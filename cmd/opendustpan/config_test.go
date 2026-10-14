@@ -1,16 +1,21 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/cli"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // writeConfig writes text to a configuration file in a new directory and
@@ -73,6 +78,110 @@ func TestServeConfigFile(t *testing.T) {
 		if form := leak(logs, secret); form != "" {
 			t.Errorf("logs hold %s of a sensitive value", form)
 		}
+	}
+
+	checkStartEntry(t, strings.TrimPrefix(database, "sqlite:"), logs, database, adminTestToken, testKeyBase64())
+}
+
+// instanceIDPattern finds the instance ID in the start log.
+var instanceIDPattern = regexp.MustCompile(`msg=instance instance_id=(ins-[a-z2-7]{20})`)
+
+// checkStartEntry proves the database at path holds one start entry of ADR
+// 63 decision 10: the channel startup, the instance ID of the log as the
+// subject, each setting with its layer, and no sensitive value.
+func checkStartEntry(t *testing.T, path, logs string, secrets ...string) {
+	t.Helper()
+
+	match := instanceIDPattern.FindStringSubmatch(logs)
+	if match == nil {
+		t.Fatalf("logs do not name the instance ID:\n%s", logs)
+	}
+
+	st, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	defer func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	}()
+
+	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list server entries: %v", err)
+	}
+
+	// The scope also holds the start switch entry of the audit chain (ADR
+	// 64), so the check counts only the settings entries.
+	var starts []audit.Entry
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Action == string(identity.ActionServerManageSettings) {
+			starts = append(starts, listing.Entries[i])
+		}
+	}
+
+	if len(starts) != 1 {
+		t.Fatalf("server scope holds %d settings entries, want 1 start entry", len(starts))
+	}
+
+	entry := starts[0]
+	if entry.Channel != audit.ChannelStartup || entry.Subject != match[1] ||
+		entry.Action != string(identity.ActionServerManageSettings) || entry.Kind != audit.KindChange {
+		t.Fatalf("start entry = %+v, want channel startup and subject %s", entry, match[1])
+	}
+
+	checkStartSettings(t, entry.Changes, secrets)
+}
+
+// checkStartSettings proves the settings of the start entry of
+// TestServeConfigFile, and that they hold no sensitive value.
+func checkStartSettings(t *testing.T, settings []audit.Change, secrets []string) {
+	t.Helper()
+
+	got := map[string]string{}
+	for _, setting := range settings {
+		got[setting.Key] = setting.New + "@" + setting.Layer
+	}
+
+	for key, want := range map[string]string{
+		"database": "set@file", "region": "from-env@env", "listen": "127.0.0.1:0@flag",
+		"log-level": "info@default", "DUSTPAN_ADMIN_TOKEN": "set@env",
+	} {
+		if got[key] != want {
+			t.Errorf("start entry setting %s = %q, want %q", key, got[key], want)
+		}
+	}
+
+	text := audit.EncodeChanges(settings)
+	for _, secret := range secrets {
+		if form := leak(text, secret); form != "" {
+			t.Errorf("start entry holds %s of a sensitive value", form)
+		}
+	}
+}
+
+// failingServerStore is an audit.ServerStore whose append always fails.
+type failingServerStore struct{}
+
+func (failingServerStore) AppendServer(context.Context, audit.Entry) (audit.Entry, error) {
+	return audit.Entry{}, errDiskFull
+}
+
+// TestStartEntryFailureStopsTheStart proves a failed start entry stops the
+// start (ADR 63 decision 11).
+func TestStartEntryFailureStopsTheStart(t *testing.T) {
+	t.Parallel()
+
+	var f serveFlags
+
+	f.instanceID = "ins-aaaaaaaaaaaaaaaaaaaa"
+
+	err := f.writeStartEntry(t.Context(), failingServerStore{})
+	if err == nil || !strings.Contains(err.Error(), "write the start audit entry") {
+		t.Fatalf("writeStartEntry = %v, want the start entry error", err)
 	}
 }
 

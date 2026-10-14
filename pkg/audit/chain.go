@@ -309,6 +309,7 @@ func chainEntry(state ChainState, at time.Time) Entry {
 		Version:    "",
 		ValuePath:  chainPathPrefix + string(state),
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "",
 		UserAgent:  "",
 		Channel:    ChannelAPI,
@@ -408,6 +409,12 @@ func NewTimelineBuilder() *TimelineBuilder {
 // Add adds the next entry of ServerScope and answers false once the
 // timeline is broken, so the caller can stop.
 func (b *TimelineBuilder) Add(e Entry) bool {
+	return b.AddStored(e, EncodeChanges(e.Changes))
+}
+
+// AddStored is Add for a stored entry, with changesText as the changes text
+// as the store holds it (see ChainWalk.StepStored).
+func (b *TimelineBuilder) AddStored(e Entry, changesText string) bool {
 	if b.broken {
 		return false
 	}
@@ -423,7 +430,7 @@ func (b *TimelineBuilder) Add(e Entry) bool {
 		b.walk.points = b.points
 	}
 
-	if !b.walk.Step(e) {
+	if !b.walk.StepStored(e, changesText) {
 		b.broken = true
 
 		return false
@@ -499,6 +506,13 @@ func NewChainWalk(timeline ChainTimeline) *ChainWalk {
 // hash protects the time of an entry. An entry without a hash ends the
 // run, so the next chained entry links to an empty previous hash.
 func (w *ChainWalk) Step(e Entry) bool {
+	return w.StepStored(e, EncodeChanges(e.Changes))
+}
+
+// StepStored is Step for a stored entry: changesText is the changes text as
+// the store holds it, and the hash covers that text (see
+// ComputeStoredHash), so a changed text fails the check.
+func (w *ChainWalk) StepStored(e Entry, changesText string) bool {
 	if w.broken || e.Sequence != w.next || w.timeGoesBack(e) {
 		return false
 	}
@@ -518,7 +532,7 @@ func (w *ChainWalk) Step(e Entry) bool {
 		return true
 	}
 
-	if e.PrevHash != w.prevHash || ComputeHash(e, e.PrevHash) != e.Hash {
+	if e.PrevHash != w.prevHash || ComputeStoredHash(e, e.PrevHash, changesText) != e.Hash {
 		return false
 	}
 

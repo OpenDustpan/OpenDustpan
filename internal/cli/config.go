@@ -63,6 +63,18 @@ type ConfigFile map[string]string
 // rules of ParseConfig. It refuses a file larger than MaxConfigBytes before
 // it parses it.
 func ReadConfigFile(path string) (ConfigFile, error) {
+	data, err := ReadConfigBytes(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return ParseConfig(data)
+}
+
+// ReadConfigBytes reads the configuration file at path. It reads at most
+// MaxConfigBytes+1 bytes and refuses a larger file, so a reload never reads
+// a large file into memory.
+func ReadConfigBytes(path string) ([]byte, error) {
 	file, err := os.Open(path) //nolint:gosec // The operator names the file with --config.
 	if err != nil {
 		return nil, fmt.Errorf("open config file: %w", err)
@@ -79,7 +91,11 @@ func ReadConfigFile(path string) (ConfigFile, error) {
 		return nil, fmt.Errorf("close config file: %w", closeErr)
 	}
 
-	return ParseConfig(data)
+	if len(data) > MaxConfigBytes {
+		return nil, ErrConfigTooLarge
+	}
+
+	return data, nil
 }
 
 // ParseConfig decodes a configuration file strictly (ADR 63 decision 3). It

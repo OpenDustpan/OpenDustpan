@@ -48,6 +48,7 @@ type AuditEntry struct {
 	PrevHash   string
 	Hash       string
 	ValueCount sql.NullInt64
+	Changes    sql.NullString
 }
 
 type Backup struct {

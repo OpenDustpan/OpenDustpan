@@ -260,6 +260,7 @@ func (s *Store) insertAuditEntry(
 		PrevHash:   e.PrevHash,
 		Hash:       e.Hash,
 		ValueCount: toInt8(e.ValueCount),
+		Changes:    toChangesText(e.Changes),
 	})
 	if insertErr != nil {
 		return audit.Entry{}, fmt.Errorf("insert audit entry: %w", insertErr)
@@ -327,6 +328,7 @@ func (s *Store) List(ctx context.Context, ns namespace.Name, page audit.Page) (a
 	}
 
 	entries := make([]audit.Entry, 0, len(rows))
+
 	for i := range rows {
 		entries = append(entries, fromAuditRow(rows[i]))
 	}
@@ -378,7 +380,7 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 		for i := range rows {
 			e := fromAuditRow(rows[i])
 
-			if !walk.Step(e) {
+			if !walk.StepStored(e, rows[i].Changes.String) {
 				return audit.CheckResult{
 					Checked: read, BadSequence: e.Sequence, Unchained: walk.Unchained(), Valid: false,
 				}, nil
@@ -397,9 +399,17 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 
 // fromAuditRow converts a row into a domain entry. The namespace reads back
 // without validation: it was validated on write and the foreign key holds.
-// A NULL value count reads as nil: only a decrypt call stores a count.
+// A NULL value count reads as nil: only a decrypt call stores a count. A
+// NULL changes column reads as nil. The changes decode leniently, for
+// display: a text that does not decode reads as nil, so a list always
+// answers the entry, and only the chain check reports the changed text.
 func fromAuditRow(row db.AuditEntry) audit.Entry {
 	ns := namespace.Name(row.Namespace)
+
+	changes, err := audit.DecodeChanges(row.Changes.String)
+	if err != nil {
+		changes = nil
+	}
 
 	return audit.Entry{
 		At:         codec.FromMillis(row.AtMs),
@@ -411,6 +421,7 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 		Object:     row.Object,
 		Version:    row.Version,
 		ValuePath:  row.ValuePath,
+		Changes:    changes,
 		ValueCount: fromInt8(row.ValueCount),
 		SourceIP:   row.SourceIp,
 		UserAgent:  row.UserAgent,
@@ -442,4 +453,12 @@ func fromInt8(count pgtype.Int8) *int64 {
 	out := count.Int64
 
 	return &out
+}
+
+// toChangesText maps the changes of an entry to their canonical JSON, and
+// no changes to NULL.
+func toChangesText(changes []audit.Change) pgtype.Text {
+	text := audit.EncodeChanges(changes)
+
+	return pgtype.Text{String: text, Valid: text != ""}
 }

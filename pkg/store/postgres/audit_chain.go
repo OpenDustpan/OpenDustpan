@@ -159,7 +159,7 @@ func walkServerScope(ctx context.Context, q *db.Queries, b *audit.TimelineBuilde
 		}
 
 		for i := range rows {
-			if rows[i].Sequence > last || !b.Add(fromAuditRow(rows[i])) {
+			if rows[i].Sequence > last || !b.AddStored(fromAuditRow(rows[i]), rows[i].Changes.String) {
 				return nil
 			}
 

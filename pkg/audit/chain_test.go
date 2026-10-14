@@ -437,6 +437,7 @@ func walkEntry(seq int64) audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "test",
 		Channel:    audit.ChannelAPI,
@@ -471,7 +472,10 @@ func walkChainedSwitch(seq int64, state audit.ChainState, at time.Time) audit.En
 // serverLink numbers es from 1 as entries of the server scope and chains
 // every entry whose hash is set: it links to the entry before it, or to an
 // empty hash after an entry without a hash.
-func serverLink(es ...audit.Entry) []audit.Entry {
+func serverLink(entries ...audit.Entry) []audit.Entry {
+	es := make([]audit.Entry, len(entries))
+	copy(es, entries)
+
 	prev := ""
 
 	for i := range es {
