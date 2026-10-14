@@ -182,5 +182,6 @@ func SweepEntry() audit.Entry {
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
+		Changes:    nil,
 	}
 }

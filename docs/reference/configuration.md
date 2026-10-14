@@ -36,6 +36,7 @@ the same list.
 | `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `max-secret-batch-bytes` | `0`: 32 MiB, the largest batch of Pulumi secrets |
 | `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `max-state-bytes` | `0`: 32 MiB, the largest OpenTofu state |
 | `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `max-body-bytes-in-flight` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One sealed state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
+| `--audit-sink` | `DUSTPAN_AUDIT_SINK` | `audit-sink` | (none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit` |
 
 ## Configuration file
 
@@ -75,7 +76,27 @@ are the database URL and the secrets. Each other URL setting refuses a URL
 with a user name or a password, so the log can show its value.
 
 At the log level `warn` or `error`, the server does not write these INFO
-lines: the level that the operator sets wins.
+lines: the level that the operator sets wins. The start audit entry (see
+"Reload") records the whole configuration at each level.
+
+### Reload
+
+The server reloads the file on SIGHUP, and when its content changes. It
+reads the file every 10 seconds and compares the SHA-256 of the content.
+A flag and a variable change only at a restart. A reload checks the whole
+file with the rules of the start. When the file fails a rule, the server
+keeps the old configuration and writes one ERROR line that names the key
+and the rule. The server writes one INFO line for each changed value, and
+one audit entry with the channel `config-file` for the reload, with each
+changed key. A changed setting takes effect at the next start. The metrics `dustpan_config_reloads_total` and
+`dustpan_config_last_reload_success` count the reloads.
+
+A ConfigMap volume mounted with `subPath` never updates. Mount the whole
+volume, so the poll sees the change.
+
+At each start, the server also writes one audit entry with the channel
+`startup` and each setting, with the rule for sensitive settings. The
+[audit guide](../guides/audit-log.md) shows these entries.
 
 This example uses the JSON shape with `#` comments. That text is valid
 YAML.
@@ -112,6 +133,8 @@ No flag takes these values, because flags show in process lists.
 | `DUSTPAN_KEY_ENCRYPTION_KEY` | The base64 text of 32 random bytes. It can stay unset while the database holds no secrets. |
 | `DUSTPAN_KEY_ENCRYPTION_KEY_FILE` | A file that holds that value. Only its owner can read it. |
 | `DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY` | Set `true` to make the key file with no prompt when no key exists. The server never overwrites a file that exists. |
+| `DUSTPAN_AUDIT_WEBHOOK_SECRET` | The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. Required when `--audit-sink` names a webhook and you set no secret file. |
+| `DUSTPAN_AUDIT_WEBHOOK_SECRET_FILE` | A file that holds the webhook secret. Only its owner can read it. When you set both, `DUSTPAN_AUDIT_WEBHOOK_SECRET` wins. |
 
 Make a key-encryption key with this command:
 

@@ -815,7 +815,7 @@ func seedRunCheckStore(t *testing.T) *sqlite.Store {
 
 // newRunCheckServer wires a server over st with another key-encryption key
 // than the one that wrapped its keys.
-func newRunCheckServer(t *testing.T, st *sqlite.Store) *dustpan.Server {
+func newRunCheckServer(t *testing.T, st *sqlite.Store, extra ...dustpan.Option) *dustpan.Server {
 	t.Helper()
 
 	wrong, err := secret.NewBuiltinWrapper([]byte("fedcba9876543210fedcba9876543210"))
@@ -839,7 +839,7 @@ func newRunCheckServer(t *testing.T, st *sqlite.Store) *dustpan.Server {
 		t.Fatalf("authenticator: %v", err)
 	}
 
-	srv, err := dustpan.NewServer(
+	opts := []dustpan.Option{
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -854,7 +854,9 @@ func newRunCheckServer(t *testing.T, st *sqlite.Store) *dustpan.Server {
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListenAddr("127.0.0.1:0"),
-	)
+	}
+
+	srv, err := dustpan.NewServer(append(opts, extra...)...)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}

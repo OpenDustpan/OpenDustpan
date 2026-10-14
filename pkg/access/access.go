@@ -88,6 +88,8 @@ var families = map[identity.Action]Family{
 	identity.ActionServerRestore:     FamilyOperator,
 	identity.ActionServerMaintenance: FamilyOperator,
 	identity.ActionServerObserve:     FamilyOperator,
+	// The installation settings (ADR 63); RFC 68 decides their API.
+	identity.ActionServerManageSettings: FamilyOperator,
 
 	identity.ActionServerReadPrincipals:   FamilyAdministration,
 	identity.ActionServerManagePrincipals: FamilyAdministration,

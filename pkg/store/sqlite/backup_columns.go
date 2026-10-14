@@ -42,7 +42,7 @@ type sqliteBackupTable struct {
 //
 //nolint:funlen // A constant table of column names; its length is the schema.
 func sqliteBackupTables() []sqliteBackupTable {
-	return []sqliteBackupTable{
+	tables := []sqliteBackupTable{
 		{
 			table: "namespaces",
 			columns: []string{
@@ -257,8 +257,56 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"prev_hash",
 				"hash",
 				"value_count",
+				"changes",
 			},
 		},
+	}
+
+	tables = append(tables, sqliteIdentityBackupTables()...)
+
+	return append(tables, []sqliteBackupTable{
+		{
+			table: "backups",
+			columns: []string{
+				"id",
+				backupColState,
+				backupColStartedAtMs,
+				backupColEndedAtMs,
+				"target",
+				"error",
+			},
+		},
+		{
+			table: "restores",
+			columns: []string{
+				"id",
+				backupColState,
+				"backup_id",
+				"pre_backup_id",
+				"requested_by",
+				backupColStartedAtMs,
+				backupColEndedAtMs,
+				"error",
+			},
+		},
+		{
+			table: "installation",
+			columns: []string{
+				"id",
+				backupColState,
+			},
+		},
+	}...)
+}
+
+// sqliteIdentityBackupTables lists the column lists of the identity tables
+// (ADR 52, ADR 53): principals, groups, memberships, access tokens, roles,
+// grants, the audit sink cursors and the token policy, in the order of
+// backup.Tables.
+//
+//nolint:funlen // A constant table of column names; its length is the schema.
+func sqliteIdentityBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
 		{
 			table: "principals",
 			columns: []string{
@@ -341,6 +389,15 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "audit_sink_cursors",
+			columns: []string{
+				"sink",
+				backupColNamespace,
+				backupColSequence,
+				backupColUpdatedAtMs,
+			},
+		},
+		{
 			table: "access_token_policy",
 			columns: []string{
 				"id",
@@ -350,37 +407,6 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"disable_accounts",
 				"disable_break_glass",
 				backupColUpdatedAtMs,
-			},
-		},
-		{
-			table: "backups",
-			columns: []string{
-				"id",
-				backupColState,
-				backupColStartedAtMs,
-				backupColEndedAtMs,
-				"target",
-				"error",
-			},
-		},
-		{
-			table: "restores",
-			columns: []string{
-				"id",
-				backupColState,
-				"backup_id",
-				"pre_backup_id",
-				"requested_by",
-				backupColStartedAtMs,
-				backupColEndedAtMs,
-				"error",
-			},
-		},
-		{
-			table: "installation",
-			columns: []string{
-				"id",
-				backupColState,
 			},
 		},
 	}

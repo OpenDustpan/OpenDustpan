@@ -106,6 +106,11 @@ const (
 	// ActionServerRestore allows starting and reading installation restores.
 	// Its object is ServerObject.
 	ActionServerRestore Action = "server:restore"
+	// ActionServerManageSettings allows changing the installation settings
+	// (ADR 63, RFC 68). Its object is ServerObject. The audit entries of the
+	// settings name it: the start entry and the entry of a reload of the
+	// configuration file. RFC 68 decides the settings API that checks it.
+	ActionServerManageSettings Action = "server:manage-settings"
 	// ActionServerReadPrincipals allows reading the principals and the
 	// groups of the installation, and the members of each group (ADR 52).
 	// Its object is ServerObject.

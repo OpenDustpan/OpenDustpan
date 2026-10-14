@@ -396,7 +396,7 @@ func appendSweepEntries(
 }
 
 // errNoPolicyRow reports a database without the seeded policy row, which
-// migration 0046 writes.
+// migration 0054 writes.
 var errNoPolicyRow = errors.New("access token policy row is missing")
 
 // tokenRow maps a generated token row to its codec row.

@@ -442,6 +442,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		Version:    "",
 		ValuePath:  "",
 		ValueCount: nil,
+		Changes:    nil,
 		SourceIP:   "192.0.2.1",
 		UserAgent:  "storetest",
 		Channel:    audit.ChannelAPI,
@@ -553,20 +554,38 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 	}
 }
 
-// seedBackupAudit appends a reveal entry and a decrypt entry with a value
-// count to acme, so the round trip compares the audit table row by row,
-// carries the nullable value count both ways, and proves the chain survives
-// it.
+// backupChanges answers changes whose text JSON escapes: <, & and > (which
+// encoding/json writes as \u003c, \u0026 and \u003e), U+2028, quotes and a
+// backslash, so the round trip proves the changes column keeps the exact
+// text that the hash covers.
+func backupChanges() []audit.Change {
+	old := `say "hi" <&> \ end`
+
+	return []audit.Change{
+		{Key: "region", Old: &old, New: "line\u2028sep <tag> & \"q\"", Layer: "file", TakesEffect: "next start"},
+		{Key: "database", Old: nil, New: "set", Layer: "env", TakesEffect: ""},
+	}
+}
+
+// seedBackupAudit appends a reveal entry, a decrypt entry with a value
+// count and a change entry with the changes of backupChanges to acme, so the
+// round trip compares the audit table row by row, carries the nullable value
+// count and the nullable changes both ways, and proves the chain survives
+// it. A store that implements audit.Feed also gets one sink cursor row.
 func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []audit.Entry {
 	t.Helper()
 
-	out := make([]audit.Entry, 0, 2)
+	out := make([]audit.Entry, 0, 3)
 
-	for i := 1; i <= 2; i++ {
-		kind, count := audit.KindReveal, (*int64)(nil)
+	for i := 1; i <= 3; i++ {
+		kind, count, changes := audit.KindReveal, (*int64)(nil), []audit.Change(nil)
 		if i == 2 {
 			n := int64(3)
 			kind, count = audit.KindToolOperation, &n
+		}
+
+		if i == 3 {
+			kind, changes = audit.KindChange, backupChanges()
 		}
 
 		stored, err := s.Append(t.Context(), acme.Fence(), audit.Entry{
@@ -580,6 +599,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Version:    "",
 			ValuePath:  "",
 			ValueCount: count,
+			Changes:    changes,
 			SourceIP:   "192.0.2.1",
 			UserAgent:  "test",
 			Channel:    audit.ChannelAPI,
@@ -595,6 +615,14 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 		}
 
 		out = append(out, stored)
+	}
+
+	// A store that ships entries to log sinks also keeps a cursor row, so
+	// the round trip carries the cursor table too (ADR 60 decision 13).
+	if feed, ok := s.(audit.Feed); ok {
+		if err := feed.AdvanceSinkCursor(t.Context(), acme.Fence(), "siem", out[len(out)-1].Sequence); err != nil {
+			t.Fatalf("advance audit sink cursor: %v", err)
+		}
 	}
 
 	return out
