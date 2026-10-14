@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -24,7 +25,13 @@ type memberTokens struct {
 // AuthenticateToken implements identity.Authenticator.
 func (m memberTokens) AuthenticateToken(ctx context.Context, token string) (identity.Principal, error) {
 	if m.member != "" && subtle.ConstantTimeCompare([]byte(token), []byte(m.member)) == 1 {
-		return identity.Principal{Subject: MemberSubject, DisplayName: MemberSubject, Admin: false, TokenID: ""}, nil
+		return identity.Principal{
+			Subject:        MemberSubject,
+			DisplayName:    MemberSubject,
+			Admin:          false,
+			TokenID:        "",
+			TokenExpiresAt: time.Time{},
+		}, nil
 	}
 
 	p, err := m.admins.AuthenticateToken(ctx, token)

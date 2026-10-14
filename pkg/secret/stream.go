@@ -102,6 +102,7 @@ func (s *Service) OpenStream(ctx context.Context, scope Scope, r io.Reader) (io.
 	return &openReader{
 		aead: aead, scope: scope, src: r,
 		nonce: nil, counter: 0, pending: nil, final: false, header: false,
+		sealedBuf: nil, plainBuf: nil,
 	}, nil
 }
 
@@ -299,6 +300,12 @@ type openReader struct {
 	pending []byte
 	final   bool
 	header  bool
+
+	// sealedBuf and plainBuf are reused for every frame, as in sealReader.
+	// A frame's plaintext aliases plainBuf until Read drains pending, and
+	// openNext runs only after that.
+	sealedBuf []byte
+	plainBuf  []byte
 }
 
 // Read opens the next chunk when its buffer runs dry.
@@ -400,18 +407,23 @@ func (r *openReader) readFrame() (bool, error) {
 		return false, fmt.Errorf("%w: sealed stream frame", ErrDecrypt)
 	}
 
-	sealed := make([]byte, length)
+	if cap(r.sealedBuf) < int(length) {
+		r.sealedBuf = make([]byte, length)
+	}
+
+	sealed := r.sealedBuf[:length]
 	if _, err := io.ReadFull(r.src, sealed); err != nil {
 		return false, fmt.Errorf("%w: sealed stream frame", ErrDecrypt)
 	}
 
 	aad := streamAAD(r.scope, r.nonce, r.counter, last)
 
-	plain, err := r.aead.Open(nil, streamNonceOf(r.nonce, r.counter), sealed, aad)
+	plain, err := r.aead.Open(r.plainBuf[:0], streamNonceOf(r.nonce, r.counter), sealed, aad)
 	if err != nil {
 		return false, fmt.Errorf("%w: sealed content", ErrDecrypt)
 	}
 
+	r.plainBuf = plain
 	r.counter++
 	r.final = last == streamFinal
 	r.pending = plain
