@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -486,9 +487,19 @@ func (coverageWorkspaces) CheckJSONRenderingUpload(
 func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
 
+	collections, err := collection.NewService(collection.Config{
+		Store:      coverageCollectionStore{},
+		Namespaces: coverageNamespaceStore{},
+		Now:        nil,
+	})
+	if err != nil {
+		tb.Fatalf("collection service: %v", err)
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		Namespaces:    namespaces,
 		Units:         coverageReader{},
+		Collections:   collections,
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
@@ -498,6 +509,41 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	return inventoryRefs(handler.Routes())
+}
+
+// coverageCollectionStore holds no collection. It exists only so that the
+// inventory handler serves its collection routes in the route table; no
+// request is ever served.
+type coverageCollectionStore struct{}
+
+func (coverageCollectionStore) CreateCollection(
+	_ context.Context, _ collection.Collection, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coverageCollectionStore) GetCollection(_ context.Context, _ collection.Ref) (collection.Collection, error) {
+	return collection.Collection{CreatedAt: time.Time{}, ID: "", Ref: collection.Ref{Namespace: "", Name: ""}}, nil
+}
+
+func (coverageCollectionStore) ListCollections(_ context.Context, _ namespace.Name) ([]collection.Collection, error) {
+	return nil, nil
+}
+
+func (coverageCollectionStore) DeleteCollection(
+	_ context.Context, _ collection.Ref, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coverageCollectionStore) SetUnitCollection(
+	_ context.Context, _ collection.Move, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coverageCollectionStore) UnitCollection(_ context.Context, _ collection.UnitRef) (collection.Ref, error) {
+	return collection.Ref{Namespace: "", Name: ""}, nil
 }
 
 // coverageReader answers no unit. It exists only to build a Handler for its

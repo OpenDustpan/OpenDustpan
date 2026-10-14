@@ -225,7 +225,7 @@ func (s *Store) ListUnits(ctx context.Context, ns namespace.Name) ([]inventory.E
 // cancels the update, so only the terminal transition clears it. Since
 // carries the take time, so the console can show the age of a lock held too
 // long.
-func inventoryEntry(row db.Inventory) inventory.Entry {
+func inventoryEntry(row db.ListInventoryRow) inventory.Entry {
 	var count *int64
 
 	if row.ResourceCount.Valid {
@@ -243,6 +243,7 @@ func inventoryEntry(row db.Inventory) inventory.Entry {
 		Status:        row.Status,
 		ResourceCount: count,
 		Lock:          inventoryLock(row),
+		Collection:    row.Collection,
 	}
 }
 
@@ -252,7 +253,7 @@ func inventoryEntry(row db.Inventory) inventory.Entry {
 // a lock. The holder may be empty: an update created without a subject still
 // locks its stack, and the entry reports the lock with no holder rather than
 // hiding it.
-func inventoryLock(row db.Inventory) *inventory.Lock {
+func inventoryLock(row db.ListInventoryRow) *inventory.Lock {
 	holder := ""
 	if row.LockHolder.Valid {
 		holder = row.LockHolder.String

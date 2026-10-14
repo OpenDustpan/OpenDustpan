@@ -99,7 +99,9 @@ func newAccessFixture(t *testing.T) accessFixture {
 
 	seedStack(t, st, "acme", "web", "prod")
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
+	authz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st},
+	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}

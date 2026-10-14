@@ -61,19 +61,23 @@ type Route struct {
 // Contract: never remove or rename these endpoints or status codes. The
 // console reads only this API, and it ships on its own schedule.
 func (h *Handler) buildRoutes() []Route {
-	return []Route{
-		{
-			Method: http.MethodGet,
-			Path:   "/api/inventory/units",
-			// The object is the namespace in the organization query value.
-			// The handler then removes every entry whose unit the caller
-			// may not read (unit:read on the reference).
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionNamespaceRead},
-			Resolve: resolveListUnits,
-			Serve:   h.listUnits,
-		},
+	units := Route{
+		Method: http.MethodGet,
+		Path:   "/api/inventory/units",
+		// The object is the namespace in the organization query value.
+		// The handler then removes every entry whose unit the caller
+		// may not read (unit:read on the reference).
+		Scope:   ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionNamespaceRead},
+		Resolve: resolveListUnits,
+		Serve:   h.listUnits,
 	}
+
+	if h.collections == nil {
+		return []Route{units}
+	}
+
+	return append([]Route{units}, h.collectionRoutes()...)
 }
 
 // Routes returns a copy of the route table. The Actions lists are copied

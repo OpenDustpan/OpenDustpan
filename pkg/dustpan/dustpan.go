@@ -57,6 +57,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -358,19 +359,35 @@ type Server struct {
 
 // services holds the domain services that NewServer wires together.
 type services struct {
-	namespaces *namespace.Service
-	stacks     *stack.Service
-	updates    *stack.Updates
-	secrets    *secret.Service
-	workspaces *workspace.Service
+	namespaces  *namespace.Service
+	stacks      *stack.Service
+	updates     *stack.Updates
+	secrets     *secret.Service
+	workspaces  *workspace.Service
+	collections *collection.Service
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
 }
 
-// NewServer validates the options and wires the server together.
-func NewServer(opts ...Option) (*Server, error) {
-	cfg := settings{
+// wireServices sets the services that need the settings after newServices: the
+// access tokens (ADR 53) and the collections (ADR 51).
+func wireServices(svc *services, cfg settings) error {
+	var err error
+
+	svc.tokens, err = newTokenService(cfg)
+	if err != nil {
+		return err
+	}
+
+	svc.collections, err = newCollectionService(cfg)
+
+	return err
+}
+
+// defaultSettings returns the settings of a server before the options.
+func defaultSettings() settings {
+	return settings{
 		disablePulumiJournaling: false,
 		namespaceStore:          nil,
 		stackStore:              nil,
@@ -404,6 +421,11 @@ func NewServer(opts ...Option) (*Server, error) {
 		backupTargetName:        "",
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 	}
+}
+
+// NewServer validates the options and wires the server together.
+func NewServer(opts ...Option) (*Server, error) {
+	cfg := defaultSettings()
 
 	for _, opt := range opts {
 		opt(&cfg)
@@ -423,9 +445,8 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	svc.tokens, err = newTokenService(cfg)
-	if err != nil {
-		return nil, err
+	if wireErr := wireServices(&svc, cfg); wireErr != nil {
+		return nil, wireErr
 	}
 
 	backups, err := newBackupService(cfg, svc)
@@ -774,7 +795,6 @@ func newServices(cfg settings) (services, error) {
 	if err != nil {
 		return services{}, fmt.Errorf("stack service: %w", err)
 	}
-
 	secrets, err := secret.NewService(secret.Config{
 		Keys:          cfg.secretKeys,
 		Wrapper:       cfg.secretWrapper,
@@ -802,12 +822,13 @@ func newServices(cfg settings) (services, error) {
 	}
 
 	return services{
-		namespaces: namespaces,
-		stacks:     stacks,
-		updates:    updates,
-		secrets:    secrets,
-		workspaces: workspaces,
-		tokens:     nil,
+		namespaces:  namespaces,
+		stacks:      stacks,
+		updates:     updates,
+		secrets:     secrets,
+		workspaces:  workspaces,
+		tokens:      nil,
+		collections: nil,
 	}, nil
 }
 
@@ -1168,12 +1189,35 @@ func newAuditHandler(svc services, cfg settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// newCollectionService builds the collection service on the namespace store
+// when that store also holds collections (ADR 51). A custom store without
+// collections gets no collection service, so its collection routes are not
+// served and the rest of the API works as before.
+func newCollectionService(cfg settings) (*collection.Service, error) {
+	store, ok := cfg.namespaceStore.(collection.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No collection service: the store holds no collections.
+	}
+
+	svc, err := collection.NewService(collection.Config{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("collection service: %w", err)
+	}
+
+	return svc, nil
+}
+
 // newInventoryHandler builds the tool-neutral inventory API from the
 // namespace service and the inventory reader.
 func newInventoryHandler(svc services, cfg settings) (http.Handler, error) {
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		Namespaces:    svc.namespaces,
 		Units:         cfg.inventoryReader,
+		Collections:   svc.collections,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
@@ -1322,7 +1366,7 @@ func setDefaultAuthorizer(cfg *settings) error {
 		return nil
 	}
 
-	authz, err := defaultAuthorizer(cfg.namespaceStore)
+	authz, err := defaultAuthorizer(*cfg)
 	if err != nil {
 		return err
 	}
@@ -1338,20 +1382,44 @@ func setDefaultAuthorizer(cfg *settings) error {
 // under both.
 //
 //nolint:ireturn // Two policies with no shared concrete type: the caller keeps the port.
-func defaultAuthorizer(store namespace.Store) (identity.Authorizer, error) {
-	stores, ok := store.(accessStores)
+func defaultAuthorizer(cfg settings) (identity.Authorizer, error) {
+	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
 		return identity.AdminOnly{}, nil
 	}
 
+	collections, err := unitCollections(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: stores, Callers: stores, Collections: nil, Units: stores,
+		Store: stores, Callers: stores, Collections: collections, Units: stores,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("authorizer: %w", err)
 	}
 
 	return authz, nil
+}
+
+// unitCollections returns the collection port of the authorizer: the
+// collection service when the store holds collections, else nil. The
+// service is returned as an interface only when it is not nil, so that a
+// nil service does not become a non-nil port.
+//
+//nolint:ireturn // The port of the authorizer: the caller keeps it as the interface.
+func unitCollections(cfg settings) (access.UnitCollections, error) {
+	svc, err := newCollectionService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if svc == nil {
+		return nil, nil //nolint:nilnil // No collections: a grant on a collection is refused as not found.
+	}
+
+	return svc, nil
 }
 
 // newAccessService builds the role and grant service (ADR 52) from the
@@ -1369,8 +1437,13 @@ func newAccessService(cfg settings) (*access.Service, error) {
 	if !isAccess {
 		var err error
 
+		collections, collErr := unitCollections(cfg)
+		if collErr != nil {
+			return nil, collErr
+		}
+
 		authz, err = access.NewAuthorizer(access.AuthorizerConfig{
-			Store: stores, Callers: stores, Collections: nil, Units: stores,
+			Store: stores, Callers: stores, Collections: collections, Units: stores,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("access authorizer: %w", err)

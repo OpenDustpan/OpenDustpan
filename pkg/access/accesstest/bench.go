@@ -49,6 +49,17 @@ func (c benchCollectionsOf) CollectionOf(_ context.Context, unit identity.Object
 	return name, ok, nil
 }
 
+// CollectionID gives a collection that some unit is in the stable ID col-<name>.
+func (c benchCollectionsOf) CollectionID(_ context.Context, col identity.Object) (string, bool, error) {
+	for _, name := range c {
+		if name == col.CollectionName() {
+			return "col-" + name, true, nil
+		}
+	}
+
+	return "", false, nil
+}
+
 // Bench seeds s with 5000 principals, 1000 groups, one membership for each
 // principal, 80 groups for the first principal, 10000 units in 100
 // collections over 10 namespaces, and 5000 grants spread over the
@@ -216,7 +227,8 @@ func seedBenchGrants(b *testing.B, s BenchStore, nss []namespace.Name, units []i
 			k := (i * 7919) % benchUnits
 			obj = units[k].WithUnitID(fmt.Sprintf("stk-bench%05d", k))
 		case 1:
-			obj = identity.CollectionObject(nss[i%benchNamespaces], fmt.Sprintf("coll%02d", (i/4)%benchCollections))
+			name := fmt.Sprintf("coll%02d", (i/4)%benchCollections)
+			obj = identity.CollectionObject(nss[i%benchNamespaces], name).WithCollectionID("col-" + name)
 		case 2:
 			obj = identity.NamespaceObject(nss[i%benchNamespaces])
 		default:

@@ -325,11 +325,14 @@ DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
 -- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
-       lock_holder, lock_since_ms, lock_operation
-FROM inventory
-WHERE namespace = ?
-ORDER BY tool, name;
+SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
+       i.lock_holder, i.lock_since_ms, i.lock_operation,
+       COALESCE(c.name, '') AS collection
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = ?
+ORDER BY i.tool, i.name;
 
 -- name: CreateWorkspace :execrows
 INSERT INTO workspaces (
@@ -1006,3 +1009,60 @@ WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND replaced_by IS NULL
 UPDATE access_tokens SET last_used_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE id = sqlc.arg('id')
   AND (last_used_at_ms IS NULL OR last_used_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER));
+-- name: CreateCollection :execrows
+-- The caller checks the fence in the same transaction. A row that exists
+-- under the same key (the name in lower case) is not written.
+INSERT INTO collections (id, namespace, name_key, name, created_at_ms)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (namespace, name_key) DO NOTHING;
+
+-- name: GetCollection :one
+SELECT id, namespace, name, created_at_ms
+FROM collections
+WHERE namespace = ? AND name_key = ?;
+
+-- name: ListCollections :many
+SELECT id, namespace, name, created_at_ms
+FROM collections
+WHERE namespace = ?
+ORDER BY name_key;
+
+-- name: CountLiveCollectionMembers :one
+-- Counts the units of a collection that the inventory still holds. A unit that
+-- was deleted has left the inventory, and its membership does not count.
+SELECT COUNT(*)
+FROM collection_members AS m
+JOIN inventory AS i ON i.unit_id = m.unit_id
+WHERE m.namespace = ? AND m.collection_key = ?;
+
+-- name: DeleteCollectionMembers :exec
+-- Removes the memberships of a collection. The caller removes them only after
+-- it found no live unit, so the rows that remain belong to deleted units.
+DELETE FROM collection_members
+WHERE namespace = ? AND collection_key = ?;
+
+-- name: DeleteCollection :execrows
+DELETE FROM collections
+WHERE namespace = ? AND name_key = ?;
+
+-- name: GetInventoryUnit :one
+-- The inventory row of one unit: its ID. The collection is read by a join on
+-- the unit ID, not from the inventory.
+SELECT unit_id
+FROM inventory
+WHERE namespace = ? AND tool = ? AND name = ?;
+
+-- name: GetUnitCollection :one
+-- The collection of one unit by its ID, as written.
+SELECT c.name
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?;
+
+-- name: UpsertUnitCollection :exec
+INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (unit_id) DO UPDATE SET
+    namespace = excluded.namespace,
+    collection_key = excluded.collection_key,
+    assigned_at_ms = excluded.assigned_at_ms;

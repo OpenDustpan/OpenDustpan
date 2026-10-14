@@ -23,6 +23,9 @@ type Callers interface {
 // does not exist.
 type UnitCollections interface {
 	CollectionOf(ctx context.Context, unit identity.Object) (string, bool, error)
+	// CollectionID returns the stable ID of the collection obj, and false when no
+	// such collection exists. A grant on a collection is keyed by this ID.
+	CollectionID(ctx context.Context, collection identity.Object) (string, bool, error)
 }
 
 // AuthorizerConfig holds the dependencies of an Authorizer.
@@ -357,24 +360,20 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 		return nil, nil
 	}
 
-	if kind == ObjectUnit {
-		var err error
-		if obj, err = a.withUnitID(ctx, obj); err != nil {
-			return nil, err
-		}
+	obj, err := a.withStableID(ctx, kind, obj)
+	if err != nil {
+		return nil, err
 	}
 
 	out := []identity.Object{obj}
 
-	if kind == ObjectUnit && a.collections != nil {
-		name, inCollection, err := a.collections.CollectionOf(ctx, obj)
-		if err != nil {
-			return nil, fmt.Errorf("read collection of unit: %w", err)
-		}
+	col, inCollection, err := a.collectionOfUnit(ctx, kind, obj)
+	if err != nil {
+		return nil, err
+	}
 
-		if inCollection {
-			out = append(out, identity.CollectionObject(obj.Namespace(), name))
-		}
+	if inCollection {
+		out = append(out, col)
 	}
 
 	if kind != ObjectInstallation && kind != ObjectNamespace {
@@ -386,6 +385,47 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 	}
 
 	return out, nil
+}
+
+// withStableID returns obj with the stable ID of its unit or its collection,
+// when kind is one of them. Any other object is returned as it is.
+func (a *Authorizer) withStableID(ctx context.Context, kind ObjectKind, obj identity.Object) (identity.Object, error) {
+	if kind == ObjectUnit {
+		return a.withUnitID(ctx, obj)
+	}
+
+	if kind == ObjectCollection {
+		return a.withCollectionID(ctx, obj)
+	}
+
+	return obj, nil
+}
+
+// collectionOfUnit returns the collection of the unit obj, with its stable ID,
+// and true when the unit is in one. It returns false for any other object, and
+// when no collection port is configured.
+func (a *Authorizer) collectionOfUnit(
+	ctx context.Context, kind ObjectKind, obj identity.Object,
+) (identity.Object, bool, error) {
+	if kind != ObjectUnit || a.collections == nil {
+		return obj, false, nil
+	}
+
+	name, inCollection, err := a.collections.CollectionOf(ctx, obj)
+	if err != nil {
+		return obj, false, fmt.Errorf("read collection of unit: %w", err)
+	}
+
+	if !inCollection {
+		return obj, false, nil
+	}
+
+	col, err := a.withCollectionID(ctx, identity.CollectionObject(obj.Namespace(), name))
+	if err != nil {
+		return obj, false, err
+	}
+
+	return col, true, nil
 }
 
 // rolesOf returns the roles that grants name, by ID: the built-in roles
@@ -540,4 +580,23 @@ func (a *Authorizer) currentUnits(ctx context.Context, grants []Grant) (map[stri
 	}
 
 	return live, nil
+}
+
+// withCollectionID returns the collection object with its stable ID. A
+// collection that does not exist keeps an empty ID, so no grant matches it.
+func (a *Authorizer) withCollectionID(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if a.collections == nil {
+		return obj, nil
+	}
+
+	id, found, err := a.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read collection ID: %w", err)
+	}
+
+	if !found {
+		return obj, nil
+	}
+
+	return obj.WithCollectionID(id), nil
 }

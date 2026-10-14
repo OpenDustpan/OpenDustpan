@@ -7,6 +7,7 @@ const (
 	backupColCreatedBy   = "created_by"
 	backupColEndedAtMs   = "ended_at_ms"
 	backupColName        = "name"
+	backupColNameKey     = "name_key"
 	backupColNamespace   = "namespace"
 	backupColSequence    = "sequence"
 	backupColSize        = "size"
@@ -179,6 +180,18 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "collections",
+			columns: []string{
+				"id", backupColNamespace, backupColNameKey, backupColName, backupColCreatedAtMs,
+			},
+		},
+		{
+			table: "collection_members",
+			columns: []string{
+				"unit_id", backupColNamespace, "collection_key", "assigned_at_ms",
+			},
+		},
+		{
 			table: "inventory_deleted",
 			columns: []string{
 				backupColNamespace,
@@ -277,7 +290,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColName,
-				"name_key",
+				backupColNameKey,
 				"description",
 				backupColSource,
 				backupColCreatedAtMs,
@@ -310,7 +323,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColName,
-				"name_key",
+				backupColNameKey,
 				"description",
 				"actions",
 				backupColCreatedAtMs,

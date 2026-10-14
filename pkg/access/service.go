@@ -311,7 +311,7 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 		return Grant{}, err
 	}
 
-	if in.Object, err = s.existingUnit(ctx, in.Object); err != nil {
+	if in.Object, err = s.existingObject(ctx, in.Object); err != nil {
 		return Grant{}, err
 	}
 
@@ -346,7 +346,7 @@ func (s *Service) Revoke(
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
 	}
 
-	if obj, err = s.existingUnit(ctx, obj); err != nil {
+	if obj, err = s.existingObject(ctx, obj); err != nil {
 		return Grant{}, err
 	}
 
@@ -399,7 +399,7 @@ func (s *Service) ListGrants(ctx context.Context, obj identity.Object, req PageR
 	limit := q.Limit
 	q.Limit++
 
-	if obj, err = s.existingUnit(ctx, obj); err != nil {
+	if obj, err = s.existingObject(ctx, obj); err != nil {
 		return Page{}, err
 	}
 
@@ -607,12 +607,6 @@ func (s *Service) checkGrant(
 		return none, fmt.Errorf("grant on %q: %w", in.Object.String(), err)
 	}
 
-	if kind == ObjectCollection {
-		// The core has no collection port yet (#478), so no collection
-		// exists, and a grant cannot name one before it exists.
-		return none, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, in.Object.String())
-	}
-
 	if kind != ObjectInstallation {
 		for _, a := range role.Actions {
 			if family, _ := FamilyOf(a); family != FamilyData {
@@ -692,6 +686,37 @@ func (s *Service) checkSubject(ctx context.Context, subject Subject) error {
 // ErrNotFound when no such unit exists: a grant names a unit that exists, so
 // that it follows the unit and not the name. Any other object returns as
 // it is.
+// existingObject resolves the stable ID of a unit or a collection, and returns
+// ErrNotFound when it does not exist: a grant can only name an object that
+// exists. Any other object is returned as it is.
+func (s *Service) existingObject(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if obj.IsCollection() {
+		return s.existingCollection(ctx, obj)
+	}
+
+	return s.existingUnit(ctx, obj)
+}
+
+// existingCollection resolves the stable ID of a collection. Without a
+// collection port no collection is found, so every grant on one answers
+// ErrNotFound.
+func (s *Service) existingCollection(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if s.authz.collections == nil {
+		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	id, found, err := s.authz.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read collection %q: %w", obj.String(), err)
+	}
+
+	if !found {
+		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	return obj.WithCollectionID(id), nil
+}
+
 func (s *Service) existingUnit(ctx context.Context, obj identity.Object) (identity.Object, error) {
 	if !obj.IsUnit() {
 		return obj, nil
@@ -712,6 +737,10 @@ func (s *Service) existingUnit(ctx context.Context, obj identity.Object) (identi
 // sameTarget reports whether a and b are the same object for a grant: the
 // same stable ID for units, the same wire form for any other object.
 func sameTarget(a, b identity.Object) bool {
+	if a.IsCollection() || b.IsCollection() {
+		return a.IsCollection() && b.IsCollection() && a.CollectionID() != "" && a.CollectionID() == b.CollectionID()
+	}
+
 	if a.IsUnit() || b.IsUnit() {
 		return a.IsUnit() && b.IsUnit() && a.UnitID() != "" && a.UnitID() == b.UnitID()
 	}

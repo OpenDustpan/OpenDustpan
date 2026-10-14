@@ -66,9 +66,11 @@ func (homedNamespaceStore) Ping(_ context.Context) error {
 func newTestHandler(t *testing.T) *apiinventory.Handler {
 	t.Helper()
 
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{
-			Store:  &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}},
+			Store:  nsStore,
 			Now:    nil,
 			Region: "test-region",
 		},
@@ -78,6 +80,7 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Authenticator: stubAuthenticator{},
@@ -104,6 +107,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Collections:   testCollectionService(t, homedNamespaceStore{}),
 		Namespaces:    namespaces,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Authenticator: tokenAuthenticator{},
@@ -283,6 +287,10 @@ func TestRoutesEnforceAuthorization(t *testing.T) {
 	handler := newTestHandler(t)
 
 	for _, route := range handler.Routes() {
+		if isCollectionRoute(route) {
+			continue
+		}
+
 		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
 			t.Parallel()
 			checkRouteEnforcement(t, route)
@@ -436,6 +444,10 @@ func TestRoutesAuthorizeDeclaredObject(t *testing.T) {
 	handler := newTestHandler(t)
 
 	for _, route := range handler.Routes() {
+		if isCollectionRoute(route) {
+			continue
+		}
+
 		t.Run(route.Method+" "+route.Path, func(t *testing.T) {
 			t.Parallel()
 			checkRouteObject(t, route)

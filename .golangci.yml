@@ -118,6 +118,7 @@ linters:
             - "**/pkg/access/**"
             - "**/pkg/accesstoken/**"
             - "**/pkg/backup/**"
+            - "**/pkg/collection/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/blob/*.go"
             - "!**/*_test.go"

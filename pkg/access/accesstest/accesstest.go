@@ -395,7 +395,7 @@ func testGrantRoundTrip(t *testing.T, s access.Store) {
 	objects := []identity.Object{
 		identity.ServerObject(),
 		identity.NamespaceObject("acme"),
-		identity.CollectionObject("acme", "payments"),
+		identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"),
 		unit(t, "acme", "web/prod"),
 	}
 

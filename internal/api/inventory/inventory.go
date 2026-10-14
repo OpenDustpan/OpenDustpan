@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -35,8 +36,12 @@ const bearerScheme = "Bearer "
 
 // Config holds the dependencies of a Handler.
 type Config struct {
-	Namespaces    *namespace.Service
-	Units         coreinventory.Reader
+	Namespaces *namespace.Service
+	Units      coreinventory.Reader
+	// Collections serves the collection routes (ADR 51). It is optional: a nil
+	// service serves no collection route, so a namespace store that holds no
+	// collections keeps the rest of the API unchanged.
+	Collections   *collection.Service
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
@@ -44,16 +49,18 @@ type Config struct {
 
 // Handler serves the inventory API under /api/inventory/.
 type Handler struct {
-	namespaces *namespace.Service
-	units      coreinventory.Reader
-	authn      identity.Authenticator
-	authz      identity.Authorizer
-	logger     *slog.Logger
-	mux        *patternMux
-	routes     []Route
+	namespaces  *namespace.Service
+	units       coreinventory.Reader
+	collections *collection.Service
+	authn       identity.Authenticator
+	authz       identity.Authorizer
+	logger      *slog.Logger
+	mux         *patternMux
+	routes      []Route
 }
 
-// NewHandler returns a Handler. Every Config field is required.
+// NewHandler returns a Handler. Every Config field is required except
+// Collections and Audit, which are optional.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Namespaces == nil:
@@ -69,13 +76,14 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	h := &Handler{
-		namespaces: cfg.Namespaces,
-		units:      cfg.Units,
-		authn:      cfg.Authenticator,
-		authz:      cfg.Authorizer,
-		logger:     cfg.Logger,
-		mux:        newPatternMux(),
-		routes:     nil,
+		namespaces:  cfg.Namespaces,
+		units:       cfg.Units,
+		collections: cfg.Collections,
+		authn:       cfg.Authenticator,
+		authz:       cfg.Authorizer,
+		logger:      cfg.Logger,
+		mux:         newPatternMux(),
+		routes:      nil,
 	}
 
 	h.routes = h.buildRoutes()
@@ -122,6 +130,9 @@ type unitEntry struct {
 	Status        string     `json:"status,omitempty"`
 	ResourceCount *int64     `json:"resourceCount,omitempty"`
 	Lock          *lockEntry `json:"lock,omitempty"`
+	// Collection is the name of the collection of the unit, omitted when the
+	// unit has none (ADR 51).
+	Collection string `json:"collection,omitempty"`
 }
 
 // listUnitsResponse is the answered document of the unit list.
@@ -157,6 +168,7 @@ func toUnitEntry(e coreinventory.Entry) unitEntry {
 		Status:        e.Status,
 		ResourceCount: e.ResourceCount,
 		Lock:          toLockEntry(e.Lock),
+		Collection:    e.Collection,
 	}
 }
 
@@ -276,6 +288,16 @@ func classify(err error) (int, string) {
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrNotFound):
 		return http.StatusNotFound, err.Error()
+	case errors.Is(err, collection.ErrInvalidName):
+		return http.StatusBadRequest, err.Error()
+	case errors.Is(err, collection.ErrNotFound), errors.Is(err, collection.ErrUnitNotFound):
+		return http.StatusNotFound, err.Error()
+	case errors.Is(err, collection.ErrAlreadyExists), errors.Is(err, collection.ErrNotEmpty),
+		errors.Is(err, collection.ErrCollectionChanged), errors.Is(err, collection.ErrNoCollection),
+		errors.Is(err, namespace.ErrFenced):
+		return http.StatusConflict, err.Error()
+	case errors.Is(err, errCollectionBody), errors.Is(err, errMoveBody), errors.Is(err, errMissingUnit):
+		return http.StatusBadRequest, err.Error()
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}

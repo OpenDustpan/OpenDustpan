@@ -30,6 +30,18 @@ func (c collections) CollectionOf(_ context.Context, unit identity.Object) (stri
 	return name, ok, nil
 }
 
+// CollectionID gives a collection that some unit is in the stable ID col-<name>.
+// A collection that no unit is in does not exist here.
+func (c collections) CollectionID(_ context.Context, col identity.Object) (string, bool, error) {
+	for _, name := range c {
+		if name == col.CollectionName() {
+			return "col-" + name, true, nil
+		}
+	}
+
+	return "", false, nil
+}
+
 // fixture is one store with an authorizer and a service over it.
 type fixture struct {
 	store *sqlite.Store
@@ -179,6 +191,15 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 		obj = f.unit(tb, obj)
 	}
 
+	if obj.IsCollection() {
+		id, found, err := f.units.CollectionID(tb.Context(), obj)
+		if err != nil || !found {
+			tb.Fatalf("collection %q has no unit: found %t, err %v", obj.String(), found, err)
+		}
+
+		obj = obj.WithCollectionID(id)
+	}
+
 	fence, e := storetest.GrantWrite(tb, f.store, obj, time.Unix(0, 0), "grant:test")
 
 	err := f.store.CreateGrant(tb.Context(), access.Grant{
@@ -189,6 +210,12 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 	if err != nil {
 		tb.Fatalf("create grant: %v", err)
 	}
+}
+
+// collection makes the collection of obj exist: a unit that the fake
+// reports in it. A grant on a collection that does not exist is refused.
+func (f *fixture) collection(obj identity.Object) {
+	f.units[obj.Namespace().String()+"/member-of-"+obj.CollectionName()] = obj.CollectionName()
 }
 
 // admin returns the bootstrap admin caller, which holds every action.
@@ -456,6 +483,7 @@ func TestEscalation(t *testing.T) {
 	f.person(t, "target")
 
 	payments := identity.CollectionObject("acme", "payments")
+	f.collection(payments)
 	f.grant(t, prn("nsadmin"), access.RoleAdmin, identity.NamespaceObject("acme"))
 	f.grant(t, prn("colladmin"), access.RoleAdmin, payments)
 	f.grant(t, prn("account"), access.RoleAccountAdministrator, identity.ServerObject())
@@ -488,9 +516,12 @@ func TestEscalation(t *testing.T) {
 			obj: identity.NamespaceObject("acme"), want: access.ErrEscalation,
 		},
 		{
-			// No collection exists until the collections are wired (#478).
 			name: "collection admin gives writer on its collection", granter: collAdmin, role: access.RoleWriter,
-			obj: payments, want: access.ErrNotFound,
+			obj: payments, want: nil,
+		},
+		{
+			name: "a grant on a collection that does not exist is refused", granter: collAdmin, role: access.RoleWriter,
+			obj: identity.CollectionObject("acme", "missing"), want: access.ErrNotFound,
 		},
 		{
 			name: "account administrator gives operator", granter: account, role: access.RoleInstallationOperator,
@@ -584,10 +615,12 @@ func TestPlacementRuleDoesNotAuthorize(t *testing.T) {
 
 	f := newFixture(t)
 	dev := f.person(t, "dev")
+	f.collection(identity.CollectionObject("acme", "sandbox"))
 	f.grant(t, prn("dev"), access.RoleMaintainer, identity.CollectionObject("acme", "sandbox"))
 
 	// A placement rule routes "payments-*" units to the collection payments.
 	target := identity.CollectionObject("acme", "payments")
+	f.collection(target)
 
 	assertChecks(t, f.authz, dev, []check{
 		{identity.CollectionObject("acme", "sandbox"), identity.ActionCollectionCreateUnit, true},
@@ -632,6 +665,7 @@ func TestListObjects(t *testing.T) {
 
 	f.grant(t, prn("alice"), access.RoleViewer, identity.NamespaceObject("acme"))
 	f.grant(t, ops, access.RoleWriter, web)
+	f.collection(identity.CollectionObject("beta", "payments"))
 	f.grant(t, ops, access.RoleViewer, identity.CollectionObject("beta", "payments"))
 
 	scope, err := f.authz.ListObjects(t.Context(), p, identity.ActionUnitRead)
