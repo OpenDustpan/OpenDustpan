@@ -142,6 +142,10 @@ func BackupCommand(ctx context.Context, args []string, stdout, stderr io.Writer)
 		)
 	}
 
+	if err := cli.ByFlag("server").CheckURL(server); err != nil {
+		return err
+	}
+
 	token, err := BackupToken()
 	if err != nil {
 		return err

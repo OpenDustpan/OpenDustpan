@@ -1,12 +1,20 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"slices"
 	"strconv"
 	"strings"
+)
+
+// The text forms of a bool value.
+const (
+	valueTrue  = "true"
+	valueFalse = "false"
 )
 
 // Kind is the value type of a setting: it selects the flag constructor and
@@ -29,6 +37,14 @@ const (
 // variable), the default as a decimal or plain string, the --help text and
 // the reference row. The same declaration registers the flag, prints --help
 // and generates docs/reference/configuration.md, so the three never drift.
+//
+// File is the key of the setting in the configuration file (ADR 63), empty
+// when the file cannot set it. Sensitive marks a setting that can hold a
+// credential: a secret or the database URL. A log line shows a sensitive
+// setting only as set or not set, never its value, a part of it or a hash of
+// it (ADR 63 decision 6). URL marks a setting that holds a URL and is not
+// sensitive: CheckURL refuses a value with user information, so its value
+// can go in a log line.
 type Setting struct {
 	Flag      string
 	Env       string
@@ -36,8 +52,24 @@ type Setting struct {
 	Help      string
 	Reference string
 	Doc       string
+	File      string
 	Kind      Kind
+	Sensitive bool
+	URL       bool
+	// NoPasswordInFile refuses a URL with a password in the configuration
+	// file: a secret comes from a variable or a *_FILE key only (ADR 63
+	// decision 4).
+	NoPasswordInFile bool
 }
+
+// The errors of a URL setting. Each error names the setting, never the
+// value, because a refused value can hold a credential.
+var (
+	// ErrURLUserInfo is a URL setting whose value has user information.
+	ErrURLUserInfo = errors.New("the URL has user information")
+	// ErrURLInvalid is a URL setting whose value is not a URL.
+	ErrURLInvalid = errors.New("the value is not a URL")
+)
 
 // ByFlag answers the declaration of the flag name. It panics when the flag
 // has no declaration: every flag in the table must come from here, and the
@@ -71,6 +103,82 @@ func (s *Setting) WithDoc(doc string) *Setting {
 	s.Doc = doc
 
 	return s
+}
+
+// WithFile sets the configuration file key of a setting and answers it.
+func (s *Setting) WithFile(key string) *Setting {
+	s.File = key
+
+	return s
+}
+
+// WithURL marks a setting as a URL that refuses user information and
+// answers it.
+func (s *Setting) WithURL() *Setting {
+	s.URL = true
+
+	return s
+}
+
+// CheckURL answers an error when s is a URL setting and value is not a URL
+// or has user information (ADR 63 decision 6). The error names the setting,
+// never the value. An empty value and a setting that is not a URL setting
+// pass.
+func (s *Setting) CheckURL(value string) error {
+	if !s.URL || strings.TrimSpace(value) == "" {
+		return nil
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil {
+		return fmt.Errorf("%s: %w", s.Name(), ErrURLInvalid)
+	}
+
+	if parsed.User != nil {
+		return fmt.Errorf("%s: %w. Remove the user name and the password from the URL", s.Name(), ErrURLUserInfo)
+	}
+
+	return nil
+}
+
+// WithNoPasswordInFile refuses a URL with a password for the setting in the
+// configuration file and answers it.
+func (s *Setting) WithNoPasswordInFile() *Setting {
+	s.NoPasswordInFile = true
+
+	return s
+}
+
+// WithSensitive marks a setting as sensitive and answers it.
+func (s *Setting) WithSensitive() *Setting {
+	s.Sensitive = true
+
+	return s
+}
+
+// Name answers the name that logs and errors use for the setting: the file
+// key, else the flag name, else the environment variable.
+func (s *Setting) Name() string {
+	switch {
+	case s.File != "":
+		return s.File
+	case s.Flag != "":
+		return s.Flag
+	default:
+		return s.Env
+	}
+}
+
+// ByFile answers the declaration of the configuration file key, or nil when
+// no declaration names it.
+func ByFile(key string) *Setting {
+	for _, s := range Settings {
+		if s.File != "" && s.File == key {
+			return s
+		}
+	}
+
+	return nil
 }
 
 // String registers the declaration as a string flag with its environment
@@ -109,8 +217,14 @@ func EnvBool(key string) bool {
 		return false
 	}
 
+	return parseEnvBool(raw)
+}
+
+// parseEnvBool answers the value of a bool variable: true when the trimmed
+// value is true or 1, else false.
+func parseEnvBool(raw string) bool {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "true", "1":
+	case valueTrue, "1":
 		return true
 	default:
 		return false
@@ -123,7 +237,17 @@ func EnvBool(key string) bool {
 // values fail.
 func EnvInt(key, def string) int64 {
 	raw, ok := os.LookupEnv(key)
-	if !ok || strings.TrimSpace(raw) == "" {
+	if !ok {
+		return mustParseInt(def)
+	}
+
+	return parseEnvInt(raw, def)
+}
+
+// parseEnvInt answers the value of an int64 variable in decimal, def when it
+// is blank, or -1 when it is invalid or negative.
+func parseEnvInt(raw, def string) int64 {
+	if strings.TrimSpace(raw) == "" {
 		return mustParseInt(def)
 	}
 
