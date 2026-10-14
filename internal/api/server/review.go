@@ -516,7 +516,7 @@ func callerAccessByType(
 // callerGrants serves GET /api/server/caller/grants: one page of the
 // current grants of the caller, in the shape of an access-review snapshot.
 func callerGrants(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	page, err := pageRequest(r)
 	if err != nil {
