@@ -20,6 +20,7 @@ const (
 	portColDeletedAtMs = "deleted_at_ms"
 	portColSource      = "source"
 	portColKind        = "kind"
+	portColSubject     = "subject"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -227,7 +228,7 @@ func portableSpec() []PortableTable {
 			Columns: []Column{
 				{Name: portColNamespace, Kind: KindText},
 				{Name: portColSequence, Kind: KindInteger},
-				{Name: "subject", Kind: KindText},
+				{Name: portColSubject, Kind: KindText},
 				{Name: "idp_subject", Kind: KindText},
 				{Name: "token_id", Kind: KindText},
 				{Name: "action", Kind: KindText},
@@ -251,7 +252,7 @@ func portableSpec() []PortableTable {
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
-				{Name: "subject", Kind: KindText},
+				{Name: portColSubject, Kind: KindText},
 				{Name: "display_name", Kind: KindText},
 				{Name: portColKind, Kind: KindText},
 				{Name: portColSource, Kind: KindText},
@@ -282,6 +283,39 @@ func portableSpec() []PortableTable {
 				{Name: "principal_id", Kind: KindText},
 				{Name: "added_at_ms", Kind: KindTime},
 				{Name: "removed_at_ms", Kind: KindTime},
+			},
+		},
+		{
+			Table:   "roles",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColName, Kind: KindText},
+				{Name: "name_key", Kind: KindText},
+				{Name: "description", Kind: KindText},
+				{Name: "actions", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+				{Name: portColDeletedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "grants",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColSubject, Kind: KindText},
+				{Name: "subject_kind", Kind: KindText},
+				{Name: "subject_id", Kind: KindText},
+				{Name: "role", Kind: KindText},
+				{Name: "object", Kind: KindText},
+				{Name: "object_kind", Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: "condition", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: "created_by", Kind: KindText},
+				{Name: "revoked_at_ms", Kind: KindTime},
+				{Name: "revoked_by", Kind: KindText},
 			},
 		},
 		{

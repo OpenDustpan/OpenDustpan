@@ -108,6 +108,7 @@ func newAuditedPrincipalHandler(
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
 		Principals:     principals,
+		Access:         nil,
 		OnAuditFailure: nil,
 		Audit:          entries,
 	})

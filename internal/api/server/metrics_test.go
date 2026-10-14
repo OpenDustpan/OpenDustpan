@@ -66,6 +66,7 @@ func newMetricsHandler(
 		Version:        "test",
 		Schema:         nil,
 		Principals:     nil,
+		Access:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})

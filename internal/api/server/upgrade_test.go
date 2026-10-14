@@ -163,6 +163,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 			{Version: 1, Name: "0001_init.sql"},
 		}},
 		Principals:     nil,
+		Access:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -201,6 +202,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 		Version:        "test",
 		Schema:         nil,
 		Principals:     nil,
+		Access:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -266,6 +268,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 			{Version: 1, Name: "0001_init.sql"},
 		}},
 		Principals:     nil,
+		Access:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})

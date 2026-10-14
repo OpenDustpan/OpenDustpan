@@ -19,6 +19,7 @@ const (
 	backupColDeletedAtMs = "deleted_at_ms"
 	backupColSource      = "source"
 	backupColKind        = "kind"
+	backupColSubject     = "subject"
 )
 
 // sqliteBackupTable is the column list of one backup table: the columns of the
@@ -220,7 +221,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColNamespace,
 				backupColSequence,
-				"subject",
+				backupColSubject,
 				"idp_subject",
 				"token_id",
 				"action",
@@ -243,7 +244,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			table: "principals",
 			columns: []string{
 				"id",
-				"subject",
+				backupColSubject,
 				"display_name",
 				backupColKind,
 				backupColSource,
@@ -268,6 +269,37 @@ func sqliteBackupTables() []sqliteBackupTable {
 		{
 			table:   "group_members",
 			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
+		},
+		{
+			table: "roles",
+			columns: []string{
+				"id",
+				backupColName,
+				"name_key",
+				"description",
+				"actions",
+				backupColCreatedAtMs,
+				backupColUpdatedAtMs,
+				backupColDeletedAtMs,
+			},
+		},
+		{
+			table: "grants",
+			columns: []string{
+				"id",
+				backupColSubject,
+				"subject_kind",
+				"subject_id",
+				"role",
+				"object",
+				"object_kind",
+				backupColNamespace,
+				"condition",
+				backupColCreatedAtMs,
+				"created_by",
+				"revoked_at_ms",
+				"revoked_by",
+			},
 		},
 		{
 			table: "backups",

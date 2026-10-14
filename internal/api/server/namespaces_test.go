@@ -42,6 +42,7 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
 		Principals:     nil,
+		Access:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -95,10 +96,10 @@ func serveNamespace(t *testing.T, handler *apiserver.Handler, body string) (int,
 	return rec.Code, rec.Body.String()
 }
 
-// TestNamespaceRouteDeclaresAdmin proves the namespace create route declares
-// exactly the action namespace:admin, with a resolver that returns the
-// namespace the body names.
-func TestNamespaceRouteDeclaresAdmin(t *testing.T) {
+// TestNamespaceRouteDeclaresCreate proves the namespace create route
+// declares exactly the action server:create-namespace, with a resolver that
+// returns the installation (ADR 52).
+func TestNamespaceRouteDeclaresCreate(t *testing.T) {
 	t.Parallel()
 
 	handler := newTestHandler(t)
@@ -108,7 +109,7 @@ func TestNamespaceRouteDeclaresAdmin(t *testing.T) {
 		t.Fatal("no POST /api/server/namespaces route")
 	}
 
-	checkNamespaceRouteAdmin(t, route)
+	checkNamespaceRouteCreate(t, route)
 }
 
 // findNamespaceRoute returns the namespace create route, or false when the
@@ -128,17 +129,17 @@ func findNamespaceRoute(
 	return apiserver.Route{}, false
 }
 
-// checkNamespaceRouteAdmin proves one route row declares namespace:admin on
-// the namespace the body names.
-func checkNamespaceRouteAdmin(t *testing.T, route apiserver.Route) {
+// checkNamespaceRouteCreate proves one route row declares
+// server:create-namespace on the installation.
+func checkNamespaceRouteCreate(t *testing.T, route apiserver.Route) {
 	t.Helper()
 
 	if route.Scope != apiserver.ScopeAuthorized {
 		t.Fatalf("route scope = %d, want authorized", route.Scope)
 	}
 
-	if len(route.Actions) != 1 || route.Actions[0] != identity.ActionNamespaceAdmin {
-		t.Fatalf("route actions = %v, want [namespace:admin]", route.Actions)
+	if len(route.Actions) != 1 || route.Actions[0] != identity.ActionServerCreateNamespace {
+		t.Fatalf("route actions = %v, want [server:create-namespace]", route.Actions)
 	}
 
 	if route.Resolve == nil {
@@ -157,8 +158,8 @@ func checkNamespaceRouteAdmin(t *testing.T, route apiserver.Route) {
 		t.Fatalf("resolve: %v", err)
 	}
 
-	if obj.String() != "acme" {
-		t.Fatalf("resolver returns %q, want the namespace acme", obj.String())
+	if !obj.IsServer() {
+		t.Fatalf("resolver returns %q, want the installation", obj.String())
 	}
 }
 
@@ -252,14 +253,14 @@ func TestNamespaceCreateNeedsToken(t *testing.T) {
 	}
 }
 
-// TestNamespaceCreateDenied proves a caller without namespace:admin on the
-// namespace answers 403.
+// TestNamespaceCreateDenied proves a caller without server:create-namespace
+// answers 403.
 func TestNamespaceCreateDenied(t *testing.T) {
 	t.Parallel()
 
 	handler := newNamespaceHandler(
 		t,
-		selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionNamespaceAdmin: true}},
+		selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionServerCreateNamespace: true}},
 	)
 
 	status, body := serveNamespace(t, handler, `{"name":"acme"}`)

@@ -18,6 +18,8 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/access/accesstest"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -46,6 +48,22 @@ func TestConformance(t *testing.T) {
 	}
 
 	storetest.Run(t, func(t *testing.T) storetest.Store {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+// TestAccessConformance runs the role and grant store suite.
+func TestAccessConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	accesstest.Run(t, func(t *testing.T) access.Store {
 		t.Helper()
 
 		return open(t, base)
@@ -2103,4 +2121,15 @@ func BenchmarkPrincipalLists(b *testing.B) {
 	}
 
 	principaltest.Bench(b, open(b, base))
+}
+
+// BenchmarkAuthorizer measures one decision and one list-objects at the
+// scale of accesstest.Bench.
+func BenchmarkAuthorizer(b *testing.B) {
+	base := os.Getenv(envURL)
+	if base == "" {
+		b.Skipf("set %s to run the PostgreSQL benchmarks", envURL)
+	}
+
+	accesstest.Bench(b, open(b, base))
 }

@@ -794,3 +794,79 @@ FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
   AND g.name_key >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR g.name_key < sqlc.arg('high'));
+
+-- name: CreateRole :execrows
+INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetRole :one
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: RolesByIDs :many
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE id IN (sqlc.slice('ids')) AND deleted_at_ms IS NULL;
+
+-- name: RoleIDByNameKey :one
+SELECT id FROM roles WHERE name_key = ? AND deleted_at_ms IS NULL;
+
+-- name: ListRoles :many
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE deleted_at_ms IS NULL
+ORDER BY name_key;
+
+-- name: UpdateRole :execrows
+UPDATE roles SET name = ?, name_key = ?, description = ?, actions = ?, updated_at_ms = ?
+WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: DeleteRole :execrows
+UPDATE roles SET deleted_at_ms = ? WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: CountGrantsWithRole :one
+SELECT COUNT(*) FROM grants WHERE role = ? AND revoked_at_ms IS NULL;
+
+-- name: CreateGrant :execrows
+INSERT INTO grants (id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetGrant :one
+SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants WHERE id = ? AND revoked_at_ms IS NULL;
+
+-- name: ListGrantsOn :many
+SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE object = sqlc.arg('object') AND revoked_at_ms IS NULL
+  AND (subject > sqlc.arg('after_subject') OR (subject = sqlc.arg('after_subject') AND role > sqlc.arg('after_role')))
+ORDER BY subject, role
+LIMIT sqlc.arg('row_limit');
+
+-- name: CountGrantsOn :one
+SELECT COUNT(*) FROM grants WHERE object = ? AND revoked_at_ms IS NULL;
+
+-- name: RevokeGrant :execrows
+UPDATE grants SET revoked_at_ms = ?, revoked_by = ? WHERE id = ? AND revoked_at_ms IS NULL;
+
+-- name: GrantsOn :many
+SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject IN (sqlc.slice('subjects')) AND object IN (sqlc.slice('objects')) AND revoked_at_ms IS NULL
+ORDER BY object, subject, role;
+
+-- name: GrantsWithRoles :many
+SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject IN (sqlc.slice('subjects')) AND role IN (sqlc.slice('roles')) AND revoked_at_ms IS NULL
+ORDER BY object, subject, role;
+
+-- name: RevokeGrantsOfSubject :exec
+UPDATE grants SET revoked_at_ms = ?, revoked_by = ?
+WHERE subject_kind = ? AND subject_id = ? AND revoked_at_ms IS NULL;
+
+-- name: SubjectsOfCaller :many
+SELECT p.id AS principal_id, CAST(COALESCE(m.group_id, '') AS TEXT) AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
+WHERE p.subject = ? AND p.deleted_at_ms IS NULL;

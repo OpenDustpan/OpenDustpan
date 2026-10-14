@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -62,6 +63,10 @@ type Config struct {
 	// (ADR 52). Nil means the store keeps none: the principal and group
 	// routes answer 501. Both SQL adapters keep them.
 	Principals *principal.Service
+	// Access keeps the roles and the grants of the installation (ADR 52).
+	// Nil means the store keeps none: the role and grant routes answer 501,
+	// and a namespace create stores no grant. Both SQL adapters keep them.
+	Access *access.Service
 	// Audit appends the entries of the scope @server: each change of a
 	// principal or a group writes one (ADR 60, decision 7). Nil writes no
 	// entry.
@@ -93,6 +98,7 @@ type Handler struct {
 	version        string
 	schema         SchemaReporter
 	principals     *principal.Service
+	access         *access.Service
 	audit          audit.ServerStore
 	onAuditFailure func()
 	mux            *patternMux
@@ -130,6 +136,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		version:        cfg.Version,
 		schema:         cfg.Schema,
 		principals:     cfg.Principals,
+		access:         cfg.Access,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
 		mux:            newPatternMux(),
@@ -256,6 +263,10 @@ func classify(err error) (int, string) {
 	}
 
 	if status, message, ok := classifyPrincipal(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyAccess(err); ok {
 		return status, message
 	}
 

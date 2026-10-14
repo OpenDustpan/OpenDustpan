@@ -878,3 +878,79 @@ WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
 -- Orders the appends of the audit scope @server, which has no namespace row
 -- to lock. The key is fixed: 0x6175646974 is "audit" in ASCII.
 SELECT pg_advisory_xact_lock(418581342580);
+
+-- name: CreateRole :execrows
+INSERT INTO roles (id, name, name_key, description, actions, created_at_ms, updated_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING;
+
+-- name: GetRole :one
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE id = $1 AND deleted_at_ms IS NULL;
+
+-- name: RolesByIDs :many
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE id = ANY(@ids::text[]) AND deleted_at_ms IS NULL;
+
+-- name: RoleIDByNameKey :one
+SELECT id FROM roles WHERE name_key COLLATE "C" = @name_key::text AND deleted_at_ms IS NULL;
+
+-- name: ListRoles :many
+SELECT id, name, description, actions, created_at_ms, updated_at_ms FROM roles
+WHERE deleted_at_ms IS NULL
+ORDER BY name_key COLLATE "C";
+
+-- name: UpdateRole :execrows
+UPDATE roles SET name = $1, name_key = $2, description = $3, actions = $4, updated_at_ms = $5
+WHERE id = $6 AND deleted_at_ms IS NULL;
+
+-- name: DeleteRole :execrows
+UPDATE roles SET deleted_at_ms = $1 WHERE id = $2 AND deleted_at_ms IS NULL;
+
+-- name: CountGrantsWithRole :one
+SELECT COUNT(*) FROM grants WHERE role = $1 AND revoked_at_ms IS NULL;
+
+-- name: CreateGrant :execrows
+INSERT INTO grants (id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT DO NOTHING;
+
+-- name: GetGrant :one
+SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants WHERE id = $1 AND revoked_at_ms IS NULL;
+
+-- name: ListGrantsOn :many
+SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE object = @object AND revoked_at_ms IS NULL
+  AND (subject > @after_subject OR (subject = @after_subject AND role > @after_role))
+ORDER BY subject, role
+LIMIT @row_limit;
+
+-- name: CountGrantsOn :one
+SELECT COUNT(*) FROM grants WHERE object = @object AND revoked_at_ms IS NULL;
+
+-- name: RevokeGrant :execrows
+UPDATE grants SET revoked_at_ms = $1, revoked_by = $2 WHERE id = $3 AND revoked_at_ms IS NULL;
+
+-- name: GrantsOn :many
+SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject = ANY(@subjects::text[]) AND object = ANY(@objects::text[]) AND revoked_at_ms IS NULL
+ORDER BY object, subject, role;
+
+-- name: GrantsWithRoles :many
+SELECT id, subject, subject_kind, subject_id, role, object, object_kind, namespace, condition, created_at_ms, created_by
+FROM grants
+WHERE subject = ANY(@subjects::text[]) AND role = ANY(@roles::text[]) AND revoked_at_ms IS NULL
+ORDER BY object, subject, role;
+
+-- name: RevokeGrantsOfSubject :exec
+UPDATE grants SET revoked_at_ms = $1, revoked_by = $2
+WHERE subject_kind = $3 AND subject_id = $4 AND revoked_at_ms IS NULL;
+
+-- name: SubjectsOfCaller :many
+SELECT p.id AS principal_id, COALESCE(m.group_id, '')::text AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
+WHERE p.subject COLLATE "C" = @subject::text AND p.deleted_at_ms IS NULL;

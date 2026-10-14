@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -225,6 +227,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	backedUp := seedBackupRecord(t, s)
 	entries := seedBackupAudit(t, s, acme)
 	seedBackupPrincipals(t, s)
+	seedBackupAccess(t, s)
 
 	return backupSeed{
 		acme:       acme,
@@ -335,6 +338,82 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
+	}
+}
+
+// seedBackupAccess writes a custom role, an ended role, two current grants
+// (one with a condition) and a revoked one when s keeps roles and grants
+// (ADR 52), so the round trip carries the nullable end times. A store with
+// no access port skips it.
+func seedBackupAccess(t *testing.T, s BackupStore) {
+	t.Helper()
+
+	as, ok := s.(access.Store)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+
+	role := access.Role{
+		CreatedAt: now(), UpdatedAt: now().Add(time.Minute), ID: "rol-deployer", Name: "Deployer",
+		Description: "Runs updates", Actions: []identity.Action{identity.ActionUnitRead, identity.ActionUnitWrite},
+		BuiltIn: false,
+	}
+	if err := as.CreateRole(ctx, role, ServerChange(now(), "role:rol-deployer")); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	gone := role
+	gone.ID, gone.Name = "rol-gone", "Gone"
+
+	if err := as.CreateRole(ctx, gone, ServerChange(now(), "role:rol-gone")); err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	if err := as.DeleteRole(ctx, gone.ID, ServerChange(now().Add(time.Hour), "role:rol-gone")); err != nil {
+		t.Fatalf("delete role: %v", err)
+	}
+
+	condition := "reserved"
+
+	grants := []access.Grant{
+		{
+			CreatedAt: now(),
+			Condition: nil,
+			Object:    identity.NamespaceObject("acme"),
+			ID:        "grt-ops",
+			Role:      access.RoleViewer,
+			CreatedBy: "admin",
+			Subject:   access.Subject{Kind: access.SubjectGroup, ID: "grp-ops"},
+		},
+		{
+			CreatedAt: now().Add(time.Hour), Condition: &condition, Object: identity.ServerObject(), ID: "grt-deploy",
+			Role: role.ID, CreatedBy: "admin", Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-deploy"},
+		},
+		{
+			CreatedAt: now(),
+			Condition: nil,
+			Object:    identity.NamespaceObject("acme"),
+			ID:        "grt-revoked",
+			Role:      access.RoleWriter,
+			CreatedBy: "admin",
+			Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: "prn-alice"},
+		},
+	}
+	for i := range grants {
+		if err := as.CreateGrant(ctx, grants[i], ServerChange(now(), "grant:"+grants[i].ID)); err != nil {
+			t.Fatalf("create grant %q: %v", grants[i].ID, err)
+		}
+	}
+
+	err := as.RevokeGrant(
+		ctx,
+		"grt-revoked",
+		ServerChange(now().Add(2*time.Hour), "grant:grt-revoked"),
+	)
+	if err != nil {
+		t.Fatalf("revoke grant: %v", err)
 	}
 }
 

@@ -49,6 +49,7 @@ const (
 	pgColDeletedAtMs = "deleted_at_ms"
 	pgColSource      = "source"
 	pgColKind        = "kind"
+	pgColSubject     = "subject"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -192,7 +193,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		{
 			table: "audit_entries",
 			columns: []string{
-				pgColNamespace, pgColSequence, "subject", "idp_subject", "token_id", "action",
+				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
 			},
@@ -219,20 +220,14 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 	}
 }
 
-// pgCopyIdentityTables holds the COPY columns of the principal and group
-// tables (ADR 52).
+// pgCopyIdentityTables holds the COPY columns of the principal, group,
+// role and grant tables (ADR 52).
 func pgCopyIdentityTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
 			table: "principals",
 			columns: []string{
-				"id",
-				"subject",
-				"display_name",
-				pgColKind,
-				pgColSource,
-				pgColCreatedAtMs,
-				pgColUpdatedAtMs,
+				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs,
 			},
 			orderBy: []string{"id"},
@@ -240,13 +235,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 		{
 			table: "principal_groups",
 			columns: []string{
-				"id",
-				pgColName,
-				"name_key",
-				"description",
-				pgColSource,
-				pgColCreatedAtMs,
-				pgColUpdatedAtMs,
+				"id", pgColName, "name_key", "description", pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs,
 			},
 			orderBy: []string{"id"},
@@ -255,6 +244,22 @@ func pgCopyIdentityTables() []pgCopyTable {
 			table:   "group_members",
 			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
 			orderBy: []string{"group_id", "principal_id", "added_at_ms"},
+		},
+		{
+			table: "roles",
+			columns: []string{
+				"id", pgColName, "name_key", "description", "actions", pgColCreatedAtMs, pgColUpdatedAtMs,
+				pgColDeletedAtMs,
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table: "grants",
+			columns: []string{
+				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "object_kind",
+				pgColNamespace, "condition", pgColCreatedAtMs, "created_by", "revoked_at_ms", "revoked_by",
+			},
+			orderBy: []string{"id"},
 		},
 	}
 }

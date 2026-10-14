@@ -56,7 +56,8 @@ The project owner chose this export. It helps a reviewer check access.
 - (research) How do roles map to the Pulumi CLI's and the TFE API's own team and
   permission endpoints?
 - (research) Which built-in roles, by name and by action? The owner chose to
-  copy the role sets of competitors (ADR 52, decision 4).
+  copy the role sets of competitors (ADR 52, decision 4). The Outcome
+  records the set.
 - Which administrators can make custom roles, and can a custom role belong
   to one namespace?
 - Can a group be a member of another group?
@@ -198,5 +199,35 @@ Lead decisions under owner delegation, 2026-10-13:
 - Source. Each principal and group has a `source`: `local` today, `ldap` or
   `scim` with directory sync (ADR 55). A group whose source is not `local`
   refuses a membership change through the API with 409.
+- Containment. A grant applies to its object and to each object that the
+  object holds, along the fixed chain installation > namespace > collection >
+  unit. Groups do not nest, and roles do not hold roles.
+- Create a unit. A new unit needs `collection:create-unit` on its target
+  collection. A placement rule only routes a unit. It never authorizes.
+- Three families of actions. No action is in two families:
+  - operator: settings, backups and restores, maintenance, the instance
+    registry, and the audit log of the installation scope.
+  - administration: principals, groups, memberships, roles, grants on the
+    installation, and namespace create (`server:create-namespace`). The
+    creator of a namespace gets the `admin` role on it in the same
+    transaction.
+  - data: every action inside a namespace, `namespace:admin` and the
+    manage-access actions included.
+- Three built-in roles on the installation: `installation-operator` (the
+  operator family only), `account-administrator` (administration and data)
+  and `site-administrator` (all three families).
+- Data roles. The lead accepted this set on 2026-10-14, by the delegation of
+  the owner: `viewer`, `auditor`, `secret-viewer`, `writer`, `maintainer` and
+  `admin`. `docs/research/m4-built-in-roles.md` gives the facts behind it.
+  `pkg/access/roles.go` holds the actions of each role. A planner role waits
+  for a route that separates a plan from an apply.
+- Grant history. A revoke ends a grant and keeps its row, and the delete of
+  a custom role ends the role. A delete of a principal or a group revokes
+  its grants in the same transaction. Each grant and role change writes its
+  audit entry in the transaction of the change.
+- Decisions at scale. One decision reads the groups of the caller in one
+  query, the grants on the chain of the object in one query, and the custom
+  roles of those grants in one query. A request reads the groups and the
+  roles once. No cache lives across requests.
 
 The other questions in "Open questions" have no outcome yet.

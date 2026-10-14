@@ -87,6 +87,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
 		Principals:     nil,
+		Access:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})
@@ -404,6 +405,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
 		Principals:     nil,
+		Access:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 	})

@@ -102,14 +102,19 @@ func TestParseObjectInvalid(t *testing.T) {
 	invalid := []string{
 		"",
 		"@caller",
-		"@server",
+		"@server/x",
 		"pulumi:",
 		"pulumi:acme",
 		"pulumi:/web",
 		"pulumi:acme/",
 		":acme/web",
 		"pulumi:acme/web:prod",
-		"acme/web",
+		"acme/",
+		"acme/web/prod",
+		"acme/we b",
+		"acme/web\n",
+		"acme/.web",
+		"/web",
 		"../acme",
 	}
 
@@ -236,8 +241,8 @@ func TestCallerObject(t *testing.T) {
 }
 
 // TestServerObject proves the server reference names no namespace, unit or
-// caller, that ParseObject rejects its wire form, and that a namespace named
-// "server" never equals it.
+// caller, that ParseObject reads its wire form back, and that a namespace
+// named "server" never equals it.
 func TestServerObject(t *testing.T) {
 	t.Parallel()
 
@@ -281,8 +286,9 @@ func checkServerIdentity(t *testing.T, sobj identity.Object) {
 func checkServerParse(t *testing.T, sobj identity.Object) {
 	t.Helper()
 
-	if _, err := identity.ParseObject(sobj.String()); !errors.Is(err, identity.ErrInvalidObject) {
-		t.Fatalf("parse server form %q = %v, want ErrInvalidObject", sobj.String(), err)
+	parsed, err := identity.ParseObject(sobj.String())
+	if err != nil || !parsed.IsServer() || parsed.String() != sobj.String() {
+		t.Fatalf("parse server form %q = %+v, %v; want the server object", sobj.String(), parsed, err)
 	}
 
 	nsObj, err := identity.ParseObject("server")
@@ -300,6 +306,22 @@ func checkServerParse(t *testing.T, sobj identity.Object) {
 
 	if identity.CallerObject() == sobj {
 		t.Fatal("caller object equals the server object")
+	}
+}
+
+// TestParseCollectionObject proves that ParseObject reads the wire form
+// <namespace>/<collection> of a collection back (ADR 51).
+func TestParseCollectionObject(t *testing.T) {
+	t.Parallel()
+
+	obj, err := identity.ParseObject("acme/payments")
+	if err != nil {
+		t.Fatalf("parse collection: %v", err)
+	}
+
+	if !obj.IsCollection() || obj.Namespace() != "acme" || obj.CollectionName() != "payments" ||
+		obj.String() != identity.CollectionObject("acme", "payments").String() {
+		t.Fatalf("collection = %+v, want payments in acme", obj)
 	}
 }
 

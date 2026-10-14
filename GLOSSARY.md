@@ -125,11 +125,15 @@ A named set of principals of the whole installation. A principal can be a member
 _Avoid_: Team (except when naming a tool's own protocol field), collection
 
 **Role**:
-A named set of actions (ADR 52).
+A named set of actions (ADR 52). A built-in role has a fixed name. An administrator makes a custom role from actions.
 _Avoid_: Permission set, policy
 
+**Action family**:
+One of three sets of actions that do not overlap: operator, administration and data. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only (RFC 19).
+_Avoid_: Permission category, scope
+
 **Grant**:
-A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52).
+A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52). A revoke ends a grant and keeps its record for the access-review history.
 _Avoid_: Binding, assignment, permission
 
 **No access**:

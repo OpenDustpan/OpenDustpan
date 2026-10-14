@@ -71,6 +71,8 @@ var Tables = []string{
 	"principals",
 	"principal_groups",
 	"group_members",
+	"roles",
+	"grants",
 	"backups",
 	"restores",
 	"installation",
