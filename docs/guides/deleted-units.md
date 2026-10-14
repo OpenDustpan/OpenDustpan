@@ -145,7 +145,27 @@ them. After an upgrade, these are units that you deleted before the server
 had a sweep. After an installation restore, these are units whose retention
 period ended after the backup.
 
-To keep such a unit, restore it before the first sweep. The retention setting
+To keep such a unit, restore it before the first sweep. First list the
+deleted units of a namespace whose retention period ends within one day. The
+units that the first sweep purges are in this list:
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/inventory/deleted-units?organization=acme&purgeWithinDays=1"
+```
+
+Then restore each unit that you keep, with the `tool` and the `unitID` of the
+list:
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" -d '{}' \
+  "https://dustpan.example/api/inventory/deleted-units/<tool>/<unitID>/restore?organization=acme"
+```
+
+If a live unit holds its name, the server answers 409. Then send a new name,
+as [Restore a deleted unit](#restore-a-deleted-unit) shows.
+
+The retention setting
 does not help here: a delete records the end of the retention period of the
 unit, and a new setting applies only to later deletes. The retention setting
 has no value that turns the purge off.
