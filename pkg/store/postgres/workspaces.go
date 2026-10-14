@@ -134,7 +134,8 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 
 // DeleteWorkspace implements workspace.Store. It soft-deletes the workspace in
 // one fenced transaction (ADR 47): it frees the name, keeps the state versions
-// and the wrapped data key, and removes the inventory entry. It returns
+// and the wrapped data key, and moves the inventory entry to the deleted
+// units. It returns
 // ErrLocked while the workspace is locked, and ErrNotFound if no live
 // workspace has ref. The row is locked before the check, so a concurrent lock of
 // the workspace either commits first and the delete refuses, or waits until
@@ -176,17 +177,38 @@ func (s *Store) DeleteWorkspace(
 			return workspace.ErrNotFound
 		}
 
-		entry := db.DeleteInventoryParams{
-			Namespace: ref.Namespace.String(),
-			Tool:      inventoryToolOpenTofu,
-			Name:      ref.Name.String(),
-		}
-		if inventoryErr := q.DeleteInventory(ctx, entry); inventoryErr != nil {
-			return fmt.Errorf("delete inventory entry: %w", inventoryErr)
-		}
-
-		return nil
+		return moveWorkspaceInventoryToDeleted(ctx, q, ref, row.ID, at)
 	})
+}
+
+// moveWorkspaceInventoryToDeleted moves the inventory entry of the deleted
+// workspace ref, with the ID workspaceID, to the deleted units in the
+// transaction of q (ADR 47). The entry keeps the name before the delete.
+func moveWorkspaceInventoryToDeleted(
+	ctx context.Context, q *db.Queries, ref workspace.Ref, workspaceID string, at time.Time,
+) error {
+	err := q.InsertDeletedInventory(ctx, db.InsertDeletedInventoryParams{
+		Namespace:    ref.Namespace.String(),
+		Tool:         inventoryToolOpenTofu,
+		UnitID:       workspaceID,
+		Name:         ref.Name.String(),
+		DeletedAtMs:  at.UnixMilli(),
+		PurgeAfterMs: at.Add(inventory.DeletedRetention).UnixMilli(),
+	})
+	if err != nil {
+		return fmt.Errorf("insert deleted inventory entry: %w", err)
+	}
+
+	entry := db.DeleteInventoryParams{
+		Namespace: ref.Namespace.String(),
+		Tool:      inventoryToolOpenTofu,
+		Name:      ref.Name.String(),
+	}
+	if err := q.DeleteInventory(ctx, entry); err != nil {
+		return fmt.Errorf("delete inventory entry: %w", err)
+	}
+
+	return nil
 }
 
 // CreateStateVersion implements workspace.StateStore with a fenced insert. A

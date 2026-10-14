@@ -180,7 +180,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			columns: []string{
 				"id", pgColNamespace, pgColName, "revision", "lock_id", "lock_holder",
 				"lock_reason", "locked_at_ms", "current_state_version_id", pgColCreatedAtMs, "updated_at_ms",
-				"allow_forced_writes", "allow_unlocked_writes", "deleted_at_ms", "deleted_name",
+				"allow_forced_writes", "allow_unlocked_writes", pgColDeletedAtMs, pgColDeletedName,
 			},
 			orderBy: []string{"id"},
 		},

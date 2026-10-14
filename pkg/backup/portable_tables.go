@@ -206,8 +206,8 @@ func portableSpec() []PortableTable {
 				{Name: "updated_at_ms", Kind: KindTime},
 				{Name: "allow_forced_writes", Kind: KindBool},
 				{Name: "allow_unlocked_writes", Kind: KindBool},
-				{Name: "deleted_at_ms", Kind: KindTime},
-				{Name: "deleted_name", Kind: KindText},
+				{Name: portColDeletedAtMs, Kind: KindTime},
+				{Name: portColDeletedName, Kind: KindText},
 			},
 		},
 		{

@@ -28,6 +28,7 @@ type WorkspaceStore interface {
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
+	inventory.DeletedReader
 }
 
 // WorkspaceFactory returns a fresh, empty store for one subtest.
@@ -3172,7 +3173,8 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 
 // testDeletedWorkspaceNameIsFree proves a new workspace can take the name of a
 // deleted one at once, with a new ID and no state, and that the lists and the
-// inventory show only live workspaces under their own names (ADR 47).
+// inventory show only live workspaces under their own names. The deleted
+// units hold the deleted workspace (ADR 47).
 func testDeletedWorkspaceNameIsFree(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
@@ -3206,6 +3208,31 @@ func testDeletedWorkspaceNameIsFree(t *testing.T, s WorkspaceStore) {
 		if entries[i].UnitID == gone.ID.String() || strings.HasPrefix(entries[i].Name, "deleted:") {
 			t.Fatalf("inventory entry %+v, want no entry of the deleted workspace", entries[i])
 		}
+	}
+
+	checkDeletedWorkspaceEntry(t, s, ns.Name, gone)
+}
+
+// checkDeletedWorkspaceEntry checks that the deleted units of ns hold exactly
+// one entry: the deleted workspace gone, under its name before the delete,
+// with the delete time and the end of the retention (ADR 47).
+func checkDeletedWorkspaceEntry(t *testing.T, s WorkspaceStore, ns namespace.Name, gone workspace.Workspace) {
+	t.Helper()
+
+	deleted, err := s.ListDeletedUnits(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("list deleted units: %v", err)
+	}
+
+	if len(deleted) != 1 {
+		t.Fatalf("deleted units = %+v, want 1", deleted)
+	}
+
+	got := deleted[0]
+	if got.Tool != "opentofu" || got.UnitID != gone.ID.String() || got.Name != gone.Ref.Name.String() ||
+		got.Namespace != ns || !got.DeletedAt.Equal(deletedAt()) ||
+		!got.PurgeAfter.Equal(deletedAt().Add(inventory.DeletedRetention)) {
+		t.Fatalf("deleted unit = %+v, want opentofu %s (%s) deleted at %v", got, gone.Ref.Name, gone.ID, deletedAt())
 	}
 }
 
