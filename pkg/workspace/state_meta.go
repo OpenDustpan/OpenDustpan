@@ -39,10 +39,11 @@ const maxSerialBytes = 32
 // and never buffered, so a large string costs no memory. An outputs value above
 // maxOutputsBytes fails with ErrTooLarge. A document that is not a JSON object
 // fails with ErrInvalidState.
-func readStateMeta(r io.Reader) (streamedMeta, error) {
+func readStateMeta(r io.Reader, grow func(int) error) (streamedMeta, error) {
 	var meta streamedMeta
 
 	s := newJSONScanner(r)
+	s.grow = grow
 
 	if err := s.skipSpace(); err != nil {
 		return streamedMeta{}, err
@@ -149,7 +150,7 @@ func checkTopLevelKey(name string, seen map[string]bool) error {
 
 // memberName reads one member name, bounded by maxMemberNameBytes.
 func (s *jsonScanner) memberName() (string, error) {
-	raw, err := s.keepValue(maxMemberNameBytes)
+	raw, err := s.keepValue(maxMemberNameBytes, nil)
 	if err != nil {
 		if errors.Is(err, errCaptureFull) {
 			return "", syntaxError("member name is too long")
@@ -200,7 +201,7 @@ func (s *jsonScanner) topMember(name string, meta *streamedMeta) error {
 
 // keepSerial reads the serial value into meta.
 func keepSerial(s *jsonScanner, meta *streamedMeta) error {
-	raw, err := s.keepValue(maxSerialBytes)
+	raw, err := s.keepValue(maxSerialBytes, nil)
 	if err != nil {
 		return boundedError(err, "serial")
 	}
@@ -216,7 +217,7 @@ func keepSerial(s *jsonScanner, meta *streamedMeta) error {
 
 // keepLineage reads the lineage value into meta.
 func keepLineage(s *jsonScanner, meta *streamedMeta) error {
-	raw, err := s.keepValue(maxLineageBytes)
+	raw, err := s.keepValue(maxLineageBytes, nil)
 	if err != nil {
 		return boundedError(err, "lineage")
 	}
@@ -234,7 +235,7 @@ func keepLineage(s *jsonScanner, meta *streamedMeta) error {
 // An outputs value over maxOutputsBytes fails with ErrTooLarge, and the walk
 // stops at that byte, so no more than the limit is ever held.
 func keepOutputs(s *jsonScanner, meta *streamedMeta) error {
-	raw, err := s.keepValue(maxOutputsBytes)
+	raw, err := s.keepValue(maxOutputsBytes, s.grow)
 	if err != nil {
 		if errors.Is(err, errCaptureFull) {
 			return fmt.Errorf("%w: outputs of more than %d bytes", ErrTooLarge, maxOutputsBytes)
@@ -252,8 +253,8 @@ func keepOutputs(s *jsonScanner, meta *streamedMeta) error {
 
 // keepValue reads one value and returns its bytes. The value must fit in limit
 // bytes: a longer value fails with errCaptureFull, and only limit bytes are held.
-func (s *jsonScanner) keepValue(limit int) ([]byte, error) {
-	keep := &capture{buf: nil, limit: limit}
+func (s *jsonScanner) keepValue(limit int, grow func(int) error) ([]byte, error) {
+	keep := &capture{buf: nil, limit: limit, grow: grow}
 
 	s.keep = keep
 	err := s.value()
@@ -282,6 +283,24 @@ type metaResult struct {
 	meta streamedMeta
 }
 
+// noMeta is the empty meta of a refused stream.
+//
+//nolint:gochecknoglobals // One shared empty value for refused streams; callers never mutate it.
+var noMeta = streamedMeta{
+	Lineage:         "",
+	Outputs:         nil,
+	Serial:          0,
+	HasSerial:       false,
+	HasLineage:      false,
+	ClientEncrypted: false,
+}
+
+// refusedByBudget reports whether err refuses the body budget: the budget is
+// full or too small for the upload.
+func refusedByBudget(err error) bool {
+	return errors.Is(err, ErrBusy) || errors.Is(err, ErrBudgetTooSmall)
+}
+
 // metaStream reads the meta of one state while its bytes pass through it. The
 // bytes go to the store, and a copy goes to a decoder that runs beside it, so
 // the document is read once. A failed store write or a failed decode closes
@@ -293,14 +312,23 @@ type metaStream struct {
 
 // newMetaStream returns the reader the store reads, and the stream that
 // finishes the meta read. The caller must call finish once the store is done.
-func newMetaStream(content io.Reader) (io.Reader, *metaStream) {
+func newMetaStream(content io.Reader, grow func(int) error) (io.Reader, *metaStream) {
 	pr, pw := io.Pipe()
 	ms := &metaStream{pipe: pw, done: make(chan metaResult, 1)}
 
 	go func() {
 		// A document the decoder refuses still streams to the end, so the store
 		// keeps its bytes. The caller decides whether the refusal counts.
-		meta, err := readStateMeta(pr)
+		// A busy budget fails fast: the reader closes with the error, so the
+		// store write stops and the client body is not read to the end.
+		meta, err := readStateMeta(pr, grow)
+		if refusedByBudget(err) {
+			_ = pr.CloseWithError(err)
+			ms.done <- metaResult{err: err, meta: noMeta}
+
+			return
+		}
+
 		if _, drainErr := io.Copy(io.Discard, pr); err == nil && drainErr != nil {
 			err = drainErr
 		}

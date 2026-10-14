@@ -17,7 +17,7 @@ func TestReadStateMetaInAnyKeyOrder(t *testing.T) {
 	doc := `{"outputs":{"greeting":{"value":"hello","type":"string","sensitive":false}},` +
 		`"resources":[{"type":"x"}],"lineage":"lin-1","version":4,"serial":7}`
 
-	meta, err := readStateMeta(strings.NewReader(doc))
+	meta, err := readStateMeta(strings.NewReader(doc), nil)
 	if err != nil {
 		t.Fatalf("read state meta: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestReadStateMetaInAnyKeyOrder(t *testing.T) {
 func TestReadStateMetaMarksClientEncryption(t *testing.T) {
 	t.Parallel()
 
-	meta, err := readStateMeta(strings.NewReader(`{"encrypted_data":"ciphertext","serial":1,"lineage":"l"}`))
+	meta, err := readStateMeta(strings.NewReader(`{"encrypted_data":"ciphertext","serial":1,"lineage":"l"}`), nil)
 	if err != nil {
 		t.Fatalf("read encrypted state meta: %v", err)
 	}
@@ -65,12 +65,12 @@ func TestReadStateMetaMarksClientEncryption(t *testing.T) {
 func TestReadStateMetaRefusesBadDocuments(t *testing.T) {
 	t.Parallel()
 
-	if _, err := readStateMeta(strings.NewReader(`[1,2]`)); !errors.Is(err, ErrInvalidState) {
+	if _, err := readStateMeta(strings.NewReader(`[1,2]`), nil); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("array document: %v, want ErrInvalidState", err)
 	}
 
 	big := `{"outputs":"` + strings.Repeat("x", maxOutputsBytes+1) + `"}`
-	if _, err := readStateMeta(strings.NewReader(big)); !errors.Is(err, ErrTooLarge) {
+	if _, err := readStateMeta(strings.NewReader(big), nil); !errors.Is(err, ErrTooLarge) {
 		t.Fatalf("oversized outputs: %v, want ErrTooLarge", err)
 	}
 }
@@ -82,7 +82,7 @@ func TestMetaStreamReadsWhileTheStoreReads(t *testing.T) {
 
 	doc := `{"serial":3,"lineage":"lin-3","outputs":{"a":{"value":1}}}`
 
-	reader, ms := newMetaStream(strings.NewReader(doc))
+	reader, ms := newMetaStream(strings.NewReader(doc), nil)
 
 	copied, err := io.ReadAll(reader)
 	if err != nil {
@@ -111,7 +111,7 @@ var errStoreRefused = errors.New("store refused")
 func TestMetaStreamFailsWithTheStoreError(t *testing.T) {
 	t.Parallel()
 
-	_, ms := newMetaStream(strings.NewReader(`{"serial":1`))
+	_, ms := newMetaStream(strings.NewReader(`{"serial":1`), nil)
 
 	storeErr := errStoreRefused
 
@@ -183,7 +183,7 @@ func TestReadStateMetaBoundsAllocations(t *testing.T) {
 
 		before := totalAllocated()
 
-		meta, err := readStateMeta(src)
+		meta, err := readStateMeta(src, nil)
 		if err != nil {
 			t.Fatalf("read state with a large skipped string: %v", err)
 		}
@@ -204,7 +204,7 @@ func TestReadStateMetaBoundsAllocations(t *testing.T) {
 
 			before := totalAllocated()
 
-			_, err := readStateMeta(src)
+			_, err := readStateMeta(src, nil)
 			if !errors.Is(err, ErrTooLarge) {
 				t.Fatalf("outputs of 64 MiB: err = %v, want ErrTooLarge", err)
 			}
@@ -272,7 +272,7 @@ func TestReadStateMetaAgreesWithEncodingJSON(t *testing.T) {
 func checkRefused(t *testing.T, doc string) {
 	t.Helper()
 
-	if _, readErr := readStateMeta(strings.NewReader(doc)); readErr == nil {
+	if _, readErr := readStateMeta(strings.NewReader(doc), nil); readErr == nil {
 		t.Fatalf("the reader accepted %s, want a refusal", doc)
 	}
 }
@@ -282,7 +282,7 @@ func checkRefused(t *testing.T, doc string) {
 func checkAgreement(t *testing.T, doc string) {
 	t.Helper()
 
-	meta, readErr := readStateMeta(strings.NewReader(doc))
+	meta, readErr := readStateMeta(strings.NewReader(doc), nil)
 	if readErr != nil {
 		t.Fatalf("the reader refused %s: %v", doc, readErr)
 	}
@@ -314,11 +314,11 @@ func TestReadStateMetaDepthMatchesEncodingJSON(t *testing.T) {
 		return `{"x":` + strings.Repeat("[", depth) + strings.Repeat("]", depth) + `,"serial":1,"lineage":"l"}`
 	}
 
-	if _, err := readStateMeta(strings.NewReader(nested(9990))); err != nil {
+	if _, err := readStateMeta(strings.NewReader(nested(9990)), nil); err != nil {
 		t.Fatalf("nesting of 9990 levels refused: %v", err)
 	}
 
-	if _, err := readStateMeta(strings.NewReader(nested(10000))); err == nil {
+	if _, err := readStateMeta(strings.NewReader(nested(10000)), nil); err == nil {
 		t.Fatal("nesting of 10000 levels accepted, want a refusal")
 	}
 }

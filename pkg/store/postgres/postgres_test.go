@@ -301,7 +301,7 @@ func TestWorkspaceConformance(t *testing.T) {
 	storetest.RunWorkspace(t, func(t *testing.T) storetest.WorkspaceStore {
 		t.Helper()
 
-		return open(t, base)
+		return openAuditedWorkspaces(t, base)
 	})
 }
 
@@ -545,17 +545,55 @@ func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit
 // errNoAuditList reports a wrapped store without an audit list.
 var errNoAuditList = errors.New("wrapped store lists no audit entries")
 
-// BreakAuditAppends implements storetest.AuditBreaker with a trigger that
-// raises an error on every insert of an audit entry.
+// BreakAuditAppends implements storetest.AuditBreaker.
 func (s *uncountedStore) BreakAuditAppends(ctx context.Context) error {
-	conn, err := pgx.Connect(ctx, s.url)
+	return breakAuditAppends(ctx, s.url)
+}
+
+// auditedWorkspaces is a store for the workspace suite that can break its
+// audit appends. It embeds the store itself, so the suite also reads its
+// audit list.
+type auditedWorkspaces struct {
+	*postgres.Store
+
+	url string
+}
+
+var _ storetest.AuditBreaker = (*auditedWorkspaces)(nil)
+
+// BreakAuditAppends implements storetest.AuditBreaker.
+func (s *auditedWorkspaces) BreakAuditAppends(ctx context.Context) error {
+	return breakAuditAppends(ctx, s.url)
+}
+
+// openAuditedWorkspaces returns a store in a fresh schema of the database at
+// base whose audit appends the suite can break.
+func openAuditedWorkspaces(t *testing.T, base string) *auditedWorkspaces {
+	t.Helper()
+
+	schemaURL := isolatedURL(t, base)
+
+	s, err := postgres.Open(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	return &auditedWorkspaces{Store: s, url: schemaURL}
+}
+
+// breakAuditAppends creates a trigger in the schema at schemaURL that raises an
+// error on every insert of an audit entry.
+func breakAuditAppends(ctx context.Context, schemaURL string) (err error) {
+	conn, err := pgx.Connect(ctx, schemaURL)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
 
 	defer func() {
 		if closeErr := conn.Close(ctx); closeErr != nil {
-			s.t.Errorf("close: %v", closeErr)
+			err = errors.Join(err, fmt.Errorf("close: %w", closeErr))
 		}
 	}()
 

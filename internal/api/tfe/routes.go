@@ -129,6 +129,17 @@ func (h *Handler) workspaceRoutes() []Route {
 			Serve:   h.readWorkspace,
 		},
 		{
+			Method: http.MethodDelete,
+			Path:   "/api/v2/organizations/{organization}/workspaces/{workspace}",
+			// A delete needs unit:manage on opentofu:<namespace>/<name>. It is
+			// a soft delete (ADR 47): the workspace keeps its state until
+			// the final delete. A locked workspace answers 409.
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionUnitManage},
+			Resolve: resolveWorkspace,
+			Serve:   h.deleteWorkspace,
+		},
+		{
 			Method: http.MethodPost,
 			Path:   "/api/v2/organizations/{organization}/workspaces",
 			// A creation needs unit:manage on the unit the body names. The

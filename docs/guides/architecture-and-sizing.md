@@ -89,5 +89,5 @@ run measures them:
 - A Pulumi checkpoint larger than 4 MiB. The server accepts up to 32 MiB by
   default (`--max-checkpoint-bytes`).
 - OpenTofu state larger than 32 MiB. The server accepts up to 32 MiB by default
-  (`--max-state-bytes`). A higher value raises the memory of the call that reads the state.
+  (`--max-state-bytes`). A higher value raises the memory of the call that reads the state. An upload with large outputs asks for more budget as the outputs grow. It answers 503 with a Retry-After of 1 to 3 seconds when the budget has no room. It answers 413 when the upload can never fit the budget. Raise `--max-body-bytes-in-flight` to fit such an upload.
 - More than one namespace, or more units than the run seeds (`-units`).

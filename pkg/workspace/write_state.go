@@ -160,7 +160,11 @@ func (s *Service) admitStream(
 func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Reader) (StateVersion, error) {
 	sv := sw.version
 
-	reader, stream := newMetaStream(body)
+	grow := func(n int) error {
+		return charge(ctx, int64(n))
+	}
+
+	reader, stream := newMetaStream(body, grow)
 
 	stored, storeErr := s.storeContent(ctx, storeInput{
 		namespace: sw.workspace.Ref.Namespace,
@@ -344,6 +348,10 @@ func (s *Service) admitDeclare(ctx context.Context, w Workspace) (func(), error)
 	return unlock, nil
 }
 
+// sealedOutputsCharge is how many times the plain outputs size a seal asks of
+// the budget: the sealed copy, and the buffers that sealing allocates.
+const sealedOutputsCharge = 2
+
 // streamedOutputs is the outputs of a streamed version: stored holds what the
 // row keeps, plain holds what the caller reads.
 type streamedOutputs struct {
@@ -362,6 +370,12 @@ func (s *Service) streamedOutputs(ctx context.Context, w Workspace, meta streame
 	plain := meta.Outputs
 	if s.sealer == nil || len(plain) == 0 {
 		return streamedOutputs{stored: plain, plain: plain}, nil
+	}
+
+	// The sealed copy is as large as the plain one, and sealing it allocates
+	// buffers that the collector frees later. Charge twice the plain size.
+	if chargeErr := charge(ctx, sealedOutputsCharge*int64(len(plain))); chargeErr != nil {
+		return streamedOutputs{stored: nil, plain: nil}, chargeErr
 	}
 
 	sealedOutputs, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), plain)

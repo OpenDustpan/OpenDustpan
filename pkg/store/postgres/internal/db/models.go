@@ -274,4 +274,6 @@ type Workspace struct {
 	UpdatedAtMs           int64
 	AllowForcedWrites     bool
 	AllowUnlockedWrites   bool
+	DeletedAtMs           pgtype.Int8
+	DeletedName           pgtype.Text
 }

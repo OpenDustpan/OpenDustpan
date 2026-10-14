@@ -368,30 +368,34 @@ ON CONFLICT DO NOTHING;
 
 -- name: GetWorkspace :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
-WHERE namespace = $1 AND name = $2;
+WHERE namespace = $1 AND name = $2 AND deleted_at_ms IS NULL;
 
 -- name: GetWorkspaceByID :one
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1;
+WHERE id = $1 AND deleted_at_ms IS NULL;
 
 -- name: LockWorkspaceForFinalize :one
 -- Locks the workspace row so two finalizes on one workspace cannot both pass
 -- the serial check.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1
+WHERE id = $1 AND deleted_at_ms IS NULL
 FOR UPDATE;
 
 -- name: ListWorkspaces :many
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
-WHERE namespace = $1
+WHERE namespace = $1 AND deleted_at_ms IS NULL
 ORDER BY name;
 
 -- name: SaveWorkspace :execrows
@@ -405,10 +409,19 @@ WHERE id = @id AND revision = @expected_revision;
 
 -- name: WorkspaceExists :one
 SELECT EXISTS (
-    SELECT 1 FROM workspaces WHERE id = $1
+    SELECT 1 FROM workspaces WHERE id = $1 AND deleted_at_ms IS NULL
 );
 
+-- name: SoftDeleteWorkspace :execrows
+-- Moves the name to deleted_name and frees it (ADR 47). A workspace name
+-- cannot hold ":", so "deleted:" and the ID never match a lookup by name. The
+-- revision moves on, so a concurrent compare-and-swap of the row fails.
+UPDATE workspaces
+SET deleted_name = name, name = 'deleted:' || id, deleted_at_ms = $1, revision = revision + 1
+WHERE id = $2 AND deleted_at_ms IS NULL;
+
 -- name: DeleteWorkspace :execrows
+-- Not used since the soft delete (ADR 47); kept for the purge of a deleted workspace.
 -- Removes one workspace. State versions go through DeleteStateVersionsOfWorkspace,
 -- the data key through DeleteSecretKeysOfStack with the workspace ID.
 DELETE FROM workspaces
@@ -460,9 +473,10 @@ WHERE workspace_id = $1 AND status = 'pending';
 -- Locks the workspace row so concurrent declares cannot both pass the
 -- pending cap.
 SELECT id, namespace, name, revision, lock_id, lock_holder, lock_reason,
-       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes
+       locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms, allow_forced_writes, allow_unlocked_writes,
+       deleted_at_ms, deleted_name
 FROM workspaces
-WHERE id = $1
+WHERE id = $1 AND deleted_at_ms IS NULL
 FOR UPDATE;
 
 -- name: ListStateContentKeys :many
@@ -1002,7 +1016,7 @@ SELECT id FROM stacks WHERE namespace = $1 AND project = $2 AND name = $3 AND de
 
 -- name: UnitWorkspaceID :one
 -- The stable ID of an OpenTofu workspace, for a grant on the unit.
-SELECT id FROM workspaces WHERE namespace = $1 AND name = $2;
+SELECT id FROM workspaces WHERE namespace = $1 AND name = $2 AND deleted_at_ms IS NULL;
 
 -- name: UnitStacksByIDs :many
 -- A deleted stack (ADR 47) is left out: its grants give nothing until a
@@ -1010,4 +1024,6 @@ SELECT id FROM workspaces WHERE namespace = $1 AND name = $2;
 SELECT id, namespace, project, name FROM stacks WHERE id = ANY(@ids::text[]) AND deleted_at_ms IS NULL;
 
 -- name: UnitWorkspacesByIDs :many
-SELECT id, namespace, name FROM workspaces WHERE id = ANY(@ids::text[]);
+-- A deleted workspace (ADR 47) is left out: its grants give nothing until
+-- a restore brings it back.
+SELECT id, namespace, name FROM workspaces WHERE id = ANY(@ids::text[]) AND deleted_at_ms IS NULL;

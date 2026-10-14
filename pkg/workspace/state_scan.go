@@ -34,12 +34,14 @@ type jsonScanner struct {
 	r     *bufio.Reader
 	keep  *capture
 	depth int
+	grow  func(n int) error
 }
 
 // capture holds the bytes of one kept value, up to limit.
 type capture struct {
 	buf   []byte
 	limit int
+	grow  func(n int) error
 }
 
 // add appends b, or fails with errCaptureFull when the value is over its limit.
@@ -51,7 +53,14 @@ func (c *capture) add(b byte) error {
 	}
 
 	if len(c.buf) == cap(c.buf) {
-		grown := make([]byte, len(c.buf), min(max(cap(c.buf)+cap(c.buf), minCaptureBytes), c.limit))
+		next := min(max(cap(c.buf)+cap(c.buf), minCaptureBytes), c.limit)
+		if c.grow != nil {
+			if growErr := c.grow(next); growErr != nil {
+				return growErr
+			}
+		}
+
+		grown := make([]byte, len(c.buf), next)
 		copy(grown, c.buf)
 		c.buf = grown
 	}
@@ -82,7 +91,7 @@ func (s *jsonScanner) end() error {
 
 // newJSONScanner returns a scanner over r.
 func newJSONScanner(r io.Reader) *jsonScanner {
-	return &jsonScanner{r: bufio.NewReaderSize(r, scanBufferBytes), keep: nil, depth: 0}
+	return &jsonScanner{r: bufio.NewReaderSize(r, scanBufferBytes), keep: nil, depth: 0, grow: nil}
 }
 
 // read consumes one byte and keeps it when a value is being kept.
