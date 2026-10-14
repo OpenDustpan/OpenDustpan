@@ -604,6 +604,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		IPAllowlists:   nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)

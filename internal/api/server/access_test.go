@@ -126,6 +126,7 @@ func newAccessFixture(t *testing.T) accessFixture {
 		Access:         grants,
 		Audit:          st,
 		OnAuditFailure: nil,
+		IPAllowlists:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

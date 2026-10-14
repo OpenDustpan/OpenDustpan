@@ -916,6 +916,25 @@ func newServices(cfg settings) (services, error) {
 	}, nil
 }
 
+// newIPAllowlistService builds the IP allowlist service from validated
+// settings, or nil when no allowlist store is configured: an SDK user who
+// did not pass WithIPAllowlistStore gets no allowlist routes.
+func newIPAllowlistService(cfg settings, namespaces *namespace.Service) (*ipallow.Service, error) {
+	allow := cfg.ipAllowlists
+	if allow == nil || allow.store == nil {
+		return nil, nil //nolint:nilnil // No allowlist store is a valid setup: the routes stay unmounted.
+	}
+
+	svc, err := ipallow.NewService(ipallow.Config{
+		Store: allow.store, Namespaces: namespaces, Now: cfg.now, Enabled: allow.enabled,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ip allowlist service: %w", err)
+	}
+
+	return svc, nil
+}
+
 // Handler returns the server's root HTTP handler, for embedding in your own server.
 func (s *Server) Handler() http.Handler {
 	return s.handler
@@ -1336,6 +1355,11 @@ func newServerHandler(
 		return nil, err
 	}
 
+	allow, err := newIPAllowlistService(cfg, deps.services.namespaces)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -1350,6 +1374,7 @@ func newServerHandler(
 		Principals:    principals,
 		Access:        grants,
 		Tokens:        deps.services.tokens,
+		IPAllowlists:  allow,
 		Audit:         serverAuditOf(cfg.namespaceStore),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()

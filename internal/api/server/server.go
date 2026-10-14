@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -76,7 +77,9 @@ type Config struct {
 	// principal or a group writes one (ADR 60, decision 7). Nil writes no
 	// entry.
 	Audit audit.ServerStore
-	// OnAuditFailure, when set, runs once for each lost audit entry, so the
+	// IPAllowlists keeps the IP allowlist of each namespace. Nil means no
+	// allowlist store is configured: the IP allowlist routes are not mounted.
+	IPAllowlists *ipallow.Service // OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
 }
@@ -106,6 +109,7 @@ type Handler struct {
 	access         *access.Service
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
+	ipAllowlists   *ipallow.Service
 	onAuditFailure func()
 	mux            *patternMux
 	routes         []Route
@@ -145,6 +149,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		access:         cfg.Access,
 		tokens:         cfg.Tokens,
 		audit:          cfg.Audit,
+		ipAllowlists:   cfg.IPAllowlists,
 		onAuditFailure: cfg.OnAuditFailure,
 		mux:            newPatternMux(),
 		routes:         nil,
@@ -287,19 +292,34 @@ func classify(err error) (int, string) {
 		return status, message
 	}
 
+	if status, message, ok := classifyIPAllowlist(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyRequest(err); ok {
+		return status, message
+	}
+
+	return classifyRegistry(err)
+}
+
+// classifyRequest maps the caller errors to their status and message: a
+// missing credential answers 401, a denied action 403, and a bad object
+// reference or body 400.
+func classifyRequest(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated"
+		return http.StatusUnauthorized, "unauthenticated", true
 	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden"
+		return http.StatusForbidden, "forbidden", true
 	case errors.Is(err, identity.ErrInvalidObject):
-		return http.StatusBadRequest, err.Error()
+		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, errInvalidBody):
-		return http.StatusBadRequest, errInvalidBody.Error()
+		return http.StatusBadRequest, errInvalidBody.Error(), true
 	case errors.Is(err, errOverrideSwitchesBody):
-		return http.StatusBadRequest, errOverrideSwitchesBody.Error()
+		return http.StatusBadRequest, errOverrideSwitchesBody.Error(), true
 	default:
-		return classifyRegistry(err)
+		return 0, "", false
 	}
 }
 

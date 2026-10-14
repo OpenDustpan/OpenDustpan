@@ -176,6 +176,21 @@ A wrong setup would otherwise make every client read as an internal address.
 Allowlists and limits treat an unknown address as denied.
 A wrong list records wrong audit sources, so review the list when entries name addresses that you do not expect.
 
+## IP allowlists of a namespace
+
+IP allowlists are off by default.
+The operator turns them on with `--ip-allowlists`.
+Each namespace opts in with its own list through three routes: GET, PUT and DELETE on `/api/server/namespaces/{namespace}/ip-allowlist`.
+These routes need the action `namespace:manage-ip-allowlist` on the namespace.
+A request whose client address (see the section about the client address) is outside the list of the namespace of its object gets 403.
+The error names the namespace and never the list.
+An unknown address is denied.
+The bootstrap admin token is exempt unless `--ip-allowlists-include-bootstrap` is set, so an administrator cannot lock themselves out.
+Every change is audited in the chain of the namespace in the same transaction.
+The check runs in the authorization step of every adapter.
+Requests with a capability URL (the OpenTofu state upload URLs) carry no principal and are not checked.
+A TFE route that lists units can answer 404 for a namespace that the caller may not see.
+
 ## Logs
 
 The server writes one log line for each request: the method, the route
