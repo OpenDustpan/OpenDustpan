@@ -257,6 +257,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"prev_hash",
 				"hash",
 				"value_count",
+				"changes",
 			},
 		},
 		{

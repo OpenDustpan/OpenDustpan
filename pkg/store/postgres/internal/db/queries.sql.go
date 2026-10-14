@@ -2669,8 +2669,8 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 `
 
 type InsertAuditEntryParams struct {
@@ -2693,6 +2693,7 @@ type InsertAuditEntryParams struct {
 	PrevHash   string
 	Hash       string
 	ValueCount pgtype.Int8
+	Changes    pgtype.Text
 }
 
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
@@ -2716,6 +2717,7 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.PrevHash,
 		arg.Hash,
 		arg.ValueCount,
+		arg.Changes,
 	)
 	return err
 }
@@ -2881,7 +2883,7 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -2913,6 +2915,7 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.PrevHash,
 		&i.Hash,
 		&i.ValueCount,
+		&i.Changes,
 	)
 	return i, err
 }
@@ -3038,7 +3041,7 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC
@@ -3084,6 +3087,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.PrevHash,
 			&i.Hash,
 			&i.ValueCount,
+			&i.Changes,
 		); err != nil {
 			return nil, err
 		}
@@ -3097,7 +3101,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -3141,6 +3145,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.PrevHash,
 			&i.Hash,
 			&i.ValueCount,
+			&i.Changes,
 		); err != nil {
 			return nil, err
 		}
