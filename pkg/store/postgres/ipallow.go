@@ -41,7 +41,7 @@ func (s *Store) NamespaceList(ctx context.Context, ns namespace.Name) (ipallow.L
 func (s *Store) SetNamespaceList(
 	ctx context.Context, ns namespace.Name, l ipallow.List, fence namespace.Fence, e audit.Entry,
 ) error {
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		n, err := q.SetNamespaceIPAllowlist(ctx, db.SetNamespaceIPAllowlistParams{
 			IpAllowlist: l.Encode(),
 			Name:        ns.String(),

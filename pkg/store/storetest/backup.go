@@ -178,7 +178,13 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	// A deleted stack keeps its row and moves its inventory entry to the
 	// deleted units (ADR 47), so the round trip carries both.
 	gone := mustCreateStack(t, s, acme, "gone")
-	if err := s.ForceDeleteStack(ctx, gone.Ref, acme.Fence(), deleteEntry(acme.Name)); err != nil {
+	err = s.ForceDeleteStack(
+		ctx,
+		gone.Ref,
+		acme.Fence(),
+		inventory.Deletion{Entry: deleteEntry(acme.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack %s: %v", gone.Ref, err)
 	}
 
@@ -238,6 +244,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupPrincipals(t, s)
 	seedBackupTokens(t, s)
 	seedBackupAccess(t, s)
+	seedBackupPurge(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -276,17 +283,17 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 
 	principals := []principal.Principal{
 		{
-			CreatedAt: now(), UpdatedAt: now().Add(time.Minute), ID: "prn-alice",
+			CreatedAt: now(), UpdatedAt: now().Add(time.Minute), DisabledAt: time.Time{}, ID: "prn-alice",
 			Subject: "alice@example.com", DisplayName: "Alice", Kind: principal.KindPerson,
 			Source: principal.SourceLocal, GroupCount: 0,
 		},
 		{
-			CreatedAt: now(), UpdatedAt: now(), ID: "prn-deploy",
+			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-deploy",
 			Subject: "ci-deploy", DisplayName: "", Kind: principal.KindService,
 			Source: principal.SourceLocal, GroupCount: 0,
 		},
 		{
-			CreatedAt: now(), UpdatedAt: now(), ID: "prn-gone",
+			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-gone",
 			Subject: "gone", DisplayName: "", Kind: principal.KindWorkload,
 			Source: principal.SourceSCIM, GroupCount: 0,
 		},
@@ -299,8 +306,13 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 	}
 
 	g := principal.Group{
-		CreatedAt: now(), UpdatedAt: now(), ID: "grp-ops", Name: "Ops", Description: "Runs the platform",
-		Source: principal.SourceLocal, MemberCount: 0,
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+		ID:          "grp-ops",
+		Name:        "Ops",
+		Description: "Runs the platform",
+		Source:      principal.SourceLocal,
+		MemberCount: 0,
 	}
 	if err := ps.CreateGroup(ctx, g, ServerChange(now(), "group:grp-ops")); err != nil {
 		t.Fatalf("create group: %v", err)
@@ -366,13 +378,59 @@ func seedBackupTokens(t *testing.T, s BackupStore) {
 	if err := ts.RotateToken(ctx, r, rotation); err != nil {
 		t.Fatalf("rotate token: %v", err)
 	}
+
+	seedBackupSweep(t, ts)
 }
 
-// backupToken returns a token of the seed that expires a day after now.
+// seedBackupSweep changes the token policy and runs one sweep, so the round
+// trip carries the policy row and the disable times of a token and of a
+// principal (ADR 53).
+func seedBackupSweep(t *testing.T, ts accesstoken.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	policy := accesstoken.Policy{
+		UpdatedAt: now(), MaxLifetime: 30 * 24 * time.Hour, Inactivity: time.Hour,
+		DisableTokens: true, DisableAccounts: true, DisableBreakGlass: true,
+	}
+
+	_, err := ts.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+		return policy, ServerChange(now(), accesstoken.PolicyRef), nil
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	// The sweep runs at the time of the database clock, after now(): every
+	// token that has not ended and prn-alice have no use in the last hour.
+	// tok-old ends before the sweep.
+	sweep := accesstoken.Sweep{Inactivity: time.Hour, Tokens: true, Accounts: true}
+	res, err := ts.SweepInactive(ctx, sweep, ServerChange)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	if len(res.Tokens) == 0 || len(res.Principals) == 0 {
+		t.Fatalf("sweep = %+v, want a disabled token and a disabled principal", res)
+	}
+}
+
+// backupToken returns a token of the seed that expires 100 years after now,
+// so it has not ended when the sweep runs at the time of the database clock.
 func backupToken(id, principalID string, kind accesstoken.Kind) accesstoken.Token {
 	return accesstoken.Token{
-		CreatedAt: now(), ExpiresAt: now().Add(24 * time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
-		ID: id, PrincipalID: principalID, Name: "seed " + id, Kind: kind, ReplacedBy: "", CreatedBy: "admin",
+		CreatedAt:   now(),
+		ExpiresAt:   now().AddDate(100, 0, 0),
+		LastUsedAt:  time.Time{},
+		RevokedAt:   time.Time{},
+		DisabledAt:  time.Time{},
+		ID:          id,
+		PrincipalID: principalID,
+		Name:        "seed " + id,
+		Kind:        kind,
+		ReplacedBy:  "",
+		CreatedBy:   "admin",
 	}
 }
 
@@ -398,6 +456,7 @@ func ServerChange(at time.Time, object string) audit.Entry {
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -555,6 +614,7 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 			Kind:       kind,
 			Outcome:    audit.OutcomeSuccess,
 			RequestID:  fmt.Sprintf("req-%d", i),
+			ObjectID:   "",
 			PrevHash:   "",
 			Hash:       "",
 			Sequence:   0,
@@ -615,6 +675,31 @@ func seedBackupKey(
 	_ = stored
 
 	return scope
+}
+
+// seedBackupPurge makes, deletes and purges the stack web/purged of acme, so
+// the seed holds one blob purge record (ADR 47) and the round trip carries
+// the blob_purges table.
+func seedBackupPurge(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	ctx := t.Context()
+	st := newStack(acme.Name, "web", "purged")
+
+	if err := s.CreateStack(ctx, st, acme.Fence()); err != nil {
+		t.Fatalf("create stack to purge: %v", err)
+	}
+
+	d := inventory.Deletion{Entry: deleteEntry(acme.Name), PurgeAfter: purgeAt()}
+	d.Entry.Object = "pulumi:" + acme.Name.String() + "/web/purged"
+
+	if err := s.DeleteStack(ctx, st.Ref, acme.Fence(), stack.EmptyGuard(), d); err != nil {
+		t.Fatalf("delete stack to purge: %v", err)
+	}
+
+	if err := s.PurgeStack(ctx, st.ID, acme.Fence(), lifecycleEntry(acme.Name, "unit:purge")); err != nil {
+		t.Fatalf("purge stack: %v", err)
+	}
 }
 
 // seedBackupRecord stores one finished backup row, so the round trip compares

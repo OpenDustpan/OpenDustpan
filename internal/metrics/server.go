@@ -33,6 +33,9 @@ const (
 	maxSinkSeries = MaxSinkSeries
 	// maxReloadSeries holds one series for each reload result.
 	maxReloadSeries = 2
+	// maxSweepResults holds one series for each result of the inactivity
+	// disable.
+	maxSweepResults = 2
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -63,12 +66,13 @@ const MaxSinkSeries = 16
 // the requests in flight gauge, the build info, the process start time, the
 // runtime gauges, the readiness failure counter (ADR 32 decision 5) and the
 // audit append failure counter (ADR 41 decision 5), and the audit sink
-// counters (ADR 60 decision 13). All
+// counters and the log sink drop counter (ADR 60 decisions 13 and 14). All
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
 // the HTTP middleware do (ADR 32 decision 9). It also holds the two
-// families of the reload of the configuration file (ADR 63 decision 5).
+// families of the reload of the configuration file (ADR 63 decision 5),
+// and counts the runs of the inactivity disable by result (ADR 53).
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -81,6 +85,7 @@ type ServerMetrics struct {
 	sinks    sinkFamilies
 	reloads  *Counter
 	reloadOK *Gauge
+	sweeps   *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -141,6 +146,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
+		sweeps: newSweepCounter(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -220,12 +226,13 @@ func (m *ServerMetrics) IncAuditAppendFailure() {
 	m.audit.Inc()
 }
 
-// sinkFamilies holds the audit sink families: counters labeled by sink,
+// sinkFamilies holds the audit and log sink families: counters labeled by sink,
 // with one series for each configured sink.
 type sinkFamilies struct {
 	shipped  *Counter
 	sinkFail *Counter
 	sinkSkip *Counter
+	logDrop  *Counter
 }
 
 // newSinkFamilies registers the audit sink families in reg.
@@ -241,6 +248,7 @@ func newSinkFamilies(reg *Registry) sinkFamilies {
 			"dustpan_audit_sink_skipped_total",
 			"Audit entries that a sink skipped because it cannot hold them, by sink.",
 		),
+		logDrop: family("dustpan_log_sink_dropped_total", "Application log records a log sink dropped, by sink."),
 	}
 }
 
@@ -269,6 +277,34 @@ func (m *ServerMetrics) AddAuditSkipped(sink string, entries int) {
 	}
 }
 
+// newSweepCounter creates dustpan_inactivity_sweeps_total in reg.
+func newSweepCounter(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_inactivity_sweeps_total",
+		"Runs of the inactivity disable by result.",
+		[]string{labelResult},
+		maxSweepResults,
+	)
+}
+
+// Results of a run of the inactivity disable.
+const (
+	SweepSuccess = "success"
+	SweepFailure = "failure"
+)
+
+// ObserveSweep adds one to the inactivity disable counter for result:
+// SweepSuccess or SweepFailure. Any other value counts as SweepFailure. The
+// server calls it after each run (ADR 53). Operators alert when the failure
+// series grows: a failed run disables nothing.
+func (m *ServerMetrics) ObserveSweep(result string) {
+	if result != SweepSuccess {
+		result = SweepFailure
+	}
+
+	m.sweeps.Inc(result)
+}
+
 // ObserveConfigReload records one reload of the configuration file (ADR 63
 // decision 5): it counts result (ReloadSuccess or ReloadFailure) in
 // dustpan_config_reloads_total and sets dustpan_config_last_reload_success
@@ -284,6 +320,15 @@ func (m *ServerMetrics) ObserveConfigReload(result string) {
 
 	m.reloads.Inc(ReloadFailure)
 	m.reloadOK.Set(0, []string{}...)
+}
+
+// AddLogSinkDropped adds records to the count of application log records
+// that the log sink named sink dropped: its queue was full or its write
+// failed (ADR 60 decision 14).
+func (m *ServerMetrics) AddLogSinkDropped(sink string, records int) {
+	if records > 0 {
+		m.sinks.logDrop.Add(uint64(records), sink)
+	}
 }
 
 // NormalizeAdapter maps an adapter label to one of the four adapters. Any

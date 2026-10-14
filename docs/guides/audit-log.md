@@ -38,6 +38,11 @@ secret value, so a value without its entry never reaches the client.
 The two `log-decryption` routes answer no secret value, so they keep
 answering 204 when the append fails.
 
+A restore or a purge of a deleted unit (ADR 47) writes one entry with the
+kind `change` (ADR 60), the action `unit:restore` or `unit:purge`, and the
+stable ID of the unit in `objectID`. The store appends it in the same
+transaction as the change, so a failed append changes nothing.
+
 Each request for an access-review export (ADR 52, decision 13) writes one
 entry with the kind `read-access`, the read-access action of the object and
 the object `access-review <object> <mode>`. The mode is `snapshot
@@ -70,11 +75,14 @@ An entry holds these fields:
 - `requestID`: the request ID the server mints. The server returns it in
   the `X-Request-Id` response header and ignores an ID the client sends
   (ADR 32).
+- `objectID`: the stable ID of the unit that the entry names (ADR 47). The
+  store sets it for each entry on a unit that exists, and for the delete,
+  restore and purge of a unit. The list omits it when the entry has none.
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
   After `prevHash`, the encoding appends each optional field that the entry
   sets, in this fixed order: `value_count=` with the decimal count, then
-  `object_id=` (ADR 47, which its own change adds), then `changes=` with
+  `object_id=` with the stable ID of the unit (ADR 47), then `changes=` with
   the canonical JSON of the changes (sorted by key), as the store holds
   it. An
   optional field that the entry does not set adds nothing, so an entry
@@ -136,6 +144,16 @@ where `S` is the first entry that does not match.
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/check?organization=acme"
+```
+
+The installation writes the entries of an action that is not in a namespace,
+such as a namespace create, to the scope `@server`. Read that scope with
+`organization=@server`. It needs the action `server:read-audit` on the
+installation instead, and the same paging. The check works the same way:
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/audit/entries?organization=@server"
 ```
 
 ## What the chain protects against
@@ -212,7 +230,7 @@ A new name starts from the first entry and sends every entry again.
 Each entry is one JSON object with `time`, `level` (`info`), `msg` (`audit entry`) and the fields of the audit API.
 `scope` names the namespace.
 `sequence` numbers the entries of the scope.
-`valueCount` and `changes` are present only when the entry has them.
+`valueCount`, `objectID` and `changes` are present only when the entry has them.
 `changes` holds the canonical JSON that the hash covers: a list sorted by `key`.
 `prevHash` and `hash` hold the chain of the entry.
 

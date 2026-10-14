@@ -48,7 +48,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -58,6 +58,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            mem,
+		Tokens:             nil,
 		Checkpoints:        mem,
 		Events:             mem,
 		Namespaces:         namespaces,

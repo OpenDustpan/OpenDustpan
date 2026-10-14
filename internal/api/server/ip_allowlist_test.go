@@ -208,6 +208,7 @@ func seedIPAllowlist(t *testing.T, st *sqlite.Store, ns namespace.Name, cidrs ..
 		Namespace:  ns,
 		Subject:    "tester",
 		IDPSubject: "",
+		ObjectID:   "",
 		TokenID:    "",
 		Action:     "namespace:set-ip-allowlist",
 		Object:     ns.String(),

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -13,15 +14,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 )
 
-// Lifetimes of a token. RFC 20 keeps the defaults open: these follow the
-// lead proposal of a maximum of one year. An administrator setting for the
-// maximum lifetime comes with ADR 53, decision 2.
+// Lifetimes of a token. RFC 20 keeps the defaults open. The maximum
+// lifetime is a setting of the Policy (ADR 53, decision 2).
 const (
 	// DefaultLifetime is the lifetime of a token when a request names no
-	// expiry.
+	// expiry, or the maximum lifetime of the Policy when that is shorter.
 	DefaultLifetime = 90 * 24 * time.Hour
-	// MaxLifetime is the longest lifetime that a request can name.
-	MaxLifetime = 365 * 24 * time.Hour
 	// DefaultRotationOverlap is how long the old token of a rotation keeps
 	// working when the request names no end time. The expiry of the old
 	// token bounds it.
@@ -61,8 +59,9 @@ type Config struct {
 	// adds no step: MFA does not exist yet (ADR 56, decision 5).
 	Freshness Freshness
 	// Grants runs the escalation check of a token for another principal.
-	// Nil lets only an administrator act for another principal (fail
-	// closed) until the grants of ADR 52 can answer the check.
+	// The server wires the grants of ADR 52. Nil lets only an
+	// administrator act for another principal (fail closed): a store that
+	// keeps no grants.
 	Grants GrantCheck
 	// Logger logs a failed write of a last-used time. Nil discards it.
 	Logger *slog.Logger
@@ -88,6 +87,7 @@ type Service struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	newID      func(prefix string) string
+	policies   *policyCache
 }
 
 var _ identity.Authenticator = (*Service)(nil)
@@ -119,6 +119,7 @@ func NewService(cfg Config) (*Service, error) {
 	return &Service{
 		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness, grants: cfg.Grants,
 		logger: logger, now: now, newID: newID,
+		policies: &policyCache{readAt: time.Time{}, policy: DefaultPolicy(), mu: sync.Mutex{}, valid: false},
 	}, nil
 }
 
@@ -128,8 +129,8 @@ func (s *Service) Now() time.Time {
 	return s.now().UTC().Truncate(time.Millisecond)
 }
 
-// Input names the fields of a new token. A zero ExpiresAt takes
-// DefaultLifetime.
+// Input names the fields of a new token. A zero ExpiresAt takes the default
+// lifetime.
 type Input struct {
 	ExpiresAt   time.Time
 	PrincipalID string
@@ -174,7 +175,7 @@ func (s *Service) Create(
 
 	at := s.Now()
 
-	expiresAt, err := expiry(at, in.ExpiresAt)
+	expiresAt, err := s.expiry(ctx, at, in.ExpiresAt)
 	if err != nil {
 		return Token{}, Secret{}, err
 	}
@@ -200,12 +201,13 @@ func (s *Service) Create(
 	return n.token, n.secret, nil
 }
 
-// expiry returns the expiry of a token made at the time at: want, or
-// DefaultLifetime when want is zero. It returns ErrInvalid for an expiry
-// that is not after at, or that is more than MaxLifetime after at.
-func expiry(at, want time.Time) (time.Time, error) {
+// expiry returns the expiry of a token made at the time at under the
+// policy p: want, or the default lifetime of p when want is zero. It returns
+// ErrInvalid for an expiry that is not after at, or that is more than the
+// maximum lifetime of p after at.
+func expiry(p Policy, at, want time.Time) (time.Time, error) {
 	if want.IsZero() {
-		return at.Add(DefaultLifetime), nil
+		return at.Add(p.DefaultLifetimeUnder()), nil
 	}
 
 	want = want.UTC().Truncate(time.Millisecond)
@@ -213,9 +215,9 @@ func expiry(at, want time.Time) (time.Time, error) {
 	switch {
 	case !want.After(at):
 		return time.Time{}, fmt.Errorf("%w: the expiry %s is not in the future", ErrInvalid, want.Format(time.RFC3339))
-	case want.Sub(at) > MaxLifetime:
-		return time.Time{}, fmt.Errorf("%w: the expiry %s is more than %s away",
-			ErrInvalid, want.Format(time.RFC3339), MaxLifetime)
+	case want.Sub(at) > p.MaxLifetime:
+		return time.Time{}, fmt.Errorf("%w: the expiry %s is more than the maximum lifetime %s away",
+			ErrInvalid, want.Format(time.RFC3339), p.MaxLifetime)
 	default:
 		return want, nil
 	}
@@ -229,6 +231,40 @@ func (s *Service) Get(ctx context.Context, id string) (Token, error) {
 	}
 
 	return t, nil
+}
+
+// CheckActive answers nil when the access token with the ID id is active now
+// and its principal still exists and is not disabled. Otherwise it answers an error that wraps
+// identity.ErrUnauthenticated, or the store error. It records no use of the
+// token: an update checks its token on each lease request (ADR 53).
+func (s *Service) CheckActive(ctx context.Context, id string) error {
+	t, err := s.store.GetToken(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return fmt.Errorf("%w: access token not found", identity.ErrUnauthenticated)
+	}
+
+	if err != nil {
+		return fmt.Errorf("check access token %q: %w", id, err)
+	}
+
+	if status := t.StatusAt(s.Now()); status != StatusActive {
+		return fmt.Errorf("%w: access token %s", identity.ErrUnauthenticated, status)
+	}
+
+	owner, err := s.principals.GetPrincipal(ctx, t.PrincipalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		return fmt.Errorf("%w: principal of access token is gone", identity.ErrUnauthenticated)
+	}
+
+	if err != nil {
+		return fmt.Errorf("check principal of access token %q: %w", id, err)
+	}
+
+	if !owner.DisabledAt.IsZero() {
+		return fmt.Errorf("%w: the principal of the access token is disabled", identity.ErrUnauthenticated)
+	}
+
+	return nil
 }
 
 // List returns one page of tokens, newest first.
@@ -333,7 +369,7 @@ func (s *Service) Rotate(
 		return Rotation{}, Secret{}, err
 	}
 
-	expiresAt, err := expiry(at, in.ExpiresAt)
+	expiresAt, err := s.expiry(ctx, at, in.ExpiresAt)
 	if err != nil {
 		return Rotation{}, Secret{}, err
 	}
@@ -393,10 +429,115 @@ func minTime(a, b time.Time) time.Time {
 	return b
 }
 
+// Policy returns the token life cycle policy of the installation.
+func (s *Service) Policy(ctx context.Context) (Policy, error) {
+	p, err := s.store.GetPolicy(ctx)
+	if err != nil {
+		return Policy{}, fmt.Errorf("read access token policy: %w", err)
+	}
+
+	return p, nil
+}
+
+// PolicyChange names the fields of the policy that a change sets. A nil
+// field keeps its value.
+type PolicyChange struct {
+	MaxLifetime       *time.Duration
+	Inactivity        *time.Duration
+	DisableTokens     *bool
+	DisableAccounts   *bool
+	DisableBreakGlass *bool
+}
+
+// SetPolicy applies c to the policy, with the entry e, and returns the
+// stored policy (ADR 53, decision 6). The store reads and writes the policy
+// in one transaction, so two changes cannot lose one of them. A lower
+// maximum lifetime applies to the tokens made after the change: it does not
+// end a token that exists.
+func (s *Service) SetPolicy(ctx context.Context, e audit.Entry, c PolicyChange) (Policy, error) {
+	p, err := s.store.UpdatePolicy(ctx, func(old Policy) (Policy, audit.Entry, error) {
+		p := c.applyTo(old)
+		p.UpdatedAt = s.Now()
+
+		if err := p.Validate(); err != nil {
+			return Policy{}, audit.Entry{}, err
+		}
+
+		return p, change(e, p.UpdatedAt, PolicyRef), nil
+	})
+
+	s.policies.forget()
+
+	if errors.Is(err, ErrInvalid) {
+		return Policy{}, err
+	}
+
+	if err != nil {
+		return Policy{}, fmt.Errorf("set access token policy: %w", err)
+	}
+
+	return p, nil
+}
+
+// applyTo returns p with the fields of c that are set.
+func (c PolicyChange) applyTo(p Policy) Policy {
+	if c.MaxLifetime != nil {
+		p.MaxLifetime = *c.MaxLifetime
+	}
+
+	if c.Inactivity != nil {
+		p.Inactivity = *c.Inactivity
+	}
+
+	if c.DisableTokens != nil {
+		p.DisableTokens = *c.DisableTokens
+	}
+
+	if c.DisableAccounts != nil {
+		p.DisableAccounts = *c.DisableAccounts
+	}
+
+	if c.DisableBreakGlass != nil {
+		p.DisableBreakGlass = *c.DisableBreakGlass
+	}
+
+	return p
+}
+
+// SweepInactive runs the inactivity disable once (ADR 53, decision 4), with
+// the entry e for each record that it disables. It reads the policy: with
+// an inactivity period of zero, or with tokens and accounts both off, it
+// changes nothing. The store takes the time of the run from the database
+// clock, and the entries carry that time. The break-glass credential of
+// ADR 57 has no stored record yet, so the bootstrap admin tokens are never
+// disabled here.
+func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult, error) {
+	p, err := s.Policy(ctx)
+	if err != nil {
+		return SweepResult{}, err
+	}
+
+	if p.Inactivity == 0 || (!p.DisableTokens && !p.DisableAccounts) {
+		return SweepResult{At: time.Time{}, Tokens: nil, Principals: nil}, nil
+	}
+
+	sweep := Sweep{Inactivity: p.Inactivity, Tokens: p.DisableTokens, Accounts: p.DisableAccounts}
+
+	res, err := s.store.SweepInactive(ctx, sweep, func(at time.Time, object string) audit.Entry {
+		return change(e, at, object)
+	})
+	if err != nil {
+		return SweepResult{}, fmt.Errorf("disable inactive access tokens and accounts: %w", err)
+	}
+
+	return res, nil
+}
+
 // AuthenticateToken implements identity.Authenticator. It resolves raw to
 // the principal of its token. A value that does not have the form of a
-// secret, an unknown secret, and a token that expired or was revoked, or
-// whose principal was deleted, answer identity.ErrUnauthenticated. The
+// secret, an unknown secret, a token that expired, was revoked, was
+// disabled or is inactive under the policy, and a token whose principal was
+// deleted or disabled, answer identity.ErrUnauthenticated. The
 // principal is never an administrator: grants decide what it can do
 // (ADR 52). A failed store read answers its error, so the caller fails
 // closed.
@@ -425,6 +566,15 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 		return identity.Principal{}, fmt.Errorf("%w: access token %s", identity.ErrUnauthenticated, status)
 	}
 
+	if !m.Owner.DisabledAt.IsZero() {
+		return identity.Principal{}, fmt.Errorf("%w: the principal of the access token is disabled",
+			identity.ErrUnauthenticated)
+	}
+
+	if err := s.checkPolicyActive(ctx, m.Token, m.Owner, now); err != nil {
+		return identity.Principal{}, err
+	}
+
 	s.touch(ctx, m.Token, now)
 
 	return identity.Principal{
@@ -434,6 +584,29 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 		TokenID:        m.Token.ID,
 		TokenExpiresAt: m.Token.ExpiresAt,
 	}, nil
+}
+
+// checkPolicyActive refuses the token t of the owner o when the policy disables
+// t, or the user account o, as inactive at now, before the sweep writes the
+// disable: the sweep runs once an hour, and a use would else move the last
+// use forward and keep t, or o, alive. A failed read of the policy answers
+// its error, so the caller fails closed.
+func (s *Service) checkPolicyActive(ctx context.Context, t Token, o Owner, now time.Time) error {
+	p, err := s.policies.get(ctx, now, s.Policy)
+	if err != nil {
+		return fmt.Errorf("authenticate access token: %w", err)
+	}
+
+	if p.inactiveAt(t, now) {
+		return fmt.Errorf("%w: access token inactive for %s", identity.ErrUnauthenticated, p.Inactivity)
+	}
+
+	if p.accountInactiveAt(o, now) {
+		return fmt.Errorf("%w: the user account of the access token is inactive for %s",
+			identity.ErrUnauthenticated, p.Inactivity)
+	}
+
+	return nil
 }
 
 // touch records the use of t at now, at most once for each touchEvery. A
@@ -447,6 +620,17 @@ func (s *Service) touch(ctx context.Context, t Token, now time.Time) {
 	if err := s.store.TouchToken(ctx, t.ID, now, touchEvery); err != nil {
 		s.logger.WarnContext(ctx, "record access token use failed", slog.String("token_id", t.ID))
 	}
+}
+
+// expiry reads the policy and returns the expiry of a token made at the
+// time at, as the package function expiry does.
+func (s *Service) expiry(ctx context.Context, at, want time.Time) (time.Time, error) {
+	p, err := s.Policy(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return expiry(p, at, want)
 }
 
 // requireFresh runs the MFA freshness check when one is wired.
@@ -503,6 +687,7 @@ func (s *Service) newToken(spec tokenSpec) (issued, error) {
 		ExpiresAt:   spec.expiresAt,
 		LastUsedAt:  time.Time{},
 		RevokedAt:   time.Time{},
+		DisabledAt:  time.Time{},
 		ID:          s.newID(idPrefix),
 		PrincipalID: spec.principalID,
 		Name:        spec.name,

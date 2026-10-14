@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -183,13 +184,30 @@ func (m *mapStackStore) DeleteStack(
 	ref stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ audit.Entry,
+	_ inventory.Deletion,
 ) error {
 	return m.deleteRef(ref)
 }
 
-func (m *mapStackStore) ForceDeleteStack(_ context.Context, ref stack.Ref, _ namespace.Fence, _ audit.Entry) error {
+func (m *mapStackStore) ForceDeleteStack(
+	_ context.Context,
+	ref stack.Ref,
+	_ namespace.Fence,
+	_ inventory.Deletion,
+) error {
 	return m.deleteRef(ref)
+}
+
+// RestoreStack implements stack.Store; this fake holds no deleted stack.
+func (*mapStackStore) RestoreStack(
+	_ context.Context, _ stack.ID, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) (stack.Ref, error) {
+	return stack.Ref{}, stack.ErrNotFound
+}
+
+// PurgeStack implements stack.Store; this fake holds no deleted stack.
+func (*mapStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ audit.Entry) error {
+	return stack.ErrNotFound
 }
 
 func (m *mapStackStore) RenameStack(
@@ -288,7 +306,7 @@ func buildSecretFixture(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -1061,7 +1079,7 @@ func TestSecretsMissingKey(t *testing.T) {
 	}
 
 	stacks, stacksErr := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if stacksErr != nil {
 		t.Fatalf("stack service: %v", stacksErr)
@@ -1153,13 +1171,30 @@ func (m *failingStackStore) DeleteStack(
 	_ stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ audit.Entry,
+	_ inventory.Deletion,
 ) error {
 	panic("failingStackStore.DeleteStack is not used")
 }
 
-func (m *failingStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
+func (m *failingStackStore) ForceDeleteStack(
+	_ context.Context,
+	_ stack.Ref,
+	_ namespace.Fence,
+	_ inventory.Deletion,
+) error {
 	panic("failingStackStore.ForceDeleteStack is not used")
+}
+
+// RestoreStack implements stack.Store; this fake holds no deleted stack.
+func (*failingStackStore) RestoreStack(
+	_ context.Context, _ stack.ID, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) (stack.Ref, error) {
+	return stack.Ref{}, stack.ErrNotFound
+}
+
+// PurgeStack implements stack.Store; this fake holds no deleted stack.
+func (*failingStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ audit.Entry) error {
+	return stack.ErrNotFound
 }
 
 func (m *failingStackStore) RenameStack(
@@ -1452,7 +1487,7 @@ func newKeylessSecretFixture(t *testing.T) (secretFixture, string) {
 	}
 
 	stacks, stacksErr := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if stacksErr != nil {
 		t.Fatalf("stack service: %v", stacksErr)
@@ -1598,7 +1633,7 @@ func newTwoStackServices(t *testing.T) twoStackServices {
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -1821,7 +1856,7 @@ func newSecretFixtureWithLogger(t *testing.T, logged *bytes.Buffer) secretFixtur
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -1896,6 +1931,7 @@ func newFailingHandler(t *testing.T, err error) *pulumi.Handler {
 			Namespaces: namespaces,
 			Now:        nil,
 			State:      nil,
+			Retention:  0,
 		},
 	)
 	if stacksErr != nil {

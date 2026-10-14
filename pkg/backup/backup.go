@@ -50,8 +50,10 @@ const (
 // holds installation last: the migration seeds its one row, and the export
 // carries it like data, so a restore loads the state the backup holds. The
 // empty checks skip it: a fresh database holds the seeded row and still
-// counts as empty. A new migration that adds a table must add its name here,
-// and the conformance suite fails while the schema and this list differ.
+// counts as empty. access_token_policy is seeded the same way, and the
+// restore stage clears both seeded rows before it loads the backup. A new
+// migration that adds a table must add its name here, and the conformance suite fails while the schema and this list
+// differ.
 //
 //nolint:gochecknoglobals // The shared frozen table list: Go has no constant slices, and both adapters use this one source.
 var Tables = []string{
@@ -66,6 +68,7 @@ var Tables = []string{
 	"secret_keys",
 	"inventory",
 	"inventory_deleted",
+	"blob_purges",
 	"workspaces",
 	"state_versions",
 	"audit_entries",
@@ -76,6 +79,7 @@ var Tables = []string{
 	"roles",
 	"grants",
 	"audit_sink_cursors",
+	"access_token_policy",
 	"backups",
 	"restores",
 	"installation",

@@ -711,6 +711,11 @@ func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) (err
 
 // List forwards to the audit list of the wrapped store, which the embedded
 // interface hides, so the delete case can read the entry of a delete.
+// Inner implements storetest.Wrapper.
+func (s *uncountedStore) Inner() any {
+	return s.UpdatesStore
+}
+
 func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
@@ -2252,6 +2257,23 @@ func BenchmarkPrincipalLists(b *testing.B) {
 	})
 
 	principaltest.Bench(b, s)
+}
+
+// BenchmarkCallerGrants measures the first page of the grants of a caller
+// at the scale of accesstest.BenchCallerGrants.
+func BenchmarkCallerGrants(b *testing.B) {
+	s, err := sqlite.Open(b.Context(), filepath.Join(b.TempDir(), "dustpan.db"))
+	if err != nil {
+		b.Fatalf("open store: %v", err)
+	}
+
+	b.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			b.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	accesstest.BenchCallerGrants(b, s)
 }
 
 // BenchmarkAuthorizer measures one decision and one list-objects at the

@@ -23,6 +23,11 @@ OpenDustpan is pre-alpha. Do not keep production state on it.
 - **Two short-lived capabilities need no token.** A Pulumi update uses an
   update lease token. An OpenTofu state upload uses a random token in its
   URL. Each is 32 random bytes, and the server keeps only its SHA-256 hash.
+  A running Pulumi update also checks, on each request, the access token that
+  started it. When that token is revoked, expired or its principal is deleted,
+  each later request answers 401. A request in flight when the revoke commits
+  may finish. An update that a bootstrap administrator token started has no
+  such token, so no check runs.
 
 Planned: users, teams and roles (RFC 19), scoped access tokens (RFC 20), and
 single sign-on with directory sync (RFC 21).
@@ -42,6 +47,26 @@ single sign-on with directory sync (RFC 21).
 
 The actions already split, for example, reading a unit from reading its
 secrets. With only administrators, that split has no effect yet.
+
+## Access tokens
+
+ADR 53 adds access tokens that the server stores (`odp_` secrets) for
+persons and services.
+
+- **The server stores only a SHA-256 digest of each secret.** It shows the
+  secret once, at create or rotation.
+- **An access token cannot make or rotate a token.** Only a caller without
+  a stored token can: today the bootstrap admin token (ADR 6), later a
+  sign-in (ADR 55). A token that could make tokens would outlive its
+  maximum lifetime and a revoke of the token that made it.
+- **A create or rotation for another principal is a grant by proxy.** The
+  caller must hold every action that the grants of that principal give,
+  through its groups too. Otherwise the server answers 403.
+- **Known gap: the check runs at create and rotation only.** A token acts
+  with the grants of its principal at the time of each request. When an
+  administrator later gives that principal a new grant, its tokens get the
+  new actions too, also tokens that a caller without those actions made.
+  Issue #531 tracks this question.
 
 ## Pulumi secrets
 
@@ -274,7 +299,8 @@ entry and how to read them.
   route.
 - **Who can read the log.** `GET /api/audit/entries` lists the entries and
   `GET /api/audit/check` checks the chain. Both need the action
-  `namespace:read-audit` on the namespace.
+  `namespace:read-audit` on the namespace. For the installation scope
+  `@server`, both need `server:read-audit` on the installation instead.
 - **A hash chain for each namespace.** Each entry holds the SHA-256 of its
   own fields and of the previous entry. The check finds a changed or a
   deleted entry. It does not stop a person who can write to the database:

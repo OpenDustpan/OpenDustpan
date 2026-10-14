@@ -76,6 +76,56 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 	return out, total, nil
 }
 
+// CallerGrants implements access.ReviewStore. It reads the page and, when
+// asked, the count in one REPEATABLE READ read-only transaction, so they
+// agree.
+func (s *Store) CallerGrants(ctx context.Context, cq access.CallerGrantsQuery) ([]access.ReviewRow, int64, error) {
+	p := db.CallerGrantsParams{
+		AsOfMs: cq.AsOfMs, Principal: cq.Principal, Groups: nonNil(cq.Groups), AfterAtMs: cq.After.AtMs,
+		AfterID: cq.After.ID, AfterMemberAtMs: cq.After.MemberAtMs, AfterMemberID: cq.After.MemberID,
+		RowLimit: int64(cq.Limit),
+	}
+
+	var (
+		out   []access.ReviewRow
+		total int64
+	)
+
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		rows, listErr := q.CallerGrants(ctx, p)
+		if listErr != nil {
+			return fmt.Errorf("select caller grants: %w", listErr)
+		}
+
+		review := make([]db.ReviewGrantsRow, 0, len(rows))
+		for i := range rows {
+			review = append(review, db.ReviewGrantsRow(rows[i]))
+		}
+
+		if out, listErr = reviewRows(review); listErr != nil {
+			return listErr
+		}
+
+		if !cq.Count {
+			return nil
+		}
+
+		total, listErr = q.CountCallerGrants(ctx, db.CountCallerGrantsParams{
+			Principal: p.Principal, AsOfMs: p.AsOfMs, Groups: p.Groups,
+		})
+		if listErr != nil {
+			return fmt.Errorf("count caller grants: %w", listErr)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return out, total, nil
+}
+
 // reviewRows maps the rows of one export page.
 func reviewRows(rows []db.ReviewGrantsRow) ([]access.ReviewRow, error) {
 	out := make([]access.ReviewRow, 0, len(rows))

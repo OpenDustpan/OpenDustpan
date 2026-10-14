@@ -66,6 +66,7 @@ func ipAllowlistEntry(ns namespace.Name) audit.Entry {
 		Namespace:  ns,
 		Subject:    "alice@example.com",
 		IDPSubject: "",
+		ObjectID:   "",
 		TokenID:    "",
 		Action:     "namespace:set-ip-allowlist",
 		Object:     ns.String(),

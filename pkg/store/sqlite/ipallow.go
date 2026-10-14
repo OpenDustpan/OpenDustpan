@@ -46,7 +46,7 @@ func (s *Store) SetNamespaceList(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		n, err := q.SetNamespaceIPAllowlist(ctx, db.SetNamespaceIPAllowlistParams{
 			IpAllowlist: l.Encode(),
 			Name:        ns.String(),

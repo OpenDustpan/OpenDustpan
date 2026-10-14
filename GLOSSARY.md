@@ -97,8 +97,24 @@ The dialect-neutral format of the SQL part of a backup: one compressed file of J
 _Avoid_: Export format, dump format
 
 **Restore**:
-The installation API operation that replaces the SQL data of an installation with a backup (ADR 38). The server checks the backup before it changes live data, applies it in maintenance mode, and takes a backup of the live data first. It is not the restore of one older version of a unit (ADR 28).
+The installation API operation that replaces the SQL data of an installation with a backup (ADR 38). The server checks the backup before it changes live data, applies it in maintenance mode, and takes a backup of the live data first. It is not the restore of one older version of a unit (ADR 28). It is also not the restore of a deleted unit (ADR 47).
 _Avoid_: Recovery, load, import
+
+**Deleted unit**:
+A unit after a delete through its tool (ADR 47). It leaves every list and its name is free at once. OpenDustpan keeps its state, history, secrets and grants until a purge. The inventory API lists the deleted units of a namespace, and a restore of a deleted unit brings one back with its stable ID.
+_Avoid_: Tombstone (except for the stored row), trashed unit, archived unit
+
+**Retention period**:
+The time that a deleted unit stays restorable, from the delete to its purge time (`purgeAfter`). `--soft-delete-retention` sets it. The default is 720 hours, and the minimum is one hour.
+_Avoid_: Grace period, TTL
+
+**Purge**:
+The final delete of a deleted unit (ADR 47). It deletes the rows of the unit, its data key, its deleted inventory entry and its blobs, and ends the grants on it. It cannot be undone. An admin can purge a unit before its retention period ends.
+_Avoid_: Hard delete, wipe
+
+**Final delete**:
+The same as a purge. Use "purge" in code and in the API, and "final delete" where a reader needs the plain meaning.
+_Avoid_: Permanent delete
 
 **Maintenance mode**:
 The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/server/maintenance/enter`. The other state is `normal`.
@@ -142,6 +158,12 @@ _Avoid_: PAT, user token
 
 **Token rotation**:
 A call that issues a new access token for the same principal and sets an end time for the old one. The old token works until that end time (ADR 53).
+
+**Token policy**:
+The administrator settings of the access token life cycle for the installation: the maximum lifetime of a token and the inactivity disable (ADR 53).
+
+**Inactivity disable**:
+The job that disables an access token or a user account after a set period with no use. The default period is 90 days. An administrator can change the period or turn the job off (ADR 53).
 
 **Service token**:
 An access token that belongs to a principal that is not a person, for a machine that cannot sign in to the console. Workload identity is the first choice for machines (ADR 54).
@@ -336,7 +358,7 @@ _Avoid_: Fork, enterprise edition, cloud edition
 - **Organization** is the word each tool uses for a namespace. Use it only to name a field or command of a tool's protocol.
 - **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.
 - **Migration** means a SQL schema migration only. For the move of a unit into OpenDustpan, write "import".
-- **Restore** has two meanings. A restore of a backup replaces the data of a whole installation (ADR 38). A restore of a version makes one older version of a unit its new current state (ADR 28). Name which one.
+- **Restore** has three meanings. A restore of a backup replaces the data of a whole installation (ADR 38). A restore of a version makes one older version of a unit its new current state (ADR 28). A restore of a deleted unit brings the unit back before its purge (ADR 47). Name which one.
 - **Lock** names the workspace lock of OpenTofu and the unit lock of the inventory. Code also says "stack lock" for the hold that a mutating Pulumi update has on its stack. Do not call a lease a lock.
 - **Delta** and **diff** are different. A delta upload saves a checkpoint. A state diff compares two versions.
 - **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.

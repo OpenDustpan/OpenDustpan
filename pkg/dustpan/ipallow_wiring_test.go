@@ -98,6 +98,7 @@ func newIPAllowlistServer(t *testing.T, includeBootstrap bool) *dustpan.Server {
 		Namespace:  nsName,
 		Subject:    "alice@example.com",
 		IDPSubject: "",
+		ObjectID:   "",
 		TokenID:    "",
 		Action:     "namespace:set-ip-allowlist",
 		Object:     nsName.String(),

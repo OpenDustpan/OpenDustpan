@@ -876,7 +876,8 @@ func classify(err error) (int, string) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
 		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
-	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid):
+	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid),
+		errors.Is(err, stack.ErrAccessTokenUnchecked):
 		return http.StatusUnauthorized, "unauthenticated"
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden"

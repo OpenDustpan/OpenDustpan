@@ -75,6 +75,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.reviewRoutes()...)
 	routes = append(routes, h.tokenRoutes()...)
 	routes = append(routes, h.ownTokenRoutes()...)
+	routes = append(routes, h.tokenPolicyRoutes()...)
 
 	return routes
 }

@@ -37,6 +37,12 @@ package server
 // object (?object=), or the objects of one kind where it can do an action
 // (?type=&action=), paged. It needs caller:read only, so every signed-in
 // principal reads its own access.
+//
+// GET /api/server/caller/grants answers the current grants of the caller,
+// paged: its own grants and the grants of its groups, with the group
+// named. It needs caller:read only, and writes no audit entry. Each page
+// reads the groups of the caller at its request, and the memberships and
+// the grants as of the snapshot time of the first page (asOfMs).
 
 import (
 	"errors"
@@ -69,6 +75,7 @@ const (
 	collectionReviewPath = "/api/server/namespaces/{namespace}/collections/{collection}/access-review"
 	unitReviewPath       = "/api/server/namespaces/{namespace}/unit-access-review"
 	callerAccessPath     = "/api/server/caller/access"
+	callerGrantsPath     = "/api/server/caller/grants"
 )
 
 // reviewRowResponse is one row of an access-review export on the wire.
@@ -174,7 +181,17 @@ func (h *Handler) reviewRoutes() []Route {
 		{resolveUnitQuery, unitReviewPath, identity.ActionUnitReadAccess},
 	}
 
-	out := make([]Route, 0, len(kinds)+1)
+	callers := []Route{{
+		Method: http.MethodGet, Path: callerAccessPath, Scope: ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller,
+		Serve: h.serveAccessRead(callerAccess),
+	}, {
+		Method: http.MethodGet, Path: callerGrantsPath, Scope: ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller,
+		Serve: h.serveAccessRead(callerGrants),
+	}}
+
+	out := make([]Route, 0, len(kinds)+len(callers))
 
 	for _, k := range kinds {
 		out = append(out, Route{
@@ -189,18 +206,14 @@ func (h *Handler) reviewRoutes() []Route {
 		})
 	}
 
-	return append(out, Route{
-		Method: http.MethodGet, Path: callerAccessPath, Scope: ScopeAuthorized,
-		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller,
-		Serve: h.serveAccessRead(callerAccess),
-	})
+	return append(out, callers...)
 }
 
 // reviewAccess returns the operation of GET on an access-review path with
 // the read-access action action: one page of the export of the object, and
 // its audit entry.
 func (h *Handler) reviewAccess(action identity.Action) accessOp {
-	return func(_ http.ResponseWriter, r *http.Request, svc *access.Service, c call) (principalResult, error) {
+	return func(_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call) (principalResult, error) {
 		req, err := reviewRequest(r)
 		if err != nil {
 			return failed(""), err
@@ -215,29 +228,40 @@ func (h *Handler) reviewAccess(action identity.Action) accessOp {
 			return failed(""), err
 		}
 
-		out := reviewResponse{
-			Total: page.Total, AsOfMs: nil, Grants: make([]reviewRowResponse, 0, len(page.Entries)),
-			NextCursor: page.NextCursor,
-		}
-
-		if page.AsOf != nil {
-			ms := page.AsOf.UnixMilli()
-			out.AsOfMs = &ms
-		}
-
-		for i := range page.Entries {
-			out.Grants = append(out.Grants, reviewRowOf(page.Entries[i]))
-		}
-
-		return ok(http.StatusOK, out, ""), nil
+		return ok(http.StatusOK, reviewPageOf(page), ""), nil
 	}
+}
+
+// reviewPageOf maps one page of an export to the wire.
+func reviewPageOf(page access.ReviewPage) reviewResponse {
+	out := reviewResponse{
+		Total: page.Total, AsOfMs: nil, Grants: make([]reviewRowResponse, 0, len(page.Entries)),
+		NextCursor: page.NextCursor,
+	}
+
+	if page.AsOf != nil {
+		ms := page.AsOf.UnixMilli()
+		out.AsOfMs = &ms
+	}
+
+	for i := range page.Entries {
+		out.Grants = append(out.Grants, reviewRowOf(page.Entries[i]))
+	}
+
+	return out
 }
 
 // appendReviewRead writes the audit entry of one export request: kind
 // read-access, in the namespace of the object or in @server. It fails
 // closed: the caller answers the error and no rows. NewHandler refuses a
 // config that serves the export with no audit store.
-func (h *Handler) appendReviewRead(r *http.Request, c call, action identity.Action, object string, at time.Time) error {
+func (h *Handler) appendReviewRead(
+	r *http.Request,
+	c *call,
+	action identity.Action,
+	object string,
+	at time.Time,
+) error {
 	entry := callerEntry(r, c.p, action)
 	entry.At, entry.Kind, entry.Outcome = at, audit.KindReadAccess, audit.OutcomeSuccess
 	entry.Object = object
@@ -408,7 +432,7 @@ func millisOf(t *time.Time) *int64 {
 // callerAccess serves GET /api/server/caller/access: the access of the
 // caller on one object, or by object kind.
 func callerAccess(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	q := r.URL.Query()
 	object, kind := q.Get("object"), q.Get("type")
@@ -487,4 +511,22 @@ func callerAccessByType(
 	}
 
 	return ok(http.StatusOK, out, ""), nil
+}
+
+// callerGrants serves GET /api/server/caller/grants: one page of the
+// current grants of the caller, in the shape of an access-review snapshot.
+func callerGrants(
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
+) (principalResult, error) {
+	page, err := pageRequest(r)
+	if err != nil {
+		return failed(""), err
+	}
+
+	got, err := svc.CallerGrants(r.Context(), c.p, access.CallerGrantsRequest{Cursor: page.Cursor, Limit: page.Limit})
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, reviewPageOf(got), ""), nil
 }

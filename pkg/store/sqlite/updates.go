@@ -51,6 +51,7 @@ func (s *Store) CreateUpdate(ctx context.Context, u stack.Update, fence namespac
 			EndedAtMs:        row.EndedAtMs,
 			CreatedBy:        row.CreatedBy,
 			RestoredFrom:     row.RestoredFrom,
+			TokenID:          row.TokenID,
 		})
 		if err != nil {
 			if isForeignKeyViolation(err) {
@@ -594,6 +595,7 @@ func saveUpdate(ctx context.Context, q *db.Queries, u stack.Update, stackID stri
 		StartedAtMs:      row.StartedAtMs,
 		EndedAtMs:        row.EndedAtMs,
 		JournalVersion:   row.JournalVersion,
+		TokenID:          row.TokenID,
 		StackID:          row.StackID,
 		ID:               row.ID,
 		ExpectedRevision: row.Revision - 1,
@@ -701,6 +703,7 @@ func fromGetUpdateRow(row db.GetUpdateRow) codec.UpdateRow {
 		DryRun:           row.DryRun,
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
+		TokenID:          row.TokenID,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}
@@ -724,6 +727,7 @@ func fromActiveUpdateRow(row db.ActiveUpdateRow) codec.UpdateRow {
 		DryRun:           row.DryRun,
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
+		TokenID:          row.TokenID,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}
@@ -747,6 +751,7 @@ func fromListUpdateRow(row db.ListUpdatesRow) codec.UpdateRow {
 		DryRun:           row.DryRun,
 		CreatedBy:        row.CreatedBy,
 		RestoredFrom:     row.RestoredFrom,
+		TokenID:          row.TokenID,
 		JournalVersion:   row.JournalVersion,
 		CheckpointBytes:  row.CheckpointBytes,
 	}

@@ -636,6 +636,7 @@ func (h *Handler) enforcePublic(route Route) http.HandlerFunc {
 // the scheme check, Resolve, the token check, the address gate, then the
 // handler. The address gate runs after the token check, so a caller without
 // the token gets the same answer whether or not the namespace has a list.
+// The update service checks the access token that started the update.
 func (h *Handler) enforceLease(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()

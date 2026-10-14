@@ -201,6 +201,7 @@ func testEntry() audit.Entry {
 		Namespace:  "",
 		Subject:    "alice@example.com",
 		IDPSubject: "",
+		ObjectID:   "",
 		TokenID:    "",
 		Action:     "namespace:set-ip-allowlist",
 		Object:     "acme",

@@ -90,8 +90,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // auditEntry is one audit entry as the console reads it, in camelCase. AtMs
 // is the time of the action in Unix milliseconds. Sequence numbers the entry
-// in its namespace from 1. PrevHash is empty for the first entry of a
-// namespace.
+// in its namespace from 1. ObjectID is the stable ID of the unit of the
+// entry, and is omitted when the entry has none. PrevHash is empty for the
+// first entry of a namespace.
 //
 // Contract: never remove or rename these fields. The console reads only this
 // API, and it ships on its own schedule, so a released console keeps working
@@ -117,6 +118,7 @@ type auditEntry struct {
 	Kind      string        `json:"kind"`
 	Outcome   string        `json:"outcome"`
 	RequestID string        `json:"requestID"`
+	ObjectID  string        `json:"objectID,omitempty"`
 	PrevHash  string        `json:"prevHash"`
 	Hash      string        `json:"hash"`
 }
@@ -141,6 +143,7 @@ func toAuditEntry(e audit.Entry) auditEntry {
 		Kind:       string(e.Kind),
 		Outcome:    string(e.Outcome),
 		RequestID:  e.RequestID,
+		ObjectID:   e.ObjectID,
 		PrevHash:   e.PrevHash,
 		Hash:       e.Hash,
 	}
@@ -191,16 +194,33 @@ type checkResponse struct {
 	Valid          bool  `json:"valid"`
 }
 
+// auditScope returns the scope of the audit entries of obj: @server for the
+// installation, else the namespace. The namespace must exist; @server is not a
+// namespace, so it needs no lookup. An unknown namespace answers 404.
+func (h *Handler) auditScope(ctx context.Context, obj identity.Object) (namespace.Name, error) {
+	if obj.IsServer() {
+		return audit.ServerScope, nil
+	}
+
+	ns := obj.Namespace()
+
+	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+		return "", err
+	}
+
+	return ns, nil
+}
+
 // listEntries answers GET /api/audit/entries with one page of the entries
-// of the namespace, newest first. The route wrapper already allowed
-// namespace:read-audit on the namespace. An unknown namespace answers 404.
+// of the scope, newest first. The route wrapper already allowed the action
+// on the object. An unknown namespace answers 404.
 func (h *Handler) listEntries(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
-	ns := obj.Namespace()
 
-	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+	ns, err := h.auditScope(ctx, obj)
+	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -228,16 +248,16 @@ func (h *Handler) listEntries(
 	h.writeJSON(ctx, w, http.StatusOK, listEntriesResponse{Entries: entries, Total: listing.Total})
 }
 
-// checkChain answers GET /api/audit/check with the chain check of the
-// namespace. The route wrapper already allowed namespace:read-audit on the
-// namespace. An unknown namespace answers 404.
+// checkChain answers GET /api/audit/check with the chain check of the scope.
+// The route wrapper already allowed the action on the object. An unknown
+// namespace answers 404.
 func (h *Handler) checkChain(
 	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
-	ns := obj.Namespace()
 
-	if _, err := h.namespaces.Get(ctx, ns); err != nil {
+	ns, err := h.auditScope(ctx, obj)
+	if err != nil {
 		h.writeError(ctx, w, err)
 
 		return

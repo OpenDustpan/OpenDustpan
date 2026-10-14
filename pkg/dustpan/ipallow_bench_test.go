@@ -96,6 +96,7 @@ func newIPAllowlistBenchServer(b *testing.B, on bool) (*dustpan.Server, *sqlite.
 		Namespace:  nsName,
 		Subject:    "alice@example.com",
 		IDPSubject: "",
+		ObjectID:   "",
 		TokenID:    "",
 		Action:     "namespace:set-ip-allowlist",
 		Object:     nsName.String(),

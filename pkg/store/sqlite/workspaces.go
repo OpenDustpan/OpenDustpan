@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -163,12 +162,14 @@ func (s *Store) SaveWorkspace(ctx context.Context, w workspace.Workspace, fence 
 // concurrent lock of the workspace either runs before the check or waits
 // until the delete commits.
 func (s *Store) DeleteWorkspace(
-	ctx context.Context, ref workspace.Ref, fence namespace.Fence, e audit.Entry,
+	ctx context.Context, ref workspace.Ref, fence namespace.Fence, d inventory.Deletion,
 ) error {
+	e := d.Entry
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inFencedAuditedTx(ctx, fence, e, func(q *db.Queries) error {
+	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
 		row, getErr := q.GetWorkspace(ctx, db.GetWorkspaceParams{
 			Namespace: ref.Namespace.String(),
 			Name:      ref.Name.String(),
@@ -197,7 +198,9 @@ func (s *Store) DeleteWorkspace(
 			return workspace.ErrNotFound
 		}
 
-		return moveWorkspaceInventoryToDeleted(ctx, q, ref, row.ID, e.At)
+		e.ObjectID = row.ID
+
+		return moveWorkspaceInventoryToDeleted(ctx, q, ref, row.ID, d)
 	})
 }
 
@@ -226,15 +229,15 @@ func refuseBusyWorkspace(ctx context.Context, q *db.Queries, lockID, workspaceID
 // workspace ref, with the ID workspaceID, to the deleted units in the
 // transaction of q (ADR 47). The entry keeps the name before the delete.
 func moveWorkspaceInventoryToDeleted(
-	ctx context.Context, q *db.Queries, ref workspace.Ref, workspaceID string, at time.Time,
+	ctx context.Context, q *db.Queries, ref workspace.Ref, workspaceID string, d inventory.Deletion,
 ) error {
 	err := q.InsertDeletedInventory(ctx, db.InsertDeletedInventoryParams{
 		Namespace:    ref.Namespace.String(),
 		Tool:         workspaceInventoryTool,
 		UnitID:       workspaceID,
 		Name:         ref.Name.String(),
-		DeletedAtMs:  at.UnixMilli(),
-		PurgeAfterMs: at.Add(inventory.DeletedRetention).UnixMilli(),
+		DeletedAtMs:  d.Entry.At.UnixMilli(),
+		PurgeAfterMs: d.PurgeAfter.UnixMilli(),
 	})
 	if err != nil {
 		return fmt.Errorf("insert deleted inventory entry: %w", err)

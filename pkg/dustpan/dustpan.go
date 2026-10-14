@@ -40,6 +40,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	auditapi "opendustpan.org/opendustpan/internal/api/audit"
@@ -54,6 +55,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -72,6 +74,13 @@ import (
 
 // ErrMissingOption reports that a required option was not provided.
 var ErrMissingOption = errors.New("missing required option")
+
+// ErrInvalidOption reports an option with a value that the server refuses.
+var ErrInvalidOption = errors.New("invalid option")
+
+// MinSoftDeleteRetention is the shortest soft-delete retention that
+// WithSoftDeleteRetention accepts (ADR 47, decision 2). There is no maximum.
+const MinSoftDeleteRetention = time.Hour
 
 // The secret service seals OpenTofu state blobs and outputs documents behind
 // the workspace Sealer port.
@@ -143,6 +152,7 @@ type settings struct {
 	maxCheckpointBytes   int
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
+	softDeleteRetention  time.Duration
 	maxBodyBytesInFlight int64
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
@@ -355,6 +365,14 @@ func WithMaxSecretBatchBytes(n int) Option {
 	return func(o *settings) { o.maxSecretBatchBytes = n }
 }
 
+// WithSoftDeleteRetention sets how long a deleted stack or workspace stays
+// before its final delete (ADR 47, decision 2). Zero means the domain
+// default, inventory.DeletedRetention. Any other value below
+// MinSoftDeleteRetention makes NewServer fail with ErrInvalidOption.
+func WithSoftDeleteRetention(d time.Duration) Option {
+	return func(o *settings) { o.softDeleteRetention = d }
+}
+
 // WithMaxStateBytes bounds one OpenTofu state version. Zero means the domain default.
 func WithMaxStateBytes(n int64) Option {
 	return func(o *settings) { o.maxStateBytes = n }
@@ -443,8 +461,11 @@ type Server struct {
 	tlsCertFile     string
 	tlsKeyFile      string
 	observed        *metrics.ServerMetrics
-	shipper         *audit.Shipper
-	beforeServe     func(ctx context.Context) error
+	// tokens runs the inactivity disable of access tokens and accounts on a
+	// schedule (ADR 53), or is nil when the store keeps no tokens.
+	tokens      *accesstoken.Service
+	shipper     *audit.Shipper
+	beforeServe func(ctx context.Context) error
 }
 
 // services holds the domain services that NewServer wires together.
@@ -457,6 +478,10 @@ type services struct {
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
+	// access keeps the roles and grants (ADR 52), or is nil when the store
+	// keeps none. NewServer sets it after newServices. The installation API
+	// and the escalation check of the token service share it.
+	access *access.Service
 }
 
 // defaultSettings answers the settings of a server before its options.
@@ -491,6 +516,7 @@ func defaultSettings() *settings {
 		maxCheckpointBytes:      0,
 		maxSecretBatchBytes:     0,
 		maxStateBytes:           0,
+		softDeleteRetention:     0,
 		maxBodyBytesInFlight:    0,
 		backupTarget:            nil,
 		backupTargetName:        "",
@@ -518,15 +544,17 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, authzErr
 	}
 
-	svc, err := newServices(cfg)
+	grants, tokens, err := newIdentityServices(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	svc.tokens, err = newTokenService(cfg)
+	svc, err := newServices(cfg, tokens)
 	if err != nil {
 		return nil, err
 	}
+
+	svc.tokens, svc.access = tokens, grants
 
 	backups, err := newBackupService(cfg, svc)
 	if err != nil {
@@ -646,6 +674,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		tlsCertFile:     cfg.tlsCertFile,
 		tlsKeyFile:      cfg.tlsKeyFile,
 		observed:        observed,
+		tokens:          svc.tokens,
 		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
 	}, nil
@@ -872,7 +901,62 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
 	}
 
-	return base, nil
+	return base, checkRetention(cfg.softDeleteRetention)
+}
+
+// newWorkspaceService builds the OpenTofu workspace service, which seals
+// state with secrets.
+func newWorkspaceService(
+	cfg *settings, namespaces *namespace.Service, secrets *secret.Service,
+) (*workspace.Service, error) {
+	workspaces, err := workspace.NewService(workspace.Config{
+		Workspaces:         cfg.workspaceStore,
+		States:             cfg.stateStore,
+		Blobs:              cfg.blobStore,
+		Namespaces:         namespaces,
+		Sealer:             secrets,
+		Logger:             cfg.logger,
+		Now:                cfg.now,
+		MaxStateBytes:      cfg.maxStateBytes,
+		MaxPendingVersions: 0,
+		Retention:          cfg.softDeleteRetention,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("workspace service: %w", err)
+	}
+
+	return workspaces, nil
+}
+
+// newUpdateService builds the update service. A nil token service leaves the
+// token checker nil, so the service fails closed for any update that an
+// access token started.
+func newUpdateService(
+	cfg *settings, namespaces *namespace.Service, journal *stack.JournalEntries, tokens *accesstoken.Service,
+) (*stack.Updates, error) {
+	var checker stack.TokenChecker
+	if tokens != nil {
+		checker = tokens
+	}
+
+	updates, err := stack.NewUpdates(stack.UpdatesConfig{
+		Updates:            cfg.updateStore,
+		Checkpoints:        cfg.checkpointStore,
+		Events:             cfg.eventStore,
+		Namespaces:         namespaces,
+		Stacks:             cfg.stackStore,
+		Blobs:              cfg.blobStore,
+		Tokens:             checker,
+		Now:                cfg.now,
+		Logger:             cfg.logger,
+		MaxCheckpointBytes: cfg.maxCheckpointBytes,
+		Journal:            journal,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
+	}
+
+	return updates, nil
 }
 
 // checkTLSAndAllowlist validates the TLS pair and the IP allowlist switch
@@ -901,7 +985,7 @@ func checkTLSAndAllowlist(cfg *settings) error {
 // newServices builds the domain services from validated settings. It reads
 // no database. Run runs the start-up checks (such as secret.CheckWrapper)
 // with its own context.
-func newServices(cfg *settings) (services, error) {
+func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: cfg.namespaceStore, Now: cfg.now, Region: cfg.region},
 	)
@@ -914,25 +998,13 @@ func newServices(cfg *settings) (services, error) {
 		return services{}, fmt.Errorf("journal writer: %w", err)
 	}
 
-	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Updates:            cfg.updateStore,
-		Checkpoints:        cfg.checkpointStore,
-		Events:             cfg.eventStore,
-		Namespaces:         namespaces,
-		Stacks:             cfg.stackStore,
-		Blobs:              cfg.blobStore,
-		Now:                cfg.now,
-		Logger:             cfg.logger,
-		MaxCheckpointBytes: cfg.maxCheckpointBytes,
-		Journal:            journal,
-	})
+	updates, err := newUpdateService(cfg, namespaces, journal, tokens)
 	if err != nil {
-		return services{}, fmt.Errorf("update service: %w", err)
+		return services{}, err
 	}
 
 	stacks, err := stack.NewService(stack.Config{
-		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now,
-		State: updates,
+		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now, State: updates, Retention: cfg.softDeleteRetention,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("stack service: %w", err)
@@ -949,19 +1021,9 @@ func newServices(cfg *settings) (services, error) {
 		return services{}, fmt.Errorf("secret service: %w", err)
 	}
 
-	workspaces, err := workspace.NewService(workspace.Config{
-		Workspaces:         cfg.workspaceStore,
-		States:             cfg.stateStore,
-		Blobs:              cfg.blobStore,
-		Namespaces:         namespaces,
-		Sealer:             secrets,
-		Logger:             cfg.logger,
-		Now:                cfg.now,
-		MaxStateBytes:      cfg.maxStateBytes,
-		MaxPendingVersions: 0,
-	})
+	workspaces, err := newWorkspaceService(cfg, namespaces, secrets)
 	if err != nil {
-		return services{}, fmt.Errorf("workspace service: %w", err)
+		return services{}, err
 	}
 
 	return services{
@@ -971,6 +1033,7 @@ func newServices(cfg *settings) (services, error) {
 		secrets:    secrets,
 		workspaces: workspaces,
 		tokens:     nil,
+		access:     nil,
 	}, nil
 }
 
@@ -1050,6 +1113,13 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
+	// The first run of the inactivity disable ends before the hook and
+	// before the server serves a request. A slow database delays the start
+	// by firstSweepLimit at most: the hourly runs try again.
+	firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
+	s.sweepOnce(firstCtx)
+	stopFirst()
+
 	if s.beforeServe != nil {
 		if hookErr := s.beforeServe(ctx); hookErr != nil {
 			return errors.Join(fmt.Errorf("before serve: %w", hookErr), closeListener(ln))
@@ -1066,6 +1136,12 @@ func (s *Server) Run(ctx context.Context) error {
 
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
+	sweepCtx, stopSweeps := context.WithCancel(ctx)
+
+	var sweeps sync.WaitGroup
+
+	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
+
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
 	shipCtx, stopShipper := context.WithCancel(ctx)
@@ -1074,9 +1150,64 @@ func (s *Server) Run(ctx context.Context) error {
 	defer func() {
 		stopShipper()
 		waitShipper()
+		stopSweeps()
+		sweeps.Wait()
 	}()
 
 	return s.serveUntilDone(ctx, srv, ln)
+}
+
+// sweepEvery is the period of the inactivity disable. The inactivity period
+// counts in days by default, so one run each hour is ample.
+const sweepEvery = time.Hour
+
+// firstSweepLimit bounds the run of the inactivity disable before the
+// server serves.
+const firstSweepLimit = time.Minute
+
+// sweepInactive runs the inactivity disable of ADR 53 once each
+// sweepEvery, until ctx is done. Run makes the first run before it serves.
+func (s *Server) sweepInactive(ctx context.Context) {
+	if s.tokens == nil {
+		return
+	}
+
+	ticker := time.NewTicker(sweepEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.sweepOnce(ctx)
+		}
+	}
+}
+
+// sweepOnce runs the inactivity disable once and counts the result. A failed
+// run logs no error text, which may hold driver detail (ADR 32 decision 7),
+// and the next run tries again. A run that the server stops (ctx canceled)
+// is not a failure. A run past its time limit is.
+func (s *Server) sweepOnce(ctx context.Context) {
+	if s.tokens == nil {
+		return
+	}
+
+	res, err := s.tokens.SweepInactive(ctx, accesstoken.SweepEntry())
+
+	switch {
+	case err != nil && !errors.Is(ctx.Err(), context.Canceled):
+		s.observed.ObserveSweep(metrics.SweepFailure)
+		s.logger.WarnContext(ctx, "inactivity disable failed")
+	case err != nil:
+	case len(res.Tokens) > 0 || len(res.Principals) > 0:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+		s.logger.InfoContext(ctx, "inactivity disable",
+			slog.Int("tokens", len(res.Tokens)), slog.Int("principals", len(res.Principals)))
+	default:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+	}
 }
 
 // startUpResult answers the result of Run when a start-up step fails with
@@ -1377,15 +1508,43 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// checkRetention refuses a soft-delete retention below
+// MinSoftDeleteRetention. Zero means the domain default.
+func checkRetention(d time.Duration) error {
+	if d != 0 && d < MinSoftDeleteRetention {
+		return fmt.Errorf("%w: WithSoftDeleteRetention needs at least %s, got %s",
+			ErrInvalidOption, MinSoftDeleteRetention, d)
+	}
+
+	return nil
+}
+
 // newInventoryHandler builds the tool-neutral inventory API from the
-// namespace service and the inventory reader.
+// namespace service, the inventory reader and the restore and purge of each
+// tool (ADR 47). Every SQL adapter also reads the deleted units through the
+// inventory reader. A custom reader that keeps no deleted units fails here
+// with a clear error.
 func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
+	deleted, ok := cfg.inventoryReader.(inventory.DeletedReader)
+	if !ok {
+		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
+	}
+
+	blobs := blobPurger{logger: cfg.logger}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
-		Namespaces:    svc.namespaces,
-		Units:         cfg.inventoryReader,
+		Namespaces: svc.namespaces,
+		Units:      cfg.inventoryReader,
+		Deleted:    deleted,
+		Lifecycles: map[string]inventory.Lifecycle{
+			pulumiTool:   pulumiLifecycle{stacks: svc.stacks, updates: svc.updates, blobs: blobs},
+			opentofuTool: opentofuLifecycle{workspaces: svc.workspaces, blobs: blobs},
+		},
+		ReadScope:     deletedReadScope{authz: cfg.authorizer},
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
+		Now:           cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)
@@ -1430,10 +1589,7 @@ func newInstallationAPI(
 func newServerHandler(
 	cfg *settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
-	grants, err := newAccessService(cfg)
-	if err != nil {
-		return nil, err
-	}
+	grants := deps.services.access
 
 	principals, err := newPrincipalService(cfg, grants)
 	if err != nil {
@@ -1619,10 +1775,31 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 	return svc, nil
 }
 
+// newIdentityServices builds the role and grant service (ADR 52) and the
+// access token service (ADR 53). The token service takes the role and
+// grant service as its escalation check. Either is nil when the store
+// keeps none.
+func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, error) {
+	grants, err := newAccessService(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tokens, err := newTokenService(cfg, grants)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return grants, tokens, nil
+}
+
 // newTokenService builds the access token service (ADR 53) from the
 // namespace store, or returns nil when the store keeps no access tokens or
-// no principals. Every SQL adapter keeps both.
-func newTokenService(cfg *settings) (*accesstoken.Service, error) {
+// no principals. Every SQL adapter keeps both. The escalation check of a
+// token for another principal (decision 3) is the grants of grants (ADR
+// 52). With nil grants, a store that keeps none, only an administrator
+// passes it.
+func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No token store is a valid setup: the routes answer 501.
@@ -1633,8 +1810,14 @@ func newTokenService(cfg *settings) (*accesstoken.Service, error) {
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
+	var check accesstoken.GrantCheck
+	if grants != nil {
+		check = tokengrants.Check{Grants: grants, Principals: principals}
+	}
+
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: nil, Logger: cfg.logger, Now: cfg.now, NewID: nil,
+		Store: store, Principals: principals, Freshness: nil, Grants: check, Logger: cfg.logger, Now: cfg.now,
+		NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)

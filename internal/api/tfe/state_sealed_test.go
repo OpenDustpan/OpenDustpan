@@ -195,6 +195,7 @@ func sealedTestWorkspaces(
 		Workspaces: store, States: store, Blobs: blobs, Namespaces: namespaces,
 		Sealer: secrets, Logger: slog.New(slog.DiscardHandler),
 		Now: nil, MaxStateBytes: 0, MaxPendingVersions: 0,
+		Retention: 0,
 	})
 	if err != nil {
 		t.Fatalf("workspaces: %v", err)

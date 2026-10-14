@@ -32,6 +32,7 @@ func reviewCases() []struct {
 		{name: "review history keeps a container grant with any custom role", test: testReviewCustomRoles},
 		{name: "review counts only when asked", test: testReviewCount},
 		{name: "review units reads live and deleted units", test: testReviewUnits},
+		{name: "caller grants read the current grants of a principal and its groups", test: testCallerGrants},
 	}
 }
 
@@ -324,7 +325,7 @@ func seedMemberships(t *testing.T, ps principal.Store) {
 	ctx := t.Context()
 
 	prn := principal.Principal{
-		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
+		CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: "prn-a", Subject: "alice", DisplayName: "",
 		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
 	}
 	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {

@@ -109,6 +109,7 @@ func entry() audit.Entry {
 		Kind:       audit.KindChange,
 		Outcome:    audit.OutcomeSuccess,
 		RequestID:  "",
+		ObjectID:   "",
 		PrevHash:   "",
 		Hash:       "",
 		Sequence:   0,
@@ -132,6 +133,7 @@ func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
 	return principal.Principal{
 		CreatedAt:   at(0),
 		UpdatedAt:   at(0),
+		DisabledAt:  time.Time{},
 		ID:          id,
 		Subject:     subject,
 		DisplayName: "Name of " + subject,
