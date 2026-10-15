@@ -314,7 +314,7 @@ func testJournalVerify(t *testing.T, f fixture) {
 func testJournalBegunRefusal(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 
 	body := []byte(`{"entries":[` +
 		`{"version":1,"kind":0,"sequenceID":1,"operationID":20,"removeOld":null,"removeNew":null},` +
