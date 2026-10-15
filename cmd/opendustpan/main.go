@@ -8,6 +8,8 @@
 //	opendustpan backup check [flags]
 //	opendustpan backup [flags]
 //	opendustpan restore [flags]
+//	opendustpan audit-chain status [flags]
+//	opendustpan audit-chain approve [flags]
 //
 // Every flag can also be set through the environment variable shown in its
 // help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN or

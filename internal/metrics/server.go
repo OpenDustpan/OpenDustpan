@@ -68,15 +68,16 @@ const MaxSinkSeries = 16
 // ServerMetrics holds the request count, the request duration histogram,
 // the requests in flight gauge, the build info, the process start time, the
 // runtime gauges, the readiness failure counter (ADR 32 decision 5) and the
-// audit append failure counter (ADR 41 decision 5), the audit chain gauge
-// (ADR 60 decision 17), and the audit sink counters and the log sink drop
-// counter (ADR 60 decisions 13 and 14). All
+// audit append failure counter (ADR 41 decision 5), and the audit sink
+// counters and the log sink drop counter (ADR 60 decisions 13 and 14). All
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
 // the HTTP middleware do (ADR 32 decision 9). It also holds the two
 // families of the reload of the configuration file (ADR 63 decision 5),
 // and counts the runs of the inactivity disable by result (ADR 53).
+// It also holds the audit chain families: the scopes whose check failed,
+// and the restores whose restored log failed the check.
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -238,15 +239,15 @@ func (m *ServerMetrics) IncAuditAppendFailure() {
 const chainInvalidHelp = "Audit scopes whose chain check failed in the last scheduled check."
 
 // SetAuditChainInvalid sets the count of audit scopes whose chain check
-// failed in the last scheduled check (ADR 60 decision 17). No label names a
-// scope. Operators alert when it is above zero.
+// failed in the last scheduled check. No label names a scope. Operators
+// alert when it is above zero.
 func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
 	m.chain.invalid.Set(float64(scopes))
 }
 
 // chainFamilies holds the audit chain families: the count of scopes whose
 // check failed, and the count of restores whose restored log failed the
-// check before the switch entry of the restore.
+// check.
 type chainFamilies struct {
 	invalid    *Gauge
 	restoreBad *Counter
@@ -274,10 +275,9 @@ func newRestoreCheckCounter(reg *Registry) *Counter {
 }
 
 // IncAuditRestoreCheckFailure adds one to the count of restores whose
-// restored audit log failed the chain check before the switch entry of the
-// restore (ADR 64 decision 6). The server still serves after such a
-// restore, so the counter and the error log are its record. Operators
-// alert when it is above zero.
+// restored audit log failed the chain check. The server still serves after
+// such a restore, so the counter and the error log are its record.
+// Operators alert when it is above zero.
 func (m *ServerMetrics) IncAuditRestoreCheckFailure() {
 	m.chain.restoreBad.Inc()
 }

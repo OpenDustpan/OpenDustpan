@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
 )
@@ -53,24 +54,96 @@ func withMaintenance(
 			return
 		}
 
-		ctx := r.Context()
+		writeRefusal(r.Context(), w, shape, logger, maintenanceMessage)
+	})
+}
 
-		switch shape {
-		case shapePulumi:
-			writeMaintenancePulumi(ctx, w, logger)
-		case shapeInventory:
-			writeMaintenanceInventory(ctx, w, logger)
-		case shapeTFE:
-			writeMaintenanceTFE(ctx, w, logger)
-		case shapeHTTPBackend:
-			writeMaintenanceHTTPBackend(w)
+// writeRefusal answers 503 with Retry-After and message, in the error shape
+// of one adapter.
+func writeRefusal(ctx context.Context, w http.ResponseWriter, shape errorShape, logger *slog.Logger, message string) {
+	switch shape {
+	case shapePulumi:
+		writeMaintenancePulumi(ctx, w, logger, message)
+	case shapeInventory:
+		writeMaintenanceInventory(ctx, w, logger, message)
+	case shapeTFE:
+		writeMaintenanceTFE(ctx, w, logger, message)
+	case shapeHTTPBackend:
+		writeMaintenanceHTTPBackend(w, message)
+	default:
+		// Unreachable: every call site passes a valid shape. Refuse
+		// rather than serve, and log the programmer error.
+		logger.ErrorContext(ctx, "unknown maintenance error shape", slog.Int("shape", int(shape)))
+		writeMaintenancePulumi(ctx, w, logger, message)
+	}
+}
+
+// withAuditChainGate refuses requests while the audit chain of this
+// instance does not agree with the stored state, in the error shape of the
+// adapter of each path. The probes, the metrics, the audit chain routes,
+// the maintenance routes and the console files always pass. An instance
+// whose setting differs from the stored state refuses every other request.
+// While a change of the chain waits or migrates, every instance refuses
+// each other request except the reads of the audit log: a read of another
+// API can also append an audit entry, for example the export of an access
+// review. Without a chain it returns next.
+func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logger) http.Handler {
+	if chain == nil {
+		return next
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		shape, gated := chainGateShape(r)
+		if !gated {
+			next.ServeHTTP(w, r)
+
+			return
+		}
+
+		rec := chain.current(r.Context())
+
+		switch {
+		case chain.setting.State() != rec.State:
+			writeRefusal(r.Context(), w, shape, logger, chainMismatchMessage)
+		case rec.Pending && !auditRead(r):
+			writeRefusal(r.Context(), w, shape, logger, chainPendingMessage)
 		default:
-			// Unreachable: every call site passes a valid shape. Refuse
-			// rather than serve, and log the programmer error.
-			logger.ErrorContext(ctx, "unknown maintenance error shape", slog.Int("shape", int(shape)))
-			writeMaintenancePulumi(ctx, w, logger)
+			next.ServeHTTP(w, r)
 		}
 	})
+}
+
+// chainGateShape answers whether the audit chain gate covers the request,
+// and the error shape of its adapter.
+func chainGateShape(r *http.Request) (errorShape, bool) {
+	path := r.URL.Path
+
+	switch {
+	case strings.HasPrefix(path, "/health/"),
+		path == "/api/server/metrics",
+		path == "/api/server/audit/chain",
+		strings.HasPrefix(path, "/api/server/maintenance"):
+		return shapePulumi, false
+	case strings.HasPrefix(path, "/api/inventory/"):
+		return shapeInventory, true
+	case strings.HasPrefix(path, "/api/v2/"), path == "/.well-known/terraform.json":
+		return shapeTFE, true
+	case strings.HasPrefix(path, "/tofu/"):
+		return shapeHTTPBackend, true
+	case strings.HasPrefix(path, "/api/"):
+		return shapePulumi, true
+	default:
+		// The console files: the console shows the approval.
+		return shapePulumi, false
+	}
+}
+
+// auditRead reports whether r reads the audit log: the audit API appends
+// nothing.
+func auditRead(r *http.Request) bool {
+	read := r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
+
+	return read && strings.HasPrefix(r.URL.Path, "/api/audit/")
 }
 
 // maintenancePulumiError is the error body the Pulumi CLI expects, as in the
@@ -81,14 +154,14 @@ type maintenancePulumiError struct {
 }
 
 // writeMaintenancePulumi answers 503 with Retry-After in the Pulumi shape.
-func writeMaintenancePulumi(ctx context.Context, w http.ResponseWriter, logger *slog.Logger) {
+func writeMaintenancePulumi(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Retry-After", maintenanceRetryAfter)
 	w.WriteHeader(http.StatusServiceUnavailable)
 
 	doc := maintenancePulumiError{
 		Code:    http.StatusServiceUnavailable,
-		Message: maintenanceMessage,
+		Message: message,
 	}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
@@ -105,14 +178,14 @@ type maintenanceInventoryError struct {
 }
 
 // writeMaintenanceInventory answers 503 with Retry-After in the inventory shape.
-func writeMaintenanceInventory(ctx context.Context, w http.ResponseWriter, logger *slog.Logger) {
+func writeMaintenanceInventory(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Retry-After", maintenanceRetryAfter)
 	w.WriteHeader(http.StatusServiceUnavailable)
 
 	doc := maintenanceInventoryError{
 		Code:    http.StatusServiceUnavailable,
-		Message: maintenanceMessage,
+		Message: message,
 	}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {
@@ -135,14 +208,14 @@ type maintenanceTFEDocument struct {
 
 // writeMaintenanceHTTPBackend answers 503 with Retry-After and the message as
 // plain text, the shape that the OpenTofu http backend shows.
-func writeMaintenanceHTTPBackend(w http.ResponseWriter) {
+func writeMaintenanceHTTPBackend(w http.ResponseWriter, message string) {
 	w.Header().Set("Retry-After", maintenanceRetryAfter)
-	http.Error(w, maintenanceMessage, http.StatusServiceUnavailable)
+	http.Error(w, message, http.StatusServiceUnavailable)
 }
 
 // writeMaintenanceTFE answers 503 with Retry-After as a JSON:API error
 // document. The title names maintenance for callers that show only it.
-func writeMaintenanceTFE(ctx context.Context, w http.ResponseWriter, logger *slog.Logger) {
+func writeMaintenanceTFE(ctx context.Context, w http.ResponseWriter, logger *slog.Logger, message string) {
 	w.Header().Set("Content-Type", "application/vnd.api+json")
 	w.Header().Set("Retry-After", maintenanceRetryAfter)
 	w.WriteHeader(http.StatusServiceUnavailable)
@@ -150,7 +223,7 @@ func writeMaintenanceTFE(ctx context.Context, w http.ResponseWriter, logger *slo
 	doc := maintenanceTFEDocument{Errors: []maintenanceTFEError{{
 		Status: "503",
 		Title:  "maintenance",
-		Detail: maintenanceMessage,
+		Detail: message,
 	}}}
 
 	if err := json.NewEncoder(w).Encode(doc); err != nil {

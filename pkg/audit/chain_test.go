@@ -95,17 +95,17 @@ func TestDigest(t *testing.T) {
 // walkStep is the time between two entries of the walk tests.
 const walkStep = 10 * time.Second
 
-// walkAt answers the time of sequence seq, plus d.
-func walkAt(seq int64, d time.Duration) time.Time {
+// walkAt answers the time of sequence seq.
+func walkAt(seq int64) time.Time {
 	base := time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC)
 
-	return base.Add(time.Duration(seq)*walkStep + d)
+	return base.Add(time.Duration(seq) * walkStep)
 }
 
 // walkEntry returns entry seq of acme without a hash.
 func walkEntry(seq int64) audit.Entry {
 	return audit.Entry{
-		At:         walkAt(seq, 0),
+		At:         walkAt(seq),
 		Namespace:  "acme",
 		Subject:    "alice",
 		IDPSubject: "",
@@ -165,9 +165,15 @@ func walkResult(scope audit.ChainScope, entries ...audit.Entry) int64 {
 	return 0
 }
 
-// recordOf answers a record with state that changed at walkAt(seq, 0).
+// recordOf answers a record with state that changed at walkAt(seq).
 func recordOf(state audit.ChainState, seq int64) audit.ChainRecord {
-	return audit.ChainRecord{ChangedAt: walkAt(seq, 0), ChangedBy: "alice", State: state, Pending: false, LogReplaced: false}
+	return audit.ChainRecord{
+		ChangedAt:   walkAt(seq),
+		ChangedBy:   "alice",
+		State:       state,
+		Pending:     false,
+		LogReplaced: false,
+	}
 }
 
 // chainedRun returns entries 1 to n of one chain from sequence 1.
@@ -347,8 +353,9 @@ func (f *fakeChain) StartChain(ctx context.Context, fence namespace.Fence, e aud
 
 	var digest audit.Digest
 
-	for _, old := range f.scopes[fence.Namespace] {
-		digest.Add(old, audit.EncodeChanges(old.Changes))
+	entries := f.scopes[fence.Namespace]
+	for i := range entries {
+		digest.Add(entries[i], audit.EncodeChanges(entries[i].Changes))
 	}
 
 	e.Changes = audit.StartChanges(&digest)
@@ -366,27 +373,29 @@ func (f *fakeChain) EndChain(ctx context.Context, fence namespace.Fence, e audit
 	return f.add(fence.Namespace, e, entries[len(entries)-1].Hash)
 }
 
-// agrees reports whether scope holds no entry or already agrees with state.
-func (f *fakeChain) agrees(ctx context.Context, scope namespace.Name, state audit.ChainState) (bool, error) {
-	last, found, err := f.LastEntry(ctx, scope)
-	if err != nil {
-		return false, err
-	}
-
-	return audit.LastAgrees(last, found, state), nil
-}
-
 func (f *fakeChain) LastEntry(_ context.Context, scope namespace.Name) (audit.Entry, bool, error) {
+	var none audit.Entry
+
 	if f.fail != nil {
-		return audit.Entry{}, false, f.fail
+		return none, false, f.fail
 	}
 
 	entries := f.scopes[scope]
 	if len(entries) == 0 {
-		return audit.Entry{}, false, nil
+		return none, false, nil
 	}
 
 	return entries[len(entries)-1], true, nil
+}
+
+// agrees reports whether scope holds no entry or already agrees with state.
+func (f *fakeChain) agrees(ctx context.Context, scope namespace.Name, state audit.ChainState) (bool, error) {
+	last, found, err := f.LastEntry(ctx, scope)
+	if err != nil || !found {
+		return !found, err
+	}
+
+	return audit.LastAgrees(&last, state), nil
 }
 
 // add appends e to scope, hashed with prev.
@@ -403,8 +412,10 @@ func (f *fakeChain) add(scope namespace.Name, e audit.Entry, prev string) (bool,
 	return true, nil
 }
 
-// put appends e to scope as the chain of the fake asks.
-func (f *fakeChain) put(scope namespace.Name, e audit.Entry) {
+// put appends e to acme as the chain of the fake asks.
+func (f *fakeChain) put(e audit.Entry) {
+	const scope = namespace.Name("acme")
+
 	entries := f.scopes[scope]
 	e.Namespace = scope
 	e.Sequence = int64(len(entries) + 1)
@@ -444,26 +455,23 @@ func TestMigrateChain(t *testing.T) {
 	empty := namespace.Fence{Namespace: "empty", FailoverVersion: 1}
 	fences := []namespace.Fence{acme, empty, audit.ServerFence()}
 
-	f.put("acme", walkEntry(0))
+	f.put(walkEntry(0))
 
-	off := audit.ChainChange{At: walkAt(5, 0), By: "alice", To: audit.ChainStateOff}
+	off := audit.ChainChange{At: walkAt(5), By: "alice", To: audit.ChainStateOff}
 	if err := audit.MigrateChain(t.Context(), f, fences, off); err != nil {
 		t.Fatalf("migrate off: %v", err)
 	}
 
-	if f.on || f.rec.State != audit.ChainStateOff || f.rec.ChangedBy != "alice" || len(f.scopes["acme"]) != 2 ||
-		len(f.scopes["empty"]) != 0 || len(f.scopes[audit.ServerScope]) != 0 {
-		t.Fatalf("after off: on %v, record %+v, scopes %v, want an end entry in acme only", f.on, f.rec, f.scopes)
-	}
+	wantEndInAcmeOnly(t, f)
 
-	f.put("acme", walkEntry(0))
+	f.put(walkEntry(0))
 
-	on := audit.ChainChange{At: walkAt(9, 0), By: "bob", To: audit.ChainStateOn}
+	on := audit.ChainChange{At: walkAt(9), By: "bob", To: audit.ChainStateOn}
 	if err := audit.MigrateChain(t.Context(), f, fences, on); err != nil {
 		t.Fatalf("migrate on: %v", err)
 	}
 
-	f.put("acme", walkEntry(0))
+	f.put(walkEntry(0))
 
 	if !f.on || f.rec.State != audit.ChainStateOn || len(f.scopes["acme"]) != 5 {
 		t.Fatalf("after on: on %v, record %+v, acme %d entries, want 5", f.on, f.rec, len(f.scopes["acme"]))
@@ -474,13 +482,24 @@ func TestMigrateChain(t *testing.T) {
 	}
 }
 
+// wantEndInAcmeOnly proves that a migration to off by alice wrote an end
+// entry in acme only and turned the chain of f off.
+func wantEndInAcmeOnly(t *testing.T, f *fakeChain) {
+	t.Helper()
+
+	if f.on || f.rec.State != audit.ChainStateOff || f.rec.ChangedBy != "alice" || len(f.scopes["acme"]) != 2 ||
+		len(f.scopes["empty"]) != 0 || len(f.scopes[audit.ServerScope]) != 0 {
+		t.Fatalf("after off: on %v, record %+v, scopes %v, want an end entry in acme only", f.on, f.rec, f.scopes)
+	}
+}
+
 func TestMigrateChainStopsAtAReadError(t *testing.T) {
 	t.Parallel()
 
 	f := newFakeChain()
-	f.fail = errors.New("read failed")
+	f.fail = errFakeRead
 
-	change := audit.ChainChange{At: walkAt(1, 0), By: "alice", To: audit.ChainStateOff}
+	change := audit.ChainChange{At: walkAt(1), By: "alice", To: audit.ChainStateOff}
 	err := audit.MigrateChain(t.Context(), f, []namespace.Fence{audit.ServerFence()}, change)
 
 	if err == nil || f.rec.State != audit.ChainStateOn {
@@ -509,20 +528,20 @@ func TestLogAgrees(t *testing.T) {
 		t.Fatal("empty scopes: want agreement with both states")
 	}
 
-	f.put("acme", walkEntry(0))
+	f.put(walkEntry(0))
 
 	if !agrees(audit.ChainStateOn) || agrees(audit.ChainStateOff) {
 		t.Fatal("a chained tail: want agreement with on only")
 	}
 
 	f.on = false
-	f.put("acme", walkEntry(0))
+	f.put(walkEntry(0))
 
 	if agrees(audit.ChainStateOn) || !agrees(audit.ChainStateOff) {
 		t.Fatal("an unchained tail: want agreement with off only")
 	}
 
-	f.fail = errors.New("read failed")
+	f.fail = errFakeRead
 	if _, err := audit.LogAgrees(t.Context(), f, scopes, audit.ChainStateOn); err == nil {
 		t.Fatal("log agrees with a read error: want an error")
 	}
@@ -531,10 +550,17 @@ func TestLogAgrees(t *testing.T) {
 func TestChainSetEntry(t *testing.T) {
 	t.Parallel()
 
-	e := audit.ChainSetEntry(audit.ChainChange{At: walkAt(1, 0), By: "alice", To: audit.ChainStateOff})
+	caller := walkMarker(1, "server:other", "", nil)
+	caller.Subject, caller.TokenID, caller.SourceIP, caller.RequestID = "alice", "tok-1", "192.0.2.1", "req-1"
+
+	e := audit.ChainSetEntry(caller, audit.ChainChange{At: walkAt(1), By: "alice", To: audit.ChainStateOff})
 
 	if e.Namespace != audit.ServerScope || e.Action != audit.ActionSetChain || e.Subject != "alice" ||
+		e.TokenID != "tok-1" || e.SourceIP != "192.0.2.1" || e.RequestID != "req-1" ||
 		e.ValuePath != "/audit/chain/off" || e.Validate() != nil {
 		t.Fatalf("set entry: got %+v, want a valid entry in the server scope by alice", e)
 	}
 }
+
+// errFakeRead is the read failure of the fake chain store.
+var errFakeRead = errors.New("read failed")

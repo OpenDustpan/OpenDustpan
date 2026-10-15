@@ -72,7 +72,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Key:         nil,
 		Region:      "test",
 		AfterApply:  nil,
-		BeforeSwap:  nil,
+		Admit:       nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -102,6 +102,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {
@@ -551,6 +552,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {
@@ -746,6 +748,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {

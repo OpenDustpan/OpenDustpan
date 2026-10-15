@@ -99,14 +99,19 @@ var families = map[identity.Action]Family{
 	identity.ActionServerReadAudit:   FamilyOperator,
 	// The installation settings (ADR 63); RFC 68 decides their API.
 	identity.ActionServerManageSettings: FamilyOperator,
+	// A change of the audit chain. Off also needs the administration
+	// action below.
+	identity.ActionServerEnableAuditChain:  FamilyOperator,
+	identity.ActionServerDisableAuditChain: FamilyOperator,
 
-	identity.ActionServerReadPrincipals:   FamilyAdministration,
-	identity.ActionServerManagePrincipals: FamilyAdministration,
-	identity.ActionServerManageGroups:     FamilyAdministration,
-	identity.ActionServerManageRoles:      FamilyAdministration,
-	identity.ActionServerManageAccess:     FamilyAdministration,
-	identity.ActionServerCreateNamespace:  FamilyAdministration,
-	identity.ActionServerReadAccess:       FamilyAdministration,
+	identity.ActionServerReadPrincipals:       FamilyAdministration,
+	identity.ActionServerManagePrincipals:     FamilyAdministration,
+	identity.ActionServerManageGroups:         FamilyAdministration,
+	identity.ActionServerManageRoles:          FamilyAdministration,
+	identity.ActionServerManageAccess:         FamilyAdministration,
+	identity.ActionServerCreateNamespace:      FamilyAdministration,
+	identity.ActionServerReadAccess:           FamilyAdministration,
+	identity.ActionServerApproveAuditChainOff: FamilyAdministration,
 	// The access tokens of other principals (ADR 53, decision 3).
 	identity.ActionServerReadTokens:   FamilyAdministration,
 	identity.ActionServerManageTokens: FamilyAdministration,

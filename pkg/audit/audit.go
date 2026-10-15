@@ -372,7 +372,7 @@ type Listing struct {
 // first entry that does not match: a changed field, a broken link or a gap
 // after a deleted entry. Checked counts the entries the check read.
 // Unchained counts the entries without a hash: the chain was off when they
-// were appended (ADR 60 decision 17). The check cannot prove such an entry
+// were appended. The check cannot prove such an entry
 // unchanged.
 type CheckResult struct {
 	Checked     int64

@@ -188,7 +188,7 @@ type listEntriesResponse struct {
 //
 // Contract: never remove or rename these fields. BadSequence is omitted
 // when the chain is valid. EntriesUnchained counts the entries without a
-// hash: the chain was off when they were appended (ADR 60 decision 17).
+// hash: the chain was off when they were appended.
 type checkResponse struct {
 	EntriesChecked   int64 `json:"entriesChecked"`
 	EntriesUnchained int64 `json:"entriesUnchained"`

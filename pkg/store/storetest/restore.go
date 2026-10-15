@@ -61,7 +61,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "a restore row survives close and reopen", test: testRestoreRowSurvivesReopen},
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
-		{name: "a restored log of another chain state checks valid after the migration", test: testRestoreChainAgreesAfterMigration},
+		{
+			name: "a restored log of another chain state checks valid after the migration",
+			test: testRestoreChainAgreesAfterMigration,
+		},
 		{name: "apply drops the pre-backup row, which is re-recorded after", test: testRestoreApplyReRecordsBackup},
 		{name: "apply without staged data is corrupt", test: testRestoreApplyWithoutStaging},
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
@@ -511,8 +514,10 @@ type chainRestoreStore interface {
 	audit.ScopesChecker
 }
 
-// chainAt is the time of the chain records of the restore cases.
-var chainAt = time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC) //nolint:gochecknoglobals // A fixed time of the test data.
+// chainAt answers the time of the chain records of the restore cases.
+func chainAt() time.Time {
+	return time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC)
+}
 
 // testRestoreKeepsChainRecord proves that a restore keeps the audit chain
 // record of the target installation: the backup does not carry it, so the
@@ -521,11 +526,17 @@ var chainAt = time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC) //nolint:
 func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
-	want := audit.ChainRecord{ChangedAt: chainAt, ChangedBy: "dst", State: audit.ChainStateOn, Pending: false, LogReplaced: false}
+	want := audit.ChainRecord{
+		ChangedAt:   chainAt(),
+		ChangedBy:   "dst",
+		State:       audit.ChainStateOn,
+		Pending:     false,
+		LogReplaced: false,
+	}
 
 	to, _ := restoreChain(t, newStore, func(from chainRestoreStore, _ namespace.Namespace) {
 		saveChainRecord(t, from, audit.ChainRecord{
-			ChangedAt: chainAt, ChangedBy: "src", State: audit.ChainStateOff, Pending: true, LogReplaced: false,
+			ChangedAt: chainAt(), ChangedBy: "src", State: audit.ChainStateOff, Pending: true, LogReplaced: false,
 		})
 	}, func(to chainRestoreStore) { saveChainRecord(t, to, want) })
 
@@ -549,14 +560,14 @@ func testRestoreChainAgreesAfterMigration(t *testing.T, newStore RestoreFactory)
 	t.Helper()
 
 	to, acme := restoreChain(t, newStore, func(from chainRestoreStore, acme namespace.Namespace) {
-		appendDecrypts(t, from, acme, chainAt, 1)
+		appendDecrypts(t, from, acme, chainAt(), 1)
 
-		change := audit.ChainChange{At: chainAt.Add(time.Minute), By: "src", To: audit.ChainStateOff}
+		change := audit.ChainChange{At: chainAt().Add(time.Minute), By: "src", To: audit.ChainStateOff}
 		if err := audit.MigrateChain(t.Context(), from, []namespace.Fence{acme.Fence()}, change); err != nil {
 			t.Fatalf("turn the source chain off: %v", err)
 		}
 
-		appendDecrypts(t, from, acme, chainAt.Add(2*time.Minute), 1)
+		appendDecrypts(t, from, acme, chainAt().Add(2*time.Minute), 1)
 	}, func(chainRestoreStore) {})
 
 	scopes := []namespace.Name{acme.Name}
@@ -569,7 +580,7 @@ func testRestoreChainAgreesAfterMigration(t *testing.T, newStore RestoreFactory)
 	// acme was fenced by the swap: read its fence again.
 	fenced := restoredFence(t, to, acme.Name)
 
-	change := audit.ChainChange{At: chainAt.Add(time.Hour), By: "alice", To: audit.ChainStateOn}
+	change := audit.ChainChange{At: chainAt().Add(time.Hour), By: "alice", To: audit.ChainStateOn}
 	if err := audit.MigrateChain(t.Context(), to, []namespace.Fence{fenced}, change); err != nil {
 		t.Fatalf("migrate the restored log: %v", err)
 	}
@@ -598,6 +609,8 @@ func restoredFence(t *testing.T, s audit.Store, name namespace.Name) namespace.F
 // restoreChain restores a backup of a new store, which fill prepares, into
 // a new store, which target prepares. It answers the target and the
 // namespace acme. A store without a chain store skips the case.
+//
+//nolint:ireturn // The cases use the ports of both SQL adapters, which share no concrete type.
 func restoreChain(
 	t *testing.T, newStore RestoreFactory,
 	fill func(from chainRestoreStore, acme namespace.Namespace), target func(to chainRestoreStore),
@@ -666,9 +679,9 @@ func wantScopesValid(t *testing.T, s audit.ScopesChecker, scopes ...namespace.Na
 		t.Fatalf("check scopes: %v", err)
 	}
 
-	for i := range results {
-		if !results[i].Valid {
-			t.Fatalf("check %s = %+v, want valid", scopes[i], results[i])
+	for i, scope := range scopes {
+		if i >= len(results) || !results[i].Valid {
+			t.Fatalf("check %s: results %+v, want valid", scope, results)
 		}
 	}
 }

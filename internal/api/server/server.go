@@ -85,6 +85,10 @@ type Config struct {
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
+	// AuditChain reads the state of the audit chain and approves a waiting
+	// change. Nil means the store keeps no audit chain: the audit chain
+	// routes answer 501.
+	AuditChain AuditChain
 	// DeletedUnits runs the retention sweep of the deleted units.
 	// Nil means the store keeps no deleted units: the sweep route answers
 	// 501. Both SQL adapters keep them.
@@ -119,6 +123,7 @@ type Handler struct {
 	ipAllowlists   *ipallow.Service
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
+	auditChain     AuditChain
 	mux            *patternMux
 	routes         []Route
 }
@@ -161,6 +166,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		access:         cfg.Access,
 		tokens:         cfg.Tokens,
 		deletedUnits:   cfg.DeletedUnits,
+		auditChain:     cfg.AuditChain,
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
 		onAuditFailure: cfg.OnAuditFailure,
@@ -416,7 +422,9 @@ func classifyNamespace(err error) (int, string, bool) {
 
 // classifyMaintenance maps the maintenance errors to their status and
 // message: an invalid state value answers 400, active work answers 409
-// naming each update and run, and an unreadable or unknown stored state
+// naming each update and run, a leave while a change of the audit chain
+// holds maintenance mode answers 409, a refused approval of an audit chain
+// change answers 409 or, without a fresh MFA step, 403, and an unreadable or unknown stored state
 // answers 500 without driver text.
 func classifyMaintenance(err error) (int, string, bool) {
 	switch {
@@ -424,6 +432,13 @@ func classifyMaintenance(err error) (int, string, bool) {
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, maintenance.ErrActiveWork):
 		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, maintenance.ErrHeld):
+		return http.StatusConflict, maintenance.ErrHeld.Error(), true
+	case errors.Is(err, audit.ErrNoChainChange), errors.Is(err, audit.ErrChainMigrating),
+		errors.Is(err, audit.ErrChainChangeWaits):
+		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, audit.ErrChainStepRequired):
+		return http.StatusForbidden, audit.ErrChainStepRequired.Error(), true
 	case errors.Is(err, maintenance.ErrUnavailable):
 		return http.StatusInternalServerError, maintenance.ErrUnavailable.Error(), true
 	default:

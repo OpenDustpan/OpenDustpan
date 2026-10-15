@@ -113,21 +113,11 @@ func checkStartEntry(t *testing.T, path, logs string, secrets ...string) {
 		t.Fatalf("list server entries: %v", err)
 	}
 
-	// The scope also holds the start switch entry of the audit chain (ADR
-	// 64), so the check counts only the settings entries.
-	var starts []audit.Entry
-
-	for i := range listing.Entries {
-		if listing.Entries[i].Action == string(identity.ActionServerManageSettings) {
-			starts = append(starts, listing.Entries[i])
-		}
+	if len(listing.Entries) != 1 {
+		t.Fatalf("server scope holds %d entries, want 1 start entry", len(listing.Entries))
 	}
 
-	if len(starts) != 1 {
-		t.Fatalf("server scope holds %d settings entries, want 1 start entry", len(starts))
-	}
-
-	entry := starts[0]
+	entry := listing.Entries[0]
 	if entry.Channel != audit.ChannelStartup || entry.Subject != match[1] ||
 		entry.Action != string(identity.ActionServerManageSettings) || entry.Kind != audit.KindChange {
 		t.Fatalf("start entry = %+v, want channel startup and subject %s", entry, match[1])

@@ -47,6 +47,7 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {

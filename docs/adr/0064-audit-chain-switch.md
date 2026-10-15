@@ -36,7 +36,8 @@ and a fresh MFA step.
    while the server runs, as for `--audit` (ADR 68 decision 3).
 3. **The database keeps the state of the chain.** The table
    `audit_chain_state` holds the state (`on` or `off`), when it last
-   changed, and who changed it. The table is bookkeeping of the
+   changed, who changed it, whether a change waits, and whether the swap
+   of a restore replaced the log. The table is bookkeeping of the
    installation, like `schema_migrations`: a backup does not carry it. An
    installation without a row counts as `on`. Before this ADR the chain was
    always on, so an upgrade needs no migration.
@@ -44,26 +45,35 @@ and a fresh MFA step.
    server starts normally and every append of this instance uses that state
    until the instance stops. No append reads the state.
 5. **A different setting starts the server in maintenance mode.** The
-   server enters the maintenance mode of ADR 38 with the reason
-   `audit-chain` and changes nothing yet.
-   - Maintenance mode keeps its reason. A restore is refused while the
-     reason is `audit-chain`, and a change of the chain is refused while a
-     restore runs. Each one leaves only its own maintenance mode.
+   server notes in `audit_chain_state` that a change waits, enters the
+   maintenance mode of ADR 38, and changes nothing yet.
+   - The note is the reason `audit-chain` of the maintenance mode. The
+     table `installation` that holds the maintenance state is in the backup
+     format, so the reason stays out of it. While the note holds, the
+     server refuses a leave of maintenance mode and a restore with 409,
+     and refuses an approval while a restore runs. Each one leaves only its
+     own maintenance mode.
    - An instance whose setting differs from the stored state answers 503 on
-     every route except the probes, the metrics and the routes of decision
-     6, also after another instance approved the change, until it restarts
-     with the stored state.
-   - In maintenance mode with the reason `audit-chain`, every instance
-     answers 503 on each route that writes, except the routes of decision 6.
+     every route except the probes, the metrics, the routes of decision 6,
+     the maintenance routes and the files of the console, also after
+     another instance approved the change, until it restarts with the
+     stored state.
+   - While a change waits or migrates, every instance answers 503 on every
+     route except the same routes and the reads of the audit API. A read of
+     another API can also append an entry, for example the export of an
+     access review (ADR 52 decision 13), so the rule covers reads too.
    - Each instance reads the stored state of the chain together with the
      installation state, with the same cache limit (ADR 38 decision 4). So
      an instance learns of an approved change without a read in each
      append.
 6. **A person approves the change.** `GET /api/server/audit/chain` answers
-   the stored state, the setting of the instance, and whether a change
-   waits. `POST /api/server/audit/chain` approves the change to the setting
-   of the instance that receives it. The console button and the CLI call the
-   same route.
+   the stored state, the setting of the instance, whether a change waits,
+   and whether its migration runs. It needs `server:read-audit`.
+   `POST /api/server/audit/chain` approves the change to the setting of the
+   instance that receives it, and answers 202. The setting of the instance
+   decides the actions of the route. The console button and the commands
+   `opendustpan audit-chain status` and `opendustpan audit-chain approve`
+   call the same routes. An approval while no change waits answers 409.
    - Turning the chain on needs the action `server:enable-audit-chain`
      (operator family).
    - Turning the chain off needs the actions `server:disable-audit-chain`

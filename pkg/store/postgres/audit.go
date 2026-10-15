@@ -259,13 +259,13 @@ func (s *Store) insertAuditEntry(
 
 	// With the chain off, the entry holds no hash. A start entry begins a
 	// chain with an empty previous hash.
-	switch mode {
-	case hashLink:
+	if mode == hashLink {
 		e.PrevHash = prevHash
 		e.Hash = audit.ComputeHash(e, prevHash)
-	case hashStart:
+	}
+
+	if mode == hashStart {
 		e.Hash = audit.ComputeHash(e, "")
-	case hashNone:
 	}
 
 	insertErr := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
@@ -420,7 +420,12 @@ var errCheckCount = errors.New("the check answered no result")
 
 // checkScope walks the chain of ns in q against the record rec (see
 // audit.ChainWalk), from sequence 1, in pages of audit.CheckPageSize.
-func checkScope(ctx context.Context, q *db.Queries, ns namespace.Name, rec audit.ChainRecord) (audit.CheckResult, error) {
+func checkScope(
+	ctx context.Context,
+	q *db.Queries,
+	ns namespace.Name,
+	rec audit.ChainRecord,
+) (audit.CheckResult, error) {
 	lowest, err := q.MinAuditSequence(ctx, ns.String())
 	if err != nil {
 		return audit.CheckResult{}, fmt.Errorf("select lowest audit sequence: %w", err)

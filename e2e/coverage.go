@@ -751,6 +751,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		IPAllowlists:   coverageIPAllowlists(tb),
 	})
 	if err != nil {
@@ -845,6 +846,7 @@ func CoverageAllowlist() []AllowEntry {
 		backupAllowEntries(),
 		namespaceAllowEntries(),
 		maintenanceAllowEntries(),
+		auditChainAllowEntries(),
 		operatorAllowEntries(),
 		stateAllowEntries(),
 		restoreAllowEntries(),
@@ -1403,6 +1405,30 @@ func maintenanceAllowEntries() []AllowEntry {
 			CoveringTest: maintenanceCoveringTest,
 			Reason: "Operator route: no CLI leaves maintenance mode. The " +
 				"harness step leaves after the 503 checks.",
+		},
+	}
+}
+
+// auditChainCoveringTest names the test that proves the audit chain routes
+// instead of a CLI: no tool CLI calls them.
+const auditChainCoveringTest = "TestAuditChain"
+
+// auditChainAllowEntries returns the operator audit chain routes that no
+// tool CLI calls. The steps of auditChainCoveringTest restart the server
+// binary with each setting, read the waiting change and approve it.
+func auditChainAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/server/audit/chain",
+			CoveringTest: auditChainCoveringTest,
+			Reason: "Operator route: no tool CLI reads the audit chain. " +
+				"The harness step reads the waiting change after each restart.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/audit/chain",
+			CoveringTest: auditChainCoveringTest,
+			Reason: "Operator route: no tool CLI approves an audit chain change. " +
+				"The harness step approves the change to off, then to on.",
 		},
 	}
 }

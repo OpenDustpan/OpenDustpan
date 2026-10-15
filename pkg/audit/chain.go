@@ -75,9 +75,10 @@ const (
 // when it last changed and who changed it. Pending reports that a change of
 // the chain waits for a person to approve it, which keeps the installation
 // in maintenance mode. LogReplaced reports that the swap of a restore
-// replaced the log and the server has not compared it with the state yet. A backup does not carry the record: a restore keeps the
-// record of the target installation. An installation without a record reads
-// as ChainStateOn, because the chain was on in every installation before it
+// replaced the log and the server has not compared it with the state yet.
+// A backup does not carry the record: a restore keeps the record of the
+// target installation. An installation without a record reads as
+// ChainStateOn, because the chain was on in every installation before it
 // had a setting.
 type ChainRecord struct {
 	ChangedAt   time.Time
@@ -107,6 +108,22 @@ const (
 
 // ErrInvalidChainSetting reports a chain setting other than on or off.
 var ErrInvalidChainSetting = errors.New("invalid audit chain setting: want on or off")
+
+// Errors of the approval of a change of the chain.
+var (
+	// ErrNoChainChange reports an approval while no change of the chain
+	// waits.
+	ErrNoChainChange = errors.New("no audit chain change waits for approval")
+	// ErrChainMigrating reports an approval or a restore while the
+	// migration of an approved change runs.
+	ErrChainMigrating = errors.New("an audit chain migration runs")
+	// ErrChainChangeWaits reports a restore while a change of the chain
+	// waits for approval.
+	ErrChainChangeWaits = errors.New("an audit chain change waits for approval")
+	// ErrChainStepRequired reports an approval of a change to off without
+	// a fresh MFA step.
+	ErrChainStepRequired = errors.New("turning the audit chain off needs a fresh MFA step")
+)
 
 // ParseChainSetting maps an operator value to a setting. An empty value is
 // ChainOn.
@@ -216,9 +233,9 @@ func migrateScope(ctx context.Context, store ChainStore, fence namespace.Fence, 
 // LastAgrees reports whether a scope whose last entry is last agrees with
 // state: with the chain on, the last entry is a chained entry that is not an
 // end entry; with the chain off, it holds no hash or it is an end entry. A
-// scope without entries (found false) agrees.
-func LastAgrees(last Entry, found bool, state ChainState) bool {
-	if !found {
+// scope without entries (last nil) agrees.
+func LastAgrees(last *Entry, state ChainState) bool {
+	if last == nil {
 		return true
 	}
 
@@ -236,7 +253,11 @@ func LogAgrees(ctx context.Context, store ChainStore, scopes []namespace.Name, s
 			return false, fmt.Errorf("read the last audit entry of %s: %w", scope, err)
 		}
 
-		if !LastAgrees(last, found, state) {
+		if !found {
+			continue
+		}
+
+		if !LastAgrees(&last, state) {
 			return false, nil
 		}
 	}
@@ -245,9 +266,17 @@ func LogAgrees(ctx context.Context, store ChainStore, scopes []namespace.Name, s
 }
 
 // ChainSetEntry returns the entry in ServerScope that records an approved
-// change.
-func ChainSetEntry(change ChainChange) Entry {
+// change. It keeps who acted and from where from caller: the subject, the
+// token, the address, the user agent, the channel and the request.
+func ChainSetEntry(caller Entry, change ChainChange) Entry {
 	e := chainMarker(ServerScope, ActionSetChain, change)
+	e.Subject = caller.Subject
+	e.IDPSubject = caller.IDPSubject
+	e.TokenID = caller.TokenID
+	e.SourceIP = caller.SourceIP
+	e.UserAgent = caller.UserAgent
+	e.Channel = caller.Channel
+	e.RequestID = caller.RequestID
 	e.ValuePath = chainPathPrefix + string(change.To)
 
 	return e
@@ -298,7 +327,9 @@ type Digest struct {
 // Add adds the stored entry e, with changesText as the store holds it.
 func (d *Digest) Add(e Entry, changesText string) {
 	leaf := ComputeStoredHash(e, "", changesText)
-	step := sha256.Sum256([]byte(d.sum + digestSeparator + leaf + digestSeparator + e.PrevHash + digestSeparator + e.Hash))
+	step := sha256.Sum256(
+		[]byte(d.sum + digestSeparator + leaf + digestSeparator + e.PrevHash + digestSeparator + e.Hash),
+	)
 
 	d.sum = hex.EncodeToString(step[:])
 	d.count++
@@ -339,7 +370,8 @@ const (
 	phaseNoChain
 )
 
-// ChainWalk checks the entries of one scope in order of sequence. The stores use it in Check, so both dialects read the chain
+// ChainWalk checks the entries of one scope in order of sequence. The stores use it in Check, so both dialects read the
+// chain
 // the same way. The zero value is not ready: use NewChainWalk.
 type ChainWalk struct {
 	scope     ChainScope
@@ -383,7 +415,7 @@ func (w *ChainWalk) StepStored(e Entry, changesText string) bool {
 
 	w.next++
 
-	ok := w.step(e, changesText)
+	ok := w.advance(e, changesText)
 	if !ok {
 		w.failed = true
 	}
@@ -400,8 +432,39 @@ func (w *ChainWalk) Step(e Entry) bool {
 	return w.StepStored(e, EncodeChanges(e.Changes))
 }
 
-// step checks e in the current phase.
-func (w *ChainWalk) step(e Entry, changesText string) bool {
+// Finish answers whether the scope ends in a state that agrees with the
+// record, after the last entry: with the chain on, a scope must not end
+// after an end entry; with the chain off, a scope with entries must end
+// after an end entry or have no chain. A walk whose start entry never came
+// fails.
+func (w *ChainWalk) Finish() bool {
+	if w.failed {
+		return false
+	}
+
+	if w.next == 1 {
+		return true
+	}
+
+	switch w.phase {
+	case phaseDigest:
+		return false
+	case phaseEnded:
+		return w.scope.Record.State == ChainStateOff
+	case phaseChain:
+		return w.scope.Record.State == ChainStateOn
+	default:
+		return true
+	}
+}
+
+// Unchained answers the count of entries without a hash so far.
+func (w *ChainWalk) Unchained() int64 {
+	return w.unchained
+}
+
+// advance checks e in the current phase.
+func (w *ChainWalk) advance(e Entry, changesText string) bool {
 	switch w.phase {
 	case phaseDigest:
 		return w.stepDigest(e, changesText)
@@ -466,37 +529,6 @@ func (w *ChainWalk) beganWhileOff(e Entry) bool {
 	rec := w.scope.Record
 
 	return rec.State == ChainStateOff && !rec.ChangedAt.IsZero() && e.At.UnixMilli() >= rec.ChangedAt.UnixMilli()
-}
-
-// Finish answers whether the scope ends in a state that agrees with the
-// record, after the last entry: with the chain on, a scope must not end
-// after an end entry; with the chain off, a scope with entries must end
-// after an end entry or have no chain. A walk whose start entry never came
-// fails.
-func (w *ChainWalk) Finish() bool {
-	if w.failed {
-		return false
-	}
-
-	if w.next == 1 {
-		return true
-	}
-
-	switch w.phase {
-	case phaseDigest:
-		return false
-	case phaseEnded:
-		return w.scope.Record.State == ChainStateOff
-	case phaseChain:
-		return w.scope.Record.State == ChainStateOn
-	default:
-		return true
-	}
-}
-
-// Unchained answers the count of entries without a hash so far.
-func (w *ChainWalk) Unchained() int64 {
-	return w.unchained
 }
 
 // ScopesChecker is the port that checks many scopes in one read of the

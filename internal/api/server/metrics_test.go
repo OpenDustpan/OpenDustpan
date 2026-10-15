@@ -78,6 +78,7 @@ func newMetricsHandler(
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {

@@ -64,6 +64,7 @@ func newSweepHandler(
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   sweeper,
+		AuditChain:     nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {

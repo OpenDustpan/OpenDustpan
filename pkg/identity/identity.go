@@ -120,6 +120,19 @@ const (
 	// settings name it: the start entry and the entry of a reload of the
 	// configuration file. RFC 68 decides the settings API that checks it.
 	ActionServerManageSettings Action = "server:manage-settings"
+	// ActionServerEnableAuditChain allows approving a change of the audit
+	// chain to on, after a restart with the setting on. Its object is
+	// ServerObject.
+	ActionServerEnableAuditChain Action = "server:enable-audit-chain"
+	// ActionServerDisableAuditChain allows approving a change of the audit
+	// chain to off, after a restart with the setting off. The approval also
+	// needs ActionServerApproveAuditChainOff. Its object is ServerObject.
+	ActionServerDisableAuditChain Action = "server:disable-audit-chain"
+	// ActionServerApproveAuditChainOff is the second action that a change
+	// of the audit chain to off needs, from the administration family, so
+	// one family alone cannot turn the chain off. Its object is
+	// ServerObject.
+	ActionServerApproveAuditChainOff Action = "server:approve-audit-chain-off"
 	// ActionServerReadPrincipals allows reading the principals and the
 	// groups of the installation, and the members of each group (ADR 52).
 	// Its object is ServerObject.

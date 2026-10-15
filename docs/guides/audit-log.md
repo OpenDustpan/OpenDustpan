@@ -161,64 +161,90 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 
 ## Turn the chain on or off
 
-The hash chain is opt-in (ADR 60 decisions 17 and 19, ADR 64).
-`--audit-chain` (`DUSTPAN_AUDIT_CHAIN`) takes `auto`, `on` or `off`.
-The default is `auto`.
+The hash chain is on by default.
+`--audit-chain` (`DUSTPAN_AUDIT_CHAIN`, or `audit-chain` in the settings file) takes `on` or `off`.
+The server reads the setting once at start.
+No API call and no reload of the settings file changes it while the server runs.
 
-- `auto` keeps the state that the installation recorded last.
-  With no record, the chain is on when the log holds chained entries, and off otherwise.
-  So a new installation starts with the chain off, and an installation that already holds chained entries keeps the chain on.
-- `on` turns the chain on.
-- `off` turns the chain off.
+The database keeps the state of the chain: `on` or `off`, when it last changed, and who changed it.
+An installation without that state counts as `on`.
+At start, the server compares its setting with the stored state.
+When they agree, the server starts normally.
 
-With the chain off, a new entry holds an empty `prevHash` and an empty `hash`.
-Each change of the chain writes a switch entry in the scope `@server` before the server serves.
-A switch entry has the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
-A switch to off holds a hash, so a chain that goes off ends with a chained entry.
-The first start of an installation also writes a switch entry for the state before that start.
-So the switch entries are the whole history of the chain.
-The server writes the switch entries and the state in one transaction.
-Every instance reads the state again at least every 2 seconds, so a change reaches every instance within 2 seconds.
-While the log holds chained entries and the chain is off, the server logs a warning at each start.
+When they differ, the server enters maintenance mode and changes nothing yet.
+A person approves the change:
 
-The installation keeps the state of the chain, and whether its log ever held a chained entry, in a table of its own.
-A backup does not carry that table.
-A restore keeps the state of the target installation.
-After a restore, the server writes one switch entry with a hash for that state.
-So the switch entries end in the state of this installation.
-The entry names the person who requested the restore, and holds the change `restore` with the ID of the backup.
-Before it writes the entry, the server checks the restored log.
-When that check fails, the server still serves, logs an error and adds one to `dustpan_audit_restore_check_failures_total`.
-A restore trusts the audit log in the backup: signed checkpoints (see below) protect a backup.
-The check finds a backup without switch entries or hashes only when this installation recorded a chained log.
-So a restore onto a new installation cannot find such a backup.
-A restore that stops after it replaced the log gets its switch entry at the next start.
-When the restored log holds chained entries and the chain is off, the server logs the same warning after the restore.
+```sh
+opendustpan audit-chain status --server https://dustpan.example
+opendustpan audit-chain approve --server https://dustpan.example
+```
 
-The check reads each run of chained entries on its own.
-An entry without a hash ends a run, and the next chained entry starts a new run with an empty `prevHash`.
-An entry without a hash passes the check only when the switch entries say that the chain was off at its time.
-An instance can keep the old state for 2 seconds after a switch to on.
-So the check also accepts an entry without a hash up to 2 seconds after the chain was off.
-So the check finds a hash that someone deleted from a chained log.
-The check reads the switch entries in the chain of `@server`, from sequence 1.
-A switch entry counts only when its hash matches its fields and links it to the entry before it.
-So an added row cannot turn the chain off.
-The first entry of `@server` of a new installation is the one exception: it is a switch to off without a hash.
+The commands call `GET` and `POST` `/api/server/audit/chain`, the same routes as the console.
+The approval sets the chain to the setting of the server that receives it.
+
+- Turning the chain on needs the action `server:enable-audit-chain` (operator family).
+- Turning the chain off needs `server:disable-audit-chain` (operator family) and `server:approve-audit-chain-off` (administration family).
+  It also needs a fresh MFA step when the server asks for MFA.
+
+The approval writes an entry in `@server` with the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
+Then the server migrates the log in the background.
+It waits 4 seconds, so every instance refuses requests.
+It writes one entry in each scope that holds entries:
+
+- **On:** a start entry with the action `server:start-audit-chain`.
+  Its hash has an empty `prevHash`.
+  Its changes hold `digest`, a running SHA-256 of every earlier entry of the scope, and `entries`, their count.
+  The earlier entries keep their rows.
+- **Off:** an end entry with the action `server:end-audit-chain`, which names the person who approved the change.
+  Its hash links to the entry before it, so the chain ends with a chained entry.
+  Later entries hold an empty `prevHash` and an empty `hash`.
+
+Then the server stores the new state, waits 4 seconds so every instance can see it, and leaves maintenance mode.
+`opendustpan audit-chain status` shows `the migration runs` until then.
+A migration that stops before it ends keeps the old state, so the change waits for an approval again.
+
+While a change waits or migrates, every instance answers 503 on most routes.
+The probes, the metrics, the audit chain routes, the maintenance routes, the reads of the audit log and the console files stay available.
+The server refuses a restore while a change waits, and refuses an approval while a restore runs.
+An instance whose setting differs from the stored state also answers 503 on most routes, also after another instance approved the change.
+Restart each instance with the stored setting.
+
+The server computes the digest of a start entry over each earlier entry in order of sequence.
+For each entry, the next digest is the hex SHA-256 of four parts joined with the unit separator (0x1F).
+The parts are the previous digest, the entry hash, the stored `prevHash` and the stored `hash`.
+The previous digest of the first entry is the empty string.
+The entry hash is the hash of the stored fields of the entry with an empty `prevHash`.
+A verifier who kept a digest outside the database can compute it again from the old rows.
+So the verifier can prove that the old rows did not change after the chain started.
+
+The check of a scope starts at its last start entry, or at sequence 1 when the scope holds none.
+From there, each entry holds a hash that matches its fields and links to the entry before it, with no gap.
+The chain goes up to now, or up to an end entry.
+After an end entry, entries hold no hash.
+A start entry also checks its digest against the earlier entries.
+With the chain on, a scope must not end after an end entry.
+With the chain off, a scope without a chain is valid only when its first entry comes after the time the chain went off.
 A row below sequence 1 fails the check.
-Next to an entry without a hash, the times of the entries must not go back.
 The store keeps the times of a scope in order.
 An entry whose time is earlier than the last entry of its scope takes the time of that entry.
-When the switch entries are gone and the installation still holds the state of the chain, every scope fails the check.
-Keep the clocks of the instances synchronized.
 The check answers `entriesUnchained`: the count of entries without a hash.
-The check cannot prove that such an entry is unchanged.
-A person can delete the hashes of the entries after the last chained entry of a scope.
-That person can then move those entries into a later off window, and the check does not see it.
-Signed checkpoints (see below) cover that case.
+The check cannot prove that an entry before a start entry, or after an end entry, is unchanged.
+Signed checkpoints (see below) and the digest cover that case.
 
-While the chain is on, the server checks the chain of every namespace and of `@server` at start and every hour.
-While the chain is off, the server does not run this check.
+A backup does not carry the state of the chain.
+A restore keeps the state of the target installation.
+After the swap, the server compares the restored log with that state.
+With the chain on, each scope must end with a chained entry that is not an end entry.
+With the chain off, each scope must end with an entry without a hash, or with an end entry.
+When the log agrees, the server checks the chain of every scope.
+When that check fails, the restore still succeeds.
+The server then logs an error and adds one to `dustpan_audit_restore_check_failures_total`.
+When the log does not agree, the installation stays in maintenance mode until a person approves the change.
+The approval runs the same migration on the restored log.
+A restore that stops after the swap gets the comparison at the next start.
+A restore trusts the audit log in the backup: signed checkpoints (see below) protect a backup.
+
+The server checks the chain of every namespace and of `@server` at start and every hour.
 `dustpan_audit_chain_invalid` holds the count of scopes whose check failed.
 
 ```yaml

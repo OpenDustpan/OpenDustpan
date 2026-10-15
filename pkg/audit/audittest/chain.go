@@ -347,7 +347,13 @@ func testChainEndedWhileOn(t *testing.T, ts ChainTestStore) {
 	tl.migrate(audit.ChainStateOff)
 
 	// Someone writes the state on without the start entries of a migration.
-	rec := audit.ChainRecord{ChangedAt: tl.tick(), ChangedBy: "mallory", State: audit.ChainStateOn, Pending: false, LogReplaced: false}
+	rec := audit.ChainRecord{
+		ChangedAt:   tl.tick(),
+		ChangedBy:   "mallory",
+		State:       audit.ChainStateOn,
+		Pending:     false,
+		LogReplaced: false,
+	}
 	if err := ts.Store.SaveChainRecord(t.Context(), rec); err != nil {
 		t.Fatalf("save chain record: %v", err)
 	}
@@ -362,7 +368,13 @@ func testChainOpenWhileOff(t *testing.T, ts ChainTestStore) {
 	tl.append(2)
 
 	// Someone writes the state off without the end entries of a migration.
-	rec := audit.ChainRecord{ChangedAt: tl.tick(), ChangedBy: "mallory", State: audit.ChainStateOff, Pending: false, LogReplaced: false}
+	rec := audit.ChainRecord{
+		ChangedAt:   tl.tick(),
+		ChangedBy:   "mallory",
+		State:       audit.ChainStateOff,
+		Pending:     false,
+		LogReplaced: false,
+	}
 	if err := ts.Store.SaveChainRecord(t.Context(), rec); err != nil {
 		t.Fatalf("save chain record: %v", err)
 	}

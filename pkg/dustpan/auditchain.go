@@ -6,113 +6,430 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // auditChainCheckInterval is the time between two scheduled chain checks.
 const auditChainCheckInterval = time.Hour
 
-// WithAuditChain sets the hash chain of the audit log (ADR 60 decisions 17
-// and 19). audit.ChainAuto, the default, keeps the chain on when the
-// installation already holds chained entries, and off otherwise.
-// audit.ChainOn and audit.ChainOff decide alone. Run resolves the setting
-// before it serves, writes an audit entry when the chain changes, and logs
-// a warning while chained entries exist and the chain is off. While the
-// chain is on, the server checks the chain of every scope at start and
-// every hour, and sets dustpan_audit_chain_invalid.
+// migrationWaits is the count of cache limits that a migration waits after
+// the enter of maintenance mode, and again after it stores the new state:
+// every instance reads the state again within one cache limit.
+const migrationWaits = 2
+
+// WithAuditChain sets the hash chain of the audit log of this instance:
+// audit.ChainOn, the default, or audit.ChainOff. The server reads it once at
+// start. When it differs from the state that the database keeps, the server
+// starts in maintenance mode, and a person approves the change through the
+// installation API, which migrates the log. The server checks the chain of
+// every scope at start and every hour, and sets
+// dustpan_audit_chain_invalid.
 func WithAuditChain(setting audit.ChainSetting) Option {
 	return func(o *settings) { o.auditChain = setting }
 }
 
-// chainDeps holds the ports of the chain switch: the switch, the audit
-// store, the check of a restored log and the namespace list. checker is
-// nil when the store cannot check a restored log.
-type chainDeps struct {
-	sw         audit.ChainSwitch
+// auditChain holds the setting of this instance, the ports of the chain and
+// the last state of the chain that the instance read. The zero value is not
+// usable: call newAuditChain.
+type auditChain struct {
+	store      audit.ChainStore
 	entries    audit.Store
-	checker    audit.RestoreChecker
+	server     audit.ServerStore
 	namespaces namespace.Store
-	setting    audit.ChainSetting
+	logger     *slog.Logger
+	now        func() time.Time
+	observed   *metrics.ServerMetrics
+	// maint, restoreRunning and freshness are set after the services that
+	// need the chain exist. A nil freshness asks for no MFA step: built-in
+	// MFA does not exist yet.
+	maint          *maintenance.Service
+	restoreRunning func(ctx context.Context) (bool, error)
+	freshness      accesstoken.Freshness
+	// queue carries an approved change to the migration loop of Run.
+	queue     chan audit.ChainChange
+	migrating atomic.Bool
+	limit     time.Duration
+	setting   audit.ChainSetting
+	mu        sync.Mutex
+	rec       audit.ChainRecord
+	readAt    time.Time
+	read      bool
 }
 
-// newChainDeps answers the ports of the chain switch from the namespace
-// store, or nil when the store has no chain switch and the setting is
-// auto: such a store keeps its own behavior. An explicit setting on such a
-// store fails.
-func newChainDeps(cfg *settings) (*chainDeps, error) {
-	sw, okSwitch := cfg.namespaceStore.(audit.ChainSwitch)
-	entries, okEntries := cfg.namespaceStore.(audit.Store)
+// Messages of the audit chain gate.
+const (
+	// chainMismatchMessage answers a request to an instance whose setting
+	// differs from the stored state.
+	chainMismatchMessage = "The audit chain setting of this server differs from the stored state. " +
+		"Approve the change with 'opendustpan audit-chain approve', or restart with the stored setting."
+	// chainPendingMessage answers a request while a change of the chain
+	// waits for approval or migrates.
+	chainPendingMessage = "An audit chain change waits for approval. " +
+		"Requests stop until the migration is complete. Run 'opendustpan audit-chain status'."
+)
 
-	if !okSwitch || !okEntries {
-		if cfg.auditChain != audit.ChainAuto {
-			return nil, fmt.Errorf("namespace store cannot turn the audit chain on or off: %w", ErrMissingOption)
+// newAuditChain answers the chain of the namespace store, or nil when the
+// store keeps no chain and the setting is on: such a store keeps its own
+// behavior. The setting off on such a store fails.
+func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain, error) {
+	store, okChain := cfg.namespaceStore.(audit.ChainStore)
+	entries, okEntries := cfg.namespaceStore.(audit.Store)
+	server, okServer := cfg.namespaceStore.(audit.ServerStore)
+
+	if !okChain || !okEntries || !okServer {
+		if cfg.auditChain != audit.ChainOn {
+			return nil, fmt.Errorf("namespace store cannot turn the audit chain off: %w", ErrMissingOption)
 		}
 
-		return nil, nil //nolint:nilnil // No switch without an error means the store keeps its own chain.
+		return nil, nil //nolint:nilnil // No chain without an error means the store keeps its own chain.
 	}
 
-	checker, ok := cfg.namespaceStore.(audit.RestoreChecker)
-	if !ok {
-		checker = nil
-	}
-
-	return &chainDeps{
-		sw:         sw,
-		entries:    entries,
-		checker:    checker,
-		namespaces: cfg.namespaceStore,
-		setting:    cfg.auditChain,
+	return &auditChain{
+		store:          store,
+		entries:        entries,
+		server:         server,
+		namespaces:     cfg.namespaceStore,
+		logger:         cfg.logger,
+		now:            cfg.now,
+		observed:       observed,
+		maint:          nil,
+		restoreRunning: nil,
+		freshness:      nil,
+		queue:          make(chan audit.ChainChange, 1),
+		migrating:      atomic.Bool{},
+		limit:          maintenance.DefaultCacheLimit,
+		setting:        cfg.auditChain,
+		mu:             sync.Mutex{},
+		rec: audit.ChainRecord{
+			ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOn, Pending: false, LogReplaced: false,
+		},
+		readAt: time.Time{},
+		read:   false,
 	}, nil
 }
 
-// resolveAuditChain resolves the chain setting before the server serves.
-func (s *Server) resolveAuditChain(ctx context.Context) error {
-	if s.chain == nil {
+// Setting implements serverapi.AuditChain.
+func (c *auditChain) Setting() audit.ChainSetting {
+	return c.setting
+}
+
+// Status implements serverapi.AuditChain. It reads the stored state, not
+// the cache.
+func (c *auditChain) Status(ctx context.Context) (serverapi.AuditChainStatus, error) {
+	rec, err := c.store.ChainRecord(ctx)
+	if err != nil {
+		return serverapi.AuditChainStatus{}, fmt.Errorf("read audit chain state: %w", err)
+	}
+
+	return serverapi.AuditChainStatus{
+		ChangedAt: rec.ChangedAt,
+		ChangedBy: rec.ChangedBy,
+		State:     rec.State,
+		Setting:   c.setting,
+		Pending:   rec.Pending,
+		Migrating: c.migrating.Load(),
+	}, nil
+}
+
+// Approve implements serverapi.AuditChain: it checks the MFA step of a
+// change to off, refuses while a restore runs, enters maintenance mode,
+// writes the entry of the approval in the server scope and hands the change
+// to the migration loop.
+func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
+	if c.setting == audit.ChainOff && c.freshness != nil {
+		if err := c.freshness.RequireFresh(ctx, caller.Subject); err != nil {
+			return fmt.Errorf("%w: %w", audit.ErrChainStepRequired, err)
+		}
+	}
+
+	if !c.migrating.CompareAndSwap(false, true) {
+		return audit.ErrChainMigrating
+	}
+
+	change, err := c.recordApproval(ctx, caller)
+	if err != nil {
+		c.migrating.Store(false)
+
+		return err
+	}
+
+	c.queue <- change
+
+	return nil
+}
+
+// held reports whether a change of the chain waits: the maintenance service
+// does not leave maintenance mode while it does.
+func (c *auditChain) held(ctx context.Context) (bool, error) {
+	rec, err := c.store.ChainRecord(ctx)
+	if err != nil {
+		return false, fmt.Errorf("read audit chain state: %w", err)
+	}
+
+	return rec.Pending, nil
+}
+
+// startUp compares the setting with the stored state before the server
+// serves. Every append of this instance follows the stored state. When the
+// swap of a restore replaced the log, it compares the log with the stored
+// state first. When the setting differs, or the log does not agree, the
+// change waits for an approval and the installation enters maintenance mode.
+func (c *auditChain) startUp(ctx context.Context) error {
+	rec, err := c.store.ChainRecord(ctx)
+	if err != nil {
+		return fmt.Errorf("audit chain: %w", err)
+	}
+
+	c.store.SetChain(rec.State == audit.ChainStateOn)
+
+	if rec.LogReplaced {
+		rec, err = c.compareRestoredLog(ctx, rec)
+		if err != nil {
+			return fmt.Errorf("audit chain: %w", err)
+		}
+	}
+
+	if c.setting.State() != rec.State && !rec.Pending {
+		rec.Pending = true
+
+		if err := c.store.SaveChainRecord(ctx, rec); err != nil {
+			return fmt.Errorf("audit chain: %w", err)
+		}
+	}
+
+	c.remember(rec)
+
+	if !rec.Pending {
 		return nil
 	}
 
-	ports := audit.ChainPorts{Switch: s.chain.sw, Logger: s.logger}
+	c.logger.WarnContext(ctx, "audit chain change waits for approval",
+		slog.String("setting", c.setting.String()), slog.String("state", string(rec.State)))
 
-	on, err := audit.ResolveChain(ctx, ports, s.chain.setting, s.now)
-	if errors.Is(err, audit.ErrChainStartRaced) {
-		return err
+	return c.enterMaintenance(ctx)
+}
+
+// enterMaintenance enters maintenance mode for a waiting change. Active work
+// keeps normal operation and logs a warning: the gate still refuses writes,
+// and the approval enters maintenance mode again.
+func (c *auditChain) enterMaintenance(ctx context.Context) error {
+	if c.maint == nil {
+		return nil
+	}
+
+	_, err := c.maint.Enter(ctx, false)
+	if errors.Is(err, maintenance.ErrActiveWork) {
+		c.logger.WarnContext(ctx, "audit chain change found active work; maintenance mode starts at the approval")
+
+		return nil
 	}
 
 	if err != nil {
 		return fmt.Errorf("audit chain: %w", err)
 	}
 
-	s.chainOn = on
+	return nil
+}
+
+// compareRestoredLog compares the log that a restore swapped in with the
+// state in rec, and stores the result: a log that agrees clears the note of
+// the swap, else the change waits for an approval that migrates the
+// restored log.
+func (c *auditChain) compareRestoredLog(ctx context.Context, rec audit.ChainRecord) (audit.ChainRecord, error) {
+	scopes, err := c.scopes(ctx)
+	if err != nil {
+		return rec, err
+	}
+
+	agrees, err := audit.LogAgrees(ctx, c.store, scopes, rec.State)
+	if err != nil {
+		return rec, fmt.Errorf("compare the restored audit log: %w", err)
+	}
+
+	rec.LogReplaced = false
+
+	if !agrees {
+		rec.Pending = true
+
+		c.logger.WarnContext(ctx, "restored audit log does not agree with the audit chain state",
+			slog.String("state", string(rec.State)))
+	}
+
+	if err := c.store.SaveChainRecord(ctx, rec); err != nil {
+		return rec, fmt.Errorf("save audit chain state: %w", err)
+	}
+
+	if agrees {
+		c.checkRestoredLog(ctx, scopes)
+	}
+
+	return rec, nil
+}
+
+// checkRestoredLog checks the chain of every scope of a restored log that
+// agrees with the stored state. A failed check counts the restore in
+// dustpan_audit_restore_check_failures_total and logs an error; the restore
+// still succeeds.
+func (c *auditChain) checkRestoredLog(ctx context.Context, scopes []namespace.Name) {
+	invalid, err := audit.CheckScopes(ctx, c.entries, scopes)
+	if err == nil && invalid == 0 {
+		return
+	}
+
+	if c.observed != nil {
+		c.observed.IncAuditRestoreCheckFailure()
+	}
+
+	c.logger.ErrorContext(ctx, "restored audit log failed the chain check", slog.Int("scopes", invalid))
+}
+
+// afterRestore is the after-apply step of a restore: when the swap
+// replaced the log, it compares the restored log with the stored state.
+func (c *auditChain) afterRestore(ctx context.Context) error {
+	rec, err := c.store.ChainRecord(ctx)
+	if err != nil {
+		return fmt.Errorf("audit chain after restore: %w", err)
+	}
+
+	if !rec.LogReplaced {
+		return nil
+	}
+
+	rec, err = c.compareRestoredLog(ctx, rec)
+	if err != nil {
+		return fmt.Errorf("audit chain after restore: %w", err)
+	}
+
+	c.remember(rec)
 
 	return nil
 }
 
-// startAuditChainCheck checks the chain of every scope now and then every
-// hour until ctx is done, while the chain is on. The returned function
-// waits until the check loop stopped.
-func (s *Server) startAuditChainCheck(ctx context.Context) func() {
-	if s.chain == nil || !s.chainOn {
-		return func() {}
+// admitRestore refuses a restore while a change of the chain waits or
+// migrates.
+func (c *auditChain) admitRestore(ctx context.Context) error {
+	if c.migrating.Load() {
+		return audit.ErrChainMigrating
 	}
 
+	pending, err := c.held(ctx)
+	if err != nil {
+		return err
+	}
+
+	if pending {
+		return audit.ErrChainChangeWaits
+	}
+
+	return nil
+}
+
+// remember stores rec as the last state that this instance read.
+func (c *auditChain) remember(rec audit.ChainRecord) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.rec, c.readAt, c.read = rec, time.Now(), true
+}
+
+// current answers the stored state, read at most once per cache limit.
+// When the stored state changed, later appends of this instance follow it.
+// A failed read keeps the last state it read.
+func (c *auditChain) current(ctx context.Context) audit.ChainRecord {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.read && time.Since(c.readAt) < c.limit {
+		return c.rec
+	}
+
+	rec, err := c.store.ChainRecord(ctx)
+	if err != nil {
+		return c.rec
+	}
+
+	if !c.read || rec.State != c.rec.State {
+		c.store.SetChain(rec.State == audit.ChainStateOn)
+	}
+
+	c.rec, c.readAt, c.read = rec, time.Now(), true
+
+	return rec
+}
+
+// recordApproval runs the checks and the writes of an approval while this
+// instance holds the migration flag, and answers the change to migrate.
+func (c *auditChain) recordApproval(ctx context.Context, caller audit.Entry) (audit.ChainChange, error) {
+	none := audit.ChainChange{At: time.Time{}, By: "", To: ""}
+
+	pending, err := c.held(ctx)
+	if err != nil {
+		return none, err
+	}
+
+	if !pending {
+		return none, audit.ErrNoChainChange
+	}
+
+	if err := c.refuseWhileRestoring(ctx); err != nil {
+		return none, err
+	}
+
+	if c.maint != nil {
+		if _, err := c.maint.Enter(ctx, false); err != nil {
+			return none, fmt.Errorf("enter maintenance mode: %w", err)
+		}
+	}
+
+	change := audit.ChainChange{At: c.now(), By: caller.Subject, To: c.setting.State()}
+
+	if _, err := c.server.AppendServer(ctx, audit.ChainSetEntry(caller, change)); err != nil {
+		return none, fmt.Errorf("append audit chain approval: %w", err)
+	}
+
+	return change, nil
+}
+
+// refuseWhileRestoring reports backup.ErrRestoreRunning while a restore
+// runs.
+func (c *auditChain) refuseWhileRestoring(ctx context.Context) error {
+	if c.restoreRunning == nil {
+		return nil
+	}
+
+	running, err := c.restoreRunning(ctx)
+	if err != nil {
+		return fmt.Errorf("read running restores: %w", err)
+	}
+
+	if running {
+		return backup.ErrRestoreRunning
+	}
+
+	return nil
+}
+
+// startMigrations runs each approved change until ctx is done. The returned
+// function waits until the loop stopped.
+func (c *auditChain) startMigrations(ctx context.Context) func() {
 	var wg sync.WaitGroup
 
 	wg.Go(func() {
-		ticker := time.NewTicker(auditChainCheckInterval)
-		defer ticker.Stop()
-
 		for {
-			s.checkAuditChain(ctx)
-
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case change := <-c.queue:
+				c.migrate(ctx, change)
 			}
 		}
 	})
@@ -120,64 +437,102 @@ func (s *Server) startAuditChainCheck(ctx context.Context) func() {
 	return wg.Wait
 }
 
-// checkAuditChain checks every namespace and the server scope once, and
-// sets dustpan_audit_chain_invalid. A failed check logs the error, never
-// an entry.
-func (s *Server) checkAuditChain(ctx context.Context) {
-	scopes, err := s.chain.scopes(ctx)
-	if err != nil {
+// migrate runs the migration of change: it waits two cache limits so every
+// instance refuses writes, writes the start or end entry in each scope,
+// stores the new state, waits two cache limits so every instance sees it,
+// and leaves maintenance mode. A failure logs an error and keeps the change
+// waiting, so a person can approve it again.
+func (c *auditChain) migrate(ctx context.Context, change audit.ChainChange) {
+	defer c.migrating.Store(false)
+
+	if err := c.migrateSteps(ctx, change); err != nil {
 		if ctx.Err() == nil {
-			s.logger.WarnContext(ctx, "audit chain check: list namespaces", slog.String("error", err.Error()))
+			c.logger.ErrorContext(ctx, "audit chain migration failed", slog.String("error", err.Error()))
 		}
 
 		return
 	}
 
-	invalid, err := audit.CheckScopes(ctx, s.chain.entries, scopes)
-	if err != nil && ctx.Err() != nil {
-		return
-	}
-
-	if err != nil {
-		s.logger.WarnContext(ctx, "audit chain check failed", slog.String("error", err.Error()))
-	}
-
-	s.observed.SetAuditChainInvalid(invalid)
-
-	if invalid > 0 {
-		s.logger.ErrorContext(ctx, "audit chain check found scopes that do not match",
-			slog.Int("scopes", invalid))
-	}
+	c.logger.InfoContext(ctx, "audit chain migration is complete",
+		slog.String("state", string(change.To)), slog.String("approved_by", change.By))
 }
 
-// markRestoreBeforeSwap returns the before-swap step of a restore: it names
-// the restore in the audit chain record, so a start after a crash knows
-// whether the swap replaced the log (see audit.MarkRestore). Without a chain
-// switch it does nothing.
-func markRestoreBeforeSwap(chain *chainDeps) restoreStep {
-	return func(ctx context.Context, restore backup.AppliedRestore) error {
-		if chain == nil {
-			return nil
-		}
+// migrateSteps runs the steps of migrate and answers the first failure.
+func (c *auditChain) migrateSteps(ctx context.Context, change audit.ChainChange) error {
+	if err := sleepContext(ctx, migrationWaits*c.limit); err != nil {
+		return err
+	}
 
-		mark := audit.ChainRestoreMark{
-			ID:          restore.ID.String(),
-			BackupID:    restore.BackupID.String(),
-			RequestedBy: restore.RequestedBy,
-			Applied:     false,
-		}
+	if err := c.refuseWhileRestoring(ctx); err != nil {
+		return err
+	}
 
-		if err := audit.MarkRestore(ctx, chain.sw, mark); err != nil {
-			return fmt.Errorf("audit chain before the swap: %w", err)
-		}
+	fences, err := c.fences(ctx)
+	if err != nil {
+		return err
+	}
 
+	if err := audit.MigrateChain(ctx, c.store, fences, change); err != nil {
+		return fmt.Errorf("migrate audit chain: %w", err)
+	}
+
+	c.forget()
+
+	if err := sleepContext(ctx, migrationWaits*c.limit); err != nil {
+		return err
+	}
+
+	if c.maint == nil {
+		return nil
+	}
+
+	if err := c.maint.Leave(ctx); err != nil {
+		return fmt.Errorf("leave maintenance mode: %w", err)
+	}
+
+	return nil
+}
+
+// forget drops the cached state, so the next request reads it again.
+func (c *auditChain) forget() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.read = false
+}
+
+// sleepContext waits d, or answers the error of ctx when it ends first.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("audit chain migration: %w", ctx.Err())
+	case <-timer.C:
 		return nil
 	}
 }
 
+// fences answers the fence of every namespace and of the server scope: the
+// scopes of a migration.
+func (c *auditChain) fences(ctx context.Context) ([]namespace.Fence, error) {
+	all, err := c.namespaces.ListNamespaces(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list namespaces: %w", err)
+	}
+
+	fences := make([]namespace.Fence, 0, len(all)+1)
+	for _, ns := range all {
+		fences = append(fences, ns.Fence())
+	}
+
+	return append(fences, audit.ServerFence()), nil
+}
+
 // scopes answers every namespace and the server scope: the scopes of a
 // check of the whole log.
-func (c *chainDeps) scopes(ctx context.Context) ([]namespace.Name, error) {
+func (c *auditChain) scopes(ctx context.Context) ([]namespace.Name, error) {
 	all, err := c.namespaces.ListNamespaces(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list namespaces: %w", err)
@@ -191,53 +546,133 @@ func (c *chainDeps) scopes(ctx context.Context) ([]namespace.Name, error) {
 	return append(scopes, audit.ServerScope), nil
 }
 
-// restoreChain holds what the after-apply step of the chain needs besides
-// its ports: the logger, the clock and the metrics.
-type restoreChain struct {
-	logger   *slog.Logger
-	now      func() time.Time
-	observed *metrics.ServerMetrics
+// startCheck checks the chain of every scope now and then every hour until
+// ctx is done. The returned function waits until the check loop stopped.
+func (c *auditChain) startCheck(ctx context.Context) func() {
+	var wg sync.WaitGroup
+
+	wg.Go(func() {
+		ticker := time.NewTicker(auditChainCheckInterval)
+		defer ticker.Stop()
+
+		for {
+			c.check(ctx)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	})
+
+	return wg.Wait
 }
 
-// recheckChainAfterRestore returns the after-apply step of a restore for the
-// audit chain (RFC 22): the restore keeps the chain record of this
-// installation. When the record says that the swap of a restore replaced
-// the log, the step checks the restored log, then writes a switch entry for
-// that state that marks the restore, notes the chained log and logs the
-// warning of a start while the chain is off (see audit.RecheckChain). The
-// restore comes from the record, so the step ignores its argument, and the
-// start runs it too. It never changes the state. When the check of the
-// restored log fails, it counts the restore in
-// dustpan_audit_restore_check_failures_total, and the restore still
-// succeeds. Without a chain switch it does nothing.
-func recheckChainAfterRestore(chain *chainDeps, rc restoreChain) restoreStep {
-	return func(ctx context.Context, _ backup.AppliedRestore) error {
-		if chain == nil {
-			return nil
+// check checks every namespace and the server scope once, and sets
+// dustpan_audit_chain_invalid. A failed check logs the error, never an
+// entry.
+func (c *auditChain) check(ctx context.Context) {
+	scopes, err := c.scopes(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.logger.WarnContext(ctx, "audit chain check: list namespaces", slog.String("error", err.Error()))
 		}
 
-		r := audit.ChainRestore{Checker: chain.checker, Now: rc.now, Scopes: nil}
+		return
+	}
 
-		if chain.checker != nil {
-			scopes, err := chain.scopes(ctx)
-			if err != nil {
-				return fmt.Errorf("audit chain after restore: %w", err)
-			}
+	invalid, err := audit.CheckScopes(ctx, c.entries, scopes)
+	if err != nil && ctx.Err() != nil {
+		return
+	}
 
-			r.Scopes = scopes
+	if err != nil {
+		c.logger.WarnContext(ctx, "audit chain check failed", slog.String("error", err.Error()))
+	}
+
+	if c.observed != nil {
+		c.observed.SetAuditChainInvalid(invalid)
+	}
+
+	if invalid > 0 {
+		c.logger.ErrorContext(ctx, "audit chain check found scopes that do not match",
+			slog.Int("scopes", invalid))
+	}
+}
+
+// bindAuditChain gives chain the services that are built after it: the
+// maintenance service and the check for a running restore.
+func bindAuditChain(chain *auditChain, maint *maintenance.Service, restores *backup.RestoreService, cfg *settings) {
+	if chain == nil {
+		return
+	}
+
+	chain.maint = maint
+
+	switch registry, ok := cfg.namespaceStore.(backup.RestoreRegistry); {
+	case restores != nil:
+		chain.restoreRunning = restores.Running
+	case ok:
+		chain.restoreRunning = func(ctx context.Context) (bool, error) {
+			return restoreRowRunning(ctx, registry)
 		}
+	default:
+		// The store keeps no restores, so no restore can run.
+	}
+}
 
-		ports := audit.ChainPorts{Switch: chain.sw, Logger: rc.logger}
+// restoreRowRunning reports whether registry holds a restore that is still
+// checking or applying.
+func restoreRowRunning(ctx context.Context, registry backup.RestoreRegistry) (bool, error) {
+	records, err := registry.ListRestores(ctx)
+	if err != nil {
+		return false, fmt.Errorf("list restores: %w", err)
+	}
 
-		invalid, err := audit.RecheckChain(ctx, ports, r)
-		if invalid > 0 && rc.observed != nil {
-			rc.observed.IncAuditRestoreCheckFailure()
+	for i := range records {
+		if records[i].State == backup.RestoreChecking || records[i].State == backup.RestoreApplying {
+			return true, nil
 		}
+	}
 
-		if err != nil {
-			return fmt.Errorf("audit chain after restore: %w", err)
-		}
+	return false, nil
+}
 
+// auditChainPort answers chain as the port of the installation API, or nil
+// without a chain, never an interface that holds a nil pointer.
+//
+//nolint:ireturn // The installation API takes the port.
+func auditChainPort(chain *auditChain) serverapi.AuditChain {
+	if chain == nil {
 		return nil
+	}
+
+	return chain
+}
+
+// startUpAuditChain compares the setting of the chain with the stored state
+// before the server serves.
+func (s *Server) startUpAuditChain(ctx context.Context) error {
+	if s.chain == nil {
+		return nil
+	}
+
+	return s.chain.startUp(ctx)
+}
+
+// startAuditChain starts the scheduled check and the migration loop of the
+// chain until ctx is done. The returned function waits until both stopped.
+func (s *Server) startAuditChain(ctx context.Context) func() {
+	if s.chain == nil {
+		return func() {}
+	}
+
+	waitCheck := s.chain.startCheck(ctx)
+	waitMigrations := s.chain.startMigrations(ctx)
+
+	return func() {
+		waitCheck()
+		waitMigrations()
 	}
 }

@@ -42,9 +42,8 @@ func (s *Store) StartChain(ctx context.Context, fence namespace.Fence, e audit.E
 	return s.appendChainMarker(ctx, fence, e, audit.ChainStateOn, func(q *db.Queries, e audit.Entry) error {
 		var digest audit.Digest
 
-		if err := walkScope(ctx, q, e.Namespace, func(row db.AuditEntry) {
-			digest.Add(fromAuditRow(row), row.Changes.String)
-		}); err != nil {
+		add := func(row db.AuditEntry) { digest.Add(fromAuditRow(row), row.Changes.String) }
+		if err := walkScope(ctx, q, e.Namespace, add); err != nil {
 			return err
 		}
 
@@ -70,7 +69,14 @@ func (s *Store) LastEntry(ctx context.Context, scope namespace.Name) (audit.Entr
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return lastEntry(ctx, s.queries, scope)
+	var none audit.Entry
+
+	last, err := lastEntry(ctx, s.queries, scope)
+	if err != nil || last == nil {
+		return none, false, err
+	}
+
+	return *last, true, nil
 }
 
 // appendChainMarker validates e and runs insert in one transaction with the
@@ -92,12 +98,12 @@ func (s *Store) appendChainMarker(
 	var wrote bool
 
 	run := func(q *db.Queries) error {
-		last, found, err := lastEntry(ctx, q, e.Namespace)
+		last, err := lastEntry(ctx, q, e.Namespace)
 		if err != nil {
 			return err
 		}
 
-		if audit.LastAgrees(last, found, state) {
+		if audit.LastAgrees(last, state) {
 			return nil
 		}
 
@@ -120,19 +126,21 @@ func (s *Store) appendChainMarker(
 	return wrote, nil
 }
 
-// lastEntry answers the entry with the highest sequence of scope in q, and
-// false when the scope holds none.
-func lastEntry(ctx context.Context, q *db.Queries, scope namespace.Name) (audit.Entry, bool, error) {
+// lastEntry answers the entry with the highest sequence of scope in q, or
+// nil when the scope holds none.
+func lastEntry(ctx context.Context, q *db.Queries, scope namespace.Name) (*audit.Entry, error) {
 	row, err := q.LastAuditEntry(ctx, scope.String())
 	if errors.Is(err, sql.ErrNoRows) {
-		return audit.Entry{}, false, nil
+		return nil, nil //nolint:nilnil // A scope without entries has no last entry.
 	}
 
 	if err != nil {
-		return audit.Entry{}, false, fmt.Errorf("read last audit entry: %w", err)
+		return nil, fmt.Errorf("read last audit entry: %w", err)
 	}
 
-	return fromAuditRow(row), true, nil
+	e := fromAuditRow(row)
+
+	return &e, nil
 }
 
 // walkScope calls fn for each entry of scope in q in order of sequence, in

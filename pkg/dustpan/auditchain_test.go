@@ -2,261 +2,245 @@ package dustpan_test
 
 import (
 	"context"
+	"io"
+	"net/http"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
-	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-// chainWait bounds how long a test waits for the server to start.
-const chainWait = 10 * time.Second
+// chainWait bounds how long a test waits for the server. A migration waits
+// four cache limits of maintenance mode, 8 seconds.
+const chainWait = 30 * time.Second
 
-// TestAuditChainOnANewInstallationStartsOff proves ADR 60 decision 17: a
-// new installation with the default setting appends entries without a
-// hash. Its first start writes one switch entry without a hash for the
-// start state (ADR 64).
-func TestAuditChainOnANewInstallationStartsOff(t *testing.T) {
+// TestAuditChainIsOnByDefault proves that a new installation keeps the
+// chain on with the default setting, writes no entry at the start, and that
+// the scheduled check sets the metric.
+func TestAuditChainIsOnByDefault(t *testing.T) {
 	t.Parallel()
 
 	st := openChainStore(t)
 	acme := createChainNamespace(t, st)
 
-	stop := runChainServer(t, st, audit.ChainAuto)
-	waitForChainState(t, st, audit.ChainStateOff)
-	stop()
+	srv := runChainServer(t, st, audit.ChainOn)
+	waitForMetricLine(t, srv.srv, "dustpan_audit_chain_invalid 0")
 
-	if e := appendChainEntry(t, st, acme, "req-1"); e.Hash != "" {
-		t.Fatalf("entry on a new installation: hash %q, want none", e.Hash)
+	if e := appendChainEntry(t, st, acme, "req-1"); e.Hash == "" {
+		t.Fatal("entry with the default setting: no hash, want the chain on")
 	}
 
-	checkStartSwitch(t, st, startSwitch{path: "/audit/chain/off", chained: false})
-}
-
-// TestAuditChainStaysOnWhenTheLogHoldsChainedEntries proves ADR 60 decision
-// 19: an installation with chained entries keeps the chain on, writes one
-// chained switch entry for the start state (ADR 64), and the scheduled
-// check sets the metric.
-func TestAuditChainStaysOnWhenTheLogHoldsChainedEntries(t *testing.T) {
-	t.Parallel()
-
-	st := openChainStore(t)
-	acme := createChainNamespace(t, st)
-
-	// A store handle computes the chain until the server sets it, as every
-	// installation before ADR 60 did.
-	appendChainEntry(t, st, acme, "req-1")
-
-	srv, stop := runChainServerWithMetrics(t, st, audit.ChainAuto)
-	waitForChainState(t, st, audit.ChainStateOn)
-	waitForMetricLine(t, srv, "dustpan_audit_chain_invalid 0")
-	stop()
-
-	if e := appendChainEntry(t, st, acme, "req-2"); e.Hash == "" {
-		t.Fatal("entry after the start: no hash, want the chain on")
+	if got := listServer(t, st); len(got) != 0 {
+		t.Fatalf("server scope after a start: got %d entries, want none", len(got))
 	}
 
-	checkStartSwitch(t, st, startSwitch{path: "/audit/chain/on", chained: true})
+	if status, body := srv.do(t, http.MethodGet, "/api/stacks"); status == http.StatusServiceUnavailable {
+		t.Fatalf("tool API with the setting of the stored state: 503, want it served (%s)", body)
+	}
 }
 
-// TestTurningTheAuditChainOffIsAudited proves the lead decision recorded in
-// RFC 22: an administrator who turns the chain off on purpose makes one
-// chained change entry in the server scope, and later entries hold no hash.
-func TestTurningTheAuditChainOffIsAudited(t *testing.T) {
+// TestAuditChainChangeWaitsForApprovalAndMigrates proves the change of the
+// chain: a start with the setting off waits in maintenance mode, the
+// approval writes an entry and an end entry in each scope, and a later
+// start with the setting on writes a start entry with the digest of the
+// earlier entries.
+func TestAuditChainChangeWaitsForApprovalAndMigrates(t *testing.T) {
 	t.Parallel()
 
 	st := openChainStore(t)
 	acme := createChainNamespace(t, st)
 	appendChainEntry(t, st, acme, "req-1")
 
-	stop := runChainServer(t, st, audit.ChainOff)
-	waitForChainState(t, st, audit.ChainStateOff)
-	stop()
+	off := runChainServer(t, st, audit.ChainOff)
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
+	wantMaintenance(t, st, maintenance.StateMaintenance)
+	wantWaitingChange(t, off)
+	approveAndWait(t, st, off, audit.ChainStateOff)
 
-	// The list answers newest first: the change after the start switch.
-	server := listServer(t, st)
-	if len(server) != 2 {
-		t.Fatalf("server scope: got %d entries, want the start switch and one change", len(server))
-	}
-
-	change := server[0]
-	if change.Kind != audit.KindChange || change.Action != audit.ActionSetChain ||
-		change.ValuePath != "/audit/chain/off" || change.Hash == "" {
-		t.Fatalf("change entry: got %+v, want a chained change that turns the chain off", change)
+	entries := listScope(t, st, acme.Name)
+	if len(entries) != 2 || entries[0].Action != audit.ActionEndChain || entries[0].Subject != "admin" ||
+		entries[0].Hash == "" || entries[0].PrevHash != entries[1].Hash {
+		t.Fatalf("acme after the change to off: got %+v, want an end entry by admin linked to the chain", entries)
 	}
 
 	if e := appendChainEntry(t, st, acme, "req-2"); e.Hash != "" {
-		t.Fatalf("entry after the chain went off: hash %q, want none", e.Hash)
+		t.Fatalf("entry after the change to off: hash %q, want none", e.Hash)
 	}
+
+	on := runChainServer(t, st, audit.ChainOn)
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
+	approveAndWait(t, st, on, audit.ChainStateOn)
+
+	start := listScope(t, st, acme.Name)[0]
+	if start.Action != audit.ActionStartChain || start.PrevHash != "" || start.Hash == "" || len(start.Changes) != 2 {
+		t.Fatalf("acme after the change to on: got %+v, want a start entry with the digest", start)
+	}
+
+	wantValid(t, st, acme.Name, audit.ServerScope)
 }
 
-// TestAStoppedRestoreRechecksTheAuditChain proves ADR 64 decision 6 for a
-// restore that stops after its swap: the next start writes the switch entry
-// of the restore, which names the requester and the backup of the mark.
-func TestAStoppedRestoreRechecksTheAuditChain(t *testing.T) {
-	t.Parallel()
-
-	st, stopped := stoppedRestore(t, true)
-
-	before := len(listServer(t, st))
-
-	stop := runChainServer(t, st, audit.ChainOn)
-	waitForServerEntries(t, st, before+1)
-	waitForRestoreState(t, st, stopped.ID, backup.RestoreFailed)
-	stop()
-
-	// The list answers newest first.
-	got := listServer(t, st)[0]
-	marked := len(got.Changes) == 1 && got.Changes[0].Key == audit.ChangeRestore &&
-		got.Changes[0].New == stopped.BackupID.String()
-
-	if got.Action != audit.ActionSetChain || got.Subject != "alice" || got.Hash == "" || !marked {
-		t.Fatalf("restore switch entry: got %+v, want a chained switch by alice that marks the restore", got)
-	}
-}
-
-// TestARestoreStoppedBeforeItsSwapWritesNoSwitchEntry proves that a restore
-// that stopped before its swap writes no switch entry at the next start:
-// the log is still the log of this installation.
-func TestARestoreStoppedBeforeItsSwapWritesNoSwitchEntry(t *testing.T) {
-	t.Parallel()
-
-	st, stopped := stoppedRestore(t, false)
-
-	before := len(listServer(t, st))
-
-	stop := runChainServer(t, st, audit.ChainOn)
-	waitForRestoreState(t, st, stopped.ID, backup.RestoreFailed)
-	stop()
-
-	if got := len(listServer(t, st)); got != before {
-		t.Fatalf("server scope after the start: got %d entries, want %d", got, before)
-	}
-}
-
-// stoppedRestore answers a store with the chain on and a restore that
-// stopped while it applied, with the mark of the restore in the chain
-// record. swapped says whether the swap replaced the log before the stop.
-func stoppedRestore(t *testing.T, swapped bool) (*sqlite.Store, backup.RestoreRecord) {
+// wantWaitingChange proves that c, whose setting is off and differs from the
+// stored state, refuses the tool API and answers a waiting change.
+func wantWaitingChange(t *testing.T, c chainServer) {
 	t.Helper()
+
+	if status, _ := c.do(t, http.MethodGet, "/api/stacks"); status != http.StatusServiceUnavailable {
+		t.Fatalf("tool API while the setting differs: %d, want 503", status)
+	}
+
+	status, body := c.do(t, http.MethodGet, "/api/server/audit/chain")
+	if status != http.StatusOK || !strings.Contains(body, `"pending":true`) ||
+		!strings.Contains(body, `"setting":"off"`) {
+		t.Fatalf("chain status: %d %s, want 200 with a waiting change to off", status, body)
+	}
+}
+
+// approveAndWait approves the waiting change through c, waits until st
+// holds state with no waiting change and normal operation, and stops c.
+func approveAndWait(t *testing.T, st *sqlite.Store, c chainServer, state audit.ChainState) {
+	t.Helper()
+
+	if status, body := c.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusAccepted {
+		t.Fatalf("approve %s: %d %s, want 202", state, status, body)
+	}
+
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.State == state && !rec.Pending })
+	waitForMaintenance(t, st, maintenance.StateNormal)
+	c.stop()
+}
+
+// TestAuditChainMismatchAfterAnotherApproval proves that an instance whose
+// setting differs from the stored state refuses the tool APIs once another
+// instance approved the change, until it restarts.
+func TestAuditChainMismatchAfterAnotherApproval(t *testing.T) {
+	t.Parallel()
 
 	st := openChainStore(t)
 	createChainNamespace(t, st)
 
-	stop := runChainServer(t, st, audit.ChainOn)
-	waitForChainState(t, st, audit.ChainStateOn)
-	stop()
-
-	stopped := backup.RestoreRecord{
-		StartedAt:   time.Now().UTC(),
-		EndedAt:     time.Time{},
-		ID:          backup.RestoreID("rst-chain0000000000001"),
-		BackupID:    backup.ID("bkp-chain0000000000001"),
-		PreBackupID: "",
-		RequestedBy: "alice",
-		Error:       "",
-		State:       backup.RestoreChecking,
-	}
-
-	if err := st.CreateRestore(t.Context(), stopped); err != nil {
-		t.Fatalf("create restore: %v", err)
-	}
-
-	if err := st.MarkRestoreApplying(t.Context(), stopped.ID, ""); err != nil {
-		t.Fatalf("mark restore applying: %v", err)
-	}
+	on := runChainServer(t, st, audit.ChainOn)
 
 	rec, err := st.ChainRecord(t.Context())
 	if err != nil {
 		t.Fatalf("chain record: %v", err)
 	}
 
-	// The record holds the mark that the server writes before the swap,
-	// and the swap sets Applied.
-	next := rec
-	next.Restore = audit.ChainRestoreMark{
-		ID:          stopped.ID.String(),
-		BackupID:    stopped.BackupID.String(),
-		RequestedBy: stopped.RequestedBy,
-		Applied:     swapped,
-	}
-
-	w := audit.ChainWrite{Now: nil, Entries: nil, Read: rec, Record: next}
-	if err := st.RecordChain(t.Context(), w); err != nil {
-		t.Fatalf("mark the restore: %v", err)
-	}
-
-	return st, stopped
-}
-
-// waitForRestoreState waits until the restore id in st holds want.
-func waitForRestoreState(t *testing.T, st *sqlite.Store, id backup.RestoreID, want backup.RestoreState) {
-	t.Helper()
+	rec.State = audit.ChainStateOff
+	saveRecord(t, st, rec)
 
 	deadline := time.Now().Add(chainWait)
 
 	for {
-		got, err := st.GetRestore(t.Context(), id)
-		if err != nil {
-			t.Fatalf("get restore %s: %v", id, err)
-		}
-
-		if got.State == want {
-			return
+		status, _ := on.do(t, http.MethodGet, "/api/stacks")
+		if status == http.StatusServiceUnavailable {
+			break
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("restore %s after %s: state %q, want %q", id, chainWait, got.State, want)
+			t.Fatalf("tool API after the stored state changed: %d, want 503", status)
 		}
 
 		pauseChain(t)
 	}
-}
 
-// waitForServerEntries waits until the server scope of st holds want
-// entries.
-func waitForServerEntries(t *testing.T, st *sqlite.Store, want int) {
-	t.Helper()
-
-	deadline := time.Now().Add(chainWait)
-
-	for len(listServer(t, st)) < want {
-		if time.Now().After(deadline) {
-			t.Fatalf("server scope after %s: got %d entries, want %d", chainWait, len(listServer(t, st)), want)
+	for _, path := range []string{"/health/live", "/api/server/audit/chain", "/api/server/maintenance"} {
+		if status, body := on.do(t, http.MethodGet, path); status == http.StatusServiceUnavailable {
+			t.Fatalf("%s while the setting differs: 503, want it served (%s)", path, body)
 		}
-
-		pauseChain(t)
 	}
 }
 
-// startSwitch is the switch entry of a first start: its value path and
-// whether it holds a hash.
-type startSwitch struct {
-	path    string
-	chained bool
+// TestARestoredLogThatDisagreesWaitsForApproval proves that a start after a
+// swap that replaced the log compares the restored log with the stored
+// state: a log that does not agree waits for an approval.
+func TestARestoredLogThatDisagreesWaitsForApproval(t *testing.T) {
+	t.Parallel()
+
+	st := openChainStore(t)
+	acme := createChainNamespace(t, st)
+	appendChainEntry(t, st, acme, "req-1")
+
+	saveRecord(t, st, audit.ChainRecord{
+		ChangedAt: time.Now(), ChangedBy: "alice", State: audit.ChainStateOff,
+		Pending: false, LogReplaced: true,
+	})
+
+	runChainServer(t, st, audit.ChainOff)
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending && !rec.LogReplaced })
+	wantMaintenance(t, st, maintenance.StateMaintenance)
 }
 
-// checkStartSwitch proves that the server scope of st holds only the switch
-// entry want.
-func checkStartSwitch(t *testing.T, st *sqlite.Store, want startSwitch) {
+// TestARestoredLogThatAgreesStartsNormally proves that a restored log that
+// agrees with the stored state clears the note of the swap and waits for
+// nothing.
+func TestARestoredLogThatAgreesStartsNormally(t *testing.T) {
+	t.Parallel()
+
+	st := openChainStore(t)
+	acme := createChainNamespace(t, st)
+	appendChainEntry(t, st, acme, "req-1")
+
+	saveRecord(t, st, audit.ChainRecord{
+		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn,
+		Pending: false, LogReplaced: true,
+	})
+
+	srv := runChainServer(t, st, audit.ChainOn)
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return !rec.LogReplaced })
+	waitForMetricLine(t, srv.srv, "dustpan_audit_restore_check_failures_total 0")
+
+	rec, err := st.ChainRecord(t.Context())
+	if err != nil || rec.Pending {
+		t.Fatalf("chain record = %+v, %v; want no waiting change", rec, err)
+	}
+
+	wantMaintenance(t, st, maintenance.StateNormal)
+}
+
+// chainServer is a running server of a chain test.
+type chainServer struct {
+	srv  *dustpan.Server
+	stop func()
+	base string
+}
+
+// do sends one request with the admin token and answers the status and the
+// body.
+func (c chainServer) do(t *testing.T, method, path string) (int, string) {
 	t.Helper()
 
-	server := listServer(t, st)
-	if len(server) != 1 {
-		t.Fatalf("server scope: got %d entries, want the start switch only", len(server))
+	req, err := http.NewRequestWithContext(t.Context(), method, c.base+path, http.NoBody)
+	if err != nil {
+		t.Fatalf("request: %v", err)
 	}
 
-	got := startSwitch{path: server[0].ValuePath, chained: server[0].Hash != ""}
-	if server[0].Action != audit.ActionSetChain || got != want {
-		t.Fatalf("start switch: got %+v, want %+v", got, want)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, path, err)
 	}
+
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			t.Errorf("close body: %v", closeErr)
+		}
+	}()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	return resp.StatusCode, string(body)
 }
 
 // openChainStore opens a fresh SQLite store that the test closes.
@@ -330,31 +314,79 @@ func appendChainEntry(t *testing.T, st *sqlite.Store, ns namespace.Namespace, re
 	return stored
 }
 
-// listServer answers the entries of the server scope.
+// listServer answers the entries of the server scope, newest first.
 func listServer(t *testing.T, st *sqlite.Store) []audit.Entry {
 	t.Helper()
 
-	listing, err := st.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	return listScope(t, st, audit.ServerScope)
+}
+
+// listScope answers the entries of scope, newest first.
+func listScope(t *testing.T, st *sqlite.Store, scope namespace.Name) []audit.Entry {
+	t.Helper()
+
+	listing, err := st.List(t.Context(), scope, audit.Page{Number: 1, Size: audit.MaxPageSize})
 	if err != nil {
-		t.Fatalf("list server scope: %v", err)
+		t.Fatalf("list %s: %v", scope, err)
 	}
 
 	return listing.Entries
 }
 
-// runChainServer starts a server on st with setting and answers a function
-// that stops it and waits for Run.
-func runChainServer(t *testing.T, st *sqlite.Store, setting audit.ChainSetting) func() {
+// saveRecord stores rec as the chain record of st.
+func saveRecord(t *testing.T, st *sqlite.Store, rec audit.ChainRecord) {
 	t.Helper()
 
-	_, stop := runChainServerWithMetrics(t, st, setting)
-
-	return stop
+	if err := st.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
 }
 
-// runChainServerWithMetrics starts a server on st with setting and answers
-// it and a function that stops it and waits for Run.
-func runChainServerWithMetrics(t *testing.T, st *sqlite.Store, setting audit.ChainSetting) (*dustpan.Server, func()) {
+// wantValid proves that the chain check of each scope passes.
+func wantValid(t *testing.T, st *sqlite.Store, scopes ...namespace.Name) {
+	t.Helper()
+
+	for _, scope := range scopes {
+		got, err := st.Check(t.Context(), scope)
+		if err != nil || !got.Valid {
+			t.Fatalf("check %s = %+v, %v; want valid", scope, got, err)
+		}
+	}
+}
+
+// wantMaintenance proves that st holds the installation state want.
+func wantMaintenance(t *testing.T, st *sqlite.Store, want maintenance.State) {
+	t.Helper()
+
+	got, err := st.GetState(t.Context())
+	if err != nil || got != want {
+		t.Fatalf("installation state = %q, %v; want %q", got, err, want)
+	}
+}
+
+// waitForMaintenance waits until st holds the installation state want.
+func waitForMaintenance(t *testing.T, st *sqlite.Store, want maintenance.State) {
+	t.Helper()
+
+	deadline := time.Now().Add(chainWait)
+
+	for {
+		got, err := st.GetState(t.Context())
+		if err == nil && got == want {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("installation state after %s = %q, %v; want %q", chainWait, got, err, want)
+		}
+
+		pauseChain(t)
+	}
+}
+
+// runChainServer starts a server on st with setting, waits until it
+// serves, and answers it. The test stops it at its end.
+func runChainServer(t *testing.T, st *sqlite.Store, setting audit.ChainSetting) chainServer {
 	t.Helper()
 
 	authn, err := identity.NewStaticToken("admin", adminToken)
@@ -373,6 +405,9 @@ func runChainServerWithMetrics(t *testing.T, st *sqlite.Store, setting audit.Cha
 		}
 	})
 
+	ln := openTestListener(t)
+	addr := ln.Addr().String()
+
 	srv, err := dustpan.NewServer(
 		dustpan.WithRegion(region),
 		dustpan.WithNamespaceStore(st),
@@ -387,7 +422,7 @@ func runChainServerWithMetrics(t *testing.T, st *sqlite.Store, setting audit.Cha
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
-		dustpan.WithListener(openTestListener(t)),
+		dustpan.WithListener(ln),
 		dustpan.WithAuditChain(setting),
 	)
 	if err != nil {
@@ -415,12 +450,43 @@ func runChainServerWithMetrics(t *testing.T, st *sqlite.Store, setting audit.Cha
 
 	t.Cleanup(stop)
 
-	return srv, stop
+	c := chainServer{srv: srv, stop: stop, base: "http://" + addr}
+	waitForLive(t, c)
+
+	return c
 }
 
-// waitForChainState waits until st records want, which Run does during its
-// start-up.
-func waitForChainState(t *testing.T, st *sqlite.Store, want audit.ChainState) {
+// waitForLive waits until the liveness probe of c answers.
+func waitForLive(t *testing.T, c chainServer) {
+	t.Helper()
+
+	deadline := time.Now().Add(chainWait)
+
+	for {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, c.base+"/health/live", http.NoBody)
+		if err != nil {
+			t.Fatalf("request: %v", err)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			if closeErr := resp.Body.Close(); closeErr != nil {
+				t.Errorf("close body: %v", closeErr)
+			}
+
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("server did not serve after %s: %v", chainWait, err)
+		}
+
+		pauseChain(t)
+	}
+}
+
+// waitForRecord waits until the chain record of st meets ok.
+func waitForRecord(t *testing.T, st *sqlite.Store, ok func(audit.ChainRecord) bool) {
 	t.Helper()
 
 	deadline := time.Now().Add(chainWait)
@@ -428,16 +494,15 @@ func waitForChainState(t *testing.T, st *sqlite.Store, want audit.ChainState) {
 	for {
 		rec, err := st.ChainRecord(t.Context())
 		if err != nil {
-			t.Fatalf("chain state: %v", err)
+			t.Fatalf("chain record: %v", err)
 		}
 
-		got := rec.State
-		if got == want {
+		if ok(rec) {
 			return
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("chain state after %s: got %q, want %q", chainWait, got, want)
+			t.Fatalf("chain record after %s: got %+v", chainWait, rec)
 		}
 
 		pauseChain(t)
@@ -478,6 +543,6 @@ func pauseChain(t *testing.T) {
 	select {
 	case <-timer.C:
 	case <-t.Context().Done():
-		t.Fatal("test ended while it waited for the server")
+		t.Fatal("test context ended")
 	}
 }

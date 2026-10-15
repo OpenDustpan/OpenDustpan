@@ -266,10 +266,11 @@ var Settings = []*Setting{
 		"(none: journaling on). Set `true` to make the Pulumi CLI save checkpoints",
 	).WithFile("disable-pulumi-journaling"),
 	stringSetting(
-		"audit-chain", "DUSTPAN_AUDIT_CHAIN", "auto",
-		"hash chain of the audit log: auto keeps it on when the log holds chained entries, "+
-			"on or off decide alone (DUSTPAN_AUDIT_CHAIN)",
-		"`auto`: on when the audit log holds chained entries, else off. `on` or `off` decide alone",
+		"audit-chain", "DUSTPAN_AUDIT_CHAIN", "on",
+		"hash chain of the audit log: on or off. A change starts the server in maintenance mode "+
+			"until a person approves it (DUSTPAN_AUDIT_CHAIN)",
+		"`on`. `off` turns the chain off. A change starts the server in maintenance mode until a person "+
+			"runs `opendustpan audit-chain approve`",
 	).WithFile("audit-chain"),
 	stringSetting(
 		"log-sink", "DUSTPAN_LOG_SINK", "",

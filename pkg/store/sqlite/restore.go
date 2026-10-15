@@ -278,7 +278,10 @@ func fenceStagedFile(ctx context.Context, path string, chain audit.ChainRecord) 
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE namespaces SET failover_version = failover_version + 1`); err != nil {
+	const fence = `UPDATE namespaces SET failover_version = failover_version + 1`
+
+	_, err = tx.ExecContext(ctx, fence)
+	if err != nil {
 		return errors.Join(fmt.Errorf("fence staged namespaces: %w", err), tx.Rollback())
 	}
 
