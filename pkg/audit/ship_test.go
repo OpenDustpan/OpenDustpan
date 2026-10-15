@@ -199,6 +199,8 @@ func newShipper(t *testing.T, feed *memFeed, sinks ...audit.ShipSink) *audit.Shi
 		OnShipped:  nil,
 		OnFailure:  nil,
 		OnSkipped:  nil,
+		OnLag:      nil,
+		Now:        nil,
 		Sinks:      sinks,
 	})
 	if err != nil {
@@ -209,7 +211,7 @@ func newShipper(t *testing.T, feed *memFeed, sinks ...audit.ShipSink) *audit.Shi
 }
 
 func shipSink(name string, s logsink.Sink) audit.ShipSink {
-	return audit.ShipSink{Sink: s, Name: name, Interval: 0}
+	return audit.ShipSink{Sink: s, Name: name, Kind: "test", Interval: 0}
 }
 
 func TestShipOnceCopiesEveryEntryInOrderAndMovesTheCursors(t *testing.T) {
@@ -315,6 +317,8 @@ func TestASkippedEntryIsCountedAndTheCursorMoves(t *testing.T) {
 		OnShipped:  func(_ string, n int) { shipped += n },
 		OnFailure:  nil,
 		OnSkipped:  func(_ string, n int) { skipped += n },
+		OnLag:      nil,
+		Now:        nil,
 		Sinks:      []audit.ShipSink{shipSink("siem", sink)},
 	})
 	if err != nil {
@@ -372,10 +376,13 @@ func TestAFailedRoundLogsAClassNotTheDriverText(t *testing.T) {
 			}
 		},
 		OnSkipped: nil,
+		OnLag:     nil,
+		Now:       nil,
 		Sinks: []audit.ShipSink{
 			{
 				Sink:     &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false},
 				Name:     "siem",
+				Kind:     "test",
 				Interval: time.Millisecond,
 			},
 		},
@@ -475,7 +482,7 @@ func TestRunShipsOnItsIntervalAndStopsWithTheContext(t *testing.T) {
 
 	feed := newMemFeed(map[namespace.Name]int{"acme": 1})
 	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
-	shipper := newShipper(t, feed, audit.ShipSink{Sink: sink, Name: "siem", Interval: time.Millisecond})
+	shipper := newShipper(t, feed, audit.ShipSink{Sink: sink, Name: "siem", Kind: "test", Interval: time.Millisecond})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -530,6 +537,8 @@ func TestNewShipperRejectsBadSinks(t *testing.T) {
 				OnShipped:  nil,
 				OnFailure:  nil,
 				OnSkipped:  nil,
+				OnLag:      nil,
+				Now:        nil,
 				Sinks:      tc.sinks,
 			})
 			if !errors.Is(err, audit.ErrInvalidShipper) {

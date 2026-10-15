@@ -174,6 +174,14 @@ FROM updates
 WHERE stack_id = $1
   AND status = 'running' AND NOT dry_run AND kind <> 'preview';
 
+-- name: CountRunningJournaledUpdates :one
+-- The count of updates that run now with journal version 1 or higher, for
+-- the upgrade check: a downgrade to a binary without the journal route
+-- answers its journal batches with 404, which the Pulumi CLI does not retry.
+SELECT COUNT(*)
+FROM updates
+WHERE status = 'running' AND journal_version > 0;
+
 -- name: HighestUpdateVersion :one
 SELECT COALESCE(MAX(version), 0)::BIGINT
 FROM updates
@@ -819,7 +827,11 @@ DELETE FROM update_journal
 WHERE stack_id = $1 AND update_id = $2;
 
 -- name: JournalState :one
-SELECT journal_closed, journal_version, status FROM updates
+SELECT journal_closed, journal_version, journal_records_changed, status FROM updates
+WHERE stack_id = $1 AND id = $2;
+
+-- name: SetJournalRecordsChanged :exec
+UPDATE updates SET journal_records_changed = TRUE
 WHERE stack_id = $1 AND id = $2;
 
 -- name: CloseJournal :exec

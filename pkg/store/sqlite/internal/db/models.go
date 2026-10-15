@@ -317,23 +317,24 @@ type StateVersion struct {
 }
 
 type Update struct {
-	StackID          string
-	ID               string
-	Kind             string
-	DryRun           bool
-	Status           string
-	Version          int64
-	Revision         int64
-	LeaseDigest      []byte
-	LeaseExpiresAtMs int64
-	CreatedAtMs      int64
-	StartedAtMs      int64
-	EndedAtMs        int64
-	CreatedBy        string
-	RestoredFrom     int64
-	JournalVersion   int64
-	JournalClosed    int64
-	TokenID          string
+	StackID               string
+	ID                    string
+	Kind                  string
+	DryRun                bool
+	Status                string
+	Version               int64
+	Revision              int64
+	LeaseDigest           []byte
+	LeaseExpiresAtMs      int64
+	CreatedAtMs           int64
+	StartedAtMs           int64
+	EndedAtMs             int64
+	CreatedBy             string
+	RestoredFrom          int64
+	JournalVersion        int64
+	JournalClosed         int64
+	TokenID               string
+	JournalRecordsChanged int64
 }
 
 type UpdateEvent struct {

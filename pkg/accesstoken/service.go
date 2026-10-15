@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -166,10 +167,6 @@ func (s *Service) Create(
 	kind, err := KindFor(p.Kind)
 	if err != nil {
 		return Token{}, Secret{}, err
-	}
-
-	if nsErr := refuseNamespacePrincipal(p, "make tokens for"); nsErr != nil {
-		return Token{}, Secret{}, nsErr
 	}
 
 	if kindErr := checkKind(scope, kind); kindErr != nil {
@@ -354,25 +351,9 @@ func (s *Service) ListOfPrincipal(
 		return Page{}, fmt.Errorf("%w: the tokens of a %s go through /api/server/tokens", ErrWrongKind, p.Kind)
 	}
 
-	if err := refuseNamespacePrincipal(p, "list the tokens of"); err != nil {
-		return Page{}, err
-	}
-
 	req.PrincipalID = p.ID
 
 	return s.List(ctx, req)
-}
-
-// refuseNamespacePrincipal returns ErrInvalid when p belongs to a
-// namespace: the token routes do not act on such a principal yet. use says
-// what the caller tried to do, for example "make tokens for".
-func refuseNamespacePrincipal(p principal.Principal, use string) error {
-	if p.Namespace == "" {
-		return nil
-	}
-
-	return fmt.Errorf("%w: principal %q belongs to the namespace %q; "+
-		"the server does not %s a principal of a namespace yet", ErrInvalid, p.ID, p.Namespace.String(), use)
 }
 
 // MaxLifetime returns the longest lifetime that a create or a rotation can
@@ -538,7 +519,7 @@ func (s *Service) SetPolicy(ctx context.Context, e audit.Entry, c PolicyChange) 
 			return Policy{}, audit.Entry{}, err
 		}
 
-		return p, change(e, p.UpdatedAt, PolicyRef), nil
+		return p, policyEntry(e, p.UpdatedAt, old, p), nil
 	})
 
 	s.policies.forget()
@@ -733,6 +714,59 @@ func change(e audit.Entry, at time.Time, object string) audit.Entry {
 	return e
 }
 
+// policyEntry returns e as the audit entry of a change of the policy from
+// old to updated at the time at.
+func policyEntry(e audit.Entry, at time.Time, old, updated Policy) audit.Entry {
+	e.At = at
+	e.Namespace = audit.ServerScope
+	e.Kind = audit.KindChange
+	e.Outcome = audit.OutcomeSuccess
+	e.Object = PolicyRef
+	e.Changes = nil
+
+	for _, c := range []struct {
+		key        string
+		old, value time.Duration
+	}{
+		{key: "maxLifetimeSeconds", old: old.MaxLifetime, value: updated.MaxLifetime},
+		{key: "inactivitySeconds", old: old.Inactivity, value: updated.Inactivity},
+	} {
+		if c.old == c.value {
+			continue
+		}
+
+		before := seconds(c.old)
+		e.Changes = append(e.Changes, audit.Change{
+			Key: c.key, Old: &before, New: seconds(c.value), Layer: "", TakesEffect: "",
+		})
+	}
+
+	for _, c := range []struct {
+		key        string
+		old, value bool
+	}{
+		{key: "disableTokens", old: old.DisableTokens, value: updated.DisableTokens},
+		{key: "disableAccounts", old: old.DisableAccounts, value: updated.DisableAccounts},
+		{key: "disableBreakGlass", old: old.DisableBreakGlass, value: updated.DisableBreakGlass},
+	} {
+		if c.old == c.value {
+			continue
+		}
+
+		before := strconv.FormatBool(c.old)
+		e.Changes = append(e.Changes, audit.Change{
+			Key: c.key, Old: &before, New: strconv.FormatBool(c.value), Layer: "", TakesEffect: "",
+		})
+	}
+
+	return e
+}
+
+// seconds returns d as a decimal count of whole seconds.
+func seconds(d time.Duration) string {
+	return strconv.FormatInt(int64(d/time.Second), 10)
+}
+
 // issued is a new token with its secret and the digest of the secret.
 type issued struct {
 	token  Token
@@ -774,11 +808,10 @@ func (s *Service) newToken(spec tokenSpec) (issued, error) {
 	return issued{token: t, secret: secret, digest: DigestOf(secret)}, nil
 }
 
-// checkRotateOwner reads the principal of t and refuses a rotation when it
-// belongs to a namespace. It returns ErrPrincipalNotFound when the principal
+// checkRotateOwner returns ErrPrincipalNotFound when the principal of t
 // was deleted.
 func (s *Service) checkRotateOwner(ctx context.Context, t Token) error {
-	owner, err := s.principals.GetPrincipal(ctx, t.PrincipalID)
+	_, err := s.principals.GetPrincipal(ctx, t.PrincipalID)
 	if errors.Is(err, principal.ErrNotFound) {
 		return fmt.Errorf("%w: %q", ErrPrincipalNotFound, t.PrincipalID)
 	}
@@ -787,5 +820,5 @@ func (s *Service) checkRotateOwner(ctx context.Context, t Token) error {
 		return fmt.Errorf("read principal: %w", err)
 	}
 
-	return refuseNamespacePrincipal(owner, "rotate the tokens of")
+	return nil
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -277,10 +278,10 @@ func testJournalVerify(t *testing.T, f fixture) {
 	var seen []int64
 
 	refused := withOperations(journalRow(t, f.s, u, 2, 2), 12)
-	refused.Verify = func(known []int64) error {
+	refused.Verify = func(known []int64, _ bool) (bool, error) {
 		seen = append([]int64(nil), known...)
 
-		return stack.ErrJournalBatch
+		return false, stack.ErrJournalBatch
 	}
 
 	if _, err := f.s.PutJournalRow(t.Context(), refused, f.fence); !errors.Is(err, stack.ErrJournalBatch) {
@@ -299,10 +300,143 @@ func testJournalVerify(t *testing.T, f fixture) {
 	}
 
 	accepted := withOperations(journalRow(t, f.s, u, 4, 3), 14)
-	accepted.Verify = func([]int64) error { return nil }
+	accepted.Verify = func([]int64, bool) (bool, error) { return false, nil }
 
 	if retried, err := f.s.PutJournalRow(t.Context(), accepted, f.fence); err != nil || retried {
 		t.Fatalf("accepted batch: retried %t, err %v; want stored", retried, err)
+	}
+}
+
+// journalBeginBody returns a batch body with one begin entry (kind 0) with the
+// given sequence and operation IDs. A begin entry changes the replay records.
+func journalBeginBody(seq, op int64) []byte {
+	return []byte(fmt.Sprintf(
+		`{"entries":[{"version":1,"kind":0,"sequenceID":%d,"operationID":%d,`+
+			`"removeOld":null,"removeNew":null}]}`,
+		seq,
+		op,
+	))
+}
+
+// journalWriteBody returns a batch body with one write entry (kind 5) with the
+// given sequence and operation IDs.
+func journalWriteBody(seq, op int64) []byte {
+	return []byte(fmt.Sprintf(
+		`{"entries":[{"version":1,"kind":5,"sequenceID":%d,"operationID":%d,`+
+			`"removeOld":null,"removeNew":null,"newSnapshot":{"manifest":`+
+			`{"time":"2026-01-01T00:00:00Z","magic":"","version":""},"resources":[]}}]}`,
+		seq,
+		op,
+	))
+}
+
+// journalBatchDef describes one batch of the records-changed test: the content
+// name, the body the verifier checks, and the sequence and operation IDs of the row.
+type journalBatchDef struct {
+	sha  byte
+	body []byte
+	seqs []int64
+	ops  []int64
+}
+
+// journalRowWithBody returns the row of a batch with the given body, checked by
+// the replay verifier, as the journal writer builds it.
+func journalRowWithBody(t *testing.T, s UpdatesStore, u stack.Update, def journalBatchDef) stack.JournalRow {
+	t.Helper()
+
+	row := journalRow(t, s, u, def.sha, def.seqs...)
+	row.OperationIDs = def.ops
+	row.Verify = func(known []int64, recordsChanged bool) (bool, error) {
+		return pulumijournal.Verifier{}.VerifyBatch(def.body, 1, known, recordsChanged)
+	}
+
+	return row
+}
+
+// testJournalRefusesWriteAfterStoredChange shows that a write entry in a later
+// batch than a record change is refused: the first stored batch that holds a record
+// change sets the flag of the update, and the verifier refuses a write entry while
+// the flag is set. The refused batch stores nothing. A write entry with no earlier
+// record change is accepted.
+func testJournalRefusesWriteAfterStoredChange(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	change := journalRowWithBody(t, f.s, u, journalBatchDef{
+		sha: 1, body: journalBeginBody(1, 10), seqs: []int64{1}, ops: []int64{10},
+	})
+	if retried, err := f.s.PutJournalRow(t.Context(), change, f.fence); err != nil || retried {
+		t.Fatalf("batch with a record change: retried %t, err %v; want stored", retried, err)
+	}
+
+	write := journalRowWithBody(t, f.s, u, journalBatchDef{
+		sha: 2, body: journalWriteBody(2, 11), seqs: []int64{2}, ops: []int64{11},
+	})
+
+	_, err := f.s.PutJournalRow(t.Context(), write, f.fence)
+	if !errors.Is(err, pulumijournal.ErrWriteOrder) {
+		t.Fatalf("write after a stored record change: err = %v, want ErrWriteOrder", err)
+	}
+
+	if !errors.Is(err, stack.ErrJournalBatch) {
+		t.Fatalf("write after a stored record change: err = %v, want ErrJournalBatch", err)
+	}
+
+	// The refused batch stored nothing, so sequence 2 is still free.
+	free := journalRow(t, f.s, u, 3, 2)
+	if retried, err := f.s.PutJournalRow(t.Context(), free, f.fence); err != nil || retried {
+		t.Fatalf("sequence 2 after a refusal: retried %t, err %v; want stored", retried, err)
+	}
+
+	// A write entry with no earlier record change is accepted, and writes alone do
+	// not set the flag: a second write is accepted too.
+	clean := f.runJournaled(t, f.other(t), "d1")
+
+	first := journalRowWithBody(t, f.s, clean, journalBatchDef{
+		sha: 4, body: journalWriteBody(1, 10), seqs: []int64{1}, ops: []int64{10},
+	})
+	if retried, err := f.s.PutJournalRow(t.Context(), first, f.fence); err != nil || retried {
+		t.Fatalf("write with no record change: retried %t, err %v; want stored", retried, err)
+	}
+
+	second := journalRowWithBody(t, f.s, clean, journalBatchDef{
+		sha: 5, body: journalWriteBody(2, 11), seqs: []int64{2}, ops: []int64{11},
+	})
+	if retried, err := f.s.PutJournalRow(t.Context(), second, f.fence); err != nil || retried {
+		t.Fatalf("second write with no record change: retried %t, err %v; want stored", retried, err)
+	}
+}
+
+// testJournalBegunRefusal shows that a batch that names a begun-only operation
+// is refused with ErrJournalBatch and stores nothing, so its sequences stay
+// free. Operation 20 only begins, so the success entry that names it cannot
+// replay.
+func testJournalBegunRefusal(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	body := []byte(`{"entries":[` +
+		`{"version":1,"kind":0,"sequenceID":1,"operationID":20,"removeOld":null,"removeNew":null},` +
+		`{"version":1,"kind":1,"sequenceID":2,"operationID":21,"removeOld":null,"removeNew":20,` +
+		`"state":{"urn":"urn:a","custom":true,"type":"t:mod:T","id":"x"}}]}`)
+
+	refused := withOperations(journalRow(t, f.s, u, 2, 1, 2), 21)
+	refused.Verify = func(known []int64, recordsChanged bool) (bool, error) {
+		return pulumijournal.Verifier{}.VerifyBatch(body, 1, known, recordsChanged)
+	}
+
+	if _, err := f.s.PutJournalRow(t.Context(), refused, f.fence); !errors.Is(err, stack.ErrJournalBatch) {
+		t.Fatalf("begun reference: err = %v, want ErrJournalBatch", err)
+	}
+
+	// The refused batch stored nothing, so sequences 1 and 2 are still free.
+	free := withOperations(journalRow(t, f.s, u, 3, 1, 2), 22)
+	free.Verify = func([]int64, bool) (bool, error) { return false, nil }
+
+	if retried, err := f.s.PutJournalRow(t.Context(), free, f.fence); err != nil || retried {
+		t.Fatalf("sequences 1 and 2 after a refusal: retried %t, err %v; want stored", retried, err)
 	}
 }
 

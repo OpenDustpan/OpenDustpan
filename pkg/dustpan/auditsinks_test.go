@@ -44,7 +44,9 @@ func TestRunShipsAuditEntriesToAFileSink(t *testing.T) {
 		}
 	})
 
-	srv := newAuditSinkServer(t, st, audit.ShipSink{Sink: sink, Name: "file", Interval: 10 * time.Millisecond})
+	srv := newAuditSinkServer(t, st, audit.ShipSink{
+		Sink: sink, Name: "file", Kind: "file", Interval: 10 * time.Millisecond,
+	})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := runServer(ctx, srv)
@@ -97,7 +99,7 @@ func TestNewServerRefusesTwoSinksWithOneName(t *testing.T) {
 		}
 	})
 
-	one := audit.ShipSink{Sink: sink, Name: "file", Interval: 0}
+	one := audit.ShipSink{Sink: sink, Name: "file", Kind: "file", Interval: 0}
 
 	_, err = dustpan.NewServer(append(auditSinkServerOptions(t, st), dustpan.WithAuditSinks(one, one))...)
 	if !errors.Is(err, audit.ErrInvalidShipper) {

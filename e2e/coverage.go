@@ -184,6 +184,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		tb.Fatalf("updates service: %v", err)
@@ -774,6 +775,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Metrics:        coverageMetrics{},
 		Version:        "test",
 		Schema:         coverageSchema{},
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -781,6 +783,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		AuditChain:     nil,
+		AuditSinks:     nil,
 		IPAllowlists:   coverageIPAllowlists(tb),
 		SessionPolicy:  coverageSessionPolicies(tb),
 	})
@@ -890,7 +893,27 @@ func CoverageAllowlist() []AllowEntry {
 		ipAllowlistAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
+		auditSinkAllowEntries(),
 	)
+}
+
+// auditSinkCoveringTest names the test that proves the audit sink list
+// instead of a CLI: no CLI reads the delivery state of the audit sinks.
+const auditSinkCoveringTest = "TestAuditSinks"
+
+// auditSinkAllowEntries returns the operator route of the audit sinks. The
+// harness steps of auditSinkCoveringTest drive it through a server with a
+// file sink on each store.
+func auditSinkAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/server/audit/sinks",
+			CoveringTest: auditSinkCoveringTest,
+			Reason: "Operator route: no CLI lists the audit sinks. The harness " +
+				"step starts a server with a file sink, writes one audited change " +
+				"and reads the list.",
+		},
+	}
 }
 
 // namespacePrincipalCoveringTest names the test that proves the routes of

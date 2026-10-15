@@ -75,6 +75,7 @@ func newUpdateFixtureWithAddressGate(
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -253,6 +254,7 @@ func newSharedLeaseServices(t *testing.T) sharedLeaseSetup {
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)

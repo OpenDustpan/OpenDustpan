@@ -1619,49 +1619,168 @@ func (r namespacedReader) GetPrincipal(ctx context.Context, id string) (principa
 	return p, err
 }
 
-// TestNamespacePrincipalTokensRefused proves that the service makes, rotates
-// and lists no token of a principal of a namespace, also for an
-// administrator, and that the token of such a principal stays as it is.
-func TestNamespacePrincipalTokensRefused(t *testing.T) {
+// TestNamespacePrincipalTokens proves that the service makes, rotates and
+// lists the tokens of a principal of a namespace for a holder of
+// principal:manage-tokens on it, and refuses a caller without it. The
+// token signs in as the principal.
+func TestNamespacePrincipalTokens(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, nil)
 	ctx := t.Context()
-	tok, _ := f.create(t, f.service, "deploy")
+	reader := namespacedReader{PrincipalReader: f.store, id: f.service.ID}
+	manage := string(identity.ActionPrincipalManageTokens) + " principal:" + f.service.ID
+	alice := as(f.person)
 
-	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: namespacedReader{PrincipalReader: f.store, id: f.service.ID},
-		Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: f.clock.Now, NewID: nil,
+	holder, err := accesstoken.NewService(accesstoken.Config{
+		Store: f.store, Principals: reader, Freshness: nil, Grants: nil,
+		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
+		Logger:     nil,
+		Now:        f.clock.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
 
-	_, _, err = svc.Create(ctx, admin(), caller(), accesstoken.ScopeService,
-		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "more"})
-	wantNamespaceRefusal(t, "make", err)
-
-	_, _, err = svc.Rotate(ctx, admin(), caller(), accesstoken.RotateInput{
-		ID: tok.ID, Scope: accesstoken.ScopeService, ExpiresAt: time.Time{}, OldEndsAt: nil,
+	denied, err := accesstoken.NewService(accesstoken.Config{
+		Store: f.store, Principals: reader, Freshness: nil, Grants: nil,
+		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},
+		Logger:     nil,
+		Now:        f.clock.Now, NewID: nil,
 	})
-	wantNamespaceRefusal(t, "rotate", err)
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	made, secret, createErr := holder.Create(ctx, alice, caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "deploy"})
+	if createErr != nil {
+		t.Fatalf("create for a holder: %v", createErr)
+	}
+
+	_, _, deniedCreateErr := denied.Create(ctx, alice, caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "more"})
+	if !errors.Is(deniedCreateErr, identity.ErrDenied) {
+		t.Fatalf("create without principal:manage-tokens = %v, want ErrDenied", deniedCreateErr)
+	}
 
 	all := accesstoken.PageRequest{PrincipalID: "", Cursor: "", Filter: accesstoken.FilterAll, Limit: 0}
-	_, err = svc.ListOfPrincipal(ctx, admin(), f.service.ID, all)
-	wantNamespaceRefusal(t, "list", err)
 
-	got, err := f.svc.Get(ctx, tok.ID)
-	if err != nil || got.ReplacedBy != "" || !got.RevokedAt.IsZero() {
-		t.Fatalf("token after the refused rotation = %+v, %v; want it unchanged", got, err)
+	page, listErr := holder.ListOfPrincipal(ctx, alice, f.service.ID, all)
+	if listErr != nil || page.Total < 1 {
+		t.Fatalf("list for a holder = %+v, %v; want at least the made token", page, listErr)
+	}
+
+	_, deniedListErr := denied.ListOfPrincipal(ctx, alice, f.service.ID, all)
+	if !errors.Is(deniedListErr, identity.ErrDenied) {
+		t.Fatalf("list without principal:manage-tokens = %v, want ErrDenied", deniedListErr)
+	}
+
+	rot, _, rotateErr := holder.Rotate(ctx, alice, caller(), accesstoken.RotateInput{
+		ID: made.ID, Scope: accesstoken.ScopeService, ExpiresAt: time.Time{}, OldEndsAt: nil,
+	})
+	if rotateErr != nil {
+		t.Fatalf("rotate for a holder: %v", rotateErr)
+	}
+
+	_, _, deniedRotateErr := denied.Rotate(ctx, alice, caller(), accesstoken.RotateInput{
+		ID: rot.New.ID, Scope: accesstoken.ScopeService, ExpiresAt: time.Time{}, OldEndsAt: nil,
+	})
+	if !errors.Is(deniedRotateErr, identity.ErrDenied) {
+		t.Fatalf("rotate without principal:manage-tokens = %v, want ErrDenied", deniedRotateErr)
+	}
+
+	got, authErr := holder.AuthenticateToken(ctx, secret.Reveal())
+	if authErr != nil || got.Subject != f.service.Subject {
+		t.Fatalf("authenticate = %+v, %v; want the service subject", got, authErr)
 	}
 }
 
-// wantNamespaceRefusal fails unless err is the ErrInvalid of a principal of
-// a namespace.
-func wantNamespaceRefusal(t *testing.T, op string, err error) {
+// TestSetPolicyRecordsChanges proves the audit entry of a policy change
+// names each field that changed with its old and new text, and names no
+// field that kept its value.
+func TestSetPolicyRecordsChanges(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	lifetime := 30 * 24 * time.Hour
+	disabled := false
+
+	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: new(lifetime), Inactivity: nil, DisableTokens: new(disabled), DisableAccounts: nil,
+		DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	want := map[string][2]string{
+		"maxLifetimeSeconds": {"31536000", "2592000"},
+		"disableTokens":      {"true", "false"},
+	}
+	got := policyEntryChanges(t, &f)
+	checkChanges(t, got, want)
+
+	// The maximum is already 30 days, so only the inactivity period changed.
+	hour := time.Hour
+
+	_, err = f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: new(lifetime), Inactivity: new(hour), DisableTokens: nil, DisableAccounts: nil,
+		DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	want = map[string][2]string{"inactivitySeconds": {"7776000", "3600"}}
+	got = policyEntryChanges(t, &f)
+	checkChanges(t, got, want)
+}
+
+// policyEntryChanges returns the changes of the latest token policy audit
+// entry in the scope @server.
+func policyEntryChanges(t *testing.T, f *fixture) []audit.Change {
 	t.Helper()
 
-	if !errors.Is(err, accesstoken.ErrInvalid) || !strings.Contains(err.Error(), "principal of a namespace") {
-		t.Fatalf("%s for a principal of a namespace: err = %v, want ErrInvalid", op, err)
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list @server entries: %v", err)
+	}
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Object == accesstoken.PolicyRef {
+			return listing.Entries[i].Changes
+		}
+	}
+
+	t.Fatalf("no %q entry in @server", accesstoken.PolicyRef)
+
+	return nil
+}
+
+// checkChanges proves changes hold exactly the keys of want with its old
+// and new text.
+func checkChanges(t *testing.T, changes []audit.Change, want map[string][2]string) {
+	t.Helper()
+
+	if len(changes) != len(want) {
+		t.Fatalf("changes = %+v, want %d items", changes, len(want))
+	}
+
+	for _, c := range changes {
+		pair, ok := want[c.Key]
+		if !ok {
+			t.Fatalf("change %q = %+v, want one of %v", c.Key, c, want)
+		}
+
+		if c.Old == nil || *c.Old != pair[0] || c.New != pair[1] {
+			t.Fatalf("change %q = %v to %q, want %q to %q", c.Key, c.Old, c.New, pair[0], pair[1])
+		}
+
+		if c.Layer != "" || c.TakesEffect != "" {
+			t.Fatalf("change %q holds layer %q and takes effect %q, want both empty", c.Key, c.Layer, c.TakesEffect)
+		}
 	}
 }

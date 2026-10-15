@@ -310,7 +310,7 @@ func (e *Env) TryServe(ctx context.Context, tb testing.TB, binPath string) Binar
 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, binPath, serveArgs(cfg, e.backendPort)...)
-	cmd.Env = backendEnv(cfg.tokens)
+	cmd.Env = backendServeEnv(cfg.tokens, cfg.dbURL)
 
 	var stdout, stderr bytes.Buffer
 

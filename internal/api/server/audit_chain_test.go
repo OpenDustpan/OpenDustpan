@@ -88,6 +88,8 @@ func newAuditChainHandler(
 		DeletedUnits:   nil,
 		SessionPolicy:  nil,
 		AuditChain:     chain,
+		AuditSinks:     nil,
+		Journal:        nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {

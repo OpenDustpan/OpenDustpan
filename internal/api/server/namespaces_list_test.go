@@ -17,7 +17,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
@@ -360,16 +359,7 @@ func TestNamespaceListSkipsCollectionGrant(t *testing.T) {
 func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []string) *apiserver.Handler {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
 	if err != nil {
@@ -398,6 +388,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 		Metrics:        stubMetrics{},
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -407,6 +398,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 		SessionPolicy:  nil,
 		DeletedUnits:   nil,
 		AuditChain:     nil,
+		AuditSinks:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -505,6 +497,7 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 		Metrics:        stubMetrics{},
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -514,6 +507,7 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 		SessionPolicy:  nil,
 		DeletedUnits:   nil,
 		AuditChain:     nil,
+		AuditSinks:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

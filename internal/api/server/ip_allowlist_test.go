@@ -105,6 +105,7 @@ func newIPAllowHandler(
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         st,
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -114,6 +115,7 @@ func newIPAllowHandler(
 		SessionPolicy:  nil,
 		DeletedUnits:   nil,
 		AuditChain:     nil,
+		AuditSinks:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -388,6 +388,93 @@ func TestCreateStateVersionErrors(t *testing.T) {
 	})
 }
 
+// lineageLockWorkspaces answers a lineage mismatch on BeginState and a locked
+// or unlocked stub workspace on GetByID, so the lineage detail tests prove
+// when the 422 names the force-unlock command.
+type lineageLockWorkspaces struct {
+	stubWorkspaces
+
+	holder string
+}
+
+func (l lineageLockWorkspaces) BeginState(
+	_ context.Context, _ workspace.ID, _ string, _ workspace.NewState, _ workspace.Authority,
+) (workspace.PendingState, error) {
+	return workspace.PendingState{}, fmt.Errorf(
+		`new state for acme/web: %w: "new-lineage", current "seed-lineage"`,
+		workspace.ErrLineageMismatch,
+	)
+}
+
+func (l lineageLockWorkspaces) GetByID(_ context.Context, id workspace.ID) (workspace.Workspace, error) {
+	ws, err := stubWorkspaceByID(id)
+	if err != nil {
+		return workspace.Workspace{}, err
+	}
+
+	if l.holder != "" {
+		ws.Lock.Holder = l.holder
+		ws.Lock.ID = "lock-test"
+	}
+
+	return ws, nil
+}
+
+// TestCreateStateVersionLineageNamesForceUnlock proves a refused state upload
+// of another lineage answers 422 with the force-unlock command while the
+// caller holds the lock, and without it while another principal holds the
+// lock or the workspace is unlocked.
+func TestCreateStateVersionLineageNamesForceUnlock(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		holder     string
+		wantUnlock bool
+	}{
+		{name: "lock of the caller names force-unlock", holder: "tester", wantUnlock: true},
+		{name: "lock of another job keeps the detail", holder: "job-b", wantUnlock: false},
+		{name: "unlocked keeps the detail", holder: "", wantUnlock: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			handler := newWriteHandler(
+				t,
+				lineageLockWorkspaces{stubWorkspaces: stubWorkspaces{}, holder: tc.holder},
+				baseurl.Resolver{},
+			)
+
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(
+				rec,
+				createStateRequest(
+					t,
+					"/api/v2/workspaces/ws-test123/state-versions",
+					stateCreateBody(4, stateCreateOutputs()),
+				),
+			)
+
+			checkJSONAPIError(t, rec, http.StatusUnprocessableEntity)
+
+			body := rec.Body.String()
+			if !strings.Contains(body, "state lineage differs from the current state") {
+				t.Fatalf("422 detail lacks the lineage mismatch: %s", body)
+			}
+
+			if tc.wantUnlock {
+				if !strings.Contains(body, "tofu force-unlock acme/web") {
+					t.Fatalf("422 detail lacks the force-unlock command: %s", body)
+				}
+			} else if strings.Contains(body, "force-unlock") {
+				t.Fatalf("422 detail names force-unlock for a lock the caller does not hold: %s", body)
+			}
+		})
+	}
+}
+
 // TestCreateStateVersionTooLarge proves a create body over the create limit
 // answers 413 with a JSON:API error stating the limit.
 func TestCreateStateVersionTooLarge(t *testing.T) {

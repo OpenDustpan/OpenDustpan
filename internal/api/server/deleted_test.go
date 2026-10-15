@@ -58,6 +58,7 @@ func newSweepHandler(
 		Metrics:        stubMetrics{},
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -65,6 +66,7 @@ func newSweepHandler(
 		OnAuditFailure: nil,
 		DeletedUnits:   sweeper,
 		AuditChain:     nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})

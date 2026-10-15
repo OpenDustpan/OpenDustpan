@@ -86,6 +86,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 		Metrics:        stubMetrics{},
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -93,6 +94,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		AuditChain:     nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})
@@ -409,6 +411,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 		Metrics:        stubMetrics{},
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -416,6 +419,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		AuditChain:     nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})

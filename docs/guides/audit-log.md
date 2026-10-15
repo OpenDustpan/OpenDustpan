@@ -159,6 +159,8 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=@server"
 ```
 
+A new namespace audit log starts with the grant of its creator.
+
 ## Turn the chain on or off
 
 The hash chain is on by default.

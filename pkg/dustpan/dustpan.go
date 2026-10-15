@@ -54,6 +54,7 @@ import (
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -169,6 +170,9 @@ type settings struct {
 	auditChain audit.ChainSetting
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
+	// auditShipper ships to auditSinks. assemble sets it before it mounts
+	// the adapters, so the installation API lists it.
+	auditShipper *audit.Shipper
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
@@ -540,6 +544,7 @@ func defaultSettings() *settings {
 		auditChain:              audit.ChainOn,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 		auditSinks:              nil,
+		auditShipper:            nil,
 	}
 }
 
@@ -659,6 +664,13 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 
 	svc.deleted = deleted
 
+	shipper, err := newAuditShipper(cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.auditShipper = shipper
+
 	adapters, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
 		return nil, err
@@ -677,11 +689,6 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	var restoreRegistry backup.RestoreRegistry
 	if reg, ok := cfg.namespaceStore.(backup.RestoreRegistry); ok {
 		restoreRegistry = reg
-	}
-
-	shipper, err := newAuditShipper(cfg, observed)
-	if err != nil {
-		return nil, err
 	}
 
 	return &Server{
@@ -979,6 +986,17 @@ func newWorkspaceService(
 	return workspaces, nil
 }
 
+// clockOf returns the clock of the server settings, defaulting to time.Now
+// like the update service does. The journal replayer stamps the manifest of
+// each checkpoint it builds with it.
+func clockOf(cfg *settings) func() time.Time {
+	if cfg.now != nil {
+		return cfg.now
+	}
+
+	return time.Now
+}
+
 // newUpdateService builds the update service. A nil token service leaves the
 // token checker nil, so the service fails closed for any update that an
 // access token started.
@@ -1002,6 +1020,7 @@ func newUpdateService(
 		Logger:             cfg.logger,
 		MaxCheckpointBytes: cfg.maxCheckpointBytes,
 		Journal:            journal,
+		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
@@ -1727,6 +1746,11 @@ func newServerHandler(
 		return nil, err
 	}
 
+	var sinks serverapi.AuditSinkSource
+	if cfg.auditShipper != nil {
+		sinks = cfg.auditShipper
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -1738,6 +1762,7 @@ func newServerHandler(
 		Metrics:       deps.observed,
 		Version:       cfg.version,
 		Schema:        schemaReporterOf(cfg.namespaceStore),
+		Journal:       journalReporterOf(cfg.namespaceStore),
 		Principals:    principals,
 		Access:        grants,
 		Tokens:        deps.services.tokens,
@@ -1749,6 +1774,7 @@ func newServerHandler(
 		},
 		DeletedUnits: deps.services.deleted,
 		AuditChain:   auditChainPort(deps.chain),
+		AuditSinks:   sinks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -1868,7 +1894,7 @@ func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
 	}
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: stores, Callers: stores, Collections: collections, Units: stores,
+		Store: stores, Callers: stores, Collections: collections, Units: stores, Principals: stores,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("authorizer: %w", err)
@@ -1939,7 +1965,7 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		var err error
 
 		authz, err = access.NewAuthorizer(access.AuthorizerConfig{
-			Store: stores, Callers: stores, Collections: collections, Units: stores,
+			Store: stores, Callers: stores, Collections: collections, Units: stores, Principals: stores,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("access authorizer: %w", err)
@@ -2047,6 +2073,20 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 //nolint:ireturn // The two SQL adapters share no concrete store type, so the
 func schemaReporterOf(store namespace.Store) serverapi.SchemaReporter {
 	reporter, ok := store.(serverapi.SchemaReporter)
+	if !ok {
+		return nil
+	}
+
+	return reporter
+}
+
+// journalReporterOf returns the journal reporter of the namespace store, or
+// nil when the store does not count running journaled updates. Both SQL
+// adapters count them.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the
+func journalReporterOf(store namespace.Store) serverapi.JournalReporter {
+	reporter, ok := store.(serverapi.JournalReporter)
 	if !ok {
 		return nil
 	}

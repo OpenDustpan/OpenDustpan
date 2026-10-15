@@ -174,6 +174,11 @@ const (
 	// deleting the service principals of a namespace. Its object is a
 	// namespace. Reading them needs ActionNamespaceReadAccess.
 	ActionNamespaceManagePrincipals Action = "namespace:manage-principals"
+	// ActionNamespaceManagePrincipalTokens allows making, rotating, listing
+	// and revoking the access tokens of the service principals of a
+	// namespace. Its object is a namespace. It reaches only the principals
+	// of that namespace, through principal:manage-tokens on each of them.
+	ActionNamespaceManagePrincipalTokens Action = "namespace:manage-principal-tokens"
 	// ActionNamespaceReadAccess allows reading the access-review export of a
 	// namespace, and its principals. Its object is a namespace.
 	ActionNamespaceReadAccess Action = "namespace:read-access"
@@ -240,10 +245,15 @@ const (
 	// 6). Its object is ServerObject.
 	ActionServerManageTokenPolicy Action = "server:manage-token-policy"
 	// ActionServerManageSignIn allows changing the sign-in settings of the
-	// installation: the session policy, and later the sign-in methods, SCIM
-	// and MFA. Its object is ServerObject. Of the built-in roles, only the
-	// site administrator holds it.
+	// installation: the session policy, the MFA freshness settings, and later
+	// the sign-in methods, SCIM and MFA. Its object is ServerObject. Of the
+	// built-in roles, only the site administrator holds it.
 	ActionServerManageSignIn Action = "server:manage-sign-in"
+	// ActionServerRestoreAccess allows a restore to replace the access
+	// tables: principals, groups, memberships, roles, grants, access tokens
+	// and trust rules. Its object is ServerObject. Of the built-in roles,
+	// only the site administrator holds it.
+	ActionServerRestoreAccess Action = "server:restore-access"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

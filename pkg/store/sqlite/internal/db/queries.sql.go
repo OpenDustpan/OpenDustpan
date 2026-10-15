@@ -698,6 +698,22 @@ func (q *Queries) CountRoleGrantsOnPrincipal(ctx context.Context, role string) (
 	return count, err
 }
 
+const countRunningJournaledUpdates = `-- name: CountRunningJournaledUpdates :one
+SELECT COUNT(*)
+FROM updates
+WHERE status = 'running' AND journal_version > 0
+`
+
+// The count of updates that run now with journal version 1 or higher, for
+// the upgrade check: a downgrade to a binary without the journal route
+// answers its journal batches with 404, which the Pulumi CLI does not retry.
+func (q *Queries) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRunningJournaledUpdates)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countSession = `-- name: CountSession :one
 SELECT COUNT(*) FROM sessions WHERE id = ?
 `
@@ -3692,7 +3708,7 @@ func (q *Queries) JournalSequenceSHA(ctx context.Context, arg JournalSequenceSHA
 }
 
 const journalState = `-- name: JournalState :one
-SELECT journal_closed, journal_version, status FROM updates
+SELECT journal_closed, journal_version, journal_records_changed, status FROM updates
 WHERE stack_id = ? AND id = ?
 `
 
@@ -3702,15 +3718,21 @@ type JournalStateParams struct {
 }
 
 type JournalStateRow struct {
-	JournalClosed  int64
-	JournalVersion int64
-	Status         string
+	JournalClosed         int64
+	JournalVersion        int64
+	JournalRecordsChanged int64
+	Status                string
 }
 
 func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (JournalStateRow, error) {
 	row := q.db.QueryRowContext(ctx, journalState, arg.StackID, arg.ID)
 	var i JournalStateRow
-	err := row.Scan(&i.JournalClosed, &i.JournalVersion, &i.Status)
+	err := row.Scan(
+		&i.JournalClosed,
+		&i.JournalVersion,
+		&i.JournalRecordsChanged,
+		&i.Status,
+	)
 	return i, err
 }
 
@@ -6600,6 +6622,21 @@ func (q *Queries) SetInstallationStateIf(ctx context.Context, arg SetInstallatio
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const setJournalRecordsChanged = `-- name: SetJournalRecordsChanged :exec
+UPDATE updates SET journal_records_changed = 1
+WHERE stack_id = ? AND id = ?
+`
+
+type SetJournalRecordsChangedParams struct {
+	StackID string
+	ID      string
+}
+
+func (q *Queries) SetJournalRecordsChanged(ctx context.Context, arg SetJournalRecordsChangedParams) error {
+	_, err := q.db.ExecContext(ctx, setJournalRecordsChanged, arg.StackID, arg.ID)
+	return err
 }
 
 const setLastSignIn = `-- name: SetLastSignIn :exec

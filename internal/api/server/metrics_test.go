@@ -72,6 +72,7 @@ func newMetricsHandler(
 		Metrics:        metrics,
 		Version:        "test",
 		Schema:         nil,
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -79,6 +80,7 @@ func newMetricsHandler(
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		AuditChain:     nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})
