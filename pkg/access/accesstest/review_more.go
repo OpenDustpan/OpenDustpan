@@ -175,7 +175,7 @@ func testReviewCustomRoles(t *testing.T, s access.Store) {
 
 	scope := access.ReviewScope{
 		Namespace: "acme", Object: identity.Object{}, Containers: []string{"@server"},
-		ContainerRoles: []string{access.RoleViewer}, All: false,
+		ContainerRoles: []string{access.RoleViewer}, TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
 	}
 
 	q := everyRow(scope)

@@ -610,8 +610,11 @@ WHERE (CAST(?7 AS BOOLEAN) = 1
     OR g.target = CAST(?9 AS TEXT)
     OR (g.target IN (SELECT value FROM json_each(CAST(?10 AS TEXT)))
       AND (g.role IN (SELECT value FROM json_each(CAST(?11 AS TEXT)))
+        OR (CAST(?3 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR (CAST(?12 AS TEXT) <> '' AND g.target = CAST(?12 AS TEXT)
+      AND (g.role IN (SELECT value FROM json_each(CAST(?13 AS TEXT)))
         OR (CAST(?3 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND (CAST(?12 AS TEXT) = '' OR g.subject = CAST(?12 AS TEXT)
+  AND (CAST(?14 AS TEXT) = '' OR g.subject = CAST(?14 AS TEXT)
     OR (CAST(?1 AS TEXT) <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN CAST(?3 AS BOOLEAN) = 1 THEN
     g.created_at_ms < CAST(?4 AS INTEGER)
@@ -620,18 +623,20 @@ WHERE (CAST(?7 AS BOOLEAN) = 1
 `
 
 type CountReviewGrantsParams struct {
-	Principal      string
-	Expand         bool
-	History        bool
-	ToMs           int64
-	FromMs         int64
-	AsOfMs         int64
-	AllGrants      bool
-	Namespace      string
-	Target         string
-	Containers     string
-	ContainerRoles string
-	Subject        string
+	Principal           string
+	Expand              bool
+	History             bool
+	ToMs                int64
+	FromMs              int64
+	AsOfMs              int64
+	AllGrants           bool
+	Namespace           string
+	Target              string
+	Containers          string
+	ContainerRoles      string
+	TokenNamespace      string
+	TokenNamespaceRoles string
+	Subject             string
 }
 
 func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsParams) (int64, error) {
@@ -647,6 +652,8 @@ func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsPa
 		arg.Target,
 		arg.Containers,
 		arg.ContainerRoles,
+		arg.TokenNamespace,
+		arg.TokenNamespaceRoles,
 		arg.Subject,
 	)
 	var count int64
@@ -5875,42 +5882,47 @@ WHERE (CAST(?7 AS BOOLEAN) = 1
     OR g.target = CAST(?9 AS TEXT)
     OR (g.target IN (SELECT value FROM json_each(CAST(?10 AS TEXT)))
       AND (g.role IN (SELECT value FROM json_each(CAST(?11 AS TEXT)))
+        OR (CAST(?4 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR (CAST(?12 AS TEXT) <> '' AND g.target = CAST(?12 AS TEXT)
+      AND (g.role IN (SELECT value FROM json_each(CAST(?13 AS TEXT)))
         OR (CAST(?4 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND (CAST(?12 AS TEXT) = '' OR g.subject = CAST(?12 AS TEXT)
+  AND (CAST(?14 AS TEXT) = '' OR g.subject = CAST(?14 AS TEXT)
     OR (CAST(?2 AS TEXT) <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN CAST(?4 AS BOOLEAN) = 1 THEN
     g.created_at_ms < CAST(?5 AS INTEGER)
     AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(?6 AS INTEGER)
   ELSE g.created_at_ms <= CAST(?1 AS INTEGER) AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER) END
-  AND (g.created_at_ms > CAST(?13 AS INTEGER)
-    OR (g.created_at_ms = CAST(?13 AS INTEGER)
-      AND (g.id > CAST(?14 AS TEXT)
-        OR (g.id = CAST(?14 AS TEXT)
-          AND (COALESCE(m.added_at_ms, 0) > CAST(?15 AS INTEGER)
-            OR (COALESCE(m.added_at_ms, 0) = CAST(?15 AS INTEGER)
-              AND COALESCE(m.principal_id, '') > CAST(?16 AS TEXT)))))))
+  AND (g.created_at_ms > CAST(?15 AS INTEGER)
+    OR (g.created_at_ms = CAST(?15 AS INTEGER)
+      AND (g.id > CAST(?16 AS TEXT)
+        OR (g.id = CAST(?16 AS TEXT)
+          AND (COALESCE(m.added_at_ms, 0) > CAST(?17 AS INTEGER)
+            OR (COALESCE(m.added_at_ms, 0) = CAST(?17 AS INTEGER)
+              AND COALESCE(m.principal_id, '') > CAST(?18 AS TEXT)))))))
 ORDER BY g.created_at_ms, g.id, member_added_at_ms, member_id
-LIMIT ?17
+LIMIT ?19
 `
 
 type ReviewGrantsParams struct {
-	AsOfMs          int64
-	Principal       string
-	Expand          bool
-	History         bool
-	ToMs            int64
-	FromMs          int64
-	AllGrants       bool
-	Namespace       string
-	Target          string
-	Containers      string
-	ContainerRoles  string
-	Subject         string
-	AfterAtMs       int64
-	AfterID         string
-	AfterMemberAtMs int64
-	AfterMemberID   string
-	RowLimit        int64
+	AsOfMs              int64
+	Principal           string
+	Expand              bool
+	History             bool
+	ToMs                int64
+	FromMs              int64
+	AllGrants           bool
+	Namespace           string
+	Target              string
+	Containers          string
+	ContainerRoles      string
+	TokenNamespace      string
+	TokenNamespaceRoles string
+	Subject             string
+	AfterAtMs           int64
+	AfterID             string
+	AfterMemberAtMs     int64
+	AfterMemberID       string
+	RowLimit            int64
 }
 
 type ReviewGrantsRow struct {
@@ -5954,6 +5966,8 @@ func (q *Queries) ReviewGrants(ctx context.Context, arg ReviewGrantsParams) ([]R
 		arg.Target,
 		arg.Containers,
 		arg.ContainerRoles,
+		arg.TokenNamespace,
+		arg.TokenNamespaceRoles,
 		arg.Subject,
 		arg.AfterAtMs,
 		arg.AfterID,

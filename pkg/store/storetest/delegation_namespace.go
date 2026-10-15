@@ -2,6 +2,8 @@ package storetest
 
 import (
 	"errors"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +155,39 @@ func testNamespacePrincipalLimits(t *testing.T, d *delegation) {
 		bootstrap(), group.ID, bot.ID)
 	if !errors.Is(memberErr, principal.ErrInvalid) {
 		t.Fatalf("membership of a principal of a namespace: err = %v, want ErrInvalid", memberErr)
+	}
+}
+
+// testNamespacePrincipalTokenManagers proves that the export of a principal
+// of a namespace lists the holders of the token action on its namespace,
+// and that the audit entry of a grant to it names them in the change
+// "tokenManagers".
+func testNamespacePrincipalTokenManagers(t *testing.T, d *delegation) {
+	t.Helper()
+
+	bot := d.acmeBot(t)
+	alice := d.principalOf(t, "alice@example.com", principal.KindPerson)
+
+	d.mustGrant(t, bootstrap(), alice, access.RoleAdmin, identity.NamespaceObject("acme"))
+
+	got, err := d.access.TokenManagers(t.Context(), bot.ID)
+	if err != nil {
+		t.Fatalf("token managers: %v", err)
+	}
+
+	want := []string{"admin", "principal:" + alice.ID}
+	slices.Sort(want)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("token managers = %q, want %q", got, want)
+	}
+
+	g := d.mustGrant(t, bootstrap(), bot, access.RoleViewer, identity.NamespaceObject("acme"))
+
+	if managers := d.tokenManagersOf(t, "acme", access.GrantRef(g)); !strings.Contains(
+		managers, "principal:"+alice.ID,
+	) {
+		t.Fatalf("token managers of the grant = %q, want alice", managers)
 	}
 }
 

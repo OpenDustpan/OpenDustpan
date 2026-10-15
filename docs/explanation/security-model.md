@@ -97,7 +97,9 @@ persons and services.
   lists and revokes the tokens of the principals of that namespace, through
   `principal:manage-tokens` on each of them. It reaches no other principal.
   A grant of a role with it needs every data action on that namespace, or
-  `server:manage-access` on the installation.
+  `server:manage-access` on the installation. The access-review export of
+  such a principal lists the holders of `namespace:manage-principal-tokens`
+  on its namespace.
 - **Only a site administrator can change the sign-in settings.** The
   action `server:manage-sign-in` changes the session policy with
   `PATCH /api/server/session-policy`: the idle limit (15 minutes by
