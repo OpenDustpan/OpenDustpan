@@ -72,6 +72,22 @@ func TestAccessConformance(t *testing.T) {
 	})
 }
 
+// TestDelegation runs the suite of the tokens of service principals.
+func TestDelegation(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL delegation suite", envURL)
+	}
+
+	storetest.RunDelegation(t, func(t *testing.T) storetest.DelegationStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
 // TestAccessTokenConformance runs the access token store suite.
 func TestAccessTokenConformance(t *testing.T) {
 	t.Parallel()

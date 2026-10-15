@@ -54,6 +54,17 @@ func TestAccessConformance(t *testing.T) {
 	})
 }
 
+// TestDelegation runs the suite of the tokens of service principals.
+func TestDelegation(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunDelegation(t, func(t *testing.T) storetest.DelegationStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 // TestAccessTokenConformance runs the access token store suite.
 func TestAccessTokenConformance(t *testing.T) {
 	t.Parallel()

@@ -942,7 +942,11 @@ WHERE subject_kind = ? AND subject_id = ? AND revoked_at_ms IS NULL
 ORDER BY target, role;
 
 -- name: CountRoleGrantsBelowInstallation :one
-SELECT COUNT(*) FROM grants WHERE role = ? AND object_kind <> 'installation' AND revoked_at_ms IS NULL;
+SELECT COUNT(*) FROM grants
+WHERE role = ? AND object_kind IN ('namespace', 'collection', 'unit') AND revoked_at_ms IS NULL;
+
+-- name: CountRoleGrantsOnPrincipal :one
+SELECT COUNT(*) FROM grants WHERE role = ? AND object_kind = 'principal' AND revoked_at_ms IS NULL;
 
 -- name: CountEndedGrantRecords :one
 -- The records of a new grant that have ended: its principal or group, and

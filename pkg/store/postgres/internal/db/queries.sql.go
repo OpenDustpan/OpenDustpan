@@ -721,11 +721,23 @@ func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsPa
 }
 
 const countRoleGrantsBelowInstallation = `-- name: CountRoleGrantsBelowInstallation :one
-SELECT COUNT(*) FROM grants WHERE role = $1 AND object_kind <> 'installation' AND revoked_at_ms IS NULL
+SELECT COUNT(*) FROM grants
+WHERE role = $1 AND object_kind IN ('namespace', 'collection', 'unit') AND revoked_at_ms IS NULL
 `
 
 func (q *Queries) CountRoleGrantsBelowInstallation(ctx context.Context, role string) (int64, error) {
 	row := q.db.QueryRow(ctx, countRoleGrantsBelowInstallation, role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRoleGrantsOnPrincipal = `-- name: CountRoleGrantsOnPrincipal :one
+SELECT COUNT(*) FROM grants WHERE role = $1 AND object_kind = 'principal' AND revoked_at_ms IS NULL
+`
+
+func (q *Queries) CountRoleGrantsOnPrincipal(ctx context.Context, role string) (int64, error) {
+	row := q.db.QueryRow(ctx, countRoleGrantsOnPrincipal, role)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
