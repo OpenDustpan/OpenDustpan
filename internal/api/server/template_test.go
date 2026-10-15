@@ -8,6 +8,7 @@ package server_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -17,12 +18,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-// serverTemplateState holds the once, path and build error of the migrated
-// empty database file.
+// serverTemplateState holds the once, directory, path and build error of the
+// migrated empty database file.
 //
 //nolint:gochecknoglobals // one template per test binary keeps the migrations out of every test
 var serverTemplateState struct {
 	once sync.Once
+	dir  string
 	path string
 	err  error
 }
@@ -37,6 +39,8 @@ func serverTemplate() (string, error) {
 		if serverTemplateState.err != nil {
 			return
 		}
+
+		serverTemplateState.dir = dir
 
 		path := filepath.Join(dir, "template.db")
 
@@ -56,6 +60,20 @@ func serverTemplate() (string, error) {
 	})
 
 	return serverTemplateState.path, serverTemplateState.err
+}
+
+// removeTemplates removes the template directory built for this test binary.
+// It skips removal when the template was never built.
+func removeTemplates() error {
+	if serverTemplateState.dir == "" {
+		return nil
+	}
+
+	if err := os.RemoveAll(serverTemplateState.dir); err != nil {
+		return fmt.Errorf("remove server template: %w", err)
+	}
+
+	return nil
 }
 
 // copyServerTemplate copies the migrated empty database to dst, with its

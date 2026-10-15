@@ -15,12 +15,13 @@ import (
 	"testing"
 )
 
-// internalTemplateState holds the once, path and build error of the migrated
-// empty database file.
+// internalTemplateState holds the once, directory, path and build error of
+// the migrated empty database file.
 //
 //nolint:gochecknoglobals // one template per test binary keeps the migrations out of every test
 var internalTemplateState struct {
 	once sync.Once
+	dir  string
 	path string
 	err  error
 }
@@ -35,6 +36,8 @@ func internalTemplate() (string, error) {
 		if internalTemplateState.err != nil {
 			return
 		}
+
+		internalTemplateState.dir = dir
 
 		path := filepath.Join(dir, "template.db")
 
