@@ -91,7 +91,7 @@ func mustAccessPrincipal(t *testing.T, ts tokenStore, id, subject string) {
 
 	p := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: id, Subject: subject, DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 	}
 
 	if err := ts.CreatePrincipal(t.Context(), p, entry()); err != nil {
