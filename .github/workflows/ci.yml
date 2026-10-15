@@ -171,6 +171,20 @@ jobs:
           --tmpfs /var/lib/postgresql:rw,size=3g
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
+      # The network fault tests (make faults) drive this Toxiproxy server.
+      # Toxiproxy is a test-only tool and never ships.
+      toxiproxy:
+        # The digest makes sure that the image changes only in a commit, like
+        # the PostgreSQL image.
+        image: ghcr.io/shopify/toxiproxy:2.12.0@sha256:9378ed52a28bc50edc1350f936f518f31fa95f0d15917d6eb40b8e376d1a214e
+        # 8474 is the API. The tests give each proxy a fixed port from
+        # TOXIPROXY_PORT_BASE (8475) to TOXIPROXY_PORT_BASE + 3, and the
+        # client dials each proxy on the same port of the runner.
+        ports: ["8474:8474", "8475-8478:8475-8478"]
+        # The proxies dial the test server and PostgreSQL on the runner
+        # through this name.
+        options: >-
+          --add-host=host.docker.internal:host-gateway
     steps:
       # The upgrade test reads the v* tags, so fetch all of the history.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -201,6 +215,14 @@ jobs:
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
         run: make crash-test
+      - name: Network fault tests
+        env:
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
+          TOXIPROXY_URL: http://localhost:${{ job.services.toxiproxy.ports['8474'] }}
+          TOXIPROXY_LISTEN_HOST: 0.0.0.0
+          TOXIPROXY_PORT_BASE: "8475"
+          TOXIPROXY_UPSTREAM_HOST: host.docker.internal
+        run: make faults
       - name: Show the report
         if: ${{ !cancelled() }}
         run: |
