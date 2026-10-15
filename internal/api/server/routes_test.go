@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -199,6 +200,11 @@ func newServiceBackedHandler(
 		t.Fatalf("ip allowlist service: %v", err)
 	}
 
+	sessionPolicies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: nil})
+	if err != nil {
+		t.Fatalf("session policy service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:  authn,
 		Authorizer:     authz,
@@ -217,6 +223,7 @@ func newServiceBackedHandler(
 		OnAuditFailure: nil,
 		DeletedUnits:   stubSweeper{},
 		IPAllowlists:   allow,
+		SessionPolicy:  sessionPolicies,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -516,6 +523,7 @@ var routeBodies = map[string]string{
 	"POST /api/server/principals/{principal}/grants":                          routePrincipalGrantBody,
 	"POST /api/server/caller/tokens/{id}/rotate":                              `{}`,
 	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
+	"PATCH /api/server/session-policy":                                        `{"idleSeconds":900}`,
 }
 
 // routeGrantBody is the body of each grant route: a role that no seeded
@@ -1180,6 +1188,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		IPAllowlists:   nil,
+		SessionPolicy:  nil,
 	}
 
 	cases := []struct {
@@ -1313,6 +1322,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		IPAllowlists:   nil,
+		SessionPolicy:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1340,6 +1350,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		IPAllowlists:   nil,
+		SessionPolicy:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)
