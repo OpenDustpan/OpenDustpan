@@ -254,7 +254,7 @@ func RefuseFlagPassword(fs *flag.FlagSet, resolved []Resolved) error {
 		f := fs.Lookup(r.Setting.Flag)
 		if f != nil && hasPassword(f.Value.String()) {
 			return fmt.Errorf(
-				"%w: --%s holds a password: set the URL in %s instead",
+				"%w: --%s: set the URL in %s instead",
 				ErrFlagPassword, r.Setting.Flag, r.Setting.Env,
 			)
 		}
