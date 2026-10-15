@@ -1,13 +1,13 @@
 ---
 rfc: 70
 title: "Authorization model findings: act-as reach, restores, trust rules and a model checker"
-status: discussing
+status: accepted
 created: 2026-10-15
 ---
 
 # RFC 70. Authorization model findings: act-as reach, restores, trust rules and a model checker
 
-Status: discussing.
+Status: accepted as ADR 70.
 
 ## Problem
 
