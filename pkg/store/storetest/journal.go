@@ -408,6 +408,38 @@ func testJournalRefusesWriteAfterStoredChange(t *testing.T, f fixture) {
 	}
 }
 
+// testJournalBegunRefusal shows that a batch that names a begun-only operation
+// is refused with ErrJournalBatch and stores nothing, so its sequences stay
+// free. Operation 20 only begins, so the success entry that names it cannot
+// replay.
+func testJournalBegunRefusal(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	body := []byte(`{"entries":[` +
+		`{"version":1,"kind":0,"sequenceID":1,"operationID":20,"removeOld":null,"removeNew":null},` +
+		`{"version":1,"kind":1,"sequenceID":2,"operationID":21,"removeOld":null,"removeNew":20,` +
+		`"state":{"urn":"urn:a","custom":true,"type":"t:mod:T","id":"x"}}]}`)
+
+	refused := withOperations(journalRow(t, f.s, u, 2, 1, 2), 21)
+	refused.Verify = func(known []int64, recordsChanged bool) (bool, error) {
+		return pulumijournal.Verifier{}.VerifyBatch(body, 1, known, recordsChanged)
+	}
+
+	if _, err := f.s.PutJournalRow(t.Context(), refused, f.fence); !errors.Is(err, stack.ErrJournalBatch) {
+		t.Fatalf("begun reference: err = %v, want ErrJournalBatch", err)
+	}
+
+	// The refused batch stored nothing, so sequences 1 and 2 are still free.
+	free := withOperations(journalRow(t, f.s, u, 3, 1, 2), 22)
+	free.Verify = func([]int64, bool) (bool, error) { return false, nil }
+
+	if retried, err := f.s.PutJournalRow(t.Context(), free, f.fence); err != nil || retried {
+		t.Fatalf("sequences 1 and 2 after a refusal: retried %t, err %v; want stored", retried, err)
+	}
+}
+
 // mustStackID returns the ID of the stack named by ref.
 func mustStackID(t *testing.T, s Store, ref stack.Ref) stack.ID {
 	t.Helper()
