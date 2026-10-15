@@ -325,12 +325,18 @@ func (s *Service) ListOwn(ctx context.Context, caller identity.Principal, req Pa
 // principalID, newest first, for caller. caller must hold
 // principal:manage-tokens on the principal: the route checks it, and this
 // check holds for every caller of the Service. req.PrincipalID is ignored.
-// An unknown principal answers ErrPrincipalNotFound, and a principal that
-// is not a service principal ErrWrongKind: principal:manage-tokens gives no
-// right on the tokens of a person.
+// The check runs first, so a caller without the action gets
+// identity.ErrDenied for every principal and learns nothing about which
+// principals exist. Then an unknown principal answers ErrPrincipalNotFound,
+// and a principal that is not a service principal ErrWrongKind:
+// principal:manage-tokens gives no right on the tokens of a person.
 func (s *Service) ListOfPrincipal(
 	ctx context.Context, caller identity.Principal, principalID string, req PageRequest,
 ) (Page, error) {
+	if err := s.requireManageTokens(ctx, caller, principalID, useList); err != nil {
+		return Page{}, err
+	}
+
 	p, err := s.principals.GetPrincipal(ctx, principalID)
 	if errors.Is(err, principal.ErrNotFound) {
 		return Page{}, fmt.Errorf("%w: %q", ErrPrincipalNotFound, principalID)
@@ -342,10 +348,6 @@ func (s *Service) ListOfPrincipal(
 
 	if p.Kind != principal.KindService {
 		return Page{}, fmt.Errorf("%w: the tokens of a %s go through /api/server/tokens", ErrWrongKind, p.Kind)
-	}
-
-	if err := s.requireManageTokens(ctx, caller, principalID); err != nil {
-		return Page{}, err
 	}
 
 	req.PrincipalID = p.ID

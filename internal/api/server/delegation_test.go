@@ -144,7 +144,12 @@ func TestTokenManagerReads(t *testing.T) {
 		{"bob", apiCall{http.MethodGet, deploy, "", http.StatusForbidden}},
 		{"tm", apiCall{http.MethodGet, "/api/server/principals/prn-alice/tokens", "", http.StatusBadRequest}},
 		{"admin", apiCall{http.MethodGet, "/api/server/principals/prn-none/tokens", "", http.StatusNotFound}},
-		{"ops", apiCall{http.MethodGet, "/api/server/caller/access?type=principal&action=unit:read", "", http.StatusOK}},
+		{"ops", apiCall{http.MethodGet, "/api/server/caller/access?type=principal&action=unit:read", "", http.StatusBadRequest}},
+		{"tm", apiCall{
+			http.MethodGet, "/api/server/caller/access?type=principal&action=server:manage-access", "",
+			http.StatusBadRequest,
+		}},
+		{"bob", apiCall{http.MethodGet, "/api/server/principals/prn-none/tokens", "", http.StatusForbidden}},
 	} {
 		f.as(t, c.subject, c.call, nil)
 	}

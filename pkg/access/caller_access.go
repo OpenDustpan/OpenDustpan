@@ -73,8 +73,17 @@ func (s *Service) Objects(ctx context.Context, p identity.Principal, req Objects
 		page.Action = read
 	}
 
-	if _, classified := FamilyOf(page.Action); !classified {
+	family, classified := FamilyOf(page.Action)
+	if !classified {
 		return page, fmt.Errorf("%w: unknown action %q", ErrInvalid, page.Action)
+	}
+
+	// A grant on the installation gives every action, so all=true for a
+	// principal would also follow from an action that gives nothing on a
+	// principal. Only a delegation action has a meaning on a principal.
+	if req.Kind == ObjectPrincipal && family != FamilyDelegation {
+		return page, fmt.Errorf("%w: action %q: type principal takes a principal action, such as %s",
+			ErrInvalid, page.Action, identity.ActionPrincipalManageTokens)
 	}
 
 	limit, after, err := objectsPaging(req)

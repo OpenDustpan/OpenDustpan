@@ -1548,16 +1548,22 @@ func TestAdministratorCreateAndRotateNeedASignIn(t *testing.T) {
 }
 
 // TestListOfPrincipal proves the checks of the token list of one service
-// principal in the Service: principal:manage-tokens on the principal, a
-// service principal only, and the list of that principal alone.
+// principal in the Service: principal:manage-tokens on the principal first,
+// so a caller without it learns nothing about which principals exist; then
+// a service principal only, and the list of that principal alone.
 func TestListOfPrincipal(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, nil)
 	ctx := t.Context()
 
-	want := string(identity.ActionPrincipalManageTokens) + " principal:" + f.service.ID
-	authz := &recordAuthorizer{allowed: map[string]bool{want: true}, checked: nil, mu: sync.Mutex{}}
+	manage := string(identity.ActionPrincipalManageTokens) + " principal:"
+	authz := &recordAuthorizer{allowed: map[string]bool{
+		manage + f.service.ID:  true,
+		manage + f.person.ID:   true,
+		manage + f.workload.ID: true,
+		manage + "prn-none":    true,
+	}, checked: nil, mu: sync.Mutex{}}
 	svc := newCheckedService(t, &f, nil, authz)
 	alice := as(f.person)
 
@@ -1585,7 +1591,10 @@ func TestListOfPrincipal(t *testing.T) {
 
 	authz.allowed = map[string]bool{}
 
-	if _, err := svc.ListOfPrincipal(ctx, alice, f.service.ID, all); !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("tokens without principal:manage-tokens: err = %v, want ErrDenied", err)
+	for _, id := range []string{f.service.ID, f.person.ID, "prn-none"} {
+		_, err := svc.ListOfPrincipal(ctx, alice, id, all)
+		if !errors.Is(err, identity.ErrDenied) || !strings.Contains(err.Error(), "list the tokens of") {
+			t.Fatalf("tokens of %s without principal:manage-tokens: err = %v, want ErrDenied for a list", id, err)
+		}
 	}
 }
