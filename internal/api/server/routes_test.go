@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -199,6 +200,11 @@ func newServiceBackedHandler(
 		t.Fatalf("ip allowlist service: %v", err)
 	}
 
+	sessionPolicies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: nil})
+	if err != nil {
+		t.Fatalf("session policy service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:  authn,
 		Authorizer:     authz,
@@ -217,6 +223,7 @@ func newServiceBackedHandler(
 		OnAuditFailure: nil,
 		DeletedUnits:   stubSweeper{},
 		IPAllowlists:   allow,
+		SessionPolicy:  sessionPolicies,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -237,11 +244,13 @@ const (
 	testPrincipalID      = "prn-routes0000000000001"
 	testOtherPrincipalID = "prn-routes0000000000002"
 	testCallerID         = "prn-routes0000000000003"
-	testGroupID          = "grp-routes0000000000001"
-	testTokenID          = "tok-routes0000000000001"
-	testServiceTokenID   = "tok-routes0000000000002"
-	testOwnTokenID       = "tok-routes0000000000003"
-	testRoleID           = "rol-routes0000000000001"
+	// testNamespacePrincipalID is a service principal of testNamespace.
+	testNamespacePrincipalID = "prn-routes0000000000004"
+	testGroupID              = "grp-routes0000000000001"
+	testTokenID              = "tok-routes0000000000001"
+	testServiceTokenID       = "tok-routes0000000000002"
+	testOwnTokenID           = "tok-routes0000000000003"
+	testRoleID               = "rol-routes0000000000001"
 )
 
 // allowGrants passes every escalation check, so the routes that create or
@@ -269,7 +278,7 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 
 	caller := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testCallerID, Subject: "tester",
-		DisplayName: "Tester", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		DisplayName: "Tester", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 	}
 	if err := st.CreatePrincipal(ctx, caller, storetest.ServerChange(at, principal.Ref(testCallerID))); err != nil {
 		t.Fatalf("seed caller: %v", err)
@@ -440,6 +449,23 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 
 // seedRoutePrincipals writes the principals, the group and the membership
 // that the principal and group routes name, and returns the service over st.
+// seedNamespacePrincipal stores testNamespacePrincipalID, a service
+// principal of testNamespace.
+func seedNamespacePrincipal(t *testing.T, st *sqlite.Store, at time.Time) {
+	t.Helper()
+
+	p := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testNamespacePrincipalID, Subject: "ci-routes",
+		DisplayName: "CI routes", Kind: principal.KindService, Source: principal.SourceLocal,
+		Namespace: testNamespace, GroupCount: 0,
+	}
+
+	fence, e := storetest.GrantWrite(t, st, identity.NamespaceObject(testNamespace), at, principal.Ref(p.ID))
+	if err := st.CreateNamespacePrincipal(t.Context(), p, fence, e); err != nil {
+		t.Fatalf("seed namespace principal: %v", err)
+	}
+}
+
 func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 	t.Helper()
 
@@ -448,12 +474,28 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	seeds := []principal.Principal{
 		{
-			CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testPrincipalID, Subject: "alice",
-			DisplayName: "Alice", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+			CreatedAt:   at,
+			UpdatedAt:   at,
+			DisabledAt:  time.Time{},
+			ID:          testPrincipalID,
+			Subject:     "alice",
+			DisplayName: "Alice",
+			Kind:        principal.KindPerson,
+			Source:      principal.SourceLocal,
+			Namespace:   "",
+			GroupCount:  0,
 		},
 		{
-			CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testOtherPrincipalID, Subject: "ci-deploy",
-			DisplayName: "CI deploy", Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
+			CreatedAt:   at,
+			UpdatedAt:   at,
+			DisabledAt:  time.Time{},
+			ID:          testOtherPrincipalID,
+			Subject:     "ci-deploy",
+			DisplayName: "CI deploy",
+			Kind:        principal.KindService,
+			Source:      principal.SourceLocal,
+			Namespace:   "",
+			GroupCount:  0,
 		},
 	}
 	for i := range seeds {
@@ -476,7 +518,9 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 		t.Fatalf("seed member: %v", err)
 	}
 
-	svc, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: nil, NewID: nil})
+	seedNamespacePrincipal(t, st, at)
+
+	svc, err := principal.NewService(principal.Config{Store: st, Guard: nil, Namespaces: st, Now: nil, NewID: nil})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -511,11 +555,14 @@ var routeBodies = map[string]string{
 	"POST /api/server/service-tokens":                                         `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
 	"POST /api/server/service-tokens/{id}/rotate":                             `{}`,
 	"POST /api/server/caller/tokens":                                          `{"name":"laptop"}`,
+	"POST /api/server/namespaces/{namespace}/principals":                      `{"subject":"ci-new"}`,
+	"PATCH /api/server/namespaces/{namespace}/principals/{id}":                `{"displayName":"Routes bot"}`,
 	"POST /api/server/principals/{principal}/tokens":                          `{"name":"ci"}`,
 	"POST /api/server/principals/{principal}/tokens/{id}/rotate":              `{}`,
 	"POST /api/server/principals/{principal}/grants":                          routePrincipalGrantBody,
 	"POST /api/server/caller/tokens/{id}/rotate":                              `{}`,
 	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
+	"PATCH /api/server/session-policy":                                        `{"idleSeconds":900}`,
 }
 
 // routeGrantBody is the body of each grant route: a role that no seeded
@@ -850,9 +897,14 @@ type routeOwner struct {
 }
 
 // routePrincipalIDs returns the owner of a route of one principal: the
-// service principal testOtherPrincipalID, with its seeded grant or token.
-// Any other path answers testPrincipalID.
+// service principal testOtherPrincipalID, with its seeded grant or token,
+// or, on the routes of the principals of a namespace, the seeded principal
+// of testNamespace. Any other path answers testPrincipalID.
 func routePrincipalIDs(path string) routeOwner {
+	if strings.HasPrefix(path, "/api/server/namespaces/{namespace}/principals") {
+		return routeOwner{principal: testPrincipalID, id: testNamespacePrincipalID, ofOne: true}
+	}
+
 	if !strings.HasPrefix(path, "/api/server/principals/{principal}/") {
 		return routeOwner{principal: testPrincipalID, id: "", ofOne: false}
 	}
@@ -900,7 +952,7 @@ func routeGrantID(path, id string) string {
 func createsRecord(path string) bool {
 	created := []string{
 		"/api/server/namespaces", "/api/server/principals", "/api/server/groups",
-		"/api/server/groups/{id}/members", "/api/server/roles",
+		"/api/server/groups/{id}/members", "/api/server/roles", "/api/server/namespaces/{namespace}/principals",
 	}
 
 	return slices.Contains(created, path) ||
@@ -1180,6 +1232,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		IPAllowlists:   nil,
+		SessionPolicy:  nil,
 	}
 
 	cases := []struct {
@@ -1313,6 +1366,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		IPAllowlists:   nil,
+		SessionPolicy:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1340,6 +1394,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		IPAllowlists:   nil,
+		SessionPolicy:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)

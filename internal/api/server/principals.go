@@ -74,7 +74,10 @@ type principalResponse struct {
 	CreatedAt   string  `json:"createdAt"`
 	UpdatedAt   string  `json:"updatedAt"`
 	DisabledAt  *string `json:"disabledAt"`
-	GroupCount  int64   `json:"groupCount"`
+	// Namespace is empty for a principal of the installation, and names the
+	// namespace of a service principal of a namespace.
+	Namespace  string `json:"namespace"`
+	GroupCount int64  `json:"groupCount"`
 }
 
 // groupResponse is one group on the wire. A group whose source is not local
@@ -167,6 +170,7 @@ func principalOf(p principal.Principal) principalResponse {
 		CreatedAt:   wireTime(p.CreatedAt),
 		UpdatedAt:   wireTime(p.UpdatedAt),
 		DisabledAt:  optionalWireTime(p.DisabledAt),
+		Namespace:   p.Namespace.String(),
 		GroupCount:  p.GroupCount,
 	}
 }
@@ -594,16 +598,17 @@ func deletePrincipal(
 }
 
 // enablePrincipal serves POST /api/server/principals/{id}/enable: it
-// enables a principal again after an inactivity disable (ADR 53) and
-// answers 200 with the principal. A principal that is not disabled answers
-// 409.
+// enables a principal again after an inactivity disable and answers 200
+// with the principal. The enable restores the use of the grants of the
+// principal, so the caller must hold every action that they give. A
+// principal that is not disabled answers 409.
 func enablePrincipal(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	id := r.PathValue("id")
 	object := principal.Ref(id)
 
-	if err := svc.EnablePrincipal(r.Context(), e, id); err != nil {
+	if err := svc.EnablePrincipal(r.Context(), e, caller, id); err != nil {
 		return failed(object), err
 	}
 
@@ -813,7 +818,8 @@ func removeMember(
 func classifyPrincipal(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, errPrincipalBody), errors.Is(err, errPrincipalChangeBody),
-		errors.Is(err, errGroupBody), errors.Is(err, errGroupChangeBody), errors.Is(err, errMemberBody):
+		errors.Is(err, errGroupBody), errors.Is(err, errGroupChangeBody), errors.Is(err, errMemberBody),
+		errors.Is(err, errNamespacePrincipalBody):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, principal.ErrInvalid), errors.Is(err, principal.ErrReservedSubject),
 		errors.Is(err, errPageQuery):

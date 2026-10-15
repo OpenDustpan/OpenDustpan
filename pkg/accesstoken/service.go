@@ -168,6 +168,10 @@ func (s *Service) Create(
 		return Token{}, Secret{}, err
 	}
 
+	if nsErr := refuseNamespacePrincipal(p, "make tokens for"); nsErr != nil {
+		return Token{}, Secret{}, nsErr
+	}
+
 	if kindErr := checkKind(scope, kind); kindErr != nil {
 		return Token{}, Secret{}, kindErr
 	}
@@ -321,6 +325,68 @@ func (s *Service) ListOwn(ctx context.Context, caller identity.Principal, req Pa
 	return s.List(ctx, req)
 }
 
+// ListOfPrincipal returns one page of the tokens of the service principal
+// principalID, newest first, for caller. caller must hold
+// principal:manage-tokens on the principal: the route checks it, and this
+// check holds for every caller of the Service. req.PrincipalID is ignored.
+// The check runs first, so a caller without the action gets
+// identity.ErrDenied for every principal and learns nothing about which
+// principals exist. Then an unknown principal answers ErrPrincipalNotFound,
+// and a principal that is not a service principal ErrWrongKind:
+// principal:manage-tokens gives no right on the tokens of a person.
+func (s *Service) ListOfPrincipal(
+	ctx context.Context, caller identity.Principal, principalID string, req PageRequest,
+) (Page, error) {
+	if err := s.requireManageTokens(ctx, caller, principalID, useList); err != nil {
+		return Page{}, err
+	}
+
+	p, err := s.principals.GetPrincipal(ctx, principalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		return Page{}, fmt.Errorf("%w: %q", ErrPrincipalNotFound, principalID)
+	}
+
+	if err != nil {
+		return Page{}, fmt.Errorf("read principal: %w", err)
+	}
+
+	if p.Kind != principal.KindService {
+		return Page{}, fmt.Errorf("%w: the tokens of a %s go through /api/server/tokens", ErrWrongKind, p.Kind)
+	}
+
+	if err := refuseNamespacePrincipal(p, "list the tokens of"); err != nil {
+		return Page{}, err
+	}
+
+	req.PrincipalID = p.ID
+
+	return s.List(ctx, req)
+}
+
+// refuseNamespacePrincipal returns ErrInvalid when p belongs to a
+// namespace: the token routes do not act on such a principal yet. use says
+// what the caller tried to do, for example "make tokens for".
+func refuseNamespacePrincipal(p principal.Principal, use string) error {
+	if p.Namespace == "" {
+		return nil
+	}
+
+	return fmt.Errorf("%w: principal %q belongs to the namespace %q; "+
+		"the server does not %s a principal of a namespace yet", ErrInvalid, p.ID, p.Namespace.String(), use)
+}
+
+// MaxLifetime returns the longest lifetime that a create or a rotation can
+// ask for: the maximum lifetime of the installation policy, which applies
+// to every principal today.
+func (s *Service) MaxLifetime(ctx context.Context) (time.Duration, error) {
+	p, err := s.Policy(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	return p.MaxLifetime, nil
+}
+
 // RotateInput names a rotation: the token ID, the scope of the caller, and
 // the times. A nil OldEndsAt keeps the old token for
 // DefaultRotationOverlap, or until its expiry when that is earlier. A zero
@@ -362,6 +428,10 @@ func (s *Service) Rotate(
 
 	if authErr := s.authorizeRotate(ctx, caller, in.Scope, old); authErr != nil {
 		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, authErr)
+	}
+
+	if ownerErr := s.checkRotateOwner(ctx, old); ownerErr != nil {
+		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, ownerErr)
 	}
 
 	at := s.Now()
@@ -702,4 +772,20 @@ func (s *Service) newToken(spec tokenSpec) (issued, error) {
 	}
 
 	return issued{token: t, secret: secret, digest: DigestOf(secret)}, nil
+}
+
+// checkRotateOwner reads the principal of t and refuses a rotation when it
+// belongs to a namespace. It returns ErrPrincipalNotFound when the principal
+// was deleted.
+func (s *Service) checkRotateOwner(ctx context.Context, t Token) error {
+	owner, err := s.principals.GetPrincipal(ctx, t.PrincipalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		return fmt.Errorf("%w: %q", ErrPrincipalNotFound, t.PrincipalID)
+	}
+
+	if err != nil {
+		return fmt.Errorf("read principal: %w", err)
+	}
+
+	return refuseNamespacePrincipal(owner, "rotate the tokens of")
 }

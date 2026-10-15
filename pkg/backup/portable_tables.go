@@ -321,6 +321,7 @@ func portableSpec() []PortableTable {
 				{Name: portColDisabledAtMs, Kind: KindTime},
 				{Name: "last_active_at_ms", Kind: KindTime},
 				{Name: "last_sign_in_at_ms", Kind: KindTime},
+				{Name: "namespace", Kind: KindText},
 			},
 		},
 		{
@@ -449,6 +450,16 @@ func portableSpec() []PortableTable {
 				{Name: "disable_tokens", Kind: KindBool},
 				{Name: "disable_accounts", Kind: KindBool},
 				{Name: "disable_break_glass", Kind: KindBool},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "session_policy",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindInteger},
+				{Name: "idle_ms", Kind: KindInteger},
+				{Name: "max_length_ms", Kind: KindInteger},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 			},
 		},

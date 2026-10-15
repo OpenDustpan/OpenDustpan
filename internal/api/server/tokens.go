@@ -124,6 +124,22 @@ type rotationResponse struct {
 	Previous tokenResponse    `json:"previous"`
 }
 
+// limitedTokenListResponse is one page of tokens with the longest lifetime
+// that a new token of the listed principal can get.
+//
+// Contract: never remove or rename these fields.
+type limitedTokenListResponse struct {
+	tokenListResponse
+
+	// MaxLifetimeSeconds is the maximum lifetime, in seconds, that applies
+	// to a token of this caller and this principal: a create or a rotation
+	// that asks for a later expiry answers 400. Today it is the maximum of
+	// the installation policy. When a narrower scope, such as a namespace,
+	// sets a shorter maximum, this field answers the shorter one, so its
+	// meaning does not change.
+	MaxLifetimeSeconds int64 `json:"maxLifetimeSeconds"`
+}
+
 // tokenListResponse wraps one page of tokens. Total is the count of every
 // token that matches the filters, on every page. NextCursor is empty on the
 // last page.
@@ -330,6 +346,10 @@ func (h *Handler) serviceTokenRoutes() []Route {
 		{
 			Method: http.MethodPost, Path: principalTokensPath, Scope: ScopeAuthorized, Actions: service,
 			Resolve: resolvePrincipalPath, ActionsFor: nil, Serve: serve(createPrincipalToken),
+		},
+		{
+			Method: http.MethodGet, Path: principalTokensPath, Scope: ScopeAuthorized, Actions: service,
+			Resolve: resolvePrincipalPath, ActionsFor: nil, Serve: h.serveTokenRead(listPrincipalTokens),
 		},
 		{
 			Method: http.MethodPost, Path: principalTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: service,
@@ -593,7 +613,42 @@ func listOwnTokens(
 		return failed(""), err
 	}
 
-	return ok(http.StatusOK, tokenPageOf(page, svc.Now()), ""), nil
+	return limitedTokenPage(r, svc, page)
+}
+
+// listPrincipalTokens serves GET /api/server/principals/{principal}/tokens:
+// one page of the tokens of the service principal in the path, newest
+// first, with the query parameters of the other token lists. The principal
+// query parameter is ignored. A principal that is not a service principal
+// answers 400, and an unknown one 404.
+func listPrincipalTokens(
+	_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, _ audit.Entry,
+) (principalResult, error) {
+	req, err := tokenPageRequest(r)
+	if err != nil {
+		return failed(""), err
+	}
+
+	page, err := svc.ListOfPrincipal(r.Context(), p, r.PathValue("principal"), req)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return limitedTokenPage(r, svc, page)
+}
+
+// limitedTokenPage answers page with the maximum lifetime of a new token.
+func limitedTokenPage(r *http.Request, svc *accesstoken.Service, page accesstoken.Page) (principalResult, error) {
+	maxLifetime, err := svc.MaxLifetime(r.Context())
+	if err != nil {
+		return failed(""), err
+	}
+
+	body := limitedTokenListResponse{
+		tokenListResponse: tokenPageOf(page, svc.Now()), MaxLifetimeSeconds: int64(maxLifetime / time.Second),
+	}
+
+	return ok(http.StatusOK, body, ""), nil
 }
 
 // tokenPageOf maps one page of tokens to the wire at the time now.

@@ -88,7 +88,9 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 
 	c := &clock{now: start, mu: sync.Mutex{}}
 
-	principals, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: c.Now, NewID: nil})
+	principals, err := principal.NewService(
+		principal.Config{Store: st, Guard: nil, Namespaces: nil, Now: c.Now, NewID: nil},
+	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -1220,7 +1222,7 @@ func TestSweepDisablesInactiveTokensAndAccounts(t *testing.T) {
 		t.Fatalf("token of a disabled person: err = %v, want ErrUnauthenticated", err)
 	}
 
-	if err := f.principals.EnablePrincipal(ctx, caller(), f.person.ID); err != nil {
+	if err := f.principals.EnablePrincipal(ctx, caller(), admin(), f.person.ID); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
 
@@ -1544,5 +1546,121 @@ func TestAdministratorCreateAndRotateNeedASignIn(t *testing.T) {
 		if _, _, err := f.svc.Rotate(ctx, withToken, caller(), in); !errors.Is(err, accesstoken.ErrSignInRequired) {
 			t.Errorf("rotation in scope %d with a token: err = %v, want ErrSignInRequired", r.scope, err)
 		}
+	}
+}
+
+// TestListOfPrincipal proves the checks of the token list of one service
+// principal in the Service: principal:manage-tokens on the principal first,
+// so a caller without it learns nothing about which principals exist; then
+// a service principal only, and the list of that principal alone.
+func TestListOfPrincipal(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	manage := string(identity.ActionPrincipalManageTokens) + " principal:"
+	authz := &recordAuthorizer{allowed: map[string]bool{
+		manage + f.service.ID:  true,
+		manage + f.person.ID:   true,
+		manage + f.workload.ID: true,
+		manage + "prn-none":    true,
+	}, checked: nil, mu: sync.Mutex{}}
+	svc := newCheckedService(t, &f, nil, authz)
+	alice := as(f.person)
+
+	f.create(t, f.service, "deploy")
+	f.create(t, f.person, "laptop")
+
+	all := accesstoken.PageRequest{PrincipalID: f.person.ID, Cursor: "", Filter: accesstoken.FilterAll, Limit: 0}
+
+	page, err := svc.ListOfPrincipal(ctx, alice, f.service.ID, all)
+	if err != nil || page.Total != 1 || page.Items[0].PrincipalID != f.service.ID {
+		t.Fatalf("tokens of the service principal = %+v, %v; want its one token", page, err)
+	}
+
+	if _, err := svc.ListOfPrincipal(ctx, alice, f.person.ID, all); !errors.Is(err, accesstoken.ErrWrongKind) {
+		t.Fatalf("tokens of a person: err = %v, want ErrWrongKind", err)
+	}
+
+	if _, err := svc.ListOfPrincipal(ctx, alice, "prn-none", all); !errors.Is(err, accesstoken.ErrPrincipalNotFound) {
+		t.Fatalf("tokens of an unknown principal: err = %v, want ErrPrincipalNotFound", err)
+	}
+
+	if _, err := svc.ListOfPrincipal(ctx, alice, f.workload.ID, all); !errors.Is(err, accesstoken.ErrWrongKind) {
+		t.Fatalf("tokens of a workload: err = %v, want ErrWrongKind", err)
+	}
+
+	authz.allowed = map[string]bool{}
+
+	for _, id := range []string{f.service.ID, f.person.ID, "prn-none"} {
+		_, err := svc.ListOfPrincipal(ctx, alice, id, all)
+		if !errors.Is(err, identity.ErrDenied) || !strings.Contains(err.Error(), "list the tokens of") {
+			t.Fatalf("tokens of %s without principal:manage-tokens: err = %v, want ErrDenied for a list", id, err)
+		}
+	}
+}
+
+// namespacedReader reads the principals of the store, and reports the
+// principal id as a principal of the namespace acme.
+type namespacedReader struct {
+	accesstoken.PrincipalReader
+
+	id string
+}
+
+func (r namespacedReader) GetPrincipal(ctx context.Context, id string) (principal.Principal, error) {
+	p, err := r.PrincipalReader.GetPrincipal(ctx, id)
+	if err == nil && p.ID == r.id {
+		p.Namespace = "acme"
+	}
+
+	return p, err
+}
+
+// TestNamespacePrincipalTokensRefused proves that the service makes, rotates
+// and lists no token of a principal of a namespace, also for an
+// administrator, and that the token of such a principal stays as it is.
+func TestNamespacePrincipalTokensRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+	tok, _ := f.create(t, f.service, "deploy")
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		Store: f.store, Principals: namespacedReader{PrincipalReader: f.store, id: f.service.ID},
+		Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: f.clock.Now, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	_, _, err = svc.Create(ctx, admin(), caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "more"})
+	wantNamespaceRefusal(t, "make", err)
+
+	_, _, err = svc.Rotate(ctx, admin(), caller(), accesstoken.RotateInput{
+		ID: tok.ID, Scope: accesstoken.ScopeService, ExpiresAt: time.Time{}, OldEndsAt: nil,
+	})
+	wantNamespaceRefusal(t, "rotate", err)
+
+	all := accesstoken.PageRequest{PrincipalID: "", Cursor: "", Filter: accesstoken.FilterAll, Limit: 0}
+	_, err = svc.ListOfPrincipal(ctx, admin(), f.service.ID, all)
+	wantNamespaceRefusal(t, "list", err)
+
+	got, err := f.svc.Get(ctx, tok.ID)
+	if err != nil || got.ReplacedBy != "" || !got.RevokedAt.IsZero() {
+		t.Fatalf("token after the refused rotation = %+v, %v; want it unchanged", got, err)
+	}
+}
+
+// wantNamespaceRefusal fails unless err is the ErrInvalid of a principal of
+// a namespace.
+func wantNamespaceRefusal(t *testing.T, op string, err error) {
+	t.Helper()
+
+	if !errors.Is(err, accesstoken.ErrInvalid) || !strings.Contains(err.Error(), "principal of a namespace") {
+		t.Fatalf("%s for a principal of a namespace: err = %v, want ErrInvalid", op, err)
 	}
 }

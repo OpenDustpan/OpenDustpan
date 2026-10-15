@@ -384,6 +384,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"disabled_at_ms",
 				"last_active_at_ms",
 				"last_sign_in_at_ms",
+				"namespace",
 			},
 		},
 		{
@@ -472,6 +473,10 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"disable_break_glass",
 				backupColUpdatedAtMs,
 			},
+		},
+		{
+			table:   "session_policy",
+			columns: []string{"id", "idle_ms", "max_length_ms", backupColUpdatedAtMs},
 		},
 	}
 }

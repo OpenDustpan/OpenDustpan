@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"opendustpan.org/opendustpan/pkg/access"
@@ -58,6 +59,10 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 		)
 	}
 
+	if fitErr := subjectFitsObject(ctx, q, g); fitErr != nil {
+		return fitErr
+	}
+
 	n, err := q.CreateGrant(ctx, db.CreateGrantParams{
 		ID:          g.ID,
 		Subject:     g.Subject.String(),
@@ -78,6 +83,33 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 
 	if n == 0 {
 		return access.ErrAlreadyExists
+	}
+
+	return nil
+}
+
+// subjectFitsObject returns ErrInvalid when the subject of g is a principal
+// of a namespace and the object of g is not that namespace or an object
+// inside it. It reads the namespace of the principal in the transaction of
+// the grant, so a grant cannot race the record it checks.
+func subjectFitsObject(ctx context.Context, q *db.Queries, g access.Grant) error {
+	if g.Subject.Kind != access.SubjectPrincipal {
+		return nil
+	}
+
+	ns, err := q.GetPrincipalNamespace(ctx, g.Subject.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// The Service checks that the subject exists.
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("select namespace of principal: %w", err)
+	}
+
+	if ns != "" && ns != g.Object.Namespace().String() {
+		return fmt.Errorf("%w: %s is a principal of the namespace %q, and can only hold grants inside it",
+			access.ErrInvalid, g.Subject.String(), ns)
 	}
 
 	return nil
@@ -474,9 +506,20 @@ func (s *Store) DeleteRole(ctx context.Context, id string, e audit.Entry) error 
 }
 
 // revokeGrantsOf ends every current grant of subject with q, at the time of
-// e and by its author, in the transaction that ends the subject.
+// e and by its author, in the transaction that ends the subject. For a
+// delete in the scope @server it also writes one audit entry in each
+// namespace that holds an ended grant, so a namespace auditor sees that the
+// access ended. A delete in a namespace scope writes no such entry: its own
+// entry is already in that namespace.
 func revokeGrantsOf(ctx context.Context, q *db.Queries, subject access.Subject, e audit.Entry) error {
-	err := q.RevokeGrantsOfSubject(ctx, db.RevokeGrantsOfSubjectParams{
+	rows, err := q.GrantsOfSubject(ctx, db.GrantsOfSubjectParams{
+		SubjectKind: string(subject.Kind), SubjectID: subject.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("select grants of %s: %w", subject.String(), err)
+	}
+
+	err = q.RevokeGrantsOfSubject(ctx, db.RevokeGrantsOfSubjectParams{
 		RevokedAtMs: nullMillis(codec.Millis(e.At)),
 		RevokedBy:   e.Subject,
 		SubjectKind: string(subject.Kind),
@@ -487,7 +530,7 @@ func revokeGrantsOf(ctx context.Context, q *db.Queries, subject access.Subject, 
 	}
 
 	if subject.Kind != access.SubjectPrincipal {
-		return nil
+		return auditSubjectRevokes(ctx, q, rows, subject, e)
 	}
 
 	// A grant on the principal, such as the right to make its tokens, ends
@@ -501,7 +544,156 @@ func revokeGrantsOf(ctx context.Context, q *db.Queries, subject access.Subject, 
 		return fmt.Errorf("revoke grants on %s: %w", subject.String(), err)
 	}
 
+	return auditSubjectRevokes(ctx, q, rows, subject, e)
+}
+
+// Change keys of the audit entry that the delete of a subject writes for
+// each grant it ends in a namespace: the grant, and the delete that ended
+// it.
+const (
+	revokeGrantKey   = "grant"
+	revokeSubjectKey = "subject"
+	revokeRoleKey    = "role"
+	revokeObjectKey  = "object"
+	revokeEndedByKey = "endedBy"
+)
+
+// grantRevokeAction returns the manage-access action that a manual revoke of
+// a grant on an object of kind k writes in its audit entry. A grant on the
+// installation or on a principal takes no namespace entry.
+func grantRevokeAction(k access.ObjectKind) (identity.Action, bool) {
+	if k == access.ObjectNamespace {
+		return identity.ActionNamespaceManageAccess, true
+	}
+
+	if k == access.ObjectCollection {
+		return identity.ActionCollectionManageAccess, true
+	}
+
+	if k == access.ObjectUnit {
+		return identity.ActionUnitManageAccess, true
+	}
+
+	return "", false
+}
+
+// subjectNamespaceGrants decodes rows and keeps the grants in a namespace,
+// ordered by namespace then ID, so the audit entries follow one order.
+func subjectNamespaceGrants(rows []db.GrantsOfSubjectRow) ([]access.Grant, error) {
+	grants := make([]access.Grant, 0, len(rows))
+
+	for i := range rows {
+		g, err := fromGrantRow(grantRow(rows[i]))
+		if err != nil {
+			return nil, fmt.Errorf("decode grant %s: %w", rows[i].ID, err)
+		}
+
+		if g.Object.Namespace() == "" {
+			continue
+		}
+
+		grants = append(grants, g)
+	}
+
+	slices.SortFunc(grants, func(a, b access.Grant) int {
+		if a.Object.Namespace() != b.Object.Namespace() {
+			return strings.Compare(a.Object.Namespace().String(), b.Object.Namespace().String())
+		}
+
+		return strings.Compare(a.ID, b.ID)
+	})
+
+	return grants, nil
+}
+
+// checkGrantNamespace reads the namespace ns in the transaction, as a grant
+// revoke checks its fence there. It returns namespace.ErrNotFound when no
+// such namespace exists.
+func checkGrantNamespace(ctx context.Context, q *db.Queries, ns namespace.Name) error {
+	if _, err := q.GetFailoverVersion(ctx, ns.String()); errors.Is(err, sql.ErrNoRows) {
+		return namespace.ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("read failover version of %q: %w", ns, err)
+	}
+
 	return nil
+}
+
+// auditSubjectRevokes writes one audit entry in each namespace that holds a
+// grant of rows, the grants that the delete of subject ended. Each entry
+// reuses the action and the record of a manual grant revoke, and names the
+// delete that ended the grant. Grants on the installation take no entry. The
+// write lock of the transaction orders the appends, and the fence check
+// reads the namespace in the same transaction, as a grant revoke does.
+func auditSubjectRevokes(
+	ctx context.Context, q *db.Queries, rows []db.GrantsOfSubjectRow, subject access.Subject, e audit.Entry,
+) error {
+	if e.Namespace != audit.ServerScope {
+		return nil
+	}
+
+	grants, err := subjectNamespaceGrants(rows)
+	if err != nil {
+		return err
+	}
+
+	endedBy := string(subject.Kind) + " delete " + subject.ID
+
+	var checked namespace.Name
+
+	for i := range grants {
+		if grants[i].Object.Namespace() != checked {
+			checked = grants[i].Object.Namespace()
+
+			if err := checkGrantNamespace(ctx, q, checked); err != nil {
+				return err
+			}
+		}
+
+		if _, err := appendAuditEntry(ctx, q, subjectRevokeEntry(e, grants[i], endedBy)); err != nil {
+			return fmt.Errorf("audit revoke of grant %s: %w", grants[i].ID, err)
+		}
+	}
+
+	return nil
+}
+
+// subjectRevokeEntry returns the audit entry of the grant g that the delete
+// endedBy ended. It reuses the action and the record of a manual grant
+// revoke, and its changes name the grant and the delete.
+func subjectRevokeEntry(e audit.Entry, g access.Grant, endedBy string) audit.Entry {
+	kind, _ := access.KindOf(g.Object)
+	action, _ := grantRevokeAction(kind)
+
+	return audit.Entry{
+		At:         e.At,
+		Namespace:  g.Object.Namespace(),
+		Subject:    e.Subject,
+		IDPSubject: e.IDPSubject,
+		TokenID:    e.TokenID,
+		Action:     string(action),
+		Object:     access.GrantRef(g),
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		Changes: []audit.Change{
+			{Key: revokeEndedByKey, Old: nil, New: endedBy, Layer: "", TakesEffect: ""},
+			{Key: revokeGrantKey, Old: nil, New: g.ID, Layer: "", TakesEffect: ""},
+			{Key: revokeObjectKey, Old: nil, New: g.Object.String(), Layer: "", TakesEffect: ""},
+			{Key: revokeRoleKey, Old: nil, New: g.Role, Layer: "", TakesEffect: ""},
+			{Key: revokeSubjectKey, Old: nil, New: g.Subject.String(), Layer: "", TakesEffect: ""},
+		},
+		SourceIP:  e.SourceIP,
+		UserAgent: e.UserAgent,
+		Channel:   e.Channel,
+		Kind:      audit.KindChange,
+		Outcome:   audit.OutcomeSuccess,
+		RequestID: e.RequestID,
+		ObjectID:  g.ID,
+		PrevHash:  "",
+		Hash:      "",
+		Sequence:  0,
+	}
 }
 
 // grantReadRow is each generated grant row. The grant reads select the same

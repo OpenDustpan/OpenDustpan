@@ -187,6 +187,7 @@ type Principal struct {
 	DisabledAtMs   pgtype.Int8
 	LastActiveAtMs int64
 	LastSignInAtMs pgtype.Int8
+	Namespace      string
 }
 
 type PrincipalGroup struct {
@@ -242,6 +243,13 @@ type Session struct {
 	EndReason    string
 	SourceIp     string
 	UserAgent    string
+}
+
+type SessionPolicy struct {
+	ID          int64
+	IdleMs      int64
+	MaxLengthMs int64
+	UpdatedAtMs int64
 }
 
 type SignInRequest struct {

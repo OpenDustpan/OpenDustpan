@@ -290,7 +290,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 			table: "principals",
 			columns: []string{
 				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms",
+				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
 			},
 			orderBy: []string{"id"},
 		},
@@ -347,6 +347,11 @@ func pgCopyIdentityTables() []pgCopyTable {
 				"id", "max_lifetime_ms", "inactivity_ms", "disable_tokens", "disable_accounts",
 				"disable_break_glass", pgColUpdatedAtMs,
 			},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   "session_policy",
+			columns: []string{"id", "idle_ms", "max_length_ms", pgColUpdatedAtMs},
 			orderBy: []string{"id"},
 		},
 	}

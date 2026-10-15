@@ -125,6 +125,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "events need the running update's lease", test: testEventsLease},
 		{name: "journal rows get arrivals and retries write nothing", test: testJournalPut},
 		{name: "journal refuses leases, previews, stacks, fences and foreign keys", test: testJournalRefusals},
+		{name: "journal refuses a batch for an update with version 0", test: testJournalRefusesVersionZero},
 		{name: "journal refuses batches after a cancel", test: testJournalAfterCancel},
 		{name: "journal stores two batches of one update that arrive at once", test: testJournalConcurrentRows},
 		{name: "journal stores one copy of a batch sent twice at once", test: testJournalConcurrentRetry},

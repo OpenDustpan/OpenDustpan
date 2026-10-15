@@ -121,6 +121,23 @@ func TestSessionConformance(t *testing.T) {
 	})
 }
 
+// TestNamespacePrincipalConformance runs the suite of the principals of a
+// namespace.
+func TestNamespacePrincipalConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	principaltest.RunNamespace(t, func(t *testing.T) principaltest.NamespaceStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
 // TestPrincipalConformance runs the principal and group store suite.
 func TestPrincipalConformance(t *testing.T) {
 	t.Parallel()
@@ -388,6 +405,21 @@ func TestIPAllowlistConformance(t *testing.T) {
 	}
 
 	storetest.RunIPAllowlist(t, func(t *testing.T) storetest.IPAllowlistStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+func TestNamespacePagingConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunNamespacePaging(t, func(t *testing.T) storetest.PagingStore {
 		t.Helper()
 
 		return open(t, base)

@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
@@ -82,6 +83,10 @@ type Config struct {
 	// IPAllowlists keeps the IP allowlist of each namespace. Nil means no
 	// allowlist store is configured: the IP allowlist routes are not mounted.
 	IPAllowlists *ipallow.Service
+	// SessionPolicy keeps the session policy of the installation. Nil
+	// means the store keeps none: the session policy routes are not
+	// mounted. Both SQL adapters keep it.
+	SessionPolicy *session.Policies
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
@@ -117,6 +122,7 @@ type Handler struct {
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
 	ipAllowlists   *ipallow.Service
+	sessions       *session.Policies
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
 	mux            *patternMux
@@ -163,6 +169,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		deletedUnits:   cfg.DeletedUnits,
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
+		sessions:       cfg.SessionPolicy,
 		onAuditFailure: cfg.OnAuditFailure,
 		mux:            newPatternMux(),
 		routes:         nil,
@@ -321,6 +328,10 @@ func classify(err error) (int, string) {
 		return status, message
 	}
 
+	if status, message, ok := classifySessionPolicy(err); ok {
+		return status, message
+	}
+
 	if status, message, ok := classifyRequest(err); ok {
 		return status, message
 	}
@@ -395,16 +406,20 @@ func classifyBackup(err error) (int, string, bool) {
 }
 
 // classifyNamespace maps the namespace errors to their status and message: a
-// bad namespace name or body answers 400, a duplicate namespace 409 and an
-// unknown namespace 404.
+// bad namespace name, body, page or cursor answers 400, a duplicate
+// namespace 409, an unknown namespace 404, and a store without the paging
+// port 501.
 func classifyNamespace(err error) (int, string, bool) {
 	switch {
-	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody):
+	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody),
+		errors.Is(err, namespace.ErrInvalidPage), errors.Is(err, errNamespaceCursor):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, namespace.ErrAlreadyExists):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, namespace.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true
+	case errors.Is(err, namespace.ErrNoPaging):
+		return http.StatusNotImplemented, err.Error(), true
 	default:
 		return 0, "", false
 	}

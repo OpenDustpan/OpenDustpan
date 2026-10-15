@@ -88,6 +88,18 @@ func TestSessionConformance(t *testing.T) {
 	})
 }
 
+// TestNamespacePrincipalConformance runs the suite of the principals of a
+// namespace.
+func TestNamespacePrincipalConformance(t *testing.T) {
+	t.Parallel()
+
+	principaltest.RunNamespace(t, func(t *testing.T) principaltest.NamespaceStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 // TestPrincipalConformance runs the principal and group store suite.
 func TestPrincipalConformance(t *testing.T) {
 	t.Parallel()
@@ -371,6 +383,18 @@ func TestIPAllowlistConformance(t *testing.T) {
 	t.Parallel()
 
 	storetest.RunIPAllowlist(t, func(t *testing.T) storetest.IPAllowlistStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestNamespacePagingConformance runs the namespace paging suite: paged,
+// filtered reads of namespaces in name order with their counts.
+func TestNamespacePagingConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunNamespacePaging(t, func(t *testing.T) storetest.PagingStore {
 		t.Helper()
 
 		return open(t)

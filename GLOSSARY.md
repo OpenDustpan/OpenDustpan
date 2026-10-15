@@ -153,8 +153,12 @@ _Avoid_: Token, guard
 ### Identity
 
 **Principal**:
-A caller whose identity OpenDustpan checked: a person, a service or a workload. A principal belongs to the whole installation, not to one namespace (ADR 52).
+A caller whose identity OpenDustpan checked: a person, a service or a workload. Most principals belong to the whole installation. A principal of a namespace is the exception.
 _Avoid_: User (when the caller can be a machine), actor
+
+**Principal of a namespace**:
+A service principal that belongs to one namespace. A holder of `namespace:manage-principals` on the namespace makes it. It can only hold grants on its namespace or on an object inside it, and it cannot be a member of a group. Its subject is unique on the whole installation.
+_Avoid_: Namespace service account, local principal
 
 **Access token**:
 The secret that a tool or the console sends to prove which principal it acts for.
@@ -167,6 +171,9 @@ _Avoid_: Login, log-in (as a noun). The verb is "sign in".
 **Session**:
 The proof of a sign-in that the console sends back in a cookie. A session belongs to one person. It ends at a sign-out, when an administrator ends it, after a period with no use, and at a maximum length. By default, the period is 15 minutes and the maximum length is 12 hours.
 _Avoid_: Login, cookie (the cookie only carries the session)
+
+**Session policy**:
+The administrator settings of the console sessions for the installation: the period with no use after which a session ends, and its maximum length. Only a site administrator can change them.
 
 **Personal token**:
 An access token that belongs to a person. A person creates it after a sign-in, and it has an expiry (ADR 53).

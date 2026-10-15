@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -21,7 +22,9 @@ import (
 func (f *fixture) principals(tb testing.TB) *principal.Service {
 	tb.Helper()
 
-	svc, err := principal.NewService(principal.Config{Store: f.store, Guard: f.svc, Now: nil, NewID: nil})
+	svc, err := principal.NewService(
+		principal.Config{Store: f.store, Guard: f.svc, Namespaces: nil, Now: nil, NewID: nil},
+	)
 	if err != nil {
 		tb.Fatalf("principal service: %v", err)
 	}
@@ -191,6 +194,139 @@ func TestRevokeAndDeleteNeedTheirActions(t *testing.T) {
 	}
 
 	checkEqualAdmins(t, f)
+}
+
+// disableAllPersons disables every person with the inactivity sweep, so a
+// test can enable them again one by one.
+func (f *fixture) disableAllPersons(tb testing.TB) {
+	tb.Helper()
+
+	_, err := f.store.SweepInactive(tb.Context(), accesstoken.Sweep{
+		Inactivity: time.Hour,
+		Tokens:     false,
+		Accounts:   true,
+	}, storetest.ServerChange)
+	if err != nil {
+		tb.Fatalf("sweep inactive: %v", err)
+	}
+}
+
+// disabled reports whether the principal with the ID id is disabled.
+func disabled(tb testing.TB, principals *principal.Service, id string) bool {
+	tb.Helper()
+
+	p, err := principals.GetPrincipal(tb.Context(), id)
+	if err != nil {
+		tb.Fatalf("get principal %q: %v", id, err)
+	}
+
+	return !p.DisabledAt.IsZero()
+}
+
+// enableSetup stores a disabled site administrator with a direct grant
+// (boss) and one with a grant through a group (olga), plus a site
+// administrator caller (sam), then enables the callers again, so a test can
+// enable one target as sam.
+//
+//nolint:nonamedreturns // The names distinguish the two principals at callers.
+func enableSetup(tb testing.TB) (principals *principal.Service, acct, sam identity.Principal) {
+	tb.Helper()
+
+	f := newFixture(tb)
+	ctx := tb.Context()
+	principals = f.principals(tb)
+	acct = f.accountAdministrator(tb, "acct")
+	sam = f.person(tb, "sam")
+	f.grant(tb, prn("sam"), access.RoleSiteAdministrator, identity.ServerObject())
+
+	f.person(tb, "boss")
+
+	_, err := f.svc.Grant(ctx, testEntry(), admin(), access.GrantInput{
+		Object: identity.ServerObject(), Role: access.RoleSiteAdministrator, Subject: prn("boss"),
+	})
+	if err != nil {
+		tb.Fatalf("grant: %v", err)
+	}
+
+	f.person(tb, "olga")
+
+	ops := f.group(tb, "ops", "olga")
+	f.grant(tb, ops, access.RoleSiteAdministrator, identity.ServerObject())
+
+	f.disableAllPersons(tb)
+
+	// The sweep disables every person, so enable the callers again and keep
+	// only the targets disabled.
+	for _, id := range []string{"prn-acct", "prn-sam"} {
+		if err := principals.EnablePrincipal(ctx, testEntry(), admin(), id); err != nil {
+			tb.Fatalf("enable %s: %v", id, err)
+		}
+	}
+
+	return principals, acct, sam
+}
+
+// TestEnableNeedsTheirActions proves that an enable needs every action
+// that a direct grant of the principal gives: an account administrator
+// cannot enable a disabled site administrator, but a site administrator
+// that is not a bootstrap admin can.
+func TestEnableNeedsTheirActions(t *testing.T) {
+	t.Parallel()
+
+	principals, acct, sam := enableSetup(t)
+	ctx := t.Context()
+
+	if !disabled(t, principals, "prn-boss") {
+		t.Fatal("boss is enabled after the sweep, want disabled")
+	}
+
+	if err := principals.EnablePrincipal(ctx, testEntry(), acct, "prn-boss"); !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("enable a site administrator = %v, want ErrEscalation", err)
+	}
+
+	if !disabled(t, principals, "prn-boss") {
+		t.Fatal("boss is enabled after a refused enable, want disabled")
+	}
+
+	if err := principals.EnablePrincipal(ctx, testEntry(), sam, "prn-boss"); err != nil {
+		t.Fatalf("enable as a site administrator: %v", err)
+	}
+
+	if disabled(t, principals, "prn-boss") {
+		t.Fatal("boss is disabled after an allowed enable, want enabled")
+	}
+}
+
+// TestEnableThroughGroupNeedsTheirActions proves that an enable needs
+// every action that a grant through a group gives: an account administrator
+// cannot enable a disabled member of a site-administrator group, but a site
+// administrator that is not a bootstrap admin can.
+func TestEnableThroughGroupNeedsTheirActions(t *testing.T) {
+	t.Parallel()
+
+	principals, acct, sam := enableSetup(t)
+	ctx := t.Context()
+
+	if !disabled(t, principals, "prn-olga") {
+		t.Fatal("olga is enabled after the sweep, want disabled")
+	}
+
+	// The enable of olga restores what ops gives through her membership.
+	if err := principals.EnablePrincipal(ctx, testEntry(), acct, "prn-olga"); !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("enable a member of a site-administrator group = %v, want ErrEscalation", err)
+	}
+
+	if !disabled(t, principals, "prn-olga") {
+		t.Fatal("olga is enabled after a refused enable, want disabled")
+	}
+
+	if err := principals.EnablePrincipal(ctx, testEntry(), sam, "prn-olga"); err != nil {
+		t.Fatalf("enable a group member as a site administrator: %v", err)
+	}
+
+	if disabled(t, principals, "prn-olga") {
+		t.Fatal("olga is disabled after an allowed enable, want enabled")
+	}
 }
 
 // checkEqualAdmins proves that one admin of a namespace can revoke the
@@ -468,4 +604,37 @@ func TestTokenActionsHaveTheirFamilies(t *testing.T) {
 	assertChecks(t, f.authz, acct, []check{{server, identity.ActionPrincipalManageTokens, true}})
 	assertChecks(t, f.authz, ops, []check{{server, identity.ActionPrincipalManageTokens, false}})
 	assertChecks(t, f.authz, plain, []check{{identity.CallerObject(), identity.ActionTokenManageOwn, true}})
+}
+
+// TestSignInSettingsAreSiteOnly places server:manage-sign-in: it is in the
+// administration family, the site administrator holds it, and the account
+// administrator and the operator do not. An account administrator cannot
+// give it to itself through a custom role.
+func TestSignInSettingsAreSiteOnly(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	acct := f.accountAdministrator(t, "sign-in-acct")
+	site := f.person(t, "sign-in-site")
+	ops := f.person(t, "sign-in-ops")
+
+	f.grant(t, prn("sign-in-site"), access.RoleSiteAdministrator, identity.ServerObject())
+	f.grant(t, prn("sign-in-ops"), access.RoleInstallationOperator, identity.ServerObject())
+
+	a := identity.ActionServerManageSignIn
+	if family, ok := access.FamilyOf(a); !ok || family != access.FamilyAdministration {
+		t.Errorf("family of %s = %q, %t; want administration", a, family, ok)
+	}
+
+	server := identity.ServerObject()
+	assertChecks(t, f.authz, site, []check{{server, a, true}})
+	assertChecks(t, f.authz, acct, []check{{server, a, false}})
+	assertChecks(t, f.authz, ops, []check{{server, a, false}})
+
+	_, err := f.svc.CreateRole(t.Context(), testEntry(), acct, access.RoleInput{
+		Name: "sign-in", Description: "", Actions: []identity.Action{a},
+	})
+	if !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("create a role with %s = %v, want ErrEscalation", a, err)
+	}
 }

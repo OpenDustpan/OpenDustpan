@@ -13,6 +13,29 @@ SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, 
 FROM namespaces
 ORDER BY name;
 
+-- name: PageNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > sqlc.arg('after')
+ORDER BY name
+LIMIT sqlc.arg('lim');
+
+-- name: PageNamespacesByNames :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > sqlc.arg('after') AND name IN (SELECT value FROM json_each(sqlc.arg('names')))
+ORDER BY name
+LIMIT sqlc.arg('lim');
+
+-- name: CountNamespaces :one
+SELECT COUNT(*)
+FROM namespaces;
+
+-- name: CountNamespacesByNames :one
+SELECT COUNT(*)
+FROM namespaces
+WHERE name IN (SELECT value FROM json_each(sqlc.arg('names')));
+
 -- name: SetNamespaceOverrides :execrows
 -- Replaces the override switches of one namespace (ADR 44, decision 6).
 UPDATE namespaces
@@ -707,7 +730,7 @@ DELETE FROM update_journal
 WHERE stack_id = ? AND update_id = ?;
 
 -- name: JournalState :one
-SELECT journal_closed, status FROM updates
+SELECT journal_closed, journal_version, status FROM updates
 WHERE stack_id = ? AND id = ?;
 
 -- name: CloseJournal :exec
@@ -715,22 +738,22 @@ UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?;
 
 -- name: CreatePrincipal :execrows
-INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetPrincipal :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.id = ? AND p.deleted_at_ms IS NULL;
 
 -- name: GetPrincipalBySubject :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.subject = sqlc.arg('subject') AND p.deleted_at_ms IS NULL;
 
 -- name: ListPrincipals :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
@@ -738,6 +761,7 @@ WHERE p.deleted_at_ms IS NULL
   AND p.subject >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR p.subject < sqlc.arg('high'))
   AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR p.kind = sqlc.arg('kind'))
+  AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR p.namespace = sqlc.arg('namespace'))
 ORDER BY p.subject
 LIMIT sqlc.arg('row_limit');
 
@@ -746,15 +770,21 @@ SELECT COUNT(*) FROM principals
 WHERE deleted_at_ms IS NULL
   AND subject >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR subject < sqlc.arg('high'))
-  AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR kind = sqlc.arg('kind'));
+  AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR kind = sqlc.arg('kind'))
+  AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR namespace = sqlc.arg('namespace'));
+
+-- name: GetPrincipalNamespace :one
+-- The namespace of a current principal: empty for a principal of the
+-- installation. A grant write reads it in its own transaction.
+SELECT namespace FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = ?, updated_at_ms = ?
-WHERE id = ? AND deleted_at_ms IS NULL;
+WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL;
 
 -- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = ?
-WHERE id = ? AND deleted_at_ms IS NULL;
+WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL;
 
 -- name: EndMembershipsOfPrincipal :exec
 UPDATE group_members SET removed_at_ms = ?
@@ -818,7 +848,7 @@ UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL;
 
 -- name: ListGroupMembers :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
   m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
@@ -1261,6 +1291,17 @@ ON CONFLICT (unit_id) DO UPDATE SET
     assigned_at_ms = excluded.assigned_at_ms;
 
 
+-- name: LastAccessByPrincipals :many
+-- The latest last-use time of the access tokens of each given principal:
+-- one row for each principal with a used token. A JSON array carries the
+-- IDs, so the query stays fixed. Revoked, replaced and expired tokens
+-- count: a use is a use.
+SELECT principal_id, CAST(MAX(last_used_at_ms) AS INTEGER) AS last_used_at_ms
+FROM access_tokens
+WHERE principal_id IN (SELECT value FROM json_each(CAST(sqlc.arg('principals') AS TEXT)))
+  AND last_used_at_ms IS NOT NULL
+GROUP BY principal_id;
+
 -- name: GetDeletedStack :one
 -- A deleted stack of one namespace by its stable ID (ADR 47), for a restore
 -- or a purge. A live stack matches no row.
@@ -1507,3 +1548,12 @@ RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms;
 
 -- name: PruneSignInRequests :execrows
 DELETE FROM sign_in_requests WHERE expires_at_ms <= ?;
+
+-- name: GetSessionPolicy :one
+SELECT idle_ms, max_length_ms, updated_at_ms FROM session_policy WHERE id = 1;
+
+-- name: SetSessionPolicy :execrows
+UPDATE session_policy
+SET idle_ms = CAST(sqlc.arg('idle_ms') AS INTEGER), max_length_ms = CAST(sqlc.arg('max_length_ms') AS INTEGER),
+  updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER)
+WHERE id = 1;

@@ -36,7 +36,11 @@ package server
 // GET /api/server/caller/access answers the access of the caller: on one
 // object (?object=), or the objects of one kind where it can do an action
 // (?type=&action=), paged. It needs caller:read only, so every signed-in
-// principal reads its own access.
+// principal reads its own access. With type=principal, the default action
+// is principal:manage-tokens: the answer lists the service principals whose
+// tokens the caller can make. There, all=true means every service principal
+// of the installation, because principal:manage-tokens gives no right on a
+// person; the answer never lists a person.
 //
 // GET /api/server/caller/grants answers the current grants of the caller,
 // paged: its own grants and the grants of its groups, with the group
@@ -64,7 +68,8 @@ var (
 	)
 	errExpandQuery       = errors.New(`invalid access review query: "expand" takes the value "members" only`)
 	errCallerAccessQuery = errors.New(
-		`invalid access query: provide "object=<object>", or "type=namespace|collection|unit" and an optional "action"`,
+		`invalid access query: provide "object=<object>", or "type=namespace|collection|unit|principal" ` +
+			`and an optional "action"`,
 	)
 )
 
@@ -96,9 +101,12 @@ const (
 // expand=members reads through a group. EffectiveFromMs and
 // EffectiveUntilMs are the time that the row gave access (null while it
 // lasts). MemberCount is set for a group row of a snapshot only.
-// LastAccessTracked is set on a row of a principal: it is false while the
-// server records no sign-in and no token use, and LastAccessAtMs is then
-// left out, so an export never shows a "Never" that it cannot prove.
+// LastAccessTracked is true on a row of a principal: on a grant whose
+// subject is a principal, or on a row read through a group, for the member.
+// LastAccessAtMs is the latest use of an access token of that principal,
+// and is left out when no token was ever used. The server records no
+// sign-in, so a sign-in does not count. A group row with no Via and a
+// bootstrap token row carry neither field.
 //
 // Contract: never remove or rename these fields.
 type reviewRowResponse struct {
@@ -404,11 +412,15 @@ func reviewRowOf(e access.ReviewEntry) reviewRowResponse {
 		out.InheritedFrom = e.InheritedFrom.String()
 	}
 
-	// No sign-in and no token use is recorded yet (ADR 53): a principal row
-	// says so, and a group row carries neither field.
-	untracked := false
-	if row.Grant.Subject.Kind == access.SubjectPrincipal || row.Via != nil {
-		out.LastAccessTracked = &untracked
+	// A row of a principal is tracked: a grant to a principal, or a row
+	// read through a group, for the member. LastAccessAtMs is the latest
+	// use of an access token of the principal, left out when no token was
+	// ever used. A group row with no Via and a bootstrap token row carry
+	// neither field.
+	if row.LastAccessTracked {
+		tracked := true
+		out.LastAccessTracked = &tracked
+		out.LastAccessAtMs = millisOf(row.LastAccessAt)
 	}
 
 	if v := row.Via; v != nil {

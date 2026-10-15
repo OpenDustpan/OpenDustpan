@@ -162,7 +162,7 @@ func mustPrincipal(t *testing.T, s Store, id, subject string, kind principal.Kin
 		DisplayName: "Name of " + subject,
 		Kind:        kind,
 		Source:      principal.SourceLocal,
-		GroupCount:  0,
+		Namespace:   "", GroupCount: 0,
 	}
 
 	e := entry("tok-x")
@@ -879,7 +879,7 @@ func mustPrincipalAt(t *testing.T, s Store, id string, kind principal.Kind, crea
 
 	p := principal.Principal{
 		CreatedAt: created, UpdatedAt: created, DisabledAt: time.Time{}, ID: id, Subject: id,
-		DisplayName: "Name of " + id, Kind: kind, Source: principal.SourceLocal, GroupCount: 0,
+		DisplayName: "Name of " + id, Kind: kind, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 	}
 
 	e := entryAt("tok-x", created)

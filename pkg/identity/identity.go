@@ -161,8 +161,12 @@ const (
 	// whole installation: every grant (ADR 52, decision 10). Its object is
 	// ServerObject.
 	ActionServerReadAccess Action = "server:read-access"
+	// ActionNamespaceManagePrincipals allows creating, changing and
+	// deleting the service principals of a namespace. Its object is a
+	// namespace. Reading them needs ActionNamespaceReadAccess.
+	ActionNamespaceManagePrincipals Action = "namespace:manage-principals"
 	// ActionNamespaceReadAccess allows reading the access-review export of a
-	// namespace. Its object is a namespace.
+	// namespace, and its principals. Its object is a namespace.
 	ActionNamespaceReadAccess Action = "namespace:read-access"
 	// ActionCollectionReadAccess allows reading the access-review export of
 	// a collection. Its object is a collection.
@@ -226,6 +230,11 @@ const (
 	// policy and running the inactivity disable (ADR 53, decisions 2, 4 and
 	// 6). Its object is ServerObject.
 	ActionServerManageTokenPolicy Action = "server:manage-token-policy"
+	// ActionServerManageSignIn allows changing the sign-in settings of the
+	// installation: the session policy, and later the sign-in methods, SCIM
+	// and MFA. Its object is ServerObject. Of the built-in roles, only the
+	// site administrator holds it.
+	ActionServerManageSignIn Action = "server:manage-sign-in"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

@@ -87,6 +87,22 @@ persons and services.
   its holder already made.** Those tokens act as the service principal
   until they expire. After such a revoke, rotate or revoke the tokens of
   the principal.
+- **A namespace can have its own service principals.** A holder of
+  `namespace:manage-principals` on the namespace makes them, and
+  `namespace:read-access` reads them. A principal of a namespace can only
+  hold grants on its namespace or on an object inside it: the server
+  refuses any other grant with 400, and checks it again in the transaction
+  of the grant. It cannot be a member of a group. The server does not make
+  tokens for it yet.
+- **Only a site administrator can change the sign-in settings.** The
+  action `server:manage-sign-in` changes the session policy with
+  `PATCH /api/server/session-policy`: the idle limit (15 minutes by
+  default) and the maximum length (12 hours by default) of a console
+  session. Of the built-in roles, only `site-administrator` holds it.
+  `account-administrator` does not, so the tenant side of a hosted
+  installation cannot change the sign-in settings of the whole
+  installation. No sign-in method issues a session yet, so the policy has
+  no effect until one is available.
 
 ## Pulumi secrets
 

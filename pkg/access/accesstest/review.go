@@ -32,6 +32,7 @@ func reviewCases() []struct {
 		{name: "review history keeps a container grant with any custom role", test: testReviewCustomRoles},
 		{name: "review counts only when asked", test: testReviewCount},
 		{name: "review units reads live and deleted units", test: testReviewUnits},
+		{name: "review last access reads the latest use of each principal", test: testLastAccess},
 		{name: "caller grants read the current grants of a principal and its groups", test: testCallerGrants},
 	}
 }
@@ -329,7 +330,7 @@ func seedMemberships(t *testing.T, ps principal.Store) {
 
 	prn := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 	}
 	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
 		t.Fatalf("create principal: %v", err)
