@@ -56,13 +56,13 @@ type builtBlob struct {
 	prev *Checkpoint
 }
 
-// buildJournalCheckpoint replays the stored batches of the update on its
+// buildJournalCheckpoint replays the given batches of the update on its
 // base checkpoint and returns the checkpoint that results, without storing
 // it. It holds the batches and the built deployment in memory; a later
 // streaming build replaces this function without changing its callers. It
 // returns ErrMissingDependency without a replayer or a journal writer.
 func (s *Updates) buildJournalCheckpoint(
-	ctx context.Context, ref Ref, u Update, stackID ID,
+	ctx context.Context, ref Ref, u Update, batches [][]byte,
 ) (Checkpoint, error) {
 	var zero Checkpoint
 
@@ -73,11 +73,6 @@ func (s *Updates) buildJournalCheckpoint(
 	base, err := s.journalBase(ctx, ref, u)
 	if err != nil {
 		return zero, err
-	}
-
-	batches, err := s.journal.Batches(ctx, stackID, u.ID)
-	if err != nil {
-		return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, err)
 	}
 
 	combined, err := combineBatches(batches)
@@ -362,7 +357,7 @@ func (s *Updates) buildBeforeEnd(ctx context.Context, ref Ref, id UpdateID, u Up
 		return nil
 	}
 
-	built, err := s.buildJournalCheckpoint(ctx, ref, u, st.ID)
+	built, err := s.buildJournalCheckpoint(ctx, ref, u, batches)
 	if err != nil {
 		return err
 	}
@@ -439,7 +434,7 @@ func (s *Updates) journaledUpdate(ctx context.Context, ref Ref, u Update) (Check
 		return zero, false, nil
 	}
 
-	built, err := s.buildJournalCheckpoint(ctx, ref, u, st.ID)
+	built, err := s.buildJournalCheckpoint(ctx, ref, u, batches)
 	if err != nil {
 		return zero, false, err
 	}

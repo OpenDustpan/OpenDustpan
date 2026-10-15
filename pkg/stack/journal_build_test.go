@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
+	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -632,6 +633,111 @@ func TestJournalBuildFailureKeepsEntries(t *testing.T) {
 
 	if _, err := f.store.CheckpointByUpdate(t.Context(), f.ref, s.Update.ID); !errors.Is(err, stack.ErrNoState) {
 		t.Fatalf("checkpoint after failed build: err = %v, want ErrNoState", err)
+	}
+}
+
+// TestJournalBuildForeignTokenKeepsEntries checks that completing a journaled
+// update with a token that never held its lease is refused with
+// ErrLeaseInvalid before any build: the journal stays and no checkpoint is
+// stored, and a later completion with the lease token still succeeds.
+func TestJournalBuildForeignTokenKeepsEntries(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	f := newBuildFixture(t, clk, pulumijournal.NewReplayer(clk.Now, ""))
+
+	s := f.startJournaled(t)
+
+	foreign, err := token.New()
+	if err != nil {
+		t.Fatalf("new token: %v", err)
+	}
+
+	if _, err = f.svc.Complete(t.Context(), f.ref, s.Update.ID, foreign, stack.StatusSucceeded); !errors.Is(
+		err,
+		stack.ErrLeaseInvalid,
+	) {
+		t.Fatalf("complete with a foreign token: err = %v, want ErrLeaseInvalid", err)
+	}
+
+	u, err := f.svc.Get(t.Context(), f.ref, s.Update.ID)
+	if err != nil {
+		t.Fatalf("get update after refused complete: %v", err)
+	}
+
+	if u.Status != stack.StatusRunning {
+		t.Fatalf("update status = %q, want running", u.Status)
+	}
+
+	if keys := f.journalKeys(t, s.Update.ID); len(keys) != 2 {
+		t.Fatalf("journal keys after refused complete = %v, want the two batches", keys)
+	}
+
+	if _, err = f.store.CheckpointByUpdate(t.Context(), f.ref, s.Update.ID); !errors.Is(err, stack.ErrNoState) {
+		t.Fatalf("checkpoint after refused complete: err = %v, want ErrNoState", err)
+	}
+
+	if _, err = f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete with the lease token: %v", err)
+	}
+
+	cp, err := f.svc.Export(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("export after complete: %v", err)
+	}
+
+	if want := f.replay(t); !bytes.Equal(cp.Deployment, want) {
+		t.Fatalf("export after complete = %s, want replay %s", cp.Deployment, want)
+	}
+}
+
+// TestJournalBuildRunningStatusKeepsEntries checks that completing a journaled
+// update with a status that is not terminal is refused with ErrInvalidUpdate
+// before any build: the journal stays and no checkpoint is stored, and a
+// later completion with a terminal status still succeeds.
+func TestJournalBuildRunningStatusKeepsEntries(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	f := newBuildFixture(t, clk, pulumijournal.NewReplayer(clk.Now, ""))
+
+	s := f.startJournaled(t)
+
+	if _, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusRunning); !errors.Is(
+		err,
+		stack.ErrInvalidUpdate,
+	) {
+		t.Fatalf("complete with a running status: err = %v, want ErrInvalidUpdate", err)
+	}
+
+	u, err := f.svc.Get(t.Context(), f.ref, s.Update.ID)
+	if err != nil {
+		t.Fatalf("get update after refused complete: %v", err)
+	}
+
+	if u.Status != stack.StatusRunning {
+		t.Fatalf("update status = %q, want running", u.Status)
+	}
+
+	if keys := f.journalKeys(t, s.Update.ID); len(keys) != 2 {
+		t.Fatalf("journal keys after refused complete = %v, want the two batches", keys)
+	}
+
+	if _, err = f.store.CheckpointByUpdate(t.Context(), f.ref, s.Update.ID); !errors.Is(err, stack.ErrNoState) {
+		t.Fatalf("checkpoint after refused complete: err = %v, want ErrNoState", err)
+	}
+
+	if _, err = f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded); err != nil {
+		t.Fatalf("complete with a terminal status: %v", err)
+	}
+
+	cp, err := f.svc.Export(t.Context(), f.ref)
+	if err != nil {
+		t.Fatalf("export after complete: %v", err)
+	}
+
+	if want := f.replay(t); !bytes.Equal(cp.Deployment, want) {
+		t.Fatalf("export after complete = %s, want replay %s", cp.Deployment, want)
 	}
 }
 

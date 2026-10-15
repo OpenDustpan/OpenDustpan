@@ -1589,13 +1589,23 @@ func gunzipBytes(gave []byte, limit int) ([]byte, error) {
 
 // completeJournaled ends the update with the status its client reports,
 // building the checkpoint of a journaled update first. A missing update
-// fails here, like the transition would.
+// fails here, like the transition would. The lease token and the requested
+// status are checked before the build, with the same checks the completion
+// uses, so a refused completion keeps the journal and stores no checkpoint.
 func (s *Updates) completeJournaled(
 	ctx context.Context, ref Ref, id UpdateID, tok token.Token, status UpdateStatus,
 ) (Update, error) {
+	if _, err := s.fence(ctx, ref); err != nil {
+		return Update{}, err
+	}
+
 	u, err := s.leaseGet(ctx, ref, id)
 	if err != nil {
 		return Update{}, err
+	}
+
+	if _, err := u.complete(tok, s.clock(), status); err != nil {
+		return Update{}, fmt.Errorf("update %s of %s: %w", id, ref, err)
 	}
 
 	if err := s.buildBeforeEnd(ctx, ref, id, u); err != nil {
