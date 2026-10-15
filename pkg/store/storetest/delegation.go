@@ -52,6 +52,8 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 		{name: "a grant on a principal takes a service principal and principal actions", test: testPrincipalGrantRules},
 		{name: "an account administrator cannot act as a site administrator", test: testNoPersonalEscalation},
 		{name: "the audit entry of a grant names the token managers", test: testGrantNamesTokenManagers},
+		{name: "the audit entry of a group grant names the token managers of its service principals", test: testGroupGrantNamesTokenManagers},
+		{name: "the audit entry of a membership add names the token managers", test: testMembershipNamesTokenManagers},
 		{name: "the export of a principal lists its token managers", test: testPrincipalExport},
 		{name: "a delete of a principal ends the grants on it", test: testDeleteEndsPrincipalGrants},
 		{name: "a principal of a namespace holds grants inside it only", test: testNamespacePrincipalGrants},
@@ -96,7 +98,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	}
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: svc, Namespaces: st, Now: nil, NewID: nil},
+		principal.Config{Store: st, Guard: svc, Namespaces: st, Tokens: svc, Now: nil, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -481,6 +483,14 @@ func testGrantNamesTokenManagers(t *testing.T, d *delegation) {
 func (d *delegation) tokenManagersOf(t *testing.T, ns namespace.Name, object string) string {
 	t.Helper()
 
+	return d.changeOf(t, ns, object, "tokenManagers")
+}
+
+// changeOf returns the new value of the change key of the audit entry of
+// object in ns, or the empty string when it has none.
+func (d *delegation) changeOf(t *testing.T, ns namespace.Name, object, key string) string {
+	t.Helper()
+
 	listing, err := d.st.List(t.Context(), ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
 	if err != nil {
 		t.Fatalf("list audit: %v", err)
@@ -492,12 +502,134 @@ func (d *delegation) tokenManagersOf(t *testing.T, ns namespace.Name, object str
 	}
 
 	for _, c := range listing.Entries[i].Changes {
-		if c.Key == "tokenManagers" {
+		if c.Key == key {
 			return c.New
 		}
 	}
 
 	return ""
+}
+
+// groupOf stores a group with the name and returns it.
+func (d *delegation) groupOf(t *testing.T, name string) principal.Group {
+	t.Helper()
+
+	g, err := d.principals.CreateGroup(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageGroups),
+		principal.GroupInput{Name: name, Description: ""})
+	if err != nil {
+		t.Fatalf("create group %q: %v", name, err)
+	}
+
+	return g
+}
+
+// addMemberOf puts the principal p in the group g for the bootstrap admin.
+func (d *delegation) addMemberOf(t *testing.T, g principal.Group, p principal.Principal) {
+	t.Helper()
+
+	_, err := d.principals.AddMember(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageGroups),
+		bootstrap(), g.ID, p.ID)
+	if err != nil {
+		t.Fatalf("add %q to group %q: %v", p.Subject, g.Name, err)
+	}
+}
+
+// grantToGroup gives role on obj to the group g for the bootstrap admin.
+func (d *delegation) grantToGroup(
+	t *testing.T, g principal.Group, role string, obj identity.Object,
+) access.Grant {
+	t.Helper()
+
+	granted, err := d.access.Grant(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageAccess),
+		bootstrap(), access.GrantInput{
+			Object: obj, Role: role, Subject: access.Subject{Kind: access.SubjectGroup, ID: g.ID},
+		})
+	if err != nil {
+		t.Fatalf("grant %s on %q to group %q: %v", role, obj.String(), g.Name, err)
+	}
+
+	return granted
+}
+
+// testGroupGrantNamesTokenManagers proves that the audit entry of a grant
+// to a group names, in one change "tokenManagers.<principal ID>" per
+// service principal member, the holders of principal:manage-tokens on it,
+// and names nothing for a person member.
+func testGroupGrantNamesTokenManagers(t *testing.T, d *delegation) {
+	t.Helper()
+
+	ops := d.principalOf(t, "ops@example.com", principal.KindPerson)
+	admin := d.principalOf(t, "root@example.com", principal.KindPerson)
+	deploy := d.principalOf(t, "ci-deploy", principal.KindService)
+	alice := d.principalOf(t, "alice@example.com", principal.KindPerson)
+
+	d.mustGrant(t, bootstrap(), ops, access.RoleTokenManager, identity.PrincipalObject(deploy.ID))
+	d.mustGrant(t, bootstrap(), admin, access.RoleAccountAdministrator, identity.ServerObject())
+
+	holders := []string{"admin", "principal:" + admin.ID, "principal:" + ops.ID}
+	slices.Sort(holders)
+
+	want := strings.Join(holders, ", ")
+
+	mixed := d.groupOf(t, "deployers")
+	d.addMemberOf(t, mixed, deploy)
+	d.addMemberOf(t, mixed, alice)
+
+	g := d.grantToGroup(t, mixed, access.RoleViewer, identity.NamespaceObject("acme"))
+
+	if got := d.changeOf(t, "acme", access.GrantRef(g), "tokenManagers."+deploy.ID); got != want {
+		t.Fatalf("token managers of %q = %q, want %q", deploy.ID, got, want)
+	}
+
+	if got := d.changeOf(t, "acme", access.GrantRef(g), "tokenManagers."+alice.ID); got != "" {
+		t.Fatalf("a person member names token managers %q", got)
+	}
+
+	if got := d.tokenManagersOf(t, "acme", access.GrantRef(g)); got != "" {
+		t.Fatalf("a group grant names flat token managers %q", got)
+	}
+
+	persons := d.groupOf(t, "readers")
+	d.addMemberOf(t, persons, alice)
+
+	h := d.grantToGroup(t, persons, access.RoleViewer, identity.NamespaceObject("acme"))
+
+	if got := d.changeOf(t, "acme", access.GrantRef(h), "tokenManagers."+alice.ID); got != "" {
+		t.Fatalf("a group of persons names token managers %q", got)
+	}
+}
+
+// testMembershipNamesTokenManagers proves that the audit entry of a
+// membership add of a service principal names the holders of
+// principal:manage-tokens on it, and that the entry of a person names
+// none.
+func testMembershipNamesTokenManagers(t *testing.T, d *delegation) {
+	t.Helper()
+
+	ops := d.principalOf(t, "ops@example.com", principal.KindPerson)
+	admin := d.principalOf(t, "root@example.com", principal.KindPerson)
+	deploy := d.principalOf(t, "ci-deploy", principal.KindService)
+	alice := d.principalOf(t, "alice@example.com", principal.KindPerson)
+
+	d.mustGrant(t, bootstrap(), ops, access.RoleTokenManager, identity.PrincipalObject(deploy.ID))
+	d.mustGrant(t, bootstrap(), admin, access.RoleAccountAdministrator, identity.ServerObject())
+
+	holders := []string{"admin", "principal:" + admin.ID, "principal:" + ops.ID}
+	slices.Sort(holders)
+
+	want := strings.Join(holders, ", ")
+
+	group := d.groupOf(t, "deployers")
+	d.addMemberOf(t, group, deploy)
+	d.addMemberOf(t, group, alice)
+
+	if got := d.changeOf(t, audit.ServerScope, principal.MemberRef(group.ID, deploy.ID), "tokenManagers"); got != want {
+		t.Fatalf("token managers of %q = %q, want %q", deploy.ID, got, want)
+	}
+
+	if got := d.changeOf(t, audit.ServerScope, principal.MemberRef(group.ID, alice.ID), "tokenManagers"); got != "" {
+		t.Fatalf("a person member names token managers %q", got)
+	}
 }
 
 // testPrincipalExport proves that the export of a service principal lists

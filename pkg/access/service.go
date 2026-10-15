@@ -39,7 +39,8 @@ const (
 )
 
 // Directory is what the service reads of the principals and groups, to check
-// the subject of a grant. principal.Store meets it.
+// the subject of a grant and to list the service principals in a group for
+// the audit entry of a grant to the group. principal.Store meets it.
 type Directory interface {
 	// GetPrincipal returns the principal with the ID id, or
 	// principal.ErrNotFound.
@@ -49,6 +50,9 @@ type Directory interface {
 	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
 	// GetGroup returns the group with the ID id, or principal.ErrNotFound.
 	GetGroup(ctx context.Context, id string) (principal.Group, error)
+	// ListMembers returns the members of the group groupID, ordered by
+	// subject, or principal.ErrNotFound when the group does not exist.
+	ListMembers(ctx context.Context, groupID string, q principal.Query) ([]principal.Member, int64, error)
 }
 
 // Namespaces is what the service reads of the namespaces: one namespace, so
@@ -317,7 +321,9 @@ type GrantInput struct {
 // The audit entry of a grant to a service principal names, in the change
 // "tokenManagers", every holder of principal:manage-tokens on that
 // principal: each of them can act as the principal, with the new grant
-// too.
+// too. The audit entry of a grant to a group names the same list for each
+// service principal that is a member of the group, in one change
+// "tokenManagers.<principal ID>" per principal.
 func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Principal, in GrantInput) (Grant, error) {
 	role, err := s.GetRole(ctx, in.Role)
 	if err != nil {
@@ -823,33 +829,95 @@ func (s *Service) checkDelegationGranter(ctx context.Context, granter identity.P
 	return err
 }
 
+// ServicePrincipalsOfGroup returns the sorted IDs of the service
+// principals that are members of the group groupID. It returns
+// principal.ErrNotFound when the group does not exist.
+func (s *Service) ServicePrincipalsOfGroup(ctx context.Context, groupID string) ([]string, error) {
+	var out []string
+
+	after := ""
+
+	for {
+		members, _, err := s.directory.ListMembers(
+			ctx,
+			groupID,
+			principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("list members of group %q: %w", groupID, err)
+		}
+
+		for i := range members {
+			if members[i].Principal.Kind == principal.KindService {
+				out = append(out, members[i].Principal.ID)
+			}
+		}
+
+		if len(members) < principal.MaxLimit {
+			break
+		}
+
+		after = members[len(members)-1].Principal.Subject
+	}
+
+	slices.Sort(out)
+
+	return out, nil
+}
+
 // withTokenManagers returns e with the change "tokenManagers" when subject
 // is a service principal: the sorted holders of principal:manage-tokens on
-// it. It returns e as it is for any other subject.
+// it. When subject is a group, it returns e with one change
+// "tokenManagers.<principal ID>" for each service principal that is a
+// member of the group, with the same value format. It returns e as it is
+// for any other subject.
 func (s *Service) withTokenManagers(ctx context.Context, e audit.Entry, subject Subject) (audit.Entry, error) {
-	if subject.Kind != SubjectPrincipal {
+	switch subject.Kind {
+	case SubjectPrincipal:
+		p, err := s.directory.GetPrincipal(ctx, subject.ID)
+		if err != nil {
+			return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
+		}
+
+		if p.Kind != principal.KindService {
+			return e, nil
+		}
+
+		holders, err := s.TokenManagers(ctx, p.ID)
+		if err != nil {
+			return e, err
+		}
+
+		e.Changes = append(slices.Clone(e.Changes), audit.Change{
+			Key: "tokenManagers", Old: nil, New: strings.Join(holders, ", "), Layer: "", TakesEffect: "",
+		})
+
+		return e, nil
+	case SubjectGroup:
+		ids, err := s.ServicePrincipalsOfGroup(ctx, subject.ID)
+		if err != nil {
+			return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
+		}
+
+		for _, id := range ids {
+			holders, err := s.TokenManagers(ctx, id)
+			if err != nil {
+				return e, err
+			}
+
+			e.Changes = append(slices.Clone(e.Changes), audit.Change{
+				Key:         "tokenManagers." + id,
+				Old:         nil,
+				New:         strings.Join(holders, ", "),
+				Layer:       "",
+				TakesEffect: "",
+			})
+		}
+
+		return e, nil
+	default:
 		return e, nil
 	}
-
-	p, err := s.directory.GetPrincipal(ctx, subject.ID)
-	if err != nil {
-		return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
-	}
-
-	if p.Kind != principal.KindService {
-		return e, nil
-	}
-
-	holders, err := s.TokenManagers(ctx, p.ID)
-	if err != nil {
-		return e, err
-	}
-
-	e.Changes = append(slices.Clone(e.Changes), audit.Change{
-		Key: "tokenManagers", Old: nil, New: strings.Join(holders, ", "), Layer: "", TakesEffect: "",
-	})
-
-	return e, nil
 }
 
 // fenceOf returns the fence of the namespace of obj, or the zero fence for

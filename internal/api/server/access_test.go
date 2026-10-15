@@ -132,7 +132,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 	}
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: grants, Namespaces: st, Now: nil, NewID: nil},
+		principal.Config{Store: st, Guard: grants, Namespaces: st, Tokens: grants, Now: nil, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
