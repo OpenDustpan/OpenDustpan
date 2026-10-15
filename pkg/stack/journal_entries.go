@@ -180,6 +180,29 @@ func (j *JournalEntries) RemoveBlobs(ctx context.Context, keys []blob.Key) error
 	return errors.Join(errs...)
 }
 
+// Batches returns the bodies of the stored batches of the update, in arrival
+// order, for the replay. It holds every body in memory; a later streaming
+// build reads them without holding them all.
+func (j *JournalEntries) Batches(ctx context.Context, stackID ID, update UpdateID) ([][]byte, error) {
+	keys, err := j.rows.JournalKeys(ctx, stackID, update)
+	if err != nil {
+		return nil, fmt.Errorf("read journal keys: %w", err)
+	}
+
+	out := make([][]byte, 0, len(keys))
+
+	for _, key := range keys {
+		body, err := j.batchBody(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, body)
+	}
+
+	return out, nil
+}
+
 // SweepUpdate deletes the journal blobs of one update that no row names and that are
 // older than the grace period at now: batches whose row never committed, and blobs
 // that a finished build left behind. It runs only when the store reports the journal
@@ -398,4 +421,25 @@ func lowest(seqs []int64) int64 {
 // journalKey returns the blob key of a batch (ADR 43, decision 6.1).
 func journalKey(stackID ID, update UpdateID, low int64) blob.Key {
 	return blob.Key(fmt.Sprintf("pulumi/%s/%s/journal/%d", stackID, update, low))
+}
+
+// batchBody reads the batch stored under key.
+func (j *JournalEntries) batchBody(ctx context.Context, key blob.Key) ([]byte, error) {
+	r, err := j.blobs.Get(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("read journal batch: %w", err)
+	}
+
+	body, readErr := io.ReadAll(r)
+	closeErr := r.Close()
+
+	if readErr != nil {
+		return nil, errors.Join(readErr, closeErr)
+	}
+
+	if closeErr != nil {
+		return nil, fmt.Errorf("close journal batch: %w", closeErr)
+	}
+
+	return body, nil
 }

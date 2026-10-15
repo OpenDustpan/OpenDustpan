@@ -54,6 +54,7 @@ import (
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -951,6 +952,17 @@ func newWorkspaceService(
 	return workspaces, nil
 }
 
+// clockOf returns the clock of the server settings, defaulting to time.Now
+// like the update service does. The journal replayer stamps the manifest of
+// each checkpoint it builds with it.
+func clockOf(cfg *settings) func() time.Time {
+	if cfg.now != nil {
+		return cfg.now
+	}
+
+	return time.Now
+}
+
 // newUpdateService builds the update service. A nil token service leaves the
 // token checker nil, so the service fails closed for any update that an
 // access token started.
@@ -974,6 +986,7 @@ func newUpdateService(
 		Logger:             cfg.logger,
 		MaxCheckpointBytes: cfg.maxCheckpointBytes,
 		Journal:            journal,
+		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)

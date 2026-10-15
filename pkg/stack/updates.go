@@ -153,6 +153,11 @@ type UpdatesConfig struct {
 	// journal version above 0. Nil refuses every batch, so the server answers
 	// the same as it does for an update without journaling.
 	Journal *JournalEntries
+	// Replayer builds the checkpoint of a journaled update from its base
+	// checkpoint and its stored batches. Nil fails every journaled build
+	// with ErrMissingDependency, so an update without a replayer never
+	// ends with a built checkpoint.
+	Replayer JournalReplayer
 }
 
 // Updates implements the update cycle of the Pulumi CLI: create and start an
@@ -171,6 +176,7 @@ type Updates struct {
 	now            func() time.Time
 	maxCheckpoints int
 	journal        *JournalEntries
+	replayer       JournalReplayer
 }
 
 // TokenChecker answers whether an access token still works. It is the port of
@@ -210,6 +216,7 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		now:            cfg.Now,
 		maxCheckpoints: cfg.MaxCheckpointBytes,
 		journal:        cfg.Journal,
+		replayer:       cfg.Replayer,
 	}
 
 	if s.now == nil {
@@ -337,21 +344,22 @@ func (s *Updates) Renew(ctx context.Context, ref Ref, id UpdateID, tok token.Tok
 	})
 }
 
-// Complete ends the update with the status its client reports.
+// Complete ends the update with the status its client reports. A journaled
+// update builds and stores its checkpoint first, so the update ends with
+// state like any other update. A failed build keeps the journal and ends
+// nothing.
 func (s *Updates) Complete(
 	ctx context.Context, ref Ref, id UpdateID, tok token.Token, status UpdateStatus,
 ) (Update, error) {
-	return s.leaseTransition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
-		return u.complete(tok, now, status)
-	})
+	return s.completeJournaled(ctx, ref, id, tok, status)
 }
 
 // Cancel ends the update without its lease, as `pulumi cancel` does. It is the
-// only way to release a stack whose client vanished.
+// only way to release a stack whose client vanished. A journaled update
+// builds and stores its checkpoint first, with unfinished operations as
+// pending operations. A failed build keeps the journal and ends nothing.
 func (s *Updates) Cancel(ctx context.Context, ref Ref, id UpdateID) (Update, error) {
-	return s.transition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
-		return u.cancel(now)
-	})
+	return s.cancelJournaled(ctx, ref, id)
 }
 
 // sweepGracePeriod is how long after its write a checkpoint blob stays before
@@ -634,14 +642,22 @@ func (s *Updates) Restore(ctx context.Context, ref Ref, version int64, subject s
 	return done, errors.Join(saveErr, err)
 }
 
-// Export returns the stack's latest checkpoint, or ErrNoState. A sequenced
-// save keeps the versioned bytes the CLI sent, so the export serves the
+// Export returns the stack's latest checkpoint, or ErrNoState. While a
+// journaled update runs, it returns the checkpoint built from its stored
+// batches, without storing it.
+// A sequenced save keeps the versioned bytes the CLI sent, so the export serves the
 // inner deployment they wrap, while the digest still names the stored row.
 // A checkpoint whose blob cannot be read fails with ErrCheckpointUnavailable
 // and one whose bytes do not match its record with ErrCheckpointMismatch;
 // both still return the stored row identity (Update and Digest) with no
 // deployment, so the caller can name the checkpoint it could not read.
 func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
+	if built, ok, err := s.journaledState(ctx, ref); err != nil {
+		return Checkpoint{}, err
+	} else if ok {
+		return built, nil
+	}
+
 	cp, err := s.checkpoints.LatestCheckpoint(ctx, ref)
 	if err != nil {
 		return Checkpoint{}, fmt.Errorf("export %s: %w", ref, err)
@@ -657,10 +673,19 @@ func (s *Updates) Export(ctx context.Context, ref Ref) (Checkpoint, error) {
 
 // ExportVersion returns the checkpoint of the stack's update with the given
 // version, or ErrNoState when no such update exists or it has no checkpoint.
-// It never falls back to an older version. A sequenced save keeps the
+// It never falls back to an older version. While a journaled update runs, a
+// read of its version returns the checkpoint built from its stored batches,
+// without storing it.
+// A sequenced save keeps the
 // versioned bytes the CLI sent, so the export serves the inner deployment
 // they wrap.
 func (s *Updates) ExportVersion(ctx context.Context, ref Ref, version int64) (Checkpoint, error) {
+	if built, ok, err := s.journaledVersion(ctx, ref, version); err != nil {
+		return Checkpoint{}, err
+	} else if ok {
+		return built, nil
+	}
+
 	cp, err := s.checkpoints.CheckpointByVersion(ctx, ref, version)
 	if err != nil {
 		return Checkpoint{}, fmt.Errorf("export %s version %d: %w", ref, version, err)
@@ -1560,4 +1585,42 @@ func gunzipBytes(gave []byte, limit int) ([]byte, error) {
 	}
 
 	return deployment, nil
+}
+
+// completeJournaled ends the update with the status its client reports,
+// building the checkpoint of a journaled update first. A missing update
+// fails here, like the transition would.
+func (s *Updates) completeJournaled(
+	ctx context.Context, ref Ref, id UpdateID, tok token.Token, status UpdateStatus,
+) (Update, error) {
+	u, err := s.leaseGet(ctx, ref, id)
+	if err != nil {
+		return Update{}, err
+	}
+
+	if err := s.buildBeforeEnd(ctx, ref, id, u); err != nil {
+		return Update{}, err
+	}
+
+	return s.leaseTransition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
+		return u.complete(tok, now, status)
+	})
+}
+
+// cancelJournaled ends the update without its lease, building the checkpoint
+// of a journaled update first. A missing update fails here, like the
+// transition would.
+func (s *Updates) cancelJournaled(ctx context.Context, ref Ref, id UpdateID) (Update, error) {
+	u, err := s.Get(ctx, ref, id)
+	if err != nil {
+		return Update{}, err
+	}
+
+	if err := s.buildBeforeEnd(ctx, ref, id, u); err != nil {
+		return Update{}, err
+	}
+
+	return s.transition(ctx, ref, id, func(u Update, now time.Time) (Update, error) {
+		return u.cancel(now)
+	})
 }
