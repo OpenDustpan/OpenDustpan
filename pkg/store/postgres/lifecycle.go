@@ -96,6 +96,12 @@ func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, id stack
 		return stack.ErrNotFound
 	}
 
+	// The foreign key keeps every membership on a collection that exists, so
+	// this removes nothing that the schema allows. It is defense only.
+	if err = q.DeleteMissingCollectionMembership(ctx, id.String()); err != nil {
+		return fmt.Errorf("check collection membership: %w", err)
+	}
+
 	delParams := db.DeleteDeletedInventoryParams{Tool: inventoryTool, UnitID: id.String()}
 	if _, err = q.DeleteDeletedInventory(ctx, delParams); err != nil {
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
@@ -249,6 +255,12 @@ func restoreWorkspaceRow(
 		return workspace.ErrNotFound
 	}
 
+	// The foreign key keeps every membership on a collection that exists, so
+	// this removes nothing that the schema allows. It is defense only.
+	if err = q.DeleteMissingCollectionMembership(ctx, id.String()); err != nil {
+		return fmt.Errorf("check collection membership: %w", err)
+	}
+
 	delParams := db.DeleteDeletedInventoryParams{Tool: inventoryToolOpenTofu, UnitID: id.String()}
 	if _, err = q.DeleteDeletedInventory(ctx, delParams); err != nil {
 		return fmt.Errorf("delete deleted inventory entry: %w", err)
@@ -396,6 +408,10 @@ func (s *Store) purgeUnit(
 
 		if err := rows(q); err != nil {
 			return err
+		}
+
+		if err := q.DeleteCollectionMembersOfUnit(ctx, u.id); err != nil {
+			return fmt.Errorf("delete collection membership: %w", err)
 		}
 
 		err := q.InsertBlobPurge(ctx, db.InsertBlobPurgeParams{

@@ -233,7 +233,8 @@ func BenchmarkIPAllowlistAuthorize1000Stacks(b *testing.B) {
 	b.ResetTimer()
 
 	for b.Loop() {
-		for _, obj := range objs {
+		for i := range objs {
+			obj := objs[i]
 			if authErr := gate.Authorize(addrCtx, principal, identity.ActionUnitRead, obj); authErr != nil {
 				b.Fatalf("Authorize inside the list = %v, want nil", authErr)
 			}

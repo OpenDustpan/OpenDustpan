@@ -494,6 +494,27 @@ func (q *Queries) CountGroupsOfPrincipal(ctx context.Context, arg CountGroupsOfP
 	return count, err
 }
 
+const countLiveCollectionMembers = `-- name: CountLiveCollectionMembers :one
+SELECT COUNT(*)
+FROM collection_members AS m
+JOIN inventory AS i ON i.unit_id = m.unit_id
+WHERE m.namespace = ? AND m.collection_key = ?
+`
+
+type CountLiveCollectionMembersParams struct {
+	Namespace     string
+	CollectionKey string
+}
+
+// Counts the units of a collection that the inventory still holds. A unit that
+// was deleted has left the inventory, and its membership does not count.
+func (q *Queries) CountLiveCollectionMembers(ctx context.Context, arg CountLiveCollectionMembersParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLiveCollectionMembers, arg.Namespace, arg.CollectionKey)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLivePrincipal = `-- name: CountLivePrincipal :one
 SELECT COUNT(*) FROM principals WHERE id = ? AND deleted_at_ms IS NULL
 `
@@ -699,6 +720,36 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int
 		arg.EndedAtMs,
 		arg.Target,
 		arg.Error,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const createCollection = `-- name: CreateCollection :execrows
+INSERT INTO collections (id, namespace, name_key, name, created_at_ms)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (namespace, name_key) DO NOTHING
+`
+
+type CreateCollectionParams struct {
+	ID          string
+	Namespace   string
+	NameKey     string
+	Name        string
+	CreatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A row that exists
+// under the same key (the name in lower case) is not written.
+func (q *Queries) CreateCollection(ctx context.Context, arg CreateCollectionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createCollection,
+		arg.ID,
+		arg.Namespace,
+		arg.NameKey,
+		arg.Name,
+		arg.CreatedAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -1170,6 +1221,53 @@ func (q *Queries) DeleteCheckpointsOfStack(ctx context.Context, stackID string) 
 	return err
 }
 
+const deleteCollection = `-- name: DeleteCollection :execrows
+DELETE FROM collections
+WHERE namespace = ? AND name_key = ?
+`
+
+type DeleteCollectionParams struct {
+	Namespace string
+	NameKey   string
+}
+
+func (q *Queries) DeleteCollection(ctx context.Context, arg DeleteCollectionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteCollection, arg.Namespace, arg.NameKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteCollectionMembers = `-- name: DeleteCollectionMembers :exec
+DELETE FROM collection_members
+WHERE namespace = ? AND collection_key = ?
+`
+
+type DeleteCollectionMembersParams struct {
+	Namespace     string
+	CollectionKey string
+}
+
+// Removes the memberships of a collection. The caller removes them only after
+// it found no live unit, so the rows that remain belong to deleted units.
+func (q *Queries) DeleteCollectionMembers(ctx context.Context, arg DeleteCollectionMembersParams) error {
+	_, err := q.db.ExecContext(ctx, deleteCollectionMembers, arg.Namespace, arg.CollectionKey)
+	return err
+}
+
+const deleteCollectionMembersOfUnit = `-- name: DeleteCollectionMembersOfUnit :exec
+DELETE FROM collection_members
+WHERE unit_id = ?
+`
+
+// Removes the membership of one unit. The purge of a unit calls it in the same
+// transaction as the purge of its rows (ADR 47, ADR 51).
+func (q *Queries) DeleteCollectionMembersOfUnit(ctx context.Context, unitID string) error {
+	_, err := q.db.ExecContext(ctx, deleteCollectionMembersOfUnit, unitID)
+	return err
+}
+
 const deleteDeletedInventory = `-- name: DeleteDeletedInventory :execrows
 DELETE FROM inventory_deleted
 WHERE tool = ? AND unit_id = ?
@@ -1279,6 +1377,22 @@ WHERE stack_id = ?
 
 func (q *Queries) DeleteJournalSequencesOfStack(ctx context.Context, stackID string) error {
 	_, err := q.db.ExecContext(ctx, deleteJournalSequencesOfStack, stackID)
+	return err
+}
+
+const deleteMissingCollectionMembership = `-- name: DeleteMissingCollectionMembership :exec
+DELETE FROM collection_members
+WHERE unit_id = ? AND NOT EXISTS (
+    SELECT 1
+    FROM collections AS c
+    WHERE c.namespace = collection_members.namespace AND c.name_key = collection_members.collection_key
+)
+`
+
+// Removes the membership of one unit when its collection no longer exists. A
+// restore calls it, so a restored unit never points at a missing collection.
+func (q *Queries) DeleteMissingCollectionMembership(ctx context.Context, unitID string) error {
+	_, err := q.db.ExecContext(ctx, deleteMissingCollectionMembership, unitID)
 	return err
 }
 
@@ -1908,6 +2022,36 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 	return i, err
 }
 
+const getCollection = `-- name: GetCollection :one
+SELECT id, namespace, name, created_at_ms
+FROM collections
+WHERE namespace = ? AND name_key = ?
+`
+
+type GetCollectionParams struct {
+	Namespace string
+	NameKey   string
+}
+
+type GetCollectionRow struct {
+	ID          string
+	Namespace   string
+	Name        string
+	CreatedAtMs int64
+}
+
+func (q *Queries) GetCollection(ctx context.Context, arg GetCollectionParams) (GetCollectionRow, error) {
+	row := q.db.QueryRowContext(ctx, getCollection, arg.Namespace, arg.NameKey)
+	var i GetCollectionRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Name,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
@@ -2117,6 +2261,27 @@ func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 	var state string
 	err := row.Scan(&state)
 	return state, err
+}
+
+const getInventoryUnit = `-- name: GetInventoryUnit :one
+SELECT unit_id
+FROM inventory
+WHERE namespace = ? AND tool = ? AND name = ?
+`
+
+type GetInventoryUnitParams struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+// The inventory row of one unit: its ID. The collection is read by a join on
+// the unit ID, not from the inventory.
+func (q *Queries) GetInventoryUnit(ctx context.Context, arg GetInventoryUnitParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getInventoryUnit, arg.Namespace, arg.Tool, arg.Name)
+	var unit_id string
+	err := row.Scan(&unit_id)
+	return unit_id, err
 }
 
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
@@ -2486,6 +2651,21 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 	return i, err
 }
 
+const getUnitCollection = `-- name: GetUnitCollection :one
+SELECT c.name
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?
+`
+
+// The collection of one unit by its ID, as written.
+func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getUnitCollection, unitID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
 const getUpdate = `-- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -2661,6 +2841,37 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.DeletedName,
 	)
 	return i, err
+}
+
+const grantIDsOnTarget = `-- name: GrantIDsOnTarget :many
+SELECT id FROM grants
+WHERE target = ? AND revoked_at_ms IS NULL
+ORDER BY id
+`
+
+// The IDs of the current grants on one target, in order. A deleted collection
+// revokes each of them, so that none outlives it.
+func (q *Queries) GrantIDsOnTarget(ctx context.Context, target string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, grantIDsOnTarget, target)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const grantsOfSubject = `-- name: GrantsOfSubject :many
@@ -3617,6 +3828,48 @@ func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([
 	return items, nil
 }
 
+const listCollections = `-- name: ListCollections :many
+SELECT id, namespace, name, created_at_ms
+FROM collections
+WHERE namespace = ?
+ORDER BY name_key
+`
+
+type ListCollectionsRow struct {
+	ID          string
+	Namespace   string
+	Name        string
+	CreatedAtMs int64
+}
+
+func (q *Queries) ListCollections(ctx context.Context, namespace string) ([]ListCollectionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCollections, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCollectionsRow
+	for rows.Next() {
+		var i ListCollectionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Name,
+			&i.CreatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeletedInventory = `-- name: ListDeletedInventory :many
 SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
 FROM inventory_deleted
@@ -4166,22 +4419,40 @@ func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPri
 }
 
 const listInventory = `-- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
-       lock_holder, lock_since_ms, lock_operation
-FROM inventory
-WHERE namespace = ?
-ORDER BY tool, name
+SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
+       i.lock_holder, i.lock_since_ms, i.lock_operation,
+       COALESCE(c.name, '') AS collection
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = ?
+ORDER BY i.tool, i.name
 `
 
-func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]Inventory, error) {
+type ListInventoryRow struct {
+	Namespace     string
+	Tool          string
+	Name          string
+	UnitID        string
+	DisplayName   string
+	LastChangedMs int64
+	Status        string
+	ResourceCount sql.NullInt64
+	LockHolder    sql.NullString
+	LockSinceMs   sql.NullInt64
+	LockOperation sql.NullString
+	Collection    string
+}
+
+func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListInventoryRow, error) {
 	rows, err := q.db.QueryContext(ctx, listInventory, namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Inventory
+	var items []ListInventoryRow
 	for rows.Next() {
-		var i Inventory
+		var i ListInventoryRow
 		if err := rows.Scan(
 			&i.Namespace,
 			&i.Tool,
@@ -4194,6 +4465,7 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]Invent
 			&i.LockHolder,
 			&i.LockSinceMs,
 			&i.LockOperation,
+			&i.Collection,
 		); err != nil {
 			return nil, err
 		}
@@ -6239,6 +6511,32 @@ func (q *Queries) UpsertInventory(ctx context.Context, arg UpsertInventoryParams
 		arg.LastChangedMs,
 		arg.Status,
 		arg.ResourceCount,
+	)
+	return err
+}
+
+const upsertUnitCollection = `-- name: UpsertUnitCollection :exec
+INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (unit_id) DO UPDATE SET
+    namespace = excluded.namespace,
+    collection_key = excluded.collection_key,
+    assigned_at_ms = excluded.assigned_at_ms
+`
+
+type UpsertUnitCollectionParams struct {
+	UnitID        string
+	Namespace     string
+	CollectionKey string
+	AssignedAtMs  int64
+}
+
+func (q *Queries) UpsertUnitCollection(ctx context.Context, arg UpsertUnitCollectionParams) error {
+	_, err := q.db.ExecContext(ctx, upsertUnitCollection,
+		arg.UnitID,
+		arg.Namespace,
+		arg.CollectionKey,
+		arg.AssignedAtMs,
 	)
 	return err
 }

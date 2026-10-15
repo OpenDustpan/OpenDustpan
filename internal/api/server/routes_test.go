@@ -322,6 +322,22 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	return svc
 }
 
+// stubCollections names the collection testCollection with its stable ID,
+// so that a grant on it is accepted (ADR 51). No unit is in a collection here.
+type stubCollections struct{}
+
+func (stubCollections) CollectionOf(context.Context, identity.Object) (string, bool, error) {
+	return "", false, nil
+}
+
+func (stubCollections) CollectionID(_ context.Context, obj identity.Object) (string, bool, error) {
+	if obj.CollectionName() == testCollection {
+		return "col-" + testCollection, true, nil
+	}
+
+	return "", false, nil
+}
+
 // Grant IDs that seedRouteAccess writes, one on each object kind, so each
 // revoke route answers 204 in the generic enforcement tests.
 const (
@@ -376,8 +392,14 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 			Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
 		},
 		{
-			CreatedAt: at, Condition: nil, Object: identity.CollectionObject(testNamespace, testCollection),
-			ID: testCollectionGrantID, Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
+			CreatedAt: at,
+			Condition: nil,
+			Object: identity.CollectionObject(testNamespace, testCollection).
+				WithCollectionID("col-" + testCollection),
+			ID:        testCollectionGrantID,
+			Role:      access.RoleViewer,
+			CreatedBy: "admin",
+			Subject:   other,
 		},
 		{
 			CreatedAt: at, Condition: nil, Object: unit, ID: testUnitGrantID,
@@ -398,7 +420,9 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 		}
 	}
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
+	authz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st},
+	)
 	if err != nil {
 		t.Fatalf("access authorizer: %v", err)
 	}
@@ -896,15 +920,8 @@ func wantSuccessStatus(route apiserver.Route) int {
 
 	if route.Method == http.MethodGet &&
 		route.Path == "/api/server/namespaces/{namespace}/collections/{collection}/access-review" {
-		// The export of a collection waits for the collections (#478).
+		// The export of a collection waits for the units inside it (ADR 52).
 		return http.StatusNotImplemented
-	}
-
-	if route.Method == http.MethodPost &&
-		route.Path == "/api/server/namespaces/{namespace}/collections/{collection}/grants" {
-		// No collection exists until the collections are wired (#478), so
-		// a grant on one answers 404 after the authorization.
-		return http.StatusNotFound
 	}
 
 	if route.Method == http.MethodPost && createsRecord(route.Path) {
