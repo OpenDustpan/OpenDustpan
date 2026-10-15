@@ -1694,6 +1694,7 @@ func newServerHandler(
 		Metrics:       deps.observed,
 		Version:       cfg.version,
 		Schema:        schemaReporterOf(cfg.namespaceStore),
+		Journal:       journalReporterOf(cfg.namespaceStore),
 		Principals:    principals,
 		Access:        grants,
 		Tokens:        deps.services.tokens,
@@ -2003,6 +2004,20 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 //nolint:ireturn // The two SQL adapters share no concrete store type, so the
 func schemaReporterOf(store namespace.Store) serverapi.SchemaReporter {
 	reporter, ok := store.(serverapi.SchemaReporter)
+	if !ok {
+		return nil
+	}
+
+	return reporter
+}
+
+// journalReporterOf returns the journal reporter of the namespace store, or
+// nil when the store does not count running journaled updates. Both SQL
+// adapters count them.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the
+func journalReporterOf(store namespace.Store) serverapi.JournalReporter {
+	reporter, ok := store.(serverapi.JournalReporter)
 	if !ok {
 		return nil
 	}
