@@ -276,17 +276,9 @@ func (s *Store) CreateNamespaceWithGrant(
 ) error {
 	row := codec.ToNamespaceRow(ns)
 
-	if err := validServerEntry(e); err != nil {
+	grantEntry, err := validateCreatorGrantEntries(ns, g, e)
+	if err != nil {
 		return err
-	}
-
-	grantEntry := e
-	grantEntry.Namespace = ns.Name
-
-	if g.ID != "" {
-		if err := grantEntry.Validate(); err != nil {
-			return fmt.Errorf("audit entry: %w", err)
-		}
 	}
 
 	return s.inTx(ctx, func(q *db.Queries) error {
@@ -294,42 +286,90 @@ func (s *Store) CreateNamespaceWithGrant(
 			return fmt.Errorf("lock server audit scope: %w", err)
 		}
 
-		n, err := q.CreateNamespace(ctx, db.CreateNamespaceParams{
-			Name:            row.Name,
-			HomeRegion:      row.HomeRegion,
-			FailoverVersion: row.FailoverVersion,
-			CreatedAtMs:     row.CreatedAtMs,
-		})
-		if err != nil {
-			return fmt.Errorf("insert namespace: %w", err)
-		}
-
-		if n == 0 {
-			return namespace.ErrAlreadyExists
-		}
-
-		if g.ID == "" {
-			if _, err := appendAuditEntry(ctx, q, e); err != nil {
-				return fmt.Errorf("append audit entry: %w", err)
-			}
-
-			return nil
-		}
-
-		if err := insertGrant(ctx, q, g); err != nil {
+		if err := insertNamespaceRow(ctx, q, row); err != nil {
 			return err
 		}
 
+		return appendCreatorGrantEntries(ctx, q, g, e, grantEntry)
+	})
+}
+
+// validateCreatorGrantEntries checks the entries of CreateNamespaceWithGrant:
+// e lives in the scope @server, and the copy of e in the chain of the new
+// namespace is valid when the grant has an ID.
+func validateCreatorGrantEntries(
+	ns namespace.Namespace, g access.Grant, e audit.Entry,
+) (audit.Entry, error) {
+	if err := validServerEntry(e); err != nil {
+		return audit.Entry{}, err
+	}
+
+	grantEntry := e
+	grantEntry.Namespace = ns.Name
+
+	if g.ID == "" {
+		return grantEntry, nil
+	}
+
+	if err := grantEntry.Validate(); err != nil {
+		return audit.Entry{}, fmt.Errorf("audit entry: %w", err)
+	}
+
+	return grantEntry, nil
+}
+
+// insertNamespaceRow inserts the namespace row. The namespace did not exist
+// before, so no fence check runs.
+func insertNamespaceRow(ctx context.Context, q *db.Queries, row codec.NamespaceRow) error {
+	n, err := q.CreateNamespace(ctx, db.CreateNamespaceParams{
+		Name:            row.Name,
+		HomeRegion:      row.HomeRegion,
+		FailoverVersion: row.FailoverVersion,
+		CreatedAtMs:     row.CreatedAtMs,
+	})
+	if err != nil {
+		return fmt.Errorf("insert namespace: %w", err)
+	}
+
+	if n == 0 {
+		return namespace.ErrAlreadyExists
+	}
+
+	return nil
+}
+
+// appendCreatorGrantEntries stores the entries of CreateNamespaceWithGrant.
+// With no grant (g.ID empty) it appends only the create entry e. With a
+// grant it inserts the grant, appends e in @server, and appends the grant
+// entry in the new namespace chain.
+func appendCreatorGrantEntries(
+	ctx context.Context,
+	q *db.Queries,
+	g access.Grant,
+	e audit.Entry,
+	grantEntry audit.Entry,
+) error {
+	if g.ID == "" {
 		if _, err := appendAuditEntry(ctx, q, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
-		if _, err := appendAuditEntry(ctx, q, grantEntry); err != nil {
-			return fmt.Errorf("append audit entry: %w", err)
-		}
-
 		return nil
-	})
+	}
+
+	if err := insertGrant(ctx, q, g); err != nil {
+		return err
+	}
+
+	if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	if _, err := appendAuditEntry(ctx, q, grantEntry); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // SubjectsOf implements access.Callers: the principal with the subject and
