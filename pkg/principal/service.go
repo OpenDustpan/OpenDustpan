@@ -94,7 +94,7 @@ func (s *Service) CreatePrincipal(ctx context.Context, e audit.Entry, in Input) 
 		DisplayName: displayName,
 		Kind:        in.Kind,
 		Source:      SourceLocal,
-		Namespace:   "", GroupCount: 0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 
 	if err := p.Validate(); err != nil {

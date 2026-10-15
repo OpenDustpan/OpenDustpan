@@ -330,7 +330,7 @@ func seedMemberships(t *testing.T, ps principal.Store) {
 
 	prn := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 	}
 	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
 		t.Fatalf("create principal: %v", err)

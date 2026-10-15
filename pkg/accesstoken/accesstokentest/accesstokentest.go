@@ -163,7 +163,7 @@ func mustPrincipal(t *testing.T, s Store, id, subject string, kind principal.Kin
 		DisplayName: "Name of " + subject,
 		Kind:        kind,
 		Source:      principal.SourceLocal,
-		Namespace:   "", GroupCount: 0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 
 	e := entry("tok-x")
@@ -330,6 +330,7 @@ func testByDigest(t *testing.T, s Store) {
 		Subject:     "ci-deploy",
 		DisplayName: "Name of ci-deploy",
 		Kind:        principal.KindService,
+		BreakGlass:  false,
 	}
 	if m.Owner != want {
 		t.Fatalf("owner = %+v, want %+v", m.Owner, want)
@@ -879,8 +880,17 @@ func mustPrincipalAt(t *testing.T, s Store, id string, kind principal.Kind, crea
 	t.Helper()
 
 	p := principal.Principal{
-		CreatedAt: created, UpdatedAt: created, DisabledAt: time.Time{}, ID: id, Subject: id,
-		DisplayName: "Name of " + id, Kind: kind, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		CreatedAt:   created,
+		UpdatedAt:   created,
+		DisabledAt:  time.Time{},
+		ID:          id,
+		Subject:     id,
+		DisplayName: "Name of " + id,
+		Kind:        kind,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
 	}
 
 	e := entryAt("tok-x", created)

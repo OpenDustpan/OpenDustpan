@@ -141,7 +141,7 @@ func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
 		DisplayName: "Name of " + subject,
 		Kind:        kind,
 		Source:      principal.SourceLocal,
-		Namespace:   "", GroupCount: 0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 }
 

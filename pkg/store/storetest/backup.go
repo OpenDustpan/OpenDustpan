@@ -285,17 +285,17 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 		{
 			CreatedAt: now(), UpdatedAt: now().Add(time.Minute), DisabledAt: time.Time{}, ID: "prn-alice",
 			Subject: "alice@example.com", DisplayName: "Alice", Kind: principal.KindPerson,
-			Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+			Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 		{
 			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-deploy",
 			Subject: "ci-deploy", DisplayName: "", Kind: principal.KindService,
-			Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+			Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 		{
 			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-gone",
 			Subject: "gone", DisplayName: "", Kind: principal.KindWorkload,
-			Source: principal.SourceSCIM, Namespace: "", GroupCount: 0,
+			Source: principal.SourceSCIM, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 	}
 	for i := range principals {

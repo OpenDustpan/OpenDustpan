@@ -97,7 +97,7 @@ func (s *Store) GetTokenByDigest(ctx context.Context, d accesstoken.Digest) (acc
 		Owner: codec.FromAccessTokenOwnerRow(codec.AccessTokenOwnerRow{
 			ID: row.PrincipalID, Subject: row.Subject, DisplayName: row.DisplayName, Kind: row.PrincipalKind,
 			DisabledAtMs: row.PrincipalDisabledAtMs.Int64, ActiveAtMs: row.PrincipalActiveAtMs,
-			BreakGlass:   row.PrincipalBreakGlass,
+			BreakGlass: row.PrincipalBreakGlass,
 		}),
 		Digest: stored,
 	}, nil
