@@ -319,6 +319,18 @@ func TestAuditChainConformance(t *testing.T) {
 					t.Fatalf("change entry %d: %v", seq, err)
 				}
 			},
+			Reopen: func(t *testing.T) audittest.ChainStore {
+				t.Helper()
+
+				second, err := postgres.Open(t.Context(), schemaURL)
+				if err != nil {
+					t.Fatalf("reopen store: %v", err)
+				}
+
+				t.Cleanup(second.Close)
+
+				return second
+			},
 		}
 	})
 }

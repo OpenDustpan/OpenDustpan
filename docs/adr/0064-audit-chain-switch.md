@@ -42,8 +42,10 @@ and a fresh MFA step.
    installation without a row counts as `on`. Before this ADR the chain was
    always on, so an upgrade needs no migration.
 4. **A start compares the setting with the state.** When they agree, the
-   server starts normally and every append of this instance uses that state
-   until the instance stops. No append reads the state.
+   server starts normally. Each append reads the stored state in its own
+   transaction. An append computes a hash when the state is on and the last
+   entry of its scope is not an end entry. Otherwise it writes no hash. A
+   missing row counts as on.
 5. **A different setting starts the server in maintenance mode.** The
    server notes in `audit_chain_state` that a change waits, enters the
    maintenance mode of ADR 38, and changes nothing yet.
@@ -62,10 +64,9 @@ and a fresh MFA step.
      route except the same routes and the reads of the audit API. A read of
      another API can also append an entry, for example the export of an
      access review (ADR 52 decision 13), so the rule covers reads too.
-   - Each instance reads the stored state of the chain together with the
-     installation state, with the same cache limit (ADR 38 decision 4). So
-     an instance learns of an approved change without a read in each
-     append.
+   - Each instance caches the stored state for the gate with the same
+     cache limit as the installation state. The cache decides admission
+     only. Each append reads the stored state in its own transaction.
 6. **A person approves the change.** `GET /api/server/audit/chain` answers
    the stored state, the setting of the instance, whether a change waits,
    and whether its migration runs. It needs `server:read-audit`.
@@ -96,12 +97,16 @@ and a fresh MFA step.
      names the person who approved the change. It holds a hash linked to
      the entry before it, so the chain ends with a chained entry.
 
-   Then the server stores the new state, when it changed and who changed
-   it, waits two cache limits so every instance can see the new state, and
-   leaves maintenance mode. A migration that stops before it ends
-   leaves the old state, so the next start asks for the approval again.
-   A second start entry in a scope does no harm: its digest covers the
-   first one.
+   To off, the server writes the end entries then stores off with no
+   wait. To on, the server stores on with a wait first, then writes the
+   start entries, then stores on with no wait. The early store makes new
+   appends hash at once. The digest of a start entry covers an append
+   before it. Then the server waits two cache limits and leaves
+   maintenance mode. A migration that stops before it ends keeps a
+   waiting change, so the next start asks for approval again. A second
+   start entry in a scope does no harm: its digest covers the first one.
+   A scope gets no start entry only when it is empty or its last entry is
+   already a start entry, so a migration that runs twice writes one.
 8. **The digest.** The digest of the entries of a scope before a start
    entry is a running SHA-256, in order of sequence. It starts as the empty
    string. For each entry, the next digest is the hex SHA-256 of the

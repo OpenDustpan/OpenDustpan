@@ -200,6 +200,22 @@ func TestAuditChainConformance(t *testing.T) {
 					t.Fatalf("change entry %d: %v", seq, err)
 				}
 			},
+			Reopen: func(t *testing.T) audittest.ChainStore {
+				t.Helper()
+
+				second, err := sqlite.Open(t.Context(), path)
+				if err != nil {
+					t.Fatalf("reopen store: %v", err)
+				}
+
+				t.Cleanup(func() {
+					if err := second.Close(); err != nil {
+						t.Errorf("close store: %v", err)
+					}
+				})
+
+				return second
+			},
 		}
 	})
 }

@@ -141,10 +141,6 @@ func ParseChainSetting(raw string) (ChainSetting, error) {
 // ChainStore is the port of the chain state and of its migration. The SQL
 // stores implement it next to Store.
 type ChainStore interface {
-	// SetChain makes later appends of this store handle compute the chain
-	// (on) or write entries without a hash (off). The server calls it at
-	// start and after a migration. No append reads the state.
-	SetChain(on bool)
 	// ChainRecord answers the record of the installation. Without a row it
 	// answers ChainStateOn with a zero time.
 	ChainRecord(ctx context.Context) (ChainRecord, error)
@@ -157,9 +153,9 @@ type ChainStore interface {
 	// ServerScope checks nothing. It returns ErrInvalidEntry when e fails
 	// validation or names another scope than fence, and
 	// namespace.ErrFenced when the fence is stale. When the scope holds no
-	// entry, or its last entry already agrees with the chain on (see
-	// LastAgrees), it appends nothing and returns false, read in the same
-	// transaction. So two migrations write one start entry.
+	// entry, or its last entry already is a start entry (see MarkerDone),
+	// it appends nothing and returns false, read in the same transaction.
+	// So two migrations write one start entry.
 	StartChain(ctx context.Context, fence namespace.Fence, e Entry) (bool, error)
 	// EndChain appends e as the end entry of its scope, with a hash linked
 	// to the hash of the entry before it, in one transaction with the check
@@ -187,25 +183,39 @@ type ChainChange struct {
 }
 
 // MigrateChain runs the migration of an approved change in the scope of
-// each fence of fences: a start entry for on, an end entry for off. A
-// scope without entries gets no entry: its first entry starts the chain,
-// or comes after the chain went off. Then it stores the new record and sets
-// the chain of the store handle. A migration that stops before the end
-// keeps the old record, so the next start asks for the approval again; a
-// second start entry does no harm, because its digest covers the first.
+// each fence of fences. To off, it writes an end entry in each scope, then
+// stores the new record with the state off and no wait. To on, it first
+// stores the new record with the state on and a wait, then writes a start
+// entry in each scope, then stores the same record with no wait. The early
+// store to on makes later appends hash at once. An append in a scope before
+// its start entry is covered by the digest of that start entry. An append
+// after an end entry but before the stored state changes writes no hash,
+// because the last entry is an end entry. A scope without entries gets no
+// entry: its first entry starts the chain, or comes after the chain went
+// off. A second start entry does no harm, because its digest covers the
+// first.
 func MigrateChain(ctx context.Context, store ChainStore, fences []namespace.Fence, change ChainChange) error {
+	if change.To == ChainStateOn {
+		early := ChainRecord{
+			ChangedAt: change.At, ChangedBy: change.By, State: change.To, Pending: true, LogReplaced: false,
+		}
+		if err := store.SaveChainRecord(ctx, early); err != nil {
+			return fmt.Errorf("save audit chain state: %w", err)
+		}
+	}
+
 	for _, fence := range fences {
 		if err := migrateScope(ctx, store, fence, change); err != nil {
 			return err
 		}
 	}
 
-	rec := ChainRecord{ChangedAt: change.At, ChangedBy: change.By, State: change.To, Pending: false, LogReplaced: false}
+	rec := ChainRecord{
+		ChangedAt: change.At, ChangedBy: change.By, State: change.To, Pending: false, LogReplaced: false,
+	}
 	if err := store.SaveChainRecord(ctx, rec); err != nil {
 		return fmt.Errorf("save audit chain state: %w", err)
 	}
-
-	store.SetChain(change.To == ChainStateOn)
 
 	return nil
 }
@@ -242,6 +252,25 @@ func LastAgrees(last *Entry, state ChainState) bool {
 	chained := last.Hash != "" && last.Action != ActionEndChain
 
 	return chained == (state == ChainStateOn)
+}
+
+// MarkerDone reports whether the migration to state needs no marker in a
+// scope whose last entry is last. A scope without entries (last nil) needs
+// none. To on, only a start entry as the last entry makes the marker done:
+// a hashed last entry is not enough, because an append can hash after the
+// state is stored as on and before the start entry of its scope, and the
+// start entry must still cover the earlier entries with its digest. To
+// off, the scope needs no marker when it agrees with off (see LastAgrees).
+func MarkerDone(last *Entry, state ChainState) bool {
+	if last == nil {
+		return true
+	}
+
+	if state == ChainStateOn {
+		return last.Action == ActionStartChain && last.Hash != ""
+	}
+
+	return LastAgrees(last, state)
 }
 
 // LogAgrees reports whether the log of every scope of scopes agrees with

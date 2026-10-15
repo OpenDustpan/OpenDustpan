@@ -23,9 +23,11 @@ type ChainStore interface {
 
 // ChainTestStore is one fresh, empty store with the tamper hook of
 // TestStore, so a case can change an entry behind the back of the store.
+// Reopen answers a second handle on the same database.
 type ChainTestStore struct {
 	Store       ChainStore
 	TamperEntry func(t *testing.T, ns namespace.Name, seq int64, field, value string)
+	Reopen      func(t *testing.T) ChainStore
 }
 
 // ChainFactory returns a fresh, empty store for one chain subtest.
@@ -61,6 +63,15 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
 		{name: "concurrent appends keep the chain", test: testChainConcurrentAppends},
+		{
+			name: "an append between the end entries and the stored state writes no hash",
+			test: testChainAppendAfterEndBeforeState,
+		},
+		{
+			name: "an append between the stored state and the start entry is covered by the digest",
+			test: testChainAppendAfterStateBeforeStart,
+		},
+		{name: "a second handle follows the stored state", test: testChainSecondHandle},
 	}
 
 	for _, tc := range cases {
@@ -436,26 +447,31 @@ func testChainMigrateTwice(t *testing.T, ts ChainTestStore) {
 	tl := newTimeline(t, ts.Store)
 	tl.append(2)
 
-	e := newEntry(tl.ns.Name, "alice", "req-start", tl.tick())
-	e.Action = audit.ActionStartChain
+	// A chained scope gets a start entry too: only a start entry as the
+	// last entry makes the marker done. A second start entry is not
+	// written.
+	for i, want := range []bool{true, false} {
+		e := newEntry(tl.ns.Name, "alice", "req-start-"+strconv.Itoa(i), tl.tick())
+		e.Action = audit.ActionStartChain
 
-	wrote, err := ts.Store.StartChain(t.Context(), tl.ns.Fence(), e)
-	if err != nil || wrote {
-		t.Fatalf("start entry in a chained scope: wrote %v, %v; want no entry", wrote, err)
+		wrote, err := ts.Store.StartChain(t.Context(), tl.ns.Fence(), e)
+		if err != nil || wrote != want {
+			t.Fatalf("start entry %d in a chained scope: wrote %v, %v; want %v", i, wrote, err, want)
+		}
 	}
 
 	tl.migrate(audit.ChainStateOff)
 	tl.migrate(audit.ChainStateOff)
-
-	if got := listScope(t, ts.Store, tl.ns.Name); len(got) != 3 {
-		t.Fatalf("entries after two migrations off: got %d, want 3", len(got))
-	}
-
-	tl.migrate(audit.ChainStateOn)
-	tl.migrate(audit.ChainStateOn)
 
 	if got := listScope(t, ts.Store, tl.ns.Name); len(got) != 4 {
-		t.Fatalf("entries after two migrations on: got %d, want 4", len(got))
+		t.Fatalf("entries after two migrations off: got %d, want 4", len(got))
+	}
+
+	tl.migrate(audit.ChainStateOn)
+	tl.migrate(audit.ChainStateOn)
+
+	if got := listScope(t, ts.Store, tl.ns.Name); len(got) != 5 {
+		t.Fatalf("entries after two migrations on: got %d, want 5", len(got))
 	}
 
 	if got := check(t, ts.Store, tl.ns.Name); !got.Valid {
@@ -686,4 +702,114 @@ func concurrentAppend(t *testing.T, s ChainStore, ns namespace.Namespace, w int,
 	_, err := s.AppendServer(t.Context(), e)
 
 	return err
+}
+
+func testChainAppendAfterEndBeforeState(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.append(1)
+
+	end := newEntry(tl.ns.Name, "alice", "req-end", tl.tick())
+	end.Action = audit.ActionEndChain
+
+	wrote, err := ts.Store.EndChain(t.Context(), tl.ns.Fence(), end)
+	if err != nil || !wrote {
+		t.Fatalf("end chain: wrote %v, %v; want one entry", wrote, err)
+	}
+
+	later := tl.append(1)[0]
+	if later.Hash != "" {
+		t.Fatalf("append after the end entry with the state still on: hash %q, want none", later.Hash)
+	}
+
+	rec := audit.ChainRecord{
+		ChangedAt: tl.tick(), ChangedBy: "alice", State: audit.ChainStateOff, Pending: false, LogReplaced: false,
+	}
+	if err := ts.Store.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	wantValid(t, check(t, ts.Store, tl.ns.Name))
+}
+
+func testChainAppendAfterStateBeforeStart(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.migrate(audit.ChainStateOff)
+	tl.append(1)
+
+	turning := audit.ChainRecord{
+		ChangedAt: tl.tick(), ChangedBy: "alice", State: audit.ChainStateOn, Pending: true, LogReplaced: false,
+	}
+	if err := ts.Store.SaveChainRecord(t.Context(), turning); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	// The scope acme ends with an entry without a hash. An append after the
+	// stored state turns on, and before the start entry, holds a hash; the
+	// start entry must still follow, with a digest that covers it.
+	hashed := tl.append(1)[0]
+	if hashed.Hash == "" {
+		t.Fatal("append after the stored state with no start entry yet: no hash, want a hash")
+	}
+
+	start := newEntry(tl.ns.Name, "alice", "req-start", tl.tick())
+	start.Action = audit.ActionStartChain
+
+	wrote, err := ts.Store.StartChain(t.Context(), tl.ns.Fence(), start)
+	if err != nil || !wrote {
+		t.Fatalf("start chain: wrote %v, %v; want one entry", wrote, err)
+	}
+
+	done := audit.ChainRecord{
+		ChangedAt: tl.tick(), ChangedBy: "alice", State: audit.ChainStateOn, Pending: false, LogReplaced: false,
+	}
+	if err := ts.Store.SaveChainRecord(t.Context(), done); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	wantValid(t, check(t, ts.Store, tl.ns.Name))
+}
+
+func testChainSecondHandle(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	if ts.Reopen == nil {
+		t.Fatal("suite needs Reopen to prove a second handle follows the state")
+	}
+
+	tl := newTimeline(t, ts.Store)
+	tl.append(1)
+
+	other := ts.Reopen(t)
+
+	tl.migrate(audit.ChainStateOff)
+
+	off := newEntry(tl.ns.Name, "admin", "req-h2-off", tl.tick())
+
+	storedOff, err := other.Append(t.Context(), tl.ns.Fence(), off)
+	if err != nil {
+		t.Fatalf("append through a second handle while off: %v", err)
+	}
+
+	if storedOff.Hash != "" {
+		t.Fatalf("append through a second handle while off: hash %q, want none", storedOff.Hash)
+	}
+
+	tl.migrate(audit.ChainStateOn)
+
+	on := newEntry(tl.ns.Name, "admin", "req-h2-on", tl.tick())
+
+	storedOn, err := other.Append(t.Context(), tl.ns.Fence(), on)
+	if err != nil {
+		t.Fatalf("append through a second handle while on: %v", err)
+	}
+
+	if storedOn.Hash == "" {
+		t.Fatal("append through a second handle while on: no hash, want a hash")
+	}
+
+	wantValid(t, check(t, ts.Store, tl.ns.Name))
 }

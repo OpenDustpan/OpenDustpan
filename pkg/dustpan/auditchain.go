@@ -189,8 +189,6 @@ func (c *auditChain) startUp(ctx context.Context) error {
 		return fmt.Errorf("audit chain: %w", err)
 	}
 
-	c.store.SetChain(rec.State == audit.ChainStateOn)
-
 	if rec.LogReplaced {
 		rec, err = c.compareRestoredLog(ctx, rec)
 		if err != nil {
@@ -342,8 +340,8 @@ func (c *auditChain) remember(rec audit.ChainRecord) {
 }
 
 // current answers the stored state, read at most once per cache limit.
-// When the stored state changed, later appends of this instance follow it.
-// A failed read keeps the last state it read.
+// The gate uses this cache. Appends read the stored state in their own
+// transaction. A failed read keeps the last state it read.
 func (c *auditChain) current(ctx context.Context) audit.ChainRecord {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -355,10 +353,6 @@ func (c *auditChain) current(ctx context.Context) audit.ChainRecord {
 	rec, err := c.store.ChainRecord(ctx)
 	if err != nil {
 		return c.rec
-	}
-
-	if !c.read || rec.State != c.rec.State {
-		c.store.SetChain(rec.State == audit.ChainStateOn)
 	}
 
 	c.rec, c.readAt, c.read = rec, time.Now(), true

@@ -15,11 +15,6 @@ import (
 
 var _ audit.ChainStore = (*Store)(nil)
 
-// SetChain implements audit.ChainStore for later appends of this handle.
-func (s *Store) SetChain(on bool) {
-	s.chainOff.Store(!on)
-}
-
 // ChainRecord implements audit.ChainStore. A missing row reads as the chain
 // on.
 func (s *Store) ChainRecord(ctx context.Context) (audit.ChainRecord, error) {
@@ -47,18 +42,14 @@ func (s *Store) StartChain(ctx context.Context, fence namespace.Fence, e audit.E
 
 		e.Changes = audit.StartChanges(&digest)
 
-		_, err := s.insertAuditEntry(ctx, q, e, hashStart)
-
-		return err
+		return s.insertAuditEntry(ctx, q, e, hashStart)
 	})
 }
 
 // EndChain implements audit.ChainStore.
 func (s *Store) EndChain(ctx context.Context, fence namespace.Fence, e audit.Entry) (bool, error) {
 	return s.appendChainMarker(ctx, fence, e, audit.ChainStateOff, func(q *db.Queries, e audit.Entry) error {
-		_, err := s.insertAuditEntry(ctx, q, e, hashLink)
-
-		return err
+		return s.insertAuditEntry(ctx, q, e, hashLink)
 	})
 }
 
@@ -101,7 +92,7 @@ func (s *Store) appendChainMarker(
 			return err
 		}
 
-		if audit.LastAgrees(last, state) {
+		if audit.MarkerDone(last, state) {
 			return nil
 		}
 

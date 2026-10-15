@@ -141,18 +141,33 @@ func validServerEntry(e audit.Entry) error {
 	return nil
 }
 
-// appendAuditEntry reads the last entry of the scope of e and inserts e as
-// the next one, with its sequence, previous hash and hash. An entry with no
-// ObjectID gets the stable ID of the live unit that its Object names. The caller runs
-// it in a transaction that orders the appends of the scope. The entry holds
-// a hash when the chain of this handle is on (see SetChain).
+// appendAuditEntry reads the stored chain state and the last entry of the
+// scope of e in the same transaction, then inserts e as the next one, with
+// its sequence, previous hash and hash. An entry with no ObjectID gets the
+// stable ID of the live unit that its Object names. The caller runs it in a
+// transaction that orders the appends of the scope. An append computes the
+// hash (hashLink) when the stored state is on (no row also counts as on)
+// and the last entry of its scope is not an end entry
+// (Action == audit.ActionEndChain). Otherwise it writes no hash (hashNone).
+// An append in a scope after its end entry but before the stored state
+// changes still writes no hash, so the check stays valid.
 func (s *Store) appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
-	mode := hashLink
-	if s.chainOff.Load() {
-		mode = hashNone
+	rec, err := readChainRecord(ctx, q)
+	if err != nil {
+		return audit.Entry{}, err
 	}
 
-	return s.insertAuditEntry(ctx, q, e, mode)
+	placed, err := placeAuditEntry(ctx, q, e)
+	if err != nil {
+		return audit.Entry{}, err
+	}
+
+	mode := hashNone
+	if rec.State == audit.ChainStateOn && placed.lastAction != audit.ActionEndChain {
+		mode = hashLink
+	}
+
+	return s.insertPlacedEntry(ctx, q, placed.entry, placed.prevHash, mode)
 }
 
 // hashMode is how insertAuditEntry hashes an entry: not at all, linked to
@@ -167,15 +182,24 @@ const (
 	hashStart
 )
 
+// placedEntry is an entry with the fields that the transaction knows,
+// plus the hash and the action of the entry before it.
+type placedEntry struct {
+	entry      audit.Entry
+	prevHash   string
+	lastAction string
+}
+
 // placeAuditEntry fills the fields of e that the transaction knows: the
 // object ID, the failover version of the namespace, the sequence and a time
-// that never goes back along the scope. It answers the hash of the entry
-// before e, or "" for the first entry of the scope.
-func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, string, error) {
+// that never goes back along the scope. It answers the entry with those
+// fields, the hash of the entry before it, or "" for the first entry of the
+// scope, and the action of that entry, or "" when the scope holds none.
+func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (placedEntry, error) {
 	if e.ObjectID == "" {
 		id, err := auditObjectID(ctx, q, e.Object)
 		if err != nil {
-			return audit.Entry{}, "", err
+			return placedEntry{}, err
 		}
 
 		e.ObjectID = id
@@ -183,12 +207,14 @@ func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.E
 
 	fenceVersion, err := auditFenceVersion(ctx, q, e.Namespace)
 	if err != nil {
-		return audit.Entry{}, "", err
+		return placedEntry{}, err
 	}
 
 	e.FenceVersion = fenceVersion
 
 	var prevHash string
+
+	var lastAction string
 
 	var seq int64 = 1
 
@@ -196,9 +222,10 @@ func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.E
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
-		return audit.Entry{}, "", fmt.Errorf("read last audit entry: %w", err)
+		return placedEntry{}, fmt.Errorf("read last audit entry: %w", err)
 	default:
 		prevHash = last.Hash
+		lastAction = last.Action
 		seq = last.Sequence + 1
 
 		// Callers take the time before the transaction, and the sequence
@@ -212,19 +239,31 @@ func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.E
 
 	e.Sequence = seq
 
-	return e, prevHash, nil
+	return placedEntry{entry: e, prevHash: prevHash, lastAction: lastAction}, nil
 }
 
 // insertAuditEntry inserts e as the next entry of its scope, hashed as mode
 // says.
 func (s *Store) insertAuditEntry(
 	ctx context.Context, q *db.Queries, e audit.Entry, mode hashMode,
-) (audit.Entry, error) {
-	e, prevHash, err := placeAuditEntry(ctx, q, e)
+) error {
+	placed, err := placeAuditEntry(ctx, q, e)
 	if err != nil {
-		return audit.Entry{}, err
+		return err
 	}
 
+	_, err = s.insertPlacedEntry(ctx, q, placed.entry, placed.prevHash, mode)
+
+	return err
+}
+
+// insertPlacedEntry hashes placed as mode says and inserts it as the next
+// entry of its scope. placed already holds the sequence and the other fields
+// that the transaction knows, and prevHash is the hash of the entry before
+// it.
+func (s *Store) insertPlacedEntry(
+	ctx context.Context, q *db.Queries, e audit.Entry, prevHash string, mode hashMode,
+) (audit.Entry, error) {
 	e.PrevHash, e.Hash = "", ""
 
 	// With the chain off, the entry holds no hash. A start entry begins a

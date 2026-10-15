@@ -325,7 +325,6 @@ type fakeChain struct {
 	scopes map[namespace.Name][]audit.Entry
 	rec    audit.ChainRecord
 	fail   error
-	on     bool
 }
 
 func newFakeChain() *fakeChain {
@@ -333,11 +332,8 @@ func newFakeChain() *fakeChain {
 		scopes: map[namespace.Name][]audit.Entry{},
 		rec:    recordOf(audit.ChainStateOn, 0),
 		fail:   nil,
-		on:     true,
 	}
 }
-
-func (f *fakeChain) SetChain(on bool) { f.on = on }
 
 func (f *fakeChain) ChainRecord(context.Context) (audit.ChainRecord, error) { return f.rec, nil }
 
@@ -392,14 +388,14 @@ func (f *fakeChain) LastEntry(_ context.Context, scope namespace.Name) (audit.En
 	return entries[len(entries)-1], true, nil
 }
 
-// agrees reports whether scope holds no entry or already agrees with state.
+// agrees reports whether scope needs no marker for state (see MarkerDone).
 func (f *fakeChain) agrees(ctx context.Context, scope namespace.Name, state audit.ChainState) (bool, error) {
 	last, found, err := f.LastEntry(ctx, scope)
 	if err != nil || !found {
 		return !found, err
 	}
 
-	return audit.LastAgrees(&last, state), nil
+	return audit.MarkerDone(&last, state), nil
 }
 
 // add appends e to scope, hashed with prev.
@@ -416,7 +412,8 @@ func (f *fakeChain) add(scope namespace.Name, e audit.Entry, prev string) (bool,
 	return true, nil
 }
 
-// put appends e to acme as the chain of the fake asks.
+// put appends e to acme as the stored state of the fake asks: it hashes
+// when the state is on and the last entry is not an end entry.
 func (f *fakeChain) put(e audit.Entry) {
 	const scope = namespace.Name("acme")
 
@@ -425,12 +422,18 @@ func (f *fakeChain) put(e audit.Entry) {
 	e.Sequence = int64(len(entries) + 1)
 	e.PrevHash, e.Hash = "", ""
 
-	if f.on {
-		if len(entries) > 0 {
-			e.PrevHash = entries[len(entries)-1].Hash
-		}
+	var prevHash string
 
-		e.Hash = audit.ComputeHash(e, e.PrevHash)
+	var lastAction string
+
+	if len(entries) > 0 {
+		prevHash = entries[len(entries)-1].Hash
+		lastAction = entries[len(entries)-1].Action
+	}
+
+	if f.rec.State == audit.ChainStateOn && lastAction != audit.ActionEndChain {
+		e.PrevHash = prevHash
+		e.Hash = audit.ComputeHash(e, prevHash)
 	}
 
 	f.scopes[scope] = append(f.scopes[scope], e)
@@ -477,8 +480,8 @@ func TestMigrateChain(t *testing.T) {
 
 	f.put(walkEntry(0))
 
-	if !f.on || f.rec.State != audit.ChainStateOn || len(f.scopes["acme"]) != 5 {
-		t.Fatalf("after on: on %v, record %+v, acme %d entries, want 5", f.on, f.rec, len(f.scopes["acme"]))
+	if f.rec.State != audit.ChainStateOn || f.rec.Pending || len(f.scopes["acme"]) != 5 {
+		t.Fatalf("after on: record %+v, acme %d entries, want on with 5", f.rec, len(f.scopes["acme"]))
 	}
 
 	if got := f.walk("acme"); got != 0 {
@@ -487,13 +490,13 @@ func TestMigrateChain(t *testing.T) {
 }
 
 // wantEndInAcmeOnly proves that a migration to off by alice wrote an end
-// entry in acme only and turned the chain of f off.
+// entry in acme only and stored the state off.
 func wantEndInAcmeOnly(t *testing.T, f *fakeChain) {
 	t.Helper()
 
-	if f.on || f.rec.State != audit.ChainStateOff || f.rec.ChangedBy != "alice" || len(f.scopes["acme"]) != 2 ||
+	if f.rec.State != audit.ChainStateOff || f.rec.ChangedBy != "alice" || len(f.scopes["acme"]) != 2 ||
 		len(f.scopes["empty"]) != 0 || len(f.scopes[audit.ServerScope]) != 0 {
-		t.Fatalf("after off: on %v, record %+v, scopes %v, want an end entry in acme only", f.on, f.rec, f.scopes)
+		t.Fatalf("after off: record %+v, scopes %v, want an end entry in acme only", f.rec, f.scopes)
 	}
 }
 
@@ -538,7 +541,7 @@ func TestLogAgrees(t *testing.T) {
 		t.Fatal("a chained tail: want agreement with on only")
 	}
 
-	f.on = false
+	f.rec = recordOf(audit.ChainStateOff, 1)
 	f.put(walkEntry(0))
 
 	if agrees(audit.ChainStateOn) || !agrees(audit.ChainStateOff) {

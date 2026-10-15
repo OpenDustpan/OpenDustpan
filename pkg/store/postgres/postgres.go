@@ -18,7 +18,6 @@ import (
 	"maps"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -48,9 +47,6 @@ type Store struct {
 	// stagingMu guards stagingSchema: one staged restore at a time.
 	stagingMu     sync.Mutex
 	stagingSchema string
-	// chainOff makes the appends of this handle write entries without a
-	// hash. The zero value keeps the chain on, the default (see SetChain).
-	chainOff atomic.Bool
 }
 
 var (
@@ -72,7 +68,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 	}
 
 	s := &Store{
-		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", chainOff: atomic.Bool{},
+		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "",
 	}
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()
