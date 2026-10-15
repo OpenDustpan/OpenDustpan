@@ -625,6 +625,12 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 	return nil
 }
 
+// CheckMove runs the escalation check of a move. A grant on the target that is
+// added after the check and before the move is written is not checked here.
+// Only a caller with manage-access on the collection can add a grant to it, and
+// that caller's own escalation check covers the grant, so the result is a
+// normal grant on the collection and not a silent escalation.
+//
 // CheckMove refuses a move of the unit into the collection target unless the
 // caller holds, on the unit, every action of every role that the target
 // grants. A move gives the unit each grant of the target, so the check is the
