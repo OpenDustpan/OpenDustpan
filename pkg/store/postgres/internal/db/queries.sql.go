@@ -3745,7 +3745,7 @@ func (q *Queries) JournalSequenceSHA(ctx context.Context, arg JournalSequenceSHA
 }
 
 const journalState = `-- name: JournalState :one
-SELECT journal_closed, journal_version, status FROM updates
+SELECT journal_closed, journal_version, journal_records_changed, status FROM updates
 WHERE stack_id = $1 AND id = $2
 `
 
@@ -3755,15 +3755,21 @@ type JournalStateParams struct {
 }
 
 type JournalStateRow struct {
-	JournalClosed  bool
-	JournalVersion int64
-	Status         string
+	JournalClosed         bool
+	JournalVersion        int64
+	JournalRecordsChanged bool
+	Status                string
 }
 
 func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (JournalStateRow, error) {
 	row := q.db.QueryRow(ctx, journalState, arg.StackID, arg.ID)
 	var i JournalStateRow
-	err := row.Scan(&i.JournalClosed, &i.JournalVersion, &i.Status)
+	err := row.Scan(
+		&i.JournalClosed,
+		&i.JournalVersion,
+		&i.JournalRecordsChanged,
+		&i.Status,
+	)
 	return i, err
 }
 
@@ -6544,6 +6550,21 @@ func (q *Queries) SetInstallationStateIf(ctx context.Context, arg SetInstallatio
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setJournalRecordsChanged = `-- name: SetJournalRecordsChanged :exec
+UPDATE updates SET journal_records_changed = TRUE
+WHERE stack_id = $1 AND id = $2
+`
+
+type SetJournalRecordsChangedParams struct {
+	StackID string
+	ID      string
+}
+
+func (q *Queries) SetJournalRecordsChanged(ctx context.Context, arg SetJournalRecordsChangedParams) error {
+	_, err := q.db.Exec(ctx, setJournalRecordsChanged, arg.StackID, arg.ID)
+	return err
 }
 
 const setLastSignIn = `-- name: SetLastSignIn :exec

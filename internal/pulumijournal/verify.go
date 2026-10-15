@@ -18,31 +18,43 @@ import (
 // such a reference with ErrMissingReference.
 type Verifier struct{}
 
-// VerifyBatch returns nil when the batch passes the checks. The errors wrap the
+// VerifyBatch returns whether the batch holds an entry that changes the replay
+// records, and nil when the batch passes the checks. The errors wrap the
 // sentinels of this package: ErrVersion, ErrUnknownKind, ErrKindVersion,
-// ErrSequenceID, ErrUnsupportedKind and ErrMissingReference.
-func (Verifier) VerifyBatch(body []byte, version int, known []int64) error {
+// ErrSequenceID, ErrUnsupportedKind and ErrMissingReference. A write entry (kind 5)
+// is refused with ErrWriteOrder when recordsChanged is set, or when an earlier
+// entry of the batch changes the records.
+//
+//nolint:revive // The stored records flag is the fact the check needs, not control coupling: a write entry is refused while it is set.
+func (Verifier) VerifyBatch(
+	body []byte,
+	version int,
+	known []int64,
+	recordsChanged bool,
+) (bool, error) {
 	held := make(map[int64]bool, len(known))
 	for _, op := range known {
 		held[op] = true
 	}
 
-	// recordsChanged is set by an entry that changes the replay records. A write
+	// changed is set by an entry that changes the replay records. A write
 	// entry (kind 5) must come before all of them (upstream backend/journal.go of
 	// github.com/pulumi/pulumi/pkg/v3 v3.268.0, lines 295 to 298, expects that order).
-	recordsChanged := false
+	// RecordsChanged covers the stored batches of the update, and changed covers
+	// the earlier entries of this batch.
+	changed := false
 
-	return DecodeEntries(bytes.NewReader(body), version, func(entry JournalEntry) error {
+	err := DecodeEntries(bytes.NewReader(body), version, func(entry JournalEntry) error {
 		if err := replayable(entry); err != nil {
 			return err
 		}
 
-		if entry.Kind == JournalEntryKindWrite && recordsChanged {
+		if entry.Kind == JournalEntryKindWrite && (recordsChanged || changed) {
 			return fmt.Errorf("entry %s: %w", entryLabel(entry), ErrWriteOrder)
 		}
 
 		if changesRecords(entry.Kind) {
-			recordsChanged = true
+			changed = true
 		}
 
 		for _, ref := range references(entry) {
@@ -55,6 +67,11 @@ func (Verifier) VerifyBatch(body []byte, version int, known []int64) error {
 
 		return nil
 	})
+	if err != nil {
+		return false, err
+	}
+
+	return changed, nil
 }
 
 // changesRecords reports whether an entry of kind changes the records of the
