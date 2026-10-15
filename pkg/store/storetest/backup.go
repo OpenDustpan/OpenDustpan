@@ -319,7 +319,11 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 	}
 
 	for _, id := range []string{"prn-alice", "prn-deploy"} {
-		m := principal.Membership{AddedAt: now().Add(time.Hour), GroupID: g.ID, PrincipalID: id}
+		m := principal.Membership{
+			AddedAt: now().Add(time.Hour), SuspendedAt: time.Time{}, GroupID: g.ID, PrincipalID: id,
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		}
 		if err := ps.AddMember(ctx, m, ServerChange(m.AddedAt, "group:grp-ops#member:"+id)); err != nil {
 			t.Fatalf("add member %q: %v", id, err)
 		}

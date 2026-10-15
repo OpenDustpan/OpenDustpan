@@ -177,7 +177,10 @@ func mustCreateGroup(t *testing.T, s principal.Store, g principal.Group) {
 func mustAddMember(t *testing.T, s principal.Store, groupID, principalID string) {
 	t.Helper()
 
-	m := principal.Membership{AddedAt: at(1), GroupID: groupID, PrincipalID: principalID}
+	m := principal.Membership{
+		AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: groupID, PrincipalID: principalID,
+		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
+	}
 	if err := s.AddMember(t.Context(), m, entry()); err != nil {
 		t.Fatalf("add %q to %q: %v", principalID, groupID, err)
 	}
@@ -709,7 +712,11 @@ func testDuplicateMember(t *testing.T, s principal.Store) {
 
 	err := s.AddMember(
 		t.Context(),
-		principal.Membership{AddedAt: at(2), GroupID: "grp-1", PrincipalID: "prn-1"},
+		principal.Membership{
+			AddedAt: at(2), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		},
 		entry(),
 	)
 	wantErr(t, "add a member twice", err, principal.ErrAlreadyExists)
@@ -723,14 +730,22 @@ func testMemberMissing(t *testing.T, s principal.Store) {
 
 	err := s.AddMember(
 		t.Context(),
-		principal.Membership{AddedAt: at(1), GroupID: "grp-missing", PrincipalID: "prn-1"},
+		principal.Membership{
+			AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-missing", PrincipalID: "prn-1",
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		},
 		entry(),
 	)
 	wantErr(t, "add to a missing group", err, principal.ErrNotFound)
 
 	err = s.AddMember(
 		t.Context(),
-		principal.Membership{AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-missing"},
+		principal.Membership{
+			AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-missing",
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		},
 		entry(),
 	)
 	wantErr(t, "add a missing principal", err, principal.ErrNotFound)
@@ -810,7 +825,11 @@ func testDeletedPrincipalHistory(t *testing.T, s principal.Store) {
 
 	err = s.AddMember(
 		t.Context(),
-		principal.Membership{AddedAt: at(3), GroupID: "grp-1", PrincipalID: "prn-1"},
+		principal.Membership{
+			AddedAt: at(3), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		},
 		entry(),
 	)
 	wantErr(t, "add a deleted principal", err, principal.ErrNotFound)
@@ -839,7 +858,10 @@ func testRejoin(t *testing.T, s principal.Store) {
 	err := s.RemoveMember(t.Context(), "grp-1", "prn-1", entry())
 	wantErr(t, "remove an ended membership", err, principal.ErrNotFound)
 
-	m := principal.Membership{AddedAt: at(4), GroupID: "grp-1", PrincipalID: "prn-1"}
+	m := principal.Membership{
+		AddedAt: at(4), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
+		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
+	}
 	if err = s.AddMember(t.Context(), m, entry()); err != nil {
 		t.Fatalf("join again: %v", err)
 	}
@@ -1007,7 +1029,11 @@ func testRefusedEntryChangesNothing(t *testing.T, s principal.Store) {
 		{func() error {
 			return s.AddMember(
 				ctx,
-				principal.Membership{AddedAt: at(2), GroupID: "grp-2", PrincipalID: "prn-1"},
+				principal.Membership{
+					AddedAt: at(2), SuspendedAt: time.Time{}, GroupID: "grp-2", PrincipalID: "prn-1",
+					Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+					Pinned: false,
+				},
 				refused(),
 			)
 		}, "add member"},
@@ -1175,7 +1201,10 @@ func testDirectoryGroup(t *testing.T, s principal.Store) {
 		t.Fatalf("principal source = %+v, %v; want scim", got, err)
 	}
 
-	err = s.AddMember(ctx, principal.Membership{AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1"}, entry())
+	err = s.AddMember(ctx, principal.Membership{
+		AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
+		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
+	}, entry())
 	wantErr(t, "add to a directory group", err, principal.ErrManagedByDirectory)
 
 	if err == nil || !strings.Contains(err.Error(), "ldap") {
@@ -1196,12 +1225,37 @@ func testMembershipSourceState(t *testing.T, s principal.Store) {
 
 	ctx := t.Context()
 
+	seedSourceStateMembers(t, s)
+
+	members, _, err := s.ListMembers(ctx, "grp-1", all())
+	if err != nil {
+		t.Fatalf("list members: %v", err)
+	}
+
+	if len(members) != 2 {
+		t.Fatalf("members = %d, want 2", len(members))
+	}
+
+	bySubject := map[string]principal.Member{}
+	for i := range members {
+		bySubject[members[i].Principal.Subject] = members[i]
+	}
+
+	checkSourceStateAlice(t, bySubject["alice"])
+	checkSourceStateBob(t, bySubject["bob"])
+}
+
+func seedSourceStateMembers(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
 	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
 	mustCreatePrincipal(t, s, newPrincipal("prn-2", "bob", principal.KindPerson))
 	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
 
 	scim := principal.Membership{
-		AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
+		AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
 		Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
 		State: principal.MembershipStateActive, Pinned: false,
 	}
@@ -1219,37 +1273,57 @@ func testMembershipSourceState(t *testing.T, s principal.Store) {
 	if err := s.AddMember(ctx, claimed, entry()); err != nil {
 		t.Fatalf("add a suspended membership from a claim: %v", err)
 	}
+}
 
-	members, _, err := s.ListMembers(ctx, "grp-1", all())
-	if err != nil {
-		t.Fatalf("list members: %v", err)
+func checkSourceStateAlice(t *testing.T, got principal.Member) {
+	t.Helper()
+
+	if got.Source != principal.MembershipSourceSCIM {
+		t.Fatalf("alice source = %q, want scim", got.Source)
 	}
 
-	if len(members) != 2 {
-		t.Fatalf("members = %d, want 2", len(members))
+	if got.SourceID != "scim-token-1" {
+		t.Fatalf("alice source ID = %q, want scim-token-1", got.SourceID)
 	}
 
-	bySubject := map[string]principal.Member{}
-	for i := range members {
-		bySubject[members[i].Principal.Subject] = members[i]
+	if got.State != principal.MembershipStateActive {
+		t.Fatalf("alice state = %q, want active", got.State)
 	}
 
-	got := bySubject["alice"]
+	if !got.SuspendedAt.IsZero() {
+		t.Fatalf("alice suspend time = %v, want zero", got.SuspendedAt)
+	}
 
-	if got.Source != principal.MembershipSourceSCIM || got.SourceID != "scim-token-1" ||
-		got.State != principal.MembershipStateActive || !got.SuspendedAt.IsZero() || got.Pinned {
-		t.Fatalf("alice membership = %+v, want scim/scim-token-1 active with no suspend time", got)
+	if got.Pinned {
+		t.Fatal("alice pinned = true, want false")
 	}
 
 	if !got.AddedAt.Equal(at(1)) || got.GroupID != "grp-1" || got.PrincipalID != "prn-1" {
 		t.Fatalf("alice membership = %+v, want added at %v in grp-1", got, at(1))
 	}
+}
 
-	got = bySubject["bob"]
+func checkSourceStateBob(t *testing.T, got principal.Member) {
+	t.Helper()
 
-	if got.Source != principal.MembershipSourceClaim || got.SourceID != "idp-1" ||
-		got.State != principal.MembershipStateSuspended || !got.SuspendedAt.Equal(at(2)) || !got.Pinned {
-		t.Fatalf("bob membership = %+v, want claim/idp-1 suspended at %v pinned", got, at(2))
+	if got.Source != principal.MembershipSourceClaim {
+		t.Fatalf("bob source = %q, want claim", got.Source)
+	}
+
+	if got.SourceID != "idp-1" {
+		t.Fatalf("bob source ID = %q, want idp-1", got.SourceID)
+	}
+
+	if got.State != principal.MembershipStateSuspended {
+		t.Fatalf("bob state = %q, want suspended", got.State)
+	}
+
+	if !got.SuspendedAt.Equal(at(2)) {
+		t.Fatalf("bob suspend time = %v, want %v", got.SuspendedAt, at(2))
+	}
+
+	if !got.Pinned {
+		t.Fatal("bob pinned = false, want true")
 	}
 }
 
@@ -1261,7 +1335,10 @@ func testLocalMembershipDefaults(t *testing.T, s principal.Store) {
 	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
 	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
 
-	m := principal.Membership{AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1"}
+	m := principal.Membership{
+		AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
+		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
+	}
 	if err := s.AddMember(ctx, m, entry()); err != nil {
 		t.Fatalf("add a local membership: %v", err)
 	}
@@ -1298,53 +1375,54 @@ func testInvalidMembership(t *testing.T, s principal.Store) {
 		{
 			"unknown source",
 			principal.Membership{
-				AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
-				Source: "ldap", State: principal.MembershipStateActive,
+				AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
+				Source: "ldap", SourceID: "", State: principal.MembershipStateActive, Pinned: false,
 			},
 		},
 		{
 			"unknown state",
 			principal.Membership{
-				AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
-				Source: principal.MembershipSourceLocal, State: "ended",
+				AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
+				Source: principal.MembershipSourceLocal, SourceID: "", State: "ended", Pinned: false,
 			},
 		},
 		{
 			"local with a source ID",
 			principal.Membership{
-				AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
+				AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
 				Source: principal.MembershipSourceLocal, SourceID: "idp-1",
-				State: principal.MembershipStateActive,
+				State: principal.MembershipStateActive, Pinned: false,
 			},
 		},
 		{
 			"claim with no source ID",
 			principal.Membership{
-				AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
-				Source: principal.MembershipSourceClaim,
-				State: principal.MembershipStateActive,
+				AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
+				Source: principal.MembershipSourceClaim, SourceID: "",
+				State: principal.MembershipStateActive, Pinned: false,
 			},
 		},
 		{
 			"active with a suspend time",
 			principal.Membership{
 				AddedAt: at(1), SuspendedAt: at(2), GroupID: "grp-1", PrincipalID: "prn-1",
-				Source: principal.MembershipSourceLocal, State: principal.MembershipStateActive,
+				Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+				Pinned: false,
 			},
 		},
 		{
 			"suspended with no suspend time",
 			principal.Membership{
-				AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
+				AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-1",
 				Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
-				State: principal.MembershipStateSuspended,
+				State: principal.MembershipStateSuspended, Pinned: false,
 			},
 		},
 	}
 
-	for _, tc := range cases {
-		err := s.AddMember(ctx, tc.m, entry())
-		wantErr(t, tc.name, err, principal.ErrInvalid)
+	for i := range cases {
+		err := s.AddMember(ctx, cases[i].m, entry())
+		wantErr(t, cases[i].name, err, principal.ErrInvalid)
 	}
 
 	members, _, err := s.ListMembers(ctx, "grp-1", all())

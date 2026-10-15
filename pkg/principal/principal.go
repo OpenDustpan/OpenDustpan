@@ -198,6 +198,58 @@ func ParseMembershipState(s string) (MembershipState, error) {
 	}
 }
 
+// Membership puts one principal in one group. SourceID names the identity
+// provider or the SCIM token of a membership from a claim or from SCIM, and
+// is empty for a local membership. SuspendedAt is zero while the membership
+// is active. Pinned keeps a restored membership through the next directory
+// sync.
+type Membership struct {
+	AddedAt     time.Time
+	SuspendedAt time.Time
+	GroupID     string
+	PrincipalID string
+	Source      MembershipSource
+	SourceID    string
+	State       MembershipState
+	Pinned      bool
+}
+
+// Validate reports whether m holds usable values. An empty source or state
+// takes the default: local and active.
+func (m Membership) Validate() error {
+	def := m.withDefaults()
+
+	if _, err := ParseMembershipSource(string(def.Source)); err != nil {
+		return err
+	}
+
+	if _, err := ParseMembershipState(string(def.State)); err != nil {
+		return err
+	}
+
+	if def.Source == MembershipSourceLocal && def.SourceID != "" {
+		return fmt.Errorf("%w: a local membership names no identity provider or SCIM token", ErrInvalid)
+	}
+
+	if def.Source != MembershipSourceLocal && def.SourceID == "" {
+		return fmt.Errorf("%w: a membership from %s names its identity provider or SCIM token", ErrInvalid, def.Source)
+	}
+
+	if err := validateText("source ID", def.SourceID, maxSubjectLength, false); err != nil {
+		return err
+	}
+
+	if def.State == MembershipStateActive && !def.SuspendedAt.IsZero() {
+		return fmt.Errorf("%w: an active membership has no suspend time", ErrInvalid)
+	}
+
+	if def.State == MembershipStateSuspended && def.SuspendedAt.IsZero() {
+		return fmt.Errorf("%w: a suspended membership names when it was suspended", ErrInvalid)
+	}
+
+	return nil
+}
+
 // withDefaults returns m with an empty source set to local and an empty
 // state set to active. A local add carries neither, so it defaults to both.
 func (m Membership) withDefaults() Membership {
@@ -212,42 +264,6 @@ func (m Membership) withDefaults() Membership {
 	return m
 }
 
-// Validate reports whether m holds usable values. An empty source or state
-// takes the default: local and active.
-func (m Membership) Validate() error {
-	m = m.withDefaults()
-
-	if _, err := ParseMembershipSource(string(m.Source)); err != nil {
-		return err
-	}
-
-	if _, err := ParseMembershipState(string(m.State)); err != nil {
-		return err
-	}
-
-	if m.Source == MembershipSourceLocal && m.SourceID != "" {
-		return fmt.Errorf("%w: a local membership names no identity provider or SCIM token", ErrInvalid)
-	}
-
-	if m.Source != MembershipSourceLocal && m.SourceID == "" {
-		return fmt.Errorf("%w: a membership from %s names its identity provider or SCIM token", ErrInvalid, m.Source)
-	}
-
-	if err := validateText("source ID", m.SourceID, maxSubjectLength, false); err != nil {
-		return err
-	}
-
-	if m.State == MembershipStateActive && !m.SuspendedAt.IsZero() {
-		return fmt.Errorf("%w: an active membership has no suspend time", ErrInvalid)
-	}
-
-	if m.State == MembershipStateSuspended && m.SuspendedAt.IsZero() {
-		return fmt.Errorf("%w: a suspended membership names when it was suspended", ErrInvalid)
-	}
-
-	return nil
-}
-
 // Member is one principal in a group, with the time it joined and where the
 // membership comes from. SourceID names the identity provider or the SCIM
 // token of a membership from a claim or from SCIM, and is empty for a local
@@ -257,22 +273,6 @@ type Member struct {
 	AddedAt     time.Time
 	SuspendedAt time.Time
 	Principal   Principal
-	GroupID     string
-	PrincipalID string
-	Source      MembershipSource
-	SourceID    string
-	State       MembershipState
-	Pinned      bool
-}
-
-// Membership puts one principal in one group. SourceID names the identity
-// provider or the SCIM token of a membership from a claim or from SCIM, and
-// is empty for a local membership. SuspendedAt is zero while the membership
-// is active. Pinned keeps a restored membership through the next directory
-// sync.
-type Membership struct {
-	AddedAt     time.Time
-	SuspendedAt time.Time
 	GroupID     string
 	PrincipalID string
 	Source      MembershipSource

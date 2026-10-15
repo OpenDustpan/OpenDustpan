@@ -347,8 +347,8 @@ func (s *Service) AddMember(
 	}
 
 	m := Membership{
-		AddedAt: s.Now(), GroupID: groupID, PrincipalID: principalID,
-		Source: MembershipSourceLocal, State: MembershipStateActive,
+		AddedAt: s.Now(), SuspendedAt: time.Time{}, GroupID: groupID, PrincipalID: principalID,
+		Source: MembershipSourceLocal, SourceID: "", State: MembershipStateActive, Pinned: false,
 	}
 
 	if err := m.Validate(); err != nil {

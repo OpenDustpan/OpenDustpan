@@ -101,7 +101,11 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 			b.Fatalf("seed group: %v", err)
 		}
 
-		m := principal.Membership{AddedAt: at(1), GroupID: id, PrincipalID: "prn-me"}
+		m := principal.Membership{
+			AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: id, PrincipalID: "prn-me",
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		}
 		if err := s.AddMember(ctx, m, entry()); err != nil {
 			b.Fatalf("seed member: %v", err)
 		}

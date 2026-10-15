@@ -909,7 +909,11 @@ func seedCaller(t *testing.T, ps principal.Store) {
 			t.Fatalf("create group: %v", err)
 		}
 
-		m := principal.Membership{AddedAt: at(1), GroupID: id, PrincipalID: "prn-a"}
+		m := principal.Membership{
+			AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: id, PrincipalID: "prn-a",
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		}
 		if err := ps.AddMember(ctx, m, entry()); err != nil {
 			t.Fatalf("add member: %v", err)
 		}

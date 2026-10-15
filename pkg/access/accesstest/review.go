@@ -351,7 +351,9 @@ func seedMemberships(t *testing.T, ps principal.Store) {
 		var err error
 		if step.add {
 			err = ps.AddMember(ctx, principal.Membership{
-				AddedAt: at(step.minute), GroupID: "grp-ops", PrincipalID: "prn-a",
+				AddedAt: at(step.minute), SuspendedAt: time.Time{}, GroupID: "grp-ops", PrincipalID: "prn-a",
+				Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+				Pinned: false,
 			}, entryAt(at(step.minute)))
 		} else {
 			err = ps.RemoveMember(ctx, "grp-ops", "prn-a", entryAt(at(step.minute)))

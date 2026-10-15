@@ -145,7 +145,11 @@ func seedTeam(t *testing.T, ps principal.Store) {
 	}
 
 	for _, id := range []string{"prn-y", "prn-x"} {
-		m := principal.Membership{AddedAt: at(1), GroupID: "grp-team", PrincipalID: id}
+		m := principal.Membership{
+			AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: "grp-team", PrincipalID: id,
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		}
 		if err := ps.AddMember(ctx, m, entryAt(at(1))); err != nil {
 			t.Fatalf("add member: %v", err)
 		}
