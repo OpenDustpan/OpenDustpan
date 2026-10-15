@@ -645,6 +645,17 @@ func (q *Queries) CountRoleGrantsOnPrincipal(ctx context.Context, role string) (
 	return count, err
 }
 
+const countSession = `-- name: CountSession :one
+SELECT COUNT(*) FROM sessions WHERE id = ?
+`
+
+func (q *Queries) CountSession(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSession, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countStateVersions = `-- name: CountStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -976,6 +987,77 @@ func (q *Queries) CreateSecretKey(ctx context.Context, arg CreateSecretKeyParams
 		arg.WrapperID,
 		arg.Ciphertext,
 		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const createSession = `-- name: CreateSession :execrows
+INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent)
+SELECT ?1, p.id, ?2, ?3, ?4,
+  ?4, ?5, ?6, ?7
+FROM principals p
+WHERE p.id = ?8 AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.kind = 'person'
+ON CONFLICT DO NOTHING
+`
+
+type CreateSessionParams struct {
+	ID          string
+	Digest      string
+	Provider    string
+	CreatedAtMs int64
+	AuthTimeMs  int64
+	SourceIp    string
+	UserAgent   string
+	PrincipalID string
+}
+
+// A session needs a person principal that exists and is not disabled. A
+// taken ID or digest inserts nothing.
+func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createSession,
+		arg.ID,
+		arg.Digest,
+		arg.Provider,
+		arg.CreatedAtMs,
+		arg.AuthTimeMs,
+		arg.SourceIp,
+		arg.UserAgent,
+		arg.PrincipalID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const createSignInRequest = `-- name: CreateSignInRequest :execrows
+INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type CreateSignInRequestParams struct {
+	Digest      string
+	Provider    string
+	Nonce       string
+	Verifier    string
+	ReturnPath  string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) CreateSignInRequest(ctx context.Context, arg CreateSignInRequestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createSignInRequest,
+		arg.Digest,
+		arg.Provider,
+		arg.Nonce,
+		arg.Verifier,
+		arg.ReturnPath,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -1532,6 +1614,7 @@ UPDATE principals SET disabled_at_ms = CAST(?1 AS INTEGER)
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
   AND created_at_ms <= CAST(?2 AS INTEGER)
   AND last_active_at_ms <= CAST(?2 AS INTEGER)
+  AND COALESCE(last_sign_in_at_ms, 0) <= CAST(?2 AS INTEGER)
   AND NOT EXISTS (
     SELECT 1 FROM access_tokens t
     WHERE t.principal_id = principals.id
@@ -1545,9 +1628,9 @@ type DisableInactivePrincipalsParams struct {
 	CutoffMs int64
 }
 
-// A person is inactive when its creation, its activity baseline, and the
-// creation and the last use of each of its tokens are all at or before the
-// cutoff.
+// A person is inactive when its creation, its activity baseline, its last
+// sign-in, and the creation and the last use of each of its tokens are all
+// at or before the cutoff.
 func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -1644,6 +1727,25 @@ func (q *Queries) EndRotatedAccessToken(ctx context.Context, arg EndRotatedAcces
 		arg.ID,
 		arg.NowMs,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const endSession = `-- name: EndSession :execrows
+UPDATE sessions SET ended_at_ms = CAST(?1 AS INTEGER), end_reason = ?2
+WHERE id = ?3 AND ended_at_ms IS NULL
+`
+
+type EndSessionParams struct {
+	AtMs      int64
+	EndReason string
+	ID        string
+}
+
+func (q *Queries) EndSession(ctx context.Context, arg EndSessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, endSession, arg.AtMs, arg.EndReason, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -1827,7 +1929,7 @@ const getAccessTokenByDigest = `-- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms,
-  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE((
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0)) AS INTEGER) AS principal_active_at_ms
 FROM access_tokens t
@@ -2501,6 +2603,110 @@ func (q *Queries) GetSecretKey(ctx context.Context, arg GetSecretKeyParams) (Sec
 		&i.Ciphertext,
 		&i.CreatedAtMs,
 	)
+	return i, err
+}
+
+const getSession = `-- name: GetSession :one
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent
+FROM sessions WHERE id = ?
+`
+
+type GetSessionRow struct {
+	ID           string
+	PrincipalID  string
+	Provider     string
+	CreatedAtMs  int64
+	LastSeenAtMs int64
+	AuthTimeMs   int64
+	EndedAtMs    sql.NullInt64
+	EndReason    string
+	SourceIp     string
+	UserAgent    string
+}
+
+func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, error) {
+	row := q.db.QueryRowContext(ctx, getSession, id)
+	var i GetSessionRow
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Provider,
+		&i.CreatedAtMs,
+		&i.LastSeenAtMs,
+		&i.AuthTimeMs,
+		&i.EndedAtMs,
+		&i.EndReason,
+		&i.SourceIp,
+		&i.UserAgent,
+	)
+	return i, err
+}
+
+const getSessionByDigest = `-- name: GetSessionByDigest :one
+SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
+  s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms
+FROM sessions s
+JOIN principals p ON p.id = s.principal_id
+WHERE s.digest = ? AND p.deleted_at_ms IS NULL
+`
+
+type GetSessionByDigestRow struct {
+	ID                    string
+	PrincipalID           string
+	Digest                string
+	Provider              string
+	CreatedAtMs           int64
+	LastSeenAtMs          int64
+	AuthTimeMs            int64
+	EndedAtMs             sql.NullInt64
+	EndReason             string
+	SourceIp              string
+	UserAgent             string
+	Subject               string
+	DisplayName           string
+	PrincipalKind         string
+	PrincipalDisabledAtMs sql.NullInt64
+}
+
+func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionByDigest, digest)
+	var i GetSessionByDigestRow
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Digest,
+		&i.Provider,
+		&i.CreatedAtMs,
+		&i.LastSeenAtMs,
+		&i.AuthTimeMs,
+		&i.EndedAtMs,
+		&i.EndReason,
+		&i.SourceIp,
+		&i.UserAgent,
+		&i.Subject,
+		&i.DisplayName,
+		&i.PrincipalKind,
+		&i.PrincipalDisabledAtMs,
+	)
+	return i, err
+}
+
+const getSessionPrincipal = `-- name: GetSessionPrincipal :one
+SELECT kind, disabled_at_ms FROM principals WHERE id = ? AND deleted_at_ms IS NULL
+`
+
+type GetSessionPrincipalRow struct {
+	Kind         string
+	DisabledAtMs sql.NullInt64
+}
+
+// The kind and the disable time of a principal that exists, so a refused
+// session insert can name its cause.
+func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessionPrincipalRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionPrincipal, id)
+	var i GetSessionPrincipalRow
+	err := row.Scan(&i.Kind, &i.DisabledAtMs)
 	return i, err
 }
 
@@ -5203,6 +5409,18 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	return count, err
 }
 
+const pruneSignInRequests = `-- name: PruneSignInRequests :execrows
+DELETE FROM sign_in_requests WHERE expires_at_ms <= ?
+`
+
+func (q *Queries) PruneSignInRequests(ctx context.Context, expiresAtMs int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneSignInRequests, expiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const purgeStack = `-- name: PurgeStack :execrows
 DELETE FROM stacks
 WHERE namespace = ? AND id = ? AND deleted_at_ms IS NOT NULL
@@ -6013,6 +6231,21 @@ func (q *Queries) SetInstallationStateIf(ctx context.Context, arg SetInstallatio
 	return result.RowsAffected()
 }
 
+const setLastSignIn = `-- name: SetLastSignIn :exec
+UPDATE principals SET last_sign_in_at_ms = MAX(COALESCE(last_sign_in_at_ms, 0), CAST(?1 AS INTEGER))
+WHERE id = ?2
+`
+
+type SetLastSignInParams struct {
+	AtMs int64
+	ID   string
+}
+
+func (q *Queries) SetLastSignIn(ctx context.Context, arg SetLastSignInParams) error {
+	_, err := q.db.ExecContext(ctx, setLastSignIn, arg.AtMs, arg.ID)
+	return err
+}
+
 const setNamespaceIPAllowlist = `-- name: SetNamespaceIPAllowlist :execrows
 UPDATE namespaces
 SET ip_allowlist = ?
@@ -6195,6 +6428,34 @@ func (q *Queries) SubjectsOfCaller(ctx context.Context, subject string) ([]Subje
 	return items, nil
 }
 
+const takeSignInRequest = `-- name: TakeSignInRequest :one
+DELETE FROM sign_in_requests WHERE digest = ?
+RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms
+`
+
+type TakeSignInRequestRow struct {
+	Provider    string
+	Nonce       string
+	Verifier    string
+	ReturnPath  string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) TakeSignInRequest(ctx context.Context, digest string) (TakeSignInRequestRow, error) {
+	row := q.db.QueryRowContext(ctx, takeSignInRequest, digest)
+	var i TakeSignInRequestRow
+	err := row.Scan(
+		&i.Provider,
+		&i.Nonce,
+		&i.Verifier,
+		&i.ReturnPath,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+	)
+	return i, err
+}
+
 const touchAccessToken = `-- name: TouchAccessToken :exec
 UPDATE access_tokens SET last_used_at_ms = CAST(?1 AS INTEGER)
 WHERE id = ?2
@@ -6209,6 +6470,23 @@ type TouchAccessTokenParams struct {
 
 func (q *Queries) TouchAccessToken(ctx context.Context, arg TouchAccessTokenParams) error {
 	_, err := q.db.ExecContext(ctx, touchAccessToken, arg.AtMs, arg.ID, arg.BeforeMs)
+	return err
+}
+
+const touchSession = `-- name: TouchSession :exec
+UPDATE sessions SET last_seen_at_ms = CAST(?1 AS INTEGER)
+WHERE id = ?2 AND ended_at_ms IS NULL
+  AND last_seen_at_ms <= CAST(?3 AS INTEGER)
+`
+
+type TouchSessionParams struct {
+	AtMs     int64
+	ID       string
+	BeforeMs int64
+}
+
+func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) error {
+	_, err := q.db.ExecContext(ctx, touchSession, arg.AtMs, arg.ID, arg.BeforeMs)
 	return err
 }
 
