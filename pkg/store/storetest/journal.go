@@ -50,13 +50,24 @@ func journalRow(t *testing.T, s UpdatesStore, u stack.Update, sha byte, seqs ...
 	}
 }
 
+// runJournaled creates and starts a mutating update with journal version 1, so it
+// saves journal batches.
+func (f fixture) runJournaled(t *testing.T, ref stack.Ref, id string) stack.Update {
+	t.Helper()
+
+	u := f.create(t, ref, id, mutating())
+	u.JournalVersion = 1
+
+	return f.start(t, u)
+}
+
 // testJournalPut shows the write of a batch row: a new batch gets the next arrival,
 // a retry with the same content writes nothing, and a sequence ID that is stored
 // with other content is a conflict. A refused batch stores none of its sequences.
 func testJournalPut(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 
 	first := journalRow(t, f.s, u, 1, 1, 2)
 	if retried, err := f.s.PutJournalRow(t.Context(), first, f.fence); err != nil || retried {
@@ -95,7 +106,7 @@ func testJournalPut(t *testing.T, f fixture) {
 func testJournalRefusals(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 
 	forged := journalRow(t, f.s, u, 1, 1)
 	forged.Lease = sha256.Sum256([]byte("another lease"))
@@ -131,12 +142,31 @@ func testJournalRefusals(t *testing.T, f fixture) {
 	}
 }
 
+// testJournalRefusesVersionZero shows that a batch for an update with journal
+// version 0, which saves checkpoints, is refused with ErrNotJournaled and stores
+// nothing.
+func testJournalRefusesVersionZero(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	row := journalRow(t, f.s, u, 1, 1)
+
+	if _, err := f.s.PutJournalRow(t.Context(), row, f.fence); !errors.Is(err, stack.ErrNotJournaled) {
+		t.Fatalf("batch for a version 0 update: err = %v, want ErrNotJournaled", err)
+	}
+
+	keys, err := f.s.JournalKeys(t.Context(), mustStackID(t, f.s, f.ref), u.ID)
+	if err != nil || len(keys) != 0 {
+		t.Fatalf("journal after a refused batch = %v, %v; want empty", keys, err)
+	}
+}
+
 // testJournalAfterCancel shows that a batch that arrives after the update is
 // canceled is refused, as the events are.
 func testJournalAfterCancel(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 	late := journalRow(t, f.s, u, 1, 1)
 	f.end(t, u, stack.StatusCanceled)
 
@@ -175,7 +205,7 @@ func putAtOnce(t *testing.T, f fixture, rows []stack.JournalRow) ([]bool, []erro
 func testJournalConcurrentRows(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 	rows := []stack.JournalRow{journalRow(t, f.s, u, 1, 1), journalRow(t, f.s, u, 2, 2)}
 
 	retried, errs := putAtOnce(t, f, rows)
@@ -201,7 +231,7 @@ func testJournalConcurrentRows(t *testing.T, f fixture) {
 func testJournalConcurrentRetry(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 	row := journalRow(t, f.s, u, 1, 1, 2)
 
 	retried, errs := putAtOnce(t, f, []stack.JournalRow{row, row})
@@ -237,7 +267,7 @@ func withOperations(row stack.JournalRow, ops ...int64) stack.JournalRow {
 func testJournalVerify(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 
 	first := withOperations(journalRow(t, f.s, u, 1, 1), 10, 11)
 	if _, err := f.s.PutJournalRow(t.Context(), first, f.fence); err != nil {
@@ -301,7 +331,7 @@ func sortedKeys(keys []blob.Key) []blob.Key {
 func testJournalBuild(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 	first := journalRow(t, f.s, u, 1, 1, 2)
 	second := journalRow(t, f.s, u, 2, 3)
 
@@ -374,7 +404,7 @@ func testJournalRefusedBuild(t *testing.T, f fixture, u stack.Update, want []blo
 func testJournalBuildRace(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 	row := journalRow(t, f.s, u, 1, 1)
 
 	var (
@@ -418,15 +448,15 @@ func testJournalBuildRace(t *testing.T, f fixture) {
 func testJournalBuildIsolation(t *testing.T, f fixture) {
 	t.Helper()
 
-	earlier := f.run(t, f.ref, "u0", mutating())
+	earlier := f.runJournaled(t, f.ref, "u0")
 	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, earlier, 1, 1), f.fence); err != nil {
 		t.Fatalf("earlier batch: %v", err)
 	}
 
 	f.end(t, earlier, stack.StatusSucceeded)
 
-	current := f.run(t, f.ref, "u1", mutating())
-	other := f.run(t, f.other(t), "d1", mutating())
+	current := f.runJournaled(t, f.ref, "u1")
+	other := f.runJournaled(t, f.other(t), "d1")
 
 	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, other, 2, 2), f.fence); err != nil {
 		t.Fatalf("batch of another stack: %v", err)
@@ -464,7 +494,7 @@ func testJournalBuildRefusals(t *testing.T, f fixture) {
 		t.Fatalf("build of a preview: err = %v, want ErrWrongUpdateState", err)
 	}
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 	want := []blob.Key{journalRow(t, f.s, u, 1, 1).BlobKey}
 
 	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 1, 1), f.fence); err != nil {
@@ -493,7 +523,7 @@ func testJournalBuildRefusals(t *testing.T, f fixture) {
 func testJournalSweepable(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 	id := mustStackID(t, f.s, f.ref)
 
 	if ok, err := f.s.JournalSweepable(t.Context(), id, u.ID); err != nil || ok {
@@ -516,7 +546,7 @@ func testJournalSweepable(t *testing.T, f fixture) {
 func testJournalKeysFollowRename(t *testing.T, f fixture) {
 	t.Helper()
 
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 1, 1), f.fence); err != nil {
 		t.Fatalf("batch: %v", err)
 	}
