@@ -101,28 +101,58 @@ func testStoreChecksSubjectNamespace(t *testing.T, d *delegation) {
 	}
 }
 
-// testNamespacePrincipalLimits proves the limits of a principal of a
-// namespace until the right to make its tokens exists: no token, also for
-// the bootstrap admin token, and no group.
+// testNamespacePrincipalLimits proves the tokens of a principal of a
+// namespace: the bootstrap admin token and a holder of the namespace admin
+// role make them, a principal without the right cannot, and the principal
+// still joins no group.
 func testNamespacePrincipalLimits(t *testing.T, d *delegation) {
 	t.Helper()
 
 	bot := d.acmeBot(t)
+	admin := d.principalOf(t, "alice@example.com", principal.KindPerson)
+	outsider := d.principalOf(t, "bob@example.com", principal.KindPerson)
 
-	if _, _, err := d.serviceToken(t, bootstrap(), bot); !errors.Is(err, accesstoken.ErrInvalid) {
-		t.Fatalf("token of a principal of a namespace: err = %v, want ErrInvalid", err)
+	d.mustGrant(t, bootstrap(), admin, access.RoleAdmin, identity.NamespaceObject("acme"))
+
+	_, _, bootErr := d.serviceToken(t, bootstrap(), bot)
+	if bootErr != nil {
+		t.Fatalf("token by the bootstrap admin: %v", bootErr)
 	}
 
-	group, err := d.principals.CreateGroup(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageGroups),
-		principal.GroupInput{Name: "ops", Description: ""})
-	if err != nil {
-		t.Fatalf("create group: %v", err)
+	tok, secret, adminErr := d.serviceToken(t, signedIn(admin), bot)
+	if adminErr != nil {
+		t.Fatalf("token by a namespace admin: %v", adminErr)
 	}
 
-	_, err = d.principals.AddMember(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageGroups),
+	_, _, outsiderErr := d.serviceToken(t, signedIn(outsider), bot)
+	if !errors.Is(outsiderErr, identity.ErrDenied) {
+		t.Fatalf("token without the right: err = %v, want ErrDenied", outsiderErr)
+	}
+
+	_, authErr := d.tokens.AuthenticateToken(t.Context(), secret.Reveal())
+	if authErr != nil {
+		t.Fatalf("authenticate as the namespace principal: %v", authErr)
+	}
+
+	revokeErr := d.tokens.Revoke(t.Context(), signedIn(admin),
+		changeEntry(signedIn(admin), identity.ActionPrincipalManageTokens),
+		accesstoken.ScopeService, tok.ID)
+	if revokeErr != nil {
+		t.Fatalf("revoke by a namespace admin: %v", revokeErr)
+	}
+
+	group, groupErr := d.principals.CreateGroup(
+		t.Context(), changeEntry(bootstrap(), identity.ActionServerManageGroups),
+		principal.GroupInput{Name: "ops", Description: ""},
+	)
+	if groupErr != nil {
+		t.Fatalf("create group: %v", groupErr)
+	}
+
+	_, memberErr := d.principals.AddMember(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageGroups),
 		bootstrap(), group.ID, bot.ID)
-	if !errors.Is(err, principal.ErrInvalid) {
-		t.Fatalf("membership of a principal of a namespace: err = %v, want ErrInvalid", err)
+	if !errors.Is(memberErr, principal.ErrInvalid) {
+		t.Fatalf("membership of a principal of a namespace: err = %v, want ErrInvalid", memberErr)
 	}
 }
 
