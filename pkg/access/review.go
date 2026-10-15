@@ -93,8 +93,15 @@ type CallerGrantsQuery struct {
 
 // ReviewRow is one row of an access-review export: a grant, how it ended,
 // the name of its subject and, for a row through a group, the membership.
+// LastAccessTracked is true on a row of a principal: on a grant whose
+// subject is a principal, or on a row read through a group, for the member
+// in Via. LastAccessAt is the latest last-use time over every access token
+// of that principal, and nil when no token of the principal was ever used.
 type ReviewRow struct {
 	RevokedAt *time.Time
+	// LastAccessAt is the latest last-use time of the access tokens of the
+	// principal of the row, and nil when no token was ever used.
+	LastAccessAt *time.Time
 	// MemberCount is the count of the members of a group subject at the
 	// time of a snapshot. It is nil for a principal subject.
 	MemberCount *int64
@@ -106,6 +113,9 @@ type ReviewRow struct {
 	SubjectName string
 	RevokedBy   string
 	Grant       Grant
+	// LastAccessTracked is true on a row of a principal, and false on a
+	// group row with no Via.
+	LastAccessTracked bool
 }
 
 // Membership is the time that a principal was a member of a group.
@@ -153,4 +163,8 @@ type ReviewStore interface {
 	// keeps, a deleted one included. An ID with no unit (a purged one, or an
 	// ID of no unit) is not in the map.
 	ReviewUnits(ctx context.Context, ids []string) (map[string]UnitState, error)
+	// LastAccess returns, for each principal ID in principalIDs, the latest
+	// last-use time of its access tokens. A principal with no used token is
+	// not in the map. It reads only the given IDs.
+	LastAccess(ctx context.Context, principalIDs []string) (map[string]time.Time, error)
 }

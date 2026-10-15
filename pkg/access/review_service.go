@@ -164,6 +164,13 @@ func (s *Service) reviewEntries(ctx context.Context, rs ReviewStore, r reviewRea
 		return ReviewPage{}, err
 	}
 
+	uses, err := s.lastAccess(ctx, rs, rows)
+	if err != nil {
+		return ReviewPage{}, err
+	}
+
+	setLastAccess(rows, uses)
+
 	for i := range rows {
 		page.Entries = append(page.Entries, reviewEntry(r.q, rows[i], states, r.grantAccess))
 	}
@@ -307,11 +314,13 @@ func (s *Service) bootstrapEntries(scope ReviewScope) []ReviewEntry {
 			InheritedFrom: nil, EffectiveUntil: nil, EffectiveFrom: time.Time{}, ObjectState: ObjectLive,
 			Holder: BootstrapHolder, CanGrantAccess: true,
 			Row: ReviewRow{
-				RevokedAt: nil, MemberCount: nil, Via: nil, SubjectName: subject, RevokedBy: "",
+				RevokedAt: nil, LastAccessAt: nil, MemberCount: nil, Via: nil, SubjectName: subject, RevokedBy: "",
 				Grant: Grant{
 					CreatedAt: time.Time{}, Condition: nil, Object: server, ID: "", Role: RoleAdmin,
 					CreatedBy: "", Subject: Subject{Kind: "", ID: ""},
 				},
+				// A bootstrap row carries no last access.
+				LastAccessTracked: false,
 			},
 		}
 
@@ -345,6 +354,69 @@ func (s *Service) unitStates(ctx context.Context, rs ReviewStore, rows []ReviewR
 	}
 
 	return states, nil
+}
+
+// lastAccess reads the latest last-use time of the access tokens of each
+// principal of rows, with one lookup for the page.
+func (s *Service) lastAccess(ctx context.Context, rs ReviewStore, rows []ReviewRow) (map[string]time.Time, error) {
+	uses, err := rs.LastAccess(ctx, principalIDsOf(rows))
+	if err != nil {
+		return nil, fmt.Errorf("read last access: %w", err)
+	}
+
+	return uses, nil
+}
+
+// principalOfRow returns the ID of the principal that a row speaks of: the
+// member of a row read through a group, or the subject of a grant to a
+// principal. It is empty for a group row with no Via.
+func principalOfRow(row *ReviewRow) string {
+	switch {
+	case row.Via != nil:
+		return row.Via.PrincipalID
+	case row.Grant.Subject.Kind == SubjectPrincipal:
+		return row.Grant.Subject.ID
+	default:
+		return ""
+	}
+}
+
+// principalIDsOf returns the IDs of the principals of rows, deduplicated.
+func principalIDsOf(rows []ReviewRow) []string {
+	var ids []string
+
+	seen := map[string]bool{}
+
+	for i := range rows {
+		id := principalOfRow(&rows[i])
+		if id == "" || seen[id] {
+			continue
+		}
+
+		seen[id] = true
+		ids = append(ids, id)
+	}
+
+	return ids
+}
+
+// setLastAccess sets the last access of each row of rows from uses: a row
+// of a principal is tracked, with the latest use of its tokens, or with no
+// time when no token was ever used. A group row with no Via keeps neither.
+func setLastAccess(rows []ReviewRow, uses map[string]time.Time) {
+	for i := range rows {
+		id := principalOfRow(&rows[i])
+		if id == "" {
+			continue
+		}
+
+		rows[i].LastAccessTracked = true
+
+		if at, ok := uses[id]; ok {
+			used := at
+			rows[i].LastAccessAt = &used
+		}
+	}
 }
 
 // reviewScope returns the scope of the export of obj, and the roles that

@@ -3157,6 +3157,46 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 	return i, err
 }
 
+const lastAccessByPrincipals = `-- name: LastAccessByPrincipals :many
+SELECT principal_id, CAST(MAX(last_used_at_ms) AS INTEGER) AS last_used_at_ms
+FROM access_tokens
+WHERE principal_id IN (SELECT value FROM json_each(CAST(?1 AS TEXT)))
+  AND last_used_at_ms IS NOT NULL
+GROUP BY principal_id
+`
+
+type LastAccessByPrincipalsRow struct {
+	PrincipalID  string
+	LastUsedAtMs int64
+}
+
+// The latest last-use time of the access tokens of each given principal:
+// one row for each principal with a used token. A JSON array carries the
+// IDs, so the query stays fixed. Revoked, replaced and expired tokens
+// count: a use is a use.
+func (q *Queries) LastAccessByPrincipals(ctx context.Context, principals string) ([]LastAccessByPrincipalsRow, error) {
+	rows, err := q.db.QueryContext(ctx, lastAccessByPrincipals, principals)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LastAccessByPrincipalsRow
+	for rows.Next() {
+		var i LastAccessByPrincipalsRow
+		if err := rows.Scan(&i.PrincipalID, &i.LastUsedAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id

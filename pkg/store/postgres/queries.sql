@@ -1252,6 +1252,16 @@ WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL A
 UPDATE access_tokens SET last_used_at_ms = sqlc.arg('at_ms')::bigint
 WHERE id = sqlc.arg('id') AND (last_used_at_ms IS NULL OR last_used_at_ms <= sqlc.arg('before_ms')::bigint);
 
+-- name: LastAccessByPrincipals :many
+-- The latest last-use time of the access tokens of each given principal:
+-- one row for each principal with a used token. Revoked, replaced and
+-- expired tokens count: a use is a use.
+SELECT principal_id, MAX(last_used_at_ms)::bigint AS last_used_at_ms
+FROM access_tokens
+WHERE principal_id = ANY(sqlc.arg('principal_ids')::text[])
+  AND last_used_at_ms IS NOT NULL
+GROUP BY principal_id;
+
 -- name: GetDeletedStack :one
 -- A deleted stack of one namespace by its stable ID (ADR 47), for a restore
 -- or a purge. A live stack matches no row.

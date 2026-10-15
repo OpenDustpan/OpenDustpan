@@ -1173,6 +1173,17 @@ UPDATE access_tokens SET last_used_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE id = sqlc.arg('id')
   AND (last_used_at_ms IS NULL OR last_used_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER));
 
+-- name: LastAccessByPrincipals :many
+-- The latest last-use time of the access tokens of each given principal:
+-- one row for each principal with a used token. A JSON array carries the
+-- IDs, so the query stays fixed. Revoked, replaced and expired tokens
+-- count: a use is a use.
+SELECT principal_id, CAST(MAX(last_used_at_ms) AS INTEGER) AS last_used_at_ms
+FROM access_tokens
+WHERE principal_id IN (SELECT value FROM json_each(CAST(sqlc.arg('principals') AS TEXT)))
+  AND last_used_at_ms IS NOT NULL
+GROUP BY principal_id;
+
 -- name: GetDeletedStack :one
 -- A deleted stack of one namespace by its stable ID (ADR 47), for a restore
 -- or a purge. A live stack matches no row.
