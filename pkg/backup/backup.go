@@ -76,6 +76,8 @@ var Tables = []string{
 	"principal_groups",
 	"group_members",
 	"access_tokens",
+	"sessions",
+	"sign_in_requests",
 	"roles",
 	"grants",
 	"audit_sink_cursors",

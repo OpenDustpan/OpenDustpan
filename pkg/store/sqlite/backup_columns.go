@@ -5,6 +5,8 @@ package sqlite
 const (
 	backupColCreatedAtMs = "created_at_ms"
 	backupColCreatedBy   = "created_by"
+	backupColDigest      = "digest"
+	backupColPrincipalID = "principal_id"
 	backupColEndedAtMs   = "ended_at_ms"
 	backupColName        = "name"
 	backupColNamespace   = "namespace"
@@ -107,7 +109,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"lease_digest",
 				"schema_version",
 				backupColSequence,
-				"digest",
+				backupColDigest,
 				"invalid",
 				"features_json",
 				"deployment",
@@ -275,6 +277,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 	}
 
 	tables = append(tables, sqliteIdentityBackupTables()...)
+	tables = append(tables, sqliteSessionBackupTables()...)
 
 	return append(tables, []sqliteBackupTable{
 		{
@@ -311,6 +314,41 @@ func sqliteBackupTables() []sqliteBackupTable {
 	}...)
 }
 
+// sqliteSessionBackupTables lists the column lists of the session and
+// sign-in request tables.
+func sqliteSessionBackupTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
+		{
+			table: "sessions",
+			columns: []string{
+				"id",
+				backupColPrincipalID,
+				backupColDigest,
+				"provider",
+				backupColCreatedAtMs,
+				"last_seen_at_ms",
+				"auth_time_ms",
+				"ended_at_ms",
+				"end_reason",
+				"source_ip",
+				"user_agent",
+			},
+		},
+		{
+			table: "sign_in_requests",
+			columns: []string{
+				backupColDigest,
+				"provider",
+				"nonce",
+				"verifier",
+				"return_path",
+				backupColCreatedAtMs,
+				"expires_at_ms",
+			},
+		},
+	}
+}
+
 // sqliteIdentityBackupTables lists the column lists of the identity tables
 // (ADR 52, ADR 53): principals, groups, memberships, access tokens, roles,
 // grants, the audit sink cursors and the token policy, in the order of
@@ -332,6 +370,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColDeletedAtMs,
 				"disabled_at_ms",
 				"last_active_at_ms",
+				"last_sign_in_at_ms",
 			},
 		},
 		{
@@ -349,16 +388,16 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "group_members",
-			columns: []string{"group_id", "principal_id", "added_at_ms", "removed_at_ms"},
+			columns: []string{"group_id", backupColPrincipalID, "added_at_ms", "removed_at_ms"},
 		},
 		{
 			table: "access_tokens",
 			columns: []string{
 				"id",
-				"principal_id",
+				backupColPrincipalID,
 				backupColName,
 				backupColKind,
-				"digest",
+				backupColDigest,
 				backupColCreatedAtMs,
 				"expires_at_ms",
 				"last_used_at_ms",

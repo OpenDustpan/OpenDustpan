@@ -152,6 +152,14 @@ _Avoid_: User (when the caller can be a machine), actor
 The secret that a tool or the console sends to prove which principal it acts for.
 _Avoid_: API key, password
 
+**Sign-in**:
+The step in which a sign-in method, such as an identity provider, proves who a person is. The method only proves the identity. The server then issues its own session.
+_Avoid_: Login, log-in (as a noun). The verb is "sign in".
+
+**Session**:
+The proof of a sign-in that the console sends back in a cookie. A session belongs to one person. It ends at a sign-out, when an administrator ends it, after a period with no use, and at a maximum length. By default, the period is 15 minutes and the maximum length is 12 hours.
+_Avoid_: Login, cookie (the cookie only carries the session)
+
 **Personal token**:
 An access token that belongs to a person. A person creates it after a sign-in, and it has an expiry (ADR 53).
 _Avoid_: PAT, user token
