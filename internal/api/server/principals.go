@@ -305,44 +305,44 @@ func (h *Handler) principalRoutes() []Route {
 			Path:    principalsPath,
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.servePrincipalChange(identity.ActionServerManagePrincipals, createPrincipal),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, createPrincipal),
 		},
 		{
 			Method: http.MethodGet, Path: principalsPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.servePrincipalRead(listPrincipals),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(listPrincipals),
 		},
 		{
 			Method: http.MethodGet, Path: principalPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.servePrincipalRead(getPrincipal),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(getPrincipal),
 		},
 		{
 			Method:  http.MethodPatch,
 			Path:    principalPath,
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.servePrincipalChange(identity.ActionServerManagePrincipals, changePrincipal),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, changePrincipal),
 		},
 		{
 			Method:  http.MethodDelete,
 			Path:    principalPath,
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.servePrincipalChange(identity.ActionServerManagePrincipals, deletePrincipal),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, deletePrincipal),
 		},
 		{
 			Method: http.MethodGet, Path: principalPath + "/groups", Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.servePrincipalRead(listGroupsOfPrincipal),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(listGroupsOfPrincipal),
 		},
 		{
 			Method:  http.MethodPost,
 			Path:    principalPath + "/enable",
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.servePrincipalChange(identity.ActionServerManagePrincipals, enablePrincipal),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.servePrincipalChange(identity.ActionServerManagePrincipals, enablePrincipal),
 		},
 	}
 }
@@ -358,52 +358,52 @@ func (h *Handler) groupRoutes() []Route {
 			Path:    groupsPath,
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.servePrincipalChange(identity.ActionServerManageGroups, createGroup),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, createGroup),
 		},
 		{
 			Method: http.MethodGet, Path: groupsPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.servePrincipalRead(listGroups),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(listGroups),
 		},
 		{
 			Method: http.MethodGet, Path: groupPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.servePrincipalRead(getGroup),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(getGroup),
 		},
 		{
 			Method:  http.MethodPatch,
 			Path:    groupPath,
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.servePrincipalChange(identity.ActionServerManageGroups, changeGroup),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, changeGroup),
 		},
 		{
 			Method:  http.MethodDelete,
 			Path:    groupPath,
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.servePrincipalChange(identity.ActionServerManageGroups, deleteGroup),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, deleteGroup),
 		},
 		{
 			Method: http.MethodGet, Path: membersPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.servePrincipalRead(listMembers),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.servePrincipalRead(listMembers),
 		},
 		{
 			Method:  http.MethodPost,
 			Path:    membersPath,
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.servePrincipalChange(identity.ActionServerManageGroups, addMember),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, addMember),
 		},
 		{
 			Method:  http.MethodDelete,
 			Path:    membersPath + "/{principal}",
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.servePrincipalChange(identity.ActionServerManageGroups, removeMember),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.servePrincipalChange(identity.ActionServerManageGroups, removeMember),
 		},
 	}
 }
@@ -411,15 +411,32 @@ func (h *Handler) groupRoutes() []Route {
 // decodeStrict reads one JSON object from r into dst with no unknown field
 // and nothing after it. Any failure answers bad.
 func decodeStrict(w http.ResponseWriter, r *http.Request, dst any, bad error) error {
+	body, err := readBody(w, r, bad)
+	if err != nil {
+		return err
+	}
+
+	return decodeBody(body, dst, bad)
+}
+
+// readBody reads the body of r under the limit of a request body. It
+// answers errBodyTooLarge over the limit, and bad when the read fails.
+func readBody(w http.ResponseWriter, r *http.Request, bad error) ([]byte, error) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxPrincipalBodyBytes))
 	if tooLarge, isLimit := errors.AsType[*http.MaxBytesError](err); isLimit && tooLarge.Limit > 0 {
-		return errBodyTooLarge
+		return nil, errBodyTooLarge
 	}
 
 	if err != nil {
-		return bad
+		return nil, bad
 	}
 
+	return body, nil
+}
+
+// decodeBody decodes body into dst as decodeStrict does: one JSON value
+// with no unknown field, else bad.
+func decodeBody(body []byte, dst any, bad error) error {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	dec.DisallowUnknownFields()
 

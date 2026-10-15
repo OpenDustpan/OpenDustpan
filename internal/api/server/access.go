@@ -230,7 +230,12 @@ const (
 	namespaceGrantsPath  = "/api/server/namespaces/{namespace}/grants"
 	collectionGrantsPath = "/api/server/namespaces/{namespace}/collections/{collection}/grants"
 	unitGrantsPath       = "/api/server/namespaces/{namespace}/unit-grants"
-	grantIDSuffix        = "/{id}"
+	// principalGrantsPath holds the grants on one service principal. Their
+	// action is server:manage-access, which only a grant on the
+	// installation gives: a grant on a principal lets its holder act as
+	// the principal.
+	principalGrantsPath = "/api/server/principals/{principal}/grants"
+	grantIDSuffix       = "/{id}"
 )
 
 // roleRoutes returns the role rows of the route table.
@@ -241,23 +246,38 @@ func (h *Handler) roleRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: rolesPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.serveAccessRead(listRoles),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveAccessRead(listRoles),
 		},
 		{
 			Method: http.MethodGet, Path: rolePath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.serveAccessRead(getRole),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveAccessRead(getRole),
 		},
 		{
-			Method: http.MethodPost, Path: rolesPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, Serve: h.serveAccessChange(identity.ActionServerManageRoles, createRole),
+			Method:     http.MethodPost,
+			Path:       rolesPath,
+			Scope:      ScopeAuthorized,
+			Actions:    manage,
+			Resolve:    resolveServer,
+			ActionsFor: nil,
+			Serve:      h.serveAccessChange(identity.ActionServerManageRoles, createRole),
 		},
 		{
-			Method: http.MethodPatch, Path: rolePath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, Serve: h.serveAccessChange(identity.ActionServerManageRoles, changeRole),
+			Method:     http.MethodPatch,
+			Path:       rolePath,
+			Scope:      ScopeAuthorized,
+			Actions:    manage,
+			Resolve:    resolveServer,
+			ActionsFor: nil,
+			Serve:      h.serveAccessChange(identity.ActionServerManageRoles, changeRole),
 		},
 		{
-			Method: http.MethodDelete, Path: rolePath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, Serve: h.serveAccessChange(identity.ActionServerManageRoles, deleteRole),
+			Method:     http.MethodDelete,
+			Path:       rolePath,
+			Scope:      ScopeAuthorized,
+			Actions:    manage,
+			Resolve:    resolveServer,
+			ActionsFor: nil,
+			Serve:      h.serveAccessChange(identity.ActionServerManageRoles, deleteRole),
 		},
 	}
 }
@@ -274,6 +294,7 @@ func (h *Handler) grantRoutes() []Route {
 		{resolveNamespacePath, namespaceGrantsPath, identity.ActionNamespaceManageAccess},
 		{resolveCollectionPath, collectionGrantsPath, identity.ActionCollectionManageAccess},
 		{resolveUnitQuery, unitGrantsPath, identity.ActionUnitManageAccess},
+		{resolvePrincipalPath, principalGrantsPath, identity.ActionServerManageAccess},
 	}
 
 	const routesPerKind = 3 // a list, a grant and a revoke
@@ -286,15 +307,20 @@ func (h *Handler) grantRoutes() []Route {
 		out = append(out,
 			Route{
 				Method: http.MethodGet, Path: k.path, Scope: ScopeAuthorized,
-				Actions: actions, Resolve: k.resolve, Serve: h.serveAccessRead(listGrants),
+				Actions: actions, Resolve: k.resolve, ActionsFor: nil, Serve: h.serveAccessRead(listGrants),
 			},
 			Route{
-				Method: http.MethodPost, Path: k.path, Scope: ScopeAuthorized,
-				Actions: actions, Resolve: k.resolve, Serve: h.serveAccessChange(k.action, createGrant),
+				Method:     http.MethodPost,
+				Path:       k.path,
+				Scope:      ScopeAuthorized,
+				Actions:    actions,
+				Resolve:    k.resolve,
+				ActionsFor: nil,
+				Serve:      h.serveAccessChange(k.action, createGrant),
 			},
 			Route{
 				Method: http.MethodDelete, Path: k.path + grantIDSuffix, Scope: ScopeAuthorized,
-				Actions: append([]identity.Action(nil), actions...), Resolve: k.resolve,
+				Actions: append([]identity.Action(nil), actions...), Resolve: k.resolve, ActionsFor: nil,
 				Serve: h.serveAccessChange(k.action, revokeGrant),
 			},
 		)
