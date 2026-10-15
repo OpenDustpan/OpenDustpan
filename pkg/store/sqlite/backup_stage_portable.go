@@ -126,6 +126,11 @@ func loadPortableTables(
 		return fmt.Errorf("clear staged token policy: %w", backup.ErrExportRead)
 	}
 
+	// The migration seeds the session policy row too.
+	if _, err := conn.ExecContext(ctx, `DELETE FROM session_policy`); err != nil {
+		return fmt.Errorf("clear staged session policy: %w", backup.ErrExportRead)
+	}
+
 	for _, table := range backup.PortableTables() {
 		if loadErr := loadPortableTable(ctx, conn, open, index[table.Table], table); loadErr != nil {
 			return loadErr

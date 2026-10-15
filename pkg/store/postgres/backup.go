@@ -349,6 +349,11 @@ func pgCopyIdentityTables() []pgCopyTable {
 			},
 			orderBy: []string{"id"},
 		},
+		{
+			table:   "session_policy",
+			columns: []string{"id", "idle_ms", "max_length_ms", pgColUpdatedAtMs},
+			orderBy: []string{"id"},
+		},
 	}
 }
 

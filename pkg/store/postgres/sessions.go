@@ -15,7 +15,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
-var _ session.Store = (*Store)(nil)
+var (
+	_ session.Store       = (*Store)(nil)
+	_ session.PolicyStore = (*Store)(nil)
+)
 
 // CreateSession implements session.Store.
 func (s *Store) CreateSession(ctx context.Context, ss session.Session, d session.Digest, e audit.Entry) error {
@@ -239,3 +242,57 @@ func (s *Store) PruneRequests(ctx context.Context, at time.Time) (int64, error) 
 
 	return n, nil
 }
+
+// GetSessionPolicy implements session.PolicyStore.
+func (s *Store) GetSessionPolicy(ctx context.Context) (session.Policy, error) {
+	row, err := s.queries.GetSessionPolicy(ctx)
+	if err != nil {
+		return session.Policy{}, fmt.Errorf("select session policy: %w", err)
+	}
+
+	return sessionPolicyOf(row), nil
+}
+
+// UpdateSessionPolicy implements session.PolicyStore. The transaction takes the
+// advisory lock of @server first, as every audited change does.
+func (s *Store) UpdateSessionPolicy(ctx context.Context, update session.PolicyUpdate) (session.Policy, error) {
+	return updateServerSetting(ctx, s, func(q *db.Queries) (session.Policy, error) {
+		row, err := q.GetSessionPolicy(ctx)
+		if err != nil {
+			return session.Policy{}, fmt.Errorf("select session policy: %w", err)
+		}
+
+		return sessionPolicyOf(row), nil
+	}, update, func(q *db.Queries, p session.Policy) error {
+		return setSessionPolicy(ctx, q, p)
+	})
+}
+
+// sessionPolicyOf maps the generated policy row to the policy.
+func sessionPolicyOf(row db.GetSessionPolicyRow) session.Policy {
+	return codec.FromSessionPolicyRow(codec.SessionPolicyRow{
+		IdleMs: row.IdleMs, MaxLengthMs: row.MaxLengthMs, UpdatedAtMs: row.UpdatedAtMs,
+	})
+}
+
+// setSessionPolicy writes p in the transaction of q.
+func setSessionPolicy(ctx context.Context, q *db.Queries, p session.Policy) error {
+	row := codec.ToSessionPolicyRow(p)
+
+	n, err := q.SetSessionPolicy(ctx, db.SetSessionPolicyParams{
+		IdleMs: row.IdleMs, MaxLengthMs: row.MaxLengthMs, UpdatedAtMs: row.UpdatedAtMs,
+	})
+	if err != nil {
+		return fmt.Errorf("update session policy: %w", err)
+	}
+
+	if n != 1 {
+		return errNoSessionPolicyRow
+	}
+
+	return nil
+}
+
+// errNoSessionPolicyRow reports a database without the seeded session
+// policy row.
+var errNoSessionPolicyRow = errors.New("session policy row is missing")
