@@ -68,9 +68,9 @@ the example below quotes each string.
 
 The file refuses a `database` URL with a password. Set such a URL in
 `DUSTPAN_DATABASE`, because a secret comes only from a variable or from a
-file that a `*_FILE` key names (ADR 63 decision 4). The `--database` flag
-still takes a URL with a password, but it is deprecated: `serve` logs a
-WARN line when it does. Use `DUSTPAN_DATABASE` instead.
+file that a `*_FILE` key names. The `--database` flag refuses a URL with a
+password too: `serve` stops with an error before it opens the database.
+Use `DUSTPAN_DATABASE` instead.
 
 At start, the server writes one INFO line for each setting, with its key,
 its value and its layer: `flag`, `env`, `file` or `default`. When more than
