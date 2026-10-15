@@ -589,6 +589,9 @@ var (
 	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
 )
 
+// errNoJournalCount reports a wrapped store without the journaled count.
+var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
+
 // openUncounted returns a store in a fresh schema of the database at base
 // that the uncounted-checkpoint case can NULL through SQL.
 func openUncounted(t *testing.T, base string) *uncountedStore {
@@ -604,6 +607,24 @@ func openUncounted(t *testing.T, base string) *uncountedStore {
 	t.Cleanup(s.Close)
 
 	return &uncountedStore{UpdatesStore: s, url: schemaURL, t: t}
+}
+
+// CountRunningJournaledUpdates forwards to the wrapped store, whose method
+// the embedded UpdatesStore interface hides.
+func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	counter, ok := s.UpdatesStore.(interface {
+		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("count running journaled updates: %w", errNoJournalCount)
+	}
+
+	count, err := counter.CountRunningJournaledUpdates(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count running journaled updates: %w", err)
+	}
+
+	return count, nil
 }
 
 // NullifyResourceCount implements storetest.CountNullifier.

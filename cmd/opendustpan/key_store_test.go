@@ -161,11 +161,15 @@ func checkRefusesNewKeyFile(t *testing.T, backend keyBackend, mode keyMakeMode) 
 
 	backend.seed(t, database, []byte(otherKeyString))
 
+	// A PostgreSQL URL holds a password, and serve refuses a password in a
+	// flag, so the database goes in the variable.
+	t.Setenv("DUSTPAN_DATABASE", database)
+
 	var logs lockedBuffer
 
 	err := serveWithIO(
 		t.Context(),
-		[]string{"--database", database, "--key-encryption-key-file", keyPath},
+		[]string{"--key-encryption-key-file", keyPath},
 		strings.NewReader(mode.stdin),
 		&logs,
 		mode.terminal,
@@ -215,11 +219,13 @@ func checkMakesKeyFile(t *testing.T, backend keyBackend, mode keyMakeMode) {
 	database := backend.database(t, dir)
 	keyPath := filepath.Join(dir, "dustpan.key")
 
+	// A PostgreSQL URL holds a password, and serve refuses a password in a
+	// flag, so the database goes in the variable.
+	t.Setenv("DUSTPAN_DATABASE", database)
+
 	var logs lockedBuffer
 
-	args := []string{
-		"--database", database, "--key-encryption-key-file", keyPath, "--listen", "127.0.0.1:0",
-	}
+	args := []string{"--key-encryption-key-file", keyPath, "--listen", "127.0.0.1:0"}
 
 	if err := startServerWithIO(t, mode.stdin, mode.terminal, &logs, args...); err != nil {
 		t.Fatalf("serve on an empty store: %v", err)

@@ -116,10 +116,11 @@ func maintainerActions() []identity.Action {
 
 // siteOnlyActions are the administration actions that, of the built-in
 // roles, only RoleSiteAdministrator holds. The sign-in settings decide who
-// can sign in to the whole installation, so the tenant side of a hosted
-// installation does not hold them.
+// can sign in to the whole installation, and a restore with the access
+// tables replaces who has access, so the tenant side of a hosted
+// installation holds neither of them.
 func siteOnlyActions() []identity.Action {
-	return []identity.Action{identity.ActionServerManageSignIn}
+	return []identity.Action{identity.ActionServerManageSignIn, identity.ActionServerRestoreAccess}
 }
 
 // accountAdministratorActions are the actions of RoleAccountAdministrator.
