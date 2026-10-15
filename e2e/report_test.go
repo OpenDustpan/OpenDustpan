@@ -3,6 +3,8 @@
 package e2e_test
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +27,82 @@ func TestWriteSummaryKeepsSummaryBelowLimit(t *testing.T) {
 	writeLargeRuns(t, dir)
 	checkSummaryBelowLimit(t, dir)
 	checkFullHoldsSections(t, dir)
+}
+
+func TestTruncateClosesFenceBeforeCutNotice(t *testing.T) {
+	t.Parallel()
+
+	_ = t.Context()
+	dir := t.TempDir()
+
+	var stderr strings.Builder
+	for i := range reportFailureLines {
+		fmt.Fprintf(&stderr, "fence test line %d\n", i)
+	}
+
+	run := largeRun(e2e.ToolPulumi, e2e.StoreSQLite, "3.250.0", "fence-test-marker", stderr.String())
+	if err := e2e.WriteRun(dir, run); err != nil {
+		t.Fatalf("write run: %v", err)
+	}
+
+	if err := e2e.WriteSummary(dir); err != nil {
+		t.Fatalf("write summary: %v", err)
+	}
+
+	summary, err := os.ReadFile(filepath.Join(dir, "summary.md")) //nolint:gosec // The test reads the report it wrote.
+	if err != nil {
+		t.Fatalf("read summary.md: %v", err)
+	}
+
+	if !strings.Contains(string(summary), "Cut ") {
+		t.Fatal("summary.md does not say how many failure lines were cut")
+	}
+
+	if !strings.Contains(string(summary), "```\nCut ") {
+		t.Error("summary.md does not close the fence before the cut notice")
+	}
+}
+
+func TestSummaryKeepsTablesWhenCut(t *testing.T) {
+	t.Parallel()
+
+	_ = t.Context()
+	dir := t.TempDir()
+	writeCutRuns(t, dir)
+
+	summary, err := os.ReadFile(filepath.Join(dir, "summary.md")) //nolint:gosec // The test reads the report it wrote.
+	if err != nil {
+		t.Fatalf("read summary.md: %v", err)
+	}
+
+	if len(summary) >= reportSummaryBudget {
+		t.Fatalf("summary.md is %d bytes, want below %d", len(summary), reportSummaryBudget)
+	}
+
+	if !strings.Contains(string(summary), "full.md") {
+		t.Error("summary.md does not point to full.md")
+	}
+
+	if !strings.Contains(string(summary), "Truncated") {
+		t.Error("summary.md does not say the report was cut")
+	}
+
+	for _, want := range []string{"# Pulumi CLI", "# OpenTofu", "## Steps", "## Requests the CLI made"} {
+		if !strings.Contains(string(summary), want) {
+			t.Errorf("summary.md misses %q after cut", want)
+		}
+	}
+
+	firstFailure := bytes.Index(summary, []byte("## Failures:"))
+	pulumiTables := bytes.Index(summary, []byte("# Pulumi CLI"))
+	tofuTables := bytes.Index(summary, []byte("# OpenTofu"))
+	if firstFailure < 0 || pulumiTables < 0 || tofuTables < 0 {
+		t.Fatal("summary.md misses tables or failures")
+	}
+
+	if pulumiTables > firstFailure || tofuTables > firstFailure {
+		t.Error("summary.md cuts a table, want tables before failures")
+	}
 }
 
 func TestClearReportsRemovesSummaryAndFull(t *testing.T) {
@@ -53,16 +131,16 @@ func TestClearReportsRemovesSummaryAndFull(t *testing.T) {
 func writeLargeRuns(t *testing.T, dir string) {
 	t.Helper()
 
-	var stderr strings.Builder
-	for range reportFailureLines {
-		stderr.WriteString("failure detail line\n")
-	}
+	pulumiSQLite := failureMarker(e2e.ToolPulumi, e2e.StoreSQLite, "3.250.0")
+	pulumiPostgres := failureMarker(e2e.ToolPulumi, e2e.StorePostgres, "3.250.0")
+	tofuSQLite := failureMarker(e2e.ToolTofu, e2e.StoreSQLite, "1.12.7")
+	tofuPostgres := failureMarker(e2e.ToolTofu, e2e.StorePostgres, "1.12.7")
 
 	runs := []e2e.Run{
-		largeRun(e2e.ToolPulumi, e2e.StoreSQLite, "3.250.0", stderr.String()),
-		largeRun(e2e.ToolPulumi, e2e.StorePostgres, "3.250.0", stderr.String()),
-		largeRun(e2e.ToolTofu, e2e.StoreSQLite, "1.12.7", stderr.String()),
-		largeRun(e2e.ToolTofu, e2e.StorePostgres, "1.12.7", stderr.String()),
+		largeRun(e2e.ToolPulumi, e2e.StoreSQLite, "3.250.0", pulumiSQLite, failureStderr(pulumiSQLite)),
+		largeRun(e2e.ToolPulumi, e2e.StorePostgres, "3.250.0", pulumiPostgres, failureStderr(pulumiPostgres)),
+		largeRun(e2e.ToolTofu, e2e.StoreSQLite, "1.12.7", tofuSQLite, failureStderr(tofuSQLite)),
+		largeRun(e2e.ToolTofu, e2e.StorePostgres, "1.12.7", tofuPostgres, failureStderr(tofuPostgres)),
 	}
 
 	for i := range runs {
@@ -74,6 +152,40 @@ func writeLargeRuns(t *testing.T, dir string) {
 	if err := e2e.WriteSummary(dir); err != nil {
 		t.Fatalf("write summary: %v", err)
 	}
+}
+
+func writeCutRuns(t *testing.T, dir string) {
+	t.Helper()
+
+	pulumiMarker := "cut-marker-pulumi-sqlite-3-250-0"
+	tofuMarker := "cut-marker-tofu-sqlite-1-12-7"
+	runs := []e2e.Run{
+		cutRun(e2e.ToolPulumi, e2e.StoreSQLite, "3.250.0", pulumiMarker),
+		cutRun(e2e.ToolTofu, e2e.StoreSQLite, "1.12.7", tofuMarker),
+	}
+
+	for i := range runs {
+		if err := e2e.WriteRun(dir, runs[i]); err != nil {
+			t.Fatalf("write run: %v", err)
+		}
+	}
+
+	if err := e2e.WriteSummary(dir); err != nil {
+		t.Fatalf("write summary: %v", err)
+	}
+}
+
+func failureMarker(tool string, store e2e.Store, version string) string {
+	return "marker-" + tool + "-" + string(store) + "-" + version
+}
+
+func failureStderr(marker string) string {
+	var stderr strings.Builder
+	for i := range reportFailureLines {
+		fmt.Fprintf(&stderr, "%s failure detail line %d\n", marker, i)
+	}
+
+	return stderr.String()
 }
 
 func checkSummaryBelowLimit(t *testing.T, dir string) {
@@ -125,12 +237,26 @@ func checkFullHoldsSections(t *testing.T, dir string) {
 		t.Error("full.md misses the request log rows")
 	}
 
-	if !strings.Contains(string(full), "failure detail line") {
-		t.Error("full.md misses the full failure text")
+	for _, marker := range []string{
+		failureMarker(e2e.ToolPulumi, e2e.StoreSQLite, "3.250.0"),
+		failureMarker(e2e.ToolPulumi, e2e.StorePostgres, "3.250.0"),
+		failureMarker(e2e.ToolTofu, e2e.StoreSQLite, "1.12.7"),
+		failureMarker(e2e.ToolTofu, e2e.StorePostgres, "1.12.7"),
+	} {
+		if !strings.Contains(string(full), marker) {
+			t.Errorf("full.md misses failure text with %q", marker)
+		}
 	}
 }
 
-func largeRun(tool string, store e2e.Store, version, stderr string) e2e.Run {
+func cutRun(tool string, store e2e.Store, version, marker string) e2e.Run {
+	pad := strings.Repeat("x", 20000)
+
+	var stderr strings.Builder
+	for i := range reportFailureLines {
+		fmt.Fprintf(&stderr, "%s padded failure line %d %s\n", marker, i, pad)
+	}
+
 	steps := []e2e.StepResult{
 		{
 			Name:     "install",
@@ -144,7 +270,41 @@ func largeRun(tool string, store e2e.Store, version, stderr string) e2e.Run {
 		{
 			Name:     "deploy",
 			Command:  tool + " deploy",
-			Failure:  "deploy failed",
+			Failure:  marker + " deploy failed",
+			Stderr:   stderr.String(),
+			ExitCode: 1,
+			Passed:   false,
+			Skipped:  false,
+		},
+	}
+
+	return e2e.Run{
+		Tool:           tool,
+		Label:          e2e.Latest,
+		Store:          store,
+		Blobs:          "",
+		Version:        version,
+		ChecksumSource: "pinned",
+		Steps:          steps,
+		Requests:       nil,
+	}
+}
+
+func largeRun(tool string, store e2e.Store, version, marker, stderr string) e2e.Run {
+	steps := []e2e.StepResult{
+		{
+			Name:     "install",
+			Command:  tool + " install",
+			Failure:  "",
+			Stderr:   "",
+			ExitCode: 0,
+			Passed:   true,
+			Skipped:  false,
+		},
+		{
+			Name:     "deploy",
+			Command:  tool + " deploy",
+			Failure:  marker + " deploy failed",
 			Stderr:   stderr,
 			ExitCode: 1,
 			Passed:   false,

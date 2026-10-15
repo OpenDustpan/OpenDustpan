@@ -185,7 +185,7 @@ func WriteSummary(dir string) error {
 	}
 
 	short := renderSummary(runs)
-	if len(short) > summaryLimit {
+	if len(short) >= summaryLimit {
 		short = cutSummary(short)
 	}
 
@@ -196,11 +196,12 @@ func WriteSummary(dir string) error {
 	return nil
 }
 
-// cutSummary cuts short at the limit on a line boundary and ends it with a
-// line that names full.md.
+// cutSummary cuts short to strictly below the limit on a line boundary and
+// ends it with a line that names full.md. It reserves room for the notice
+// before cutting.
 func cutSummary(short string) string {
 	note := "\nTruncated to 900 KiB, see full.md for the full report.\n"
-	keep := summaryLimit - len(note)
+	keep := summaryLimit - len(note) - 1
 	if keep <= 0 {
 		return note
 	}
@@ -241,40 +242,50 @@ func renderSummary(runs []Run) string {
 
 	b.WriteString("# End-to-end report\n")
 
+	// Tables first, then failures, so a cut keeps every table.
 	for _, tool := range []string{ToolPulumi, ToolTofu} {
-		var mine []Run
-
-		for i := range runs {
-			if runs[i].Tool == tool {
-				mine = append(mine, runs[i])
-			}
-		}
-
+		mine := runsForTool(runs, tool)
 		if len(mine) > 0 {
 			fmt.Fprintf(&b, "\n# %s\n\n", toolTitle(tool))
-			renderSummaryTool(&b, mine)
+			renderSteps(&b, mine)
+			renderMatrix(&b, mine)
+		}
+	}
+
+	for _, tool := range []string{ToolPulumi, ToolTofu} {
+		mine := runsForTool(runs, tool)
+		for i := range mine {
+			fmt.Fprintf(&b, "\n## Failures: %s\n\n", versionTitle(mine[i]))
+			b.WriteString(truncateFailures(failures(mine[i])))
+		}
+
+		for i := range mine {
+			fmt.Fprintf(
+				&b,
+				"\n## Request log: %s\n\nSee full.md for the request log.\n",
+				versionTitle(mine[i]),
+			)
 		}
 	}
 
 	return b.String()
 }
 
-func renderSummaryTool(b *strings.Builder, runs []Run) {
-	renderSteps(b, runs)
-	renderMatrix(b, runs)
+func runsForTool(runs []Run, tool string) []Run {
+	var mine []Run
 
 	for i := range runs {
-		fmt.Fprintf(b, "\n## Failures: %s\n\n", versionTitle(runs[i]))
-		b.WriteString(truncateFailures(failures(runs[i])))
+		if runs[i].Tool == tool {
+			mine = append(mine, runs[i])
+		}
 	}
 
-	for i := range runs {
-		fmt.Fprintf(b, "\n## Request log: %s\n\nSee full.md for the request log.\n", versionTitle(runs[i]))
-	}
+	return mine
 }
 
 // truncateFailures keeps the first maxFailureLines lines of text and ends it
-// with a line that says how many lines were cut and names full.md.
+// with a line that says how many lines were cut and names full.md. When the
+// cut falls inside a fenced block, it closes the fence before the notice.
 func truncateFailures(text string) string {
 	trimmed := strings.TrimSuffix(text, "\n")
 	lines := strings.Split(trimmed, "\n")
@@ -283,6 +294,9 @@ func truncateFailures(text string) string {
 	}
 
 	kept := strings.Join(lines[:maxFailureLines], "\n") + "\n"
+	if strings.Count(kept, "```")%2 == 1 {
+		kept += "  ```\n"
+	}
 
 	return fmt.Sprintf("%sCut %d lines, see full.md.\n", kept, len(lines)-maxFailureLines)
 }
