@@ -85,7 +85,9 @@ func agreementReplay(t *testing.T, prior, referrer string) error {
 
 // agreementVerify runs the verifier over the body with known and reports its error.
 func agreementVerify(body string, known []int64) error {
-	return (pulumijournal.Verifier{}).VerifyBatch([]byte(body), 1, known)
+	_, err := (pulumijournal.Verifier{}).VerifyBatch([]byte(body), 1, known, false)
+
+	return err
 }
 
 // agreementCase is one reference case: a prior entry and a success referrer

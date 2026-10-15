@@ -44,10 +44,15 @@ var ErrJournalBatch = errors.New("journal batch is malformed")
 // update. known holds the completed operation IDs that the update already
 // holds: the operations of success entries with a state, which are the only
 // ones that later references can name. A reference to an entry must name one
-// of them, or a completed entry earlier in the same batch. It returns an error
-// when the batch cannot replay.
+// of them, or a completed entry earlier in the same batch. recordsChanged
+// reports whether a stored batch of the update holds an entry that changes the
+// replay records. A write entry must come before all of them, so a batch that
+// holds one is refused when recordsChanged is set. It returns whether the batch
+// holds an entry that changes the records, so the store sets the flag of the
+// update in the same transaction as the write. It returns an error when the
+// batch cannot replay.
 type BatchVerifier interface {
-	VerifyBatch(body []byte, version int, known []int64) error
+	VerifyBatch(body []byte, version int, known []int64, recordsChanged bool) (changed bool, err error)
 }
 
 // JournalBatch is one batch that a journaled update sends (ADR 43, decision 6.1).
@@ -81,10 +86,13 @@ type JournalRow struct {
 	// later references, so only those are stored for the known set.
 	OperationIDs []int64
 	// Verify checks the batch against the completed operation IDs that the update
-	// holds. The store calls it in the fenced transaction, after the retry check
-	// and before the write, with the operation IDs of the stored rows. A nil
-	// Verify skips the check. A non-nil error refuses the batch with ErrJournalBatch.
-	Verify func(known []int64) error
+	// holds and the flag that reports whether a stored batch holds an entry that
+	// changes the replay records. The store calls it in the fenced transaction,
+	// after the retry check and before the write, with the operation IDs of the
+	// stored rows and the flag. It returns whether the batch holds such an entry,
+	// so the store sets the flag in the same transaction as the write. A nil Verify
+	// skips the check. A non-nil error refuses the batch with ErrJournalBatch.
+	Verify func(known []int64, recordsChanged bool) (changed bool, err error)
 }
 
 // JournalStore persists the rows of journal batches.
@@ -97,7 +105,9 @@ type JournalStore interface {
 	// it returns retried true and writes nothing. A sequence ID stored with a
 	// different SHA-256, or a batch that is only partly stored, returns
 	// ErrJournalConflict. The blob must already be in the blob store. A row with a
-	// Verify function that returns an error is refused with ErrJournalBatch.
+	// Verify function that returns an error is refused with ErrJournalBatch. When
+	// Verify reports that the batch holds an entry that changes the replay records,
+	// the flag of the update is set in the same transaction as the write.
 	PutJournalRow(ctx context.Context, row JournalRow, fence namespace.Fence) (retried bool, err error)
 	// JournalKeys returns the blob keys of the batches of the update, in arrival
 	// order. It is keyed by the stack ID, as the blob keys are. A missing update
@@ -275,8 +285,8 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		Size:         int64(len(batch.Content)),
 		SequenceIDs:  ids.sequences,
 		OperationIDs: ids.operations,
-		Verify: func(known []int64) error {
-			return j.verifier.VerifyBatch(batch.Content, batch.Version, known)
+		Verify: func(known []int64, recordsChanged bool) (bool, error) {
+			return j.verifier.VerifyBatch(batch.Content, batch.Version, known, recordsChanged)
 		},
 	}
 

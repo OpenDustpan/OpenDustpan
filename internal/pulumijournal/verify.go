@@ -19,19 +19,27 @@ import (
 // ErrMissingReference.
 type Verifier struct{}
 
-// VerifyBatch returns nil when the batch passes the checks. The errors wrap the
+// VerifyBatch returns whether the batch holds an entry that changes the replay
+// records, and nil when the batch passes the checks. The errors wrap the
 // sentinels of this package: ErrVersion, ErrUnknownKind, ErrKindVersion,
 // ErrSequenceID, ErrUnsupportedKind and ErrMissingReference. known holds the
 // completed operations that the update already holds: the operation IDs of
 // success entries with a state. A reference must name one of them, or a
-// completed entry earlier in the same batch.
-func (Verifier) VerifyBatch(body []byte, version int, known []int64) error {
-	check := newBatchCheck(known)
+// completed entry earlier in the same batch. A write entry (kind 5) is refused
+// with ErrWriteOrder when recordsChanged is set, or when an earlier entry of the
+// batch changes the records.
+func (Verifier) VerifyBatch(
+	body []byte,
+	version int,
+	known []int64,
+	recordsChanged bool,
+) (bool, error) {
+	check := newBatchCheck(known, recordsChanged)
 
-	// recordsChanged is set by an entry that changes the replay records. A write
-	// entry (kind 5) must come before all of them (upstream backend/journal.go of
-	// github.com/pulumi/pulumi/pkg/v3 v3.268.0, lines 295 to 298, expects that order).
-	return DecodeEntries(bytes.NewReader(body), version, func(entry JournalEntry) error {
+	// A write entry (kind 5) must come before every entry that changes the replay
+	// records (upstream backend/journal.go of github.com/pulumi/pulumi/pkg/v3
+	// v3.268.0, lines 295 to 298, expects that order).
+	err := DecodeEntries(bytes.NewReader(body), version, func(entry JournalEntry) error {
 		if err := replayable(entry); err != nil {
 			return err
 		}
@@ -51,29 +59,37 @@ func (Verifier) VerifyBatch(body []byte, version int, known []int64) error {
 
 		return nil
 	})
+	if err != nil {
+		return false, err
+	}
+
+	return check.changed, nil
 }
 
 // batchCheck holds the verifier state for one batch: the completed operations
-// that references can name, and whether an entry changed the replay records.
+// that references can name, whether a stored batch of the update changed the
+// replay records, and whether an earlier entry of this batch did.
 type batchCheck struct {
-	held           map[int64]bool
-	recordsChanged bool
+	held    map[int64]bool
+	stored  bool
+	changed bool
 }
 
 // newBatchCheck returns a check over the completed operations that the update
-// already holds.
-func newBatchCheck(known []int64) *batchCheck {
+// already holds, and the records flag of its stored batches.
+func newBatchCheck(known []int64, stored bool) *batchCheck {
 	held := make(map[int64]bool, len(known))
 	for _, op := range known {
 		held[op] = true
 	}
 
-	return &batchCheck{held: held, recordsChanged: false}
+	return &batchCheck{held: held, stored: stored, changed: false}
 }
 
-// writeOrder refuses a write entry after an entry that changes the records.
+// writeOrder refuses a write entry after an entry that changes the records, in
+// a stored batch or earlier in this batch.
 func (c *batchCheck) writeOrder(entry JournalEntry) error {
-	if entry.Kind == JournalEntryKindWrite && c.recordsChanged {
+	if entry.Kind == JournalEntryKindWrite && (c.stored || c.changed) {
 		return fmt.Errorf("entry %s: %w", entryLabel(entry), ErrWriteOrder)
 	}
 
@@ -83,7 +99,7 @@ func (c *batchCheck) writeOrder(entry JournalEntry) error {
 // noteRecords records whether the entry changes the replay records.
 func (c *batchCheck) noteRecords(entry JournalEntry) {
 	if changesRecords(entry.Kind) {
-		c.recordsChanged = true
+		c.changed = true
 	}
 }
 
