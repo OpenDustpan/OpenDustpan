@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -55,6 +56,18 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 		{
 			name: "the audit entry of a group grant names the token managers of its service principals",
 			test: testGroupGrantNamesTokenManagers,
+		},
+		{
+			name: "the audit entry of a large group grant names every service principal in one change",
+			test: testGroupGrantLargeNamesAll,
+		},
+		{
+			name: "the audit entry of a group grant pages past the member limit",
+			test: testGroupGrantPagesMembers,
+		},
+		{
+			name: "the audit entry of a group grant names a group that holds token managers",
+			test: testGroupGrantNamesGroupHolder,
 		},
 		{name: "the audit entry of a membership add names the token managers", test: testMembershipNamesTokenManagers},
 		{name: "the export of a principal lists its token managers", test: testPrincipalExport},
@@ -498,23 +511,54 @@ func (d *delegation) tokenManagersOf(t *testing.T, ns namespace.Name, object str
 func (d *delegation) changeOf(t *testing.T, ns namespace.Name, object, key string) string {
 	t.Helper()
 
-	listing, err := d.st.List(t.Context(), ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
-	if err != nil {
-		t.Fatalf("list audit: %v", err)
-	}
+	entry := d.entryOf(t, ns, object)
 
-	i := slices.IndexFunc(listing.Entries, func(e audit.Entry) bool { return e.Object == object })
-	if i < 0 {
-		t.Fatalf("no audit entry of %q", object)
-	}
-
-	for _, c := range listing.Entries[i].Changes {
+	for _, c := range entry.Changes {
 		if c.Key == key {
 			return c.New
 		}
 	}
 
 	return ""
+}
+
+// entryOf returns the audit entry of object in ns.
+func (d *delegation) entryOf(t *testing.T, ns namespace.Name, object string) audit.Entry {
+	t.Helper()
+
+	for number := 1; ; number++ {
+		listing, err := d.st.List(t.Context(), ns, audit.Page{Number: number, Size: audit.MaxPageSize})
+		if err != nil {
+			t.Fatalf("list audit: %v", err)
+		}
+
+		for _, e := range listing.Entries {
+			if e.Object == object {
+				return e
+			}
+		}
+
+		if int64(number*audit.MaxPageSize) >= listing.Total {
+			t.Fatalf("no audit entry of %q", object)
+		}
+	}
+}
+
+// countChanges returns the count of the changes with the key key in the
+// audit entry of object in ns.
+func (d *delegation) countChanges(t *testing.T, ns namespace.Name, object, key string) int {
+	t.Helper()
+
+	entry := d.entryOf(t, ns, object)
+	n := 0
+
+	for _, c := range entry.Changes {
+		if c.Key == key {
+			n++
+		}
+	}
+
+	return n
 }
 
 // groupOf stores a group with the name and returns it.
@@ -559,9 +603,9 @@ func (d *delegation) grantToGroup(
 }
 
 // testGroupGrantNamesTokenManagers proves that the audit entry of a grant
-// to a group names, in one change "tokenManagers.<principal ID>" per
-// service principal member, the holders of principal:manage-tokens on it,
-// and names nothing for a person member.
+// to a group names, in one change "tokenManagers" with one line per service
+// principal member, the holders of principal:manage-tokens on it, and names
+// nothing for a person member.
 func testGroupGrantNamesTokenManagers(t *testing.T, d *delegation) {
 	t.Helper()
 
@@ -576,7 +620,7 @@ func testGroupGrantNamesTokenManagers(t *testing.T, d *delegation) {
 	holders := []string{"admin", "principal:" + admin.ID, "principal:" + ops.ID}
 	slices.Sort(holders)
 
-	want := strings.Join(holders, ", ")
+	want := deploy.ID + ": " + strings.Join(holders, ", ")
 
 	mixed := d.groupOf(t, "deployers")
 	d.addMemberOf(t, mixed, deploy)
@@ -584,16 +628,16 @@ func testGroupGrantNamesTokenManagers(t *testing.T, d *delegation) {
 
 	g := d.grantToGroup(t, mixed, access.RoleViewer, identity.NamespaceObject("acme"))
 
-	if got := d.changeOf(t, "acme", access.GrantRef(g), "tokenManagers."+deploy.ID); got != want {
-		t.Fatalf("token managers of %q = %q, want %q", deploy.ID, got, want)
+	if got := d.tokenManagersOf(t, "acme", access.GrantRef(g)); got != want {
+		t.Fatalf("token managers = %q, want %q", got, want)
 	}
 
-	if got := d.changeOf(t, "acme", access.GrantRef(g), "tokenManagers."+alice.ID); got != "" {
-		t.Fatalf("a person member names token managers %q", got)
+	if got := d.changeOf(t, "acme", access.GrantRef(g), "tokenManagers."+deploy.ID); got != "" {
+		t.Fatalf("a group grant names a per-principal change %q", got)
 	}
 
-	if got := d.tokenManagersOf(t, "acme", access.GrantRef(g)); got != "" {
-		t.Fatalf("a group grant names flat token managers %q", got)
+	if n := d.countChanges(t, "acme", access.GrantRef(g), "tokenManagers"); n != 1 {
+		t.Fatalf("tokenManagers changes = %d, want 1", n)
 	}
 
 	persons := d.groupOf(t, "readers")
@@ -601,8 +645,153 @@ func testGroupGrantNamesTokenManagers(t *testing.T, d *delegation) {
 
 	h := d.grantToGroup(t, persons, access.RoleViewer, identity.NamespaceObject("acme"))
 
-	if got := d.changeOf(t, "acme", access.GrantRef(h), "tokenManagers."+alice.ID); got != "" {
+	if got := d.tokenManagersOf(t, "acme", access.GrantRef(h)); got != "" {
 		t.Fatalf("a group of persons names token managers %q", got)
+	}
+}
+
+// testGroupGrantLargeNamesAll proves that a grant to a group with 300
+// service-principal members succeeds with one "tokenManagers" change, and
+// that the change names every member in lines sorted by principal ID.
+func testGroupGrantLargeNamesAll(t *testing.T, d *delegation) {
+	t.Helper()
+
+	admin := d.principalOf(t, "root@example.com", principal.KindPerson)
+	d.mustGrant(t, bootstrap(), admin, access.RoleAccountAdministrator, identity.ServerObject())
+
+	holders := []string{"admin", "principal:" + admin.ID}
+	slices.Sort(holders)
+
+	holderText := strings.Join(holders, ", ")
+	group := d.groupOf(t, "deployers")
+
+	ids := make([]string, 0, 300)
+
+	for i := 0; i < 300; i++ {
+		p := d.principalOf(t, fmt.Sprintf("svc-%03d@example.com", i), principal.KindService)
+		d.addMemberOf(t, group, p)
+		ids = append(ids, p.ID)
+	}
+
+	slices.Sort(ids)
+
+	g := d.grantToGroup(t, group, access.RoleViewer, identity.NamespaceObject("acme"))
+
+	if n := d.countChanges(t, "acme", access.GrantRef(g), "tokenManagers"); n != 1 {
+		t.Fatalf("tokenManagers changes = %d, want 1", n)
+	}
+
+	got := d.tokenManagersOf(t, "acme", access.GrantRef(g))
+	lines := strings.Split(got, "\n")
+
+	if len(lines) != len(ids) {
+		t.Fatalf("tokenManagers lines = %d, want %d", len(lines), len(ids))
+	}
+
+	for i, id := range ids {
+		want := id + ": " + holderText
+		if lines[i] != want {
+			t.Fatalf("tokenManagers line %d = %q, want %q", i, lines[i], want)
+		}
+	}
+}
+
+// testGroupGrantPagesMembers proves that a grant to a group with more
+// members than principal.MaxLimit still names every service principal: the
+// member listing pages past the limit.
+func testGroupGrantPagesMembers(t *testing.T, d *delegation) {
+	t.Helper()
+
+	admin := d.principalOf(t, "root@example.com", principal.KindPerson)
+	d.mustGrant(t, bootstrap(), admin, access.RoleAccountAdministrator, identity.ServerObject())
+
+	holders := []string{"admin", "principal:" + admin.ID}
+	slices.Sort(holders)
+
+	holderText := strings.Join(holders, ", ")
+	group := d.groupOf(t, "deployers")
+
+	const members = principal.MaxLimit + 1
+
+	ids := make([]string, 0, members)
+
+	for i := 0; i < members; i++ {
+		p := d.principalOf(t, fmt.Sprintf("svc-%05d@example.com", i), principal.KindService)
+		d.addMemberOf(t, group, p)
+		ids = append(ids, p.ID)
+	}
+
+	slices.Sort(ids)
+
+	g := d.grantToGroup(t, group, access.RoleViewer, identity.NamespaceObject("acme"))
+
+	if n := d.countChanges(t, "acme", access.GrantRef(g), "tokenManagers"); n != 1 {
+		t.Fatalf("tokenManagers changes = %d, want 1", n)
+	}
+
+	got := d.tokenManagersOf(t, "acme", access.GrantRef(g))
+	lines := strings.Split(got, "\n")
+
+	if len(lines) != len(ids) {
+		t.Fatalf("tokenManagers lines = %d, want %d", len(lines), len(ids))
+	}
+
+	for i, id := range ids {
+		want := id + ": " + holderText
+		if lines[i] != want {
+			t.Fatalf("tokenManagers line %d = %q, want %q", i, lines[i], want)
+		}
+	}
+}
+
+// testGroupGrantNamesGroupHolder proves that when a group holds
+// principal:manage-tokens on a service principal, the "tokenManagers" line
+// of a later grant to a group with that principal names the holder as
+// "group:<id>#member".
+func testGroupGrantNamesGroupHolder(t *testing.T, d *delegation) {
+	t.Helper()
+
+	admin := d.principalOf(t, "root@example.com", principal.KindPerson)
+	deploy := d.principalOf(t, "ci-deploy", principal.KindService)
+
+	d.mustGrant(t, bootstrap(), admin, access.RoleAccountAdministrator, identity.ServerObject())
+
+	managers := d.groupOf(t, "managers")
+	d.mustGrant(t, bootstrap(), admin, access.RoleTokenManager, identity.PrincipalObject(deploy.ID))
+
+	_, err := d.access.Grant(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageAccess),
+		bootstrap(), access.GrantInput{
+			Object: identity.PrincipalObject(deploy.ID), Role: access.RoleTokenManager,
+			Subject: access.Subject{Kind: access.SubjectGroup, ID: managers.ID},
+		})
+	if err != nil {
+		t.Fatalf("grant token-manager to group: %v", err)
+	}
+
+	group := d.groupOf(t, "deployers")
+	d.addMemberOf(t, group, deploy)
+
+	g := d.grantToGroup(t, group, access.RoleViewer, identity.NamespaceObject("acme"))
+	got := d.tokenManagersOf(t, "acme", access.GrantRef(g))
+
+	wantHolder := "group:" + managers.ID + "#member"
+	found := false
+
+	for _, line := range strings.Split(got, "\n") {
+		id, holders, ok := strings.Cut(line, ": ")
+		if !ok || id != deploy.ID {
+			continue
+		}
+
+		found = true
+
+		if !slices.Contains(strings.Split(holders, ", "), wantHolder) {
+			t.Fatalf("token managers of %q = %q, want holder %q", deploy.ID, holders, wantHolder)
+		}
+	}
+
+	if !found {
+		t.Fatalf("no tokenManagers line for %q in %q", deploy.ID, got)
 	}
 }
 

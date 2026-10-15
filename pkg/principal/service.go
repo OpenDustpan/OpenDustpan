@@ -368,7 +368,11 @@ func (s *Service) AddMember(
 	}
 
 	kind := Kind("")
-	if p, err := s.store.GetPrincipal(ctx, principalID); err == nil {
+	if p, err := s.store.GetPrincipal(ctx, principalID); err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+		}
+	} else {
 		if p.Namespace != "" {
 			return Membership{}, fmt.Errorf("add principal %q to group %q: %w: a principal of a namespace cannot be "+
 				"a member of a group, because a group belongs to the whole installation", principalID, groupID, ErrInvalid)

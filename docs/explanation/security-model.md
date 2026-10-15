@@ -82,6 +82,11 @@ persons and services.
   `GET /api/server/principals/{id}/access-review` lists the holders of
   `principal:manage-tokens` on the principal. The audit entry of each grant
   to a service principal names the same holders in the change
+  `tokenManagers`. The audit entry of each grant to a group names the same
+  holders for each service principal in the group in one change
+  `tokenManagers`, with one line per service principal in the form
+  `<principal ID>: <holder>, <holder>`. The audit entry of each membership
+  add of a service principal names the same holders in the change
   `tokenManagers`.
 - **A revoke of `principal:manage-tokens` does not end the tokens that
   its holder already made.** Those tokens act as the service principal
