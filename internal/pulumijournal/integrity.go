@@ -19,9 +19,10 @@
 // check on the new deployment, clear the integrity error metadata when the check
 // passes and set it with the version, the command, the error text and the environment
 // variables when it fails) of pulumi/pulumi at commit
-// 128d3f2ec94e147915a6a928fdf7449d561d560e (tag v3.268.0). It ports these functions:
-// VerifyIntegrity, SnapshotIntegrityErrorf, ForRead, ForReadWithMetadata and
-// AsSnapshotIntegrityError, with the helpers they call: integrityMagic (the manifest
+// 128d3f2ec94e147915a6a928fdf7449d561d560e (tag v3.268.0). It ports these names:
+// VerifyIntegrity, the SnapshotIntegrityError type with SnapshotIntegrityErrorf,
+// ForRead, ForReadWithMetadata and AsSnapshotIntegrityError, and the write and
+// read operation values, with the helpers they call: integrityMagic (the manifest
 // magic check), isProviderType (the provider type check), and the checks for the
 // identity, provider, parent, dependencies, property dependencies, deleted-with,
 // duplicate resources and snippet UUIDs.
@@ -119,6 +120,7 @@ type SnapshotIntegrityError struct {
 // SnapshotIntegrityErrorf returns a write-time integrity error with a formatted message.
 func SnapshotIntegrityErrorf(format string, args ...any) error {
 	return &SnapshotIntegrityError{
+		//nolint:err113 // The error carries the caller message, so it is dynamic by design.
 		Err:           fmt.Errorf(format, args...),
 		Op:            SnapshotIntegrityWrite,
 		Stack:         debug.Stack(),
@@ -354,13 +356,14 @@ func (c *integrityChecker) checkParent(res IntegrityResource, i int) error {
 // checkDependencies checks that every dependency of res was seen.
 func (c *integrityChecker) checkDependencies(res IntegrityResource, i int) error {
 	for _, dep := range res.Dependencies {
-		if err := c.checkReference(
+		err := c.checkReference(
 			i,
 			res.URN,
 			dep,
 			"resource %s's dependency %s comes after it",
 			"resource %s refers to missing dependency %s",
-		); err != nil {
+		)
+		if err != nil {
 			return err
 		}
 	}
@@ -372,13 +375,14 @@ func (c *integrityChecker) checkDependencies(res IntegrityResource, i int) error
 func (c *integrityChecker) checkPropertyDependencies(res IntegrityResource, i int) error {
 	for _, deps := range res.PropertyDependencies {
 		for _, dep := range deps {
-			if err := c.checkReference(
+			err := c.checkReference(
 				i,
 				res.URN,
 				dep,
 				"resource %s's property dependency %s comes after it",
 				"resource %s refers to missing property dependency %s",
-			); err != nil {
+			)
+			if err != nil {
 				return err
 			}
 		}
@@ -419,8 +423,8 @@ func (c *integrityChecker) checkReference(i int, urn, dep, after, missing string
 
 // comesLater reports whether urn names a resource after index i.
 func (c *integrityChecker) comesLater(urn string, i int) bool {
-	for _, other := range c.resources[i+1:] {
-		if other.URN == urn {
+	for k := i + 1; k < len(c.resources); k++ {
+		if c.resources[k].URN == urn {
 			return true
 		}
 	}
@@ -438,8 +442,8 @@ func checkIntegrityDuplicates(seen map[string][]IntegrityResource) error {
 
 		deletes := 0
 
-		for _, state := range states {
-			if state.Delete {
+		for j := range states {
+			if states[j].Delete {
 				deletes++
 			}
 		}

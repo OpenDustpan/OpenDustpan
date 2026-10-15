@@ -9,15 +9,24 @@ import (
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 )
 
+// integrityOutputMetadata holds the deployment metadata of a replay output.
+type integrityOutputMetadata struct {
+	Metadata map[string]any `json:"metadata"`
+}
+
+// integrityOutput holds the deployment of a replay output.
+type integrityOutput struct {
+	Deployment integrityOutputMetadata `json:"deployment"`
+}
+
+// errPlainIntegrity is a non-integrity error for the type query test.
+var errPlainIntegrity = errors.New("plain failure")
+
 // integrityErrorOf decodes the integrity_error member of a replay output. It
 // returns the member and whether the output holds one.
 func integrityErrorOf(t *testing.T, got string) (map[string]any, bool) {
 	t.Helper()
-	var doc struct {
-		Deployment struct {
-			Metadata map[string]any `json:"metadata"`
-		} `json:"deployment"`
-	}
+	var doc integrityOutput
 	if err := json.Unmarshal([]byte(got), &doc); err != nil {
 		t.Fatalf("decode output: %v", err)
 	}
@@ -145,8 +154,12 @@ func checkIntegrityError(
 	if !strings.Contains(err.Error(), want) {
 		t.Fatalf("error is %q, want it to hold %q", err.Error(), want)
 	}
-	if _, ok := pulumijournal.AsSnapshotIntegrityError(err); !ok {
+	got, ok := pulumijournal.AsSnapshotIntegrityError(err)
+	if !ok {
 		t.Fatalf("error %v is not an integrity error", err)
+	}
+	if !strings.Contains(got.Error(), want) {
+		t.Fatalf("integrity error is %q, want it to hold %q", got.Error(), want)
 	}
 }
 
@@ -387,6 +400,8 @@ func TestVerifyIntegrityReportsEachFailure(t *testing.T) {
 			want:     "duplicate resource",
 		},
 		{
+			// Ports the "missing" case of TestVerifyIntegrity_SnippetUUID in
+			// pkg/resource/stack/snapshot/integrity_test.go.
 			name:      "snippet without UUID",
 			resources: []pulumijournal.IntegrityResource{validIntegrityResource("urn:a")},
 			snippets:  []pulumijournal.IntegritySnippet{{UUID: ""}},
@@ -394,6 +409,8 @@ func TestVerifyIntegrityReportsEachFailure(t *testing.T) {
 			want:      "missing required 'uuid' field",
 		},
 		{
+			// Ports the "duplicate" case of TestVerifyIntegrity_SnippetUUID in
+			// pkg/resource/stack/snapshot/integrity_test.go.
 			name:      "duplicate snippet UUID",
 			resources: []pulumijournal.IntegrityResource{validIntegrityResource("urn:a")},
 			snippets: []pulumijournal.IntegritySnippet{
@@ -457,9 +474,8 @@ func TestVerifyIntegrityAcceptsPendingProvider(t *testing.T) {
 	res := validIntegrityResource("urn:a")
 	res.Provider = "urn:pulumi:dev::app::pulumi:providers:aws::default::id-9"
 	res.PendingReplacement = true
-	if err := pulumijournal.VerifyIntegrity(
-		integrityDeploymentOf([]pulumijournal.IntegrityResource{res}, nil),
-	); err != nil {
+	deployment := integrityDeploymentOf([]pulumijournal.IntegrityResource{res}, nil)
+	if err := pulumijournal.VerifyIntegrity(deployment); err != nil {
 		t.Fatalf("pending replacement with unknown provider: %v", err)
 	}
 }
@@ -511,7 +527,7 @@ func TestSnapshotIntegrityErrorHelpers(t *testing.T) {
 	if fixed.Op != pulumijournal.SnapshotIntegrityRead || fixed.Metadata != metadata {
 		t.Fatalf("fixed read is %+v, want the read value with the metadata", fixed)
 	}
-	if _, ok := pulumijournal.AsSnapshotIntegrityError(errors.New("plain failure")); ok {
-		t.Fatalf("plain error answers as an integrity error")
+	if got, ok := pulumijournal.AsSnapshotIntegrityError(errPlainIntegrity); ok {
+		t.Fatalf("plain error %v answers as an integrity error", got)
 	}
 }

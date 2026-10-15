@@ -555,10 +555,10 @@ type baseScan struct {
 // delete and pending marks of the output.
 type integrityExtra struct {
 	resourceType string
-	custom      bool
-	id          string
-	deleted     bool
-	pending     bool
+	custom       bool
+	id           string
+	deleted      bool
+	pending      bool
 }
 
 // integrityStateView is the part of a resource state that the integrity check
@@ -581,10 +581,10 @@ func integrityExtraOf(raw jsontext.Value, deleted, pending bool) (integrityExtra
 
 	return integrityExtra{
 		resourceType: view.Type,
-		custom:      view.Custom,
-		id:          view.ID,
-		deleted:     view.Delete || deleted,
-		pending:     view.PendingReplacement || pending,
+		custom:       view.Custom,
+		id:           view.ID,
+		deleted:      view.Delete || deleted,
+		pending:      view.PendingReplacement || pending,
 	}, nil
 }
 
