@@ -47,7 +47,7 @@ import (
 func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 	t.Parallel()
 
-	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, 1<<20, 30*time.Second, 5*time.Second)
+	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, 1<<18, 30*time.Second, 5*time.Second)
 	defer restore()
 
 	ctx := t.Context()
@@ -126,7 +126,7 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 
 	t.Logf("maximum write-ahead log size under load: %d bytes", maxWAL)
 
-	const bound = 8 << 20
+	const bound = 2 << 20
 
 	if maxWAL >= bound {
 		t.Fatalf("maximum write-ahead log size = %d bytes, want below %d bytes", maxWAL, bound)
@@ -1219,7 +1219,7 @@ func TestWALGuardBusyWarnsOnce(t *testing.T) {
 
 	// Stay busy past a second warn period: no repeat until a truncate
 	// succeeds.
-	pauseLoad(ctx, t, 500*time.Millisecond)
+	pauseLoad(ctx, t, 700*time.Millisecond)
 
 	requireBusyWarningCount(t, recorder, 1, "while busy")
 
