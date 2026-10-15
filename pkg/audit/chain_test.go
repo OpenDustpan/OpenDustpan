@@ -105,27 +105,28 @@ func walkAt(seq int64) time.Time {
 // walkEntry returns entry seq of acme without a hash.
 func walkEntry(seq int64) audit.Entry {
 	return audit.Entry{
-		At:         walkAt(seq),
-		Namespace:  "acme",
-		Subject:    "alice",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:read-secrets",
-		Object:     "opentofu:acme/prod",
-		ObjectID:   "",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "test",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindReveal,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "req",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   seq,
+		At:           walkAt(seq),
+		Namespace:    "acme",
+		Subject:      "alice",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:read-secrets",
+		Object:       "opentofu:acme/prod",
+		ObjectID:     "",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "test",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindReveal,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "req",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     seq,
+		FenceVersion: 0,
 	}
 }
 
@@ -369,6 +370,9 @@ func (f *fakeChain) EndChain(ctx context.Context, fence namespace.Fence, e audit
 	}
 
 	entries := f.scopes[fence.Namespace]
+	if len(entries) == 0 {
+		return false, nil
+	}
 
 	return f.add(fence.Namespace, e, entries[len(entries)-1].Hash)
 }

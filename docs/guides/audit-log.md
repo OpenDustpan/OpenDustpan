@@ -182,8 +182,8 @@ opendustpan audit-chain approve --server https://dustpan.example
 The commands call `GET` and `POST` `/api/server/audit/chain`, the same routes as the console.
 The approval sets the chain to the setting of the server that receives it.
 
-- Turning the chain on needs the action `server:enable-audit-chain` (operator family).
-- Turning the chain off needs `server:disable-audit-chain` (operator family) and `server:approve-audit-chain-off` (administration family).
+- Turning the chain on needs the action `server:set-audit-chain` (operator family).
+- Turning the chain off needs `server:set-audit-chain` (operator family) and `server:disable-audit-chain` (administration family).
   It also needs a fresh MFA step when the server asks for MFA.
 
 The approval writes an entry in `@server` with the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
@@ -214,6 +214,11 @@ For each entry, the next digest is the hex SHA-256 of four parts joined with the
 The parts are the previous digest, the entry hash, the stored `prevHash` and the stored `hash`.
 The previous digest of the first entry is the empty string.
 The entry hash is the hash of the stored fields of the entry with an empty `prevHash`.
+
+The hash takes no key: any installation can compute it again from the stored fields.
+Each entry of a namespace holds `fenceVersion`, the failover version of the namespace when the server appended it.
+The hash covers it, so a verifier can see where a forced failover forked the chain of a namespace.
+Entries in `@server`, and entries from before the field, hold 0, and the audit API omits the field for them.
 A verifier who kept a digest outside the database can compute it again from the old rows.
 So the verifier can prove that the old rows did not change after the chain started.
 

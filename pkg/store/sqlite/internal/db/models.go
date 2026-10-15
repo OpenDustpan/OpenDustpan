@@ -43,27 +43,28 @@ type AuditChainState struct {
 }
 
 type AuditEntry struct {
-	Namespace  string
-	Sequence   int64
-	Subject    string
-	IdpSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	AtMs       int64
-	SourceIp   string
-	UserAgent  string
-	Channel    string
-	Kind       string
-	Outcome    string
-	RequestID  string
-	PrevHash   string
-	Hash       string
-	ValueCount sql.NullInt64
-	Changes    sql.NullString
-	ObjectID   string
+	Namespace    string
+	Sequence     int64
+	Subject      string
+	IdpSubject   string
+	TokenID      string
+	Action       string
+	Object       string
+	Version      string
+	ValuePath    string
+	AtMs         int64
+	SourceIp     string
+	UserAgent    string
+	Channel      string
+	Kind         string
+	Outcome      string
+	RequestID    string
+	PrevHash     string
+	Hash         string
+	ValueCount   sql.NullInt64
+	Changes      sql.NullString
+	ObjectID     string
+	FenceVersion int64
 }
 
 type AuditSinkCursor struct {

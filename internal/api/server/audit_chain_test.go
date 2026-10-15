@@ -123,27 +123,23 @@ func TestApproveAuditChainNeedsTheActionsOfItsDirection(t *testing.T) {
 		setting audit.ChainSetting
 		want    int
 	}{
-		{name: "on with the enable action", deny: "", setting: audit.ChainOn, want: http.StatusAccepted},
+		{name: "on with the set action", deny: "", setting: audit.ChainOn, want: http.StatusAccepted},
 		{
-			name: "on without the enable action", deny: identity.ActionServerEnableAuditChain,
+			name: "on without the set action", deny: identity.ActionServerSetAuditChain,
 			setting: audit.ChainOn, want: http.StatusForbidden,
 		},
 		{
-			name: "on asks for no action of off", deny: identity.ActionServerApproveAuditChainOff,
+			name: "on asks for no disable action", deny: identity.ActionServerDisableAuditChain,
 			setting: audit.ChainOn, want: http.StatusAccepted,
 		},
 		{name: "off with both actions", deny: "", setting: audit.ChainOff, want: http.StatusAccepted},
 		{
+			name: "off without the set action", deny: identity.ActionServerSetAuditChain,
+			setting: audit.ChainOff, want: http.StatusForbidden,
+		},
+		{
 			name: "off without the disable action", deny: identity.ActionServerDisableAuditChain,
 			setting: audit.ChainOff, want: http.StatusForbidden,
-		},
-		{
-			name: "off without the administration action", deny: identity.ActionServerApproveAuditChainOff,
-			setting: audit.ChainOff, want: http.StatusForbidden,
-		},
-		{
-			name: "off asks for no action of on", deny: identity.ActionServerEnableAuditChain,
-			setting: audit.ChainOff, want: http.StatusAccepted,
 		},
 	}
 

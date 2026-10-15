@@ -167,19 +167,26 @@ const (
 	hashStart
 )
 
-// insertAuditEntry inserts e as the next entry of its scope, hashed as mode
-// says.
-func (s *Store) insertAuditEntry(
-	ctx context.Context, q *db.Queries, e audit.Entry, mode hashMode,
-) (audit.Entry, error) {
+// placeAuditEntry fills the fields of e that the transaction knows: the
+// object ID, the failover version of the namespace, the sequence and a time
+// that never goes back along the scope. It answers the hash of the entry
+// before e, or "" for the first entry of the scope.
+func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, string, error) {
 	if e.ObjectID == "" {
 		id, err := auditObjectID(ctx, q, e.Object)
 		if err != nil {
-			return audit.Entry{}, err
+			return audit.Entry{}, "", err
 		}
 
 		e.ObjectID = id
 	}
+
+	fenceVersion, err := auditFenceVersion(ctx, q, e.Namespace)
+	if err != nil {
+		return audit.Entry{}, "", err
+	}
+
+	e.FenceVersion = fenceVersion
 
 	var prevHash string
 
@@ -189,7 +196,7 @@ func (s *Store) insertAuditEntry(
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
-		return audit.Entry{}, fmt.Errorf("read last audit entry: %w", err)
+		return audit.Entry{}, "", fmt.Errorf("read last audit entry: %w", err)
 	default:
 		prevHash = last.Hash
 		seq = last.Sequence + 1
@@ -204,6 +211,20 @@ func (s *Store) insertAuditEntry(
 	}
 
 	e.Sequence = seq
+
+	return e, prevHash, nil
+}
+
+// insertAuditEntry inserts e as the next entry of its scope, hashed as mode
+// says.
+func (s *Store) insertAuditEntry(
+	ctx context.Context, q *db.Queries, e audit.Entry, mode hashMode,
+) (audit.Entry, error) {
+	e, prevHash, err := placeAuditEntry(ctx, q, e)
+	if err != nil {
+		return audit.Entry{}, err
+	}
+
 	e.PrevHash, e.Hash = "", ""
 
 	// With the chain off, the entry holds no hash. A start entry begins a
@@ -218,33 +239,55 @@ func (s *Store) insertAuditEntry(
 	}
 
 	insertErr := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
-		Namespace:  e.Namespace.String(),
-		Sequence:   e.Sequence,
-		Subject:    e.Subject,
-		IdpSubject: e.IDPSubject,
-		TokenID:    e.TokenID,
-		Action:     e.Action,
-		Object:     e.Object,
-		Version:    e.Version,
-		ValuePath:  e.ValuePath,
-		AtMs:       codec.Millis(e.At),
-		SourceIp:   e.SourceIP,
-		UserAgent:  e.UserAgent,
-		Channel:    string(e.Channel),
-		Kind:       string(e.Kind),
-		Outcome:    string(e.Outcome),
-		RequestID:  e.RequestID,
-		PrevHash:   e.PrevHash,
-		Hash:       e.Hash,
-		ValueCount: toNullInt64(e.ValueCount),
-		Changes:    toChangesText(e.Changes),
-		ObjectID:   e.ObjectID,
+		Namespace:    e.Namespace.String(),
+		Sequence:     e.Sequence,
+		Subject:      e.Subject,
+		IdpSubject:   e.IDPSubject,
+		TokenID:      e.TokenID,
+		Action:       e.Action,
+		Object:       e.Object,
+		Version:      e.Version,
+		ValuePath:    e.ValuePath,
+		AtMs:         codec.Millis(e.At),
+		SourceIp:     e.SourceIP,
+		UserAgent:    e.UserAgent,
+		Channel:      string(e.Channel),
+		Kind:         string(e.Kind),
+		Outcome:      string(e.Outcome),
+		RequestID:    e.RequestID,
+		PrevHash:     e.PrevHash,
+		Hash:         e.Hash,
+		ValueCount:   toNullInt64(e.ValueCount),
+		Changes:      toChangesText(e.Changes),
+		ObjectID:     e.ObjectID,
+		FenceVersion: e.FenceVersion,
 	})
 	if insertErr != nil {
 		return audit.Entry{}, fmt.Errorf("insert audit entry: %w", insertErr)
 	}
 
 	return e, nil
+}
+
+// auditFenceVersion answers the failover version of the namespace scope in
+// q, read in the transaction of the append, so the hash of the entry covers
+// the fence it was written under. ServerScope, and a scope without a
+// namespace row, answer 0.
+func auditFenceVersion(ctx context.Context, q *db.Queries, scope namespace.Name) (int64, error) {
+	if scope == audit.ServerScope {
+		return 0, nil
+	}
+
+	row, err := q.GetNamespace(ctx, scope.String())
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+
+	if err != nil {
+		return 0, fmt.Errorf("read the failover version of %s: %w", scope, err)
+	}
+
+	return row.FailoverVersion, nil
 }
 
 // List implements audit.Store: one page of the entries of ns, newest first,
@@ -399,27 +442,28 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 	}
 
 	return audit.Entry{
-		At:         codec.FromMillis(row.AtMs),
-		Namespace:  ns,
-		Subject:    row.Subject,
-		IDPSubject: row.IdpSubject,
-		TokenID:    row.TokenID,
-		Action:     row.Action,
-		Object:     row.Object,
-		Version:    row.Version,
-		ValuePath:  row.ValuePath,
-		Changes:    changes,
-		ValueCount: fromNullInt64(row.ValueCount),
-		ObjectID:   row.ObjectID,
-		SourceIP:   row.SourceIp,
-		UserAgent:  row.UserAgent,
-		Channel:    audit.Channel(row.Channel),
-		Kind:       audit.Kind(row.Kind),
-		Outcome:    audit.Outcome(row.Outcome),
-		RequestID:  row.RequestID,
-		PrevHash:   row.PrevHash,
-		Hash:       row.Hash,
-		Sequence:   row.Sequence,
+		At:           codec.FromMillis(row.AtMs),
+		Namespace:    ns,
+		Subject:      row.Subject,
+		IDPSubject:   row.IdpSubject,
+		TokenID:      row.TokenID,
+		Action:       row.Action,
+		Object:       row.Object,
+		Version:      row.Version,
+		ValuePath:    row.ValuePath,
+		Changes:      changes,
+		ValueCount:   fromNullInt64(row.ValueCount),
+		ObjectID:     row.ObjectID,
+		SourceIP:     row.SourceIp,
+		UserAgent:    row.UserAgent,
+		Channel:      audit.Channel(row.Channel),
+		Kind:         audit.Kind(row.Kind),
+		Outcome:      audit.Outcome(row.Outcome),
+		RequestID:    row.RequestID,
+		PrevHash:     row.PrevHash,
+		Hash:         row.Hash,
+		Sequence:     row.Sequence,
+		FenceVersion: row.FenceVersion,
 	}
 }
 

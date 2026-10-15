@@ -81,7 +81,9 @@ func (s *Store) LastEntry(ctx context.Context, scope namespace.Name) (audit.Entr
 
 // appendChainMarker validates e and runs insert in one transaction with the
 // check of fence, unless the scope holds no entry or its last entry already
-// agrees with state. It reports whether it ran insert. A fence of the server scope checks nothing.
+// agrees with state. It reports whether it ran insert. The write lock of
+// the transaction orders concurrent markers. A fence of the server scope
+// checks nothing.
 func (s *Store) appendChainMarker(
 	ctx context.Context, fence namespace.Fence, e audit.Entry, state audit.ChainState,
 	insert func(q *db.Queries, e audit.Entry) error,

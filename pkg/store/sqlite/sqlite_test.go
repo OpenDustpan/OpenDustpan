@@ -210,6 +210,7 @@ func tamperAuditColumn(field string) (string, bool) {
 		"at_ms",
 		"sequence",
 		"changes",
+		"fence_version",
 		"value_path":
 		return field, true
 	default:

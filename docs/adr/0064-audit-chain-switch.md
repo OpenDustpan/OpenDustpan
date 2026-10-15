@@ -74,11 +74,11 @@ and a fresh MFA step.
    decides the actions of the route. The console button and the commands
    `opendustpan audit-chain status` and `opendustpan audit-chain approve`
    call the same routes. An approval while no change waits answers 409.
-   - Turning the chain on needs the action `server:enable-audit-chain`
+   - Turning the chain on needs the action `server:set-audit-chain`
      (operator family).
-   - Turning the chain off needs the actions `server:disable-audit-chain`
-     (operator family) and `server:approve-audit-chain-off` (administration
-     family), and a fresh MFA step. Until built-in MFA exists, the MFA step
+   - Turning the chain off needs `server:set-audit-chain` (operator family)
+     and `server:disable-audit-chain` (administration family), so "both
+     families" is literal, and a fresh MFA step. Until built-in MFA exists, the MFA step
      asks for nothing (ADR 56 decision 5). A test proves that the step is
      required as soon as MFA asks for one.
    - The approval writes an audit entry in `@server` with the action
@@ -107,8 +107,9 @@ and a fresh MFA step.
    string. For each entry, the next digest is the hex SHA-256 of the
    previous digest, the entry hash, the stored previous hash and the stored
    hash, joined with the unit separator (0x1F). The entry hash is the hash
-   of ADR 41 decision 13 of the stored fields of the entry, with an empty
-   previous hash. So the digest covers every field and the stored hash
+   of the stored fields of the entry that ADR 41 decision 13 defines, with
+   the optional fields of ADR 60 decision 5 and decision 10 of this ADR,
+   and with an empty previous hash. So the digest covers every field and the stored hash
    columns. A verifier can compute it again from the old rows to prove that
    they did not change after the chain started.
 9. **The check.** For each scope, the chain starts at its last start entry,
@@ -121,7 +122,19 @@ and a fresh MFA step.
    - With the chain off, a scope without a chain is valid only when its
      first entry comes after the time the chain went off: the scope did not
      exist while the chain was on.
-10. **A restore keeps the state of the target.** After the swap, the server
+10. **The hash takes no key, and covers the fence.** The entry hash is a
+    plain SHA-256 over the documented encoding, with no key or secret of
+    the installation, so another installation can check a namespace chain
+    that it receives. Each entry of a namespace scope holds the failover
+    version of the namespace when the store appended it (`fence_version`),
+    read in the transaction of the append. The hash covers it as an
+    optional field, `fence_version=<n>`, after `changes`, when it is above
+    0. Entries in `@server`, and entries from before this field, hold 0 and
+    keep their hashes. So a verifier sees where a forced failover forked
+    the chain of a namespace. A later change may store entries of another
+    installation as they are, with the same sequence and hashes: nothing in
+    this ADR depends on the installation that wrote an entry.
+11. **A restore keeps the state of the target.** After the swap, the server
     compares the restored log with the stored state. The log agrees when,
     with the chain on, each scope ends with a chained entry that is not an
     end entry, and with the chain off, each scope ends with an entry

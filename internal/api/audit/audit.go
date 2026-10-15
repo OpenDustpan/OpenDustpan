@@ -121,31 +121,36 @@ type auditEntry struct {
 	ObjectID  string        `json:"objectID,omitempty"`
 	PrevHash  string        `json:"prevHash"`
 	Hash      string        `json:"hash"`
+	// FenceVersion is the failover version of the namespace when the entry
+	// was appended, which the hash covers. It is omitted when it is 0: in
+	// @server and in entries from before the field.
+	FenceVersion int64 `json:"fenceVersion,omitempty"`
 }
 
 // toAuditEntry maps one domain entry to its wire shape.
 func toAuditEntry(e audit.Entry) auditEntry {
 	return auditEntry{
-		AtMs:       e.AtMs(),
-		Sequence:   e.Sequence,
-		Subject:    e.Subject,
-		IDPSubject: e.IDPSubject,
-		TokenID:    e.TokenID,
-		Action:     e.Action,
-		Object:     e.Object,
-		Version:    e.Version,
-		ValuePath:  e.ValuePath,
-		ValueCount: e.ValueCount,
-		Changes:    toAuditChanges(e.Changes),
-		SourceIP:   e.SourceIP,
-		UserAgent:  e.UserAgent,
-		Channel:    string(e.Channel),
-		Kind:       string(e.Kind),
-		Outcome:    string(e.Outcome),
-		RequestID:  e.RequestID,
-		ObjectID:   e.ObjectID,
-		PrevHash:   e.PrevHash,
-		Hash:       e.Hash,
+		AtMs:         e.AtMs(),
+		Sequence:     e.Sequence,
+		Subject:      e.Subject,
+		IDPSubject:   e.IDPSubject,
+		TokenID:      e.TokenID,
+		Action:       e.Action,
+		Object:       e.Object,
+		Version:      e.Version,
+		ValuePath:    e.ValuePath,
+		ValueCount:   e.ValueCount,
+		Changes:      toAuditChanges(e.Changes),
+		SourceIP:     e.SourceIP,
+		UserAgent:    e.UserAgent,
+		Channel:      string(e.Channel),
+		Kind:         string(e.Kind),
+		Outcome:      string(e.Outcome),
+		RequestID:    e.RequestID,
+		ObjectID:     e.ObjectID,
+		PrevHash:     e.PrevHash,
+		Hash:         e.Hash,
+		FenceVersion: e.FenceVersion,
 	}
 }
 

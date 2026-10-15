@@ -76,7 +76,9 @@ func (s *Store) LastEntry(ctx context.Context, scope namespace.Name) (audit.Entr
 
 // appendChainMarker validates e and runs insert in one transaction with the
 // check of fence, unless the scope holds no entry or its last entry already
-// agrees with state. It reports whether it ran insert. A fence of the server scope checks nothing, and takes the
+// agrees with state. It reports whether it ran insert. A namespace fence
+// locks the namespace row, as Append does, so a concurrent marker reads the
+// new last entry. A fence of the server scope checks nothing, and takes the
 // advisory lock of the server scope instead, as AppendServer does.
 func (s *Store) appendChainMarker(
 	ctx context.Context, fence namespace.Fence, e audit.Entry, state audit.ChainState,
@@ -118,7 +120,7 @@ func (s *Store) appendChainMarker(
 			return run(q)
 		})
 	} else {
-		err = s.inFencedTx(ctx, fence, run)
+		err = s.inFencedUpdateTx(ctx, fence, run)
 	}
 
 	if err != nil {

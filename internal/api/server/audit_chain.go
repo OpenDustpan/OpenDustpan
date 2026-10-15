@@ -7,10 +7,9 @@ package server
 // instance that answers, whether a change waits and whether its migration
 // runs. It needs server:read-audit.
 // POST /api/server/audit/chain approves the change to the setting of the
-// instance that receives it, and starts the migration: it answers 202. On
-// an instance with the setting on it needs server:enable-audit-chain. On an
-// instance with the setting off it needs server:disable-audit-chain and
-// server:approve-audit-chain-off, and a fresh MFA step.
+// instance that receives it, and starts the migration: it answers 202. It
+// needs server:set-audit-chain. On an instance with the setting off it also
+// needs server:disable-audit-chain, and a fresh MFA step.
 
 import (
 	"context"
@@ -81,9 +80,8 @@ func (h *Handler) auditChainRoutes() []Route {
 			Path:   "/api/server/audit/chain",
 			Scope:  ScopeAuthorized,
 			Actions: []identity.Action{
-				identity.ActionServerEnableAuditChain,
+				identity.ActionServerSetAuditChain,
 				identity.ActionServerDisableAuditChain,
-				identity.ActionServerApproveAuditChainOff,
 			},
 			Resolve:    resolveServer,
 			ActionsFor: h.auditChainApproveActions,
@@ -98,12 +96,12 @@ func (h *Handler) auditChainRoutes() []Route {
 func (h *Handler) auditChainApproveActions(identity.Object) []identity.Action {
 	if h.auditChain != nil && h.auditChain.Setting() == audit.ChainOff {
 		return []identity.Action{
+			identity.ActionServerSetAuditChain,
 			identity.ActionServerDisableAuditChain,
-			identity.ActionServerApproveAuditChainOff,
 		}
 	}
 
-	return []identity.Action{identity.ActionServerEnableAuditChain}
+	return []identity.Action{identity.ActionServerSetAuditChain}
 }
 
 // getAuditChain answers the state of the audit chain.

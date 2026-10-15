@@ -1,6 +1,7 @@
 package audittest
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"sync"
@@ -55,6 +56,7 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "the log agrees with the state after each migration", test: testChainLogAgrees},
 		{name: "a second migration to the same state writes no entry", test: testChainMigrateTwice},
 		{name: "concurrent end entries write one entry", test: testChainConcurrentEnds},
+		{name: "each namespace entry holds its failover version under the hash", test: testChainFenceVersion},
 		{name: "a stale fence refuses a start entry", test: testChainStaleFence},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
@@ -508,6 +510,55 @@ func testChainConcurrentEnds(t *testing.T, ts ChainTestStore) {
 
 	if got := listScope(t, ts.Store, tl.ns.Name); len(got) != 2 {
 		t.Fatalf("entries: got %d, want 2", len(got))
+	}
+}
+
+// fenceBumper increments the failover version of every namespace, as a
+// forced failover or a restore does. Both SQL stores implement it.
+type fenceBumper interface {
+	BumpFailoverVersions(ctx context.Context) (int64, error)
+}
+
+func testChainFenceVersion(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+
+	if first := tl.append(1)[0]; first.FenceVersion != 1 {
+		t.Fatalf("entry at failover version 1: fence version %d, want 1", first.FenceVersion)
+	}
+
+	server, err := ts.Store.AppendServer(t.Context(), newServerEntry("admin", "req-server"))
+	if err != nil || server.FenceVersion != 0 {
+		t.Fatalf("server entry = fence version %d, %v; want 0", server.FenceVersion, err)
+	}
+
+	bumper, ok := ts.Store.(fenceBumper)
+	if !ok {
+		t.Skip("the store cannot increment failover versions")
+	}
+
+	if _, err := bumper.BumpFailoverVersions(t.Context()); err != nil {
+		t.Fatalf("increment failover versions: %v", err)
+	}
+
+	tl.ns.FailoverVersion++
+
+	if second := tl.append(1)[0]; second.FenceVersion != 2 {
+		t.Fatalf("entry after a failover: fence version %d, want 2", second.FenceVersion)
+	}
+
+	got := listScope(t, ts.Store, tl.ns.Name)
+	if len(got) != 2 || got[0].FenceVersion != 1 || got[1].FenceVersion != 2 {
+		t.Fatalf("listed fence versions: got %+v, want 1 and 2", got)
+	}
+
+	wantValid(t, check(t, ts.Store, tl.ns.Name))
+
+	ts.TamperEntry(t, tl.ns.Name, 1, "fence_version", "3")
+
+	if res := check(t, ts.Store, tl.ns.Name); res.Valid || res.BadSequence != 1 {
+		t.Fatalf("check after a changed fence version: got %+v, want invalid at 1", res)
 	}
 }
 

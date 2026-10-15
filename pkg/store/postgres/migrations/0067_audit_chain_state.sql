@@ -15,3 +15,10 @@ CREATE TABLE audit_chain_state (
     pending       BOOLEAN  NOT NULL DEFAULT false,
     log_replaced  BOOLEAN  NOT NULL DEFAULT false
 );
+
+-- fence_version is the failover version of the namespace when the store
+-- appended the entry, and 0 in @server and in every entry from before this
+-- migration. The hash of an entry covers it when it is above 0, so a
+-- verifier on any installation can see where a forced failover forked the
+-- chain of a namespace.
+ALTER TABLE audit_entries ADD COLUMN fence_version BIGINT NOT NULL DEFAULT 0;
