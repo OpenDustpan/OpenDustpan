@@ -378,16 +378,44 @@ FROM inventory_deleted
 WHERE namespace = $1
 ORDER BY tool COLLATE "C", name COLLATE "C", unit_id COLLATE "C";
 
+-- name: ListExpiredInventory :many
+-- The first page of the deleted units of every namespace whose retention
+-- ended at or before $1, for the retention sweep. Byte order
+-- (COLLATE "C"), as inventory.PageExpired orders.
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= $1
+ORDER BY purge_after_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $2;
+
+-- name: ListExpiredInventoryAfter :many
+-- The page of ListExpiredInventory after the cursor (end of retention,
+-- tool, unit ID). The lower bound on purge_after_ms lets the index scan
+-- start at the cursor.
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= sqlc.arg(now_ms)
+  AND purge_after_ms >= sqlc.arg(after_ms)
+  AND (purge_after_ms > sqlc.arg(after_ms)
+    OR (purge_after_ms = sqlc.arg(after_ms) AND tool COLLATE "C" > sqlc.arg(after_tool))
+    OR (purge_after_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool)
+      AND unit_id COLLATE "C" > sqlc.arg(after_unit_id)))
+ORDER BY purge_after_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT sqlc.arg(page_limit);
+
 -- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = $1 AND tool = $2 AND name = $3;
 
 -- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
-       lock_holder, lock_since_ms, lock_operation
-FROM inventory
-WHERE namespace = $1
-ORDER BY tool, name;
+SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
+       i.lock_holder, i.lock_since_ms, i.lock_operation,
+       COALESCE(c.name, '') AS collection
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = $1
+ORDER BY i.tool, i.name;
 
 -- name: CreateWorkspace :execrows
 INSERT INTO workspaces (
@@ -1278,6 +1306,64 @@ WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL A
 -- name: TouchAccessToken :exec
 UPDATE access_tokens SET last_used_at_ms = sqlc.arg('at_ms')::bigint
 WHERE id = sqlc.arg('id') AND (last_used_at_ms IS NULL OR last_used_at_ms <= sqlc.arg('before_ms')::bigint);
+-- name: CreateCollection :execrows
+-- The caller checks the fence in the same transaction. A row that exists
+-- under the same key (the name in lower case) is not written.
+INSERT INTO collections (id, namespace, name_key, name, created_at_ms)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (namespace, name_key) DO NOTHING;
+
+-- name: GetCollection :one
+SELECT id, namespace, name, created_at_ms
+FROM collections
+WHERE namespace = $1 AND name_key = $2;
+
+-- name: ListCollections :many
+SELECT id, namespace, name, created_at_ms
+FROM collections
+WHERE namespace = $1
+ORDER BY name_key;
+
+-- name: CountLiveCollectionMembers :one
+-- Counts the units of a collection that the inventory still holds. A unit that
+-- was deleted has left the inventory, and its membership does not count.
+SELECT COUNT(*)
+FROM collection_members AS m
+JOIN inventory AS i ON i.unit_id = m.unit_id
+WHERE m.namespace = $1 AND m.collection_key = $2;
+
+-- name: DeleteCollectionMembers :exec
+-- Removes the memberships of a collection. The caller removes them only after
+-- it found no live unit, so the rows that remain belong to deleted units.
+DELETE FROM collection_members
+WHERE namespace = $1 AND collection_key = $2;
+
+-- name: DeleteCollection :execrows
+DELETE FROM collections
+WHERE namespace = $1 AND name_key = $2;
+
+-- name: GetInventoryUnit :one
+-- The inventory row of one unit: its ID. The collection is read by a join on
+-- the unit ID, not from the inventory.
+SELECT unit_id
+FROM inventory
+WHERE namespace = $1 AND tool = $2 AND name = $3;
+
+-- name: GetUnitCollection :one
+-- The collection of one unit by its ID, as written.
+SELECT c.name
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = $1;
+
+-- name: UpsertUnitCollection :exec
+INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (unit_id) DO UPDATE SET
+    namespace = excluded.namespace,
+    collection_key = excluded.collection_key,
+    assigned_at_ms = excluded.assigned_at_ms;
+
 
 -- name: GetDeletedStack :one
 -- A deleted stack of one namespace by its stable ID (ADR 47), for a restore
@@ -1373,6 +1459,17 @@ FROM blob_purges
 ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
 LIMIT $1;
 
+-- name: ListBlobPurgesAfter :many
+-- The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+WHERE purged_at_ms > sqlc.arg(after_ms)
+  OR (purged_at_ms = sqlc.arg(after_ms) AND tool COLLATE "C" > sqlc.arg(after_tool))
+  OR (purged_at_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool)
+    AND unit_id COLLATE "C" > sqlc.arg(after_unit_id))
+ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT sqlc.arg(page_limit);
+
 -- name: GetAuditSinkCursor :one
 -- The highest sequence of a namespace that a log sink holds (ADR 60
 -- decision 13). A sink with no row holds no entry of the namespace.
@@ -1434,3 +1531,26 @@ RETURNING id;
 UPDATE principals SET disabled_at_ms = NULL, updated_at_ms = sqlc.arg('updated_at_ms')::bigint,
   last_active_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
 WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NOT NULL;
+
+-- name: DeleteCollectionMembersOfUnit :exec
+-- Removes the membership of one unit. The purge of a unit calls it in the same
+-- transaction as the purge of its rows (ADR 47, ADR 51).
+DELETE FROM collection_members
+WHERE unit_id = $1;
+
+-- name: DeleteMissingCollectionMembership :exec
+-- Removes the membership of one unit when its collection no longer exists. A
+-- restore calls it, so a restored unit never points at a missing collection.
+DELETE FROM collection_members
+WHERE unit_id = $1 AND NOT EXISTS (
+    SELECT 1
+    FROM collections AS c
+    WHERE c.namespace = collection_members.namespace AND c.name_key = collection_members.collection_key
+);
+
+-- name: GrantIDsOnTarget :many
+-- The IDs of the current grants on one target, in order. A deleted collection
+-- revokes each of them, so that none outlives it.
+SELECT id FROM grants
+WHERE target = $1 AND revoked_at_ms IS NULL
+ORDER BY id;

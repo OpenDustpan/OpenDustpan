@@ -382,9 +382,9 @@ func stacksOnlyIn(ns string) func(e2e.Result) error {
 	}
 }
 
-// checkCollectionGrantsWait drives the grant routes of a collection. No
-// collection exists until the collections are wired (#478), so a grant on
-// one answers 404, its list is empty, and a revoke finds nothing.
+// checkCollectionGrantsWait drives the grant routes of a collection that does
+// not exist. Each route answers 404, as it does for a missing unit, so no
+// grant is made or listed on a collection with no units.
 func checkCollectionGrantsWait(ctx context.Context, t *testing.T, env *e2e.Env, subject string) {
 	t.Helper()
 
@@ -394,12 +394,7 @@ func checkCollectionGrantsWait(ctx context.Context, t *testing.T, env *e2e.Env, 
 		http.MethodPost, grants, `{"subject":"` + subject + `","role":"writer"}`, http.StatusNotFound,
 	}, nil)
 
-	var list e2eGrantList
-	principalCall(ctx, t, env, principalStep{http.MethodGet, grants, "", http.StatusOK}, &list)
-
-	if list.Total != 0 || len(list.Grants) != 0 {
-		t.Fatalf("grants on a collection = %+v, want none", list)
-	}
+	principalCall(ctx, t, env, principalStep{http.MethodGet, grants, "", http.StatusNotFound}, nil)
 
 	principalCall(ctx, t, env, principalStep{http.MethodDelete, grants + "/grt-missing", "", http.StatusNotFound}, nil)
 }

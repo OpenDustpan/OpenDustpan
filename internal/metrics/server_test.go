@@ -229,3 +229,31 @@ func TestServerMetricsConfigReload(t *testing.T) {
 		}
 	}
 }
+
+// TestServerObserveDeletedSweep proves the outcome series of the retention
+// sweep, and that an unknown result counts as a failure.
+func TestServerObserveDeletedSweep(t *testing.T) {
+	t.Parallel()
+
+	m := metrics.NewServerMetrics("dev", time.Now())
+	m.ObserveDeletedSweep(metrics.DeletedSweepPurged, 3)
+	m.ObserveDeletedSweep(metrics.DeletedSweepSkipped, 1)
+	m.ObserveDeletedSweep(metrics.DeletedSweepFinished, 2)
+	m.ObserveDeletedSweep(metrics.DeletedSweepFailed, 1)
+	m.ObserveDeletedSweep("other", 1)
+	m.ObserveDeletedSweep(metrics.DeletedSweepPurged, 0)
+
+	got := scrapeServer(t, m)
+
+	for _, want := range []string{
+		"# TYPE dustpan_deleted_unit_sweep_total counter",
+		`dustpan_deleted_unit_sweep_total{result="purged"} 3`,
+		`dustpan_deleted_unit_sweep_total{result="skipped"} 1`,
+		`dustpan_deleted_unit_sweep_total{result="finished"} 2`,
+		`dustpan_deleted_unit_sweep_total{result="failed"} 2`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output misses %q:\n%s", want, got)
+		}
+	}
+}

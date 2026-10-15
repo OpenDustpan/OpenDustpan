@@ -404,7 +404,9 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		TokenExpiresAt: time.Time{},
 	}
 
-	for _, obj := range []identity.Object{nsObj, unitObj, identity.CallerObject(), identity.ServerObject()} {
+	objs := []identity.Object{nsObj, unitObj, identity.CallerObject(), identity.ServerObject()}
+	for i := range objs {
+		obj := objs[i]
 		for _, action := range actions {
 			if err := authorizer.Authorize(t.Context(), admin, action, obj); err != nil {
 				t.Fatalf("admin %s on %q: %v", action, obj.String(), err)

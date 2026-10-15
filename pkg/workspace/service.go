@@ -96,8 +96,12 @@ type DeletedStore interface {
 	// ends the grants on the workspace and records the blob purge
 	// (inventory.BlobPurge) in that transaction. The caller removes its
 	// blobs after the commit; the sweep finishes the record. It returns
-	// ErrNotFound if the namespace has no deleted workspace id.
-	PurgeWorkspace(ctx context.Context, id ID, fence namespace.Fence, e audit.Entry) error
+	// ErrNotFound if the namespace has no deleted workspace id. With a
+	// non-zero dueBy, it also returns ErrNotFound and changes nothing when
+	// the retention period of the workspace ends after dueBy, a check in the
+	// same transaction. The retention sweep sets dueBy, and a purge by an
+	// admin leaves it zero.
+	PurgeWorkspace(ctx context.Context, id ID, fence namespace.Fence, dueBy time.Time, e audit.Entry) error
 }
 
 // StateStore persists state version metadata.
@@ -411,18 +415,17 @@ func (s *Service) RestoreDeleted(
 // caller then removes the state blobs with DeletePurgedBlobs. It returns
 // ErrNotFound if ns has no deleted workspace id.
 func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e audit.Entry) error {
-	fence, err := s.fence(ctx, ns)
-	if err != nil {
-		return err
-	}
+	return s.purge(ctx, ns, id, time.Time{}, e)
+}
 
-	e.At = s.clock()
-
-	if err := s.workspaces.PurgeWorkspace(ctx, id, fence, e); err != nil {
-		return fmt.Errorf("purge workspace %s: %w", id, err)
-	}
-
-	return nil
+// PurgeExpired removes the deleted workspace id of ns for good, as
+// PurgeDeleted does, only when its retention period ended at or before
+// dueBy. The store checks the end of the retention in the purge
+// transaction. It returns ErrNotFound if ns has no deleted workspace id
+// whose retention period ended by then: a restore and a new delete after
+// the caller read the unit gave it a new retention period.
+func (s *Service) PurgeExpired(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+	return s.purge(ctx, ns, id, dueBy, e)
 }
 
 // DeletePurgedBlobs removes every state blob of the purged workspace id,
@@ -2334,4 +2337,21 @@ func deleteOnCleanup(ctx context.Context, blobs blob.Store, key blob.Key) error 
 	defer cancel()
 
 	return blobs.Delete(cleanCtx, key)
+}
+
+// purge removes the deleted workspace id of ns with the retention check of
+// dueBy, which zero turns off.
+func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+	fence, err := s.fence(ctx, ns)
+	if err != nil {
+		return err
+	}
+
+	e.At = s.clock()
+
+	if err := s.workspaces.PurgeWorkspace(ctx, id, fence, dueBy, e); err != nil {
+		return fmt.Errorf("purge workspace %s: %w", id, err)
+	}
+
+	return nil
 }

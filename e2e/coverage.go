@@ -22,6 +22,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -260,7 +261,13 @@ func (coverageStackStore) RestoreStack(
 }
 
 // PurgeStack implements stack.Store; this fake holds no deleted stack.
-func (coverageStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ audit.Entry) error {
+func (coverageStackStore) PurgeStack(
+	_ context.Context,
+	_ stack.ID,
+	_ namespace.Fence,
+	_ time.Time,
+	_ audit.Entry,
+) error {
 	return stack.ErrNotFound
 }
 
@@ -507,9 +514,20 @@ func (coverageWorkspaces) CheckJSONRenderingUpload(
 func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
 
+	collections, err := collection.NewService(collection.Config{
+		Store:      coverageCollectionStore{},
+		Namespaces: coverageNamespaceStore{},
+		Now:        nil,
+	})
+	if err != nil {
+		tb.Fatalf("collection service: %v", err)
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		Moves:         nil,
 		Namespaces:    namespaces,
 		Units:         coverageReader{},
+		Collections:   collections,
 		Deleted:       coverageReader{},
 		Lifecycles:    map[string]coreinventory.Lifecycle{"pulumi": coverageLifecycle{}},
 		ReadScope:     coverageScope{},
@@ -523,6 +541,41 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	}
 
 	return inventoryRefs(handler.Routes())
+}
+
+// coverageCollectionStore holds no collection. It exists only so that the
+// inventory handler serves its collection routes in the route table; no
+// request is ever served.
+type coverageCollectionStore struct{}
+
+func (coverageCollectionStore) CreateCollection(
+	_ context.Context, _ collection.Collection, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coverageCollectionStore) GetCollection(_ context.Context, _ collection.Ref) (collection.Collection, error) {
+	return collection.Collection{CreatedAt: time.Time{}, ID: "", Ref: collection.Ref{Namespace: "", Name: ""}}, nil
+}
+
+func (coverageCollectionStore) ListCollections(_ context.Context, _ namespace.Name) ([]collection.Collection, error) {
+	return nil, nil
+}
+
+func (coverageCollectionStore) DeleteCollection(
+	_ context.Context, _ collection.Ref, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coverageCollectionStore) SetUnitCollection(
+	_ context.Context, _ collection.Move, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coverageCollectionStore) UnitCollection(_ context.Context, _ collection.UnitRef) (collection.Ref, error) {
+	return collection.Ref{Namespace: "", Name: ""}, nil
 }
 
 // coverageReader answers no unit. It exists only to build a Handler for its
@@ -697,6 +750,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   coverageIPAllowlists(tb),
 	})
 	if err != nil {
@@ -1078,6 +1132,12 @@ func deletedUnitAllowEntries() []AllowEntry {
 			CoveringTest: deletedUnitCoveringTest,
 			Reason: "Console-only: no CLI purges a deleted unit. The harness " +
 				"steps purge one after the CLI deletes it.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/deleted-units/sweep",
+			CoveringTest: deletedUnitCoveringTest,
+			Reason: "Operator route: no CLI runs the retention sweep. The harness " +
+				"steps run it while a unit is in retention and after a purge.",
 		},
 	}
 }

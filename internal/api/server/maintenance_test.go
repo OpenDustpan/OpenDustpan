@@ -91,6 +91,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {
@@ -411,6 +412,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 	})
 	if err == nil {
