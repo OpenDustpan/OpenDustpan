@@ -222,6 +222,19 @@ func (s *Store) RoleGrantedBelowInstallation(ctx context.Context, role string) (
 	return n > 0, nil
 }
 
+// RoleGrantedOnPrincipal implements access.GrantStore.
+func (s *Store) RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	n, err := s.queries.CountRoleGrantsOnPrincipal(ctx, role)
+	if err != nil {
+		return false, fmt.Errorf("count grants of role: %w", err)
+	}
+
+	return n > 0, nil
+}
+
 // GrantsWithRoles implements access.GrantStore.
 func (s *Store) GrantsWithRoles(
 	ctx context.Context,
@@ -473,6 +486,21 @@ func revokeGrantsOf(ctx context.Context, q *db.Queries, subject access.Subject, 
 		return fmt.Errorf("revoke grants of %s: %w", subject.String(), err)
 	}
 
+	if subject.Kind != access.SubjectPrincipal {
+		return nil
+	}
+
+	// A grant on the principal, such as the right to make its tokens, ends
+	// with it too.
+	_, err = q.RevokeGrantsOnTarget(ctx, db.RevokeGrantsOnTargetParams{
+		RevokedAtMs: nullMillis(codec.Millis(e.At)),
+		RevokedBy:   e.Subject,
+		Target:      identity.PrincipalObject(subject.ID).String(),
+	})
+	if err != nil {
+		return fmt.Errorf("revoke grants on %s: %w", subject.String(), err)
+	}
+
 	return nil
 }
 
@@ -620,7 +648,8 @@ func subjectStrings(subjects []access.Subject) []string {
 func targetStrings(objects []identity.Object) []string {
 	out := make([]string, 0, len(objects))
 
-	for _, o := range objects {
+	for i := range objects {
+		o := objects[i]
 		if t, err := targetOf(o); err == nil {
 			out = append(out, t)
 		}

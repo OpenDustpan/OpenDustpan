@@ -209,7 +209,8 @@ func (s deletedReadScope) ReadableUnits(
 		return true, nil, nil
 	}
 
-	for _, obj := range scope.Namespaces {
+	for i := range scope.Namespaces {
+		obj := scope.Namespaces[i]
 		if obj.Namespace() == ns {
 			return true, nil, nil
 		}
@@ -217,7 +218,8 @@ func (s deletedReadScope) ReadableUnits(
 
 	ids := []string{}
 
-	for _, obj := range scope.Units {
+	for i := range scope.Units {
+		obj := scope.Units[i]
 		if obj.Namespace() == ns && obj.UnitID() != "" {
 			ids = append(ids, obj.UnitID())
 		}

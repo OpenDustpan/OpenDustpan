@@ -74,8 +74,11 @@ const (
 	namespaceReviewPath  = "/api/server/namespaces/{namespace}/access-review"
 	collectionReviewPath = "/api/server/namespaces/{namespace}/collections/{collection}/access-review"
 	unitReviewPath       = "/api/server/namespaces/{namespace}/unit-access-review"
-	callerAccessPath     = "/api/server/caller/access"
-	callerGrantsPath     = "/api/server/caller/grants"
+	// principalReviewPath answers who holds principal:manage-tokens on one
+	// service principal, and so can act as it.
+	principalReviewPath = "/api/server/principals/{principal}/access-review"
+	callerAccessPath    = "/api/server/caller/access"
+	callerGrantsPath    = "/api/server/caller/grants"
 )
 
 // reviewRowResponse is one row of an access-review export on the wire.
@@ -179,15 +182,16 @@ func (h *Handler) reviewRoutes() []Route {
 		{resolveNamespacePath, namespaceReviewPath, identity.ActionNamespaceReadAccess},
 		{resolveCollectionPath, collectionReviewPath, identity.ActionCollectionReadAccess},
 		{resolveUnitQuery, unitReviewPath, identity.ActionUnitReadAccess},
+		{resolvePrincipalPath, principalReviewPath, identity.ActionServerReadAccess},
 	}
 
 	callers := []Route{{
 		Method: http.MethodGet, Path: callerAccessPath, Scope: ScopeAuthorized,
-		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller,
+		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
 		Serve: h.serveAccessRead(callerAccess),
 	}, {
 		Method: http.MethodGet, Path: callerGrantsPath, Scope: ScopeAuthorized,
-		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller,
+		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
 		Serve: h.serveAccessRead(callerGrants),
 	}}
 
@@ -201,8 +205,8 @@ func (h *Handler) reviewRoutes() []Route {
 			Actions: []identity.Action{
 				k.action,
 			},
-			Resolve: k.resolve,
-			Serve:   h.serveAccessRead(h.reviewAccess(k.action)),
+			Resolve: k.resolve, ActionsFor: nil,
+			Serve: h.serveAccessRead(h.reviewAccess(k.action)),
 		})
 	}
 
@@ -505,7 +509,8 @@ func callerAccessByType(
 		All:        got.All,
 	}
 
-	for _, obj := range got.Objects {
+	for i := range got.Objects {
+		obj := got.Objects[i]
 		k, _ := access.KindOf(obj)
 		out.Objects = append(out.Objects, accessObjectResponse{Object: obj.String(), Kind: string(k)})
 	}

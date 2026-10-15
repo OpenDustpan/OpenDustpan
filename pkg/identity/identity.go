@@ -182,11 +182,18 @@ const (
 	// decision 3). Its object is ServerObject. A create or a rotation also
 	// runs the escalation check against the grants of the person.
 	ActionServerManageTokens Action = "server:manage-tokens"
-	// ActionServerManageServiceTokens allows creating and rotating service
-	// tokens (ADR 53, decisions 3 and 7). Its object is ServerObject. A
-	// create or a rotation also runs the escalation check against the
-	// grants of the service principal.
+	// ActionServerManageServiceTokens allowed creating and rotating service
+	// tokens. Its object is ServerObject.
+	//
+	// Deprecated: no route declares it. Use ActionPrincipalManageTokens,
+	// which the built-in roles that hold this action also hold.
 	ActionServerManageServiceTokens Action = "server:manage-service-tokens"
+	// ActionPrincipalManageTokens allows creating, rotating and revoking the
+	// access tokens of a service principal. Its object is the principal
+	// (PrincipalObject) or ServerObject, which holds every principal. A
+	// holder can act as the principal, with every grant that the principal
+	// has now or gets later.
+	ActionPrincipalManageTokens Action = "principal:manage-tokens"
 	// ActionTokenManageOwn allows a person to list, create, rotate and
 	// revoke its own personal tokens (ADR 53, decisions 3 and 10). Its
 	// object is CallerObject. Every authenticated person holds it with no
@@ -256,6 +263,9 @@ type Object struct {
 	// collectionID is the stable ID of a collection reference, when the core
 	// resolved it (ADR 51). It is not part of the wire form.
 	collectionID string
+	// principal is the ID of the principal that a principal reference
+	// names, and empty for every other reference.
+	principal string
 }
 
 // NamespaceObject returns the reference to the namespace ns.
@@ -271,6 +281,7 @@ func NamespaceObject(ns namespace.Name) Object {
 		isCollection: false,
 		collection:   "",
 		unitID:       "", collectionID: "",
+		principal: "",
 	}
 }
 
@@ -293,6 +304,7 @@ func CallerObject() Object {
 		collection:   "",
 		unitID:       "",
 		collectionID: "",
+		principal:    "",
 	}
 }
 
@@ -314,7 +326,40 @@ func ServerObject() Object {
 		collection:   "",
 		unitID:       "",
 		collectionID: "",
+		principal:    "",
 	}
+}
+
+// principalObjectPrefix starts the wire form of a principal reference.
+const principalObjectPrefix = "principal:"
+
+// maxPrincipalIDLength bounds the ID part of a principal reference, in
+// bytes.
+const maxPrincipalIDLength = 64
+
+// PrincipalObject returns the reference to the principal with the ID id,
+// the object of the actions on one principal, such as the issue of its
+// tokens. Its wire form is "principal:<id>": an ID has no '/', and a unit
+// reference always has one, so the forms never overlap. The installation
+// holds every principal. id must already be valid: ParsePrincipalObject
+// checks it.
+func PrincipalObject(id string) Object {
+	return Object{
+		raw: principalObjectPrefix + id, ns: namespace.Name(""), tool: "", unit: "",
+		isUnit: false, isCaller: false, isServer: false, isCollection: false, collection: "", unitID: "",
+		collectionID: "", principal: id,
+	}
+}
+
+// ParsePrincipalObject returns the reference to the principal with the ID
+// id, or ErrInvalidObject when id is not 1 to 64 letters, digits, '-', '_'
+// and '.'.
+func ParsePrincipalObject(id string) (Object, error) {
+	if !ident.Valid(id, maxPrincipalIDLength) {
+		return Object{}, fmt.Errorf("%w: principal %q", ErrInvalidObject, id)
+	}
+
+	return PrincipalObject(id), nil
 }
 
 // CollectionObject returns the reference to the collection called name in the
@@ -335,6 +380,7 @@ func CollectionObject(ns namespace.Name, name string) Object {
 		collection:   name,
 		collectionID: "",
 		unitID:       "",
+		principal:    "",
 	}
 }
 
@@ -363,14 +409,20 @@ func UnitObject(tool string, ns namespace.Name, name string) (Object, error) {
 		isCollection: false,
 		collection:   "",
 		unitID:       "", collectionID: "",
+		principal: "",
 	}, nil
 }
 
-// ParseObject parses s as a namespace, collection, unit or server
-// reference. It rejects the caller reference form: use CallerObject for it.
+// ParseObject parses s as a namespace, collection, unit, principal or
+// server reference. It rejects the caller reference form: use CallerObject
+// for it.
 func ParseObject(s string) (Object, error) {
 	if s == ServerObject().String() {
 		return ServerObject(), nil
+	}
+
+	if id, ok := strings.CutPrefix(s, principalObjectPrefix); ok && !strings.Contains(id, "/") {
+		return ParsePrincipalObject(id)
 	}
 
 	if !strings.Contains(s, ":") && strings.Contains(s, "/") {
@@ -394,6 +446,7 @@ func ParseObject(s string) (Object, error) {
 			isCollection: false,
 			collection:   "",
 			unitID:       "", collectionID: "",
+			principal: "",
 		}, nil
 	}
 
@@ -460,6 +513,7 @@ func parseUnitObject(s string) (Object, error) {
 		isCollection: false,
 		collection:   "",
 		unitID:       "", collectionID: "",
+		principal: "",
 	}, nil
 }
 
@@ -505,6 +559,17 @@ func (o Object) IsCollection() bool {
 // or the empty string when it names no collection.
 func (o Object) CollectionName() string {
 	return o.collection
+}
+
+// IsPrincipal reports whether the reference names a principal.
+func (o Object) IsPrincipal() bool {
+	return o.principal != ""
+}
+
+// PrincipalID returns the ID of the principal that the reference names, or
+// the empty string when it names no principal.
+func (o Object) PrincipalID() string {
+	return o.principal
 }
 
 // IsServer reports whether the reference names the installation itself

@@ -283,13 +283,17 @@ func (s *Scope) add(obj identity.Object) {
 		s.Collections = appendObject(s.Collections, obj)
 	case ObjectUnit:
 		s.Units = appendObject(s.Units, obj)
+	case ObjectPrincipal:
+		// A scope lists namespaces and what they hold, never principals.
+		return
 	default:
 	}
 }
 
 // appendObject appends obj to objs once.
 func appendObject(objs []identity.Object, obj identity.Object) []identity.Object {
-	for _, o := range objs {
+	for i := range objs {
+		o := objs[i]
 		if o.String() == obj.String() {
 			return objs
 		}
@@ -356,18 +360,24 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 }
 
 // givenOn reports whether a grant on obj gives action. A grant on the
-// installation gives every action of its role. A grant on any other object
+// installation gives every action of its role. A grant on a principal gives
+// the delegation actions of its role only. A grant on any other object
 // gives the data actions of its role only. The Service refuses a role with
-// another action below the installation, and this rule holds also when a
-// role change races a grant.
+// another action on such an object, and this rule holds also when a role
+// change races a grant.
 func givenOn(action identity.Action, obj identity.Object) bool {
-	if kind, _ := KindOf(obj); kind == ObjectInstallation {
-		return true
-	}
-
 	family, _ := FamilyOf(action)
 
-	return family == FamilyData
+	switch kind, _ := KindOf(obj); kind {
+	case ObjectInstallation:
+		return true
+	case ObjectPrincipal:
+		return family == FamilyDelegation
+	case ObjectNamespace, ObjectCollection, ObjectUnit:
+		return family == FamilyData
+	default:
+		return false
+	}
 }
 
 // subjectsOf returns the subjects of p: its principal and each of its
@@ -394,8 +404,8 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 }
 
 // chain returns obj and every object that holds it, innermost first: a unit,
-// its collection, its namespace and the installation. The caller object
-// holds nothing and is in no chain.
+// its collection, its namespace and the installation, or a principal and
+// the installation. The caller object holds nothing and is in no chain.
 func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity.Object, error) {
 	kind, ok := KindOf(obj)
 	if !ok {
@@ -418,7 +428,7 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 		out = append(out, col)
 	}
 
-	if kind != ObjectInstallation && kind != ObjectNamespace {
+	if kind == ObjectCollection || kind == ObjectUnit {
 		out = append(out, identity.NamespaceObject(obj.Namespace()))
 	}
 
@@ -589,9 +599,10 @@ func (a *Authorizer) reviewRoles(ctx context.Context) ([]string, map[string]bool
 
 // managesAccess reports whether r holds an action that changes who has
 // access to an object: a grant, a custom role, a membership of a group
-// that has access, or a grant on a namespace, a collection or a unit. A
-// service token gets no access without a grant, so
-// server:manage-service-tokens does not count.
+// that has access, or a grant on a namespace, a collection or a unit. The
+// issue of the tokens of a service principal gives no grant, so it does
+// not count: the export lists its holders apart, for each service
+// principal.
 func managesAccess(r Role) bool {
 	return slices.ContainsFunc(r.Actions, func(a identity.Action) bool {
 		return slices.Contains(accessManagementActions(), a)

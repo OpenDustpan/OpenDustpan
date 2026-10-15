@@ -209,8 +209,9 @@ func pageOf(t *testing.T, f *fixture, obj identity.Object, cursor string) access
 
 // TestReviewMarksWhoCanGrantAccess checks canGrantAccess: a role that can
 // change who has access (here, the members of groups) is marked, and a
-// role that manages service tokens is not, because a service token gets no
-// access without a grant.
+// role that makes the tokens of service principals is not: such a token
+// acts with the grants of its principal, and the export of the principal
+// lists who can make it.
 func TestReviewMarksWhoCanGrantAccess(t *testing.T) {
 	t.Parallel()
 
@@ -223,7 +224,7 @@ func TestReviewMarksWhoCanGrantAccess(t *testing.T) {
 		action identity.Action
 	}{
 		{"groups", identity.ActionServerManageGroups},
-		{"service-tokens", identity.ActionServerManageServiceTokens},
+		{"service-tokens", identity.ActionPrincipalManageTokens},
 	} {
 		role, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
 			Name: r.name, Description: "", Actions: []identity.Action{r.action},

@@ -13,7 +13,9 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -134,6 +136,14 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		t.Fatalf("principal service: %v", err)
 	}
 
+	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Store: st, Principals: st, Freshness: nil, Grants: tokengrants.Check{Grants: grants, Principals: st},
+		Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("token service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:  subjectAuthenticator{},
 		Authorizer:     authz,
@@ -146,7 +156,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
 		Principals:     principals,
-		Tokens:         nil,
+		Tokens:         tokens,
 		Access:         grants,
 		Audit:          entries(st),
 		OnAuditFailure: nil,

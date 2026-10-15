@@ -445,13 +445,19 @@ func TestBuiltInRoleFamilies(t *testing.T) {
 		want []access.Family
 	}{
 		{access.RoleInstallationOperator, []access.Family{access.FamilyOperator}},
-		{access.RoleAccountAdministrator, []access.Family{access.FamilyAdministration, access.FamilyData}},
+		{
+			access.RoleAccountAdministrator,
+			[]access.Family{access.FamilyAdministration, access.FamilyData, access.FamilyDelegation},
+		},
 		{
 			access.RoleSiteAdministrator,
-			[]access.Family{access.FamilyAdministration, access.FamilyData, access.FamilyOperator},
+			[]access.Family{
+				access.FamilyAdministration, access.FamilyData, access.FamilyDelegation, access.FamilyOperator,
+			},
 		},
 		{access.RoleAdmin, []access.Family{access.FamilyData}},
 		{access.RoleViewer, []access.Family{access.FamilyData}},
+		{access.RoleTokenManager, []access.Family{access.FamilyDelegation}},
 	}
 
 	for _, tc := range cases {
@@ -466,7 +472,10 @@ func TestBuiltInRoleFamilies(t *testing.T) {
 	}
 
 	site, _ := access.BuiltInRole(access.RoleSiteAdministrator)
-	for _, f := range []access.Family{access.FamilyOperator, access.FamilyAdministration, access.FamilyData} {
+	families := []access.Family{
+		access.FamilyOperator, access.FamilyAdministration, access.FamilyData, access.FamilyDelegation,
+	}
+	for _, f := range families {
 		for _, a := range access.Actions(f) {
 			if !site.Has(a) {
 				t.Errorf("site administrator lacks %s", a)
