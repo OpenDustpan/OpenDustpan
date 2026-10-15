@@ -184,7 +184,7 @@ func testNamespacePrincipalTokenManagers(t *testing.T, d *delegation) {
 
 	g := d.mustGrant(t, bootstrap(), bot, access.RoleViewer, identity.NamespaceObject("acme"))
 
-	if managers := d.tokenManagersOf(t, "acme", access.GrantRef(g)); !strings.Contains(
+	if managers := d.changeOf(t, "acme", access.GrantRef(g), "tokenManagers"); !strings.Contains(
 		managers, "principal:"+alice.ID,
 	) {
 		t.Fatalf("token managers of the grant = %q, want alice", managers)
