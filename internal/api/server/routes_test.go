@@ -522,7 +522,9 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	seedNamespacePrincipal(t, st, at)
 
-	svc, err := principal.NewService(principal.Config{Store: st, Guard: nil, Namespaces: st, Now: nil, NewID: nil})
+	svc, err := principal.NewService(principal.Config{
+		Store: st, Guard: nil, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
+	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}

@@ -66,7 +66,7 @@ func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: nil, Namespaces: nil, Now: nil, NewID: nil},
+		principal.Config{Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -686,7 +686,7 @@ func TestPrincipalChangeFailsClosed(t *testing.T) {
 	_, st := newTestPrincipalStore(t)
 
 	svc, err := principal.NewService(
-		principal.Config{Store: failingStore{st}, Guard: nil, Namespaces: nil, Now: nil, NewID: nil},
+		principal.Config{Store: failingStore{st}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
