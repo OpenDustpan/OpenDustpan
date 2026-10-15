@@ -115,6 +115,7 @@ var families = map[identity.Action]Family{
 	identity.ActionServerManageServiceTokens:  FamilyAdministration, //nolint:staticcheck // Kept classified for stored roles.
 	identity.ActionServerManageTokenPolicy:    FamilyAdministration,
 	identity.ActionServerManageSignIn:         FamilyAdministration,
+	identity.ActionServerRestoreAccess:        FamilyAdministration,
 	identity.ActionNamespaceManageIPAllowlist: FamilyAdministration,
 
 	identity.ActionPrincipalManageTokens: FamilyDelegation,
