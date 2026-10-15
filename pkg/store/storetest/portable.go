@@ -397,7 +397,7 @@ func testPortableJournalBlob(t *testing.T, newStore PortableFactory) {
 
 	src := newStore(t)
 	f := newFixture(t, src)
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 
 	row := journalRow(t, src, u, 7, 1)
 	row.Size = 33

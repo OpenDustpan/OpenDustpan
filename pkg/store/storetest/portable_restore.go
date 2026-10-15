@@ -245,7 +245,7 @@ func testRestoreJournalBlob(t *testing.T, newStore RestoreFactory) {
 	ctx := t.Context()
 
 	f := newFixture(t, ps.src)
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 
 	row := journalRow(t, ps.src, u, 7, 1)
 	row.Size = 33

@@ -815,7 +815,7 @@ DELETE FROM update_journal
 WHERE stack_id = $1 AND update_id = $2;
 
 -- name: JournalState :one
-SELECT journal_closed, status FROM updates
+SELECT journal_closed, journal_version, status FROM updates
 WHERE stack_id = $1 AND id = $2;
 
 -- name: CloseJournal :exec
