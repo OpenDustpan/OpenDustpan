@@ -65,6 +65,16 @@ func requireNoCanary(t *testing.T, where, haystack string) {
 	}
 }
 
+// canaryErrText answers err.Error, or "" when err is nil, so a canary
+// check can read an error without a nil dereference.
+func canaryErrText(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	return err.Error()
+}
+
 // benignRecord returns a record with no canary value in it.
 func benignRecord() logsink.Record {
 	return logsink.Record{
@@ -179,7 +189,7 @@ func canaryFile(t *testing.T) {
 		t.Fatalf("write to a closed file sink: got %v, want ErrClosed", err)
 	}
 
-	requireNoCanary(t, "closed file error", err.Error())
+	requireNoCanary(t, "closed file error", canaryErrText(err))
 }
 
 // canarySyslogUDP writes a benign record to a local UDP receiver, then
@@ -254,7 +264,7 @@ func canarySyslogUDP(t *testing.T) {
 	}
 
 	requireNoCanary(t, "syslog skip reason", skip.Reason)
-	requireNoCanary(t, "syslog skip error", capErr.Error())
+	requireNoCanary(t, "syslog skip error", canaryErrText(capErr))
 }
 
 // canarySyslogTCP writes a benign record to a local TCP receiver, then
@@ -326,7 +336,7 @@ func canarySyslogTCP(t *testing.T) {
 	}
 
 	requireNoCanary(t, "syslog skip reason", skip.Reason)
-	requireNoCanary(t, "syslog skip error", capErr.Error())
+	requireNoCanary(t, "syslog skip error", canaryErrText(capErr))
 }
 
 // canaryWebhook posts a benign batch with the credential canary as the sink
@@ -399,7 +409,7 @@ func canaryWebhook(t *testing.T) {
 		t.Fatalf("write to a refusing receiver: got %v, want ErrRefused", writeErr)
 	}
 
-	requireNoCanary(t, "webhook refusal error", writeErr.Error())
+	requireNoCanary(t, "webhook refusal error", canaryErrText(writeErr))
 
 	// A canary record that a refusing receiver refuses must not appear in
 	// the returned error either: the error keeps the status only.
@@ -408,7 +418,7 @@ func canaryWebhook(t *testing.T) {
 		t.Fatalf("write of a canary record to a refusing receiver: got %v, want ErrRefused", writeErr)
 	}
 
-	requireNoCanary(t, "webhook canary refusal error", writeErr.Error())
+	requireNoCanary(t, "webhook canary refusal error", canaryErrText(writeErr))
 }
 
 // canaryObjectStore writes a benign record to the directory blob store, then
