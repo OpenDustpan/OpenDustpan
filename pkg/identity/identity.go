@@ -240,6 +240,11 @@ const (
 	// the sign-in methods, SCIM and MFA. Its object is ServerObject. Of the
 	// built-in roles, only the site administrator holds it.
 	ActionServerManageSignIn Action = "server:manage-sign-in"
+	// ActionServerRestoreAccess allows a restore to replace the access
+	// tables: principals, groups, memberships, roles, grants, access tokens
+	// and trust rules. Its object is ServerObject. Of the built-in roles,
+	// only the site administrator holds it.
+	ActionServerRestoreAccess Action = "server:restore-access"
 )
 
 // Object limits for the tool and unit parts of a unit reference.
