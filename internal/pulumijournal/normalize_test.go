@@ -83,11 +83,23 @@ func TestReplayKeepsURNOfChildOfRootStack(t *testing.T) {
 			`{"urn":"`+urnChild+`","custom":true,"type":"t:mod:T","parent":"`+stack+`"}`)
 }
 
+// providerAliased returns a provider state with the ID that the user refers
+// to. The provider type registers the reference, so the output passes the
+// integrity check.
+func providerAliased(urn, id string, aliases ...string) string {
+	list := make([]string, 0, len(aliases))
+	for _, a := range aliases {
+		list = append(list, `"`+a+`"`)
+	}
+	return `{"urn":"` + urn + `","custom":true,"type":"pulumi:providers:aws","id":"` + id + `","aliases":[` +
+		strings.Join(list, ",") + `]}`
+}
+
 // TestReplayNormalizesProvider checks that a provider reference keeps its ID and
 // gets the URN of the provider that declares the alias.
 func TestReplayNormalizesProvider(t *testing.T) {
 	t.Parallel()
-	provider := aliased(urnProvider, urnOldProv)
+	provider := providerAliased(urnProvider, providerID, urnOldProv)
 	user := `{"urn":"urn:b","custom":true,"type":"t:mod:T","provider":"` + urnOldProv + `::` + providerID + `"}`
 	base := baseJSON(provider, user)
 	got, err := replay(base, batch())
@@ -95,21 +107,24 @@ func TestReplayNormalizesProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	expectDeployment(t, got,
-		`{"urn":"`+urnProvider+`","custom":true,"type":"t:mod:T","id":"x"},`+
+		`{"urn":"`+urnProvider+`","custom":true,"type":"pulumi:providers:aws","id":"`+providerID+`"},`+
 			`{"urn":"urn:b","custom":true,"type":"t:mod:T","provider":"`+urnProvider+`::`+providerID+`"}`)
 }
 
 // TestReplayGivesProviderEmptyIDTheUnknownID checks that a provider reference with
-// no ID gets the unknown ID, as upstream providers.NewReference does.
+// no ID gets the unknown ID, as upstream providers.NewReference does. The base
+// holds the provider, so the output passes the integrity check.
 func TestReplayGivesProviderEmptyIDTheUnknownID(t *testing.T) {
 	t.Parallel()
+	provider := `{"urn":"` + urnProvider + `","custom":true,"type":"pulumi:providers:aws","id":"` + unknownID + `"}`
 	user := `{"urn":"urn:b","custom":true,"type":"t:mod:T","provider":"` + urnProvider + `::"}`
-	got, err := replay(baseJSON(user), batch())
+	got, err := replay(baseJSON(provider, user), batch())
 	if err != nil {
 		t.Fatal(err)
 	}
 	expectDeployment(t, got,
-		`{"urn":"urn:b","custom":true,"type":"t:mod:T","provider":"`+urnProvider+`::`+unknownID+`"}`)
+		provider+`,`+
+			`{"urn":"urn:b","custom":true,"type":"t:mod:T","provider":"`+urnProvider+`::`+unknownID+`"}`)
 }
 
 // TestReplayNormalizesPropertyDependenciesAndDeletedWith checks the rewrite of the
@@ -170,24 +185,30 @@ func TestReplayNormalizesViewOf(t *testing.T) {
 
 // TestReplayNormalizesNewAndBaseRecords checks that a new resource and a base resource
 // both get the same rewrite. The index keeps its own copy of each slice, so the second
-// pass sees the rewrite as a change.
+// pass sees the rewrite as a change. The alias target is new and comes first, so each
+// reference names a resource before it and the output passes the integrity check.
 func TestReplayNormalizesNewAndBaseRecords(t *testing.T) {
 	t.Parallel()
-	base := baseJSON(aliased(urnNewA, urnOldA),
-		`{"urn":"urn:b","custom":true,"type":"t:mod:T","dependencies":["`+urnOldA+`"]}`)
+	base := baseJSON(
+		`{"urn":"urn:b","custom":true,"type":"t:mod:T","dependencies":["` + urnOldA + `"]}`,
+	)
+	target := aliased(urnNewA, urnOldA)
 	newState := `{"urn":"urn:c","custom":true,"type":"t:mod:T","id":"x","dependencies":["` + urnOldA + `"]}`
 	entries := batch(
 		`{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`,
 		`{"version":1,"kind":1,"sequenceID":2,"operationID":1,"removeOld":null,"removeNew":null,`+
-			`"state":`+newState+`,"deleteOld":null}`,
+			`"state":`+target+`}`,
+		`{"version":1,"kind":0,"sequenceID":3,"operationID":2,"removeOld":null,"removeNew":null}`,
+		`{"version":1,"kind":1,"sequenceID":4,"operationID":2,"removeOld":null,"removeNew":null,`+
+			`"state":`+newState+`}`,
 	)
 	got, err := replay(base, entries)
 	if err != nil {
 		t.Fatal(err)
 	}
 	expectDeployment(t, got,
-		`{"urn":"urn:c","custom":true,"type":"t:mod:T","id":"x","dependencies":["`+urnNewA+`"]},`+
-			`{"urn":"`+urnNewA+`","custom":true,"type":"t:mod:T","id":"x"},`+
+		`{"urn":"`+urnNewA+`","custom":true,"type":"t:mod:T","id":"x"},`+
+			`{"urn":"urn:c","custom":true,"type":"t:mod:T","id":"x","dependencies":["`+urnNewA+`"]},`+
 			`{"urn":"urn:b","custom":true,"type":"t:mod:T","dependencies":["`+urnNewA+`"]}`)
 }
 
