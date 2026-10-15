@@ -20,8 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/pkg/blob"
-	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/blob/s3"
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/logsink/file"
 	"opendustpan.org/opendustpan/pkg/logsink/objectstore"
@@ -31,36 +30,41 @@ import (
 )
 
 // Canary values for the never-shipped test. They are test values only and
-// look like no real token format.
+// look like no real token format. No record field ever holds one: every
+// record below holds ordinary values only, so a shipped canary proves the
+// sink added data that was not in the record.
 //
 //nolint:gosec // Canary values for the never-shipped test, not credentials.
 const (
 	canaryCred = "canary-cred-7f3e9a1b"
-	canaryPath = "/canary/path/do-not-log"
+	canaryPath = "/canary-data/do-not-log/key.pem"
 	canaryBody = "canary-body-5d2c"
 )
 
 // canaries holds every canary value the test checks for.
 var canaries = []string{canaryCred, canaryPath, canaryBody} //nolint:gochecknoglobals // Shared by the canary subtests.
 
-// errCanaryTarget reports a failed target in the canary test. One test
-// double fails with it, so the text that a careless adapter echoes would
-// hold every canary value.
+// errCanaryTarget reports a failed target in the canary test. The text that
+// a careless adapter echoes would hold every canary value.
 var errCanaryTarget = errors.New(
 	"target down: " + canaryCred + " " + canaryPath + " " + canaryBody,
 )
-
-// errCanaryStore reports a failed object store in the canary test.
-var errCanaryStore = errors.New("object store unavailable")
 
 // requireNoCanary fails when haystack holds any canary value. where names
 // the output under check, so a failure points at the leaking channel.
 func requireNoCanary(t *testing.T, where, haystack string) {
 	t.Helper()
 
-	for _, c := range canaries {
-		if strings.Contains(haystack, c) {
-			t.Fatalf("%s holds canary value %q", where, c)
+	requireNoValue(t, where, haystack, canaries...)
+}
+
+// requireNoValue fails the test when haystack holds any of the values.
+func requireNoValue(t *testing.T, where, haystack string, values ...string) {
+	t.Helper()
+
+	for _, v := range values {
+		if strings.Contains(haystack, v) {
+			t.Fatalf("%s holds canary value %q", where, v)
 		}
 	}
 }
@@ -75,39 +79,60 @@ func canaryErrText(err error) string {
 	return err.Error()
 }
 
-// benignRecord returns a record with no canary value in it.
+// benignRecord returns a record with ordinary values only: the path and the
+// message the server puts in an audit or application record.
 func benignRecord() logsink.Record {
 	return logsink.Record{
 		Time:    time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC),
 		Level:   logsink.LevelInfo,
 		Message: "audit entry",
 		Attrs: []logsink.Attr{
+			logsink.String("path", "/api/stacks"),
 			logsink.String("scope", "acme"),
 			logsink.Int64("sequence", 1),
 		},
 	}
 }
 
-// canaryRecord returns a record whose message and attribute hold the body
-// and path canaries. The message carries padding past the smallest syslog
-// cap, so the capped syslog sinks skip it. A Write that fails must not echo
-// them in its error, and a Write that the test drops must not deliver them.
-func canaryRecord() logsink.Record {
+// longRecord returns a record with an ordinary long message that sits above
+// the smallest syslog cap. Every long field is trimmable, so the syslog
+// sink trims it to fit and ships it instead of skipping it.
+func longRecord() logsink.Record {
 	return logsink.Record{
 		Time:    time.Date(2026, time.October, 15, 12, 0, 1, 0, time.UTC),
 		Level:   logsink.LevelInfo,
-		Message: canaryBody + " " + strings.Repeat("x", 600),
+		Message: strings.Repeat("audit ", 100),
 		Attrs: []logsink.Attr{
-			logsink.String("path", canaryPath),
+			logsink.String("path", "/api/stacks"),
+			logsink.String("scope", "acme"),
 		},
 	}
 }
 
-// TestCanaryNoAdapterLeaksSecrets proves no adapter ships a secret it holds
-// only in its configuration, in a target failure, or in a dropped request
-// body. Each row uses the test double of one adapter: a temp dir, a local
-// UDP or TCP listener, a local HTTPS server, or the directory blob store.
-// No row calls any outside network.
+// skipRecord returns a record that cannot fit under the smallest syslog cap
+// even with every trimmable field empty. The scope attribute is never
+// trimmed, so its long value overflows the cap and the sink skips the
+// record. It holds no canary: the skip reason must prove that.
+func skipRecord() logsink.Record {
+	return logsink.Record{
+		Time:    time.Date(2026, time.October, 15, 12, 0, 2, 0, time.UTC),
+		Level:   logsink.LevelInfo,
+		Message: "audit entry",
+		Attrs: []logsink.Attr{
+			logsink.String("path", "/api/stacks"),
+			logsink.String("scope", strings.Repeat("acme-", 120)),
+		},
+	}
+}
+
+// TestCanaryNoAdapterLeaksSecrets proves no adapter ships data that was not
+// in the record, and no adapter echoes its own secrets or its inputs into a
+// shipped record or an error. Each row uses the test double of one adapter:
+// a temp dir, a local UDP or TCP listener, a local HTTPS server, a local S3
+// endpoint, or a memory sink. No row calls any outside network. The records
+// hold ordinary values only. The canaries sit where a sink holds data that
+// must never ship: the webhook secret, the object storage secret, the file
+// sink path, a refused answer body, or a failed target error.
 func TestCanaryNoAdapterLeaksSecrets(t *testing.T) {
 	t.Parallel()
 
@@ -132,19 +157,14 @@ func TestCanaryNoAdapterLeaksSecrets(t *testing.T) {
 	}
 }
 
-// canaryFile writes a benign record to a file sink whose directory name
-// holds the credential canary, then drops a canary record on a closed sink.
-// Neither the shipped lines nor the returned errors hold any canary.
-// Adapters return errors instead of logging, so no log line can hold a
-// canary here.
+// canaryFile writes a benign record to a file sink, drops a benign record
+// on a closed sink, and opens a sink whose path holds the path canary under
+// a parent that is a regular file, so the open fails before any write. The
+// shipped lines and the errors must hold no canary.
 func canaryFile(t *testing.T) {
 	t.Helper()
 
-	dir := filepath.Join(t.TempDir(), canaryCred)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		t.Fatalf("create dir: %v", err)
-	}
-
+	dir := t.TempDir()
 	path := filepath.Join(dir, "audit.jsonl")
 
 	s, err := file.Open(path)
@@ -162,18 +182,37 @@ func canaryFile(t *testing.T) {
 		t.Fatalf("write: %v", writeErr)
 	}
 
+	// The shipped lines hold only the benign record.
 	data, readErr := os.ReadFile(path) //nolint:gosec // The path is a test temp file.
 	if readErr != nil {
 		t.Fatalf("read: %v", readErr)
 	}
 
-	// The directory name holds the credential canary, but the shipped lines
-	// hold only the benign record.
 	requireNoCanary(t, "shipped file lines", string(data))
 
 	if !bytes.Contains(data, []byte(`"msg":"audit entry"`)) {
 		t.Fatalf("shipped file lines lack the benign record: %q", data)
 	}
+
+	// The path canary below sits in the sink configuration only. The test
+	// never writes to it: the open fails first, and that failure is the
+	// point, so the error path is exercised too.
+	blocker := filepath.Join(t.TempDir(), "blocker")
+
+	if writeErr := os.WriteFile(blocker, []byte("block"), 0o600); writeErr != nil {
+		t.Fatalf("write blocker: %v", writeErr)
+	}
+
+	badPath := filepath.Join(blocker, canaryPath)
+
+	_, badErr := file.Open(badPath)
+	if badErr == nil {
+		t.Fatal("open on an unusable directory: got nil error")
+	}
+
+	// The open error names the configured path on purpose; it reaches only
+	// the operator. The credential and body canaries must still stay out.
+	requireNoValue(t, "file open error", canaryErrText(badErr), canaryCred, canaryBody)
 
 	closed, openErr := file.Open(filepath.Join(t.TempDir(), "closed.jsonl"))
 	if openErr != nil {
@@ -184,7 +223,7 @@ func canaryFile(t *testing.T) {
 		t.Fatalf("close: %v", closeErr)
 	}
 
-	err = closed.Write(t.Context(), []logsink.Record{canaryRecord()})
+	err = closed.Write(t.Context(), []logsink.Record{benignRecord()})
 	if !errors.Is(err, logsink.ErrClosed) {
 		t.Fatalf("write to a closed file sink: got %v, want ErrClosed", err)
 	}
@@ -192,9 +231,13 @@ func canaryFile(t *testing.T) {
 	requireNoCanary(t, "closed file error", canaryErrText(err))
 }
 
-// canarySyslogUDP writes a benign record to a local UDP receiver, then
-// drops a canary record above the message cap. The delivered message and
-// the skip error hold no canary.
+// canarySyslogUDP writes a benign record to a local UDP receiver, writes a
+// long benign record above the cap to a capped sink, and writes a record
+// that cannot fit at all. The first two ship, the last skips. The delivered
+// messages, the skip reason and the skip error hold no canary. The syslog
+// configuration holds no password, token or secret: the only
+// secret-adjacent field is the TLS client configuration, which the UDP case
+// does not use.
 func canarySyslogUDP(t *testing.T) {
 	t.Helper()
 
@@ -253,23 +296,45 @@ func canarySyslogUDP(t *testing.T) {
 		}
 	})
 
-	// The record above the cap holds the body and path canaries. The sink
-	// skips it with a fixed reason that echoes neither the record nor any
-	// target detail.
-	capErr = capped.Write(t.Context(), []logsink.Record{canaryRecord()})
+	// A record above the cap ships trimmed, so the write returns nil. The
+	// trimmed record reaches the receiver marked truncated and holds only
+	// the ordinary long message.
+	if writeErr := capped.Write(t.Context(), []logsink.Record{longRecord()}); writeErr != nil {
+		t.Fatalf("write above the cap: %v", writeErr)
+	}
+
+	msgs = r.waitFor(t, 2)
+	requireNoCanary(t, "shipped trimmed syslog message", string(msgs[1]))
+
+	if !bytes.Contains(msgs[1], []byte(`"truncated":true`)) {
+		t.Fatalf("shipped syslog message lacks the truncated mark: %q", msgs[1])
+	}
+
+	if !bytes.Contains(msgs[1], []byte("audit ")) {
+		t.Fatalf("shipped syslog message lacks the benign message: %q", msgs[1])
+	}
+
+	// The scope attribute is never trimmed, so this record cannot fit even
+	// with every trimmable field empty. The sink skips it with a fixed
+	// reason that echoes neither the record nor any target detail.
+	capErr = capped.Write(t.Context(), []logsink.Record{skipRecord()})
 
 	skip, ok := errors.AsType[*logsink.SkipError](capErr)
 	if !ok || !errors.Is(capErr, logsink.ErrSkipped) {
-		t.Fatalf("write above the cap: got %v, want a skip error", capErr)
+		t.Fatalf("write that cannot fit: got %v, want a skip error", capErr)
 	}
 
 	requireNoCanary(t, "syslog skip reason", skip.Reason)
 	requireNoCanary(t, "syslog skip error", canaryErrText(capErr))
 }
 
-// canarySyslogTCP writes a benign record to a local TCP receiver, then
-// drops a canary record above the message cap. The delivered message and
-// the skip error hold no canary.
+// canarySyslogTCP writes a benign record to a local TCP receiver, writes a
+// long benign record above the cap to a capped sink, and writes a record
+// that cannot fit at all. The first two ship, the last skips. The delivered
+// messages, the skip reason and the skip error hold no canary. The syslog
+// configuration holds no password, token or secret: the only
+// secret-adjacent field is the TLS client configuration, which the TCP case
+// does not use.
 func canarySyslogTCP(t *testing.T) {
 	t.Helper()
 
@@ -328,11 +393,33 @@ func canarySyslogTCP(t *testing.T) {
 		}
 	})
 
-	capErr = capped.Write(t.Context(), []logsink.Record{canaryRecord()})
+	// A record above the cap ships trimmed, so the write returns nil. The
+	// trimmed record reaches the receiver marked truncated and holds only
+	// the ordinary long message.
+	if writeErr := capped.Write(t.Context(), []logsink.Record{longRecord()}); writeErr != nil {
+		t.Fatalf("write above the cap: %v", writeErr)
+	}
+
+	msgs = r.waitFor(t, 2)
+	requireNoCanary(t, "shipped trimmed syslog message", string(msgs[1]))
+
+	body := canaryBodyOf(t, msgs[1])
+	if !bytes.Contains(body, []byte(`"truncated":true`)) {
+		t.Fatalf("shipped syslog message lacks the truncated mark: %q", msgs[1])
+	}
+
+	if !bytes.Contains(body, []byte("audit ")) {
+		t.Fatalf("shipped syslog message lacks the benign message: %q", msgs[1])
+	}
+
+	// The scope attribute is never trimmed, so this record cannot fit even
+	// with every trimmable field empty. The sink skips it with a fixed
+	// reason that echoes neither the record nor any target detail.
+	capErr = capped.Write(t.Context(), []logsink.Record{skipRecord()})
 
 	skip, ok := errors.AsType[*logsink.SkipError](capErr)
 	if !ok || !errors.Is(capErr, logsink.ErrSkipped) {
-		t.Fatalf("write above the cap: got %v, want a skip error", capErr)
+		t.Fatalf("write that cannot fit: got %v, want a skip error", capErr)
 	}
 
 	requireNoCanary(t, "syslog skip reason", skip.Reason)
@@ -340,9 +427,11 @@ func canarySyslogTCP(t *testing.T) {
 }
 
 // canaryWebhook posts a benign batch with the credential canary as the sink
-// secret, then posts to a receiver that refuses with a body that holds every
-// canary. Neither the shipped body, the signature headers, nor the refusal
-// error hold any canary in plain text.
+// secret, then posts a benign batch to a receiver that refuses with a body
+// that holds every canary. Neither the shipped body, the signature headers,
+// nor the refusal error hold any canary in plain text. The webhook
+// configuration holds no other secret: it has no auth header or token field
+// besides the secret.
 func canaryWebhook(t *testing.T) {
 	t.Helper()
 
@@ -410,25 +499,83 @@ func canaryWebhook(t *testing.T) {
 	}
 
 	requireNoCanary(t, "webhook refusal error", canaryErrText(writeErr))
-
-	// A canary record that a refusing receiver refuses must not appear in
-	// the returned error either: the error keeps the status only.
-	writeErr = bad.Write(t.Context(), []logsink.Record{canaryRecord()})
-	if !errors.Is(writeErr, webhook.ErrRefused) {
-		t.Fatalf("write of a canary record to a refusing receiver: got %v, want ErrRefused", writeErr)
-	}
-
-	requireNoCanary(t, "webhook canary refusal error", canaryErrText(writeErr))
 }
 
-// canaryObjectStore writes a benign record to the directory blob store, then
-// drops a canary record on a store whose Put fails with a generic error.
-// The shipped objects and the failure error hold no canary: the error never
-// echoes the record.
+// canaryObjectStore writes a benign record through a sink backed by an S3
+// store that signs with the credential canary as its secret access key,
+// then writes a benign record to a store whose endpoint refuses with an
+// error body that holds every canary. The shipped objects, the signature
+// headers and the refusal error hold no canary. The access key ID is an
+// ordinary value because it travels in the signature header by design. The
+// session token stays empty.
 func canaryObjectStore(t *testing.T) {
 	t.Helper()
 
-	store, err := fs.Open(t.TempDir())
+	fake := newCanaryS3(t, http.StatusOK)
+	s := canaryS3Sink(t, fake.srv)
+
+	if writeErr := s.Write(t.Context(), []logsink.Record{benignRecord()}); writeErr != nil {
+		t.Fatalf("write: %v", writeErr)
+	}
+
+	bodies, headers := fake.received(t)
+	if len(bodies) != 1 {
+		t.Fatalf("shipped objects = %d, want 1", len(bodies))
+	}
+
+	// The store signs with the credential canary, but each shipped object
+	// holds only the benign record and the signature header holds no
+	// secret. The token header stays empty.
+	lines := gunzipLines(t, bodies[0])
+	if len(lines) != 1 {
+		t.Fatalf("shipped object lines = %d, want 1", len(lines))
+	}
+
+	requireNoCanary(t, "shipped object lines", string(lines[0]))
+	requireNoCanary(t, "object store signature", headers.auth)
+
+	if headers.token != "" {
+		t.Fatalf("session token header = %q, want empty", headers.token)
+	}
+
+	if !bytes.Contains(lines[0], []byte(`"msg":"audit entry"`)) {
+		t.Fatalf("shipped object lines lack the benign record: %q", lines[0])
+	}
+
+	// The refusing endpoint answers with an error body that holds every
+	// canary. The failure error keeps the status and code only, never the
+	// answer body and never the record.
+	refusing := newCanaryS3(t, http.StatusForbidden)
+	bad := canaryS3Sink(t, refusing.srv)
+
+	writeErr := bad.Write(t.Context(), []logsink.Record{benignRecord()})
+	if writeErr == nil {
+		t.Fatal("write to a refusing object store: got nil error")
+	}
+
+	requireNoCanary(t, "object store failure error", writeErr.Error())
+}
+
+// canaryS3Sink returns an object store sink backed by an S3 store at srv
+// that signs with the credential canary as its secret access key. The
+// access key ID is an ordinary value because it travels in the signature
+// header by design. The session token stays empty.
+func canaryS3Sink(t *testing.T, srv *httptest.Server) *objectstore.Sink {
+	t.Helper()
+
+	signer := &s3.Signer{
+		Bucket:   "canary-bucket",
+		Region:   "us-east-1",
+		Endpoint: srv.URL,
+		Credentials: s3.Credentials{
+			AccessKeyID:     "test-access-key",
+			SecretAccessKey: canaryCred,
+			SessionToken:    "",
+		},
+		Now: nil,
+	}
+
+	store, err := s3.New(signer, "audit", srv.Client())
 	if err != nil {
 		t.Fatalf("open blob store: %v", err)
 	}
@@ -444,48 +591,16 @@ func canaryObjectStore(t *testing.T) {
 		}
 	})
 
-	if writeErr := s.Write(t.Context(), []logsink.Record{benignRecord()}); writeErr != nil {
-		t.Fatalf("write: %v", writeErr)
-	}
-
-	lines := readCanaryObjects(t, store, "audit")
-	if len(lines) != 1 {
-		t.Fatalf("shipped object lines = %d, want 1", len(lines))
-	}
-
-	requireNoCanary(t, "shipped object lines", string(lines[0]))
-
-	if !bytes.Contains(lines[0], []byte(`"msg":"audit entry"`)) {
-		t.Fatalf("shipped object lines lack the benign record: %q", lines[0])
-	}
-
-	failing := &canaryBlobStore{err: errCanaryStore}
-
-	bad, badErr := objectstore.New(failing, "audit")
-	if badErr != nil {
-		t.Fatalf("new failing sink: %v", badErr)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := bad.Close(); closeErr != nil {
-			t.Errorf("close failing sink: %v", closeErr)
-		}
-	})
-
-	// The record holds the body and path canaries, but the failure error
-	// reports the store failure only, never the record.
-	writeErr := bad.Write(t.Context(), []logsink.Record{canaryRecord()})
-	if writeErr == nil {
-		t.Fatal("write to a failing object store: got nil error")
-	}
-
-	requireNoCanary(t, "object store failure error", writeErr.Error())
+	return s
 }
 
-// canarySlogsink logs a benign record through the handler, then logs
-// through a handler whose sink fails with an error that holds every canary.
-// The handler drops the records and answers nil, so neither the delivered
-// records nor the returned errors hold any canary.
+// canarySlogsink logs a benign record through the handler, then logs a
+// benign record through a handler whose sink fails with an error that holds
+// every canary. The handler drops the records and answers nil, so neither
+// the delivered records nor the returned errors hold any canary. The
+// handler ships every attribute and drops none by key, so the body canary
+// has no placement in this case: no rule drops an attribute or a context
+// value, and the records stay benign.
 func canarySlogsink(t *testing.T) {
 	t.Helper()
 
@@ -502,7 +617,7 @@ func canarySlogsink(t *testing.T) {
 		WriteTimeout:  time.Second,
 	})
 
-	slog.New(h).Info("audit entry", slog.String("scope", "acme"))
+	slog.New(h).Info("audit entry", slog.String("path", "/api/stacks"), slog.String("scope", "acme"))
 
 	if err := h.Close(t.Context()); err != nil {
 		t.Fatalf("close handler: %v", err)
@@ -542,10 +657,13 @@ func canarySlogsink(t *testing.T) {
 	})
 
 	logger := slog.New(fh)
-	logger.Info(canaryBody, slog.String("path", canaryPath))
+	logger.Info("audit entry", slog.String("path", "/api/stacks"), slog.String("scope", "acme"))
 
-	if err := fh.Close(t.Context()); err != nil {
-		t.Fatalf("close failing handler: %v", err)
+	closeErr := fh.Close(t.Context())
+	requireNoCanary(t, "slog close error", canaryErrText(closeErr))
+
+	if closeErr != nil {
+		t.Fatalf("close failing handler: %v", closeErr)
 	}
 
 	if got := failing.records(); len(got) != 0 {
@@ -586,72 +704,102 @@ func (s *canaryMemSink) records() []logsink.Record {
 	return append([]logsink.Record(nil), s.recs...)
 }
 
-// canaryBlobStore fails every Put with err. Every other method answers the
-// zero value, so a failed Write ships nothing.
-type canaryBlobStore struct {
-	err error
-}
-
-func (s *canaryBlobStore) Put(_ context.Context, _ blob.Key, _ io.Reader) error {
-	return s.err
-}
-
-func (s *canaryBlobStore) Get(_ context.Context, _ blob.Key) (io.ReadCloser, error) {
-	return nil, blob.ErrNotFound
-}
-
-func (s *canaryBlobStore) Delete(_ context.Context, _ blob.Key) error {
-	return nil
-}
-
-func (s *canaryBlobStore) List(_ context.Context, _ string) ([]blob.Object, error) {
-	return nil, nil
-}
-
-func (s *canaryBlobStore) Ping(_ context.Context) error {
-	return nil
-}
-
-// readCanaryObjects answers the lines of every object under prefix.
-func readCanaryObjects(t *testing.T, store blob.Store, prefix string) [][]byte {
+// gunzipLines answers the lines of one gzip object body.
+func gunzipLines(t *testing.T, data []byte) [][]byte {
 	t.Helper()
 
-	objs, err := store.List(t.Context(), prefix)
+	zr, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
-		t.Fatalf("list: %v", err)
+		t.Fatalf("gzip: %v", err)
+	}
+
+	body, err := io.ReadAll(zr)
+
+	if closeErr := zr.Close(); closeErr != nil {
+		t.Fatalf("close gzip reader: %v", closeErr)
+	}
+
+	if err != nil {
+		t.Fatalf("read gzip body: %v", err)
 	}
 
 	var out [][]byte
 
-	for _, o := range objs {
-		rc, err := store.Get(t.Context(), o.Key)
-		if err != nil {
-			t.Fatalf("get %s: %v", o.Key, err)
-		}
-
-		zr, err := gzip.NewReader(rc)
-		if err != nil {
-			_ = rc.Close() //nolint:errcheck // The gzip error decides the test result.
-
-			t.Fatalf("gzip %s: %v", o.Key, err)
-		}
-
-		data, err := io.ReadAll(zr)
-
-		if closeErr := rc.Close(); closeErr != nil {
-			t.Fatalf("close %s: %v", o.Key, closeErr)
-		}
-
-		if err != nil {
-			t.Fatalf("read %s: %v", o.Key, err)
-		}
-
-		for line := range bytes.SplitSeq(bytes.TrimSuffix(data, []byte("\n")), []byte("\n")) {
-			out = append(out, line)
-		}
+	for line := range bytes.SplitSeq(bytes.TrimSuffix(body, []byte("\n")), []byte("\n")) {
+		out = append(out, line)
 	}
 
 	return out
+}
+
+// canaryS3Headers holds the signature headers and the token headers that
+// one fake S3 endpoint saw.
+type canaryS3Headers struct {
+	auth  string
+	token string
+}
+
+// canaryS3 is a local S3 endpoint that keeps the bodies it receives and the
+// signature headers of each request.
+type canaryS3 struct {
+	srv    *httptest.Server
+	bodies [][]byte
+	auth   []string
+	tokens []string
+	mu     sync.Mutex
+	status int
+}
+
+// newCanaryS3 starts a local S3 endpoint that answers status. A refusal
+// carries an error body that holds every canary, so the test proves the
+// failure error never echoes it. Only the code travels into the error.
+func newCanaryS3(t *testing.T, status int) *canaryS3 {
+	t.Helper()
+
+	f := &canaryS3{srv: nil, bodies: nil, auth: nil, tokens: nil, mu: sync.Mutex{}, status: status}
+
+	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+
+			return
+		}
+
+		f.mu.Lock()
+		f.bodies = append(f.bodies, body)
+		f.auth = append(f.auth, req.Header.Get("Authorization"))
+		f.tokens = append(f.tokens, req.Header.Get("X-Amz-Security-Token"))
+		f.mu.Unlock()
+
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+
+			refused := `<?xml version="1.0" encoding="UTF-8"?><Error><Code>AccessDenied</Code><Message>refused: ` +
+				canaryCred + " " + canaryPath + " " + canaryBody + `</Message></Error>`
+			_, _ = w.Write([]byte(refused)) //nolint:errcheck // The status decides the result.
+		} else {
+			w.WriteHeader(status)
+		}
+	}))
+
+	t.Cleanup(f.srv.Close)
+
+	return f
+}
+
+// received answers the bodies, the signature headers and the token headers
+// seen so far.
+func (f *canaryS3) received(t *testing.T) ([][]byte, canaryS3Headers) {
+	t.Helper()
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return append([][]byte(nil), f.bodies...), canaryS3Headers{
+		auth:  strings.Join(f.auth, "\n"),
+		token: strings.Join(f.tokens, "\n"),
+	}
 }
 
 // canaryReceiver is a local HTTPS server that keeps the bodies it receives
