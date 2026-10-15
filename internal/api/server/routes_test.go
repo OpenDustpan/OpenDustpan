@@ -216,6 +216,7 @@ func newServiceBackedHandler(
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         st,
+		Journal:        st,
 		Principals:     seedRoutePrincipals(t, st),
 		Tokens:         seedRouteTokens(t, st),
 		Access:         seedRouteAccess(t, st),

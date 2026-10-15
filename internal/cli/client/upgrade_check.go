@@ -51,12 +51,14 @@ const (
 )
 
 // UpgradeCheck runs `opendustpan upgrade check`: it asks the server for its
-// version, the schema version of its database and the names of the applied
-// migrations, compares them with the migrations in its own binary and prints
-// the binary version, the server version, the schema version of the database,
-// the schema version the binary needs, the names of the pending migrations
-// and one verdict. It writes nothing. The exit code is 0 for `up to date`
-// and `upgrade possible` and 1 for `cannot start` and for errors.
+// version, the schema version of its database, the names of the applied
+// migrations and the count of running journaled updates, compares the
+// migrations with the migrations in its own binary and prints the binary
+// version, the server version, the schema version of the database, the
+// schema version the binary needs, the names of the pending migrations, the
+// count of running journaled updates and one verdict. It writes nothing. The
+// exit code is 0 for `up to date` and `upgrade possible` and 1 for `cannot
+// start` and for errors.
 // binaryVersion is the stamped version of the binary: the report prints it,
 // so it names the same version as --version.
 func UpgradeCheck(
@@ -111,7 +113,9 @@ func UpgradeCheck(
 
 	warning := keyWarningFor(answer)
 
-	if err := writeUpgradeReport(stdout, answer.ServerVersion, binaryVersion, inspection, warning); err != nil {
+	if err := writeUpgradeReport(
+		stdout, answer.ServerVersion, binaryVersion, inspection, warning, answer.RunningJournaledUpdates,
+	); err != nil {
 		return err
 	}
 
@@ -139,14 +143,16 @@ func (f *upgradeCheckFlags) register(fs *flag.FlagSet) {
 }
 
 // UpgradeCheckAnswer is the server answer the upgrade check compares: the
-// server version, the schema version of its database and the names of the
-// applied migrations ordered by version. KeyEncryptionKey is nil when the
-// server is older than ADR 41 and does not answer the field.
+// server version, the schema version of its database, the names of the
+// applied migrations ordered by version and the count of running journaled
+// updates. KeyEncryptionKey is nil when the server is older and does not
+// answer the field.
 type UpgradeCheckAnswer struct {
-	ServerVersion     string   `json:"version"`
-	SchemaVersion     int64    `json:"schemaVersion"`
-	AppliedMigrations []string `json:"appliedMigrations"`
-	KeyEncryptionKey  *bool    `json:"keyEncryptionKey"`
+	ServerVersion           string   `json:"version"`
+	SchemaVersion           int64    `json:"schemaVersion"`
+	AppliedMigrations       []string `json:"appliedMigrations"`
+	KeyEncryptionKey        *bool    `json:"keyEncryptionKey"`
+	RunningJournaledUpdates int64    `json:"runningJournaledUpdates"`
 }
 
 // KeyWarning is the upgrade report line for a server that runs without a
@@ -314,11 +320,19 @@ func upgradeVerdict(inspection schema.Inspection) string {
 
 // writeUpgradeReport writes the binary version, the server version, the
 // schema version of the database, the schema version the binary needs, the
-// pending migration names, the key warning when warning is not empty, and
-// the verdict. When migrations are pending it tells the operator to back up the
-// database first and that no downgrade path exists.
+// pending migration names, the count of running journaled updates, the key
+// warning when warning is not empty, and the verdict. When migrations are
+// pending it tells the operator to back up the database first and that no
+// downgrade path exists. When journaled updates run it tells the operator to
+// let them finish or cancel them before a downgrade: a downgrade to a binary
+// without the journal route answers their journal batches with 404, which
+// the Pulumi CLI does not retry.
 func writeUpgradeReport(
-	stdout io.Writer, serverVersion, binaryVersion string, inspection schema.Inspection, warning string,
+	stdout io.Writer,
+	serverVersion, binaryVersion string,
+	inspection schema.Inspection,
+	warning string,
+	journaled int64,
 ) error {
 	lines := []string{
 		"binary version: " + binaryVersion,
@@ -338,6 +352,15 @@ func writeUpgradeReport(
 		lines = append(
 			lines,
 			"Back up the database before the upgrade. No downgrade path exists.",
+		)
+	}
+
+	lines = append(lines, fmt.Sprintf("running journaled updates: %d", journaled))
+
+	if journaled > 0 {
+		lines = append(
+			lines,
+			"Let running journaled updates finish or cancel them before a downgrade.",
 		)
 	}
 
