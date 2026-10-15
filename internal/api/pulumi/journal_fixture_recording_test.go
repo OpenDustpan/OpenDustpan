@@ -29,7 +29,7 @@ func journalWriterFor(t *testing.T, blobs *memBlob, rows *memUpdateStore) *stack
 // PutJournalRow checks the row with the replay verifier, as the stores do on
 // arrival, and keeps nothing: the route tests read the answer, not the rows.
 func (m *memUpdateStore) PutJournalRow(_ context.Context, row stack.JournalRow, _ namespace.Fence) (bool, error) {
-	if err := row.Verify(nil); err != nil {
+	if _, err := row.Verify(nil, false); err != nil {
 		return false, fmt.Errorf("%w: %w", stack.ErrJournalBatch, err)
 	}
 

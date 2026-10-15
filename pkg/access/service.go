@@ -865,6 +865,53 @@ func (s *Service) servicePrincipalsOfGroup(ctx context.Context, groupID string) 
 	return out, nil
 }
 
+// checkNamespaceTokenGranter refuses a role with
+// namespace:manage-principal-tokens unless granter holds every data action
+// on the namespace of obj, or server:manage-access on the installation. A
+// grant on the installation needs server:manage-access. The action reaches
+// the tokens of the principals of one namespace, so only a principal with
+// the whole data access of that namespace can give it.
+func (s *Service) checkNamespaceTokenGranter(
+	ctx context.Context, granter identity.Principal, obj identity.Object, role Role,
+) error {
+	if !role.Has(identity.ActionNamespaceManagePrincipalTokens) {
+		return nil
+	}
+
+	if obj.IsServer() || obj.Namespace() == "" {
+		err := s.authz.Authorize(ctx, granter, identity.ActionServerManageAccess, identity.ServerObject())
+		if errors.Is(err, identity.ErrDenied) {
+			return fmt.Errorf("%w: role %q holds %s, which needs %s on the installation",
+				ErrEscalation, role.ID, identity.ActionNamespaceManagePrincipalTokens,
+				identity.ActionServerManageAccess)
+		}
+
+		return err
+	}
+
+	if err := s.authz.Authorize(ctx, granter, identity.ActionServerManageAccess, identity.ServerObject()); err == nil {
+		return nil
+	} else if !errors.Is(err, identity.ErrDenied) {
+		return err
+	}
+
+	held, err := s.authz.heldActions(ctx, granter, identity.NamespaceObject(obj.Namespace()))
+	if err != nil {
+		return err
+	}
+
+	for _, a := range Actions(FamilyData) {
+		if !held.has(a) {
+			return fmt.Errorf("%w: role %q holds %s, which needs every data action on namespace %q or %s "+
+				"on the installation",
+				ErrEscalation, role.ID, identity.ActionNamespaceManagePrincipalTokens, obj.Namespace().String(),
+				identity.ActionServerManageAccess)
+		}
+	}
+
+	return nil
+}
+
 // withTokenManagers returns e with the change "tokenManagers" when subject
 // is a service principal: the sorted holders of principal:manage-tokens on
 // it. When subject is a group, it returns e with one change
@@ -937,9 +984,11 @@ func (s *Service) fenceOf(ctx context.Context, obj identity.Object) (namespace.F
 }
 
 // checkEscalation refuses a role with an action that granter does not hold
-// on obj, and a role with a delegation action when granter does not hold
-// server:manage-access on the installation. A grant, a revoke, a change of
-// who holds a grant and a change of a role all run it.
+// on obj, a role with a delegation action when granter does not hold
+// server:manage-access on the installation, and a role with
+// namespace:manage-principal-tokens when granter holds neither every data
+// action on the namespace of obj nor server:manage-access. A grant, a
+// revoke, a change of who holds a grant and a change of a role all run it.
 func (s *Service) checkEscalation(
 	ctx context.Context,
 	granter identity.Principal,
@@ -951,6 +1000,10 @@ func (s *Service) checkEscalation(
 	}
 
 	if err := s.checkDelegationGranter(ctx, granter, role); err != nil {
+		return err
+	}
+
+	if err := s.checkNamespaceTokenGranter(ctx, granter, obj, role); err != nil {
 		return err
 	}
 
