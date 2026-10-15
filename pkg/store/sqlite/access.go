@@ -222,6 +222,19 @@ func (s *Store) RoleGrantedBelowInstallation(ctx context.Context, role string) (
 	return n > 0, nil
 }
 
+// RoleGrantedOnPrincipal implements access.GrantStore.
+func (s *Store) RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	n, err := s.queries.CountRoleGrantsOnPrincipal(ctx, role)
+	if err != nil {
+		return false, fmt.Errorf("count grants of role: %w", err)
+	}
+
+	return n > 0, nil
+}
+
 // GrantsWithRoles implements access.GrantStore.
 func (s *Store) GrantsWithRoles(
 	ctx context.Context,
@@ -473,6 +486,21 @@ func revokeGrantsOf(ctx context.Context, q *db.Queries, subject access.Subject, 
 		return fmt.Errorf("revoke grants of %s: %w", subject.String(), err)
 	}
 
+	if subject.Kind != access.SubjectPrincipal {
+		return nil
+	}
+
+	// A grant on the principal, such as the right to make its tokens, ends
+	// with it too.
+	_, err = q.RevokeGrantsOnTarget(ctx, db.RevokeGrantsOnTargetParams{
+		RevokedAtMs: nullMillis(codec.Millis(e.At)),
+		RevokedBy:   e.Subject,
+		Target:      identity.PrincipalObject(subject.ID).String(),
+	})
+	if err != nil {
+		return fmt.Errorf("revoke grants on %s: %w", subject.String(), err)
+	}
+
 	return nil
 }
 
@@ -543,6 +571,10 @@ func fromGrantRow(row db.GetGrantRow) (access.Grant, error) {
 
 	if id, isUnit := strings.CutPrefix(row.Target, unitTargetPrefix); isUnit {
 		obj = obj.WithUnitID(id)
+	}
+
+	if id, isCollection := strings.CutPrefix(row.Target, collectionTargetPrefix); isCollection {
+		obj = obj.WithCollectionID(id)
 	}
 
 	var condition *string
@@ -616,7 +648,8 @@ func subjectStrings(subjects []access.Subject) []string {
 func targetStrings(objects []identity.Object) []string {
 	out := make([]string, 0, len(objects))
 
-	for _, o := range objects {
+	for i := range objects {
+		o := objects[i]
 		if t, err := targetOf(o); err == nil {
 			out = append(out, t)
 		}
@@ -629,10 +662,22 @@ func targetStrings(objects []identity.Object) []string {
 // unit follows it.
 const unitTargetPrefix = "unit:"
 
+// collectionTargetPrefix starts the target of a collection grant: the stable ID
+// of the collection follows it (ADR 52).
+const collectionTargetPrefix = "collection:"
+
 // targetOf returns what a grant on obj matches: unit:<stable ID> for a unit,
 // and the wire form for every other object. A unit with no stable ID
 // returns access.ErrInvalid.
 func targetOf(obj identity.Object) (string, error) {
+	if obj.IsCollection() {
+		if obj.CollectionID() == "" {
+			return "", fmt.Errorf("%w: collection %q has no stable ID", access.ErrInvalid, obj.String())
+		}
+
+		return collectionTargetPrefix + obj.CollectionID(), nil
+	}
+
 	if !obj.IsUnit() {
 		return obj.String(), nil
 	}

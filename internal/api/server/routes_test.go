@@ -18,9 +18,12 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -191,6 +194,11 @@ func newServiceBackedHandler(
 		t.Fatalf("seed namespace: %v", seedErr)
 	}
 
+	allow, err := ipallow.NewService(ipallow.Config{Store: st, Namespaces: namespaces, Now: nil, Enabled: true})
+	if err != nil {
+		t.Fatalf("ip allowlist service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:  authn,
 		Authorizer:     authz,
@@ -207,6 +215,8 @@ func newServiceBackedHandler(
 		Access:         seedRouteAccess(t, st),
 		Audit:          st,
 		OnAuditFailure: nil,
+		DeletedUnits:   stubSweeper{},
+		IPAllowlists:   allow,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -239,6 +249,14 @@ const (
 type allowGrants struct{}
 
 func (allowGrants) RequireHeld(context.Context, identity.Principal, string) error { return nil }
+
+// allowAll allows every action, so the token service passes its own check
+// of principal:manage-tokens and the route alone decides.
+type allowAll struct{}
+
+func (allowAll) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return nil
+}
 
 // seedRouteTokens writes the person record of the test caller and one
 // token of each kind, so the token routes with an ID answer their success
@@ -294,13 +312,30 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Logger: nil, Now: nil, NewID: nil,
+		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Authorizer: allowAll{}, Logger: nil, Now: nil,
+		NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
 	}
 
 	return svc
+}
+
+// stubCollections names the collection testCollection with its stable ID,
+// so that a grant on it is accepted (ADR 51). No unit is in a collection here.
+type stubCollections struct{}
+
+func (stubCollections) CollectionOf(context.Context, identity.Object) (string, bool, error) {
+	return "", false, nil
+}
+
+func (stubCollections) CollectionID(_ context.Context, obj identity.Object) (string, bool, error) {
+	if obj.CollectionName() == testCollection {
+		return "col-" + testCollection, true, nil
+	}
+
+	return "", false, nil
 }
 
 // Grant IDs that seedRouteAccess writes, one on each object kind, so each
@@ -310,6 +345,7 @@ const (
 	testNamespaceGrantID  = "grt-routes-namespace"
 	testCollectionGrantID = "grt-routes-collection"
 	testUnitGrantID       = "grt-routes-unit"
+	testPrincipalGrantID  = "grt-routes-principal"
 )
 
 // testCollection and testUnitName name the collection and the unit of the
@@ -356,12 +392,23 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 			Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
 		},
 		{
-			CreatedAt: at, Condition: nil, Object: identity.CollectionObject(testNamespace, testCollection),
-			ID: testCollectionGrantID, Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
+			CreatedAt: at,
+			Condition: nil,
+			Object: identity.CollectionObject(testNamespace, testCollection).
+				WithCollectionID("col-" + testCollection),
+			ID:        testCollectionGrantID,
+			Role:      access.RoleViewer,
+			CreatedBy: "admin",
+			Subject:   other,
 		},
 		{
 			CreatedAt: at, Condition: nil, Object: unit, ID: testUnitGrantID,
 			Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
+		},
+		{
+			CreatedAt: at, Condition: nil, Object: identity.PrincipalObject(testOtherPrincipalID),
+			ID: testPrincipalGrantID, Role: access.RoleTokenManager, CreatedBy: "admin",
+			Subject: access.Subject{Kind: access.SubjectPrincipal, ID: testPrincipalID},
 		},
 	}
 	for i := range grants {
@@ -373,7 +420,9 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 		}
 	}
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
+	authz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st},
+	)
 	if err != nil {
 		t.Fatalf("access authorizer: %v", err)
 	}
@@ -441,6 +490,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 //nolint:gochecknoglobals,gosec // A constant table of request bodies; G101 reads "token" in the paths.
 var routeBodies = map[string]string{
 	"PUT /api/server/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
+	"PUT /api/server/namespaces/{namespace}/ip-allowlist":      `{"cidrs":["10.0.0.0/8"]}`,
 	"POST /api/server/namespaces":                              `{"name":"acme"}`,
 	"POST /api/server/restores": `{"backupID":"` + string(
 		testBackupID,
@@ -461,6 +511,9 @@ var routeBodies = map[string]string{
 	"POST /api/server/service-tokens":                                         `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
 	"POST /api/server/service-tokens/{id}/rotate":                             `{}`,
 	"POST /api/server/caller/tokens":                                          `{"name":"laptop"}`,
+	"POST /api/server/principals/{principal}/tokens":                          `{"name":"ci"}`,
+	"POST /api/server/principals/{principal}/tokens/{id}/rotate":              `{}`,
+	"POST /api/server/principals/{principal}/grants":                          routePrincipalGrantBody,
 	"POST /api/server/caller/tokens/{id}/rotate":                              `{}`,
 	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
 }
@@ -468,6 +521,11 @@ var routeBodies = map[string]string{
 // routeGrantBody is the body of each grant route: a role that no seeded
 // grant gives to the group.
 const routeGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"writer"}`
+
+// routePrincipalGrantBody is the body of the grant route of a principal: a
+// role with principal actions only, which no seeded grant gives to the
+// group.
+const routePrincipalGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"token-manager"}`
 
 // openRouteTestStore opens a fresh SQLite store for one route test.
 func openRouteTestStore(t *testing.T) *sqlite.Store {
@@ -733,8 +791,11 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	t.Helper()
 
 	id := string(testBackupID)
+	owner := routePrincipalIDs(route.Path)
 
 	switch {
+	case owner.ofOne:
+		id = owner.id
 	case strings.HasPrefix(route.Path, "/api/server/restores"):
 		id = string(testRestoreID)
 	case strings.HasPrefix(route.Path, "/api/server/principals"):
@@ -755,7 +816,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 
 	path := strings.ReplaceAll(route.Path, "{id}", id)
 	path = strings.ReplaceAll(path, "{namespace}", testNamespace)
-	path = strings.ReplaceAll(path, "{principal}", testPrincipalID)
+	path = strings.ReplaceAll(path, "{principal}", owner.principal)
 	path = strings.ReplaceAll(path, "{collection}", testCollection)
 
 	path += routeQuery(route.Path)
@@ -771,7 +832,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	// sets in production.
 	req.SetPathValue("namespace", testNamespace)
 	req.SetPathValue("id", id)
-	req.SetPathValue("principal", testPrincipalID)
+	req.SetPathValue("principal", owner.principal)
 	req.SetPathValue("collection", testCollection)
 
 	if token != "" {
@@ -779,6 +840,29 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	}
 
 	return req
+}
+
+// routeOwner is the {principal} of a route, and for a route of one
+// principal the {id} of its seeded grant or token.
+type routeOwner struct {
+	principal string
+	id        string
+	ofOne     bool
+}
+
+// routePrincipalIDs returns the owner of a route of one principal: the
+// service principal testOtherPrincipalID, with its seeded grant or token.
+// Any other path answers testPrincipalID.
+func routePrincipalIDs(path string) routeOwner {
+	if !strings.HasPrefix(path, "/api/server/principals/{principal}/") {
+		return routeOwner{principal: testPrincipalID, id: "", ofOne: false}
+	}
+
+	if strings.Contains(path, "/grants") {
+		return routeOwner{principal: testOtherPrincipalID, id: testPrincipalGrantID, ofOne: true}
+	}
+
+	return routeOwner{principal: testOtherPrincipalID, id: testServiceTokenID, ofOne: true}
 }
 
 // routeQuery returns the query that a route with the path pattern path
@@ -837,15 +921,8 @@ func wantSuccessStatus(route apiserver.Route) int {
 
 	if route.Method == http.MethodGet &&
 		route.Path == "/api/server/namespaces/{namespace}/collections/{collection}/access-review" {
-		// The export of a collection waits for the collections (#478).
+		// The export of a collection waits for the units inside it (ADR 52).
 		return http.StatusNotImplemented
-	}
-
-	if route.Method == http.MethodPost &&
-		route.Path == "/api/server/namespaces/{namespace}/collections/{collection}/grants" {
-		// No collection exists until the collections are wired (#478), so
-		// a grant on one answers 404 after the authorization.
-		return http.StatusNotFound
 	}
 
 	if route.Method == http.MethodPost && createsRecord(route.Path) {
@@ -1029,7 +1106,7 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, want, rec.Body.String())
 	}
 
-	for _, action := range route.Actions {
+	for _, action := range route.ActionsOn(expected) {
 		if !containsCall(recorder.calls, recordedCall{action: action, object: expected.String()}) {
 			t.Fatalf("route never asks %s on %q (calls %v)", action, expected.String(), recorder.calls)
 		}
@@ -1102,6 +1179,8 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	}
 
 	cases := []struct {
@@ -1233,6 +1312,8 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1258,6 +1339,8 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)
@@ -1266,4 +1349,14 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	if without.Backups() != nil {
 		t.Fatal("handler without a backup target builds a backup service, want nil")
 	}
+}
+
+// stubSweeper is an apiserver.DeletedUnitSweeper that purges nothing.
+type stubSweeper struct{}
+
+func (stubSweeper) Sweep(context.Context, audit.Entry) (inventory.SweepResult, error) {
+	return inventory.SweepResult{
+		Purged: []inventory.DeletedEntry{}, Failed: 0, Skipped: 0,
+		FinishedBlobPurges: 0, PendingBlobPurges: 0,
+	}, nil
 }

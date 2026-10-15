@@ -155,6 +155,133 @@ func (q *Queries) BumpFailoverVersions(ctx context.Context) (int64, error) {
 	return result.RowsAffected()
 }
 
+const callerGrants = `-- name: CallerGrants :many
+WITH holders (kind, id) AS (
+  SELECT 'principal', CAST(?2 AS TEXT)
+  UNION ALL SELECT 'group', value FROM json_each(CAST(?8 AS TEXT))
+)
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.condition,
+  g.created_at_ms, g.created_by, g.revoked_at_ms, g.revoked_by,
+  CAST(COALESCE(m.added_at_ms, 0) AS INTEGER) AS member_added_at_ms,
+  m.removed_at_ms AS member_removed_at_ms,
+  CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
+  CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
+  (SELECT COUNT(*) FROM group_members c
+   WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
+     AND c.added_at_ms <= CAST(?1 AS INTEGER)
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER)) AS member_count
+FROM holders h
+CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = CAST(?2 AS TEXT)
+  AND m.added_at_ms <= CAST(?1 AS INTEGER)
+  AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER)
+LEFT JOIN principals mp ON mp.id = m.principal_id
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= CAST(?1 AS INTEGER)
+  AND (g.created_at_ms > CAST(?3 AS INTEGER)
+    OR (g.created_at_ms = CAST(?3 AS INTEGER)
+      AND (g.id > CAST(?4 AS TEXT)
+        OR (g.id = CAST(?4 AS TEXT)
+          AND (COALESCE(m.added_at_ms, 0) > CAST(?5 AS INTEGER)
+            OR (COALESCE(m.added_at_ms, 0) = CAST(?5 AS INTEGER)
+              AND COALESCE(m.principal_id, '') > CAST(?6 AS TEXT)))))))
+ORDER BY g.created_at_ms, g.id, member_added_at_ms, member_id
+LIMIT ?7
+`
+
+type CallerGrantsParams struct {
+	AsOfMs          int64
+	Principal       string
+	AfterAtMs       int64
+	AfterID         string
+	AfterMemberAtMs int64
+	AfterMemberID   string
+	RowLimit        int64
+	Groups          string
+}
+
+type CallerGrantsRow struct {
+	ID                string
+	Subject           string
+	SubjectKind       string
+	SubjectID         string
+	Role              string
+	Object            string
+	Target            string
+	Condition         sql.NullString
+	CreatedAtMs       int64
+	CreatedBy         string
+	RevokedAtMs       sql.NullInt64
+	RevokedBy         string
+	MemberAddedAtMs   int64
+	MemberRemovedAtMs sql.NullInt64
+	MemberID          string
+	MemberSubject     string
+	SubjectName       string
+	MemberCount       int64
+}
+
+// One page of the current grants of a caller (ADR 52): the grants of the
+// principal, and the grants of each of its groups through its membership
+// at as_of_ms. Each holder reads its grants from grants_holder, so the cost
+// follows the grants of the caller, not the grants of the installation. A
+// JSON array carries the groups, so the query stays fixed. CROSS JOIN
+// keeps the holders as the outer loop.
+func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]CallerGrantsRow, error) {
+	rows, err := q.db.QueryContext(ctx, callerGrants,
+		arg.AsOfMs,
+		arg.Principal,
+		arg.AfterAtMs,
+		arg.AfterID,
+		arg.AfterMemberAtMs,
+		arg.AfterMemberID,
+		arg.RowLimit,
+		arg.Groups,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CallerGrantsRow
+	for rows.Next() {
+		var i CallerGrantsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Subject,
+			&i.SubjectKind,
+			&i.SubjectID,
+			&i.Role,
+			&i.Object,
+			&i.Target,
+			&i.Condition,
+			&i.CreatedAtMs,
+			&i.CreatedBy,
+			&i.RevokedAtMs,
+			&i.RevokedBy,
+			&i.MemberAddedAtMs,
+			&i.MemberRemovedAtMs,
+			&i.MemberID,
+			&i.MemberSubject,
+			&i.SubjectName,
+			&i.MemberCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?
@@ -217,6 +344,35 @@ WHERE namespace = ?
 
 func (q *Queries) CountAuditEntries(ctx context.Context, namespace string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countAuditEntries, namespace)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countCallerGrants = `-- name: CountCallerGrants :one
+WITH holders (kind, id) AS (
+  SELECT 'principal', CAST(?1 AS TEXT)
+  UNION ALL SELECT 'group', value FROM json_each(CAST(?3 AS TEXT))
+)
+SELECT COUNT(*)
+FROM holders h
+CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = CAST(?1 AS TEXT)
+  AND m.added_at_ms <= CAST(?2 AS INTEGER)
+  AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?2 AS INTEGER)
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= CAST(?2 AS INTEGER)
+`
+
+type CountCallerGrantsParams struct {
+	Principal string
+	AsOfMs    int64
+	Groups    string
+}
+
+func (q *Queries) CountCallerGrants(ctx context.Context, arg CountCallerGrantsParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countCallerGrants, arg.Principal, arg.AsOfMs, arg.Groups)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -338,12 +494,58 @@ func (q *Queries) CountGroupsOfPrincipal(ctx context.Context, arg CountGroupsOfP
 	return count, err
 }
 
+const countLiveCollectionMembers = `-- name: CountLiveCollectionMembers :one
+SELECT COUNT(*)
+FROM collection_members AS m
+JOIN inventory AS i ON i.unit_id = m.unit_id
+WHERE m.namespace = ? AND m.collection_key = ?
+`
+
+type CountLiveCollectionMembersParams struct {
+	Namespace     string
+	CollectionKey string
+}
+
+// Counts the units of a collection that the inventory still holds. A unit that
+// was deleted has left the inventory, and its membership does not count.
+func (q *Queries) CountLiveCollectionMembers(ctx context.Context, arg CountLiveCollectionMembersParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLiveCollectionMembers, arg.Namespace, arg.CollectionKey)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLivePrincipal = `-- name: CountLivePrincipal :one
 SELECT COUNT(*) FROM principals WHERE id = ? AND deleted_at_ms IS NULL
 `
 
 func (q *Queries) CountLivePrincipal(ctx context.Context, id string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countLivePrincipal, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNamespaces = `-- name: CountNamespaces :one
+SELECT COUNT(*)
+FROM namespaces
+`
+
+func (q *Queries) CountNamespaces(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNamespaces)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNamespacesByNames = `-- name: CountNamespacesByNames :one
+SELECT COUNT(*)
+FROM namespaces
+WHERE name IN (SELECT value FROM json_each(?1))
+`
+
+func (q *Queries) CountNamespacesByNames(ctx context.Context, names interface{}) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNamespacesByNames, names)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -446,11 +648,34 @@ func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsPa
 }
 
 const countRoleGrantsBelowInstallation = `-- name: CountRoleGrantsBelowInstallation :one
-SELECT COUNT(*) FROM grants WHERE role = ? AND object_kind <> 'installation' AND revoked_at_ms IS NULL
+SELECT COUNT(*) FROM grants
+WHERE role = ? AND object_kind IN ('namespace', 'collection', 'unit') AND revoked_at_ms IS NULL
 `
 
 func (q *Queries) CountRoleGrantsBelowInstallation(ctx context.Context, role string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countRoleGrantsBelowInstallation, role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRoleGrantsOnPrincipal = `-- name: CountRoleGrantsOnPrincipal :one
+SELECT COUNT(*) FROM grants WHERE role = ? AND object_kind = 'principal' AND revoked_at_ms IS NULL
+`
+
+func (q *Queries) CountRoleGrantsOnPrincipal(ctx context.Context, role string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRoleGrantsOnPrincipal, role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSession = `-- name: CountSession :one
+SELECT COUNT(*) FROM sessions WHERE id = ?
+`
+
+func (q *Queries) CountSession(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSession, id)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -531,6 +756,36 @@ func (q *Queries) CreateBackup(ctx context.Context, arg CreateBackupParams) (int
 		arg.EndedAtMs,
 		arg.Target,
 		arg.Error,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const createCollection = `-- name: CreateCollection :execrows
+INSERT INTO collections (id, namespace, name_key, name, created_at_ms)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (namespace, name_key) DO NOTHING
+`
+
+type CreateCollectionParams struct {
+	ID          string
+	Namespace   string
+	NameKey     string
+	Name        string
+	CreatedAtMs int64
+}
+
+// The caller checks the fence in the same transaction. A row that exists
+// under the same key (the name in lower case) is not written.
+func (q *Queries) CreateCollection(ctx context.Context, arg CreateCollectionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createCollection,
+		arg.ID,
+		arg.Namespace,
+		arg.NameKey,
+		arg.Name,
+		arg.CreatedAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -757,6 +1012,77 @@ func (q *Queries) CreateSecretKey(ctx context.Context, arg CreateSecretKeyParams
 		arg.WrapperID,
 		arg.Ciphertext,
 		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const createSession = `-- name: CreateSession :execrows
+INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent)
+SELECT ?1, p.id, ?2, ?3, ?4,
+  ?4, ?5, ?6, ?7
+FROM principals p
+WHERE p.id = ?8 AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.kind = 'person'
+ON CONFLICT DO NOTHING
+`
+
+type CreateSessionParams struct {
+	ID          string
+	Digest      string
+	Provider    string
+	CreatedAtMs int64
+	AuthTimeMs  int64
+	SourceIp    string
+	UserAgent   string
+	PrincipalID string
+}
+
+// A session needs a person principal that exists and is not disabled. A
+// taken ID or digest inserts nothing.
+func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createSession,
+		arg.ID,
+		arg.Digest,
+		arg.Provider,
+		arg.CreatedAtMs,
+		arg.AuthTimeMs,
+		arg.SourceIp,
+		arg.UserAgent,
+		arg.PrincipalID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const createSignInRequest = `-- name: CreateSignInRequest :execrows
+INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type CreateSignInRequestParams struct {
+	Digest      string
+	Provider    string
+	Nonce       string
+	Verifier    string
+	ReturnPath  string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) CreateSignInRequest(ctx context.Context, arg CreateSignInRequestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createSignInRequest,
+		arg.Digest,
+		arg.Provider,
+		arg.Nonce,
+		arg.Verifier,
+		arg.ReturnPath,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -1002,6 +1328,53 @@ func (q *Queries) DeleteCheckpointsOfStack(ctx context.Context, stackID string) 
 	return err
 }
 
+const deleteCollection = `-- name: DeleteCollection :execrows
+DELETE FROM collections
+WHERE namespace = ? AND name_key = ?
+`
+
+type DeleteCollectionParams struct {
+	Namespace string
+	NameKey   string
+}
+
+func (q *Queries) DeleteCollection(ctx context.Context, arg DeleteCollectionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteCollection, arg.Namespace, arg.NameKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteCollectionMembers = `-- name: DeleteCollectionMembers :exec
+DELETE FROM collection_members
+WHERE namespace = ? AND collection_key = ?
+`
+
+type DeleteCollectionMembersParams struct {
+	Namespace     string
+	CollectionKey string
+}
+
+// Removes the memberships of a collection. The caller removes them only after
+// it found no live unit, so the rows that remain belong to deleted units.
+func (q *Queries) DeleteCollectionMembers(ctx context.Context, arg DeleteCollectionMembersParams) error {
+	_, err := q.db.ExecContext(ctx, deleteCollectionMembers, arg.Namespace, arg.CollectionKey)
+	return err
+}
+
+const deleteCollectionMembersOfUnit = `-- name: DeleteCollectionMembersOfUnit :exec
+DELETE FROM collection_members
+WHERE unit_id = ?
+`
+
+// Removes the membership of one unit. The purge of a unit calls it in the same
+// transaction as the purge of its rows (ADR 47, ADR 51).
+func (q *Queries) DeleteCollectionMembersOfUnit(ctx context.Context, unitID string) error {
+	_, err := q.db.ExecContext(ctx, deleteCollectionMembersOfUnit, unitID)
+	return err
+}
+
 const deleteDeletedInventory = `-- name: DeleteDeletedInventory :execrows
 DELETE FROM inventory_deleted
 WHERE tool = ? AND unit_id = ?
@@ -1111,6 +1484,22 @@ WHERE stack_id = ?
 
 func (q *Queries) DeleteJournalSequencesOfStack(ctx context.Context, stackID string) error {
 	_, err := q.db.ExecContext(ctx, deleteJournalSequencesOfStack, stackID)
+	return err
+}
+
+const deleteMissingCollectionMembership = `-- name: DeleteMissingCollectionMembership :exec
+DELETE FROM collection_members
+WHERE unit_id = ? AND NOT EXISTS (
+    SELECT 1
+    FROM collections AS c
+    WHERE c.namespace = collection_members.namespace AND c.name_key = collection_members.collection_key
+)
+`
+
+// Removes the membership of one unit when its collection no longer exists. A
+// restore calls it, so a restored unit never points at a missing collection.
+func (q *Queries) DeleteMissingCollectionMembership(ctx context.Context, unitID string) error {
+	_, err := q.db.ExecContext(ctx, deleteMissingCollectionMembership, unitID)
 	return err
 }
 
@@ -1250,6 +1639,7 @@ UPDATE principals SET disabled_at_ms = CAST(?1 AS INTEGER)
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
   AND created_at_ms <= CAST(?2 AS INTEGER)
   AND last_active_at_ms <= CAST(?2 AS INTEGER)
+  AND COALESCE(last_sign_in_at_ms, 0) <= CAST(?2 AS INTEGER)
   AND NOT EXISTS (
     SELECT 1 FROM access_tokens t
     WHERE t.principal_id = principals.id
@@ -1263,9 +1653,9 @@ type DisableInactivePrincipalsParams struct {
 	CutoffMs int64
 }
 
-// A person is inactive when its creation, its activity baseline, and the
-// creation and the last use of each of its tokens are all at or before the
-// cutoff.
+// A person is inactive when its creation, its activity baseline, its last
+// sign-in, and the creation and the last use of each of its tokens are all
+// at or before the cutoff.
 func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -1362,6 +1752,25 @@ func (q *Queries) EndRotatedAccessToken(ctx context.Context, arg EndRotatedAcces
 		arg.ID,
 		arg.NowMs,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const endSession = `-- name: EndSession :execrows
+UPDATE sessions SET ended_at_ms = CAST(?1 AS INTEGER), end_reason = ?2
+WHERE id = ?3 AND ended_at_ms IS NULL
+`
+
+type EndSessionParams struct {
+	AtMs      int64
+	EndReason string
+	ID        string
+}
+
+func (q *Queries) EndSession(ctx context.Context, arg EndSessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, endSession, arg.AtMs, arg.EndReason, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -1545,7 +1954,7 @@ const getAccessTokenByDigest = `-- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms,
-  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE((
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0)) AS INTEGER) AS principal_active_at_ms
 FROM access_tokens t
@@ -1772,6 +2181,36 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 	return i, err
 }
 
+const getCollection = `-- name: GetCollection :one
+SELECT id, namespace, name, created_at_ms
+FROM collections
+WHERE namespace = ? AND name_key = ?
+`
+
+type GetCollectionParams struct {
+	Namespace string
+	NameKey   string
+}
+
+type GetCollectionRow struct {
+	ID          string
+	Namespace   string
+	Name        string
+	CreatedAtMs int64
+}
+
+func (q *Queries) GetCollection(ctx context.Context, arg GetCollectionParams) (GetCollectionRow, error) {
+	row := q.db.QueryRowContext(ctx, getCollection, arg.Namespace, arg.NameKey)
+	var i GetCollectionRow
+	err := row.Scan(
+		&i.ID,
+		&i.Namespace,
+		&i.Name,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
 SELECT sv.id, sv.workspace_id, sv.status, sv.serial, sv.lineage, sv.md5, sv.size,
        sv.content_key, sv.outputs, sv.force, sv.upload_digest, sv.upload_expires_at_ms,
@@ -1983,6 +2422,27 @@ func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 	return state, err
 }
 
+const getInventoryUnit = `-- name: GetInventoryUnit :one
+SELECT unit_id
+FROM inventory
+WHERE namespace = ? AND tool = ? AND name = ?
+`
+
+type GetInventoryUnitParams struct {
+	Namespace string
+	Tool      string
+	Name      string
+}
+
+// The inventory row of one unit: its ID. The collection is read by a join on
+// the unit ID, not from the inventory.
+func (q *Queries) GetInventoryUnit(ctx context.Context, arg GetInventoryUnitParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getInventoryUnit, arg.Namespace, arg.Tool, arg.Name)
+	var unit_id string
+	err := row.Scan(&unit_id)
+	return unit_id, err
+}
+
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
        c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count,
@@ -2023,9 +2483,18 @@ FROM namespaces
 WHERE name = ?
 `
 
-func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, error) {
+type GetNamespaceRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRow, error) {
 	row := q.db.QueryRowContext(ctx, getNamespace, name)
-	var i Namespace
+	var i GetNamespaceRow
 	err := row.Scan(
 		&i.Name,
 		&i.HomeRegion,
@@ -2035,6 +2504,19 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (Namespace, err
 		&i.AllowUnlockedWrites,
 	)
 	return i, err
+}
+
+const getNamespaceIPAllowlist = `-- name: GetNamespaceIPAllowlist :one
+SELECT ip_allowlist
+FROM namespaces
+WHERE name = ?
+`
+
+func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getNamespaceIPAllowlist, name)
+	var ip_allowlist string
+	err := row.Scan(&ip_allowlist)
+	return ip_allowlist, err
 }
 
 const getPrincipal = `-- name: GetPrincipal :one
@@ -2178,6 +2660,110 @@ func (q *Queries) GetSecretKey(ctx context.Context, arg GetSecretKeyParams) (Sec
 		&i.Ciphertext,
 		&i.CreatedAtMs,
 	)
+	return i, err
+}
+
+const getSession = `-- name: GetSession :one
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent
+FROM sessions WHERE id = ?
+`
+
+type GetSessionRow struct {
+	ID           string
+	PrincipalID  string
+	Provider     string
+	CreatedAtMs  int64
+	LastSeenAtMs int64
+	AuthTimeMs   int64
+	EndedAtMs    sql.NullInt64
+	EndReason    string
+	SourceIp     string
+	UserAgent    string
+}
+
+func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, error) {
+	row := q.db.QueryRowContext(ctx, getSession, id)
+	var i GetSessionRow
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Provider,
+		&i.CreatedAtMs,
+		&i.LastSeenAtMs,
+		&i.AuthTimeMs,
+		&i.EndedAtMs,
+		&i.EndReason,
+		&i.SourceIp,
+		&i.UserAgent,
+	)
+	return i, err
+}
+
+const getSessionByDigest = `-- name: GetSessionByDigest :one
+SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
+  s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms
+FROM sessions s
+JOIN principals p ON p.id = s.principal_id
+WHERE s.digest = ? AND p.deleted_at_ms IS NULL
+`
+
+type GetSessionByDigestRow struct {
+	ID                    string
+	PrincipalID           string
+	Digest                string
+	Provider              string
+	CreatedAtMs           int64
+	LastSeenAtMs          int64
+	AuthTimeMs            int64
+	EndedAtMs             sql.NullInt64
+	EndReason             string
+	SourceIp              string
+	UserAgent             string
+	Subject               string
+	DisplayName           string
+	PrincipalKind         string
+	PrincipalDisabledAtMs sql.NullInt64
+}
+
+func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionByDigest, digest)
+	var i GetSessionByDigestRow
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Digest,
+		&i.Provider,
+		&i.CreatedAtMs,
+		&i.LastSeenAtMs,
+		&i.AuthTimeMs,
+		&i.EndedAtMs,
+		&i.EndReason,
+		&i.SourceIp,
+		&i.UserAgent,
+		&i.Subject,
+		&i.DisplayName,
+		&i.PrincipalKind,
+		&i.PrincipalDisabledAtMs,
+	)
+	return i, err
+}
+
+const getSessionPrincipal = `-- name: GetSessionPrincipal :one
+SELECT kind, disabled_at_ms FROM principals WHERE id = ? AND deleted_at_ms IS NULL
+`
+
+type GetSessionPrincipalRow struct {
+	Kind         string
+	DisabledAtMs sql.NullInt64
+}
+
+// The kind and the disable time of a principal that exists, so a refused
+// session insert can name its cause.
+func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessionPrincipalRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionPrincipal, id)
+	var i GetSessionPrincipalRow
+	err := row.Scan(&i.Kind, &i.DisabledAtMs)
 	return i, err
 }
 
@@ -2326,6 +2912,21 @@ func (q *Queries) GetStateVersion(ctx context.Context, id string) (StateVersion,
 		&i.UnlockedWrite,
 	)
 	return i, err
+}
+
+const getUnitCollection = `-- name: GetUnitCollection :one
+SELECT c.name
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?
+`
+
+// The collection of one unit by its ID, as written.
+func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getUnitCollection, unitID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
 }
 
 const getUpdate = `-- name: GetUpdate :one
@@ -2503,6 +3104,37 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 		&i.DeletedName,
 	)
 	return i, err
+}
+
+const grantIDsOnTarget = `-- name: GrantIDsOnTarget :many
+SELECT id FROM grants
+WHERE target = ? AND revoked_at_ms IS NULL
+ORDER BY id
+`
+
+// The IDs of the current grants on one target, in order. A deleted collection
+// revokes each of them, so that none outlives it.
+func (q *Queries) GrantIDsOnTarget(ctx context.Context, target string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, grantIDsOnTarget, target)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const grantsOfSubject = `-- name: GrantsOfSubject :many
@@ -3023,6 +3655,46 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 	return i, err
 }
 
+const lastAccessByPrincipals = `-- name: LastAccessByPrincipals :many
+SELECT principal_id, CAST(MAX(last_used_at_ms) AS INTEGER) AS last_used_at_ms
+FROM access_tokens
+WHERE principal_id IN (SELECT value FROM json_each(CAST(?1 AS TEXT)))
+  AND last_used_at_ms IS NOT NULL
+GROUP BY principal_id
+`
+
+type LastAccessByPrincipalsRow struct {
+	PrincipalID  string
+	LastUsedAtMs int64
+}
+
+// The latest last-use time of the access tokens of each given principal:
+// one row for each principal with a used token. A JSON array carries the
+// IDs, so the query stays fixed. Revoked, replaced and expired tokens
+// count: a use is a use.
+func (q *Queries) LastAccessByPrincipals(ctx context.Context, principals string) ([]LastAccessByPrincipalsRow, error) {
+	rows, err := q.db.QueryContext(ctx, lastAccessByPrincipals, principals)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LastAccessByPrincipalsRow
+	for rows.Next() {
+		var i LastAccessByPrincipalsRow
+		if err := rows.Scan(&i.PrincipalID, &i.LastUsedAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lastAuditChainSwitchSequence = `-- name: LastAuditChainSwitchSequence :one
 SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) FROM audit_entries
 WHERE namespace = '@server' AND action = 'server:set-audit-chain' AND sequence >= 1
@@ -3400,6 +4072,59 @@ func (q *Queries) ListBlobPurges(ctx context.Context, limit int64) ([]BlobPurge,
 	return items, nil
 }
 
+const listBlobPurgesAfter = `-- name: ListBlobPurgesAfter :many
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+WHERE purged_at_ms >= ?1
+  AND (purged_at_ms > ?1
+    OR (purged_at_ms = ?1 AND tool > ?2)
+    OR (purged_at_ms = ?1 AND tool = ?2 AND unit_id > ?3))
+ORDER BY purged_at_ms, tool, unit_id
+LIMIT ?4
+`
+
+type ListBlobPurgesAfterParams struct {
+	AfterMs     int64
+	AfterTool   string
+	AfterUnitID string
+	PageLimit   int64
+}
+
+// The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+// The lower bound on purged_at_ms lets the index scan start at the cursor.
+func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAfterParams) ([]BlobPurge, error) {
+	rows, err := q.db.QueryContext(ctx, listBlobPurgesAfter,
+		arg.AfterMs,
+		arg.AfterTool,
+		arg.AfterUnitID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BlobPurge
+	for rows.Next() {
+		var i BlobPurge
+		if err := rows.Scan(
+			&i.Tool,
+			&i.UnitID,
+			&i.Namespace,
+			&i.PurgedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
 SELECT blob_key
 FROM checkpoints
@@ -3423,6 +4148,48 @@ func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([
 			return nil, err
 		}
 		items = append(items, blob_key)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCollections = `-- name: ListCollections :many
+SELECT id, namespace, name, created_at_ms
+FROM collections
+WHERE namespace = ?
+ORDER BY name_key
+`
+
+type ListCollectionsRow struct {
+	ID          string
+	Namespace   string
+	Name        string
+	CreatedAtMs int64
+}
+
+func (q *Queries) ListCollections(ctx context.Context, namespace string) ([]ListCollectionsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCollections, namespace)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCollectionsRow
+	for rows.Next() {
+		var i ListCollectionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Namespace,
+			&i.Name,
+			&i.CreatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -3506,6 +4273,110 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 	for rows.Next() {
 		var i ListEventsRow
 		if err := rows.Scan(&i.Sequence, &i.TimestampMs, &i.Payload); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiredInventory = `-- name: ListExpiredInventory :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= ?
+ORDER BY purge_after_ms, tool, unit_id
+LIMIT ?
+`
+
+type ListExpiredInventoryParams struct {
+	PurgeAfterMs int64
+	Limit        int64
+}
+
+// The first page of the deleted units of every namespace whose retention
+// ended at or before the time, for the retention sweep.
+func (q *Queries) ListExpiredInventory(ctx context.Context, arg ListExpiredInventoryParams) ([]InventoryDeleted, error) {
+	rows, err := q.db.QueryContext(ctx, listExpiredInventory, arg.PurgeAfterMs, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryDeleted
+	for rows.Next() {
+		var i InventoryDeleted
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DeletedAtMs,
+			&i.PurgeAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiredInventoryAfter = `-- name: ListExpiredInventoryAfter :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= ?1
+  AND purge_after_ms >= ?2
+  AND (purge_after_ms > ?2
+    OR (purge_after_ms = ?2 AND tool > ?3)
+    OR (purge_after_ms = ?2 AND tool = ?3 AND unit_id > ?4))
+ORDER BY purge_after_ms, tool, unit_id
+LIMIT ?5
+`
+
+type ListExpiredInventoryAfterParams struct {
+	NowMs       int64
+	AfterMs     int64
+	AfterTool   string
+	AfterUnitID string
+	PageLimit   int64
+}
+
+// The page of ListExpiredInventory after the cursor (end of retention,
+// tool, unit ID). The lower bound on purge_after_ms lets the index scan
+// start at the cursor.
+func (q *Queries) ListExpiredInventoryAfter(ctx context.Context, arg ListExpiredInventoryAfterParams) ([]InventoryDeleted, error) {
+	rows, err := q.db.QueryContext(ctx, listExpiredInventoryAfter,
+		arg.NowMs,
+		arg.AfterMs,
+		arg.AfterTool,
+		arg.AfterUnitID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryDeleted
+	for rows.Next() {
+		var i InventoryDeleted
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DeletedAtMs,
+			&i.PurgeAfterMs,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -3878,22 +4749,40 @@ func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPri
 }
 
 const listInventory = `-- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
-       lock_holder, lock_since_ms, lock_operation
-FROM inventory
-WHERE namespace = ?
-ORDER BY tool, name
+SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
+       i.lock_holder, i.lock_since_ms, i.lock_operation,
+       COALESCE(c.name, '') AS collection
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = ?
+ORDER BY i.tool, i.name
 `
 
-func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]Inventory, error) {
+type ListInventoryRow struct {
+	Namespace     string
+	Tool          string
+	Name          string
+	UnitID        string
+	DisplayName   string
+	LastChangedMs int64
+	Status        string
+	ResourceCount sql.NullInt64
+	LockHolder    sql.NullString
+	LockSinceMs   sql.NullInt64
+	LockOperation sql.NullString
+	Collection    string
+}
+
+func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListInventoryRow, error) {
 	rows, err := q.db.QueryContext(ctx, listInventory, namespace)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Inventory
+	var items []ListInventoryRow
 	for rows.Next() {
-		var i Inventory
+		var i ListInventoryRow
 		if err := rows.Scan(
 			&i.Namespace,
 			&i.Tool,
@@ -3906,6 +4795,7 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]Invent
 			&i.LockHolder,
 			&i.LockSinceMs,
 			&i.LockOperation,
+			&i.Collection,
 		); err != nil {
 			return nil, err
 		}
@@ -3960,15 +4850,24 @@ FROM namespaces
 ORDER BY name
 `
 
-func (q *Queries) ListNamespaces(ctx context.Context) ([]Namespace, error) {
+type ListNamespacesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listNamespaces)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Namespace
+	var items []ListNamespacesRow
 	for rows.Next() {
-		var i Namespace
+		var i ListNamespacesRow
 		if err := rows.Scan(
 			&i.Name,
 			&i.HomeRegion,
@@ -4636,6 +5535,111 @@ func (q *Queries) NextJournalArrival(ctx context.Context, arg NextJournalArrival
 	return arrival, err
 }
 
+const pageNamespaces = `-- name: PageNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > ?1
+ORDER BY name
+LIMIT ?2
+`
+
+type PageNamespacesParams struct {
+	After string
+	Lim   int64
+}
+
+type PageNamespacesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) ([]PageNamespacesRow, error) {
+	rows, err := q.db.QueryContext(ctx, pageNamespaces, arg.After, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageNamespacesRow
+	for rows.Next() {
+		var i PageNamespacesRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.HomeRegion,
+			&i.FailoverVersion,
+			&i.CreatedAtMs,
+			&i.AllowForcedWrites,
+			&i.AllowUnlockedWrites,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pageNamespacesByNames = `-- name: PageNamespacesByNames :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > ?1 AND name IN (SELECT value FROM json_each(?2))
+ORDER BY name
+LIMIT ?3
+`
+
+type PageNamespacesByNamesParams struct {
+	After string
+	Names interface{}
+	Lim   int64
+}
+
+type PageNamespacesByNamesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) PageNamespacesByNames(ctx context.Context, arg PageNamespacesByNamesParams) ([]PageNamespacesByNamesRow, error) {
+	rows, err := q.db.QueryContext(ctx, pageNamespacesByNames, arg.After, arg.Names, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageNamespacesByNamesRow
+	for rows.Next() {
+		var i PageNamespacesByNamesRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.HomeRegion,
+			&i.FailoverVersion,
+			&i.CreatedAtMs,
+			&i.AllowForcedWrites,
+			&i.AllowUnlockedWrites,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const principalExists = `-- name: PrincipalExists :one
 SELECT COUNT(*) FROM principals WHERE id = ? AND deleted_at_ms IS NULL
 `
@@ -4645,6 +5649,18 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const pruneSignInRequests = `-- name: PruneSignInRequests :execrows
+DELETE FROM sign_in_requests WHERE expires_at_ms <= ?
+`
+
+func (q *Queries) PruneSignInRequests(ctx context.Context, expiresAtMs int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneSignInRequests, expiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const purgeStack = `-- name: PurgeStack :execrows
@@ -5487,6 +6503,41 @@ func (q *Queries) SetInstallationStateIf(ctx context.Context, arg SetInstallatio
 	return result.RowsAffected()
 }
 
+const setLastSignIn = `-- name: SetLastSignIn :exec
+UPDATE principals SET last_sign_in_at_ms = MAX(COALESCE(last_sign_in_at_ms, 0), CAST(?1 AS INTEGER))
+WHERE id = ?2
+`
+
+type SetLastSignInParams struct {
+	AtMs int64
+	ID   string
+}
+
+func (q *Queries) SetLastSignIn(ctx context.Context, arg SetLastSignInParams) error {
+	_, err := q.db.ExecContext(ctx, setLastSignIn, arg.AtMs, arg.ID)
+	return err
+}
+
+const setNamespaceIPAllowlist = `-- name: SetNamespaceIPAllowlist :execrows
+UPDATE namespaces
+SET ip_allowlist = ?
+WHERE name = ?
+`
+
+type SetNamespaceIPAllowlistParams struct {
+	IpAllowlist string
+	Name        string
+}
+
+// Replaces the IP allowlist of one namespace (ADR 55, decision 8).
+func (q *Queries) SetNamespaceIPAllowlist(ctx context.Context, arg SetNamespaceIPAllowlistParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setNamespaceIPAllowlist, arg.IpAllowlist, arg.Name)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setNamespaceOverrides = `-- name: SetNamespaceOverrides :execrows
 UPDATE namespaces
 SET allow_forced_writes = ?, allow_unlocked_writes = ?
@@ -5649,6 +6700,34 @@ func (q *Queries) SubjectsOfCaller(ctx context.Context, subject string) ([]Subje
 	return items, nil
 }
 
+const takeSignInRequest = `-- name: TakeSignInRequest :one
+DELETE FROM sign_in_requests WHERE digest = ?
+RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms
+`
+
+type TakeSignInRequestRow struct {
+	Provider    string
+	Nonce       string
+	Verifier    string
+	ReturnPath  string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) TakeSignInRequest(ctx context.Context, digest string) (TakeSignInRequestRow, error) {
+	row := q.db.QueryRowContext(ctx, takeSignInRequest, digest)
+	var i TakeSignInRequestRow
+	err := row.Scan(
+		&i.Provider,
+		&i.Nonce,
+		&i.Verifier,
+		&i.ReturnPath,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+	)
+	return i, err
+}
+
 const touchAccessToken = `-- name: TouchAccessToken :exec
 UPDATE access_tokens SET last_used_at_ms = CAST(?1 AS INTEGER)
 WHERE id = ?2
@@ -5663,6 +6742,23 @@ type TouchAccessTokenParams struct {
 
 func (q *Queries) TouchAccessToken(ctx context.Context, arg TouchAccessTokenParams) error {
 	_, err := q.db.ExecContext(ctx, touchAccessToken, arg.AtMs, arg.ID, arg.BeforeMs)
+	return err
+}
+
+const touchSession = `-- name: TouchSession :exec
+UPDATE sessions SET last_seen_at_ms = CAST(?1 AS INTEGER)
+WHERE id = ?2 AND ended_at_ms IS NULL
+  AND last_seen_at_ms <= CAST(?3 AS INTEGER)
+`
+
+type TouchSessionParams struct {
+	AtMs     int64
+	ID       string
+	BeforeMs int64
+}
+
+func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) error {
+	_, err := q.db.ExecContext(ctx, touchSession, arg.AtMs, arg.ID, arg.BeforeMs)
 	return err
 }
 
@@ -5965,6 +7061,32 @@ func (q *Queries) UpsertInventory(ctx context.Context, arg UpsertInventoryParams
 		arg.LastChangedMs,
 		arg.Status,
 		arg.ResourceCount,
+	)
+	return err
+}
+
+const upsertUnitCollection = `-- name: UpsertUnitCollection :exec
+INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (unit_id) DO UPDATE SET
+    namespace = excluded.namespace,
+    collection_key = excluded.collection_key,
+    assigned_at_ms = excluded.assigned_at_ms
+`
+
+type UpsertUnitCollectionParams struct {
+	UnitID        string
+	Namespace     string
+	CollectionKey string
+	AssignedAtMs  int64
+}
+
+func (q *Queries) UpsertUnitCollection(ctx context.Context, arg UpsertUnitCollectionParams) error {
+	_, err := q.db.ExecContext(ctx, upsertUnitCollection,
+		arg.UnitID,
+		arg.Namespace,
+		arg.CollectionKey,
+		arg.AssignedAtMs,
 	)
 	return err
 }

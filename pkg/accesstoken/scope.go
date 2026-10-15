@@ -21,8 +21,8 @@ const (
 	// ScopePersonal is an administrator who acts on the personal tokens of
 	// other persons, with server:manage-tokens.
 	ScopePersonal
-	// ScopeService is an administrator who acts on service tokens, with
-	// server:manage-service-tokens.
+	// ScopeService is a principal who acts on service tokens, with
+	// principal:manage-tokens on the service principal of each token.
 	ScopeService
 )
 
@@ -42,9 +42,11 @@ var (
 	ErrNoOwnPrincipal = errors.New("the caller is not a person with a principal record")
 )
 
-// GrantCheck is the escalation check of a token for another principal. A
-// token acts as its principal, so to create or rotate one is to grant, by
-// proxy, everything that the principal holds.
+// GrantCheck is the escalation check of a personal token for another
+// person. A token acts as its principal, so to create or rotate one is to
+// grant, by proxy, everything that the principal holds: an administrator
+// must never act as a person who holds more. A service token does not run
+// it: principal:manage-tokens on the service principal decides.
 type GrantCheck interface {
 	// RequireHeld returns nil when caller holds, on each object, every
 	// action that the grants of the principal principalID give it, through
@@ -141,11 +143,23 @@ func (s *Service) checkOwner(ctx context.Context, caller identity.Principal, t T
 }
 
 // authorizeRevoke checks that caller can revoke the token t in scope. For
-// ScopeOwn, t must belong to the person of caller. An administrator scope
-// needs nothing more: a revoke never raises access.
+// ScopeOwn, t must belong to the person of caller. ScopeService takes a
+// service token only (ErrWrongKind): principal:manage-tokens gives no right
+// on a personal token. A service token needs principal:manage-tokens on its
+// principal, in ScopeService and in ScopePersonal. A personal token of
+// another person needs nothing more than server:manage-tokens, the action
+// of its route: a revoke never raises access.
 func (s *Service) authorizeRevoke(ctx context.Context, caller identity.Principal, scope Scope, t Token) error {
 	if scope == ScopeOwn {
 		return s.checkOwner(ctx, caller, t)
+	}
+
+	if scope == ScopeService && t.Kind != KindService {
+		return fmt.Errorf("%w: a %s token goes through /api/server/tokens", ErrWrongKind, t.Kind)
+	}
+
+	if t.Kind == KindService {
+		return s.requireManageTokens(ctx, caller, t.PrincipalID)
 	}
 
 	return nil
@@ -154,7 +168,7 @@ func (s *Service) authorizeRevoke(ctx context.Context, caller identity.Principal
 // authorizeRotate checks that caller can rotate the token t in scope. The
 // caller must not use an access token. For ScopeOwn, t must belong to the
 // person of caller. For the other scopes, t must have the kind of the
-// scope, and the escalation check runs: the new token acts as its
+// scope, and the check of mayActFor runs: the new token acts as its
 // principal.
 func (s *Service) authorizeRotate(ctx context.Context, caller identity.Principal, scope Scope, t Token) error {
 	if err := requireSignIn(caller); err != nil {
@@ -169,13 +183,54 @@ func (s *Service) authorizeRotate(ctx context.Context, caller identity.Principal
 		return err
 	}
 
-	return s.requireHeld(ctx, caller, t.PrincipalID)
+	return s.mayActFor(ctx, caller, t.Kind, t.PrincipalID)
 }
 
-// requireHeld runs the escalation check. With no GrantCheck wired (a store
-// that keeps no grants), only an administrator can act for another
-// principal: an administrator holds every action, so it raises nothing.
-// This fails closed.
+// mayActFor checks that caller can make a token of kind for the principal
+// principalID. A service token needs principal:manage-tokens on the
+// principal: its holder can act as the principal, with every grant that
+// the principal has now or gets later. A personal token for another person
+// runs the escalation check, so an administrator can never act as a person
+// who holds more.
+func (s *Service) mayActFor(ctx context.Context, caller identity.Principal, kind Kind, principalID string) error {
+	if kind == KindService {
+		return s.requireManageTokens(ctx, caller, principalID)
+	}
+
+	return s.requireHeld(ctx, caller, principalID)
+}
+
+// requireManageTokens checks that caller holds principal:manage-tokens on
+// the principal principalID. The route of the change checks it too: this
+// check holds for every caller of the Service. With no Authorizer wired,
+// only an administrator passes it. This fails closed.
+func (s *Service) requireManageTokens(ctx context.Context, caller identity.Principal, principalID string) error {
+	if s.authz == nil {
+		if caller.Admin {
+			return nil
+		}
+
+		return fmt.Errorf("%w: %s may not make a token for principal %q: "+
+			"only an administrator can when the server keeps no grants", identity.ErrDenied,
+			caller.Subject, principalID)
+	}
+
+	obj, err := identity.ParsePrincipalObject(principalID)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrPrincipalNotFound, err)
+	}
+
+	if err := s.authz.Authorize(ctx, caller, identity.ActionPrincipalManageTokens, obj); err != nil {
+		return fmt.Errorf("token for principal %q: %w", principalID, err)
+	}
+
+	return nil
+}
+
+// requireHeld runs the escalation check of a personal token for another
+// person. With no GrantCheck wired (a store that keeps no grants), only an
+// administrator can act for another person: an administrator holds every
+// action, so it raises nothing. This fails closed.
 func (s *Service) requireHeld(ctx context.Context, caller identity.Principal, principalID string) error {
 	if s.grants != nil {
 		if err := s.grants.RequireHeld(ctx, caller, principalID); err != nil {

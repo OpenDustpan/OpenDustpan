@@ -70,6 +70,7 @@ func TestDeleteWorkspace(t *testing.T) {
 			handler, err := tfe.NewHandler(tfe.Config{
 				Authenticator:  tokenAuthenticator{},
 				Authorizer:     allowAll(),
+				AddressGate:    nil,
 				Logger:         slog.New(slog.DiscardHandler),
 				Namespaces:     newTestNamespaces(t),
 				Workspaces:     recordingDeleter{stubWorkspaces: stubWorkspaces{}, entries: &passed},

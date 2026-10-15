@@ -36,6 +36,9 @@ const (
 	// maxSweepResults holds one series for each result of the inactivity
 	// disable.
 	maxSweepResults = 2
+	// maxDeletedSweepResults holds one series for each outcome of the
+	// retention sweep.
+	maxDeletedSweepResults = 4
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -83,14 +86,12 @@ type ServerMetrics struct {
 	inFlight *Gauge
 	ready    *Counter
 	audit    *Counter
-	chainBad *Gauge
-	// restoreBad counts restores whose audit log failed the chain check
-	// before the switch entry of the restore.
-	restoreBad *Counter
-	sinks      sinkFamilies
-	reloads    *Counter
-	reloadOK   *Gauge
-	sweeps     *Counter
+	chain    chainFamilies
+	sinks    sinkFamilies
+	reloads  *Counter
+	reloadOK *Gauge
+	sweeps   *Counter
+	deleted  *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -138,9 +139,8 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		chainBad:   reg.NewGauge("dustpan_audit_chain_invalid", chainInvalidHelp, nil, 1),
-		restoreBad: newRestoreCheckCounter(reg),
-		sinks:      newSinkFamilies(reg),
+		chain: newChainFamilies(reg),
+		sinks: newSinkFamilies(reg),
 		reloads: reg.NewCounter(
 			"dustpan_config_reloads_total",
 			"Reloads of the configuration file by result.",
@@ -153,7 +153,8 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		sweeps: newSweepCounter(reg),
+		sweeps:  newSweepCounter(reg),
+		deleted: newDeletedSweepCounter(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -240,7 +241,23 @@ const chainInvalidHelp = "Audit scopes whose chain check failed in the last sche
 // failed in the last scheduled check (ADR 60 decision 17). No label names a
 // scope. Operators alert when it is above zero.
 func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
-	m.chainBad.Set(float64(scopes))
+	m.chain.invalid.Set(float64(scopes))
+}
+
+// chainFamilies holds the audit chain families: the count of scopes whose
+// check failed, and the count of restores whose restored log failed the
+// check before the switch entry of the restore.
+type chainFamilies struct {
+	invalid    *Gauge
+	restoreBad *Counter
+}
+
+// newChainFamilies registers the audit chain families in reg.
+func newChainFamilies(reg *Registry) chainFamilies {
+	return chainFamilies{
+		invalid:    reg.NewGauge("dustpan_audit_chain_invalid", chainInvalidHelp, nil, 1),
+		restoreBad: newRestoreCheckCounter(reg),
+	}
 }
 
 // newRestoreCheckCounter registers dustpan_audit_restore_check_failures_total
@@ -262,7 +279,7 @@ func newRestoreCheckCounter(reg *Registry) *Counter {
 // restore, so the counter and the error log are its record. Operators
 // alert when it is above zero.
 func (m *ServerMetrics) IncAuditRestoreCheckFailure() {
-	m.restoreBad.Inc()
+	m.chain.restoreBad.Inc()
 }
 
 // sinkFamilies holds the audit and log sink families: counters labeled by sink,
@@ -342,6 +359,47 @@ func (m *ServerMetrics) ObserveSweep(result string) {
 	}
 
 	m.sweeps.Inc(result)
+}
+
+// newDeletedSweepCounter creates dustpan_deleted_unit_sweep_total in reg.
+func newDeletedSweepCounter(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_deleted_unit_sweep_total",
+		"Outcomes of the retention sweep of deleted units by result.",
+		[]string{labelResult},
+		maxDeletedSweepResults,
+	)
+}
+
+// Outcomes of the retention sweep.
+const (
+	// DeletedSweepPurged counts the deleted units that the sweep purged.
+	DeletedSweepPurged = "purged"
+	// DeletedSweepSkipped counts the expired units that the sweep left to
+	// another installation or that a restore took first.
+	DeletedSweepSkipped = "skipped"
+	// DeletedSweepFailed counts the failed purges, blob deletes and record
+	// finishes, and the runs that could not read the store.
+	DeletedSweepFailed = "failed"
+	// DeletedSweepFinished counts the blob purge records that the sweep
+	// finished.
+	DeletedSweepFinished = "finished"
+)
+
+// ObserveDeletedSweep adds n to the retention sweep counter for result: one
+// of the DeletedSweep outcomes. Any other value counts as
+// DeletedSweepFailed, so the label set stays fixed. Operators alert when the
+// failed series grows: a failed purge keeps the unit until the next run.
+func (m *ServerMetrics) ObserveDeletedSweep(result string, n int) {
+	switch result {
+	case DeletedSweepPurged, DeletedSweepSkipped, DeletedSweepFinished:
+	default:
+		result = DeletedSweepFailed
+	}
+
+	if n > 0 {
+		m.deleted.Add(uint64(n), result)
+	}
 }
 
 // ObserveConfigReload records one reload of the configuration file (ADR 63

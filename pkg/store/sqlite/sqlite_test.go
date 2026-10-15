@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
+	"opendustpan.org/opendustpan/pkg/session/sessiontest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -54,11 +55,33 @@ func TestAccessConformance(t *testing.T) {
 	})
 }
 
+// TestDelegation runs the suite of the tokens of service principals.
+func TestDelegation(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunDelegation(t, func(t *testing.T) storetest.DelegationStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 // TestAccessTokenConformance runs the access token store suite.
 func TestAccessTokenConformance(t *testing.T) {
 	t.Parallel()
 
 	accesstokentest.Run(t, func(t *testing.T) accesstokentest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestSessionConformance runs the session store suite.
+func TestSessionConformance(t *testing.T) {
+	t.Parallel()
+
+	sessiontest.Run(t, func(t *testing.T) sessiontest.Store {
 		t.Helper()
 
 		return open(t)
@@ -386,6 +409,28 @@ func TestWorkspaceConformance(t *testing.T) {
 		t.Helper()
 
 		return openAuditedWorkspaces(t)
+	})
+}
+
+func TestIPAllowlistConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunIPAllowlist(t, func(t *testing.T) storetest.IPAllowlistStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestNamespacePagingConformance runs the namespace paging suite: paged,
+// filtered reads of namespaces in name order with their counts.
+func TestNamespacePagingConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunNamespacePaging(t, func(t *testing.T) storetest.PagingStore {
+		t.Helper()
+
+		return open(t)
 	})
 }
 
@@ -2292,6 +2337,23 @@ func BenchmarkPrincipalLists(b *testing.B) {
 	})
 
 	principaltest.Bench(b, s)
+}
+
+// BenchmarkCallerGrants measures the first page of the grants of a caller
+// at the scale of accesstest.BenchCallerGrants.
+func BenchmarkCallerGrants(b *testing.B) {
+	s, err := sqlite.Open(b.Context(), filepath.Join(b.TempDir(), "dustpan.db"))
+	if err != nil {
+		b.Fatalf("open store: %v", err)
+	}
+
+	b.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			b.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	accesstest.BenchCallerGrants(b, s)
 }
 
 // BenchmarkAuthorizer measures one decision and one list-objects at the

@@ -13,10 +13,44 @@ SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, 
 FROM namespaces
 ORDER BY name;
 
+-- name: PageNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > sqlc.arg('after')
+ORDER BY name
+LIMIT sqlc.arg('lim');
+
+-- name: PageNamespacesByNames :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > sqlc.arg('after') AND name IN (SELECT value FROM json_each(sqlc.arg('names')))
+ORDER BY name
+LIMIT sqlc.arg('lim');
+
+-- name: CountNamespaces :one
+SELECT COUNT(*)
+FROM namespaces;
+
+-- name: CountNamespacesByNames :one
+SELECT COUNT(*)
+FROM namespaces
+WHERE name IN (SELECT value FROM json_each(sqlc.arg('names')));
+
 -- name: SetNamespaceOverrides :execrows
 -- Replaces the override switches of one namespace (ADR 44, decision 6).
 UPDATE namespaces
 SET allow_forced_writes = ?, allow_unlocked_writes = ?
+WHERE name = ?;
+
+-- name: GetNamespaceIPAllowlist :one
+SELECT ip_allowlist
+FROM namespaces
+WHERE name = ?;
+
+-- name: SetNamespaceIPAllowlist :execrows
+-- Replaces the IP allowlist of one namespace (ADR 55, decision 8).
+UPDATE namespaces
+SET ip_allowlist = ?
 WHERE name = ?;
 
 -- name: GetFailoverVersion :one
@@ -315,16 +349,42 @@ FROM inventory_deleted
 WHERE namespace = ?
 ORDER BY tool, name, unit_id;
 
+-- name: ListExpiredInventory :many
+-- The first page of the deleted units of every namespace whose retention
+-- ended at or before the time, for the retention sweep.
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= ?
+ORDER BY purge_after_ms, tool, unit_id
+LIMIT ?;
+
+-- name: ListExpiredInventoryAfter :many
+-- The page of ListExpiredInventory after the cursor (end of retention,
+-- tool, unit ID). The lower bound on purge_after_ms lets the index scan
+-- start at the cursor.
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= sqlc.arg(now_ms)
+  AND purge_after_ms >= sqlc.arg(after_ms)
+  AND (purge_after_ms > sqlc.arg(after_ms)
+    OR (purge_after_ms = sqlc.arg(after_ms) AND tool > sqlc.arg(after_tool))
+    OR (purge_after_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool) AND unit_id > sqlc.arg(after_unit_id)))
+ORDER BY purge_after_ms, tool, unit_id
+LIMIT sqlc.arg(page_limit);
+
 -- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
 -- name: ListInventory :many
-SELECT namespace, tool, name, unit_id, display_name, last_changed_ms, status, resource_count,
-       lock_holder, lock_since_ms, lock_operation
-FROM inventory
-WHERE namespace = ?
-ORDER BY tool, name;
+SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
+       i.lock_holder, i.lock_since_ms, i.lock_operation,
+       COALESCE(c.name, '') AS collection
+FROM inventory AS i
+LEFT JOIN collection_members AS m ON m.unit_id = i.unit_id
+LEFT JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE i.namespace = ?
+ORDER BY i.tool, i.name;
 
 -- name: CreateWorkspace :execrows
 INSERT INTO workspaces (
@@ -908,7 +968,11 @@ WHERE subject_kind = ? AND subject_id = ? AND revoked_at_ms IS NULL
 ORDER BY target, role;
 
 -- name: CountRoleGrantsBelowInstallation :one
-SELECT COUNT(*) FROM grants WHERE role = ? AND object_kind <> 'installation' AND revoked_at_ms IS NULL;
+SELECT COUNT(*) FROM grants
+WHERE role = ? AND object_kind IN ('namespace', 'collection', 'unit') AND revoked_at_ms IS NULL;
+
+-- name: CountRoleGrantsOnPrincipal :one
+SELECT COUNT(*) FROM grants WHERE role = ? AND object_kind = 'principal' AND revoked_at_ms IS NULL;
 
 -- name: CountEndedGrantRecords :one
 -- The records of a new grant that have ended: its principal or group, and
@@ -1007,6 +1071,64 @@ WHERE (CAST(sqlc.arg('all_grants') AS BOOLEAN) = 1
     AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
   ELSE g.created_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER) AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER) END;
 
+-- name: CallerGrants :many
+-- One page of the current grants of a caller (ADR 52): the grants of the
+-- principal, and the grants of each of its groups through its membership
+-- at as_of_ms. Each holder reads its grants from grants_holder, so the cost
+-- follows the grants of the caller, not the grants of the installation. A
+-- JSON array carries the groups, so the query stays fixed. CROSS JOIN
+-- keeps the holders as the outer loop.
+WITH holders (kind, id) AS (
+  SELECT 'principal', CAST(sqlc.arg('principal') AS TEXT)
+  UNION ALL SELECT 'group', value FROM json_each(CAST(sqlc.arg('groups') AS TEXT))
+)
+SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target, g.condition,
+  g.created_at_ms, g.created_by, g.revoked_at_ms, g.revoked_by,
+  CAST(COALESCE(m.added_at_ms, 0) AS INTEGER) AS member_added_at_ms,
+  m.removed_at_ms AS member_removed_at_ms,
+  CAST(COALESCE(m.principal_id, '') AS TEXT) AS member_id,
+  CAST(COALESCE(mp.subject, '') AS TEXT) AS member_subject,
+  CAST(COALESCE(p.subject, pg.name, '') AS TEXT) AS subject_name,
+  (SELECT COUNT(*) FROM group_members c
+   WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
+     AND c.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)) AS member_count
+FROM holders h
+CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
+LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT)
+  AND m.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+  AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)
+LEFT JOIN principals mp ON mp.id = m.principal_id
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+  AND (g.created_at_ms > CAST(sqlc.arg('after_at_ms') AS INTEGER)
+    OR (g.created_at_ms = CAST(sqlc.arg('after_at_ms') AS INTEGER)
+      AND (g.id > CAST(sqlc.arg('after_id') AS TEXT)
+        OR (g.id = CAST(sqlc.arg('after_id') AS TEXT)
+          AND (COALESCE(m.added_at_ms, 0) > CAST(sqlc.arg('after_member_at_ms') AS INTEGER)
+            OR (COALESCE(m.added_at_ms, 0) = CAST(sqlc.arg('after_member_at_ms') AS INTEGER)
+              AND COALESCE(m.principal_id, '') > CAST(sqlc.arg('after_member_id') AS TEXT)))))))
+ORDER BY g.created_at_ms, g.id, member_added_at_ms, member_id
+LIMIT sqlc.arg('row_limit');
+
+-- name: CountCallerGrants :one
+WITH holders (kind, id) AS (
+  SELECT 'principal', CAST(sqlc.arg('principal') AS TEXT)
+  UNION ALL SELECT 'group', value FROM json_each(CAST(sqlc.arg('groups') AS TEXT))
+)
+SELECT COUNT(*)
+FROM holders h
+CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
+LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
+  AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT)
+  AND m.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
+  AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)
+WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
+  AND g.created_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER);
+
 -- name: ReviewStacksByIDs :many
 -- The stacks of the unit grants of an export, deleted ones included (ADR 47):
 -- an export shows a grant on a deleted unit, with its name at the time of
@@ -1059,7 +1181,7 @@ FROM access_tokens WHERE id = ?;
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms,
-  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE((
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0)) AS INTEGER) AS principal_active_at_ms
 FROM access_tokens t
@@ -1103,6 +1225,75 @@ WHERE id = sqlc.arg('id') AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL A
 UPDATE access_tokens SET last_used_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE id = sqlc.arg('id')
   AND (last_used_at_ms IS NULL OR last_used_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER));
+-- name: CreateCollection :execrows
+-- The caller checks the fence in the same transaction. A row that exists
+-- under the same key (the name in lower case) is not written.
+INSERT INTO collections (id, namespace, name_key, name, created_at_ms)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT (namespace, name_key) DO NOTHING;
+
+-- name: GetCollection :one
+SELECT id, namespace, name, created_at_ms
+FROM collections
+WHERE namespace = ? AND name_key = ?;
+
+-- name: ListCollections :many
+SELECT id, namespace, name, created_at_ms
+FROM collections
+WHERE namespace = ?
+ORDER BY name_key;
+
+-- name: CountLiveCollectionMembers :one
+-- Counts the units of a collection that the inventory still holds. A unit that
+-- was deleted has left the inventory, and its membership does not count.
+SELECT COUNT(*)
+FROM collection_members AS m
+JOIN inventory AS i ON i.unit_id = m.unit_id
+WHERE m.namespace = ? AND m.collection_key = ?;
+
+-- name: DeleteCollectionMembers :exec
+-- Removes the memberships of a collection. The caller removes them only after
+-- it found no live unit, so the rows that remain belong to deleted units.
+DELETE FROM collection_members
+WHERE namespace = ? AND collection_key = ?;
+
+-- name: DeleteCollection :execrows
+DELETE FROM collections
+WHERE namespace = ? AND name_key = ?;
+
+-- name: GetInventoryUnit :one
+-- The inventory row of one unit: its ID. The collection is read by a join on
+-- the unit ID, not from the inventory.
+SELECT unit_id
+FROM inventory
+WHERE namespace = ? AND tool = ? AND name = ?;
+
+-- name: GetUnitCollection :one
+-- The collection of one unit by its ID, as written.
+SELECT c.name
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?;
+
+-- name: UpsertUnitCollection :exec
+INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (unit_id) DO UPDATE SET
+    namespace = excluded.namespace,
+    collection_key = excluded.collection_key,
+    assigned_at_ms = excluded.assigned_at_ms;
+
+
+-- name: LastAccessByPrincipals :many
+-- The latest last-use time of the access tokens of each given principal:
+-- one row for each principal with a used token. A JSON array carries the
+-- IDs, so the query stays fixed. Revoked, replaced and expired tokens
+-- count: a use is a use.
+SELECT principal_id, CAST(MAX(last_used_at_ms) AS INTEGER) AS last_used_at_ms
+FROM access_tokens
+WHERE principal_id IN (SELECT value FROM json_each(CAST(sqlc.arg('principals') AS TEXT)))
+  AND last_used_at_ms IS NOT NULL
+GROUP BY principal_id;
 
 -- name: GetAuditChainState :one
 -- The audit chain state that this installation recorded last (ADR 60
@@ -1230,6 +1421,18 @@ FROM blob_purges
 ORDER BY purged_at_ms, tool, unit_id
 LIMIT ?;
 
+-- name: ListBlobPurgesAfter :many
+-- The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+-- The lower bound on purged_at_ms lets the index scan start at the cursor.
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+WHERE purged_at_ms >= sqlc.arg(after_ms)
+  AND (purged_at_ms > sqlc.arg(after_ms)
+    OR (purged_at_ms = sqlc.arg(after_ms) AND tool > sqlc.arg(after_tool))
+    OR (purged_at_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool) AND unit_id > sqlc.arg(after_unit_id)))
+ORDER BY purged_at_ms, tool, unit_id
+LIMIT sqlc.arg(page_limit);
+
 -- name: GetAuditSinkCursor :one
 -- The highest sequence of a namespace that a log sink holds (ADR 60
 -- decision 13). A sink with no row holds no entry of the namespace.
@@ -1271,13 +1474,14 @@ WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > CAST(
 RETURNING id, principal_id;
 
 -- name: DisableInactivePrincipals :many
--- A person is inactive when its creation, its activity baseline, and the
--- creation and the last use of each of its tokens are all at or before the
--- cutoff.
+-- A person is inactive when its creation, its activity baseline, its last
+-- sign-in, and the creation and the last use of each of its tokens are all
+-- at or before the cutoff.
 UPDATE principals SET disabled_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
   AND created_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
   AND last_active_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
+  AND COALESCE(last_sign_in_at_ms, 0) <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
   AND NOT EXISTS (
     SELECT 1 FROM access_tokens t
     WHERE t.principal_id = principals.id
@@ -1291,3 +1495,81 @@ RETURNING id;
 UPDATE principals SET disabled_at_ms = NULL, updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER),
   last_active_at_ms = CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
 WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NOT NULL;
+
+-- name: DeleteCollectionMembersOfUnit :exec
+-- Removes the membership of one unit. The purge of a unit calls it in the same
+-- transaction as the purge of its rows (ADR 47, ADR 51).
+DELETE FROM collection_members
+WHERE unit_id = ?;
+
+-- name: DeleteMissingCollectionMembership :exec
+-- Removes the membership of one unit when its collection no longer exists. A
+-- restore calls it, so a restored unit never points at a missing collection.
+DELETE FROM collection_members
+WHERE unit_id = ? AND NOT EXISTS (
+    SELECT 1
+    FROM collections AS c
+    WHERE c.namespace = collection_members.namespace AND c.name_key = collection_members.collection_key
+);
+
+-- name: GrantIDsOnTarget :many
+-- The IDs of the current grants on one target, in order. A deleted collection
+-- revokes each of them, so that none outlives it.
+SELECT id FROM grants
+WHERE target = ? AND revoked_at_ms IS NULL
+ORDER BY id;
+
+-- name: CreateSession :execrows
+-- A session needs a person principal that exists and is not disabled. A
+-- taken ID or digest inserts nothing.
+INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent)
+SELECT sqlc.arg('id'), p.id, sqlc.arg('digest'), sqlc.arg('provider'), sqlc.arg('created_at_ms'),
+  sqlc.arg('created_at_ms'), sqlc.arg('auth_time_ms'), sqlc.arg('source_ip'), sqlc.arg('user_agent')
+FROM principals p
+WHERE p.id = sqlc.arg('principal_id') AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.kind = 'person'
+ON CONFLICT DO NOTHING;
+
+-- name: GetSessionPrincipal :one
+-- The kind and the disable time of a principal that exists, so a refused
+-- session insert can name its cause.
+SELECT kind, disabled_at_ms FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: SetLastSignIn :exec
+UPDATE principals SET last_sign_in_at_ms = MAX(COALESCE(last_sign_in_at_ms, 0), CAST(sqlc.arg('at_ms') AS INTEGER))
+WHERE id = sqlc.arg('id');
+
+-- name: GetSession :one
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent
+FROM sessions WHERE id = ?;
+
+-- name: GetSessionByDigest :one
+SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
+  s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms
+FROM sessions s
+JOIN principals p ON p.id = s.principal_id
+WHERE s.digest = ? AND p.deleted_at_ms IS NULL;
+
+-- name: TouchSession :exec
+UPDATE sessions SET last_seen_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
+WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL
+  AND last_seen_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER);
+
+-- name: EndSession :execrows
+UPDATE sessions SET ended_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER), end_reason = sqlc.arg('end_reason')
+WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL;
+
+-- name: CountSession :one
+SELECT COUNT(*) FROM sessions WHERE id = ?;
+
+-- name: CreateSignInRequest :execrows
+INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: TakeSignInRequest :one
+DELETE FROM sign_in_requests WHERE digest = ?
+RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms;
+
+-- name: PruneSignInRequests :execrows
+DELETE FROM sign_in_requests WHERE expires_at_ms <= ?;

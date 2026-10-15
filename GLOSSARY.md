@@ -68,6 +68,10 @@ _Avoid_: Cluster, instance (one server process), deployment
 One server process of an installation. Each start makes a new instance ID, `ins-` and 20 characters, which the start log shows. The instance ID is the subject of the audit entries that the process writes on its own (ADR 63).
 _Avoid_: Node, replica, host
 
+**IP allowlist**:
+A list of CIDRs on a namespace. A request that acts on the namespace from outside the list gets 403. The feature is off unless the operator turns it on.
+_Avoid_: Whitelist
+
 **Setting**:
 One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
 _Avoid_: Option, parameter, config value
@@ -112,6 +116,14 @@ _Avoid_: Hard delete, wipe
 The same as a purge. Use "purge" in code and in the API, and "final delete" where a reader needs the plain meaning.
 _Avoid_: Permanent delete
 
+**Retention sweep**:
+The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records.
+_Avoid_: Garbage collection, reaper
+
+**Blob purge record**:
+A row that a purge writes for a unit whose blobs may still exist. A save that started before the purge can write a blob after the purge deletes the blobs. The retention sweep deletes the blobs again when the record is older than 24 hours, and then finishes the record. In code this time is `BlobPurgeGrace`. It is not the retention period.
+_Avoid_: Tombstone
+
 **Maintenance mode**:
 The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/server/maintenance/enter`. The other state is `normal`.
 _Avoid_: Downtime, freeze
@@ -148,6 +160,14 @@ _Avoid_: User (when the caller can be a machine), actor
 The secret that a tool or the console sends to prove which principal it acts for.
 _Avoid_: API key, password
 
+**Sign-in**:
+The step in which a sign-in method, such as an identity provider, proves who a person is. The method only proves the identity. The server then issues its own session.
+_Avoid_: Login, log-in (as a noun). The verb is "sign in".
+
+**Session**:
+The proof of a sign-in that the console sends back in a cookie. A session belongs to one person. It ends at a sign-out, when an administrator ends it, after a period with no use, and at a maximum length. By default, the period is 15 minutes and the maximum length is 12 hours.
+_Avoid_: Login, cookie (the cookie only carries the session)
+
 **Personal token**:
 An access token that belongs to a person. A person creates it after a sign-in, and it has an expiry (ADR 53).
 _Avoid_: PAT, user token
@@ -178,12 +198,16 @@ A named set of actions (ADR 52). A built-in role has a fixed name. An administra
 _Avoid_: Permission set, policy
 
 **Action family**:
-One of three sets of actions that do not overlap: operator, administration and data. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only (RFC 19).
+One of four sets of actions that do not overlap: operator, administration, data and delegation. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only. A role on a service principal holds delegation actions only.
 _Avoid_: Permission category, scope
 
 **Grant**:
-A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52). A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
+A record that gives one role to a principal or a group on one object. The object is the installation, a namespace, a collection, a unit or a service principal. A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
 _Avoid_: Binding, assignment, permission
+
+**Token manager**:
+A holder of `principal:manage-tokens` on a service principal. It can make, rotate and revoke the tokens of that principal. So it can act as the principal, with every grant that the principal has now or gets later. The built-in role `token-manager` gives this action on one service principal.
+_Avoid_: Token owner, delegate
 
 **Access review**:
 An export of the grants that give access to one object. It holds the grants on the object and inside it. It also holds the grants with a role that gives a data action or manages access on each object that contains it. A bootstrap admin token has a row too. It is a snapshot at one time, or a history between two times (ADR 52, decision 10). Each export request writes an audit entry.

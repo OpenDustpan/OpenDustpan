@@ -42,6 +42,9 @@ A restore or a purge of a deleted unit (ADR 47) writes one entry with the
 kind `change` (ADR 60), the action `unit:restore` or `unit:purge`, and the
 stable ID of the unit in `objectID`. The store appends it in the same
 transaction as the change, so a failed append changes nothing.
+A purge of the scheduled retention sweep has the subject `@server`. A purge
+of a sweep that a person starts through the API has that person as the
+subject.
 
 Each request for an access-review export (ADR 52, decision 13) writes one
 entry with the kind `read-access`, the read-access action of the object and

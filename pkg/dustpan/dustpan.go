@@ -61,8 +61,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -156,18 +158,27 @@ type settings struct {
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
 	checkpointDeltaCutoff int
+	backupTarget          blob.Store
+	backupTargetName      string
+	ipAllowlists          *ipAllowlistSettings
 	// disablePulumiJournaling turns Pulumi journaling off. See
 	// WithDisablePulumiJournaling.
 	disablePulumiJournaling bool
 	// auditChain is the hash chain setting. See WithAuditChain.
-	auditChain       audit.ChainSetting
-	backupTarget     blob.Store
-	backupTargetName string
+	auditChain audit.ChainSetting
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
+}
+
+// ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
+// exemption switch and the list store (ADR 55, decision 8).
+type ipAllowlistSettings struct {
+	store            ipallow.Store
+	enabled          bool
+	includeBootstrap bool
 }
 
 // Option configures a Server.
@@ -391,6 +402,37 @@ func WithCheckpointDeltaCutoff(n int) Option {
 	return func(o *settings) { o.checkpointDeltaCutoff = n }
 }
 
+// WithIPAllowlists turns IP allowlists on when on is true. A namespace
+// that has a list then refuses requests from addresses outside it
+// (ADR 55, decision 8). Off by default.
+func WithIPAllowlists(on bool) Option {
+	return func(o *settings) { ipAllowlistConfig(o).enabled = on }
+}
+
+// WithIPAllowlistsIncludeBootstrap applies IP allowlists to the bootstrap
+// admin token too when on is true. Off by default: the bootstrap admin token
+// is exempt, so an administrator cannot lock themselves out.
+func WithIPAllowlistsIncludeBootstrap(on bool) Option {
+	return func(o *settings) { ipAllowlistConfig(o).includeBootstrap = on }
+}
+
+// WithIPAllowlistStore sets the IP allowlist persistence port. Required when
+// IP allowlists are on: every SQL adapter serves it from the same database
+// connection as the other ports.
+func WithIPAllowlistStore(s ipallow.Store) Option {
+	return func(o *settings) { ipAllowlistConfig(o).store = s }
+}
+
+// ipAllowlistConfig returns the mutable allowlist settings of o, creating
+// them when an Option runs on zero settings.
+func ipAllowlistConfig(o *settings) *ipAllowlistSettings {
+	if o.ipAllowlists == nil {
+		o.ipAllowlists = &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false}
+	}
+
+	return o.ipAllowlists
+}
+
 // WithBackupTarget sets the backup target that holds blobs/<key>,
 // backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json (ADR 30 decision 5).
 // target is the opened target store, for example a blob/fs store for
@@ -429,6 +471,8 @@ type Server struct {
 	tokens      *accesstoken.Service
 	shipper     *audit.Shipper
 	beforeServe func(ctx context.Context) error
+	// deleted runs the retention sweep of the deleted units on a schedule.
+	deleted *deletedSweeper
 }
 
 // services holds the domain services that NewServer wires together.
@@ -441,6 +485,12 @@ type services struct {
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
+	// collections is the collection service (ADR 51), or nil when the store
+	// holds no collections. NewServer sets it after newServices.
+	collections *collection.Service
+	// deleted runs the retention sweep. assemble sets it, because
+	// it counts on the server metrics.
+	deleted *deletedSweeper
 	// access keeps the roles and grants (ADR 52), or is nil when the store
 	// keeps none. NewServer sets it after newServices. The installation API
 	// and the escalation check of the token service share it.
@@ -486,6 +536,7 @@ func defaultSettings() *settings {
 		beforeServe:             nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		auditChain:              audit.ChainAuto,
+		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 		auditSinks:              nil,
 	}
 }
@@ -519,6 +570,11 @@ func NewServer(opts ...Option) (*Server, error) {
 
 	svc.tokens, svc.access = tokens, grants
 
+	svc.collections, err = newCollectionService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	backups, err := newBackupService(cfg, svc)
 	if err != nil {
 		return nil, err
@@ -541,11 +597,48 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 	}
 
 	cfg.authenticator = authn
-	cfg.authorizer = identity.SelfAllowed{
+	cfg.authorizer = allowlistGate(identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
-	}
+	}, cfg.ipAllowlists)
 
 	return nil
+}
+
+// allowlistGate wraps next in the IP allowlist gate when the feature is on.
+// The gate is the outermost authorizer, so it runs in the authorization step
+// of every adapter. When the feature is off it returns next with no
+// decorator, so the default path has zero cost and zero risk.
+//
+//nolint:ireturn // The adapters take the port.
+func allowlistGate(next identity.Authorizer, allow *ipAllowlistSettings) identity.Authorizer {
+	if allow == nil || !allow.enabled {
+		return next
+	}
+
+	return ipallow.Gate{
+		Next: next, Rules: allow.store,
+		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
+	}
+}
+
+// allowlistAddressGate returns the address-only gate for the capability
+// routes of the tool adapters when the feature is on, else nil. It holds
+// only the list rules: capability routes have no principal, so there is no
+// bootstrap exemption to carry. A nil interface (not a typed nil) reports
+// off, so the adapters skip the check.
+//
+//nolint:ireturn // The adapters take the port.
+func allowlistAddressGate(allow *ipAllowlistSettings) interface {
+	CheckAddress(ctx context.Context, ns namespace.Name) error
+} {
+	if allow == nil || !allow.enabled {
+		return nil
+	}
+
+	return ipallow.Gate{
+		Next: nil, Rules: allow.store,
+		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
+	}
 }
 
 // assemble mounts the adapters and routes around the services. backups is
@@ -556,6 +649,13 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	// families, and the readiness failure counter of the probe.
 	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
 	registry := observed.Registry()
+
+	deleted, err := newDeletedSweeper(svc, cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	svc.deleted = deleted
 
 	adapters, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
@@ -610,6 +710,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		tokens:          svc.tokens,
 		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
+		deleted:         deleted,
 	}, nil
 }
 
@@ -767,6 +868,7 @@ func newTFEHandler(
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
+		AddressGate:   allowlistAddressGate(cfg.ipAllowlists),
 		Logger:        cfg.logger,
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
@@ -824,13 +926,8 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		)
 	}
 
-	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
-		missing := "WithTLS certificate file"
-		if cfg.tlsCertFile != "" {
-			missing = "WithTLS key file"
-		}
-
-		return baseurl.Resolver{}, fmt.Errorf("%w: %s", ErrMissingOption, missing)
+	if err := checkTLSAndAllowlist(cfg); err != nil {
+		return baseurl.Resolver{}, err
 	}
 
 	base, err := baseurl.Parse(cfg.publicURL)
@@ -896,6 +993,29 @@ func newUpdateService(
 	return updates, nil
 }
 
+// checkTLSAndAllowlist validates the TLS pair and the IP allowlist switch
+// of cfg. It keeps checkSettings under the complexity limit.
+func checkTLSAndAllowlist(cfg *settings) error {
+	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
+		missing := "WithTLS certificate file"
+		if cfg.tlsCertFile != "" {
+			missing = "WithTLS key file"
+		}
+
+		return fmt.Errorf("%w: %s", ErrMissingOption, missing)
+	}
+
+	allow := cfg.ipAllowlists
+	if allow != nil && allow.enabled && allow.store == nil {
+		return fmt.Errorf(
+			"%w: --ip-allowlists needs a store: pass WithIPAllowlistStore",
+			ErrMissingOption,
+		)
+	}
+
+	return nil
+}
+
 // newServices builds the domain services from validated settings. It reads
 // no database. Run runs the start-up checks (such as secret.CheckWrapper)
 // with its own context.
@@ -941,14 +1061,35 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	}
 
 	return services{
-		namespaces: namespaces,
-		stacks:     stacks,
-		updates:    updates,
-		secrets:    secrets,
-		workspaces: workspaces,
-		tokens:     nil,
-		access:     nil,
+		namespaces:  namespaces,
+		stacks:      stacks,
+		updates:     updates,
+		secrets:     secrets,
+		workspaces:  workspaces,
+		tokens:      nil,
+		deleted:     nil,
+		access:      nil,
+		collections: nil,
 	}, nil
+}
+
+// newIPAllowlistService builds the IP allowlist service from validated
+// settings, or nil when no allowlist store is configured: an SDK user who
+// did not pass WithIPAllowlistStore gets no allowlist routes.
+func newIPAllowlistService(cfg *settings, namespaces *namespace.Service) (*ipallow.Service, error) {
+	allow := cfg.ipAllowlists
+	if allow == nil || allow.store == nil {
+		return nil, nil //nolint:nilnil // No allowlist store is a valid setup: the routes stay unmounted.
+	}
+
+	svc, err := ipallow.NewService(ipallow.Config{
+		Store: allow.store, Namespaces: namespaces, Now: cfg.now, Enabled: allow.enabled,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ip allowlist service: %w", err)
+	}
+
+	return svc, nil
 }
 
 // Handler returns the server's root HTTP handler, for embedding in your own server.
@@ -1041,6 +1182,7 @@ func (s *Server) Run(ctx context.Context) error {
 	var sweeps sync.WaitGroup
 
 	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
+	sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
 
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
@@ -1385,6 +1527,7 @@ func newPulumiHandler(
 		Namespaces:           svc.namespaces,
 		Authenticator:        cfg.authenticator,
 		Authorizer:           cfg.authorizer,
+		AddressGate:          allowlistAddressGate(cfg.ipAllowlists),
 		Logger:               cfg.logger,
 		BaseURL:              base,
 		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,
@@ -1449,17 +1592,31 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
 	}
 
-	blobs := blobPurger{logger: cfg.logger}
+	stacks, workspaces := unitLifecycles(svc, cfg)
+
+	// The move check is the escalation check of the access service. A store
+	// with no roles and grants gives no checker, so a move is refused there.
+	grants, err := newAccessService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var moves inventoryapi.MoveChecker
+	if grants != nil {
+		moves = grants
+	}
 
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		Namespaces: svc.namespaces,
 		Units:      cfg.inventoryReader,
 		Deleted:    deleted,
 		Lifecycles: map[string]inventory.Lifecycle{
-			pulumiTool:   pulumiLifecycle{stacks: svc.stacks, updates: svc.updates, blobs: blobs},
-			opentofuTool: opentofuLifecycle{workspaces: svc.workspaces, blobs: blobs},
+			pulumiTool:   stacks,
+			opentofuTool: workspaces,
 		},
 		ReadScope:     deletedReadScope{authz: cfg.authorizer},
+		Collections:   svc.collections,
+		Moves:         moves,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
@@ -1470,6 +1627,15 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// unitLifecycles returns the restore and purge of each tool. The
+// inventory API and the retention sweep share them.
+func unitLifecycles(svc services, cfg *settings) (pulumiLifecycle, opentofuLifecycle) {
+	blobs := blobPurger{logger: cfg.logger}
+
+	return pulumiLifecycle{stacks: svc.stacks, updates: svc.updates, blobs: blobs},
+		opentofuLifecycle{workspaces: svc.workspaces, blobs: blobs}
 }
 
 // installationDeps carries the services of the installation API.
@@ -1515,6 +1681,11 @@ func newServerHandler(
 		return nil, err
 	}
 
+	allow, err := newIPAllowlistService(cfg, deps.services.namespaces)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -1529,10 +1700,12 @@ func newServerHandler(
 		Principals:    principals,
 		Access:        grants,
 		Tokens:        deps.services.tokens,
+		IPAllowlists:  allow,
 		Audit:         serverAuditOf(cfg.namespaceStore),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
 		},
+		DeletedUnits: deps.services.deleted,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -1622,7 +1795,7 @@ func setDefaultAuthorizer(cfg *settings) error {
 		return nil
 	}
 
-	authz, err := defaultAuthorizer(cfg.namespaceStore)
+	authz, err := defaultAuthorizer(cfg)
 	if err != nil {
 		return err
 	}
@@ -1638,20 +1811,66 @@ func setDefaultAuthorizer(cfg *settings) error {
 // under both.
 //
 //nolint:ireturn // Two policies with no shared concrete type: the caller keeps the port.
-func defaultAuthorizer(store namespace.Store) (identity.Authorizer, error) {
-	stores, ok := store.(accessStores)
+func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
+	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
 		return identity.AdminOnly{}, nil
 	}
 
+	collections, err := unitCollections(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: stores, Callers: stores, Collections: nil, Units: stores,
+		Store: stores, Callers: stores, Collections: collections, Units: stores,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("authorizer: %w", err)
 	}
 
 	return authz, nil
+}
+
+// newCollectionService builds the collection service on the namespace store
+// when that store also holds collections (ADR 51). A custom store without
+// collections gets no collection service, so its collection routes are not
+// served and the rest of the API works as before.
+func newCollectionService(cfg *settings) (*collection.Service, error) {
+	store, ok := cfg.namespaceStore.(collection.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No collection service: the store holds no collections.
+	}
+
+	svc, err := collection.NewService(collection.Config{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("collection service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// unitCollections returns the collection port of the authorizer: the
+// collection service when the store holds collections, else nil. The
+// service is returned as an interface only when it is not nil, so that a
+// nil service does not become a non-nil port.
+//
+//nolint:ireturn // The port of the authorizer: the caller keeps it as the interface.
+func unitCollections(cfg *settings) (access.UnitCollections, error) {
+	svc, err := newCollectionService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if svc == nil {
+		return nil, nil //nolint:nilnil // No collections: a grant on a collection is refused as not found.
+	}
+
+	return svc, nil
 }
 
 // newAccessService builds the role and grant service (ADR 52) from the
@@ -1667,10 +1886,15 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 
 	authz, isAccess := cfg.authorizer.(*access.Authorizer)
 	if !isAccess {
+		collections, collErr := unitCollections(cfg)
+		if collErr != nil {
+			return nil, collErr
+		}
+
 		var err error
 
 		authz, err = access.NewAuthorizer(access.AuthorizerConfig{
-			Store: stores, Callers: stores, Collections: nil, Units: stores,
+			Store: stores, Callers: stores, Collections: collections, Units: stores,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("access authorizer: %w", err)
@@ -1709,9 +1933,10 @@ func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, 
 // newTokenService builds the access token service (ADR 53) from the
 // namespace store, or returns nil when the store keeps no access tokens or
 // no principals. Every SQL adapter keeps both. The escalation check of a
-// token for another principal (decision 3) is the grants of grants (ADR
-// 52). With nil grants, a store that keeps none, only an administrator
-// passes it.
+// personal token for another person is the grants of grants, and the
+// authorizer of grants decides principal:manage-tokens for a service
+// token. With nil grants, a store that keeps none, only an administrator
+// passes either.
 func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
@@ -1723,14 +1948,19 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
-	var check accesstoken.GrantCheck
+	var (
+		check accesstoken.GrantCheck
+		authz identity.Authorizer
+	)
+
 	if grants != nil {
 		check = tokengrants.Check{Grants: grants, Principals: principals}
+		authz = grants.Authorizer()
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: check, Logger: cfg.logger, Now: cfg.now,
-		NewID: nil,
+		Store: store, Principals: principals, Freshness: nil, Grants: check, Authorizer: authz,
+		Logger: cfg.logger, Now: cfg.now, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)

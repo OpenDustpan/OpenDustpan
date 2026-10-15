@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -13,24 +14,32 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 type reviewRowDoc struct {
-	LastAccessTracked *bool  `json:"lastAccessTracked"`
-	LastAccessAtMs    *int64 `json:"lastAccessAtMs"`
-	Subject           string `json:"subject"`
-	SubjectName       string `json:"subjectName"`
-	Holder            string `json:"holder"`
-	Role              string `json:"role"`
-	Object            string `json:"object"`
-	ObjectState       string `json:"objectState"`
-	InheritedFrom     string `json:"inheritedFrom"`
-	CanGrantAccess    bool   `json:"canGrantAccess"`
+	Via               *reviewViaDoc `json:"via"`
+	LastAccessTracked *bool         `json:"lastAccessTracked"`
+	LastAccessAtMs    *int64        `json:"lastAccessAtMs"`
+	Subject           string        `json:"subject"`
+	SubjectName       string        `json:"subjectName"`
+	Holder            string        `json:"holder"`
+	Role              string        `json:"role"`
+	Object            string        `json:"object"`
+	ObjectState       string        `json:"objectState"`
+	InheritedFrom     string        `json:"inheritedFrom"`
+	CanGrantAccess    bool          `json:"canGrantAccess"`
+}
+
+type reviewViaDoc struct {
+	Group  string `json:"group"`
+	Member string `json:"member"`
 }
 
 type reviewDoc struct {
@@ -90,7 +99,7 @@ func TestReviewScopesAndActions(t *testing.T) {
 		t.Fatalf("export of acme = %q (total %v, as of %v), want %q", got, ns.Total, ns.AsOfMs, want)
 	}
 
-	checkUntrackedRows(t, ns.Grants)
+	checkTrackedRows(t, ns.Grants)
 
 	for _, c := range []struct {
 		subject string
@@ -122,19 +131,19 @@ func TestReviewScopesAndActions(t *testing.T) {
 	}, nil)
 }
 
-// checkUntrackedRows checks that each principal row says that the last
-// access is not tracked, that no row has a last access time, and that every
-// object is live.
-func checkUntrackedRows(t *testing.T, rows []reviewRowDoc) {
+// checkTrackedRows checks that each principal row says that the last
+// access is tracked with no last access time, that a group row and a
+// bootstrap row carry neither field, and that every object is live.
+func checkTrackedRows(t *testing.T, rows []reviewRowDoc) {
 	t.Helper()
 
 	for i := range rows {
 		g := &rows[i]
 
-		tracked := g.LastAccessTracked != nil && !*g.LastAccessTracked
+		tracked := g.LastAccessTracked != nil && *g.LastAccessTracked
 		if g.LastAccessAtMs != nil || tracked != (g.Holder == "") || g.ObjectState != access.ObjectLive {
 			t.Fatalf(
-				"row %+v: want lastAccessTracked false on a principal row, no lastAccessAtMs, and a live object",
+				"row %+v: want lastAccessTracked true on a principal row, no lastAccessAtMs, and a live object",
 				g,
 			)
 		}
@@ -273,6 +282,149 @@ func TestCallerAccess(t *testing.T) {
 	}
 }
 
+// TestCallerGrants reads the grants of callers: bob holds a grant of his
+// own and one through a group, read one row a page.
+func TestCallerGrants(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	seedOpsGrants(t, f)
+
+	var got []string
+
+	path := "/api/server/caller/grants?limit=1"
+
+	for page := 0; path != ""; page++ {
+		var doc reviewDoc
+		f.as(t, "bob", apiCall{http.MethodGet, path, "", http.StatusOK}, &doc)
+
+		if (page == 0) != (doc.Total != nil) || (doc.Total != nil && *doc.Total != 2) || doc.AsOfMs == nil {
+			t.Fatalf("page %d = %+v, want a total of 2 on the first page only, and a time", page, doc)
+		}
+
+		got = append(got, callerGrantRows(doc)...)
+
+		path = ""
+		if doc.NextCursor != "" {
+			path = "/api/server/caller/grants?limit=1&cursor=" + doc.NextCursor
+		}
+	}
+
+	want := []string{
+		"principal:prn-bob bob viewer acme",
+		"group:grp-ops#member ops installation-operator @server via group:grp-ops#member principal:prn-bob",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("grants of bob = %q, want %q", got, want)
+	}
+}
+
+// TestCallerGrantsOfOtherCallers reads the grants of olga, who holds one,
+// and of the bootstrap admin, who holds none.
+func TestCallerGrantsOfOtherCallers(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	for subject, rows := range map[string]int{"olga": 1, "admin": 0} {
+		var doc reviewDoc
+		f.as(t, subject, apiCall{http.MethodGet, "/api/server/caller/grants", "", http.StatusOK}, &doc)
+
+		if doc.Total == nil || *doc.Total != int64(rows) || len(doc.Grants) != rows || doc.NextCursor != "" {
+			t.Fatalf("grants of %s = %+v, want %d", subject, doc, rows)
+		}
+	}
+}
+
+// TestCallerGrantsRefusals sends the queries that the caller grants
+// refuse. A cursor of one caller does not page the grants of another.
+func TestCallerGrantsRefusals(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	seedOpsGrants(t, f)
+
+	var first reviewDoc
+	f.as(t, "bob", apiCall{http.MethodGet, "/api/server/caller/grants?limit=1", "", http.StatusOK}, &first)
+
+	for _, c := range []struct{ subject, query string }{
+		{"olga", "cursor=" + first.NextCursor},
+		{"bob", "limit=0"},
+		{"bob", "limit=x"},
+		{"bob", "cursor=%21"},
+	} {
+		f.as(t, c.subject, apiCall{
+			http.MethodGet, "/api/server/caller/grants?" + c.query, "", http.StatusBadRequest,
+		}, nil)
+	}
+}
+
+// seedOpsGrants gives bob a viewer grant on acme and makes him a member of
+// the group ops, which holds installation-operator on the installation.
+func seedOpsGrants(t *testing.T, f accessFixture) {
+	t.Helper()
+
+	at := time.Date(2026, time.October, 13, 13, 0, 0, 0, time.UTC)
+
+	group := principal.Group{
+		CreatedAt: at, UpdatedAt: at, ID: "grp-ops", Name: "ops", Description: "",
+		Source: principal.SourceLocal, MemberCount: 0,
+	}
+	if err := f.store.CreateGroup(t.Context(), group, storetest.ServerChange(at, "group:grp-ops")); err != nil {
+		t.Fatalf("seed group: %v", err)
+	}
+
+	member := principal.Membership{AddedAt: at, GroupID: "grp-ops", PrincipalID: "prn-bob"}
+	joined := storetest.ServerChange(at, "group:grp-ops#member:prn-bob")
+
+	if err := f.store.AddMember(t.Context(), member, joined); err != nil {
+		t.Fatalf("seed member: %v", err)
+	}
+
+	grants := []access.Grant{
+		{
+			CreatedAt: at,
+			Condition: nil,
+			Object:    identity.NamespaceObject("acme"),
+			ID:        "grt-bob-own",
+			Role:      access.RoleViewer,
+			CreatedBy: "admin",
+			Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: "prn-bob"},
+		},
+		{
+			CreatedAt: at.Add(time.Second), Condition: nil, Object: identity.ServerObject(), ID: "grt-ops",
+			Role: access.RoleInstallationOperator, CreatedBy: "admin",
+			Subject: access.Subject{Kind: access.SubjectGroup, ID: "grp-ops"},
+		},
+	}
+
+	for i := range grants {
+		fence, e := storetest.GrantWrite(t, f.store, grants[i].Object, at, "grant:"+grants[i].ID)
+		if err := f.store.CreateGrant(t.Context(), grants[i], fence, e); err != nil {
+			t.Fatalf("seed grant: %v", err)
+		}
+	}
+}
+
+// callerGrantRows returns each row of doc as its subject, subject name,
+// role, object and membership.
+func callerGrantRows(doc reviewDoc) []string {
+	out := make([]string, 0, len(doc.Grants))
+
+	for i := range doc.Grants {
+		r := &doc.Grants[i]
+
+		via := ""
+		if r.Via != nil {
+			via = " via " + r.Via.Group + " " + r.Via.Member
+		}
+
+		out = append(out, r.Subject+" "+r.SubjectName+" "+r.Role+" "+r.Object+via)
+	}
+
+	return out
+}
+
 // TestCallerAccessPaging walks the objects of a caller one page at a time.
 // Grants on units, a collection and a namespace all cover units.
 func TestCallerAccessPaging(t *testing.T) {
@@ -290,7 +442,7 @@ func TestCallerAccessPaging(t *testing.T) {
 
 	web = web.WithUnitID("stk-acme-web-prod")
 
-	for i, o := range []identity.Object{identity.CollectionObject("acme", "payments"), web, api} {
+	for i, o := range []identity.Object{identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"), web, api} {
 		g := access.Grant{
 			CreatedAt: at, Condition: nil, Object: o, ID: "grt-page-" + strconv.Itoa(i), Role: access.RoleViewer,
 			CreatedBy: "admin", Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-bob"},
@@ -387,6 +539,227 @@ func handMadeCursor() string {
 	raw := strings.Join([]string{"0", "0", "", "0", "", "0", strings.Repeat("0", 16)}, "\x00")
 
 	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// seedUsedToken stores a token of principalID used at used.
+func seedUsedToken(t *testing.T, f accessFixture, principalID string, used time.Time) {
+	t.Helper()
+
+	tok := accesstoken.Token{
+		CreatedAt:   used.Add(-time.Hour),
+		ExpiresAt:   used.Add(24 * time.Hour),
+		LastUsedAt:  time.Time{},
+		RevokedAt:   time.Time{},
+		DisabledAt:  time.Time{},
+		ID:          "tok-" + principalID,
+		PrincipalID: principalID,
+		Name:        "token tok-" + principalID,
+		Kind:        accesstoken.KindService,
+		ReplacedBy:  "",
+		CreatedBy:   "admin",
+	}
+	e := storetest.ServerChange(tok.CreatedAt, "token:"+tok.ID)
+
+	if err := f.store.CreateToken(t.Context(), tok, sha256.Sum256([]byte(principalID)), e); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	if err := f.store.TouchToken(t.Context(), tok.ID, used, time.Minute); err != nil {
+		t.Fatalf("touch token: %v", err)
+	}
+}
+
+// trackedOf reports whether the row says its last access is tracked.
+func trackedOf(r map[string]any) bool {
+	tracked, ok := r["lastAccessTracked"].(bool)
+
+	return ok && tracked
+}
+
+// checkNeverJSON checks that every row of rows is tracked with no
+// lastAccessAtMs key at all.
+func checkNeverJSON(t *testing.T, rows []map[string]any) {
+	t.Helper()
+
+	for _, r := range rows {
+		if !trackedOf(r) {
+			t.Fatalf("row %+v: want lastAccessTracked true", r)
+		}
+
+		if _, ok := r["lastAccessAtMs"]; ok {
+			t.Fatalf("row %+v: want no lastAccessAtMs key", r)
+		}
+	}
+}
+
+// TestReviewLastAccess checks the last access on the wire: a principal row
+// with a used token answers lastAccessTracked true with lastAccessAtMs; a
+// principal row never used answers tracked true with no lastAccessAtMs key
+// at all; a group row and a bootstrap row carry neither key. The grants of
+// the caller answer the same fields.
+func TestReviewLastAccess(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	seedOpsGrants(t, f)
+
+	used := time.Date(2026, time.October, 13, 14, 0, 0, 0, time.UTC)
+	seedUsedToken(t, f, "prn-alice", used)
+
+	rows := reviewRowsAsMap(t, f, "ann", "/api/server/access-review")
+
+	checkUsedRow(t, rows, "principal:prn-alice", float64(used.UnixMilli()))
+	checkNeverRow(t, rows, "principal:prn-bob")
+	checkBareRow(t, rows, "group:grp-ops#member")
+	checkBareRow(t, rows, "")
+
+	checkFilteredLastAccess(t, f)
+
+	grants := reviewRowsAsMap(t, f, "alice", "/api/server/caller/grants")
+	if len(grants) != 1 {
+		t.Fatalf("grants of alice = %d rows, want her own row", len(grants))
+	}
+
+	checkUsedRow(t, grants, "principal:prn-alice", float64(used.UnixMilli()))
+
+	bob := reviewRowsAsMap(t, f, "bob", "/api/server/caller/grants")
+	if len(bob) != 2 {
+		t.Fatalf("grants of bob = %d rows, want the own row and the row through the group", len(bob))
+	}
+
+	checkNeverJSON(t, bob)
+}
+
+// checkFilteredLastAccess checks the export filtered to bob: his own row
+// and his row through the group, both tracked with no lastAccessAtMs key.
+func checkFilteredLastAccess(t *testing.T, f accessFixture) {
+	t.Helper()
+
+	rows := reviewRowsAsMap(t, f, "ann", "/api/server/access-review?subject=principal:prn-bob")
+
+	own, through := false, false
+
+	for _, r := range rows {
+		switch {
+		case r["subject"] == "principal:prn-bob" && r["via"] == nil:
+			own = true
+		case r["subject"] == "group:grp-ops#member" && r["via"] != nil:
+			through = true
+		default:
+			continue
+		}
+
+		if !trackedOf(r) {
+			t.Fatalf("filtered row %+v: want lastAccessTracked true", r)
+		}
+
+		if _, ok := r["lastAccessAtMs"]; ok {
+			t.Fatalf("filtered row %+v: want no lastAccessAtMs key", r)
+		}
+	}
+
+	if !own || !through {
+		t.Fatal("filtered export has no own row and no row through the group")
+	}
+}
+
+// reviewRowsAsMap reads path and returns its grant rows as maps, so a test
+// can tell a missing key from a null one.
+func reviewRowsAsMap(t *testing.T, f accessFixture, subject, path string) []map[string]any {
+	t.Helper()
+
+	var raw map[string]any
+	f.as(t, subject, apiCall{http.MethodGet, path, "", http.StatusOK}, &raw)
+
+	list, ok := raw["grants"].([]any)
+	if !ok {
+		t.Fatalf("%s grants = %v, want a list", path, raw["grants"])
+	}
+
+	out := make([]map[string]any, 0, len(list))
+
+	for _, item := range list {
+		row, ok := item.(map[string]any)
+		if !ok {
+			t.Fatalf("%s row = %v, want an object", path, item)
+		}
+
+		out = append(out, row)
+	}
+
+	return out
+}
+
+// checkUsedRow checks the row of subject: tracked, with the last access at
+// usedMs.
+func checkUsedRow(t *testing.T, rows []map[string]any, subject string, usedMs float64) {
+	t.Helper()
+
+	for _, r := range rows {
+		if r["subject"] == subject && r["holder"] == nil {
+			if !trackedOf(r) || r["lastAccessAtMs"] != usedMs {
+				t.Fatalf("row %+v: want lastAccessTracked true with lastAccessAtMs %v", r, usedMs)
+			}
+
+			return
+		}
+	}
+
+	t.Fatalf("no row of %s", subject)
+}
+
+// checkNeverRow checks the row of subject: tracked, with no lastAccessAtMs
+// key at all.
+func checkNeverRow(t *testing.T, rows []map[string]any, subject string) {
+	t.Helper()
+
+	for _, r := range rows {
+		if r["subject"] == subject && r["via"] == nil {
+			if !trackedOf(r) {
+				t.Fatalf("row %+v: want lastAccessTracked true", r)
+			}
+
+			if _, ok := r["lastAccessAtMs"]; ok {
+				t.Fatalf("row %+v: want no lastAccessAtMs key", r)
+			}
+
+			return
+		}
+	}
+
+	t.Fatalf("no row of %s", subject)
+}
+
+// checkBareRow checks that the row of subject, or the bootstrap row for an
+// empty subject, carries neither last access key.
+func checkBareRow(t *testing.T, rows []map[string]any, subject string) {
+	t.Helper()
+
+	for _, r := range rows {
+		if matchBareRow(r, subject) {
+			if _, ok := r["lastAccessTracked"]; ok {
+				t.Fatalf("row %+v: want no lastAccessTracked key", r)
+			}
+
+			if _, ok := r["lastAccessAtMs"]; ok {
+				t.Fatalf("row %+v: want no lastAccessAtMs key", r)
+			}
+
+			return
+		}
+	}
+
+	t.Fatalf("no bare row of %q", subject)
+}
+
+// matchBareRow reports whether r is the bootstrap row for an empty subject,
+// or the group row of subject with no membership.
+func matchBareRow(r map[string]any, subject string) bool {
+	if subject == "" {
+		return r["holder"] != nil
+	}
+
+	return r["subject"] == subject && r["via"] == nil
 }
 
 // failingAudit refuses every append, as an audit store that is down does.

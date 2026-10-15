@@ -253,8 +253,12 @@ type DeletedStore interface {
 	// purge (inventory.BlobPurge) in that transaction. The caller removes
 	// its blobs after the commit; the sweep finishes the record. It
 	// returns ErrNotFound if the namespace has no deleted stack id, which
-	// also covers a live stack: a purge acts on deleted stacks only.
-	PurgeStack(ctx context.Context, id ID, fence namespace.Fence, e audit.Entry) error
+	// also covers a live stack: a purge acts on deleted stacks only. With a
+	// non-zero dueBy, it also returns ErrNotFound and changes nothing when
+	// the retention period of the stack ends after dueBy, a check in the same
+	// transaction. The retention sweep sets dueBy, and a purge by an admin
+	// leaves it zero.
+	PurgeStack(ctx context.Context, id ID, fence namespace.Fence, dueBy time.Time, e audit.Entry) error
 }
 
 // Config holds the dependencies of a Service.
@@ -484,18 +488,17 @@ func (s *Service) RestoreDeleted(
 // fenced transaction. The caller removes the checkpoint blobs after it. It
 // returns ErrNotFound if ns has no deleted stack id.
 func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e audit.Entry) error {
-	n, err := s.namespaces.WritableHere(ctx, ns)
-	if err != nil {
-		return fmt.Errorf("purge stack %s: %w", id, err)
-	}
+	return s.purge(ctx, ns, id, time.Time{}, e)
+}
 
-	e.At = s.now().UTC()
-
-	if err := s.store.PurgeStack(ctx, id, n.Fence(), e); err != nil {
-		return fmt.Errorf("purge stack %s: %w", id, err)
-	}
-
-	return nil
+// PurgeExpired removes the deleted stack id of ns for good, as PurgeDeleted
+// does, only when its retention period ended at or before dueBy. The store
+// checks the end of the retention in the purge transaction. It returns
+// ErrNotFound if ns has no deleted stack id whose retention period ended by
+// then: a restore and a new delete after the caller read the unit gave it a
+// new retention period.
+func (s *Service) PurgeExpired(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+	return s.purge(ctx, ns, id, dueBy, e)
 }
 
 // UpdateTags replaces the tags of the stack identified by ref with tags, as
@@ -579,4 +582,21 @@ func (s *Service) deleteGuard(ctx context.Context, ref Ref) (DeleteGuard, error)
 		UpdateID: cp.Update, Digest: cp.Digest,
 		HasCheckpoint: true, HasResources: CountManagedResources(cp.Deployment) > 0,
 	}, nil
+}
+
+// purge removes the deleted stack id of ns with the retention check of
+// dueBy, which zero turns off.
+func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+	n, err := s.namespaces.WritableHere(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("purge stack %s: %w", id, err)
+	}
+
+	e.At = s.now().UTC()
+
+	if err := s.store.PurgeStack(ctx, id, n.Fence(), dueBy, e); err != nil {
+		return fmt.Errorf("purge stack %s: %w", id, err)
+	}
+
+	return nil
 }

@@ -102,6 +102,7 @@ func newConflictHandler(t *testing.T) *tfe.Handler {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     conflictWorkspaces{stubWorkspaces: stubWorkspaces{}},
@@ -370,6 +371,7 @@ func TestConcurrentLocksReportHeldLock(t *testing.T) {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  concurrentAuthenticator{},
 		Authorizer:     allowAll(),
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stores,
