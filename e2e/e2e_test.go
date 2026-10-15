@@ -8781,7 +8781,7 @@ func checkForcedPushNamesUnlock(
 	env *e2e.Env, step, serverDetail, lockID string,
 ) func(e2e.Result) error {
 	return func(r e2e.Result) error {
-		out := r.Stdout + r.Stderr
+		out := flatDiagnostics(r.Stdout + r.Stderr)
 		wantUnlock := "tofu force-unlock " + lockID
 
 		if err := checkServerRefusal(env, step, out, serverDetail); err != nil {
@@ -8794,6 +8794,17 @@ func checkForcedPushNamesUnlock(
 
 		return checkForcedCreateHasUnlock(env, step, wantUnlock)
 	}
+}
+
+// diagnosticDecoration matches the color codes and the box characters that
+// newer OpenTofu versions put around an error message.
+var diagnosticDecoration = regexp.MustCompile("\x1b\\[[0-9;]*m|[│╷╵]")
+
+// flatDiagnostics removes the color codes and the box characters from CLI
+// output and joins the words with one space. Newer OpenTofu versions wrap a
+// long error message across lines, so a phrase can hold a line break.
+func flatDiagnostics(out string) string {
+	return strings.Join(strings.Fields(diagnosticDecoration.ReplaceAllString(out, " ")), " ")
 }
 
 // checkForcedCreateHasUnlock proves the recorded create of step holds the
