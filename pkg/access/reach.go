@@ -80,11 +80,11 @@ func (r Reach) Has(action identity.Action, obj identity.Object) bool {
 		return false
 	}
 
-	if e, ok := r.entries[reachTarget(obj)]; ok && e.actions[action] {
+	if e, ok := r.entries[reachTarget(obj)]; ok && e != nil && e.actions[action] {
 		return true
 	}
 
-	if e, ok := r.entries[identity.ServerObject().String()]; ok && e.actions[action] {
+	if e, ok := r.entries[identity.ServerObject().String()]; ok && e != nil && e.actions[action] {
 		return true
 	}
 
@@ -99,8 +99,11 @@ func (r Reach) Has(action identity.Action, obj identity.Object) bool {
 	}
 
 	e, ok := r.entries[identity.NamespaceObject(ns).String()]
+	if !ok || e == nil {
+		return false
+	}
 
-	return ok && e.actions[action]
+	return e.actions[action]
 }
 
 // Covers reports whether r holds every action of other on every object of
@@ -108,6 +111,9 @@ func (r Reach) Has(action identity.Action, obj identity.Object) bool {
 func (r Reach) Covers(other Reach) bool {
 	for key := range other.entries {
 		e := other.entries[key]
+		if e == nil {
+			continue
+		}
 
 		for action := range e.actions {
 			if !r.Has(action, e.object) {
@@ -126,7 +132,12 @@ func (r Reach) ActionsOn(obj identity.Object) []identity.Action {
 	var out []identity.Action
 
 	for key := range r.entries {
-		for action := range r.entries[key].actions {
+		e := r.entries[key]
+		if e == nil {
+			continue
+		}
+
+		for action := range e.actions {
 			if !seen[action] && r.Has(action, obj) {
 				seen[action] = true
 				out = append(out, action)
@@ -148,9 +159,13 @@ func reachAdd(r *Reach, obj identity.Object, action identity.Action) {
 	key := reachTarget(obj)
 	e, ok := r.entries[key]
 
-	if !ok {
+	if !ok || e == nil {
 		e = &reachEntry{object: obj, actions: map[identity.Action]bool{}}
 		r.entries[key] = e
+	}
+
+	if e.actions == nil {
+		e.actions = map[identity.Action]bool{}
 	}
 
 	e.actions[action] = true
