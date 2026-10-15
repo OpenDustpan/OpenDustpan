@@ -126,8 +126,9 @@ workspace prefix, and the differences from TFE.
 
 A refused `tofu state push -force` of another lineage keeps the workspace
 lock. The error names the command that clears it. Run
-`tofu force-unlock <namespace>/<workspace>` to clear the lock, then push
-again or run `tofu apply`.
+`tofu force-unlock <namespace>/<workspace>` to clear the lock. Do not push
+the same file again, because its lineage is still different. Run `tofu apply`,
+or push a state file that has the lineage of the workspace.
 
 ### Web console
 
