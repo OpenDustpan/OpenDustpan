@@ -16,17 +16,20 @@ var errNoSchemaStore = errors.New("no schema store is configured")
 // upgradeCheckResponse answers the upgrade check: the server version, the
 // schema version of its database and the names of the applied migrations
 // ordered by version. The command compares them with the migrations in its
-// own binary and prints the verdicts of ADR 33. KeyEncryptionKey tells
-// whether the server runs with a key-encryption key (ADR 41 decision 12). It
-// is always true: the server does not start without a key (#344), and
-// dustpan.NewServer does not build without one (#367). The command still
-// warns when it is false or missing, because a server from before ADR 41
-// does not answer it. It writes nothing.
+// own binary and prints one verdict. KeyEncryptionKey tells whether the
+// server runs with a key-encryption key. It is always true: the server does
+// not start without one. The command still warns when it is false or
+// missing, because an older server does not answer it.
+// RunningJournaledUpdates counts the updates that run now with journal
+// version 1 or higher: a downgrade to a binary without the journal route
+// answers their journal batches with 404, which the Pulumi CLI does not
+// retry. It writes nothing.
 type upgradeCheckResponse struct {
-	Version           string   `json:"version"`
-	SchemaVersion     int64    `json:"schemaVersion"`
-	AppliedMigrations []string `json:"appliedMigrations"`
-	KeyEncryptionKey  bool     `json:"keyEncryptionKey"`
+	Version                 string   `json:"version"`
+	SchemaVersion           int64    `json:"schemaVersion"`
+	AppliedMigrations       []string `json:"appliedMigrations"`
+	KeyEncryptionKey        bool     `json:"keyEncryptionKey"`
+	RunningJournaledUpdates int64    `json:"runningJournaledUpdates"`
 }
 
 // serveUpgradeCheck answers the server version, the schema version of its
@@ -51,16 +54,28 @@ func (h *Handler) serveUpgradeCheck(
 		return
 	}
 
+	var journaled int64
+
+	if h.journal != nil {
+		journaled, err = h.journal.CountRunningJournaledUpdates(ctx)
+		if err != nil {
+			h.writeError(ctx, w, err)
+
+			return
+		}
+	}
+
 	version := h.version
 	if version == "" {
 		version = "dev"
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, upgradeCheckResponse{
-		Version:           version,
-		SchemaVersion:     schema.DatabaseVersion(appliedVersions(applied)),
-		AppliedMigrations: appliedNames(applied),
-		KeyEncryptionKey:  true,
+		Version:                 version,
+		SchemaVersion:           schema.DatabaseVersion(appliedVersions(applied)),
+		AppliedMigrations:       appliedNames(applied),
+		KeyEncryptionKey:        true,
+		RunningJournaledUpdates: journaled,
 	})
 }
 

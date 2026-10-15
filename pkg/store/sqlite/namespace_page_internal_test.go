@@ -52,7 +52,7 @@ func openPlanStore(t *testing.T) *Store {
 func seedPlanNamespaces(t *testing.T, s *Store, n int) {
 	t.Helper()
 
-	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC).UnixMilli()
+	nowMs := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC).UnixMilli()
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -67,7 +67,7 @@ func seedPlanNamespaces(t *testing.T, s *Store, n int) {
 	for start := 0; start < n; start += batchRows {
 		end := min(start+batchRows, n)
 
-		stmt, args := planSeedBatch(start, end, now)
+		stmt, args := planSeedBatch(start, end, nowMs)
 		if _, err := tx.ExecContext(t.Context(), stmt, args...); err != nil {
 			if rbErr := tx.Rollback(); rbErr != nil {
 				t.Errorf("roll back seed transaction: %v", rbErr)

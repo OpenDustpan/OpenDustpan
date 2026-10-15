@@ -54,6 +54,7 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         st,
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
