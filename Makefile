@@ -10,7 +10,7 @@
 
 .PHONY: check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo
 
-check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
+check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -20,6 +20,9 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	sqlc diff
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -count=1
 	golangci-lint run ./...
+
+lint-journal-build: ## Lint the journal recording build: some files are left out of it, so it needs its own run.
+	golangci-lint run --build-tags e2e,journalrecording ./...
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
 ANALYSIS_TAGS := e2e,upgrade,soak
@@ -79,8 +82,12 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # candidate is sent to its provider for verification. "unknown" is a candidate
 # that could not be verified (for example, the provider did not answer), so a
 # network failure can fail this target. Exit code 183 means a secret was found.
+# .trufflehog-exclude-paths.txt lists files that are known false positives,
+# one regular expression per line. Each entry needs the owner's approval.
+# Today it holds one vendored agent skill, where a Markdown link that names a
+# file looks like a credential to a detector.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
-	trufflehog git file://. --results=verified,unknown --fail --no-update
+	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
 # The same platform pairs as scripts/release-build.sh. The release archives
 # and the container image ship these files (third_party_licenses/).
