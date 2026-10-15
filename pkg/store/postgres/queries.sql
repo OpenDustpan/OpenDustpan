@@ -1410,6 +1410,11 @@ UPDATE audit_chain_state
 SET migrating_at_ms = $1
 WHERE id = 1 AND pending AND (migrating_at_ms = 0 OR migrating_at_ms < $2);
 
+-- name: RenewAuditChainMigration :execrows
+-- Moves the start of the held claim to the given time. It writes only
+-- when a claim holds, so a renewal without a claim changes no row.
+UPDATE audit_chain_state SET migrating_at_ms = $1 WHERE id = 1 AND migrating_at_ms <> 0;
+
 -- name: ReleaseAuditChainMigration :exec
 -- Releases the claim of a migration that stops without storing the new
 -- state.

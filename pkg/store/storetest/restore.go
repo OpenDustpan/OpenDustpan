@@ -567,9 +567,7 @@ func testRestoreChainAgreesAfterMigration(t *testing.T, newStore RestoreFactory)
 		appendDecrypts(t, from, acme, chainAt(), 1)
 
 		change := audit.ChainChange{At: chainAt().Add(time.Minute), By: "src", To: audit.ChainStateOff}
-		if err := audit.MigrateChain(t.Context(), from, []namespace.Fence{acme.Fence()}, change); err != nil {
-			t.Fatalf("turn the source chain off: %v", err)
-		}
+		migrateChain(t, from, []namespace.Fence{acme.Fence()}, change)
 
 		appendDecrypts(t, from, acme, chainAt().Add(2*time.Minute), 1)
 	}, func(chainRestoreStore) {})
@@ -585,9 +583,7 @@ func testRestoreChainAgreesAfterMigration(t *testing.T, newStore RestoreFactory)
 	fenced := restoredFence(t, to, acme.Name)
 
 	change := audit.ChainChange{At: chainAt().Add(time.Hour), By: "alice", To: audit.ChainStateOn}
-	if err := audit.MigrateChain(t.Context(), to, []namespace.Fence{fenced}, change); err != nil {
-		t.Fatalf("migrate the restored log: %v", err)
-	}
+	migrateChain(t, to, []namespace.Fence{fenced}, change)
 
 	wantScopesValid(t, to, acme.Name)
 }
@@ -656,6 +652,29 @@ func saveChainRecord(t *testing.T, s audit.ChainStore, rec audit.ChainRecord) {
 
 	if err := s.SaveChainRecord(t.Context(), rec); err != nil {
 		t.Fatalf("save chain record %+v: %v", rec, err)
+	}
+}
+
+// migrateChain runs the migration of change in s with a held claim, so each
+// renewal after a scope succeeds.
+func migrateChain(t *testing.T, s chainRestoreStore, fences []namespace.Fence, change audit.ChainChange) {
+	t.Helper()
+
+	rec, err := s.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	rec.MigratingAt = change.At
+
+	if err := s.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	clock := func() time.Time { return change.At.Add(time.Minute) }
+
+	if err := audit.MigrateChain(t.Context(), s, fences, change, clock); err != nil {
+		t.Fatalf("migrate the chain: %v", err)
 	}
 }
 

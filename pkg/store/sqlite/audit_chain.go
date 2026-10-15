@@ -75,6 +75,24 @@ func (s *Store) ReleaseChainMigration(ctx context.Context) error {
 	return nil
 }
 
+// RenewChainMigration implements audit.ChainStore: it moves the start of
+// the held claim to now, so a long migration keeps its claim.
+func (s *Store) RenewChainMigration(ctx context.Context, now time.Time) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	n, err := s.queries.RenewAuditChainMigration(ctx, codec.Millis(now))
+	if err != nil {
+		return fmt.Errorf("renew audit chain migration: %w", err)
+	}
+
+	if n == 0 {
+		return audit.ErrChainClaimLost
+	}
+
+	return nil
+}
+
 // StartChain implements audit.ChainStore: it reads the earlier entries of
 // the scope for the digest and appends the start entry in the same
 // transaction, so no append lands in between.

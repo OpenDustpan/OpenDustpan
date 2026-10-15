@@ -66,6 +66,8 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a stale fence refuses a start entry", test: testChainStaleFence},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "one approval wins the migration claim", test: testChainClaimMigration},
+		{name: "a renewal moves the claim and a release loses it", test: testChainRenewMigration},
+		{name: "a renewal keeps a short lease", test: testChainRenewShortLease},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
 		{name: "concurrent appends keep the chain", test: testChainConcurrentAppends},
 		{
@@ -138,14 +140,28 @@ func (tl *timeline) append(n int) []audit.Entry {
 }
 
 // migrate runs the migration of a change to state in acme and in the server
-// scope, by alice.
+// scope, by alice. It holds a claim across the migration, so each renewal
+// after a scope succeeds.
 func (tl *timeline) migrate(state audit.ChainState) {
 	tl.t.Helper()
 
 	fences := []namespace.Fence{tl.ns.Fence(), audit.ServerFence()}
 	change := audit.ChainChange{At: tl.tick(), By: "alice", To: state}
 
-	if err := audit.MigrateChain(tl.t.Context(), tl.s, fences, change); err != nil {
+	rec, err := tl.s.ChainRecord(tl.t.Context())
+	if err != nil {
+		tl.t.Fatalf("chain record: %v", err)
+	}
+
+	rec.MigratingAt = change.At
+
+	if err := tl.s.SaveChainRecord(tl.t.Context(), rec); err != nil {
+		tl.t.Fatalf("save chain record: %v", err)
+	}
+
+	clock := func() time.Time { return tl.tick() }
+
+	if err := audit.MigrateChain(tl.t.Context(), tl.s, fences, change, clock); err != nil {
 		tl.t.Fatalf("migrate the chain %s: %v", state, err)
 	}
 }
@@ -697,6 +713,81 @@ func testChainClaimMigration(t *testing.T, ts ChainTestStore) {
 
 	if err := s.ClaimChainMigration(t.Context(), at, lease); !errors.Is(err, audit.ErrNoChainChange) {
 		t.Fatalf("claim with nothing waiting: got %v, want ErrNoChainChange", err)
+	}
+}
+
+// testChainRenewMigration proves that a renewal moves the claim: a claim
+// at t0, a renewal at t0+10m and a second claim at t0+20m with a lease of
+// 15m still reports a running migration. After the release, a renewal
+// reports a lost claim.
+func testChainRenewMigration(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	s := ts.Store
+	at := now().Truncate(time.Millisecond)
+	lease := audit.ChainMigrationLease
+
+	saveClaimRecord(t, s, audit.ChainRecord{
+		ChangedAt: at, ChangedBy: "alice", State: audit.ChainStateOn, Pending: true,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
+	})
+
+	claimAt(t, s, at, lease, "claim the waiting change")
+
+	if err := s.RenewChainMigration(t.Context(), at.Add(10*time.Minute)); err != nil {
+		t.Fatalf("renew the claim: %v", err)
+	}
+
+	renewed := at.Add(20 * time.Minute)
+	claimErr := s.ClaimChainMigration(t.Context(), renewed, lease)
+
+	if !errors.Is(claimErr, audit.ErrChainMigrating) {
+		t.Fatalf("second claim after the renewal: got %v, want ErrChainMigrating", claimErr)
+	}
+
+	if err := s.ReleaseChainMigration(t.Context()); err != nil {
+		t.Fatalf("release chain migration: %v", err)
+	}
+
+	if err := s.RenewChainMigration(t.Context(), at.Add(21*time.Minute)); !errors.Is(err, audit.ErrChainClaimLost) {
+		t.Fatalf("renew after the release: got %v, want ErrChainClaimLost", err)
+	}
+}
+
+// testChainRenewShortLease proves that a renewal keeps a second claim out
+// when the lease is shorter than the migration: a claim at t0 with a lease
+// of one minute, renewed at t0+2m after the lease ended, still blocks a
+// second claim at t0+2m30s.
+func testChainRenewShortLease(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	s := ts.Store
+	at := now().Truncate(time.Millisecond)
+	lease := time.Minute
+
+	saveClaimRecord(t, s, audit.ChainRecord{
+		ChangedAt: at, ChangedBy: "alice", State: audit.ChainStateOn, Pending: true,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
+	})
+
+	claimAt(t, s, at, lease, "claim the waiting change")
+
+	if err := s.RenewChainMigration(t.Context(), at.Add(2*time.Minute)); err != nil {
+		t.Fatalf("renew after the lease ended: %v", err)
+	}
+
+	second := at.Add(2*time.Minute + 30*time.Second)
+	if err := s.ClaimChainMigration(t.Context(), second, lease); !errors.Is(err, audit.ErrChainMigrating) {
+		t.Fatalf("second claim after the renewal: got %v, want ErrChainMigrating", err)
+	}
+
+	rec, err := s.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	if !rec.MigratingAt.Equal(at.Add(2 * time.Minute)) {
+		t.Fatalf("claim after the renewal = %v, want %v", rec.MigratingAt, at.Add(2*time.Minute))
 	}
 }
 

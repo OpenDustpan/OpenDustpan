@@ -1335,6 +1335,11 @@ WHERE id = 1 AND pending = 1 AND (migrating_at_ms = 0 OR migrating_at_ms < ?);
 -- state.
 UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1;
 
+-- name: RenewAuditChainMigration :execrows
+-- Moves the start of the held claim to the given time. It writes only
+-- when a claim holds, so a renewal without a claim changes no row.
+UPDATE audit_chain_state SET migrating_at_ms = ? WHERE id = 1 AND migrating_at_ms <> 0;
+
 -- name: LastAuditChainStartSequence :one
 -- The sequence of the last start entry of the audit chain of a namespace,
 -- or 0 when there is none. The chain check starts there.

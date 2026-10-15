@@ -134,6 +134,9 @@ var (
 	// ErrChainNeedsPerson reports an approval of a change to off by a
 	// service principal. Only a person may approve turning the chain off.
 	ErrChainNeedsPerson = errors.New("a person must approve turning the audit chain off")
+	// ErrChainClaimLost reports a renewal while no claim holds. The
+	// migration stops when it loses its claim.
+	ErrChainClaimLost = errors.New("the audit chain migration lost its claim")
 )
 
 // ParseChainSetting maps an operator value to a setting. An empty value is
@@ -166,6 +169,10 @@ type ChainStore interface {
 	// ReleaseChainMigration releases the claim of a migration that stops
 	// without storing the new state.
 	ReleaseChainMigration(ctx context.Context) error
+	// RenewChainMigration moves the start of the held claim to now, so a
+	// long migration keeps its claim within the lease. It writes only when
+	// a claim holds, and returns ErrChainClaimLost when none holds.
+	RenewChainMigration(ctx context.Context, now time.Time) error
 	// StartChain appends e as the start entry of its scope, in one
 	// transaction with the read of the earlier entries and the check of
 	// fence: its changes get the digest and the count of those entries (see
@@ -209,14 +216,23 @@ type ChainChange struct {
 // start entry in each scope. Then it stores the same record with no wait.
 // The early store to on keeps the claim of the approval, so a second
 // approval still sees the migration. The final store clears the claim.
-// Appends in a scope hash only after its start entry, or at once when the
-// scope holds no entries. The digest of the start entry covers an append
-// before it. An append after an end entry but before the stored state
-// changes writes no hash, because the last entry is an end entry. A scope
-// without entries gets no entry: its first entry starts the chain, or comes
-// after the chain went off. A second start entry does no harm, because its
-// digest covers the first.
-func MigrateChain(ctx context.Context, store ChainStore, fences []namespace.Fence, change ChainChange) error {
+// After each scope it renews the claim with now, so a long migration keeps
+// a second approval out. A nil now reads time.Now. A renewal error stops
+// the migration. Appends in a scope hash only after its start entry, or at
+// once when the scope holds no entries. The digest of the start entry
+// covers an append before it. An append after an end entry but before the
+// stored state changes writes no hash, because the last entry is an end
+// entry. A scope without entries gets no entry: its first entry starts the
+// chain, or comes after the chain went off. A second start entry does no
+// harm, because its digest covers the first.
+func MigrateChain(
+	ctx context.Context, store ChainStore, fences []namespace.Fence, change ChainChange, now func() time.Time,
+) error {
+	clock := now
+	if clock == nil {
+		clock = time.Now
+	}
+
 	current, err := store.ChainRecord(ctx)
 	if err != nil {
 		return fmt.Errorf("read audit chain state: %w", err)
@@ -236,6 +252,10 @@ func MigrateChain(ctx context.Context, store ChainStore, fences []namespace.Fenc
 	for _, fence := range fences {
 		if err := migrateScope(ctx, store, fence, change); err != nil {
 			return err
+		}
+
+		if err := store.RenewChainMigration(ctx, clock()); err != nil {
+			return fmt.Errorf("renew audit chain migration: %w", err)
 		}
 	}
 

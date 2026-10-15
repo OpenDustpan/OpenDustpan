@@ -700,7 +700,7 @@ func (c *auditChain) migrateSteps(ctx context.Context, change audit.ChainChange)
 		return err
 	}
 
-	err = audit.MigrateChain(ctx, c.store, fences, change)
+	err = audit.MigrateChain(ctx, c.store, fences, change, c.chainNow)
 	if err != nil {
 		return fmt.Errorf("migrate audit chain: %w", err)
 	}
