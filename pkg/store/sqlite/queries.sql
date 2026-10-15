@@ -730,7 +730,11 @@ DELETE FROM update_journal
 WHERE stack_id = ? AND update_id = ?;
 
 -- name: JournalState :one
-SELECT journal_closed, status FROM updates
+SELECT journal_closed, journal_records_changed, status FROM updates
+WHERE stack_id = ? AND id = ?;
+
+-- name: SetJournalRecordsChanged :exec
+UPDATE updates SET journal_records_changed = 1
 WHERE stack_id = ? AND id = ?;
 
 -- name: CloseJournal :exec
