@@ -1618,50 +1618,80 @@ func (r namespacedReader) GetPrincipal(ctx context.Context, id string) (principa
 	return p, err
 }
 
-// TestNamespacePrincipalTokensRefused proves that the service makes, rotates
-// and lists no token of a principal of a namespace, also for an
-// administrator, and that the token of such a principal stays as it is.
-func TestNamespacePrincipalTokensRefused(t *testing.T) {
+// TestNamespacePrincipalTokens proves that the service makes, rotates and
+// lists the tokens of a principal of a namespace for a holder of
+// principal:manage-tokens on it, and refuses a caller without it. The
+// token signs in as the principal.
+func TestNamespacePrincipalTokens(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, nil)
 	ctx := t.Context()
-	tok, _ := f.create(t, f.service, "deploy")
+	reader := namespacedReader{PrincipalReader: f.store, id: f.service.ID}
+	manage := string(identity.ActionPrincipalManageTokens) + " principal:" + f.service.ID
+	alice := as(f.person)
 
-	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: namespacedReader{PrincipalReader: f.store, id: f.service.ID},
-		Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: f.clock.Now, NewID: nil,
+	holder, err := accesstoken.NewService(accesstoken.Config{
+		Store: f.store, Principals: reader, Freshness: nil, Grants: nil,
+		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
+		Logger:     nil,
+		Now:        f.clock.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}
 
-	_, _, err = svc.Create(ctx, admin(), caller(), accesstoken.ScopeService,
-		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "more"})
-	wantNamespaceRefusal(t, "make", err)
-
-	_, _, err = svc.Rotate(ctx, admin(), caller(), accesstoken.RotateInput{
-		ID: tok.ID, Scope: accesstoken.ScopeService, ExpiresAt: time.Time{}, OldEndsAt: nil,
+	denied, err := accesstoken.NewService(accesstoken.Config{
+		Store: f.store, Principals: reader, Freshness: nil, Grants: nil,
+		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},
+		Logger:     nil,
+		Now:        f.clock.Now, NewID: nil,
 	})
-	wantNamespaceRefusal(t, "rotate", err)
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	made, secret, createErr := holder.Create(ctx, alice, caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "deploy"})
+	if createErr != nil {
+		t.Fatalf("create for a holder: %v", createErr)
+	}
+
+	_, _, deniedCreateErr := denied.Create(ctx, alice, caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "more"})
+	if !errors.Is(deniedCreateErr, identity.ErrDenied) {
+		t.Fatalf("create without principal:manage-tokens = %v, want ErrDenied", deniedCreateErr)
+	}
 
 	all := accesstoken.PageRequest{PrincipalID: "", Cursor: "", Filter: accesstoken.FilterAll, Limit: 0}
-	_, err = svc.ListOfPrincipal(ctx, admin(), f.service.ID, all)
-	wantNamespaceRefusal(t, "list", err)
 
-	got, err := f.svc.Get(ctx, tok.ID)
-	if err != nil || got.ReplacedBy != "" || !got.RevokedAt.IsZero() {
-		t.Fatalf("token after the refused rotation = %+v, %v; want it unchanged", got, err)
+	page, listErr := holder.ListOfPrincipal(ctx, alice, f.service.ID, all)
+	if listErr != nil || page.Total < 1 {
+		t.Fatalf("list for a holder = %+v, %v; want at least the made token", page, listErr)
 	}
-}
 
-// wantNamespaceRefusal fails unless err is the ErrInvalid of a principal of
-// a namespace.
-func wantNamespaceRefusal(t *testing.T, op string, err error) {
-	t.Helper()
+	_, deniedListErr := denied.ListOfPrincipal(ctx, alice, f.service.ID, all)
+	if !errors.Is(deniedListErr, identity.ErrDenied) {
+		t.Fatalf("list without principal:manage-tokens = %v, want ErrDenied", deniedListErr)
+	}
 
-	if !errors.Is(err, accesstoken.ErrInvalid) || !strings.Contains(err.Error(), "principal of a namespace") {
-		t.Fatalf("%s for a principal of a namespace: err = %v, want ErrInvalid", op, err)
+	rot, _, rotateErr := holder.Rotate(ctx, alice, caller(), accesstoken.RotateInput{
+		ID: made.ID, Scope: accesstoken.ScopeService, ExpiresAt: time.Time{}, OldEndsAt: nil,
+	})
+	if rotateErr != nil {
+		t.Fatalf("rotate for a holder: %v", rotateErr)
+	}
+
+	_, _, deniedRotateErr := denied.Rotate(ctx, alice, caller(), accesstoken.RotateInput{
+		ID: rot.New.ID, Scope: accesstoken.ScopeService, ExpiresAt: time.Time{}, OldEndsAt: nil,
+	})
+	if !errors.Is(deniedRotateErr, identity.ErrDenied) {
+		t.Fatalf("rotate without principal:manage-tokens = %v, want ErrDenied", deniedRotateErr)
+	}
+
+	got, authErr := holder.AuthenticateToken(ctx, secret.Reveal())
+	if authErr != nil || got.Subject != f.service.Subject {
+		t.Fatalf("authenticate = %+v, %v; want the service subject", got, authErr)
 	}
 }
 
