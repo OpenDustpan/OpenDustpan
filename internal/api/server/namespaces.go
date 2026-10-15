@@ -360,8 +360,8 @@ func (h *Handler) visibleNamespaces(
 	}
 
 	names := make([]namespace.Name, 0, len(scope.Namespaces))
-	for _, obj := range scope.Namespaces {
-		names = append(names, obj.Namespace())
+	for i := range scope.Namespaces {
+		names = append(names, scope.Namespaces[i].Namespace())
 	}
 
 	slices.Sort(names)

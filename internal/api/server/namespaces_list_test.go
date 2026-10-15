@@ -335,10 +335,7 @@ func TestNamespaceListSkipsCollectionGrant(t *testing.T) {
 	f := newAccessFixture(t)
 	createListNamespaces(t, f, []string{"solo"})
 
-	obj, err := identity.ParseObject("solo/payments")
-	if err != nil {
-		t.Fatalf("collection object: %v", err)
-	}
+	obj := identity.CollectionObject("solo", "payments").WithCollectionID("col-solo-payments")
 
 	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 	grt := access.Grant{
@@ -407,6 +404,7 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 		Audit:          nil,
 		OnAuditFailure: nil,
 		IPAllowlists:   nil,
+		DeletedUnits:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -511,6 +509,7 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		IPAllowlists:   nil,
+		DeletedUnits:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
