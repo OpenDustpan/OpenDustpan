@@ -177,20 +177,8 @@ func (m *journalMemStore) storeJournalRow(row stack.JournalRow) (bool, error) {
 		return false, stack.ErrJournalConflict
 	}
 
-	if row.Verify != nil {
-		var known []int64
-		for i := range m.journal[row.Update] {
-			known = append(known, m.journal[row.Update][i].OperationIDs...)
-		}
-
-		changed, err := row.Verify(known, m.changed[row.Update])
-		if err != nil {
-			return false, err
-		}
-
-		if changed {
-			m.changed[row.Update] = true
-		}
+	if err := m.verifyJournalRow(row); err != nil {
+		return false, err
 	}
 
 	m.journal[row.Update] = append(m.journal[row.Update], row)
@@ -200,6 +188,31 @@ func (m *journalMemStore) storeJournalRow(row stack.JournalRow) (bool, error) {
 	}
 
 	return false, nil
+}
+
+// verifyJournalRow runs the row's verifier against the operations the update
+// already holds, and sets the records flag of the update when the batch changes
+// the records. A row without a verifier passes.
+func (m *journalMemStore) verifyJournalRow(row stack.JournalRow) error {
+	if row.Verify == nil {
+		return nil
+	}
+
+	var known []int64
+	for i := range m.journal[row.Update] {
+		known = append(known, m.journal[row.Update][i].OperationIDs...)
+	}
+
+	changed, err := row.Verify(known, m.changed[row.Update])
+	if err != nil {
+		return err
+	}
+
+	if changed {
+		m.changed[row.Update] = true
+	}
+
+	return nil
 }
 
 // buildFixture is an Updates service with a journal writer and a replayer,
