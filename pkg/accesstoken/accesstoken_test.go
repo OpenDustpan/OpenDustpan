@@ -1598,3 +1598,92 @@ func TestListOfPrincipal(t *testing.T) {
 		}
 	}
 }
+
+// TestSetPolicyRecordsChanges proves the audit entry of a policy change
+// names each field that changed with its old and new text, and names no
+// field that kept its value.
+func TestSetPolicyRecordsChanges(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	lifetime := 30 * 24 * time.Hour
+	disabled := false
+
+	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: new(lifetime), Inactivity: nil, DisableTokens: new(disabled), DisableAccounts: nil,
+		DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	want := map[string][2]string{
+		"maxLifetimeSeconds": {"31536000", "2592000"},
+		"disableTokens":      {"true", "false"},
+	}
+	got := policyEntryChanges(t, &f)
+	checkChanges(t, got, want)
+
+	// The maximum is already 30 days, so only the inactivity period changed.
+	hour := time.Hour
+
+	_, err = f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: new(lifetime), Inactivity: new(hour), DisableTokens: nil, DisableAccounts: nil,
+		DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	want = map[string][2]string{"inactivitySeconds": {"7776000", "3600"}}
+	got = policyEntryChanges(t, &f)
+	checkChanges(t, got, want)
+}
+
+// policyEntryChanges returns the changes of the latest token policy audit
+// entry in the scope @server.
+func policyEntryChanges(t *testing.T, f *fixture) []audit.Change {
+	t.Helper()
+
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list @server entries: %v", err)
+	}
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Object == accesstoken.PolicyRef {
+			return listing.Entries[i].Changes
+		}
+	}
+
+	t.Fatalf("no %q entry in @server", accesstoken.PolicyRef)
+
+	return nil
+}
+
+// checkChanges proves changes hold exactly the keys of want with its old
+// and new text.
+func checkChanges(t *testing.T, changes []audit.Change, want map[string][2]string) {
+	t.Helper()
+
+	if len(changes) != len(want) {
+		t.Fatalf("changes = %+v, want %d items", changes, len(want))
+	}
+
+	for _, c := range changes {
+		pair, ok := want[c.Key]
+		if !ok {
+			t.Fatalf("change %q = %+v, want one of %v", c.Key, c, want)
+		}
+
+		if c.Old == nil || *c.Old != pair[0] || c.New != pair[1] {
+			t.Fatalf("change %q = %v to %q, want %q to %q", c.Key, c.Old, c.New, pair[0], pair[1])
+		}
+
+		if c.Layer != "" || c.TakesEffect != "" {
+			t.Fatalf("change %q holds layer %q and takes effect %q, want both empty", c.Key, c.Layer, c.TakesEffect)
+		}
+	}
+}
