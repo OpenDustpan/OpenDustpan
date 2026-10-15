@@ -346,7 +346,14 @@ func (s *Service) AddMember(
 			"a member of a group, because a group belongs to the whole installation", principalID, groupID, ErrInvalid)
 	}
 
-	m := Membership{AddedAt: s.Now(), GroupID: groupID, PrincipalID: principalID}
+	m := Membership{
+		AddedAt: s.Now(), GroupID: groupID, PrincipalID: principalID,
+		Source: MembershipSourceLocal, State: MembershipStateActive,
+	}
+
+	if err := m.Validate(); err != nil {
+		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+	}
 
 	err := s.store.AddMember(ctx, m, change(e, m.AddedAt, MemberRef(groupID, principalID)))
 	if errors.Is(err, ErrAlreadyExists) {

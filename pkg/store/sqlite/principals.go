@@ -428,7 +428,8 @@ func (s *Store) DeleteGroup(ctx context.Context, id string, e audit.Entry) error
 }
 
 // AddMember implements principal.Store. It checks the group and the
-// principal in the same transaction as the insert.
+// principal in the same transaction as the insert. An empty source or state
+// defaults to local and active.
 func (s *Store) AddMember(ctx context.Context, m principal.Membership, e audit.Entry) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -438,10 +439,21 @@ func (s *Store) AddMember(ctx context.Context, m principal.Membership, e audit.E
 			return err
 		}
 
+		m = withMembershipDefaults(m)
+
+		if err := m.Validate(); err != nil {
+			return err
+		}
+
 		n, err := q.AddGroupMember(ctx, db.AddGroupMemberParams{
-			GroupID:     m.GroupID,
-			PrincipalID: m.PrincipalID,
-			AddedAtMs:   codec.Millis(m.AddedAt),
+			GroupID:       m.GroupID,
+			PrincipalID:   m.PrincipalID,
+			AddedAtMs:     codec.Millis(m.AddedAt),
+			Source:        string(m.Source),
+			SourceID:      m.SourceID,
+			State:         string(m.State),
+			SuspendedAtMs: codec.OptionalMillis(m.SuspendedAt),
+			Pinned:        m.Pinned,
 		})
 		if err != nil {
 			return fmt.Errorf("insert group member: %w", err)
@@ -562,7 +574,14 @@ func (s *Store) ListMembers(
 
 		out = mapRows(rows, func(r db.ListGroupMembersRow) principal.Member {
 			return principal.Member{
-				AddedAt: codec.FromMillis(r.AddedAtMs),
+				AddedAt:     codec.FromMillis(r.AddedAtMs),
+				SuspendedAt: codec.FromOptionalMillis(r.MemberSuspendedAtMs),
+				GroupID:     groupID,
+				PrincipalID: r.ID,
+				Source:      principal.MembershipSource(r.MemberSource),
+				SourceID:    r.MemberSourceID,
+				State:       principal.MembershipState(r.MemberState),
+				Pinned:      r.MemberPinned,
 				Principal: principalOf(principalFields{
 					id: r.ID, subject: r.Subject, displayName: r.DisplayName, kind: r.Kind, source: r.Source,
 					createdAtMs: r.CreatedAtMs, updatedAtMs: r.UpdatedAtMs, groupCount: r.GroupCount,
@@ -709,6 +728,20 @@ func nullMillis(ms int64) sql.NullInt64 {
 // to case. Group names hold ASCII only (principal.ValidateGroupName).
 func groupNameKey(name string) string {
 	return strings.ToLower(name)
+}
+
+// withMembershipDefaults sets an empty membership source to local and an
+// empty state to active: a local add carries neither.
+func withMembershipDefaults(m principal.Membership) principal.Membership {
+	if m.Source == "" {
+		m.Source = principal.MembershipSourceLocal
+	}
+
+	if m.State == "" {
+		m.State = principal.MembershipStateActive
+	}
+
+	return m
 }
 
 // isUniqueViolation reports whether err is a unique or primary key

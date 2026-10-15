@@ -131,10 +131,15 @@ type Grant struct {
 }
 
 type GroupMember struct {
-	GroupID     string
-	PrincipalID string
-	AddedAtMs   int64
-	RemovedAtMs pgtype.Int8
+	GroupID       string
+	PrincipalID   string
+	AddedAtMs     int64
+	RemovedAtMs   pgtype.Int8
+	Source        string
+	SourceID      string
+	State         string
+	SuspendedAtMs int64
+	Pinned        bool
 }
 
 type Installation struct {

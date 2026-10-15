@@ -333,6 +333,38 @@ func TestGroupGrants(t *testing.T) {
 	assertChecks(t, f.authz, member, []check{{web, identity.ActionUnitRead, false}})
 }
 
+func TestSuspendedMembershipGivesNoRights(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	suspended := f.person(t, "suspended")
+	active := f.person(t, "active")
+	ops := f.group(t, "ops")
+	web := unitObject(t, "acme", "web/prod")
+
+	f.grant(t, ops, access.RoleWriter, identity.NamespaceObject("acme"))
+
+	ctx := t.Context()
+
+	if err := f.store.AddMember(ctx, principal.Membership{
+		AddedAt: time.Unix(0, 0), SuspendedAt: time.Unix(0, 0), GroupID: ops.ID, PrincipalID: "prn-suspended",
+		Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
+		State: principal.MembershipStateSuspended, Pinned: false,
+	}, storetest.ServerChange(time.Unix(0, 0), "group:"+ops.ID)); err != nil {
+		t.Fatalf("add suspended member: %v", err)
+	}
+
+	if err := f.store.AddMember(ctx, principal.Membership{
+		AddedAt: time.Unix(0, 0), GroupID: ops.ID, PrincipalID: "prn-active",
+		Source: principal.MembershipSourceLocal, State: principal.MembershipStateActive,
+	}, storetest.ServerChange(time.Unix(0, 0), "group:"+ops.ID)); err != nil {
+		t.Fatalf("add active member: %v", err)
+	}
+
+	assertChecks(t, f.authz, suspended, []check{{web, identity.ActionUnitWrite, false}})
+	assertChecks(t, f.authz, active, []check{{web, identity.ActionUnitWrite, true}})
+}
+
 func TestUnknownAndDeletedPrincipals(t *testing.T) {
 	t.Parallel()
 

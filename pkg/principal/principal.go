@@ -150,17 +150,135 @@ type Group struct {
 	MemberCount int64
 }
 
-// Member is one principal in a group, with the time it joined.
-type Member struct {
-	AddedAt   time.Time
-	Principal Principal
+// MembershipSource names where a group membership comes from: a local
+// change through the API, a SCIM call, or a group claim at sign-in.
+type MembershipSource string
+
+// Sources of a membership.
+const (
+	// MembershipSourceLocal is a membership made through the API.
+	MembershipSourceLocal MembershipSource = "local"
+	// MembershipSourceSCIM is a membership that a SCIM call keeps.
+	MembershipSourceSCIM MembershipSource = "scim"
+	// MembershipSourceClaim is a membership from a group claim at sign-in.
+	MembershipSourceClaim MembershipSource = "claim"
+)
+
+// ParseMembershipSource returns the MembershipSource that s names, or
+// ErrInvalid.
+func ParseMembershipSource(s string) (MembershipSource, error) {
+	switch src := MembershipSource(s); src {
+	case MembershipSourceLocal, MembershipSourceSCIM, MembershipSourceClaim:
+		return src, nil
+	default:
+		return "", fmt.Errorf("%w: unknown membership source %q", ErrInvalid, s)
+	}
 }
 
-// Membership puts one principal in one group.
-type Membership struct {
+// MembershipState names whether a group membership is in effect.
+type MembershipState string
+
+// States of a membership. A suspended membership gives no rights until it
+// is active again.
+const (
+	// MembershipStateActive is a membership in effect.
+	MembershipStateActive MembershipState = "active"
+	// MembershipStateSuspended is a membership that gives no rights.
+	MembershipStateSuspended MembershipState = "suspended"
+)
+
+// ParseMembershipState returns the MembershipState that s names, or
+// ErrInvalid.
+func ParseMembershipState(s string) (MembershipState, error) {
+	switch st := MembershipState(s); st {
+	case MembershipStateActive, MembershipStateSuspended:
+		return st, nil
+	default:
+		return "", fmt.Errorf("%w: unknown membership state %q", ErrInvalid, s)
+	}
+}
+
+// withDefaults returns m with an empty source set to local and an empty
+// state set to active. A local add carries neither, so it defaults to both.
+func (m Membership) withDefaults() Membership {
+	if m.Source == "" {
+		m.Source = MembershipSourceLocal
+	}
+
+	if m.State == "" {
+		m.State = MembershipStateActive
+	}
+
+	return m
+}
+
+// Validate reports whether m holds usable values. An empty source or state
+// takes the default: local and active.
+func (m Membership) Validate() error {
+	m = m.withDefaults()
+
+	if _, err := ParseMembershipSource(string(m.Source)); err != nil {
+		return err
+	}
+
+	if _, err := ParseMembershipState(string(m.State)); err != nil {
+		return err
+	}
+
+	if m.Source == MembershipSourceLocal && m.SourceID != "" {
+		return fmt.Errorf("%w: a local membership names no identity provider or SCIM token", ErrInvalid)
+	}
+
+	if m.Source != MembershipSourceLocal && m.SourceID == "" {
+		return fmt.Errorf("%w: a membership from %s names its identity provider or SCIM token", ErrInvalid, m.Source)
+	}
+
+	if err := validateText("source ID", m.SourceID, maxSubjectLength, false); err != nil {
+		return err
+	}
+
+	if m.State == MembershipStateActive && !m.SuspendedAt.IsZero() {
+		return fmt.Errorf("%w: an active membership has no suspend time", ErrInvalid)
+	}
+
+	if m.State == MembershipStateSuspended && m.SuspendedAt.IsZero() {
+		return fmt.Errorf("%w: a suspended membership names when it was suspended", ErrInvalid)
+	}
+
+	return nil
+}
+
+// Member is one principal in a group, with the time it joined and where the
+// membership comes from. SourceID names the identity provider or the SCIM
+// token of a membership from a claim or from SCIM, and is empty for a local
+// membership. SuspendedAt is zero while the membership is active. Pinned
+// keeps a restored membership through the next directory sync.
+type Member struct {
 	AddedAt     time.Time
+	SuspendedAt time.Time
+	Principal   Principal
 	GroupID     string
 	PrincipalID string
+	Source      MembershipSource
+	SourceID    string
+	State       MembershipState
+	Pinned      bool
+}
+
+// Membership puts one principal in one group. SourceID names the identity
+// provider or the SCIM token of a membership from a claim or from SCIM, and
+// is empty for a local membership. SuspendedAt is zero while the membership
+// is active. Pinned keeps a restored membership through the next directory
+// sync.
+type Membership struct {
+	AddedAt     time.Time
+	SuspendedAt time.Time
+	GroupID     string
+	PrincipalID string
+	Source      MembershipSource
+	SourceID    string
+	State       MembershipState
+	Pinned      bool
 }
 
 // ValidateSubject reports whether s is a usable subject for a principal

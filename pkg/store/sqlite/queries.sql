@@ -843,8 +843,8 @@ SELECT COUNT(*) FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
 SELECT source FROM principal_groups WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: AddGroupMember :execrows
-INSERT INTO group_members (group_id, principal_id, added_at_ms)
-VALUES (?, ?, ?)
+INSERT INTO group_members (group_id, principal_id, added_at_ms, source, source_id, state, suspended_at_ms, pinned)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: RemoveGroupMember :execrows
@@ -854,7 +854,8 @@ WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL;
 -- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
-  m.added_at_ms
+  m.added_at_ms, m.source AS member_source, m.source_id AS member_source_id, m.state AS member_state,
+  m.suspended_at_ms AS member_suspended_at_ms, m.pinned AS member_pinned
 FROM group_members m JOIN principals p ON p.id = m.principal_id
 WHERE m.group_id = sqlc.arg('group_id') AND m.removed_at_ms IS NULL
   AND p.subject > sqlc.arg('after')
@@ -998,7 +999,7 @@ SELECT (SELECT COUNT(*) FROM principals p WHERE CAST(sqlc.arg('subject_kind') AS
 -- name: SubjectsOfCaller :many
 SELECT p.id AS principal_id, CAST(COALESCE(m.group_id, '') AS TEXT) AS group_id
 FROM principals p
-LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
 WHERE p.subject = ? AND p.deleted_at_ms IS NULL;
 
 -- name: ReviewGrants :many

@@ -73,6 +73,9 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "concurrent creates of one subject or group name: one wins", test: testConcurrentCreates},
 		{name: "lists answer totals and records answer their counts", test: testTotalsAndCounts},
 		{name: "a group of a directory refuses membership changes", test: testDirectoryGroup},
+		{name: "membership source and state round trip", test: testMembershipSourceState},
+		{name: "a local add defaults to local and active", test: testLocalMembershipDefaults},
+		{name: "a membership with a bad source or state is ErrInvalid", test: testInvalidMembership},
 	}
 
 	for _, tc := range cases {
@@ -1185,5 +1188,171 @@ func testDirectoryGroup(t *testing.T, s principal.Store) {
 	groups, _, err := s.ListGroups(ctx, all())
 	if err != nil || len(groups) != 1 || groups[0].Source != principal.SourceLDAP {
 		t.Fatalf("groups = %+v, %v; want engineering from ldap", groups, err)
+	}
+}
+
+func testMembershipSourceState(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
+	mustCreatePrincipal(t, s, newPrincipal("prn-2", "bob", principal.KindPerson))
+	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
+
+	scim := principal.Membership{
+		AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
+		Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
+		State: principal.MembershipStateActive, Pinned: false,
+	}
+
+	if err := s.AddMember(ctx, scim, entry()); err != nil {
+		t.Fatalf("add a membership from scim: %v", err)
+	}
+
+	claimed := principal.Membership{
+		AddedAt: at(1), SuspendedAt: at(2), GroupID: "grp-1", PrincipalID: "prn-2",
+		Source: principal.MembershipSourceClaim, SourceID: "idp-1",
+		State: principal.MembershipStateSuspended, Pinned: true,
+	}
+
+	if err := s.AddMember(ctx, claimed, entry()); err != nil {
+		t.Fatalf("add a suspended membership from a claim: %v", err)
+	}
+
+	members, _, err := s.ListMembers(ctx, "grp-1", all())
+	if err != nil {
+		t.Fatalf("list members: %v", err)
+	}
+
+	if len(members) != 2 {
+		t.Fatalf("members = %d, want 2", len(members))
+	}
+
+	bySubject := map[string]principal.Member{}
+	for i := range members {
+		bySubject[members[i].Principal.Subject] = members[i]
+	}
+
+	got := bySubject["alice"]
+
+	if got.Source != principal.MembershipSourceSCIM || got.SourceID != "scim-token-1" ||
+		got.State != principal.MembershipStateActive || !got.SuspendedAt.IsZero() || got.Pinned {
+		t.Fatalf("alice membership = %+v, want scim/scim-token-1 active with no suspend time", got)
+	}
+
+	if !got.AddedAt.Equal(at(1)) || got.GroupID != "grp-1" || got.PrincipalID != "prn-1" {
+		t.Fatalf("alice membership = %+v, want added at %v in grp-1", got, at(1))
+	}
+
+	got = bySubject["bob"]
+
+	if got.Source != principal.MembershipSourceClaim || got.SourceID != "idp-1" ||
+		got.State != principal.MembershipStateSuspended || !got.SuspendedAt.Equal(at(2)) || !got.Pinned {
+		t.Fatalf("bob membership = %+v, want claim/idp-1 suspended at %v pinned", got, at(2))
+	}
+}
+
+func testLocalMembershipDefaults(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
+	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
+
+	m := principal.Membership{AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1"}
+	if err := s.AddMember(ctx, m, entry()); err != nil {
+		t.Fatalf("add a local membership: %v", err)
+	}
+
+	members, _, err := s.ListMembers(ctx, "grp-1", all())
+	if err != nil {
+		t.Fatalf("list members: %v", err)
+	}
+
+	if len(members) != 1 {
+		t.Fatalf("members = %d, want 1", len(members))
+	}
+
+	got := members[0]
+
+	if got.Source != principal.MembershipSourceLocal || got.SourceID != "" ||
+		got.State != principal.MembershipStateActive || !got.SuspendedAt.IsZero() || got.Pinned {
+		t.Fatalf("membership = %+v, want local active with no source ID or suspend time", got)
+	}
+}
+
+func testInvalidMembership(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustCreatePrincipal(t, s, newPrincipal("prn-1", "alice", principal.KindPerson))
+	mustCreateGroup(t, s, newGroup("grp-1", "ops"))
+
+	cases := []struct {
+		name string
+		m    principal.Membership
+	}{
+		{
+			"unknown source",
+			principal.Membership{
+				AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
+				Source: "ldap", State: principal.MembershipStateActive,
+			},
+		},
+		{
+			"unknown state",
+			principal.Membership{
+				AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
+				Source: principal.MembershipSourceLocal, State: "ended",
+			},
+		},
+		{
+			"local with a source ID",
+			principal.Membership{
+				AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
+				Source: principal.MembershipSourceLocal, SourceID: "idp-1",
+				State: principal.MembershipStateActive,
+			},
+		},
+		{
+			"claim with no source ID",
+			principal.Membership{
+				AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
+				Source: principal.MembershipSourceClaim,
+				State: principal.MembershipStateActive,
+			},
+		},
+		{
+			"active with a suspend time",
+			principal.Membership{
+				AddedAt: at(1), SuspendedAt: at(2), GroupID: "grp-1", PrincipalID: "prn-1",
+				Source: principal.MembershipSourceLocal, State: principal.MembershipStateActive,
+			},
+		},
+		{
+			"suspended with no suspend time",
+			principal.Membership{
+				AddedAt: at(1), GroupID: "grp-1", PrincipalID: "prn-1",
+				Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
+				State: principal.MembershipStateSuspended,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		err := s.AddMember(ctx, tc.m, entry())
+		wantErr(t, tc.name, err, principal.ErrInvalid)
+	}
+
+	members, _, err := s.ListMembers(ctx, "grp-1", all())
+	if err != nil {
+		t.Fatalf("list members: %v", err)
+	}
+
+	if len(members) != 0 {
+		t.Fatalf("members = %d, want none after refused adds", len(members))
 	}
 }

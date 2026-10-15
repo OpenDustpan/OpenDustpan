@@ -304,8 +304,11 @@ func pgCopyIdentityTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table:   "group_members",
-			columns: []string{"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms"},
+			table: "group_members",
+			columns: []string{
+				"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms", pgColSource, "source_id",
+				pgColState, "suspended_at_ms", "pinned",
+			},
 			orderBy: []string{"group_id", pgColPrincipalID, "added_at_ms"},
 		},
 		{

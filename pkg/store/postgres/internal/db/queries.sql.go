@@ -68,19 +68,33 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdat
 }
 
 const addGroupMember = `-- name: AddGroupMember :execrows
-INSERT INTO group_members (group_id, principal_id, added_at_ms)
-VALUES ($1, $2, $3)
+INSERT INTO group_members (group_id, principal_id, added_at_ms, source, source_id, state, suspended_at_ms, pinned)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING
 `
 
 type AddGroupMemberParams struct {
-	GroupID     string
-	PrincipalID string
-	AddedAtMs   int64
+	GroupID       string
+	PrincipalID   string
+	AddedAtMs     int64
+	Source        string
+	SourceID      string
+	State         string
+	SuspendedAtMs int64
+	Pinned        bool
 }
 
 func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) (int64, error) {
-	result, err := q.db.Exec(ctx, addGroupMember, arg.GroupID, arg.PrincipalID, arg.AddedAtMs)
+	result, err := q.db.Exec(ctx, addGroupMember,
+		arg.GroupID,
+		arg.PrincipalID,
+		arg.AddedAtMs,
+		arg.Source,
+		arg.SourceID,
+		arg.State,
+		arg.SuspendedAtMs,
+		arg.Pinned,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -4607,7 +4621,8 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 const listGroupMembers = `-- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
-  m.added_at_ms
+  m.added_at_ms, m.source AS member_source, m.source_id AS member_source_id, m.state AS member_state,
+  m.suspended_at_ms AS member_suspended_at_ms, m.pinned AS member_pinned
 FROM group_members m JOIN principals p ON p.id = m.principal_id
 WHERE m.group_id = $1 AND m.removed_at_ms IS NULL
   AND p.subject COLLATE "C" > $2::text
@@ -4626,17 +4641,22 @@ type ListGroupMembersParams struct {
 }
 
 type ListGroupMembersRow struct {
-	ID           string
-	Subject      string
-	DisplayName  string
-	Kind         string
-	Source       string
-	CreatedAtMs  int64
-	UpdatedAtMs  int64
-	DisabledAtMs pgtype.Int8
-	Namespace    string
-	GroupCount   int64
-	AddedAtMs    int64
+	ID                  string
+	Subject             string
+	DisplayName         string
+	Kind                string
+	Source              string
+	CreatedAtMs         int64
+	UpdatedAtMs         int64
+	DisabledAtMs        pgtype.Int8
+	Namespace           string
+	GroupCount          int64
+	AddedAtMs           int64
+	MemberSource        string
+	MemberSourceID      string
+	MemberState         string
+	MemberSuspendedAtMs int64
+	MemberPinned        bool
 }
 
 func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersParams) ([]ListGroupMembersRow, error) {
@@ -4666,6 +4686,11 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 			&i.Namespace,
 			&i.GroupCount,
 			&i.AddedAtMs,
+			&i.MemberSource,
+			&i.MemberSourceID,
+			&i.MemberState,
+			&i.MemberSuspendedAtMs,
+			&i.MemberPinned,
 		); err != nil {
 			return nil, err
 		}
@@ -6753,7 +6778,7 @@ func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspa
 const subjectsOfCaller = `-- name: SubjectsOfCaller :many
 SELECT p.id AS principal_id, COALESCE(m.group_id, '')::text AS group_id
 FROM principals p
-LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
 WHERE p.subject COLLATE "C" = $1::text AND p.deleted_at_ms IS NULL
 `
 
