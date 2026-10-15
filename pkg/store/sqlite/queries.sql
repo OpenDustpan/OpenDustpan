@@ -13,6 +13,29 @@ SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, 
 FROM namespaces
 ORDER BY name;
 
+-- name: PageNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > sqlc.arg('after')
+ORDER BY name
+LIMIT sqlc.arg('lim');
+
+-- name: PageNamespacesByNames :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > sqlc.arg('after') AND name IN (SELECT value FROM json_each(sqlc.arg('names')))
+ORDER BY name
+LIMIT sqlc.arg('lim');
+
+-- name: CountNamespaces :one
+SELECT COUNT(*)
+FROM namespaces;
+
+-- name: CountNamespacesByNames :one
+SELECT COUNT(*)
+FROM namespaces
+WHERE name IN (SELECT value FROM json_each(sqlc.arg('names')));
+
 -- name: SetNamespaceOverrides :execrows
 -- Replaces the override switches of one namespace (ADR 44, decision 6).
 UPDATE namespaces
