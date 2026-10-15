@@ -170,7 +170,7 @@ func (h *Handler) createWorkspace(ctx context.Context, c call) (workspace.Worksp
 		return workspace.Workspace{}, err
 	}
 
-	if authErr := h.authz.Authorize(ctx, c.principal, identity.ActionUnitManage, obj); authErr != nil {
+	if authErr := h.guard.Authorize(ctx, c.request, c.principal, identity.ActionUnitManage, obj); authErr != nil {
 		return workspace.Workspace{}, fmt.Errorf("authorize %s: %w", identity.ActionUnitManage, authErr)
 	}
 

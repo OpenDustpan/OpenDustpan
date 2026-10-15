@@ -748,7 +748,7 @@ func newAdapters(
 		return adapters{}, err
 	}
 
-	tofuHTTPAPI, err := newTofuHTTPHandler(cfg, svc, gate)
+	tofuHTTPAPI, err := newTofuHTTPHandler(cfg, svc, observed, gate)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -792,7 +792,9 @@ func newAdapters(
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
 // shares the workspace service with the TFE-compatible adapter; it does not
 // call that adapter.
-func newTofuHTTPHandler(cfg *settings, svc services, gate *bodygate.Gate) (*tofuhttp.Handler, error) {
+func newTofuHTTPHandler(
+	cfg *settings, svc services, observed *metrics.ServerMetrics, gate *bodygate.Gate,
+) (*tofuhttp.Handler, error) {
 	var entries audit.Store
 	if s, ok := cfg.namespaceStore.(audit.Store); ok {
 		entries = s
@@ -806,6 +808,9 @@ func newTofuHTTPHandler(cfg *settings, svc services, gate *bodygate.Gate) (*tofu
 		Namespaces:    svc.namespaces,
 		Audit:         entries,
 		Gate:          gate,
+		OnAuditFailure: func() {
+			observed.IncAuditAppendFailure()
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tofu http backend: %w", err)

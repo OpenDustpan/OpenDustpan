@@ -92,6 +92,7 @@ func runRefusedActionsOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, stor
 
 	writeRefusalTofuProject(t, env)
 	runTofuRefusal(t, env, tofuCLI, maintainer, viewer)
+	runTofuHTTPRefusal(t, env, tofuCLI, maintainer, viewer)
 
 	checkRefusalAudit(ctx, t, env)
 }
@@ -258,4 +259,74 @@ func checkRefusalAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
 			t.Errorf("audit log of %s holds no denied entry for the viewer from %s", refusalNamespace, tool)
 		}
 	}
+}
+
+// runTofuHTTPRefusal runs OpenTofu against the http backend of the refusal
+// namespace and checks that the viewer's apply is refused on that route table.
+// The namespace log must gain one more denied entry from OpenTofu for the
+// viewer, so the refusal is on record for the HTTP backend too.
+func runTofuHTTPRefusal(t *testing.T, env *e2e.Env, cli e2e.Install, maintainer, viewer *refusalPerson) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	before := deniedEntriesOf(ctx, t, env, viewer.name+"@example.com")
+
+	dir := filepath.Join(env.Home(), "tofu-refuse-http")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("make %s: %v", dir, err)
+	}
+
+	address := env.URL + "/tofu/state/" + refusalNamespace + "/web"
+	writeTofuHTTPConfig(t, dir, address)
+
+	httpEnv := func(p *refusalPerson) []string {
+		return []string{"TF_HTTP_USERNAME=dustpan", "TF_HTTP_PASSWORD=" + p.token.Secret}
+	}
+
+	res, err := env.RunAs(ctx, cli, dir, httpEnv(maintainer), "init", "-input=false", "-no-color")
+	if err != nil {
+		t.Fatalf("tofu http init: %v", err)
+	}
+
+	if res.ExitCode != 0 {
+		t.Fatalf("tofu http init as maintainer exits %d:\n%s", res.ExitCode, res.Stderr)
+	}
+
+	res, err = env.RunAs(ctx, cli, dir, httpEnv(viewer), "apply", "-input=false", "-auto-approve", "-no-color")
+	if err != nil {
+		t.Fatalf("tofu http apply as viewer: %v", err)
+	}
+
+	if res.ExitCode == 0 {
+		t.Fatalf("tofu http apply as viewer succeeds, want a refusal:\n%s", res.Stdout)
+	}
+
+	after := deniedEntriesOf(ctx, t, env, viewer.name+"@example.com")
+	if after <= before {
+		t.Fatalf("audit log holds %d denied entries for the viewer after the HTTP refusal, want more than %d",
+			after, before)
+	}
+}
+
+// deniedEntriesOf counts the denied entries of subject in the refusal
+// namespace log. The OpenTofu HTTP backend sends its own user agent, so the
+// count does not filter on the client.
+func deniedEntriesOf(ctx context.Context, t *testing.T, env *e2e.Env, subject string) int {
+	t.Helper()
+
+	entries, err := fetchAuditEntries(ctx, env, refusalNamespace)
+	if err != nil {
+		t.Fatalf("list %s audit entries: %v", refusalNamespace, err)
+	}
+
+	count := 0
+
+	for i := range entries {
+		if entries[i].Subject == subject && entries[i].Outcome == "denied" {
+			count++
+		}
+	}
+
+	return count
 }
