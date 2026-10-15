@@ -1380,11 +1380,13 @@ LIMIT ?;
 
 -- name: ListBlobPurgesAfter :many
 -- The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+-- The lower bound on purged_at_ms lets the index scan start at the cursor.
 SELECT tool, unit_id, namespace, purged_at_ms
 FROM blob_purges
-WHERE purged_at_ms > sqlc.arg(after_ms)
-  OR (purged_at_ms = sqlc.arg(after_ms) AND tool > sqlc.arg(after_tool))
-  OR (purged_at_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool) AND unit_id > sqlc.arg(after_unit_id))
+WHERE purged_at_ms >= sqlc.arg(after_ms)
+  AND (purged_at_ms > sqlc.arg(after_ms)
+    OR (purged_at_ms = sqlc.arg(after_ms) AND tool > sqlc.arg(after_tool))
+    OR (purged_at_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool) AND unit_id > sqlc.arg(after_unit_id)))
 ORDER BY purged_at_ms, tool, unit_id
 LIMIT sqlc.arg(page_limit);
 
