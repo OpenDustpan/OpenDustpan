@@ -18,17 +18,38 @@ import (
 	"time"
 )
 
-// toxiproxyBin returns TOXIPROXY_BIN or fails the test with the make target that sets it.
-func toxiproxyBin(t *testing.T) string {
+// toxiproxyAPI returns the Toxiproxy HTTP API base URL. If TOXIPROXY_URL
+// is set it uses that running server and starts no binary. If not, it
+// starts TOXIPROXY_BIN as a child process. If neither is set it fails the
+// test with the make target that sets them.
+func toxiproxyAPI(t *testing.T) string {
 	t.Helper()
 
-	if bin := os.Getenv("TOXIPROXY_BIN"); bin != "" {
-		return bin
+	if api := strings.TrimSpace(os.Getenv("TOXIPROXY_URL")); api != "" {
+		api = strings.TrimRight(api, "/")
+		waitForToxiproxy(t, api)
+
+		return api
 	}
 
-	t.Fatal("set TOXIPROXY_BIN with make faults")
+	if bin := strings.TrimSpace(os.Getenv("TOXIPROXY_BIN")); bin != "" {
+		return startToxiproxy(t, bin)
+	}
+
+	t.Fatal("set TOXIPROXY_URL or TOXIPROXY_BIN with make faults")
 
 	return ""
+}
+
+// toxiproxyListenHost returns the host that new proxies listen on. It
+// defaults to 127.0.0.1. Set TOXIPROXY_LISTEN_HOST to 0.0.0.0 when the
+// Toxiproxy server runs in a container.
+func toxiproxyListenHost() string {
+	if host := strings.TrimSpace(os.Getenv("TOXIPROXY_LISTEN_HOST")); host != "" {
+		return host
+	}
+
+	return "127.0.0.1"
 }
 
 // freePort returns a free loopback port as a string. The caller binds it
@@ -154,12 +175,16 @@ type proxyListen struct {
 	Listen string `json:"listen"`
 }
 
-// createProxy creates a proxy named name from listen 127.0.0.1:0 to
-// upstream (host:port) and returns its actual listen address.
+// createProxy creates a proxy named name from listen host port 0 to
+// upstream (host:port) and returns its dialable listen address. The proxy
+// is removed at test cleanup so a shared server stays clean.
 func createProxy(t *testing.T, api, name, upstream string) string {
 	t.Helper()
 
-	body := fmt.Sprintf(`{"name":%q,"listen":"127.0.0.1:0","upstream":%q}`, name, upstream)
+	listen := net.JoinHostPort(toxiproxyListenHost(), "0")
+	body := fmt.Sprintf(`{"name":%q,"listen":%q,"upstream":%q}`, name, listen, upstream)
+
+	deleteProxy(api, name)
 
 	status, data := toxiproxyDo(t, http.MethodPost, api+"/proxies", body)
 	if status != http.StatusCreated {
@@ -176,7 +201,44 @@ func createProxy(t *testing.T, api, name, upstream string) string {
 		t.Fatalf("create proxy %s: no listen address in %s", name, data)
 	}
 
-	return got.Listen
+	t.Cleanup(func() { deleteProxy(api, name) })
+
+	return dialListen(got.Listen)
+}
+
+// deleteProxy removes the proxy named name. It reports nothing: it runs
+// at cleanup and before create to drop a stale proxy on a shared server.
+func deleteProxy(api, name string) {
+	client := &http.Client{Timeout: 5 * time.Second}
+
+	req, err := http.NewRequest(http.MethodDelete, api+"/proxies/"+name, http.NoBody)
+	if err != nil {
+		return
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+
+	_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // Best-effort cleanup.
+	_ = resp.Body.Close()                 //nolint:errcheck // Best-effort cleanup.
+}
+
+// dialListen returns a dialable address for a proxy listen address. A
+// proxy that listens on all interfaces (0.0.0.0 or ::) is reached through
+// 127.0.0.1.
+func dialListen(listen string) string {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return listen
+	}
+
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		return net.JoinHostPort("127.0.0.1", port)
+	}
+
+	return listen
 }
 
 // addToxic adds a toxic of type typ on stream with attributes to proxy.

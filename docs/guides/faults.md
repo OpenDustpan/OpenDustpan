@@ -37,6 +37,27 @@ and runs the tests with the binary path in `TOXIPROXY_BIN`.
 The tests carry the `faults` build tag.
 Plain `go test ./...` and `make check` skip them.
 
+## Use a running server
+
+Set `TOXIPROXY_URL` to use a Toxiproxy server that already runs:
+
+```sh
+TOXIPROXY_URL=http://127.0.0.1:8474 go test -tags faults -race -count=1 ./e2e/faults/...
+```
+
+With the variable set the tests use that server and start no binary.
+Without it the tests start the binary named by `TOXIPROXY_BIN`, as `make faults` does.
+Without either variable the tests fail and name `make faults`.
+
+Set `TOXIPROXY_LISTEN_HOST` to change the host that new proxies listen on:
+
+```sh
+TOXIPROXY_LISTEN_HOST=0.0.0.0 TOXIPROXY_URL=http://127.0.0.1:8474 go test -tags faults -race -count=1 ./e2e/faults/...
+```
+
+The default host is `127.0.0.1`.
+Use `0.0.0.0` when the Toxiproxy server runs in a container.
+
 Run the suite against PostgreSQL with the test URL:
 
 ```sh

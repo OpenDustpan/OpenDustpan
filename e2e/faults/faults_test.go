@@ -26,9 +26,8 @@ import (
 func TestLatencyThroughProxy(t *testing.T) {
 	t.Parallel()
 
-	bin := toxiproxyBin(t)
+	api := toxiproxyAPI(t)
 	srv := startFaultServer(t)
-	api := startToxiproxy(t, bin)
 	listen := createProxy(t, api, "latency-proxy", srv.upstream)
 
 	addToxic(t, api, "latency-proxy", "latency-down", "latency", "downstream", `{"latency":500,"jitter":0}`)
@@ -66,9 +65,8 @@ func TestLatencyThroughProxy(t *testing.T) {
 func TestTimeoutThroughProxy(t *testing.T) {
 	t.Parallel()
 
-	bin := toxiproxyBin(t)
+	api := toxiproxyAPI(t)
 	srv := startFaultServer(t)
-	api := startToxiproxy(t, bin)
 	listen := createProxy(t, api, "timeout-proxy", srv.upstream)
 
 	addToxic(t, api, "timeout-proxy", "stall", "timeout", "upstream", `{"timeout":0}`)
@@ -125,7 +123,7 @@ func TestTimeoutThroughProxy(t *testing.T) {
 func TestLimitDataKeepsOldState(t *testing.T) {
 	t.Parallel()
 
-	bin := toxiproxyBin(t)
+	api := toxiproxyAPI(t)
 	srv := startFaultServer(t)
 	direct := &http.Client{Timeout: 10 * time.Second}
 	tokenAuth := "token " + srv.token
@@ -140,7 +138,6 @@ func TestLimitDataKeepsOldState(t *testing.T) {
 
 	secondLease := startUpdate(t, direct, srv.url, tokenAuth)
 
-	api := startToxiproxy(t, bin)
 	listen := createProxy(t, api, "limit-proxy", srv.upstream)
 
 	addToxic(t, api, "limit-proxy", "cut-body", "limit_data", "upstream", `{"bytes":1024}`)
@@ -423,7 +420,6 @@ func TestPostgresCutThroughProxy(t *testing.T) {
 func checkPostgresCut(t *testing.T, base string) {
 	t.Helper()
 
-	bin := toxiproxyBin(t)
 	ctx := t.Context()
 
 	parsed, err := url.Parse(base)
@@ -437,7 +433,7 @@ func checkPostgresCut(t *testing.T, base string) {
 		port = "5432"
 	}
 
-	api := startToxiproxy(t, bin)
+	api := toxiproxyAPI(t)
 	listen := createProxy(t, api, "pg-proxy", net.JoinHostPort(host, port))
 
 	schema := randomSchema(t)
