@@ -101,6 +101,7 @@ func portableSpec() []PortableTable {
 				{Name: "journal_version", Kind: KindInteger},
 				{Name: "journal_closed", Kind: KindBool},
 				{Name: "token_id", Kind: KindText},
+				{Name: "journal_records_changed", Kind: KindBool},
 			},
 		},
 		{

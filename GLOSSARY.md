@@ -157,7 +157,7 @@ A caller whose identity OpenDustpan checked: a person, a service or a workload. 
 _Avoid_: User (when the caller can be a machine), actor
 
 **Principal of a namespace**:
-A service principal that belongs to one namespace. A holder of `namespace:manage-principals` on the namespace makes it. It can only hold grants on its namespace or on an object inside it, and it cannot be a member of a group. Its subject is unique on the whole installation.
+A service principal that belongs to one namespace. A holder of `namespace:manage-principals` on the namespace makes it. It can only hold grants on its namespace or on an object inside it, and it cannot be a member of a group. Its subject is unique on the whole installation. A holder of `namespace:manage-principal-tokens` on the namespace makes the tokens of its principals.
 _Avoid_: Namespace service account, local principal
 
 **Access token**:
