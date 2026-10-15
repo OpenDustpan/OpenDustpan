@@ -261,7 +261,13 @@ func (coverageStackStore) RestoreStack(
 }
 
 // PurgeStack implements stack.Store; this fake holds no deleted stack.
-func (coverageStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ audit.Entry) error {
+func (coverageStackStore) PurgeStack(
+	_ context.Context,
+	_ stack.ID,
+	_ namespace.Fence,
+	_ time.Time,
+	_ audit.Entry,
+) error {
 	return stack.ErrNotFound
 }
 
@@ -744,6 +750,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   coverageIPAllowlists(tb),
 	})
 	if err != nil {
@@ -1125,6 +1132,12 @@ func deletedUnitAllowEntries() []AllowEntry {
 			CoveringTest: deletedUnitCoveringTest,
 			Reason: "Console-only: no CLI purges a deleted unit. The harness " +
 				"steps purge one after the CLI deletes it.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/deleted-units/sweep",
+			CoveringTest: deletedUnitCoveringTest,
+			Reason: "Operator route: no CLI runs the retention sweep. The harness " +
+				"steps run it while a unit is in retention and after a purge.",
 		},
 	}
 }

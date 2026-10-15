@@ -49,8 +49,8 @@ var errUnknownTool = errors.New("unknown tool")
 // delete, Name the tool's own name of the unit at the time of the delete, and
 // UnitID its stable ID, which the restore and purge routes take. DeletedAt
 // and PurgeAfter are RFC 3339 times in UTC, as the other tool-neutral APIs
-// write times. PurgeAfter is the end of the retention period. The server
-// does not purge on its own yet: the sweep comes with ADR 47 PR 4.
+// write times. PurgeAfter is the end of the retention period: the retention
+// sweep purges the unit after it.
 //
 // Contract: never remove or rename these fields.
 type deletedUnitEntry struct {

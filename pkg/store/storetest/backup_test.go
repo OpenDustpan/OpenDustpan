@@ -411,7 +411,7 @@ func (*fakeBackupStore) RestoreStack(
 }
 
 // PurgeStack implements stack.Store; this fake holds no deleted stack.
-func (*fakeBackupStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ audit.Entry) error {
+func (*fakeBackupStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ time.Time, _ audit.Entry) error {
 	return stack.ErrNotFound
 }
 
@@ -1403,7 +1403,13 @@ func (*fakeBackupStore) RestoreWorkspace(
 
 // PurgeWorkspace implements workspace.Store; this fake holds no deleted
 // workspace.
-func (*fakeBackupStore) PurgeWorkspace(_ context.Context, _ workspace.ID, _ namespace.Fence, _ audit.Entry) error {
+func (*fakeBackupStore) PurgeWorkspace(
+	_ context.Context,
+	_ workspace.ID,
+	_ namespace.Fence,
+	_ time.Time,
+	_ audit.Entry,
+) error {
 	return workspace.ErrNotFound
 }
 

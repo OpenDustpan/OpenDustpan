@@ -8,10 +8,8 @@ take the unit out of every list and free its name at once. OpenDustpan keeps
 the state, the history and the secrets of the unit until its retention
 period ends.
 
-The server does not purge a unit on its own yet. The automatic purge at the
-end of the retention period comes in a later change (ADR 47). Until then, a
-deleted unit stays until an admin purges it through the API, also after its
-retention period ends.
+When the retention period of a unit ends, the retention sweep purges the
+unit. An admin can also purge a unit through the API before that time.
 
 ## Set the retention period
 
@@ -92,3 +90,84 @@ nothing.
 
 Each restore and each purge writes one audit entry with the kind `change`.
 See [Audit log](audit-log.md).
+
+## The retention sweep
+
+The server runs the retention sweep one time each hour. The first sweep runs
+one hour after the server starts. The sweep does two things:
+
+1. It purges each deleted unit whose retention period ended, in every
+   namespace that has its home in this region. Each purge runs in its own
+   fenced transaction and writes one audit entry with the subject `@server`
+   and the action `unit:purge`.
+2. It finishes the blob purge records. A purge deletes the blobs of the unit
+   after its rows, and keeps a blob purge record. A checkpoint save or a
+   state upload that started before the purge can still write a blob after
+   that delete. So the sweep deletes the blobs of a record again when the
+   record is older than 24 hours, and finishes the record only when no blob
+   remains.
+
+A sweep purges a unit only when its retention period ended at the start of
+the sweep. The purge checks this again in its transaction. So a unit that you
+restore and delete again during a sweep gets its new retention period. A
+restore and a sweep purge of the same unit can run at the same time. One of
+them wins, and the sweep counts the other unit as skipped. A failed purge
+does not stop the sweep. The server logs a warning with the unit reference
+and the error kind, and the next sweep tries again.
+
+When a sweep purges units, the server logs one line with the count and the
+oldest purge time among them.
+
+`POST /api/server/deleted-units/sweep` runs one sweep now. It needs the action
+`server:maintenance` on the installation. Each purge writes its audit entry
+with you as the subject. While another sweep of the server runs, the route
+answers 409 at once. Try again later. The answer names each purged unit and
+counts the other outcomes:
+
+```json
+{
+  "purged": [{"tool": "pulumi", "namespace": "acme", "unitID": "stk-1", "reference": "pulumi:acme/web/prod"}],
+  "failed": 0,
+  "skipped": 0,
+  "finishedBlobPurges": 1,
+  "pendingBlobPurges": 2
+}
+```
+
+The metric `dustpan_deleted_unit_sweep_total` counts the outcomes of each
+sweep. See [Observe](observe.md).
+
+## After an upgrade or an installation restore
+
+At the start, the server logs one line with the count of deleted units whose
+retention period has already ended. The first sweep, one hour later, purges
+them. After an upgrade, these are units that you deleted before the server
+had a sweep. After an installation restore, these are units whose retention
+period ended after the backup.
+
+To keep such a unit, restore it before the first sweep. First list the
+deleted units whose retention period ends within one day. The units that the
+first sweep purges are in this list. The list holds the units of one
+namespace, so list each namespace. The list comes in pages: when the answer has a
+`nextCursor`, send it as `cursor` to get the next page.
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/inventory/deleted-units?organization=acme&purgeWithinDays=1"
+```
+
+Then restore each unit that you keep, with the `tool` and the `unitID` of the
+list:
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" -d '{}' \
+  "https://dustpan.example/api/inventory/deleted-units/<tool>/<unitID>/restore?organization=acme"
+```
+
+If a live unit holds its name, the server answers 409. Then send a new name,
+as [Restore a deleted unit](#restore-a-deleted-unit) shows.
+
+The retention setting
+does not help here: a delete records the end of the retention period of the
+unit, and a new setting applies only to later deletes. The retention setting
+has no value that turns the purge off.

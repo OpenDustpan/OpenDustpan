@@ -414,7 +414,13 @@ func (m *memStore) RestoreWorkspace(
 
 // PurgeWorkspace implements workspace.Store: it removes the deleted
 // workspace id of the namespace of fence with its state versions.
-func (m *memStore) PurgeWorkspace(_ context.Context, id workspace.ID, fence namespace.Fence, e audit.Entry) error {
+func (m *memStore) PurgeWorkspace(
+	_ context.Context,
+	id workspace.ID,
+	fence namespace.Fence,
+	dueBy time.Time,
+	e audit.Entry,
+) error {
 	if err := validMemEntry(e, fence); err != nil {
 		return err
 	}
@@ -426,7 +432,14 @@ func (m *memStore) PurgeWorkspace(_ context.Context, id workspace.ID, fence name
 		return err
 	}
 
-	if entry, ok := m.deleted[id]; !ok || entry.Namespace != fence.Namespace {
+	entry, ok := m.deleted[id]
+	if !ok || entry.Namespace != fence.Namespace {
+		return workspace.ErrNotFound
+	}
+
+	// A sweep purge (non-zero dueBy) acts only on a workspace whose
+	// retention period ended by then.
+	if !dueBy.IsZero() && entry.PurgeAfter.After(dueBy) {
 		return workspace.ErrNotFound
 	}
 

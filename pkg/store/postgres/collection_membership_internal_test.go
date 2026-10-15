@@ -42,7 +42,7 @@ func TestPurgeDeletesMembershipInTheFencedTransaction(t *testing.T) {
 
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
 
-	if err := s.PurgeWorkspace(t.Context(), id, stale, e); !errors.Is(err, namespace.ErrFenced) {
+	if err := s.PurgeWorkspace(t.Context(), id, stale, time.Time{}, e); !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("purge with a stale fence = %v, want ErrFenced", err)
 	}
 
@@ -50,7 +50,7 @@ func TestPurgeDeletesMembershipInTheFencedTransaction(t *testing.T) {
 		t.Fatalf("memberships after a refused purge = %d, want 1", got)
 	}
 
-	if err := s.PurgeWorkspace(t.Context(), id, ns.Fence(), e); err != nil {
+	if err := s.PurgeWorkspace(t.Context(), id, ns.Fence(), time.Time{}, e); err != nil {
 		t.Fatalf("purge: %v", err)
 	}
 

@@ -467,6 +467,8 @@ type Server struct {
 	tokens      *accesstoken.Service
 	shipper     *audit.Shipper
 	beforeServe func(ctx context.Context) error
+	// deleted runs the retention sweep of the deleted units on a schedule.
+	deleted *deletedSweeper
 }
 
 // services holds the domain services that NewServer wires together.
@@ -482,6 +484,9 @@ type services struct {
 	// collections is the collection service (ADR 51), or nil when the store
 	// holds no collections. NewServer sets it after newServices.
 	collections *collection.Service
+	// deleted runs the retention sweep. assemble sets it, because
+	// it counts on the server metrics.
+	deleted *deletedSweeper
 	// access keeps the roles and grants (ADR 52), or is nil when the store
 	// keeps none. NewServer sets it after newServices. The installation API
 	// and the escalation check of the token service share it.
@@ -640,6 +645,13 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
 	registry := observed.Registry()
 
+	deleted, err := newDeletedSweeper(svc, cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	svc.deleted = deleted
+
 	adapters, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
 		return nil, err
@@ -686,6 +698,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		tokens:          svc.tokens,
 		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
+		deleted:         deleted,
 	}, nil
 }
 
@@ -1042,6 +1055,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		secrets:     secrets,
 		workspaces:  workspaces,
 		tokens:      nil,
+		deleted:     nil,
 		access:      nil,
 		collections: nil,
 	}, nil
@@ -1151,6 +1165,7 @@ func (s *Server) Run(ctx context.Context) error {
 	var sweeps sync.WaitGroup
 
 	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
+	sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
 
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
@@ -1540,7 +1555,7 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
 	}
 
-	blobs := blobPurger{logger: cfg.logger}
+	stacks, workspaces := unitLifecycles(svc, cfg)
 
 	// The move check is the escalation check of the access service. A store
 	// with no roles and grants gives no checker, so a move is refused there.
@@ -1559,8 +1574,8 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		Units:      cfg.inventoryReader,
 		Deleted:    deleted,
 		Lifecycles: map[string]inventory.Lifecycle{
-			pulumiTool:   pulumiLifecycle{stacks: svc.stacks, updates: svc.updates, blobs: blobs},
-			opentofuTool: opentofuLifecycle{workspaces: svc.workspaces, blobs: blobs},
+			pulumiTool:   stacks,
+			opentofuTool: workspaces,
 		},
 		ReadScope:     deletedReadScope{authz: cfg.authorizer},
 		Collections:   svc.collections,
@@ -1575,6 +1590,15 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// unitLifecycles returns the restore and purge of each tool. The
+// inventory API and the retention sweep share them.
+func unitLifecycles(svc services, cfg *settings) (pulumiLifecycle, opentofuLifecycle) {
+	blobs := blobPurger{logger: cfg.logger}
+
+	return pulumiLifecycle{stacks: svc.stacks, updates: svc.updates, blobs: blobs},
+		opentofuLifecycle{workspaces: svc.workspaces, blobs: blobs}
 }
 
 // installationDeps carries the services of the installation API.
@@ -1644,6 +1668,7 @@ func newServerHandler(
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
 		},
+		DeletedUnits: deps.services.deleted,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
