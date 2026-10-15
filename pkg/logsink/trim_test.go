@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/logsink"
 )
 
@@ -190,5 +191,67 @@ func TestTrimToFitRejectsBadJSON(t *testing.T) {
 
 	if _, _, err := logsink.TrimToFit(rec, 8192); err == nil {
 		t.Fatal("trim: got nil error for invalid JSON")
+	}
+}
+
+func TestTrimToFitKeepsAuditChainFields(t *testing.T) {
+	t.Parallel()
+
+	entry := audit.Entry{
+		At:         time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC),
+		Namespace:  "acme",
+		Subject:    "admin",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "unit:read-secrets",
+		Object:     strings.Repeat("o", 800),
+		Version:    "sv-1",
+		ValuePath:  strings.Repeat("v", 800),
+		ValueCount: nil,
+		Changes:    nil,
+		SourceIP:   "192.0.2.1",
+		UserAgent:  strings.Repeat("u", 800),
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindReveal,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "req-7",
+		ObjectID:   "",
+		PrevHash:   "prev-hash-value",
+		Hash:       "hash-value",
+		Sequence:   7,
+	}
+
+	rec := audit.ToRecord(entry)
+	budget := len(marshalLine(t, rec)) - 500
+
+	got, ok, err := logsink.TrimToFit(rec, budget)
+	if err != nil {
+		t.Fatalf("trim: %v", err)
+	}
+
+	if !ok {
+		t.Fatal("trim: reported no fit for a trimmable audit record")
+	}
+
+	if trimmed := marshalLine(t, got); len(trimmed) > budget {
+		t.Fatalf("trimmed line holds %d bytes, want at most %d", len(trimmed), budget)
+	}
+
+	checkMarked(t, got)
+
+	for _, key := range []string{"scope", "prevHash", "hash"} {
+		want, _ := attrValue(rec.Attrs, key)
+		kept, found := attrValue(got.Attrs, key)
+
+		if !found || kept != want {
+			t.Fatalf("chain field %q: got %v, want %v", key, kept, want)
+		}
+	}
+
+	wantSeq, _ := attrValue(rec.Attrs, "sequence")
+	keptSeq, found := attrValue(got.Attrs, "sequence")
+
+	if !found || keptSeq != wantSeq {
+		t.Fatalf("chain field sequence: got %v, want %v", keptSeq, wantSeq)
 	}
 }

@@ -150,6 +150,7 @@ Name `stderr` too when you want to keep the stderr lines.
 A syslog target uses the facility `local0` (16) unless you set `?facility=<0 to 23>`.
 `?max-size=<bytes>` caps a message, from 480 to 65507 bytes, default 8192.
 A line above the cap arrives trimmed to fit, with the long fields shortened and `"truncated": true` in the record.
+A truncated audit record keeps its `hash`, but the receiver cannot recompute it from the shipped fields. The audit log guide states the full guarantee.
 Only a line that cannot fit even with every trimmable field empty is skipped and counted.
 A webhook target signs each request with the key in `DUSTPAN_LOG_WEBHOOK_SECRET`, or in a file that `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` names.
 The audit log guide describes the record format, the syslog format and the webhook signature.
