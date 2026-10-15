@@ -90,6 +90,9 @@ type envInput struct {
 	// disableJournaling turns Pulumi journaling off on the server, so each
 	// update answers journalVersion 0.
 	disableJournaling bool
+	// ipAllowlists turns IP allowlists on for the server and applies them to
+	// the bootstrap admin token too.
+	ipAllowlists bool
 }
 
 // backendConfig groups the settings of one backend process.
@@ -110,6 +113,10 @@ type backendConfig struct {
 	// disableJournaling passes --disable-pulumi-journaling when set, so an
 	// inherited DUSTPAN_DISABLE_PULUMI_JOURNALING never changes a test backend.
 	disableJournaling bool
+	// ipAllowlists passes --ip-allowlists with
+	// --ip-allowlists-include-bootstrap when set, so the binary server checks
+	// the lists of every namespace, including for the bootstrap admin token.
+	ipAllowlists bool
 }
 
 // backendCert holds the certificate and key paths of one backend.
@@ -398,6 +405,13 @@ func serveArgs(cfg backendConfig, port string) []string {
 		args = append(args, disableJournalingFlag)
 	}
 
+	if cfg.ipAllowlists {
+		// The recording proxy on loopback fronts the binary, so the binary
+		// trusts it to name the client address in X-Forwarded-For.
+		args = append(args, "--ip-allowlists", "--ip-allowlists-include-bootstrap",
+			"--trusted-proxies", "127.0.0.1/32")
+	}
+
 	if cfg.blobStore != "" {
 		args = append(args, "--blob-store", cfg.blobStore, "--s3-endpoint", cfg.s3Endpoint)
 	} else {
@@ -544,6 +558,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 
 	cfg := backendConfig{
 		disableJournaling: false,
+		ipAllowlists:      false,
 		bin:               e.binPath,
 		dbURL:             dbURL,
 		blobDir:           blobDir,
@@ -798,6 +813,9 @@ func startRecordingProxy(tb testing.TB, rec *Recorder, backendURL string) *httpt
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
 			r.Out.Host = r.In.Host
+			// The backend reads the client address of a request from this
+			// header, when it trusts the proxy (--trusted-proxies).
+			r.SetXForwarded()
 		},
 		Transport: transport,
 	}
@@ -918,6 +936,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		tokens:            in.token + "," + in.tokenB,
 		deltaCutoff:       in.deltaCutoff,
 		disableJournaling: in.disableJournaling,
+		ipAllowlists:      in.ipAllowlists,
 	}
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 

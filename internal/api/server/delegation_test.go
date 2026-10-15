@@ -1,0 +1,186 @@
+package server_test
+
+import (
+	"net/http"
+	"slices"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
+)
+
+// tokenDoc decodes the ID of a token.
+type tokenDoc struct {
+	ID string `json:"id"`
+}
+
+// seedService stores the service principal "prn-<subject>".
+func (f accessFixture) seedService(t *testing.T, subject string) {
+	t.Helper()
+
+	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
+
+	prn := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, ID: "prn-" + subject, Subject: subject,
+		DisplayName: "", Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
+		DisabledAt: time.Time{},
+	}
+	if err := f.store.CreatePrincipal(t.Context(), prn, storetest.ServerChange(at, "principal:"+prn.ID)); err != nil {
+		t.Fatalf("seed service principal: %v", err)
+	}
+}
+
+// TestDelegationRoutesRefuse proves the refusals of the routes of one
+// service principal with the authorizer that decides with grants: a
+// principal with no grant, a token manager on one principal, and a token
+// manager on the installation, which holds every principal but gets no
+// right on a personal token.
+func TestDelegationRoutesRefuse(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	f.seedService(t, "deploy")
+	f.seed(t, "ops", access.RoleTokenManager, identity.PrincipalObject("prn-deploy"))
+	f.seed(t, "tm", access.RoleTokenManager, identity.ServerObject())
+
+	const (
+		deploy = "/api/server/principals/prn-deploy"
+		alice  = "/api/server/principals/prn-alice"
+	)
+
+	var service, personal tokenDoc
+	f.as(t, "admin", apiCall{http.MethodPost, deploy + "/tokens", `{"name":"ci"}`, http.StatusCreated}, &service)
+	f.as(t, "admin", apiCall{
+		http.MethodPost, "/api/server/tokens", `{"principalID":"prn-alice","name":"laptop"}`, http.StatusCreated,
+	}, &personal)
+
+	for _, c := range []struct {
+		subject string
+		call    apiCall
+	}{
+		{"bob", apiCall{http.MethodPost, deploy + "/tokens", `{"name":"x"}`, http.StatusForbidden}},
+		{"bob", apiCall{http.MethodPost, deploy + "/tokens/" + service.ID + "/rotate", `{}`, http.StatusForbidden}},
+		{"bob", apiCall{http.MethodDelete, deploy + "/tokens/" + service.ID, "", http.StatusForbidden}},
+		{"bob", apiCall{http.MethodDelete, "/api/server/tokens/" + service.ID, "", http.StatusForbidden}},
+		{"bob", apiCall{
+			http.MethodPost, "/api/server/service-tokens", `{"principalID":"prn-deploy","name":"x"}`,
+			http.StatusForbidden,
+		}},
+		{"bob", apiCall{
+			http.MethodPost, "/api/server/service-tokens", `{"principalID":"prn-none","name":"x"}`,
+			http.StatusForbidden,
+		}},
+		{"bob", apiCall{http.MethodGet, deploy + "/grants", "", http.StatusForbidden}},
+		{"bob", apiCall{http.MethodGet, deploy + "/access-review", "", http.StatusForbidden}},
+		{"ops", apiCall{
+			http.MethodPost, deploy + "/grants", `{"subject":"principal:prn-bob","role":"token-manager"}`,
+			http.StatusForbidden,
+		}},
+		{"ops", apiCall{http.MethodDelete, "/api/server/tokens/" + personal.ID, "", http.StatusForbidden}},
+		{"tm", apiCall{http.MethodDelete, alice + "/tokens/" + personal.ID, "", http.StatusBadRequest}},
+		{"tm", apiCall{http.MethodPost, alice + "/tokens/" + personal.ID + "/rotate", `{}`, http.StatusBadRequest}},
+		{"tm", apiCall{http.MethodPost, alice + "/tokens", `{"name":"x"}`, http.StatusBadRequest}},
+		{"tm", apiCall{http.MethodDelete, "/api/server/tokens/" + personal.ID, "", http.StatusForbidden}},
+		{"admin", apiCall{
+			http.MethodPost, "/api/server/service-tokens", `{"principalID":"prn-none","name":"x"}`,
+			http.StatusNotFound,
+		}},
+	} {
+		f.as(t, c.subject, c.call, nil)
+	}
+
+	// The token manager of deploy makes and revokes its tokens.
+	var made tokenDoc
+	f.as(t, "ops", apiCall{http.MethodPost, deploy + "/tokens", `{"name":"ops"}`, http.StatusCreated}, &made)
+	f.as(t, "ops", apiCall{http.MethodDelete, deploy + "/tokens/" + made.ID, "", http.StatusNoContent}, nil)
+	f.as(t, "ops", apiCall{http.MethodDelete, "/api/server/tokens/" + service.ID, "", http.StatusNoContent}, nil)
+}
+
+// limitedTokenListDoc decodes a token list with the maximum lifetime.
+type limitedTokenListDoc struct {
+	Tokens             []tokenDoc `json:"tokens"`
+	Total              int64      `json:"total"`
+	MaxLifetimeSeconds int64      `json:"maxLifetimeSeconds"`
+}
+
+// TestTokenManagerReads proves the reads of a token manager with the
+// authorizer that decides with grants: the token list of the principals it
+// manages, the principals themselves, and the maximum lifetime, which every
+// signed-in person reads. A principal without the right, and a person path,
+// are refused.
+func TestTokenManagerReads(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	f.seedService(t, "deploy")
+	f.seedService(t, "other")
+	f.seed(t, "ops", access.RoleTokenManager, identity.PrincipalObject("prn-deploy"))
+	f.seed(t, "tm", access.RoleTokenManager, identity.ServerObject())
+
+	const (
+		deploy = "/api/server/principals/prn-deploy/tokens"
+		other  = "/api/server/principals/prn-other/tokens"
+		year   = int64(365 * 24 * 60 * 60)
+	)
+
+	f.as(t, "admin", apiCall{http.MethodPost, deploy, `{"name":"ci"}`, http.StatusCreated}, nil)
+	f.as(t, "admin", apiCall{http.MethodPost, other, `{"name":"ci"}`, http.StatusCreated}, nil)
+
+	var list limitedTokenListDoc
+	f.as(t, "ops", apiCall{http.MethodGet, deploy, "", http.StatusOK}, &list)
+
+	if list.Total != 1 || len(list.Tokens) != 1 || list.MaxLifetimeSeconds != year {
+		t.Fatalf("tokens of deploy = %+v, want one token and the maximum lifetime %d", list, year)
+	}
+
+	for _, c := range []struct {
+		subject string
+		call    apiCall
+	}{
+		{"ops", apiCall{http.MethodGet, other, "", http.StatusForbidden}},
+		{"bob", apiCall{http.MethodGet, deploy, "", http.StatusForbidden}},
+		{"tm", apiCall{http.MethodGet, "/api/server/principals/prn-alice/tokens", "", http.StatusBadRequest}},
+		{"admin", apiCall{http.MethodGet, "/api/server/principals/prn-none/tokens", "", http.StatusNotFound}},
+		{"ops", apiCall{http.MethodGet, "/api/server/caller/access?type=principal&action=unit:read", "", http.StatusBadRequest}},
+		{"tm", apiCall{
+			http.MethodGet, "/api/server/caller/access?type=principal&action=server:manage-access", "",
+			http.StatusBadRequest,
+		}},
+		{"bob", apiCall{http.MethodGet, "/api/server/principals/prn-none/tokens", "", http.StatusForbidden}},
+	} {
+		f.as(t, c.subject, c.call, nil)
+	}
+
+	for _, c := range []struct {
+		subject string
+		objects []string
+		all     bool
+	}{
+		{"ops", []string{"principal:prn-deploy"}, false},
+		{"tm", nil, true},
+		{"bob", nil, false},
+	} {
+		var got accessObjectsDoc
+		f.as(t, c.subject, apiCall{http.MethodGet, "/api/server/caller/access?type=principal", "", http.StatusOK}, &got)
+
+		objects := make([]string, 0, len(got.Objects))
+		for _, o := range got.Objects {
+			objects = append(objects, o.Object)
+		}
+
+		if got.All != c.all || !slices.Equal(objects, c.objects) ||
+			got.Action != string(identity.ActionPrincipalManageTokens) {
+			t.Errorf("principals of %s = %+v, want %v, all %t", c.subject, got, c.objects, c.all)
+		}
+	}
+
+	var own limitedTokenListDoc
+	f.as(t, "bob", apiCall{http.MethodGet, "/api/server/caller/tokens", "", http.StatusOK}, &own)
+
+	if own.MaxLifetimeSeconds != year {
+		t.Fatalf("maximum lifetime of a person = %d, want %d", own.MaxLifetimeSeconds, year)
+	}
+}

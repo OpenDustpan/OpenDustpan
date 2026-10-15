@@ -96,8 +96,12 @@ type DeletedStore interface {
 	// ends the grants on the workspace and records the blob purge
 	// (inventory.BlobPurge) in that transaction. The caller removes its
 	// blobs after the commit; the sweep finishes the record. It returns
-	// ErrNotFound if the namespace has no deleted workspace id.
-	PurgeWorkspace(ctx context.Context, id ID, fence namespace.Fence, e audit.Entry) error
+	// ErrNotFound if the namespace has no deleted workspace id. With a
+	// non-zero dueBy, it also returns ErrNotFound and changes nothing when
+	// the retention period of the workspace ends after dueBy, a check in the
+	// same transaction. The retention sweep sets dueBy, and a purge by an
+	// admin leaves it zero.
+	PurgeWorkspace(ctx context.Context, id ID, fence namespace.Fence, dueBy time.Time, e audit.Entry) error
 }
 
 // StateStore persists state version metadata.
@@ -411,18 +415,17 @@ func (s *Service) RestoreDeleted(
 // caller then removes the state blobs with DeletePurgedBlobs. It returns
 // ErrNotFound if ns has no deleted workspace id.
 func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e audit.Entry) error {
-	fence, err := s.fence(ctx, ns)
-	if err != nil {
-		return err
-	}
+	return s.purge(ctx, ns, id, time.Time{}, e)
+}
 
-	e.At = s.clock()
-
-	if err := s.workspaces.PurgeWorkspace(ctx, id, fence, e); err != nil {
-		return fmt.Errorf("purge workspace %s: %w", id, err)
-	}
-
-	return nil
+// PurgeExpired removes the deleted workspace id of ns for good, as
+// PurgeDeleted does, only when its retention period ended at or before
+// dueBy. The store checks the end of the retention in the purge
+// transaction. It returns ErrNotFound if ns has no deleted workspace id
+// whose retention period ended by then: a restore and a new delete after
+// the caller read the unit gave it a new retention period.
+func (s *Service) PurgeExpired(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+	return s.purge(ctx, ns, id, dueBy, e)
 }
 
 // DeletePurgedBlobs removes every state blob of the purged workspace id,
@@ -910,26 +913,52 @@ func (s *Service) Upload(
 // a bad capability: ErrStateVersionNotFound for an unknown version,
 // ErrUploadDenied for a wrong or expired capability or a version that is not
 // pending. A retry with the capability that finalized the version passes, as
-// in Upload.
-func (s *Service) CheckUpload(ctx context.Context, id StateVersionID, tok token.Token) error {
+// in Upload. On success it also returns the namespace of the workspace of
+// the version, after the capability check passed, so a caller with a bad
+// token learns nothing about an allowlist.
+func (s *Service) CheckUpload(
+	ctx context.Context, id StateVersionID, tok token.Token,
+) (namespace.Name, error) {
 	sv, err := s.states.GetStateVersion(ctx, id)
 	if err != nil {
-		return fmt.Errorf("upload state %s: %w", id, err)
+		return "", fmt.Errorf("upload state %s: %w", id, err)
 	}
 
-	return sv.checkUploadCapability(tok, s.clock())
+	if capErr := sv.checkUploadCapability(tok, s.clock()); capErr != nil {
+		return "", capErr
+	}
+
+	w, err := s.workspaces.GetWorkspaceByID(ctx, sv.Workspace)
+	if err != nil {
+		return "", fmt.Errorf("upload state %s: %w", id, err)
+	}
+
+	return w.Ref.Namespace, nil
 }
 
 // CheckJSONRenderingUpload does the same for the JSON rendering upload (the
 // rules of DiscardJSONRendering: wrong capability or expired capability fail;
-// a finalized version with the same capability still passes).
-func (s *Service) CheckJSONRenderingUpload(ctx context.Context, id StateVersionID, tok token.Token) error {
+// a finalized version with the same capability still passes). On success it
+// also returns the namespace of the workspace of the version, after the
+// capability check passed.
+func (s *Service) CheckJSONRenderingUpload(
+	ctx context.Context, id StateVersionID, tok token.Token,
+) (namespace.Name, error) {
 	sv, err := s.states.GetStateVersion(ctx, id)
 	if err != nil {
-		return fmt.Errorf("upload JSON rendering of %s: %w", id, err)
+		return "", fmt.Errorf("upload JSON rendering of %s: %w", id, err)
 	}
 
-	return sv.checkRenderingCapability(tok, s.clock())
+	if capErr := sv.checkRenderingCapability(tok, s.clock()); capErr != nil {
+		return "", capErr
+	}
+
+	w, err := s.workspaces.GetWorkspaceByID(ctx, sv.Workspace)
+	if err != nil {
+		return "", fmt.Errorf("upload JSON rendering of %s: %w", id, err)
+	}
+
+	return w.Ref.Namespace, nil
 }
 
 // uploadedBody is what a state upload stores: the size of its bytes, and the
@@ -2308,4 +2337,21 @@ func deleteOnCleanup(ctx context.Context, blobs blob.Store, key blob.Key) error 
 	defer cancel()
 
 	return blobs.Delete(cleanCtx, key)
+}
+
+// purge removes the deleted workspace id of ns with the retention check of
+// dueBy, which zero turns off.
+func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+	fence, err := s.fence(ctx, ns)
+	if err != nil {
+		return err
+	}
+
+	e.At = s.clock()
+
+	if err := s.workspaces.PurgeWorkspace(ctx, id, fence, dueBy, e); err != nil {
+		return fmt.Errorf("purge workspace %s: %w", id, err)
+	}
+
+	return nil
 }

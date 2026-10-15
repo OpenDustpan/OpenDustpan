@@ -37,6 +37,7 @@ func loggedTFEHandler(t *testing.T, stores tfe.WorkspaceService, buf *bytes.Buff
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
+		AddressGate:    nil,
 		Logger:         logger,
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stores,

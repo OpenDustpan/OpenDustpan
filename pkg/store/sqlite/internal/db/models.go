@@ -98,6 +98,21 @@ type Checkpoint struct {
 	BlobMd5       []byte
 }
 
+type Collection struct {
+	ID          string
+	Namespace   string
+	NameKey     string
+	Name        string
+	CreatedAtMs int64
+}
+
+type CollectionMember struct {
+	UnitID        string
+	Namespace     string
+	CollectionKey string
+	AssignedAtMs  int64
+}
+
 type Grant struct {
 	ID          string
 	Subject     string
@@ -157,6 +172,7 @@ type Namespace struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	IpAllowlist         string
 }
 
 type Principal struct {
@@ -170,6 +186,7 @@ type Principal struct {
 	DeletedAtMs    sql.NullInt64
 	DisabledAtMs   sql.NullInt64
 	LastActiveAtMs int64
+	LastSignInAtMs sql.NullInt64
 }
 
 type PrincipalGroup struct {
@@ -211,6 +228,37 @@ type SecretKey struct {
 	WrapperID   string
 	Ciphertext  []byte
 	CreatedAtMs int64
+}
+
+type Session struct {
+	ID           string
+	PrincipalID  string
+	Digest       string
+	Provider     string
+	CreatedAtMs  int64
+	LastSeenAtMs int64
+	AuthTimeMs   int64
+	EndedAtMs    sql.NullInt64
+	EndReason    string
+	SourceIp     string
+	UserAgent    string
+}
+
+type SessionPolicy struct {
+	ID          int64
+	IdleMs      int64
+	MaxLengthMs int64
+	UpdatedAtMs int64
+}
+
+type SignInRequest struct {
+	Digest      string
+	Provider    string
+	Nonce       string
+	Verifier    string
+	ReturnPath  string
+	CreatedAtMs int64
+	ExpiresAtMs int64
 }
 
 type Stack struct {

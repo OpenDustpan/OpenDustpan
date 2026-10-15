@@ -307,21 +307,33 @@ type GrantInput struct {
 // Grant gives the role in to the subject in on the object in, for granter,
 // with the entry e. It checks that the subject exists, that the namespace
 // of the object exists, that a role with an operator or administration
-// action goes on the installation only, and that granter holds every action
-// of the role on the object, directly or through an object that holds it.
-// The caller has already authorized the manage-access action of the object.
+// action goes on the installation only, that a grant on a principal names a
+// service principal and a role with delegation actions only, and that
+// granter holds every action of the role on the object, directly or through
+// an object that holds it. A role with a delegation action also needs
+// server:manage-access on the installation. The caller has already
+// authorized the manage-access action of the object.
+//
+// The audit entry of a grant to a service principal names, in the change
+// "tokenManagers", every holder of principal:manage-tokens on that
+// principal: each of them can act as the principal, with the new grant
+// too.
 func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Principal, in GrantInput) (Grant, error) {
 	role, err := s.GetRole(ctx, in.Role)
 	if err != nil {
 		return Grant{}, err
 	}
 
-	if in.Object, err = s.existingUnit(ctx, in.Object); err != nil {
+	if in.Object, err = s.existingObject(ctx, in.Object); err != nil {
 		return Grant{}, err
 	}
 
 	fence, err := s.checkGrant(ctx, granter, in, role)
 	if err != nil {
+		return Grant{}, err
+	}
+
+	if e, err = s.withTokenManagers(ctx, e, in.Subject); err != nil {
 		return Grant{}, err
 	}
 
@@ -351,7 +363,7 @@ func (s *Service) Revoke(
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
 	}
 
-	if obj, err = s.existingUnit(ctx, obj); err != nil {
+	if obj, err = s.existingObject(ctx, obj); err != nil {
 		return Grant{}, err
 	}
 
@@ -409,7 +421,7 @@ func (s *Service) ListGrants(ctx context.Context, obj identity.Object, req PageR
 	limit := q.Limit
 	q.Limit++
 
-	if obj, err = s.existingUnit(ctx, obj); err != nil {
+	if obj, err = s.existingObject(ctx, obj); err != nil {
 		return Page{}, err
 	}
 
@@ -591,8 +603,9 @@ func (s *Service) CheckGroupGrants(ctx context.Context, caller identity.Principa
 
 // CheckPrincipalGrants implements principal.Guard: caller must hold every
 // action that the current grants of the principal give, on each of their
-// objects. The delete of a principal also ends its memberships, so the
-// grants of each of its current groups count too.
+// objects. The delete of a principal also ends its memberships, and the
+// enable restores them, so the grants of each of its current groups count
+// too.
 func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Principal, principalID string) error {
 	if caller.Admin {
 		return nil
@@ -600,7 +613,7 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 
 	p, err := s.directory.GetPrincipal(ctx, principalID)
 	if errors.Is(err, principal.ErrNotFound) {
-		// Nothing to take away: the store answers the delete.
+		// Nothing to take away or restore: the store answers the delete or the enable.
 		return nil
 	}
 
@@ -620,6 +633,76 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 		if err := s.checkSubjectGrants(ctx, caller, subject); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// CheckMove runs the escalation check of a move. A grant on the target that is
+// added after the check and before the move is written is not checked here.
+// Only a caller with manage-access on the collection can add a grant to it, and
+// that caller's own escalation check covers the grant, so the result is a
+// normal grant on the collection and not a silent escalation.
+//
+// CheckMove refuses a move of the unit into the collection target unless the
+// caller holds, on the unit, every action of every role that the target
+// grants. A move gives the unit each grant of the target, so the check is the
+// same one that a direct grant on the unit runs. It returns ErrNotFound when
+// the unit or the target does not exist, and an error that wraps
+// identity.ErrDenied and ErrEscalation when a grant of the target gives an
+// action that the caller does not hold on the unit. A grant whose role no
+// longer exists gives nothing, so it is skipped. On success it returns the
+// stable ID of the target that it checked. The move is written with that ID,
+// so a collection deleted and created again after the check is refused.
+func (s *Service) CheckMove(
+	ctx context.Context, caller identity.Principal, unit, target identity.Object,
+) (string, error) {
+	withID, err := s.existingObject(ctx, unit)
+	if err != nil {
+		return "", fmt.Errorf("move %s: %w", unit.String(), err)
+	}
+
+	targetWithID, err := s.existingObject(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("move %s into %s: %w", unit.String(), target.String(), err)
+	}
+
+	cursor := ""
+
+	for {
+		page, err := s.ListGrants(ctx, targetWithID, PageRequest{Cursor: cursor, Limit: MaxLimit, Holder: "", Role: ""})
+		if err != nil {
+			return "", fmt.Errorf("grants of %s: %w", target.String(), err)
+		}
+
+		for i := range page.Grants {
+			if err := s.checkMoveGrant(ctx, caller, withID, page.Grants[i].Grant); err != nil {
+				return "", err
+			}
+		}
+
+		if page.NextCursor == "" {
+			return targetWithID.CollectionID(), nil
+		}
+
+		cursor = page.NextCursor
+	}
+}
+
+// checkMoveGrant checks one grant of a move target against the unit it would
+// reach. A role that no longer exists gives nothing, so it passes.
+func (s *Service) checkMoveGrant(ctx context.Context, caller identity.Principal, unit identity.Object, g Grant) error {
+	role, err := s.GetRole(ctx, g.Role)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("role of grant %s: %w", g.ID, err)
+	}
+
+	if err := s.checkEscalation(ctx, caller, unit, role); err != nil {
+		return fmt.Errorf("move %s: %w: %w", unit.String(), identity.ErrDenied, err)
 	}
 
 	return nil
@@ -646,22 +729,97 @@ func (s *Service) checkGrant(
 		return none, fmt.Errorf("grant on %q: %w", in.Object.String(), err)
 	}
 
-	if kind == ObjectCollection {
-		// The core has no collection port yet (#478), so no collection
-		// exists, and a grant cannot name one before it exists.
-		return none, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, in.Object.String())
-	}
-
-	if kind != ObjectInstallation {
-		for _, a := range role.Actions {
-			if family, _ := FamilyOf(a); family != FamilyData {
-				return none, fmt.Errorf("%w: role %q holds %s, which only a grant on the installation can give",
-					ErrInvalid, role.ID, a)
-			}
+	switch kind {
+	case ObjectInstallation:
+	case ObjectPrincipal:
+		if err := s.checkPrincipalObject(ctx, in.Object, role); err != nil {
+			return none, err
 		}
+	case ObjectNamespace, ObjectCollection, ObjectUnit:
+		if a, ok := actionOutside(role, FamilyData); ok {
+			return none, fmt.Errorf("%w: role %q holds %s, which only a grant on the installation can give",
+				ErrInvalid, role.ID, a)
+		}
+	default:
+		return none, fmt.Errorf("%w: object %q takes no grant", ErrInvalid, in.Object.String())
 	}
 
 	return fence, s.checkEscalation(ctx, granter, in.Object, role)
+}
+
+// checkPrincipalObject refuses a grant on obj, a principal, unless the
+// principal is a service principal and role holds delegation actions only.
+// It returns principal.ErrNotFound when the principal does not exist.
+func (s *Service) checkPrincipalObject(ctx context.Context, obj identity.Object, role Role) error {
+	p, err := s.directory.GetPrincipal(ctx, obj.PrincipalID())
+	if err != nil {
+		return fmt.Errorf("grant on %q: %w", obj.String(), err)
+	}
+
+	if p.Kind != principal.KindService {
+		return fmt.Errorf("%w: principal %q is a %s principal; only a service principal takes a grant",
+			ErrInvalid, p.ID, p.Kind)
+	}
+
+	if len(role.Actions) == 0 {
+		return fmt.Errorf("%w: role %q holds no principal action; a grant on a principal needs one, "+
+			"for example the role %s", ErrInvalid, role.ID, RoleTokenManager)
+	}
+
+	if a, ok := actionOutside(role, FamilyDelegation); ok {
+		return fmt.Errorf("%w: role %q holds %s; a grant on a principal can give principal actions only, "+
+			"for example the role %s", ErrInvalid, role.ID, a, RoleTokenManager)
+	}
+
+	return nil
+}
+
+// checkDelegationGranter refuses a role with a delegation action unless
+// granter holds server:manage-access on the installation. A delegation
+// action lets its holder act as a service principal, with every grant that
+// the principal has, so only a principal that manages every grant can give
+// it.
+func (s *Service) checkDelegationGranter(ctx context.Context, granter identity.Principal, role Role) error {
+	if !slices.ContainsFunc(role.Actions, func(a identity.Action) bool { return families[a] == FamilyDelegation }) {
+		return nil
+	}
+
+	err := s.authz.Authorize(ctx, granter, identity.ActionServerManageAccess, identity.ServerObject())
+	if errors.Is(err, identity.ErrDenied) {
+		return fmt.Errorf("%w: role %q holds a principal action, which needs %s on the installation",
+			ErrEscalation, role.ID, identity.ActionServerManageAccess)
+	}
+
+	return err
+}
+
+// withTokenManagers returns e with the change "tokenManagers" when subject
+// is a service principal: the sorted holders of principal:manage-tokens on
+// it. It returns e as it is for any other subject.
+func (s *Service) withTokenManagers(ctx context.Context, e audit.Entry, subject Subject) (audit.Entry, error) {
+	if subject.Kind != SubjectPrincipal {
+		return e, nil
+	}
+
+	p, err := s.directory.GetPrincipal(ctx, subject.ID)
+	if err != nil {
+		return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
+	}
+
+	if p.Kind != principal.KindService {
+		return e, nil
+	}
+
+	holders, err := s.TokenManagers(ctx, p.ID)
+	if err != nil {
+		return e, err
+	}
+
+	e.Changes = append(slices.Clone(e.Changes), audit.Change{
+		Key: "tokenManagers", Old: nil, New: strings.Join(holders, ", "), Layer: "", TakesEffect: "",
+	})
+
+	return e, nil
 }
 
 // fenceOf returns the fence of the namespace of obj, or the zero fence for
@@ -681,7 +839,9 @@ func (s *Service) fenceOf(ctx context.Context, obj identity.Object) (namespace.F
 }
 
 // checkEscalation refuses a role with an action that granter does not hold
-// on obj.
+// on obj, and a role with a delegation action when granter does not hold
+// server:manage-access on the installation. A grant, a revoke, a change of
+// who holds a grant and a change of a role all run it.
 func (s *Service) checkEscalation(
 	ctx context.Context,
 	granter identity.Principal,
@@ -690,6 +850,10 @@ func (s *Service) checkEscalation(
 ) error {
 	if granter.Admin {
 		return nil
+	}
+
+	if err := s.checkDelegationGranter(ctx, granter, role); err != nil {
+		return err
 	}
 
 	held, err := s.authz.heldActions(ctx, granter, obj)
@@ -727,6 +891,37 @@ func (s *Service) checkSubject(ctx context.Context, subject Subject) error {
 	return nil
 }
 
+// existingObject resolves the stable ID of a unit or a collection, and returns
+// ErrNotFound when it does not exist: a grant can only name an object that
+// exists. Any other object is returned as it is.
+func (s *Service) existingObject(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if obj.IsCollection() {
+		return s.existingCollection(ctx, obj)
+	}
+
+	return s.existingUnit(ctx, obj)
+}
+
+// existingCollection resolves the stable ID of a collection. Without a
+// collection port no collection is found, so every grant on one answers
+// ErrNotFound.
+func (s *Service) existingCollection(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if s.authz.collections == nil {
+		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	id, found, err := s.authz.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read collection %q: %w", obj.String(), err)
+	}
+
+	if !found {
+		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	return obj.WithCollectionID(id), nil
+}
+
 // existingUnit returns obj with its stable ID when obj is a unit, and
 // ErrNotFound when no such unit exists: a grant names a unit that exists, so
 // that it follows the unit and not the name. Any other object returns as
@@ -751,6 +946,10 @@ func (s *Service) existingUnit(ctx context.Context, obj identity.Object) (identi
 // sameTarget reports whether a and b are the same object for a grant: the
 // same stable ID for units, the same wire form for any other object.
 func sameTarget(a, b identity.Object) bool {
+	if a.IsCollection() || b.IsCollection() {
+		return a.IsCollection() && b.IsCollection() && a.CollectionID() != "" && a.CollectionID() == b.CollectionID()
+	}
+
 	if a.IsUnit() || b.IsUnit() {
 		return a.IsUnit() && b.IsUnit() && a.UnitID() != "" && a.UnitID() == b.UnitID()
 	}
@@ -774,37 +973,49 @@ func (s *Service) checkGrantHeld(ctx context.Context, caller identity.Principal,
 	return s.checkEscalation(ctx, caller, g.Object, role)
 }
 
-// checkPlacement refuses a role with an operator or administration action
-// while a current grant gives it on an object other than the installation:
-// such a grant would then give those actions inside a namespace.
+// checkPlacement refuses a role with an action outside the data family
+// while a current grant gives it on a namespace, a collection or a unit,
+// and a role with an action outside the delegation family while a current
+// grant gives it on a principal: such a grant would then give those actions
+// on an object that must not take them.
 func (s *Service) checkPlacement(ctx context.Context, r Role) error {
-	if !givesBeyondData(r) {
-		return nil
+	if _, ok := actionOutside(r, FamilyData); ok {
+		below, err := s.store.RoleGrantedBelowInstallation(ctx, r.ID)
+		if err != nil {
+			return fmt.Errorf("read grants of role %q: %w", r.ID, err)
+		}
+
+		if below {
+			return fmt.Errorf("%w: role %q is granted below the installation, so it can hold data actions only",
+				ErrInUse, r.ID)
+		}
 	}
 
-	below, err := s.store.RoleGrantedBelowInstallation(ctx, r.ID)
-	if err != nil {
-		return fmt.Errorf("read grants of role %q: %w", r.ID, err)
-	}
+	if _, ok := actionOutside(r, FamilyDelegation); ok || len(r.Actions) == 0 {
+		onPrincipal, err := s.store.RoleGrantedOnPrincipal(ctx, r.ID)
+		if err != nil {
+			return fmt.Errorf("read grants of role %q: %w", r.ID, err)
+		}
 
-	if below {
-		return fmt.Errorf("%w: role %q is granted below the installation, so it can hold data actions only",
-			ErrInUse, r.ID)
+		if onPrincipal {
+			return fmt.Errorf("%w: role %q is granted on a principal, so it can hold principal actions only",
+				ErrInUse, r.ID)
+		}
 	}
 
 	return nil
 }
 
-// givesBeyondData reports whether r holds an operator or administration
-// action.
-func givesBeyondData(r Role) bool {
+// actionOutside returns the first action of r that is not in the family f,
+// and false when every action of r is in f.
+func actionOutside(r Role, f Family) (identity.Action, bool) {
 	for _, a := range r.Actions {
-		if family, _ := FamilyOf(a); family != FamilyData {
-			return true
+		if family, _ := FamilyOf(a); family != f {
+			return a, true
 		}
 	}
 
-	return false
+	return "", false
 }
 
 // checkSubjectGrants checks each current grant of subject with

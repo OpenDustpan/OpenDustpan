@@ -13,7 +13,9 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -114,7 +116,9 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 
 	seedStack(t, st, "acme", "web", "prod")
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
+	authz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st},
+	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}
@@ -132,6 +136,14 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		t.Fatalf("principal service: %v", err)
 	}
 
+	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Store: st, Principals: st, Freshness: nil, Grants: tokengrants.Check{Grants: grants, Principals: st},
+		Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("token service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:  subjectAuthenticator{},
 		Authorizer:     authz,
@@ -144,10 +156,13 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
 		Principals:     principals,
-		Tokens:         nil,
+		Tokens:         tokens,
 		Access:         grants,
 		Audit:          entries(st),
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
+		IPAllowlists:   nil,
+		SessionPolicy:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -562,6 +577,55 @@ func TestAccountAdministratorCannotReachOperatorActions(t *testing.T) {
 	}
 
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/metrics", "", http.StatusForbidden}, nil)
+}
+
+// TestEnableNeedsGrantActions proves that the enable route needs every
+// action that the grants of the principal give: an account administrator
+// cannot enable a disabled site administrator, but a site administrator
+// that is not a bootstrap admin can.
+func TestEnableNeedsGrantActions(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	f.seed(t, "boss", access.RoleSiteAdministrator, identity.ServerObject())
+	f.seed(t, "sam", access.RoleSiteAdministrator, identity.ServerObject())
+
+	_, err := f.store.SweepInactive(t.Context(), accesstoken.Sweep{
+		Inactivity: time.Hour,
+		Tokens:     false,
+		Accounts:   true,
+	}, storetest.ServerChange)
+	if err != nil {
+		t.Fatalf("sweep inactive: %v", err)
+	}
+
+	f.as(t, "ann", apiCall{
+		method: http.MethodPost, path: "/api/server/principals/prn-boss/enable", body: "",
+		want: http.StatusForbidden,
+	}, nil)
+
+	boss, err := f.store.GetPrincipal(t.Context(), "prn-boss")
+	if err != nil {
+		t.Fatalf("get boss: %v", err)
+	}
+
+	if boss.DisabledAt.IsZero() {
+		t.Fatal("boss is enabled after a refused enable, want disabled")
+	}
+
+	f.as(t, "sam", apiCall{
+		method: http.MethodPost, path: "/api/server/principals/prn-boss/enable", body: "",
+		want: http.StatusOK,
+	}, nil)
+
+	boss, err = f.store.GetPrincipal(t.Context(), "prn-boss")
+	if err != nil {
+		t.Fatalf("get boss: %v", err)
+	}
+
+	if !boss.DisabledAt.IsZero() {
+		t.Fatal("boss is disabled after an allowed enable, want enabled")
+	}
 }
 
 // TestGrantListNamesHoldersAndFilters lists the grants on acme with the

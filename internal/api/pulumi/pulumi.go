@@ -72,6 +72,12 @@ const (
 	unitTool = "pulumi"
 )
 
+// AddressGate checks the client address against the IP allowlist of a
+// namespace. Nil means no check.
+type AddressGate interface {
+	CheckAddress(ctx context.Context, ns namespace.Name) error
+}
+
 // Config holds the dependencies of a Handler.
 type Config struct {
 	Stacks        *stack.Service
@@ -80,6 +86,7 @@ type Config struct {
 	Namespaces    *namespace.Service
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
+	AddressGate   AddressGate
 	Logger        *slog.Logger
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
@@ -114,6 +121,7 @@ type Handler struct {
 	namespaces     *namespace.Service
 	authn          identity.Authenticator
 	authz          identity.Authorizer
+	addressGate    AddressGate
 	logger         *slog.Logger
 	baseURL        baseurl.Resolver
 	gate           *bodygate.Gate
@@ -163,6 +171,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces:     cfg.Namespaces,
 		authn:          cfg.Authenticator,
 		authz:          cfg.Authorizer,
+		addressGate:    cfg.AddressGate,
 		logger:         cfg.Logger,
 		baseURL:        cfg.BaseURL,
 		gate:           cfg.Gate,

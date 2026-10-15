@@ -66,12 +66,12 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "subjects of a caller are its principal and current groups", test: testSubjectsOf},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntry},
 		{name: "grants of a subject are its current grants on every object", test: testGrantsOf},
-		{name: "a role granted below the installation is reported", test: testRoleGrantedBelow},
+		{name: "a role granted below the installation or on a principal is reported", test: testRoleGrantedBelow},
 		{name: "a unit grant matches its stable ID, not its name", test: testUnitTarget},
 		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
 	}
 
-	for _, tc := range slices.Concat(cases, reviewCases(), unitCases()) {
+	for _, tc := range slices.Concat(cases, reviewCases(), unitCases(), moveCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -409,11 +409,12 @@ func testGrantRoundTrip(t *testing.T, s access.Store) {
 	objects := []identity.Object{
 		identity.ServerObject(),
 		identity.NamespaceObject("acme"),
-		identity.CollectionObject("acme", "payments"),
+		identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"),
 		unit(t, "acme", "web/prod"),
 	}
 
-	for i, obj := range objects {
+	for i := range objects {
+		obj := objects[i]
 		want := newGrant("grt-"+string(rune('a'+i)), opsGroup(), access.RoleViewer, obj)
 		mustCreateGrant(t, s, want)
 
@@ -1034,15 +1035,30 @@ func testRoleGrantedBelow(t *testing.T, s access.Store) {
 	mustCreateGrant(t, s, newGrant("grt-1", opsGroup(), "rol-a", identity.ServerObject()))
 	mustCreateGrant(t, s, newGrant("grt-2", opsGroup(), "rol-b", identity.NamespaceObject("acme")))
 	mustCreateGrant(t, s, newGrant("grt-3", opsGroup(), "rol-c", identity.NamespaceObject("acme")))
+	mustCreateGrant(t, s, newGrant("grt-4", opsGroup(), "rol-d", identity.PrincipalObject("prn-deploy")))
+	mustCreateGrant(t, s, newGrant("grt-5", opsGroup(), "rol-e", identity.PrincipalObject("prn-deploy")))
 
 	if err := revokeGrant(t, s, "grt-3", "acme", entry()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
-	for role, want := range map[string]bool{"rol-a": false, "rol-b": true, "rol-c": false, "rol-none": false} {
+	if err := revokeGrant(t, s, "grt-5", "", entry()); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	below := map[string]bool{"rol-a": false, "rol-b": true, "rol-c": false, "rol-d": false, "rol-none": false}
+	for role, want := range below {
 		got, err := s.RoleGrantedBelowInstallation(ctx, role)
 		if err != nil || got != want {
 			t.Errorf("role %s granted below the installation = %t, %v; want %t", role, got, err, want)
+		}
+	}
+
+	onPrincipal := map[string]bool{"rol-a": false, "rol-b": false, "rol-d": true, "rol-e": false, "rol-none": false}
+	for role, want := range onPrincipal {
+		got, err := s.RoleGrantedOnPrincipal(ctx, role)
+		if err != nil || got != want {
+			t.Errorf("role %s granted on a principal = %t, %v; want %t", role, got, err, want)
 		}
 	}
 }

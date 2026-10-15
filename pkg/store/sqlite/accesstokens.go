@@ -252,40 +252,16 @@ func (s *Store) UpdatePolicy(ctx context.Context, update accesstoken.PolicyUpdat
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	var stored accesstoken.Policy
-
-	err := s.inTx(ctx, func(q *db.Queries) error {
+	return updateServerSetting(ctx, s, func(q *db.Queries) (accesstoken.Policy, error) {
 		row, err := q.GetAccessTokenPolicy(ctx)
 		if err != nil {
-			return fmt.Errorf("select access token policy: %w", err)
+			return accesstoken.Policy{}, fmt.Errorf("select access token policy: %w", err)
 		}
 
-		p, e, err := update(policyOf(row))
-		if err != nil {
-			return err
-		}
-
-		if err := validServerEntry(e); err != nil {
-			return err
-		}
-
-		if err := setPolicy(ctx, q, p); err != nil {
-			return err
-		}
-
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
-			return fmt.Errorf("append audit entry: %w", err)
-		}
-
-		stored = p
-
-		return nil
+		return policyOf(row), nil
+	}, update, func(q *db.Queries, p accesstoken.Policy) error {
+		return setPolicy(ctx, q, p)
 	})
-	if err != nil {
-		return accesstoken.Policy{}, err
-	}
-
-	return stored, nil
 }
 
 // policyOf maps the generated policy row to the policy.

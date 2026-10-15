@@ -75,6 +75,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "a restore under a taken name fails and under a new name works", test: testRestoreStackUnderANewName},
 		{name: "a restore or purge of an unknown or live stack is not found", test: testRestoreOrPurgeUnknownStack},
 		{name: "a purge removes a deleted stack for good", test: testPurgeStack},
+		{name: "a sweep purge checks the retention in its transaction", test: testSweepPurgeChecksTheRetention},
 		{name: "a purge ends the grants on the stack", test: testPurgeStackRevokesItsGrants},
 		{name: "an audit entry on a stack gets its stable ID", test: testAppendFillsStackID},
 		{

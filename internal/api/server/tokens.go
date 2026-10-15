@@ -9,13 +9,18 @@ package server
 //   - server:read-tokens lists and reads the tokens of every principal,
 //     never their secrets. Its object is @server.
 //   - server:manage-tokens creates and rotates the personal tokens of other
-//     persons, and revokes any token. Its object is @server.
-//   - server:manage-service-tokens creates and rotates service tokens under
-//     /api/server/service-tokens. Its object is @server.
+//     persons, and revokes them. Its object is @server.
+//   - principal:manage-tokens creates, rotates and revokes the tokens of a
+//     service principal, under /api/server/principals/{principal}/tokens and
+//     /api/server/service-tokens, and through DELETE /api/server/tokens/{id}.
+//     Its object is the service principal, which the installation holds.
 //
-// A token acts as its principal, so a create or a rotation for another
-// principal runs the escalation check: the caller must hold what that
-// principal holds. A revoke never raises access and needs no check.
+// A token acts as its principal. A create or a rotation of a personal token
+// for another person runs the escalation check: the caller must hold what
+// that person holds, so an administrator can never act as a stronger
+// person. A holder of principal:manage-tokens can act as the service
+// principal, with every grant that it has now or gets later: the grant is
+// the decision, and no escalation check runs. A revoke never raises access.
 //
 // A create and a rotation answer the secret of the new token once, with
 // Cache-Control: no-store. No other answer holds a secret, and the server
@@ -33,7 +38,10 @@ package server
 // token when the request names none).
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -55,6 +63,10 @@ var (
 	)
 	errTokenQuery = errors.New(
 		"invalid token list query: status is active, expiring or ended, and limit is a number from 1 to 1000",
+	)
+	errPrincipalTokenBody = errors.New(
+		`invalid access token body: provide {"name":"...","expiresAt":"<RFC 3339 time>"}; ` +
+			`the path names the principal`,
 	)
 )
 
@@ -112,6 +124,22 @@ type rotationResponse struct {
 	Previous tokenResponse    `json:"previous"`
 }
 
+// limitedTokenListResponse is one page of tokens with the longest lifetime
+// that a new token of the listed principal can get.
+//
+// Contract: never remove or rename these fields.
+type limitedTokenListResponse struct {
+	tokenListResponse
+
+	// MaxLifetimeSeconds is the maximum lifetime, in seconds, that applies
+	// to a token of this caller and this principal: a create or a rotation
+	// that asks for a later expiry answers 400. Today it is the maximum of
+	// the installation policy. When a narrower scope, such as a namespace,
+	// sets a shorter maximum, this field answers the shorter one, so its
+	// meaning does not change.
+	MaxLifetimeSeconds int64 `json:"maxLifetimeSeconds"`
+}
+
 // tokenListResponse wraps one page of tokens. Total is the count of every
 // token that matches the filters, on every page. NextCursor is empty on the
 // last page.
@@ -127,6 +155,13 @@ type createTokenRequest struct {
 	PrincipalID *string    `json:"principalID"`
 	Name        *string    `json:"name"`
 	ExpiresAt   *time.Time `json:"expiresAt"`
+}
+
+// principalTokenRequest is the body of a token create on the path of a
+// principal. A missing expiresAt takes the default lifetime.
+type principalTokenRequest struct {
+	Name      *string    `json:"name"`
+	ExpiresAt *time.Time `json:"expiresAt"`
 }
 
 // rotateTokenRequest is the body of a rotation. Each field is optional.
@@ -145,6 +180,9 @@ const (
 	serviceTokenPath  = "/api/server/service-tokens/{id}"
 	ownTokensPath     = "/api/server/caller/tokens"
 	ownTokenPath      = "/api/server/caller/tokens/{id}"
+	// principalTokensPath holds the tokens of one service principal.
+	principalTokensPath = "/api/server/principals/{principal}/tokens"
+	principalTokenPath  = "/api/server/principals/{principal}/tokens/{id}"
 )
 
 // optionalWireTime formats t for the wire, or answers nil for the zero
@@ -254,52 +292,212 @@ func resolveCaller(_ http.ResponseWriter, _ *http.Request) (identity.Object, err
 func (h *Handler) tokenRoutes() []Route {
 	read := []identity.Action{identity.ActionServerReadTokens}
 	manage := []identity.Action{identity.ActionServerManageTokens}
-	service := []identity.Action{identity.ActionServerManageServiceTokens}
 
-	return []Route{
+	return append([]Route{
 		{
 			Method: http.MethodPost, Path: tokensPath, Scope: ScopeAuthorized, Actions: manage, Resolve: resolveServer,
-			Serve: h.serveTokenChange(identity.ActionServerManageTokens, createToken(accesstoken.ScopePersonal)),
+			ActionsFor: nil,
+			Serve:      h.serveTokenChange(identity.ActionServerManageTokens, createToken(accesstoken.ScopePersonal)),
 		},
 		{
 			Method: http.MethodGet, Path: tokensPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.serveTokenRead(listTokens),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveTokenRead(listTokens),
 		},
 		{
 			Method: http.MethodGet, Path: tokenPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.serveTokenRead(getToken),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveTokenRead(getToken),
 		},
 		{
-			Method: http.MethodDelete, Path: tokenPath, Scope: ScopeAuthorized, Actions: manage, Resolve: resolveServer,
-			Serve: h.serveTokenChange(identity.ActionServerManageTokens, revokeToken(accesstoken.ScopePersonal)),
+			// A service token needs principal:manage-tokens on its
+			// principal, a personal token server:manage-tokens on the
+			// installation.
+			Method: http.MethodDelete, Path: tokenPath, Scope: ScopeAuthorized,
+			Actions:    []identity.Action{identity.ActionServerManageTokens, identity.ActionPrincipalManageTokens},
+			Resolve:    h.resolveTokenOwner,
+			ActionsFor: revokeActions,
+			Serve:      h.serveTokenChange(identity.ActionServerManageTokens, revokeToken(accesstoken.ScopePersonal)),
 		},
 		{
 			Method: http.MethodPost, Path: tokenPath + "/rotate", Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.serveTokenChange(identity.ActionServerManageTokens, rotateToken(accesstoken.ScopePersonal)),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.serveTokenChange(identity.ActionServerManageTokens, rotateToken(accesstoken.ScopePersonal)),
+		},
+	}, h.serviceTokenRoutes()...)
+}
+
+// serviceTokenRoutes returns the rows of the tokens of service principals.
+// Each declares principal:manage-tokens on the service principal of the
+// token.
+func (h *Handler) serviceTokenRoutes() []Route {
+	service := []identity.Action{identity.ActionPrincipalManageTokens}
+	serve := func(op tokenOp) RouteHandler {
+		return h.serveTokenChange(identity.ActionPrincipalManageTokens, op)
+	}
+
+	return []Route{
+		{
+			Method: http.MethodPost, Path: serviceTokensPath, Scope: ScopeAuthorized, Actions: service,
+			Resolve: resolveServiceTokenCreate, ActionsFor: nil, Serve: serve(createToken(accesstoken.ScopeService)),
 		},
 		{
-			Method:  http.MethodPost,
-			Path:    serviceTokensPath,
-			Scope:   ScopeAuthorized,
-			Actions: service,
-			Resolve: resolveServer,
-			Serve: h.serveTokenChange(
-				identity.ActionServerManageServiceTokens,
-				createToken(accesstoken.ScopeService),
-			),
+			Method: http.MethodPost, Path: serviceTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: service,
+			Resolve: h.resolveTokenOwner, ActionsFor: nil, Serve: serve(rotateToken(accesstoken.ScopeService)),
 		},
 		{
-			Method:  http.MethodPost,
-			Path:    serviceTokenPath + "/rotate",
-			Scope:   ScopeAuthorized,
-			Actions: service,
-			Resolve: resolveServer,
-			Serve: h.serveTokenChange(
-				identity.ActionServerManageServiceTokens,
-				rotateToken(accesstoken.ScopeService),
-			),
+			Method: http.MethodPost, Path: principalTokensPath, Scope: ScopeAuthorized, Actions: service,
+			Resolve: resolvePrincipalPath, ActionsFor: nil, Serve: serve(createPrincipalToken),
 		},
+		{
+			Method: http.MethodGet, Path: principalTokensPath, Scope: ScopeAuthorized, Actions: service,
+			Resolve: resolvePrincipalPath, ActionsFor: nil, Serve: h.serveTokenRead(listPrincipalTokens),
+		},
+		{
+			Method: http.MethodPost, Path: principalTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: service,
+			Resolve: resolvePrincipalPath, ActionsFor: nil,
+			Serve: serve(ofPathPrincipal(rotateToken(accesstoken.ScopeService))),
+		},
+		{
+			Method: http.MethodDelete, Path: principalTokenPath, Scope: ScopeAuthorized, Actions: service,
+			Resolve: resolvePrincipalPath, ActionsFor: nil,
+			Serve: serve(ofPathPrincipal(revokeToken(accesstoken.ScopeService))),
+		},
+	}
+}
+
+// revokeActions returns the action of DELETE /api/server/tokens/{id} on
+// obj: principal:manage-tokens on the principal of a service token, else
+// server:manage-tokens.
+func revokeActions(obj identity.Object) []identity.Action {
+	if obj.IsPrincipal() {
+		return []identity.Action{identity.ActionPrincipalManageTokens}
+	}
+
+	return []identity.Action{identity.ActionServerManageTokens}
+}
+
+// resolvePrincipalPath returns the principal that the path names. A
+// malformed ID answers 400.
+func resolvePrincipalPath(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+	return identity.ParsePrincipalObject(r.PathValue("principal"))
+}
+
+// resolveTokenOwner returns the object of a change of the token in the
+// path: the principal of a service token, else the installation. A token
+// that does not exist resolves to the installation, and the Service
+// answers 404 after the route check.
+func (h *Handler) resolveTokenOwner(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+	if h.tokens == nil {
+		return identity.ServerObject(), nil
+	}
+
+	t, err := h.tokens.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, accesstoken.ErrNotFound) || errors.Is(err, accesstoken.ErrInvalid) {
+		return identity.ServerObject(), nil
+	}
+
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("read access token: %w", err)
+	}
+
+	if t.Kind != accesstoken.KindService {
+		return identity.ServerObject(), nil
+	}
+
+	return identity.ParsePrincipalObject(t.PrincipalID)
+}
+
+// resolveServiceTokenCreate returns the object of POST
+// /api/server/service-tokens: the principal that the body names. It reads
+// the body under the limit of a request body and restores r.Body, so the
+// handler reads it again. A body with no principalID answers 400, before
+// the route check and before any write. It does not read the principal, so
+// a caller without the action gets 403 for every ID, and an unknown
+// principal answers 404 from the Service after the route check.
+func resolveServiceTokenCreate(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
+	body, err := readBody(w, r, errTokenBody)
+	if err != nil {
+		return identity.Object{}, err
+	}
+
+	r.Body = io.NopCloser(bytes.NewReader(body))
+
+	var req createTokenRequest
+	if decodeErr := decodeBody(body, &req, errTokenBody); decodeErr != nil {
+		return identity.Object{}, decodeErr
+	}
+
+	if req.PrincipalID == nil {
+		return identity.Object{}, errTokenBody
+	}
+
+	obj, err := identity.ParsePrincipalObject(*req.PrincipalID)
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("%w: %q", accesstoken.ErrPrincipalNotFound, *req.PrincipalID)
+	}
+
+	return obj, nil
+}
+
+// createPrincipalToken serves POST /api/server/principals/{principal}/tokens:
+// it issues a token for the service principal in the path and answers 201
+// with the token and its secret. A principal that is not a service
+// principal answers 400, and an unknown one 404.
+func createPrincipalToken(
+	w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
+) (principalResult, error) {
+	id := r.PathValue("principal")
+	object := principal.Ref(id)
+
+	var req principalTokenRequest
+	if err := decodeStrict(w, r, &req, errPrincipalTokenBody); err != nil {
+		return failed(object), err
+	}
+
+	if req.Name == nil {
+		return failed(object), errPrincipalTokenBody
+	}
+
+	in := accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: id, Name: *req.Name}
+	if req.ExpiresAt != nil {
+		in.ExpiresAt = *req.ExpiresAt
+	}
+
+	t, secret, err := svc.Create(r.Context(), p, e, accesstoken.ScopeService, in)
+	if err != nil {
+		return failed(object), err
+	}
+
+	body := newTokenResponse{tokenResponse: tokenOf(t, svc.Now()), Secret: secret.Reveal()}
+
+	return ok(http.StatusCreated, body, accesstoken.TokenRef(t.PrincipalID, t.ID)), nil
+}
+
+// ofPathPrincipal returns op behind a check that the token in the path
+// belongs to the principal in the path: a token of another principal
+// answers 404, so the route of one principal tells nothing about the
+// tokens of another. These routes are for service principals only: a
+// personal token answers 400.
+func ofPathPrincipal(op tokenOp) tokenOp {
+	return func(
+		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
+	) (principalResult, error) {
+		id := r.PathValue("id")
+
+		t, err := svc.Get(r.Context(), id)
+		switch {
+		case err != nil:
+		case t.PrincipalID != r.PathValue("principal"):
+			err = fmt.Errorf("%w: %q", accesstoken.ErrNotFound, id)
+		case t.Kind != accesstoken.KindService:
+			err = fmt.Errorf("%w: a %s token goes through /api/server/tokens", accesstoken.ErrWrongKind, t.Kind)
+		default:
+		}
+
+		if err != nil {
+			return failed(principal.Ref(r.PathValue("principal"))), err
+		}
+
+		return op(w, r, svc, p, e)
 	}
 }
 
@@ -310,20 +508,30 @@ func (h *Handler) ownTokenRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: ownTokensPath, Scope: ScopeAuthorized,
-			Actions: own, Resolve: resolveCaller, Serve: h.serveTokenRead(listOwnTokens),
+			Actions: own, Resolve: resolveCaller, ActionsFor: nil, Serve: h.serveTokenRead(listOwnTokens),
 		},
 		{
-			Method: http.MethodPost, Path: ownTokensPath, Scope: ScopeAuthorized, Actions: own, Resolve: resolveCaller,
-			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, createToken(accesstoken.ScopeOwn)),
+			Method:     http.MethodPost,
+			Path:       ownTokensPath,
+			Scope:      ScopeAuthorized,
+			Actions:    own,
+			Resolve:    resolveCaller,
+			ActionsFor: nil,
+			Serve:      h.serveTokenChange(identity.ActionTokenManageOwn, createToken(accesstoken.ScopeOwn)),
 		},
 		{
-			Method: http.MethodDelete, Path: ownTokenPath, Scope: ScopeAuthorized, Actions: own, Resolve: resolveCaller,
-			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
+			Method:     http.MethodDelete,
+			Path:       ownTokenPath,
+			Scope:      ScopeAuthorized,
+			Actions:    own,
+			Resolve:    resolveCaller,
+			ActionsFor: nil,
+			Serve:      h.serveTokenChange(identity.ActionTokenManageOwn, revokeToken(accesstoken.ScopeOwn)),
 		},
 		{
 			Method: http.MethodPost, Path: ownTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: own,
-			Resolve: resolveCaller,
-			Serve:   h.serveTokenChange(identity.ActionTokenManageOwn, rotateToken(accesstoken.ScopeOwn)),
+			Resolve: resolveCaller, ActionsFor: nil,
+			Serve: h.serveTokenChange(identity.ActionTokenManageOwn, rotateToken(accesstoken.ScopeOwn)),
 		},
 	}
 }
@@ -405,7 +613,42 @@ func listOwnTokens(
 		return failed(""), err
 	}
 
-	return ok(http.StatusOK, tokenPageOf(page, svc.Now()), ""), nil
+	return limitedTokenPage(r, svc, page)
+}
+
+// listPrincipalTokens serves GET /api/server/principals/{principal}/tokens:
+// one page of the tokens of the service principal in the path, newest
+// first, with the query parameters of the other token lists. The principal
+// query parameter is ignored. A principal that is not a service principal
+// answers 400, and an unknown one 404.
+func listPrincipalTokens(
+	_ http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, _ audit.Entry,
+) (principalResult, error) {
+	req, err := tokenPageRequest(r)
+	if err != nil {
+		return failed(""), err
+	}
+
+	page, err := svc.ListOfPrincipal(r.Context(), p, r.PathValue("principal"), req)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return limitedTokenPage(r, svc, page)
+}
+
+// limitedTokenPage answers page with the maximum lifetime of a new token.
+func limitedTokenPage(r *http.Request, svc *accesstoken.Service, page accesstoken.Page) (principalResult, error) {
+	maxLifetime, err := svc.MaxLifetime(r.Context())
+	if err != nil {
+		return failed(""), err
+	}
+
+	body := limitedTokenListResponse{
+		tokenListResponse: tokenPageOf(page, svc.Now()), MaxLifetimeSeconds: int64(maxLifetime / time.Second),
+	}
+
+	return ok(http.StatusOK, body, ""), nil
 }
 
 // tokenPageOf maps one page of tokens to the wire at the time now.
@@ -540,7 +783,7 @@ func classifyToken(err error) (int, string, bool) {
 	case errors.Is(err, identity.ErrRateLimited):
 		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
 	case errors.Is(err, errTokenBody), errors.Is(err, errRotateBody), errors.Is(err, errTokenQuery),
-		errors.Is(err, errPolicyBody),
+		errors.Is(err, errPolicyBody), errors.Is(err, errPrincipalTokenBody),
 		errors.Is(err, accesstoken.ErrInvalid), errors.Is(err, accesstoken.ErrNoTokenForKind):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, accesstoken.ErrNotFound), errors.Is(err, accesstoken.ErrPrincipalNotFound):

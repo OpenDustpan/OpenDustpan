@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -164,6 +166,13 @@ func (s *Service) reviewEntries(ctx context.Context, rs ReviewStore, r reviewRea
 		return ReviewPage{}, err
 	}
 
+	uses, err := s.lastAccess(ctx, rs, rows)
+	if err != nil {
+		return ReviewPage{}, err
+	}
+
+	setLastAccess(rows, uses)
+
 	for i := range rows {
 		page.Entries = append(page.Entries, reviewEntry(r.q, rows[i], states, r.grantAccess))
 	}
@@ -307,11 +316,13 @@ func (s *Service) bootstrapEntries(scope ReviewScope) []ReviewEntry {
 			InheritedFrom: nil, EffectiveUntil: nil, EffectiveFrom: time.Time{}, ObjectState: ObjectLive,
 			Holder: BootstrapHolder, CanGrantAccess: true,
 			Row: ReviewRow{
-				RevokedAt: nil, MemberCount: nil, Via: nil, SubjectName: subject, RevokedBy: "",
+				RevokedAt: nil, LastAccessAt: nil, MemberCount: nil, Via: nil, SubjectName: subject, RevokedBy: "",
 				Grant: Grant{
 					CreatedAt: time.Time{}, Condition: nil, Object: server, ID: "", Role: RoleAdmin,
 					CreatedBy: "", Subject: Subject{Kind: "", ID: ""},
 				},
+				// A bootstrap row carries no last access.
+				LastAccessTracked: false,
 			},
 		}
 
@@ -347,6 +358,69 @@ func (s *Service) unitStates(ctx context.Context, rs ReviewStore, rows []ReviewR
 	return states, nil
 }
 
+// lastAccess reads the latest last-use time of the access tokens of each
+// principal of rows, with one lookup for the page.
+func (s *Service) lastAccess(ctx context.Context, rs ReviewStore, rows []ReviewRow) (map[string]time.Time, error) {
+	uses, err := rs.LastAccess(ctx, principalIDsOf(rows))
+	if err != nil {
+		return nil, fmt.Errorf("read last access: %w", err)
+	}
+
+	return uses, nil
+}
+
+// principalOfRow returns the ID of the principal that a row speaks of: the
+// member of a row read through a group, or the subject of a grant to a
+// principal. It is empty for a group row with no Via.
+func principalOfRow(row *ReviewRow) string {
+	switch {
+	case row.Via != nil:
+		return row.Via.PrincipalID
+	case row.Grant.Subject.Kind == SubjectPrincipal:
+		return row.Grant.Subject.ID
+	default:
+		return ""
+	}
+}
+
+// principalIDsOf returns the IDs of the principals of rows, deduplicated.
+func principalIDsOf(rows []ReviewRow) []string {
+	var ids []string
+
+	seen := map[string]bool{}
+
+	for i := range rows {
+		id := principalOfRow(&rows[i])
+		if id == "" || seen[id] {
+			continue
+		}
+
+		seen[id] = true
+		ids = append(ids, id)
+	}
+
+	return ids
+}
+
+// setLastAccess sets the last access of each row of rows from uses: a row
+// of a principal is tracked, with the latest use of its tokens, or with no
+// time when no token was ever used. A group row with no Via keeps neither.
+func setLastAccess(rows []ReviewRow, uses map[string]time.Time) {
+	for i := range rows {
+		id := principalOfRow(&rows[i])
+		if id == "" {
+			continue
+		}
+
+		rows[i].LastAccessTracked = true
+
+		if at, ok := uses[id]; ok {
+			used := at
+			rows[i].LastAccessAt = &used
+		}
+	}
+}
+
 // reviewScope returns the scope of the export of obj, and the roles that
 // manage access.
 func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewScope, map[string]bool, error) {
@@ -370,6 +444,12 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 
 	if kind == ObjectCollection {
 		return scope, nil, fmt.Errorf("export of %q: %w", obj.String(), ErrCollectionReview)
+	}
+
+	if kind == ObjectPrincipal {
+		scope, err = s.principalReviewScope(ctx, obj)
+
+		return scope, grantAccess, err
 	}
 
 	if nsErr := s.reviewNamespace(ctx, obj); nsErr != nil {
@@ -400,6 +480,76 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 	scope.ContainerRoles = roles
 
 	return scope, grantAccess, nil
+}
+
+// principalReviewScope returns the scope of the export of obj, a service
+// principal: the grants on the principal, and the grants on the
+// installation with a role that holds principal:manage-tokens. So the
+// export answers who can make a token for the principal and act as it. It
+// returns ErrNotFound when the principal does not exist, and ErrInvalid
+// when it is not a service principal.
+func (s *Service) principalReviewScope(ctx context.Context, obj identity.Object) (ReviewScope, error) {
+	scope := ReviewScope{Object: obj, Namespace: "", Containers: nil, ContainerRoles: nil, All: false}
+
+	p, err := s.directory.GetPrincipal(ctx, obj.PrincipalID())
+	if errors.Is(err, principal.ErrNotFound) {
+		return scope, fmt.Errorf("%w: principal %q", ErrNotFound, obj.PrincipalID())
+	}
+
+	if err != nil {
+		return scope, fmt.Errorf("read principal: %w", err)
+	}
+
+	if p.Kind != principal.KindService {
+		return scope, fmt.Errorf("%w: principal %q is a %s principal; only a service principal has this export",
+			ErrInvalid, p.ID, p.Kind)
+	}
+
+	if scope.ContainerRoles, err = s.authz.rolesWith(ctx, identity.ActionPrincipalManageTokens); err != nil {
+		return scope, err
+	}
+
+	scope.Containers = []string{identity.ServerObject().String()}
+
+	return scope, nil
+}
+
+// TokenManagers returns the current holders of principal:manage-tokens on
+// the service principal with the ID id, sorted and each once: the text form
+// of the subject of each grant that gives it, and the subject of each
+// bootstrap admin token. A group stands for each of its members.
+func (s *Service) TokenManagers(ctx context.Context, id string) ([]string, error) {
+	obj, err := identity.ParsePrincipalObject(id)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+
+	seen := map[string]bool{}
+	req := ReviewRequest{From: nil, To: nil, Subject: "", Cursor: "", Limit: MaxLimit, Expand: false}
+
+	for {
+		page, err := s.Review(ctx, obj, req)
+		if err != nil {
+			return nil, fmt.Errorf("read token managers of principal %q: %w", id, err)
+		}
+
+		for i := range page.Entries {
+			row := page.Entries[i].Row
+			if page.Entries[i].Holder == BootstrapHolder {
+				seen[row.SubjectName] = true
+			} else {
+				seen[row.Grant.Subject.String()] = true
+			}
+		}
+
+		if page.NextCursor == "" {
+			break
+		}
+
+		req.Cursor = page.NextCursor
+	}
+
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 // reviewNamespace returns ErrNotFound when the namespace of obj does not

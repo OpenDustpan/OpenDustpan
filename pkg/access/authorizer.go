@@ -23,6 +23,9 @@ type Callers interface {
 // does not exist.
 type UnitCollections interface {
 	CollectionOf(ctx context.Context, unit identity.Object) (string, bool, error)
+	// CollectionID returns the stable ID of the collection obj, and false when no
+	// such collection exists. A grant on a collection is keyed by this ID.
+	CollectionID(ctx context.Context, collection identity.Object) (string, bool, error)
 }
 
 // AuthorizerConfig holds the dependencies of an Authorizer.
@@ -173,12 +176,14 @@ func (h held) actions() []identity.Action {
 // Scope is the set of objects of one kind where a principal can do one
 // action, as grants name them (ADR 52). All is true when a grant on the
 // installation covers every object. A unit is in the scope when it, its
-// collection or its namespace is in a set. A consumer filters a list with
+// collection or its namespace is in a set. A principal is in the scope when
+// it is in Principals. A consumer filters a list with
 // the scope in its own query, never with one check for each object.
 type Scope struct {
 	Namespaces  []identity.Object
 	Collections []identity.Object
 	Units       []identity.Object
+	Principals  []identity.Object
 	All         bool
 }
 
@@ -187,7 +192,7 @@ type Scope struct {
 // of the subjects with a role that holds action. An administrator has every
 // object.
 func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, action identity.Action) (Scope, error) {
-	none := Scope{Namespaces: nil, Collections: nil, Units: nil, All: false}
+	none := Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}
 
 	if p.Admin {
 		none.All = true
@@ -218,20 +223,52 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 	out := none
 
 	for i := range grants {
-		// The name of a unit that no longer exists may name a new unit now:
-		// its grants give nothing.
-		if grants[i].Object.IsUnit() && !live[grants[i].Object.UnitID()] {
-			continue
-		}
-
 		if !givenOn(action, grants[i].Object) {
 			continue
 		}
 
-		out.add(grants[i].Object)
+		ok, liveErr := a.grantLive(ctx, grants[i].Object, live)
+		if liveErr != nil {
+			return none, liveErr
+		}
+
+		if ok {
+			out.add(grants[i].Object)
+		}
 	}
 
 	return out, nil
+}
+
+// grantLive reports whether a grant on obj still gives something. The name
+// of a unit that no longer exists may name a new unit now, and a collection
+// that was deleted and created again under its name is a new collection, so
+// the grants of the old one give nothing.
+func (a *Authorizer) grantLive(ctx context.Context, obj identity.Object, live map[string]bool) (bool, error) {
+	switch {
+	case obj.IsUnit():
+		return live[obj.UnitID()], nil
+	case obj.IsCollection():
+		return a.liveCollection(ctx, obj)
+	default:
+		return true, nil
+	}
+}
+
+// liveCollection reports whether obj names the collection that holds its
+// stable ID now. It is false when no collection port is configured, and when
+// the name is gone or has another ID.
+func (a *Authorizer) liveCollection(ctx context.Context, obj identity.Object) (bool, error) {
+	if a.collections == nil {
+		return false, nil
+	}
+
+	id, found, err := a.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return false, fmt.Errorf("read collection %q: %w", obj.String(), err)
+	}
+
+	return found && id == obj.CollectionID(), nil
 }
 
 // add puts obj in the set of its kind once. An object on the installation
@@ -248,13 +285,16 @@ func (s *Scope) add(obj identity.Object) {
 		s.Collections = appendObject(s.Collections, obj)
 	case ObjectUnit:
 		s.Units = appendObject(s.Units, obj)
+	case ObjectPrincipal:
+		s.Principals = appendObject(s.Principals, obj)
 	default:
 	}
 }
 
 // appendObject appends obj to objs once.
 func appendObject(objs []identity.Object, obj identity.Object) []identity.Object {
-	for _, o := range objs {
+	for i := range objs {
+		o := objs[i]
 		if o.String() == obj.String() {
 			return objs
 		}
@@ -321,18 +361,24 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 }
 
 // givenOn reports whether a grant on obj gives action. A grant on the
-// installation gives every action of its role. A grant on any other object
+// installation gives every action of its role. A grant on a principal gives
+// the delegation actions of its role only. A grant on any other object
 // gives the data actions of its role only. The Service refuses a role with
-// another action below the installation, and this rule holds also when a
-// role change races a grant.
+// another action on such an object, and this rule holds also when a role
+// change races a grant.
 func givenOn(action identity.Action, obj identity.Object) bool {
-	if kind, _ := KindOf(obj); kind == ObjectInstallation {
-		return true
-	}
-
 	family, _ := FamilyOf(action)
 
-	return family == FamilyData
+	switch kind, _ := KindOf(obj); kind {
+	case ObjectInstallation:
+		return true
+	case ObjectPrincipal:
+		return family == FamilyDelegation
+	case ObjectNamespace, ObjectCollection, ObjectUnit:
+		return family == FamilyData
+	default:
+		return false
+	}
 }
 
 // subjectsOf returns the subjects of p: its principal and each of its
@@ -359,35 +405,31 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 }
 
 // chain returns obj and every object that holds it, innermost first: a unit,
-// its collection, its namespace and the installation. The caller object
-// holds nothing and is in no chain.
+// its collection, its namespace and the installation, or a principal and
+// the installation. The caller object holds nothing and is in no chain.
 func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity.Object, error) {
 	kind, ok := KindOf(obj)
 	if !ok {
 		return nil, nil
 	}
 
-	if kind == ObjectUnit {
-		var err error
-		if obj, err = a.withUnitID(ctx, obj); err != nil {
-			return nil, err
-		}
+	obj, err := a.withStableID(ctx, kind, obj)
+	if err != nil {
+		return nil, err
 	}
 
 	out := []identity.Object{obj}
 
-	if kind == ObjectUnit && a.collections != nil {
-		name, inCollection, err := a.collections.CollectionOf(ctx, obj)
-		if err != nil {
-			return nil, fmt.Errorf("read collection of unit: %w", err)
-		}
-
-		if inCollection {
-			out = append(out, identity.CollectionObject(obj.Namespace(), name))
-		}
+	col, inCollection, err := a.collectionOfUnit(ctx, kind, obj)
+	if err != nil {
+		return nil, err
 	}
 
-	if kind != ObjectInstallation && kind != ObjectNamespace {
+	if inCollection {
+		out = append(out, col)
+	}
+
+	if kind == ObjectCollection || kind == ObjectUnit {
 		out = append(out, identity.NamespaceObject(obj.Namespace()))
 	}
 
@@ -396,6 +438,47 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 	}
 
 	return out, nil
+}
+
+// withStableID returns obj with the stable ID of its unit or its collection,
+// when kind is one of them. Any other object is returned as it is.
+func (a *Authorizer) withStableID(ctx context.Context, kind ObjectKind, obj identity.Object) (identity.Object, error) {
+	if kind == ObjectUnit {
+		return a.withUnitID(ctx, obj)
+	}
+
+	if kind == ObjectCollection {
+		return a.withCollectionID(ctx, obj)
+	}
+
+	return obj, nil
+}
+
+// collectionOfUnit returns the collection of the unit obj, with its stable ID,
+// and true when the unit is in one. It returns false for any other object, and
+// when no collection port is configured.
+func (a *Authorizer) collectionOfUnit(
+	ctx context.Context, kind ObjectKind, obj identity.Object,
+) (identity.Object, bool, error) {
+	if kind != ObjectUnit || a.collections == nil {
+		return obj, false, nil
+	}
+
+	name, inCollection, err := a.collections.CollectionOf(ctx, obj)
+	if err != nil {
+		return obj, false, fmt.Errorf("read collection of unit: %w", err)
+	}
+
+	if !inCollection {
+		return obj, false, nil
+	}
+
+	col, err := a.withCollectionID(ctx, identity.CollectionObject(obj.Namespace(), name))
+	if err != nil {
+		return obj, false, err
+	}
+
+	return col, true, nil
 }
 
 // rolesOf returns the roles that grants name, by ID: the built-in roles
@@ -517,9 +600,10 @@ func (a *Authorizer) reviewRoles(ctx context.Context) ([]string, map[string]bool
 
 // managesAccess reports whether r holds an action that changes who has
 // access to an object: a grant, a custom role, a membership of a group
-// that has access, or a grant on a namespace, a collection or a unit. A
-// service token gets no access without a grant, so
-// server:manage-service-tokens does not count.
+// that has access, or a grant on a namespace, a collection or a unit. The
+// issue of the tokens of a service principal gives no grant, so it does
+// not count: the export lists its holders apart, for each service
+// principal.
 func managesAccess(r Role) bool {
 	return slices.ContainsFunc(r.Actions, func(a identity.Action) bool {
 		return slices.Contains(accessManagementActions(), a)
@@ -608,4 +692,23 @@ func (a *Authorizer) currentUnits(ctx context.Context, grants []Grant) (map[stri
 	}
 
 	return live, nil
+}
+
+// withCollectionID returns the collection object with its stable ID. A
+// collection that does not exist keeps an empty ID, so no grant matches it.
+func (a *Authorizer) withCollectionID(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if a.collections == nil {
+		return obj, nil
+	}
+
+	id, found, err := a.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read collection ID: %w", err)
+	}
+
+	if !found {
+		return obj, nil
+	}
+
+	return obj.WithCollectionID(id), nil
 }
