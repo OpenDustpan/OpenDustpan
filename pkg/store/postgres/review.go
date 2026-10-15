@@ -143,12 +143,16 @@ func reviewRows(rows []db.ReviewGrantsRow) ([]access.ReviewRow, error) {
 		}
 
 		row := access.ReviewRow{
-			RevokedAt:   optionalTime(r.RevokedAtMs),
-			MemberCount: nil,
-			Via:         nil,
-			SubjectName: r.SubjectName,
-			RevokedBy:   r.RevokedBy,
-			Grant:       g,
+			RevokedAt:    optionalTime(r.RevokedAtMs),
+			LastAccessAt: nil,
+			MemberCount:  nil,
+			Via:          nil,
+			SubjectName:  r.SubjectName,
+			RevokedBy:    r.RevokedBy,
+			Grant:        g,
+			// The service fills the last access with one lookup for the
+			// page.
+			LastAccessTracked: false,
 		}
 
 		if g.Subject.Kind == access.SubjectGroup {
@@ -267,4 +271,25 @@ func (s *Store) reviewWorkspaces(ctx context.Context, ids []string, out map[stri
 	}
 
 	return nil
+}
+
+// LastAccess implements access.ReviewStore: the latest last-use time of
+// the access tokens of each given principal. A principal with no used
+// token is not in the map.
+func (s *Store) LastAccess(ctx context.Context, principalIDs []string) (map[string]time.Time, error) {
+	out := make(map[string]time.Time, len(principalIDs))
+	if len(principalIDs) == 0 {
+		return out, nil
+	}
+
+	rows, err := s.queries.LastAccessByPrincipals(ctx, principalIDs)
+	if err != nil {
+		return nil, fmt.Errorf("read last access: %w", err)
+	}
+
+	for i := range rows {
+		out[rows[i].PrincipalID] = codec.FromMillis(rows[i].LastUsedAtMs)
+	}
+
+	return out, nil
 }

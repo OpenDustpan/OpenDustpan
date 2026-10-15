@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 
@@ -177,6 +178,164 @@ func checkMemberSignsIn(ctx context.Context, t *testing.T, env *e2e.Env) {
 		spec.Env, spec.Redact = as, true
 		env.Step(ctx, t, spec)
 	}
+
+	checkNamespaceList(ctx, t, env)
+}
+
+// e2eNamespaceItem decodes one namespace of the list.
+type e2eNamespaceItem struct {
+	Name string `json:"name"`
+}
+
+// e2eNamespaceList decodes one page of GET /api/server/namespaces.
+type e2eNamespaceList struct {
+	Namespaces []e2eNamespaceItem `json:"namespaces"`
+	NextCursor string             `json:"nextCursor"`
+	Total      *int64             `json:"total"`
+}
+
+// fetchNamespaceList reads one page of the namespace list with the admin
+// token and decodes it.
+func fetchNamespaceList(ctx context.Context, t *testing.T, env *e2e.Env, route string) e2eNamespaceList {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, route, "")
+	if err != nil {
+		t.Fatalf("GET %s: %v", route, err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("GET %s answers %d, want %d (%s)", route, status, http.StatusOK, body)
+	}
+
+	var list e2eNamespaceList
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatalf("decode GET %s %q: %v", route, body, err)
+	}
+
+	return list
+}
+
+// namespaceNames returns the names of a decoded page.
+func namespaceNames(list e2eNamespaceList) []string {
+	names := make([]string, 0, len(list.Namespaces))
+	for _, ns := range list.Namespaces {
+		names = append(names, ns.Name)
+	}
+
+	return names
+}
+
+// checkAdminSeesBoth proves the admin list holds team and hidden.
+func checkAdminSeesBoth(ctx context.Context, t *testing.T, env *e2e.Env) []string {
+	t.Helper()
+
+	names := namespaceNames(fetchNamespaceList(ctx, t, env, "/api/server/namespaces"))
+
+	for _, want := range []string{"team", "hidden"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("admin namespaces = %v, want %q among them", names, want)
+		}
+	}
+
+	return names
+}
+
+// walkNamespacePages follows limit 1 from the first page to the end and
+// returns every name once. It fails unless the first page has a cursor and
+// a total, and the walk reaches the total.
+func walkNamespacePages(ctx context.Context, t *testing.T, env *e2e.Env, names []string) map[string]bool {
+	t.Helper()
+
+	first := fetchNamespaceList(ctx, t, env, "/api/server/namespaces?limit=1")
+	if first.NextCursor == "" {
+		t.Fatalf("first page has no next cursor, want one for limit 1 over %v", names)
+	}
+
+	if first.Total == nil {
+		t.Fatal("first page has no total, want one")
+	}
+
+	seen := map[string]bool{}
+	route := "/api/server/namespaces?limit=1"
+
+	for route != "" {
+		page := fetchNamespaceList(ctx, t, env, route)
+		for _, ns := range page.Namespaces {
+			if seen[ns.Name] {
+				t.Fatalf("paged namespaces list %q twice", ns.Name)
+			}
+			seen[ns.Name] = true
+		}
+		route = ""
+		if page.NextCursor != "" {
+			route = "/api/server/namespaces?limit=1&cursor=" + page.NextCursor
+		}
+		if len(seen) > 100 {
+			t.Fatalf("paged more than 100 namespaces, want the end: %v", seen)
+		}
+	}
+
+	if int64(len(seen)) != *first.Total {
+		t.Fatalf("paged %d namespaces, want total %d", len(seen), *first.Total)
+	}
+
+	return seen
+}
+
+// checkMemberSeesTeamOnly proves the member list holds team and not hidden.
+// Without an in-process member token it skips, as the binary server knows
+// only the bootstrap admin tokens.
+func checkMemberSeesTeamOnly(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	token, ok := env.MemberToken()
+	if !ok {
+		t.Log("skip the member list: the binary server knows only the bootstrap admin tokens")
+
+		return
+	}
+
+	status, body, err := env.ServerAPIStatusAs(ctx, token, http.MethodGet, "/api/server/namespaces", "")
+	if err != nil {
+		t.Fatalf("member GET namespaces: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("member GET namespaces answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var member e2eNamespaceList
+	if err := json.Unmarshal([]byte(body), &member); err != nil {
+		t.Fatalf("decode member list %q: %v", body, err)
+	}
+
+	holds := map[string]bool{}
+	for _, ns := range member.Namespaces {
+		holds[ns.Name] = true
+	}
+
+	if !holds["team"] || holds["hidden"] {
+		t.Fatalf("member namespaces hold team=%t hidden=%t, want team only", holds["team"], holds["hidden"])
+	}
+}
+
+// checkNamespaceList proves the namespace list: the admin sees every
+// namespace, paging by name reaches each name once, and the member sees
+// only the namespace it may read.
+func checkNamespaceList(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	names := checkAdminSeesBoth(ctx, t, env)
+	seen := walkNamespacePages(ctx, t, env, names)
+
+	for _, want := range []string{"team", "hidden"} {
+		if !seen[want] {
+			t.Fatalf("paged namespaces miss %q", want)
+		}
+	}
+
+	checkMemberSeesTeamOnly(ctx, t, env)
 }
 
 // onlyOrganization checks that whoami --verbose names ns as the only

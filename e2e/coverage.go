@@ -1308,10 +1308,11 @@ func stateAllowEntries() []AllowEntry {
 // instead of a CLI: no CLI version in the matrix calls it.
 const namespaceCoveringTest = "TestCLIs (checkNamespaceCreateThroughAPI)"
 
-// namespaceAllowEntries returns the operator namespace route that no CLI
-// calls. The harness creates the first namespace through it on an empty
-// installation, and the scenario steps prove the duplicate, invalid and
-// unauthenticated cases.
+// namespaceAllowEntries returns the operator namespace routes that no CLI
+// calls. The harness creates the first namespace through the create on an
+// empty installation, and the scenario steps prove the duplicate, invalid
+// and unauthenticated cases. The harness lists the namespaces through the
+// list, which no CLI calls either.
 func namespaceAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{
@@ -1320,6 +1321,12 @@ func namespaceAllowEntries() []AllowEntry {
 			Reason: "Operator route: no CLI creates a namespace. The harness " +
 				"creates the first one on an empty installation and the scenario " +
 				"checks the duplicate, invalid and unauthenticated cases.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/namespaces",
+			CoveringTest: "TestRolesAndGrants",
+			Reason: "Operator and console route: no CLI lists namespaces. The harness " +
+				"step lists them as the admin and as the member and pages through them.",
 		},
 	}
 }

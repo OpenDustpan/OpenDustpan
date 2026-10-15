@@ -13,6 +13,29 @@ SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, 
 FROM namespaces
 ORDER BY name;
 
+-- name: PageNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > sqlc.arg('after')
+ORDER BY name
+LIMIT sqlc.arg('lim');
+
+-- name: PageNamespacesByNames :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > sqlc.arg('after') AND name IN (SELECT value FROM json_each(sqlc.arg('names')))
+ORDER BY name
+LIMIT sqlc.arg('lim');
+
+-- name: CountNamespaces :one
+SELECT COUNT(*)
+FROM namespaces;
+
+-- name: CountNamespacesByNames :one
+SELECT COUNT(*)
+FROM namespaces
+WHERE name IN (SELECT value FROM json_each(sqlc.arg('names')));
+
 -- name: SetNamespaceOverrides :execrows
 -- Replaces the override switches of one namespace (ADR 44, decision 6).
 UPDATE namespaces
@@ -1158,7 +1181,7 @@ FROM access_tokens WHERE id = ?;
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms,
-  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE((
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0)) AS INTEGER) AS principal_active_at_ms
 FROM access_tokens t
@@ -1261,6 +1284,17 @@ ON CONFLICT (unit_id) DO UPDATE SET
     assigned_at_ms = excluded.assigned_at_ms;
 
 
+-- name: LastAccessByPrincipals :many
+-- The latest last-use time of the access tokens of each given principal:
+-- one row for each principal with a used token. A JSON array carries the
+-- IDs, so the query stays fixed. Revoked, replaced and expired tokens
+-- count: a use is a use.
+SELECT principal_id, CAST(MAX(last_used_at_ms) AS INTEGER) AS last_used_at_ms
+FROM access_tokens
+WHERE principal_id IN (SELECT value FROM json_each(CAST(sqlc.arg('principals') AS TEXT)))
+  AND last_used_at_ms IS NOT NULL
+GROUP BY principal_id;
+
 -- name: GetDeletedStack :one
 -- A deleted stack of one namespace by its stable ID (ADR 47), for a restore
 -- or a purge. A live stack matches no row.
@@ -1357,11 +1391,13 @@ LIMIT ?;
 
 -- name: ListBlobPurgesAfter :many
 -- The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+-- The lower bound on purged_at_ms lets the index scan start at the cursor.
 SELECT tool, unit_id, namespace, purged_at_ms
 FROM blob_purges
-WHERE purged_at_ms > sqlc.arg(after_ms)
-  OR (purged_at_ms = sqlc.arg(after_ms) AND tool > sqlc.arg(after_tool))
-  OR (purged_at_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool) AND unit_id > sqlc.arg(after_unit_id))
+WHERE purged_at_ms >= sqlc.arg(after_ms)
+  AND (purged_at_ms > sqlc.arg(after_ms)
+    OR (purged_at_ms = sqlc.arg(after_ms) AND tool > sqlc.arg(after_tool))
+    OR (purged_at_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool) AND unit_id > sqlc.arg(after_unit_id)))
 ORDER BY purged_at_ms, tool, unit_id
 LIMIT sqlc.arg(page_limit);
 
@@ -1406,13 +1442,14 @@ WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > CAST(
 RETURNING id, principal_id;
 
 -- name: DisableInactivePrincipals :many
--- A person is inactive when its creation, its activity baseline, and the
--- creation and the last use of each of its tokens are all at or before the
--- cutoff.
+-- A person is inactive when its creation, its activity baseline, its last
+-- sign-in, and the creation and the last use of each of its tokens are all
+-- at or before the cutoff.
 UPDATE principals SET disabled_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
   AND created_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
   AND last_active_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
+  AND COALESCE(last_sign_in_at_ms, 0) <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
   AND NOT EXISTS (
     SELECT 1 FROM access_tokens t
     WHERE t.principal_id = principals.id
@@ -1449,3 +1486,58 @@ WHERE unit_id = ? AND NOT EXISTS (
 SELECT id FROM grants
 WHERE target = ? AND revoked_at_ms IS NULL
 ORDER BY id;
+
+-- name: CreateSession :execrows
+-- A session needs a person principal that exists and is not disabled. A
+-- taken ID or digest inserts nothing.
+INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent)
+SELECT sqlc.arg('id'), p.id, sqlc.arg('digest'), sqlc.arg('provider'), sqlc.arg('created_at_ms'),
+  sqlc.arg('created_at_ms'), sqlc.arg('auth_time_ms'), sqlc.arg('source_ip'), sqlc.arg('user_agent')
+FROM principals p
+WHERE p.id = sqlc.arg('principal_id') AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.kind = 'person'
+ON CONFLICT DO NOTHING;
+
+-- name: GetSessionPrincipal :one
+-- The kind and the disable time of a principal that exists, so a refused
+-- session insert can name its cause.
+SELECT kind, disabled_at_ms FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
+
+-- name: SetLastSignIn :exec
+UPDATE principals SET last_sign_in_at_ms = MAX(COALESCE(last_sign_in_at_ms, 0), CAST(sqlc.arg('at_ms') AS INTEGER))
+WHERE id = sqlc.arg('id');
+
+-- name: GetSession :one
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent
+FROM sessions WHERE id = ?;
+
+-- name: GetSessionByDigest :one
+SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
+  s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms
+FROM sessions s
+JOIN principals p ON p.id = s.principal_id
+WHERE s.digest = ? AND p.deleted_at_ms IS NULL;
+
+-- name: TouchSession :exec
+UPDATE sessions SET last_seen_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
+WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL
+  AND last_seen_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER);
+
+-- name: EndSession :execrows
+UPDATE sessions SET ended_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER), end_reason = sqlc.arg('end_reason')
+WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL;
+
+-- name: CountSession :one
+SELECT COUNT(*) FROM sessions WHERE id = ?;
+
+-- name: CreateSignInRequest :execrows
+INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: TakeSignInRequest :one
+DELETE FROM sign_in_requests WHERE digest = ?
+RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms;
+
+-- name: PruneSignInRequests :execrows
+DELETE FROM sign_in_requests WHERE expires_at_ms <= ?;

@@ -622,6 +622,31 @@ func (q *Queries) CountLivePrincipal(ctx context.Context, id string) (int64, err
 	return count, err
 }
 
+const countNamespaces = `-- name: CountNamespaces :one
+SELECT COUNT(*)
+FROM namespaces
+`
+
+func (q *Queries) CountNamespaces(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countNamespaces)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNamespacesByNames = `-- name: CountNamespacesByNames :one
+SELECT COUNT(*)
+FROM namespaces
+WHERE name = ANY($1::text[])
+`
+
+func (q *Queries) CountNamespacesByNames(ctx context.Context, names []string) (int64, error) {
+	row := q.db.QueryRow(ctx, countNamespacesByNames, names)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -734,6 +759,17 @@ SELECT COUNT(*) FROM grants WHERE role = $1 AND object_kind = 'principal' AND re
 
 func (q *Queries) CountRoleGrantsOnPrincipal(ctx context.Context, role string) (int64, error) {
 	row := q.db.QueryRow(ctx, countRoleGrantsOnPrincipal, role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSession = `-- name: CountSession :one
+SELECT COUNT(*) FROM sessions WHERE id = $1
+`
+
+func (q *Queries) CountSession(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRow(ctx, countSession, id)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1070,6 +1106,77 @@ func (q *Queries) CreateSecretKey(ctx context.Context, arg CreateSecretKeyParams
 		arg.WrapperID,
 		arg.Ciphertext,
 		arg.CreatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createSession = `-- name: CreateSession :execrows
+INSERT INTO sessions (id, principal_id, digest, provider, created_at_ms, last_seen_at_ms, auth_time_ms, source_ip, user_agent)
+SELECT $1, p.id, $2, $3, $4::bigint,
+  $4::bigint, $5::bigint, $6, $7
+FROM principals p
+WHERE p.id = $8 AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL AND p.kind = 'person'
+ON CONFLICT DO NOTHING
+`
+
+type CreateSessionParams struct {
+	ID          string
+	Digest      string
+	Provider    string
+	CreatedAtMs int64
+	AuthTimeMs  int64
+	SourceIp    string
+	UserAgent   string
+	PrincipalID string
+}
+
+// A session needs a person principal that exists and is not disabled. A
+// taken ID or digest inserts nothing.
+func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createSession,
+		arg.ID,
+		arg.Digest,
+		arg.Provider,
+		arg.CreatedAtMs,
+		arg.AuthTimeMs,
+		arg.SourceIp,
+		arg.UserAgent,
+		arg.PrincipalID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const createSignInRequest = `-- name: CreateSignInRequest :execrows
+INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT DO NOTHING
+`
+
+type CreateSignInRequestParams struct {
+	Digest      string
+	Provider    string
+	Nonce       string
+	Verifier    string
+	ReturnPath  string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) CreateSignInRequest(ctx context.Context, arg CreateSignInRequestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, createSignInRequest,
+		arg.Digest,
+		arg.Provider,
+		arg.Nonce,
+		arg.Verifier,
+		arg.ReturnPath,
+		arg.CreatedAtMs,
+		arg.ExpiresAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -1625,6 +1732,7 @@ UPDATE principals SET disabled_at_ms = $1::bigint
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
   AND created_at_ms <= $2::bigint
   AND last_active_at_ms <= $2::bigint
+  AND COALESCE(last_sign_in_at_ms, 0) <= $2::bigint
   AND NOT EXISTS (
     SELECT 1 FROM access_tokens t
     WHERE t.principal_id = principals.id
@@ -1638,9 +1746,9 @@ type DisableInactivePrincipalsParams struct {
 	CutoffMs int64
 }
 
-// A person is inactive when its creation, its activity baseline, and the
-// creation and the last use of each of its tokens are all at or before the
-// cutoff.
+// A person is inactive when its creation, its activity baseline, its last
+// sign-in, and the creation and the last use of each of its tokens are all
+// at or before the cutoff.
 func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
 	rows, err := q.db.Query(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -1733,6 +1841,25 @@ func (q *Queries) EndRotatedAccessToken(ctx context.Context, arg EndRotatedAcces
 		arg.ID,
 		arg.NowMs,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const endSession = `-- name: EndSession :execrows
+UPDATE sessions SET ended_at_ms = $1::bigint, end_reason = $2
+WHERE id = $3 AND ended_at_ms IS NULL
+`
+
+type EndSessionParams struct {
+	AtMs      int64
+	EndReason string
+	ID        string
+}
+
+func (q *Queries) EndSession(ctx context.Context, arg EndSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, endSession, arg.AtMs, arg.EndReason, arg.ID)
 	if err != nil {
 		return 0, err
 	}
@@ -1906,7 +2033,7 @@ const getAccessTokenByDigest = `-- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms,
-  GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE((
+  GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0))::bigint AS principal_active_at_ms
 FROM access_tokens t
@@ -2685,6 +2812,110 @@ func (q *Queries) GetSecretKey(ctx context.Context, arg GetSecretKeyParams) (Sec
 		&i.Ciphertext,
 		&i.CreatedAtMs,
 	)
+	return i, err
+}
+
+const getSession = `-- name: GetSession :one
+SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms, ended_at_ms, end_reason, source_ip, user_agent
+FROM sessions WHERE id = $1
+`
+
+type GetSessionRow struct {
+	ID           string
+	PrincipalID  string
+	Provider     string
+	CreatedAtMs  int64
+	LastSeenAtMs int64
+	AuthTimeMs   int64
+	EndedAtMs    pgtype.Int8
+	EndReason    string
+	SourceIp     string
+	UserAgent    string
+}
+
+func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, error) {
+	row := q.db.QueryRow(ctx, getSession, id)
+	var i GetSessionRow
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Provider,
+		&i.CreatedAtMs,
+		&i.LastSeenAtMs,
+		&i.AuthTimeMs,
+		&i.EndedAtMs,
+		&i.EndReason,
+		&i.SourceIp,
+		&i.UserAgent,
+	)
+	return i, err
+}
+
+const getSessionByDigest = `-- name: GetSessionByDigest :one
+SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
+  s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
+  p.disabled_at_ms AS principal_disabled_at_ms
+FROM sessions s
+JOIN principals p ON p.id = s.principal_id
+WHERE s.digest = $1 AND p.deleted_at_ms IS NULL
+`
+
+type GetSessionByDigestRow struct {
+	ID                    string
+	PrincipalID           string
+	Digest                string
+	Provider              string
+	CreatedAtMs           int64
+	LastSeenAtMs          int64
+	AuthTimeMs            int64
+	EndedAtMs             pgtype.Int8
+	EndReason             string
+	SourceIp              string
+	UserAgent             string
+	Subject               string
+	DisplayName           string
+	PrincipalKind         string
+	PrincipalDisabledAtMs pgtype.Int8
+}
+
+func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
+	row := q.db.QueryRow(ctx, getSessionByDigest, digest)
+	var i GetSessionByDigestRow
+	err := row.Scan(
+		&i.ID,
+		&i.PrincipalID,
+		&i.Digest,
+		&i.Provider,
+		&i.CreatedAtMs,
+		&i.LastSeenAtMs,
+		&i.AuthTimeMs,
+		&i.EndedAtMs,
+		&i.EndReason,
+		&i.SourceIp,
+		&i.UserAgent,
+		&i.Subject,
+		&i.DisplayName,
+		&i.PrincipalKind,
+		&i.PrincipalDisabledAtMs,
+	)
+	return i, err
+}
+
+const getSessionPrincipal = `-- name: GetSessionPrincipal :one
+SELECT kind, disabled_at_ms FROM principals WHERE id = $1 AND deleted_at_ms IS NULL
+`
+
+type GetSessionPrincipalRow struct {
+	Kind         string
+	DisabledAtMs pgtype.Int8
+}
+
+// The kind and the disable time of a principal that exists, so a refused
+// session insert can name its cause.
+func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessionPrincipalRow, error) {
+	row := q.db.QueryRow(ctx, getSessionPrincipal, id)
+	var i GetSessionPrincipalRow
+	err := row.Scan(&i.Kind, &i.DisabledAtMs)
 	return i, err
 }
 
@@ -3491,6 +3722,42 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 	return i, err
 }
 
+const lastAccessByPrincipals = `-- name: LastAccessByPrincipals :many
+SELECT principal_id, MAX(last_used_at_ms)::bigint AS last_used_at_ms
+FROM access_tokens
+WHERE principal_id = ANY($1::text[])
+  AND last_used_at_ms IS NOT NULL
+GROUP BY principal_id
+`
+
+type LastAccessByPrincipalsRow struct {
+	PrincipalID  string
+	LastUsedAtMs int64
+}
+
+// The latest last-use time of the access tokens of each given principal:
+// one row for each principal with a used token. Revoked, replaced and
+// expired tokens count: a use is a use.
+func (q *Queries) LastAccessByPrincipals(ctx context.Context, principalIds []string) ([]LastAccessByPrincipalsRow, error) {
+	rows, err := q.db.Query(ctx, lastAccessByPrincipals, principalIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LastAccessByPrincipalsRow
+	for rows.Next() {
+		var i LastAccessByPrincipalsRow
+		if err := rows.Scan(&i.PrincipalID, &i.LastUsedAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
@@ -3841,10 +4108,11 @@ func (q *Queries) ListBlobPurges(ctx context.Context, limit int32) ([]BlobPurge,
 const listBlobPurgesAfter = `-- name: ListBlobPurgesAfter :many
 SELECT tool, unit_id, namespace, purged_at_ms
 FROM blob_purges
-WHERE purged_at_ms > $1
-  OR (purged_at_ms = $1 AND tool COLLATE "C" > $2)
-  OR (purged_at_ms = $1 AND tool = $2
-    AND unit_id COLLATE "C" > $3)
+WHERE purged_at_ms >= $1
+  AND (purged_at_ms > $1
+    OR (purged_at_ms = $1 AND tool COLLATE "C" > $2)
+    OR (purged_at_ms = $1 AND tool = $2
+      AND unit_id COLLATE "C" > $3))
 ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
 LIMIT $4
 `
@@ -3857,6 +4125,7 @@ type ListBlobPurgesAfterParams struct {
 }
 
 // The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+// The lower bound on purged_at_ms lets the index scan start at the cursor.
 func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAfterParams) ([]BlobPurge, error) {
 	rows, err := q.db.Query(ctx, listBlobPurgesAfter,
 		arg.AfterMs,
@@ -5337,6 +5606,105 @@ func (q *Queries) NextJournalArrival(ctx context.Context, arg NextJournalArrival
 	return arrival, err
 }
 
+const pageNamespaces = `-- name: PageNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > $1
+ORDER BY name
+LIMIT $2
+`
+
+type PageNamespacesParams struct {
+	After string
+	Lim   int32
+}
+
+type PageNamespacesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) ([]PageNamespacesRow, error) {
+	rows, err := q.db.Query(ctx, pageNamespaces, arg.After, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageNamespacesRow
+	for rows.Next() {
+		var i PageNamespacesRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.HomeRegion,
+			&i.FailoverVersion,
+			&i.CreatedAtMs,
+			&i.AllowForcedWrites,
+			&i.AllowUnlockedWrites,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pageNamespacesByNames = `-- name: PageNamespacesByNames :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > $1 AND name = ANY($2::text[])
+ORDER BY name
+LIMIT $3
+`
+
+type PageNamespacesByNamesParams struct {
+	After string
+	Names []string
+	Lim   int32
+}
+
+type PageNamespacesByNamesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) PageNamespacesByNames(ctx context.Context, arg PageNamespacesByNamesParams) ([]PageNamespacesByNamesRow, error) {
+	rows, err := q.db.Query(ctx, pageNamespacesByNames, arg.After, arg.Names, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageNamespacesByNamesRow
+	for rows.Next() {
+		var i PageNamespacesByNamesRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.HomeRegion,
+			&i.FailoverVersion,
+			&i.CreatedAtMs,
+			&i.AllowForcedWrites,
+			&i.AllowUnlockedWrites,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const principalExists = `-- name: PrincipalExists :one
 SELECT COUNT(*) FROM principals WHERE id = $1 AND deleted_at_ms IS NULL
 `
@@ -5346,6 +5714,18 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const pruneSignInRequests = `-- name: PruneSignInRequests :execrows
+DELETE FROM sign_in_requests WHERE expires_at_ms <= $1
+`
+
+func (q *Queries) PruneSignInRequests(ctx context.Context, expiresAtMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneSignInRequests, expiresAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const purgeStack = `-- name: PurgeStack :execrows
@@ -6114,6 +6494,21 @@ func (q *Queries) SetInstallationStateIf(ctx context.Context, arg SetInstallatio
 	return result.RowsAffected(), nil
 }
 
+const setLastSignIn = `-- name: SetLastSignIn :exec
+UPDATE principals SET last_sign_in_at_ms = GREATEST(COALESCE(last_sign_in_at_ms, 0), $1::bigint)
+WHERE id = $2
+`
+
+type SetLastSignInParams struct {
+	AtMs int64
+	ID   string
+}
+
+func (q *Queries) SetLastSignIn(ctx context.Context, arg SetLastSignInParams) error {
+	_, err := q.db.Exec(ctx, setLastSignIn, arg.AtMs, arg.ID)
+	return err
+}
+
 const setNamespaceIPAllowlist = `-- name: SetNamespaceIPAllowlist :execrows
 UPDATE namespaces
 SET ip_allowlist = $1
@@ -6293,6 +6688,34 @@ func (q *Queries) SubjectsOfCaller(ctx context.Context, subject string) ([]Subje
 	return items, nil
 }
 
+const takeSignInRequest = `-- name: TakeSignInRequest :one
+DELETE FROM sign_in_requests WHERE digest = $1
+RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms
+`
+
+type TakeSignInRequestRow struct {
+	Provider    string
+	Nonce       string
+	Verifier    string
+	ReturnPath  string
+	CreatedAtMs int64
+	ExpiresAtMs int64
+}
+
+func (q *Queries) TakeSignInRequest(ctx context.Context, digest string) (TakeSignInRequestRow, error) {
+	row := q.db.QueryRow(ctx, takeSignInRequest, digest)
+	var i TakeSignInRequestRow
+	err := row.Scan(
+		&i.Provider,
+		&i.Nonce,
+		&i.Verifier,
+		&i.ReturnPath,
+		&i.CreatedAtMs,
+		&i.ExpiresAtMs,
+	)
+	return i, err
+}
+
 const touchAccessToken = `-- name: TouchAccessToken :exec
 UPDATE access_tokens SET last_used_at_ms = $1::bigint
 WHERE id = $2 AND (last_used_at_ms IS NULL OR last_used_at_ms <= $3::bigint)
@@ -6306,6 +6729,22 @@ type TouchAccessTokenParams struct {
 
 func (q *Queries) TouchAccessToken(ctx context.Context, arg TouchAccessTokenParams) error {
 	_, err := q.db.Exec(ctx, touchAccessToken, arg.AtMs, arg.ID, arg.BeforeMs)
+	return err
+}
+
+const touchSession = `-- name: TouchSession :exec
+UPDATE sessions SET last_seen_at_ms = $1::bigint
+WHERE id = $2 AND ended_at_ms IS NULL AND last_seen_at_ms <= $3::bigint
+`
+
+type TouchSessionParams struct {
+	AtMs     int64
+	ID       string
+	BeforeMs int64
+}
+
+func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) error {
+	_, err := q.db.Exec(ctx, touchSession, arg.AtMs, arg.ID, arg.BeforeMs)
 	return err
 }
 
