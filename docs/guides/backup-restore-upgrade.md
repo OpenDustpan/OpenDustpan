@@ -4,7 +4,7 @@ This guide shows how to back up a whole installation, check the backup, restore 
 
 A backup covers the whole installation. It holds the SQL data with the blob content that the data names. A backup holds no key-encryption key.
 
-The commands are the same for both databases. The server chooses the database: SQLite is the default, and `serve --database postgres://...` selects PostgreSQL. A backup of one database restores into the other. Section "Restore a backup" gives the rule.
+The commands are the same for both databases. The server chooses the database: SQLite is the default, and `serve --database postgres://...` selects PostgreSQL. A URL with a password goes in `DUSTPAN_DATABASE` instead, because serve refuses a password in the flag. A backup of one database restores into the other. Section "Restore a backup" gives the rule.
 
 ## Back up the installation
 

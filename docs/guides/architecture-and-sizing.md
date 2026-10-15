@@ -41,7 +41,7 @@ In the target design:
 
 - Each instance would run the same server binary with the same flags. Each instance would serve every API.
 - The load balancer would receive each request. It would pass each request to one healthy instance.
-- The SQL store would be one PostgreSQL database. Set it with `--database postgres://...` (`DUSTPAN_DATABASE`).
+- The SQL store would be one PostgreSQL database. Set it with `--database postgres://...` (`DUSTPAN_DATABASE`). When the URL holds a password, set it only in `DUSTPAN_DATABASE`, because `serve` refuses a password in the flag.
 - The blob store would be one S3-compatible bucket. Set it with `--blob-store s3://<bucket>` (`DUSTPAN_BLOB_STORE`). The [S3 guide](s3-blobs.md) shows the endpoint, region, and credential settings.
 - The key-encryption key would have the same value on each instance. Set it with `DUSTPAN_KEY_ENCRYPTION_KEY`. Keep it outside the database and the backup target.
 - The backup target would have the same value on each instance. Set a directory or an S3-compatible bucket with `--backup-target` (`DUSTPAN_BACKUP_TARGET`).

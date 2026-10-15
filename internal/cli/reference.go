@@ -158,9 +158,9 @@ func writeConfigValues(out *strings.Builder) {
 	out.WriteString("\n")
 	out.WriteString("The file refuses a `database` URL with a password. Set such a URL in\n")
 	out.WriteString("`DUSTPAN_DATABASE`, because a secret comes only from a variable or from a\n")
-	out.WriteString("file that a `*_FILE` key names (ADR 63 decision 4). The `--database` flag\n")
-	out.WriteString("still takes a URL with a password, but it is deprecated: `serve` logs a\n")
-	out.WriteString("WARN line when it does. Use `DUSTPAN_DATABASE` instead.\n")
+	out.WriteString("file that a `*_FILE` key names. The `--database` flag refuses a URL with a\n")
+	out.WriteString("password too: `serve` stops with an error before it opens the database.\n")
+	out.WriteString("Use `DUSTPAN_DATABASE` instead.\n")
 	out.WriteString("\n")
 }
 
