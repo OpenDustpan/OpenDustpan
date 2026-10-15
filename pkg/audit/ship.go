@@ -83,19 +83,23 @@ type NamespaceLister interface {
 
 // ShipSink is one sink of the shipper. Name keys the cursors of the sink
 // in the database and labels its metrics: keep it when the sink setting
-// changes, or the sink receives every entry again. Interval is the time
+// changes, or the sink receives every entry again. Kind names the adapter
+// of the sink, for example file or webhook. Interval is the time
 // between two rounds. Zero means DefaultShipInterval.
 type ShipSink struct {
 	Sink     logsink.Sink
 	Name     string
+	Kind     string
 	Interval time.Duration
 }
 
-// ShipperConfig configures a Shipper. OnShipped, OnFailure and OnSkipped
-// are hooks for metrics and may be nil. OnShipped receives the sink name
-// and the count of entries of one accepted batch. OnFailure receives the
-// sink name after a failed round. OnSkipped receives the sink name and the
-// count of entries that the sink skipped (logsink.ErrSkipped).
+// ShipperConfig configures a Shipper. OnShipped, OnFailure, OnSkipped and
+// OnLag are hooks for metrics and may be nil. OnShipped receives the sink
+// name and the count of entries of one accepted batch. OnFailure receives
+// the sink name after a failed round. OnSkipped receives the sink name and
+// the count of entries that the sink skipped (logsink.ErrSkipped). OnLag
+// receives the sink name and its delivery lag in seconds after each round.
+// Now answers the current time for the lag; nil means time.Now.
 type ShipperConfig struct {
 	Feed       Feed
 	Namespaces NamespaceLister
@@ -103,12 +107,17 @@ type ShipperConfig struct {
 	OnShipped  func(sink string, entries int)
 	OnFailure  func(sink string)
 	OnSkipped  func(sink string, entries int)
+	OnLag      func(sink string, seconds float64)
+	Now        func() time.Time
 	Sinks      []ShipSink
 }
 
 // Shipper copies committed entries to sinks.
 type Shipper struct {
 	cfg ShipperConfig
+
+	mu      sync.Mutex
+	lastErr map[string]string
 }
 
 // NewShipper checks cfg and returns a shipper. Every sink needs a name of
@@ -141,7 +150,19 @@ func NewShipper(cfg ShipperConfig) (*Shipper, error) {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
 
-	return &Shipper{cfg: cfg}, nil
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+
+	return &Shipper{cfg: cfg, mu: sync.Mutex{}, lastErr: map[string]string{}}, nil
+}
+
+// Sinks answers the configured sinks in order.
+func (s *Shipper) Sinks() []ShipSink {
+	out := make([]ShipSink, len(s.cfg.Sinks))
+	copy(out, s.cfg.Sinks)
+
+	return out
 }
 
 // serverScope answers ServerScope as a namespace value: its fence has no
@@ -194,8 +215,15 @@ func (s *Shipper) ShipOnce(ctx context.Context) error {
 
 	for _, sink := range s.cfg.Sinks {
 		if err := s.round(ctx, sink); err != nil {
+			s.setLastError(sink.Name, ErrorClass(err))
+			s.observeLag(ctx, sink.Name)
 			errs = append(errs, fmt.Errorf("sink %s: %w", sink.Name, err))
+
+			continue
 		}
+
+		s.setLastError(sink.Name, "")
+		s.observeLag(ctx, sink.Name)
 	}
 
 	return errors.Join(errs...)
@@ -228,14 +256,58 @@ func (s *Shipper) loop(ctx context.Context, sink ShipSink) {
 			}
 
 			s.fail(ctx, sink.Name, err)
+			s.setLastError(sink.Name, ErrorClass(err))
+			s.observeLag(ctx, sink.Name)
 
 			wait = min(wait*shipBackoffFactor, MaxShipBackoff)
 
 			continue
 		}
 
+		s.setLastError(sink.Name, "")
+		s.observeLag(ctx, sink.Name)
+
 		wait = interval
 	}
+}
+
+// setLastError records the last error class of sink: empty when the last
+// round succeeded.
+func (s *Shipper) setLastError(sink, class string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if class == "" {
+		delete(s.lastErr, sink)
+
+		return
+	}
+
+	s.lastErr[sink] = class
+}
+
+// lastErrorOf answers the last error class of sink, or empty when the last
+// round succeeded.
+func (s *Shipper) lastErrorOf(sink string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.lastErr[sink]
+}
+
+// observeLag reads the delivery lag of sink and calls the lag hook. A lag
+// read that fails keeps the last gauge value: the next round tries again.
+func (s *Shipper) observeLag(ctx context.Context, sink string) {
+	if s.cfg.OnLag == nil {
+		return
+	}
+
+	lag, err := s.Lag(ctx, sink, s.cfg.Now())
+	if err != nil {
+		return
+	}
+
+	s.cfg.OnLag(sink, lag)
 }
 
 // fail logs a failed round and calls the failure hook. The log line holds

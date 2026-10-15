@@ -111,7 +111,7 @@ func openAuditSinks(items []string, blobs blob.Store, lookup func(string) (strin
 			out.files = append(out.files, f)
 		}
 
-		out.ship = append(out.ship, audit.ShipSink{Sink: sink, Name: name, Interval: interval})
+		out.ship = append(out.ship, audit.ShipSink{Sink: sink, Name: name, Kind: sinkKind(spec), Interval: interval})
 	}
 
 	return out, nil

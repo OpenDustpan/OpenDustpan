@@ -65,6 +65,7 @@ func newSweepHandler(
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   sweeper,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})

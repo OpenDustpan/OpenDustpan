@@ -98,6 +98,9 @@ type Config struct {
 	// Nil means the store keeps no deleted units: the sweep route answers
 	// 501. Both SQL adapters keep them.
 	DeletedUnits DeletedUnitSweeper
+	// AuditSinks lists the configured audit sinks with their delivery
+	// state. Nil means no sink is configured: the sink list is empty.
+	AuditSinks AuditSinkSource
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -139,6 +142,7 @@ type Handler struct {
 	sessions       *session.Policies
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
+	auditSinks     AuditSinkSource
 	mux            *patternMux
 	routes         []Route
 }
@@ -186,6 +190,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		ipAllowlists:   cfg.IPAllowlists,
 		sessions:       cfg.SessionPolicy,
 		onAuditFailure: cfg.OnAuditFailure,
+		auditSinks:     cfg.AuditSinks,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}

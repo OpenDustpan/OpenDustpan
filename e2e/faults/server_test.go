@@ -3,9 +3,10 @@
 package faults_test
 
 import (
+	"net"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"testing"
 	"time"
 
@@ -90,7 +91,9 @@ func startFaultServer(t *testing.T) *faultServer {
 		t.Fatalf("new server: %v", err)
 	}
 
-	ts := httptest.NewServer(srv.Handler())
+	ts := httptest.NewUnstartedServer(srv.Handler())
+	listenForToxiproxy(t, ts)
+	ts.Start()
 	t.Cleanup(ts.Close)
 
 	if err := st.CreateNamespace(ctx, namespace.Namespace{
@@ -103,7 +106,36 @@ func startFaultServer(t *testing.T) *faultServer {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	upstream := strings.TrimPrefix(strings.TrimPrefix(ts.URL, "http://"), "https://")
+	addr, ok := ts.Listener.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("test server address %s is not TCP", ts.Listener.Addr())
+	}
 
-	return &faultServer{url: ts.URL, upstream: upstream, store: st, token: faultToken}
+	upstream := net.JoinHostPort("127.0.0.1", strconv.Itoa(addr.Port))
+
+	return &faultServer{url: "http://" + upstream, upstream: upstream, store: st, token: faultToken}
+}
+
+// listenForToxiproxy makes ts listen on all interfaces when
+// TOXIPROXY_UPSTREAM_HOST is set. A Toxiproxy server in a container cannot
+// reach the loopback address of the test machine, so it dials that host.
+func listenForToxiproxy(t *testing.T, ts *httptest.Server) {
+	t.Helper()
+
+	if toxiproxyUpstreamHost() == "" {
+		return
+	}
+
+	var lc net.ListenConfig
+
+	ln, err := lc.Listen(t.Context(), "tcp", ":0")
+	if err != nil {
+		t.Fatalf("listen on all interfaces: %v", err)
+	}
+
+	if err := ts.Listener.Close(); err != nil {
+		t.Fatalf("close default listener: %v", err)
+	}
+
+	ts.Listener = ln
 }

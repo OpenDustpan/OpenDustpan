@@ -114,6 +114,7 @@ func newIPAllowHandler(
 		IPAllowlists:   svc,
 		SessionPolicy:  nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
