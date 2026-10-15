@@ -84,6 +84,10 @@ and a fresh MFA step.
      required as soon as MFA asks for one.
    - The approval writes an audit entry in `@server` with the action
      `server:set-audit-chain`, and starts the migration.
+   - The approval claims the migration in one conditional write on
+     `audit_chain_state`. Only one approval on all instances wins; another
+     answers 409. A claim expires after 15 minutes, so a migration that
+     stops without a release blocks a new approval for that time at most.
 7. **The migration.** The server stays in maintenance mode until the
    migration ends. Before it writes, it waits two cache limits after the
    enter, so every instance refuses writes. The migration writes in each

@@ -170,7 +170,7 @@ func TestARestoredLogThatDisagreesWaitsForApproval(t *testing.T) {
 
 	saveRecord(t, st, audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "alice", State: audit.ChainStateOff,
-		Pending: false, LogReplaced: true,
+		Pending: false, MigratingAt: time.Time{}, LogReplaced: true,
 	})
 
 	runChainServer(t, st, audit.ChainOff)
@@ -190,7 +190,7 @@ func TestARestoredLogThatAgreesStartsNormally(t *testing.T) {
 
 	saveRecord(t, st, audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn,
-		Pending: false, LogReplaced: true,
+		Pending: false, MigratingAt: time.Time{}, LogReplaced: true,
 	})
 
 	srv := runChainServer(t, st, audit.ChainOn)

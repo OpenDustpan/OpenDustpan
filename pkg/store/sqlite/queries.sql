@@ -1308,16 +1308,30 @@ GROUP BY principal_id;
 
 -- name: GetAuditChainState :one
 -- The audit chain state that this installation keeps: the state, when it
--- last changed, who changed it, whether a change waits for an approval, and
--- whether a restore replaced the log. No row means the chain is on.
-SELECT state, changed_at_ms, changed_by, pending, log_replaced FROM audit_chain_state WHERE id = 1;
+-- last changed, who changed it, whether a change waits for an approval,
+-- whether a restore replaced the log, and when the running migration
+-- started, 0 when none runs. No row means the chain is on.
+SELECT state, changed_at_ms, changed_by, pending, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1;
 
 -- name: SetAuditChainState :exec
 -- Stores the audit chain state of this installation.
-INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, log_replaced)
-VALUES (1, ?, ?, ?, ?, ?)
+INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, log_replaced, migrating_at_ms)
+VALUES (1, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET state = excluded.state, changed_at_ms = excluded.changed_at_ms,
-    changed_by = excluded.changed_by, pending = excluded.pending, log_replaced = excluded.log_replaced;
+    changed_by = excluded.changed_by, pending = excluded.pending, log_replaced = excluded.log_replaced,
+    migrating_at_ms = excluded.migrating_at_ms;
+
+-- name: ClaimAuditChainMigration :execrows
+-- Starts the migration of a waiting change in one write: it stamps the start
+-- time only when a change waits and no claim within the lease holds.
+UPDATE audit_chain_state
+SET migrating_at_ms = ?
+WHERE id = 1 AND pending = 1 AND (migrating_at_ms = 0 OR migrating_at_ms < ?);
+
+-- name: ReleaseAuditChainMigration :exec
+-- Releases the claim of a migration that stops without storing the new
+-- state.
+UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1;
 
 -- name: LastAuditChainStartSequence :one
 -- The sequence of the last start entry of the audit chain of a namespace,

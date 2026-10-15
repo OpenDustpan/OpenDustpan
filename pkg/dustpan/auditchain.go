@@ -110,7 +110,8 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		setting:        cfg.auditChain,
 		mu:             sync.Mutex{},
 		rec: audit.ChainRecord{
-			ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOn, Pending: false, LogReplaced: false,
+			ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOn, Pending: false,
+			MigratingAt: time.Time{}, LogReplaced: false,
 		},
 		readAt: time.Time{},
 		read:   false,
@@ -136,7 +137,7 @@ func (c *auditChain) Status(ctx context.Context) (serverapi.AuditChainStatus, er
 		State:     rec.State,
 		Setting:   c.setting,
 		Pending:   rec.Pending,
-		Migrating: c.migrating.Load(),
+		Migrating: c.migrating.Load() || chainClaimHolds(rec, c.chainNow()),
 	}, nil
 }
 
@@ -165,6 +166,24 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 	c.queue <- change
 
 	return nil
+}
+
+// chainNow answers the time of this instance.
+func (c *auditChain) chainNow() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+
+	return time.Now()
+}
+
+// chainClaimHolds reports whether rec holds a claim within the lease at now.
+func chainClaimHolds(rec audit.ChainRecord, now time.Time) bool {
+	if rec.MigratingAt.IsZero() {
+		return false
+	}
+
+	return now.Sub(rec.MigratingAt) < audit.ChainMigrationLease
 }
 
 // held reports whether a change of the chain waits: the maintenance service
@@ -361,25 +380,25 @@ func (c *auditChain) current(ctx context.Context) audit.ChainRecord {
 }
 
 // recordApproval runs the checks and the writes of an approval while this
-// instance holds the migration flag, and answers the change to migrate.
+// instance holds the migration flag, and answers the change to migrate. The
+// claim in the store orders approvals on every instance: exactly one wins.
 func (c *auditChain) recordApproval(ctx context.Context, caller audit.Entry) (audit.ChainChange, error) {
 	none := audit.ChainChange{At: time.Time{}, By: "", To: ""}
 
-	pending, err := c.held(ctx)
-	if err != nil {
+	if err := c.store.ClaimChainMigration(ctx, c.chainNow(), audit.ChainMigrationLease); err != nil {
 		return none, err
 	}
 
-	if !pending {
-		return none, audit.ErrNoChainChange
-	}
-
 	if err := c.refuseWhileRestoring(ctx); err != nil {
+		c.releaseClaim(ctx)
+
 		return none, err
 	}
 
 	if c.maint != nil {
 		if _, err := c.maint.Enter(ctx, false); err != nil {
+			c.releaseClaim(ctx)
+
 			return none, fmt.Errorf("enter maintenance mode: %w", err)
 		}
 	}
@@ -387,10 +406,20 @@ func (c *auditChain) recordApproval(ctx context.Context, caller audit.Entry) (au
 	change := audit.ChainChange{At: c.now(), By: caller.Subject, To: c.setting.State()}
 
 	if _, err := c.server.AppendServer(ctx, audit.ChainSetEntry(caller, change)); err != nil {
+		c.releaseClaim(ctx)
+
 		return none, fmt.Errorf("append audit chain approval: %w", err)
 	}
 
 	return change, nil
+}
+
+// releaseClaim releases the claim of a migration that stops before it runs.
+// A failed release only logs: the lease bounds the block.
+func (c *auditChain) releaseClaim(ctx context.Context) {
+	if err := c.store.ReleaseChainMigration(ctx); err != nil {
+		c.logger.WarnContext(ctx, "release audit chain migration", slog.String("error", err.Error()))
+	}
 }
 
 // refuseWhileRestoring reports backup.ErrRestoreRunning while a restore
@@ -434,12 +463,14 @@ func (c *auditChain) startMigrations(ctx context.Context) func() {
 // migrate runs the migration of change: it waits two cache limits so every
 // instance refuses writes, writes the start or end entry in each scope,
 // stores the new state, waits two cache limits so every instance sees it,
-// and leaves maintenance mode. A failure logs an error and keeps the change
-// waiting, so a person can approve it again.
+// and leaves maintenance mode. A failure releases the claim and logs an
+// error, and keeps the change waiting, so a person can approve it again.
 func (c *auditChain) migrate(ctx context.Context, change audit.ChainChange) {
 	defer c.migrating.Store(false)
 
 	if err := c.migrateSteps(ctx, change); err != nil {
+		c.releaseClaim(context.WithoutCancel(ctx))
+
 		if ctx.Err() == nil {
 			c.logger.ErrorContext(ctx, "audit chain migration failed", slog.String("error", err.Error()))
 		}

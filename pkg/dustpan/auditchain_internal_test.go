@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -46,7 +47,8 @@ func newTestAuditChain(t *testing.T, setting audit.ChainSetting) *auditChain {
 	}
 
 	err = st.SaveChainRecord(t.Context(), audit.ChainRecord{
-		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true, LogReplaced: false,
+		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
+		MigratingAt: time.Time{}, LogReplaced: false,
 	})
 	if err != nil {
 		t.Fatalf("save chain record: %v", err)
@@ -163,5 +165,79 @@ func TestApproveWithNothingToApprove(t *testing.T) {
 
 	if err := chain.admitRestore(t.Context()); err != nil {
 		t.Fatalf("restore with nothing waiting: %v, want it admitted", err)
+	}
+}
+
+// TestConcurrentApprovalsOnOneStore proves that two instances on the same
+// store approve at the same time, and exactly one wins: the other answers
+// ErrChainMigrating.
+func TestConcurrentApprovalsOnOneStore(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	newChain := func() *auditChain {
+		t.Helper()
+
+		cfg := defaultSettings()
+		cfg.namespaceStore = st
+		cfg.auditChain = audit.ChainOff
+
+		chain, err := newAuditChain(cfg, nil)
+		if err != nil || chain == nil {
+			t.Fatalf("new audit chain = %v, %v", chain, err)
+		}
+
+		return chain
+	}
+
+	first, second := newChain(), newChain()
+
+	saveErr := st.SaveChainRecord(t.Context(), audit.ChainRecord{
+		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
+		MigratingAt: time.Time{}, LogReplaced: false,
+	})
+	if saveErr != nil {
+		t.Fatalf("save chain record: %v", saveErr)
+	}
+
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		won  int
+		held int
+	)
+
+	for _, chain := range []*auditChain{first, second} {
+		wg.Go(func() {
+			err := chain.Approve(t.Context(), approver())
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil:
+				won++
+			case errors.Is(err, audit.ErrChainMigrating):
+				held++
+			default:
+				t.Errorf("approve: %v, want nil or ErrChainMigrating", err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if won != 1 || held != 1 {
+		t.Fatalf("concurrent approvals: won %d, held %d, want 1 and 1", won, held)
 	}
 }

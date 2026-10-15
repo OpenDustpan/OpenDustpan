@@ -531,12 +531,14 @@ func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
 		ChangedBy:   "dst",
 		State:       audit.ChainStateOn,
 		Pending:     false,
+		MigratingAt: time.Time{},
 		LogReplaced: false,
 	}
 
 	to, _ := restoreChain(t, newStore, func(from chainRestoreStore, _ namespace.Namespace) {
 		saveChainRecord(t, from, audit.ChainRecord{
-			ChangedAt: chainAt(), ChangedBy: "src", State: audit.ChainStateOff, Pending: true, LogReplaced: false,
+			ChangedAt: chainAt(), ChangedBy: "src", State: audit.ChainStateOff, Pending: true,
+			MigratingAt: time.Time{}, LogReplaced: false,
 		})
 	}, func(to chainRestoreStore) { saveChainRecord(t, to, want) })
 
@@ -547,7 +549,7 @@ func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
 
 	want.LogReplaced = true
 	if !got.ChangedAt.Equal(want.ChangedAt) || got.ChangedBy != want.ChangedBy || got.State != want.State ||
-		got.Pending != want.Pending || got.LogReplaced != want.LogReplaced {
+		got.Pending != want.Pending || !got.MigratingAt.Equal(want.MigratingAt) || got.LogReplaced != want.LogReplaced {
 		t.Fatalf("chain record after the restore = %+v, want the target record %+v", got, want)
 	}
 }

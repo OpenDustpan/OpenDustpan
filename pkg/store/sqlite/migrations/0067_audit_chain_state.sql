@@ -8,12 +8,13 @@
 -- installation, as schema_migrations is: a backup does not carry it, and a
 -- restore keeps the row of the target.
 CREATE TABLE audit_chain_state (
-    id            INTEGER PRIMARY KEY CHECK (id = 1),
-    state         TEXT    NOT NULL CHECK (state IN ('on', 'off')),
-    changed_at_ms INTEGER NOT NULL,
-    changed_by    TEXT    NOT NULL,
-    pending       INTEGER NOT NULL DEFAULT 0 CHECK (pending IN (0, 1)),
-    log_replaced  INTEGER NOT NULL DEFAULT 0 CHECK (log_replaced IN (0, 1))
+    id              INTEGER PRIMARY KEY CHECK (id = 1),
+    state           TEXT    NOT NULL CHECK (state IN ('on', 'off')),
+    changed_at_ms   INTEGER NOT NULL,
+    changed_by      TEXT    NOT NULL,
+    pending         INTEGER NOT NULL DEFAULT 0 CHECK (pending IN (0, 1)),
+    log_replaced    INTEGER NOT NULL DEFAULT 0 CHECK (log_replaced IN (0, 1)),
+    migrating_at_ms INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
 -- fence_version is the failover version of the namespace when the store

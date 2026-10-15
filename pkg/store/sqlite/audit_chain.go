@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -28,6 +29,50 @@ func (s *Store) SaveChainRecord(ctx context.Context, rec audit.ChainRecord) erro
 	return s.inTx(ctx, func(q *db.Queries) error {
 		return saveChainRecord(ctx, q, rec)
 	})
+}
+
+// ClaimChainMigration implements audit.ChainStore: it stamps now in one
+// conditional write, so exactly one approval wins.
+func (s *Store) ClaimChainMigration(ctx context.Context, now time.Time, lease time.Duration) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	nowMs := codec.Millis(now)
+	expireMs := codec.Millis(now.Add(-lease))
+
+	n, err := s.queries.ClaimAuditChainMigration(ctx, db.ClaimAuditChainMigrationParams{
+		MigratingAtMs: nowMs, MigratingAtMs_2: expireMs,
+	})
+	if err != nil {
+		return fmt.Errorf("claim audit chain migration: %w", err)
+	}
+
+	if n > 0 {
+		return nil
+	}
+
+	rec, err := readChainRecord(ctx, s.queries)
+	if err != nil {
+		return err
+	}
+
+	if !rec.Pending {
+		return audit.ErrNoChainChange
+	}
+
+	return audit.ErrChainMigrating
+}
+
+// ReleaseChainMigration implements audit.ChainStore.
+func (s *Store) ReleaseChainMigration(ctx context.Context) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if err := s.queries.ReleaseAuditChainMigration(ctx); err != nil {
+		return fmt.Errorf("release audit chain migration: %w", err)
+	}
+
+	return nil
 }
 
 // StartChain implements audit.ChainStore: it reads the earlier entries of
@@ -169,7 +214,7 @@ func readChainRecord(ctx context.Context, q *db.Queries) (audit.ChainRecord, err
 	if errors.Is(err, sql.ErrNoRows) {
 		return audit.ChainRecord{
 			ChangedAt: codec.FromMillis(0), ChangedBy: "", State: audit.ChainStateOn,
-			Pending: false, LogReplaced: false,
+			Pending: false, MigratingAt: time.Time{}, LogReplaced: false,
 		}, nil
 	}
 
@@ -182,6 +227,7 @@ func readChainRecord(ctx context.Context, q *db.Queries) (audit.ChainRecord, err
 		ChangedBy:   row.ChangedBy,
 		State:       audit.ChainState(row.State),
 		Pending:     row.Pending != 0,
+		MigratingAt: codec.FromOptionalMillis(row.MigratingAtMs),
 		LogReplaced: row.LogReplaced != 0,
 	}, nil
 }
@@ -198,11 +244,12 @@ func saveChainRecord(ctx context.Context, q *db.Queries, rec audit.ChainRecord) 
 	}
 
 	err := q.SetAuditChainState(ctx, db.SetAuditChainStateParams{
-		State:       string(rec.State),
-		ChangedAtMs: codec.Millis(rec.ChangedAt),
-		ChangedBy:   rec.ChangedBy,
-		Pending:     pending,
-		LogReplaced: replaced,
+		State:         string(rec.State),
+		ChangedAtMs:   codec.Millis(rec.ChangedAt),
+		ChangedBy:     rec.ChangedBy,
+		Pending:       pending,
+		MigratingAtMs: codec.OptionalMillis(rec.MigratingAt),
+		LogReplaced:   replaced,
 	})
 	if err != nil {
 		return fmt.Errorf("save audit chain state: %w", err)

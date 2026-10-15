@@ -173,6 +173,7 @@ func recordOf(state audit.ChainState, seq int64) audit.ChainRecord {
 		ChangedBy:   "alice",
 		State:       state,
 		Pending:     false,
+		MigratingAt: time.Time{},
 		LogReplaced: false,
 	}
 }
@@ -302,7 +303,8 @@ func TestChainWalkScopeWithoutAChain(t *testing.T) {
 	}
 
 	never := audit.ChainScope{Record: audit.ChainRecord{
-		ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOff, Pending: false, LogReplaced: false,
+		ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOff, Pending: false,
+		MigratingAt: time.Time{}, LogReplaced: false,
 	}, Start: 0}
 	if got := walkResult(never, entries...); got != 1 {
 		t.Fatalf("a scope without a chain and an off record without a time: fails at %d, want 1", got)
@@ -339,6 +341,29 @@ func (f *fakeChain) ChainRecord(context.Context) (audit.ChainRecord, error) { re
 
 func (f *fakeChain) SaveChainRecord(_ context.Context, rec audit.ChainRecord) error {
 	f.rec = rec
+
+	return nil
+}
+
+// ClaimChainMigration claims the waiting change in one check, so tests of
+// MigrateChain keep the same errors as the SQL stores.
+func (f *fakeChain) ClaimChainMigration(_ context.Context, now time.Time, lease time.Duration) error {
+	if !f.rec.Pending {
+		return audit.ErrNoChainChange
+	}
+
+	if !f.rec.MigratingAt.IsZero() && now.Sub(f.rec.MigratingAt) < lease {
+		return audit.ErrChainMigrating
+	}
+
+	f.rec.MigratingAt = now
+
+	return nil
+}
+
+// ReleaseChainMigration releases the claim of the fake.
+func (f *fakeChain) ReleaseChainMigration(context.Context) error {
+	f.rec.MigratingAt = time.Time{}
 
 	return nil
 }

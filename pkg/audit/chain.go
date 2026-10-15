@@ -74,10 +74,11 @@ const (
 // ChainRecord is what the installation keeps about its chain: the state,
 // when it last changed and who changed it. Pending reports that a change of
 // the chain waits for a person to approve it, which keeps the installation
-// in maintenance mode. LogReplaced reports that the swap of a restore
-// replaced the log and the server has not compared it with the state yet.
-// A backup does not carry the record: a restore keeps the record of the
-// target installation. An installation without a record reads as
+// in maintenance mode. MigratingAt holds the start of the running
+// migration, zero when none runs. LogReplaced reports that the swap of a
+// restore replaced the log and the server has not compared it with the
+// state yet. A backup does not carry the record: a restore keeps the record
+// of the target installation. An installation without a record reads as
 // ChainStateOn, because the chain was on in every installation before it
 // had a setting.
 type ChainRecord struct {
@@ -85,6 +86,7 @@ type ChainRecord struct {
 	ChangedBy   string
 	State       ChainState
 	Pending     bool
+	MigratingAt time.Time
 	LogReplaced bool
 }
 
@@ -108,6 +110,10 @@ const (
 
 // ErrInvalidChainSetting reports a chain setting other than on or off.
 var ErrInvalidChainSetting = errors.New("invalid audit chain setting: want on or off")
+
+// ChainMigrationLease bounds how long a migration that stops without a
+// release blocks a new approval.
+const ChainMigrationLease = 15 * time.Minute
 
 // Errors of the approval of a change of the chain.
 var (
@@ -146,6 +152,15 @@ type ChainStore interface {
 	ChainRecord(ctx context.Context) (ChainRecord, error)
 	// SaveChainRecord stores rec as the record of the installation.
 	SaveChainRecord(ctx context.Context, rec ChainRecord) error
+	// ClaimChainMigration starts the migration of a waiting change in one
+	// conditional write: it stamps now as the start only when a change waits
+	// and no claim within lease holds. It returns ErrNoChainChange when no
+	// change waits, and ErrChainMigrating when a claim within the lease
+	// holds.
+	ClaimChainMigration(ctx context.Context, now time.Time, lease time.Duration) error
+	// ReleaseChainMigration releases the claim of a migration that stops
+	// without storing the new state.
+	ReleaseChainMigration(ctx context.Context) error
 	// StartChain appends e as the start entry of its scope, in one
 	// transaction with the read of the earlier entries and the check of
 	// fence: its changes get the digest and the count of those entries (see
@@ -187,17 +202,24 @@ type ChainChange struct {
 // stores the new record with the state off and no wait. To on, it first
 // stores the new record with the state on and a wait, then writes a start
 // entry in each scope, then stores the same record with no wait. The early
-// store to on makes later appends hash at once. An append in a scope before
-// its start entry is covered by the digest of that start entry. An append
-// after an end entry but before the stored state changes writes no hash,
-// because the last entry is an end entry. A scope without entries gets no
-// entry: its first entry starts the chain, or comes after the chain went
-// off. A second start entry does no harm, because its digest covers the
-// first.
+// store to on keeps the claim of the approval, so a second approval still
+// sees the migration. The final store clears the claim. The early store to
+// on makes later appends hash at once. An append in a scope before its
+// start entry is covered by the digest of that start entry. An append after
+// an end entry but before the stored state changes writes no hash, because
+// the last entry is an end entry. A scope without entries gets no entry:
+// its first entry starts the chain, or comes after the chain went off. A
+// second start entry does no harm, because its digest covers the first.
 func MigrateChain(ctx context.Context, store ChainStore, fences []namespace.Fence, change ChainChange) error {
 	if change.To == ChainStateOn {
+		current, err := store.ChainRecord(ctx)
+		if err != nil {
+			return fmt.Errorf("read audit chain state: %w", err)
+		}
+
 		early := ChainRecord{
-			ChangedAt: change.At, ChangedBy: change.By, State: change.To, Pending: true, LogReplaced: false,
+			ChangedAt: change.At, ChangedBy: change.By, State: change.To, Pending: true,
+			MigratingAt: current.MigratingAt, LogReplaced: false,
 		}
 		if err := store.SaveChainRecord(ctx, early); err != nil {
 			return fmt.Errorf("save audit chain state: %w", err)
@@ -211,7 +233,8 @@ func MigrateChain(ctx context.Context, store ChainStore, fences []namespace.Fenc
 	}
 
 	rec := ChainRecord{
-		ChangedAt: change.At, ChangedBy: change.By, State: change.To, Pending: false, LogReplaced: false,
+		ChangedAt: change.At, ChangedBy: change.By, State: change.To, Pending: false,
+		MigratingAt: time.Time{}, LogReplaced: false,
 	}
 	if err := store.SaveChainRecord(ctx, rec); err != nil {
 		return fmt.Errorf("save audit chain state: %w", err)

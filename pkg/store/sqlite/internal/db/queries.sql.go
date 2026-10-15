@@ -282,6 +282,27 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 	return items, nil
 }
 
+const claimAuditChainMigration = `-- name: ClaimAuditChainMigration :execrows
+UPDATE audit_chain_state
+SET migrating_at_ms = ?
+WHERE id = 1 AND pending = 1 AND (migrating_at_ms = 0 OR migrating_at_ms < ?)
+`
+
+type ClaimAuditChainMigrationParams struct {
+	MigratingAtMs   int64
+	MigratingAtMs_2 int64
+}
+
+// Starts the migration of a waiting change in one write: it stamps the start
+// time only when a change waits and no claim within the lease holds.
+func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditChainMigrationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimAuditChainMigration, arg.MigratingAtMs, arg.MigratingAtMs_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?
@@ -2048,20 +2069,22 @@ func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolic
 }
 
 const getAuditChainState = `-- name: GetAuditChainState :one
-SELECT state, changed_at_ms, changed_by, pending, log_replaced FROM audit_chain_state WHERE id = 1
+SELECT state, changed_at_ms, changed_by, pending, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1
 `
 
 type GetAuditChainStateRow struct {
-	State       string
-	ChangedAtMs int64
-	ChangedBy   string
-	Pending     int64
-	LogReplaced int64
+	State         string
+	ChangedAtMs   int64
+	ChangedBy     string
+	Pending       int64
+	LogReplaced   int64
+	MigratingAtMs int64
 }
 
 // The audit chain state that this installation keeps: the state, when it
-// last changed, who changed it, whether a change waits for an approval, and
-// whether a restore replaced the log. No row means the chain is on.
+// last changed, who changed it, whether a change waits for an approval,
+// whether a restore replaced the log, and when the running migration
+// started, 0 when none runs. No row means the chain is on.
 func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow, error) {
 	row := q.db.QueryRowContext(ctx, getAuditChainState)
 	var i GetAuditChainStateRow
@@ -2071,6 +2094,7 @@ func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow
 		&i.ChangedBy,
 		&i.Pending,
 		&i.LogReplaced,
+		&i.MigratingAtMs,
 	)
 	return i, err
 }
@@ -5807,6 +5831,17 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 	return err
 }
 
+const releaseAuditChainMigration = `-- name: ReleaseAuditChainMigration :exec
+UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1
+`
+
+// Releases the claim of a migration that stops without storing the new
+// state.
+func (q *Queries) ReleaseAuditChainMigration(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, releaseAuditChainMigration)
+	return err
+}
+
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
 UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL
@@ -6495,18 +6530,20 @@ func (q *Queries) SetAccessTokenPolicy(ctx context.Context, arg SetAccessTokenPo
 }
 
 const setAuditChainState = `-- name: SetAuditChainState :exec
-INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, log_replaced)
-VALUES (1, ?, ?, ?, ?, ?)
+INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, log_replaced, migrating_at_ms)
+VALUES (1, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET state = excluded.state, changed_at_ms = excluded.changed_at_ms,
-    changed_by = excluded.changed_by, pending = excluded.pending, log_replaced = excluded.log_replaced
+    changed_by = excluded.changed_by, pending = excluded.pending, log_replaced = excluded.log_replaced,
+    migrating_at_ms = excluded.migrating_at_ms
 `
 
 type SetAuditChainStateParams struct {
-	State       string
-	ChangedAtMs int64
-	ChangedBy   string
-	Pending     int64
-	LogReplaced int64
+	State         string
+	ChangedAtMs   int64
+	ChangedBy     string
+	Pending       int64
+	LogReplaced   int64
+	MigratingAtMs int64
 }
 
 // Stores the audit chain state of this installation.
@@ -6517,6 +6554,7 @@ func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainState
 		arg.ChangedBy,
 		arg.Pending,
 		arg.LogReplaced,
+		arg.MigratingAtMs,
 	)
 	return err
 }
