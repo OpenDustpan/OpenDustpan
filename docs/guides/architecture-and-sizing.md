@@ -34,7 +34,8 @@ local file system: SQLite WAL mode does not work on a network file system.
 One `opendustpan serve` process uses:
 
 - **The SQL store:** a PostgreSQL database, set with
-  `--database postgres://...`.
+  `--database postgres://...`, or with `DUSTPAN_DATABASE` when the URL
+  holds a password, which serve refuses in the flag.
 - **The blob store:** a bucket, set with `--blob-store s3://<bucket>`. The
   [S3 guide](s3-blobs.md) shows the settings.
 - **The key-encryption key:** as above. With PostgreSQL, the default key
