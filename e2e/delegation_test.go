@@ -21,6 +21,12 @@ type e2eExport struct {
 	Grants []e2eExportRow `json:"grants"`
 }
 
+// e2eLimitedTokens decodes a token list with the maximum lifetime.
+type e2eLimitedTokens struct {
+	Tokens             []e2eToken `json:"tokens"`
+	MaxLifetimeSeconds int64      `json:"maxLifetimeSeconds"`
+}
+
 // e2eRotation decodes the answer of a rotation.
 type e2eRotation struct {
 	Token    e2eToken `json:"token"`
@@ -110,6 +116,7 @@ func runDelegationOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}, &f.opsToken)
 
 	checkTokenFollowsGrants(ctx, t, env, &f)
+	checkHolderReads(ctx, t, env, &f)
 	checkHolderRevokes(ctx, t, env, &f)
 
 	principalCall(ctx, t, env, principalStep{
@@ -210,6 +217,63 @@ func checkTokenFollowsGrants(ctx context.Context, t *testing.T, env *e2e.Env, f 
 
 	if rot.Previous.ID != tok.ID || rot.Token.PrincipalID != f.deploy.ID {
 		t.Fatalf("rotation = %+v, want a new token of deploy for %s", rot, tok.ID)
+	}
+}
+
+// checkHolderReads proves what the token of ops reads: the tokens of
+// deploy with the maximum lifetime, the principals it manages, and its own
+// token list with the maximum lifetime. The tokens of other answer 403.
+func checkHolderReads(ctx context.Context, t *testing.T, env *e2e.Env, f *delegationFixture) {
+	t.Helper()
+
+	reads := []struct {
+		out  any
+		path string
+		want int
+	}{
+		{
+			&e2eLimitedTokens{Tokens: nil, MaxLifetimeSeconds: 0},
+			"/api/server/principals/" + f.deploy.ID + "/tokens",
+			http.StatusOK,
+		},
+		{nil, "/api/server/principals/" + f.other.ID + "/tokens", http.StatusForbidden},
+		{&e2eLimitedTokens{Tokens: nil, MaxLifetimeSeconds: 0}, "/api/server/caller/tokens", http.StatusOK},
+	}
+
+	for _, read := range reads {
+		status, body, err := env.ServerAPIStatusAs(ctx, f.opsToken.Secret, http.MethodGet, read.path, "")
+		if err != nil || status != read.want {
+			t.Fatalf("GET %s with the token of ops = %d, %v (%s); want %d", read.path, status, err, body, read.want)
+		}
+
+		list, isList := read.out.(*e2eLimitedTokens)
+		if !isList {
+			continue
+		}
+
+		if err := json.Unmarshal([]byte(body), list); err != nil || list.MaxLifetimeSeconds <= 0 {
+			t.Fatalf("GET %s = %s, %v; want a list with the maximum lifetime", read.path, body, err)
+		}
+	}
+
+	checkHolderPrincipals(ctx, t, env, f)
+}
+
+// checkHolderPrincipals proves that the token of ops lists deploy, and only
+// deploy, as the principals it manages.
+func checkHolderPrincipals(ctx context.Context, t *testing.T, env *e2e.Env, f *delegationFixture) {
+	t.Helper()
+
+	var managed e2eAccessObjects
+
+	status, body, err := env.ServerAPIStatusAs(ctx, f.opsToken.Secret, http.MethodGet,
+		"/api/server/caller/access?type=principal", "")
+	if err != nil || status != http.StatusOK || json.Unmarshal([]byte(body), &managed) != nil {
+		t.Fatalf("principals that ops manages = %d, %v (%s); want 200", status, err, body)
+	}
+
+	if managed.All || len(managed.Objects) != 1 || managed.Objects[0].Object != "principal:"+f.deploy.ID {
+		t.Fatalf("principals that ops manages = %s, want only deploy", body)
 	}
 }
 

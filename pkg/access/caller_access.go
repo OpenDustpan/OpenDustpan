@@ -15,8 +15,10 @@ import (
 
 // ObjectsRequest asks for one page of the objects of one kind where a
 // principal can do one action (ADR 52, decision 14). Kind is
-// ObjectNamespace, ObjectCollection or ObjectUnit. Action empty means the
-// read action of the kind. Cursor and Limit page as in ReviewRequest.
+// ObjectNamespace, ObjectCollection, ObjectUnit or ObjectPrincipal. Action
+// empty means the default action of the kind: the read action, or
+// principal:manage-tokens for ObjectPrincipal. Cursor and Limit page as in
+// ReviewRequest.
 type ObjectsRequest struct {
 	Kind   ObjectKind
 	Action identity.Action
@@ -36,7 +38,7 @@ type ObjectsPage struct {
 	All        bool
 }
 
-// readActions is the read action of each object kind of an objects
+// readActions is the default action of each object kind of an objects
 // request.
 //
 //nolint:gochecknoglobals // A constant table; Go has no constant maps.
@@ -44,6 +46,7 @@ var readActions = map[ObjectKind]identity.Action{
 	ObjectNamespace:  identity.ActionNamespaceRead,
 	ObjectCollection: identity.ActionCollectionRead,
 	ObjectUnit:       identity.ActionUnitRead,
+	ObjectPrincipal:  identity.ActionPrincipalManageTokens,
 }
 
 // Access answers what p can do on obj and which grants give it: the "my
@@ -63,7 +66,7 @@ func (s *Service) Objects(ctx context.Context, p identity.Principal, req Objects
 
 	read, ok := readActions[req.Kind]
 	if !ok {
-		return page, fmt.Errorf("%w: type %q: write namespace, collection or unit", ErrInvalid, req.Kind)
+		return page, fmt.Errorf("%w: type %q: write namespace, collection, unit or principal", ErrInvalid, req.Kind)
 	}
 
 	if page.Action == "" {
@@ -143,8 +146,13 @@ func objectsPaging(req ObjectsRequest) (int, string, error) {
 }
 
 // scopeObjects returns the objects of scope that cover objects of kind,
-// sorted by their text form.
+// sorted by their text form. A principal is covered only by a grant on it:
+// the grants on namespaces, collections and units do not reach principals.
 func scopeObjects(scope Scope, kind ObjectKind) []identity.Object {
+	if kind == ObjectPrincipal {
+		return sortedObjects(slices.Clone(scope.Principals))
+	}
+
 	out := slices.Clone(scope.Namespaces)
 
 	if kind == ObjectCollection || kind == ObjectUnit {
@@ -155,11 +163,16 @@ func scopeObjects(scope Scope, kind ObjectKind) []identity.Object {
 		out = append(out, scope.Units...)
 	}
 
-	slices.SortFunc(out, func(a, b identity.Object) int {
+	return sortedObjects(out)
+}
+
+// sortedObjects sorts objs by their text form and returns them.
+func sortedObjects(objs []identity.Object) []identity.Object {
+	slices.SortFunc(objs, func(a, b identity.Object) int {
 		return strings.Compare(a.String(), b.String())
 	})
 
-	return out
+	return objs
 }
 
 // CallerGrantsRequest asks for one page of the current grants of a caller.

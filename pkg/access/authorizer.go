@@ -173,12 +173,14 @@ func (h held) actions() []identity.Action {
 // Scope is the set of objects of one kind where a principal can do one
 // action, as grants name them (ADR 52). All is true when a grant on the
 // installation covers every object. A unit is in the scope when it, its
-// collection or its namespace is in a set. A consumer filters a list with
+// collection or its namespace is in a set. A principal is in the scope when
+// it is in Principals. A consumer filters a list with
 // the scope in its own query, never with one check for each object.
 type Scope struct {
 	Namespaces  []identity.Object
 	Collections []identity.Object
 	Units       []identity.Object
+	Principals  []identity.Object
 	All         bool
 }
 
@@ -187,7 +189,7 @@ type Scope struct {
 // of the subjects with a role that holds action. An administrator has every
 // object.
 func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, action identity.Action) (Scope, error) {
-	none := Scope{Namespaces: nil, Collections: nil, Units: nil, All: false}
+	none := Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}
 
 	if p.Admin {
 		none.All = true
@@ -249,8 +251,7 @@ func (s *Scope) add(obj identity.Object) {
 	case ObjectUnit:
 		s.Units = appendObject(s.Units, obj)
 	case ObjectPrincipal:
-		// A scope lists namespaces and what they hold, never principals.
-		return
+		s.Principals = appendObject(s.Principals, obj)
 	default:
 	}
 }

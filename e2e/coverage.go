@@ -826,6 +826,7 @@ func delegationAllowEntries() []AllowEntry {
 
 	routes := []struct{ method, path string }{
 		{http.MethodPost, tokens},
+		{http.MethodGet, tokens},
 		{http.MethodPost, tokens + "/{id}/rotate"},
 		{http.MethodDelete, tokens + "/{id}"},
 		{http.MethodGet, grants},
