@@ -19,15 +19,7 @@ func TestBackupCoverageFailsOnAddedColumn(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
-	seed, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	if closeErr := seed.Close(); closeErr != nil {
-		t.Fatalf("close seed store: %v", closeErr)
-	}
-
+	copyTemplate(t, path)
 	addSpikeColumn(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
@@ -63,15 +55,7 @@ func TestPortableExportRefusesAddedColumn(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
-	seed, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	if closeErr := seed.Close(); closeErr != nil {
-		t.Fatalf("close seed store: %v", closeErr)
-	}
-
+	copyTemplate(t, path)
 	addSpikeColumn(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
