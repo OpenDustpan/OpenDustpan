@@ -526,6 +526,31 @@ func (q *Queries) CountLivePrincipal(ctx context.Context, id string) (int64, err
 	return count, err
 }
 
+const countNamespaces = `-- name: CountNamespaces :one
+SELECT COUNT(*)
+FROM namespaces
+`
+
+func (q *Queries) CountNamespaces(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNamespaces)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNamespacesByNames = `-- name: CountNamespacesByNames :one
+SELECT COUNT(*)
+FROM namespaces
+WHERE name IN (SELECT value FROM json_each(?1))
+`
+
+func (q *Queries) CountNamespacesByNames(ctx context.Context, names interface{}) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNamespacesByNames, names)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -5436,6 +5461,111 @@ func (q *Queries) NextJournalArrival(ctx context.Context, arg NextJournalArrival
 	var arrival int64
 	err := row.Scan(&arrival)
 	return arrival, err
+}
+
+const pageNamespaces = `-- name: PageNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > ?1
+ORDER BY name
+LIMIT ?2
+`
+
+type PageNamespacesParams struct {
+	After string
+	Lim   int64
+}
+
+type PageNamespacesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) ([]PageNamespacesRow, error) {
+	rows, err := q.db.QueryContext(ctx, pageNamespaces, arg.After, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageNamespacesRow
+	for rows.Next() {
+		var i PageNamespacesRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.HomeRegion,
+			&i.FailoverVersion,
+			&i.CreatedAtMs,
+			&i.AllowForcedWrites,
+			&i.AllowUnlockedWrites,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pageNamespacesByNames = `-- name: PageNamespacesByNames :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > ?1 AND name IN (SELECT value FROM json_each(?2))
+ORDER BY name
+LIMIT ?3
+`
+
+type PageNamespacesByNamesParams struct {
+	After string
+	Names interface{}
+	Lim   int64
+}
+
+type PageNamespacesByNamesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) PageNamespacesByNames(ctx context.Context, arg PageNamespacesByNamesParams) ([]PageNamespacesByNamesRow, error) {
+	rows, err := q.db.QueryContext(ctx, pageNamespacesByNames, arg.After, arg.Names, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageNamespacesByNamesRow
+	for rows.Next() {
+		var i PageNamespacesByNamesRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.HomeRegion,
+			&i.FailoverVersion,
+			&i.CreatedAtMs,
+			&i.AllowForcedWrites,
+			&i.AllowUnlockedWrites,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const principalExists = `-- name: PrincipalExists :one

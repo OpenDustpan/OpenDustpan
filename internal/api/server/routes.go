@@ -108,6 +108,14 @@ func (h *Handler) coreRoutes() []Route {
 		},
 		{
 			Method:  http.MethodGet,
+			Path:    "/api/server/namespaces",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionCallerRead},
+			Resolve: resolveCaller, ActionsFor: nil,
+			Serve: h.listNamespaces,
+		},
+		{
+			Method:  http.MethodGet,
 			Path:    "/api/server/metrics",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
