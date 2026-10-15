@@ -2744,6 +2744,23 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 	return i, err
 }
 
+const getSessionPolicy = `-- name: GetSessionPolicy :one
+SELECT idle_ms, max_length_ms, updated_at_ms FROM session_policy WHERE id = 1
+`
+
+type GetSessionPolicyRow struct {
+	IdleMs      int64
+	MaxLengthMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) GetSessionPolicy(ctx context.Context) (GetSessionPolicyRow, error) {
+	row := q.db.QueryRowContext(ctx, getSessionPolicy)
+	var i GetSessionPolicyRow
+	err := row.Scan(&i.IdleMs, &i.MaxLengthMs, &i.UpdatedAtMs)
+	return i, err
+}
+
 const getSessionPrincipal = `-- name: GetSessionPrincipal :one
 SELECT kind, disabled_at_ms FROM principals WHERE id = ? AND deleted_at_ms IS NULL
 `
@@ -6506,6 +6523,27 @@ type SetPendingContentKeyParams struct {
 // matches no row, so a late attempt reports no change.
 func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingContentKeyParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, setPendingContentKey, arg.ContentKey, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setSessionPolicy = `-- name: SetSessionPolicy :execrows
+UPDATE session_policy
+SET idle_ms = CAST(?1 AS INTEGER), max_length_ms = CAST(?2 AS INTEGER),
+  updated_at_ms = CAST(?3 AS INTEGER)
+WHERE id = 1
+`
+
+type SetSessionPolicyParams struct {
+	IdleMs      int64
+	MaxLengthMs int64
+	UpdatedAtMs int64
+}
+
+func (q *Queries) SetSessionPolicy(ctx context.Context, arg SetSessionPolicyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionPolicy, arg.IdleMs, arg.MaxLengthMs, arg.UpdatedAtMs)
 	if err != nil {
 		return 0, err
 	}

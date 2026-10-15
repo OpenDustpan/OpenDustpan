@@ -605,3 +605,36 @@ func TestTokenActionsHaveTheirFamilies(t *testing.T) {
 	assertChecks(t, f.authz, ops, []check{{server, identity.ActionPrincipalManageTokens, false}})
 	assertChecks(t, f.authz, plain, []check{{identity.CallerObject(), identity.ActionTokenManageOwn, true}})
 }
+
+// TestSignInSettingsAreSiteOnly places server:manage-sign-in: it is in the
+// administration family, the site administrator holds it, and the account
+// administrator and the operator do not. An account administrator cannot
+// give it to itself through a custom role.
+func TestSignInSettingsAreSiteOnly(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	acct := f.accountAdministrator(t, "sign-in-acct")
+	site := f.person(t, "sign-in-site")
+	ops := f.person(t, "sign-in-ops")
+
+	f.grant(t, prn("sign-in-site"), access.RoleSiteAdministrator, identity.ServerObject())
+	f.grant(t, prn("sign-in-ops"), access.RoleInstallationOperator, identity.ServerObject())
+
+	a := identity.ActionServerManageSignIn
+	if family, ok := access.FamilyOf(a); !ok || family != access.FamilyAdministration {
+		t.Errorf("family of %s = %q, %t; want administration", a, family, ok)
+	}
+
+	server := identity.ServerObject()
+	assertChecks(t, f.authz, site, []check{{server, a, true}})
+	assertChecks(t, f.authz, acct, []check{{server, a, false}})
+	assertChecks(t, f.authz, ops, []check{{server, a, false}})
+
+	_, err := f.svc.CreateRole(t.Context(), testEntry(), acct, access.RoleInput{
+		Name: "sign-in", Description: "", Actions: []identity.Action{a},
+	})
+	if !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("create a role with %s = %v, want ErrEscalation", a, err)
+	}
+}

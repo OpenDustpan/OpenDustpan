@@ -474,5 +474,9 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColUpdatedAtMs,
 			},
 		},
+		{
+			table:   "session_policy",
+			columns: []string{"id", "idle_ms", "max_length_ms", backupColUpdatedAtMs},
+		},
 	}
 }

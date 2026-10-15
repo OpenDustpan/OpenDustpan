@@ -29,6 +29,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -727,6 +728,34 @@ func coverageIPAllowlists(tb testing.TB) *ipallow.Service {
 	return svc
 }
 
+// coverageSessionPolicyStore holds the default session policy: the route
+// table needs a session policy service, and the coverage gate never serves
+// a request.
+type coverageSessionPolicyStore struct{}
+
+func (coverageSessionPolicyStore) GetSessionPolicy(_ context.Context) (session.Policy, error) {
+	return session.DefaultPolicy(), nil
+}
+
+func (coverageSessionPolicyStore) UpdateSessionPolicy(
+	_ context.Context, _ session.PolicyUpdate,
+) (session.Policy, error) {
+	return session.DefaultPolicy(), nil
+}
+
+// coverageSessionPolicies returns the session policy service of the route
+// table.
+func coverageSessionPolicies(tb testing.TB) *session.Policies {
+	tb.Helper()
+
+	svc, err := session.NewPolicies(session.PolicyConfig{Store: coverageSessionPolicyStore{}, Now: nil})
+	if err != nil {
+		tb.Fatalf("session policy service: %v", err)
+	}
+
+	return svc
+}
+
 // coverageServerRoutes returns the installation adapter's route table: the
 // namespace route (ADR 39), the backup routes (ADR 30), the restore routes
 // (ADR 38), the metrics route (ADR 32), the maintenance routes (ADR 38) and
@@ -752,6 +781,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
 		IPAllowlists:   coverageIPAllowlists(tb),
+		SessionPolicy:  coverageSessionPolicies(tb),
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -854,6 +884,7 @@ func CoverageAllowlist() []AllowEntry {
 		reviewAllowEntries(),
 		tokenAllowEntries(),
 		tokenPolicyAllowEntries(),
+		sessionPolicyAllowEntries(),
 		ipAllowlistAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
@@ -1093,6 +1124,28 @@ func tokenPolicyAllowEntries() []AllowEntry {
 	for _, r := range routes {
 		out = append(out, AllowEntry{
 			Method: r.method, Path: r.path, CoveringTest: "TestTokenPolicy", Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// sessionPolicyAllowEntries returns the operator and console routes of the
+// session policy. The harness steps of TestSessionPolicy drive each one
+// through the real binary on each store.
+func sessionPolicyAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI reads or changes the session policy. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, "/api/server/session-policy"},
+		{http.MethodPatch, "/api/server/session-policy"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestSessionPolicy", Reason: reason,
 		})
 	}
 

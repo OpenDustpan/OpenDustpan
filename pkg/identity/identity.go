@@ -230,6 +230,11 @@ const (
 	// policy and running the inactivity disable (ADR 53, decisions 2, 4 and
 	// 6). Its object is ServerObject.
 	ActionServerManageTokenPolicy Action = "server:manage-token-policy"
+	// ActionServerManageSignIn allows changing the sign-in settings of the
+	// installation: the session policy, and later the sign-in methods, SCIM
+	// and MFA. Its object is ServerObject. Of the built-in roles, only the
+	// site administrator holds it.
+	ActionServerManageSignIn Action = "server:manage-sign-in"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

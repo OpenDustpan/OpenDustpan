@@ -454,6 +454,16 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "session_policy",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindInteger},
+				{Name: "idle_ms", Kind: KindInteger},
+				{Name: "max_length_ms", Kind: KindInteger},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+			},
+		},
+		{
 			Table:   "backups",
 			OrderBy: []string{"id"},
 			Columns: []Column{

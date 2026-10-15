@@ -1548,3 +1548,12 @@ RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms;
 
 -- name: PruneSignInRequests :execrows
 DELETE FROM sign_in_requests WHERE expires_at_ms <= ?;
+
+-- name: GetSessionPolicy :one
+SELECT idle_ms, max_length_ms, updated_at_ms FROM session_policy WHERE id = 1;
+
+-- name: SetSessionPolicy :execrows
+UPDATE session_policy
+SET idle_ms = CAST(sqlc.arg('idle_ms') AS INTEGER), max_length_ms = CAST(sqlc.arg('max_length_ms') AS INTEGER),
+  updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER)
+WHERE id = 1;
