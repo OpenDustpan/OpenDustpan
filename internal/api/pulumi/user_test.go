@@ -118,7 +118,7 @@ func (*memStackStore) RestoreStack(
 }
 
 // PurgeStack implements stack.Store; this fake holds no deleted stack.
-func (*memStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ audit.Entry) error {
+func (*memStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ time.Time, _ audit.Entry) error {
 	return stack.ErrNotFound
 }
 

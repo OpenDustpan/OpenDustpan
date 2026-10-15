@@ -102,6 +102,8 @@ type Inner interface {
 	workspace.StateStore
 	inventory.Reader
 	inventory.DeletedReader
+	inventory.ExpiredDeleted
+	inventory.BlobPurges
 	maintenance.Store
 }
 
@@ -526,12 +528,18 @@ func (s *Store) RestoreWorkspace(
 
 // PurgeWorkspace removes a deleted workspace for good, unless a fault fires
 // first.
-func (s *Store) PurgeWorkspace(ctx context.Context, id workspace.ID, fence namespace.Fence, e audit.Entry) error {
+func (s *Store) PurgeWorkspace(
+	ctx context.Context,
+	id workspace.ID,
+	fence namespace.Fence,
+	dueBy time.Time,
+	e audit.Entry,
+) error {
 	if err := s.before(ctx, "PurgeWorkspace"); err != nil {
 		return err
 	}
 
-	return s.inner.PurgeWorkspace(ctx, id, fence, e)
+	return s.inner.PurgeWorkspace(ctx, id, fence, dueBy, e)
 }
 
 // RestoreStack brings back a deleted stack, unless a fault fires first.
@@ -546,12 +554,18 @@ func (s *Store) RestoreStack(
 }
 
 // PurgeStack removes a deleted stack for good, unless a fault fires first.
-func (s *Store) PurgeStack(ctx context.Context, id stack.ID, fence namespace.Fence, e audit.Entry) error {
+func (s *Store) PurgeStack(
+	ctx context.Context,
+	id stack.ID,
+	fence namespace.Fence,
+	dueBy time.Time,
+	e audit.Entry,
+) error {
 	if err := s.before(ctx, "PurgeStack"); err != nil {
 		return err
 	}
 
-	return s.inner.PurgeStack(ctx, id, fence, e)
+	return s.inner.PurgeStack(ctx, id, fence, dueBy, e)
 }
 
 // CreateStateVersion persists a new, pending version, unless a fault fires first.
@@ -754,6 +768,39 @@ func (s *Store) GetDeletedUnit(
 	}
 
 	return s.inner.GetDeletedUnit(ctx, ns, tool, unitID)
+}
+
+// ListExpiredDeleted returns one page of expired deleted units, unless a
+// fault fires first.
+func (s *Store) ListExpiredDeleted(
+	ctx context.Context, now time.Time, after *inventory.ExpiredCursor, limit int,
+) ([]inventory.DeletedEntry, error) {
+	if err := s.before(ctx, "ListExpiredDeleted"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.ListExpiredDeleted(ctx, now, after, limit)
+}
+
+// ListBlobPurges returns one page of blob purge records, unless a fault
+// fires first.
+func (s *Store) ListBlobPurges(
+	ctx context.Context, after *inventory.BlobPurgeCursor, limit int,
+) ([]inventory.BlobPurge, error) {
+	if err := s.before(ctx, "ListBlobPurges"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.ListBlobPurges(ctx, after, limit)
+}
+
+// FinishBlobPurge removes one blob purge record, unless a fault fires first.
+func (s *Store) FinishBlobPurge(ctx context.Context, tool, unitID string) error {
+	if err := s.before(ctx, "FinishBlobPurge"); err != nil {
+		return err
+	}
+
+	return s.inner.FinishBlobPurge(ctx, tool, unitID)
 }
 
 // GetState returns the installation state, unless a fault fires first.
