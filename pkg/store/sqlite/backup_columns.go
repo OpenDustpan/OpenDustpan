@@ -9,6 +9,7 @@ const (
 	backupColPrincipalID = "principal_id"
 	backupColEndedAtMs   = "ended_at_ms"
 	backupColName        = "name"
+	backupColNameKey     = "name_key"
 	backupColNamespace   = "namespace"
 	backupColSequence    = "sequence"
 	backupColSize        = "size"
@@ -180,6 +181,18 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"lock_holder",
 				"lock_since_ms",
 				"lock_operation",
+			},
+		},
+		{
+			table: "collections",
+			columns: []string{
+				"id", backupColNamespace, backupColNameKey, backupColName, backupColCreatedAtMs,
+			},
+		},
+		{
+			table: "collection_members",
+			columns: []string{
+				"unit_id", backupColNamespace, "collection_key", "assigned_at_ms",
 			},
 		},
 		{
@@ -378,7 +391,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColName,
-				"name_key",
+				backupColNameKey,
 				"description",
 				backupColSource,
 				backupColCreatedAtMs,
@@ -412,7 +425,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColName,
-				"name_key",
+				backupColNameKey,
 				"description",
 				"actions",
 				backupColCreatedAtMs,

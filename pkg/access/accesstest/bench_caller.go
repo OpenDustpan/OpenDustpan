@@ -129,7 +129,7 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 func benchGrant(b *testing.B, s BenchStore, id string, subject access.Subject, collection string) {
 	b.Helper()
 
-	obj := identity.CollectionObject(namespace.Name("bench"), collection)
+	obj := identity.CollectionObject(namespace.Name("bench"), collection).WithCollectionID("col-" + collection)
 	g := access.Grant{
 		CreatedAt: at(2), Condition: nil, Object: obj, ID: id, Role: access.RoleViewer, CreatedBy: "admin",
 		Subject: subject,

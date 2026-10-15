@@ -509,7 +509,8 @@ func callerAccessByType(
 		All:        got.All,
 	}
 
-	for _, obj := range got.Objects {
+	for i := range got.Objects {
+		obj := got.Objects[i]
 		k, _ := access.KindOf(obj)
 		out.Objects = append(out.Objects, accessObjectResponse{Object: obj.String(), Kind: string(k)})
 	}

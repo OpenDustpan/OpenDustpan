@@ -120,6 +120,7 @@ linters:
             - "**/pkg/accesstoken/**"
             - "**/pkg/session/**"
             - "**/pkg/backup/**"
+            - "**/pkg/collection/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/blob/*.go"
             - "**/pkg/logsink/*.go"

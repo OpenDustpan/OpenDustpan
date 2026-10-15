@@ -179,6 +179,7 @@ func buildDeletedFixture(
 	pulumi := &memLifecycle{err: lifecycleErr, calls: nil}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Moves:      nil,
 		Namespaces: namespaces,
 		Units:      &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Deleted:    &memDeleted{entries: entries},
@@ -187,6 +188,7 @@ func buildDeletedFixture(
 			"opentofu": &memLifecycle{err: nil, calls: nil},
 		},
 		ReadScope:     scope,
+		Collections:   nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),

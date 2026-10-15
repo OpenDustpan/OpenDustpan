@@ -4,6 +4,7 @@ package backup
 // constant.
 const (
 	portColName         = "name"
+	portColNameKey      = "name_key"
 	portColCreatedAtMs  = "created_at_ms"
 	portColCreatedBy    = "created_by"
 	portColNamespace    = "namespace"
@@ -200,6 +201,27 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "collections",
+			OrderBy: []string{portColNamespace, portColNameKey},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: portColNameKey, Kind: KindText},
+				{Name: portColName, Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "collection_members",
+			OrderBy: []string{portColUnitID},
+			Columns: []Column{
+				{Name: portColUnitID, Kind: KindText},
+				{Name: portColNamespace, Kind: KindText},
+				{Name: "collection_key", Kind: KindText},
+				{Name: "assigned_at_ms", Kind: KindTime},
+			},
+		},
+		{
 			Table:   "blob_purges",
 			OrderBy: []string{portColTool, portColUnitID},
 			Columns: []Column{
@@ -307,7 +329,7 @@ func portableSpec() []PortableTable {
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
 				{Name: portColName, Kind: KindText},
-				{Name: "name_key", Kind: KindText},
+				{Name: portColNameKey, Kind: KindText},
 				{Name: "description", Kind: KindText},
 				{Name: portColSource, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},

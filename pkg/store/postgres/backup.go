@@ -33,6 +33,8 @@ const pgMD5Len = 16
 // COPY column names shared by several backup tables.
 const (
 	pgColArrival     = "arrival"
+	pgColUnitID      = "unit_id"
+	pgColNameKey     = "name_key"
 	pgColCreatedAtMs = "created_at_ms"
 	pgColCreatedBy   = "created_by"
 	pgColDigest      = "digest"
@@ -54,8 +56,8 @@ const (
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
-	pgColUnitID      = "unit_id"
 	pgColPrincipalID = "principal_id"
+	pgColDisplayName = "display_name"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -165,7 +167,7 @@ func pgCopyScopeTables() []pgCopyTable {
 		{
 			table: "inventory",
 			columns: []string{
-				pgColNamespace, pgColTool, pgColName, pgColUnitID, "display_name",
+				pgColNamespace, pgColTool, pgColName, pgColUnitID, pgColDisplayName,
 				"last_changed_ms", pgColStatus, "resource_count",
 				"lock_holder", "lock_since_ms", "lock_operation",
 			},
@@ -175,6 +177,20 @@ func pgCopyScopeTables() []pgCopyTable {
 			table:   "inventory_deleted",
 			columns: []string{pgColNamespace, pgColTool, pgColUnitID, pgColName, pgColDeletedAtMs, "purge_after_ms"},
 			orderBy: []string{pgColTool, pgColUnitID},
+		},
+		{
+			table: "collections",
+			columns: []string{
+				"id", pgColNamespace, pgColNameKey, pgColName, pgColCreatedAtMs,
+			},
+			orderBy: []string{pgColNamespace, pgColNameKey},
+		},
+		{
+			table: "collection_members",
+			columns: []string{
+				pgColUnitID, pgColNamespace, "collection_key", "assigned_at_ms",
+			},
+			orderBy: []string{pgColUnitID},
 		},
 		{
 			table:   "blob_purges",
