@@ -200,8 +200,11 @@ It writes one entry in each scope that holds entries:
   Later entries hold an empty `prevHash` and an empty `hash`.
 
 Then the server stores the new state, waits 4 seconds so every instance can see it, and leaves maintenance mode.
-`opendustpan audit-chain status` shows `the migration runs` until then.
+`opendustpan audit-chain status --server https://dustpan.example` shows `the migration runs` until then.
 A migration that stops before it ends keeps the old state, so the change waits for an approval again.
+A restart with the stored setting cancels a waiting change.
+The installation then leaves maintenance mode.
+Run `opendustpan audit-chain approve --server <url>` to approve a waiting change.
 
 While a change waits or migrates, every instance answers 503 on most routes.
 The probes, the metrics, the audit chain routes, the maintenance routes, the reads of the audit log and the console files stay available.

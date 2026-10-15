@@ -46,6 +46,8 @@ func newTestAuditChain(t *testing.T, setting audit.ChainSetting) *auditChain {
 		t.Fatalf("new audit chain = %v, %v", chain, err)
 	}
 
+	chain.migrationsRunning.Store(true)
+
 	err = st.SaveChainRecord(t.Context(), audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
 		MigratingAt: time.Time{}, LogReplaced: false,
@@ -197,6 +199,8 @@ func TestConcurrentApprovalsOnOneStore(t *testing.T) {
 			t.Fatalf("new audit chain = %v, %v", chain, err)
 		}
 
+		chain.migrationsRunning.Store(true)
+
 		return chain
 	}
 
@@ -239,5 +243,35 @@ func TestConcurrentApprovalsOnOneStore(t *testing.T) {
 
 	if won != 1 || held != 1 {
 		t.Fatalf("concurrent approvals: won %d, held %d, want 1 and 1", won, held)
+	}
+}
+
+// TestApproveWithoutMigrationLoop proves that an approval while the server
+// runs no migration loop stops before it claims anything.
+func TestApproveWithoutMigrationLoop(t *testing.T) {
+	t.Parallel()
+
+	chain := newTestAuditChain(t, audit.ChainOff)
+	chain.migrationsRunning.Store(false)
+
+	if err := chain.Approve(t.Context(), approver()); !errors.Is(err, errMigrationsStopped) {
+		t.Fatalf("approve without the migration loop: %v, want errMigrationsStopped", err)
+	}
+
+	if chain.migrating.Load() {
+		t.Fatal("a refused approval holds the migration")
+	}
+
+	if len(chain.queue) != 0 {
+		t.Fatalf("queued changes = %d, want 0", len(chain.queue))
+	}
+
+	rec, err := chain.store.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	if !rec.Pending || !rec.MigratingAt.IsZero() {
+		t.Fatalf("chain record = %+v, want the waiting change with no claim", rec)
 	}
 }

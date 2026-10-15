@@ -87,6 +87,27 @@ func TestAuditChainChangeWaitsForApprovalAndMigrates(t *testing.T) {
 	wantValid(t, st, acme.Name, audit.ServerScope)
 }
 
+// TestRestartWithStoredSettingCancelsWaitingChange proves that a restart
+// with the stored setting cancels a waiting change: a start with the
+// setting off waits, and the next start with the setting on clears the
+// wait and leaves maintenance mode.
+func TestRestartWithStoredSettingCancelsWaitingChange(t *testing.T) {
+	t.Parallel()
+
+	st := openChainStore(t)
+	acme := createChainNamespace(t, st)
+	appendChainEntry(t, st, acme, "req-1")
+
+	off := runChainServer(t, st, audit.ChainOff)
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
+	waitForMaintenance(t, st, maintenance.StateMaintenance)
+	off.stop()
+
+	runChainServer(t, st, audit.ChainOn)
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return !rec.Pending })
+	waitForMaintenance(t, st, maintenance.StateNormal)
+}
+
 // wantWaitingChange proves that c, whose setting is off and differs from the
 // stored state, refuses the tool API and answers a waiting change.
 func wantWaitingChange(t *testing.T, c chainServer) {

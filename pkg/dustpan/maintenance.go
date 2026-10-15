@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
 )
@@ -106,7 +107,12 @@ func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logge
 		case chain.setting.State() != rec.State:
 			writeRefusal(r.Context(), w, shape, logger, chainMismatchMessage)
 		case rec.Pending && !auditRead(r):
-			writeRefusal(r.Context(), w, shape, logger, chainPendingMessage)
+			message := chainPendingMessage
+			if chain.migrating.Load() || chainClaimHolds(rec, time.Now()) {
+				message = chainMigratingMessage
+			}
+
+			writeRefusal(r.Context(), w, shape, logger, message)
 		default:
 			next.ServeHTTP(w, r)
 		}

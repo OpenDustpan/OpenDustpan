@@ -57,12 +57,14 @@ type auditChain struct {
 	// queue carries an approved change to the migration loop of Run.
 	queue     chan audit.ChainChange
 	migrating atomic.Bool
-	limit     time.Duration
-	setting   audit.ChainSetting
-	mu        sync.Mutex
-	rec       audit.ChainRecord
-	readAt    time.Time
-	read      bool
+	// migrationsRunning reports whether startMigrations runs its loop.
+	migrationsRunning atomic.Bool
+	limit             time.Duration
+	setting           audit.ChainSetting
+	mu                sync.Mutex
+	rec               audit.ChainRecord
+	readAt            time.Time
+	read              bool
 }
 
 // Messages of the audit chain gate.
@@ -70,11 +72,21 @@ const (
 	// chainMismatchMessage answers a request to an instance whose setting
 	// differs from the stored state.
 	chainMismatchMessage = "The audit chain setting of this server differs from the stored state. " +
-		"Approve the change with 'opendustpan audit-chain approve', or restart with the stored setting."
+		"Restart this server with the stored setting, or approve the change with " +
+		"'opendustpan audit-chain approve --server <url>'."
 	// chainPendingMessage answers a request while a change of the chain
-	// waits for approval or migrates.
+	// waits for approval.
 	chainPendingMessage = "An audit chain change waits for approval. " +
-		"Requests stop until the migration is complete. Run 'opendustpan audit-chain status'."
+		"Run 'opendustpan audit-chain approve --server <url>'."
+	// chainMigratingMessage answers a request while a migration of the
+	// chain runs.
+	chainMigratingMessage = "An audit chain migration runs. Requests stop until it is complete."
+)
+
+// errMigrationsStopped reports an approval while the server runs no
+// migration loop.
+var errMigrationsStopped = errors.New(
+	"the server does not run audit chain migrations now: start the server and approve again",
 )
 
 // newAuditChain answers the chain of the namespace store, or nil when the
@@ -94,21 +106,22 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 	}
 
 	return &auditChain{
-		store:          store,
-		entries:        entries,
-		server:         server,
-		namespaces:     cfg.namespaceStore,
-		logger:         cfg.logger,
-		now:            cfg.now,
-		observed:       observed,
-		maint:          nil,
-		restoreRunning: nil,
-		freshness:      nil,
-		queue:          make(chan audit.ChainChange, 1),
-		migrating:      atomic.Bool{},
-		limit:          maintenance.DefaultCacheLimit,
-		setting:        cfg.auditChain,
-		mu:             sync.Mutex{},
+		store:             store,
+		entries:           entries,
+		server:            server,
+		namespaces:        cfg.namespaceStore,
+		logger:            cfg.logger,
+		now:               cfg.now,
+		observed:          observed,
+		maint:             nil,
+		restoreRunning:    nil,
+		freshness:         nil,
+		queue:             make(chan audit.ChainChange, 1),
+		migrating:         atomic.Bool{},
+		migrationsRunning: atomic.Bool{},
+		limit:             maintenance.DefaultCacheLimit,
+		setting:           cfg.auditChain,
+		mu:                sync.Mutex{},
 		rec: audit.ChainRecord{
 			ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOn, Pending: false,
 			MigratingAt: time.Time{}, LogReplaced: false,
@@ -146,6 +159,10 @@ func (c *auditChain) Status(ctx context.Context) (serverapi.AuditChainStatus, er
 // writes the entry of the approval in the server scope and hands the change
 // to the migration loop.
 func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
+	if !c.migrationsRunning.Load() {
+		return errMigrationsStopped
+	}
+
 	if c.setting == audit.ChainOff && c.freshness != nil {
 		if err := c.freshness.RequireFresh(ctx, caller.Subject); err != nil {
 			return fmt.Errorf("%w: %w", audit.ErrChainStepRequired, err)
@@ -163,9 +180,15 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 		return err
 	}
 
-	c.queue <- change
+	select {
+	case c.queue <- change:
+		return nil
+	default:
+		c.releaseClaim(ctx)
+		c.migrating.Store(false)
 
-	return nil
+		return audit.ErrChainMigrating
+	}
 }
 
 // chainNow answers the time of this instance.
@@ -215,6 +238,11 @@ func (c *auditChain) startUp(ctx context.Context) error {
 		}
 	}
 
+	rec, err = c.cancelWaitingChange(ctx, rec)
+	if err != nil {
+		return fmt.Errorf("audit chain: %w", err)
+	}
+
 	if c.setting.State() != rec.State && !rec.Pending {
 		rec.Pending = true
 
@@ -233,6 +261,48 @@ func (c *auditChain) startUp(ctx context.Context) error {
 		slog.String("setting", c.setting.String()), slog.String("state", string(rec.State)))
 
 	return c.enterMaintenance(ctx)
+}
+
+// cancelWaitingChange clears a waiting change when the setting matches the
+// stored state, the log agrees with it and no migration holds a claim. A log
+// that does not agree keeps the wait. It saves the cleared record, logs the
+// end and leaves maintenance mode.
+func (c *auditChain) cancelWaitingChange(ctx context.Context, rec audit.ChainRecord) (audit.ChainRecord, error) {
+	if !rec.Pending || c.setting.State() != rec.State || chainClaimHolds(rec, c.chainNow()) {
+		return rec, nil
+	}
+
+	scopes, err := c.scopes(ctx)
+	if err != nil {
+		return rec, err
+	}
+
+	agrees, err := audit.LogAgrees(ctx, c.store, scopes, rec.State)
+	if err != nil {
+		return rec, err
+	}
+
+	if !agrees {
+		return rec, nil
+	}
+
+	rec.Pending = false
+
+	if err := c.store.SaveChainRecord(ctx, rec); err != nil {
+		return rec, err
+	}
+
+	c.logger.InfoContext(ctx, "audit chain change canceled: the setting matches the stored state")
+
+	if c.maint == nil {
+		return rec, nil
+	}
+
+	if err := c.maint.Leave(ctx); err != nil && !errors.Is(err, maintenance.ErrHeld) {
+		return rec, fmt.Errorf("leave maintenance mode: %w", err)
+	}
+
+	return rec, nil
 }
 
 // enterMaintenance enters maintenance mode for a waiting change. Active work
@@ -446,7 +516,11 @@ func (c *auditChain) refuseWhileRestoring(ctx context.Context) error {
 func (c *auditChain) startMigrations(ctx context.Context) func() {
 	var wg sync.WaitGroup
 
+	c.migrationsRunning.Store(true)
+
 	wg.Go(func() {
+		defer c.migrationsRunning.Store(false)
+
 		for {
 			select {
 			case <-ctx.Done():
