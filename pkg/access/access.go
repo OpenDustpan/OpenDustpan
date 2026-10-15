@@ -119,34 +119,35 @@ var families = map[identity.Action]Family{
 
 	identity.ActionPrincipalManageTokens: FamilyDelegation,
 
-	identity.ActionNamespaceRead:             FamilyData,
-	identity.ActionNamespaceAdmin:            FamilyData,
-	identity.ActionNamespaceReadAudit:        FamilyData,
-	identity.ActionNamespaceSetOverrides:     FamilyData,
-	identity.ActionNamespaceManageAccess:     FamilyData,
-	identity.ActionNamespaceReadAccess:       FamilyData,
-	identity.ActionNamespaceManagePrincipals: FamilyData,
-	identity.ActionCollectionRead:            FamilyData,
-	identity.ActionCollectionCreate:          FamilyData,
-	identity.ActionCollectionUpdate:          FamilyData,
-	identity.ActionCollectionDelete:          FamilyData,
-	identity.ActionCollectionCreateUnit:      FamilyData,
-	identity.ActionCollectionManageAccess:    FamilyData,
-	identity.ActionCollectionReadAccess:      FamilyData,
-	identity.ActionUnitRead:                  FamilyData,
-	identity.ActionUnitWrite:                 FamilyData,
-	identity.ActionUnitManage:                FamilyData,
-	identity.ActionUnitEncrypt:               FamilyData,
-	identity.ActionUnitDecrypt:               FamilyData,
-	identity.ActionUnitWriteForced:           FamilyData,
-	identity.ActionUnitWriteUnlocked:         FamilyData,
-	identity.ActionUnitSetOverrides:          FamilyData,
-	identity.ActionUnitReadSecrets:           FamilyData,
-	identity.ActionUnitMove:                  FamilyData,
-	identity.ActionUnitManageAccess:          FamilyData,
-	identity.ActionUnitRestore:               FamilyData,
-	identity.ActionUnitPurge:                 FamilyData,
-	identity.ActionUnitReadAccess:            FamilyData,
+	identity.ActionNamespaceRead:                  FamilyData,
+	identity.ActionNamespaceAdmin:                 FamilyData,
+	identity.ActionNamespaceReadAudit:             FamilyData,
+	identity.ActionNamespaceSetOverrides:          FamilyData,
+	identity.ActionNamespaceManageAccess:          FamilyData,
+	identity.ActionNamespaceReadAccess:            FamilyData,
+	identity.ActionNamespaceManagePrincipals:      FamilyData,
+	identity.ActionNamespaceManagePrincipalTokens: FamilyData,
+	identity.ActionCollectionRead:                 FamilyData,
+	identity.ActionCollectionCreate:               FamilyData,
+	identity.ActionCollectionUpdate:               FamilyData,
+	identity.ActionCollectionDelete:               FamilyData,
+	identity.ActionCollectionCreateUnit:           FamilyData,
+	identity.ActionCollectionManageAccess:         FamilyData,
+	identity.ActionCollectionReadAccess:           FamilyData,
+	identity.ActionUnitRead:                       FamilyData,
+	identity.ActionUnitWrite:                      FamilyData,
+	identity.ActionUnitManage:                     FamilyData,
+	identity.ActionUnitEncrypt:                    FamilyData,
+	identity.ActionUnitDecrypt:                    FamilyData,
+	identity.ActionUnitWriteForced:                FamilyData,
+	identity.ActionUnitWriteUnlocked:              FamilyData,
+	identity.ActionUnitSetOverrides:               FamilyData,
+	identity.ActionUnitReadSecrets:                FamilyData,
+	identity.ActionUnitMove:                       FamilyData,
+	identity.ActionUnitManageAccess:               FamilyData,
+	identity.ActionUnitRestore:                    FamilyData,
+	identity.ActionUnitPurge:                      FamilyData,
+	identity.ActionUnitReadAccess:                 FamilyData,
 
 	identity.ActionCallerRead:     FamilySelf,
 	identity.ActionRoleRead:       FamilySelf,
@@ -383,7 +384,10 @@ type GrantStore interface {
 	// CreateNamespaceWithGrant persists ns, g and e in one transaction: the
 	// creator of a namespace holds the namespace-admin role on it from the
 	// start. A grant with no ID stores the namespace and the entry alone. It
-	// returns namespace.ErrAlreadyExists when the name is taken.
+	// returns namespace.ErrAlreadyExists when the name is taken. With a grant
+	// it keeps the entry e in the scope audit.ServerScope and appends the same
+	// grant entry in the chain of the new namespace, so the chain starts with
+	// the grant of its creator.
 	CreateNamespaceWithGrant(ctx context.Context, ns namespace.Namespace, g Grant, e audit.Entry) error
 }
 

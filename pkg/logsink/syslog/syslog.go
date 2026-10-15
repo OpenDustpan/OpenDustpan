@@ -103,9 +103,11 @@ type Config struct {
 	Facility int
 	// Timeout bounds one dial and one batch write. Zero means 10 seconds.
 	Timeout time.Duration
-	// MaxMessageBytes caps one message, header included. Write skips a
-	// record above the cap and answers a *logsink.SkipError, so a record
-	// that the receiver cannot hold never blocks the records after it. Zero
+	// MaxMessageBytes caps one message, header included. Write trims the
+	// long string fields of a record above the cap and marks it truncated,
+	// so a record that the receiver cannot hold never blocks the records
+	// after it. It skips only a record that cannot fit even with every
+	// trimmable field empty, and answers a *logsink.SkipError for it. Zero
 	// means 8192. The value must be from 480 to 65507.
 	MaxMessageBytes int
 }
@@ -217,24 +219,41 @@ func headerField(s string, limit int) string {
 }
 
 // Format returns the RFC 5424 message for r, without transport framing.
+// A record above the message cap arrives trimmed to fit, with the long
+// string fields shortened and a truncated mark. It answers a
+// *logsink.SkipError only for a record that cannot fit even with every
+// trimmable field empty.
 func (s *Sink) Format(r logsink.Record) ([]byte, error) {
-	msg, err := logsink.MarshalJSON(r)
+	var prefix bytes.Buffer
+
+	prefix.WriteByte('<')
+	prefix.WriteString(strconv.Itoa(s.facility*8 + severity(r.Level)))
+	prefix.WriteString(">1 ")
+	prefix.WriteString(r.Time.UTC().Format(logsink.TimeFormat))
+	prefix.WriteByte(' ')
+	prefix.WriteString(s.header)
+	prefix.WriteString(" - - ")
+
+	budget := s.cfg.MaxMessageBytes - prefix.Len()
+
+	trimmed, ok, err := logsink.TrimToFit(r, budget)
 	if err != nil {
 		return nil, err
 	}
 
-	var buf bytes.Buffer
+	if !ok {
+		return nil, &logsink.SkipError{
+			Reason:  fmt.Sprintf("syslog message above %d bytes", s.cfg.MaxMessageBytes),
+			Skipped: 1,
+		}
+	}
 
-	buf.WriteByte('<')
-	buf.WriteString(strconv.Itoa(s.facility*8 + severity(r.Level)))
-	buf.WriteString(">1 ")
-	buf.WriteString(r.Time.UTC().Format(logsink.TimeFormat))
-	buf.WriteByte(' ')
-	buf.WriteString(s.header)
-	buf.WriteString(" - - ")
-	buf.Write(msg)
+	msg, err := logsink.MarshalJSON(trimmed)
+	if err != nil {
+		return nil, err
+	}
 
-	return buf.Bytes(), nil
+	return append(prefix.Bytes(), msg...), nil
 }
 
 // severity maps a level to the RFC 5424 severity code.
@@ -265,6 +284,13 @@ func (s *Sink) Write(ctx context.Context, records []logsink.Record) error {
 	for i := range records {
 		m, err := s.Format(records[i])
 		if err != nil {
+			skip, ok := errors.AsType[*logsink.SkipError](err)
+			if ok {
+				skipped += skip.Skipped
+
+				continue
+			}
+
 			return err
 		}
 
