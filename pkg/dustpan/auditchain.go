@@ -141,7 +141,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		mu:                sync.Mutex{},
 		rec: audit.ChainRecord{
 			ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOn, Pending: false,
-			MigratingAt: time.Time{}, LogReplaced: false,
+			EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 		},
 		readAt: time.Time{},
 		read:   false,
@@ -312,8 +312,9 @@ func (c *auditChain) startUp(ctx context.Context) error {
 
 // cancelWaitingChange clears a waiting change when the setting matches the
 // stored state, the log agrees with it and no migration holds a claim. A log
-// that does not agree keeps the wait. It saves the cleared record, logs the
-// end and leaves maintenance mode.
+// that does not agree keeps the wait. It saves the cleared record and logs
+// the end. It leaves maintenance mode only when the chain entered it itself
+// and no restore runs, else it keeps maintenance mode.
 func (c *auditChain) cancelWaitingChange(ctx context.Context, rec audit.ChainRecord) (audit.ChainRecord, error) {
 	if !rec.Pending || c.setting.State() != rec.State || chainClaimHolds(rec, c.chainNow()) {
 		return rec, nil
@@ -341,12 +342,37 @@ func (c *auditChain) cancelWaitingChange(ctx context.Context, rec audit.ChainRec
 
 	c.logger.InfoContext(ctx, "audit chain change canceled: the setting matches the stored state")
 
-	if c.maint == nil {
+	return c.leaveForCancel(ctx, rec)
+}
+
+// leaveForCancel leaves maintenance mode for a canceled wait. It leaves only
+// when the chain entered maintenance mode itself and no restore runs, else
+// it keeps maintenance mode.
+func (c *auditChain) leaveForCancel(ctx context.Context, rec audit.ChainRecord) (audit.ChainRecord, error) {
+	if c.maint == nil || !rec.EnteredMaintenance {
 		return rec, nil
 	}
 
-	if err := c.maint.Leave(ctx); err != nil && !errors.Is(err, maintenance.ErrHeld) {
+	if err := c.refuseWhileRestoring(ctx); err != nil {
+		if errors.Is(err, backup.ErrRestoreRunning) {
+			return rec, nil
+		}
+
+		return rec, err
+	}
+
+	if err := c.maint.Leave(ctx); err != nil {
+		if errors.Is(err, maintenance.ErrHeld) {
+			return rec, nil
+		}
+
 		return rec, fmt.Errorf("leave maintenance mode: %w", err)
+	}
+
+	rec.EnteredMaintenance = false
+
+	if err := c.store.SaveChainRecord(ctx, rec); err != nil {
+		return rec, err
 	}
 
 	return rec, nil
@@ -354,13 +380,23 @@ func (c *auditChain) cancelWaitingChange(ctx context.Context, rec audit.ChainRec
 
 // enterMaintenance enters maintenance mode for a waiting change. Active work
 // keeps normal operation and logs a warning: the gate still refuses writes,
-// and the approval enters maintenance mode again.
+// and the approval enters maintenance mode again. It notes in the stored
+// record when the chain entered maintenance mode itself.
 func (c *auditChain) enterMaintenance(ctx context.Context) error {
 	if c.maint == nil {
 		return nil
 	}
 
-	_, err := c.maint.Enter(ctx, false)
+	before, err := c.maint.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("audit chain: %w", err)
+	}
+
+	if before == maintenance.StateMaintenance {
+		return nil
+	}
+
+	_, err = c.maint.Enter(ctx, false)
 	if errors.Is(err, maintenance.ErrActiveWork) {
 		c.logger.WarnContext(ctx, "audit chain change found active work; maintenance mode starts at the approval")
 
@@ -368,6 +404,27 @@ func (c *auditChain) enterMaintenance(ctx context.Context) error {
 	}
 
 	if err != nil {
+		return fmt.Errorf("audit chain: %w", err)
+	}
+
+	return c.markEnteredMaintenance(ctx)
+}
+
+// markEnteredMaintenance notes in the stored record that the chain entered
+// maintenance mode itself.
+func (c *auditChain) markEnteredMaintenance(ctx context.Context) error {
+	rec, err := c.store.ChainRecord(ctx)
+	if err != nil {
+		return fmt.Errorf("audit chain: %w", err)
+	}
+
+	if rec.EnteredMaintenance {
+		return nil
+	}
+
+	rec.EnteredMaintenance = true
+
+	if err := c.store.SaveChainRecord(ctx, rec); err != nil {
 		return fmt.Errorf("audit chain: %w", err)
 	}
 
@@ -499,6 +556,8 @@ func (c *auditChain) current(ctx context.Context) audit.ChainRecord {
 // recordApproval runs the checks and the writes of an approval while this
 // instance holds the migration flag, and answers the change to migrate. The
 // claim in the store orders approvals on every instance: exactly one wins.
+// It notes in the stored record when the chain entered maintenance mode
+// itself.
 func (c *auditChain) recordApproval(ctx context.Context, caller audit.Entry) (audit.ChainChange, error) {
 	none := audit.ChainChange{At: time.Time{}, By: "", To: ""}
 
@@ -512,12 +571,10 @@ func (c *auditChain) recordApproval(ctx context.Context, caller audit.Entry) (au
 		return none, err
 	}
 
-	if c.maint != nil {
-		if _, err := c.maint.Enter(ctx, false); err != nil {
-			c.releaseClaim(ctx)
+	if err := c.enterForApproval(ctx); err != nil {
+		c.releaseClaim(ctx)
 
-			return none, fmt.Errorf("enter maintenance mode: %w", err)
-		}
+		return none, err
 	}
 
 	change := audit.ChainChange{At: c.now(), By: caller.Subject, To: c.setting.State()}
@@ -529,6 +586,29 @@ func (c *auditChain) recordApproval(ctx context.Context, caller audit.Entry) (au
 	}
 
 	return change, nil
+}
+
+// enterForApproval enters maintenance mode for an approval. It notes in the
+// stored record when the chain entered maintenance mode itself.
+func (c *auditChain) enterForApproval(ctx context.Context) error {
+	if c.maint == nil {
+		return nil
+	}
+
+	before, err := c.maint.Get(ctx)
+	if err != nil {
+		return fmt.Errorf("enter maintenance mode: %w", err)
+	}
+
+	if _, err := c.maint.Enter(ctx, false); err != nil {
+		return fmt.Errorf("enter maintenance mode: %w", err)
+	}
+
+	if before != maintenance.StateNormal {
+		return nil
+	}
+
+	return c.markEnteredMaintenance(ctx)
 }
 
 // releaseClaim releases the claim of a migration that stops before it runs.
@@ -603,7 +683,9 @@ func (c *auditChain) migrate(ctx context.Context, change audit.ChainChange) {
 		slog.String("state", string(change.To)), slog.String("approved_by", change.By))
 }
 
-// migrateSteps runs the steps of migrate and answers the first failure.
+// migrateSteps runs the steps of migrate and answers the first failure. It
+// leaves maintenance mode only when the chain entered it itself, else it
+// keeps the maintenance mode of the operator.
 func (c *auditChain) migrateSteps(ctx context.Context, change audit.ChainChange) error {
 	if err := sleepContext(ctx, migrationWaits*c.limit); err != nil {
 		return err
@@ -618,13 +700,15 @@ func (c *auditChain) migrateSteps(ctx context.Context, change audit.ChainChange)
 		return err
 	}
 
-	if err := audit.MigrateChain(ctx, c.store, fences, change); err != nil {
+	err = audit.MigrateChain(ctx, c.store, fences, change)
+	if err != nil {
 		return fmt.Errorf("migrate audit chain: %w", err)
 	}
 
 	c.forget()
 
-	if err := sleepContext(ctx, migrationWaits*c.limit); err != nil {
+	err = sleepContext(ctx, migrationWaits*c.limit)
+	if err != nil {
 		return err
 	}
 
@@ -632,8 +716,27 @@ func (c *auditChain) migrateSteps(ctx context.Context, change audit.ChainChange)
 		return nil
 	}
 
-	if err := c.maint.Leave(ctx); err != nil {
+	var rec audit.ChainRecord
+
+	rec, err = c.store.ChainRecord(ctx)
+	if err != nil {
+		return fmt.Errorf("read audit chain state: %w", err)
+	}
+
+	if !rec.EnteredMaintenance {
+		return nil
+	}
+
+	err = c.maint.Leave(ctx)
+	if err != nil {
 		return fmt.Errorf("leave maintenance mode: %w", err)
+	}
+
+	rec.EnteredMaintenance = false
+
+	err = c.store.SaveChainRecord(ctx, rec)
+	if err != nil {
+		return fmt.Errorf("save audit chain state: %w", err)
 	}
 
 	return nil

@@ -13,6 +13,8 @@ CREATE TABLE audit_chain_state (
     changed_at_ms   INTEGER NOT NULL,
     changed_by      TEXT    NOT NULL,
     pending         INTEGER NOT NULL DEFAULT 0 CHECK (pending IN (0, 1)),
+    -- entered_maintenance notes whether the chain entered maintenance mode itself.
+    entered_maintenance INTEGER NOT NULL DEFAULT 0 CHECK (entered_maintenance IN (0, 1)),
     log_replaced    INTEGER NOT NULL DEFAULT 0 CHECK (log_replaced IN (0, 1)),
     migrating_at_ms INTEGER NOT NULL DEFAULT 0
 ) STRICT;

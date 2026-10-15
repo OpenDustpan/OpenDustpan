@@ -169,12 +169,13 @@ func walkResult(scope audit.ChainScope, entries ...audit.Entry) int64 {
 // recordOf answers a record with state that changed at walkAt(seq).
 func recordOf(state audit.ChainState, seq int64) audit.ChainRecord {
 	return audit.ChainRecord{
-		ChangedAt:   walkAt(seq),
-		ChangedBy:   "alice",
-		State:       state,
-		Pending:     false,
-		MigratingAt: time.Time{},
-		LogReplaced: false,
+		ChangedAt:          walkAt(seq),
+		ChangedBy:          "alice",
+		State:              state,
+		Pending:            false,
+		EnteredMaintenance: false,
+		MigratingAt:        time.Time{},
+		LogReplaced:        false,
 	}
 }
 
@@ -375,7 +376,7 @@ func TestChainWalkScopeWithoutAChain(t *testing.T) {
 
 	never := audit.ChainScope{Record: audit.ChainRecord{
 		ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOff, Pending: false,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 	}, Start: 0}
 	if got := walkResult(never, entries...); got != 1 {
 		t.Fatalf("a scope without a chain and an off record without a time: fails at %d, want 1", got)

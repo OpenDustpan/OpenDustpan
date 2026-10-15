@@ -288,9 +288,10 @@ func fenceStagedFile(ctx context.Context, path string, chain audit.ChainRecord) 
 	// The swap replaces the log, so the copy of the record sets
 	// log_replaced: the server compares the restored log with the state,
 	// also after a crash. The copy keeps no migration: a new approval
-	// starts it again.
-	const keepChain = `INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, log_replaced, migrating_at_ms)
-    VALUES (1, ?, ?, ?, ?, 1, 0)`
+	// starts it again. The copy keeps entered_maintenance false: the chain
+	// enters maintenance mode again when it still waits.
+	const keepChain = `INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+    VALUES (1, ?, ?, ?, ?, 0, 1, 0)`
 
 	_, err = tx.ExecContext(ctx, keepChain, string(chain.State), codec.Millis(chain.ChangedAt), chain.ChangedBy,
 		chain.Pending)

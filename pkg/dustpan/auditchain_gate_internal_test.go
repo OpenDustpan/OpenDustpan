@@ -83,12 +83,13 @@ func gateHandler(t *testing.T, state gateState) http.Handler {
 	chain := newTestAuditChain(t, audit.ChainOn)
 	chain.limit = time.Hour
 	chain.rec = audit.ChainRecord{
-		ChangedAt:   time.Now(),
-		ChangedBy:   "alice",
-		State:       state.state,
-		Pending:     state.pending,
-		MigratingAt: time.Time{},
-		LogReplaced: false,
+		ChangedAt:          time.Now(),
+		ChangedBy:          "alice",
+		State:              state.state,
+		Pending:            state.pending,
+		EnteredMaintenance: false,
+		MigratingAt:        time.Time{},
+		LogReplaced:        false,
 	}
 	chain.readAt = time.Now()
 	chain.read = true

@@ -296,13 +296,14 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 // installation: a restore keeps the row of the target. The swap replaces
 // the log, so the copy sets log_replaced: the server compares the restored
 // log with the state, also after a crash. The copy keeps no migration: a
-// new approval starts it again. Without a row, the copy writes the state
-// that a missing row reads as: the chain on.
+// new approval starts it again. The copy keeps entered_maintenance false:
+// the chain enters maintenance mode again when it still waits. Without a
+// row, the copy writes the state that a missing row reads as: the chain on.
 func keepChainState(ctx context.Context, tx pgx.Tx, live, previous string) error {
-	const columns = "id, state, changed_at_ms, changed_by, pending, log_replaced, migrating_at_ms"
+	const columns = "id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms"
 
 	keep := "INSERT INTO " + pgIdent(live) + ".audit_chain_state (" + columns + ")" +
-		" SELECT id, state, changed_at_ms, changed_by, pending, true, 0 FROM " +
+		" SELECT id, state, changed_at_ms, changed_by, pending, false, true, 0 FROM " +
 		pgIdent(previous) + ".audit_chain_state"
 
 	tag, err := tx.Exec(ctx, keep)
@@ -314,8 +315,9 @@ func keepChainState(ctx context.Context, tx pgx.Tx, live, previous string) error
 		return nil
 	}
 
-	seed := "INSERT INTO " + pgIdent(live) + ".audit_chain_state (" + columns + ")" +
-		" VALUES (1, 'on', 0, '', false, true, 0)"
+	seed := "INSERT INTO " + pgIdent(live) +
+		".audit_chain_state (id, state, changed_at_ms, changed_by, pending, log_replaced, entered_maintenance, migrating_at_ms)" +
+		" VALUES (1, 'on', 0, '', false, true, false, 0)"
 	if _, err := tx.Exec(ctx, seed); err != nil {
 		return fmt.Errorf("keep audit chain state: %w", err)
 	}

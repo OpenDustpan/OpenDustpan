@@ -1389,16 +1389,18 @@ GROUP BY principal_id;
 -- name: GetAuditChainState :one
 -- The audit chain state that this installation keeps: the state, when it
 -- last changed, who changed it, whether a change waits for an approval,
--- whether a restore replaced the log, and when the running migration
--- started, 0 when none runs. No row means the chain is on.
-SELECT state, changed_at_ms, changed_by, pending, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1;
+-- whether the chain entered maintenance mode itself, whether a restore
+-- replaced the log, and when the running migration started, 0 when none
+-- runs. No row means the chain is on.
+SELECT state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1;
 
 -- name: SetAuditChainState :exec
 -- Stores the audit chain state of this installation.
-INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, log_replaced, migrating_at_ms)
-VALUES (1, $1, $2, $3, $4, $5, $6)
+INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+VALUES (1, $1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, changed_at_ms = EXCLUDED.changed_at_ms,
-    changed_by = EXCLUDED.changed_by, pending = EXCLUDED.pending, log_replaced = EXCLUDED.log_replaced,
+    changed_by = EXCLUDED.changed_by, pending = EXCLUDED.pending,
+    entered_maintenance = EXCLUDED.entered_maintenance, log_replaced = EXCLUDED.log_replaced,
     migrating_at_ms = EXCLUDED.migrating_at_ms;
 
 -- name: ClaimAuditChainMigration :execrows

@@ -214,7 +214,7 @@ func readChainRecord(ctx context.Context, q *db.Queries) (audit.ChainRecord, err
 	if errors.Is(err, sql.ErrNoRows) {
 		return audit.ChainRecord{
 			ChangedAt: codec.FromMillis(0), ChangedBy: "", State: audit.ChainStateOn,
-			Pending: false, MigratingAt: time.Time{}, LogReplaced: false,
+			Pending: false, EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 		}, nil
 	}
 
@@ -223,20 +223,25 @@ func readChainRecord(ctx context.Context, q *db.Queries) (audit.ChainRecord, err
 	}
 
 	return audit.ChainRecord{
-		ChangedAt:   codec.FromMillis(row.ChangedAtMs),
-		ChangedBy:   row.ChangedBy,
-		State:       audit.ChainState(row.State),
-		Pending:     row.Pending != 0,
-		MigratingAt: codec.FromOptionalMillis(row.MigratingAtMs),
-		LogReplaced: row.LogReplaced != 0,
+		ChangedAt:          codec.FromMillis(row.ChangedAtMs),
+		ChangedBy:          row.ChangedBy,
+		State:              audit.ChainState(row.State),
+		Pending:            row.Pending != 0,
+		EnteredMaintenance: row.EnteredMaintenance != 0,
+		MigratingAt:        codec.FromOptionalMillis(row.MigratingAtMs),
+		LogReplaced:        row.LogReplaced != 0,
 	}, nil
 }
 
 // saveChainRecord stores rec in q.
 func saveChainRecord(ctx context.Context, q *db.Queries, rec audit.ChainRecord) error {
-	var pending, replaced int64
+	var pending, entered, replaced int64
 	if rec.Pending {
 		pending = 1
+	}
+
+	if rec.EnteredMaintenance {
+		entered = 1
 	}
 
 	if rec.LogReplaced {
@@ -244,12 +249,13 @@ func saveChainRecord(ctx context.Context, q *db.Queries, rec audit.ChainRecord) 
 	}
 
 	err := q.SetAuditChainState(ctx, db.SetAuditChainStateParams{
-		State:         string(rec.State),
-		ChangedAtMs:   codec.Millis(rec.ChangedAt),
-		ChangedBy:     rec.ChangedBy,
-		Pending:       pending,
-		MigratingAtMs: codec.OptionalMillis(rec.MigratingAt),
-		LogReplaced:   replaced,
+		State:              string(rec.State),
+		ChangedAtMs:        codec.Millis(rec.ChangedAt),
+		ChangedBy:          rec.ChangedBy,
+		Pending:            pending,
+		EnteredMaintenance: entered,
+		MigratingAtMs:      codec.OptionalMillis(rec.MigratingAt),
+		LogReplaced:        replaced,
 	})
 	if err != nil {
 		return fmt.Errorf("save audit chain state: %w", err)

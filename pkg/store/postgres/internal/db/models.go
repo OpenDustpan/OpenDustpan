@@ -34,13 +34,14 @@ type AccessTokenPolicy struct {
 }
 
 type AuditChainState struct {
-	ID            int16
-	State         string
-	ChangedAtMs   int64
-	ChangedBy     string
-	Pending       bool
-	LogReplaced   bool
-	MigratingAtMs int64
+	ID                 int16
+	State              string
+	ChangedAtMs        int64
+	ChangedBy          string
+	Pending            bool
+	EnteredMaintenance bool
+	LogReplaced        bool
+	MigratingAtMs      int64
 }
 
 type AuditEntry struct {

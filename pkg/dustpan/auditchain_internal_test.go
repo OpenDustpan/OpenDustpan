@@ -51,7 +51,7 @@ func newTestAuditChain(t *testing.T, setting audit.ChainSetting) *auditChain {
 
 	err = st.SaveChainRecord(t.Context(), audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 	})
 	if err != nil {
 		t.Fatalf("save chain record: %v", err)
@@ -281,7 +281,7 @@ func TestConcurrentApprovalsOnOneStore(t *testing.T) {
 
 	saveErr := st.SaveChainRecord(t.Context(), audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 	})
 	if saveErr != nil {
 		t.Fatalf("save chain record: %v", saveErr)

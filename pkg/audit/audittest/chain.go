@@ -389,12 +389,13 @@ func testChainEndedWhileOn(t *testing.T, ts ChainTestStore) {
 
 	// Someone writes the state on without the start entries of a migration.
 	rec := audit.ChainRecord{
-		ChangedAt:   tl.tick(),
-		ChangedBy:   "mallory",
-		State:       audit.ChainStateOn,
-		Pending:     false,
-		MigratingAt: time.Time{},
-		LogReplaced: false,
+		ChangedAt:          tl.tick(),
+		ChangedBy:          "mallory",
+		State:              audit.ChainStateOn,
+		Pending:            false,
+		EnteredMaintenance: false,
+		MigratingAt:        time.Time{},
+		LogReplaced:        false,
 	}
 	if err := ts.Store.SaveChainRecord(t.Context(), rec); err != nil {
 		t.Fatalf("save chain record: %v", err)
@@ -411,12 +412,13 @@ func testChainOpenWhileOff(t *testing.T, ts ChainTestStore) {
 
 	// Someone writes the state off without the end entries of a migration.
 	rec := audit.ChainRecord{
-		ChangedAt:   tl.tick(),
-		ChangedBy:   "mallory",
-		State:       audit.ChainStateOff,
-		Pending:     false,
-		MigratingAt: time.Time{},
-		LogReplaced: false,
+		ChangedAt:          tl.tick(),
+		ChangedBy:          "mallory",
+		State:              audit.ChainStateOff,
+		Pending:            false,
+		EnteredMaintenance: false,
+		MigratingAt:        time.Time{},
+		LogReplaced:        false,
 	}
 	if err := ts.Store.SaveChainRecord(t.Context(), rec); err != nil {
 		t.Fatalf("save chain record: %v", err)
@@ -632,14 +634,21 @@ func testChainRecordRoundTrip(t *testing.T, ts ChainTestStore) {
 	at := now().Truncate(time.Millisecond)
 
 	for _, want := range []audit.ChainRecord{
-		{ChangedAt: at, ChangedBy: "alice", State: audit.ChainStateOff, Pending: false, MigratingAt: time.Time{}, LogReplaced: false},
+		{
+			ChangedAt: at, ChangedBy: "alice", State: audit.ChainStateOff, Pending: false,
+			EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
+		},
 		{
 			ChangedAt: at.Add(time.Second), ChangedBy: "bob", State: audit.ChainStateOn, Pending: true,
-			MigratingAt: at.Add(time.Second), LogReplaced: false,
+			EnteredMaintenance: true, MigratingAt: at.Add(time.Second), LogReplaced: false,
 		},
 		{
 			ChangedAt: at.Add(2 * time.Second), ChangedBy: "bob", State: audit.ChainStateOn, Pending: false,
-			MigratingAt: time.Time{}, LogReplaced: true,
+			EnteredMaintenance: true, MigratingAt: time.Time{}, LogReplaced: true,
+		},
+		{
+			ChangedAt: at.Add(3 * time.Second), ChangedBy: "bob", State: audit.ChainStateOn, Pending: false,
+			EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: true,
 		},
 	} {
 		if err := s.SaveChainRecord(t.Context(), want); err != nil {
@@ -652,7 +661,8 @@ func testChainRecordRoundTrip(t *testing.T, ts ChainTestStore) {
 		}
 
 		if !got.ChangedAt.Equal(want.ChangedAt) || got.ChangedBy != want.ChangedBy || got.State != want.State ||
-			got.Pending != want.Pending || !got.MigratingAt.Equal(want.MigratingAt) || got.LogReplaced != want.LogReplaced {
+			got.Pending != want.Pending || got.EnteredMaintenance != want.EnteredMaintenance ||
+			!got.MigratingAt.Equal(want.MigratingAt) || got.LogReplaced != want.LogReplaced {
 			t.Fatalf("chain record: got %+v, want %+v", got, want)
 		}
 	}
@@ -667,7 +677,7 @@ func testChainClaimMigration(t *testing.T, ts ChainTestStore) {
 
 	saveClaimRecord(t, s, audit.ChainRecord{
 		ChangedAt: at, ChangedBy: "alice", State: audit.ChainStateOn, Pending: true,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 	})
 
 	claimOneWins(t, s, at, lease)
@@ -682,7 +692,7 @@ func testChainClaimMigration(t *testing.T, ts ChainTestStore) {
 
 	saveClaimRecord(t, s, audit.ChainRecord{
 		ChangedAt: at, ChangedBy: "alice", State: audit.ChainStateOn, Pending: false,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 	})
 
 	if err := s.ClaimChainMigration(t.Context(), at, lease); !errors.Is(err, audit.ErrNoChainChange) {
@@ -878,7 +888,7 @@ func testChainAppendAfterEnd(t *testing.T, ts ChainTestStore, n int) {
 
 	rec := audit.ChainRecord{
 		ChangedAt: tl.tick(), ChangedBy: "alice", State: audit.ChainStateOff, Pending: false,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 	}
 	if err := ts.Store.SaveChainRecord(t.Context(), rec); err != nil {
 		t.Fatalf("save chain record: %v", err)
@@ -896,7 +906,7 @@ func testChainAppendAfterStateBeforeStart(t *testing.T, ts ChainTestStore) {
 
 	turning := audit.ChainRecord{
 		ChangedAt: tl.tick(), ChangedBy: "alice", State: audit.ChainStateOn, Pending: true,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 	}
 	if err := ts.Store.SaveChainRecord(t.Context(), turning); err != nil {
 		t.Fatalf("save chain record: %v", err)
@@ -920,7 +930,7 @@ func testChainAppendAfterStateBeforeStart(t *testing.T, ts ChainTestStore) {
 
 	done := audit.ChainRecord{
 		ChangedAt: tl.tick(), ChangedBy: "alice", State: audit.ChainStateOn, Pending: false,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 	}
 	if err := ts.Store.SaveChainRecord(t.Context(), done); err != nil {
 		t.Fatalf("save chain record: %v", err)
@@ -940,7 +950,7 @@ func testChainAppendAfterFailedMigration(t *testing.T, ts ChainTestStore) {
 	// entries. It stops after the store here, so no start entry follows.
 	turning := audit.ChainRecord{
 		ChangedAt: tl.tick(), ChangedBy: "alice", State: audit.ChainStateOn, Pending: true,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 	}
 	if err := ts.Store.SaveChainRecord(t.Context(), turning); err != nil {
 		t.Fatalf("save chain record: %v", err)
@@ -970,7 +980,7 @@ func testChainAppendAfterFailedMigration(t *testing.T, ts ChainTestStore) {
 
 	done := audit.ChainRecord{
 		ChangedAt: tl.tick(), ChangedBy: "alice", State: audit.ChainStateOn, Pending: false,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
 	}
 	if err := ts.Store.SaveChainRecord(t.Context(), done); err != nil {
 		t.Fatalf("save chain record: %v", err)

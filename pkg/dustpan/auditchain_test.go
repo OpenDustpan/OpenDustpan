@@ -108,6 +108,41 @@ func TestRestartWithStoredSettingCancelsWaitingChange(t *testing.T) {
 	waitForMaintenance(t, st, maintenance.StateNormal)
 }
 
+// TestRestartWithStoredSettingKeepsOperatorMaintenance proves that a restart
+// with the stored setting keeps the maintenance mode of an operator: the
+// operator enters maintenance mode, a start with the setting off waits
+// without entering it again, and the next start with the setting on clears
+// the wait but stays in maintenance mode.
+func TestRestartWithStoredSettingKeepsOperatorMaintenance(t *testing.T) {
+	t.Parallel()
+
+	st := openChainStore(t)
+	acme := createChainNamespace(t, st)
+	appendChainEntry(t, st, acme, "req-1")
+
+	on := runChainServer(t, st, audit.ChainOn)
+	if status, body := on.do(t, http.MethodPost, "/api/server/maintenance/enter"); status != http.StatusOK {
+		t.Fatalf("enter maintenance mode: %d %s, want 200", status, body)
+	}
+
+	waitForMaintenance(t, st, maintenance.StateMaintenance)
+	on.stop()
+
+	off := runChainServer(t, st, audit.ChainOff)
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
+
+	if rec, err := st.ChainRecord(t.Context()); err != nil || rec.EnteredMaintenance {
+		t.Fatalf("chain record = %+v, %v; want no entered maintenance", rec, err)
+	}
+
+	wantMaintenance(t, st, maintenance.StateMaintenance)
+	off.stop()
+
+	runChainServer(t, st, audit.ChainOn)
+	waitForRecord(t, st, func(rec audit.ChainRecord) bool { return !rec.Pending })
+	wantMaintenance(t, st, maintenance.StateMaintenance)
+}
+
 // wantWaitingChange proves that c, whose setting is off and differs from the
 // stored state, refuses the tool API and answers a waiting change.
 func wantWaitingChange(t *testing.T, c chainServer) {
@@ -191,7 +226,7 @@ func TestARestoredLogThatDisagreesWaitsForApproval(t *testing.T) {
 
 	saveRecord(t, st, audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "alice", State: audit.ChainStateOff,
-		Pending: false, MigratingAt: time.Time{}, LogReplaced: true,
+		Pending: false, EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: true,
 	})
 
 	runChainServer(t, st, audit.ChainOff)
@@ -211,7 +246,7 @@ func TestARestoredLogThatAgreesStartsNormally(t *testing.T) {
 
 	saveRecord(t, st, audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn,
-		Pending: false, MigratingAt: time.Time{}, LogReplaced: true,
+		Pending: false, EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: true,
 	})
 
 	srv := runChainServer(t, st, audit.ChainOn)

@@ -57,6 +57,9 @@ and a fresh MFA step.
      server refuses a leave of maintenance mode and a restore with 409,
      and refuses an approval while a restore runs. Each one leaves only its
      own maintenance mode.
+   - The state notes whether the chain entered maintenance mode itself, and
+     the chain leaves only a maintenance mode that it entered, never while a
+     restore runs.
    - An instance whose setting differs from the stored state answers 503 on
      most routes. The probes, GET of the metrics route, and the files of
      the console stay available. GET and POST of the audit chain route stay

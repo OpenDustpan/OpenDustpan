@@ -74,7 +74,8 @@ const (
 // ChainRecord is what the installation keeps about its chain: the state,
 // when it last changed and who changed it. Pending reports that a change of
 // the chain waits for a person to approve it, which keeps the installation
-// in maintenance mode. MigratingAt holds the start of the running
+// in maintenance mode. EnteredMaintenance reports whether the chain entered
+// maintenance mode itself. MigratingAt holds the start of the running
 // migration, zero when none runs. LogReplaced reports that the swap of a
 // restore replaced the log and the server has not compared it with the
 // state yet. A backup does not carry the record: a restore keeps the record
@@ -82,12 +83,13 @@ const (
 // ChainStateOn, because the chain was on in every installation before it
 // had a setting.
 type ChainRecord struct {
-	ChangedAt   time.Time
-	ChangedBy   string
-	State       ChainState
-	Pending     bool
-	MigratingAt time.Time
-	LogReplaced bool
+	ChangedAt          time.Time
+	ChangedBy          string
+	State              ChainState
+	Pending            bool
+	EnteredMaintenance bool
+	MigratingAt        time.Time
+	LogReplaced        bool
 }
 
 // Actions of the entries that the chain writes, and the keys of the changes
@@ -215,15 +217,16 @@ type ChainChange struct {
 // after the chain went off. A second start entry does no harm, because its
 // digest covers the first.
 func MigrateChain(ctx context.Context, store ChainStore, fences []namespace.Fence, change ChainChange) error {
-	if change.To == ChainStateOn {
-		current, err := store.ChainRecord(ctx)
-		if err != nil {
-			return fmt.Errorf("read audit chain state: %w", err)
-		}
+	current, err := store.ChainRecord(ctx)
+	if err != nil {
+		return fmt.Errorf("read audit chain state: %w", err)
+	}
 
+	if change.To == ChainStateOn {
 		early := ChainRecord{
 			ChangedAt: change.At, ChangedBy: change.By, State: change.To, Pending: true,
-			MigratingAt: current.MigratingAt, LogReplaced: false,
+			EnteredMaintenance: current.EnteredMaintenance,
+			MigratingAt:        current.MigratingAt, LogReplaced: false,
 		}
 		if err := store.SaveChainRecord(ctx, early); err != nil {
 			return fmt.Errorf("save audit chain state: %w", err)
@@ -238,7 +241,8 @@ func MigrateChain(ctx context.Context, store ChainStore, fences []namespace.Fenc
 
 	rec := ChainRecord{
 		ChangedAt: change.At, ChangedBy: change.By, State: change.To, Pending: false,
-		MigratingAt: time.Time{}, LogReplaced: false,
+		EnteredMaintenance: current.EnteredMaintenance,
+		MigratingAt:        time.Time{}, LogReplaced: false,
 	}
 	if err := store.SaveChainRecord(ctx, rec); err != nil {
 		return fmt.Errorf("save audit chain state: %w", err)
