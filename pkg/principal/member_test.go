@@ -43,7 +43,7 @@ func TestAddMemberRefusesNamespacePrincipal(t *testing.T) {
 	added := 0
 
 	svc, err := principal.NewService(principal.Config{
-		Store: memberStore{Store: nil, added: &added}, Guard: nil, Namespaces: nil, Now: nil, NewID: nil,
+		Store: memberStore{Store: nil, added: &added}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

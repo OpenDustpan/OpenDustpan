@@ -89,7 +89,7 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 	c := &clock{now: start, mu: sync.Mutex{}}
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: nil, Namespaces: nil, Now: c.Now, NewID: nil},
+		principal.Config{Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: c.Now, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)

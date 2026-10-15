@@ -1140,6 +1140,9 @@ WHERE (@all_grants::boolean
     OR g.target = @target::text
     OR (g.target = ANY(@containers::text[])
       AND (g.role = ANY(@container_roles::text[])
+        OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR (@token_namespace::text <> '' AND g.target = @token_namespace::text
+      AND (g.role = ANY(@token_namespace_roles::text[])
         OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
   AND (@subject::text = '' OR g.subject = @subject::text
     OR (@principal::text <> '' AND m.principal_id IS NOT NULL))
@@ -1173,6 +1176,9 @@ WHERE (@all_grants::boolean
     OR g.target = @target::text
     OR (g.target = ANY(@containers::text[])
       AND (g.role = ANY(@container_roles::text[])
+        OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR (@token_namespace::text <> '' AND g.target = @token_namespace::text
+      AND (g.role = ANY(@token_namespace_roles::text[])
         OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
   AND (@subject::text = '' OR g.subject = @subject::text
     OR (@principal::text <> '' AND m.principal_id IS NOT NULL))
