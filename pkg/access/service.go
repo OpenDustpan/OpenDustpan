@@ -759,6 +759,10 @@ func (s *Service) checkGrant(
 		return none, err
 	}
 
+	if err := s.checkSubjectNamespace(ctx, in.Subject, in.Object); err != nil {
+		return none, err
+	}
+
 	fence, err := s.fenceOf(ctx, in.Object)
 	if err != nil {
 		return none, fmt.Errorf("grant on %q: %w", in.Object.String(), err)
@@ -782,6 +786,27 @@ func (s *Service) checkGrant(
 	return fence, s.checkEscalation(ctx, granter, in.Object, role)
 }
 
+// checkSubjectNamespace refuses a grant to a principal of a namespace on an
+// object that is not that namespace or inside it (ErrInvalid). The store
+// checks it again in the transaction of the grant.
+func (s *Service) checkSubjectNamespace(ctx context.Context, subject Subject, obj identity.Object) error {
+	if subject.Kind != SubjectPrincipal {
+		return nil
+	}
+
+	p, err := s.directory.GetPrincipal(ctx, subject.ID)
+	if err != nil {
+		return fmt.Errorf("grant subject %s: %w", subject.String(), err)
+	}
+
+	if p.Namespace != "" && p.Namespace != obj.Namespace() {
+		return fmt.Errorf("%w: %s is a principal of the namespace %q, and can only hold grants inside it",
+			ErrInvalid, subject.String(), p.Namespace.String())
+	}
+
+	return nil
+}
+
 // checkPrincipalObject refuses a grant on obj, a principal, unless the
 // principal is a service principal and role holds delegation actions only.
 // It returns principal.ErrNotFound when the principal does not exist.
@@ -794,6 +819,11 @@ func (s *Service) checkPrincipalObject(ctx context.Context, obj identity.Object,
 	if p.Kind != principal.KindService {
 		return fmt.Errorf("%w: principal %q is a %s principal; only a service principal takes a grant",
 			ErrInvalid, p.ID, p.Kind)
+	}
+
+	if p.Namespace != "" {
+		return fmt.Errorf("%w: principal %q belongs to the namespace %q; a grant on it is not available yet",
+			ErrInvalid, p.ID, p.Namespace.String())
 	}
 
 	if len(role.Actions) == 0 {

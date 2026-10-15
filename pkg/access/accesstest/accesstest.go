@@ -704,7 +704,7 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 
 	prn := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 		DisabledAt: time.Time{},
 	}
 	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
@@ -893,7 +893,7 @@ func seedCaller(t *testing.T, ps principal.Store) {
 
 	alice := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 		DisabledAt: time.Time{},
 	}
 	if err := ps.CreatePrincipal(ctx, alice, entry()); err != nil {
