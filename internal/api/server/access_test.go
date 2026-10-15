@@ -413,6 +413,95 @@ func TestRevokeGrantByID(t *testing.T) {
 	}
 }
 
+// deleteGrantByID sends DELETE /api/server/grants/{id} with the test token
+// on a fresh handler that denies deny, and answers its status and body.
+// Each call builds a fresh handler, so a revoked grant stays present.
+func deleteGrantByID(t *testing.T, deny map[identity.Action]bool, id string) (int, string) {
+	t.Helper()
+
+	h := newEnforcingHandler(t, selectiveAuthorizer{deny: deny})
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/server/grants/"+id, http.NoBody)
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Body.String()
+}
+
+// TestRevokeGrantByIDKindActions proves that DELETE /api/server/grants/{id}
+// checks the manage-access action of the grant's own object, for each object
+// kind: denying manage answers 403 while read is allowed, and denying read
+// answers 404 with the same body as an unknown ID. An unknown ID answers
+// 404.
+func TestRevokeGrantByIDKindActions(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		grantID string
+		manage  identity.Action
+		read    identity.Action
+	}{
+		{
+			name: "installation", grantID: testServerGrantID,
+			manage: identity.ActionServerManageAccess, read: identity.ActionServerReadAccess,
+		},
+		{
+			name: "namespace", grantID: testNamespaceGrantID,
+			manage: identity.ActionNamespaceManageAccess, read: identity.ActionNamespaceRead,
+		},
+		{
+			name: "collection", grantID: testCollectionGrantID,
+			manage: identity.ActionCollectionManageAccess, read: identity.ActionCollectionRead,
+		},
+		{
+			name: "unit", grantID: testUnitGrantID,
+			manage: identity.ActionUnitManageAccess, read: identity.ActionUnitRead,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkGrantKindActions(t, tc.grantID, tc.manage, tc.read)
+		})
+	}
+
+	if status, body := deleteGrantByID(t, map[identity.Action]bool{}, "grt-unknown-id"); status != http.StatusNotFound {
+		t.Fatalf("revoke unknown grant by ID answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+}
+
+// checkGrantKindActions revokes one grant by ID under each authorizer: 204
+// when allowed, 403 when its manage action is denied but read is allowed,
+// and 404 with the unknown-ID body when its read action is denied.
+func checkGrantKindActions(t *testing.T, grantID string, manage, read identity.Action) {
+	t.Helper()
+
+	if status, body := deleteGrantByID(t, map[identity.Action]bool{}, grantID); status != http.StatusNoContent {
+		t.Fatalf("revoke %s by ID answers %d, want %d (%s)", grantID, status, http.StatusNoContent, body)
+	}
+
+	denyManage := map[identity.Action]bool{manage: true}
+	if status, body := deleteGrantByID(t, denyManage, grantID); status != http.StatusForbidden {
+		t.Fatalf("revoke %s without manage answers %d, want %d (%s)", grantID, status, http.StatusForbidden, body)
+	}
+
+	_, unknownBody := deleteGrantByID(t, map[identity.Action]bool{}, "grt-unknown-id")
+
+	denyRead := map[identity.Action]bool{read: true}
+
+	status, body := deleteGrantByID(t, denyRead, grantID)
+	if status != http.StatusNotFound {
+		t.Fatalf("revoke %s without read answers %d, want %d (%s)", grantID, status, http.StatusNotFound, body)
+	}
+
+	if want := strings.ReplaceAll(unknownBody, "grt-unknown-id", grantID); body != want {
+		t.Fatalf("revoke %s without read body = %s, want %s", grantID, body, want)
+	}
+}
+
 // TestOperatorRefusals checks the families over HTTP: an installation
 // operator cannot make a principal and cannot grant.
 func TestOperatorRefusals(t *testing.T) {

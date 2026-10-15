@@ -36,7 +36,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -290,8 +289,8 @@ func (h *Handler) roleRoutes() []Route {
 // grantRoutes returns the grant rows of the route table: a list, a grant
 // and a revoke on each object kind. DELETE /api/server/grants/{id} is the
 // exception: it revokes any grant by its ID, whatever its object, so its
-// route check allows every signed-in principal and its handler authorizes
-// the manage-access action of the grant's own object.
+// resolver returns the grant's own object and its route check authorizes
+// the manage-access action of that object.
 func (h *Handler) grantRoutes() []Route {
 	kinds := []struct {
 		resolve ObjectResolver
@@ -342,8 +341,15 @@ func (h *Handler) grantRoutes() []Route {
 
 	out = append(out, Route{
 		Method: http.MethodDelete, Path: serverGrantsPath + grantIDSuffix, Scope: ScopeAuthorized,
-		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
-		Serve: h.serveRevokeGrantByID,
+		Actions: []identity.Action{
+			identity.ActionServerManageAccess,
+			identity.ActionNamespaceManageAccess,
+			identity.ActionCollectionManageAccess,
+			identity.ActionUnitManageAccess,
+		},
+		Resolve:    h.resolveGrantObject,
+		ActionsFor: grantManageActionsFor,
+		Serve:      h.serveRevokeGrantByID,
 	})
 
 	return out
@@ -650,18 +656,71 @@ func grantAccessActions(obj identity.Object) (grantActions, bool) {
 	}
 }
 
+// grantManageActionsFor returns the manage-access action of the resolved
+// object of DELETE /api/server/grants/{id}: server:manage-access on the
+// installation and on a service principal, else the manage-access action of
+// the namespace, the collection or the unit.
+func grantManageActionsFor(obj identity.Object) []identity.Action {
+	if actions, known := grantAccessActions(obj); known {
+		return []identity.Action{actions.manage}
+	}
+
+	return []identity.Action{identity.ActionServerManageAccess}
+}
+
+// resolveGrantObject returns the object of the grant in the path, for the
+// route check of DELETE /api/server/grants/{id}. An unknown grant answers
+// 404. A grant the caller may not see answers 404 with the same body,
+// never 403: the caller must hold the read action of the grant's object.
+// A request without the caller that enforce stores answers 401, so the
+// visibility check never runs without a caller. The route check authorizes
+// the manage-access action of the returned object.
+func (h *Handler) resolveGrantObject(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+	if h.access == nil {
+		return identity.ServerObject(), nil
+	}
+
+	id := r.PathValue("id")
+
+	g, err := h.access.GetGrant(r.Context(), id)
+	if errors.Is(err, access.ErrNotFound) {
+		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+	}
+
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, err)
+	}
+
+	actions, known := grantAccessActions(g.Object)
+	if !known {
+		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+	}
+
+	p, ok := principalFromRequest(r)
+	if !ok {
+		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, identity.ErrUnauthenticated)
+	}
+
+	if authErr := h.authz.Authorize(r.Context(), p, actions.read, g.Object); authErr != nil {
+		if errors.Is(authErr, identity.ErrDenied) {
+			return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+		}
+
+		return identity.Object{}, fmt.Errorf("authorize %s: %w", actions.read, authErr)
+	}
+
+	return g.Object, nil
+}
+
 // serveRevokeGrantByID serves DELETE /api/server/grants/{id}: it ends any
 // grant by its ID, whatever its object, and answers 204. The row stays for
-// the history, and the entry goes in the scope of the grant, as the
-// Service writes it.
-//
-// The route check allows every signed-in principal, so this handler
-// authorizes the grant itself. A grant the caller may not see answers 404
-// with the same body as an unknown ID, never 403. A caller that sees the
-// object but lacks its manage-access action answers 403. The Service
-// refuses a grant that gives more than the caller holds.
+// the history. The wrapper already checked visibility and authorized the
+// manage-access action of the grant's object, which the resolver returned.
+// The Service refuses a grant that gives more than the caller holds. A
+// refused revoke writes one failure entry in the scope of the grant, as the
+// other grant changes do.
 func (h *Handler) serveRevokeGrantByID(
-	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
 ) {
 	ctx := r.Context()
 
@@ -672,86 +731,26 @@ func (h *Handler) serveRevokeGrantByID(
 	}
 
 	id := r.PathValue("id")
-	at := h.access.Now()
 
-	g, err := h.access.GetGrant(ctx, id)
-	if err != nil {
-		if errors.Is(err, access.ErrNotFound) {
-			err = fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
-		}
-
-		h.failRevokeByID(w, r, p, revokeFailure{
-			obj: identity.ServerObject(), manage: identity.ActionServerManageAccess,
-			id: id, at: at, err: err,
-		})
-
-		return
-	}
-
-	actions, known := grantAccessActions(g.Object)
+	actions, known := grantAccessActions(obj)
 	if !known {
-		h.failRevokeByID(w, r, p, revokeFailure{
-			obj: identity.ServerObject(), manage: identity.ActionServerManageAccess,
-			id: id, at: at, err: fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound),
-		})
-
-		return
-	}
-
-	if authErr := h.authz.Authorize(ctx, p, actions.read, g.Object); authErr != nil {
-		if errors.Is(authErr, identity.ErrDenied) {
-			authErr = fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
-		} else {
-			authErr = fmt.Errorf("authorize %s: %w", actions.read, authErr)
-		}
-
-		h.failRevokeByID(w, r, p, revokeFailure{
-			obj: g.Object, manage: actions.manage, id: id, at: at, err: authErr,
-		})
-
-		return
-	}
-
-	if authErr := h.authz.Authorize(ctx, p, actions.manage, g.Object); authErr != nil {
-		h.failRevokeByID(w, r, p, revokeFailure{
-			obj: g.Object, manage: actions.manage, id: id, at: at,
-			err: fmt.Errorf("authorize %s: %w", actions.manage, authErr),
-		})
+		h.writeError(ctx, w, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound))
 
 		return
 	}
 
 	revoked, err := h.access.RevokeByID(ctx, callerEntry(r, p, actions.manage), p, id)
 	if err != nil {
-		h.failRevokeByID(w, r, p, revokeFailure{
-			obj: g.Object, manage: actions.manage, id: id, at: at, err: err,
+		h.writeError(ctx, w, err)
+		h.appendObjectChange(r, p, obj, serverChange{
+			at: h.access.Now(), action: actions.manage, object: access.GrantIDRef(id),
+			outcome: audit.OutcomeFailure,
 		})
 
 		return
 	}
 
 	h.writePrincipalResult(w, r, ok(http.StatusNoContent, nil, access.GrantRef(revoked)))
-}
-
-// revokeFailure names a refused revoke by ID for its failure entry: the
-// grant's object, or the installation for an unknown grant, with the
-// manage-access action of that object.
-type revokeFailure struct {
-	obj    identity.Object
-	manage identity.Action
-	id     string
-	at     time.Time
-	err    error
-}
-
-// failRevokeByID writes the error of f and one failure entry for a refused
-// revoke by ID: in the scope of the grant's object, or in @server for an
-// unknown grant. The entry names the grant ID only, never its tuple.
-func (h *Handler) failRevokeByID(w http.ResponseWriter, r *http.Request, p identity.Principal, f revokeFailure) {
-	h.writeError(r.Context(), w, f.err)
-	h.appendObjectChange(r, p, f.obj, serverChange{
-		at: f.at, action: f.manage, object: access.GrantIDRef(f.id), outcome: audit.OutcomeFailure,
-	})
 }
 
 // classifyAccess maps the role and grant errors to their status and
