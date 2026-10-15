@@ -47,10 +47,16 @@ func newAuditShipper(cfg *settings, observed *metrics.ServerMetrics) (*audit.Shi
 		OnShipped:  observed.AddAuditShipped,
 		OnFailure:  observed.IncAuditSinkFailure,
 		OnSkipped:  observed.AddAuditSkipped,
+		OnLag:      observed.SetAuditSinkLag,
+		Now:        nil,
 		Sinks:      cfg.auditSinks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("audit sinks: %w", err)
+	}
+
+	for _, sink := range cfg.auditSinks {
+		observed.SetAuditSinkLag(sink.Name, 0)
 	}
 
 	return shipper, nil

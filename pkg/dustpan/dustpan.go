@@ -168,6 +168,9 @@ type settings struct {
 	disablePulumiJournaling bool
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
+	// auditShipper ships to auditSinks. assemble sets it before it mounts
+	// the adapters, so the installation API lists it.
+	auditShipper *audit.Shipper
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
@@ -535,6 +538,7 @@ func defaultSettings() *settings {
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 		auditSinks:              nil,
+		auditShipper:            nil,
 	}
 }
 
@@ -654,6 +658,13 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 
 	svc.deleted = deleted
 
+	shipper, err := newAuditShipper(cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.auditShipper = shipper
+
 	adapters, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
 		return nil, err
@@ -672,11 +683,6 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	var restoreRegistry backup.RestoreRegistry
 	if reg, ok := cfg.namespaceStore.(backup.RestoreRegistry); ok {
 		restoreRegistry = reg
-	}
-
-	shipper, err := newAuditShipper(cfg, observed)
-	if err != nil {
-		return nil, err
 	}
 
 	return &Server{
@@ -1685,6 +1691,11 @@ func newServerHandler(
 		return nil, err
 	}
 
+	var sinks serverapi.AuditSinkSource
+	if cfg.auditShipper != nil {
+		sinks = cfg.auditShipper
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -1706,6 +1717,7 @@ func newServerHandler(
 			deps.observed.IncAuditAppendFailure()
 		},
 		DeletedUnits: deps.services.deleted,
+		AuditSinks:   sinks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)

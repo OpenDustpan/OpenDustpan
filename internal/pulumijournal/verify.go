@@ -5,65 +5,57 @@ import (
 	"fmt"
 )
 
-// Verifier checks a journal batch when it arrives (ADR 43, decision 6.4). It
-// satisfies stack.BatchVerifier without importing that package. Each entry must pass
+// Verifier checks a journal batch when it arrives. It satisfies
+// stack.BatchVerifier without importing that package. Each entry must pass
 // the rules of decision 5.5, which DecodeEntries applies. Each entry must also
 // be one that the replayer can apply, and each reference to an earlier entry must
 // name an operation that the update holds or an earlier entry of the batch. Then
 // every stored entry can replay, and the stored set never refers to a missing
 // entry.
 //
-// A reference to the operation of a Begin entry passes this check, because the
-// stored operation IDs do not say which kind introduced them. The replay refuses
-// such a reference with ErrMissingReference.
+// Only a success entry with a state creates a resource that later entries can
+// name. The held set therefore holds only those operations, matching the index
+// that the replay builds. A reference to a begun-only operation is refused with
+// ErrMissingReference.
 type Verifier struct{}
 
 // VerifyBatch returns whether the batch holds an entry that changes the replay
 // records, and nil when the batch passes the checks. The errors wrap the
 // sentinels of this package: ErrVersion, ErrUnknownKind, ErrKindVersion,
-// ErrSequenceID, ErrUnsupportedKind and ErrMissingReference. A write entry (kind 5)
-// is refused with ErrWriteOrder when recordsChanged is set, or when an earlier
-// entry of the batch changes the records.
-//
-//nolint:revive // The stored records flag is the fact the check needs, not control coupling: a write entry is refused while it is set.
+// ErrSequenceID, ErrUnsupportedKind and ErrMissingReference. known holds the
+// completed operations that the update already holds: the operation IDs of
+// success entries with a state. A reference must name one of them, or a
+// completed entry earlier in the same batch. A write entry (kind 5) is refused
+// with ErrWriteOrder when recordsChanged is set, or when an earlier entry of the
+// batch changes the records.
 func (Verifier) VerifyBatch(
 	body []byte,
 	version int,
 	known []int64,
 	recordsChanged bool,
 ) (bool, error) {
-	held := make(map[int64]bool, len(known))
-	for _, op := range known {
-		held[op] = true
-	}
+	check := newBatchCheck(known, recordsChanged)
 
-	// changed is set by an entry that changes the replay records. A write
-	// entry (kind 5) must come before all of them (upstream backend/journal.go of
-	// github.com/pulumi/pulumi/pkg/v3 v3.268.0, lines 295 to 298, expects that order).
-	// RecordsChanged covers the stored batches of the update, and changed covers
-	// the earlier entries of this batch.
-	changed := false
-
+	// A write entry (kind 5) must come before every entry that changes the replay
+	// records (upstream backend/journal.go of github.com/pulumi/pulumi/pkg/v3
+	// v3.268.0, lines 295 to 298, expects that order).
 	err := DecodeEntries(bytes.NewReader(body), version, func(entry JournalEntry) error {
 		if err := replayable(entry); err != nil {
 			return err
 		}
 
-		if entry.Kind == JournalEntryKindWrite && (recordsChanged || changed) {
-			return fmt.Errorf("entry %s: %w", entryLabel(entry), ErrWriteOrder)
+		if err := check.writeOrder(entry); err != nil {
+			return err
 		}
 
-		if changesRecords(entry.Kind) {
-			changed = true
+		check.noteRecords(entry)
+		check.trackCompletion(entry)
+
+		if err := check.references(entry); err != nil {
+			return err
 		}
 
-		for _, ref := range references(entry) {
-			if !held[ref] {
-				return fmt.Errorf("entry %s: operation %d: %w", entryLabel(entry), ref, ErrMissingReference)
-			}
-		}
-
-		held[entry.OperationID] = true
+		check.trackRebuild(entry)
 
 		return nil
 	})
@@ -71,7 +63,80 @@ func (Verifier) VerifyBatch(
 		return false, err
 	}
 
-	return changed, nil
+	return check.changed, nil
+}
+
+// batchCheck holds the verifier state for one batch: the completed operations
+// that references can name, whether a stored batch of the update changed the
+// replay records, and whether an earlier entry of this batch did.
+type batchCheck struct {
+	held    map[int64]bool
+	stored  bool
+	changed bool
+}
+
+// newBatchCheck returns a check over the completed operations that the update
+// already holds, and the records flag of its stored batches.
+func newBatchCheck(known []int64, stored bool) *batchCheck {
+	held := make(map[int64]bool, len(known))
+	for _, op := range known {
+		held[op] = true
+	}
+
+	return &batchCheck{held: held, stored: stored, changed: false}
+}
+
+// writeOrder refuses a write entry after an entry that changes the records, in
+// a stored batch or earlier in this batch.
+func (c *batchCheck) writeOrder(entry JournalEntry) error {
+	if entry.Kind == JournalEntryKindWrite && (c.stored || c.changed) {
+		return fmt.Errorf("entry %s: %w", entryLabel(entry), ErrWriteOrder)
+	}
+
+	return nil
+}
+
+// noteRecords records whether the entry changes the replay records.
+func (c *batchCheck) noteRecords(entry JournalEntry) {
+	if changesRecords(entry.Kind) {
+		c.changed = true
+	}
+}
+
+// trackCompletion records a completed entry before its references are checked,
+// as the replay adds its index before it applies its removals and flags. A
+// reference to the entry itself therefore passes in both.
+func (c *batchCheck) trackCompletion(entry JournalEntry) {
+	if completed(entry) {
+		c.held[entry.OperationID] = true
+	}
+}
+
+// references refuses a reference to an operation that is not held.
+func (c *batchCheck) references(entry JournalEntry) error {
+	for _, ref := range references(entry) {
+		if !c.held[ref] {
+			return fmt.Errorf("entry %s: operation %d: %w", entryLabel(entry), ref, ErrMissingReference)
+		}
+	}
+
+	return nil
+}
+
+// trackRebuild drops the held operations after a rebuilt base state entry, as
+// the replay drops its records. Later references to earlier operations are
+// then refused.
+func (c *batchCheck) trackRebuild(entry JournalEntry) {
+	if entry.Kind == JournalEntryKindRebuiltBaseState {
+		clear(c.held)
+	}
+}
+
+// completed reports whether an entry creates a resource that later entries can
+// name. Only a success entry with a state does, matching the index that the
+// replay builds from applied entries.
+func completed(entry JournalEntry) bool {
+	return entry.Kind == JournalEntryKindSuccess && present(entry.State)
 }
 
 // changesRecords reports whether an entry of kind changes the records of the
