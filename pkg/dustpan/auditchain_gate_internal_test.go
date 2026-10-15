@@ -131,6 +131,7 @@ func gateRefused() []gateRoute {
 		{method: http.MethodGet, path: "/api/v2/workspaces/x"},
 		{method: http.MethodGet, path: "/tofu/state/x"},
 		{method: http.MethodPut, path: "/api/server/audit/chain"},
+		{method: http.MethodGet, path: "/api/server/maintenancex"},
 	}
 }
 

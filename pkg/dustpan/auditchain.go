@@ -85,12 +85,6 @@ const (
 	chainMigratingMessage = "An audit chain migration runs. Requests stop until it is complete."
 )
 
-// errMigrationsStopped reports an approval while the server runs no
-// migration loop.
-var errMigrationsStopped = errors.New(
-	"the server does not run audit chain migrations now: start the server and approve again",
-)
-
 // principalReader answers the principal with a subject. It returns
 // principal.ErrNotFound when no principal has the subject.
 type principalReader interface {
@@ -177,7 +171,7 @@ func (c *auditChain) Status(ctx context.Context) (serverapi.AuditChainStatus, er
 // to the migration loop.
 func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 	if !c.migrationsRunning.Load() {
-		return errMigrationsStopped
+		return audit.ErrChainMigrationsStopped
 	}
 
 	if c.setting == audit.ChainOff {

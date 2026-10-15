@@ -436,7 +436,8 @@ func classifyNamespace(err error) (int, string, bool) {
 // naming each update and run, a leave while a change of the audit chain
 // holds maintenance mode answers 409, a refused approval of an audit chain
 // change answers 409 or, without a fresh MFA step or when a service
-// principal approves turning the chain off, 403, and an unreadable or
+// principal approves turning the chain off, 403, an approval while the
+// server runs no migration loop answers 503, and an unreadable or
 // unknown stored state answers 500 without driver text.
 func classifyMaintenance(err error) (int, string, bool) {
 	switch {
@@ -449,6 +450,8 @@ func classifyMaintenance(err error) (int, string, bool) {
 	case errors.Is(err, audit.ErrNoChainChange), errors.Is(err, audit.ErrChainMigrating),
 		errors.Is(err, audit.ErrChainChangeWaits):
 		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, audit.ErrChainMigrationsStopped):
+		return http.StatusServiceUnavailable, audit.ErrChainMigrationsStopped.Error(), true
 	case errors.Is(err, audit.ErrChainStepRequired):
 		return http.StatusForbidden, audit.ErrChainStepRequired.Error(), true
 	case errors.Is(err, audit.ErrChainNeedsPerson):

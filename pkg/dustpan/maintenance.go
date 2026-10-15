@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
 	"opendustpan.org/opendustpan/pkg/maintenance"
 )
@@ -110,7 +109,7 @@ func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logge
 			writeRefusal(r.Context(), w, shape, logger, chainMismatchMessage)
 		case rec.Pending:
 			message := chainPendingMessage
-			if chain.migrating.Load() || chainClaimHolds(rec, time.Now()) {
+			if chain.migrating.Load() || chainClaimHolds(rec, chain.chainNow()) {
 				message = chainMigratingMessage
 			}
 
@@ -132,7 +131,7 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 	case strings.HasPrefix(path, "/health/"),
 		path == "/api/server/metrics" && r.Method == http.MethodGet,
 		path == "/api/server/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
-		strings.HasPrefix(path, "/api/server/maintenance"):
+		path == "/api/server/maintenance" || strings.HasPrefix(path, "/api/server/maintenance/"):
 		return shapePulumi, false
 	case strings.HasPrefix(path, "/api/inventory/"):
 		return shapeInventory, true

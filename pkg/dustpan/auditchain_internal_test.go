@@ -327,8 +327,8 @@ func TestApproveWithoutMigrationLoop(t *testing.T) {
 	chain := newTestAuditChain(t, audit.ChainOff)
 	chain.migrationsRunning.Store(false)
 
-	if err := chain.Approve(t.Context(), approver()); !errors.Is(err, errMigrationsStopped) {
-		t.Fatalf("approve without the migration loop: %v, want errMigrationsStopped", err)
+	if err := chain.Approve(t.Context(), approver()); !errors.Is(err, audit.ErrChainMigrationsStopped) {
+		t.Fatalf("approve without the migration loop: %v, want ErrChainMigrationsStopped", err)
 	}
 
 	if chain.migrating.Load() {

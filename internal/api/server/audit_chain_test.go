@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // fakeAuditChain answers setting and status, fails each approval with
@@ -56,9 +57,11 @@ func newFakeAuditChain(setting audit.ChainSetting) *fakeAuditChain {
 	}
 }
 
-// newAuditChainHandler builds a Handler with chain and an authorizer that
-// denies deny.
-func newAuditChainHandler(t *testing.T, chain apiserver.AuditChain, deny ...identity.Action) *apiserver.Handler {
+// newAuditChainHandler builds a Handler with chain, namespaces and an
+// authorizer that denies deny.
+func newAuditChainHandler(
+	t *testing.T, namespaces *namespace.Service, chain apiserver.AuditChain, deny ...identity.Action,
+) *apiserver.Handler {
 	t.Helper()
 
 	denied := map[identity.Action]bool{}
@@ -70,7 +73,7 @@ func newAuditChainHandler(t *testing.T, chain apiserver.AuditChain, deny ...iden
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: denied},
 		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     newTestNamespaces(t),
+		Namespaces:     namespaces,
 		Backups:        nil,
 		Restores:       nil,
 		Maintenance:    newFakeMaintenance(maintenance.StateMaintenance),
@@ -97,7 +100,8 @@ func newAuditChainHandler(t *testing.T, chain apiserver.AuditChain, deny ...iden
 func TestGetAuditChainAnswersTheState(t *testing.T) {
 	t.Parallel()
 
-	handler := newAuditChainHandler(t, newFakeAuditChain(audit.ChainOff))
+	namespaces := newTestNamespaces(t)
+	handler := newAuditChainHandler(t, namespaces, newFakeAuditChain(audit.ChainOff))
 
 	status, body := serveMaintenance(t, handler, http.MethodGet, "/api/server/audit/chain", "")
 	if status != http.StatusOK {
@@ -144,12 +148,14 @@ func TestApproveAuditChainNeedsTheActionsOfItsDirection(t *testing.T) {
 		},
 	}
 
+	namespaces := newTestNamespaces(t)
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			chain := newFakeAuditChain(tc.setting)
-			handler := newAuditChainHandler(t, chain, tc.deny)
+			handler := newAuditChainHandler(t, namespaces, chain, tc.deny)
 
 			status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/audit/chain", "")
 			if status != tc.want {
@@ -185,8 +191,11 @@ func TestApproveAuditChainMapsItsErrors(t *testing.T) {
 		{name: "no fresh MFA step", err: audit.ErrChainStepRequired, want: http.StatusForbidden},
 		{name: "a service principal approves turning off", err: audit.ErrChainNeedsPerson, want: http.StatusForbidden},
 		{name: "active work", err: maintenance.ErrActiveWork, want: http.StatusConflict},
+		{name: "no migration loop", err: audit.ErrChainMigrationsStopped, want: http.StatusServiceUnavailable},
 		{name: "a server fault", err: errAuditChainFault, want: http.StatusInternalServerError},
 	}
+
+	namespaces := newTestNamespaces(t)
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,7 +203,7 @@ func TestApproveAuditChainMapsItsErrors(t *testing.T) {
 
 			chain := newFakeAuditChain(audit.ChainOff)
 			chain.approveErr = fmt.Errorf("approve: %w", tc.err)
-			handler := newAuditChainHandler(t, chain)
+			handler := newAuditChainHandler(t, namespaces, chain)
 
 			status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/audit/chain", "")
 			if status != tc.want {
@@ -207,7 +216,8 @@ func TestApproveAuditChainMapsItsErrors(t *testing.T) {
 func TestAuditChainRoutesWithoutAChain(t *testing.T) {
 	t.Parallel()
 
-	handler := newAuditChainHandler(t, nil)
+	namespaces := newTestNamespaces(t)
+	handler := newAuditChainHandler(t, namespaces, nil)
 
 	for _, method := range []string{http.MethodGet, http.MethodPost} {
 		status, body := serveMaintenance(t, handler, method, "/api/server/audit/chain", "")

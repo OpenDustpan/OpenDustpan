@@ -137,6 +137,11 @@ var (
 	// ErrChainClaimLost reports a renewal while no claim holds. The
 	// migration stops when it loses its claim.
 	ErrChainClaimLost = errors.New("the audit chain migration lost its claim")
+	// ErrChainMigrationsStopped reports an approval while the server runs
+	// no migration loop.
+	ErrChainMigrationsStopped = errors.New(
+		"the server does not run audit chain migrations now: restart the server and approve again",
+	)
 )
 
 // ParseChainSetting maps an operator value to a setting. An empty value is
