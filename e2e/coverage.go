@@ -774,6 +774,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Metrics:        coverageMetrics{},
 		Version:        "test",
 		Schema:         coverageSchema{},
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,

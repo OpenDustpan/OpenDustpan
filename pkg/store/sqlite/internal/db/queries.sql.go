@@ -684,6 +684,22 @@ func (q *Queries) CountRoleGrantsOnPrincipal(ctx context.Context, role string) (
 	return count, err
 }
 
+const countRunningJournaledUpdates = `-- name: CountRunningJournaledUpdates :one
+SELECT COUNT(*)
+FROM updates
+WHERE status = 'running' AND journal_version > 0
+`
+
+// The count of updates that run now with journal version 1 or higher, for
+// the upgrade check: a downgrade to a binary without the journal route
+// answers its journal batches with 404, which the Pulumi CLI does not retry.
+func (q *Queries) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRunningJournaledUpdates)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countSession = `-- name: CountSession :one
 SELECT COUNT(*) FROM sessions WHERE id = ?
 `
