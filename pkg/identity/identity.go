@@ -161,8 +161,12 @@ const (
 	// whole installation: every grant (ADR 52, decision 10). Its object is
 	// ServerObject.
 	ActionServerReadAccess Action = "server:read-access"
+	// ActionNamespaceManagePrincipals allows creating, changing and
+	// deleting the service principals of a namespace. Its object is a
+	// namespace. Reading them needs ActionNamespaceReadAccess.
+	ActionNamespaceManagePrincipals Action = "namespace:manage-principals"
 	// ActionNamespaceReadAccess allows reading the access-review export of a
-	// namespace. Its object is a namespace.
+	// namespace, and its principals. Its object is a namespace.
 	ActionNamespaceReadAccess Action = "namespace:read-access"
 	// ActionCollectionReadAccess allows reading the access-review export of
 	// a collection. Its object is a collection.

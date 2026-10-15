@@ -115,7 +115,7 @@ func TestValidateGroupName(t *testing.T) {
 func TestNewServiceNeedsStore(t *testing.T) {
 	t.Parallel()
 
-	_, err := principal.NewService(principal.Config{Store: nil, Guard: nil, Now: nil, NewID: nil})
+	_, err := principal.NewService(principal.Config{Store: nil, Guard: nil, Namespaces: nil, Now: nil, NewID: nil})
 	if !errors.Is(err, principal.ErrMissingDependency) {
 		t.Fatalf("NewService without a store = %v, want ErrMissingDependency", err)
 	}
@@ -125,8 +125,16 @@ func TestDisplayNameRefusesFormatCharacters(t *testing.T) {
 	t.Parallel()
 
 	p := principal.Principal{
-		CreatedAt: time.Time{}, UpdatedAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-1", Subject: "alice",
-		DisplayName: "Ali\u200bce", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		CreatedAt:   time.Time{},
+		UpdatedAt:   time.Time{},
+		DisabledAt:  time.Time{},
+		ID:          "prn-1",
+		Subject:     "alice",
+		DisplayName: "Ali\u200bce",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
 	}
 	if err := p.Validate(); !errors.Is(err, principal.ErrInvalid) {
 		t.Fatalf("display name with a zero-width space = %v, want ErrInvalid", err)
@@ -215,7 +223,7 @@ func TestServiceEntries(t *testing.T) {
 
 	svc, err := principal.NewService(principal.Config{
 		Store: st,
-		Guard: nil,
+		Guard: nil, Namespaces: nil,
 		Now:   func() time.Time { return at },
 		NewID: func(prefix string) string { return prefix + "fixed" },
 	})
@@ -279,7 +287,9 @@ func openStore(t *testing.T) *sqlite.Store {
 func newServiceOverStore(t *testing.T) *principal.Service {
 	t.Helper()
 
-	svc, err := principal.NewService(principal.Config{Store: openStore(t), Guard: nil, Now: nil, NewID: nil})
+	svc, err := principal.NewService(
+		principal.Config{Store: openStore(t), Guard: nil, Namespaces: nil, Now: nil, NewID: nil},
+	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}

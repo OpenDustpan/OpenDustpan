@@ -738,22 +738,22 @@ UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?;
 
 -- name: CreatePrincipal :execrows
-INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetPrincipal :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.id = ? AND p.deleted_at_ms IS NULL;
 
 -- name: GetPrincipalBySubject :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.subject = sqlc.arg('subject') AND p.deleted_at_ms IS NULL;
 
 -- name: ListPrincipals :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
@@ -761,6 +761,7 @@ WHERE p.deleted_at_ms IS NULL
   AND p.subject >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR p.subject < sqlc.arg('high'))
   AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR p.kind = sqlc.arg('kind'))
+  AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR p.namespace = sqlc.arg('namespace'))
 ORDER BY p.subject
 LIMIT sqlc.arg('row_limit');
 
@@ -769,15 +770,21 @@ SELECT COUNT(*) FROM principals
 WHERE deleted_at_ms IS NULL
   AND subject >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR subject < sqlc.arg('high'))
-  AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR kind = sqlc.arg('kind'));
+  AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR kind = sqlc.arg('kind'))
+  AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR namespace = sqlc.arg('namespace'));
+
+-- name: GetPrincipalNamespace :one
+-- The namespace of a current principal: empty for a principal of the
+-- installation. A grant write reads it in its own transaction.
+SELECT namespace FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = ?, updated_at_ms = ?
-WHERE id = ? AND deleted_at_ms IS NULL;
+WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL;
 
 -- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = ?
-WHERE id = ? AND deleted_at_ms IS NULL;
+WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL;
 
 -- name: EndMembershipsOfPrincipal :exec
 UPDATE group_members SET removed_at_ms = ?
@@ -841,7 +848,7 @@ UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL;
 
 -- name: ListGroupMembers :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
   m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
