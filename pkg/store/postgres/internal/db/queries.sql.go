@@ -4047,10 +4047,11 @@ func (q *Queries) ListBlobPurges(ctx context.Context, limit int32) ([]BlobPurge,
 const listBlobPurgesAfter = `-- name: ListBlobPurgesAfter :many
 SELECT tool, unit_id, namespace, purged_at_ms
 FROM blob_purges
-WHERE purged_at_ms > $1
-  OR (purged_at_ms = $1 AND tool COLLATE "C" > $2)
-  OR (purged_at_ms = $1 AND tool = $2
-    AND unit_id COLLATE "C" > $3)
+WHERE purged_at_ms >= $1
+  AND (purged_at_ms > $1
+    OR (purged_at_ms = $1 AND tool COLLATE "C" > $2)
+    OR (purged_at_ms = $1 AND tool = $2
+      AND unit_id COLLATE "C" > $3))
 ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
 LIMIT $4
 `
@@ -4063,6 +4064,7 @@ type ListBlobPurgesAfterParams struct {
 }
 
 // The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+// The lower bound on purged_at_ms lets the index scan start at the cursor.
 func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAfterParams) ([]BlobPurge, error) {
 	rows, err := q.db.Query(ctx, listBlobPurgesAfter,
 		arg.AfterMs,
