@@ -169,6 +169,7 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 	stored, storeErr := s.storeContent(ctx, storeInput{
 		namespace: sw.workspace.Ref.Namespace,
 		workspace: sw.workspace.ID,
+		version:   string(sv.ID),
 		seal:      sv.Sealed,
 		key:       sw.key,
 		want:      sw.want,
@@ -185,7 +186,7 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 		return StateVersion{}, s.refuseStream(ctx, sw, fmt.Errorf("write state %s: %w", sv.ID, metaErr))
 	}
 
-	outputs, err := s.streamedOutputs(ctx, sw.workspace, meta)
+	outputs, err := s.streamedOutputs(ctx, sw.workspace, string(sv.ID), meta)
 	if err != nil {
 		return StateVersion{}, s.refuseStream(ctx, sw, err)
 	}
@@ -362,7 +363,9 @@ type streamedOutputs struct {
 // streamedOutputs returns the outputs to store and the plain outputs to return.
 // A state the client encrypted has no readable outputs, so it stores none. A
 // version of a sealing service stores the outputs sealed (ADR 41).
-func (s *Service) streamedOutputs(ctx context.Context, w Workspace, meta streamedMeta) (streamedOutputs, error) {
+func (s *Service) streamedOutputs(
+	ctx context.Context, w Workspace, versionID string, meta streamedMeta,
+) (streamedOutputs, error) {
 	if meta.ClientEncrypted {
 		return streamedOutputs{stored: nil, plain: nil}, nil
 	}
@@ -378,7 +381,7 @@ func (s *Service) streamedOutputs(ctx context.Context, w Workspace, meta streame
 		return streamedOutputs{stored: nil, plain: nil}, chargeErr
 	}
 
-	sealedOutputs, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), plain)
+	sealedOutputs, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), versionID, plain)
 	if err != nil {
 		return streamedOutputs{stored: nil, plain: nil}, fmt.Errorf("seal outputs of %s: %w", w.Ref, err)
 	}

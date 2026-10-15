@@ -271,7 +271,7 @@ func (s *Service) writeSealedBlob(
 	hash := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
 	counted := &countingReader{r: io.TeeReader(old, hash), n: 0}
 
-	sealedReader, err := s.sealer.SealState(ctx, w.Ref.Namespace, w.ID.String(), counted)
+	sealedReader, err := s.sealer.SealState(ctx, w.Ref.Namespace, w.ID.String(), string(sv.ID), counted)
 	if err != nil {
 		return "", errors.Join(fmt.Errorf("seal state %s: %w", sv.ID, err), old.Close())
 	}
@@ -309,7 +309,7 @@ func (s *Service) sealRowOutputs(
 		return sv.Outputs, nil
 	}
 
-	sealed, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), sv.Outputs)
+	sealed, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(sv.ID), sv.Outputs)
 	if err != nil {
 		return nil, fmt.Errorf("seal state %s: %w", sv.ID, err)
 	}

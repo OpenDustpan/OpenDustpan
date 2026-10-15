@@ -129,7 +129,7 @@ func streamNamespace(t *testing.T, s Store) {
 func sealAll(t *testing.T, svc *secret.Service, scope secret.Scope, plain []byte) []byte {
 	t.Helper()
 
-	sealed, err := svc.SealStream(t.Context(), scope, bytes.NewReader(plain))
+	sealed, err := svc.SealStream(t.Context(), scope, []byte(streamBindingText), bytes.NewReader(plain))
 	if err != nil {
 		t.Fatalf("seal stream: %v", err)
 	}
@@ -146,7 +146,7 @@ func sealAll(t *testing.T, svc *secret.Service, scope secret.Scope, plain []byte
 func openAll(t *testing.T, svc *secret.Service, scope secret.Scope, sealed []byte) []byte {
 	t.Helper()
 
-	opened, err := svc.OpenStream(t.Context(), scope, bytes.NewReader(sealed))
+	opened, err := svc.OpenStream(t.Context(), scope, []byte(streamBindingText), bytes.NewReader(sealed))
 	if err != nil {
 		t.Fatalf("open stream: %v", err)
 	}
@@ -158,6 +158,9 @@ func openAll(t *testing.T, svc *secret.Service, scope secret.Scope, sealed []byt
 
 	return plain
 }
+
+// streamBindingText is the binding of the streams of this suite.
+const streamBindingText = "state-version-suite"
 
 // testSealStreamRoundTrip seals content across chunk borders and opens it.
 func testSealStreamRoundTrip(t *testing.T, s Store) {
@@ -190,7 +193,7 @@ func testSealStreamBindsScope(t *testing.T, s Store) {
 
 	sealed := sealAll(t, svc, first, []byte("sensitive state"))
 
-	opened, err := svc.OpenStream(t.Context(), second, bytes.NewReader(sealed))
+	opened, err := svc.OpenStream(t.Context(), second, []byte(streamBindingText), bytes.NewReader(sealed))
 	if err != nil {
 		// No key exists for the other scope: the open fails closed.
 		if !errors.Is(err, secret.ErrDecrypt) {
@@ -236,7 +239,7 @@ func testSealStreamTamper(t *testing.T, s Store) {
 	mutants["extended"] = append(bytes.Clone(sealed), 0x00)
 
 	for name, bad := range mutants {
-		opened, err := svc.OpenStream(t.Context(), scope, bytes.NewReader(bad))
+		opened, err := svc.OpenStream(t.Context(), scope, []byte(streamBindingText), bytes.NewReader(bad))
 		if err != nil {
 			t.Fatalf("%s: open stream: %v", name, err)
 		}
@@ -301,5 +304,89 @@ func assertNoLeak(t *testing.T, name string, err error, secrets []string) {
 		if s != "" && strings.Contains(text, s) {
 			t.Errorf("%s: error %q holds %q, want no key, scope or content", name, text, s)
 		}
+	}
+}
+
+// testSealStateBindsVersion proves a sealed state version opens only as its
+// own version. A swapped blob from the same workspace under another version
+// ID fails with ErrDecrypt, and an empty or oversized binding is refused.
+func testSealStateBindsVersion(t *testing.T, s Store) {
+	t.Helper()
+	streamNamespace(t, s)
+
+	svc := streamService(t, s)
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	plain := []byte("state of version a")
+
+	sealed, err := svc.SealState(t.Context(), ns, "scope-1", "sv-a", bytes.NewReader(plain))
+	if err != nil {
+		t.Fatalf("seal state: %v", err)
+	}
+
+	sealedBytes, err := io.ReadAll(sealed)
+	if err != nil {
+		t.Fatalf("read sealed state: %v", err)
+	}
+
+	opened, err := svc.OpenState(t.Context(), ns, "scope-1", "sv-a", bytes.NewReader(sealedBytes))
+	if err != nil {
+		t.Fatalf("open state of its own version: %v", err)
+	}
+
+	got, err := io.ReadAll(opened)
+	if err != nil || !bytes.Equal(got, plain) {
+		t.Fatalf("own version opened %q, err %v", got, err)
+	}
+
+	swapped, err := svc.OpenState(t.Context(), ns, "scope-1", "sv-b", bytes.NewReader(sealedBytes))
+	if err != nil {
+		t.Fatalf("open state of another version: %v", err)
+	}
+
+	_, err = io.ReadAll(swapped)
+	if !errors.Is(err, secret.ErrDecrypt) {
+		t.Fatalf("swapped version err = %v, want ErrDecrypt", err)
+	}
+
+	_, err = svc.SealState(t.Context(), ns, "scope-1", "", bytes.NewReader(plain))
+	if !errors.Is(err, secret.ErrInvalidBinding) {
+		t.Errorf("empty version err = %v, want ErrInvalidBinding", err)
+	}
+
+	long := string(bytes.Repeat([]byte("v"), 256))
+	_, err = svc.SealState(t.Context(), ns, "scope-1", long, bytes.NewReader(plain))
+	if !errors.Is(err, secret.ErrInvalidBinding) {
+		t.Errorf("oversized version err = %v, want ErrInvalidBinding", err)
+	}
+}
+
+// testSealStreamTruncated proves a stream cut at any point fails with
+// ErrDecrypt: inside the header, inside a frame header, inside a frame, and
+// before the final chunk.
+func testSealStreamTruncated(t *testing.T, s Store) {
+	t.Helper()
+	streamNamespace(t, s)
+
+	svc := streamService(t, s)
+	scope := streamScope(t, "scope-1")
+
+	plain := bytes.Repeat([]byte("truncation-check"), 9000)
+	sealed := sealAll(t, svc, scope, plain)
+
+	for _, cut := range []int{0, 1, 20, 33, 34, 40, len(sealed) / 2, len(sealed) - 1} {
+		opened, err := svc.OpenStream(t.Context(), scope, []byte(streamBindingText), bytes.NewReader(sealed[:cut]))
+		if err == nil {
+			_, err = io.ReadAll(opened)
+		}
+
+		if !errors.Is(err, secret.ErrDecrypt) {
+			t.Errorf("cut at %d: err = %v, want ErrDecrypt", cut, err)
+		}
+
+		assertNoLeak(t, "truncated stream", err, []string{"truncation-check", "scope-1", "acme"})
 	}
 }

@@ -4400,7 +4400,8 @@ func assertTamperedDownloadFails(t *testing.T, c *tamperCase) {
 // version byte and an 8-byte nonce, then frames of a 4-byte big-endian
 // ciphertext length, a final-chunk flag byte and the ciphertext.
 func swapSealedFrames(sealed []byte) []byte {
-	const header = 1 + 8
+	// The version byte and the 32-byte salt of a version 3 stream header.
+	const header = 1 + 32
 
 	frames := [][]byte{}
 	rest := sealed[header:]

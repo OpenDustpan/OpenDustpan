@@ -49,6 +49,7 @@ func (s *Service) releaseWithFence(
 	size, err := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
+		version:   string(sv.ID),
 		seal:      cur.Sealed,
 		key:       sv.Content,
 		want:      sv.MD5,

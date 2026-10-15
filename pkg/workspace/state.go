@@ -25,6 +25,9 @@ var (
 	ErrLineageMismatch = errors.New("state lineage differs from the current state")
 	// ErrChecksumMismatch reports uploaded bytes whose MD5 differs from the declared one.
 	ErrChecksumMismatch = errors.New("uploaded state does not match its declared MD5")
+	// ErrStoredContentMismatch reports stored state whose plain bytes do not
+	// match the size and MD5 of its state version row.
+	ErrStoredContentMismatch = errors.New("stored state does not match its recorded size and MD5")
 	// ErrUploadDenied reports an upload capability that is unknown, used or expired.
 	ErrUploadDenied = errors.New("state upload not allowed")
 	// ErrTooManyPending reports a workspace holding the maximum pending
