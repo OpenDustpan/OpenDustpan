@@ -165,6 +165,9 @@ The chain shows a change or a deletion of an entry.
 Each entry holds the hash of its own fields and of the previous entry of
 its namespace, so a changed field breaks the hash of that entry and a
 deleted entry breaks the link of the next one.
+A sink copy with `"truncated": true` keeps `scope`, `sequence`, `prevHash` and `hash`, so a receiver can still follow the links and find gaps and duplicates.
+The receiver cannot recompute the `hash` of such a copy from the shipped fields.
+The full entry stays in the server audit log, and the chain check on the server covers it.
 A backup carries the `audit_entries` table, so a restore keeps the entries
 and a valid chain.
 
@@ -236,6 +239,9 @@ Each entry is one JSON object with `time`, `level` (`info`), `msg` (`audit entry
 `valueCount`, `objectID` and `changes` are present only when the entry has them.
 `changes` holds the canonical JSON that the hash covers: a list sorted by `key`.
 `prevHash` and `hash` hold the chain of the entry.
+`scope`, `sequence`, `prevHash` and `hash` are never trimmed. A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
+A record with `"truncated": true` has a `hash` that the receiver cannot recompute from the shipped fields.
+The full entry stays in the server audit log, and the chain check on the server covers it.
 
 ```json
 {"time":"2026-10-13T12:00:00.000Z","level":"info","msg":"audit entry","scope":"acme","sequence":7,"atMs":1791892800000,"subject":"admin","action":"unit:read-secrets","object":"opentofu:acme/prod","kind":"reveal","outcome":"success","prevHash":"9f2c...","hash":"41ab..."}
@@ -262,8 +268,15 @@ Use `tls` for an audit log.
 `?ca-file=<path>` names a PEM bundle to trust instead of the system store.
 `?max-size=<bytes>` sets the largest message, from 480 to 65507 bytes.
 The default is 8192.
-The server does not send an entry above that size.
-It counts the entry in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
+An entry above that size arrives trimmed to fit, with the long fields shortened and `"truncated": true` in the record.
+Trim never shortens `truncated`, `scope`, `sequence`, `time`, `action`, `kind`, `outcome`, `prevHash` and `hash`.
+`scope`, `sequence`, `prevHash` and `hash` stay whole. A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
+A record with `"truncated": true` has a `hash` that the receiver cannot recompute from the shipped fields.
+The full entry stays in the server audit log, and the chain check on the server covers it.
+Read the full entry through the entry list, for example `GET /api/audit/entries?organization=acme&page[size]=50`, and find the entry with the same `sequence`.
+There is no route that reads one entry by scope and sequence.
+Only an entry that cannot fit even with every trimmable field empty is skipped.
+The server counts it in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
 
 ### Webhook
 
@@ -303,7 +316,7 @@ A rotation tool moves the file away and sends `SIGHUP` to the server.
 
 `dustpan_audit_sink_entries_total{sink="<name>"}` counts the entries that a sink accepted.
 `dustpan_audit_sink_failures_total{sink="<name>"}` counts the failed batches.
-`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog message above `max-size`.
+`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog record that cannot fit below `max-size` even trimmed.
 A failed batch loses no entry, but a count that keeps growing means the sink falls behind.
 A skipped entry is not in the sink: alert when that count is above zero.
 The metrics count 16 sinks at most. With more sinks, the server logs a warning at start.

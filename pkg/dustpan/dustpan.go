@@ -1824,7 +1824,7 @@ func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
 	}
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: stores, Callers: stores, Collections: collections, Units: stores,
+		Store: stores, Callers: stores, Collections: collections, Units: stores, Principals: stores,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("authorizer: %w", err)
@@ -1895,7 +1895,7 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 		var err error
 
 		authz, err = access.NewAuthorizer(access.AuthorizerConfig{
-			Store: stores, Callers: stores, Collections: collections, Units: stores,
+			Store: stores, Callers: stores, Collections: collections, Units: stores, Principals: stores,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("access authorizer: %w", err)
