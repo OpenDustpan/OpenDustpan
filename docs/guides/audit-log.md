@@ -262,8 +262,10 @@ Use `tls` for an audit log.
 `?ca-file=<path>` names a PEM bundle to trust instead of the system store.
 `?max-size=<bytes>` sets the largest message, from 480 to 65507 bytes.
 The default is 8192.
-The server does not send an entry above that size.
-It counts the entry in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
+An entry above that size arrives trimmed to fit, with the long fields shortened and `"truncated": true` in the record.
+The scope, sequence, time, action, kind, outcome and hash fields stay whole.
+Only an entry that cannot fit even with every trimmable field empty is skipped.
+The server counts it in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
 
 ### Webhook
 
@@ -303,7 +305,7 @@ A rotation tool moves the file away and sends `SIGHUP` to the server.
 
 `dustpan_audit_sink_entries_total{sink="<name>"}` counts the entries that a sink accepted.
 `dustpan_audit_sink_failures_total{sink="<name>"}` counts the failed batches.
-`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog message above `max-size`.
+`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog record that cannot fit below `max-size` even trimmed.
 A failed batch loses no entry, but a count that keeps growing means the sink falls behind.
 A skipped entry is not in the sink: alert when that count is above zero.
 The metrics count 16 sinks at most. With more sinks, the server logs a warning at start.
