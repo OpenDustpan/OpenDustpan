@@ -129,6 +129,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "journal stores two batches of one update that arrive at once", test: testJournalConcurrentRows},
 		{name: "journal stores one copy of a batch sent twice at once", test: testJournalConcurrentRetry},
 		{name: "journal check sees the stored operations and refusals store nothing", test: testJournalVerify},
+		{name: "journal refuses a reference to a begun-only operation", test: testJournalBegunRefusal},
 		{name: "build removes the journal and returns its blob keys", test: testJournalBuild},
 		{name: "build races a batch without losing its key", test: testJournalBuildRace},
 		{name: "build leaves other updates and stacks journaled", test: testJournalBuildIsolation},

@@ -38,12 +38,14 @@ const journalSweepGrace = time.Hour
 // sequence ID of 0 or less, or a sequence ID that the batch holds twice.
 var ErrJournalBatch = errors.New("journal batch is malformed")
 
-// BatchVerifier checks one journal batch before the server stores it (ADR 43,
-// decision 6.4). The types are standard library types, so an implementation
-// needs no import of this package. version is the journal version that the server
-// negotiated for the update. known holds the operation IDs that the update already
-// holds. A reference to an entry must name one of them, or an earlier entry of the
-// same batch. It returns an error when the batch cannot replay.
+// BatchVerifier checks one journal batch before the server stores it. The types
+// are standard library types, so an implementation needs no import of this
+// package. version is the journal version that the server negotiated for the
+// update. known holds the completed operation IDs that the update already
+// holds: the operations of success entries with a state, which are the only
+// ones that later references can name. A reference to an entry must name one
+// of them, or a completed entry earlier in the same batch. It returns an error
+// when the batch cannot replay.
 type BatchVerifier interface {
 	VerifyBatch(body []byte, version int, known []int64) error
 }
@@ -63,7 +65,7 @@ type JournalBatch struct {
 }
 
 // JournalRow is the row of one stored batch: the blob that holds it, and the
-// parts that the retry check and the replay read (ADR 43, decision 6.1).
+// parts that the retry check and the replay read.
 type JournalRow struct {
 	Ref     Ref
 	Update  UpdateID
@@ -71,14 +73,17 @@ type JournalRow struct {
 	BlobKey blob.Key
 	SHA256  [sha256.Size]byte
 	// MD5 is the MD5 of the stored bytes. The backup manifest names the blob by it.
-	MD5          [md5.Size]byte
-	Size         int64
-	SequenceIDs  []int64
+	MD5         [md5.Size]byte
+	Size        int64
+	SequenceIDs []int64
+	// OperationIDs holds the completed operation IDs of the batch: the
+	// operations of success entries with a state. Only those can be named by
+	// later references, so only those are stored for the known set.
 	OperationIDs []int64
-	// Verify checks the batch against the operation IDs that the update holds. The
-	// store calls it in the fenced transaction, after the retry check and before
-	// the write, with the operation IDs of the stored rows. A nil Verify skips the
-	// check. A non-nil error refuses the batch with ErrJournalBatch.
+	// Verify checks the batch against the completed operation IDs that the update
+	// holds. The store calls it in the fenced transaction, after the retry check
+	// and before the write, with the operation IDs of the stored rows. A nil
+	// Verify skips the check. A non-nil error refuses the batch with ErrJournalBatch.
 	Verify func(known []int64) error
 }
 
@@ -117,9 +122,10 @@ type BuiltCheckpointStore interface {
 	PutBuiltCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) ([]blob.Key, error)
 }
 
-// KnownOperationIDs returns the operation IDs that the stored rows of an update
-// hold. Each element is the JSON array that a row keeps (see JournalRow.OperationIDs).
-// It returns an error for a value that is not such an array.
+// KnownOperationIDs returns the completed operation IDs that the stored rows of
+// an update hold. Each element is the JSON array that a row keeps (see
+// JournalRow.OperationIDs). It returns an error for a value that is not such
+// an array.
 func KnownOperationIDs(stored []string) ([]int64, error) {
 	var known []int64
 	for _, raw := range stored {
@@ -134,17 +140,20 @@ func KnownOperationIDs(stored []string) ([]int64, error) {
 	return known, nil
 }
 
-// journalBody is the part of a journal batch body that the blob key and the
-// retry check read. The wire format is the batch of the Pulumi CLI (ADR 43,
-// decision 8.1).
+// journalBody is the part of a journal batch body that the blob key, the retry
+// check and the completed operation IDs read.
 type journalBody struct {
 	Entries []journalEntryIDs `json:"entries"`
 }
 
-// journalEntryIDs holds the IDs of one entry.
+// journalEntryIDs holds the IDs and the completion parts of one entry. Kind 1
+// is the success kind, and only a success entry with a state creates a resource
+// that later references can name, matching the index that the replay builds.
 type journalEntryIDs struct {
-	SequenceID  int64 `json:"sequenceID"`
-	OperationID int64 `json:"operationID"`
+	SequenceID  int64           `json:"sequenceID"`
+	OperationID int64           `json:"operationID"`
+	Kind        int             `json:"kind"`
+	State       json.RawMessage `json:"state"`
 }
 
 // JournalEntries writes journal batches: the blob first, then the row in a fenced
@@ -348,9 +357,11 @@ func (j *JournalEntries) digestOf(ctx context.Context, key blob.Key) ([sha256.Si
 	return sum, nil
 }
 
-// batchIDs returns the sequence IDs and the operation IDs of a batch body. Each
-// sequence ID must be positive and appear once (ADR 43, decision 5.5). A body with
-// no entries returns no IDs and no error.
+// batchIDs returns the sequence IDs and the completed operation IDs of a batch
+// body. Each sequence ID must be positive and appear once. A body with no
+// entries returns no IDs and no error. Only success entries with a state
+// contribute operation IDs, as only those create resources that later
+// references can name.
 func batchIDs(content []byte) (journalIDs, error) {
 	var body journalBody
 	if err := json.Unmarshal(content, &body); err != nil {
@@ -372,14 +383,21 @@ func batchIDs(content []byte) (journalIDs, error) {
 
 		seen[e.SequenceID] = true
 		seqs = append(seqs, e.SequenceID)
-		ops = append(ops, e.OperationID)
+
+		if e.Kind == journalSuccessKind && len(e.State) > 0 && string(e.State) != "null" {
+			ops = append(ops, e.OperationID)
+		}
 	}
 
 	return journalIDs{sequences: seqs, operations: ops}, nil
 }
 
-// journalIDs holds the sequence IDs and the operation IDs of one batch, in the
-// order of the body.
+// journalSuccessKind is the kind of a success entry. Only such an entry with a
+// state creates a resource that later references can name.
+const journalSuccessKind = 1
+
+// journalIDs holds the sequence IDs of one batch in the order of the body, and
+// its completed operation IDs.
 type journalIDs struct {
 	sequences  []int64
 	operations []int64
