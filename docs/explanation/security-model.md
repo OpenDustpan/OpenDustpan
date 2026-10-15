@@ -92,8 +92,12 @@ persons and services.
   `namespace:read-access` reads them. A principal of a namespace can only
   hold grants on its namespace or on an object inside it: the server
   refuses any other grant with 400, and checks it again in the transaction
-  of the grant. It cannot be a member of a group. The server does not make
-  tokens for it yet.
+  of the grant. It cannot be a member of a group. A holder of
+  `namespace:manage-principal-tokens` on the namespace makes, rotates,
+  lists and revokes the tokens of the principals of that namespace, through
+  `principal:manage-tokens` on each of them. It reaches no other principal.
+  A grant of a role with it needs every data action on that namespace, or
+  `server:manage-access` on the installation.
 - **Only a site administrator can change the sign-in settings.** The
   action `server:manage-sign-in` changes the session policy with
   `PATCH /api/server/session-policy`: the idle limit (15 minutes by
