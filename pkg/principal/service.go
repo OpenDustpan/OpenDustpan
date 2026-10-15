@@ -191,8 +191,15 @@ func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller ide
 }
 
 // EnablePrincipal enables the principal with the ID id again after an
-// inactivity disable (ADR 53), with the entry e.
-func (s *Service) EnablePrincipal(ctx context.Context, e audit.Entry, id string) error {
+// inactivity disable, with the entry e. The enable restores the use of its
+// grants, so the Guard checks that caller holds every action that they give.
+func (s *Service) EnablePrincipal(
+	ctx context.Context, e audit.Entry, caller identity.Principal, id string,
+) error {
+	if err := s.checkPrincipal(ctx, caller, id); err != nil {
+		return fmt.Errorf("enable principal %q: %w", id, err)
+	}
+
 	if err := s.store.EnablePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
 		return fmt.Errorf("enable principal %q: %w", id, err)
 	}

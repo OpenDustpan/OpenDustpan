@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -191,6 +192,131 @@ func TestRevokeAndDeleteNeedTheirActions(t *testing.T) {
 	}
 
 	checkEqualAdmins(t, f)
+}
+
+// disableAllPersons disables every person with the inactivity sweep, so a
+// test can enable them again one by one.
+func (f *fixture) disableAllPersons(tb testing.TB) {
+	tb.Helper()
+
+	_, err := f.store.SweepInactive(tb.Context(), accesstoken.Sweep{
+		Inactivity: time.Hour,
+		Tokens:     false,
+		Accounts:   true,
+	}, storetest.ServerChange)
+	if err != nil {
+		tb.Fatalf("sweep inactive: %v", err)
+	}
+}
+
+// disabled reports whether the principal with the ID id is disabled.
+func disabled(tb testing.TB, principals *principal.Service, id string) bool {
+	tb.Helper()
+
+	p, err := principals.GetPrincipal(tb.Context(), id)
+	if err != nil {
+		tb.Fatalf("get principal %q: %v", id, err)
+	}
+
+	return !p.DisabledAt.IsZero()
+}
+
+// enableSetup stores a disabled site administrator with a direct grant
+// (boss) and one with a grant through a group (olga), then enables the
+// account-administrator caller again, so a test can enable one target.
+func enableSetup(tb testing.TB) (*principal.Service, identity.Principal) {
+	tb.Helper()
+
+	f := newFixture(tb)
+	ctx := tb.Context()
+	principals := f.principals(tb)
+	acct := f.accountAdministrator(tb, "acct")
+
+	f.person(tb, "boss")
+
+	_, err := f.svc.Grant(ctx, testEntry(), admin(), access.GrantInput{
+		Object: identity.ServerObject(), Role: access.RoleSiteAdministrator, Subject: prn("boss"),
+	})
+	if err != nil {
+		tb.Fatalf("grant: %v", err)
+	}
+
+	f.person(tb, "olga")
+
+	ops := f.group(tb, "ops", "olga")
+	f.grant(tb, ops, access.RoleSiteAdministrator, identity.ServerObject())
+
+	f.disableAllPersons(tb)
+
+	// The sweep disables every person, so enable the caller again and keep
+	// only the targets disabled.
+	err = principals.EnablePrincipal(ctx, testEntry(), admin(), "prn-acct")
+	if err != nil {
+		tb.Fatalf("enable the caller: %v", err)
+	}
+
+	return principals, acct
+}
+
+// TestEnableNeedsTheirActions proves that an enable needs every action
+// that a direct grant of the principal gives: an account administrator
+// cannot enable a disabled site administrator.
+func TestEnableNeedsTheirActions(t *testing.T) {
+	t.Parallel()
+
+	principals, acct := enableSetup(t)
+	ctx := t.Context()
+
+	if !disabled(t, principals, "prn-boss") {
+		t.Fatal("boss is enabled after the sweep, want disabled")
+	}
+
+	if err := principals.EnablePrincipal(ctx, testEntry(), acct, "prn-boss"); !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("enable a site administrator = %v, want ErrEscalation", err)
+	}
+
+	if !disabled(t, principals, "prn-boss") {
+		t.Fatal("boss is enabled after a refused enable, want disabled")
+	}
+
+	if err := principals.EnablePrincipal(ctx, testEntry(), admin(), "prn-boss"); err != nil {
+		t.Fatalf("enable as a caller with every action: %v", err)
+	}
+
+	if disabled(t, principals, "prn-boss") {
+		t.Fatal("boss is disabled after an allowed enable, want enabled")
+	}
+}
+
+// TestEnableThroughGroupNeedsTheirActions proves that an enable needs
+// every action that a grant through a group gives: an account administrator
+// cannot enable a disabled member of a site-administrator group.
+func TestEnableThroughGroupNeedsTheirActions(t *testing.T) {
+	t.Parallel()
+
+	principals, acct := enableSetup(t)
+	ctx := t.Context()
+
+	if !disabled(t, principals, "prn-olga") {
+		t.Fatal("olga is enabled after the sweep, want disabled")
+	}
+
+	// The enable of olga restores what ops gives through her membership.
+	if err := principals.EnablePrincipal(ctx, testEntry(), acct, "prn-olga"); !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("enable a member of a site-administrator group = %v, want ErrEscalation", err)
+	}
+
+	if !disabled(t, principals, "prn-olga") {
+		t.Fatal("olga is enabled after a refused enable, want disabled")
+	}
+
+	if err := principals.EnablePrincipal(ctx, testEntry(), admin(), "prn-olga"); err != nil {
+		t.Fatalf("enable a group member as a caller with every action: %v", err)
+	}
+
+	if disabled(t, principals, "prn-olga") {
+		t.Fatal("olga is disabled after an allowed enable, want enabled")
+	}
 }
 
 // checkEqualAdmins proves that one admin of a namespace can revoke the
