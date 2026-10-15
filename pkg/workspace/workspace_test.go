@@ -418,7 +418,7 @@ func (m *memStore) PurgeWorkspace(
 	_ context.Context,
 	id workspace.ID,
 	fence namespace.Fence,
-	_ time.Time,
+	dueBy time.Time,
 	e audit.Entry,
 ) error {
 	if err := validMemEntry(e, fence); err != nil {
@@ -432,7 +432,14 @@ func (m *memStore) PurgeWorkspace(
 		return err
 	}
 
-	if entry, ok := m.deleted[id]; !ok || entry.Namespace != fence.Namespace {
+	entry, ok := m.deleted[id]
+	if !ok || entry.Namespace != fence.Namespace {
+		return workspace.ErrNotFound
+	}
+
+	// A sweep purge (non-zero dueBy) acts only on a workspace whose
+	// retention period ended by then.
+	if !dueBy.IsZero() && entry.PurgeAfter.After(dueBy) {
 		return workspace.ErrNotFound
 	}
 
