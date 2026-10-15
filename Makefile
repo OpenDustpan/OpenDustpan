@@ -127,8 +127,11 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
 
-faults: ## Run Toxiproxy network fault tests against a self-started server (downloads toxiproxy-server; test-only, never ships). Not part of check.
-	TOXIPROXY_BIN="$$(./scripts/toxiproxy.sh)" go test -tags faults -race -count=1 -timeout 20m ./e2e/faults/...
+# With TOXIPROXY_URL set, the target uses that Toxiproxy server (CI runs it
+# as a service container) and downloads no binary.
+faults: ## Run Toxiproxy network fault tests against a self-started server (downloads toxiproxy-server unless TOXIPROXY_URL is set; test-only, never ships). Not part of check.
+	if [ -z "$$TOXIPROXY_URL" ]; then TOXIPROXY_BIN="$$(./scripts/toxiproxy.sh)" && export TOXIPROXY_BIN; fi && \
+	go test -tags faults -race -count=1 -timeout 20m ./e2e/faults/...
 
 e2e-journal: ## Drive the real Pulumi CLI through the journal route on the recording build (ADR 43, work item 9). Not part of check.
 	go test -tags "e2e journalrecording" -race -count=1 -run TestPulumiJournalingOn -timeout 60m ./e2e/...

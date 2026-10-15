@@ -52,6 +52,73 @@ func toxiproxyListenHost() string {
 	return "127.0.0.1"
 }
 
+// proxyPortOffset returns the fixed offset from TOXIPROXY_PORT_BASE of the
+// proxy named name. A container publishes only the ports it declares, so
+// each proxy that a test creates needs a known port. CI publishes the
+// ports from the base to the base plus 3.
+func proxyPortOffset(name string) (int, bool) {
+	switch name {
+	case "latency-proxy":
+		return 0, true
+	case "timeout-proxy":
+		return 1, true
+	case "limit-proxy":
+		return 2, true
+	case "pg-proxy":
+		return 3, true
+	default:
+		return 0, false
+	}
+}
+
+// proxyListenPort returns the port that the proxy named name listens on.
+// Without TOXIPROXY_PORT_BASE it is "0", and Toxiproxy picks a free port.
+// With it, the port is the base plus the offset of the proxy.
+func proxyListenPort(t *testing.T, name string) string {
+	t.Helper()
+
+	raw := strings.TrimSpace(os.Getenv("TOXIPROXY_PORT_BASE"))
+	if raw == "" {
+		return "0"
+	}
+
+	base, err := strconv.Atoi(raw)
+	if err != nil || base <= 0 {
+		t.Fatalf("TOXIPROXY_PORT_BASE %q is not a positive port number", raw)
+	}
+
+	offset, ok := proxyPortOffset(name)
+	if !ok {
+		t.Fatalf("proxy %s has no port offset; add it to proxyPortOffset", name)
+	}
+
+	return strconv.Itoa(base + offset)
+}
+
+// toxiproxyUpstreamHost returns the host that Toxiproxy dials to reach
+// a service on the test machine, or "" to keep the host of the service.
+// Set TOXIPROXY_UPSTREAM_HOST when the Toxiproxy server runs in a
+// container, for example to host.docker.internal.
+func toxiproxyUpstreamHost() string {
+	return strings.TrimSpace(os.Getenv("TOXIPROXY_UPSTREAM_HOST"))
+}
+
+// upstreamAddr returns addr (host:port) with its host replaced by
+// TOXIPROXY_UPSTREAM_HOST, if that variable is set.
+func upstreamAddr(addr string) string {
+	host := toxiproxyUpstreamHost()
+	if host == "" {
+		return addr
+	}
+
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+
+	return net.JoinHostPort(host, port)
+}
+
 // freePort returns a free loopback port as a string. The caller binds it
 // right away, so the usual port race stays small.
 func freePort(t *testing.T) string {
@@ -101,13 +168,20 @@ func startToxiproxy(t *testing.T, bin string) string {
 	return api
 }
 
+// toxiproxyClient returns a client for the Toxiproxy HTTP API that keeps
+// no idle connection. A Toxiproxy server in a container runs after the
+// tests end, so an idle connection to it would stay open after the tests.
+func toxiproxyClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: &http.Transport{DisableKeepAlives: true}}
+}
+
 // waitForToxiproxy waits until GET /version answers 200 or the test context ends.
 func waitForToxiproxy(t *testing.T, api string) {
 	t.Helper()
 
 	ctx := t.Context()
 	deadline := time.Now().Add(10 * time.Second)
-	client := &http.Client{Timeout: time.Second}
+	client := toxiproxyClient(time.Second)
 
 	for time.Now().Before(deadline) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, api+"/version", http.NoBody)
@@ -151,7 +225,7 @@ func toxiproxyDo(t *testing.T, method, url, body string) (int, []byte) {
 
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := toxiproxyClient(5 * time.Second)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -175,13 +249,14 @@ type proxyListen struct {
 	Listen string `json:"listen"`
 }
 
-// createProxy creates a proxy named name from listen host port 0 to
-// upstream (host:port) and returns its dialable listen address. The proxy
-// is removed at test cleanup so a shared server stays clean.
+// createProxy creates a proxy named name to upstream (host:port) and
+// returns its dialable listen address. The proxy is removed at test
+// cleanup so a shared server stays clean.
 func createProxy(t *testing.T, api, name, upstream string) string {
 	t.Helper()
 
-	listen := net.JoinHostPort(toxiproxyListenHost(), "0")
+	listen := net.JoinHostPort(toxiproxyListenHost(), proxyListenPort(t, name))
+	upstream = upstreamAddr(upstream)
 	body := fmt.Sprintf(`{"name":%q,"listen":%q,"upstream":%q}`, name, listen, upstream)
 
 	deleteProxy(api, name)
@@ -209,7 +284,7 @@ func createProxy(t *testing.T, api, name, upstream string) string {
 // deleteProxy removes the proxy named name. It reports nothing: it runs
 // at cleanup and before create to drop a stale proxy on a shared server.
 func deleteProxy(api, name string) {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := toxiproxyClient(5 * time.Second)
 
 	req, err := http.NewRequest(http.MethodDelete, api+"/proxies/"+name, http.NoBody)
 	if err != nil {

@@ -60,6 +60,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntryChangesNothing},
 		{name: "concurrent rotations of one token: one wins", test: testConcurrentRotations},
 		{name: "the policy starts at the defaults and keeps a change", test: testPolicy},
+		{name: "the stored entry of a policy change keeps its changes", test: testPolicyKeepsChanges},
 		{name: "the sweep disables inactive tokens", test: testSweepTokens},
 		{name: "the sweep disables inactive user accounts", test: testSweepAccounts},
 		{name: "a sweep with a refused entry changes nothing", test: testSweepRefused},
@@ -796,6 +797,99 @@ func testPolicy(t *testing.T, s Store) {
 	if got != want {
 		t.Fatalf("policy = %+v, want %+v", got, want)
 	}
+}
+
+func testPolicyKeepsChanges(t *testing.T, s Store) {
+	t.Helper()
+
+	entries, ok := s.(auditLister)
+	if !ok {
+		t.Skip("the store keeps no audit log to read")
+	}
+
+	ctx := t.Context()
+
+	oldMax := "31536000"
+	oldDisable := "true"
+	want := []audit.Change{
+		{Key: "maxLifetimeSeconds", Old: &oldMax, New: "2592000", Layer: "", TakesEffect: ""},
+		{Key: "disableTokens", Old: &oldDisable, New: "false", Layer: "", TakesEffect: ""},
+	}
+
+	updated := accesstoken.Policy{
+		UpdatedAt: at(5), MaxLifetime: 30 * 24 * time.Hour, Inactivity: accesstoken.DefaultInactivity,
+		DisableTokens: false, DisableAccounts: true, DisableBreakGlass: false,
+	}
+
+	_, err := s.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+		e := entry("tok-x")
+		e.Object = accesstoken.PolicyRef
+		e.Changes = want
+
+		return updated, e, nil
+	})
+	if err != nil {
+		t.Fatalf("update policy: %v", err)
+	}
+
+	listing, err := entries.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Object != accesstoken.PolicyRef {
+			continue
+		}
+
+		checkStoredChanges(t, listing.Entries[i].Changes, want)
+
+		return
+	}
+
+	t.Fatalf("no %q entry in @server", accesstoken.PolicyRef)
+}
+
+// checkStoredChanges proves got holds exactly the changes of want, in any
+// order: the store keeps the canonical JSON, sorted by key.
+func checkStoredChanges(t *testing.T, got, want []audit.Change) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("got %d changes, want %d", len(got), len(want))
+	}
+
+	byKey := make(map[string]audit.Change, len(got))
+	for _, c := range got {
+		byKey[c.Key] = c
+	}
+
+	for _, w := range want {
+		g, ok := byKey[w.Key]
+		if !ok {
+			t.Fatalf("missing change %q in %d changes", w.Key, len(got))
+		}
+
+		if !equalChange(g, w) {
+			t.Fatalf("change %q mismatch: got old %s new %q, want old %s new %q",
+				w.Key, oldText(g.Old), g.New, oldText(w.Old), w.New)
+		}
+	}
+}
+
+// oldText renders a change old value for a failure message.
+func oldText(old *string) string {
+	if old == nil {
+		return "<nil>"
+	}
+
+	return *old
+}
+
+func equalChange(a, b audit.Change) bool {
+	sameOld := (a.Old == nil) == (b.Old == nil) && (a.Old == nil || *a.Old == *b.Old)
+
+	return a.Key == b.Key && sameOld && a.New == b.New && a.Layer == b.Layer && a.TakesEffect == b.TakesEffect
 }
 
 func testConcurrentPolicyUpdates(t *testing.T, s Store) {
