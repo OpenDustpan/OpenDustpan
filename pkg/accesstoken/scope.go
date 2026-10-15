@@ -159,7 +159,7 @@ func (s *Service) authorizeRevoke(ctx context.Context, caller identity.Principal
 	}
 
 	if t.Kind == KindService {
-		return s.requireManageTokens(ctx, caller, t.PrincipalID)
+		return s.requireManageTokens(ctx, caller, t.PrincipalID, useMake)
 	}
 
 	return nil
@@ -194,25 +194,34 @@ func (s *Service) authorizeRotate(ctx context.Context, caller identity.Principal
 // who holds more.
 func (s *Service) mayActFor(ctx context.Context, caller identity.Principal, kind Kind, principalID string) error {
 	if kind == KindService {
-		return s.requireManageTokens(ctx, caller, principalID)
+		return s.requireManageTokens(ctx, caller, principalID, useMake)
 	}
 
 	return s.requireHeld(ctx, caller, principalID)
 }
 
+// Uses of principal:manage-tokens, as the text of a refusal names them.
+const (
+	useMake = "make a token for"
+	useList = "list the tokens of"
+)
+
 // requireManageTokens checks that caller holds principal:manage-tokens on
-// the principal principalID. The route of the change checks it too: this
-// check holds for every caller of the Service. With no Authorizer wired,
-// only an administrator passes it. This fails closed.
-func (s *Service) requireManageTokens(ctx context.Context, caller identity.Principal, principalID string) error {
+// the principal principalID, for use: useMake or useList. The route of the
+// change checks it too: this check holds for every caller of the Service.
+// With no Authorizer wired, only an administrator passes it. This fails
+// closed.
+func (s *Service) requireManageTokens(
+	ctx context.Context, caller identity.Principal, principalID, use string,
+) error {
 	if s.authz == nil {
 		if caller.Admin {
 			return nil
 		}
 
-		return fmt.Errorf("%w: %s may not make a token for principal %q: "+
+		return fmt.Errorf("%w: %s may not %s principal %q: "+
 			"only an administrator can when the server keeps no grants", identity.ErrDenied,
-			caller.Subject, principalID)
+			caller.Subject, use, principalID)
 	}
 
 	obj, err := identity.ParsePrincipalObject(principalID)
@@ -221,7 +230,7 @@ func (s *Service) requireManageTokens(ctx context.Context, caller identity.Princ
 	}
 
 	if err := s.authz.Authorize(ctx, caller, identity.ActionPrincipalManageTokens, obj); err != nil {
-		return fmt.Errorf("token for principal %q: %w", principalID, err)
+		return fmt.Errorf("%s principal %q: %w", use, principalID, err)
 	}
 
 	return nil
