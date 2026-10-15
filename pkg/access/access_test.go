@@ -109,7 +109,7 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 
 	err := f.store.CreatePrincipal(tb.Context(), principal.Principal{
 		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 		DisabledAt: time.Time{},
 	}, storetest.ServerChange(time.Unix(0, 0), "principal:prn-"+subject))
 	if err != nil {

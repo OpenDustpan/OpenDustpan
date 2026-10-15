@@ -74,7 +74,10 @@ type principalResponse struct {
 	CreatedAt   string  `json:"createdAt"`
 	UpdatedAt   string  `json:"updatedAt"`
 	DisabledAt  *string `json:"disabledAt"`
-	GroupCount  int64   `json:"groupCount"`
+	// Namespace is empty for a principal of the installation, and names the
+	// namespace of a service principal of a namespace.
+	Namespace  string `json:"namespace"`
+	GroupCount int64  `json:"groupCount"`
 }
 
 // groupResponse is one group on the wire. A group whose source is not local
@@ -167,6 +170,7 @@ func principalOf(p principal.Principal) principalResponse {
 		CreatedAt:   wireTime(p.CreatedAt),
 		UpdatedAt:   wireTime(p.UpdatedAt),
 		DisabledAt:  optionalWireTime(p.DisabledAt),
+		Namespace:   p.Namespace.String(),
 		GroupCount:  p.GroupCount,
 	}
 }
@@ -814,7 +818,8 @@ func removeMember(
 func classifyPrincipal(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, errPrincipalBody), errors.Is(err, errPrincipalChangeBody),
-		errors.Is(err, errGroupBody), errors.Is(err, errGroupChangeBody), errors.Is(err, errMemberBody):
+		errors.Is(err, errGroupBody), errors.Is(err, errGroupChangeBody), errors.Is(err, errMemberBody),
+		errors.Is(err, errNamespacePrincipalBody):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, principal.ErrInvalid), errors.Is(err, principal.ErrReservedSubject),
 		errors.Is(err, errPageQuery):
