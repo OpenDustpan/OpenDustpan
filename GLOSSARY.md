@@ -116,6 +116,14 @@ _Avoid_: Hard delete, wipe
 The same as a purge. Use "purge" in code and in the API, and "final delete" where a reader needs the plain meaning.
 _Avoid_: Permanent delete
 
+**Retention sweep**:
+The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records.
+_Avoid_: Garbage collection, reaper
+
+**Blob purge record**:
+A row that a purge writes for a unit whose blobs may still exist. A save that started before the purge can write a blob after the purge deletes the blobs. The retention sweep deletes the blobs again when the record is older than 24 hours, and then finishes the record. In code this time is `BlobPurgeGrace`. It is not the retention period.
+_Avoid_: Tombstone
+
 **Maintenance mode**:
 The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/server/maintenance/enter`. The other state is `normal`.
 _Avoid_: Downtime, freeze
