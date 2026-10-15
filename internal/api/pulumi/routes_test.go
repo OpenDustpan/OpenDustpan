@@ -135,7 +135,7 @@ func (stubStackStore) RestoreStack(
 }
 
 // PurgeStack implements stack.Store; this fake holds no deleted stack.
-func (stubStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ audit.Entry) error {
+func (stubStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ time.Time, _ audit.Entry) error {
 	return stack.ErrNotFound
 }
 
@@ -242,7 +242,13 @@ func (*recordingStackStore) RestoreStack(
 }
 
 // PurgeStack implements stack.Store; this fake holds no deleted stack.
-func (*recordingStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ audit.Entry) error {
+func (*recordingStackStore) PurgeStack(
+	_ context.Context,
+	_ stack.ID,
+	_ namespace.Fence,
+	_ time.Time,
+	_ audit.Entry,
+) error {
 	return stack.ErrNotFound
 }
 

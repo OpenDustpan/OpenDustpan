@@ -111,6 +111,7 @@ func newIPAllowHandler(
 		Audit:          nil,
 		OnAuditFailure: nil,
 		IPAllowlists:   svc,
+		DeletedUnits:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

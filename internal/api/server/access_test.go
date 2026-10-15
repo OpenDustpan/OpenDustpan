@@ -158,6 +158,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		Access:         grants,
 		Audit:          entries(st),
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {

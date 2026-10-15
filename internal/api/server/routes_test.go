@@ -18,9 +18,11 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -213,6 +215,7 @@ func newServiceBackedHandler(
 		Access:         seedRouteAccess(t, st),
 		Audit:          st,
 		OnAuditFailure: nil,
+		DeletedUnits:   stubSweeper{},
 		IPAllowlists:   allow,
 	})
 	if err != nil {
@@ -1158,6 +1161,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 	}
 
@@ -1290,6 +1294,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {
@@ -1316,6 +1321,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {
@@ -1325,4 +1331,14 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	if without.Backups() != nil {
 		t.Fatal("handler without a backup target builds a backup service, want nil")
 	}
+}
+
+// stubSweeper is an apiserver.DeletedUnitSweeper that purges nothing.
+type stubSweeper struct{}
+
+func (stubSweeper) Sweep(context.Context, audit.Entry) (inventory.SweepResult, error) {
+	return inventory.SweepResult{
+		Purged: []inventory.DeletedEntry{}, Failed: 0, Skipped: 0,
+		FinishedBlobPurges: 0, PendingBlobPurges: 0,
+	}, nil
 }

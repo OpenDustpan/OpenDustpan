@@ -150,9 +150,9 @@ type Lifecycle interface {
 // BlobPurge is a purged unit whose blobs may still exist (ADR 47). A purge
 // records it in its own transaction, and the caller deletes the blobs of the
 // unit after the commit. A save that passed its checks before the purge can
-// still write a blob after that delete, so only the sweep finishes the
-// record: it deletes the blobs again after a grace period longer than any
-// save.
+// still write a blob after that delete, so only the retention sweep
+// (Sweeper) finishes the record: it deletes the blobs again after
+// BlobPurgeGrace, which is longer than any save.
 type BlobPurge struct {
 	PurgedAt  time.Time
 	Namespace namespace.Name
@@ -160,11 +160,21 @@ type BlobPurge struct {
 	UnitID    string
 }
 
+// BlobPurgeCursor is the position after which a page of blob purge records
+// starts: the order key of the last record of the page before.
+type BlobPurgeCursor struct {
+	PurgedAt time.Time
+	Tool     string
+	UnitID   string
+}
+
 // BlobPurges reads and finishes the records of purged units whose blobs may
 // still exist.
 type BlobPurges interface {
-	// ListBlobPurges returns at most limit records, the oldest first.
-	ListBlobPurges(ctx context.Context, limit int) ([]BlobPurge, error)
+	// ListBlobPurges returns at most limit records, ordered by PurgedAt,
+	// then tool, then unit ID. With a cursor, it returns only the records
+	// after the cursor in that order.
+	ListBlobPurges(ctx context.Context, after *BlobPurgeCursor, limit int) ([]BlobPurge, error)
 	// FinishBlobPurge removes the record of the unit unitID of tool. A
 	// missing record is not an error.
 	FinishBlobPurge(ctx context.Context, tool, unitID string) error

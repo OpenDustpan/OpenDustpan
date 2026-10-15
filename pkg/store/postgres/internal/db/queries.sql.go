@@ -3630,6 +3630,55 @@ func (q *Queries) ListBlobPurges(ctx context.Context, limit int32) ([]BlobPurge,
 	return items, nil
 }
 
+const listBlobPurgesAfter = `-- name: ListBlobPurgesAfter :many
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+WHERE purged_at_ms > $1
+  OR (purged_at_ms = $1 AND tool COLLATE "C" > $2)
+  OR (purged_at_ms = $1 AND tool = $2
+    AND unit_id COLLATE "C" > $3)
+ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $4
+`
+
+type ListBlobPurgesAfterParams struct {
+	AfterMs     int64
+	AfterTool   string
+	AfterUnitID string
+	PageLimit   int32
+}
+
+// The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAfterParams) ([]BlobPurge, error) {
+	rows, err := q.db.Query(ctx, listBlobPurgesAfter,
+		arg.AfterMs,
+		arg.AfterTool,
+		arg.AfterUnitID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BlobPurge
+	for rows.Next() {
+		var i BlobPurge
+		if err := rows.Scan(
+			&i.Tool,
+			&i.UnitID,
+			&i.Namespace,
+			&i.PurgedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
 SELECT blob_key
 FROM checkpoints
@@ -3732,6 +3781,106 @@ func (q *Queries) ListEvents(ctx context.Context, arg ListEventsParams) ([]ListE
 	for rows.Next() {
 		var i ListEventsRow
 		if err := rows.Scan(&i.Sequence, &i.TimestampMs, &i.Payload); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiredInventory = `-- name: ListExpiredInventory :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= $1
+ORDER BY purge_after_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $2
+`
+
+type ListExpiredInventoryParams struct {
+	PurgeAfterMs int64
+	Limit        int32
+}
+
+// The first page of the deleted units of every namespace whose retention
+// ended at or before $1, for the retention sweep. Byte order
+// (COLLATE "C"), as inventory.PageExpired orders.
+func (q *Queries) ListExpiredInventory(ctx context.Context, arg ListExpiredInventoryParams) ([]InventoryDeleted, error) {
+	rows, err := q.db.Query(ctx, listExpiredInventory, arg.PurgeAfterMs, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryDeleted
+	for rows.Next() {
+		var i InventoryDeleted
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DeletedAtMs,
+			&i.PurgeAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExpiredInventoryAfter = `-- name: ListExpiredInventoryAfter :many
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= $1
+  AND purge_after_ms >= $2
+  AND (purge_after_ms > $2
+    OR (purge_after_ms = $2 AND tool COLLATE "C" > $3)
+    OR (purge_after_ms = $2 AND tool = $3
+      AND unit_id COLLATE "C" > $4))
+ORDER BY purge_after_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $5
+`
+
+type ListExpiredInventoryAfterParams struct {
+	NowMs       int64
+	AfterMs     int64
+	AfterTool   string
+	AfterUnitID string
+	PageLimit   int32
+}
+
+// The page of ListExpiredInventory after the cursor (end of retention,
+// tool, unit ID). The lower bound on purge_after_ms lets the index scan
+// start at the cursor.
+func (q *Queries) ListExpiredInventoryAfter(ctx context.Context, arg ListExpiredInventoryAfterParams) ([]InventoryDeleted, error) {
+	rows, err := q.db.Query(ctx, listExpiredInventoryAfter,
+		arg.NowMs,
+		arg.AfterMs,
+		arg.AfterTool,
+		arg.AfterUnitID,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryDeleted
+	for rows.Next() {
+		var i InventoryDeleted
+		if err := rows.Scan(
+			&i.Namespace,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DeletedAtMs,
+			&i.PurgeAfterMs,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
