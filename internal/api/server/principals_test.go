@@ -101,6 +101,7 @@ func newAuditedPrincipalHandler(
 		Metrics:        stubMetrics{},
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
+		Journal:        nil,
 		Principals:     principals,
 		Access:         nil,
 		Tokens:         nil,

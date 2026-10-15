@@ -62,6 +62,10 @@ type Config struct {
 	// means the upgrade check answers 500: every production server wires its
 	// store.
 	Schema SchemaReporter
+	// Journal counts the running journaled updates the upgrade check
+	// answers. Nil means the upgrade check answers 0: a store that predates
+	// the count still serves.
+	Journal JournalReporter
 	// Principals keeps the principals and the groups of the installation
 	// (ADR 52). Nil means the store keeps none: the principal and group
 	// routes answer 501. Both SQL adapters keep them.
@@ -108,6 +112,15 @@ type SchemaReporter interface {
 	AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error)
 }
 
+// JournalReporter counts the updates that run now with journal version 1
+// or higher. Both store adapters implement it. It is defined here, in the
+// package that consumes it, so the domain stays free of transport code.
+type JournalReporter interface {
+	// CountRunningJournaledUpdates returns the count of running updates
+	// with journal version above 0.
+	CountRunningJournaledUpdates(ctx context.Context) (int64, error)
+}
+
 // Handler serves the installation API under /api/server/.
 type Handler struct {
 	authn          identity.Authenticator
@@ -120,6 +133,7 @@ type Handler struct {
 	metrics        MetricsWriter
 	version        string
 	schema         SchemaReporter
+	journal        JournalReporter
 	principals     *principal.Service
 	access         *access.Service
 	tokens         *accesstoken.Service
@@ -167,6 +181,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		metrics:        cfg.Metrics,
 		version:        cfg.Version,
 		schema:         cfg.Schema,
+		journal:        cfg.Journal,
 		principals:     cfg.Principals,
 		access:         cfg.Access,
 		tokens:         cfg.Tokens,
