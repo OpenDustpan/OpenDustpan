@@ -244,6 +244,13 @@ type Session struct {
 	UserAgent    string
 }
 
+type SessionPolicy struct {
+	ID          int64
+	IdleMs      int64
+	MaxLengthMs int64
+	UpdatedAtMs int64
+}
+
 type SignInRequest struct {
 	Digest      string
 	Provider    string
