@@ -638,3 +638,25 @@ func TestSignInSettingsAreSiteOnly(t *testing.T) {
 		t.Fatalf("create a role with %s = %v, want ErrEscalation", a, err)
 	}
 }
+
+// TestManageSignInCatalogIsSiteOnly walks the role catalog: only the site
+// administrator holds server:manage-sign-in, and the operator family holds
+// no such action, so no operator role gains it by a family change.
+func TestManageSignInCatalogIsSiteOnly(t *testing.T) {
+	t.Parallel()
+
+	a := identity.ActionServerManageSignIn
+
+	for _, r := range access.BuiltInRoles() {
+		want := r.ID == access.RoleSiteAdministrator
+		if got := r.Has(a); got != want {
+			t.Errorf("role %q holds %s = %t, want %t", r.ID, a, got, want)
+		}
+	}
+
+	for _, o := range access.Actions(access.FamilyOperator) {
+		if o == a {
+			t.Errorf("operator family holds %s, want no such action", a)
+		}
+	}
+}

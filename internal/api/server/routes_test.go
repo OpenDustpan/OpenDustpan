@@ -222,6 +222,7 @@ func newServiceBackedHandler(
 		Audit:          st,
 		OnAuditFailure: nil,
 		DeletedUnits:   stubSweeper{},
+		AuditSinks:     nil,
 		IPAllowlists:   allow,
 		SessionPolicy:  sessionPolicies,
 	})
@@ -1240,6 +1241,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	}
@@ -1374,6 +1376,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})
@@ -1402,6 +1405,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})

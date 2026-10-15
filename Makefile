@@ -79,8 +79,12 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # candidate is sent to its provider for verification. "unknown" is a candidate
 # that could not be verified (for example, the provider did not answer), so a
 # network failure can fail this target. Exit code 183 means a secret was found.
+# .trufflehog-exclude-paths.txt lists files that are known false positives,
+# one regular expression per line. Each entry needs the owner's approval.
+# Today it holds one vendored agent skill, where a Markdown link that names a
+# file looks like a credential to a detector.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
-	trufflehog git file://. --results=verified,unknown --fail --no-update
+	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
 # The same platform pairs as scripts/release-build.sh. The release archives
 # and the container image ship these files (third_party_licenses/).
