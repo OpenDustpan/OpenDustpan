@@ -291,8 +291,11 @@ func (s *Store) GrantsWithRoles(
 }
 
 // CreateNamespaceWithGrant implements access.GrantStore: the namespace, the
-// grant of its creator and the entry commit together. A grant with no ID
-// stores the namespace and the entry alone.
+// grant of its creator and the entries commit together. A grant with no ID
+// stores the namespace and the entry alone. With a grant it stores the entry
+// in the scope @server and the same grant entry in the chain of the new
+// namespace, so the chain starts with the grant of its creator. The namespace
+// did not exist before, so no fence check runs.
 func (s *Store) CreateNamespaceWithGrant(
 	ctx context.Context, ns namespace.Namespace, g access.Grant, e audit.Entry,
 ) error {
@@ -301,7 +304,20 @@ func (s *Store) CreateNamespaceWithGrant(
 
 	row := codec.ToNamespaceRow(ns)
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	if err := validServerEntry(e); err != nil {
+		return err
+	}
+
+	grantEntry := e
+	grantEntry.Namespace = ns.Name
+
+	if g.ID != "" {
+		if err := grantEntry.Validate(); err != nil {
+			return fmt.Errorf("audit entry: %w", err)
+		}
+	}
+
+	return s.inTx(ctx, func(q *db.Queries) error {
 		n, err := q.CreateNamespace(ctx, db.CreateNamespaceParams{
 			Name:            row.Name,
 			HomeRegion:      row.HomeRegion,
@@ -317,10 +333,26 @@ func (s *Store) CreateNamespaceWithGrant(
 		}
 
 		if g.ID == "" {
+			if _, err := appendAuditEntry(ctx, q, e); err != nil {
+				return fmt.Errorf("append audit entry: %w", err)
+			}
+
 			return nil
 		}
 
-		return insertGrant(ctx, q, g)
+		if err := insertGrant(ctx, q, g); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		if _, err := appendAuditEntry(ctx, q, grantEntry); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		return nil
 	})
 }
 

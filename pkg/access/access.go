@@ -383,7 +383,10 @@ type GrantStore interface {
 	// CreateNamespaceWithGrant persists ns, g and e in one transaction: the
 	// creator of a namespace holds the namespace-admin role on it from the
 	// start. A grant with no ID stores the namespace and the entry alone. It
-	// returns namespace.ErrAlreadyExists when the name is taken.
+	// returns namespace.ErrAlreadyExists when the name is taken. With a grant
+	// it keeps the entry e in the scope audit.ServerScope and appends the same
+	// grant entry in the chain of the new namespace, so the chain starts with
+	// the grant of its creator.
 	CreateNamespaceWithGrant(ctx context.Context, ns namespace.Namespace, g Grant, e audit.Entry) error
 }
 
