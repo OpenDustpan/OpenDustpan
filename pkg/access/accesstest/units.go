@@ -174,10 +174,8 @@ func testDeletedUnit(t *testing.T, s access.Store) {
 		t.Fatalf("delete workspace: %v", deleteErr)
 	}
 
-	id, found, err := us.UnitID(ctx, unitRef(t, "opentofu", "network"))
-	if err != nil || found || id != "" {
-		t.Fatalf("unit ID of a deleted workspace = %q, %t, %v; want none", id, found, err)
-	}
+	assertLiveStack(t, us)
+	assertDeletedWorkspaceGone(t, us)
 
 	got, err := us.UnitObjects(ctx, []string{"ws-network", "stk-web"})
 	if err != nil {
@@ -186,5 +184,25 @@ func testDeletedUnit(t *testing.T, s access.Store) {
 
 	if _, ok := got["ws-network"]; ok || len(got) != 1 {
 		t.Fatalf("unit objects = %v, want the stack only", got)
+	}
+}
+
+// assertLiveStack checks that a live stack keeps its ID and its name.
+func assertLiveStack(t *testing.T, us UnitStore) {
+	t.Helper()
+
+	live, found, err := us.UnitID(t.Context(), unitRef(t, "pulumi", "web/prod"))
+	if err != nil || !found || live != "stk-web" {
+		t.Fatalf("unit ID of the live stack = %q, %t, %v; want stk-web, true", live, found, err)
+	}
+}
+
+// assertDeletedWorkspaceGone checks that a deleted workspace has no ID.
+func assertDeletedWorkspaceGone(t *testing.T, us UnitStore) {
+	t.Helper()
+
+	id, found, err := us.UnitID(t.Context(), unitRef(t, "opentofu", "network"))
+	if err != nil || found || id != "" {
+		t.Fatalf("unit ID of a deleted workspace = %q, %t, %v; want none", id, found, err)
 	}
 }
