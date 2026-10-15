@@ -206,6 +206,9 @@ func TestNamespacePrincipalRoutes(t *testing.T) {
 	one := principals + "/" + bot.ID
 	tokens := "/api/server/principals/" + bot.ID + "/tokens"
 
+	var ops groupDoc
+	f.as(t, "admin", apiCall{http.MethodPost, "/api/server/groups", `{"name":"ops"}`, http.StatusCreated}, &ops)
+
 	for _, c := range []struct {
 		subject string
 		call    apiCall
@@ -225,6 +228,10 @@ func TestNamespacePrincipalRoutes(t *testing.T) {
 		{"alice", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusForbidden}},
 		{"admin", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusBadRequest}},
 		{"admin", apiCall{http.MethodGet, tokens, "", http.StatusBadRequest}},
+		{"admin", apiCall{
+			http.MethodPost, "/api/server/groups/" + ops.ID + "/members", `{"principalID":"` + bot.ID + `"}`,
+			http.StatusBadRequest,
+		}},
 		{"admin", apiCall{
 			http.MethodPost, "/api/server/grants", `{"subject":"principal:` + bot.ID + `","role":"viewer"}`,
 			http.StatusBadRequest,

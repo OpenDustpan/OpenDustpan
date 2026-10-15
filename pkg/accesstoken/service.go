@@ -430,6 +430,10 @@ func (s *Service) Rotate(
 		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, authErr)
 	}
 
+	if ownerErr := s.checkRotateOwner(ctx, old); ownerErr != nil {
+		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, ownerErr)
+	}
+
 	at := s.Now()
 	if old.StatusAt(at) != StatusActive || old.ReplacedBy != "" {
 		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, ErrEnded)
@@ -768,4 +772,20 @@ func (s *Service) newToken(spec tokenSpec) (issued, error) {
 	}
 
 	return issued{token: t, secret: secret, digest: DigestOf(secret)}, nil
+}
+
+// checkRotateOwner reads the principal of t and refuses a rotation when it
+// belongs to a namespace. It returns ErrPrincipalNotFound when the principal
+// was deleted.
+func (s *Service) checkRotateOwner(ctx context.Context, t Token) error {
+	owner, err := s.principals.GetPrincipal(ctx, t.PrincipalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		return fmt.Errorf("%w: %q", ErrPrincipalNotFound, t.PrincipalID)
+	}
+
+	if err != nil {
+		return fmt.Errorf("read principal: %w", err)
+	}
+
+	return refuseNamespacePrincipal(owner, "rotate the tokens of")
 }
