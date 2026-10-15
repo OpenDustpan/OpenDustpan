@@ -134,9 +134,10 @@ type MemberStore interface {
 	ListGroupsOf(ctx context.Context, principalID string, q Query) ([]Group, int64, error)
 }
 
-// Guard checks that a caller may change who holds a set of grants (ADR 52).
-// A membership change gives or takes the grants of the group, and the delete
-// of a principal or a group revokes its grants. So the caller must hold, on
+// Guard checks that a caller may change who holds a set of grants.
+// A membership change gives or takes the grants of the group, the delete
+// of a principal or a group revokes its grants, and the enable of a principal
+// restores its grants. So the caller must hold, on
 // the object of each grant, every action that the grant gives there, as it
 // must to make or revoke the grant itself. access.Service meets it.
 //

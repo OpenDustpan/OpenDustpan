@@ -39,8 +39,9 @@ func (g fakeGuard) CheckPrincipalGrants(_ context.Context, _ identity.Principal,
 	return nil
 }
 
-// TestGuardChecksEveryChangeOfWhoHoldsGrants proves that a membership change
-// and a delete ask the Guard first, and that a refusal changes nothing.
+// TestGuardChecksEveryChangeOfWhoHoldsGrants proves that a membership change,
+// a delete and an enable ask the Guard first, and that a refusal changes
+// nothing.
 func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 	t.Parallel()
 
@@ -93,6 +94,10 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 		t.Fatalf("delete group = %v, want the refusal of the guard", err)
 	}
 
+	if err := svc.EnablePrincipal(ctx, e, caller, p.ID); !errors.Is(err, errRefused) {
+		t.Fatalf("enable principal = %v, want the refusal of the guard", err)
+	}
+
 	if err := svc.DeletePrincipal(ctx, e, caller, p.ID); !errors.Is(err, errRefused) {
 		t.Fatalf("delete principal = %v, want the refusal of the guard", err)
 	}
@@ -101,8 +106,8 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 		t.Fatalf("group after the refused delete: %v", err)
 	}
 
-	if checks != 4 {
-		t.Fatalf("guard checks = %d, want 4", checks)
+	if checks != 5 {
+		t.Fatalf("guard checks = %d, want 5", checks)
 	}
 
 	delete(guard.refuse, g.ID)

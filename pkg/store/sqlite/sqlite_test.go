@@ -389,6 +389,18 @@ func TestIPAllowlistConformance(t *testing.T) {
 	})
 }
 
+// TestNamespacePagingConformance runs the namespace paging suite: paged,
+// filtered reads of namespaces in name order with their counts.
+func TestNamespacePagingConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunNamespacePaging(t, func(t *testing.T) storetest.PagingStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 func TestBackupConformance(t *testing.T) {
 	t.Parallel()
 

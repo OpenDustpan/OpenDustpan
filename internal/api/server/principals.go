@@ -598,16 +598,17 @@ func deletePrincipal(
 }
 
 // enablePrincipal serves POST /api/server/principals/{id}/enable: it
-// enables a principal again after an inactivity disable (ADR 53) and
-// answers 200 with the principal. A principal that is not disabled answers
-// 409.
+// enables a principal again after an inactivity disable and answers 200
+// with the principal. The enable restores the use of the grants of the
+// principal, so the caller must hold every action that they give. A
+// principal that is not disabled answers 409.
 func enablePrincipal(
-	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, _ identity.Principal,
+	_ http.ResponseWriter, r *http.Request, svc *principal.Service, e audit.Entry, caller identity.Principal,
 ) (principalResult, error) {
 	id := r.PathValue("id")
 	object := principal.Ref(id)
 
-	if err := svc.EnablePrincipal(r.Context(), e, id); err != nil {
+	if err := svc.EnablePrincipal(r.Context(), e, caller, id); err != nil {
 		return failed(object), err
 	}
 

@@ -32,6 +32,7 @@ func reviewCases() []struct {
 		{name: "review history keeps a container grant with any custom role", test: testReviewCustomRoles},
 		{name: "review counts only when asked", test: testReviewCount},
 		{name: "review units reads live and deleted units", test: testReviewUnits},
+		{name: "review last access reads the latest use of each principal", test: testLastAccess},
 		{name: "caller grants read the current grants of a principal and its groups", test: testCallerGrants},
 	}
 }

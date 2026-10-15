@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
@@ -96,6 +97,92 @@ func TestDelegationRoutesRefuse(t *testing.T) {
 	f.as(t, "ops", apiCall{http.MethodPost, deploy + "/tokens", `{"name":"ops"}`, http.StatusCreated}, &made)
 	f.as(t, "ops", apiCall{http.MethodDelete, deploy + "/tokens/" + made.ID, "", http.StatusNoContent}, nil)
 	f.as(t, "ops", apiCall{http.MethodDelete, "/api/server/tokens/" + service.ID, "", http.StatusNoContent}, nil)
+}
+
+// limitedTokenListDoc decodes a token list with the maximum lifetime.
+type limitedTokenListDoc struct {
+	Tokens             []tokenDoc `json:"tokens"`
+	Total              int64      `json:"total"`
+	MaxLifetimeSeconds int64      `json:"maxLifetimeSeconds"`
+}
+
+// TestTokenManagerReads proves the reads of a token manager with the
+// authorizer that decides with grants: the token list of the principals it
+// manages, the principals themselves, and the maximum lifetime, which every
+// signed-in person reads. A principal without the right, and a person path,
+// are refused.
+func TestTokenManagerReads(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	f.seedService(t, "deploy")
+	f.seedService(t, "other")
+	f.seed(t, "ops", access.RoleTokenManager, identity.PrincipalObject("prn-deploy"))
+	f.seed(t, "tm", access.RoleTokenManager, identity.ServerObject())
+
+	const (
+		deploy = "/api/server/principals/prn-deploy/tokens"
+		other  = "/api/server/principals/prn-other/tokens"
+		year   = int64(365 * 24 * 60 * 60)
+	)
+
+	f.as(t, "admin", apiCall{http.MethodPost, deploy, `{"name":"ci"}`, http.StatusCreated}, nil)
+	f.as(t, "admin", apiCall{http.MethodPost, other, `{"name":"ci"}`, http.StatusCreated}, nil)
+
+	var list limitedTokenListDoc
+	f.as(t, "ops", apiCall{http.MethodGet, deploy, "", http.StatusOK}, &list)
+
+	if list.Total != 1 || len(list.Tokens) != 1 || list.MaxLifetimeSeconds != year {
+		t.Fatalf("tokens of deploy = %+v, want one token and the maximum lifetime %d", list, year)
+	}
+
+	for _, c := range []struct {
+		subject string
+		call    apiCall
+	}{
+		{"ops", apiCall{http.MethodGet, other, "", http.StatusForbidden}},
+		{"bob", apiCall{http.MethodGet, deploy, "", http.StatusForbidden}},
+		{"tm", apiCall{http.MethodGet, "/api/server/principals/prn-alice/tokens", "", http.StatusBadRequest}},
+		{"admin", apiCall{http.MethodGet, "/api/server/principals/prn-none/tokens", "", http.StatusNotFound}},
+		{"ops", apiCall{http.MethodGet, "/api/server/caller/access?type=principal&action=unit:read", "", http.StatusBadRequest}},
+		{"tm", apiCall{
+			http.MethodGet, "/api/server/caller/access?type=principal&action=server:manage-access", "",
+			http.StatusBadRequest,
+		}},
+		{"bob", apiCall{http.MethodGet, "/api/server/principals/prn-none/tokens", "", http.StatusForbidden}},
+	} {
+		f.as(t, c.subject, c.call, nil)
+	}
+
+	for _, c := range []struct {
+		subject string
+		objects []string
+		all     bool
+	}{
+		{"ops", []string{"principal:prn-deploy"}, false},
+		{"tm", nil, true},
+		{"bob", nil, false},
+	} {
+		var got accessObjectsDoc
+		f.as(t, c.subject, apiCall{http.MethodGet, "/api/server/caller/access?type=principal", "", http.StatusOK}, &got)
+
+		objects := make([]string, 0, len(got.Objects))
+		for _, o := range got.Objects {
+			objects = append(objects, o.Object)
+		}
+
+		if got.All != c.all || !slices.Equal(objects, c.objects) ||
+			got.Action != string(identity.ActionPrincipalManageTokens) {
+			t.Errorf("principals of %s = %+v, want %v, all %t", c.subject, got, c.objects, c.all)
+		}
+	}
+
+	var own limitedTokenListDoc
+	f.as(t, "bob", apiCall{http.MethodGet, "/api/server/caller/tokens", "", http.StatusOK}, &own)
+
+	if own.MaxLifetimeSeconds != year {
+		t.Fatalf("maximum lifetime of a person = %d, want %d", own.MaxLifetimeSeconds, year)
+	}
 }
 
 // TestNamespacePrincipalRoutes proves the routes of the principals of a

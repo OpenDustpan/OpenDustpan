@@ -526,6 +526,31 @@ func (q *Queries) CountLivePrincipal(ctx context.Context, id string) (int64, err
 	return count, err
 }
 
+const countNamespaces = `-- name: CountNamespaces :one
+SELECT COUNT(*)
+FROM namespaces
+`
+
+func (q *Queries) CountNamespaces(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNamespaces)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countNamespacesByNames = `-- name: CountNamespacesByNames :one
+SELECT COUNT(*)
+FROM namespaces
+WHERE name IN (SELECT value FROM json_each(?1))
+`
+
+func (q *Queries) CountNamespacesByNames(ctx context.Context, names interface{}) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countNamespacesByNames, names)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countPendingStateVersions = `-- name: CountPendingStateVersions :one
 SELECT COUNT(*)
 FROM state_versions
@@ -3613,6 +3638,46 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 	return i, err
 }
 
+const lastAccessByPrincipals = `-- name: LastAccessByPrincipals :many
+SELECT principal_id, CAST(MAX(last_used_at_ms) AS INTEGER) AS last_used_at_ms
+FROM access_tokens
+WHERE principal_id IN (SELECT value FROM json_each(CAST(?1 AS TEXT)))
+  AND last_used_at_ms IS NOT NULL
+GROUP BY principal_id
+`
+
+type LastAccessByPrincipalsRow struct {
+	PrincipalID  string
+	LastUsedAtMs int64
+}
+
+// The latest last-use time of the access tokens of each given principal:
+// one row for each principal with a used token. A JSON array carries the
+// IDs, so the query stays fixed. Revoked, replaced and expired tokens
+// count: a use is a use.
+func (q *Queries) LastAccessByPrincipals(ctx context.Context, principals string) ([]LastAccessByPrincipalsRow, error) {
+	rows, err := q.db.QueryContext(ctx, lastAccessByPrincipals, principals)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LastAccessByPrincipalsRow
+	for rows.Next() {
+		var i LastAccessByPrincipalsRow
+		if err := rows.Scan(&i.PrincipalID, &i.LastUsedAtMs); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
        at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
@@ -5430,6 +5495,111 @@ func (q *Queries) NextJournalArrival(ctx context.Context, arg NextJournalArrival
 	var arrival int64
 	err := row.Scan(&arrival)
 	return arrival, err
+}
+
+const pageNamespaces = `-- name: PageNamespaces :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > ?1
+ORDER BY name
+LIMIT ?2
+`
+
+type PageNamespacesParams struct {
+	After string
+	Lim   int64
+}
+
+type PageNamespacesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) ([]PageNamespacesRow, error) {
+	rows, err := q.db.QueryContext(ctx, pageNamespaces, arg.After, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageNamespacesRow
+	for rows.Next() {
+		var i PageNamespacesRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.HomeRegion,
+			&i.FailoverVersion,
+			&i.CreatedAtMs,
+			&i.AllowForcedWrites,
+			&i.AllowUnlockedWrites,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pageNamespacesByNames = `-- name: PageNamespacesByNames :many
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+FROM namespaces
+WHERE name > ?1 AND name IN (SELECT value FROM json_each(?2))
+ORDER BY name
+LIMIT ?3
+`
+
+type PageNamespacesByNamesParams struct {
+	After string
+	Names interface{}
+	Lim   int64
+}
+
+type PageNamespacesByNamesRow struct {
+	Name                string
+	HomeRegion          string
+	FailoverVersion     int64
+	CreatedAtMs         int64
+	AllowForcedWrites   bool
+	AllowUnlockedWrites bool
+}
+
+func (q *Queries) PageNamespacesByNames(ctx context.Context, arg PageNamespacesByNamesParams) ([]PageNamespacesByNamesRow, error) {
+	rows, err := q.db.QueryContext(ctx, pageNamespacesByNames, arg.After, arg.Names, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageNamespacesByNamesRow
+	for rows.Next() {
+		var i PageNamespacesByNamesRow
+		if err := rows.Scan(
+			&i.Name,
+			&i.HomeRegion,
+			&i.FailoverVersion,
+			&i.CreatedAtMs,
+			&i.AllowForcedWrites,
+			&i.AllowUnlockedWrites,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const principalExists = `-- name: PrincipalExists :one

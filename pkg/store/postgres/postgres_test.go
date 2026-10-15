@@ -411,6 +411,21 @@ func TestIPAllowlistConformance(t *testing.T) {
 	})
 }
 
+func TestNamespacePagingConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunNamespacePaging(t, func(t *testing.T) storetest.PagingStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
 func TestBackupConformance(t *testing.T) {
 	t.Parallel()
 
