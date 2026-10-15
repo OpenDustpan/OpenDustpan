@@ -236,12 +236,22 @@ read the CIS Controls for this ADR. This ADR makes no claim about them.
     hardware key (NIST SP 800-53 IA-2(1)). On the hosted service, they hold
     `account-administrator` of the tenant. The site administrator of the
     hosted operator is a separate principal.
+
+    A self-hosted installation can turn break-glass off. The default is on.
+    A site administrator of a self-hosted installation can turn off the
+    break-glass requirement. The installation then has no break-glass
+    accounts and no guard, and its administrators come only from the managed
+    accounts of the installation. The change needs a fresh MFA step and
+    writes an audit entry. The setup and the console say that the operator
+    accepts the risk of a lockout. The admin access report shows the
+    setting. The hosted service cannot turn break-glass off. This keeps ADR
+    57 mode 3.
 24. **A guard keeps two working paths.** The first setup cannot finish
     without two break-glass accounts. The server refuses each change that
     leaves fewer than two working paths, a restore included. It counts only
     an account that has these four properties: enabled, not expired, not
-    blocked by a policy, and not dependent on the identity provider. A rotation of a break-glass
-    credential is atomic.
+    blocked by a policy, and not dependent on the identity provider. A
+    rotation of a break-glass credential is atomic.
 25. **Break-glass accounts are accounts of last resort.** NIST SP 800-53
     AC-2 names accounts of last resort, which are not subject to automatic
     disabling. No job disables a break-glass account. After a break-glass
@@ -250,9 +260,9 @@ read the CIS Controls for this ADR. This ADR makes no claim about them.
 26. **The server records each use.** Each break-glass sign-in needs a reason that the
     person types. It raises an alert. The audit log records each action of
     the session (AC-2(4), AC-6(9), PCI DSS 8.2.2, 8.6.1 and 10.2.1.2). The
-    server reminds the administrators to test each account every 90 days. A test
-is a real sign-in, so that no account is inactive for 90 days (PCI DSS
-8.2.6).
+    server reminds the administrators to test each account every 90 days. A
+    test is a real sign-in, so that no account is inactive for 90 days (PCI
+    DSS 8.2.6).
     Full sync (decision 17) cannot disable or change a break-glass account.
 
 ### Recovery (D7)
@@ -340,8 +350,7 @@ is a real sign-in, so that no account is inactive for 90 days (PCI DSS
 - How a fresh MFA step works with an SSO identity provider (ADR 56, "Not
   decided here"), for decisions 16 and 17. The step should not depend on the
   identity provider.
-- Whether ADR 57 mode 3 (no break-glass) stays, and how the host token of
-  decision 27 relates to modes 1 and 2.
+- How the host token of decision 27 relates to ADR 57 modes 1 and 2.
 - Whether the access tables of decision 7 also hold the sign-in settings and
   the break-glass accounts. How a restore keeps rows that name units or
   namespaces that the backup does not hold.
@@ -367,7 +376,8 @@ is a real sign-in, so that no account is inactive for 90 days (PCI DSS
   applies decisions 13 to 22. The e2e suite drives a real or a test identity
   provider through removals, attribute changes and token expiry.
 - The first setup asks for two break-glass accounts with passkeys or
-  hardware keys. An installation without them cannot finish its setup. An
+  hardware keys. An installation without them cannot finish its setup,
+  unless a self-hosted operator turns break-glass off (decision 23). An
   upgrade of an existing installation needs a path to add them.
 - The restore code splits the access tables from the other data.
 - `GLOSSARY.md` gets the terms reach, act-as edge, protected group, full sync,
