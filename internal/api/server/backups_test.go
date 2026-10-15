@@ -148,6 +148,7 @@ func newBackupFixture(
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})
@@ -561,6 +562,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})

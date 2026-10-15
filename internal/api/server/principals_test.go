@@ -106,6 +106,7 @@ func newAuditedPrincipalHandler(
 		Tokens:         nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 		Audit:          entries,

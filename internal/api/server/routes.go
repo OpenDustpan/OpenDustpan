@@ -93,8 +93,24 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.ownTokenRoutes()...)
 	routes = append(routes, h.tokenPolicyRoutes()...)
 	routes = append(routes, h.sessionPolicyRoutes()...)
+	routes = append(routes, h.auditSinkRoutes()...)
 
 	return routes
+}
+
+// auditSinkRoutes returns the audit sink rows of the route table: the list
+// of the configured audit sinks with their delivery state.
+func (h *Handler) auditSinkRoutes() []Route {
+	return []Route{
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/audit/sinks",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerObserve},
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.listAuditSinks,
+		},
+	}
 }
 
 // coreRoutes returns the namespace and metrics rows of the route table.

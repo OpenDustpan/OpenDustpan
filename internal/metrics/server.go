@@ -238,6 +238,7 @@ type sinkFamilies struct {
 	sinkFail *Counter
 	sinkSkip *Counter
 	logDrop  *Counter
+	sinkLag  *Gauge
 }
 
 // newSinkFamilies registers the audit sink families in reg.
@@ -254,6 +255,12 @@ func newSinkFamilies(reg *Registry) sinkFamilies {
 			"Audit entries that a sink skipped because it cannot hold them, by sink.",
 		),
 		logDrop: family("dustpan_log_sink_dropped_total", "Application log records a log sink dropped, by sink."),
+		sinkLag: reg.NewGauge(
+			"dustpan_audit_sink_lag_seconds",
+			"Delivery lag of an audit sink in seconds, by sink.",
+			[]string{labelSink},
+			maxSinkSeries,
+		),
 	}
 }
 
@@ -280,6 +287,17 @@ func (m *ServerMetrics) AddAuditSkipped(sink string, entries int) {
 	if entries > 0 {
 		m.sinks.sinkSkip.Add(uint64(entries), sink)
 	}
+}
+
+// SetAuditSinkLag sets the delivery lag of the sink named sink in seconds:
+// the age of the oldest entry the sink has not delivered yet, or 0 when it
+// is up to date. Operators alert when it keeps growing.
+func (m *ServerMetrics) SetAuditSinkLag(sink string, seconds float64) {
+	if seconds < 0 {
+		seconds = 0
+	}
+
+	m.sinks.sinkLag.Set(seconds, sink)
 }
 
 // newSweepCounter creates dustpan_inactivity_sweeps_total in reg.
