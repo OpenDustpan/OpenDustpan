@@ -146,8 +146,10 @@ had a sweep. After an installation restore, these are units whose retention
 period ended after the backup.
 
 To keep such a unit, restore it before the first sweep. First list the
-deleted units of a namespace whose retention period ends within one day. The
-units that the first sweep purges are in this list:
+deleted units whose retention period ends within one day. The units that the
+first sweep purges are in this list. The list holds the units of one
+namespace, so list each namespace. The list comes in pages: when the answer has a
+`nextCursor`, send it as `cursor` to get the next page.
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \

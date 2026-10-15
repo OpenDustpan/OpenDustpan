@@ -3750,6 +3750,7 @@ const listExpiredInventoryAfter = `-- name: ListExpiredInventoryAfter :many
 SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
 FROM inventory_deleted
 WHERE purge_after_ms <= ?1
+  AND purge_after_ms >= ?2
   AND (purge_after_ms > ?2
     OR (purge_after_ms = ?2 AND tool > ?3)
     OR (purge_after_ms = ?2 AND tool = ?3 AND unit_id > ?4))
@@ -3766,7 +3767,8 @@ type ListExpiredInventoryAfterParams struct {
 }
 
 // The page of ListExpiredInventory after the cursor (end of retention,
-// tool, unit ID).
+// tool, unit ID). The lower bound on purge_after_ms lets the index scan
+// start at the cursor.
 func (q *Queries) ListExpiredInventoryAfter(ctx context.Context, arg ListExpiredInventoryAfterParams) ([]InventoryDeleted, error) {
 	rows, err := q.db.QueryContext(ctx, listExpiredInventoryAfter,
 		arg.NowMs,
