@@ -20,6 +20,9 @@ type Config struct {
 	// no check: only an installation that grants nothing, where every
 	// caller is an administrator, leaves it nil.
 	Guard Guard
+	// Namespaces reads the fence of the namespace of a principal of a
+	// namespace. Nil means the Service keeps no principal of a namespace.
+	Namespaces Namespaces
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
 	// NewID returns a new opaque ID with the prefix it takes. Nil means
@@ -34,10 +37,11 @@ type Config struct {
 // own clock, the scope, the kind change, the outcome success and the record,
 // and the store appends the entry in the transaction of the change.
 type Service struct {
-	store Store
-	guard Guard
-	now   func() time.Time
-	newID func(prefix string) string
+	store      Store
+	guard      Guard
+	namespaces Namespaces
+	now        func() time.Time
+	newID      func(prefix string) string
 }
 
 // NewService returns a Service. Store is required.
@@ -56,7 +60,7 @@ func NewService(cfg Config) (*Service, error) {
 		newID = ident.NewID
 	}
 
-	return &Service{store: cfg.Store, guard: cfg.Guard, now: now, newID: newID}, nil
+	return &Service{store: cfg.Store, guard: cfg.Guard, namespaces: cfg.Namespaces, now: now, newID: newID}, nil
 }
 
 // Now returns the time of the Service clock, in UTC to the millisecond:
@@ -90,7 +94,7 @@ func (s *Service) CreatePrincipal(ctx context.Context, e audit.Entry, in Input) 
 		DisplayName: displayName,
 		Kind:        in.Kind,
 		Source:      SourceLocal,
-		GroupCount:  0,
+		Namespace:   "", GroupCount: 0,
 	}
 
 	if err := p.Validate(); err != nil {
@@ -168,7 +172,7 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 		return Principal{}, err
 	}
 
-	if err := s.store.UpdatePrincipal(ctx, p, change(e, p.UpdatedAt, Ref(id))); err != nil {
+	if err := s.storeUpdate(ctx, e, p); err != nil {
 		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
 	}
 
@@ -177,13 +181,26 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 
 // DeletePrincipal ends the principal with the ID id and its memberships,
 // with the entry e. The store revokes its grants in the same transaction, so
-// the Guard checks that caller holds every action that they give.
+// the Guard checks that caller holds every action that they give. The
+// delete of a principal of a namespace goes to the audit log of the
+// namespace, with its fence.
 func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
 	if err := s.checkPrincipal(ctx, caller, id); err != nil {
 		return fmt.Errorf("delete principal %q: %w", id, err)
 	}
 
-	if err := s.store.DeletePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
+	p, err := s.store.GetPrincipal(ctx, id)
+	if err != nil {
+		return fmt.Errorf("delete principal %q: %w", id, err)
+	}
+
+	if p.Namespace == "" {
+		err = s.store.DeletePrincipal(ctx, id, change(e, s.Now(), Ref(id)))
+	} else {
+		err = s.endNamespacePrincipal(ctx, e, p)
+	}
+
+	if err != nil {
 		return fmt.Errorf("delete principal %q: %w", id, err)
 	}
 
@@ -322,6 +339,11 @@ func (s *Service) AddMember(
 ) (Membership, error) {
 	if err := s.checkGroup(ctx, caller, groupID); err != nil {
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+	}
+
+	if p, err := s.store.GetPrincipal(ctx, principalID); err == nil && p.Namespace != "" {
+		return Membership{}, fmt.Errorf("add principal %q to group %q: %w: a principal of a namespace cannot be "+
+			"a member of a group, because a group belongs to the whole installation", principalID, groupID, ErrInvalid)
 	}
 
 	m := Membership{AddedAt: s.Now(), GroupID: groupID, PrincipalID: principalID}
