@@ -110,8 +110,8 @@ func (h *Handler) coreRoutes() []Route {
 			Path:    "/api/server/namespaces",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionCallerRead},
-			Resolve: resolveCaller,
-			Serve:   h.listNamespaces,
+			Resolve: resolveCaller, ActionsFor: nil,
+			Serve: h.listNamespaces,
 		},
 		{
 			Method:  http.MethodGet,
