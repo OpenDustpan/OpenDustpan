@@ -54,8 +54,8 @@ func storePrincipal(t *testing.T, st *sqlite.Store, subject string) {
 		DisplayName: subject,
 		Kind:        principal.KindPerson,
 		Source:      principal.SourceLocal,
-		GroupCount:  0,
-		DisabledAt:  time.Time{},
+		Namespace:   "", GroupCount: 0,
+		DisabledAt: time.Time{},
 	}
 
 	createErr := st.CreatePrincipal(
