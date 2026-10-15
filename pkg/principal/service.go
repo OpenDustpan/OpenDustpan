@@ -15,8 +15,8 @@ import (
 // Config holds the dependencies of a Service.
 type Config struct {
 	Store Store
-	// Guard checks that the caller of a membership change or a delete holds
-	// what the grants of the principal or the group give (ADR 52). Nil means
+	// Guard checks that the caller of a membership change, a delete or an enable holds
+	// what the grants of the principal or the group give. Nil means
 	// no check: only an installation that grants nothing, where every
 	// caller is an administrator, leaves it nil.
 	Guard Guard

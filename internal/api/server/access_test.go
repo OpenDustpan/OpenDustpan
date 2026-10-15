@@ -580,13 +580,14 @@ func TestAccountAdministratorCannotReachOperatorActions(t *testing.T) {
 
 // TestEnableNeedsGrantActions proves that the enable route needs every
 // action that the grants of the principal give: an account administrator
-// cannot enable a disabled site administrator, and a caller with every
-// action can.
+// cannot enable a disabled site administrator, but a site administrator
+// that is not a bootstrap admin can.
 func TestEnableNeedsGrantActions(t *testing.T) {
 	t.Parallel()
 
 	f := newAccessFixture(t)
 	f.seed(t, "boss", access.RoleSiteAdministrator, identity.ServerObject())
+	f.seed(t, "sam", access.RoleSiteAdministrator, identity.ServerObject())
 
 	_, err := f.store.SweepInactive(t.Context(), accesstoken.Sweep{
 		Inactivity: time.Hour,
@@ -611,7 +612,7 @@ func TestEnableNeedsGrantActions(t *testing.T) {
 		t.Fatal("boss is enabled after a refused enable, want disabled")
 	}
 
-	f.as(t, "admin", apiCall{
+	f.as(t, "sam", apiCall{
 		method: http.MethodPost, path: "/api/server/principals/prn-boss/enable", body: "",
 		want: http.StatusOK,
 	}, nil)

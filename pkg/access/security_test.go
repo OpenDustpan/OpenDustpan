@@ -222,15 +222,20 @@ func disabled(tb testing.TB, principals *principal.Service, id string) bool {
 }
 
 // enableSetup stores a disabled site administrator with a direct grant
-// (boss) and one with a grant through a group (olga), then enables the
-// account-administrator caller again, so a test can enable one target.
-func enableSetup(tb testing.TB) (*principal.Service, identity.Principal) {
+// (boss) and one with a grant through a group (olga), plus a site
+// administrator caller (sam), then enables the callers again, so a test can
+// enable one target as sam.
+//
+//nolint:nonamedreturns // The names distinguish the two principals at callers.
+func enableSetup(tb testing.TB) (principals *principal.Service, acct, sam identity.Principal) {
 	tb.Helper()
 
 	f := newFixture(tb)
 	ctx := tb.Context()
-	principals := f.principals(tb)
-	acct := f.accountAdministrator(tb, "acct")
+	principals = f.principals(tb)
+	acct = f.accountAdministrator(tb, "acct")
+	sam = f.person(tb, "sam")
+	f.grant(tb, prn("sam"), access.RoleSiteAdministrator, identity.ServerObject())
 
 	f.person(tb, "boss")
 
@@ -248,23 +253,25 @@ func enableSetup(tb testing.TB) (*principal.Service, identity.Principal) {
 
 	f.disableAllPersons(tb)
 
-	// The sweep disables every person, so enable the caller again and keep
+	// The sweep disables every person, so enable the callers again and keep
 	// only the targets disabled.
-	err = principals.EnablePrincipal(ctx, testEntry(), admin(), "prn-acct")
-	if err != nil {
-		tb.Fatalf("enable the caller: %v", err)
+	for _, id := range []string{"prn-acct", "prn-sam"} {
+		if err := principals.EnablePrincipal(ctx, testEntry(), admin(), id); err != nil {
+			tb.Fatalf("enable %s: %v", id, err)
+		}
 	}
 
-	return principals, acct
+	return principals, acct, sam
 }
 
 // TestEnableNeedsTheirActions proves that an enable needs every action
 // that a direct grant of the principal gives: an account administrator
-// cannot enable a disabled site administrator.
+// cannot enable a disabled site administrator, but a site administrator
+// that is not a bootstrap admin can.
 func TestEnableNeedsTheirActions(t *testing.T) {
 	t.Parallel()
 
-	principals, acct := enableSetup(t)
+	principals, acct, sam := enableSetup(t)
 	ctx := t.Context()
 
 	if !disabled(t, principals, "prn-boss") {
@@ -279,8 +286,8 @@ func TestEnableNeedsTheirActions(t *testing.T) {
 		t.Fatal("boss is enabled after a refused enable, want disabled")
 	}
 
-	if err := principals.EnablePrincipal(ctx, testEntry(), admin(), "prn-boss"); err != nil {
-		t.Fatalf("enable as a caller with every action: %v", err)
+	if err := principals.EnablePrincipal(ctx, testEntry(), sam, "prn-boss"); err != nil {
+		t.Fatalf("enable as a site administrator: %v", err)
 	}
 
 	if disabled(t, principals, "prn-boss") {
@@ -290,11 +297,12 @@ func TestEnableNeedsTheirActions(t *testing.T) {
 
 // TestEnableThroughGroupNeedsTheirActions proves that an enable needs
 // every action that a grant through a group gives: an account administrator
-// cannot enable a disabled member of a site-administrator group.
+// cannot enable a disabled member of a site-administrator group, but a site
+// administrator that is not a bootstrap admin can.
 func TestEnableThroughGroupNeedsTheirActions(t *testing.T) {
 	t.Parallel()
 
-	principals, acct := enableSetup(t)
+	principals, acct, sam := enableSetup(t)
 	ctx := t.Context()
 
 	if !disabled(t, principals, "prn-olga") {
@@ -310,8 +318,8 @@ func TestEnableThroughGroupNeedsTheirActions(t *testing.T) {
 		t.Fatal("olga is enabled after a refused enable, want disabled")
 	}
 
-	if err := principals.EnablePrincipal(ctx, testEntry(), admin(), "prn-olga"); err != nil {
-		t.Fatalf("enable a group member as a caller with every action: %v", err)
+	if err := principals.EnablePrincipal(ctx, testEntry(), sam, "prn-olga"); err != nil {
+		t.Fatalf("enable a group member as a site administrator: %v", err)
 	}
 
 	if disabled(t, principals, "prn-olga") {
