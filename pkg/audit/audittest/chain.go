@@ -53,6 +53,8 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a chain that goes on while the state is off is found", test: testChainOpenWhileOff},
 		{name: "a row below sequence 1 is found", test: testChainRowBelowOne},
 		{name: "the log agrees with the state after each migration", test: testChainLogAgrees},
+		{name: "a second migration to the same state writes no entry", test: testChainMigrateTwice},
+		{name: "concurrent end entries write one entry", test: testChainConcurrentEnds},
 		{name: "a stale fence refuses a start entry", test: testChainStaleFence},
 		{name: "the chain record round-trips", test: testChainRecordRoundTrip},
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
@@ -411,6 +413,89 @@ func testChainLogAgrees(t *testing.T, ts ChainTestStore) {
 
 	if agrees(audit.ChainStateOn) || !agrees(audit.ChainStateOff) {
 		t.Fatal("a log with an entry without a hash: want agreement with off only")
+	}
+}
+
+func testChainMigrateTwice(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.append(2)
+
+	e := newEntry(tl.ns.Name, "alice", "req-start", tl.tick())
+	e.Action = audit.ActionStartChain
+
+	wrote, err := ts.Store.StartChain(t.Context(), tl.ns.Fence(), e)
+	if err != nil || wrote {
+		t.Fatalf("start entry in a chained scope: wrote %v, %v; want no entry", wrote, err)
+	}
+
+	tl.migrate(audit.ChainStateOff)
+	tl.migrate(audit.ChainStateOff)
+
+	if got := listScope(t, ts.Store, tl.ns.Name); len(got) != 3 {
+		t.Fatalf("entries after two migrations off: got %d, want 3", len(got))
+	}
+
+	tl.migrate(audit.ChainStateOn)
+	tl.migrate(audit.ChainStateOn)
+
+	if got := listScope(t, ts.Store, tl.ns.Name); len(got) != 4 {
+		t.Fatalf("entries after two migrations on: got %d, want 4", len(got))
+	}
+
+	if got := check(t, ts.Store, tl.ns.Name); !got.Valid {
+		t.Fatalf("check after the migrations: got %+v, want valid", got)
+	}
+
+	empty := audit.ServerFence()
+
+	end := newEntry(audit.ServerScope, "alice", "req-end", tl.tick())
+	end.Action = audit.ActionEndChain
+
+	if wrote, err := ts.Store.EndChain(t.Context(), empty, end); err != nil || wrote {
+		t.Fatalf("end entry in an empty scope: wrote %v, %v; want no entry", wrote, err)
+	}
+}
+
+func testChainConcurrentEnds(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.append(1)
+
+	const workers = 4
+
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		wrote int
+	)
+
+	for i := range workers {
+		e := newEntry(tl.ns.Name, "alice", "req-end-"+strconv.Itoa(i), tl.tick())
+		e.Action = audit.ActionEndChain
+
+		wg.Go(func() {
+			ok, err := ts.Store.EndChain(t.Context(), tl.ns.Fence(), e)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err == nil && ok {
+				wrote++
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if wrote != 1 {
+		t.Fatalf("end entries written: got %d, want 1", wrote)
+	}
+
+	if got := listScope(t, ts.Store, tl.ns.Name); len(got) != 2 {
+		t.Fatalf("entries: got %d, want 2", len(got))
 	}
 }
 

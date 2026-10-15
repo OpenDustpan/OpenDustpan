@@ -36,67 +36,70 @@ func (s *Store) SaveChainRecord(ctx context.Context, rec audit.ChainRecord) erro
 // StartChain implements audit.ChainStore: it reads the earlier entries of
 // the scope for the digest and appends the start entry in the same
 // transaction, so no append lands in between.
-func (s *Store) StartChain(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
-	return s.appendChainMarker(ctx, fence, e, func(q *db.Queries, e audit.Entry) (audit.Entry, error) {
+func (s *Store) StartChain(ctx context.Context, fence namespace.Fence, e audit.Entry) (bool, error) {
+	return s.appendChainMarker(ctx, fence, e, audit.ChainStateOn, func(q *db.Queries, e audit.Entry) error {
 		var digest audit.Digest
 
 		if err := walkScope(ctx, q, e.Namespace, func(row db.AuditEntry) {
 			digest.Add(fromAuditRow(row), row.Changes.String)
 		}); err != nil {
-			return audit.Entry{}, err
+			return err
 		}
 
 		e.Changes = audit.StartChanges(&digest)
 
-		return s.insertAuditEntry(ctx, q, e, hashStart)
+		_, err := s.insertAuditEntry(ctx, q, e, hashStart)
+
+		return err
 	})
 }
 
 // EndChain implements audit.ChainStore.
-func (s *Store) EndChain(ctx context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
-	return s.appendChainMarker(ctx, fence, e, func(q *db.Queries, e audit.Entry) (audit.Entry, error) {
-		return s.insertAuditEntry(ctx, q, e, hashLink)
+func (s *Store) EndChain(ctx context.Context, fence namespace.Fence, e audit.Entry) (bool, error) {
+	return s.appendChainMarker(ctx, fence, e, audit.ChainStateOff, func(q *db.Queries, e audit.Entry) error {
+		_, err := s.insertAuditEntry(ctx, q, e, hashLink)
+
+		return err
 	})
 }
 
 // LastEntry implements audit.ChainStore.
 func (s *Store) LastEntry(ctx context.Context, scope namespace.Name) (audit.Entry, bool, error) {
-	row, err := s.queries.LastAuditEntry(ctx, scope.String())
-	if errors.Is(err, pgx.ErrNoRows) {
-		return audit.Entry{}, false, nil
-	}
-
-	if err != nil {
-		return audit.Entry{}, false, fmt.Errorf("read last audit entry: %w", err)
-	}
-
-	return fromAuditRow(row), true, nil
+	return lastEntry(ctx, s.queries, scope)
 }
 
 // appendChainMarker validates e and runs insert in one transaction with the
-// check of fence. A fence of the server scope checks nothing, and takes the
+// check of fence, unless the scope holds no entry or its last entry already
+// agrees with state. It reports whether it ran insert. A fence of the server scope checks nothing, and takes the
 // advisory lock of the server scope instead, as AppendServer does.
 func (s *Store) appendChainMarker(
-	ctx context.Context, fence namespace.Fence, e audit.Entry,
-	insert func(q *db.Queries, e audit.Entry) (audit.Entry, error),
-) (audit.Entry, error) {
+	ctx context.Context, fence namespace.Fence, e audit.Entry, state audit.ChainState,
+	insert func(q *db.Queries, e audit.Entry) error,
+) (bool, error) {
 	if err := e.Validate(); err != nil {
-		return audit.Entry{}, fmt.Errorf("audit entry: %w", err)
+		return false, fmt.Errorf("audit entry: %w", err)
 	}
 
 	if e.Namespace != fence.Namespace {
-		return audit.Entry{}, fmt.Errorf("%w: entry names %q, fence names %q",
+		return false, fmt.Errorf("%w: entry names %q, fence names %q",
 			audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
 	}
 
-	var stored audit.Entry
+	var wrote bool
 
 	run := func(q *db.Queries) error {
-		var err error
+		last, found, err := lastEntry(ctx, q, e.Namespace)
+		if err != nil {
+			return err
+		}
 
-		stored, err = insert(q, e)
+		if audit.LastAgrees(last, found, state) {
+			return nil
+		}
 
-		return err
+		wrote = true
+
+		return insert(q, e)
 	}
 
 	var err error
@@ -113,10 +116,25 @@ func (s *Store) appendChainMarker(
 	}
 
 	if err != nil {
-		return audit.Entry{}, err
+		return false, err
 	}
 
-	return stored, nil
+	return wrote, nil
+}
+
+// lastEntry answers the entry with the highest sequence of scope in q, and
+// false when the scope holds none.
+func lastEntry(ctx context.Context, q *db.Queries, scope namespace.Name) (audit.Entry, bool, error) {
+	row, err := q.LastAuditEntry(ctx, scope.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return audit.Entry{}, false, nil
+	}
+
+	if err != nil {
+		return audit.Entry{}, false, fmt.Errorf("read last audit entry: %w", err)
+	}
+
+	return fromAuditRow(row), true, nil
 }
 
 // walkScope calls fn for each entry of scope in q in order of sequence, in

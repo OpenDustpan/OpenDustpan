@@ -340,7 +340,11 @@ func (f *fakeChain) SaveChainRecord(_ context.Context, rec audit.ChainRecord) er
 	return nil
 }
 
-func (f *fakeChain) StartChain(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+func (f *fakeChain) StartChain(ctx context.Context, fence namespace.Fence, e audit.Entry) (bool, error) {
+	if skip, err := f.agrees(ctx, fence.Namespace, audit.ChainStateOn); skip || err != nil {
+		return false, err
+	}
+
 	var digest audit.Digest
 
 	for _, old := range f.scopes[fence.Namespace] {
@@ -352,10 +356,24 @@ func (f *fakeChain) StartChain(_ context.Context, fence namespace.Fence, e audit
 	return f.add(fence.Namespace, e, "")
 }
 
-func (f *fakeChain) EndChain(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+func (f *fakeChain) EndChain(ctx context.Context, fence namespace.Fence, e audit.Entry) (bool, error) {
+	if skip, err := f.agrees(ctx, fence.Namespace, audit.ChainStateOff); skip || err != nil {
+		return false, err
+	}
+
 	entries := f.scopes[fence.Namespace]
 
 	return f.add(fence.Namespace, e, entries[len(entries)-1].Hash)
+}
+
+// agrees reports whether scope holds no entry or already agrees with state.
+func (f *fakeChain) agrees(ctx context.Context, scope namespace.Name, state audit.ChainState) (bool, error) {
+	last, found, err := f.LastEntry(ctx, scope)
+	if err != nil {
+		return false, err
+	}
+
+	return audit.LastAgrees(last, found, state), nil
 }
 
 func (f *fakeChain) LastEntry(_ context.Context, scope namespace.Name) (audit.Entry, bool, error) {
@@ -372,9 +390,9 @@ func (f *fakeChain) LastEntry(_ context.Context, scope namespace.Name) (audit.En
 }
 
 // add appends e to scope, hashed with prev.
-func (f *fakeChain) add(scope namespace.Name, e audit.Entry, prev string) (audit.Entry, error) {
+func (f *fakeChain) add(scope namespace.Name, e audit.Entry, prev string) (bool, error) {
 	if err := e.Validate(); err != nil {
-		return audit.Entry{}, err
+		return false, err
 	}
 
 	e.Sequence = int64(len(f.scopes[scope]) + 1)
@@ -382,7 +400,7 @@ func (f *fakeChain) add(scope namespace.Name, e audit.Entry, prev string) (audit
 	e.Hash = audit.ComputeHash(e, prev)
 	f.scopes[scope] = append(f.scopes[scope], e)
 
-	return e, nil
+	return true, nil
 }
 
 // put appends e to scope as the chain of the fake asks.

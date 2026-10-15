@@ -139,12 +139,17 @@ type ChainStore interface {
 	// StartChanges), and its hash an empty previous hash. A fence of
 	// ServerScope checks nothing. It returns ErrInvalidEntry when e fails
 	// validation or names another scope than fence, and
-	// namespace.ErrFenced when the fence is stale.
-	StartChain(ctx context.Context, fence namespace.Fence, e Entry) (Entry, error)
+	// namespace.ErrFenced when the fence is stale. When the scope holds no
+	// entry, or its last entry already agrees with the chain on (see
+	// LastAgrees), it appends nothing and returns false, read in the same
+	// transaction. So two migrations write one start entry.
+	StartChain(ctx context.Context, fence namespace.Fence, e Entry) (bool, error)
 	// EndChain appends e as the end entry of its scope, with a hash linked
 	// to the hash of the entry before it, in one transaction with the check
-	// of fence. It returns the errors of StartChain.
-	EndChain(ctx context.Context, fence namespace.Fence, e Entry) (Entry, error)
+	// of fence. It returns the errors of StartChain, and skips a scope that
+	// holds no entry or already agrees with the chain off, as StartChain
+	// does.
+	EndChain(ctx context.Context, fence namespace.Fence, e Entry) (bool, error)
 	// LastEntry answers the entry with the highest sequence of scope, and
 	// false when the scope holds none.
 	LastEntry(ctx context.Context, scope namespace.Name) (Entry, bool, error)
@@ -189,18 +194,9 @@ func MigrateChain(ctx context.Context, store ChainStore, fences []namespace.Fenc
 }
 
 // migrateScope writes the start or the end entry of change in the scope of
-// fence, when the scope holds an entry.
+// fence. The store skips a scope that holds no entry or already agrees.
 func migrateScope(ctx context.Context, store ChainStore, fence namespace.Fence, change ChainChange) error {
 	scope := fence.Namespace
-
-	_, found, err := store.LastEntry(ctx, scope)
-	if err != nil {
-		return fmt.Errorf("read the last audit entry of %s: %w", scope, err)
-	}
-
-	if !found {
-		return nil
-	}
 
 	if change.To == ChainStateOn {
 		if _, err := store.StartChain(ctx, fence, chainMarker(scope, ActionStartChain, change)); err != nil {
@@ -217,11 +213,22 @@ func migrateScope(ctx context.Context, store ChainStore, fence namespace.Fence, 
 	return nil
 }
 
+// LastAgrees reports whether a scope whose last entry is last agrees with
+// state: with the chain on, the last entry is a chained entry that is not an
+// end entry; with the chain off, it holds no hash or it is an end entry. A
+// scope without entries (found false) agrees.
+func LastAgrees(last Entry, found bool, state ChainState) bool {
+	if !found {
+		return true
+	}
+
+	chained := last.Hash != "" && last.Action != ActionEndChain
+
+	return chained == (state == ChainStateOn)
+}
+
 // LogAgrees reports whether the log of every scope of scopes agrees with
-// state: with the chain on, each scope ends with a
-// chained entry that is not an end entry; with the chain off, each scope
-// ends with an entry without a hash or with an end entry. A scope without
-// entries agrees.
+// state, as LastAgrees decides for each scope.
 func LogAgrees(ctx context.Context, store ChainStore, scopes []namespace.Name, state ChainState) (bool, error) {
 	for _, scope := range scopes {
 		last, found, err := store.LastEntry(ctx, scope)
@@ -229,12 +236,7 @@ func LogAgrees(ctx context.Context, store ChainStore, scopes []namespace.Name, s
 			return false, fmt.Errorf("read the last audit entry of %s: %w", scope, err)
 		}
 
-		if !found {
-			continue
-		}
-
-		chained := last.Hash != "" && last.Action != ActionEndChain
-		if chained != (state == ChainStateOn) {
+		if !LastAgrees(last, found, state) {
 			return false, nil
 		}
 	}
