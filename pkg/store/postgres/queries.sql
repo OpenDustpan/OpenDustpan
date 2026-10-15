@@ -1376,36 +1376,28 @@ WHERE principal_id = ANY(sqlc.arg('principal_ids')::text[])
 GROUP BY principal_id;
 
 -- name: GetAuditChainState :one
--- The audit chain state that this installation recorded last (ADR 60
--- decision 19), and whether its log ever held a chained entry. No row
--- means no record. The restore columns name the restore whose swap the
--- server waits for.
-SELECT state, ever_chained, restore_id, restore_backup_id, restore_requested_by, restore_applied
-FROM audit_chain_state WHERE id = 1;
+-- The audit chain state that this installation keeps: the state, when it
+-- last changed, who changed it, whether a change waits for an approval, and
+-- whether a restore replaced the log. No row means the chain is on.
+SELECT state, changed_at_ms, changed_by, pending, log_replaced FROM audit_chain_state WHERE id = 1;
 
 -- name: SetAuditChainState :exec
--- Records the audit chain state of this installation.
-INSERT INTO audit_chain_state (id, state, ever_chained, restore_id, restore_backup_id, restore_requested_by, restore_applied)
-VALUES (1, $1, $2, $3, $4, $5, $6)
-ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, ever_chained = EXCLUDED.ever_chained,
-    restore_id = EXCLUDED.restore_id, restore_backup_id = EXCLUDED.restore_backup_id,
-    restore_requested_by = EXCLUDED.restore_requested_by, restore_applied = EXCLUDED.restore_applied;
+-- Stores the audit chain state of this installation.
+INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, log_replaced)
+VALUES (1, $1, $2, $3, $4, $5)
+ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, changed_at_ms = EXCLUDED.changed_at_ms,
+    changed_by = EXCLUDED.changed_by, pending = EXCLUDED.pending, log_replaced = EXCLUDED.log_replaced;
 
--- name: LastAuditChainSwitchSequence :one
--- The sequence of the last switch entry of the audit chain in the scope
--- @server, or 0 when there is none. The chain check walks @server up to it
--- to build the timeline of the chain.
+-- name: LastAuditChainStartSequence :one
+-- The sequence of the last start entry of the audit chain of a namespace,
+-- or 0 when there is none. The chain check starts there.
 SELECT CAST(COALESCE(MAX(sequence), 0) AS BIGINT) FROM audit_entries
-WHERE namespace = '@server' AND action = 'server:set-audit-chain' AND sequence >= 1;
+WHERE namespace = $1 AND action = 'server:start-audit-chain' AND sequence >= 1;
 
 -- name: MinAuditSequence :one
 -- The lowest sequence of a namespace, or 1 when it has no entry. The chain
 -- check fails a namespace with a row below 1, because the walk starts at 1.
 SELECT CAST(COALESCE(MIN(sequence), 1) AS BIGINT) FROM audit_entries WHERE namespace = $1;
-
--- name: HasChainedAuditEntries :one
--- Whether any scope holds an audit entry with a hash.
-SELECT EXISTS (SELECT 1 FROM audit_entries WHERE hash <> '');
 
 -- name: GetDeletedStack :one
 -- A deleted stack of one namespace by its stable ID (ADR 47), for a restore

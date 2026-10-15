@@ -18,6 +18,7 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -27,7 +28,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
-	"opendustpan.org/opendustpan/pkg/store/internal/chaincache"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -48,9 +48,9 @@ type Store struct {
 	// stagingMu guards stagingSchema: one staged restore at a time.
 	stagingMu     sync.Mutex
 	stagingSchema string
-	// chain keeps the audit chain state of this handle for at most
-	// audit.ChainSwitchLag (ADR 64).
-	chain chaincache.Cache
+	// chainOff makes the appends of this handle write entries without a
+	// hash. The zero value keeps the chain on, the default (see SetChain).
+	chainOff atomic.Bool
 }
 
 var (
@@ -72,7 +72,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 	}
 
 	s := &Store{
-		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", chain: chaincache.Cache{},
+		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", chainOff: atomic.Bool{},
 	}
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()

@@ -1,12 +1,8 @@
 package audit_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"io"
-	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
@@ -14,643 +10,99 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// fakeSwitch is an in-memory audit.ChainSwitch. It keeps the switch
-// entries it records and counts the reads of the whole log.
-type fakeSwitch struct {
-	entries []audit.ChainEntry
-	rec     audit.ChainRecord
-	records int
-	scans   int
-	// conflicts is the count of writes to refuse with
-	// audit.ErrChainRecordChanged, as when another instance writes first.
-	conflicts int
-	chained   bool
-	on        bool
-}
-
-func (f *fakeSwitch) SetChain(on bool) { f.on = on }
-
-func (f *fakeSwitch) HasChainedEntries(context.Context) (bool, error) {
-	f.scans++
-
-	return f.chained, nil
-}
-
-func (f *fakeSwitch) ChainRecord(context.Context) (audit.ChainRecord, error) { return f.rec, nil }
-
-func (f *fakeSwitch) RecordChain(_ context.Context, w audit.ChainWrite) error {
-	if f.conflicts > 0 || w.Read != f.rec {
-		f.conflicts--
-
-		return audit.ErrChainRecordChanged
-	}
-
-	entries := make([]audit.ChainEntry, 0, len(w.Entries))
-
-	for i := range w.Entries {
-		e := w.Entries[i]
-		if w.Now != nil {
-			e.Entry.At = w.Now()
-		}
-
-		if err := e.Entry.Validate(); err != nil {
-			return err
-		}
-
-		entries = append(entries, e)
-	}
-
-	f.entries = append(f.entries, entries...)
-	f.rec = w.Record
-	f.records++
-
-	return nil
-}
-
-// newFake answers a fake switch with rec and a log that holds chained
-// entries when chained.
-func newFake(rec audit.ChainRecord, chained bool) *fakeSwitch {
-	return &fakeSwitch{entries: nil, rec: rec, records: 0, scans: 0, conflicts: 0, chained: chained, on: true}
-}
-
-// clockAt answers a clock that always answers t.
-func clockAt(t time.Time) func() time.Time {
-	return func() time.Time { return t }
-}
-
-// wantSwitch is one switch entry a start must write: its value path and
-// whether it holds a hash.
-type wantSwitch struct {
-	path    string
-	chained bool
-}
-
-// resolveCase is one start of TestResolveChain.
-type resolveCase struct {
-	name     string
-	setting  audit.ChainSetting
-	recorded audit.ChainState
-	want     []wantSwitch
-	chained  bool
-	wantOn   bool
-	wantWarn bool
-}
-
-func TestResolveChain(t *testing.T) {
-	t.Parallel()
-
-	on := wantSwitch{path: "/audit/chain/on", chained: true}
-	off := wantSwitch{path: "/audit/chain/off", chained: true}
-	startOff := wantSwitch{path: "/audit/chain/off", chained: false}
-
-	cases := []resolveCase{
-		{
-			name: "a new installation starts off", setting: audit.ChainAuto, recorded: audit.ChainUnknown,
-			want: []wantSwitch{startOff}, chained: false, wantOn: false, wantWarn: false,
-		},
-		{
-			name: "chained entries keep the chain on", setting: audit.ChainAuto, recorded: audit.ChainUnknown,
-			want: []wantSwitch{on}, chained: true, wantOn: true, wantWarn: false,
-		},
-		{
-			name: "turning off on purpose is a switch and warns", setting: audit.ChainOff, recorded: audit.ChainUnknown,
-			want: []wantSwitch{on, off}, chained: true, wantOn: false, wantWarn: true,
-		},
-		{
-			name: "a recorded off stays off and warns", setting: audit.ChainAuto, recorded: audit.ChainStateOff,
-			want: nil, chained: true, wantOn: false, wantWarn: true,
-		},
-		{
-			name: "turning on is a switch", setting: audit.ChainOn, recorded: audit.ChainStateOff,
-			want: []wantSwitch{on}, chained: false, wantOn: true, wantWarn: false,
-		},
-		{
-			name: "on with no change writes nothing", setting: audit.ChainOn, recorded: audit.ChainStateOn,
-			want: nil, chained: true, wantOn: true, wantWarn: false,
-		},
-		{
-			name:     "off on a new installation writes the start only",
-			setting:  audit.ChainOff,
-			recorded: audit.ChainUnknown,
-			want:     []wantSwitch{startOff},
-			chained:  false,
-			wantOn:   false,
-			wantWarn: false,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			runResolveCase(t, tc)
-		})
-	}
-}
-
-// runResolveCase resolves tc against a fake switch and checks the result,
-// the record, the switch entries and the warning.
-func runResolveCase(t *testing.T, tc resolveCase) {
-	t.Helper()
-
-	// A record holds whether the log was ever chained; without a record the
-	// resolve reads the log.
-	rec := audit.ChainRecord{
-		Restore:     audit.NoRestore(),
-		State:       tc.recorded,
-		EverChained: tc.recorded != audit.ChainUnknown && tc.chained,
-	}
-	f := newFake(rec, tc.chained)
-
-	var logs bytes.Buffer
-
-	ports := audit.ChainPorts{Switch: f, Logger: slog.New(slog.NewTextHandler(&logs, nil))}
-
-	got, err := audit.ResolveChain(t.Context(), ports, tc.setting, clockAt(time.Unix(0, 0)))
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-
-	if got != tc.wantOn || f.on != tc.wantOn {
-		t.Fatalf("chain: got %v (switch %v), want %v", got, f.on, tc.wantOn)
-	}
-
-	wantState := audit.ChainStateOff
-	if tc.wantOn {
-		wantState = audit.ChainStateOn
-	}
-
-	if f.rec.State != wantState {
-		t.Fatalf("recorded state: got %q, want %q", f.rec.State, wantState)
-	}
-
-	checkRecordReads(t, f, tc)
-	checkSwitches(t, f, tc.want)
-
-	if warned := strings.Contains(logs.String(), "audit chain is off"); warned != tc.wantWarn {
-		t.Fatalf("warning: got %v, want %v (%s)", warned, tc.wantWarn, logs.String())
-	}
-}
-
-// checkRecordReads proves that only a resolve without a record read the
-// whole log, that the switch entries and the state went in one call, and
-// that the record notes a log that was ever chained.
-func checkRecordReads(t *testing.T, f *fakeSwitch, tc resolveCase) {
-	t.Helper()
-
-	wantScans := 0
-	if tc.recorded == audit.ChainUnknown {
-		wantScans = 1
-	}
-
-	if f.scans != wantScans {
-		t.Fatalf("reads of the whole log: got %d, want %d", f.scans, wantScans)
-	}
-
-	if f.records > 1 {
-		t.Fatalf("record calls: got %d, want at most one", f.records)
-	}
-
-	before := tc.recorded == audit.ChainStateOn || (tc.recorded == audit.ChainUnknown && tc.chained)
-	wantEver := tc.chained || tc.wantOn || before != tc.wantOn
-
-	if f.rec.EverChained != wantEver {
-		t.Fatalf("ever chained: got %v, want %v", f.rec.EverChained, wantEver)
-	}
-}
-
-// checkSwitches proves f holds the switch entries want, in order.
-func checkSwitches(t *testing.T, f *fakeSwitch, want []wantSwitch) {
-	t.Helper()
-
-	if len(f.entries) != len(want) {
-		t.Fatalf("switch entries: got %d, want %d", len(f.entries), len(want))
-	}
-
-	for i, w := range want {
-		e := f.entries[i]
-		if e.Entry.Kind != audit.KindChange || e.Entry.Namespace != audit.ServerScope ||
-			e.Entry.Action != audit.ActionSetChain || e.Entry.ValuePath != w.path || e.Chained != w.chained {
-			t.Fatalf("switch entry %d: got %+v (chained %v), want %s chained %v",
-				i, e.Entry, e.Chained, w.path, w.chained)
-		}
-	}
-}
-
-func TestResolveChainReadsAgainOnce(t *testing.T) {
-	t.Parallel()
-
-	off := audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: false}
-
-	// One write that another instance changed first: the start reads the
-	// record again and records the switch.
-	f := newFake(off, false)
-	f.conflicts = 1
-
-	ports := audit.ChainPorts{Switch: f, Logger: nil}
-
-	on, err := audit.ResolveChain(t.Context(), ports, audit.ChainOn, clockAt(walkAt(0, 0)))
-	if err != nil || !on || f.records != 1 {
-		t.Fatalf("resolve after one change: on %v, err %v, records %d, want on, nil, 1", on, err, f.records)
-	}
-
-	// Two such writes fail the start.
-	f = newFake(off, false)
-	f.conflicts = 2
-	ports.Switch = f
-
-	_, err = audit.ResolveChain(t.Context(), ports, audit.ChainOn, clockAt(walkAt(0, 0)))
-	if !errors.Is(err, audit.ErrChainStartRaced) {
-		t.Fatalf("resolve after two changes: got %v, want ErrChainStartRaced", err)
-	}
-
-	if f.records != 0 {
-		t.Fatalf("resolve after two changes: %d records, want 0", f.records)
-	}
-}
-
-// fakeChecker is an audit.RestoreChecker that answers results, or err.
-type fakeChecker struct {
-	err     error
-	results []audit.CheckResult
-}
-
-func (c fakeChecker) CheckRestored(context.Context, []namespace.Name) ([]audit.CheckResult, error) {
-	return c.results, c.err
-}
-
-// recheckCase is one restore of TestRecheckChainAfterARestore.
-type recheckCase struct {
-	check       fakeChecker
-	name        string
-	rec         audit.ChainRecord
-	wantInvalid int
-	chained     bool
-	wantEver    bool
-	wantWarn    bool
-	wantError   bool
-}
-
-func TestRecheckChainAfterARestore(t *testing.T) {
-	t.Parallel()
-
-	valid := fakeChecker{
-		err: nil,
-		results: []audit.CheckResult{
-			{Checked: 1, BadSequence: 0, Unchained: 0, Valid: true},
-			{Checked: 1, BadSequence: 0, Unchained: 0, Valid: true},
-		},
-	}
-	stripped := fakeChecker{
-		err: nil,
-		results: []audit.CheckResult{
-			{Checked: 1, BadSequence: 0, Unchained: 0, Valid: true},
-			{Checked: 1, BadSequence: 1, Unchained: 0, Valid: false},
-		},
-	}
-	failed := fakeChecker{err: io.ErrUnexpectedEOF, results: nil}
-	off := audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: false}
-
-	cases := []recheckCase{
-		{
-			name: "a chained log on a chain that is off warns", rec: off, check: valid,
-			chained: true, wantEver: true, wantWarn: true, wantInvalid: 0, wantError: false,
-		},
-		{
-			name:        "a chained log on a chain that is on is quiet",
-			rec:         audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOn, EverChained: false},
-			check:       valid,
-			chained:     true,
-			wantEver:    true,
-			wantWarn:    false,
-			wantInvalid: 0,
-			wantError:   false,
-		},
-		{
-			name: "an unchained log changes nothing", rec: off, check: valid,
-			chained: false, wantEver: false, wantWarn: false, wantInvalid: 0, wantError: false,
-		},
-		{
-			name: "a restored log that fails the check logs an error", rec: off, check: stripped,
-			chained: false, wantEver: false, wantWarn: false, wantInvalid: 1, wantError: true,
-		},
-		{
-			name: "a check that cannot read counts every scope", rec: off, check: failed,
-			chained: false, wantEver: false, wantWarn: false, wantInvalid: 2, wantError: true,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			runRecheckCase(t, tc)
-		})
-	}
-}
-
-// runRecheckCase rechecks tc against a fake switch and checks the switch
-// entry, the count of failed scopes and the logs.
-func runRecheckCase(t *testing.T, tc recheckCase) {
-	t.Helper()
-
-	// The swap of the restore set the mark.
-	rec := tc.rec
-	rec.Restore = audit.ChainRestoreMark{ID: "rst-1", BackupID: "bkp-1", RequestedBy: "alice", Applied: true}
-	f := newFake(rec, tc.chained)
-
-	var logs bytes.Buffer
-
-	ports := audit.ChainPorts{Switch: f, Logger: slog.New(slog.NewTextHandler(&logs, nil))}
-	restore := recheckOf(tc.check)
-
-	invalid, err := audit.RecheckChain(t.Context(), ports, restore)
-	if err != nil {
-		t.Fatalf("recheck: %v", err)
-	}
-
-	if invalid != tc.wantInvalid {
-		t.Fatalf("failed scopes: got %d, want %d", invalid, tc.wantInvalid)
-	}
-
-	checkRestoreSwitch(t, f, tc.rec)
-	checkRecheckLogs(t, logs.String(), tc)
-}
-
-// recheckOf answers the recheck of a restore with the checker c of the
-// scopes @server and acme.
-func recheckOf(c audit.RestoreChecker) audit.ChainRestore {
-	return audit.ChainRestore{
-		Checker: c,
-		Now:     clockAt(walkAt(0, 0)),
-		Scopes:  []namespace.Name{audit.ServerScope, "acme"},
-	}
-}
-
-func TestRecheckChainNeedsTheSwap(t *testing.T) {
-	t.Parallel()
-
-	// The record names a restore whose swap never ran.
-	rec := audit.ChainRecord{
-		Restore:     audit.ChainRestoreMark{ID: "rst-1", BackupID: "bkp-1", RequestedBy: "alice", Applied: false},
-		State:       audit.ChainStateOn,
-		EverChained: true,
-	}
-	f := newFake(rec, true)
-
-	invalid, err := audit.RecheckChain(t.Context(), audit.ChainPorts{Switch: f, Logger: nil}, recheckOf(nil))
-	if err != nil || invalid != 0 || f.records != 0 {
-		t.Fatalf("recheck without a swap: invalid %d, err %v, records %d, want 0, nil, 0", invalid, err, f.records)
-	}
-}
-
-func TestMarkRestore(t *testing.T) {
-	t.Parallel()
-
-	mark := audit.ChainRestoreMark{ID: "rst-1", BackupID: "bkp-1", RequestedBy: "alice", Applied: false}
-
-	f := newFake(audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: true}, true)
-	f.conflicts = 1
-
-	if err := audit.MarkRestore(t.Context(), f, mark); err != nil {
-		t.Fatalf("mark: %v", err)
-	}
-
-	if f.rec.Restore != mark || f.rec.State != audit.ChainStateOff || !f.rec.EverChained || len(f.entries) != 0 {
-		t.Fatalf("record after the mark: %+v with %d entries, want the mark and no entry", f.rec, len(f.entries))
-	}
-
-	// Without a record there is nothing to recheck, so the mark writes
-	// nothing.
-	none := newFake(audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainUnknown, EverChained: false}, false)
-	if err := audit.MarkRestore(t.Context(), none, mark); err != nil || none.records != 0 {
-		t.Fatalf("mark without a record: err %v, records %d, want nil, 0", err, none.records)
-	}
-}
-
-// checkRestoreSwitch proves that f holds one chained switch entry for the
-// state of rec by alice that marks the restore of bkp-1.
-func checkRestoreSwitch(t *testing.T, f *fakeSwitch, rec audit.ChainRecord) {
-	t.Helper()
-
-	// A restore ends the restored timeline with one chained switch entry
-	// for the recorded state, so the record notes a chained log. The entry
-	// names the requester and marks the restore of the backup.
-	if f.rec.State != rec.State || !f.rec.EverChained || len(f.entries) != 1 ||
-		!f.entries[0].Chained || f.entries[0].Entry.ValuePath != "/audit/chain/"+string(rec.State) ||
-		f.entries[0].Entry.Subject != "alice" {
-		t.Fatalf("record %+v with entries %+v, want state %q, ever and one chained switch entry",
-			f.rec, f.entries, rec.State)
-	}
-
-	if got := f.entries[0].Entry.Changes; len(got) != 1 || got[0].Key != audit.ChangeRestore || got[0].New != "bkp-1" {
-		t.Fatalf("switch entry changes: got %+v, want restore = bkp-1", got)
-	}
-}
-
-// checkRecheckLogs proves that logs hold the warning and the error that tc
-// wants.
-func checkRecheckLogs(t *testing.T, logs string, tc recheckCase) {
-	t.Helper()
-
-	if warned := strings.Contains(logs, "audit chain is off"); warned != tc.wantWarn {
-		t.Fatalf("warning: got %v, want %v", warned, tc.wantWarn)
-	}
-
-	if logged := strings.Contains(logs, "level=ERROR"); logged != tc.wantError {
-		t.Fatalf("error log: got %v, want %v in %q", logged, tc.wantError, logs)
-	}
-}
-
 func TestParseChainSetting(t *testing.T) {
 	t.Parallel()
 
-	for raw, want := range map[string]audit.ChainSetting{"": audit.ChainAuto, "auto": audit.ChainAuto, "on": audit.ChainOn, "off": audit.ChainOff} {
+	for raw, want := range map[string]audit.ChainSetting{"": audit.ChainOn, "on": audit.ChainOn, "off": audit.ChainOff} {
 		got, err := audit.ParseChainSetting(raw)
 		if err != nil || got != want {
 			t.Fatalf("parse %q: got %q, %v, want %q", raw, got, err, want)
 		}
 	}
 
-	if _, err := audit.ParseChainSetting("yes"); !errors.Is(err, audit.ErrInvalidChainSetting) {
-		t.Fatalf("parse yes: got %v, want ErrInvalidChainSetting", err)
+	for _, raw := range []string{"auto", "yes", "ON"} {
+		if _, err := audit.ParseChainSetting(raw); !errors.Is(err, audit.ErrInvalidChainSetting) {
+			t.Fatalf("parse %q: got %v, want ErrInvalidChainSetting", raw, err)
+		}
 	}
 }
 
-// walkStep is the time between two entries of the walk tests, longer than
-// audit.ChainSwitchLag.
+func TestChainSetting(t *testing.T) {
+	t.Parallel()
+
+	var zero audit.ChainSetting
+
+	if zero != audit.ChainOn || zero.String() != "on" || zero.State() != audit.ChainStateOn {
+		t.Fatalf("zero setting: got %q, state %q, want on", zero, zero.State())
+	}
+
+	if audit.ChainOff.String() != "off" || audit.ChainOff.State() != audit.ChainStateOff {
+		t.Fatalf("off: got %q, state %q", audit.ChainOff, audit.ChainOff.State())
+	}
+
+	if got := audit.ChainSetting(7).String(); got != "7" {
+		t.Fatalf("unknown setting: got %q, want 7", got)
+	}
+}
+
+func TestDigest(t *testing.T) {
+	t.Parallel()
+
+	var empty audit.Digest
+	if empty.Sum() != "" || empty.Count() != 0 {
+		t.Fatalf("empty digest: got %q, %d", empty.Sum(), empty.Count())
+	}
+
+	one, two := walkEntry(1), walkChained(2, "")
+
+	var a, b audit.Digest
+
+	a.Add(one, "")
+	a.Add(two, "")
+	b.Add(one, "")
+	b.Add(two, "")
+
+	if a.Sum() == "" || a.Sum() != b.Sum() || a.Count() != 2 {
+		t.Fatalf("digest: got %q and %q, count %d, want one value of 2 entries", a.Sum(), b.Sum(), a.Count())
+	}
+
+	// The digest covers the stored hash columns as well as the fields.
+	stripped := two
+	stripped.Hash = ""
+
+	var c audit.Digest
+
+	c.Add(one, "")
+	c.Add(stripped, "")
+
+	if c.Sum() == a.Sum() {
+		t.Fatal("digest: a removed hash gives the same digest")
+	}
+
+	changed := one
+	changed.Subject = "mallory"
+
+	var d audit.Digest
+
+	d.Add(changed, "")
+	d.Add(two, "")
+
+	if d.Sum() == a.Sum() {
+		t.Fatal("digest: a changed field gives the same digest")
+	}
+}
+
+// walkStep is the time between two entries of the walk tests.
 const walkStep = 10 * time.Second
 
-// walkAt answers the time of sequence seq, plus d. Sequence 0 is at a fixed
-// time, and sequence n is n times walkStep later.
+// walkAt answers the time of sequence seq, plus d.
 func walkAt(seq int64, d time.Duration) time.Time {
-	base := time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC)
+	base := time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC)
 
 	return base.Add(time.Duration(seq)*walkStep + d)
 }
 
-// walkChained returns entry seq linked to prev, with its hash.
-func walkChained(seq int64, prev string) audit.Entry {
-	e := walkEntry(seq)
-	e.PrevHash = prev
-	e.Hash = audit.ComputeHash(e, prev)
-
-	return e
-}
-
-// walkOK reports whether the walk over points accepts every entry.
-func walkOK(points []audit.ChainPoint, entries ...audit.Entry) bool {
-	w := audit.NewChainWalk(audit.ChainTimeline{Points: points, Recorded: len(points) > 0, Broken: false})
-
-	for i := range entries {
-		if !w.Step(entries[i]) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func TestChainWalk(t *testing.T) {
-	t.Parallel()
-
-	one := walkChained(1, "")
-	two := walkEntry(2)
-	three := walkChained(3, "")
-	four := walkChained(4, three.Hash)
-
-	// The chain started on, went off just after entry 1, and on again just
-	// after entry 2.
-	timeline := []audit.ChainPoint{
-		{At: walkAt(0, 0), On: true},
-		{At: walkAt(1, time.Second), On: false},
-		{At: walkAt(2, time.Second), On: true},
-	}
-
-	walk := audit.NewChainWalk(audit.ChainTimeline{Points: timeline, Recorded: true, Broken: false})
-	for _, e := range []audit.Entry{one, two, three, four} {
-		if !walk.Step(e) {
-			t.Fatalf("entry %d does not match", e.Sequence)
-		}
-	}
-
-	if walk.Unchained() != 1 {
-		t.Fatalf("unchained: got %d, want 1", walk.Unchained())
-	}
-
-	bad := []struct {
-		name    string
-		entries []audit.Entry
-	}{
-		{name: "a gap", entries: []audit.Entry{one, three}},
-		{
-			name:    "a link to the hash before an unchained entry",
-			entries: []audit.Entry{one, two, walkChained(3, one.Hash)},
-		},
-		{name: "an unchained entry with a link", entries: []audit.Entry{one, withPrev(walkEntry(2), one.Hash)}},
-		{name: "a changed field", entries: []audit.Entry{withSubject(one, "mallory")}},
-		{name: "a removed hash while the chain was on", entries: []audit.Entry{walkEntry(1)}},
-		{name: "a removed hash after the chain went on again", entries: []audit.Entry{one, two, walkEntry(3)}},
-	}
-
-	for _, tc := range bad {
-		if walkOK(timeline, tc.entries...) {
-			t.Fatalf("%s: the walk accepts it", tc.name)
-		}
-	}
-}
-
-func TestChainWalkSwitchLag(t *testing.T) {
-	t.Parallel()
-
-	// The chain started off and went on at entry 2.
-	timeline := []audit.ChainPoint{{At: walkAt(0, 0), On: false}, {At: walkAt(2, 0), On: true}}
-
-	late := walkEntry(3)
-	late.At = walkAt(2, audit.ChainSwitchLag/2)
-
-	if !walkOK(timeline, walkEntry(1), walkEntry(2), late) {
-		t.Fatal("the walk refuses an unchained entry within the lag after the switch to on")
-	}
-
-	tooLate := walkEntry(3)
-	tooLate.At = walkAt(2, 2*audit.ChainSwitchLag)
-
-	if walkOK(timeline, walkEntry(1), walkEntry(2), tooLate) {
-		t.Fatal("the walk accepts an unchained entry after the lag")
-	}
-}
-
-func TestChainWalkShortOffWindow(t *testing.T) {
-	t.Parallel()
-
-	// The chain was on, went off at entry 2, and on again a quarter of the
-	// lag later. An instance could still hold the state off for the lag.
-	timeline := []audit.ChainPoint{
-		{At: walkAt(0, 0), On: true},
-		{At: walkAt(2, 0), On: false},
-		{At: walkAt(2, audit.ChainSwitchLag/4), On: true},
-	}
-
-	within := walkEntry(2)
-	within.At = walkAt(2, audit.ChainSwitchLag/2)
-
-	if !walkOK(timeline, walkChained(1, ""), within) {
-		t.Fatal("the walk refuses an unchained entry within the lag after a short off window")
-	}
-
-	after := walkEntry(2)
-	after.At = walkAt(2, audit.ChainSwitchLag+audit.ChainSwitchLag/2)
-
-	if walkOK(timeline, walkChained(1, ""), after) {
-		t.Fatal("the walk accepts an unchained entry after the lag of a short off window")
-	}
-}
-
-func TestChainWalkWithoutATimeline(t *testing.T) {
-	t.Parallel()
-
-	// A store that never recorded a switch: an unchained entry matches only
-	// before the first chained entry of its scope.
-	if !walkOK(nil, walkEntry(1), walkChained(2, "")) {
-		t.Fatal("the walk refuses an unchained first entry")
-	}
-
-	if walkOK(nil, walkChained(1, ""), walkEntry(2)) {
-		t.Fatal("the walk accepts an unchained entry after a chained one")
-	}
-}
-
-func TestChainPointFromPath(t *testing.T) {
-	t.Parallel()
-
-	at := walkAt(0, 0)
-
-	if p, ok := audit.ChainPointFromPath(at, "/audit/chain/on"); !ok || !p.On {
-		t.Fatalf("on: got %+v, %v", p, ok)
-	}
-
-	if p, ok := audit.ChainPointFromPath(at, "/audit/chain/off"); !ok || p.On {
-		t.Fatalf("off: got %+v, %v", p, ok)
-	}
-
-	if _, ok := audit.ChainPointFromPath(at, "/audit/other"); ok {
-		t.Fatal("another path reads as a point")
-	}
-}
-
-func withPrev(e audit.Entry, prev string) audit.Entry {
-	e.PrevHash = prev
-
-	return e
-}
-
-func withSubject(e audit.Entry, subject string) audit.Entry {
-	e.Subject = subject
-
-	return e
-}
-
-// walkEntry returns an entry of acme with sequence seq, at walkAt(seq, 0),
-// and no chain.
+// walkEntry returns entry seq of acme without a hash.
 func walkEntry(seq int64) audit.Entry {
 	return audit.Entry{
 		At:         walkAt(seq, 0),
@@ -677,294 +129,394 @@ func walkEntry(seq int64) audit.Entry {
 	}
 }
 
-// walkSwitch returns the switch entry of state at seq of the server scope,
-// without a hash.
-func walkSwitch(seq int64, state audit.ChainState, at time.Time) audit.Entry {
+// walkChained returns entry seq linked to prev, with its hash.
+func walkChained(seq int64, prev string) audit.Entry {
 	e := walkEntry(seq)
-	e.Namespace, e.At = audit.ServerScope, at
-	e.Kind, e.Action, e.Object = audit.KindChange, audit.ActionSetChain, audit.ServerScope.String()
-	e.ValuePath = "/audit/chain/" + string(state)
+	e.PrevHash = prev
+	e.Hash = audit.ComputeHash(e, prev)
 
 	return e
 }
 
-// walkChainedSwitch returns walkSwitch with its hash.
-func walkChainedSwitch(seq int64, state audit.ChainState, at time.Time) audit.Entry {
-	e := walkSwitch(seq, state, at)
-	e.Hash = audit.ComputeHash(e, "")
+// walkMarker returns entry seq with action, linked to prev and hashed.
+func walkMarker(seq int64, action, prev string, changes []audit.Change) audit.Entry {
+	e := walkEntry(seq)
+	e.Action, e.Changes, e.PrevHash = action, changes, prev
+	e.Hash = audit.ComputeHash(e, prev)
 
 	return e
 }
 
-// serverLink numbers es from 1 as entries of the server scope and chains
-// every entry whose hash is set: it links to the entry before it, or to an
-// empty hash after an entry without a hash.
-func serverLink(entries ...audit.Entry) []audit.Entry {
-	es := make([]audit.Entry, len(entries))
-	copy(es, entries)
+// walkResult runs a walk over entries and answers the sequence of the first
+// entry that fails, 0 when every entry passes, or -1 when Finish fails.
+func walkResult(scope audit.ChainScope, entries ...audit.Entry) int64 {
+	w := audit.NewChainWalk(scope)
 
+	for i := range entries {
+		if !w.Step(entries[i]) {
+			return entries[i].Sequence
+		}
+	}
+
+	if !w.Finish() {
+		return -1
+	}
+
+	return 0
+}
+
+// recordOf answers a record with state that changed at walkAt(seq, 0).
+func recordOf(state audit.ChainState, seq int64) audit.ChainRecord {
+	return audit.ChainRecord{ChangedAt: walkAt(seq, 0), ChangedBy: "alice", State: state, Pending: false, LogReplaced: false}
+}
+
+// chainedRun returns entries 1 to n of one chain from sequence 1.
+func chainedRun(n int64) []audit.Entry {
+	out := make([]audit.Entry, 0, n)
 	prev := ""
 
-	for i := range es {
-		es[i].Namespace, es[i].Sequence = audit.ServerScope, int64(i+1)
-
-		if es[i].Hash == "" {
-			prev = ""
-
-			continue
-		}
-
-		es[i].PrevHash = prev
-		es[i].Hash = audit.ComputeHash(es[i], prev)
-		prev = es[i].Hash
+	for seq := int64(1); seq <= n; seq++ {
+		e := walkChained(seq, prev)
+		out = append(out, e)
+		prev = e.Hash
 	}
 
-	return es
+	return out
 }
 
-// build adds es to a new builder and answers the timeline against rec.
-func build(rec audit.ChainRecord, es []audit.Entry) audit.ChainTimeline {
-	b := audit.NewTimelineBuilder()
-
-	for i := range es {
-		if !b.Add(es[i]) {
-			break
-		}
-	}
-
-	return b.Timeline(rec)
-}
-
-// noRecord answers the record of an installation that recorded nothing.
-func noRecord() audit.ChainRecord {
-	return audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainUnknown, EverChained: false}
-}
-
-func TestTimelineBuilder(t *testing.T) {
+func TestChainWalkFromTheFirstEntry(t *testing.T) {
 	t.Parallel()
 
-	plain := walkChained(0, "")
-	plain.At = walkAt(2, 0)
+	on := audit.ChainScope{Record: recordOf(audit.ChainStateOn, 0), Start: 0}
+	run := chainedRun(3)
 
-	got := build(
-		audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: true},
-		serverLink(
-			walkSwitch(1, audit.ChainStateOff, walkAt(0, 0)),
-			walkChainedSwitch(2, audit.ChainStateOn, walkAt(1, 0)),
-			plain,
-			walkChainedSwitch(4, audit.ChainStateOff, walkAt(3, 0)),
-		),
-	)
-	if got.Broken || len(got.Points) != 3 || got.Points[0].On || !got.Points[1].On || got.Points[2].On {
-		t.Fatalf("timeline: got %+v, want off, on, off and not broken", got)
+	if got := walkResult(on, run...); got != 0 {
+		t.Fatalf("a chain from sequence 1: fails at %d", got)
 	}
 
-	replayed := serverLink(
-		walkChainedSwitch(1, audit.ChainStateOn, walkAt(0, 0)),
-		walkChainedSwitch(2, audit.ChainStateOff, walkAt(1, 0)),
-	)
-	replayed[1].PrevHash = "other-installation"
-	replayed[1].Hash = audit.ComputeHash(replayed[1], replayed[1].PrevHash)
-
-	broken := []struct {
+	bad := []struct {
 		name    string
 		entries []audit.Entry
+		want    int64
 	}{
-		{name: "an unhashed switch to off after sequence 1", entries: serverLink(
-			walkChainedSwitch(1, audit.ChainStateOn, walkAt(0, 0)),
-			walkSwitch(2, audit.ChainStateOff, walkAt(1, 0)),
-		)},
-		{name: "a switch entry that links to another chain", entries: replayed},
-		{name: "a switch entry earlier than the one before it", entries: serverLink(
-			walkChainedSwitch(1, audit.ChainStateOn, walkAt(2, 0)),
-			walkChainedSwitch(2, audit.ChainStateOff, walkAt(1, 0)),
-		)},
-		{name: "an unhashed switch to on at sequence 1", entries: serverLink(
-			walkSwitch(1, audit.ChainStateOn, walkAt(0, 0)),
-		)},
+		{name: "a gap", entries: []audit.Entry{run[0], run[2]}, want: 3},
+		{name: "a broken link", entries: []audit.Entry{run[0], walkChained(2, "x")}, want: 2},
+		{name: "a removed hash", entries: []audit.Entry{run[0], walkEntry(2)}, want: 2},
+		{name: "an unchained first entry", entries: []audit.Entry{walkEntry(1)}, want: 1},
 	}
 
-	for _, tc := range broken {
-		if got := build(noRecord(), tc.entries); !got.Broken {
-			t.Fatalf("%s: timeline is not broken: %+v", tc.name, got)
+	for _, tc := range bad {
+		if got := walkResult(on, tc.entries...); got != tc.want {
+			t.Fatalf("%s: fails at %d, want %d", tc.name, got, tc.want)
+		}
+	}
+
+	// The same chain fails the finish when the record says off: an off
+	// state needs an end entry.
+	off := audit.ChainScope{Record: recordOf(audit.ChainStateOff, 9), Start: 0}
+	if got := walkResult(off, run...); got != -1 {
+		t.Fatalf("a chain without an end while off: got %d, want a failed finish", got)
+	}
+}
+
+func TestChainWalkEnd(t *testing.T) {
+	t.Parallel()
+
+	run := chainedRun(2)
+	end := walkMarker(3, audit.ActionEndChain, run[1].Hash, nil)
+	after := walkEntry(4)
+	entries := []audit.Entry{run[0], run[1], end, after}
+
+	off := audit.ChainScope{Record: recordOf(audit.ChainStateOff, 3), Start: 0}
+	if got := walkResult(off, entries...); got != 0 {
+		t.Fatalf("a chain with an end while off: fails at %d", got)
+	}
+
+	on := audit.ChainScope{Record: recordOf(audit.ChainStateOn, 3), Start: 0}
+	if got := walkResult(on, entries...); got != -1 {
+		t.Fatalf("a chain that ends while on: got %d, want a failed finish", got)
+	}
+
+	hashedAfter := walkChained(4, end.Hash)
+	if got := walkResult(off, run[0], run[1], end, hashedAfter); got != 4 {
+		t.Fatalf("a hash after the end: fails at %d, want 4", got)
+	}
+}
+
+func TestChainWalkStart(t *testing.T) {
+	t.Parallel()
+
+	one := walkEntry(1)
+	two := walkEntry(2)
+
+	var digest audit.Digest
+
+	digest.Add(one, "")
+	digest.Add(two, "")
+
+	start := walkMarker(3, audit.ActionStartChain, "", audit.StartChanges(&digest))
+	four := walkChained(4, start.Hash)
+	scope := audit.ChainScope{Record: recordOf(audit.ChainStateOn, 3), Start: 3}
+
+	if got := walkResult(scope, one, two, start, four); got != 0 {
+		t.Fatalf("a start after two entries: fails at %d", got)
+	}
+
+	changed := two
+	changed.Subject = "mallory"
+
+	if got := walkResult(scope, one, changed, start, four); got != 3 {
+		t.Fatalf("a changed entry before the start: fails at %d, want 3", got)
+	}
+
+	linked := walkMarker(3, audit.ActionStartChain, "x", audit.StartChanges(&digest))
+	if got := walkResult(scope, one, two, linked); got != 3 {
+		t.Fatalf("a start with a previous hash: fails at %d, want 3", got)
+	}
+
+	if got := walkResult(scope, one, two); got != -1 {
+		t.Fatalf("a scope without its start entry: got %d, want a failed finish", got)
+	}
+}
+
+func TestChainWalkScopeWithoutAChain(t *testing.T) {
+	t.Parallel()
+
+	entries := []audit.Entry{walkEntry(1), walkEntry(2)}
+
+	after := audit.ChainScope{Record: recordOf(audit.ChainStateOff, 0), Start: 0}
+	if got := walkResult(after, entries...); got != 0 {
+		t.Fatalf("a scope that began after the chain went off: fails at %d", got)
+	}
+
+	before := audit.ChainScope{Record: recordOf(audit.ChainStateOff, 5), Start: 0}
+	if got := walkResult(before, entries...); got != 1 {
+		t.Fatalf("a scope that began while the chain was on: fails at %d, want 1", got)
+	}
+
+	never := audit.ChainScope{Record: audit.ChainRecord{
+		ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOff, Pending: false, LogReplaced: false,
+	}, Start: 0}
+	if got := walkResult(never, entries...); got != 1 {
+		t.Fatalf("a scope without a chain and an off record without a time: fails at %d, want 1", got)
+	}
+}
+
+func TestChainWalkEmptyScope(t *testing.T) {
+	t.Parallel()
+
+	for _, state := range []audit.ChainState{audit.ChainStateOn, audit.ChainStateOff} {
+		w := audit.NewChainWalk(audit.ChainScope{Record: recordOf(state, 0), Start: 0})
+		if !w.Finish() || w.Unchained() != 0 {
+			t.Fatalf("an empty scope with the chain %s: want a finish with no unchained entry", state)
 		}
 	}
 }
 
-func TestTimelineAgainstTheRecord(t *testing.T) {
-	t.Parallel()
+// fakeChain is an in-memory audit.ChainStore over the scopes of one test.
+type fakeChain struct {
+	scopes map[namespace.Name][]audit.Entry
+	rec    audit.ChainRecord
+	fail   error
+	on     bool
+}
 
-	startOff := walkSwitch(1, audit.ChainStateOff, walkAt(0, 0))
-	on := walkChainedSwitch(2, audit.ChainStateOn, walkAt(1, 0))
-	unknown := walkChainedSwitch(2, audit.ChainStateOn, walkAt(1, 0))
-	unknown.ValuePath = "/audit/chain/On"
+func newFakeChain() *fakeChain {
+	return &fakeChain{
+		scopes: map[namespace.Name][]audit.Entry{},
+		rec:    recordOf(audit.ChainStateOn, 0),
+		fail:   nil,
+		on:     true,
+	}
+}
 
-	cases := []struct {
-		name    string
-		rec     audit.ChainRecord
-		entries []audit.Entry
-		broken  bool
-	}{
-		{
-			name:   "a fresh installation with the chain off",
-			broken: false,
-			rec: audit.ChainRecord{
-				Restore:     audit.NoRestore(),
-				State:       audit.ChainStateOff,
-				EverChained: false,
-			},
-			entries: serverLink(startOff),
-		},
-		{
-			name:   "a chain that is on with a switch to on",
-			broken: false,
-			rec: audit.ChainRecord{
-				Restore:     audit.NoRestore(),
-				State:       audit.ChainStateOn,
-				EverChained: true,
-			},
-			entries: serverLink(startOff, on),
-		},
-		{
-			name:   "a record that says chained and no hashed switch",
-			broken: true,
-			rec: audit.ChainRecord{
-				Restore:     audit.NoRestore(),
-				State:       audit.ChainStateOff,
-				EverChained: true,
-			},
-			entries: serverLink(startOff),
-		},
-		{
-			name:   "a record that says on and no hashed switch",
-			broken: true,
-			rec: audit.ChainRecord{
-				Restore:     audit.NoRestore(),
-				State:       audit.ChainStateOn,
-				EverChained: false,
-			},
-			entries: serverLink(startOff),
-		},
-		{
-			name:   "a last point that is not the recorded state",
-			broken: true,
-			rec: audit.ChainRecord{
-				Restore:     audit.NoRestore(),
-				State:       audit.ChainStateOff,
-				EverChained: true,
-			},
-			entries: serverLink(startOff, on),
-		},
-		{
-			name: "a switch entry with an unknown value path", broken: true,
-			rec: noRecord(), entries: serverLink(startOff, unknown),
-		},
+func (f *fakeChain) SetChain(on bool) { f.on = on }
+
+func (f *fakeChain) ChainRecord(context.Context) (audit.ChainRecord, error) { return f.rec, nil }
+
+func (f *fakeChain) SaveChainRecord(_ context.Context, rec audit.ChainRecord) error {
+	f.rec = rec
+
+	return nil
+}
+
+func (f *fakeChain) StartChain(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	var digest audit.Digest
+
+	for _, old := range f.scopes[fence.Namespace] {
+		digest.Add(old, audit.EncodeChanges(old.Changes))
 	}
 
-	for _, tc := range cases {
-		if got := build(tc.rec, tc.entries); got.Broken != tc.broken {
-			t.Fatalf("%s: broken %v, want %v", tc.name, got.Broken, tc.broken)
+	e.Changes = audit.StartChanges(&digest)
+
+	return f.add(fence.Namespace, e, "")
+}
+
+func (f *fakeChain) EndChain(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
+	entries := f.scopes[fence.Namespace]
+
+	return f.add(fence.Namespace, e, entries[len(entries)-1].Hash)
+}
+
+func (f *fakeChain) LastEntry(_ context.Context, scope namespace.Name) (audit.Entry, bool, error) {
+	if f.fail != nil {
+		return audit.Entry{}, false, f.fail
+	}
+
+	entries := f.scopes[scope]
+	if len(entries) == 0 {
+		return audit.Entry{}, false, nil
+	}
+
+	return entries[len(entries)-1], true, nil
+}
+
+// add appends e to scope, hashed with prev.
+func (f *fakeChain) add(scope namespace.Name, e audit.Entry, prev string) (audit.Entry, error) {
+	if err := e.Validate(); err != nil {
+		return audit.Entry{}, err
+	}
+
+	e.Sequence = int64(len(f.scopes[scope]) + 1)
+	e.PrevHash = prev
+	e.Hash = audit.ComputeHash(e, prev)
+	f.scopes[scope] = append(f.scopes[scope], e)
+
+	return e, nil
+}
+
+// put appends e to scope as the chain of the fake asks.
+func (f *fakeChain) put(scope namespace.Name, e audit.Entry) {
+	entries := f.scopes[scope]
+	e.Namespace = scope
+	e.Sequence = int64(len(entries) + 1)
+	e.PrevHash, e.Hash = "", ""
+
+	if f.on {
+		if len(entries) > 0 {
+			e.PrevHash = entries[len(entries)-1].Hash
+		}
+
+		e.Hash = audit.ComputeHash(e, e.PrevHash)
+	}
+
+	f.scopes[scope] = append(f.scopes[scope], e)
+}
+
+// walk answers walkResult over every entry of scope against the record.
+func (f *fakeChain) walk(scope namespace.Name) int64 {
+	entries := f.scopes[scope]
+
+	var start int64
+
+	for i := range entries {
+		if entries[i].Action == audit.ActionStartChain {
+			start = entries[i].Sequence
 		}
 	}
+
+	return walkResult(audit.ChainScope{Record: f.rec, Start: start}, entries...)
 }
 
-func TestRestoredTimeline(t *testing.T) {
+func TestMigrateChain(t *testing.T) {
 	t.Parallel()
 
-	startOn := walkChainedSwitch(1, audit.ChainStateOn, walkAt(0, 0))
-	startOff := walkSwitch(1, audit.ChainStateOff, walkAt(0, 0))
-	off := audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOff, EverChained: false}
-	chained := audit.ChainRecord{Restore: audit.NoRestore(), State: audit.ChainStateOn, EverChained: true}
+	f := newFakeChain()
+	acme := namespace.Fence{Namespace: "acme", FailoverVersion: 1}
+	empty := namespace.Fence{Namespace: "empty", FailoverVersion: 1}
+	fences := []namespace.Fence{acme, empty, audit.ServerFence()}
 
-	// The backup ends on and the target records off: the log of the
-	// backup is whole.
-	b := audit.NewTimelineBuilder()
-	b.Add(serverLink(startOn)[0])
+	f.put("acme", walkEntry(0))
 
-	if got := b.RestoredTimeline(off); got.Broken {
-		t.Fatalf("a backup that ends in another state: %+v, want not broken", got)
+	off := audit.ChainChange{At: walkAt(5, 0), By: "alice", To: audit.ChainStateOff}
+	if err := audit.MigrateChain(t.Context(), f, fences, off); err != nil {
+		t.Fatalf("migrate off: %v", err)
 	}
 
-	// A backup without a hashed switch, and a target that records a
-	// chained log: someone removed the hashes.
-	b = audit.NewTimelineBuilder()
-	b.Add(serverLink(startOff)[0])
-
-	if got := b.RestoredTimeline(chained); !got.Broken {
-		t.Fatalf("a backup without a hashed switch: %+v, want broken", got)
+	if f.on || f.rec.State != audit.ChainStateOff || f.rec.ChangedBy != "alice" || len(f.scopes["acme"]) != 2 ||
+		len(f.scopes["empty"]) != 0 || len(f.scopes[audit.ServerScope]) != 0 {
+		t.Fatalf("after off: on %v, record %+v, scopes %v, want an end entry in acme only", f.on, f.rec, f.scopes)
 	}
-}
 
-func TestChainWalkBrokenTimeline(t *testing.T) {
-	t.Parallel()
+	f.put("acme", walkEntry(0))
 
-	timeline := audit.ChainTimeline{
-		Points:   []audit.ChainPoint{{At: walkAt(0, 0), On: false}},
-		Recorded: true,
-		Broken:   true,
+	on := audit.ChainChange{At: walkAt(9, 0), By: "bob", To: audit.ChainStateOn}
+	if err := audit.MigrateChain(t.Context(), f, fences, on); err != nil {
+		t.Fatalf("migrate on: %v", err)
 	}
-	if audit.NewChainWalk(timeline).Step(walkEntry(1)) {
-		t.Fatal("the walk accepts an entry against a broken timeline")
+
+	f.put("acme", walkEntry(0))
+
+	if !f.on || f.rec.State != audit.ChainStateOn || len(f.scopes["acme"]) != 5 {
+		t.Fatalf("after on: on %v, record %+v, acme %d entries, want 5", f.on, f.rec, len(f.scopes["acme"]))
 	}
-}
 
-func TestChainSettingString(t *testing.T) {
-	t.Parallel()
-
-	if got := audit.ChainSetting(9).String(); got != "9" {
-		t.Fatalf("an unknown setting prints %q, want 9", got)
+	if got := f.walk("acme"); got != 0 {
+		t.Fatalf("acme after off and on: fails at %d", got)
 	}
 }
 
-func TestChainWalkRecordWithoutSwitches(t *testing.T) {
+func TestMigrateChainStopsAtAReadError(t *testing.T) {
 	t.Parallel()
 
-	walk := audit.NewChainWalk(audit.ChainTimeline{Points: nil, Recorded: true, Broken: false})
-	if walk.Step(walkChained(1, "")) {
-		t.Fatal("the walk accepts an entry while the switch entries of a recorded chain are gone")
+	f := newFakeChain()
+	f.fail = errors.New("read failed")
+
+	change := audit.ChainChange{At: walkAt(1, 0), By: "alice", To: audit.ChainStateOff}
+	err := audit.MigrateChain(t.Context(), f, []namespace.Fence{audit.ServerFence()}, change)
+
+	if err == nil || f.rec.State != audit.ChainStateOn {
+		t.Fatalf("migrate with a read error: err %v, record %+v, want an error and the old record", err, f.rec)
 	}
 }
 
-func TestChainWalkTimeMustNotGoBack(t *testing.T) {
+func TestLogAgrees(t *testing.T) {
 	t.Parallel()
 
-	// The chain started off and went on after entry 1.
-	timeline := []audit.ChainPoint{{At: walkAt(0, 0), On: false}, {At: walkAt(1, time.Second), On: true}}
+	f := newFakeChain()
+	scopes := []namespace.Name{"acme", "empty"}
 
-	two := walkChained(2, "")
-	moved := walkEntry(3)
-	moved.At = walkAt(1, 500*time.Millisecond)
+	agrees := func(state audit.ChainState) bool {
+		t.Helper()
 
-	if walkOK(timeline, walkEntry(1), two, moved) {
-		t.Fatal("the walk accepts an unchained entry earlier than the entry before it")
+		ok, err := audit.LogAgrees(t.Context(), f, scopes, state)
+		if err != nil {
+			t.Fatalf("log agrees: %v", err)
+		}
+
+		return ok
 	}
 
-	back := walkChained(3, "")
-	back.At = walkAt(0, time.Second)
-	back.Hash = audit.ComputeHash(back, "")
+	if !agrees(audit.ChainStateOn) || !agrees(audit.ChainStateOff) {
+		t.Fatal("empty scopes: want agreement with both states")
+	}
 
-	if walkOK(timeline, walkEntry(1), walkEntry(2), back) {
-		t.Fatal("the walk accepts a chained entry earlier than the unchained entry before it")
+	f.put("acme", walkEntry(0))
+
+	if !agrees(audit.ChainStateOn) || agrees(audit.ChainStateOff) {
+		t.Fatal("a chained tail: want agreement with on only")
+	}
+
+	f.on = false
+	f.put("acme", walkEntry(0))
+
+	if agrees(audit.ChainStateOn) || !agrees(audit.ChainStateOff) {
+		t.Fatal("an unchained tail: want agreement with off only")
+	}
+
+	f.fail = errors.New("read failed")
+	if _, err := audit.LogAgrees(t.Context(), f, scopes, audit.ChainStateOn); err == nil {
+		t.Fatal("log agrees with a read error: want an error")
 	}
 }
 
-func TestChainWalkNeedsAnOffAfterTheLastChainedEntry(t *testing.T) {
+func TestChainSetEntry(t *testing.T) {
 	t.Parallel()
 
-	// The chain was off from the start. A chained entry long after the
-	// start, then an unchained one: no switch to off follows the chained
-	// entry, so the unchained entry does not fit.
-	timeline := make([]audit.ChainPoint, 0, 2)
-	timeline = append(timeline, audit.ChainPoint{At: walkAt(0, 0), On: false})
+	e := audit.ChainSetEntry(audit.ChainChange{At: walkAt(1, 0), By: "alice", To: audit.ChainStateOff})
 
-	if walkOK(timeline, walkChained(1, ""), walkEntry(2)) {
-		t.Fatal("the walk accepts an unchained entry after a chained one with no switch to off between")
-	}
-
-	// With a switch to off after the chained entry, it fits.
-	timeline = append(timeline, audit.ChainPoint{At: walkAt(1, time.Second), On: false})
-
-	if !walkOK(timeline, walkChained(1, ""), walkEntry(2)) {
-		t.Fatal("the walk refuses an unchained entry after a switch to off")
+	if e.Namespace != audit.ServerScope || e.Action != audit.ActionSetChain || e.Subject != "alice" ||
+		e.ValuePath != "/audit/chain/off" || e.Validate() != nil {
+		t.Fatalf("set entry: got %+v, want a valid entry in the server scope by alice", e)
 	}
 }

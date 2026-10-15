@@ -293,18 +293,28 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 
 // keepChainState copies the audit chain state from the schema previous to
 // the restored schema live, in tx. The chain state is bookkeeping of this
-// installation: a restore keeps the row of the target. The swap
-// applies the restore that the record names, so the copy sets
-// restore_applied: a start after a crash then knows that the log was
-// replaced.
+// installation: a restore keeps the row of the target. The swap replaces
+// the log, so the copy sets log_replaced: the server compares the restored
+// log with the state, also after a crash. Without a row, the copy writes
+// the state that a missing row reads as: the chain on.
 func keepChainState(ctx context.Context, tx pgx.Tx, live, previous string) error {
-	const columns = "id, state, ever_chained, restore_id, restore_backup_id, restore_requested_by, restore_applied"
+	const columns = "id, state, changed_at_ms, changed_by, pending, log_replaced"
 
 	keep := "INSERT INTO " + pgIdent(live) + ".audit_chain_state (" + columns + ")" +
-		" SELECT id, state, ever_chained, restore_id, restore_backup_id, restore_requested_by, true FROM " +
+		" SELECT id, state, changed_at_ms, changed_by, pending, true FROM " +
 		pgIdent(previous) + ".audit_chain_state"
 
-	if _, err := tx.Exec(ctx, keep); err != nil {
+	tag, err := tx.Exec(ctx, keep)
+	if err != nil {
+		return fmt.Errorf("keep audit chain state: %w", err)
+	}
+
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+
+	seed := "INSERT INTO " + pgIdent(live) + ".audit_chain_state (" + columns + ") VALUES (1, 'on', 0, '', false, true)"
+	if _, err := tx.Exec(ctx, seed); err != nil {
 		return fmt.Errorf("keep audit chain state: %w", err)
 	}
 

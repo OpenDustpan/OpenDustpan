@@ -34,13 +34,12 @@ type AccessTokenPolicy struct {
 }
 
 type AuditChainState struct {
-	ID                 int16
-	State              string
-	EverChained        bool
-	RestoreID          string
-	RestoreBackupID    string
-	RestoreRequestedBy string
-	RestoreApplied     bool
+	ID          int16
+	State       string
+	ChangedAtMs int64
+	ChangedBy   string
+	Pending     bool
+	LogReplaced bool
 }
 
 type AuditEntry struct {
