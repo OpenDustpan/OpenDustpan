@@ -40,6 +40,10 @@ type Entry struct {
 	Status        string
 	ResourceCount *int64
 	Lock          *Lock
+	// Collection is the name of the collection that holds the unit, as it was
+	// written. It is empty when the unit has none (ADR 51). A collection never
+	// changes the tool's own name of the unit.
+	Collection string
 }
 
 // Lock is who holds a unit and why. Holder is the subject of the principal
