@@ -84,7 +84,7 @@ func (h *Handler) tokenPolicyRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: tokenPolicyPath, Scope: ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerReadTokens}, Resolve: resolveServer,
+			Actions: []identity.Action{identity.ActionServerReadTokens}, Resolve: resolveServer, ActionsFor: nil,
 			Serve: h.serveTokenRead(getTokenPolicy),
 		},
 		{
@@ -92,16 +92,16 @@ func (h *Handler) tokenPolicyRoutes() []Route {
 			Path:    tokenPolicyPath,
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.serveTokenChange(identity.ActionServerManageTokenPolicy, changeTokenPolicy),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.serveTokenChange(identity.ActionServerManageTokenPolicy, changeTokenPolicy),
 		},
 		{
 			Method:  http.MethodPost,
 			Path:    tokenPolicySweepPath,
 			Scope:   ScopeAuthorized,
 			Actions: manage,
-			Resolve: resolveServer,
-			Serve:   h.serveTokenChange(identity.ActionServerManageTokenPolicy, sweepInactive),
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.serveTokenChange(identity.ActionServerManageTokenPolicy, sweepInactive),
 		},
 	}
 }

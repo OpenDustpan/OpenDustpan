@@ -808,7 +808,47 @@ func CoverageAllowlist() []AllowEntry {
 		tokenAllowEntries(),
 		tokenPolicyAllowEntries(),
 		ipAllowlistAllowEntries(),
+		delegationAllowEntries(),
 	)
+}
+
+// delegationCoveringTest names the test that proves the routes of the
+// tokens, the grants and the export of one service principal instead of a
+// CLI: no CLI calls them.
+const delegationCoveringTest = "TestServicePrincipalTokens"
+
+// delegationAllowEntries returns the operator and console routes of one
+// service principal: its tokens, the grants on it and its export. The
+// harness steps of delegationCoveringTest drive each one through the real
+// binary on each store.
+func delegationAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages the tokens of a service principal or the grants on it. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	const (
+		root   = "/api/server/principals/{principal}"
+		tokens = root + "/tokens"
+		grants = root + "/grants"
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodPost, tokens},
+		{http.MethodPost, tokens + "/{id}/rotate"},
+		{http.MethodDelete, tokens + "/{id}"},
+		{http.MethodGet, grants},
+		{http.MethodPost, grants},
+		{http.MethodDelete, grants + "/{id}"},
+		{http.MethodGet, root + "/access-review"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: delegationCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
 }
 
 // principalCoveringTest names the test that proves the principal and group

@@ -1821,9 +1821,10 @@ func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, 
 // newTokenService builds the access token service (ADR 53) from the
 // namespace store, or returns nil when the store keeps no access tokens or
 // no principals. Every SQL adapter keeps both. The escalation check of a
-// token for another principal (decision 3) is the grants of grants (ADR
-// 52). With nil grants, a store that keeps none, only an administrator
-// passes it.
+// personal token for another person is the grants of grants, and the
+// authorizer of grants decides principal:manage-tokens for a service
+// token. With nil grants, a store that keeps none, only an administrator
+// passes either.
 func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
@@ -1835,14 +1836,19 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
-	var check accesstoken.GrantCheck
+	var (
+		check accesstoken.GrantCheck
+		authz identity.Authorizer
+	)
+
 	if grants != nil {
 		check = tokengrants.Check{Grants: grants, Principals: principals}
+		authz = grants.Authorizer()
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: check, Logger: cfg.logger, Now: cfg.now,
-		NewID: nil,
+		Store: store, Principals: principals, Freshness: nil, Grants: check, Authorizer: authz,
+		Logger: cfg.logger, Now: cfg.now, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)

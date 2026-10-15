@@ -50,8 +50,22 @@ type Route struct {
 	// Resolve returns the object that Actions apply to. Only authorized
 	// routes set it.
 	Resolve ObjectResolver
+	// ActionsFor, when it is not nil, picks from Actions the actions that
+	// the resolved object needs, for a route whose object can be of more
+	// than one kind. Nil means every entry of Actions.
+	ActionsFor func(obj identity.Object) []identity.Action
 	// Serve handles the request after the wrapper has enforced the row.
 	Serve RouteHandler
+}
+
+// ActionsOn returns the actions that the route authorizes on obj: the
+// choice of ActionsFor when it is set, else Actions.
+func (r Route) ActionsOn(obj identity.Object) []identity.Action {
+	if r.ActionsFor != nil {
+		return r.ActionsFor(obj)
+	}
+
+	return r.Actions
 }
 
 // buildRoutes returns the route table. It is the single source of the
@@ -89,16 +103,16 @@ func (h *Handler) coreRoutes() []Route {
 			Path:    "/api/server/namespaces",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerCreateNamespace},
-			Resolve: resolveCreateNamespace,
-			Serve:   h.createNamespace,
+			Resolve: resolveCreateNamespace, ActionsFor: nil,
+			Serve: h.createNamespace,
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/server/metrics",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
-			Resolve: resolveServer,
-			Serve:   h.serveMetrics,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.serveMetrics,
 		},
 	}
 }
@@ -111,24 +125,24 @@ func (h *Handler) backupRoutes() []Route {
 			Path:    "/api/server/backups",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer,
-			Serve:   h.startBackup,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.startBackup,
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/server/backups",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer,
-			Serve:   h.listBackups,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.listBackups,
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/server/backups/{id}",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer,
-			Serve:   h.getBackup,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.getBackup,
 		},
 	}
 }
@@ -142,24 +156,24 @@ func (h *Handler) restoreRoutes() []Route {
 			Path:    "/api/server/restores",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer,
-			Serve:   h.startRestore,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.startRestore,
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/server/restores",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer,
-			Serve:   h.listRestores,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.listRestores,
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/server/restores/{id}",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerRestore},
-			Resolve: resolveServer,
-			Serve:   h.getRestore,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.getRestore,
 		},
 	}
 }
@@ -173,16 +187,16 @@ func (h *Handler) checkRoutes() []Route {
 			Path:    "/api/server/backups/{id}/check",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerBackup},
-			Resolve: resolveServer,
-			Serve:   h.checkBackup,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.checkBackup,
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/api/server/upgrade-check",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerObserve},
-			Resolve: resolveServer,
-			Serve:   h.serveUpgradeCheck,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.serveUpgradeCheck,
 		},
 	}
 }
@@ -195,24 +209,24 @@ func (h *Handler) maintenanceRoutes() []Route {
 			Path:    "/api/server/maintenance",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerMaintenance},
-			Resolve: resolveServer,
-			Serve:   h.getMaintenance,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.getMaintenance,
 		},
 		{
 			Method:  http.MethodPost,
 			Path:    "/api/server/maintenance/enter",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerMaintenance},
-			Resolve: resolveServer,
-			Serve:   h.enterMaintenance,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.enterMaintenance,
 		},
 		{
 			Method:  http.MethodPost,
 			Path:    "/api/server/maintenance/leave",
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionServerMaintenance},
-			Resolve: resolveServer,
-			Serve:   h.leaveMaintenance,
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.leaveMaintenance,
 		},
 	}
 }
@@ -321,7 +335,15 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 			return
 		}
 
-		for _, action := range route.Actions {
+		actions := route.ActionsOn(obj)
+		if len(actions) == 0 {
+			h.writeError(ctx, w, fmt.Errorf("%w: %s %s needs no action on %q", identity.ErrDenied,
+				route.Method, route.Path, obj.String()))
+
+			return
+		}
+
+		for _, action := range actions {
 			if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
 				h.writeError(ctx, w, fmt.Errorf("authorize %s: %w", action, err))
 
