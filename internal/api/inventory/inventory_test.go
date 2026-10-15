@@ -190,6 +190,8 @@ func newBehaviorHandler(
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Moves:         nil,
+		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
 		Deleted:       seededDeleted(),
@@ -290,6 +292,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 
 	reader.entries[ns] = []coreinventory.Entry{
 		{
+			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
 			Tool:          "pulumi",
@@ -301,6 +304,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Lock:          nil,
 		},
 		{
+			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
 			Tool:          "opentofu",
@@ -312,6 +316,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Lock:          nil,
 		},
 		{
+			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
 			Tool:          "pulumi",
@@ -539,6 +544,7 @@ func TestListUnitsLockField(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
 					Tool:          "pulumi",
@@ -592,6 +598,7 @@ func TestListUnitsOmitsLock(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
 					Tool:          "opentofu",
@@ -644,6 +651,7 @@ func TestListUnitsLockHoldsNoToken(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
 					Tool:          "opentofu",
@@ -849,6 +857,8 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiinventory.Config{
+		Moves:         nil,
+		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
 		Deleted:       seededDeleted(),

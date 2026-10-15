@@ -116,7 +116,9 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 
 	seedStack(t, st, "acme", "web", "prod")
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
+	authz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st},
+	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}
@@ -158,6 +160,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		Access:         grants,
 		Audit:          entries(st),
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {

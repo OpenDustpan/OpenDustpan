@@ -442,7 +442,7 @@ func TestCallerAccessPaging(t *testing.T) {
 
 	web = web.WithUnitID("stk-acme-web-prod")
 
-	for i, o := range []identity.Object{identity.CollectionObject("acme", "payments"), web, api} {
+	for i, o := range []identity.Object{identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"), web, api} {
 		g := access.Grant{
 			CreatedAt: at, Condition: nil, Object: o, ID: "grt-page-" + strconv.Itoa(i), Role: access.RoleViewer,
 			CreatedBy: "admin", Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-bob"},

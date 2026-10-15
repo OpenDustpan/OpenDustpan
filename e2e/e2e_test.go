@@ -4035,6 +4035,8 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 
 	// The inventory API serves the console scheme as well as Bearer (ADR 13).
 	inventorySchemeScenario(t, env)
+	// The collection routes move the e2e workspace between two collections (ADR 51).
+	collectionsScenario(t, env)
 
 	// The sealed round trip with a key set: state pull, the API download of
 	// the current version and its MD5 attribute agree.

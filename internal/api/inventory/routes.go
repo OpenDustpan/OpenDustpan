@@ -61,7 +61,8 @@ type Route struct {
 // Contract: never remove or rename these endpoints or status codes. The
 // console reads only this API, and it ships on its own schedule.
 func (h *Handler) buildRoutes() []Route {
-	return []Route{
+	//nolint:prealloc // The table is one literal; the collection rows are appended only when a collection service is set.
+	routes := []Route{
 		{
 			Method: http.MethodGet,
 			Path:   "/api/inventory/units",
@@ -103,6 +104,12 @@ func (h *Handler) buildRoutes() []Route {
 			Serve:   h.purgeUnit,
 		},
 	}
+
+	if h.collections == nil {
+		return routes
+	}
+
+	return append(routes, h.collectionRoutes()...)
 }
 
 // Routes returns a copy of the route table. The Actions lists are copied

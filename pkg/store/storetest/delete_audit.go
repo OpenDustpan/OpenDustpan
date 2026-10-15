@@ -525,7 +525,7 @@ func testPortablePurgeRemovesChildren(t *testing.T, newStore PortableFactory) {
 	}
 
 	purge := lifecycleEntry(seed.acme.Name, "unit:purge")
-	if err := s.PurgeStack(t.Context(), seed.prod.ID, seed.acme.Fence(), purge); err != nil {
+	if err := s.PurgeStack(t.Context(), seed.prod.ID, seed.acme.Fence(), time.Time{}, purge); err != nil {
 		t.Fatalf("purge stack: %v", err)
 	}
 
@@ -687,8 +687,15 @@ func seedPurgedWorkspace(t *testing.T, s PortableStore, acme namespace.Namespace
 		t.Fatalf("delete workspace: %v", err)
 	}
 
-	if err := s.PurgeWorkspace(ctx, w.ID, acme.Fence(), lifecycleEntry(acme.Name, "unit:purge")); err != nil {
-		t.Fatalf("purge workspace: %v", err)
+	purgeErr := s.PurgeWorkspace(
+		ctx,
+		w.ID,
+		acme.Fence(),
+		time.Time{},
+		lifecycleEntry(acme.Name, "unit:purge"),
+	)
+	if purgeErr != nil {
+		t.Fatalf("purge workspace: %v", purgeErr)
 	}
 
 	return w.ID.String()

@@ -697,7 +697,7 @@ func seedBackupPurge(t *testing.T, s BackupStore, acme namespace.Namespace) {
 		t.Fatalf("delete stack to purge: %v", err)
 	}
 
-	if err := s.PurgeStack(ctx, st.ID, acme.Fence(), lifecycleEntry(acme.Name, "unit:purge")); err != nil {
+	if err := s.PurgeStack(ctx, st.ID, acme.Fence(), time.Time{}, lifecycleEntry(acme.Name, "unit:purge")); err != nil {
 		t.Fatalf("purge stack: %v", err)
 	}
 }

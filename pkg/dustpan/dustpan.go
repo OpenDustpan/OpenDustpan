@@ -61,6 +61,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
@@ -466,6 +467,8 @@ type Server struct {
 	tokens      *accesstoken.Service
 	shipper     *audit.Shipper
 	beforeServe func(ctx context.Context) error
+	// deleted runs the retention sweep of the deleted units on a schedule.
+	deleted *deletedSweeper
 }
 
 // services holds the domain services that NewServer wires together.
@@ -478,6 +481,12 @@ type services struct {
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
+	// collections is the collection service (ADR 51), or nil when the store
+	// holds no collections. NewServer sets it after newServices.
+	collections *collection.Service
+	// deleted runs the retention sweep. assemble sets it, because
+	// it counts on the server metrics.
+	deleted *deletedSweeper
 	// access keeps the roles and grants (ADR 52), or is nil when the store
 	// keeps none. NewServer sets it after newServices. The installation API
 	// and the escalation check of the token service share it.
@@ -556,6 +565,11 @@ func NewServer(opts ...Option) (*Server, error) {
 
 	svc.tokens, svc.access = tokens, grants
 
+	svc.collections, err = newCollectionService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	backups, err := newBackupService(cfg, svc)
 	if err != nil {
 		return nil, err
@@ -631,6 +645,13 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
 	registry := observed.Registry()
 
+	deleted, err := newDeletedSweeper(svc, cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	svc.deleted = deleted
+
 	adapters, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
 		return nil, err
@@ -677,6 +698,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		tokens:          svc.tokens,
 		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
+		deleted:         deleted,
 	}, nil
 }
 
@@ -1027,13 +1049,15 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	}
 
 	return services{
-		namespaces: namespaces,
-		stacks:     stacks,
-		updates:    updates,
-		secrets:    secrets,
-		workspaces: workspaces,
-		tokens:     nil,
-		access:     nil,
+		namespaces:  namespaces,
+		stacks:      stacks,
+		updates:     updates,
+		secrets:     secrets,
+		workspaces:  workspaces,
+		tokens:      nil,
+		deleted:     nil,
+		access:      nil,
+		collections: nil,
 	}, nil
 }
 
@@ -1141,6 +1165,7 @@ func (s *Server) Run(ctx context.Context) error {
 	var sweeps sync.WaitGroup
 
 	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
+	sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
 
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
@@ -1530,17 +1555,31 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
 	}
 
-	blobs := blobPurger{logger: cfg.logger}
+	stacks, workspaces := unitLifecycles(svc, cfg)
+
+	// The move check is the escalation check of the access service. A store
+	// with no roles and grants gives no checker, so a move is refused there.
+	grants, err := newAccessService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var moves inventoryapi.MoveChecker
+	if grants != nil {
+		moves = grants
+	}
 
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		Namespaces: svc.namespaces,
 		Units:      cfg.inventoryReader,
 		Deleted:    deleted,
 		Lifecycles: map[string]inventory.Lifecycle{
-			pulumiTool:   pulumiLifecycle{stacks: svc.stacks, updates: svc.updates, blobs: blobs},
-			opentofuTool: opentofuLifecycle{workspaces: svc.workspaces, blobs: blobs},
+			pulumiTool:   stacks,
+			opentofuTool: workspaces,
 		},
 		ReadScope:     deletedReadScope{authz: cfg.authorizer},
+		Collections:   svc.collections,
+		Moves:         moves,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
@@ -1551,6 +1590,15 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// unitLifecycles returns the restore and purge of each tool. The
+// inventory API and the retention sweep share them.
+func unitLifecycles(svc services, cfg *settings) (pulumiLifecycle, opentofuLifecycle) {
+	blobs := blobPurger{logger: cfg.logger}
+
+	return pulumiLifecycle{stacks: svc.stacks, updates: svc.updates, blobs: blobs},
+		opentofuLifecycle{workspaces: svc.workspaces, blobs: blobs}
 }
 
 // installationDeps carries the services of the installation API.
@@ -1620,6 +1668,7 @@ func newServerHandler(
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
 		},
+		DeletedUnits: deps.services.deleted,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -1709,7 +1758,7 @@ func setDefaultAuthorizer(cfg *settings) error {
 		return nil
 	}
 
-	authz, err := defaultAuthorizer(cfg.namespaceStore)
+	authz, err := defaultAuthorizer(cfg)
 	if err != nil {
 		return err
 	}
@@ -1725,20 +1774,66 @@ func setDefaultAuthorizer(cfg *settings) error {
 // under both.
 //
 //nolint:ireturn // Two policies with no shared concrete type: the caller keeps the port.
-func defaultAuthorizer(store namespace.Store) (identity.Authorizer, error) {
-	stores, ok := store.(accessStores)
+func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
+	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
 		return identity.AdminOnly{}, nil
 	}
 
+	collections, err := unitCollections(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: stores, Callers: stores, Collections: nil, Units: stores,
+		Store: stores, Callers: stores, Collections: collections, Units: stores,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("authorizer: %w", err)
 	}
 
 	return authz, nil
+}
+
+// newCollectionService builds the collection service on the namespace store
+// when that store also holds collections (ADR 51). A custom store without
+// collections gets no collection service, so its collection routes are not
+// served and the rest of the API works as before.
+func newCollectionService(cfg *settings) (*collection.Service, error) {
+	store, ok := cfg.namespaceStore.(collection.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No collection service: the store holds no collections.
+	}
+
+	svc, err := collection.NewService(collection.Config{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("collection service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// unitCollections returns the collection port of the authorizer: the
+// collection service when the store holds collections, else nil. The
+// service is returned as an interface only when it is not nil, so that a
+// nil service does not become a non-nil port.
+//
+//nolint:ireturn // The port of the authorizer: the caller keeps it as the interface.
+func unitCollections(cfg *settings) (access.UnitCollections, error) {
+	svc, err := newCollectionService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if svc == nil {
+		return nil, nil //nolint:nilnil // No collections: a grant on a collection is refused as not found.
+	}
+
+	return svc, nil
 }
 
 // newAccessService builds the role and grant service (ADR 52) from the
@@ -1754,10 +1849,15 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 
 	authz, isAccess := cfg.authorizer.(*access.Authorizer)
 	if !isAccess {
+		collections, collErr := unitCollections(cfg)
+		if collErr != nil {
+			return nil, collErr
+		}
+
 		var err error
 
 		authz, err = access.NewAuthorizer(access.AuthorizerConfig{
-			Store: stores, Callers: stores, Collections: nil, Units: stores,
+			Store: stores, Callers: stores, Collections: collections, Units: stores,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("access authorizer: %w", err)
