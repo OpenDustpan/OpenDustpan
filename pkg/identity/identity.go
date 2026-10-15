@@ -236,10 +236,15 @@ const (
 	// 6). Its object is ServerObject.
 	ActionServerManageTokenPolicy Action = "server:manage-token-policy"
 	// ActionServerManageSignIn allows changing the sign-in settings of the
-	// installation: the session policy, and later the sign-in methods, SCIM
-	// and MFA. Its object is ServerObject. Of the built-in roles, only the
-	// site administrator holds it.
+	// installation: the session policy, the MFA freshness settings, and later
+	// the sign-in methods, SCIM and MFA. Its object is ServerObject. Of the
+	// built-in roles, only the site administrator holds it.
 	ActionServerManageSignIn Action = "server:manage-sign-in"
+	// ActionServerRestoreAccess allows a restore to replace the access
+	// tables: principals, groups, memberships, roles, grants, access tokens
+	// and trust rules. Its object is ServerObject. Of the built-in roles,
+	// only the site administrator holds it.
+	ActionServerRestoreAccess Action = "server:restore-access"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

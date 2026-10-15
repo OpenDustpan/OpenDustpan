@@ -89,6 +89,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		},
 		{name: "journal version round trip", test: testJournalVersionRoundTrip},
 		{name: "journal version of a new update is zero", test: testJournalVersionDefaultsToZero},
+		{name: "count of running journaled updates", test: testCountRunningJournaledUpdates},
 		{name: "missing update is ErrUpdateNotFound", test: testMissingUpdate},
 		{name: "update of missing stack is ErrNotFound", test: testUpdateMissingStack},
 		{name: "stale fence is ErrFenced on every write", test: testUpdateWritesFenced},
@@ -131,6 +132,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "journal stores one copy of a batch sent twice at once", test: testJournalConcurrentRetry},
 		{name: "journal check sees the stored operations and refusals store nothing", test: testJournalVerify},
 		{name: "journal refuses a write after a stored change", test: testJournalRefusesWriteAfterStoredChange},
+		{name: "journal refuses a reference to a begun-only operation", test: testJournalBegunRefusal},
 		{name: "build removes the journal and returns its blob keys", test: testJournalBuild},
 		{name: "build races a batch without losing its key", test: testJournalBuildRace},
 		{name: "build leaves other updates and stacks journaled", test: testJournalBuildIsolation},
@@ -564,6 +566,78 @@ func testJournalVersionDefaultsToZero(t *testing.T, f fixture) {
 	got := f.start(t, want)
 	if got.JournalVersion != 0 {
 		t.Fatalf("started update journal version = %d, want 0", got.JournalVersion)
+	}
+}
+
+// testCountRunningJournaledUpdates checks the count of running updates with
+// journal version above 0: an empty store counts 0, each running journaled
+// update counts once, a running update without journaling changes nothing,
+// and an ended journaled update leaves the count.
+func testCountRunningJournaledUpdates(t *testing.T, f fixture) {
+	t.Helper()
+
+	counter, ok := f.s.(interface {
+		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
+	})
+	if !ok {
+		t.Fatal("store does not count running journaled updates")
+	}
+
+	count := func() int64 {
+		t.Helper()
+
+		got, err := counter.CountRunningJournaledUpdates(t.Context())
+		if err != nil {
+			t.Fatalf("count running journaled updates: %v", err)
+		}
+
+		return got
+	}
+
+	startJournaled := func(ref stack.Ref, id string, version int64) stack.Update {
+		t.Helper()
+
+		u := started(t, f.create(t, ref, id, mutating()))
+		u.JournalVersion = version
+
+		got, err := f.s.StartUpdate(t.Context(), u, f.fence)
+		if err != nil {
+			t.Fatalf("start journaled update %s: %v", id, err)
+		}
+
+		return got
+	}
+
+	if got := count(); got != 0 {
+		t.Fatalf("empty count = %d, want 0", got)
+	}
+
+	first := startJournaled(f.ref, "u1", 1)
+	if got := count(); got != 1 {
+		t.Fatalf("count with one running journaled update = %d, want 1", got)
+	}
+
+	other := f.other(t)
+	second := startJournaled(other, "u2", 2)
+	if got := count(); got != 2 {
+		t.Fatalf("count with two running journaled updates = %d, want 2", got)
+	}
+
+	f.end(t, first, stack.StatusSucceeded)
+	if got := count(); got != 1 {
+		t.Fatalf("count after one journaled update ended = %d, want 1", got)
+	}
+
+	plain := f.run(t, f.ref, "u3", mutating())
+	if got := count(); got != 1 {
+		t.Fatalf("count with a running update without journaling = %d, want 1", got)
+	}
+
+	f.end(t, second, stack.StatusSucceeded)
+	f.end(t, plain, stack.StatusSucceeded)
+
+	if got := count(); got != 0 {
+		t.Fatalf("count after every update ended = %d, want 0", got)
 	}
 }
 

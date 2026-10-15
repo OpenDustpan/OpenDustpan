@@ -128,6 +128,7 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates: s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
 		Stacks: stacks, Blobs: blobs, Tokens: nil, Now: now, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,
+		Replayer: nil,
 	})
 	if err != nil {
 		b.Fatalf("updates service: %v", err)

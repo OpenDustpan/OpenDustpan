@@ -216,12 +216,14 @@ func newServiceBackedHandler(
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         st,
+		Journal:        st,
 		Principals:     seedRoutePrincipals(t, st),
 		Tokens:         seedRouteTokens(t, st),
 		Access:         seedRouteAccess(t, st),
 		Audit:          st,
 		OnAuditFailure: nil,
 		DeletedUnits:   stubSweeper{},
+		AuditSinks:     nil,
 		IPAllowlists:   allow,
 		SessionPolicy:  sessionPolicies,
 	})
@@ -576,22 +578,13 @@ const routeGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"wr
 // group.
 const routePrincipalGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"token-manager"}`
 
-// openRouteTestStore opens a fresh SQLite store for one route test.
+// openRouteTestStore opens a fresh SQLite store for one route test, copied
+// from the migrated template so only the first test of the binary runs every
+// migration.
 func openRouteTestStore(t *testing.T) *sqlite.Store {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	return st
+	return openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 }
 
 // openRouteTestBlobs opens a fresh file blob store for one route test.
@@ -1227,12 +1220,14 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         nil,
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	}
@@ -1361,12 +1356,14 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         nil,
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})
@@ -1389,12 +1386,14 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         nil,
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})
