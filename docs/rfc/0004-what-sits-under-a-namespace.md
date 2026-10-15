@@ -263,5 +263,4 @@ questions for collections", under the delegation of the owner. To move a unit,
 a person needs rights on the unit, on the old collection and on the target
 collection. A stack-name pattern of a placement rule is a glob with `*`. A
 change to a placement rule does not change units that exist.
-
 The rest of this RFC has no outcome yet.
