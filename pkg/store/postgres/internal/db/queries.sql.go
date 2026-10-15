@@ -3745,7 +3745,7 @@ func (q *Queries) JournalSequenceSHA(ctx context.Context, arg JournalSequenceSHA
 }
 
 const journalState = `-- name: JournalState :one
-SELECT journal_closed, journal_records_changed, status FROM updates
+SELECT journal_closed, journal_version, journal_records_changed, status FROM updates
 WHERE stack_id = $1 AND id = $2
 `
 
@@ -3756,6 +3756,7 @@ type JournalStateParams struct {
 
 type JournalStateRow struct {
 	JournalClosed         bool
+	JournalVersion        int64
 	JournalRecordsChanged bool
 	Status                string
 }
@@ -3763,7 +3764,12 @@ type JournalStateRow struct {
 func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (JournalStateRow, error) {
 	row := q.db.QueryRow(ctx, journalState, arg.StackID, arg.ID)
 	var i JournalStateRow
-	err := row.Scan(&i.JournalClosed, &i.JournalRecordsChanged, &i.Status)
+	err := row.Scan(
+		&i.JournalClosed,
+		&i.JournalVersion,
+		&i.JournalRecordsChanged,
+		&i.Status,
+	)
 	return i, err
 }
 
