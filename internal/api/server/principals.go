@@ -22,6 +22,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -62,6 +63,9 @@ var errNoPrincipalStore = errors.New("the store of this server keeps no principa
 // memberships: its groups come from their own paged route. A null
 // disabledAt means that the inactivity disable did not end the principal
 // (ADR 53); POST /api/server/principals/{id}/enable clears it.
+// TemporaryAdministrator is true for a temporary administrator that still
+// works, with its fixed expiry in TemporaryExpiresAt, so the console shows
+// a banner for it. Both stay empty for every other principal.
 //
 // Contract: never remove or rename these fields. The console and the
 // clients read only this API, and they update on their own schedule.
@@ -78,6 +82,11 @@ type principalResponse struct {
 	// namespace of a service principal of a namespace.
 	Namespace  string `json:"namespace"`
 	GroupCount int64  `json:"groupCount"`
+	// TemporaryAdministrator and TemporaryExpiresAt name a working
+	// temporary administrator and its fixed expiry. A null expiry means
+	// the principal is no temporary administrator.
+	TemporaryAdministrator bool    `json:"temporaryAdministrator"`
+	TemporaryExpiresAt     *string `json:"temporaryExpiresAt"`
 }
 
 // groupResponse is one group on the wire. A group whose source is not local
@@ -162,16 +171,68 @@ func wireTime(t time.Time) string {
 
 func principalOf(p principal.Principal) principalResponse {
 	return principalResponse{
-		ID:          p.ID,
-		Subject:     p.Subject,
-		DisplayName: p.DisplayName,
-		Kind:        string(p.Kind),
-		Source:      string(p.Source),
-		CreatedAt:   wireTime(p.CreatedAt),
-		UpdatedAt:   wireTime(p.UpdatedAt),
-		DisabledAt:  optionalWireTime(p.DisabledAt),
-		Namespace:   p.Namespace.String(),
-		GroupCount:  p.GroupCount,
+		ID:                     p.ID,
+		Subject:                p.Subject,
+		DisplayName:            p.DisplayName,
+		Kind:                   string(p.Kind),
+		Source:                 string(p.Source),
+		CreatedAt:              wireTime(p.CreatedAt),
+		UpdatedAt:              wireTime(p.UpdatedAt),
+		DisabledAt:             optionalWireTime(p.DisabledAt),
+		Namespace:              p.Namespace.String(),
+		GroupCount:             p.GroupCount,
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     nil,
+	}
+}
+
+// markTempAdmin sets the banner flag on each principal of the installation
+// in body that still works as a temporary administrator. Without a reader
+// the body passes through unchanged. Only persons are looked up: only a
+// person holds a record.
+func (h *Handler) markTempAdmin(ctx context.Context, body any) any {
+	if h.tempAdmins == nil {
+		return body
+	}
+
+	mark := func(res principalResponse) principalResponse {
+		if res.Kind != string(principal.KindPerson) {
+			return res
+		}
+
+		rec, err := h.tempAdmins.GetTempAdminBySubject(ctx, res.Subject)
+		if err != nil || !rec.ActiveAt(time.Now().UTC()) {
+			return res
+		}
+
+		at := wireTime(rec.ExpiresAt)
+		res.TemporaryAdministrator = true
+		res.TemporaryExpiresAt = &at
+
+		return res
+	}
+
+	switch v := body.(type) {
+	case principalResponse:
+		return mark(v)
+	case principalListResponse:
+		for i := range v.Principals {
+			v.Principals[i] = mark(v.Principals[i])
+		}
+
+		return v
+	case memberResponse:
+		v.Principal = mark(v.Principal)
+
+		return v
+	case memberListResponse:
+		for i := range v.Members {
+			v.Members[i].Principal = mark(v.Members[i].Principal)
+		}
+
+		return v
+	default:
+		return body
 	}
 }
 
@@ -277,7 +338,9 @@ func (h *Handler) runPrincipalOp(
 	return res, true
 }
 
-// writePrincipalResult writes the status and the body of a success.
+// writePrincipalResult writes the status and the body of a success. A body
+// that holds principals carries the banner flag of each working temporary
+// administrator.
 func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, res principalResult) {
 	if res.body == nil {
 		w.WriteHeader(res.status)
@@ -285,7 +348,7 @@ func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 
-	h.writeJSON(r.Context(), w, res.status, res.body)
+	h.writeJSON(r.Context(), w, res.status, h.markTempAdmin(r.Context(), res.body))
 }
 
 // ok returns the result of a success.

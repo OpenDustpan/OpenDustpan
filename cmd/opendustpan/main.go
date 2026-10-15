@@ -41,6 +41,8 @@ import (
 	"opendustpan.org/opendustpan/internal/cli"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/instance"
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
@@ -50,11 +52,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -1483,6 +1487,11 @@ type store interface {
 	inventory.Reader
 	ipallow.Store
 	audit.ServerStore
+	principal.Store
+	accesstoken.Store
+	access.Store
+	access.Callers
+	tempadmin.Store
 	close()
 }
 
@@ -1499,9 +1508,11 @@ type postgresStore struct{ *postgres.Store }
 func (s postgresStore) close() { s.Close() }
 
 // openStore opens the persistence adapter that --database names. Only serve
-// calls it: every other command is a client of the REST API (ADR 39 decision
-// 1). The gate test swaps it for a function that fails the test, so a future
-// client command that opens a store fails the test.
+// and host call it: serve runs the server, and host recovers a lost
+// administrator through the database. Every other command is a client of
+// the REST API. The gate test swaps it for a function
+// that fails the test, so a future client command that opens a store fails
+// the test.
 //
 //nolint:gochecknoglobals // The gate test swaps the opener, so it is a variable.
 var openStore = func(ctx context.Context, database string, logger *slog.Logger) (store, error) {

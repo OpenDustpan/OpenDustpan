@@ -25,6 +25,7 @@ func (adminAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 	}
 
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "Admin",
 		Admin:          true,
@@ -62,6 +63,7 @@ func newMetricsHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
 		Authenticator:  authn,
 		Authorizer:     identity.AdminOnly{},
 		Logger:         slog.New(slog.DiscardHandler),

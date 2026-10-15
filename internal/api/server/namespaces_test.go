@@ -31,6 +31,7 @@ func newNamespaceHandler(t *testing.T, authz identity.Authorizer) *apiserver.Han
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
 		Logger:         slog.New(slog.DiscardHandler),

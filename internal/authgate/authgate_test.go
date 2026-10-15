@@ -26,6 +26,7 @@ func (c *countingAuthenticator) AuthenticateToken(_ context.Context, token strin
 	}
 
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "ci",
 		DisplayName:    "CI",
 		Admin:          false,

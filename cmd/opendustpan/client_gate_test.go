@@ -42,10 +42,12 @@ func gateHealthServer(t *testing.T) *httptest.Server {
 	return server
 }
 
-// TestNonServeCommandsOpenNoStore proves every command except serve never
-// opens a store: it swaps the store opener that only serve may use for one
-// that fails the test, then runs every other command in process against fake
-// servers or with flags that fail early (ADR 39 decision 4).
+// TestNonServeCommandsOpenNoStore proves every command except serve and
+// host never opens a store: it swaps the store opener that only serve and
+// host may use for one that fails the test, then runs every other command
+// in process against fake servers or with flags that fail early. Serve opens
+// the store to run the server, and host opens it to recover a lost administrator
+// without the public listener: both have their own tests.
 func TestNonServeCommandsOpenNoStore(t *testing.T) {
 	t.Setenv(adminTokenEnvVar, "test-token")
 

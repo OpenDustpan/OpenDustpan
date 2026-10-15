@@ -1561,3 +1561,57 @@ UPDATE session_policy
 SET idle_ms = CAST(sqlc.arg('idle_ms') AS INTEGER), max_length_ms = CAST(sqlc.arg('max_length_ms') AS INTEGER),
   updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER)
 WHERE id = 1;
+
+-- name: CreateTempAdmin :execrows
+-- Records the principal as a temporary administrator with its fixed expiry.
+-- A principal holds at most one record.
+INSERT INTO temp_admins (principal_id, subject, expires_at_ms, created_at_ms, created_by)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetTempAdmin :one
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
+FROM temp_admins WHERE principal_id = ?;
+
+-- name: GetTempAdminBySubject :one
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
+FROM temp_admins WHERE subject = ?;
+
+-- name: ListTempAdmins :many
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
+FROM temp_admins ORDER BY expires_at_ms;
+
+-- name: DeleteTempAdmin :execrows
+DELETE FROM temp_admins WHERE principal_id = ?;
+
+-- name: DisablePrincipalForExpiry :execrows
+-- Disables the principal at the expiry of its temporary administrator
+-- record. A principal that is already disabled stays as it is.
+UPDATE principals SET disabled_at_ms = CAST(sqlc.arg('disabled_at_ms') AS INTEGER)
+WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
+
+-- name: DisableInactiveAccessTokensExceptTemp :many
+-- As DisableInactiveAccessTokens, but keeps the tokens of the principals
+-- that still work as temporary administrators: while break-glass is on,
+-- the inactivity disable never ends them.
+UPDATE access_tokens SET disabled_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
+WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
+  AND COALESCE(last_used_at_ms, created_at_ms) <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
+  AND principal_id NOT IN (SELECT principal_id FROM temp_admins)
+RETURNING id, principal_id;
+
+-- name: DisableInactivePrincipalsExceptTemp :many
+-- As DisableInactivePrincipals, but keeps the principals that still work as
+-- temporary administrators.
+UPDATE principals SET disabled_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
+WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND created_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
+  AND last_active_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
+  AND COALESCE(last_sign_in_at_ms, 0) <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
+  AND NOT EXISTS (
+    SELECT 1 FROM access_tokens t
+    WHERE t.principal_id = principals.id
+      AND (t.created_at_ms > CAST(sqlc.arg('cutoff_ms') AS INTEGER) OR t.last_used_at_ms > CAST(sqlc.arg('cutoff_ms') AS INTEGER))
+  )
+  AND id NOT IN (SELECT principal_id FROM temp_admins)
+RETURNING id;

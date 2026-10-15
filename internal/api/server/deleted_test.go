@@ -48,6 +48,7 @@ func newSweepHandler(
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: deny},
 		Logger:         slog.New(slog.DiscardHandler),

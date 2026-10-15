@@ -210,8 +210,15 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: s.tokens, Principals: s.principals, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: now,
-		NewID: nil,
+		TempAdmins: nil,
+		Store:      s.tokens,
+		Principals: s.principals,
+		Freshness:  nil,
+		Grants:     nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        now,
+		NewID:      nil,
 	})
 	if err != nil {
 		b.Fatalf("token service: %v", err)
@@ -311,6 +318,7 @@ func leaseBenchHandler(b *testing.B, s leaseStores, blobs *fs.Store) http.Handle
 // benchAdmin is the bootstrap administrator that creates the benchmark token.
 func benchAdmin() identity.Principal {
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "admin",
 		Admin:          true,

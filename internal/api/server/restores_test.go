@@ -85,6 +85,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:         slog.New(slog.DiscardHandler),
@@ -533,6 +534,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 	}
 
 	denied, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:    nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer: selectiveAuthorizer{deny: map[identity.Action]bool{
 			identity.ActionServerRestore: true,
@@ -731,6 +733,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:         slog.New(slog.DiscardHandler),

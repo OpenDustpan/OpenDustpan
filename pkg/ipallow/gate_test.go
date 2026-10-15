@@ -70,6 +70,7 @@ func mustList(t *testing.T, items []string) ipallow.List {
 // adminPrincipal returns an admin principal with subject.
 func adminPrincipal(subject string) identity.Principal {
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        subject,
 		DisplayName:    subject,
 		Admin:          true,
@@ -81,6 +82,7 @@ func adminPrincipal(subject string) identity.Principal {
 // userPrincipal returns a non-admin principal with subject.
 func userPrincipal(subject string) identity.Principal {
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        subject,
 		DisplayName:    subject,
 		Admin:          false,

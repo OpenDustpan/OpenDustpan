@@ -54,6 +54,7 @@ func TestRequireHeld(t *testing.T) {
 	t.Parallel()
 
 	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "alice",
 		DisplayName:    "",
 		Admin:          false,

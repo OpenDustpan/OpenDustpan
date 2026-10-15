@@ -29,6 +29,7 @@ const (
 	portColUnitID       = "unit_id"
 	portColPrincipalID  = "principal_id"
 	portColDigest       = "digest"
+	portColExpiresAtMs  = "expires_at_ms"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -350,6 +351,17 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "temp_admins",
+			OrderBy: []string{portColPrincipalID},
+			Columns: []Column{
+				{Name: portColPrincipalID, Kind: KindText},
+				{Name: portColSubject, Kind: KindText},
+				{Name: portColExpiresAtMs, Kind: KindTime},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: portColCreatedBy, Kind: KindText},
+			},
+		},
+		{
 			Table:   "access_tokens",
 			OrderBy: []string{"id"},
 			Columns: []Column{
@@ -359,7 +371,7 @@ func portableSpec() []PortableTable {
 				{Name: portColKind, Kind: KindText},
 				{Name: portColDigest, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
-				{Name: "expires_at_ms", Kind: KindTime},
+				{Name: portColExpiresAtMs, Kind: KindTime},
 				{Name: "last_used_at_ms", Kind: KindTime},
 				{Name: "revoked_at_ms", Kind: KindTime},
 				{Name: "replaced_by", Kind: KindText},
@@ -394,7 +406,7 @@ func portableSpec() []PortableTable {
 				{Name: "verifier", Kind: KindText},
 				{Name: "return_path", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
-				{Name: "expires_at_ms", Kind: KindTime},
+				{Name: portColExpiresAtMs, Kind: KindTime},
 			},
 		},
 		{

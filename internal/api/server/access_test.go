@@ -32,6 +32,7 @@ type subjectAuthenticator struct{}
 
 func (subjectAuthenticator) AuthenticateToken(_ context.Context, token string) (identity.Principal, error) {
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        token,
 		DisplayName:    token,
 		Admin:          token == "admin",
@@ -139,7 +140,8 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: tokengrants.Check{Grants: grants, Principals: st},
+		TempAdmins: nil,
+		Store:      st, Principals: st, Freshness: nil, Grants: tokengrants.Check{Grants: grants, Principals: st},
 		Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
@@ -147,6 +149,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
 		Authenticator:  subjectAuthenticator{},
 		Authorizer:     authz,
 		Logger:         slog.New(slog.DiscardHandler),
@@ -593,9 +596,10 @@ func TestEnableNeedsGrantActions(t *testing.T) {
 	f.seed(t, "sam", access.RoleSiteAdministrator, identity.ServerObject())
 
 	_, err := f.store.SweepInactive(t.Context(), accesstoken.Sweep{
-		Inactivity: time.Hour,
-		Tokens:     false,
-		Accounts:   true,
+		ExceptTempAdmins: false,
+		Inactivity:       time.Hour,
+		Tokens:           false,
+		Accounts:         true,
 	}, storetest.ServerChange)
 	if err != nil {
 		t.Fatalf("sweep inactive: %v", err)

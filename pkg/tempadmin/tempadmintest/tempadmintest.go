@@ -1,0 +1,353 @@
+// Package tempadmintest is the conformance suite for tempadmin.Store.
+// Every built-in store runs it:
+//
+//	func TestTempAdminConformance(t *testing.T) {
+//		t.Parallel()
+//		tempadmintest.Run(t, func(t *testing.T) tempadmintest.Store { return newMyStore(t) })
+//	}
+package tempadmintest
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
+)
+
+// Store is the store under test: the temporary administrator port with the
+// principal records that it refers to.
+type Store interface {
+	tempadmin.Store
+	principal.RecordStore
+}
+
+// Factory returns a fresh, empty store for one subtest.
+type Factory func(t *testing.T) Store
+
+// Run executes the conformance suite against stores produced by newStore.
+func Run(t *testing.T, newStore Factory) {
+	t.Helper()
+
+	cases := []struct {
+		test func(t *testing.T, s Store)
+		name string
+	}{
+		{name: "create and read round trip", test: testRoundTrip},
+		{name: "read by subject", test: testBySubject},
+		{name: "duplicate record is ErrAlreadyExists", test: testDuplicate},
+		{name: "record of a missing principal is principal.ErrNotFound", test: testMissingPrincipal},
+		{name: "missing record is ErrNotFound", test: testMissing},
+		{name: "list orders by expiry", test: testList},
+		{name: "expiry disables the principal and drops the record", test: testExpire},
+		{name: "expiry of a missing record is ErrNotFound", test: testExpireMissing},
+		{name: "each write appends its audit entry in @server", test: testAuditEntries},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tc.test(t, newStore(t))
+		})
+	}
+}
+
+// at returns a fixed time minute minutes after a base, in UTC to the
+// millisecond, so records stay comparable.
+func at(minute int) time.Time {
+	return time.Date(2026, time.October, 15, 12, minute, 0, 0, time.UTC)
+}
+
+// Minutes of the fixed times of the suite, after a base hour.
+const (
+	minuteBase   = 0
+	minuteLater  = 5
+	minuteLatest = 30
+)
+
+// wantNewEntries is the count of audit entries that the create and the
+// expiry of one record append.
+const wantNewEntries = 2
+
+// createdBy is the creator of the records of the suite.
+const createdBy = "host"
+
+// entry returns a valid audit entry of the kind change in the scope
+// @server, with the object object.
+func entry(object string) audit.Entry {
+	return audit.Entry{
+		At:         at(minuteBase),
+		Namespace:  audit.ServerScope,
+		Subject:    createdBy,
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     tempadmin.Action,
+		Object:     object,
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		Changes:    nil,
+		SourceIP:   "",
+		UserAgent:  "",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		ObjectID:   "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
+}
+
+// mustPrincipal creates the person id with the subject subject.
+func mustPrincipal(t *testing.T, s Store, id, subject string) {
+	t.Helper()
+
+	p := principal.Principal{
+		CreatedAt:   at(0),
+		UpdatedAt:   at(0),
+		DisabledAt:  time.Time{},
+		ID:          id,
+		Subject:     subject,
+		DisplayName: "Name of " + subject,
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+	}
+
+	e := entry(principal.Ref(id))
+
+	if err := s.CreatePrincipal(t.Context(), p, e); err != nil {
+		t.Fatalf("create principal %q: %v", id, err)
+	}
+}
+
+// mustRecord creates the temporary administrator record of id for subject
+// at minute created.
+func mustRecord(t *testing.T, s Store, id, subject string, created int) tempadmin.TempAdmin {
+	t.Helper()
+
+	r := tempadmin.TempAdmin{
+		CreatedAt:   at(created),
+		ExpiresAt:   at(created).Add(tempadmin.Lifetime),
+		PrincipalID: id,
+		Subject:     subject,
+		CreatedBy:   createdBy,
+	}
+
+	if err := s.CreateTempAdmin(t.Context(), r, entry(tempadmin.Ref(id))); err != nil {
+		t.Fatalf("create temporary administrator for %q: %v", subject, err)
+	}
+
+	return r
+}
+
+// wantErr fails the test unless err wraps want.
+func wantErr(t *testing.T, what string, err, want error) {
+	t.Helper()
+
+	if !errors.Is(err, want) {
+		t.Fatalf("%s: err = %v, want %v", what, err, want)
+	}
+}
+
+// equalRecord fails the test unless got holds the fields of want.
+func equalRecord(t *testing.T, got, want tempadmin.TempAdmin) {
+	t.Helper()
+
+	same := got.CreatedAt.Equal(want.CreatedAt) && got.ExpiresAt.Equal(want.ExpiresAt) &&
+		got.PrincipalID == want.PrincipalID && got.Subject == want.Subject && got.CreatedBy == want.CreatedBy
+
+	if !same {
+		t.Fatalf("record = %+v, want %+v", got, want)
+	}
+}
+
+func testRoundTrip(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, "prn-alice", "alice")
+	want := mustRecord(t, s, "prn-alice", "alice", 0)
+
+	got, err := s.GetTempAdmin(t.Context(), "prn-alice")
+	if err != nil {
+		t.Fatalf("get temporary administrator: %v", err)
+	}
+
+	equalRecord(t, got, want)
+}
+
+func testBySubject(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, "prn-alice", "alice")
+	want := mustRecord(t, s, "prn-alice", "alice", 0)
+
+	got, err := s.GetTempAdminBySubject(t.Context(), "alice")
+	if err != nil {
+		t.Fatalf("get temporary administrator by subject: %v", err)
+	}
+
+	equalRecord(t, got, want)
+}
+
+func testDuplicate(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, "prn-alice", "alice")
+	mustRecord(t, s, "prn-alice", "alice", 0)
+
+	dup := tempadmin.TempAdmin{
+		CreatedAt:   at(minuteLater),
+		ExpiresAt:   at(minuteLater).Add(tempadmin.Lifetime),
+		PrincipalID: "prn-alice",
+		Subject:     "alice",
+		CreatedBy:   createdBy,
+	}
+
+	err := s.CreateTempAdmin(t.Context(), dup, entry(tempadmin.Ref("prn-alice")))
+	wantErr(t, "duplicate record", err, tempadmin.ErrAlreadyExists)
+}
+
+func testMissingPrincipal(t *testing.T, s Store) {
+	t.Helper()
+
+	r := tempadmin.TempAdmin{
+		CreatedAt:   at(0),
+		ExpiresAt:   at(0).Add(tempadmin.Lifetime),
+		PrincipalID: "prn-ghost",
+		Subject:     "ghost",
+		CreatedBy:   createdBy,
+	}
+
+	err := s.CreateTempAdmin(t.Context(), r, entry(tempadmin.Ref("prn-ghost")))
+	wantErr(t, "record of a missing principal", err, principal.ErrNotFound)
+}
+
+func testMissing(t *testing.T, s Store) {
+	t.Helper()
+
+	if _, err := s.GetTempAdmin(t.Context(), "prn-ghost"); !errors.Is(err, tempadmin.ErrNotFound) {
+		t.Fatalf("get of a missing record = %v, want ErrNotFound", err)
+	}
+
+	if _, err := s.GetTempAdminBySubject(t.Context(), "ghost"); !errors.Is(err, tempadmin.ErrNotFound) {
+		t.Fatalf("get by subject of a missing record = %v, want ErrNotFound", err)
+	}
+}
+
+func testList(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, "prn-alice", "alice")
+	mustPrincipal(t, s, "prn-bob", "bob")
+	mustRecord(t, s, "prn-bob", "bob", minuteLatest)
+	mustRecord(t, s, "prn-alice", "alice", 0)
+
+	all, err := s.ListTempAdmins(t.Context())
+	if err != nil {
+		t.Fatalf("list temporary administrators: %v", err)
+	}
+
+	if len(all) != 2 || all[0].PrincipalID != "prn-alice" || all[1].PrincipalID != "prn-bob" {
+		t.Fatalf("list = %v, want alice then bob by expiry", all)
+	}
+}
+
+func testExpire(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, "prn-alice", "alice")
+	mustRecord(t, s, "prn-alice", "alice", 0)
+
+	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
+		t.Fatalf("expire temporary administrator: %v", err)
+	}
+
+	if _, err := s.GetTempAdmin(t.Context(), "prn-alice"); !errors.Is(err, tempadmin.ErrNotFound) {
+		t.Fatalf("get after expiry = %v, want ErrNotFound", err)
+	}
+
+	p, err := s.GetPrincipal(t.Context(), "prn-alice")
+	if err != nil {
+		t.Fatalf("get principal after expiry: %v", err)
+	}
+
+	if p.DisabledAt.IsZero() {
+		t.Fatal("principal after expiry is not disabled")
+	}
+}
+
+func testExpireMissing(t *testing.T, s Store) {
+	t.Helper()
+
+	err := s.ExpireTempAdmin(t.Context(), "prn-ghost", entry(tempadmin.Ref("prn-ghost")))
+	wantErr(t, "expiry of a missing record", err, tempadmin.ErrNotFound)
+}
+
+// auditLister reads the audit log of a store that keeps one.
+type auditLister interface {
+	List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error)
+}
+
+func testAuditEntries(t *testing.T, s Store) {
+	t.Helper()
+
+	lister, ok := s.(auditLister)
+	if !ok {
+		t.Skip("the store keeps no audit log to read")
+	}
+
+	mustPrincipal(t, s, "prn-alice", "alice")
+
+	before, err := listServerObjects(t.Context(), lister)
+	if err != nil {
+		t.Fatalf("list audit entries: %v", err)
+	}
+
+	mustRecord(t, s, "prn-alice", "alice", 0)
+
+	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
+		t.Fatalf("expire temporary administrator: %v", err)
+	}
+
+	after, afterErr := listServerObjects(t.Context(), lister)
+	if afterErr != nil {
+		t.Fatalf("list audit entries: %v", afterErr)
+	}
+
+	if len(after)-len(before) != wantNewEntries {
+		t.Fatalf("audit entries grew by %d, want %d for the create and the expiry",
+			len(after)-len(before), wantNewEntries)
+	}
+
+	for _, object := range after[:2] {
+		if object != tempadmin.Ref("prn-alice") {
+			t.Fatalf("audit object = %q, want %q", object, tempadmin.Ref("prn-alice"))
+		}
+	}
+}
+
+// listServerObjects returns the objects of the entries of @server, newest
+// first, so a case counts the entries that its writes append.
+func listServerObjects(ctx context.Context, lister auditLister) ([]string, error) {
+	listing, err := lister.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]string, 0, len(listing.Entries))
+
+	for i := range listing.Entries {
+		out = append(out, listing.Entries[i].Object)
+	}
+
+	return out, nil
+}

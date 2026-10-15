@@ -202,9 +202,10 @@ func (f *fixture) disableAllPersons(tb testing.TB) {
 	tb.Helper()
 
 	_, err := f.store.SweepInactive(tb.Context(), accesstoken.Sweep{
-		Inactivity: time.Hour,
-		Tokens:     false,
-		Accounts:   true,
+		ExceptTempAdmins: false,
+		Inactivity:       time.Hour,
+		Tokens:           false,
+		Accounts:         true,
 	}, storetest.ServerChange)
 	if err != nil {
 		tb.Fatalf("sweep inactive: %v", err)

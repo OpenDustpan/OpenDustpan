@@ -60,6 +60,7 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, token string) (id
 	}
 
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "tester",
 		DisplayName:    "Tester",
 		Admin:          false,
@@ -206,6 +207,7 @@ func newServiceBackedHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
 		Authenticator:  authn,
 		Authorizer:     authz,
 		Logger:         slog.New(slog.DiscardHandler),
@@ -315,14 +317,21 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 
 	// Disable the person testPrincipalID, so the enable route answers 200:
 	// it and its token were made more than one hour before the sweep.
-	sweep := accesstoken.Sweep{Inactivity: time.Hour, Tokens: false, Accounts: true}
+	sweep := accesstoken.Sweep{ExceptTempAdmins: false, Inactivity: time.Hour, Tokens: false, Accounts: true}
 	if _, sweepErr := st.SweepInactive(ctx, sweep, storetest.ServerChange); sweepErr != nil {
 		t.Fatalf("seed sweep: %v", sweepErr)
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Authorizer: allowAll{}, Logger: nil, Now: nil,
-		NewID: nil,
+		TempAdmins: nil,
+		Store:      st,
+		Principals: st,
+		Freshness:  nil,
+		Grants:     allowGrants{},
+		Authorizer: allowAll{},
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -1215,6 +1224,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiserver.Config{
+		TempAdmins:     nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:         slog.New(slog.DiscardHandler),
@@ -1349,6 +1359,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
 		Authenticator:  stubAuthenticator{},
 		Authorizer:     stubAuthorizer{},
 		Logger:         slog.New(slog.DiscardHandler),
@@ -1377,6 +1388,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:     nil,
 		Authenticator:  stubAuthenticator{},
 		Authorizer:     stubAuthorizer{},
 		Logger:         slog.New(slog.DiscardHandler),

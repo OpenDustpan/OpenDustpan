@@ -1641,3 +1641,57 @@ UPDATE session_policy
 SET idle_ms = sqlc.arg('idle_ms')::bigint, max_length_ms = sqlc.arg('max_length_ms')::bigint,
   updated_at_ms = sqlc.arg('updated_at_ms')::bigint
 WHERE id = 1;
+
+-- name: CreateTempAdmin :execrows
+-- Records the principal as a temporary administrator with its fixed expiry.
+-- A principal holds at most one record.
+INSERT INTO temp_admins (principal_id, subject, expires_at_ms, created_at_ms, created_by)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT DO NOTHING;
+
+-- name: GetTempAdmin :one
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
+FROM temp_admins WHERE principal_id = $1;
+
+-- name: GetTempAdminBySubject :one
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
+FROM temp_admins WHERE subject = $1;
+
+-- name: ListTempAdmins :many
+SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
+FROM temp_admins ORDER BY expires_at_ms;
+
+-- name: DeleteTempAdmin :execrows
+DELETE FROM temp_admins WHERE principal_id = $1;
+
+-- name: DisablePrincipalForExpiry :execrows
+-- Disables the principal at the expiry of its temporary administrator
+-- record. A principal that is already disabled stays as it is.
+UPDATE principals SET disabled_at_ms = sqlc.arg('disabled_at_ms')::bigint
+WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
+
+-- name: DisableInactiveAccessTokensExceptTemp :many
+-- As DisableInactiveAccessTokens, but keeps the tokens of the principals
+-- that still work as temporary administrators: while break-glass is on,
+-- the inactivity disable never ends them.
+UPDATE access_tokens SET disabled_at_ms = sqlc.arg('at_ms')::bigint
+WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > sqlc.arg('at_ms')::bigint
+  AND COALESCE(last_used_at_ms, created_at_ms) <= sqlc.arg('cutoff_ms')::bigint
+  AND principal_id NOT IN (SELECT principal_id FROM temp_admins)
+RETURNING id, principal_id;
+
+-- name: DisableInactivePrincipalsExceptTemp :many
+-- As DisableInactivePrincipals, but keeps the principals that still work as
+-- temporary administrators.
+UPDATE principals SET disabled_at_ms = sqlc.arg('at_ms')::bigint
+WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND created_at_ms <= sqlc.arg('cutoff_ms')::bigint
+  AND last_active_at_ms <= sqlc.arg('cutoff_ms')::bigint
+  AND COALESCE(last_sign_in_at_ms, 0) <= sqlc.arg('cutoff_ms')::bigint
+  AND NOT EXISTS (
+    SELECT 1 FROM access_tokens t
+    WHERE t.principal_id = principals.id
+      AND (t.created_at_ms > sqlc.arg('cutoff_ms')::bigint OR t.last_used_at_ms > sqlc.arg('cutoff_ms')::bigint)
+  )
+  AND id NOT IN (SELECT principal_id FROM temp_admins)
+RETURNING id;

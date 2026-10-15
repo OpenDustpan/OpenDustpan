@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/schema"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // ErrMissingDependency reports a Config without a required dependency.
@@ -94,6 +95,10 @@ type Config struct {
 	// Nil means the store keeps no deleted units: the sweep route answers
 	// 501. Both SQL adapters keep them.
 	DeletedUnits DeletedUnitSweeper
+	// TempAdmins reads the temporary administrator records for the banner
+	// flag of the principal routes. Nil means no record is read: the flag
+	// stays false. Both SQL adapters keep them.
+	TempAdmins tempadmin.Reader
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -125,6 +130,7 @@ type Handler struct {
 	sessions       *session.Policies
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
+	tempAdmins     tempadmin.Reader
 	mux            *patternMux
 	routes         []Route
 }
@@ -167,6 +173,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		access:         cfg.Access,
 		tokens:         cfg.Tokens,
 		deletedUnits:   cfg.DeletedUnits,
+		tempAdmins:     cfg.TempAdmins,
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
 		sessions:       cfg.SessionPolicy,

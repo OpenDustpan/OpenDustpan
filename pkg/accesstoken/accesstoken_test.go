@@ -96,7 +96,15 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: fresh, Grants: nil, Authorizer: nil, Logger: nil, Now: c.Now, NewID: nil,
+		TempAdmins: nil,
+		Store:      st,
+		Principals: st,
+		Freshness:  fresh,
+		Grants:     nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        c.Now,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -129,6 +137,7 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 // with no GrantCheck wired.
 func admin() identity.Principal {
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "admin",
 		Admin:          true,
@@ -200,7 +209,15 @@ func TestNewServiceNeedsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := accesstoken.NewService(accesstoken.Config{
-		Store: nil, Principals: nil, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      nil,
+		Principals: nil,
+		Freshness:  nil,
+		Grants:     nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if !errors.Is(err, accesstoken.ErrMissingDependency) {
 		t.Fatalf("err = %v, want ErrMissingDependency", err)
@@ -353,6 +370,7 @@ func TestAuthenticate(t *testing.T) {
 	}
 
 	want := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "ci-deploy",
 		DisplayName:    "ci-deploy",
 		Admin:          false,
@@ -403,6 +421,7 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 
 	_, personSecret := f.create(t, f.person, "laptop")
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "",
 		Admin:          true,
@@ -445,6 +464,7 @@ func TestCheckActive(t *testing.T) {
 
 	orphan, _ := f.create(t, f.person, "laptop")
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "",
 		Admin:          true,
@@ -752,6 +772,7 @@ func TestDigest(t *testing.T) {
 // as returns the caller with the subject of p, not an administrator.
 func as(p principal.Principal) identity.Principal {
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        p.Subject,
 		DisplayName:    p.DisplayName,
 		Admin:          false,
@@ -957,7 +978,8 @@ func newCheckedService(
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: f.store, Freshness: nil, Grants: grants, Authorizer: authz, Logger: nil,
+		TempAdmins: nil,
+		Store:      f.store, Principals: f.store, Freshness: nil, Grants: grants, Authorizer: authz, Logger: nil,
 		Now: f.clock.Now, NewID: nil,
 	})
 	if err != nil {
@@ -1170,7 +1192,6 @@ func TestPolicyBoundsLifetime(t *testing.T) {
 			MaxLifetime: new(accesstoken.MaxPolicyDuration + time.Hour), Inactivity: nil, DisableTokens: nil,
 			DisableAccounts: nil, DisableBreakGlass: nil,
 		},
-		{MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(true)},
 	} {
 		if _, err := f.svc.SetPolicy(ctx, caller(), c); !errors.Is(err, accesstoken.ErrInvalid) {
 			t.Errorf("set policy %+v: err = %v, want ErrInvalid", c, err)
@@ -1339,16 +1360,29 @@ func TestExpiryWarningOfAnEndedToken(t *testing.T) {
 	}
 }
 
-func TestBreakGlassDisableIsRefused(t *testing.T) {
+func TestBreakGlassDisableIsStored(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, nil)
 
-	_, err := f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
+	p, err := f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(true),
 	})
-	if !errors.Is(err, accesstoken.ErrBreakGlassUnavailable) || !strings.Contains(err.Error(), "ADR 57") {
-		t.Fatalf("err = %v, want ErrBreakGlassUnavailable that names ADR 57", err)
+	if err != nil {
+		t.Fatalf("set break-glass disable: %v", err)
+	}
+
+	if !p.DisableBreakGlass {
+		t.Fatalf("policy = %+v, want the break-glass disable on", p)
+	}
+
+	stored, err := f.svc.Policy(t.Context())
+	if err != nil {
+		t.Fatalf("read policy: %v", err)
+	}
+
+	if !stored.DisableBreakGlass {
+		t.Fatalf("stored policy = %+v, want the break-glass disable on", stored)
 	}
 }
 
@@ -1454,7 +1488,8 @@ func TestPolicyReadErrorFailsClosed(t *testing.T) {
 	_, secret := f.createLong(t, f.service, "deploy")
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: failingPolicy{f.store}, Principals: f.store, Freshness: nil, Grants: nil, Authorizer: nil,
+		TempAdmins: nil,
+		Store:      failingPolicy{f.store}, Principals: f.store, Freshness: nil, Grants: nil, Authorizer: nil,
 		Logger: nil,
 		Now:    f.clock.Now, NewID: nil,
 	})
@@ -1632,7 +1667,8 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	alice := as(f.person)
 
 	holder, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: reader, Freshness: nil, Grants: nil,
+		TempAdmins: nil,
+		Store:      f.store, Principals: reader, Freshness: nil, Grants: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
 		Logger:     nil,
 		Now:        f.clock.Now, NewID: nil,
@@ -1642,7 +1678,8 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	}
 
 	denied, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: reader, Freshness: nil, Grants: nil,
+		TempAdmins: nil,
+		Store:      f.store, Principals: reader, Freshness: nil, Grants: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},
 		Logger:     nil,
 		Now:        f.clock.Now, NewID: nil,

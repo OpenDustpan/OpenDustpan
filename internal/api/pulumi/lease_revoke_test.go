@@ -36,6 +36,7 @@ func (a *revocableTokens) AuthenticateToken(_ context.Context, token string) (id
 		}
 
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "tester",
 			DisplayName:    "Tester",
 			Admin:          false,
@@ -44,6 +45,7 @@ func (a *revocableTokens) AuthenticateToken(_ context.Context, token string) (id
 		}, nil
 	case "boot-token":
 		return identity.Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        "admin",
 			DisplayName:    "Admin",
 			Admin:          true,

@@ -58,6 +58,7 @@ const (
 	pgColTool        = "tool"
 	pgColPrincipalID = "principal_id"
 	pgColDisplayName = "display_name"
+	pgColExpiresAtMs = "expires_at_ms"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -276,7 +277,7 @@ func pgCopySessionTables() []pgCopyTable {
 		{
 			table: "sign_in_requests",
 			columns: []string{
-				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, "expires_at_ms",
+				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, pgColExpiresAtMs,
 			},
 			orderBy: []string{pgColDigest},
 		},
@@ -285,6 +286,8 @@ func pgCopySessionTables() []pgCopyTable {
 
 // pgCopyIdentityTables holds the COPY columns of the principal, group,
 // role and grant tables (ADR 52).
+//
+//nolint:funlen // A constant table of column names; its length is the schema.
 func pgCopyIdentityTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
@@ -309,6 +312,13 @@ func pgCopyIdentityTables() []pgCopyTable {
 			orderBy: []string{"group_id", pgColPrincipalID, "added_at_ms"},
 		},
 		{
+			table: "temp_admins",
+			columns: []string{
+				pgColPrincipalID, pgColSubject, pgColExpiresAtMs, pgColCreatedAtMs, pgColCreatedBy,
+			},
+			orderBy: []string{pgColPrincipalID},
+		},
+		{
 			table: "access_tokens",
 			columns: []string{
 				"id",
@@ -317,7 +327,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 				pgColKind,
 				pgColDigest,
 				pgColCreatedAtMs,
-				"expires_at_ms",
+				pgColExpiresAtMs,
 				"last_used_at_ms",
 				"revoked_at_ms",
 				"replaced_by",

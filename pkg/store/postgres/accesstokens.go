@@ -317,7 +317,7 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 	params := db.DisableInactiveAccessTokensParams{AtMs: nowMs, CutoffMs: nowMs - sw.Inactivity.Milliseconds()}
 
 	if sw.Tokens {
-		rows, err := q.DisableInactiveAccessTokens(ctx, params)
+		rows, err := disableInactiveTokens(ctx, q, sw, params)
 		if err != nil {
 			return accesstoken.SweepResult{}, fmt.Errorf("disable inactive access tokens: %w", err)
 		}
@@ -328,7 +328,7 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 	}
 
 	if sw.Accounts {
-		ids, err := q.DisableInactivePrincipals(ctx, db.DisableInactivePrincipalsParams(params))
+		ids, err := disableInactiveAccounts(ctx, q, sw, params)
 		if err != nil {
 			return accesstoken.SweepResult{}, fmt.Errorf("disable inactive accounts: %w", err)
 		}
@@ -337,6 +337,46 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 	}
 
 	return res, nil
+}
+
+// disableInactiveTokens disables the inactive tokens of sw: every token, or
+// every token but the ones of the working temporary administrators while
+// break-glass is on.
+func disableInactiveTokens(
+	ctx context.Context, q *db.Queries, sw accesstoken.Sweep, params db.DisableInactiveAccessTokensParams,
+) ([]db.DisableInactiveAccessTokensRow, error) {
+	if sw.ExceptTempAdmins {
+		rows, err := q.DisableInactiveAccessTokensExceptTemp(
+			ctx,
+			db.DisableInactiveAccessTokensExceptTempParams(params),
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		out := make([]db.DisableInactiveAccessTokensRow, 0, len(rows))
+
+		for _, r := range rows {
+			out = append(out, db.DisableInactiveAccessTokensRow(r))
+		}
+
+		return out, nil
+	}
+
+	return q.DisableInactiveAccessTokens(ctx, params)
+}
+
+// disableInactiveAccounts disables the inactive user accounts of sw: every
+// account, or every account but the working temporary administrators while
+// break-glass is on.
+func disableInactiveAccounts(
+	ctx context.Context, q *db.Queries, sw accesstoken.Sweep, params db.DisableInactiveAccessTokensParams,
+) ([]string, error) {
+	if sw.ExceptTempAdmins {
+		return q.DisableInactivePrincipalsExceptTemp(ctx, db.DisableInactivePrincipalsExceptTempParams(params))
+	}
+
+	return q.DisableInactivePrincipals(ctx, db.DisableInactivePrincipalsParams(params))
 }
 
 // appendSweepEntries appends one entry for each record of res, in the

@@ -79,6 +79,7 @@ func Bench(b *testing.B, s BenchStore) {
 	}
 
 	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "user-00000",
 		DisplayName:    "",
 		Admin:          false,

@@ -57,6 +57,7 @@ func TestGrantOnCollectionReachesItsUnits(t *testing.T) {
 	authz := grants.Authorizer()
 
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "admin",
 		DisplayName:    "",
 		Admin:          true,
@@ -74,13 +75,22 @@ func TestGrantOnCollectionReachesItsUnits(t *testing.T) {
 	}
 
 	alice := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "alice",
 		DisplayName:    "",
 		Admin:          false,
 		TokenID:        "",
 		TokenExpiresAt: time.Time{},
 	}
-	bob := identity.Principal{Subject: "bob", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{}}
+	bob := identity.Principal{
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "bob",
+		DisplayName:            "",
+		Admin:                  false,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
+	}
 
 	tests := []struct {
 		name   string

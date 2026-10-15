@@ -23,14 +23,16 @@ import (
 // Command path elements: one constant for each, so the table and the help
 // never spell a command two ways.
 const (
-	commandBackup    = "backup"
-	commandCheck     = "check"
-	commandCreate    = "create"
-	commandHealth    = "health"
-	commandNamespace = "namespace"
-	commandRestore   = "restore"
-	commandServe     = "serve"
-	commandUpgrade   = "upgrade"
+	commandBackup          = "backup"
+	commandCheck           = "check"
+	commandCreate          = "create"
+	commandCreateTempAdmin = "create-temp-admin"
+	commandHealth          = "health"
+	commandHost            = "host"
+	commandNamespace       = "namespace"
+	commandRestore         = "restore"
+	commandServe           = "serve"
+	commandUpgrade         = "upgrade"
 )
 
 // RunFunc runs one command: args holds the flags and operands after the

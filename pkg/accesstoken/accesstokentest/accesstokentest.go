@@ -891,7 +891,7 @@ func mustPrincipalAt(t *testing.T, s Store, id string, kind principal.Kind, crea
 }
 
 func sweep(tokens, accounts bool) accesstoken.Sweep {
-	return accesstoken.Sweep{Inactivity: sweepPeriod, Tokens: tokens, Accounts: accounts}
+	return accesstoken.Sweep{ExceptTempAdmins: false, Inactivity: sweepPeriod, Tokens: tokens, Accounts: accounts}
 }
 
 // sweepEntry is the entry function of a sweep.

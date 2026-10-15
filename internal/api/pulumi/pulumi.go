@@ -278,6 +278,10 @@ type userResponse struct {
 	GithubLogin   string                `json:"githubLogin"`
 	Name          string                `json:"name"`
 	Organizations []organizationSummary `json:"organizations"`
+	// TemporaryAdministrator is true for a temporary administrator that
+	// still works, so the console shows a banner for it. The Pulumi CLI
+	// ignores it.
+	TemporaryAdministrator bool `json:"temporaryAdministrator"`
 }
 
 // currentUser answers GET /api/user. Organizations are the namespaces the
@@ -293,9 +297,10 @@ func (h *Handler) currentUser(w http.ResponseWriter, r *http.Request, p identity
 	}
 
 	h.writeJSON(r.Context(), w, http.StatusOK, userResponse{
-		GithubLogin:   p.Subject,
-		Name:          p.DisplayName,
-		Organizations: namespaces,
+		GithubLogin:            p.Subject,
+		Name:                   p.DisplayName,
+		Organizations:          namespaces,
+		TemporaryAdministrator: p.TemporaryAdministrator,
 	})
 }
 

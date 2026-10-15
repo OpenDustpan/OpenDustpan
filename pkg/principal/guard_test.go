@@ -58,6 +58,7 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 	ctx := t.Context()
 	e := testEntry()
 	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "tester",
 		DisplayName:    "",
 		Admin:          false,

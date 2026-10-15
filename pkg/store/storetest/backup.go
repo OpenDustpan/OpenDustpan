@@ -405,7 +405,7 @@ func seedBackupSweep(t *testing.T, ts accesstoken.Store) {
 	// The sweep runs at the time of the database clock, after now(): every
 	// token that has not ended and prn-alice have no use in the last hour.
 	// tok-old ends before the sweep.
-	sweep := accesstoken.Sweep{Inactivity: time.Hour, Tokens: true, Accounts: true}
+	sweep := accesstoken.Sweep{ExceptTempAdmins: false, Inactivity: time.Hour, Tokens: true, Accounts: true}
 	res, err := ts.SweepInactive(ctx, sweep, ServerChange)
 	if err != nil {
 		t.Fatalf("sweep: %v", err)

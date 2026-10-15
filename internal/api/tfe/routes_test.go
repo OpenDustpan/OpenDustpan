@@ -84,6 +84,7 @@ func (tokenAuthenticator) AuthenticateToken(_ context.Context, raw string) (iden
 	}
 
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        "tester",
 		DisplayName:    "Tester",
 		Admin:          false,

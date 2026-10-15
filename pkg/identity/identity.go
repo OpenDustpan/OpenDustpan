@@ -55,6 +55,14 @@ type Principal struct {
 	// authenticated the caller, so a response can warn before it (ADR 53,
 	// decision 11). It is the zero time for a bootstrap admin token.
 	TokenExpiresAt time.Time
+	// TemporaryAdministrator reports a temporary administrator: a person
+	// the host command made for recovery, with a fixed expiry. The API
+	// answers it, so the console shows a banner for the principal. It is
+	// false for every other caller, including the bootstrap administrators.
+	TemporaryAdministrator bool
+	// TemporaryExpiresAt is the fixed end of a temporary administrator.
+	// It is the zero time for every other caller.
+	TemporaryExpiresAt time.Time
 }
 
 // Action is something a principal wants to do.
@@ -636,6 +644,7 @@ func NewStaticToken(subject, token string) (*StaticToken, error) {
 
 	return &StaticToken{
 		principal: Principal{
+			TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 			Subject:        subject,
 			DisplayName:    subject,
 			Admin:          true,
@@ -706,7 +715,15 @@ func NewStaticTokens(tokens ...string) (*StaticTokens, error) {
 
 		principals = append(
 			principals,
-			Principal{Subject: subject, DisplayName: subject, Admin: true, TokenID: "", TokenExpiresAt: time.Time{}},
+			Principal{
+				TemporaryAdministrator: false,
+				TemporaryExpiresAt:     time.Time{},
+				Subject:                subject,
+				DisplayName:            subject,
+				Admin:                  true,
+				TokenID:                "",
+				TokenExpiresAt:         time.Time{},
+			},
 		)
 		hashes = append(hashes, sum)
 	}

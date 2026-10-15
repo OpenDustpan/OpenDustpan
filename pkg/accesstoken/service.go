@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // Lifetimes of a token. RFC 20 keeps the defaults open. The maximum
@@ -67,6 +68,11 @@ type Config struct {
 	// of a service token. Nil lets only an administrator act on service
 	// tokens (fail closed).
 	Authorizer identity.Authorizer
+	// TempAdmins reads the temporary administrator records for the
+	// break-glass exemption of the inactivity checks. Nil turns the
+	// exemption off: an inactive token is refused even for a temporary
+	// administrator.
+	TempAdmins tempadmin.Reader
 	// Logger logs a failed write of a last-used time. Nil discards it.
 	Logger *slog.Logger
 	// Now returns the current time. Nil means time.Now.
@@ -89,6 +95,7 @@ type Service struct {
 	freshness  Freshness
 	grants     GrantCheck
 	authz      identity.Authorizer
+	tempAdmins tempadmin.Reader
 	logger     *slog.Logger
 	now        func() time.Time
 	newID      func(prefix string) string
@@ -123,7 +130,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness, grants: cfg.Grants,
-		authz: cfg.Authorizer, logger: logger, now: now, newID: newID,
+		authz: cfg.Authorizer, tempAdmins: cfg.TempAdmins, logger: logger, now: now, newID: newID,
 		policies: &policyCache{readAt: time.Time{}, policy: DefaultPolicy(), mu: sync.Mutex{}, valid: false},
 	}, nil
 }
@@ -563,9 +570,10 @@ func (c PolicyChange) applyTo(p Policy) Policy {
 // the entry e for each record that it disables. It reads the policy: with
 // an inactivity period of zero, or with tokens and accounts both off, it
 // changes nothing. The store takes the time of the run from the database
-// clock, and the entries carry that time. The break-glass credential of
-// ADR 57 has no stored record yet, so the bootstrap admin tokens are never
-// disabled here.
+// clock, and the entries carry that time. While break-glass is on, the run
+// keeps the temporary administrators that still work: only their fixed
+// expiry ends them. The bootstrap admin tokens have no stored record, so
+// they are never disabled here.
 func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult, error) {
 	p, err := s.Policy(ctx)
 	if err != nil {
@@ -576,7 +584,12 @@ func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult
 		return SweepResult{At: time.Time{}, Tokens: nil, Principals: nil}, nil
 	}
 
-	sweep := Sweep{Inactivity: p.Inactivity, Tokens: p.DisableTokens, Accounts: p.DisableAccounts}
+	sweep := Sweep{
+		Inactivity:       p.Inactivity,
+		Tokens:           p.DisableTokens,
+		Accounts:         p.DisableAccounts,
+		ExceptTempAdmins: !p.DisableBreakGlass,
+	}
 
 	res, err := s.store.SweepInactive(ctx, sweep, func(at time.Time, object string) audit.Entry {
 		return change(e, at, object)
@@ -633,6 +646,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	s.touch(ctx, m.Token, now)
 
 	return identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        m.Owner.Subject,
 		DisplayName:    m.Owner.DisplayName,
 		Admin:          false,
@@ -644,8 +658,9 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 // checkPolicyActive refuses the token t of the owner o when the policy disables
 // t, or the user account o, as inactive at now, before the sweep writes the
 // disable: the sweep runs once an hour, and a use would else move the last
-// use forward and keep t, or o, alive. A failed read of the policy answers
-// its error, so the caller fails closed.
+// use forward and keep t, or o, alive. While break-glass is on, a working
+// temporary administrator is exempt: only its fixed expiry ends it. A failed
+// read of the policy answers its error, so the caller fails closed.
 func (s *Service) checkPolicyActive(ctx context.Context, t Token, o Owner, now time.Time) error {
 	p, err := s.policies.get(ctx, now, s.Policy)
 	if err != nil {
@@ -653,15 +668,44 @@ func (s *Service) checkPolicyActive(ctx context.Context, t Token, o Owner, now t
 	}
 
 	if p.inactiveAt(t, now) {
-		return fmt.Errorf("%w: access token inactive for %s", identity.ErrUnauthenticated, p.Inactivity)
+		if allow, err := s.breakGlassExempt(ctx, o.Subject, now, p); err != nil {
+			return err
+		} else if !allow {
+			return fmt.Errorf("%w: access token inactive for %s", identity.ErrUnauthenticated, p.Inactivity)
+		}
 	}
 
 	if p.accountInactiveAt(o, now) {
-		return fmt.Errorf("%w: the user account of the access token is inactive for %s",
-			identity.ErrUnauthenticated, p.Inactivity)
+		if allow, err := s.breakGlassExempt(ctx, o.Subject, now, p); err != nil {
+			return err
+		} else if !allow {
+			return fmt.Errorf("%w: the user account of the access token is inactive for %s",
+				identity.ErrUnauthenticated, p.Inactivity)
+		}
 	}
 
 	return nil
+}
+
+// breakGlassExempt reports whether the inactivity disable exempts the person
+// subject at now: break-glass is on and subject is a working temporary
+// administrator. Without a TempAdmins reader it answers false. A failed
+// record read answers its error, so the caller fails closed.
+func (s *Service) breakGlassExempt(ctx context.Context, subject string, now time.Time, p Policy) (bool, error) {
+	if p.DisableBreakGlass || s.tempAdmins == nil {
+		return false, nil
+	}
+
+	rec, err := s.tempAdmins.GetTempAdminBySubject(ctx, subject)
+	if errors.Is(err, tempadmin.ErrNotFound) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("authenticate access token: %w", err)
+	}
+
+	return rec.ActiveAt(now), nil
 }
 
 // touch records the use of t at now, at most once for each touchEvery. A

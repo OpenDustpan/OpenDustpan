@@ -71,6 +71,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -466,6 +467,7 @@ type Server struct {
 	// tokens runs the inactivity disable of access tokens and accounts on a
 	// schedule (ADR 53), or is nil when the store keeps no tokens.
 	tokens      *accesstoken.Service
+	tempAdmins  *tempadmin.Service
 	shipper     *audit.Shipper
 	beforeServe func(ctx context.Context) error
 	// deleted runs the retention sweep of the deleted units on a schedule.
@@ -492,6 +494,10 @@ type services struct {
 	// keeps none. NewServer sets it after newServices. The installation API
 	// and the escalation check of the token service share it.
 	access *access.Service
+	// tempAdmins keeps the temporary administrators, or is nil when the
+	// store keeps none. NewServer sets it after newServices. The expiry
+	// sweep and the banner flag share it.
+	tempAdmins *tempadmin.Service
 }
 
 // defaultSettings answers the settings of a server before its options.
@@ -580,6 +586,15 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, tokensErr
 	}
 
+	if tempErr := wireTempAdmins(cfg); tempErr != nil {
+		return nil, tempErr
+	}
+
+	svc.tempAdmins, err = newTempAdminService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	return assemble(cfg, base, svc, backups)
 }
 
@@ -598,6 +613,51 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 	}, cfg.ipAllowlists)
 
 	return nil
+}
+
+// wireTempAdmins marks the temporary administrators among the callers that
+// the configured authenticator resolves, with a sign-in entry for each use
+// and an expiry entry at the first use after the expiry. Without a store
+// that keeps the records, or without an audit store for the entries, the
+// authenticator stays as it is.
+func wireTempAdmins(cfg *settings) error {
+	store, ok := cfg.namespaceStore.(tempadmin.Store)
+	if !ok {
+		return nil
+	}
+
+	entries := serverAuditOf(cfg.namespaceStore)
+	if entries == nil {
+		return nil
+	}
+
+	dec, err := tempadmin.NewDecorator(tempadmin.DecoratorConfig{
+		Next: cfg.authenticator, Records: store, Expirer: store, Audit: entries, Now: cfg.now,
+	})
+	if err != nil {
+		return fmt.Errorf("temporary administrator authenticator: %w", err)
+	}
+
+	cfg.authenticator = dec
+
+	return nil
+}
+
+// newTempAdminService builds the temporary administrator service, or nil
+// when the store keeps no records: the expiry sweep stays off and the
+// routes answer no flag.
+func newTempAdminService(cfg *settings) (*tempadmin.Service, error) {
+	store, ok := cfg.namespaceStore.(tempadmin.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No record store is a valid setup: expiry never runs.
+	}
+
+	svc, err := tempadmin.NewService(tempadmin.Config{Store: store, Now: cfg.now})
+	if err != nil {
+		return nil, fmt.Errorf("temporary administrator service: %w", err)
+	}
+
+	return svc, nil
 }
 
 // allowlistGate wraps next in the IP allowlist gate when the feature is on.
@@ -697,6 +757,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		tlsKeyFile:      cfg.tlsKeyFile,
 		observed:        observed,
 		tokens:          svc.tokens,
+		tempAdmins:      svc.tempAdmins,
 		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
 		deleted:         deleted,
@@ -1056,6 +1117,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		secrets:     secrets,
 		workspaces:  workspaces,
 		tokens:      nil,
+		tempAdmins:  nil,
 		deleted:     nil,
 		access:      nil,
 		collections: nil,
@@ -1228,15 +1290,23 @@ func (s *Server) sweepInactive(ctx context.Context) {
 	}
 }
 
-// sweepOnce runs the inactivity disable once and counts the result. A failed
-// run logs no error text, which may hold driver detail (ADR 32 decision 7),
-// and the next run tries again. A run that the server stops (ctx canceled)
-// is not a failure. A run past its time limit is.
+// sweepOnce runs the inactivity disable once and the expiry of temporary
+// administrators once, and counts each result. A failed run logs no error
+// text, which may hold driver detail, and the next run
+// tries again. A run that the server stops (ctx canceled) is not a failure.
+// A run past its time limit is.
 func (s *Server) sweepOnce(ctx context.Context) {
-	if s.tokens == nil {
-		return
+	if s.tokens != nil {
+		s.sweepTokensOnce(ctx)
 	}
 
+	if s.tempAdmins != nil {
+		s.sweepTempAdminsOnce(ctx)
+	}
+}
+
+// sweepTokensOnce runs the inactivity disable once and counts the result.
+func (s *Server) sweepTokensOnce(ctx context.Context) {
 	res, err := s.tokens.SweepInactive(ctx, accesstoken.SweepEntry())
 
 	switch {
@@ -1248,6 +1318,46 @@ func (s *Server) sweepOnce(ctx context.Context) {
 		s.observed.ObserveSweep(metrics.SweepSuccess)
 		s.logger.InfoContext(ctx, "inactivity disable",
 			slog.Int("tokens", len(res.Tokens)), slog.Int("principals", len(res.Principals)))
+	default:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+	}
+}
+
+// sweepTempAdminsOnce disables the temporary administrators whose fixed
+// time ended, each with its expiry entry, and counts the result.
+func (s *Server) sweepTempAdminsOnce(ctx context.Context) {
+	done, err := s.tempAdmins.Sweep(ctx, audit.Entry{
+		At:         time.Time{},
+		Namespace:  "",
+		Subject:    "",
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "",
+		Object:     "",
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		Changes:    nil,
+		SourceIP:   "",
+		UserAgent:  "",
+		Channel:    audit.ChannelAPI,
+		Kind:       "",
+		Outcome:    "",
+		RequestID:  "",
+		ObjectID:   "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	})
+
+	switch {
+	case err != nil && !errors.Is(ctx.Err(), context.Canceled):
+		s.observed.ObserveSweep(metrics.SweepFailure)
+		s.logger.WarnContext(ctx, "temporary administrator expiry failed")
+	case err != nil:
+	case len(done) > 0:
+		s.observed.ObserveSweep(metrics.SweepSuccess)
+		s.logger.InfoContext(ctx, "temporary administrator expiry", slog.Int("principals", len(done)))
 	default:
 		s.observed.ObserveSweep(metrics.SweepSuccess)
 	}
@@ -1693,6 +1803,7 @@ func newServerHandler(
 			deps.observed.IncAuditAppendFailure()
 		},
 		DeletedUnits: deps.services.deleted,
+		TempAdmins:   tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -1949,13 +2060,26 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Store: store, Principals: principals, Freshness: nil, Grants: check, Authorizer: authz,
-		Logger: cfg.logger, Now: cfg.now, NewID: nil,
+		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)
 	}
 
 	return svc, nil
+}
+
+// tempReaderOf returns the temporary administrator reader of the namespace
+// store, or nil when the store keeps none. Both SQL adapters keep them.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the caller keeps the port.
+func tempReaderOf(store namespace.Store) tempadmin.Reader {
+	records, ok := store.(tempadmin.Reader)
+	if !ok {
+		return nil
+	}
+
+	return records
 }
 
 // gatedAuthenticator returns the authenticator that every adapter and the

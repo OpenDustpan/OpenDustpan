@@ -50,6 +50,7 @@ func TestAddMemberRefusesNamespacePrincipal(t *testing.T) {
 	}
 
 	caller := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject: "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 	}
 

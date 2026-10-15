@@ -171,6 +171,7 @@ var embeddedMigrationNames = []string{
 	"0065_session_policy.sql",
 	"0066_namespace_principals.sql",
 	"0068_update_journal_records_changed.sql",
+	"0072_temp_admins.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary

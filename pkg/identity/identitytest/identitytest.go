@@ -223,6 +223,7 @@ func testAdminPasses(t *testing.T, authz identity.Authorizer) {
 	t.Helper()
 
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        adminSubject,
 		DisplayName:    adminSubject,
 		Admin:          true,
@@ -247,6 +248,7 @@ func testDenied(t *testing.T, authz identity.Authorizer) {
 	t.Helper()
 
 	viewer := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        viewerSubject,
 		DisplayName:    viewerSubject,
 		Admin:          false,
@@ -271,6 +273,7 @@ func testDenialNamesObject(t *testing.T, authz identity.Authorizer) {
 	t.Helper()
 
 	viewer := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        viewerSubject,
 		DisplayName:    viewerSubject,
 		Admin:          false,
@@ -307,6 +310,7 @@ func testUnitsDistinct(t *testing.T, authz identity.Authorizer) {
 	}
 
 	viewer := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        viewerSubject,
 		DisplayName:    viewerSubject,
 		Admin:          false,
@@ -385,6 +389,7 @@ func testUnitGrant(t *testing.T) {
 		identity.ActionUnitRead: {unitA.String()},
 	})
 	alice := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        aliceSubject,
 		DisplayName:    aliceSubject,
 		Admin:          false,
@@ -443,6 +448,7 @@ func testNamespaceGrant(t *testing.T) {
 		identity.ActionUnitRead: {identity.NamespaceObject(acme).String()},
 	})
 	alice := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        aliceSubject,
 		DisplayName:    aliceSubject,
 		Admin:          false,
@@ -482,6 +488,7 @@ func testAdminDespiteGrants(t *testing.T) {
 
 	authz := NewPolicyAuthorizer(aliceSubject, map[identity.Action][]string{})
 	admin := identity.Principal{
+		TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
 		Subject:        adminSubject,
 		DisplayName:    adminSubject,
 		Admin:          true,
