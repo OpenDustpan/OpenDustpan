@@ -430,7 +430,7 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 	}
 
 	authz, err := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st},
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st, Principals: st},
 	)
 	if err != nil {
 		t.Fatalf("access authorizer: %v", err)

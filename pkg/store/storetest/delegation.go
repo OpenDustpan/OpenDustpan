@@ -84,7 +84,9 @@ type delegation struct {
 func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	t.Helper()
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: st, Callers: st, Collections: nil, Units: st, Principals: st,
+	})
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}
