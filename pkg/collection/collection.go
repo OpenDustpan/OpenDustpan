@@ -41,6 +41,9 @@ var (
 	// ErrCollectionChanged reports a move whose expected source collection is
 	// no longer the collection of the unit. The caller reads again and retries.
 	ErrCollectionChanged = errors.New("unit collection changed: read it again and retry")
+	// ErrMoveUnchecked reports a move that names no stable ID for its target
+	// collection. The caller checks the target, then passes its ID in the move.
+	ErrMoveUnchecked = errors.New("move names no checked target collection ID")
 	// ErrUnitNotFound reports a unit reference that the inventory does not hold.
 	ErrUnitNotFound = errors.New("unit not found in the inventory")
 	// ErrNoCollection reports a unit that is in no collection.
@@ -140,11 +143,15 @@ func (u UnitRef) String() string {
 
 // Move names one change of the collection of a unit. From is the collection
 // that the caller read for the unit, or the empty name when it read none. To is
-// the collection the unit moves into.
+// the collection the unit moves into. ToID is the stable ID of To that the
+// caller checked. The store refuses the move when To now has another ID, so a
+// collection that was deleted and created again between the check and the
+// write is never the target.
 type Move struct {
 	Unit UnitRef
 	From Name
 	To   Ref
+	ToID string
 }
 
 // Store is the persistence port for collections and for the collection of each

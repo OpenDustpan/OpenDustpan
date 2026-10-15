@@ -7,6 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -93,31 +94,16 @@ func (s *Store) DeleteCollection(
 			return collection.ErrNotEmpty
 		}
 
-		err = q.DeleteCollectionMembers(ctx, db.DeleteCollectionMembersParams{
-			Namespace:     ref.Namespace.String(),
-			CollectionKey: ref.Name.Key(),
-		})
-		if err != nil {
-			return fmt.Errorf("delete collection memberships: %w", err)
+		id, idErr := collectionID(ctx, q, ref)
+		if idErr != nil {
+			return idErr
 		}
 
-		n, err := q.DeleteCollection(ctx, db.DeleteCollectionParams{
-			Namespace: ref.Namespace.String(),
-			NameKey:   ref.Name.Key(),
-		})
-		if isForeignKeyViolation(err) {
-			return collection.ErrNotEmpty
+		if revokeErr := revokeCollectionGrants(ctx, q, id, e); revokeErr != nil {
+			return revokeErr
 		}
 
-		if err != nil {
-			return fmt.Errorf("delete collection: %w", err)
-		}
-
-		if n == 0 {
-			return collection.ErrNotFound
-		}
-
-		return nil
+		return removeCollection(ctx, q, ref)
 	})
 }
 
@@ -155,7 +141,7 @@ func setUnitCollection(ctx context.Context, q *db.Queries, m collection.Move, e 
 		return fmt.Errorf("select inventory unit: %w", err)
 	}
 
-	_, err = q.GetCollection(ctx, db.GetCollectionParams{
+	target, err := q.GetCollection(ctx, db.GetCollectionParams{
 		Namespace: to.Namespace.String(),
 		NameKey:   to.Name.Key(),
 	})
@@ -165,6 +151,10 @@ func setUnitCollection(ctx context.Context, q *db.Queries, m collection.Move, e 
 
 	if err != nil {
 		return fmt.Errorf("select target collection: %w", err)
+	}
+
+	if target.ID != m.ToID {
+		return collection.ErrCollectionChanged
 	}
 
 	current, err := currentUnitCollection(ctx, q, unitID)
@@ -240,4 +230,87 @@ func collectionFromRow(id, ns, name string, createdAtMs int64) collection.Collec
 			Name:      collection.Name(name),
 		},
 	}
+}
+
+// revokeCollectionGrants ends every current grant on the collection with the
+// stable ID id. Each grant gets its own audit entry, in the same transaction
+// as the delete, so a deleted collection leaves no grant that a re-created
+// name could inherit.
+func revokeCollectionGrants(ctx context.Context, q *db.Queries, id string, e audit.Entry) error {
+	ids, err := q.GrantIDsOnTarget(ctx, collectionTargetPrefix+id)
+	if err != nil {
+		return fmt.Errorf("list collection grants: %w", err)
+	}
+
+	for _, gid := range ids {
+		ge := e
+		ge.Object = "grant:" + gid
+		ge.ObjectID = gid
+
+		if _, err := appendAuditEntry(ctx, q, ge); err != nil {
+			return fmt.Errorf("audit revoke of grant %s: %w", gid, err)
+		}
+
+		n, err := q.RevokeGrant(ctx, db.RevokeGrantParams{
+			RevokedAtMs: nullMillis(codec.Millis(e.At)), RevokedBy: e.Subject, ID: gid,
+		})
+		if err != nil {
+			return fmt.Errorf("revoke grant %s: %w", gid, err)
+		}
+
+		if n == 0 {
+			return fmt.Errorf("revoke grant %s: %w", gid, access.ErrNotFound)
+		}
+	}
+
+	return nil
+}
+
+// collectionID returns the stable ID of the collection ref in the transaction
+// q. It returns collection.ErrNotFound when no such collection exists.
+func collectionID(ctx context.Context, q *db.Queries, ref collection.Ref) (string, error) {
+	row, err := q.GetCollection(ctx, db.GetCollectionParams{
+		Namespace: ref.Namespace.String(),
+		NameKey:   ref.Name.Key(),
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", collection.ErrNotFound
+	}
+
+	if err != nil {
+		return "", fmt.Errorf("select collection: %w", err)
+	}
+
+	return row.ID, nil
+}
+
+// removeCollection deletes the memberships and then the row of the collection
+// ref, in the transaction q. The caller has checked that no live unit is in
+// it.
+func removeCollection(ctx context.Context, q *db.Queries, ref collection.Ref) error {
+	err := q.DeleteCollectionMembers(ctx, db.DeleteCollectionMembersParams{
+		Namespace:     ref.Namespace.String(),
+		CollectionKey: ref.Name.Key(),
+	})
+	if err != nil {
+		return fmt.Errorf("delete collection memberships: %w", err)
+	}
+
+	n, err := q.DeleteCollection(ctx, db.DeleteCollectionParams{
+		Namespace: ref.Namespace.String(),
+		NameKey:   ref.Name.Key(),
+	})
+	if isForeignKeyViolation(err) {
+		return collection.ErrNotEmpty
+	}
+
+	if err != nil {
+		return fmt.Errorf("delete collection: %w", err)
+	}
+
+	if n == 0 {
+		return collection.ErrNotFound
+	}
+
+	return nil
 }

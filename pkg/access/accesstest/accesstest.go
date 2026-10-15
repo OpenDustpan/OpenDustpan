@@ -71,7 +71,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
 	}
 
-	for _, tc := range slices.Concat(cases, reviewCases(), unitCases()) {
+	for _, tc := range slices.Concat(cases, reviewCases(), unitCases(), moveCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))

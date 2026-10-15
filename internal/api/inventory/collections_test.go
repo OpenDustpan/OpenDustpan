@@ -2,6 +2,7 @@ package inventory_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -58,7 +59,7 @@ func (m *memCollections) GetCollection(_ context.Context, ref collection.Ref) (c
 
 	return collection.Collection{
 		CreatedAt: changeTime(),
-		ID:        "",
+		ID:        "col-" + name.Key(),
 		Ref:       collection.Ref{Namespace: ref.Namespace, Name: name},
 	}, nil
 }
@@ -95,6 +96,10 @@ func (m *memCollections) SetUnitCollection(
 
 	if _, ok := m.collections[collectionKey(mv.To.Namespace, mv.To.Name)]; !ok {
 		return collection.ErrNotFound
+	}
+
+	if mv.ToID != "col-"+mv.To.Name.Key() {
+		return collection.ErrCollectionChanged
 	}
 
 	if m.members[mv.Unit].Key() != mv.From.Key() {
@@ -161,6 +166,12 @@ type moveFixture struct {
 
 func newMoveFixture(t *testing.T, authz identity.Authorizer) moveFixture {
 	t.Helper()
+	return newMoveFixtureWith(t, authz, allowMoves{})
+}
+
+// newMoveFixtureWith is newMoveFixture with the move checker moves.
+func newMoveFixtureWith(t *testing.T, authz identity.Authorizer, moves apiinventory.MoveChecker) moveFixture {
+	t.Helper()
 
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
@@ -189,6 +200,7 @@ func newMoveFixture(t *testing.T, authz identity.Authorizer) moveFixture {
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections:   svc,
+		Moves:         moves,
 		Deleted:       &memDeleted{entries: nil},
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
@@ -322,5 +334,41 @@ func TestUnitMoveWithoutCollectionChecksOnlyTheTarget(t *testing.T) {
 
 	if got.Name != "new" {
 		t.Errorf("unit is in %q, want %q", got.Name, "new")
+	}
+}
+
+// allowMoves is a move checker that allows every move. The escalation check
+// of a move is tested with the access service, so these tests check the
+// handler alone.
+type allowMoves struct{}
+
+func (allowMoves) CheckMove(context.Context, identity.Principal, identity.Object, identity.Object) error {
+	return nil
+}
+
+// denyMoves refuses every move, as the escalation check does when the caller
+// holds less on the unit than the target collection gives.
+type denyMoves struct{}
+
+func (denyMoves) CheckMove(_ context.Context, _ identity.Principal, unit, _ identity.Object) error {
+	return fmt.Errorf("move %s: %w", unit.String(), identity.ErrDenied)
+}
+
+// TestMoveRefusedByTheEscalationCheckAnswersForbidden checks that a move the
+// move checker refuses is not made, and answers 403.
+func TestMoveRefusedByTheEscalationCheckAnswersForbidden(t *testing.T) {
+	t.Parallel()
+
+	f := newMoveFixtureWith(t, objectDenier{action: "", object: ""}, denyMoves{})
+	f.store.members = map[collection.UnitRef]collection.Name{}
+
+	rec := f.move(t, "new")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403: %s", rec.Code, rec.Body.String())
+	}
+
+	got, err := f.store.UnitCollection(t.Context(), f.unitRef)
+	if !errors.Is(err, collection.ErrNoCollection) {
+		t.Fatalf("UnitCollection = %q, %v; want no collection: a refused move makes no change", got.Name, err)
 	}
 }

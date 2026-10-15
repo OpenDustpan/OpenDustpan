@@ -52,6 +52,7 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinve
 		Namespaces:    nsSvc,
 		Units:         &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil},
 		Collections:   svc,
+		Moves:         allowMoves{},
 		Deleted:       &memDeleted{entries: nil},
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},

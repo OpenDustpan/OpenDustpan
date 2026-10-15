@@ -221,20 +221,52 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 	out := none
 
 	for i := range grants {
-		// The name of a unit that no longer exists may name a new unit now:
-		// its grants give nothing.
-		if grants[i].Object.IsUnit() && !live[grants[i].Object.UnitID()] {
-			continue
-		}
-
 		if !givenOn(action, grants[i].Object) {
 			continue
 		}
 
-		out.add(grants[i].Object)
+		ok, liveErr := a.grantLive(ctx, grants[i].Object, live)
+		if liveErr != nil {
+			return none, liveErr
+		}
+
+		if ok {
+			out.add(grants[i].Object)
+		}
 	}
 
 	return out, nil
+}
+
+// grantLive reports whether a grant on obj still gives something. The name
+// of a unit that no longer exists may name a new unit now, and a collection
+// that was deleted and created again under its name is a new collection, so
+// the grants of the old one give nothing.
+func (a *Authorizer) grantLive(ctx context.Context, obj identity.Object, live map[string]bool) (bool, error) {
+	switch {
+	case obj.IsUnit():
+		return live[obj.UnitID()], nil
+	case obj.IsCollection():
+		return a.liveCollection(ctx, obj)
+	default:
+		return true, nil
+	}
+}
+
+// liveCollection reports whether obj names the collection that holds its
+// stable ID now. It is false when no collection port is configured, and when
+// the name is gone or has another ID.
+func (a *Authorizer) liveCollection(ctx context.Context, obj identity.Object) (bool, error) {
+	if a.collections == nil {
+		return false, nil
+	}
+
+	id, found, err := a.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return false, fmt.Errorf("read collection %q: %w", obj.String(), err)
+	}
+
+	return found && id == obj.CollectionID(), nil
 }
 
 // add puts obj in the set of its kind once. An object on the installation

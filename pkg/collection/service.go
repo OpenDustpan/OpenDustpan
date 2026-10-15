@@ -92,10 +92,15 @@ func (s *Service) Delete(ctx context.Context, ref Ref, by audit.Entry) error {
 
 // SetUnit applies m and appends by, which names the unit and the two
 // collections. The store refuses the move with ErrCollectionChanged when the
-// collection of the unit is no longer m.From.
+// collection of the unit is no longer m.From, or when m.To has another stable
+// ID than m.ToID. A move with no ToID is refused with ErrMoveUnchecked.
 func (s *Service) SetUnit(ctx context.Context, m Move, by audit.Entry) error {
 	if m.Unit.Namespace != m.To.Namespace {
 		return fmt.Errorf("collection %s: %w", m.To, ErrNotFound)
+	}
+
+	if m.ToID == "" {
+		return fmt.Errorf("move %s to %s: %w", m.Unit, m.To, ErrMoveUnchecked)
 	}
 
 	fence, err := s.fence(ctx, m.Unit.Namespace)

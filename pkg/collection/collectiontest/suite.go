@@ -66,6 +66,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a collection has a stable ID", test: testCollectionID},
 		{name: "a failed audit write leaves no collection", test: testAuditRollsBack},
 		{name: "a move from a stale source is refused", test: testMoveStaleSource},
+		{name: "a move to a collection that was re-created is refused", test: testMoveRecreatedTarget},
 		{name: "a Pulumi stack keeps its collection through a rename", test: testStackRename},
 		{name: "a soft-deleted unit does not keep its collection", test: testDeletedUnitMembership},
 		{name: "CollectionOf names the collection, and false when there is none", test: testCollectionOf},
@@ -505,6 +506,46 @@ func testAuditRollsBack(t *testing.T, s Store) {
 	}
 }
 
+// testMoveRecreatedTarget checks that a move names the target by the stable ID
+// that the caller checked. A target deleted and created again has another ID,
+// so the move is refused and the unit keeps its collection.
+func testMoveRecreatedTarget(t *testing.T, s Store) {
+	t.Helper()
+
+	ns := newNamespace(t, s, "acme")
+	unit := createUnit(t, s, ns)
+	target := newCollection(t, ns.Name, "payments")
+
+	if err := createColl(t, s, target, ns.Fence()); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	checked := collectionID(t, s, target.Ref)
+
+	if err := deleteColl(t, s, target.Ref, ns.Fence()); err != nil {
+		t.Fatalf("delete target: %v", err)
+	}
+
+	recreated := newCollection(t, ns.Name, "payments")
+	if err := createColl(t, s, recreated, ns.Fence()); err != nil {
+		t.Fatalf("create target again: %v", err)
+	}
+
+	err := s.SetUnitCollection(
+		t.Context(),
+		collection.Move{Unit: unit, From: "", To: target.Ref, ToID: checked},
+		ns.Fence(),
+		auditFor(ns.Fence()),
+	)
+	if !errors.Is(err, collection.ErrCollectionChanged) {
+		t.Fatalf("move to a re-created target: err = %v, want ErrCollectionChanged", err)
+	}
+
+	if _, err := s.UnitCollection(t.Context(), unit); !errors.Is(err, collection.ErrNoCollection) {
+		t.Fatalf("unit after a refused move: err = %v, want ErrNoCollection", err)
+	}
+}
+
 func testMoveStaleSource(t *testing.T, s Store) {
 	t.Helper()
 
@@ -525,7 +566,10 @@ func testMoveStaleSource(t *testing.T, s Store) {
 
 	// The caller read "no collection" before the first move, so its source is stale.
 	err := s.SetUnitCollection(
-		t.Context(), collection.Move{Unit: unit, From: "", To: second.Ref}, ns.Fence(), auditFor(ns.Fence()),
+		t.Context(),
+		collection.Move{Unit: unit, From: "", To: second.Ref, ToID: collectionID(t, s, second.Ref)},
+		ns.Fence(),
+		auditFor(ns.Fence()),
 	)
 	if !errors.Is(err, collection.ErrCollectionChanged) {
 		t.Fatalf("move from a stale source: err = %v, want ErrCollectionChanged", err)
@@ -648,10 +692,23 @@ func setUnit(
 
 	return from, s.SetUnitCollection(
 		t.Context(),
-		collection.Move{Unit: unit, From: from, To: to},
+		collection.Move{Unit: unit, From: from, To: to, ToID: collectionID(t, s, to)},
 		fence,
 		auditFor(fence),
 	)
+}
+
+// collectionID returns the stable ID of the collection ref, as the caller of a
+// move reads it before the move.
+func collectionID(t *testing.T, s Store, ref collection.Ref) string {
+	t.Helper()
+
+	c, err := s.GetCollection(t.Context(), ref)
+	if err != nil {
+		t.Fatalf("get collection %v: %v", ref, err)
+	}
+
+	return c.ID
 }
 
 // auditFor returns a valid audit entry for a write in the namespace of fence.

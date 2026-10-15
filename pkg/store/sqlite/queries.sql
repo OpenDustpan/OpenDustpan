@@ -1405,3 +1405,10 @@ WHERE unit_id = ? AND NOT EXISTS (
     FROM collections AS c
     WHERE c.namespace = collection_members.namespace AND c.name_key = collection_members.collection_key
 );
+
+-- name: GrantIDsOnTarget :many
+-- The IDs of the current grants on one target, in order. A deleted collection
+-- revokes each of them, so that none outlives it.
+SELECT id FROM grants
+WHERE target = ? AND revoked_at_ms IS NULL
+ORDER BY id;

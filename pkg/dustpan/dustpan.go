@@ -1542,6 +1542,18 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 
 	blobs := blobPurger{logger: cfg.logger}
 
+	// The move check is the escalation check of the access service. A store
+	// with no roles and grants gives no checker, so a move is refused there.
+	grants, err := newAccessService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var moves inventoryapi.MoveChecker
+	if grants != nil {
+		moves = grants
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
 		Namespaces: svc.namespaces,
 		Units:      cfg.inventoryReader,
@@ -1552,6 +1564,7 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		},
 		ReadScope:     deletedReadScope{authz: cfg.authorizer},
 		Collections:   svc.collections,
+		Moves:         moves,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,

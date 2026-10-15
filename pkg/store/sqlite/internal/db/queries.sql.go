@@ -2831,6 +2831,37 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id string) (Workspace, e
 	return i, err
 }
 
+const grantIDsOnTarget = `-- name: GrantIDsOnTarget :many
+SELECT id FROM grants
+WHERE target = ? AND revoked_at_ms IS NULL
+ORDER BY id
+`
+
+// The IDs of the current grants on one target, in order. A deleted collection
+// revokes each of them, so that none outlives it.
+func (q *Queries) GrantIDsOnTarget(ctx context.Context, target string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, grantIDsOnTarget, target)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const grantsOfSubject = `-- name: GrantsOfSubject :many
 SELECT id, subject, subject_kind, subject_id, role, object, target, object_kind, namespace, condition, created_at_ms, created_by
 FROM grants

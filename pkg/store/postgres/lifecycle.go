@@ -95,6 +95,8 @@ func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, id stack
 		return stack.ErrNotFound
 	}
 
+	// The foreign key keeps every membership on a collection that exists, so
+	// this removes nothing that the schema allows. It is defense only.
 	if err = q.DeleteMissingCollectionMembership(ctx, id.String()); err != nil {
 		return fmt.Errorf("check collection membership: %w", err)
 	}
@@ -236,6 +238,8 @@ func restoreWorkspaceRow(
 		return workspace.ErrNotFound
 	}
 
+	// The foreign key keeps every membership on a collection that exists, so
+	// this removes nothing that the schema allows. It is defense only.
 	if err = q.DeleteMissingCollectionMembership(ctx, id.String()); err != nil {
 		return fmt.Errorf("check collection membership: %w", err)
 	}

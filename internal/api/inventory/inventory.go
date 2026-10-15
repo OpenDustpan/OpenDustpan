@@ -49,7 +49,10 @@ type Config struct {
 	// Collections serves the collection routes (ADR 51). It is optional: a nil
 	// service serves no collection route, so a namespace store that holds no
 	// collections keeps the rest of the API unchanged.
-	Collections   *collection.Service
+	Collections *collection.Service
+	// Moves checks the escalation of a move into a collection. It is required
+	// with Collections: a move with no checker is refused.
+	Moves         MoveChecker
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	Logger        *slog.Logger
@@ -64,6 +67,7 @@ type Handler struct {
 	lifecycles  map[string]coreinventory.Lifecycle
 	readScope   DeletedReadScope
 	collections *collection.Service
+	moves       MoveChecker
 	authn       identity.Authenticator
 	authz       identity.Authorizer
 	logger      *slog.Logger
@@ -106,6 +110,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		lifecycles:  cfg.Lifecycles,
 		readScope:   cfg.ReadScope,
 		collections: cfg.Collections,
+		moves:       cfg.Moves,
 		authn:       cfg.Authenticator,
 		authz:       cfg.Authorizer,
 		logger:      cfg.Logger,

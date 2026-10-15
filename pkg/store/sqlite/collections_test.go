@@ -96,7 +96,8 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 	platform := collection.Ref{Namespace: ns.Name, Name: mustCollectionName(t, "platform")}
 	unit := collection.UnitRef{Namespace: ns.Name, Tool: "opentofu", Name: "web"}
 
-	if _, err := svc.Create(ctx, payments, entry("collection:create")); err != nil {
+	paymentsCol, err := svc.Create(ctx, payments, entry("collection:create"))
+	if err != nil {
 		t.Fatalf("create payments: %v", err)
 	}
 
@@ -107,7 +108,8 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 	move := entry("unit:move")
 	move.Version = "from=none;to=payments"
 
-	if err := svc.SetUnit(ctx, collection.Move{Unit: unit, From: "", To: payments}, move); err != nil {
+	m := collection.Move{Unit: unit, From: "", To: payments, ToID: paymentsCol.ID}
+	if err := svc.SetUnit(ctx, m, move); err != nil {
 		t.Fatalf("move into payments: %v", err)
 	}
 

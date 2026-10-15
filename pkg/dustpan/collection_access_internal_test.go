@@ -158,10 +158,16 @@ func createPrincipals(t *testing.T, st *sqlite.Store, at time.Time, subjects ...
 func moveUnit(t *testing.T, svc *collection.Service, to collection.Ref, at time.Time) {
 	t.Helper()
 
+	target, err := svc.Get(t.Context(), to)
+	if err != nil {
+		t.Fatalf("get target: %v", err)
+	}
+
 	m := collection.Move{
 		Unit: collection.UnitRef{Namespace: to.Namespace, Tool: "pulumi", Name: "app/prod"},
 		From: "",
 		To:   to,
+		ToID: target.ID,
 	}
 	if err := svc.SetUnit(t.Context(), m, nsChange(at, to.Namespace, "unit:app/prod")); err != nil {
 		t.Fatalf("move unit: %v", err)

@@ -131,12 +131,13 @@ func membershipSetup(t *testing.T) (*Store, namespace.Namespace, workspace.ID) {
 	}
 
 	payments := collection.Ref{Namespace: ns.Name, Name: collection.Name("payments")}
-	if _, createErr := svc.Create(ctx, payments, membershipEntry(at, ns.Name, "collection:create")); createErr != nil {
+	paymentsCol, createErr := svc.Create(ctx, payments, membershipEntry(at, ns.Name, "collection:create"))
+	if createErr != nil {
 		t.Fatalf("create collection: %v", createErr)
 	}
 
 	unit := collection.UnitRef{Namespace: ns.Name, Tool: "opentofu", Name: "web"}
-	move := collection.Move{Unit: unit, From: "", To: payments}
+	move := collection.Move{Unit: unit, From: "", To: payments, ToID: paymentsCol.ID}
 	if moveErr := svc.SetUnit(ctx, move, membershipEntry(at, ns.Name, "unit:move")); moveErr != nil {
 		t.Fatalf("move into collection: %v", moveErr)
 	}

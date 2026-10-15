@@ -299,6 +299,16 @@ func (h *Handler) moveUnit(
 
 	fromName := from.Name
 
+	// The target is read once here: the check and the write both use its
+	// stable ID, so a collection that is deleted and created again in between
+	// is refused by the write.
+	targetCol, err := h.collections.Get(ctx, to)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	if authErr := h.authorizeMove(ctx, p, obj, from, to); authErr != nil {
 		h.writeError(ctx, w, authErr)
 
@@ -307,7 +317,7 @@ func (h *Handler) moveUnit(
 
 	version := "from=" + nameOrNone(fromName) + ";to=" + to.Name.String()
 
-	err = h.collections.SetUnit(ctx, collection.Move{Unit: unit, From: fromName, To: to},
+	err = h.collections.SetUnit(ctx, collection.Move{Unit: unit, From: fromName, To: to, ToID: targetCol.ID},
 		auditEntry(r, p, obj, identity.ActionUnitMove, version))
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -328,8 +338,17 @@ type moveCheck struct {
 	object identity.Object
 }
 
+// MoveChecker decides whether a caller may move a unit into a collection. A
+// refusal wraps identity.ErrDenied, and a missing unit or collection wraps
+// the error of the store.
+type MoveChecker interface {
+	CheckMove(ctx context.Context, caller identity.Principal, unit, target identity.Object) error
+}
+
 // authorizeMove checks the access of a move from the collection from, when the
-// unit had one, into the collection to. Each check must allow the move.
+// unit had one, into the collection to. Each check must allow the move, and
+// the grants that the target collection gives must be ones the caller holds on
+// the unit.
 func (h *Handler) authorizeMove(
 	ctx context.Context, p identity.Principal, obj identity.Object, from, to collection.Ref,
 ) error {
@@ -353,7 +372,11 @@ func (h *Handler) authorizeMove(
 		}
 	}
 
-	return nil
+	if h.moves == nil {
+		return fmt.Errorf("move %s: %w: no move checker is configured", obj.String(), identity.ErrDenied)
+	}
+
+	return h.moves.CheckMove(ctx, p, obj, toObj)
 }
 
 // nameOrNone returns the collection name, or "none" when the unit had none.
@@ -483,8 +506,6 @@ func collectionOf(c collection.Collection) collectionEntry {
 	}
 }
 
-// truncateUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8 rune
-// boundary, so a multi-byte rune is never split.
 // sourceIP returns the remote address that the server sees, without the port.
 func sourceIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
