@@ -233,6 +233,10 @@ func testReviewUnits(t *testing.T, s access.Store) {
 		t.Fatalf("delete workspace: %v", delErr)
 	}
 
+	// A lookup that returns nothing fails this case here, as the review reads
+	// the same units.
+	assertLiveStack(t, us)
+
 	got, err := rs.ReviewUnits(ctx, []string{"stk-web", "ws-network", "stk-purged"})
 	if err != nil {
 		t.Fatalf("review units: %v", err)
