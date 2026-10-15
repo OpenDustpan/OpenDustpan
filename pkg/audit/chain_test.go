@@ -287,6 +287,77 @@ func TestChainWalkStart(t *testing.T) {
 	}
 }
 
+func TestChainWalkChangedHashedEntryBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	one := walkChained(1, "")
+	two := walkChained(2, one.Hash)
+	end := walkMarker(3, audit.ActionEndChain, two.Hash, nil)
+
+	var digest audit.Digest
+
+	digest.Add(one, "")
+	digest.Add(two, "")
+	digest.Add(end, "")
+
+	start := walkMarker(4, audit.ActionStartChain, "", audit.StartChanges(&digest))
+	scope := audit.ChainScope{Record: recordOf(audit.ChainStateOn, 4), Start: 4}
+
+	if got := walkResult(scope, one, two, end, start); got != 0 {
+		t.Fatalf("a start after an end entry: fails at %d", got)
+	}
+
+	// Change entry 1 after hashing, then rebuild the digest so it matches
+	// the edited rows. The walk still fails at sequence 1.
+	edited := one
+	edited.Subject = "mallory"
+
+	var rebuilt audit.Digest
+
+	rebuilt.Add(edited, "")
+	rebuilt.Add(two, "")
+	rebuilt.Add(end, "")
+
+	rebuiltStart := walkMarker(4, audit.ActionStartChain, "", audit.StartChanges(&rebuilt))
+
+	if got := walkResult(scope, edited, two, end, rebuiltStart); got != 1 {
+		t.Fatalf("a changed hashed entry before the start: fails at %d, want 1", got)
+	}
+
+	// An unhashed old entry with a changed field still passes when the
+	// digest matches the edited rows.
+	plainOne := walkEntry(1)
+	plainTwo := walkEntry(2)
+
+	var plain audit.Digest
+
+	plain.Add(plainOne, "")
+	plain.Add(plainTwo, "")
+
+	plainStart := walkMarker(3, audit.ActionStartChain, "", audit.StartChanges(&plain))
+	plainFour := walkChained(4, plainStart.Hash)
+	plainScope := audit.ChainScope{Record: recordOf(audit.ChainStateOn, 3), Start: 3}
+
+	if got := walkResult(plainScope, plainOne, plainTwo, plainStart, plainFour); got != 0 {
+		t.Fatalf("a start after two plain entries: fails at %d", got)
+	}
+
+	changedPlain := plainOne
+	changedPlain.Subject = "mallory"
+
+	var changedDigest audit.Digest
+
+	changedDigest.Add(changedPlain, "")
+	changedDigest.Add(plainTwo, "")
+
+	changedStart := walkMarker(3, audit.ActionStartChain, "", audit.StartChanges(&changedDigest))
+	changedFour := walkChained(4, changedStart.Hash)
+
+	if got := walkResult(plainScope, changedPlain, plainTwo, changedStart, changedFour); got != 0 {
+		t.Fatalf("a changed plain entry before the start: fails at %d", got)
+	}
+}
+
 func TestChainWalkScopeWithoutAChain(t *testing.T) {
 	t.Parallel()
 

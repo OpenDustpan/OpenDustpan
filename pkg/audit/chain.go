@@ -425,7 +425,9 @@ const (
 
 // ChainWalk checks the entries of one scope in order of sequence. The stores use it in Check, so both dialects read the
 // chain
-// the same way. The zero value is not ready: use NewChainWalk.
+// the same way. Before the start entry, it also checks each entry that
+// holds a hash against its own fields and stored previous hash. The zero
+// value is not ready: use NewChainWalk.
 type ChainWalk struct {
 	scope     ChainScope
 	digest    Digest
@@ -458,7 +460,8 @@ func NewChainWalk(scope ChainScope) *ChainWalk {
 // it, and answers false at the first entry that does not match: a gap, a
 // broken link, a hash that does not match the fields, a digest that does
 // not match the earlier entries, or an entry without a hash inside the
-// chain.
+// chain. Before the start entry, an entry that holds a hash must match its
+// own fields and its stored previous hash.
 func (w *ChainWalk) StepStored(e Entry, changesText string) bool {
 	if w.failed || e.Sequence != w.next {
 		w.failed = true
@@ -530,10 +533,16 @@ func (w *ChainWalk) advance(e Entry, changesText string) bool {
 	}
 }
 
-// stepDigest adds an entry before the start entry to the digest, and
-// checks the start entry against it.
+// stepDigest adds an entry before the start entry to the digest, checks each
+// earlier entry that holds a hash against its own fields and stored previous
+// hash, and checks the start entry against the digest. It does not check the
+// links between earlier entries.
 func (w *ChainWalk) stepDigest(e Entry, changesText string) bool {
 	if e.Sequence < w.scope.Start {
+		if e.Hash != "" && ComputeStoredHash(e, e.PrevHash, changesText) != e.Hash {
+			return false
+		}
+
 		w.digest.Add(e, changesText)
 
 		return true

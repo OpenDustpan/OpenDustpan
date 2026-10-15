@@ -85,8 +85,8 @@ and a fresh MFA step.
    - The approval writes an audit entry in `@server` with the action
      `server:set-audit-chain`, and starts the migration.
    - The approval claims the migration in one conditional write on
-     `audit_chain_state`. Only one approval on all instances wins; another
-     answers 409. A claim expires after 15 minutes, so a migration that
+     `audit_chain_state`. Only one approval on all instances wins. Another
+     approval answers 409. A claim expires after 15 minutes, so a migration that
      stops without a release blocks a new approval for that time at most.
 7. **The migration.** The server stays in maintenance mode until the
    migration ends. Before it writes, it waits two cache limits after the
@@ -126,7 +126,9 @@ and a fresh MFA step.
    a hash that matches its fields and links to the entry before it, with no
    gap, up to now or up to an end entry. After an end entry, entries hold no
    hash.
-   - A start entry also checks its digest against the earlier entries.
+   - A start entry also checks its digest against the earlier entries. It
+     also requires each earlier entry that holds a hash to match its own
+     fields and stored previous hash.
    - With the chain on, the scope must not end after an end entry.
    - With the chain off, a scope without a chain is valid only when its
      first entry comes after the time the chain went off: the scope did not

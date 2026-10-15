@@ -48,6 +48,10 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "an end entry closes the chain and later entries hold no hash", test: testChainEnd},
 		{name: "a start entry holds the digest of the earlier entries", test: testChainStartDigest},
 		{name: "a changed entry before a start entry is found", test: testChainChangedBeforeStart},
+		{
+			name: "a changed hashed entry before a start entry fails at its sequence",
+			test: testChainChangedHashedBeforeStart,
+		},
 		{name: "a removed hash inside the chain is found", test: testChainStrippedInside},
 		{name: "a renamed end entry is found", test: testChainEndRenamed},
 		{name: "a scope that began after the chain went off checks as valid", test: testChainScopeAfterOff},
@@ -295,6 +299,21 @@ func testChainChangedBeforeStart(t *testing.T, ts ChainTestStore) {
 	ts.TamperEntry(t, tl.ns.Name, 3, "subject", "mallory")
 
 	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 4)
+}
+
+func testChainChangedHashedBeforeStart(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.append(2)
+	tl.migrate(audit.ChainStateOff)
+	tl.migrate(audit.ChainStateOn)
+
+	// Entry 1 holds a hash, so the check finds the changed field at
+	// sequence 1, before it compares the digest.
+	ts.TamperEntry(t, tl.ns.Name, 1, "subject", "mallory")
+
+	wantInvalidAt(t, check(t, ts.Store, tl.ns.Name), 1)
 }
 
 func testChainStrippedInside(t *testing.T, ts ChainTestStore) {
