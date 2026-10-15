@@ -105,6 +105,8 @@ type Inner interface {
 	inventory.ExpiredDeleted
 	inventory.BlobPurges
 	maintenance.Store
+
+	CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 }
 
 // Store wraps an Inner store and applies faults before it delegates. The zero
@@ -446,6 +448,16 @@ func (s *Store) ListEvents(
 	}
 
 	return s.inner.ListEvents(ctx, ref, id, after, limit)
+}
+
+// CountRunningJournaledUpdates counts the running journaled updates, unless a
+// fault fires first.
+func (s *Store) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	if err := s.before(ctx, "CountRunningJournaledUpdates"); err != nil {
+		return 0, err
+	}
+
+	return s.inner.CountRunningJournaledUpdates(ctx)
 }
 
 // CreateWorkspace persists a new workspace, unless a fault fires first.
