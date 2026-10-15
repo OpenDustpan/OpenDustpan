@@ -119,18 +119,7 @@ func TestAuditFeedConformance(t *testing.T) {
 	audittest.RunFeed(t, func(t *testing.T) audittest.FeedStore {
 		t.Helper()
 
-		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		t.Cleanup(func() {
-			if err := s.Close(); err != nil {
-				t.Errorf("close store: %v", err)
-			}
-		})
-
-		return s
+		return open(t)
 	})
 }
 
@@ -145,6 +134,8 @@ func TestAuditConformance(t *testing.T) {
 		t.Helper()
 
 		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
 
 		s, err := sqlite.Open(t.Context(), path)
 		if err != nil {
@@ -260,7 +251,11 @@ func TestSchemaConformance(t *testing.T) {
 func TestPingClosed(t *testing.T) {
 	t.Parallel()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -294,6 +289,8 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, openErr := sqlite.Open(t.Context(), path)
 	if openErr != nil {
@@ -458,11 +455,14 @@ var (
 	_ storetest.StagingWitness = (*backupStore)(nil)
 )
 
-// openBackup returns a fresh backup-capable store in a temporary directory.
+// openBackup returns a fresh backup-capable store in a temporary directory,
+// copied from the migrated template.
 func openBackup(t *testing.T) storetest.BackupStore { //nolint:ireturn // Factory signature returns the interface.
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -661,22 +661,13 @@ func checkUsableWorkspace(t *testing.T, s *sqlite.Store, ns namespace.Namespace,
 	}
 }
 
-// open returns a fresh store in a temporary directory.
+// open returns a fresh store in a temporary directory, copied from the
+// migrated template so only the first test of the binary runs every
+// migration.
 func open(t *testing.T) *sqlite.Store {
 	t.Helper()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("close store: %v", err)
-		}
-	})
-
-	return s
+	return openTemplated(t)
 }
 
 // uncountedStore wraps a Store with its path so the uncounted-checkpoint
@@ -695,11 +686,14 @@ var (
 )
 
 // openUncounted returns a fresh store in a temporary directory that the
-// uncounted-checkpoint case can NULL through SQL.
+// uncounted-checkpoint case can NULL through SQL, copied from the migrated
+// template.
 func openUncounted(t *testing.T) *uncountedStore {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -802,11 +796,13 @@ func (s *auditedWorkspaces) BreakAuditAppends(ctx context.Context) error {
 }
 
 // openAuditedWorkspaces returns a fresh store in a temporary directory whose
-// audit appends the suite can break.
+// audit appends the suite can break, copied from the migrated template.
 func openAuditedWorkspaces(t *testing.T) *auditedWorkspaces {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -1705,6 +1701,8 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {

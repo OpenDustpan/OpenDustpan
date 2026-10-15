@@ -11,13 +11,16 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-// TestBackupCoverageFailsOnAddedColumn adds the column that the spike of ADR 42
-// added, outside the migrations, and proves the coverage check fails with
-// ErrCoverage and names the table and the column (ADR 42, decision 5).
+// TestBackupCoverageFailsOnAddedColumn adds a column outside the migrations
+// and proves the coverage check fails with ErrCoverage and names the table
+// and the column.
 func TestBackupCoverageFailsOnAddedColumn(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+	addSpikeColumn(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -29,21 +32,6 @@ func TestBackupCoverageFailsOnAddedColumn(t *testing.T) {
 			t.Errorf("close store: %v", closeErr)
 		}
 	})
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close database: %v", closeErr)
-		}
-	}()
-
-	if _, execErr := conn.ExecContext(t.Context(), `ALTER TABLE stacks ADD COLUMN spike_new_col TEXT`); execErr != nil {
-		t.Fatalf("add column: %v", execErr)
-	}
 
 	err = s.CheckCoverage(t.Context())
 	if err == nil {
@@ -61,11 +49,14 @@ func TestBackupCoverageFailsOnAddedColumn(t *testing.T) {
 
 // TestPortableExportRefusesAddedColumn proves the portable export runs the
 // coverage check first: a column that no list names fails the export before a
-// file is written (ADR 42, decision 5).
+// file is written.
 func TestPortableExportRefusesAddedColumn(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+	addSpikeColumn(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -77,21 +68,6 @@ func TestPortableExportRefusesAddedColumn(t *testing.T) {
 			t.Errorf("close store: %v", closeErr)
 		}
 	})
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close database: %v", closeErr)
-		}
-	}()
-
-	if _, execErr := conn.ExecContext(t.Context(), `ALTER TABLE stacks ADD COLUMN spike_new_col TEXT`); execErr != nil {
-		t.Fatalf("add column: %v", execErr)
-	}
 
 	var writes int
 
@@ -108,6 +84,28 @@ func TestPortableExportRefusesAddedColumn(t *testing.T) {
 
 	if writes != 0 {
 		t.Fatalf("files opened = %d, want none before the coverage check", writes)
+	}
+}
+
+// addSpikeColumn adds the probe column to stacks with no store open. The
+// seed store is closed before this runs and the test store opens after, so
+// no guard checkpoint can hold the write lock during the alter.
+func addSpikeColumn(t *testing.T, path string) {
+	t.Helper()
+
+	conn, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close database: %v", closeErr)
+		}
+	}()
+
+	if _, execErr := conn.ExecContext(t.Context(), `ALTER TABLE stacks ADD COLUMN spike_new_col TEXT`); execErr != nil {
+		t.Fatalf("add column: %v", execErr)
 	}
 }
 

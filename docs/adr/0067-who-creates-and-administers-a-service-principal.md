@@ -112,3 +112,15 @@ The owner accepted three points on 2026-10-14 ("Strong yes"):
   principal to a team without giving that team the access of the principal.
 - A team can make and run its own service principals inside its namespace
   without an installation administrator, and without access outside it.
+
+## Note on the tokens of a namespace
+
+The action `namespace:manage-principal-tokens` has a namespace as its
+object. It gives `principal:manage-tokens` on the principals of that
+namespace only, through a grant on that namespace. The built-in role
+`admin` holds it. It gives no other action on a principal. On the
+installation, only `principal:manage-tokens` gives the tokens of a
+principal. A grant of a role with it needs
+every data action on the namespace of its object, or `server:manage-access`
+on the installation. A grant on the installation needs
+`server:manage-access`.

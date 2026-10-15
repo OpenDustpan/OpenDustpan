@@ -63,16 +63,7 @@ func newTestPrincipals(t *testing.T) *principal.Service {
 func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	principals, err := principal.NewService(
 		principal.Config{Store: st, Guard: nil, Namespaces: nil, Now: nil, NewID: nil},
@@ -115,6 +106,7 @@ func newAuditedPrincipalHandler(
 		Tokens:         nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 		Audit:          entries,

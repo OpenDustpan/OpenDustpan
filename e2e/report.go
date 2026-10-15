@@ -17,7 +17,12 @@ const (
 	reportDirEnv   = "E2E_REPORT_DIR"
 	defaultReports = "report"
 	summaryFile    = "summary.md"
+	fullFile       = "full.md"
 	reportExt      = ".json"
+	// GitHub accepts at most 1024 KiB in a job summary.
+	summaryLimit = 900 * 1024
+	// maxFailureLines bounds how many failure lines summary.md keeps per run.
+	maxFailureLines = 40
 )
 
 // Run is everything recorded for one CLI version on one store.
@@ -122,7 +127,7 @@ func ClearReports(dir string) error {
 		return fmt.Errorf("list old reports: %w", err)
 	}
 
-	for _, name := range append(old, filepath.Join(dir, summaryFile)) {
+	for _, name := range append(old, filepath.Join(dir, summaryFile), filepath.Join(dir, fullFile)) {
 		if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove old report: %w", err)
 		}
@@ -131,8 +136,9 @@ func ClearReports(dir string) error {
 	return nil
 }
 
-// WriteSummary reads every run in dir and writes summary.md: a step table and
-// an endpoint matrix per version. It returns nothing when dir has no runs.
+// WriteSummary reads every run in dir and writes full.md with the full
+// report and summary.md with the short report. It returns nothing when dir
+// has no runs.
 func WriteSummary(dir string) error {
 	names, err := filepath.Glob(filepath.Join(dir, "*"+reportExt))
 	if err != nil {
@@ -174,11 +180,38 @@ func WriteSummary(dir string) error {
 		)
 	})
 
-	if err := os.WriteFile(filepath.Join(dir, summaryFile), []byte(render(runs)), fileMode); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, fullFile), []byte(render(runs)), fileMode); err != nil {
+		return fmt.Errorf("write full report: %w", err)
+	}
+
+	short := renderSummary(runs)
+	if len(short) >= summaryLimit {
+		short = cutSummary(short)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, summaryFile), []byte(short), fileMode); err != nil {
 		return fmt.Errorf("write summary: %w", err)
 	}
 
 	return nil
+}
+
+// cutSummary cuts short to strictly below the limit on a line boundary and
+// ends it with a line that names full.md. It reserves room for the notice
+// before cutting.
+func cutSummary(short string) string {
+	note := "\nTruncated to 900 KiB, see full.md for the full report.\n"
+	keep := summaryLimit - len(note) - 1
+	if keep <= 0 {
+		return note
+	}
+
+	cut := short[:min(keep, len(short))]
+	if i := strings.LastIndexByte(cut, '\n'); i >= 0 {
+		cut = cut[:i+1]
+	}
+
+	return cut + note
 }
 
 func render(runs []Run) string {
@@ -204,6 +237,70 @@ func render(runs []Run) string {
 	return b.String()
 }
 
+func renderSummary(runs []Run) string {
+	var b strings.Builder
+
+	b.WriteString("# End-to-end report\n")
+
+	// Tables first, then failures, so a cut keeps every table.
+	for _, tool := range []string{ToolPulumi, ToolTofu} {
+		mine := runsForTool(runs, tool)
+		if len(mine) > 0 {
+			fmt.Fprintf(&b, "\n# %s\n\n", toolTitle(tool))
+			renderSteps(&b, mine)
+			renderMatrix(&b, mine)
+		}
+	}
+
+	for _, tool := range []string{ToolPulumi, ToolTofu} {
+		mine := runsForTool(runs, tool)
+		for i := range mine {
+			fmt.Fprintf(&b, "\n## Failures: %s\n\n", versionTitle(mine[i]))
+			b.WriteString(truncateFailures(failures(mine[i])))
+		}
+
+		for i := range mine {
+			fmt.Fprintf(
+				&b,
+				"\n## Request log: %s\n\nSee full.md for the request log.\n",
+				versionTitle(mine[i]),
+			)
+		}
+	}
+
+	return b.String()
+}
+
+func runsForTool(runs []Run, tool string) []Run {
+	var mine []Run
+
+	for i := range runs {
+		if runs[i].Tool == tool {
+			mine = append(mine, runs[i])
+		}
+	}
+
+	return mine
+}
+
+// truncateFailures keeps the first maxFailureLines lines of text and ends it
+// with a line that says how many lines were cut and names full.md. When the
+// cut falls inside a fenced block, it closes the fence before the notice.
+func truncateFailures(text string) string {
+	trimmed := strings.TrimSuffix(text, "\n")
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) <= maxFailureLines {
+		return text
+	}
+
+	kept := strings.Join(lines[:maxFailureLines], "\n") + "\n"
+	if strings.Count(kept, "```")%2 == 1 {
+		kept += "  ```\n"
+	}
+
+	return fmt.Sprintf("%sCut %d lines, see full.md.\n", kept, len(lines)-maxFailureLines)
+}
+
 func toolTitle(tool string) string {
 	if tool == ToolTofu {
 		return "OpenTofu"
@@ -213,44 +310,8 @@ func toolTitle(tool string) string {
 }
 
 func renderTool(b *strings.Builder, runs []Run) {
-	b.WriteString("## Steps\n\n| Step |")
-
-	for i := range runs {
-		fmt.Fprintf(b, " %s |", versionTitle(runs[i]))
-	}
-
-	b.WriteString("\n|---|" + strings.Repeat("---|", len(runs)) + "\n")
-
-	for _, name := range stepNames(runs) {
-		fmt.Fprintf(b, "| `%s` |", name)
-
-		for i := range runs {
-			fmt.Fprintf(b, " %s |", stepCell(runs[i], name))
-		}
-
-		b.WriteString("\n")
-	}
-
-	b.WriteString("\n## Requests the CLI made\n\n")
-	b.WriteString("Cells list the status codes returned. " +
-		"4xx and 5xx mean the server does not yet do what the CLI expects.\n\n")
-	b.WriteString("| Request |")
-
-	for i := range runs {
-		fmt.Fprintf(b, " %s |", versionTitle(runs[i]))
-	}
-
-	b.WriteString("\n|---|" + strings.Repeat("---|", len(runs)) + "\n")
-
-	for _, key := range requestKeys(runs) {
-		fmt.Fprintf(b, "| `%s` |", key)
-
-		for i := range runs {
-			fmt.Fprintf(b, " %s |", statusCell(runs[i], key))
-		}
-
-		b.WriteString("\n")
-	}
+	renderSteps(b, runs)
+	renderMatrix(b, runs)
 
 	for i := range runs {
 		fmt.Fprintf(b, "\n## Failures: %s\n\n", versionTitle(runs[i]))
@@ -273,6 +334,49 @@ func renderTool(b *strings.Builder, runs []Run) {
 
 			fmt.Fprintf(b, "| %d | %s | `%s %s` | %d | `%s` |\n", e.Seq, e.Step, e.Method, target, e.Status, e.Accept)
 		}
+	}
+}
+
+func renderSteps(b *strings.Builder, runs []Run) {
+	b.WriteString("## Steps\n\n| Step |")
+
+	for i := range runs {
+		fmt.Fprintf(b, " %s |", versionTitle(runs[i]))
+	}
+
+	b.WriteString("\n|---|" + strings.Repeat("---|", len(runs)) + "\n")
+
+	for _, name := range stepNames(runs) {
+		fmt.Fprintf(b, "| `%s` |", name)
+
+		for i := range runs {
+			fmt.Fprintf(b, " %s |", stepCell(runs[i], name))
+		}
+
+		b.WriteString("\n")
+	}
+}
+
+func renderMatrix(b *strings.Builder, runs []Run) {
+	b.WriteString("\n## Requests the CLI made\n\n")
+	b.WriteString("Cells list the status codes returned. " +
+		"4xx and 5xx mean the server does not yet do what the CLI expects.\n\n")
+	b.WriteString("| Request |")
+
+	for i := range runs {
+		fmt.Fprintf(b, " %s |", versionTitle(runs[i]))
+	}
+
+	b.WriteString("\n|---|" + strings.Repeat("---|", len(runs)) + "\n")
+
+	for _, key := range requestKeys(runs) {
+		fmt.Fprintf(b, "| `%s` |", key)
+
+		for i := range runs {
+			fmt.Fprintf(b, " %s |", statusCell(runs[i], key))
+		}
+
+		b.WriteString("\n")
 	}
 }
 

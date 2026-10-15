@@ -94,16 +94,7 @@ type auditStore interface {
 func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStore) accessFixture {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
 	if err != nil {
@@ -117,7 +108,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 	seedStack(t, st, "acme", "web", "prod")
 
 	authz, err := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st},
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st, Principals: st},
 	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
@@ -163,6 +154,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		Audit:          entries(st),
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})

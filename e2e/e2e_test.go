@@ -8626,6 +8626,38 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 		),
 	)
 	logPushSide(t, env, "state push other lineage")
+
+	// A forced push of another lineage reaches the server: the CLI locks,
+	// the create answers 422, and the CLI leaves the lock behind. The 422
+	// names the force-unlock command with the lock ID, the CLI shows it,
+	// and force-unlock clears the lock so the next apply works.
+	forcedOtherPath := writePushFile(
+		t,
+		"other-force.tfstate",
+		editedState(t, pulled.Stdout, current.Serial+100, "00000000-0000-0000-0000-000000000000"),
+	)
+	lockID := e2e.Namespace + "/" + e2e.Workspace
+
+	env.Step(
+		ctx,
+		t,
+		failStep(
+			"state push other lineage forced",
+			checkForcedPushNamesUnlock(env, "state push other lineage forced", lineageMismatchDetail, lockID),
+			"state",
+			"push",
+			"-force",
+			forcedOtherPath,
+		),
+	)
+	logPushSide(t, env, "state push other lineage forced")
+
+	env.Step(ctx, t, step("force-unlock after refused push", nil, "force-unlock", "-force", lockID))
+	env.Step(
+		ctx,
+		t,
+		step("apply after force-unlock", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
+	)
 }
 
 // pulledStateDoc decodes the serial and lineage of a pulled state document.
@@ -8739,6 +8771,66 @@ func checkPushRejected(env *e2e.Env, step, serverDetail string) func(e2e.Result)
 
 		return checkServerRefusal(env, step, out, serverDetail)
 	}
+}
+
+// checkForcedPushNamesUnlock proves a forced push of another lineage reached
+// the server and names the way out: the CLI output holds the lineage detail
+// and the force-unlock command with the lock ID, and the recorded create
+// answers 422 with both in its JSON:API error document.
+func checkForcedPushNamesUnlock(
+	env *e2e.Env, step, serverDetail, lockID string,
+) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		out := flatDiagnostics(r.Stdout + r.Stderr)
+		wantUnlock := "tofu force-unlock " + lockID
+
+		if err := checkServerRefusal(env, step, out, serverDetail); err != nil {
+			return err
+		}
+
+		if !strings.Contains(out, wantUnlock) {
+			return fmt.Errorf("%w: %s output lacks %q: %s", errUnexpected, step, wantUnlock, out)
+		}
+
+		return checkForcedCreateHasUnlock(env, step, wantUnlock)
+	}
+}
+
+// diagnosticDecoration matches the color codes and the box characters that
+// newer OpenTofu versions put around an error message.
+var diagnosticDecoration = regexp.MustCompile("\x1b\\[[0-9;]*m|[│╷╵]")
+
+// flatDiagnostics removes the color codes and the box characters from CLI
+// output and joins the words with one space. Newer OpenTofu versions wrap a
+// long error message across lines, so a phrase can hold a line break.
+func flatDiagnostics(out string) string {
+	return strings.Join(strings.Fields(diagnosticDecoration.ReplaceAllString(out, " ")), " ")
+}
+
+// checkForcedCreateHasUnlock proves the recorded create of step holds the
+// force-unlock command with the lock ID in its 422 error document.
+func checkForcedCreateHasUnlock(env *e2e.Env, step, wantUnlock string) error {
+	entries := env.Recorder.Entries()
+	for i := range entries {
+		e := &entries[i]
+		if e.Step != step || e.Method != http.MethodPost || !strings.HasSuffix(e.Path, "/state-versions") {
+			continue
+		}
+
+		if !strings.Contains(e.ResponseBody, wantUnlock) {
+			return fmt.Errorf(
+				"%w: POST state-versions during %q lacks %q: %s",
+				errUnexpected,
+				step,
+				wantUnlock,
+				e.ResponseBody,
+			)
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s reached no state-versions route", errUnexpected, step)
 }
 
 // checkClientRefusal proves the CLI stopped the push itself with its own
