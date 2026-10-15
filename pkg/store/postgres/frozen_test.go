@@ -62,7 +62,11 @@ func TestFrozenMigrations(t *testing.T) {
 		"0054_token_policy.sql":                    "9a36e62b1ce6943d8ec762ce1732ea2b78e56eb2ff5c017a9ddde539786577c8",
 		"0056_audit_object_id_and_blob_purges.sql": "6f48b62438b91099e44d3de20a6905ba8d9b1ca90538382a9c7f2528ddf2fad2",
 		"0057_namespace_ip_allowlist.sql":          "24567a6a4104e14e1909dfeb3489cc7fafebcded41fd1672980b3877006ba051",
-		"0061_namespace_principals.sql":            "1f8013ffa3162a5bcaf313ef65dbd74de34b728bcb24a2f15c34e930d0201923",
+		"0058_inventory_deleted_purge_after.sql":   "a11abf98a8894509350b3c193f00ebe3bb5809f32b8ab424cbad5cf5b70ba2fb",
+		"0059_collections.sql":                     "d6aba083e67c43c5df37b823ac0535d835f3da819099e5e9cde0bf9d57e1c97d",
+		"0062_sessions.sql":                        "7a6c50236de51f453ad519a75dc1966b87a2b8d189b8366160df41624d251457",
+		"0064_blob_purges_age_byte_order.sql":      "e2a6965f07096da54f1e00240016a349cb046571b05a3ddec0544ec593c86d2d",
+		"0066_namespace_principals.sql":            "1f8013ffa3162a5bcaf313ef65dbd74de34b728bcb24a2f15c34e930d0201923",
 	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")

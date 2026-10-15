@@ -33,8 +33,11 @@ const pgMD5Len = 16
 // COPY column names shared by several backup tables.
 const (
 	pgColArrival     = "arrival"
+	pgColUnitID      = "unit_id"
+	pgColNameKey     = "name_key"
 	pgColCreatedAtMs = "created_at_ms"
 	pgColCreatedBy   = "created_by"
+	pgColDigest      = "digest"
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
@@ -53,8 +56,8 @@ const (
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
-	pgColUnitID      = "unit_id"
 	pgColPrincipalID = "principal_id"
+	pgColDisplayName = "display_name"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -81,6 +84,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyScopeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
 	tables = append(tables, pgCopyIdentityTables()...)
+	tables = append(tables, pgCopySessionTables()...)
 
 	return tables
 }
@@ -123,7 +127,7 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "checkpoints",
 			columns: []string{
 				pgColStackID, pgColUpdateID, "lease_digest", "schema_version", pgColSequence,
-				"digest", "invalid", "features", "deployment", "saved_at_ms",
+				pgColDigest, "invalid", "features", "deployment", "saved_at_ms",
 				"resource_count", "blob_key", pgColSize, "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
@@ -163,7 +167,7 @@ func pgCopyScopeTables() []pgCopyTable {
 		{
 			table: "inventory",
 			columns: []string{
-				pgColNamespace, pgColTool, pgColName, pgColUnitID, "display_name",
+				pgColNamespace, pgColTool, pgColName, pgColUnitID, pgColDisplayName,
 				"last_changed_ms", pgColStatus, "resource_count",
 				"lock_holder", "lock_since_ms", "lock_operation",
 			},
@@ -173,6 +177,20 @@ func pgCopyScopeTables() []pgCopyTable {
 			table:   "inventory_deleted",
 			columns: []string{pgColNamespace, pgColTool, pgColUnitID, pgColName, pgColDeletedAtMs, "purge_after_ms"},
 			orderBy: []string{pgColTool, pgColUnitID},
+		},
+		{
+			table: "collections",
+			columns: []string{
+				"id", pgColNamespace, pgColNameKey, pgColName, pgColCreatedAtMs,
+			},
+			orderBy: []string{pgColNamespace, pgColNameKey},
+		},
+		{
+			table: "collection_members",
+			columns: []string{
+				pgColUnitID, pgColNamespace, "collection_key", "assigned_at_ms",
+			},
+			orderBy: []string{pgColUnitID},
 		},
 		{
 			table:   "blob_purges",
@@ -242,6 +260,28 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 	}
 }
 
+// pgCopySessionTables holds the COPY columns of the session and sign-in
+// request tables.
+func pgCopySessionTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: "sessions",
+			columns: []string{
+				"id", pgColPrincipalID, pgColDigest, "provider", pgColCreatedAtMs, "last_seen_at_ms", "auth_time_ms",
+				"ended_at_ms", "end_reason", "source_ip", "user_agent",
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table: "sign_in_requests",
+			columns: []string{
+				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, "expires_at_ms",
+			},
+			orderBy: []string{pgColDigest},
+		},
+	}
+}
+
 // pgCopyIdentityTables holds the COPY columns of the principal, group,
 // role and grant tables (ADR 52).
 func pgCopyIdentityTables() []pgCopyTable {
@@ -250,7 +290,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 			table: "principals",
 			columns: []string{
 				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "namespace",
+				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
 			},
 			orderBy: []string{"id"},
 		},
@@ -274,7 +314,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 				pgColPrincipalID,
 				pgColName,
 				pgColKind,
-				"digest",
+				pgColDigest,
 				pgColCreatedAtMs,
 				"expires_at_ms",
 				"last_used_at_ms",

@@ -167,6 +167,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {
@@ -208,6 +209,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {
@@ -276,6 +278,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
+		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 	})
 	if err != nil {

@@ -71,7 +71,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
 	}
 
-	for _, tc := range slices.Concat(cases, reviewCases(), unitCases()) {
+	for _, tc := range slices.Concat(cases, reviewCases(), unitCases(), moveCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -409,11 +409,12 @@ func testGrantRoundTrip(t *testing.T, s access.Store) {
 	objects := []identity.Object{
 		identity.ServerObject(),
 		identity.NamespaceObject("acme"),
-		identity.CollectionObject("acme", "payments"),
+		identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"),
 		unit(t, "acme", "web/prod"),
 	}
 
-	for i, obj := range objects {
+	for i := range objects {
+		obj := objects[i]
 		want := newGrant("grt-"+string(rune('a'+i)), opsGroup(), access.RoleViewer, obj)
 		mustCreateGrant(t, s, want)
 

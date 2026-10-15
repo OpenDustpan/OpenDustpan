@@ -324,7 +324,7 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 		return Grant{}, err
 	}
 
-	if in.Object, err = s.existingUnit(ctx, in.Object); err != nil {
+	if in.Object, err = s.existingObject(ctx, in.Object); err != nil {
 		return Grant{}, err
 	}
 
@@ -363,7 +363,7 @@ func (s *Service) Revoke(
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
 	}
 
-	if obj, err = s.existingUnit(ctx, obj); err != nil {
+	if obj, err = s.existingObject(ctx, obj); err != nil {
 		return Grant{}, err
 	}
 
@@ -421,7 +421,7 @@ func (s *Service) ListGrants(ctx context.Context, obj identity.Object, req PageR
 	limit := q.Limit
 	q.Limit++
 
-	if obj, err = s.existingUnit(ctx, obj); err != nil {
+	if obj, err = s.existingObject(ctx, obj); err != nil {
 		return Page{}, err
 	}
 
@@ -637,6 +637,76 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 	return nil
 }
 
+// CheckMove runs the escalation check of a move. A grant on the target that is
+// added after the check and before the move is written is not checked here.
+// Only a caller with manage-access on the collection can add a grant to it, and
+// that caller's own escalation check covers the grant, so the result is a
+// normal grant on the collection and not a silent escalation.
+//
+// CheckMove refuses a move of the unit into the collection target unless the
+// caller holds, on the unit, every action of every role that the target
+// grants. A move gives the unit each grant of the target, so the check is the
+// same one that a direct grant on the unit runs. It returns ErrNotFound when
+// the unit or the target does not exist, and an error that wraps
+// identity.ErrDenied and ErrEscalation when a grant of the target gives an
+// action that the caller does not hold on the unit. A grant whose role no
+// longer exists gives nothing, so it is skipped. On success it returns the
+// stable ID of the target that it checked. The move is written with that ID,
+// so a collection deleted and created again after the check is refused.
+func (s *Service) CheckMove(
+	ctx context.Context, caller identity.Principal, unit, target identity.Object,
+) (string, error) {
+	withID, err := s.existingObject(ctx, unit)
+	if err != nil {
+		return "", fmt.Errorf("move %s: %w", unit.String(), err)
+	}
+
+	targetWithID, err := s.existingObject(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("move %s into %s: %w", unit.String(), target.String(), err)
+	}
+
+	cursor := ""
+
+	for {
+		page, err := s.ListGrants(ctx, targetWithID, PageRequest{Cursor: cursor, Limit: MaxLimit, Holder: "", Role: ""})
+		if err != nil {
+			return "", fmt.Errorf("grants of %s: %w", target.String(), err)
+		}
+
+		for i := range page.Grants {
+			if err := s.checkMoveGrant(ctx, caller, withID, page.Grants[i].Grant); err != nil {
+				return "", err
+			}
+		}
+
+		if page.NextCursor == "" {
+			return targetWithID.CollectionID(), nil
+		}
+
+		cursor = page.NextCursor
+	}
+}
+
+// checkMoveGrant checks one grant of a move target against the unit it would
+// reach. A role that no longer exists gives nothing, so it passes.
+func (s *Service) checkMoveGrant(ctx context.Context, caller identity.Principal, unit identity.Object, g Grant) error {
+	role, err := s.GetRole(ctx, g.Role)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("role of grant %s: %w", g.ID, err)
+	}
+
+	if err := s.checkEscalation(ctx, caller, unit, role); err != nil {
+		return fmt.Errorf("move %s: %w: %w", unit.String(), identity.ErrDenied, err)
+	}
+
+	return nil
+}
+
 // checkGrant runs the checks of Grant. It returns the fence of the
 // namespace of the object, or the zero fence for the installation.
 func (s *Service) checkGrant(
@@ -660,12 +730,6 @@ func (s *Service) checkGrant(
 	fence, err := s.fenceOf(ctx, in.Object)
 	if err != nil {
 		return none, fmt.Errorf("grant on %q: %w", in.Object.String(), err)
-	}
-
-	if kind == ObjectCollection {
-		// The core has no collection port yet (#478), so no collection
-		// exists, and a grant cannot name one before it exists.
-		return none, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, in.Object.String())
 	}
 
 	switch kind {
@@ -856,6 +920,37 @@ func (s *Service) checkSubject(ctx context.Context, subject Subject) error {
 	return nil
 }
 
+// existingObject resolves the stable ID of a unit or a collection, and returns
+// ErrNotFound when it does not exist: a grant can only name an object that
+// exists. Any other object is returned as it is.
+func (s *Service) existingObject(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if obj.IsCollection() {
+		return s.existingCollection(ctx, obj)
+	}
+
+	return s.existingUnit(ctx, obj)
+}
+
+// existingCollection resolves the stable ID of a collection. Without a
+// collection port no collection is found, so every grant on one answers
+// ErrNotFound.
+func (s *Service) existingCollection(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if s.authz.collections == nil {
+		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	id, found, err := s.authz.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read collection %q: %w", obj.String(), err)
+	}
+
+	if !found {
+		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	return obj.WithCollectionID(id), nil
+}
+
 // existingUnit returns obj with its stable ID when obj is a unit, and
 // ErrNotFound when no such unit exists: a grant names a unit that exists, so
 // that it follows the unit and not the name. Any other object returns as
@@ -880,6 +975,10 @@ func (s *Service) existingUnit(ctx context.Context, obj identity.Object) (identi
 // sameTarget reports whether a and b are the same object for a grant: the
 // same stable ID for units, the same wire form for any other object.
 func sameTarget(a, b identity.Object) bool {
+	if a.IsCollection() || b.IsCollection() {
+		return a.IsCollection() && b.IsCollection() && a.CollectionID() != "" && a.CollectionID() == b.CollectionID()
+	}
+
 	if a.IsUnit() || b.IsUnit() {
 		return a.IsUnit() && b.IsUnit() && a.UnitID() != "" && a.UnitID() == b.UnitID()
 	}

@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
+	"opendustpan.org/opendustpan/pkg/session/sessiontest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -70,6 +71,17 @@ func TestAccessTokenConformance(t *testing.T) {
 	t.Parallel()
 
 	accesstokentest.Run(t, func(t *testing.T) accesstokentest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestSessionConformance runs the session store suite.
+func TestSessionConformance(t *testing.T) {
+	t.Parallel()
+
+	sessiontest.Run(t, func(t *testing.T) sessiontest.Store {
 		t.Helper()
 
 		return open(t)

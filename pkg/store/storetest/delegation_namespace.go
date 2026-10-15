@@ -50,9 +50,12 @@ func testNamespacePrincipalGrants(t *testing.T, d *delegation) {
 	bot := d.acmeBot(t)
 	other := d.principalOf(t, "ci-deploy", principal.KindService)
 
-	for _, obj := range []identity.Object{
+	objects := []identity.Object{
 		identity.ServerObject(), identity.NamespaceObject("beta"), identity.PrincipalObject(other.ID),
-	} {
+	}
+	for i := range objects {
+		obj := objects[i]
+
 		role := access.RoleViewer
 		if obj.IsPrincipal() {
 			role = access.RoleTokenManager

@@ -139,6 +139,78 @@ func checkDeletedAbsent(ctx context.Context, env *e2e.Env, u unitTarget, name st
 	return nil
 }
 
+// sweptUnitDoc is one unit that a sweep purged.
+type sweptUnitDoc struct {
+	Tool      string `json:"tool"`
+	Namespace string `json:"namespace"`
+	UnitID    string `json:"unitID"`
+	Reference string `json:"reference"`
+}
+
+// sweepDoc is the answer of POST /api/server/deleted-units/sweep.
+type sweepDoc struct {
+	Purged             []sweptUnitDoc `json:"purged"`
+	Failed             int            `json:"failed"`
+	FinishedBlobPurges int            `json:"finishedBlobPurges"`
+	PendingBlobPurges  int            `json:"pendingBlobPurges"`
+}
+
+// sweepPath is the route that runs one retention sweep now.
+const sweepPath = "/api/server/deleted-units/sweep"
+
+// sweepDeleted runs one retention sweep through the installation API.
+func sweepDeleted(ctx context.Context, env *e2e.Env) (sweepDoc, error) {
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, sweepPath, "")
+	if err != nil {
+		return sweepDoc{}, fmt.Errorf("post %s: %w", sweepPath, err)
+	}
+
+	if status != http.StatusOK {
+		return sweepDoc{}, fmt.Errorf("%w: post %s: status %d (%s)", errUnexpected, sweepPath, status, body)
+	}
+
+	var doc sweepDoc
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return sweepDoc{}, fmt.Errorf("decode %s: %w", sweepPath, err)
+	}
+
+	return doc, nil
+}
+
+// checkSweepKeeps runs one sweep and checks that it purged no unit and
+// finished no blob purge record: the retention of every deleted unit and the
+// grace period of every record are still running. Then the deleted units
+// must still hold u under name.
+func checkSweepKeeps(ctx context.Context, env *e2e.Env, u unitTarget, name string) error {
+	doc, err := sweepDeleted(ctx, env)
+	if err != nil {
+		return err
+	}
+
+	if len(doc.Purged) != 0 || doc.Failed != 0 || doc.FinishedBlobPurges != 0 {
+		return fmt.Errorf("%w: sweep = %+v, want no purge, no failure and no finished record", errUnexpected, doc)
+	}
+
+	return checkDeletedListed(ctx, env, u, name)
+}
+
+// checkSweepKeepsRecord runs one sweep after the purge of a unit and checks
+// that it keeps the blob purge record of the unit: the grace period of the
+// record is still running, so at least one record stays pending.
+func checkSweepKeepsRecord(ctx context.Context, env *e2e.Env) error {
+	doc, err := sweepDeleted(ctx, env)
+	if err != nil {
+		return err
+	}
+
+	if doc.FinishedBlobPurges != 0 || doc.PendingBlobPurges < 1 || doc.Failed != 0 {
+		return fmt.Errorf("%w: sweep after a purge = %+v, want one pending record or more and none finished",
+			errUnexpected, doc)
+	}
+
+	return nil
+}
+
 // unitPath is the path of the deleted unit u in the inventory API, with
 // suffix after its ID.
 func unitPath(u unitTarget, suffix string) string {
@@ -240,6 +312,9 @@ func pulumiRestoreSteps(ctx context.Context, env *e2e.Env, org, removedID string
 		step("deleted list holds the removed stack", func(e2e.Result) error {
 			return checkDeletedListed(ctx, env, u, oldName)
 		}, "stack", "ls", "--json", "--all"),
+		step("retention sweep keeps the removed stack", func(e2e.Result) error {
+			return checkSweepKeeps(ctx, env, u, oldName)
+		}, "stack", "ls", "--json", "--all"),
 		step("restore under a taken name answers 409", func(e2e.Result) error {
 			return checkRestore(ctx, env, u, restoreCase{newName: "", wantName: "", want: http.StatusConflict})
 		}, "stack", "ls", "--json", "--all"),
@@ -281,6 +356,9 @@ func pulumiRestoreSteps(ctx context.Context, env *e2e.Env, org, removedID string
 
 			return checkRestore(ctx, env, u, restoreCase{newName: "", wantName: "", want: http.StatusNotFound})
 		}, "stack", "ls", "--json", "--all"),
+		step("retention sweep keeps the blob purge record of the stack", func(e2e.Result) error {
+			return checkSweepKeepsRecord(ctx, env)
+		}, "stack", "ls", "--json", "--all"),
 	}
 }
 
@@ -299,6 +377,9 @@ func tofuRestoreSteps(ctx context.Context, env *e2e.Env, removedID *string) []e2
 	return []e2e.StepSpec{
 		step("deleted list holds the deleted workspace", func(e2e.Result) error {
 			return checkDeletedListed(ctx, env, target(), remoteProdName)
+		}, "workspace", "list", "-no-color"),
+		step("retention sweep keeps the deleted workspace", func(e2e.Result) error {
+			return checkSweepKeeps(ctx, env, target(), remoteProdName)
 		}, "workspace", "list", "-no-color"),
 		step("restore workspace under a taken name answers 409", func(e2e.Result) error {
 			return checkRestore(ctx, env, target(), restoreCase{newName: "", wantName: "", want: http.StatusConflict})
@@ -334,6 +415,9 @@ func tofuRestoreSteps(ctx context.Context, env *e2e.Env, removedID *string) []e2
 			}
 
 			return checkRestore(ctx, env, target(), restoreCase{newName: "", wantName: "", want: http.StatusNotFound})
+		}, "workspace", "list", "-no-color"),
+		step("retention sweep keeps the blob purge record of the workspace", func(e2e.Result) error {
+			return checkSweepKeepsRecord(ctx, env)
 		}, "workspace", "list", "-no-color"),
 	}
 }

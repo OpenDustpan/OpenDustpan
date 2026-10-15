@@ -555,6 +555,10 @@ func fromGrantRow(row db.GetGrantRow) (access.Grant, error) {
 		obj = obj.WithUnitID(id)
 	}
 
+	if id, isCollection := strings.CutPrefix(row.Target, collectionTargetPrefix); isCollection {
+		obj = obj.WithCollectionID(id)
+	}
+
 	var condition *string
 	if row.Condition.Valid {
 		c := row.Condition.String
@@ -626,7 +630,8 @@ func subjectStrings(subjects []access.Subject) []string {
 func targetStrings(objects []identity.Object) []string {
 	out := make([]string, 0, len(objects))
 
-	for _, o := range objects {
+	for i := range objects {
+		o := objects[i]
 		if t, err := targetOf(o); err == nil {
 			out = append(out, t)
 		}
@@ -639,10 +644,22 @@ func targetStrings(objects []identity.Object) []string {
 // unit follows it.
 const unitTargetPrefix = "unit:"
 
+// collectionTargetPrefix starts the target of a collection grant: the stable ID
+// of the collection follows it (ADR 52).
+const collectionTargetPrefix = "collection:"
+
 // targetOf returns what a grant on obj matches: unit:<stable ID> for a unit,
 // and the wire form for every other object. A unit with no stable ID
 // returns access.ErrInvalid.
 func targetOf(obj identity.Object) (string, error) {
+	if obj.IsCollection() {
+		if obj.CollectionID() == "" {
+			return "", fmt.Errorf("%w: collection %q has no stable ID", access.ErrInvalid, obj.String())
+		}
+
+		return collectionTargetPrefix + obj.CollectionID(), nil
+	}
+
 	if !obj.IsUnit() {
 		return obj.String(), nil
 	}
