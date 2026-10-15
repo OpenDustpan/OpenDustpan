@@ -342,6 +342,7 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
+		AuditSinks:     nil,
 	}
 
 	if journaled >= 0 {
