@@ -878,6 +878,191 @@ func waitForTakeover(t *testing.T) {
 	}
 }
 
+// slowSink accepts its first batch and blocks later batches until ctx ends,
+// without recording them. It proves that a round stops at its deadline.
+type slowSink struct {
+	inner *memSink
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *slowSink) Write(ctx context.Context, records []logsink.Record) error {
+	s.mu.Lock()
+	s.calls++
+	n := s.calls
+	s.mu.Unlock()
+
+	if n == 1 {
+		return s.inner.Write(ctx, records)
+	}
+
+	<-ctx.Done()
+
+	return fmt.Errorf("slow sink wait: %w", ctx.Err())
+}
+
+func (s *slowSink) Close() error { return nil }
+
+// loseOnceLeaser grants the first lease take and answers not held after
+// that, as when another instance took the lease in the middle of a round.
+type loseOnceLeaser struct {
+	inner *memLeaser
+	mu    sync.Mutex
+	calls int
+}
+
+func (l *loseOnceLeaser) AcquireSinkLease(ctx context.Context, sink, holder string, ttl time.Duration) (bool, error) {
+	l.mu.Lock()
+	l.calls++
+	n := l.calls
+	l.mu.Unlock()
+
+	if n == 1 {
+		return l.inner.AcquireSinkLease(ctx, sink, holder, ttl)
+	}
+
+	return false, nil
+}
+
+func (l *loseOnceLeaser) ReleaseSinkLease(ctx context.Context, sink, holder string) error {
+	return l.inner.ReleaseSinkLease(ctx, sink, holder)
+}
+
+// TestASlowSinkStopsItsRoundAndDoesNotShipAfterTakeover proves that a sink
+// slower than the lease stops its round at the round deadline: it keeps
+// only its first batch and its cursor, and the next holder ships the rest.
+func TestASlowSinkStopsItsRoundAndDoesNotShipAfterTakeover(t *testing.T) {
+	t.Parallel()
+
+	total := audit.ShipBatchSize + 1
+	feed := newMemFeed(map[namespace.Name]int{"acme": total})
+	leases := newMemLeaser()
+	slow := &slowSink{
+		inner: &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false},
+		mu:    sync.Mutex{},
+		calls: 0,
+	}
+
+	first := newLeasedShipper(t, feed, leases, "ins-holder-a", slow)
+
+	if err := first.ShipOnce(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("slow ship once: got %v, want context.DeadlineExceeded", err)
+	}
+
+	checkSlowRoundKeptFirstBatch(t, slow, feed)
+
+	standbySink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
+	second := newLeasedShipper(t, feed, leases, "ins-holder-b", standbySink)
+
+	waitTakeoverShipsLast(t, second, standbySink)
+	checkTakeoverShipment(t, slow, feed, standbySink, total)
+}
+
+// checkSlowRoundKeptFirstBatch checks that a slow round shipped one batch
+// and moved the cursor past only that batch.
+func checkSlowRoundKeptFirstBatch(t *testing.T, slow *slowSink, feed *memFeed) {
+	t.Helper()
+
+	if got := len(slow.inner.sequences()); got != audit.ShipBatchSize {
+		t.Fatalf("slow sink shipped %d records, want %d", got, audit.ShipBatchSize)
+	}
+
+	if got := feed.acmeCursor("siem"); got != int64(audit.ShipBatchSize) {
+		t.Fatalf("cursor after a slow round: got %d, want %d", got, audit.ShipBatchSize)
+	}
+}
+
+// waitTakeoverShipsLast polls the standby shipper until it ships one entry
+// or the deadline passes.
+func waitTakeoverShipsLast(t *testing.T, second *audit.Shipper, standbySink *memSink) {
+	t.Helper()
+
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+
+	tick := time.NewTimer(50 * time.Millisecond)
+	defer tick.Stop()
+
+	for len(standbySink.sequences()) != 1 {
+		if err := second.ShipOnce(t.Context()); err != nil && !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("standby ship once: %v", err)
+		}
+
+		if len(standbySink.sequences()) == 1 {
+			return
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatal("standby did not take over: test context done")
+		case <-deadline.C:
+			t.Fatalf("standby did not take over within 10 seconds: %v", standbySink.sequences())
+		case <-tick.C:
+			tick.Reset(50 * time.Millisecond)
+		}
+	}
+}
+
+// checkTakeoverShipment checks that the standby shipped the last entry and
+// the slow sink shipped nothing after the takeover.
+func checkTakeoverShipment(t *testing.T, slow *slowSink, feed *memFeed, standbySink *memSink, total int) {
+	t.Helper()
+
+	wantLast := fmt.Sprintf("[acme/%d]", total)
+	if got := standbySink.sequences(); fmt.Sprint(got) != wantLast {
+		t.Fatalf("standby shipped %v, want %s", got, wantLast)
+	}
+
+	if got := len(slow.inner.sequences()); got != audit.ShipBatchSize {
+		t.Fatalf("slow sink shipped %d records after takeover, want %d", got, audit.ShipBatchSize)
+	}
+
+	if got := feed.acmeCursor("siem"); got != int64(total) {
+		t.Fatalf("cursor after takeover: got %d, want %d", got, total)
+	}
+}
+
+// TestALostRenewStopsTheRound proves that a renew in the middle of a round
+// that answers not held stops the round at once: the second batch never
+// ships and the cursor stays past only the first batch.
+func TestALostRenewStopsTheRound(t *testing.T) {
+	t.Parallel()
+
+	total := audit.ShipBatchSize + 1
+	feed := newMemFeed(map[namespace.Name]int{"acme": total})
+	leases := &loseOnceLeaser{inner: newMemLeaser(), mu: sync.Mutex{}, calls: 0}
+	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
+
+	s, err := audit.NewShipper(audit.ShipperConfig{
+		Feed:          feed,
+		Namespaces:    feed,
+		Logger:        nil,
+		OnShipped:     nil,
+		OnFailure:     nil,
+		OnSkipped:     nil,
+		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Interval: 0}},
+		InstanceID:    "ins-holder-a",
+		Leases:        leases,
+		LeaseTTL:      30 * time.Second,
+		RenewInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new shipper: %v", err)
+	}
+
+	if err := s.ShipOnce(t.Context()); err == nil {
+		t.Fatal("ship once with a lost renew: got nil, want an error")
+	}
+
+	if got := len(sink.sequences()); got != audit.ShipBatchSize {
+		t.Fatalf("shipped %d records after a lost renew, want %d", got, audit.ShipBatchSize)
+	}
+
+	if got := feed.acmeCursor("siem"); got != int64(audit.ShipBatchSize) {
+		t.Fatalf("cursor after a lost renew: got %d, want %d", got, audit.ShipBatchSize)
+	}
+}
+
 // TestShipperReleasesItsLeaseOnShutdown proves that a running shipper
 // releases its sink lease when its context ends, so a standby takes over at
 // once without waiting for expiry.
