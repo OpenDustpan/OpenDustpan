@@ -23,6 +23,9 @@ type Callers interface {
 // does not exist.
 type UnitCollections interface {
 	CollectionOf(ctx context.Context, unit identity.Object) (string, bool, error)
+	// CollectionID returns the stable ID of the collection obj, and false when no
+	// such collection exists. A grant on a collection is keyed by this ID.
+	CollectionID(ctx context.Context, collection identity.Object) (string, bool, error)
 }
 
 // AuthorizerConfig holds the dependencies of an Authorizer.
@@ -220,20 +223,52 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 	out := none
 
 	for i := range grants {
-		// The name of a unit that no longer exists may name a new unit now:
-		// its grants give nothing.
-		if grants[i].Object.IsUnit() && !live[grants[i].Object.UnitID()] {
-			continue
-		}
-
 		if !givenOn(action, grants[i].Object) {
 			continue
 		}
 
-		out.add(grants[i].Object)
+		ok, liveErr := a.grantLive(ctx, grants[i].Object, live)
+		if liveErr != nil {
+			return none, liveErr
+		}
+
+		if ok {
+			out.add(grants[i].Object)
+		}
 	}
 
 	return out, nil
+}
+
+// grantLive reports whether a grant on obj still gives something. The name
+// of a unit that no longer exists may name a new unit now, and a collection
+// that was deleted and created again under its name is a new collection, so
+// the grants of the old one give nothing.
+func (a *Authorizer) grantLive(ctx context.Context, obj identity.Object, live map[string]bool) (bool, error) {
+	switch {
+	case obj.IsUnit():
+		return live[obj.UnitID()], nil
+	case obj.IsCollection():
+		return a.liveCollection(ctx, obj)
+	default:
+		return true, nil
+	}
+}
+
+// liveCollection reports whether obj names the collection that holds its
+// stable ID now. It is false when no collection port is configured, and when
+// the name is gone or has another ID.
+func (a *Authorizer) liveCollection(ctx context.Context, obj identity.Object) (bool, error) {
+	if a.collections == nil {
+		return false, nil
+	}
+
+	id, found, err := a.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return false, fmt.Errorf("read collection %q: %w", obj.String(), err)
+	}
+
+	return found && id == obj.CollectionID(), nil
 }
 
 // add puts obj in the set of its kind once. An object on the installation
@@ -258,7 +293,8 @@ func (s *Scope) add(obj identity.Object) {
 
 // appendObject appends obj to objs once.
 func appendObject(objs []identity.Object, obj identity.Object) []identity.Object {
-	for _, o := range objs {
+	for i := range objs {
+		o := objs[i]
 		if o.String() == obj.String() {
 			return objs
 		}
@@ -377,24 +413,20 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 		return nil, nil
 	}
 
-	if kind == ObjectUnit {
-		var err error
-		if obj, err = a.withUnitID(ctx, obj); err != nil {
-			return nil, err
-		}
+	obj, err := a.withStableID(ctx, kind, obj)
+	if err != nil {
+		return nil, err
 	}
 
 	out := []identity.Object{obj}
 
-	if kind == ObjectUnit && a.collections != nil {
-		name, inCollection, err := a.collections.CollectionOf(ctx, obj)
-		if err != nil {
-			return nil, fmt.Errorf("read collection of unit: %w", err)
-		}
+	col, inCollection, err := a.collectionOfUnit(ctx, kind, obj)
+	if err != nil {
+		return nil, err
+	}
 
-		if inCollection {
-			out = append(out, identity.CollectionObject(obj.Namespace(), name))
-		}
+	if inCollection {
+		out = append(out, col)
 	}
 
 	if kind == ObjectCollection || kind == ObjectUnit {
@@ -406,6 +438,47 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 	}
 
 	return out, nil
+}
+
+// withStableID returns obj with the stable ID of its unit or its collection,
+// when kind is one of them. Any other object is returned as it is.
+func (a *Authorizer) withStableID(ctx context.Context, kind ObjectKind, obj identity.Object) (identity.Object, error) {
+	if kind == ObjectUnit {
+		return a.withUnitID(ctx, obj)
+	}
+
+	if kind == ObjectCollection {
+		return a.withCollectionID(ctx, obj)
+	}
+
+	return obj, nil
+}
+
+// collectionOfUnit returns the collection of the unit obj, with its stable ID,
+// and true when the unit is in one. It returns false for any other object, and
+// when no collection port is configured.
+func (a *Authorizer) collectionOfUnit(
+	ctx context.Context, kind ObjectKind, obj identity.Object,
+) (identity.Object, bool, error) {
+	if kind != ObjectUnit || a.collections == nil {
+		return obj, false, nil
+	}
+
+	name, inCollection, err := a.collections.CollectionOf(ctx, obj)
+	if err != nil {
+		return obj, false, fmt.Errorf("read collection of unit: %w", err)
+	}
+
+	if !inCollection {
+		return obj, false, nil
+	}
+
+	col, err := a.withCollectionID(ctx, identity.CollectionObject(obj.Namespace(), name))
+	if err != nil {
+		return obj, false, err
+	}
+
+	return col, true, nil
 }
 
 // rolesOf returns the roles that grants name, by ID: the built-in roles
@@ -619,4 +692,23 @@ func (a *Authorizer) currentUnits(ctx context.Context, grants []Grant) (map[stri
 	}
 
 	return live, nil
+}
+
+// withCollectionID returns the collection object with its stable ID. A
+// collection that does not exist keeps an empty ID, so no grant matches it.
+func (a *Authorizer) withCollectionID(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if a.collections == nil {
+		return obj, nil
+	}
+
+	id, found, err := a.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read collection ID: %w", err)
+	}
+
+	if !found {
+		return obj, nil
+	}
+
+	return obj.WithCollectionID(id), nil
 }

@@ -85,6 +85,10 @@ type Config struct {
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
+	// DeletedUnits runs the retention sweep of the deleted units.
+	// Nil means the store keeps no deleted units: the sweep route answers
+	// 501. Both SQL adapters keep them.
+	DeletedUnits DeletedUnitSweeper
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -114,6 +118,7 @@ type Handler struct {
 	audit          audit.ServerStore
 	ipAllowlists   *ipallow.Service
 	onAuditFailure func()
+	deletedUnits   DeletedUnitSweeper
 	mux            *patternMux
 	routes         []Route
 }
@@ -155,6 +160,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		principals:     cfg.Principals,
 		access:         cfg.Access,
 		tokens:         cfg.Tokens,
+		deletedUnits:   cfg.DeletedUnits,
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
 		onAuditFailure: cfg.OnAuditFailure,
@@ -389,16 +395,20 @@ func classifyBackup(err error) (int, string, bool) {
 }
 
 // classifyNamespace maps the namespace errors to their status and message: a
-// bad namespace name or body answers 400, a duplicate namespace 409 and an
-// unknown namespace 404.
+// bad namespace name, body, page or cursor answers 400, a duplicate
+// namespace 409, an unknown namespace 404, and a store without the paging
+// port 501.
 func classifyNamespace(err error) (int, string, bool) {
 	switch {
-	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody):
+	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody),
+		errors.Is(err, namespace.ErrInvalidPage), errors.Is(err, errNamespaceCursor):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, namespace.ErrAlreadyExists):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, namespace.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true
+	case errors.Is(err, namespace.ErrNoPaging):
+		return http.StatusNotImplemented, err.Error(), true
 	default:
 		return 0, "", false
 	}

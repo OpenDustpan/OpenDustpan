@@ -37,9 +37,20 @@ var (
 	// return it without driver text. Callers must use errors.Is to check
 	// for it, not string matching.
 	ErrUnavailable = errors.New("database unavailable")
+	// ErrNoPaging reports a namespace store that does not page namespaces:
+	// it does not implement Pager.
+	ErrNoPaging = errors.New("the namespace store does not page namespaces")
+	// ErrInvalidPage reports a page query with a limit outside 1 to
+	// maxPageLimit.
+	ErrInvalidPage = errors.New("invalid namespace page")
 )
 
 const maxNameLength = 100
+
+// maxPageLimit is the largest page size a page query can name. It holds one
+// row more than the largest page a caller can ask for, so a handler that
+// reads limit+1 to find the next page stays inside it.
+const maxPageLimit = 1001
 
 // Name is a validated namespace name.
 type Name string
@@ -137,6 +148,36 @@ type Store interface {
 	Ping(ctx context.Context) error
 }
 
+// Filter names which namespaces qualify for a page or a count. With All
+// set, every namespace qualifies; otherwise only the namespaces named in
+// Names qualify (unknown names are ignored; empty Names gives none).
+type Filter struct {
+	All   bool
+	Names []Name
+}
+
+// PageQuery asks for one page of namespaces, in the order of
+// ListNamespaces, which is the order of the name column of the store. After
+// is the name of the last namespace of the page before, or empty for the
+// first page. Limit is 1 to maxPageLimit. Filter names which namespaces
+// qualify.
+type PageQuery struct {
+	After  Name
+	Limit  int
+	Filter Filter
+}
+
+// Pager reads namespaces one page at a time. It is an optional port: a
+// Store that does not implement it answers ErrNoPaging through Service.
+type Pager interface {
+	// PageNamespaces returns at most Limit namespaces after After, in the
+	// order of ListNamespaces, which is the order of the name column of the
+	// store. Filter names which namespaces qualify.
+	PageNamespaces(ctx context.Context, q PageQuery) ([]Namespace, error)
+	// CountNamespaces returns how many namespaces qualify under Filter.
+	CountNamespaces(ctx context.Context, f Filter) (int64, error)
+}
+
 // Config holds the dependencies of a Service.
 type Config struct {
 	Store  Store
@@ -226,6 +267,68 @@ func (s *Service) List(ctx context.Context) ([]Namespace, error) {
 	}
 
 	return namespaces, nil
+}
+
+// PageNamespaces returns one page of namespaces through the Pager port of
+// the store. It returns ErrInvalidPage when the limit is not 1 to
+// maxPageLimit, and ErrNoPaging when the store does not implement Pager.
+// Names are deduplicated before the call, and the slice is not modified.
+func (s *Service) PageNamespaces(ctx context.Context, q PageQuery) ([]Namespace, error) {
+	if q.Limit < 1 || q.Limit > maxPageLimit {
+		return nil, fmt.Errorf("%w: limit %d is not 1 to %d", ErrInvalidPage, q.Limit, maxPageLimit)
+	}
+
+	pager, ok := s.store.(Pager)
+	if !ok {
+		return nil, ErrNoPaging
+	}
+
+	page, err := pager.PageNamespaces(ctx, PageQuery{
+		After:  q.After,
+		Limit:  q.Limit,
+		Filter: Filter{All: q.Filter.All, Names: dedupNames(q.Filter.Names)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("page namespaces: %w", err)
+	}
+
+	return page, nil
+}
+
+// CountNamespaces returns how many namespaces qualify under Filter through
+// the Pager port of the store. It returns ErrNoPaging when the store does
+// not implement Pager. Names are deduplicated before the call, and the
+// slice is not modified.
+func (s *Service) CountNamespaces(ctx context.Context, f Filter) (int64, error) {
+	pager, ok := s.store.(Pager)
+	if !ok {
+		return 0, ErrNoPaging
+	}
+
+	total, err := pager.CountNamespaces(ctx, Filter{All: f.All, Names: dedupNames(f.Names)})
+	if err != nil {
+		return 0, fmt.Errorf("count namespaces: %w", err)
+	}
+
+	return total, nil
+}
+
+// dedupNames returns the names of in without duplicates, keeping the first
+// order. It builds a new slice, so in is not modified.
+func dedupNames(in []Name) []Name {
+	out := make([]Name, 0, len(in))
+	seen := make(map[Name]struct{}, len(in))
+
+	for _, name := range in {
+		if _, ok := seen[name]; ok {
+			continue
+		}
+
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+
+	return out
 }
 
 // WritableHere returns the namespace if this region may write to it. It returns

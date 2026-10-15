@@ -101,9 +101,12 @@ const (
 // expand=members reads through a group. EffectiveFromMs and
 // EffectiveUntilMs are the time that the row gave access (null while it
 // lasts). MemberCount is set for a group row of a snapshot only.
-// LastAccessTracked is set on a row of a principal: it is false while the
-// server records no sign-in and no token use, and LastAccessAtMs is then
-// left out, so an export never shows a "Never" that it cannot prove.
+// LastAccessTracked is true on a row of a principal: on a grant whose
+// subject is a principal, or on a row read through a group, for the member.
+// LastAccessAtMs is the latest use of an access token of that principal,
+// and is left out when no token was ever used. The server records no
+// sign-in, so a sign-in does not count. A group row with no Via and a
+// bootstrap token row carry neither field.
 //
 // Contract: never remove or rename these fields.
 type reviewRowResponse struct {
@@ -409,11 +412,15 @@ func reviewRowOf(e access.ReviewEntry) reviewRowResponse {
 		out.InheritedFrom = e.InheritedFrom.String()
 	}
 
-	// No sign-in and no token use is recorded yet (ADR 53): a principal row
-	// says so, and a group row carries neither field.
-	untracked := false
-	if row.Grant.Subject.Kind == access.SubjectPrincipal || row.Via != nil {
-		out.LastAccessTracked = &untracked
+	// A row of a principal is tracked: a grant to a principal, or a row
+	// read through a group, for the member. LastAccessAtMs is the latest
+	// use of an access token of the principal, left out when no token was
+	// ever used. A group row with no Via and a bootstrap token row carry
+	// neither field.
+	if row.LastAccessTracked {
+		tracked := true
+		out.LastAccessTracked = &tracked
+		out.LastAccessAtMs = millisOf(row.LastAccessAt)
 	}
 
 	if v := row.Via; v != nil {
@@ -514,7 +521,8 @@ func callerAccessByType(
 		All:        got.All,
 	}
 
-	for _, obj := range got.Objects {
+	for i := range got.Objects {
+		obj := got.Objects[i]
 		k, _ := access.KindOf(obj)
 		out.Objects = append(out.Objects, accessObjectResponse{Object: obj.String(), Kind: string(k)})
 	}

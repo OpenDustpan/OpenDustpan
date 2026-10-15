@@ -373,7 +373,7 @@ func checkReviewRow(t *testing.T, f reviewFixture, r *e2eReviewRow) {
 	t.Helper()
 
 	if !isCarolRow(f, r) && !isGroupRow(f, r) {
-		t.Fatalf("row = %+v, want carol with an untracked last access, or reviewers with 1 member", r)
+		t.Fatalf("row = %+v, want carol with a tracked last access, or reviewers with 1 member", r)
 	}
 
 	if r.GrantedAtMs == nil || *r.GrantedAtMs < f.beforeAtMs || r.GrantedBy == "" || r.RevokedAtMs != nil ||
@@ -382,19 +382,18 @@ func checkReviewRow(t *testing.T, f reviewFixture, r *e2eReviewRow) {
 	}
 }
 
-// isCarolRow reports whether r is a row of carol. No sign-in and no token
-// use is recorded yet, so a principal row says that it does not track the
-// last access.
+// isCarolRow reports whether r is a row of carol. No token of carol was
+// used yet, so a principal row is tracked with no last access time.
 func isCarolRow(f reviewFixture, r *e2eReviewRow) bool {
 	return r.Subject == f.carolRef && r.SubjectName == "carol" && r.LastAccessTracked != nil &&
-		!*r.LastAccessTracked && r.LastAccessAtMs == nil && r.MemberCount == nil
+		*r.LastAccessTracked && r.LastAccessAtMs == nil && r.MemberCount == nil
 }
 
 // isGroupRow reports whether r is a row of the group with its one member.
 // A group row has no last access field.
 func isGroupRow(f reviewFixture, r *e2eReviewRow) bool {
 	return r.Subject == f.groupRef && r.SubjectName == "reviewers" && r.MemberCount != nil &&
-		*r.MemberCount == 1 && r.LastAccessTracked == nil
+		*r.MemberCount == 1 && r.LastAccessTracked == nil && r.LastAccessAtMs == nil
 }
 
 // checkReviewPrincipal filters the export to one principal: its own grants
@@ -513,12 +512,25 @@ func checkReviewHistory(ctx context.Context, t *testing.T, env *e2e.Env, f revie
 
 	window.Set("subject", f.carolRef)
 
-	carolRows := reviewOf(ctx, t, env, "/api/server/access-review", window)
-	for i := range carolRows {
-		r := &carolRows[i]
+	checkCarolHistory(ctx, t, env, window)
+}
+
+// checkCarolHistory reads the history of carol: every membership ended,
+// and every row tracked with a last access time, since she called with her
+// token.
+func checkCarolHistory(ctx context.Context, t *testing.T, env *e2e.Env, window url.Values) {
+	t.Helper()
+
+	rows := reviewOf(ctx, t, env, "/api/server/access-review", window)
+	for i := range rows {
+		r := &rows[i]
 
 		if r.Via != nil && r.Via.MemberUntilMs == nil {
 			t.Fatalf("history row of carol = %+v, want the end of her membership", r)
+		}
+
+		if r.LastAccessTracked == nil || !*r.LastAccessTracked || r.LastAccessAtMs == nil {
+			t.Fatalf("history row of carol = %+v, want a tracked last access with a time", r)
 		}
 	}
 }
