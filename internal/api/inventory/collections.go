@@ -299,17 +299,8 @@ func (h *Handler) moveUnit(
 
 	fromName := from.Name
 
-	// The target is read once here: the check and the write both use its
-	// stable ID, so a collection that is deleted and created again in between
-	// is refused by the write.
-	targetCol, err := h.collections.Get(ctx, to)
-	if err != nil {
-		h.writeError(ctx, w, err)
-
-		return
-	}
-
-	if authErr := h.authorizeMove(ctx, p, obj, from, to); authErr != nil {
+	toID, authErr := h.authorizeMove(ctx, p, obj, from, to)
+	if authErr != nil {
 		h.writeError(ctx, w, authErr)
 
 		return
@@ -317,7 +308,7 @@ func (h *Handler) moveUnit(
 
 	version := "from=" + nameOrNone(fromName) + ";to=" + to.Name.String()
 
-	err = h.collections.SetUnit(ctx, collection.Move{Unit: unit, From: fromName, To: to, ToID: targetCol.ID},
+	err = h.collections.SetUnit(ctx, collection.Move{Unit: unit, From: fromName, To: to, ToID: toID},
 		auditEntry(r, p, obj, identity.ActionUnitMove, version))
 	if err != nil {
 		h.writeError(ctx, w, err)
@@ -342,16 +333,16 @@ type moveCheck struct {
 // refusal wraps identity.ErrDenied, and a missing unit or collection wraps
 // the error of the store.
 type MoveChecker interface {
-	CheckMove(ctx context.Context, caller identity.Principal, unit, target identity.Object) error
+	CheckMove(ctx context.Context, caller identity.Principal, unit, target identity.Object) (string, error)
 }
 
 // authorizeMove checks the access of a move from the collection from, when the
 // unit had one, into the collection to. Each check must allow the move, and
 // the grants that the target collection gives must be ones the caller holds on
-// the unit.
+// the unit. It returns the stable ID of the target that the move checked.
 func (h *Handler) authorizeMove(
 	ctx context.Context, p identity.Principal, obj identity.Object, from, to collection.Ref,
-) error {
+) (string, error) {
 	toObj := identity.CollectionObject(to.Namespace, to.Name.String())
 	checks := []moveCheck{
 		{identity.ActionUnitManageAccess, obj},
@@ -368,12 +359,12 @@ func (h *Handler) authorizeMove(
 
 	for i := range checks {
 		if err := h.authorize(ctx, p, checks[i].action, checks[i].object); err != nil {
-			return err
+			return "", err
 		}
 	}
 
 	if h.moves == nil {
-		return fmt.Errorf("move %s: %w: no move checker is configured", obj.String(), identity.ErrDenied)
+		return "", fmt.Errorf("move %s: %w: no move checker is configured", obj.String(), identity.ErrDenied)
 	}
 
 	return h.moves.CheckMove(ctx, p, obj, toObj)

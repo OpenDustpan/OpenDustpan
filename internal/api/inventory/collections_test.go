@@ -342,16 +342,20 @@ func TestUnitMoveWithoutCollectionChecksOnlyTheTarget(t *testing.T) {
 // handler alone.
 type allowMoves struct{}
 
-func (allowMoves) CheckMove(context.Context, identity.Principal, identity.Object, identity.Object) error {
-	return nil
+func (allowMoves) CheckMove(
+	_ context.Context, _ identity.Principal, _, target identity.Object,
+) (string, error) {
+	return "col-" + strings.ToLower(target.CollectionName()), nil
 }
 
 // denyMoves refuses every move, as the escalation check does when the caller
 // holds less on the unit than the target collection gives.
 type denyMoves struct{}
 
-func (denyMoves) CheckMove(_ context.Context, _ identity.Principal, unit, _ identity.Object) error {
-	return fmt.Errorf("move %s: %w", unit.String(), identity.ErrDenied)
+func (denyMoves) CheckMove(
+	_ context.Context, _ identity.Principal, unit, _ identity.Object,
+) (string, error) {
+	return "", fmt.Errorf("move %s: %w", unit.String(), identity.ErrDenied)
 }
 
 // TestMoveRefusedByTheEscalationCheckAnswersForbidden checks that a move the
@@ -370,5 +374,21 @@ func TestMoveRefusedByTheEscalationCheckAnswersForbidden(t *testing.T) {
 	got, err := f.store.UnitCollection(t.Context(), f.unitRef)
 	if !errors.Is(err, collection.ErrNoCollection) {
 		t.Fatalf("UnitCollection = %q, %v; want no collection: a refused move makes no change", got.Name, err)
+	}
+}
+
+// TestMoveIntoMissingCollectionIsForbiddenBeforeNotFound checks that a caller
+// who may not create units in a collection gets 403 for a move into a name
+// that does not exist, so the answer does not tell which names exist.
+func TestMoveIntoMissingCollectionIsForbiddenBeforeNotFound(t *testing.T) {
+	t.Parallel()
+
+	f := newMoveFixtureWith(t,
+		objectDenier{action: identity.ActionCollectionCreateUnit, object: "acme/missing"}, allowMoves{})
+	f.store.members = map[collection.UnitRef]collection.Name{}
+
+	rec := f.move(t, "missing")
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 before any existence check: %s", rec.Code, rec.Body.String())
 	}
 }

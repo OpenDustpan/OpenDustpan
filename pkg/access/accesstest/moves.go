@@ -173,12 +173,12 @@ func testMoveEscalation(t *testing.T, s access.Store) {
 		t.Fatalf("direct grant of admin on the unit = %v, want ErrEscalation", err)
 	}
 
-	err = svc.CheckMove(t.Context(), mallory, unit, sandbox)
+	_, err = svc.CheckMove(t.Context(), mallory, unit, sandbox)
 	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, access.ErrEscalation) {
 		t.Fatalf("move into sandbox = %v, want ErrDenied wrapping ErrEscalation", err)
 	}
 
-	if err := svc.CheckMove(t.Context(), mallory, unit, lab); err != nil {
+	if _, err := svc.CheckMove(t.Context(), mallory, unit, lab); err != nil {
 		t.Fatalf("move into lab = %v, want nil: the target gives only what the caller holds", err)
 	}
 }

@@ -650,16 +650,20 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 // the unit or the target does not exist, and an error that wraps
 // identity.ErrDenied and ErrEscalation when a grant of the target gives an
 // action that the caller does not hold on the unit. A grant whose role no
-// longer exists gives nothing, so it is skipped.
-func (s *Service) CheckMove(ctx context.Context, caller identity.Principal, unit, target identity.Object) error {
+// longer exists gives nothing, so it is skipped. On success it returns the
+// stable ID of the target that it checked. The move is written with that ID,
+// so a collection deleted and created again after the check is refused.
+func (s *Service) CheckMove(
+	ctx context.Context, caller identity.Principal, unit, target identity.Object,
+) (string, error) {
 	withID, err := s.existingObject(ctx, unit)
 	if err != nil {
-		return fmt.Errorf("move %s: %w", unit.String(), err)
+		return "", fmt.Errorf("move %s: %w", unit.String(), err)
 	}
 
 	targetWithID, err := s.existingObject(ctx, target)
 	if err != nil {
-		return fmt.Errorf("move %s into %s: %w", unit.String(), target.String(), err)
+		return "", fmt.Errorf("move %s into %s: %w", unit.String(), target.String(), err)
 	}
 
 	cursor := ""
@@ -667,17 +671,17 @@ func (s *Service) CheckMove(ctx context.Context, caller identity.Principal, unit
 	for {
 		page, err := s.ListGrants(ctx, targetWithID, PageRequest{Cursor: cursor, Limit: MaxLimit, Holder: "", Role: ""})
 		if err != nil {
-			return fmt.Errorf("grants of %s: %w", target.String(), err)
+			return "", fmt.Errorf("grants of %s: %w", target.String(), err)
 		}
 
 		for i := range page.Grants {
 			if err := s.checkMoveGrant(ctx, caller, withID, page.Grants[i].Grant); err != nil {
-				return err
+				return "", err
 			}
 		}
 
 		if page.NextCursor == "" {
-			return nil
+			return targetWithID.CollectionID(), nil
 		}
 
 		cursor = page.NextCursor
