@@ -17,6 +17,7 @@ func TestEveryRouteDeclaresItsActions(t *testing.T) {
 		namespaces: nil,
 		audit:      nil,
 		gate:       nil,
+		guard:      nil,
 		mux:        nil,
 		routes:     nil,
 	}
