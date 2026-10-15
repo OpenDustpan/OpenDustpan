@@ -26,6 +26,7 @@ type journalMemStore struct {
 	journal map[stack.UpdateID][]stack.JournalRow
 	seqs    map[stack.UpdateID]map[int64][sha256.Size]byte
 	closed  map[stack.UpdateID]bool
+	changed map[stack.UpdateID]bool
 }
 
 func newJournalMemStore() *journalMemStore {
@@ -34,6 +35,7 @@ func newJournalMemStore() *journalMemStore {
 		journal:    map[stack.UpdateID][]stack.JournalRow{},
 		seqs:       map[stack.UpdateID]map[int64][sha256.Size]byte{},
 		closed:     map[stack.UpdateID]bool{},
+		changed:    map[stack.UpdateID]bool{},
 	}
 }
 
@@ -181,8 +183,13 @@ func (m *journalMemStore) storeJournalRow(row stack.JournalRow) (bool, error) {
 			known = append(known, m.journal[row.Update][i].OperationIDs...)
 		}
 
-		if err := row.Verify(known); err != nil {
+		changed, err := row.Verify(known, m.changed[row.Update])
+		if err != nil {
 			return false, err
+		}
+
+		if changed {
+			m.changed[row.Update] = true
 		}
 	}
 
