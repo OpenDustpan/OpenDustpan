@@ -143,13 +143,19 @@ func (s *Service) checkOwner(ctx context.Context, caller identity.Principal, t T
 }
 
 // authorizeRevoke checks that caller can revoke the token t in scope. For
-// ScopeOwn, t must belong to the person of caller. A service token needs
-// principal:manage-tokens on its principal, in any other scope. A personal
-// token of another person needs nothing more than the action of its
-// route: a revoke never raises access.
+// ScopeOwn, t must belong to the person of caller. ScopeService takes a
+// service token only (ErrWrongKind): principal:manage-tokens gives no right
+// on a personal token. A service token needs principal:manage-tokens on its
+// principal, in ScopeService and in ScopePersonal. A personal token of
+// another person needs nothing more than server:manage-tokens, the action
+// of its route: a revoke never raises access.
 func (s *Service) authorizeRevoke(ctx context.Context, caller identity.Principal, scope Scope, t Token) error {
 	if scope == ScopeOwn {
 		return s.checkOwner(ctx, caller, t)
+	}
+
+	if scope == ScopeService && t.Kind != KindService {
+		return fmt.Errorf("%w: a %s token goes through /api/server/tokens", ErrWrongKind, t.Kind)
 	}
 
 	if t.Kind == KindService {

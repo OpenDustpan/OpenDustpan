@@ -321,7 +321,7 @@ func (h *Handler) serviceTokenRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodPost, Path: serviceTokensPath, Scope: ScopeAuthorized, Actions: service,
-			Resolve: h.resolveServiceTokenCreate, ActionsFor: nil, Serve: serve(createToken(accesstoken.ScopeService)),
+			Resolve: resolveServiceTokenCreate, ActionsFor: nil, Serve: serve(createToken(accesstoken.ScopeService)),
 		},
 		{
 			Method: http.MethodPost, Path: serviceTokenPath + "/rotate", Scope: ScopeAuthorized, Actions: service,
@@ -389,9 +389,11 @@ func (h *Handler) resolveTokenOwner(_ http.ResponseWriter, r *http.Request) (ide
 // resolveServiceTokenCreate returns the object of POST
 // /api/server/service-tokens: the principal that the body names. It reads
 // the body under the limit of a request body and restores r.Body, so the
-// handler reads it again. A body with no principalID answers 400 and an
-// unknown principal 404, before the route check and before any write.
-func (h *Handler) resolveServiceTokenCreate(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
+// handler reads it again. A body with no principalID answers 400, before
+// the route check and before any write. It does not read the principal, so
+// a caller without the action gets 403 for every ID, and an unknown
+// principal answers 404 from the Service after the route check.
+func resolveServiceTokenCreate(w http.ResponseWriter, r *http.Request) (identity.Object, error) {
 	body, err := readBody(w, r, errTokenBody)
 	if err != nil {
 		return identity.Object{}, err
@@ -411,19 +413,6 @@ func (h *Handler) resolveServiceTokenCreate(w http.ResponseWriter, r *http.Reque
 	obj, err := identity.ParsePrincipalObject(*req.PrincipalID)
 	if err != nil {
 		return identity.Object{}, fmt.Errorf("%w: %q", accesstoken.ErrPrincipalNotFound, *req.PrincipalID)
-	}
-
-	if h.principals == nil {
-		return obj, nil
-	}
-
-	_, err = h.principals.GetPrincipal(r.Context(), obj.PrincipalID())
-	if errors.Is(err, principal.ErrNotFound) {
-		return identity.Object{}, fmt.Errorf("%w: %q", accesstoken.ErrPrincipalNotFound, obj.PrincipalID())
-	}
-
-	if err != nil {
-		return identity.Object{}, fmt.Errorf("read principal: %w", err)
 	}
 
 	return obj, nil
@@ -466,7 +455,8 @@ func createPrincipalToken(
 // ofPathPrincipal returns op behind a check that the token in the path
 // belongs to the principal in the path: a token of another principal
 // answers 404, so the route of one principal tells nothing about the
-// tokens of another.
+// tokens of another. These routes are for service principals only: a
+// personal token answers 400.
 func ofPathPrincipal(op tokenOp) tokenOp {
 	return func(
 		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
@@ -474,8 +464,13 @@ func ofPathPrincipal(op tokenOp) tokenOp {
 		id := r.PathValue("id")
 
 		t, err := svc.Get(r.Context(), id)
-		if err == nil && t.PrincipalID != r.PathValue("principal") {
+		switch {
+		case err != nil:
+		case t.PrincipalID != r.PathValue("principal"):
 			err = fmt.Errorf("%w: %q", accesstoken.ErrNotFound, id)
+		case t.Kind != accesstoken.KindService:
+			err = fmt.Errorf("%w: a %s token goes through /api/server/tokens", accesstoken.ErrWrongKind, t.Kind)
+		default:
 		}
 
 		if err != nil {

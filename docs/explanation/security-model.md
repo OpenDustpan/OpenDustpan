@@ -83,6 +83,10 @@ persons and services.
   `principal:manage-tokens` on the principal. The audit entry of each grant
   to a service principal names the same holders in the change
   `tokenManagers`.
+- **A revoke of `principal:manage-tokens` does not end the tokens that
+  its holder already made.** Those tokens act as the service principal
+  until they expire. After such a revoke, rotate or revoke the tokens of
+  the principal.
 
 ## Pulumi secrets
 

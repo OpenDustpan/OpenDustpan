@@ -46,6 +46,7 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 	}{
 		{name: "a token of a manage-tokens holder follows later grants", test: testTokenFollowsLaterGrants},
 		{name: "a service token needs principal:manage-tokens", test: testServiceTokenNeedsTheGrant},
+		{name: "principal:manage-tokens gives no right on a personal token", test: testNoRightOnPersonalTokens},
 		{name: "a grant of manage-tokens needs server:manage-access", test: testManageTokensGrantNeedsAccess},
 		{name: "a membership that gives manage-tokens needs server:manage-access", test: testMembershipNeedsAccess},
 		{name: "a grant on a principal takes a service principal and principal actions", test: testPrincipalGrantRules},
@@ -268,6 +269,44 @@ func testServiceTokenNeedsTheGrant(t *testing.T, d *delegation) {
 		accesstoken.ScopePersonal, tok.ID)
 	if !errors.Is(err, identity.ErrDenied) {
 		t.Fatalf("revoke of a token of another principal: err = %v, want ErrDenied", err)
+	}
+}
+
+// testNoRightOnPersonalTokens proves that principal:manage-tokens on the
+// installation, which holds every principal, gives no right on the
+// personal token of a person: a revoke or a rotation in the service scope
+// answers ErrWrongKind, and the token stays active.
+func testNoRightOnPersonalTokens(t *testing.T, d *delegation) {
+	t.Helper()
+
+	ctx := t.Context()
+	ops := d.principalOf(t, "ops@example.com", principal.KindPerson)
+	root := d.principalOf(t, "root@example.com", principal.KindPerson)
+
+	d.mustGrant(t, bootstrap(), ops, access.RoleTokenManager, identity.ServerObject())
+	d.mustGrant(t, bootstrap(), root, access.RoleSiteAdministrator, identity.ServerObject())
+
+	tok, secret, err := d.tokens.Create(ctx, bootstrap(), changeEntry(bootstrap(), identity.ActionServerManageTokens),
+		accesstoken.ScopePersonal, accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: root.ID, Name: "laptop"})
+	if err != nil {
+		t.Fatalf("personal token: %v", err)
+	}
+
+	entry := changeEntry(signedIn(ops), identity.ActionPrincipalManageTokens)
+
+	revokeErr := d.tokens.Revoke(ctx, signedIn(ops), entry, accesstoken.ScopeService, tok.ID)
+	if !errors.Is(revokeErr, accesstoken.ErrWrongKind) {
+		t.Fatalf("revoke of a personal token by a manage-tokens holder: err = %v, want ErrWrongKind", revokeErr)
+	}
+
+	_, _, rotErr := d.tokens.Rotate(ctx, signedIn(ops), entry,
+		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}, ID: tok.ID, Scope: accesstoken.ScopeService})
+	if !errors.Is(rotErr, accesstoken.ErrWrongKind) {
+		t.Fatalf("rotation of a personal token by a manage-tokens holder: err = %v, want ErrWrongKind", rotErr)
+	}
+
+	if _, err := d.tokens.AuthenticateToken(ctx, secret.Reveal()); err != nil {
+		t.Fatalf("the personal token no longer signs in: %v", err)
 	}
 }
 
