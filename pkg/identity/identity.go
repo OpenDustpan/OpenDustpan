@@ -165,6 +165,11 @@ const (
 	// deleting the service principals of a namespace. Its object is a
 	// namespace. Reading them needs ActionNamespaceReadAccess.
 	ActionNamespaceManagePrincipals Action = "namespace:manage-principals"
+	// ActionNamespaceManagePrincipalTokens allows making, rotating, listing
+	// and revoking the access tokens of the service principals of a
+	// namespace. Its object is a namespace. It reaches only the principals
+	// of that namespace, through principal:manage-tokens on each of them.
+	ActionNamespaceManagePrincipalTokens Action = "namespace:manage-principal-tokens"
 	// ActionNamespaceReadAccess allows reading the access-review export of a
 	// namespace, and its principals. Its object is a namespace.
 	ActionNamespaceReadAccess Action = "namespace:read-access"

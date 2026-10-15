@@ -72,7 +72,7 @@ func Bench(b *testing.B, s BenchStore) {
 	units, collections := seedBenchInstallation(b, s)
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: s, Callers: s, Collections: collections, Units: s,
+		Store: s, Callers: s, Collections: collections, Units: s, Principals: nil,
 	})
 	if err != nil {
 		b.Fatalf("authorizer: %v", err)
