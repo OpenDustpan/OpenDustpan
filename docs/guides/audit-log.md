@@ -207,9 +207,10 @@ The installation then leaves maintenance mode.
 Run `opendustpan audit-chain approve --server <url>` to approve a waiting change.
 
 While a change waits or migrates, every instance answers 503 on most routes.
-The probes, the metrics, the audit chain routes, the maintenance routes, the reads of the audit log and the console files stay available.
+The probes, GET of the metrics route, GET and POST of the audit chain route, the maintenance routes and the console files stay available.
 The server refuses a restore while a change waits, and refuses an approval while a restore runs.
 An instance whose setting differs from the stored state also answers 503 on most routes, also after another instance approved the change.
+The maintenance routes stay available, so an operator can clear stale active work on an instance whose setting differs.
 Restart each instance with the stored setting.
 
 The server computes the digest of a start entry over each earlier entry in order of sequence.

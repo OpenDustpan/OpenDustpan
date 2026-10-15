@@ -56,14 +56,14 @@ and a fresh MFA step.
      and refuses an approval while a restore runs. Each one leaves only its
      own maintenance mode.
    - An instance whose setting differs from the stored state answers 503 on
-     every route except the probes, the metrics, the routes of decision 6,
-     the maintenance routes and the files of the console, also after
-     another instance approved the change, until it restarts with the
-     stored state.
+     most routes. The probes, GET of the metrics route, and the files of
+     the console stay available. GET and POST of the audit chain route stay
+     available. The maintenance routes stay available. The maintenance
+     routes pass so an operator can clear stale active work on an instance
+     whose setting differs. This holds after another instance approved the
+     change, until the instance restarts with the stored state.
    - While a change waits or migrates, every instance answers 503 on every
-     route except the same routes and the reads of the audit API. A read of
-     another API can also append an entry, for example the export of an
-     access review (ADR 52 decision 13), so the rule covers reads too.
+     route except the same routes. Reads of the audit API wait too.
    - Each instance caches the stored state for the gate with the same
      cache limit as the installation state. The cache decides admission
      only. Each append reads the stored state in its own transaction.

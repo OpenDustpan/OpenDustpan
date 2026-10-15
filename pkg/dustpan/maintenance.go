@@ -81,13 +81,15 @@ func writeRefusal(ctx context.Context, w http.ResponseWriter, shape errorShape, 
 
 // withAuditChainGate refuses requests while the audit chain of this
 // instance does not agree with the stored state, in the error shape of the
-// adapter of each path. The probes, the metrics, the audit chain routes,
-// the maintenance routes and the console files always pass. An instance
-// whose setting differs from the stored state refuses every other request.
-// While a change of the chain waits or migrates, every instance refuses
-// each other request except the reads of the audit log: a read of another
-// API can also append an audit entry, for example the export of an access
-// review. Without a chain it returns next.
+// adapter of each path. The probes under /health/, GET /api/server/metrics,
+// GET and POST /api/server/audit/chain, the paths under
+// /api/server/maintenance, and the console files always pass. The maintenance
+// routes pass on purpose: an operator must be able to clear stale active work
+// on a single instance whose setting differs from the stored state. An
+// instance whose setting differs from the stored state refuses every other
+// request. While a change of the chain waits or migrates, every instance
+// refuses every other request, including reads of the audit log. Without a
+// chain it returns next.
 func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logger) http.Handler {
 	if chain == nil {
 		return next
@@ -106,7 +108,7 @@ func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logge
 		switch {
 		case chain.setting.State() != rec.State:
 			writeRefusal(r.Context(), w, shape, logger, chainMismatchMessage)
-		case rec.Pending && !auditRead(r):
+		case rec.Pending:
 			message := chainPendingMessage
 			if chain.migrating.Load() || chainClaimHolds(rec, time.Now()) {
 				message = chainMigratingMessage
@@ -120,14 +122,16 @@ func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logge
 }
 
 // chainGateShape answers whether the audit chain gate covers the request,
-// and the error shape of its adapter.
+// and the error shape of its adapter. The probes under /health/, GET
+// /api/server/metrics, GET and POST /api/server/audit/chain, the paths under
+// /api/server/maintenance, and the console files bypass the gate.
 func chainGateShape(r *http.Request) (errorShape, bool) {
 	path := r.URL.Path
 
 	switch {
 	case strings.HasPrefix(path, "/health/"),
-		path == "/api/server/metrics",
-		path == "/api/server/audit/chain",
+		path == "/api/server/metrics" && r.Method == http.MethodGet,
+		path == "/api/server/audit/chain" && (r.Method == http.MethodGet || r.Method == http.MethodPost),
 		strings.HasPrefix(path, "/api/server/maintenance"):
 		return shapePulumi, false
 	case strings.HasPrefix(path, "/api/inventory/"):
@@ -142,14 +146,6 @@ func chainGateShape(r *http.Request) (errorShape, bool) {
 		// The console files: the console shows the approval.
 		return shapePulumi, false
 	}
-}
-
-// auditRead reports whether r reads the audit log: the audit API appends
-// nothing.
-func auditRead(r *http.Request) bool {
-	read := r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions
-
-	return read && strings.HasPrefix(r.URL.Path, "/api/audit/")
 }
 
 // maintenancePulumiError is the error body the Pulumi CLI expects, as in the
