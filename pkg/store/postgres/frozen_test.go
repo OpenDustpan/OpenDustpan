@@ -63,6 +63,7 @@ func TestFrozenMigrations(t *testing.T) {
 		"0056_audit_object_id_and_blob_purges.sql": "6f48b62438b91099e44d3de20a6905ba8d9b1ca90538382a9c7f2528ddf2fad2",
 		"0057_namespace_ip_allowlist.sql":          "24567a6a4104e14e1909dfeb3489cc7fafebcded41fd1672980b3877006ba051",
 		"0058_inventory_deleted_purge_after.sql":   "a11abf98a8894509350b3c193f00ebe3bb5809f32b8ab424cbad5cf5b70ba2fb",
+		"0064_blob_purges_age_byte_order.sql":      "e2a6965f07096da54f1e00240016a349cb046571b05a3ddec0544ec593c86d2d",
 	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")
