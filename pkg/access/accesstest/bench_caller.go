@@ -117,7 +117,9 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 		benchGrant(b, s, fmt.Sprintf("grt-me%03d", i), subject, fmt.Sprintf("me%03d", i))
 	}
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: s, Callers: s, Collections: nil, Units: s})
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: s, Callers: s, Collections: nil, Units: s, Principals: nil,
+	})
 	if err != nil {
 		b.Fatalf("authorizer: %v", err)
 	}
