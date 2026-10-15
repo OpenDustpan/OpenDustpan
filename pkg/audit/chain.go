@@ -203,16 +203,17 @@ type ChainChange struct {
 // MigrateChain runs the migration of an approved change in the scope of
 // each fence of fences. To off, it writes an end entry in each scope, then
 // stores the new record with the state off and no wait. To on, it first
-// stores the new record with the state on and a wait, then writes a start
-// entry in each scope, then stores the same record with no wait. The early
-// store to on keeps the claim of the approval, so a second approval still
-// sees the migration. The final store clears the claim. The early store to
-// on makes later appends hash at once. An append in a scope before its
-// start entry is covered by the digest of that start entry. An append after
-// an end entry but before the stored state changes writes no hash, because
-// the last entry is an end entry. A scope without entries gets no entry:
-// its first entry starts the chain, or comes after the chain went off. A
-// second start entry does no harm, because its digest covers the first.
+// stores the new record with the state on and a wait. Then it writes a
+// start entry in each scope. Then it stores the same record with no wait.
+// The early store to on keeps the claim of the approval, so a second
+// approval still sees the migration. The final store clears the claim.
+// Appends in a scope hash only after its start entry, or at once when the
+// scope holds no entries. The digest of the start entry covers an append
+// before it. An append after an end entry but before the stored state
+// changes writes no hash, because the last entry is an end entry. A scope
+// without entries gets no entry: its first entry starts the chain, or comes
+// after the chain went off. A second start entry does no harm, because its
+// digest covers the first.
 func MigrateChain(ctx context.Context, store ChainStore, fences []namespace.Fence, change ChainChange) error {
 	if change.To == ChainStateOn {
 		current, err := store.ChainRecord(ctx)

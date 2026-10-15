@@ -1266,9 +1266,14 @@ func (s *Server) sweepInactive(ctx context.Context) {
 // sweepOnce runs the inactivity disable once and counts the result. A failed
 // run logs no error text, which may hold driver detail (ADR 32 decision 7),
 // and the next run tries again. A run that the server stops (ctx canceled)
-// is not a failure. A run past its time limit is.
+// is not a failure. A run past its time limit is. While a change of the
+// chain waits, it skips one run.
 func (s *Server) sweepOnce(ctx context.Context) {
 	if s.tokens == nil {
+		return
+	}
+
+	if s.chainChangeWaits(ctx) {
 		return
 	}
 

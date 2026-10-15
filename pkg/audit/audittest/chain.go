@@ -69,12 +69,20 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		{name: "a check of each scope answers the result of check", test: testChainCheckEach},
 		{name: "concurrent appends keep the chain", test: testChainConcurrentAppends},
 		{
-			name: "an append between the end entries and the stored state writes no hash",
-			test: testChainAppendAfterEndBeforeState,
+			name: "two appends between the end entry and the stored state write no hash",
+			test: testChainAppendAfterEndTwo,
 		},
 		{
-			name: "an append between the stored state and the start entry is covered by the digest",
+			name: "three appends between the end entry and the stored state write no hash",
+			test: testChainAppendAfterEndThree,
+		},
+		{
+			name: "an append between the stored state and the start entry holds no hash",
 			test: testChainAppendAfterStateBeforeStart,
+		},
+		{
+			name: "an append after a failed migration to on stays unhashed until the start entry",
+			test: testChainAppendAfterFailedMigration,
 		},
 		{name: "a second handle follows the stored state", test: testChainSecondHandle},
 	}
@@ -828,7 +836,26 @@ func concurrentAppend(t *testing.T, s ChainStore, ns namespace.Namespace, w int,
 	return err
 }
 
-func testChainAppendAfterEndBeforeState(t *testing.T, ts ChainTestStore) {
+// testChainAppendAfterEndTwo checks two appends after an end entry while
+// the stored state is still on.
+func testChainAppendAfterEndTwo(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	testChainAppendAfterEnd(t, ts, 2)
+}
+
+// testChainAppendAfterEndThree checks three appends after an end entry
+// while the stored state is still on.
+func testChainAppendAfterEndThree(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	testChainAppendAfterEnd(t, ts, 3)
+}
+
+// testChainAppendAfterEnd appends n entries after an end entry while the
+// stored state is still on: none holds a hash. Storing off then checks as
+// valid.
+func testChainAppendAfterEnd(t *testing.T, ts ChainTestStore, n int) {
 	t.Helper()
 
 	tl := newTimeline(t, ts.Store)
@@ -842,9 +869,11 @@ func testChainAppendAfterEndBeforeState(t *testing.T, ts ChainTestStore) {
 		t.Fatalf("end chain: wrote %v, %v; want one entry", wrote, err)
 	}
 
-	later := tl.append(1)[0]
-	if later.Hash != "" {
-		t.Fatalf("append after the end entry with the state still on: hash %q, want none", later.Hash)
+	later := tl.append(n)
+	for i := range later {
+		if later[i].Hash != "" || later[i].PrevHash != "" {
+			t.Fatalf("append %d after the end entry with the state still on: got %+v, want no hash", i, later[i])
+		}
 	}
 
 	rec := audit.ChainRecord{
@@ -874,11 +903,61 @@ func testChainAppendAfterStateBeforeStart(t *testing.T, ts ChainTestStore) {
 	}
 
 	// The scope acme ends with an entry without a hash. An append after the
-	// stored state turns on, and before the start entry, holds a hash; the
-	// start entry must still follow, with a digest that covers it.
-	hashed := tl.append(1)[0]
-	if hashed.Hash == "" {
-		t.Fatal("append after the stored state with no start entry yet: no hash, want a hash")
+	// stored state turns on, and before the start entry, holds no hash; the
+	// start entry still follows, with a digest that covers it.
+	waiting := tl.append(1)[0]
+	if waiting.Hash != "" || waiting.PrevHash != "" {
+		t.Fatalf("append after the stored state with no start entry yet: got %+v, want no hash", waiting)
+	}
+
+	start := newEntry(tl.ns.Name, "alice", "req-start", tl.tick())
+	start.Action = audit.ActionStartChain
+
+	wrote, err := ts.Store.StartChain(t.Context(), tl.ns.Fence(), start)
+	if err != nil || !wrote {
+		t.Fatalf("start chain: wrote %v, %v; want one entry", wrote, err)
+	}
+
+	done := audit.ChainRecord{
+		ChangedAt: tl.tick(), ChangedBy: "alice", State: audit.ChainStateOn, Pending: false,
+		MigratingAt: time.Time{}, LogReplaced: false,
+	}
+	if err := ts.Store.SaveChainRecord(t.Context(), done); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	wantValid(t, check(t, ts.Store, tl.ns.Name))
+}
+
+func testChainAppendAfterFailedMigration(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	tl := newTimeline(t, ts.Store)
+	tl.migrate(audit.ChainStateOff)
+	tl.append(1)
+
+	// The migration to on stores the state first, then writes the start
+	// entries. It stops after the store here, so no start entry follows.
+	turning := audit.ChainRecord{
+		ChangedAt: tl.tick(), ChangedBy: "alice", State: audit.ChainStateOn, Pending: true,
+		MigratingAt: time.Time{}, LogReplaced: false,
+	}
+	if err := ts.Store.SaveChainRecord(t.Context(), turning); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	waiting := tl.append(1)[0]
+	if waiting.Hash != "" || waiting.PrevHash != "" {
+		t.Fatalf("append after a failed migration to on: got %+v, want no hash", waiting)
+	}
+
+	agrees, err := audit.LogAgrees(t.Context(), ts.Store, []namespace.Name{tl.ns.Name}, audit.ChainStateOn)
+	if err != nil {
+		t.Fatalf("log agrees: %v", err)
+	}
+
+	if agrees {
+		t.Fatal("log after a failed migration to on agrees with on, want no agreement")
 	}
 
 	start := newEntry(tl.ns.Name, "alice", "req-start", tl.tick())

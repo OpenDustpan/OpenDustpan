@@ -797,6 +797,30 @@ func auditChainPort(chain *auditChain) serverapi.AuditChain {
 	return chain
 }
 
+// chainChangeWaits reports whether a change of the chain waits for
+// approval. The retention sweep and the inactivity sweep skip one run
+// while it does. Both write audit entries outside the gate, so they pause
+// until the migration ends. A read error also skips the run: it logs at
+// WARN and answers true, so no sweep writes while the state is unknown.
+func (s *Server) chainChangeWaits(ctx context.Context) bool {
+	if s.chain == nil {
+		return false
+	}
+
+	held, err := s.chain.held(ctx)
+	if err != nil {
+		s.logger.WarnContext(ctx, "skipping the sweep: the audit chain state is unknown")
+
+		return true
+	}
+
+	if held {
+		s.logger.DebugContext(ctx, "skipping the sweep: an audit chain change waits")
+	}
+
+	return held
+}
+
 // startUpAuditChain compares the setting of the chain with the stored state
 // before the server serves.
 func (s *Server) startUpAuditChain(ctx context.Context) error {

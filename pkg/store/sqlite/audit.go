@@ -146,11 +146,12 @@ func validServerEntry(e audit.Entry) error {
 // its sequence, previous hash and hash. An entry with no ObjectID gets the
 // stable ID of the live unit that its Object names. The caller runs it in a
 // transaction that orders the appends of the scope. An append computes the
-// hash (hashLink) when the stored state is on (no row also counts as on)
-// and the last entry of its scope is not an end entry
-// (Action == audit.ActionEndChain). Otherwise it writes no hash (hashNone).
-// An append in a scope after its end entry but before the stored state
-// changes still writes no hash, so the check stays valid.
+// hash (hashLink) only when the chain of its scope is open. The chain is
+// open when the stored state is on. No row also counts as on. The scope
+// has no entries, or its last entry holds a hash and is not an end entry
+// (Action == audit.ActionEndChain). Otherwise the append writes no hash
+// (hashNone). An append in a scope whose chain is closed stays unhashed
+// until a start entry. The digest of the start entry covers it.
 func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
 	rec, err := readChainRecord(ctx, q)
 	if err != nil {
@@ -163,7 +164,7 @@ func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.
 	}
 
 	mode := hashNone
-	if rec.State == audit.ChainStateOn && placed.lastAction != audit.ActionEndChain {
+	if rec.State == audit.ChainStateOn && audit.LastAgrees(placed.last, audit.ChainStateOn) {
 		mode = hashLink
 	}
 
@@ -183,18 +184,18 @@ const (
 )
 
 // placedEntry is an entry with the fields that the transaction knows,
-// plus the hash and the action of the entry before it.
+// plus the last entry of its scope, or nil when the scope holds none.
 type placedEntry struct {
-	entry      audit.Entry
-	prevHash   string
-	lastAction string
+	entry    audit.Entry
+	prevHash string
+	last     *audit.Entry
 }
 
 // placeAuditEntry fills the fields of e that the transaction knows: the
 // object ID, the failover version of the namespace, the sequence and a time
 // that never goes back along the scope. It answers the entry with those
 // fields, the hash of the entry before it, or "" for the first entry of the
-// scope, and the action of that entry, or "" when the scope holds none.
+// scope, and the last entry of the scope, or nil when the scope holds none.
 func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (placedEntry, error) {
 	if e.ObjectID == "" {
 		id, err := auditObjectID(ctx, q, e.Object)
@@ -214,32 +215,34 @@ func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (placedE
 
 	var prevHash string
 
-	var lastAction string
+	var last *audit.Entry
 
 	var seq int64 = 1
 
-	last, err := q.LastAuditEntry(ctx, e.Namespace.String())
+	row, err := q.LastAuditEntry(ctx, e.Namespace.String())
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
 		return placedEntry{}, fmt.Errorf("read last audit entry: %w", err)
 	default:
-		prevHash = last.Hash
-		lastAction = last.Action
-		seq = last.Sequence + 1
+		prevHash = row.Hash
+		seq = row.Sequence + 1
 
 		// Callers take the time before the transaction, and the sequence
 		// comes inside it, so two appends to one scope can commit out of
 		// time order. The time never goes back along the sequence of a
 		// scope: an entry earlier than the last one takes its time.
-		if codec.Millis(e.At) < last.AtMs {
-			e.At = codec.FromMillis(last.AtMs)
+		if codec.Millis(e.At) < row.AtMs {
+			e.At = codec.FromMillis(row.AtMs)
 		}
+
+		stored := fromAuditRow(row)
+		last = &stored
 	}
 
 	e.Sequence = seq
 
-	return placedEntry{entry: e, prevHash: prevHash, lastAction: lastAction}, nil
+	return placedEntry{entry: e, prevHash: prevHash, last: last}, nil
 }
 
 // insertAuditEntry inserts e as the next entry of its scope, hashed as mode

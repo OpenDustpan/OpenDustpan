@@ -43,8 +43,10 @@ and a fresh MFA step.
    always on, so an upgrade needs no migration.
 4. **A start compares the setting with the state.** When they agree, the
    server starts normally. Each append reads the stored state in its own
-   transaction. An append computes a hash when the state is on and the last
-   entry of its scope is not an end entry. Otherwise it writes no hash. A
+   transaction. An append computes a hash when the state is on and the
+   chain of its scope is open. The chain is open when the scope has no
+   entries, or its last entry holds a hash and is not an end entry.
+   Otherwise it writes no hash. A
    missing row counts as on.
 5. **A different setting starts the server in maintenance mode.** The
    server notes in `audit_chain_state` that a change waits, enters the
@@ -105,9 +107,10 @@ and a fresh MFA step.
 
    To off, the server writes the end entries then stores off with no
    wait. To on, the server stores on with a wait first, then writes the
-   start entries, then stores on with no wait. The early store makes new
-   appends hash at once. The digest of a start entry covers an append
-   before it. Then the server waits two cache limits and leaves
+   start entries, then stores on with no wait. Appends in a scope hash
+   only after its start entry, or at once when the scope holds no
+   entries. The digest of a start entry covers an append before it.
+   Then the server waits two cache limits and leaves
    maintenance mode. A migration that stops before it ends keeps a
    waiting change, so the next start asks for approval again. A second
    start entry in a scope does no harm: its digest covers the first one.
