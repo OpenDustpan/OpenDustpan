@@ -5,11 +5,13 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Store is the persistence port for principals, groups and memberships.
-// The records belong to the installation, so no write carries a namespace
-// fence. Each list answers its rows and its total in one read
+// The records of RecordStore, GroupStore and MemberStore belong to the
+// installation, so their writes carry no namespace fence. The writes of
+// NamespaceRecordStore carry one. Each list answers its rows and its total in one read
 // transaction.
 //
 // Each write takes the audit entry of the change, in the scope
@@ -20,6 +22,7 @@ import (
 // time, such as the end of a membership, is e.At too.
 type Store interface {
 	RecordStore
+	NamespaceRecordStore
 	GroupStore
 	MemberStore
 }
@@ -52,6 +55,36 @@ type RecordStore interface {
 	// id and sets its update time to e.At. It returns ErrNotFound when no
 	// such principal exists, and ErrNotDisabled when it is not disabled.
 	EnablePrincipal(ctx context.Context, id string, e audit.Entry) error
+}
+
+// NamespaceRecordStore keeps the records of the principals of a namespace.
+//
+// Each write takes the fence of the namespace of the principal and checks it
+// in the transaction of the write, and appends its audit entry in that
+// namespace in the same transaction: both commit, or neither. A write returns
+// ErrInvalid when the fence or the entry names another namespace, and
+// namespace.ErrNotFound or namespace.ErrFenced from the fence check. The
+// writes of RecordStore act on the principals of the installation only: they
+// answer ErrNotFound for a principal of a namespace, and CreatePrincipal
+// answers ErrInvalid for one.
+type NamespaceRecordStore interface {
+	// CreateNamespacePrincipal persists p, a principal of the namespace
+	// p.Namespace. It returns ErrAlreadyExists when the ID is taken, or when
+	// a principal that exists has the subject: a subject is unique on the
+	// whole installation.
+	CreateNamespacePrincipal(ctx context.Context, p Principal, fence namespace.Fence, e audit.Entry) error
+	// ListNamespacePrincipals returns the principals of the namespace ns
+	// that exist, ordered by subject: the rows of q, with the subject as the
+	// key.
+	ListNamespacePrincipals(ctx context.Context, ns namespace.Name, q Query) ([]Principal, int64, error)
+	// UpdateNamespacePrincipal replaces the display name and the update time
+	// of the principal with the ID p.ID in the namespace p.Namespace. It
+	// returns ErrNotFound when no such principal exists in that namespace.
+	UpdateNamespacePrincipal(ctx context.Context, p Principal, fence namespace.Fence, e audit.Entry) error
+	// DeleteNamespacePrincipal ends the principal with the ID id in the
+	// namespace of fence, at e.At, with its grants and the grants on it. It
+	// returns ErrNotFound when no such principal exists in that namespace.
+	DeleteNamespacePrincipal(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
 }
 
 // GroupStore keeps the group records.

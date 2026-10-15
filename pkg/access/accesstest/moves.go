@@ -125,7 +125,7 @@ func seedPrincipal(t *testing.T, s moveStore, id, subject string) identity.Princ
 
 	p := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Subject: subject, DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 		DisabledAt: time.Time{},
 	}
 	if err := s.CreatePrincipal(t.Context(), p, entry()); err != nil {
