@@ -349,6 +349,16 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 	return g, nil
 }
 
+// GetGrant returns the current grant with the ID id, or ErrNotFound.
+func (s *Service) GetGrant(ctx context.Context, id string) (Grant, error) {
+	g, err := s.store.GetGrant(ctx, id)
+	if err != nil {
+		return Grant{}, fmt.Errorf("get grant %q: %w", id, err)
+	}
+
+	return g, nil
+}
+
 // Revoke ends the grant with the ID id on obj for caller, with the entry e.
 // A grant on another object answers ErrNotFound, so a caller cannot revoke
 // through an object that it manages a grant that it does not manage. caller
@@ -371,20 +381,22 @@ func (s *Service) Revoke(
 		return Grant{}, fmt.Errorf("revoke grant %q on %q: %w", id, obj.String(), ErrNotFound)
 	}
 
-	if heldErr := s.checkGrantHeld(ctx, caller, g); heldErr != nil {
-		return Grant{}, heldErr
-	}
+	return s.revokeStored(ctx, e, caller, g, id)
+}
 
-	fence, err := s.fenceOf(ctx, g.Object)
+// RevokeByID ends the grant with the ID id, whatever its object, for
+// caller, with the entry e. It reads the grant and revokes it on its own
+// object, with every check of Revoke. An unknown ID answers ErrNotFound,
+// and a grant that gives an action the caller does not hold answers
+// ErrEscalation. The caller authorizes the manage-access action of the
+// grant's object before this call.
+func (s *Service) RevokeByID(ctx context.Context, e audit.Entry, caller identity.Principal, id string) (Grant, error) {
+	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
 	}
 
-	if err := s.store.RevokeGrant(ctx, id, fence, grantChange(e, s.Now(), fence, GrantRef(g))); err != nil {
-		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
-	}
-
-	return g, nil
+	return s.revokeStored(ctx, e, caller, g, id)
 }
 
 // PageRequest asks for one page of the grants on an object. Cursor is the
@@ -706,6 +718,29 @@ func (s *Service) checkMoveGrant(ctx context.Context, caller identity.Principal,
 	}
 
 	return nil
+}
+
+// revokeStored ends the stored grant g with the ID id for caller, with the
+// entry e. It holds the checks that Revoke and RevokeByID share: the caller
+// holds every action the grant gives, and the entry goes in the scope of
+// the grant.
+func (s *Service) revokeStored(
+	ctx context.Context, e audit.Entry, caller identity.Principal, g Grant, id string,
+) (Grant, error) {
+	if heldErr := s.checkGrantHeld(ctx, caller, g); heldErr != nil {
+		return Grant{}, heldErr
+	}
+
+	fence, err := s.fenceOf(ctx, g.Object)
+	if err != nil {
+		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+	}
+
+	if err := s.store.RevokeGrant(ctx, id, fence, grantChange(e, s.Now(), fence, GrantRef(g))); err != nil {
+		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+	}
+
+	return g, nil
 }
 
 // checkGrant runs the checks of Grant. It returns the fence of the

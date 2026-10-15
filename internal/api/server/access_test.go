@@ -330,6 +330,87 @@ func TestGrantRoutes(t *testing.T) {
 	}, nil)
 }
 
+// TestRevokeGrantByID proves that DELETE /api/server/grants/{id} ends any
+// grant by its ID: a namespace grant answers 204 and is gone, an unknown ID
+// answers 404, a caller without read on the object gets 404 with the same
+// body as the unknown ID, a caller with read but without manage-access gets
+// 403, and an installation grant still answers 204.
+func TestRevokeGrantByID(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	send := func(subject, method, path, body string) (int, string) {
+		req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+subject)
+
+		rec := httptest.NewRecorder()
+		f.handler.ServeHTTP(rec, req)
+
+		return rec.Code, rec.Body.String()
+	}
+
+	var g grantDoc
+	f.as(t, "alice", apiCall{
+		http.MethodPost, "/api/server/namespaces/acme/grants",
+		`{"subject":"principal:prn-bob","role":"viewer"}`, http.StatusCreated,
+	}, &g)
+
+	status, body := send("alice", http.MethodDelete, "/api/server/grants/"+g.ID, "")
+	if status != http.StatusNoContent {
+		t.Fatalf("revoke namespace grant by ID answers %d, want %d (%s)", status, http.StatusNoContent, body)
+	}
+
+	var list grantListDoc
+	f.as(t, "alice", apiCall{http.MethodGet, "/api/server/namespaces/acme/grants", "", http.StatusOK}, &list)
+
+	for i := range list.Grants {
+		if list.Grants[i].ID == g.ID {
+			t.Fatalf("grants on acme still hold %s after the revoke by ID", g.ID)
+		}
+	}
+
+	unknownStatus, unknownBody := send("alice", http.MethodDelete, "/api/server/grants/grt-unknown-id", "")
+	if unknownStatus != http.StatusNotFound {
+		t.Fatalf("revoke unknown grant by ID answers %d, want %d (%s)", unknownStatus, http.StatusNotFound, unknownBody)
+	}
+
+	var hidden grantDoc
+	f.as(t, "alice", apiCall{
+		http.MethodPost, "/api/server/namespaces/acme/grants",
+		`{"subject":"principal:prn-olga","role":"viewer"}`, http.StatusCreated,
+	}, &hidden)
+
+	status, body = send("bob", http.MethodDelete, "/api/server/grants/"+hidden.ID, "")
+	if status != http.StatusNotFound {
+		t.Fatalf("revoke without read answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+
+	want := strings.ReplaceAll(unknownBody, "grt-unknown-id", hidden.ID)
+	if body != want {
+		t.Fatalf("revoke without read body = %s, want %s", body, want)
+	}
+
+	f.seed(t, "carol", access.RoleViewer, identity.NamespaceObject("acme"))
+
+	status, body = send("carol", http.MethodDelete, "/api/server/grants/"+hidden.ID, "")
+	if status != http.StatusForbidden {
+		t.Fatalf("revoke with read but without manage-access answers %d, want %d (%s)",
+			status, http.StatusForbidden, body)
+	}
+
+	var inst grantDoc
+	f.as(t, "ann", apiCall{
+		http.MethodPost, "/api/server/grants", `{"subject":"principal:prn-bob","role":"viewer"}`,
+		http.StatusCreated,
+	}, &inst)
+
+	status, body = send("ann", http.MethodDelete, "/api/server/grants/"+inst.ID, "")
+	if status != http.StatusNoContent {
+		t.Fatalf("revoke installation grant by ID answers %d, want %d (%s)", status, http.StatusNoContent, body)
+	}
+}
+
 // TestOperatorRefusals checks the families over HTTP: an installation
 // operator cannot make a principal and cannot grant.
 func TestOperatorRefusals(t *testing.T) {
