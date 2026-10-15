@@ -247,7 +247,7 @@ func (s *Store) revokeCollectionGrants(ctx context.Context, q *db.Queries, id st
 		ge.Object = "grant:" + gid
 		ge.ObjectID = gid
 
-		if _, err := s.appendAuditEntry(ctx, q, ge); err != nil {
+		if _, err := appendAuditEntry(ctx, q, ge); err != nil {
 			return fmt.Errorf("audit revoke of grant %s: %w", gid, err)
 		}
 

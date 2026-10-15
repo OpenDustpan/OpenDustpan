@@ -383,7 +383,7 @@ func (s *Store) appendSweepEntries(
 			return err
 		}
 
-		if _, err := s.appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 	}

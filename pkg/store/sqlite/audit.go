@@ -36,7 +36,7 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 	txErr := s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		var err error
 
-		stored, err = s.appendAuditEntry(ctx, q, e)
+		stored, err = appendAuditEntry(ctx, q, e)
 
 		return err
 	})
@@ -61,7 +61,7 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 	txErr := s.inTx(ctx, func(q *db.Queries) error {
 		var err error
 
-		stored, err = s.appendAuditEntry(ctx, q, e)
+		stored, err = appendAuditEntry(ctx, q, e)
 
 		return err
 	})
@@ -86,7 +86,7 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 			return err
 		}
 
-		if _, err := s.appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -118,7 +118,7 @@ func (s *Store) inFencedAuditedTx(
 			return err
 		}
 
-		if _, err := s.appendAuditEntry(ctx, q, *e); err != nil {
+		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -151,7 +151,7 @@ func validServerEntry(e audit.Entry) error {
 // (Action == audit.ActionEndChain). Otherwise it writes no hash (hashNone).
 // An append in a scope after its end entry but before the stored state
 // changes still writes no hash, so the check stays valid.
-func (s *Store) appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
+func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
 	rec, err := readChainRecord(ctx, q)
 	if err != nil {
 		return audit.Entry{}, err
@@ -167,7 +167,7 @@ func (s *Store) appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Ent
 		mode = hashLink
 	}
 
-	return s.insertPlacedEntry(ctx, q, placed.entry, placed.prevHash, mode)
+	return insertPlacedEntry(ctx, q, placed.entry, placed.prevHash, mode)
 }
 
 // hashMode is how insertAuditEntry hashes an entry: not at all, linked to
@@ -244,7 +244,7 @@ func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (placedE
 
 // insertAuditEntry inserts e as the next entry of its scope, hashed as mode
 // says.
-func (s *Store) insertAuditEntry(
+func insertAuditEntry(
 	ctx context.Context, q *db.Queries, e audit.Entry, mode hashMode,
 ) error {
 	placed, err := placeAuditEntry(ctx, q, e)
@@ -252,7 +252,7 @@ func (s *Store) insertAuditEntry(
 		return err
 	}
 
-	_, err = s.insertPlacedEntry(ctx, q, placed.entry, placed.prevHash, mode)
+	_, err = insertPlacedEntry(ctx, q, placed.entry, placed.prevHash, mode)
 
 	return err
 }
@@ -261,7 +261,7 @@ func (s *Store) insertAuditEntry(
 // entry of its scope. placed already holds the sequence and the other fields
 // that the transaction knows, and prevHash is the hash of the entry before
 // it.
-func (s *Store) insertPlacedEntry(
+func insertPlacedEntry(
 	ctx context.Context, q *db.Queries, e audit.Entry, prevHash string, mode hashMode,
 ) (audit.Entry, error) {
 	e.PrevHash, e.Hash = "", ""
@@ -567,7 +567,7 @@ func updateServerSetting[T any](
 			return err
 		}
 
-		if _, err := s.appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 

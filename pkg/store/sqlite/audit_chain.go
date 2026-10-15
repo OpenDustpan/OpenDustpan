@@ -89,14 +89,14 @@ func (s *Store) StartChain(ctx context.Context, fence namespace.Fence, e audit.E
 
 		e.Changes = audit.StartChanges(&digest)
 
-		return s.insertAuditEntry(ctx, q, e, hashStart)
+		return insertAuditEntry(ctx, q, e, hashStart)
 	})
 }
 
 // EndChain implements audit.ChainStore.
 func (s *Store) EndChain(ctx context.Context, fence namespace.Fence, e audit.Entry) (bool, error) {
 	return s.appendChainMarker(ctx, fence, e, audit.ChainStateOff, func(q *db.Queries, e audit.Entry) error {
-		return s.insertAuditEntry(ctx, q, e, hashLink)
+		return insertAuditEntry(ctx, q, e, hashLink)
 	})
 }
 
