@@ -58,11 +58,15 @@ type Config struct {
 	// Freshness checks the MFA step before a create or a rotation. Nil
 	// adds no step: MFA does not exist yet (ADR 56, decision 5).
 	Freshness Freshness
-	// Grants runs the escalation check of a token for another principal.
-	// The server wires the grants of ADR 52. Nil lets only an
-	// administrator act for another principal (fail closed): a store that
+	// Grants runs the escalation check of a personal token for another
+	// person. The server wires the grants of the access model. Nil lets only an
+	// administrator act for another person (fail closed): a store that
 	// keeps no grants.
 	Grants GrantCheck
+	// Authorizer decides principal:manage-tokens on the service principal
+	// of a service token. Nil lets only an administrator act on service
+	// tokens (fail closed).
+	Authorizer identity.Authorizer
 	// Logger logs a failed write of a last-used time. Nil discards it.
 	Logger *slog.Logger
 	// Now returns the current time. Nil means time.Now.
@@ -84,6 +88,7 @@ type Service struct {
 	principals PrincipalReader
 	freshness  Freshness
 	grants     GrantCheck
+	authz      identity.Authorizer
 	logger     *slog.Logger
 	now        func() time.Time
 	newID      func(prefix string) string
@@ -118,7 +123,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness, grants: cfg.Grants,
-		logger: logger, now: now, newID: newID,
+		authz: cfg.Authorizer, logger: logger, now: now, newID: newID,
 		policies: &policyCache{readAt: time.Time{}, policy: DefaultPolicy(), mu: sync.Mutex{}, valid: false},
 	}, nil
 }
@@ -140,7 +145,7 @@ type Input struct {
 // Create issues a new token for a principal in scope, with the entry e
 // of caller. For ScopeOwn the principal is the person of caller, and
 // in.PrincipalID is ignored. For the other scopes it is in.PrincipalID, its
-// kind must fit the scope, and the escalation check runs. It returns the
+// kind must fit the scope, and the check of mayActFor runs. It returns the
 // token and its secret: the only time the server shows the secret.
 func (s *Service) Create(
 	ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, in Input,
@@ -168,8 +173,8 @@ func (s *Service) Create(
 	}
 
 	if scope != ScopeOwn {
-		if heldErr := s.requireHeld(ctx, caller, p.ID); heldErr != nil {
-			return Token{}, Secret{}, heldErr
+		if mayErr := s.mayActFor(ctx, caller, kind, p.ID); mayErr != nil {
+			return Token{}, Secret{}, mayErr
 		}
 	}
 
@@ -283,9 +288,9 @@ func (s *Service) List(ctx context.Context, req PageRequest) (Page, error) {
 }
 
 // Revoke ends the token id at once, with the entry e of caller. For
-// ScopeOwn the token must belong to the person of caller. An administrator
-// can revoke any token: a revoke never raises access, so it needs no
-// escalation check.
+// ScopeOwn the token must belong to the person of caller. A service token
+// needs principal:manage-tokens on its principal. A revoke never raises
+// access, so it needs no escalation check.
 func (s *Service) Revoke(ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, id string) error {
 	t, err := s.store.GetToken(ctx, id)
 	if err != nil {

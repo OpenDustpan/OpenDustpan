@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -372,6 +374,12 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 		return scope, nil, fmt.Errorf("export of %q: %w", obj.String(), ErrCollectionReview)
 	}
 
+	if kind == ObjectPrincipal {
+		scope, err = s.principalReviewScope(ctx, obj)
+
+		return scope, grantAccess, err
+	}
+
 	if nsErr := s.reviewNamespace(ctx, obj); nsErr != nil {
 		return scope, nil, nsErr
 	}
@@ -400,6 +408,76 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 	scope.ContainerRoles = roles
 
 	return scope, grantAccess, nil
+}
+
+// principalReviewScope returns the scope of the export of obj, a service
+// principal: the grants on the principal, and the grants on the
+// installation with a role that holds principal:manage-tokens. So the
+// export answers who can make a token for the principal and act as it. It
+// returns ErrNotFound when the principal does not exist, and ErrInvalid
+// when it is not a service principal.
+func (s *Service) principalReviewScope(ctx context.Context, obj identity.Object) (ReviewScope, error) {
+	scope := ReviewScope{Object: obj, Namespace: "", Containers: nil, ContainerRoles: nil, All: false}
+
+	p, err := s.directory.GetPrincipal(ctx, obj.PrincipalID())
+	if errors.Is(err, principal.ErrNotFound) {
+		return scope, fmt.Errorf("%w: principal %q", ErrNotFound, obj.PrincipalID())
+	}
+
+	if err != nil {
+		return scope, fmt.Errorf("read principal: %w", err)
+	}
+
+	if p.Kind != principal.KindService {
+		return scope, fmt.Errorf("%w: principal %q is a %s principal; only a service principal has this export",
+			ErrInvalid, p.ID, p.Kind)
+	}
+
+	if scope.ContainerRoles, err = s.authz.rolesWith(ctx, identity.ActionPrincipalManageTokens); err != nil {
+		return scope, err
+	}
+
+	scope.Containers = []string{identity.ServerObject().String()}
+
+	return scope, nil
+}
+
+// TokenManagers returns the current holders of principal:manage-tokens on
+// the service principal with the ID id, sorted and each once: the text form
+// of the subject of each grant that gives it, and the subject of each
+// bootstrap admin token. A group stands for each of its members.
+func (s *Service) TokenManagers(ctx context.Context, id string) ([]string, error) {
+	obj, err := identity.ParsePrincipalObject(id)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+
+	seen := map[string]bool{}
+	req := ReviewRequest{From: nil, To: nil, Subject: "", Cursor: "", Limit: MaxLimit, Expand: false}
+
+	for {
+		page, err := s.Review(ctx, obj, req)
+		if err != nil {
+			return nil, fmt.Errorf("read token managers of principal %q: %w", id, err)
+		}
+
+		for i := range page.Entries {
+			row := page.Entries[i].Row
+			if page.Entries[i].Holder == BootstrapHolder {
+				seen[row.SubjectName] = true
+			} else {
+				seen[row.Grant.Subject.String()] = true
+			}
+		}
+
+		if page.NextCursor == "" {
+			break
+		}
+
+		req.Cursor = page.NextCursor
+	}
+
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 // reviewNamespace returns ErrNotFound when the namespace of obj does not

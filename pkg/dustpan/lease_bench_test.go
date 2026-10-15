@@ -208,7 +208,8 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: s.tokens, Principals: s.principals, Freshness: nil, Grants: nil, Logger: nil, Now: now, NewID: nil,
+		Store: s.tokens, Principals: s.principals, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: now,
+		NewID: nil,
 	})
 	if err != nil {
 		b.Fatalf("token service: %v", err)

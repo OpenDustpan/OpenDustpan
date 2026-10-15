@@ -449,8 +449,7 @@ func TestTokenActionsHaveTheirFamilies(t *testing.T) {
 
 	server := identity.ServerObject()
 	manage := []identity.Action{
-		identity.ActionServerReadTokens, identity.ActionServerManageTokens, identity.ActionServerManageServiceTokens,
-		identity.ActionServerManageTokenPolicy,
+		identity.ActionServerReadTokens, identity.ActionServerManageTokens, identity.ActionServerManageTokenPolicy,
 	}
 
 	for _, a := range manage {
@@ -462,5 +461,11 @@ func TestTokenActionsHaveTheirFamilies(t *testing.T) {
 		assertChecks(t, f.authz, ops, []check{{server, a, false}})
 	}
 
+	if family, ok := access.FamilyOf(identity.ActionPrincipalManageTokens); !ok || family != access.FamilyDelegation {
+		t.Errorf("family of %s = %q, %t; want delegation", identity.ActionPrincipalManageTokens, family, ok)
+	}
+
+	assertChecks(t, f.authz, acct, []check{{server, identity.ActionPrincipalManageTokens, true}})
+	assertChecks(t, f.authz, ops, []check{{server, identity.ActionPrincipalManageTokens, false}})
 	assertChecks(t, f.authz, plain, []check{{identity.CallerObject(), identity.ActionTokenManageOwn, true}})
 }
