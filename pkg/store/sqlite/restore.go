@@ -274,9 +274,15 @@ func fenceStagedFile(ctx context.Context, path string) error {
 
 	// The restored log can reuse sequences that a sink already holds, and
 	// a restored cursor can point past the restored entries. A reset makes
-	// every sink receive the restored log again from its first entry.
+	// every sink receive the restored log again from its first entry. A
+	// restored lease could block that reship, so the reset releases every
+	// lease too.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM audit_sink_cursors`); err != nil {
 		return errors.Join(fmt.Errorf("reset staged audit sink cursors: %w", err), tx.Rollback())
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM audit_sink_leases`); err != nil {
+		return errors.Join(fmt.Errorf("reset staged audit sink leases: %w", err), tx.Rollback())
 	}
 
 	if err := tx.Commit(); err != nil {

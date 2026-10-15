@@ -1134,6 +1134,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithIPAllowlists(f.ipAllowlists),
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
 		dustpan.WithIPAllowlistStore(st),
+		dustpan.WithInstanceID(f.instanceID),
 	}, nil
 }
 

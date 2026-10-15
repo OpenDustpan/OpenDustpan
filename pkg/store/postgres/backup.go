@@ -240,7 +240,12 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			orderBy: []string{"sink", pgColNamespace},
 		},
 		{
-			table:   "backups",
+			table:   "audit_sink_leases",
+			columns: []string{"sink", "holder", "expires_at_ms"},
+			orderBy: []string{"sink"},
+		},
+		{
+			table: "backups",
 			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
 			orderBy: []string{"id"},
 		},

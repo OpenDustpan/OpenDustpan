@@ -463,6 +463,14 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "audit_sink_leases",
+			columns: []string{
+				"sink",
+				"holder",
+				"expires_at_ms",
+			},
+		},
+		{
 			table: "access_token_policy",
 			columns: []string{
 				"id",

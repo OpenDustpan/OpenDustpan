@@ -23,10 +23,12 @@ import (
 // it. A restart or another instance goes on from the cursor. A failed
 // write leaves the cursor, so the next round sends the batch again: a sink
 // can receive an entry twice, and the receiver removes duplicates by scope
-// and sequence. Each instance of the server runs the shipper, so a sink
-// receives each entry about once per instance. The shipper never drops an
-// entry, except one that a sink cannot hold (logsink.ErrSkipped): it
-// counts and logs that skip, and goes on.
+// and sequence. Only the holder of the lease of a sink ships to it, so two
+// instances never ship one entry twice. The holder renews the lease well
+// before it ends, and the cursor stays the source of truth, so a new holder
+// goes on from the cursor. The shipper never drops an entry, except one
+// that a sink cannot hold (logsink.ErrSkipped): it counts and logs that
+// skip, and goes on.
 
 // Shipper defaults and limits.
 const (
@@ -95,15 +97,24 @@ type ShipSink struct {
 // are hooks for metrics and may be nil. OnShipped receives the sink name
 // and the count of entries of one accepted batch. OnFailure receives the
 // sink name after a failed round. OnSkipped receives the sink name and the
-// count of entries that the sink skipped (logsink.ErrSkipped).
+// count of entries that the sink skipped (logsink.ErrSkipped). InstanceID
+// names the holder of the sink leases of this shipper: one instance ID per
+// server process. Leases keeps those leases; when it is nil and Feed serves
+// SinkLeaser, the shipper uses Feed. LeaseTTL is how long a taken lease
+// lasts and defaults to SinkLeaseDuration. RenewInterval is how often the
+// holder renews and defaults to SinkLeaseRenewInterval.
 type ShipperConfig struct {
-	Feed       Feed
-	Namespaces NamespaceLister
-	Logger     *slog.Logger
-	OnShipped  func(sink string, entries int)
-	OnFailure  func(sink string)
-	OnSkipped  func(sink string, entries int)
-	Sinks      []ShipSink
+	Feed          Feed
+	Namespaces    NamespaceLister
+	Logger        *slog.Logger
+	OnShipped     func(sink string, entries int)
+	OnFailure     func(sink string)
+	OnSkipped     func(sink string, entries int)
+	Sinks         []ShipSink
+	InstanceID    string
+	Leases        SinkLeaser
+	LeaseTTL      time.Duration
+	RenewInterval time.Duration
 }
 
 // Shipper copies committed entries to sinks.
@@ -112,7 +123,8 @@ type Shipper struct {
 }
 
 // NewShipper checks cfg and returns a shipper. Every sink needs a name of
-// at most 64 bytes of [a-z0-9._-], and no two sinks share a name.
+// at most 64 bytes of [a-z0-9._-], and no two sinks share a name. When the
+// shipper keeps leases, InstanceID is required and names their holder.
 func NewShipper(cfg ShipperConfig) (*Shipper, error) {
 	if cfg.Feed == nil || cfg.Namespaces == nil {
 		return nil, fmt.Errorf("%w: missing feed or namespace lister", ErrInvalidShipper)
@@ -135,6 +147,28 @@ func NewShipper(cfg ShipperConfig) (*Shipper, error) {
 		}
 
 		seen[s.Name] = true
+	}
+
+	if cfg.Leases == nil {
+		if leaser, ok := cfg.Feed.(SinkLeaser); ok {
+			cfg.Leases = leaser
+		}
+	}
+
+	if cfg.Leases != nil && cfg.InstanceID == "" {
+		return nil, fmt.Errorf("%w: missing instance ID for sink leases", ErrInvalidShipper)
+	}
+
+	if cfg.LeaseTTL < 0 || cfg.RenewInterval < 0 {
+		return nil, fmt.Errorf("%w: negative lease timing", ErrInvalidShipper)
+	}
+
+	if cfg.LeaseTTL == 0 {
+		cfg.LeaseTTL = SinkLeaseDuration
+	}
+
+	if cfg.RenewInterval == 0 {
+		cfg.RenewInterval = SinkLeaseRenewInterval
 	}
 
 	if cfg.Logger == nil {
@@ -187,12 +221,25 @@ func (s *Shipper) Run(ctx context.Context) {
 	wg.Wait()
 }
 
-// ShipOnce runs one round for every sink: it copies every entry above the
-// cursors. It answers the joined errors of the failed sinks.
+// ShipOnce runs one round for every sink: it takes or renews the lease of
+// the sink and copies every entry above the cursors while it holds it. A
+// sink held by another instance is skipped without an error. It answers the
+// joined errors of the failed sinks.
 func (s *Shipper) ShipOnce(ctx context.Context) error {
 	var errs []error
 
 	for _, sink := range s.cfg.Sinks {
+		held, err := s.acquire(ctx, sink.Name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("sink %s: %w", sink.Name, err))
+
+			continue
+		}
+
+		if !held {
+			continue
+		}
+
 		if err := s.round(ctx, sink); err != nil {
 			errs = append(errs, fmt.Errorf("sink %s: %w", sink.Name, err))
 		}
@@ -202,13 +249,90 @@ func (s *Shipper) ShipOnce(ctx context.Context) error {
 }
 
 // loop runs rounds for sink until ctx is done. After a failed round it
-// waits twice as long as before, up to MaxShipBackoff.
+// waits twice as long as before, up to MaxShipBackoff. It takes or renews
+// the lease of the sink before every round and ships only while it holds
+// it. It wakes at least every renew interval to renew, so a ship interval
+// longer than the lease still holds it, and it releases the lease when the
+// context ends.
 func (s *Shipper) loop(ctx context.Context, sink ShipSink) {
 	interval := sink.Interval
 	if interval <= 0 {
 		interval = DefaultShipInterval
 	}
 
+	if s.cfg.Leases == nil {
+		s.loopWithoutLease(ctx, sink, interval)
+
+		return
+	}
+
+	renew := s.cfg.RenewInterval
+	wait := interval
+	lastShip := time.Now()
+
+	defer s.release(sink.Name)
+
+	for {
+		sleep := min(wait, renew)
+		if sleep <= 0 {
+			sleep = renew
+		}
+
+		timer := time.NewTimer(sleep)
+
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+
+			return
+		case <-timer.C:
+		}
+
+		held, err := s.acquire(ctx, sink.Name)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
+			s.fail(ctx, sink.Name, err)
+
+			wait = min(wait*shipBackoffFactor, MaxShipBackoff)
+
+			continue
+		}
+
+		if !held {
+			wait = interval
+
+			continue
+		}
+
+		if time.Since(lastShip) < interval {
+			continue
+		}
+
+		if err := s.round(ctx, sink); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+
+			s.fail(ctx, sink.Name, err)
+
+			wait = min(wait*shipBackoffFactor, MaxShipBackoff)
+			lastShip = time.Now()
+
+			continue
+		}
+
+		wait = interval
+		lastShip = time.Now()
+	}
+}
+
+// loopWithoutLease runs rounds for sink until ctx is done without keeping a
+// lease. After a failed round it waits twice as long as before, up to
+// MaxShipBackoff.
+func (s *Shipper) loopWithoutLease(ctx context.Context, sink ShipSink, interval time.Duration) {
 	wait := interval
 
 	for {
@@ -235,6 +359,38 @@ func (s *Shipper) loop(ctx context.Context, sink ShipSink) {
 		}
 
 		wait = interval
+	}
+}
+
+// acquire takes or renews the lease of sink for this shipper. It answers
+// false without an error while another instance holds a live lease. Without
+// a lease store it always answers true.
+func (s *Shipper) acquire(ctx context.Context, sink string) (bool, error) {
+	if s.cfg.Leases == nil {
+		return true, nil
+	}
+
+	held, err := s.cfg.Leases.AcquireSinkLease(ctx, sink, s.cfg.InstanceID, s.cfg.LeaseTTL)
+	if err != nil {
+		return false, &shipError{step: stepLease, err: err}
+	}
+
+	return held, nil
+}
+
+// release releases the lease of sink held by this shipper. Without a lease
+// store it does nothing. It runs at loop shutdown with a detached context,
+// so a canceled loop still releases.
+func (s *Shipper) release(sink string) {
+	if s.cfg.Leases == nil {
+		return
+	}
+
+	ctx := context.Background()
+
+	if err := s.cfg.Leases.ReleaseSinkLease(ctx, sink, s.cfg.InstanceID); err != nil {
+		s.cfg.Logger.DebugContext(ctx, "audit sink lease release failed",
+			slog.String("sink", sink), slog.String("error", ErrorClass(err)))
 	}
 }
 
@@ -417,6 +573,7 @@ const (
 	stepRead    = "read entries"
 	stepWrite   = "write"
 	stepAdvance = "advance cursor"
+	stepLease   = "take lease"
 )
 
 // shipError is a failure of one step of a round. Its text holds the text of

@@ -168,9 +168,10 @@ var embeddedMigrationNames = []string{
 	"0059_collections.sql",
 	"0062_sessions.sql",
 	"0064_blob_purges_age_byte_order.sql",
-	"0065_session_policy.sql",
-	"0066_namespace_principals.sql",
-}
+		"0065_session_policy.sql",
+		"0066_namespace_principals.sql",
+		"0069_audit_sink_leases.sql",
+	}
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary
 // embeds with the newest version. Both adapters and the upgrade check client

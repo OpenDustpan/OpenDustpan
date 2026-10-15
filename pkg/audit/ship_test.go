@@ -650,3 +650,207 @@ func hasAttr(r logsink.Record, key string, value any) bool {
 
 	return false
 }
+
+// memLeaser is an in-memory audit.SinkLeaser. It holds one lease per sink
+// with its holder and expiry.
+type memLeaser struct {
+	mu      sync.Mutex
+	holders map[string]string
+	expires map[string]time.Time
+}
+
+func newMemLeaser() *memLeaser {
+	return &memLeaser{holders: map[string]string{}, expires: map[string]time.Time{}}
+}
+
+func (l *memLeaser) AcquireSinkLease(_ context.Context, sink, holder string, ttl time.Duration) (bool, error) {
+	if sink == "" || holder == "" || ttl <= 0 {
+		return false, fmt.Errorf("%w: sink %q holder %q", audit.ErrInvalidSinkLease, sink, holder)
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	now := time.Now()
+	if h, ok := l.holders[sink]; ok && h != holder && now.Before(l.expires[sink]) {
+		return false, nil
+	}
+
+	l.holders[sink] = holder
+	l.expires[sink] = now.Add(ttl)
+
+	return true, nil
+}
+
+func (l *memLeaser) ReleaseSinkLease(_ context.Context, sink, holder string) error {
+	if sink == "" || holder == "" {
+		return fmt.Errorf("%w: sink %q holder %q", audit.ErrInvalidSinkLease, sink, holder)
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.holders[sink] == holder {
+		delete(l.holders, sink)
+		delete(l.expires, sink)
+	}
+
+	return nil
+}
+
+func newLeasedShipper(t *testing.T, feed *memFeed, leases *memLeaser, holder string, sink logsink.Sink) *audit.Shipper {
+	t.Helper()
+
+	s, err := audit.NewShipper(audit.ShipperConfig{
+		Feed:          feed,
+		Namespaces:    feed,
+		Logger:        nil,
+		OnShipped:     nil,
+		OnFailure:     nil,
+		OnSkipped:     nil,
+		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Interval: 0}},
+		InstanceID:    holder,
+		Leases:        leases,
+		LeaseTTL:      150 * time.Millisecond,
+		RenewInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new shipper: %v", err)
+	}
+
+	return s
+}
+
+// TestTwoShippersShareOneSinkLease proves that two shippers on one feed and
+// one lease store never ship one entry twice: only the holder ships, and
+// when it stops renewing, the other takes over from the cursor.
+func TestTwoShippersShareOneSinkLease(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 3})
+	leases := newMemLeaser()
+	sinkA := &memSink{}
+	sinkB := &memSink{}
+
+	first := newLeasedShipper(t, feed, leases, "ins-holder-a", sinkA)
+	second := newLeasedShipper(t, feed, leases, "ins-holder-b", sinkB)
+
+	if err := first.ShipOnce(t.Context()); err != nil {
+		t.Fatalf("first ship once: %v", err)
+	}
+
+	if err := second.ShipOnce(t.Context()); err != nil {
+		t.Fatalf("second ship once while the lease is live: %v", err)
+	}
+
+	if got := sinkA.sequences(); fmt.Sprint(got) != "[acme/1 acme/2 acme/3]" {
+		t.Fatalf("holder shipped %v, want [acme/1 acme/2 acme/3]", got)
+	}
+
+	if got := sinkB.sequences(); len(got) != 0 {
+		t.Fatalf("standby shipped %v, want nothing while the lease is live", got)
+	}
+
+	feed.mu.Lock()
+	feed.entries["acme"] = append(feed.entries["acme"], entryAt("acme", 4), entryAt("acme", 5))
+	feed.mu.Unlock()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		if err := second.ShipOnce(t.Context()); err != nil {
+			t.Fatalf("second ship once: %v", err)
+		}
+
+		if len(sinkB.sequences()) == 2 {
+			break
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("standby did not take over within 10 seconds: %v", sinkB.sequences())
+		}
+
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	if got := sinkB.sequences(); fmt.Sprint(got) != "[acme/4 acme/5]" {
+		t.Fatalf("standby shipped %v, want [acme/4 acme/5]", got)
+	}
+
+	combined := append(append([]string{}, sinkA.sequences()...), sinkB.sequences()...)
+	seen := map[string]int{}
+	for _, seq := range combined {
+		seen[seq]++
+	}
+
+	for seq, n := range seen {
+		if n != 1 {
+			t.Fatalf("entry %s shipped %d times, want once: %v", seq, n, combined)
+		}
+	}
+
+	if got := len(combined); got != 5 {
+		t.Fatalf("shipped %d entries, want 5: %v", got, combined)
+	}
+}
+
+// TestShipperReleasesItsLeaseOnShutdown proves that a running shipper
+// releases its sink lease when its context ends, so a standby takes over at
+// once without waiting for expiry.
+func TestShipperReleasesItsLeaseOnShutdown(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 1})
+	leases := newMemLeaser()
+	sink := &memSink{}
+
+	s, err := audit.NewShipper(audit.ShipperConfig{
+		Feed:          feed,
+		Namespaces:    feed,
+		Logger:        nil,
+		OnShipped:     nil,
+		OnFailure:     nil,
+		OnSkipped:     nil,
+		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Interval: time.Millisecond}},
+		InstanceID:    "ins-holder-a",
+		Leases:        leases,
+		LeaseTTL:      30 * time.Second,
+		RenewInterval: 10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new shipper: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		s.Run(ctx)
+	}()
+
+	deadline := time.Now().Add(5 * time.Second)
+
+	for feed.acmeCursor("siem") != 1 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+
+	if got := feed.acmeCursor("siem"); got != 1 {
+		cancel()
+		<-done
+		t.Fatalf("run did not ship within 5 seconds")
+	}
+
+	cancel()
+	<-done
+
+	held, err := leases.AcquireSinkLease(t.Context(), "siem", "ins-holder-b", 30*time.Second)
+	if err != nil {
+		t.Fatalf("acquire after shutdown: %v", err)
+	}
+
+	if !held {
+		t.Fatalf("lease after shutdown: got false, want true")
+	}
+}

@@ -441,6 +441,15 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "audit_sink_leases",
+			OrderBy: []string{"sink"},
+			Columns: []Column{
+				{Name: "sink", Kind: KindText},
+				{Name: "holder", Kind: KindText},
+				{Name: "expires_at_ms", Kind: KindTime},
+			},
+		},
+		{
 			Table:   "access_token_policy",
 			OrderBy: []string{"id"},
 			Columns: []Column{

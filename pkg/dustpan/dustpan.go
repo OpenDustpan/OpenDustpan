@@ -167,6 +167,9 @@ type settings struct {
 	disablePulumiJournaling bool
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
+	// instanceID names this server process in the sink leases of its audit
+	// shipper. See WithInstanceID.
+	instanceID string
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
