@@ -6,6 +6,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -227,9 +228,14 @@ func testReviewUnits(t *testing.T, s access.Store) {
 	gone.Action, gone.Object = "unit:manage", "opentofu:acme/network"
 
 	ref := workspace.Ref{Namespace: "acme", Name: name}
-	if delErr := us.DeleteWorkspace(ctx, ref, ns.Fence(), gone); delErr != nil {
+	deletion := inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(time.Hour)}
+	if delErr := us.DeleteWorkspace(ctx, ref, ns.Fence(), deletion); delErr != nil {
 		t.Fatalf("delete workspace: %v", delErr)
 	}
+
+	// A lookup that returns nothing fails this case here, as the review reads
+	// the same units.
+	assertLiveStack(t, us)
 
 	got, err := rs.ReviewUnits(ctx, []string{"stk-web", "ws-network", "stk-purged"})
 	if err != nil {
