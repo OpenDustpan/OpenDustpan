@@ -170,6 +170,7 @@ var embeddedMigrationNames = []string{
 	"0064_blob_purges_age_byte_order.sql",
 	"0065_session_policy.sql",
 	"0066_namespace_principals.sql",
+	"0068_update_journal_records_changed.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary

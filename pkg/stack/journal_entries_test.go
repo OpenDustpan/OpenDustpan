@@ -98,7 +98,7 @@ func (f *fakeRows) PutJournalRow(_ context.Context, row stack.JournalRow, _ name
 	f.rows = append(f.rows, row)
 
 	if row.Verify != nil {
-		if err := row.Verify(nil); err != nil {
+		if _, err := row.Verify(nil, false); err != nil {
 			return false, fmt.Errorf("%w: %w", stack.ErrJournalBatch, err)
 		}
 	}
@@ -132,22 +132,30 @@ func (f *fakeRows) JournalSweepable(context.Context, stack.ID, stack.UpdateID) (
 // allowAll is a verifier that accepts every batch.
 type allowAll struct{}
 
-func (allowAll) VerifyBatch([]byte, int, []int64) error { return nil }
+func (allowAll) VerifyBatch([]byte, int, []int64, bool) (bool, error) { return false, nil }
 
 // recordVerifier records the arguments of each call and answers err.
 type recordVerifier struct {
-	body    []byte
-	known   []int64
-	version int
-	err     error
+	body           []byte
+	known          []int64
+	version        int
+	recordsChanged bool
+	changed        bool
+	err            error
 }
 
-func (v *recordVerifier) VerifyBatch(body []byte, version int, known []int64) error {
+func (v *recordVerifier) VerifyBatch(
+	body []byte,
+	version int,
+	known []int64,
+	recordsChanged bool,
+) (bool, error) {
 	v.body = body
 	v.version = version
 	v.known = known
+	v.recordsChanged = recordsChanged
 
-	return v.err
+	return v.changed, v.err
 }
 
 // batchBody returns a journal batch body with the given sequence IDs.
@@ -377,7 +385,7 @@ func TestJournalAppendAcceptsEmptyBatch(t *testing.T) {
 func TestJournalAppendPassesTheBatchToTheVerifier(t *testing.T) {
 	t.Parallel()
 
-	verifier := &recordVerifier{err: nil, body: nil, known: nil, version: 0}
+	verifier := &recordVerifier{err: nil, body: nil, known: nil, version: 0, recordsChanged: false, changed: false}
 	entries := newEntries(t,
 		newFakeBlobs(),
 		&fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil},
@@ -406,7 +414,9 @@ func TestJournalAppendDeletesBlobOnVerifierRefusal(t *testing.T) {
 	t.Parallel()
 
 	blobs := newFakeBlobs()
-	verifier := &recordVerifier{err: io.ErrUnexpectedEOF, body: nil, known: nil, version: 0}
+	verifier := &recordVerifier{
+		err: io.ErrUnexpectedEOF, body: nil, known: nil, version: 0, recordsChanged: false, changed: false,
+	}
 	entries := newEntries(
 		t,
 		blobs,

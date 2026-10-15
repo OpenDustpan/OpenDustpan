@@ -54,6 +54,8 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 		{name: "the audit entry of a grant names the token managers", test: testGrantNamesTokenManagers},
 		{name: "the export of a principal lists its token managers", test: testPrincipalExport},
 		{name: "a delete of a principal ends the grants on it", test: testDeleteEndsPrincipalGrants},
+		{name: "a delete of a principal audits its grants in their namespaces", test: testDeletePrincipalGrantsAudit},
+		{name: "a delete of a group audits its grants in their namespaces", test: testDeleteGroupGrantsAudit},
 		{name: "a principal of a namespace holds grants inside it only", test: testNamespacePrincipalGrants},
 		{name: "the store checks the namespace of a subject in its write", test: testStoreChecksSubjectNamespace},
 		{name: "a principal of a namespace gets no token and no group yet", test: testNamespacePrincipalLimits},
@@ -82,7 +84,9 @@ type delegation struct {
 func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	t.Helper()
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: st, Callers: st, Collections: nil, Units: st, Principals: st,
+	})
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}

@@ -14,8 +14,8 @@ import (
 // TestNamespacePrincipals drives the routes of the service principals of a
 // namespace through the real binary, on each store. A namespace admin makes
 // and manages them with a stored token of its own. A principal of a
-// namespace holds grants inside its namespace only, and gets no token and no
-// group membership.
+// namespace holds grants inside its namespace only, and joins no group. A
+// namespace admin manages the tokens of its principals.
 func TestNamespacePrincipals(t *testing.T) {
 	t.Parallel()
 
@@ -131,14 +131,15 @@ func runNamespacePrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Stor
 	}
 
 	checkNamespacePrincipalLimits(ctx, t, env, bot)
+	checkNamespacePrincipalTokens(ctx, t, env, namespaceTokenFixture{lead: leadTok, outsider: outsiderTok, bot: bot})
 
 	tokenCall(ctx, t, env, leadTok.Secret, principalStep{http.MethodDelete, one, "", http.StatusNoContent})
 	tokenCall(ctx, t, env, leadTok.Secret, principalStep{http.MethodGet, one, "", http.StatusNotFound})
 }
 
 // checkNamespacePrincipalLimits proves, with the bootstrap admin token, that
-// a principal of a namespace gets no grant outside its namespace, no token
-// and no group membership.
+// a principal of a namespace gets no grant outside its namespace and no
+// group membership.
 func checkNamespacePrincipalLimits(ctx context.Context, t *testing.T, env *e2e.Env, bot e2ePrincipal) {
 	t.Helper()
 
@@ -151,7 +152,6 @@ func checkNamespacePrincipalLimits(ctx context.Context, t *testing.T, env *e2e.E
 			http.MethodPost, "/api/server/grants", `{"subject":"principal:` + bot.ID + `","role":"viewer"}`,
 			http.StatusBadRequest,
 		},
-		{http.MethodPost, "/api/server/principals/" + bot.ID + "/tokens", `{"name":"ci"}`, http.StatusBadRequest},
 		{
 			http.MethodPost, "/api/server/groups/" + group.ID + "/members", `{"principalID":"` + bot.ID + `"}`,
 			http.StatusBadRequest,
@@ -159,4 +159,96 @@ func checkNamespacePrincipalLimits(ctx context.Context, t *testing.T, env *e2e.E
 	} {
 		principalCall(ctx, t, env, step, nil)
 	}
+}
+
+// namespaceTokenFixture holds the stored tokens and the bot of the token
+// test.
+type namespaceTokenFixture struct {
+	lead     e2eToken
+	outsider e2eToken
+	bot      e2ePrincipal
+}
+
+// checkNamespacePrincipalTokens proves that a namespace admin manages the
+// tokens of its principals: the bootstrap admin token makes a token of the
+// bot, the stored token of the admin lists and revokes it, a rotation
+// issues a new one, and the bot token acts as the bot. The same admin gets
+// 403 on a principal of another namespace and on a principal of the
+// installation. A create and a rotation need a sign-in, so the bootstrap
+// admin token makes them; a stored token lists and revokes.
+func checkNamespacePrincipalTokens(ctx context.Context, t *testing.T, env *e2e.Env, fx namespaceTokenFixture) {
+	t.Helper()
+
+	principalCall(ctx, t, env,
+		principalStep{http.MethodPost, "/api/server/namespaces", `{"name":"otherns"}`, http.StatusCreated}, nil)
+
+	var other e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals", `{"subject":"ci-install","kind":"service"}`, http.StatusCreated,
+	}, &other)
+
+	otherBotID := other.ID
+
+	var otherNsBot e2ePrincipal
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/namespaces/otherns/principals",
+		`{"subject":"ci-otherns"}`)
+	if err != nil || status != http.StatusCreated {
+		t.Fatalf("create a principal of otherns = %d, %v (%s); want 201", status, err, body)
+	}
+
+	if unmarshalErr := json.Unmarshal([]byte(body), &otherNsBot); unmarshalErr != nil {
+		t.Fatalf("decode principal: %v", unmarshalErr)
+	}
+
+	botTokens := "/api/server/principals/" + fx.bot.ID + "/tokens"
+
+	var made e2eToken
+	principalCall(ctx, t, env, principalStep{http.MethodPost, botTokens, `{"name":"ci"}`, http.StatusCreated}, &made)
+
+	if made.PrincipalID != fx.bot.ID || made.Kind != "service" {
+		t.Fatalf("token = %+v, want a service token of the bot", made)
+	}
+
+	tokenCall(ctx, t, env, fx.lead.Secret, principalStep{http.MethodGet, botTokens, "", http.StatusOK})
+	tokenCall(ctx, t, env, fx.outsider.Secret, principalStep{http.MethodGet, botTokens, "", http.StatusForbidden})
+
+	outsiderPost := principalStep{http.MethodPost, botTokens, `{"name":"x"}`, http.StatusForbidden}
+	tokenCall(ctx, t, env, fx.outsider.Secret, outsiderPost)
+
+	for _, path := range []string{
+		"/api/server/principals/" + otherNsBot.ID + "/tokens",
+		"/api/server/principals/" + otherBotID + "/tokens",
+	} {
+		tokenCall(ctx, t, env, fx.lead.Secret, principalStep{http.MethodGet, path, "", http.StatusForbidden})
+		tokenCall(
+			ctx,
+			t,
+			env,
+			fx.lead.Secret,
+			principalStep{http.MethodPost, path, `{"name":"x"}`, http.StatusForbidden},
+		)
+	}
+
+	var rot e2eRotation
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, botTokens + "/" + made.ID + "/rotate", `{}`, http.StatusCreated,
+	}, &rot)
+
+	if rot.Previous.ID != made.ID || rot.Token.PrincipalID != fx.bot.ID {
+		t.Fatalf("rotation = %+v, want a new token of the bot", rot)
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/teamns/grants",
+		`{"subject":"principal:` + fx.bot.ID + `","role":"admin"}`, http.StatusCreated,
+	}, nil)
+
+	status, body, err = env.ServerAPIStatusAs(ctx, rot.Token.Secret, http.MethodGet,
+		"/api/server/namespaces/teamns/principals", "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET principals with the bot token = %d, %v (%s); want 200", status, err, body)
+	}
+
+	tokenCall(ctx, t, env, fx.lead.Secret,
+		principalStep{http.MethodDelete, botTokens + "/" + rot.Token.ID, "", http.StatusNoContent})
 }
