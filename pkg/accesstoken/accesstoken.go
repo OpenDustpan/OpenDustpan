@@ -189,7 +189,8 @@ func (t Token) DaysLeft(now time.Time) (int64, bool) {
 // DisabledAt is zero for a principal that the inactivity disable did not
 // end. ActiveAt is the latest activity of the principal by the account
 // rule of the sweep: the latest of its creation, its activity baseline, and
-// the creation and the last use of each of its tokens.
+// the creation and the last use of each of its tokens. BreakGlass marks a
+// break-glass account, which is always exempt from the inactivity disable.
 type Owner struct {
 	ActiveAt    time.Time
 	DisabledAt  time.Time
@@ -197,6 +198,7 @@ type Owner struct {
 	Subject     string
 	DisplayName string
 	Kind        principal.Kind
+	BreakGlass  bool
 }
 
 // Limits of the text fields, in bytes, and of the IDs.

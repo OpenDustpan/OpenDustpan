@@ -54,6 +54,9 @@ var (
 	ErrManagedByDirectory = errors.New("group is managed by a directory")
 	// ErrNotDisabled reports an enable of a principal that is not disabled.
 	ErrNotDisabled = errors.New("principal is not disabled")
+	// ErrBreakGlassKind reports a break-glass account that is not a person.
+	// Only a person can be a break-glass account.
+	ErrBreakGlassKind = errors.New("break-glass account must be a person")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -123,6 +126,9 @@ const (
 // Namespace is empty for a principal of the installation, and names the
 // namespace of a principal of a namespace: a service principal that can only
 // hold grants inside that namespace. It does not change after the create.
+// BreakGlass marks a break-glass account: a person that signs in without
+// the identity provider. A break-glass account is always exempt from the
+// inactivity disable. Only a person can have it.
 type Principal struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -134,6 +140,7 @@ type Principal struct {
 	Source      Source
 	Namespace   namespace.Name
 	GroupCount  int64
+	BreakGlass  bool
 }
 
 // Group is the stored record of one group. ID is stable and opaque, with the
@@ -252,7 +259,8 @@ func validateText(field, s string, maxLen int, required bool) error {
 }
 
 // Validate reports whether p holds usable values. It does not check ID or
-// the times: the Service sets them.
+// the times: the Service sets them. It returns ErrBreakGlassKind when a
+// principal that is not a person is marked as a break-glass account.
 func (p Principal) Validate() error {
 	if err := ValidateSubject(p.Subject); err != nil {
 		return err
@@ -264,6 +272,10 @@ func (p Principal) Validate() error {
 
 	if _, err := ParseKind(string(p.Kind)); err != nil {
 		return err
+	}
+
+	if p.BreakGlass && p.Kind != KindPerson {
+		return fmt.Errorf("%w: kind %q", ErrBreakGlassKind, p.Kind)
 	}
 
 	if err := p.validateNamespace(); err != nil {
