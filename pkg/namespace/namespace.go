@@ -156,9 +156,11 @@ type Filter struct {
 	Names []Name
 }
 
-// PageQuery asks for one page of namespaces, in name order. After is the
-// name of the last namespace of the page before, or empty for the first
-// page. Limit is 1 to maxPageLimit. Filter names which namespaces qualify.
+// PageQuery asks for one page of namespaces, in the order of
+// ListNamespaces, which is the order of the name column of the store. After
+// is the name of the last namespace of the page before, or empty for the
+// first page. Limit is 1 to maxPageLimit. Filter names which namespaces
+// qualify.
 type PageQuery struct {
 	After  Name
 	Limit  int
@@ -168,8 +170,9 @@ type PageQuery struct {
 // Pager reads namespaces one page at a time. It is an optional port: a
 // Store that does not implement it answers ErrNoPaging through Service.
 type Pager interface {
-	// PageNamespaces returns at most Limit namespaces with a name greater
-	// than After, in name order. Filter names which namespaces qualify.
+	// PageNamespaces returns at most Limit namespaces after After, in the
+	// order of ListNamespaces, which is the order of the name column of the
+	// store. Filter names which namespaces qualify.
 	PageNamespaces(ctx context.Context, q PageQuery) ([]Namespace, error)
 	// CountNamespaces returns how many namespaces qualify under Filter.
 	CountNamespaces(ctx context.Context, f Filter) (int64, error)

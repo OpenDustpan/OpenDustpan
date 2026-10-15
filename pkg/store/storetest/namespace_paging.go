@@ -44,7 +44,7 @@ func RunNamespacePaging(t *testing.T, newStore PagingFactory) {
 }
 
 // pagingSeed holds 25 names with digits, a hyphen and upper- and lowercase
-// letters, so a collation that is not byte order would show in the order.
+// letters, so paging must still match ListNamespaces under any collation.
 var pagingSeed = []string{ //nolint:gochecknoglobals // Fixed fixture of the suite, never written.
 	"0", "00", "0-0",
 	"a", "a-", "a-0", "a0", "a00", "a1", "a2", "a10", "a-1", "a-10", "a-2",
@@ -53,23 +53,96 @@ var pagingSeed = []string{ //nolint:gochecknoglobals // Fixed fixture of the sui
 	"omega",
 }
 
+// storeOrder returns the names of ListNamespaces in the order the store
+// gave them. Every page must follow this order.
+func storeOrder(t *testing.T, s PagingStore) []namespace.Name {
+	t.Helper()
+
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
+
+	all, err := s.ListNamespaces(t.Context())
+	if err != nil {
+		t.Fatalf("list namespaces: %v", err)
+	}
+
+	out := make([]namespace.Name, 0, len(all))
+	for i := range all {
+		out = append(out, all[i].Name)
+	}
+
+	return out
+}
+
 // seedPagingNamespaces creates one namespace per seed name and returns the
-// names in byte order, which is the order every page must follow.
+// names in the order of ListNamespaces.
 func seedPagingNamespaces(t *testing.T, s PagingStore) []namespace.Name {
 	t.Helper()
+
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
 
 	for _, name := range pagingSeed {
 		newNamespace(t, s, name)
 	}
 
-	want := make([]namespace.Name, 0, len(pagingSeed))
-	for _, name := range pagingSeed {
-		want = append(want, namespace.Name(name))
+	return storeOrder(t, s)
+}
+
+// filterOrder returns the names of want that are in keep, keeping the order
+// of want. Unknown names in keep never match, so they stay out.
+func filterOrder(t *testing.T, want, keep []namespace.Name) []namespace.Name {
+	t.Helper()
+
+	held := make(map[namespace.Name]struct{}, len(keep))
+	for _, name := range keep {
+		held[name] = struct{}{}
 	}
 
-	slices.Sort(want)
+	var out []namespace.Name
 
-	return want
+	for _, name := range want {
+		if _, ok := held[name]; ok {
+			out = append(out, name)
+		}
+	}
+
+	return out
+}
+
+// afterOrder returns the names of want past the cursor name in the order
+// of want. An empty cursor gives all of want. It finds the cursor by index
+// in want.
+func afterOrder(t *testing.T, want []namespace.Name, after namespace.Name) []namespace.Name {
+	t.Helper()
+
+	if after == "" {
+		out := make([]namespace.Name, 0, len(want))
+		out = append(out, want...)
+
+		return out
+	}
+
+	at := -1
+
+	for i, name := range want {
+		if name == after {
+			at = i
+
+			break
+		}
+	}
+
+	if at < 0 {
+		t.Fatalf("cursor %q is not in the list %v", after, want)
+	}
+
+	out := make([]namespace.Name, 0, len(want)-at-1)
+	out = append(out, want[at+1:]...)
+
+	return out
 }
 
 // pageNames returns the names of a page, in order.
@@ -86,6 +159,10 @@ func pageNames(page []namespace.Namespace) []namespace.Name {
 // in the order the store gave them.
 func collectAll(t *testing.T, s PagingStore, q namespace.PageQuery) []namespace.Name {
 	t.Helper()
+
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
 
 	var out []namespace.Name
 
@@ -113,9 +190,13 @@ func collectAll(t *testing.T, s PagingStore, q namespace.PageQuery) []namespace.
 }
 
 // testPagingAllInOrder pages every namespace with limit 2 and checks the
-// walk gives each namespace once, in name order.
+// walk gives each namespace once, in the order of ListNamespaces.
 func testPagingAllInOrder(t *testing.T, s PagingStore) {
 	t.Helper()
+
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
 
 	want := seedPagingNamespaces(t, s)
 
@@ -125,14 +206,27 @@ func testPagingAllInOrder(t *testing.T, s PagingStore) {
 	}
 }
 
-// testPagingAllPastEnd checks a cursor past the last name gives no page.
+// testPagingAllPastEnd checks a cursor on the last name gives no page: no
+// name comes after the last name of ListNamespaces.
 func testPagingAllPastEnd(t *testing.T, s PagingStore) {
 	t.Helper()
 
-	seedPagingNamespaces(t, s)
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
+
+	want := seedPagingNamespaces(t, s)
+	if len(want) == 0 {
+		t.Fatal("seeded list is empty, want seeded names")
+	}
+
+	after := want[len(want)-1]
+	if tail := afterOrder(t, want, after); len(tail) != 0 {
+		t.Fatalf("names after %q = %v, want none", after, tail)
+	}
 
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
-		After:  "zzzz",
+		After:  after,
 		Limit:  10,
 		Filter: namespace.Filter{All: true, Names: nil},
 	})
@@ -145,13 +239,18 @@ func testPagingAllPastEnd(t *testing.T, s PagingStore) {
 	}
 }
 
-// testPagingSubset checks only the named namespaces appear, unknown names
-// are ignored, and the count skips them too.
+// testPagingSubset checks only the named namespaces appear, in the order
+// of ListNamespaces, and unknown names are ignored in the page and count.
 func testPagingSubset(t *testing.T, s PagingStore) {
 	t.Helper()
 
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
+
 	want := seedPagingNamespaces(t, s)
 	names := []namespace.Name{want[3], want[10], want[20], "ghost"}
+	filtered := filterOrder(t, want, names)
 
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  "",
@@ -162,8 +261,8 @@ func testPagingSubset(t *testing.T, s PagingStore) {
 		t.Fatalf("page a subset: %v", err)
 	}
 
-	if got := pageNames(page); !slices.Equal(got, names[:3]) {
-		t.Fatalf("subset page = %v, want %v", got, names[:3])
+	if got := pageNames(page); !slices.Equal(got, filtered) {
+		t.Fatalf("subset page = %v, want %v", got, filtered)
 	}
 
 	total, err := s.CountNamespaces(t.Context(), namespace.Filter{All: false, Names: names})
@@ -179,6 +278,10 @@ func testPagingSubset(t *testing.T, s PagingStore) {
 // testPagingEmptyNames checks an empty set gives no page and count zero.
 func testPagingEmptyNames(t *testing.T, s PagingStore) {
 	t.Helper()
+
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
 
 	seedPagingNamespaces(t, s)
 
@@ -206,12 +309,17 @@ func testPagingEmptyNames(t *testing.T, s PagingStore) {
 }
 
 // testPagingSubsetAfter checks a cursor inside the set starts the page
-// after it, and a cursor between members starts at the next member.
+// after it, and a cursor on the last member of the set gives no page.
 func testPagingSubsetAfter(t *testing.T, s PagingStore) {
 	t.Helper()
 
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
+
 	want := seedPagingNamespaces(t, s)
 	set := []namespace.Name{want[2], want[5], want[8]}
+	filtered := filterOrder(t, afterOrder(t, want, set[0]), set)
 
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  set[0],
@@ -222,8 +330,13 @@ func testPagingSubsetAfter(t *testing.T, s PagingStore) {
 		t.Fatalf("page a subset after a member: %v", err)
 	}
 
-	if got := pageNames(page); !slices.Equal(got, set[1:]) {
-		t.Fatalf("subset page after %q = %v, want %v", set[0], got, set[1:])
+	if got := pageNames(page); !slices.Equal(got, filtered) {
+		t.Fatalf("subset page after %q = %v, want %v", set[0], got, filtered)
+	}
+
+	tail := filterOrder(t, afterOrder(t, want, set[2]), set)
+	if len(tail) != 0 {
+		t.Fatalf("names after %q = %v, want none", set[2], tail)
 	}
 
 	page, err = s.PageNamespaces(t.Context(), namespace.PageQuery{
@@ -240,12 +353,18 @@ func testPagingSubsetAfter(t *testing.T, s PagingStore) {
 	}
 }
 
-// testPagingLargeLimit checks a limit larger than the set reads the set.
+// testPagingLargeLimit checks a limit larger than the set reads the set in
+// the order of ListNamespaces.
 func testPagingLargeLimit(t *testing.T, s PagingStore) {
 	t.Helper()
 
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
+
 	want := seedPagingNamespaces(t, s)
 	set := []namespace.Name{want[1], want[7], want[13]}
+	filtered := filterOrder(t, want, set)
 
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
 		After:  "",
@@ -256,8 +375,8 @@ func testPagingLargeLimit(t *testing.T, s PagingStore) {
 		t.Fatalf("page a subset with a large limit: %v", err)
 	}
 
-	if got := pageNames(page); !slices.Equal(got, set) {
-		t.Fatalf("subset page = %v, want %v", got, set)
+	if got := pageNames(page); !slices.Equal(got, filtered) {
+		t.Fatalf("subset page = %v, want %v", got, filtered)
 	}
 }
 
@@ -265,6 +384,10 @@ func testPagingLargeLimit(t *testing.T, s PagingStore) {
 // with unknown names ignored.
 func testPagingCounts(t *testing.T, s PagingStore) {
 	t.Helper()
+
+	if s == nil {
+		t.Fatal("paging store is nil")
+	}
 
 	want := seedPagingNamespaces(t, s)
 

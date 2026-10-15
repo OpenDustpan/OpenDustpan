@@ -11,15 +11,16 @@ package server
 // commit in one transaction, and the grant writes an audit entry.
 //
 // GET /api/server/namespaces lists the namespaces where the caller holds
-// namespace:read, in name order, one page at a time. The caller needs only
-// caller:read. A grant on the namespace or on the installation puts the
-// namespace in the list; a namespace that the caller reaches only through
-// a collection or a unit grant is not listed. Paging is by name with an
-// opaque cursor: limit names the page size, and cursor is the nextCursor of
-// the page before. The total is on the first page only, and null on the
-// pages after it. The list writes no audit entry. With no access service
-// only administrators list (all namespaces) and everybody else gets an
-// empty page.
+// namespace:read, in the order of the name column of the store, one page at
+// a time. The caller needs only caller:read. A grant on the namespace or on
+// the installation puts the namespace in the list; a namespace that the
+// caller reaches only through a collection or a unit grant is not listed.
+// Paging is by name with an opaque cursor: limit names the page size, and
+// cursor is the nextCursor of the page before. With the cursor the order is
+// stable. The total is on the first page only, and null on the pages after
+// it. The list writes no audit entry. With no access service only
+// administrators list (all namespaces) and everybody else gets an empty
+// page.
 
 import (
 	"bytes"
@@ -168,9 +169,10 @@ func (h *Handler) storeNamespace(
 var errNamespaceCursor = errors.New("invalid cursor: provide the nextCursor of the page before")
 
 // listNamespacesResponse is one page of GET /api/server/namespaces.
-// Namespaces holds the page in name order, never null. NextCursor is empty
-// on the last page. Total is the count of every visible namespace, on the
-// first page only, and null on the pages after it.
+// Namespaces holds the page in the order of the name column of the store,
+// never null. NextCursor is empty on the last page. Total is the count of
+// every visible namespace, on the first page only, and null on the pages
+// after it.
 //
 // Contract: never remove or rename these fields. The console reads only
 // this API, and it updates on its own schedule.
@@ -189,8 +191,9 @@ type namespaceListQuery struct {
 }
 
 // listNamespaces serves GET /api/server/namespaces: one page of the
-// namespaces where the caller holds namespace:read. A bad limit or cursor
-// answers 400. A store without the paging port answers 501.
+// namespaces where the caller holds namespace:read, in the order of the
+// name column of the store. With the cursor the order is stable. A bad limit
+// or cursor answers 400. A store without the paging port answers 501.
 func (h *Handler) listNamespaces(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
