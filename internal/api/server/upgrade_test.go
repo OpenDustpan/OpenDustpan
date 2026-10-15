@@ -163,6 +163,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql"},
 		}},
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -206,6 +207,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         nil,
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -276,6 +278,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql"},
 		}},
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
@@ -327,6 +330,7 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql"},
 		}},
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,

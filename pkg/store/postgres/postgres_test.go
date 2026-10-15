@@ -613,7 +613,7 @@ func openUncounted(t *testing.T, base string) *uncountedStore {
 // the embedded UpdatesStore interface hides.
 func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
 	counter, ok := s.UpdatesStore.(interface {
-		CountRunningJournaledUpdates(context.Context) (int64, error)
+		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 	})
 	if !ok {
 		return 0, fmt.Errorf("count running journaled updates: %w", errNoJournalCount)

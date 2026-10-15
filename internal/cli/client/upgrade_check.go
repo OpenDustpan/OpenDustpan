@@ -113,9 +113,9 @@ func UpgradeCheck(
 
 	warning := keyWarningFor(answer)
 
-	if err := writeUpgradeReport(
-		stdout, answer.ServerVersion, binaryVersion, inspection, warning, answer.RunningJournaledUpdates,
-	); err != nil {
+	report := newUpgradeReport(stdout, answer, binaryVersion, inspection, warning)
+
+	if err := writeUpgradeReport(report); err != nil {
 		return err
 	}
 
@@ -318,6 +318,38 @@ func upgradeVerdict(inspection schema.Inspection) string {
 	}
 }
 
+// upgradeReport holds the inputs of the upgrade report: where to write it,
+// the server and binary versions, the migration inspection, the key warning
+// (empty means none) and the count of running journaled updates.
+type upgradeReport struct {
+	stdout        io.Writer
+	serverVersion string
+	binaryVersion string
+	inspection    schema.Inspection
+	warning       string
+	journaled     int64
+}
+
+// newUpgradeReport gathers the inputs of the upgrade report: where to
+// write it, the server answer, the version of the binary, the migration
+// inspection and the key warning (empty means none).
+func newUpgradeReport(
+	stdout io.Writer,
+	answer UpgradeCheckAnswer,
+	binaryVersion string,
+	inspection schema.Inspection,
+	warning string,
+) upgradeReport {
+	return upgradeReport{
+		stdout:        stdout,
+		serverVersion: answer.ServerVersion,
+		binaryVersion: binaryVersion,
+		inspection:    inspection,
+		warning:       warning,
+		journaled:     answer.RunningJournaledUpdates,
+	}
+}
+
 // writeUpgradeReport writes the binary version, the server version, the
 // schema version of the database, the schema version the binary needs, the
 // pending migration names, the count of running journaled updates, the key
@@ -327,25 +359,19 @@ func upgradeVerdict(inspection schema.Inspection) string {
 // let them finish or cancel them before a downgrade: a downgrade to a binary
 // without the journal route answers their journal batches with 404, which
 // the Pulumi CLI does not retry.
-func writeUpgradeReport(
-	stdout io.Writer,
-	serverVersion, binaryVersion string,
-	inspection schema.Inspection,
-	warning string,
-	journaled int64,
-) error {
+func writeUpgradeReport(report upgradeReport) error {
 	lines := []string{
-		"binary version: " + binaryVersion,
-		"server version: " + serverVersion,
-		fmt.Sprintf("database schema version: %d", inspection.DatabaseVersion),
-		fmt.Sprintf("binary schema version: %d", inspection.BinaryVersion),
+		"binary version: " + report.binaryVersion,
+		"server version: " + report.serverVersion,
+		fmt.Sprintf("database schema version: %d", report.inspection.DatabaseVersion),
+		fmt.Sprintf("binary schema version: %d", report.inspection.BinaryVersion),
 	}
 
-	if len(inspection.Pending) == 0 {
+	if len(report.inspection.Pending) == 0 {
 		lines = append(lines, "pending migrations: none")
 	} else {
 		lines = append(lines, "pending migrations:")
-		for _, name := range inspection.Pending {
+		for _, name := range report.inspection.Pending {
 			lines = append(lines, "  "+name)
 		}
 
@@ -355,23 +381,23 @@ func writeUpgradeReport(
 		)
 	}
 
-	lines = append(lines, fmt.Sprintf("running journaled updates: %d", journaled))
+	lines = append(lines, fmt.Sprintf("running journaled updates: %d", report.journaled))
 
-	if journaled > 0 {
+	if report.journaled > 0 {
 		lines = append(
 			lines,
 			"Let running journaled updates finish or cancel them before a downgrade.",
 		)
 	}
 
-	if warning != "" {
-		lines = append(lines, warning)
+	if report.warning != "" {
+		lines = append(lines, report.warning)
 	}
 
-	lines = append(lines, "verdict: "+upgradeVerdict(inspection))
+	lines = append(lines, "verdict: "+upgradeVerdict(report.inspection))
 
 	for _, line := range lines {
-		if _, err := fmt.Fprintln(stdout, line); err != nil {
+		if _, err := fmt.Fprintln(report.stdout, line); err != nil {
 			return fmt.Errorf("write output: %w", err)
 		}
 	}

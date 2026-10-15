@@ -157,6 +157,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		Metrics:        stubMetrics{},
 		Version:        "",
 		Schema:         stubSchema{migrations: nil},
+		Journal:        nil,
 		Principals:     principals,
 		Tokens:         tokens,
 		Access:         grants,

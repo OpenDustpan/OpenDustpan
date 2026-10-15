@@ -27,13 +27,17 @@ func serveUpgradeCheck(t *testing.T, journaled int64) *httptest.Server {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+
+		err := json.NewEncoder(w).Encode(map[string]any{
 			"version":                 "test",
 			"schemaVersion":           binary,
 			"appliedMigrations":       embedded,
 			"keyEncryptionKey":        true,
 			"runningJournaledUpdates": journaled,
 		})
+		if err != nil {
+			t.Errorf("encode upgrade check answer: %v", err)
+		}
 	}))
 	t.Cleanup(srv.Close)
 
@@ -48,9 +52,10 @@ func runUpgradeCheck(t *testing.T, srv *httptest.Server) string {
 
 	var stdout, stderr bytes.Buffer
 
-	if err := client.UpgradeCheck(
-		t.Context(), []string{"--server", srv.URL}, &stdout, &stderr, "test-binary",
-	); err != nil {
+	args := []string{"--server", srv.URL}
+
+	err := client.UpgradeCheck(t.Context(), args, &stdout, &stderr, "test-binary")
+	if err != nil {
 		t.Fatalf("upgrade check: %v", err)
 	}
 
@@ -60,6 +65,8 @@ func runUpgradeCheck(t *testing.T, srv *httptest.Server) string {
 // TestUpgradeCheckReportsNoJournaledUpdates proves the report with no running
 // journaled update holds the zero count and no downgrade advice. The test
 // sets the admin token, so it cannot run in parallel with other tests.
+//
+//nolint:paralleltest // The test sets the admin token, so it cannot run in parallel.
 func TestUpgradeCheckReportsNoJournaledUpdates(t *testing.T) {
 	out := runUpgradeCheck(t, serveUpgradeCheck(t, 0))
 
@@ -75,6 +82,8 @@ func TestUpgradeCheckReportsNoJournaledUpdates(t *testing.T) {
 // TestUpgradeCheckReportsTwoJournaledUpdates proves the report with two
 // running journaled updates holds the count and the downgrade advice. The
 // test sets the admin token, so it cannot run in parallel with other tests.
+//
+//nolint:paralleltest // The test sets the admin token, so it cannot run in parallel.
 func TestUpgradeCheckReportsTwoJournaledUpdates(t *testing.T) {
 	out := runUpgradeCheck(t, serveUpgradeCheck(t, 2))
 
