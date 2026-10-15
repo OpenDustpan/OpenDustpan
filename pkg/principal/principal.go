@@ -1,9 +1,11 @@
 // Package principal keeps the principals and the groups of an installation
 // (ADR 52, decisions 1, 2 and 4).
 //
-// A principal is a person, a service or a workload. It belongs to the whole
-// installation, not to one namespace. A grant on each object decides what a
-// principal can do there (RFC 19). A group is a named set of principals. It
+// A principal is a person, a service or a workload. Most principals belong
+// to the whole installation. A service principal can instead belong to one
+// namespace: it can only hold grants inside that namespace, and it cannot be
+// a member of a group. A grant on each object decides what a principal can
+// do there. A group is a named set of principals. It
 // also belongs to the whole installation. Any principal can be a member of
 // more than one group.
 //
@@ -28,6 +30,7 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Sentinel errors returned by this package and by Store implementations.
@@ -117,6 +120,9 @@ const (
 // DisabledAt is zero for a principal that the inactivity disable of access
 // tokens did not end (ADR 53, decision 4). A disabled principal does not
 // authenticate until an administrator enables it again. A write ignores it.
+// Namespace is empty for a principal of the installation, and names the
+// namespace of a principal of a namespace: a service principal that can only
+// hold grants inside that namespace. It does not change after the create.
 type Principal struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -126,6 +132,7 @@ type Principal struct {
 	DisplayName string
 	Kind        Kind
 	Source      Source
+	Namespace   namespace.Name
 	GroupCount  int64
 }
 
@@ -259,7 +266,29 @@ func (p Principal) Validate() error {
 		return err
 	}
 
+	if err := p.validateNamespace(); err != nil {
+		return err
+	}
+
 	return validateSource(p.Source)
+}
+
+// validateNamespace returns ErrInvalid for a principal of a namespace with
+// a namespace name that is not valid, or that is not a service principal.
+func (p Principal) validateNamespace() error {
+	if p.Namespace == "" {
+		return nil
+	}
+
+	if _, err := namespace.ParseName(p.Namespace.String()); err != nil {
+		return fmt.Errorf("%w: namespace %q", ErrInvalid, p.Namespace.String())
+	}
+
+	if p.Kind != KindService {
+		return fmt.Errorf("%w: a principal of a namespace must be a service principal, not a %s", ErrInvalid, p.Kind)
+	}
+
+	return nil
 }
 
 // validateSource returns ErrInvalid for a source that is not local, ldap or

@@ -54,6 +54,10 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 		{name: "the audit entry of a grant names the token managers", test: testGrantNamesTokenManagers},
 		{name: "the export of a principal lists its token managers", test: testPrincipalExport},
 		{name: "a delete of a principal ends the grants on it", test: testDeleteEndsPrincipalGrants},
+		{name: "a principal of a namespace holds grants inside it only", test: testNamespacePrincipalGrants},
+		{name: "the store checks the namespace of a subject in its write", test: testStoreChecksSubjectNamespace},
+		{name: "a principal of a namespace gets no token and no group yet", test: testNamespacePrincipalLimits},
+		{name: "a delete of a principal of a namespace ends its grants", test: testNamespacePrincipalDelete},
 	}
 
 	for _, tc := range cases {
@@ -91,7 +95,9 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 		t.Fatalf("access service: %v", err)
 	}
 
-	principals, err := principal.NewService(principal.Config{Store: st, Guard: svc, Now: nil, NewID: nil})
+	principals, err := principal.NewService(
+		principal.Config{Store: st, Guard: svc, Namespaces: st, Now: nil, NewID: nil},
+	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
