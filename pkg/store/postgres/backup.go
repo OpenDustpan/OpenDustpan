@@ -58,6 +58,8 @@ const (
 	pgColTool        = "tool"
 	pgColPrincipalID = "principal_id"
 	pgColDisplayName = "display_name"
+	pgColSink        = "sink"
+	pgColExpiresAtMs = "expires_at_ms"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -236,16 +238,16 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		},
 		{
 			table:   "audit_sink_cursors",
-			columns: []string{"sink", pgColNamespace, pgColSequence, pgColUpdatedAtMs},
-			orderBy: []string{"sink", pgColNamespace},
+			columns: []string{pgColSink, pgColNamespace, pgColSequence, pgColUpdatedAtMs},
+			orderBy: []string{pgColSink, pgColNamespace},
 		},
 		{
 			table:   "audit_sink_leases",
-			columns: []string{"sink", "holder", "expires_at_ms"},
-			orderBy: []string{"sink"},
+			columns: []string{pgColSink, "holder", pgColExpiresAtMs},
+			orderBy: []string{pgColSink},
 		},
 		{
-			table: "backups",
+			table:   "backups",
 			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
 			orderBy: []string{"id"},
 		},
@@ -280,7 +282,7 @@ func pgCopySessionTables() []pgCopyTable {
 		{
 			table: "sign_in_requests",
 			columns: []string{
-				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, "expires_at_ms",
+				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, pgColExpiresAtMs,
 			},
 			orderBy: []string{pgColDigest},
 		},
@@ -321,7 +323,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 				pgColKind,
 				pgColDigest,
 				pgColCreatedAtMs,
-				"expires_at_ms",
+				pgColExpiresAtMs,
 				"last_used_at_ms",
 				"revoked_at_ms",
 				"replaced_by",

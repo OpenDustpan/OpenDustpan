@@ -57,10 +57,11 @@ func (s *Store) ReleaseSinkLease(ctx context.Context, sink, holder string) error
 	}
 
 	err := s.inTx(ctx, func(q *db.Queries) error {
-		if _, err := q.ReleaseAuditSinkLease(ctx, db.ReleaseAuditSinkLeaseParams{
+		_, err := q.ReleaseAuditSinkLease(ctx, db.ReleaseAuditSinkLeaseParams{
 			Sink:   sink,
 			Holder: holder,
-		}); err != nil {
+		})
+		if err != nil {
 			return fmt.Errorf("release audit sink lease: %w", err)
 		}
 

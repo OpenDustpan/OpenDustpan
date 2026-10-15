@@ -288,14 +288,14 @@ func testServerScopeFeed(t *testing.T, s FeedStore) {
 	}
 }
 
-// acquireLease takes or renews the lease of sink for holder and answers
-// whether the caller holds it after the call.
-func acquireLease(t *testing.T, s FeedStore, sink, holder string, ttl time.Duration) bool {
+// acquireLease takes or renews the lease of the siem sink for holder and
+// answers whether the caller holds it after the call.
+func acquireLease(t *testing.T, s FeedStore, holder string, ttl time.Duration) bool {
 	t.Helper()
 
-	held, err := s.AcquireSinkLease(t.Context(), sink, holder, ttl)
+	held, err := s.AcquireSinkLease(t.Context(), "siem", holder, ttl)
 	if err != nil {
-		t.Fatalf("acquire lease %s for %s: %v", sink, holder, err)
+		t.Fatalf("acquire lease siem for %s: %v", holder, err)
 	}
 
 	return held
@@ -313,74 +313,89 @@ func releaseLease(t *testing.T, s FeedStore, sink, holder string) {
 func testLeaseTake(t *testing.T, s FeedStore) {
 	t.Helper()
 
-	if !acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second) {
-		t.Fatalf("take lease: got false, want true")
+	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
+		t.Fatal("take lease: got false, want true")
 	}
 }
 
 func testLeaseRenewByHolder(t *testing.T, s FeedStore) {
 	t.Helper()
 
-	if !acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second) {
-		t.Fatalf("take lease: got false, want true")
+	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
+		t.Fatal("take lease: got false, want true")
 	}
 
-	if !acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second) {
-		t.Fatalf("renew lease by the holder: got false, want true")
+	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
+		t.Fatal("renew lease by the holder: got false, want true")
 	}
 }
 
 func testLeaseRefusedWhileLive(t *testing.T, s FeedStore) {
 	t.Helper()
 
-	if !acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second) {
-		t.Fatalf("take lease: got false, want true")
+	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
+		t.Fatal("take lease: got false, want true")
 	}
 
-	if acquireLease(t, s, "siem", "ins-holder-b", 30*time.Second) {
-		t.Fatalf("acquire by another holder while live: got true, want false")
+	if acquireLease(t, s, "ins-holder-b", 30*time.Second) {
+		t.Fatal("acquire by another holder while live: got true, want false")
 	}
 
 	releaseLease(t, s, "siem", "ins-holder-b")
 
-	if acquireLease(t, s, "siem", "ins-holder-b", 30*time.Second) {
-		t.Fatalf("acquire by another holder after its release: got true, want false")
+	if acquireLease(t, s, "ins-holder-b", 30*time.Second) {
+		t.Fatal("acquire by another holder after its release: got true, want false")
 	}
 }
 
 func testLeaseTakenAfterExpiry(t *testing.T, s FeedStore) {
 	t.Helper()
 
-	if !acquireLease(t, s, "siem", "ins-holder-a", 150*time.Millisecond) {
-		t.Fatalf("take lease: got false, want true")
+	if !acquireLease(t, s, "ins-holder-a", 150*time.Millisecond) {
+		t.Fatal("take lease: got false, want true")
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
 
 	for {
-		if acquireLease(t, s, "siem", "ins-holder-b", 30*time.Second) {
+		if acquireLease(t, s, "ins-holder-b", 30*time.Second) {
 			return
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("lease was not taken after expiry within 10 seconds")
+			t.Fatal("lease was not taken after expiry within 10 seconds")
 		}
 
-		time.Sleep(50 * time.Millisecond)
+		waitLeaseExpiry(t)
+	}
+}
+
+// waitLeaseExpiry waits a short time for a sink lease to end, or stops the
+// test when its context ends.
+func waitLeaseExpiry(t *testing.T) {
+	t.Helper()
+
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-t.Context().Done():
+		t.Fatal("lease was not taken after expiry within 10 seconds: test context done")
+	case <-timer.C:
 	}
 }
 
 func testLeaseRelease(t *testing.T, s FeedStore) {
 	t.Helper()
 
-	if !acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second) {
-		t.Fatalf("take lease: got false, want true")
+	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
+		t.Fatal("take lease: got false, want true")
 	}
 
 	releaseLease(t, s, "siem", "ins-holder-a")
 
-	if !acquireLease(t, s, "siem", "ins-holder-b", 30*time.Second) {
-		t.Fatalf("take lease after release: got false, want true")
+	if !acquireLease(t, s, "ins-holder-b", 30*time.Second) {
+		t.Fatal("take lease after release: got false, want true")
 	}
 }
 

@@ -130,37 +130,76 @@ func NewShipper(cfg ShipperConfig) (*Shipper, error) {
 		return nil, fmt.Errorf("%w: missing feed or namespace lister", ErrInvalidShipper)
 	}
 
-	seen := make(map[string]bool, len(cfg.Sinks))
+	if err := checkShipSinks(cfg.Sinks); err != nil {
+		return nil, err
+	}
 
-	for _, s := range cfg.Sinks {
-		if s.Sink == nil {
-			return nil, fmt.Errorf("%w: sink %q is nil", ErrInvalidShipper, s.Name)
-		}
+	cfg.setSinkLeaser()
 
-		if !validSinkName(s.Name) {
-			return nil, fmt.Errorf("%w: sink name %q: want 1 to %d bytes of a-z, 0-9, '.', '_' or '-'",
-				ErrInvalidShipper, s.Name, maxSinkNameLen)
-		}
+	if err := applyLeaseDefaults(&cfg); err != nil {
+		return nil, err
+	}
 
-		if seen[s.Name] {
-			return nil, fmt.Errorf("%w: two sinks are named %q", ErrInvalidShipper, s.Name)
+	if cfg.Logger == nil {
+		cfg.Logger = slog.New(slog.DiscardHandler)
+	}
+
+	return &Shipper{cfg: cfg}, nil
+}
+
+// checkShipSinks checks that every sink has a usable name and no name
+// repeats.
+func checkShipSinks(sinks []ShipSink) error {
+	seen := make(map[string]bool, len(sinks))
+
+	for _, s := range sinks {
+		if err := checkShipSink(s, seen); err != nil {
+			return err
 		}
 
 		seen[s.Name] = true
 	}
 
+	return nil
+}
+
+// checkShipSink checks one sink against the names seen so far.
+func checkShipSink(s ShipSink, seen map[string]bool) error {
+	if s.Sink == nil {
+		return fmt.Errorf("%w: sink %q is nil", ErrInvalidShipper, s.Name)
+	}
+
+	if !validSinkName(s.Name) {
+		return fmt.Errorf("%w: sink name %q: want 1 to %d bytes of a-z, 0-9, '.', '_' or '-'",
+			ErrInvalidShipper, s.Name, maxSinkNameLen)
+	}
+
+	if seen[s.Name] {
+		return fmt.Errorf("%w: two sinks are named %q", ErrInvalidShipper, s.Name)
+	}
+
+	return nil
+}
+
+// setSinkLeaser sets the lease store of a shipper config: cfg when set, or
+// the feed when it keeps leases.
+func (cfg *ShipperConfig) setSinkLeaser() {
 	if cfg.Leases == nil {
 		if leaser, ok := cfg.Feed.(SinkLeaser); ok {
 			cfg.Leases = leaser
 		}
 	}
+}
 
+// applyLeaseDefaults checks the lease holder and timing and sets the timing
+// defaults.
+func applyLeaseDefaults(cfg *ShipperConfig) error {
 	if cfg.Leases != nil && cfg.InstanceID == "" {
-		return nil, fmt.Errorf("%w: missing instance ID for sink leases", ErrInvalidShipper)
+		return fmt.Errorf("%w: missing instance ID for sink leases", ErrInvalidShipper)
 	}
 
 	if cfg.LeaseTTL < 0 || cfg.RenewInterval < 0 {
-		return nil, fmt.Errorf("%w: negative lease timing", ErrInvalidShipper)
+		return fmt.Errorf("%w: negative lease timing", ErrInvalidShipper)
 	}
 
 	if cfg.LeaseTTL == 0 {
@@ -171,11 +210,7 @@ func NewShipper(cfg ShipperConfig) (*Shipper, error) {
 		cfg.RenewInterval = SinkLeaseRenewInterval
 	}
 
-	if cfg.Logger == nil {
-		cfg.Logger = slog.New(slog.DiscardHandler)
-	}
-
-	return &Shipper{cfg: cfg}, nil
+	return nil
 }
 
 // serverScope answers ServerScope as a namespace value: its fence has no
@@ -255,10 +290,7 @@ func (s *Shipper) ShipOnce(ctx context.Context) error {
 // longer than the lease still holds it, and it releases the lease when the
 // context ends.
 func (s *Shipper) loop(ctx context.Context, sink ShipSink) {
-	interval := sink.Interval
-	if interval <= 0 {
-		interval = DefaultShipInterval
-	}
+	interval := shipInterval(sink)
 
 	if s.cfg.Leases == nil {
 		s.loopWithoutLease(ctx, sink, interval)
@@ -267,66 +299,116 @@ func (s *Shipper) loop(ctx context.Context, sink ShipSink) {
 	}
 
 	renew := s.cfg.RenewInterval
-	wait := interval
-	lastShip := time.Now()
+	state := &leasedState{wait: interval, lastShip: time.Now()}
 
-	defer s.release(sink.Name)
+	defer s.release(ctx, sink.Name)
 
 	for {
-		sleep := min(wait, renew)
-		if sleep <= 0 {
-			sleep = renew
-		}
-
-		timer := time.NewTimer(sleep)
-
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-
+		if !waitNextRound(ctx, leaseSleep(state.wait, renew)) {
 			return
-		case <-timer.C:
 		}
 
-		held, err := s.acquire(ctx, sink.Name)
-		if err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-
-			s.fail(ctx, sink.Name, err)
-
-			wait = min(wait*shipBackoffFactor, MaxShipBackoff)
-
-			continue
+		if !s.stepLeased(ctx, sink, interval, state) {
+			return
 		}
-
-		if !held {
-			wait = interval
-
-			continue
-		}
-
-		if time.Since(lastShip) < interval {
-			continue
-		}
-
-		if err := s.round(ctx, sink); err != nil {
-			if ctx.Err() != nil {
-				return
-			}
-
-			s.fail(ctx, sink.Name, err)
-
-			wait = min(wait*shipBackoffFactor, MaxShipBackoff)
-			lastShip = time.Now()
-
-			continue
-		}
-
-		wait = interval
-		lastShip = time.Now()
 	}
+}
+
+// leasedState holds the backoff and the last ship time of one leased loop.
+type leasedState struct {
+	wait     time.Duration
+	lastShip time.Time
+}
+
+// shipInterval answers the time between two rounds of sink.
+func shipInterval(sink ShipSink) time.Duration {
+	if sink.Interval <= 0 {
+		return DefaultShipInterval
+	}
+
+	return sink.Interval
+}
+
+// leaseSleep answers how long a leased loop waits before its next lease
+// take: the backoff or the renew interval, whichever is shorter.
+func leaseSleep(wait, renew time.Duration) time.Duration {
+	sleep := min(wait, renew)
+	if sleep <= 0 {
+		return renew
+	}
+
+	return sleep
+}
+
+// waitNextRound waits sleep before the next lease take and answers whether
+// to go on: false when ctx ends first.
+func waitNextRound(ctx context.Context, sleep time.Duration) bool {
+	timer := time.NewTimer(sleep)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// stepLeasedShip takes or renews the lease of sink and ships when due. It
+// updates state and answers whether the loop goes on: false when ctx ends.
+func (s *Shipper) stepLeased(ctx context.Context, sink ShipSink, interval time.Duration, state *leasedState) bool {
+	held, err := s.acquire(ctx, sink.Name)
+	if err != nil {
+		return s.handleLeaseError(ctx, sink.Name, err, state)
+	}
+
+	if !held {
+		state.wait = interval
+
+		return true
+	}
+
+	if time.Since(state.lastShip) < interval {
+		return true
+	}
+
+	return s.shipAndAccount(ctx, sink, interval, state)
+}
+
+// handleLeaseError records a failed lease take in state and answers whether
+// the loop goes on: false when ctx ends.
+func (s *Shipper) handleLeaseError(ctx context.Context, name string, err error, state *leasedState) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
+	s.fail(ctx, name, err)
+
+	state.wait = min(state.wait*shipBackoffFactor, MaxShipBackoff)
+
+	return true
+}
+
+// shipAndAccount ships one round and records its outcome in state. It
+// answers whether the loop goes on: false when ctx ends.
+func (s *Shipper) shipAndAccount(ctx context.Context, sink ShipSink, interval time.Duration, state *leasedState) bool {
+	if err := s.round(ctx, sink); err != nil {
+		if ctx.Err() != nil {
+			return false
+		}
+
+		s.fail(ctx, sink.Name, err)
+
+		state.wait = min(state.wait*shipBackoffFactor, MaxShipBackoff)
+		state.lastShip = time.Now()
+
+		return true
+	}
+
+	state.wait = interval
+	state.lastShip = time.Now()
+
+	return true
 }
 
 // loopWithoutLease runs rounds for sink until ctx is done without keeping a
@@ -381,12 +463,12 @@ func (s *Shipper) acquire(ctx context.Context, sink string) (bool, error) {
 // release releases the lease of sink held by this shipper. Without a lease
 // store it does nothing. It runs at loop shutdown with a detached context,
 // so a canceled loop still releases.
-func (s *Shipper) release(sink string) {
+func (s *Shipper) release(ctx context.Context, sink string) {
 	if s.cfg.Leases == nil {
 		return
 	}
 
-	ctx := context.Background()
+	ctx = context.WithoutCancel(ctx)
 
 	if err := s.cfg.Leases.ReleaseSinkLease(ctx, sink, s.cfg.InstanceID); err != nil {
 		s.cfg.Logger.DebugContext(ctx, "audit sink lease release failed",

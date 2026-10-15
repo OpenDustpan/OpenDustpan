@@ -537,6 +537,7 @@ func defaultSettings() *settings {
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 		auditSinks:              nil,
+		instanceID:              "",
 	}
 }
 

@@ -60,15 +60,17 @@ func newAuditShipper(cfg *settings, observed *metrics.ServerMetrics) (*audit.Shi
 	}
 
 	shipper, err := audit.NewShipper(audit.ShipperConfig{
-		Feed:       feed,
-		Namespaces: cfg.namespaceStore,
-		Logger:     cfg.logger,
-		OnShipped:  observed.AddAuditShipped,
-		OnFailure:  observed.IncAuditSinkFailure,
-		OnSkipped:  observed.AddAuditSkipped,
-		Sinks:      cfg.auditSinks,
-		InstanceID: holder,
-		Leases:     leases,
+		Feed:          feed,
+		Namespaces:    cfg.namespaceStore,
+		Logger:        cfg.logger,
+		OnShipped:     observed.AddAuditShipped,
+		OnFailure:     observed.IncAuditSinkFailure,
+		OnSkipped:     observed.AddAuditSkipped,
+		Sinks:         cfg.auditSinks,
+		InstanceID:    holder,
+		Leases:        leases,
+		LeaseTTL:      0,
+		RenewInterval: 0,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("audit sinks: %w", err)

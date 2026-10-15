@@ -29,6 +29,8 @@ const (
 	portColUnitID       = "unit_id"
 	portColPrincipalID  = "principal_id"
 	portColDigest       = "digest"
+	portColSink         = "sink"
+	portColExpiresAtMs  = "expires_at_ms"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -358,7 +360,7 @@ func portableSpec() []PortableTable {
 				{Name: portColKind, Kind: KindText},
 				{Name: portColDigest, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
-				{Name: "expires_at_ms", Kind: KindTime},
+				{Name: portColExpiresAtMs, Kind: KindTime},
 				{Name: "last_used_at_ms", Kind: KindTime},
 				{Name: "revoked_at_ms", Kind: KindTime},
 				{Name: "replaced_by", Kind: KindText},
@@ -393,7 +395,7 @@ func portableSpec() []PortableTable {
 				{Name: "verifier", Kind: KindText},
 				{Name: "return_path", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
-				{Name: "expires_at_ms", Kind: KindTime},
+				{Name: portColExpiresAtMs, Kind: KindTime},
 			},
 		},
 		{
@@ -432,9 +434,9 @@ func portableSpec() []PortableTable {
 		},
 		{
 			Table:   "audit_sink_cursors",
-			OrderBy: []string{"sink", portColNamespace},
+			OrderBy: []string{portColSink, portColNamespace},
 			Columns: []Column{
-				{Name: "sink", Kind: KindText},
+				{Name: portColSink, Kind: KindText},
 				{Name: portColNamespace, Kind: KindText},
 				{Name: portColSequence, Kind: KindInteger},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
@@ -442,11 +444,11 @@ func portableSpec() []PortableTable {
 		},
 		{
 			Table:   "audit_sink_leases",
-			OrderBy: []string{"sink"},
+			OrderBy: []string{portColSink},
 			Columns: []Column{
-				{Name: "sink", Kind: KindText},
+				{Name: portColSink, Kind: KindText},
 				{Name: "holder", Kind: KindText},
-				{Name: "expires_at_ms", Kind: KindTime},
+				{Name: portColExpiresAtMs, Kind: KindTime},
 			},
 		},
 		{

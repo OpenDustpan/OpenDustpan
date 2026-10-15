@@ -27,6 +27,7 @@ const (
 	backupColDeletedName = "deleted_name"
 	backupColTool        = "tool"
 	backupColUnitID      = "unit_id"
+	backupColExpiresAtMs = "expires_at_ms"
 )
 
 // sqliteBackupTable is the column list of one backup table: the columns of the
@@ -356,7 +357,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 				"verifier",
 				"return_path",
 				backupColCreatedAtMs,
-				"expires_at_ms",
+				backupColExpiresAtMs,
 			},
 		},
 	}
@@ -413,7 +414,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColKind,
 				backupColDigest,
 				backupColCreatedAtMs,
-				"expires_at_ms",
+				backupColExpiresAtMs,
 				"last_used_at_ms",
 				"revoked_at_ms",
 				"replaced_by",
@@ -467,7 +468,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"sink",
 				"holder",
-				"expires_at_ms",
+				backupColExpiresAtMs,
 			},
 		},
 		{
