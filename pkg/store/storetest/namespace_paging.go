@@ -91,10 +91,9 @@ func collectAll(t *testing.T, s PagingStore, q namespace.PageQuery) []namespace.
 
 	for after := q.After; ; {
 		page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
-			After: after,
-			Limit: q.Limit,
-			Names: q.Names,
-			All:   q.All,
+			After:  after,
+			Limit:  q.Limit,
+			Filter: q.Filter,
 		})
 		if err != nil {
 			t.Fatalf("page namespaces after %q: %v", after, err)
@@ -120,7 +119,7 @@ func testPagingAllInOrder(t *testing.T, s PagingStore) {
 
 	want := seedPagingNamespaces(t, s)
 
-	got := collectAll(t, s, namespace.PageQuery{After: "", Limit: 2, Names: nil, All: true})
+	got := collectAll(t, s, namespace.PageQuery{After: "", Limit: 2, Filter: namespace.Filter{All: true, Names: nil}})
 	if !slices.Equal(got, want) {
 		t.Fatalf("paged namespaces = %v, want %v", got, want)
 	}
@@ -133,10 +132,9 @@ func testPagingAllPastEnd(t *testing.T, s PagingStore) {
 	seedPagingNamespaces(t, s)
 
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
-		After: "zzzz",
-		Limit: 10,
-		Names: nil,
-		All:   true,
+		After:  "zzzz",
+		Limit:  10,
+		Filter: namespace.Filter{All: true, Names: nil},
 	})
 	if err != nil {
 		t.Fatalf("page namespaces past the end: %v", err)
@@ -156,10 +154,9 @@ func testPagingSubset(t *testing.T, s PagingStore) {
 	names := []namespace.Name{want[3], want[10], want[20], "ghost"}
 
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
-		After: "",
-		Limit: 100,
-		Names: names,
-		All:   false,
+		After:  "",
+		Limit:  100,
+		Filter: namespace.Filter{All: false, Names: names},
 	})
 	if err != nil {
 		t.Fatalf("page a subset: %v", err)
@@ -169,7 +166,7 @@ func testPagingSubset(t *testing.T, s PagingStore) {
 		t.Fatalf("subset page = %v, want %v", got, names[:3])
 	}
 
-	total, err := s.CountNamespaces(t.Context(), false, names)
+	total, err := s.CountNamespaces(t.Context(), namespace.Filter{All: false, Names: names})
 	if err != nil {
 		t.Fatalf("count a subset: %v", err)
 	}
@@ -186,10 +183,9 @@ func testPagingEmptyNames(t *testing.T, s PagingStore) {
 	seedPagingNamespaces(t, s)
 
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
-		After: "",
-		Limit: 10,
-		Names: nil,
-		All:   false,
+		After:  "",
+		Limit:  10,
+		Filter: namespace.Filter{All: false, Names: nil},
 	})
 	if err != nil {
 		t.Fatalf("page an empty set: %v", err)
@@ -199,7 +195,7 @@ func testPagingEmptyNames(t *testing.T, s PagingStore) {
 		t.Fatalf("empty set page = %v, want none", pageNames(page))
 	}
 
-	total, err := s.CountNamespaces(t.Context(), false, nil)
+	total, err := s.CountNamespaces(t.Context(), namespace.Filter{All: false, Names: nil})
 	if err != nil {
 		t.Fatalf("count an empty set: %v", err)
 	}
@@ -218,10 +214,9 @@ func testPagingSubsetAfter(t *testing.T, s PagingStore) {
 	set := []namespace.Name{want[2], want[5], want[8]}
 
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
-		After: set[0],
-		Limit: 10,
-		Names: set,
-		All:   false,
+		After:  set[0],
+		Limit:  10,
+		Filter: namespace.Filter{All: false, Names: set},
 	})
 	if err != nil {
 		t.Fatalf("page a subset after a member: %v", err)
@@ -232,10 +227,9 @@ func testPagingSubsetAfter(t *testing.T, s PagingStore) {
 	}
 
 	page, err = s.PageNamespaces(t.Context(), namespace.PageQuery{
-		After: set[2],
-		Limit: 10,
-		Names: set,
-		All:   false,
+		After:  set[2],
+		Limit:  10,
+		Filter: namespace.Filter{All: false, Names: set},
 	})
 	if err != nil {
 		t.Fatalf("page a subset after its last member: %v", err)
@@ -254,10 +248,9 @@ func testPagingLargeLimit(t *testing.T, s PagingStore) {
 	set := []namespace.Name{want[1], want[7], want[13]}
 
 	page, err := s.PageNamespaces(t.Context(), namespace.PageQuery{
-		After: "",
-		Limit: 100,
-		Names: set,
-		All:   false,
+		After:  "",
+		Limit:  100,
+		Filter: namespace.Filter{All: false, Names: set},
 	})
 	if err != nil {
 		t.Fatalf("page a subset with a large limit: %v", err)
@@ -275,7 +268,7 @@ func testPagingCounts(t *testing.T, s PagingStore) {
 
 	want := seedPagingNamespaces(t, s)
 
-	total, err := s.CountNamespaces(t.Context(), true, nil)
+	total, err := s.CountNamespaces(t.Context(), namespace.Filter{All: true, Names: nil})
 	if err != nil {
 		t.Fatalf("count all namespaces: %v", err)
 	}
@@ -284,7 +277,10 @@ func testPagingCounts(t *testing.T, s PagingStore) {
 		t.Fatalf("all count = %d, want %d", total, len(want))
 	}
 
-	total, err = s.CountNamespaces(t.Context(), false, []namespace.Name{want[0], want[1], "ghost"})
+	total, err = s.CountNamespaces(
+		t.Context(),
+		namespace.Filter{All: false, Names: []namespace.Name{want[0], want[1], "ghost"}},
+	)
 	if err != nil {
 		t.Fatalf("count a subset: %v", err)
 	}

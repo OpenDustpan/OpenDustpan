@@ -157,7 +157,10 @@ func checkPlanPage(t *testing.T, s *Store, subset []namespace.Name) {
 
 	start := time.Now()
 
-	page, err := s.PageNamespaces(ctx, namespace.PageQuery{After: "", Limit: 50, Names: nil, All: true})
+	page, err := s.PageNamespaces(
+		ctx,
+		namespace.PageQuery{After: "", Limit: 50, Filter: namespace.Filter{All: true, Names: nil}},
+	)
 	if err != nil {
 		t.Fatalf("page namespaces: %v", err)
 	}
@@ -178,7 +181,10 @@ func checkPlanPage(t *testing.T, s *Store, subset []namespace.Name) {
 		}
 	}
 
-	sub, err := s.PageNamespaces(ctx, namespace.PageQuery{After: "", Limit: 100, Names: subset, All: false})
+	sub, err := s.PageNamespaces(
+		ctx,
+		namespace.PageQuery{After: "", Limit: 100, Filter: namespace.Filter{All: false, Names: subset}},
+	)
 	if err != nil {
 		t.Fatalf("page a subset: %v", err)
 	}
@@ -200,7 +206,7 @@ func checkPlanCounts(t *testing.T, s *Store, subset []namespace.Name) {
 
 	ctx := t.Context()
 
-	total, err := s.CountNamespaces(ctx, true, nil)
+	total, err := s.CountNamespaces(ctx, namespace.Filter{All: true, Names: nil})
 	if err != nil {
 		t.Fatalf("count namespaces: %v", err)
 	}
@@ -209,7 +215,7 @@ func checkPlanCounts(t *testing.T, s *Store, subset []namespace.Name) {
 		t.Fatalf("count = %d, want %d", total, planNamespaces)
 	}
 
-	sub, err := s.CountNamespaces(ctx, false, subset)
+	sub, err := s.CountNamespaces(ctx, namespace.Filter{All: false, Names: subset})
 	if err != nil {
 		t.Fatalf("count a subset: %v", err)
 	}

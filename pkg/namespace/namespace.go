@@ -47,8 +47,10 @@ var (
 
 const maxNameLength = 100
 
-// maxPageLimit is the largest page size a page query can name.
-const maxPageLimit = 1000
+// maxPageLimit is the largest page size a page query can name. It holds one
+// row more than the largest page a caller can ask for, so a handler that
+// reads limit+1 to find the next page stays inside it.
+const maxPageLimit = 1001
 
 // Name is a validated namespace name.
 type Name string
@@ -146,29 +148,31 @@ type Store interface {
 	Ping(ctx context.Context) error
 }
 
+// Filter names which namespaces qualify for a page or a count. With All
+// set, every namespace qualifies; otherwise only the namespaces named in
+// Names qualify (unknown names are ignored; empty Names gives none).
+type Filter struct {
+	All   bool
+	Names []Name
+}
+
 // PageQuery asks for one page of namespaces, in name order. After is the
 // name of the last namespace of the page before, or empty for the first
-// page. Limit is 1 to maxPageLimit. With All set, every namespace
-// qualifies; otherwise only the namespaces named in Names qualify (unknown
-// names are ignored; empty Names gives none).
+// page. Limit is 1 to maxPageLimit. Filter names which namespaces qualify.
 type PageQuery struct {
-	After Name
-	Limit int
-	Names []Name
-	All   bool
+	After  Name
+	Limit  int
+	Filter Filter
 }
 
 // Pager reads namespaces one page at a time. It is an optional port: a
 // Store that does not implement it answers ErrNoPaging through Service.
 type Pager interface {
 	// PageNamespaces returns at most Limit namespaces with a name greater
-	// than After, in name order. With All set, every namespace qualifies;
-	// otherwise only the namespaces named in Names qualify (unknown names
-	// are ignored; empty Names gives none).
+	// than After, in name order. Filter names which namespaces qualify.
 	PageNamespaces(ctx context.Context, q PageQuery) ([]Namespace, error)
-	// CountNamespaces returns how many namespaces qualify under the same
-	// All / Names rule.
-	CountNamespaces(ctx context.Context, all bool, names []Name) (int64, error)
+	// CountNamespaces returns how many namespaces qualify under Filter.
+	CountNamespaces(ctx context.Context, f Filter) (int64, error)
 }
 
 // Config holds the dependencies of a Service.
@@ -277,10 +281,9 @@ func (s *Service) PageNamespaces(ctx context.Context, q PageQuery) ([]Namespace,
 	}
 
 	page, err := pager.PageNamespaces(ctx, PageQuery{
-		After: q.After,
-		Limit: q.Limit,
-		Names: dedupNames(q.Names),
-		All:   q.All,
+		After:  q.After,
+		Limit:  q.Limit,
+		Filter: Filter{All: q.Filter.All, Names: dedupNames(q.Filter.Names)},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("page namespaces: %w", err)
@@ -289,17 +292,17 @@ func (s *Service) PageNamespaces(ctx context.Context, q PageQuery) ([]Namespace,
 	return page, nil
 }
 
-// CountNamespaces returns how many namespaces qualify under the All /
-// Names rule through the Pager port of the store. It returns ErrNoPaging
-// when the store does not implement Pager. Names are deduplicated before
-// the call, and the slice is not modified.
-func (s *Service) CountNamespaces(ctx context.Context, all bool, names []Name) (int64, error) {
+// CountNamespaces returns how many namespaces qualify under Filter through
+// the Pager port of the store. It returns ErrNoPaging when the store does
+// not implement Pager. Names are deduplicated before the call, and the
+// slice is not modified.
+func (s *Service) CountNamespaces(ctx context.Context, f Filter) (int64, error) {
 	pager, ok := s.store.(Pager)
 	if !ok {
 		return 0, ErrNoPaging
 	}
 
-	total, err := pager.CountNamespaces(ctx, all, dedupNames(names))
+	total, err := pager.CountNamespaces(ctx, Filter{All: f.All, Names: dedupNames(f.Names)})
 	if err != nil {
 		return 0, fmt.Errorf("count namespaces: %w", err)
 	}

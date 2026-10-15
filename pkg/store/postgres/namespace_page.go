@@ -17,7 +17,7 @@ var _ namespace.Pager = (*Store)(nil)
 // names in the query. The comparison and the order use the column collation,
 // as ListNamespaces does, so the page and the count agree with the list.
 func (s *Store) PageNamespaces(ctx context.Context, q namespace.PageQuery) ([]namespace.Namespace, error) {
-	if q.All {
+	if q.Filter.All {
 		rows, err := s.queries.PageNamespaces(ctx, db.PageNamespacesParams{
 			After: q.After.String(),
 			Lim:   int32(min(max(q.Limit, 0), math.MaxInt32)),
@@ -31,7 +31,7 @@ func (s *Store) PageNamespaces(ctx context.Context, q namespace.PageQuery) ([]na
 
 	rows, err := s.queries.PageNamespacesByNames(ctx, db.PageNamespacesByNamesParams{
 		After: q.After.String(),
-		Names: pageNameStrings(q.Names),
+		Names: pageNameStrings(q.Filter.Names),
 		Lim:   int32(min(max(q.Limit, 0), math.MaxInt32)),
 	})
 	if err != nil {
@@ -47,11 +47,9 @@ func (s *Store) PageNamespaces(ctx context.Context, q namespace.PageQuery) ([]na
 }
 
 // CountNamespaces implements namespace.Pager. It counts under the same
-// All / Names rule as PageNamespaces.
-//
-//nolint:revive // The all flag is the port: the page and the count share one rule, so the caller names all or a name set.
-func (s *Store) CountNamespaces(ctx context.Context, all bool, names []namespace.Name) (int64, error) {
-	if all {
+// filter as PageNamespaces.
+func (s *Store) CountNamespaces(ctx context.Context, f namespace.Filter) (int64, error) {
+	if f.All {
 		total, err := s.queries.CountNamespaces(ctx)
 		if err != nil {
 			return 0, fmt.Errorf("count namespaces: %w", err)
@@ -60,7 +58,7 @@ func (s *Store) CountNamespaces(ctx context.Context, all bool, names []namespace
 		return total, nil
 	}
 
-	total, err := s.queries.CountNamespacesByNames(ctx, pageNameStrings(names))
+	total, err := s.queries.CountNamespacesByNames(ctx, pageNameStrings(f.Names))
 	if err != nil {
 		return 0, fmt.Errorf("count namespaces: %w", err)
 	}
