@@ -54,17 +54,29 @@ func TestVerifierRefusesAReferenceToNothing(t *testing.T) {
 	}
 }
 
-// TestVerifierKnowsEarlierEntriesOfTheBatch checks that a reference to an earlier entry of
-// the same batch passes, and that a reference to a later one is refused.
+// TestVerifierKnowsEarlierEntriesOfTheBatch checks that a reference to a completed
+// earlier entry of the same batch passes, and that a reference to a later one
+// is refused. Only a success entry with a state creates a referenceable
+// operation.
 func TestVerifierKnowsEarlierEntriesOfTheBatch(t *testing.T) {
 	t.Parallel()
 
-	earlier := batchOf(entryJSON(0, 1, 5, ""), entryJSON(2, 2, 6, "5"))
+	state := `{"urn":"urn:a","custom":true,"type":"t:mod:T","id":"x"}`
+	completed := `{"version":1,"kind":1,"sequenceID":1,"operationID":5,"removeOld":null,"removeNew":null,` +
+		`"state":` + state + `}`
+	referrer := `{"version":1,"kind":1,"sequenceID":2,"operationID":6,"removeOld":null,"removeNew":5,` +
+		`"state":` + state + `}`
+
+	earlier := batchOf(completed, referrer)
 	if _, err := (pulumijournal.Verifier{}).VerifyBatch(earlier, 1, nil, false); err != nil {
 		t.Fatalf("reference to an earlier entry: %v", err)
 	}
 
-	later := batchOf(entryJSON(2, 1, 6, "5"), entryJSON(0, 2, 5, ""))
+	forward := `{"version":1,"kind":1,"sequenceID":1,"operationID":6,"removeOld":null,"removeNew":5,` +
+		`"state":` + state + `}`
+	late := `{"version":1,"kind":1,"sequenceID":2,"operationID":5,"removeOld":null,"removeNew":null,` +
+		`"state":` + state + `}`
+	later := batchOf(forward, late)
 	_, err := (pulumijournal.Verifier{}).VerifyBatch(later, 1, nil, false)
 	if !errors.Is(err, pulumijournal.ErrMissingReference) {
 		t.Fatalf("reference to a later entry: err = %v, want ErrMissingReference", err)

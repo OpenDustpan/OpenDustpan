@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/e2e"
@@ -146,8 +147,17 @@ func tofuForceUnlockFenceScenario(t *testing.T, env *e2e.Env) {
 		Body: `{"data":{"type":"state-versions","attributes":{"serial":` +
 			strconv.FormatInt(before.Data.Attributes.Serial+1, 10) +
 			`,"lineage":"` + before.Data.Attributes.Lineage + `","md5":"` + emptyMD5 + `"}}}`,
-		Want:      http.StatusUnprocessableEntity,
-		Check:     nil,
+		Want: http.StatusUnprocessableEntity,
+		// The two jobs share one token, so the server sees the caller as the
+		// holder and names the command that clears the lock.
+		Check: func(body string) error {
+			wantUnlock := "tofu force-unlock " + e2e.Namespace + "/" + e2e.Workspace
+			if !strings.Contains(body, wantUnlock) {
+				return fmt.Errorf("%w: stale declare lacks %q: %s", errUnexpected, wantUnlock, body)
+			}
+
+			return nil
+		},
 		UserAgent: "",
 		Scheme:    "",
 	})

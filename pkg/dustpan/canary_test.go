@@ -384,7 +384,9 @@ func TestCanaryNeverInAFileAuditSink(t *testing.T) {
 
 	ts, srv, st := canaryServer(t, &sink, nil,
 		dustpan.WithListener(openTestListener(t)),
-		dustpan.WithAuditSinks(audit.ShipSink{Sink: auditFile, Name: "canary", Interval: 10 * time.Millisecond}),
+		dustpan.WithAuditSinks(audit.ShipSink{
+			Sink: auditFile, Name: "canary", Kind: "file", Interval: 10 * time.Millisecond,
+		}),
 	)
 	seedCanaryNamespace(t, st)
 
