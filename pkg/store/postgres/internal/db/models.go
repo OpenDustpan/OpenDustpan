@@ -171,6 +171,7 @@ type Principal struct {
 	DeletedAtMs    pgtype.Int8
 	DisabledAtMs   pgtype.Int8
 	LastActiveAtMs int64
+	Namespace      string
 }
 
 type PrincipalGroup struct {

@@ -250,7 +250,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 			table: "principals",
 			columns: []string{
 				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms",
+				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "namespace",
 			},
 			orderBy: []string{"id"},
 		},

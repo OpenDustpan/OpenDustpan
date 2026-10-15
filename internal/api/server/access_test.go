@@ -129,7 +129,9 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		t.Fatalf("access service: %v", err)
 	}
 
-	principals, err := principal.NewService(principal.Config{Store: st, Guard: grants, Now: nil, NewID: nil})
+	principals, err := principal.NewService(
+		principal.Config{Store: st, Guard: grants, Namespaces: st, Now: nil, NewID: nil},
+	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -183,7 +185,7 @@ func (f accessFixture) seed(t *testing.T, subject, role string, obj identity.Obj
 
 	prn := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 		DisabledAt: time.Time{},
 	}
 	if err := f.store.CreatePrincipal(t.Context(), prn, storetest.ServerChange(at, "principal:"+prn.ID)); err != nil {

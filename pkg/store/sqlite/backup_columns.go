@@ -332,6 +332,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColDeletedAtMs,
 				"disabled_at_ms",
 				"last_active_at_ms",
+				"namespace",
 			},
 		},
 		{

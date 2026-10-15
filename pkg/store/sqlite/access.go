@@ -58,6 +58,10 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 		)
 	}
 
+	if fitErr := subjectFitsObject(ctx, q, g); fitErr != nil {
+		return fitErr
+	}
+
 	n, err := q.CreateGrant(ctx, db.CreateGrantParams{
 		ID:          g.ID,
 		Subject:     g.Subject.String(),
@@ -78,6 +82,33 @@ func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 
 	if n == 0 {
 		return access.ErrAlreadyExists
+	}
+
+	return nil
+}
+
+// subjectFitsObject returns ErrInvalid when the subject of g is a principal
+// of a namespace and the object of g is not that namespace or an object
+// inside it. It reads the namespace of the principal in the transaction of
+// the grant, so a grant cannot race the record it checks.
+func subjectFitsObject(ctx context.Context, q *db.Queries, g access.Grant) error {
+	if g.Subject.Kind != access.SubjectPrincipal {
+		return nil
+	}
+
+	ns, err := q.GetPrincipalNamespace(ctx, g.Subject.ID)
+	if errors.Is(err, sql.ErrNoRows) {
+		// The Service checks that the subject exists.
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("select namespace of principal: %w", err)
+	}
+
+	if ns != "" && ns != g.Object.Namespace().String() {
+		return fmt.Errorf("%w: %s is a principal of the namespace %q, and can only hold grants inside it",
+			access.ErrInvalid, g.Subject.String(), ns)
 	}
 
 	return nil

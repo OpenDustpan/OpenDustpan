@@ -24,7 +24,7 @@ func (f accessFixture) seedService(t *testing.T, subject string) {
 
 	prn := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
+		DisplayName: "", Kind: principal.KindService, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 		DisabledAt: time.Time{},
 	}
 	if err := f.store.CreatePrincipal(t.Context(), prn, storetest.ServerChange(at, "principal:"+prn.ID)); err != nil {
@@ -96,4 +96,53 @@ func TestDelegationRoutesRefuse(t *testing.T) {
 	f.as(t, "ops", apiCall{http.MethodPost, deploy + "/tokens", `{"name":"ops"}`, http.StatusCreated}, &made)
 	f.as(t, "ops", apiCall{http.MethodDelete, deploy + "/tokens/" + made.ID, "", http.StatusNoContent}, nil)
 	f.as(t, "ops", apiCall{http.MethodDelete, "/api/server/tokens/" + service.ID, "", http.StatusNoContent}, nil)
+}
+
+// TestNamespacePrincipalRoutes proves the routes of the principals of a
+// namespace with the authorizer that decides with grants: the namespace
+// admin manages them, a principal without a grant on the namespace cannot,
+// and a principal of a namespace gets no token and no grant outside it.
+func TestNamespacePrincipalRoutes(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	const principals = "/api/server/namespaces/acme/principals"
+
+	var bot principalDoc
+	f.as(t, "alice", apiCall{http.MethodPost, principals, `{"subject":"ci-acme"}`, http.StatusCreated}, &bot)
+
+	if bot.Kind != "service" || bot.Namespace != "acme" {
+		t.Fatalf("principal = %+v, want a service principal of acme", bot)
+	}
+
+	one := principals + "/" + bot.ID
+	tokens := "/api/server/principals/" + bot.ID + "/tokens"
+
+	for _, c := range []struct {
+		subject string
+		call    apiCall
+	}{
+		{"alice", apiCall{http.MethodGet, principals, "", http.StatusOK}},
+		{"alice", apiCall{http.MethodGet, one, "", http.StatusOK}},
+		{"alice", apiCall{http.MethodPatch, one, `{"displayName":"Acme bot"}`, http.StatusOK}},
+		{"alice", apiCall{http.MethodGet, principals + "/prn-alice", "", http.StatusNotFound}},
+		{"alice", apiCall{
+			http.MethodPost, "/api/server/namespaces/acme/grants",
+			`{"subject":"principal:` + bot.ID + `","role":"writer"}`, http.StatusCreated,
+		}},
+		{"bob", apiCall{http.MethodPost, principals, `{"subject":"ci-bob"}`, http.StatusForbidden}},
+		{"bob", apiCall{http.MethodGet, principals, "", http.StatusForbidden}},
+		{"bob", apiCall{http.MethodDelete, one, "", http.StatusForbidden}},
+		{"olga", apiCall{http.MethodGet, principals, "", http.StatusForbidden}},
+		{"alice", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusForbidden}},
+		{"admin", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusBadRequest}},
+		{"admin", apiCall{
+			http.MethodPost, "/api/server/grants", `{"subject":"principal:` + bot.ID + `","role":"viewer"}`,
+			http.StatusBadRequest,
+		}},
+		{"alice", apiCall{http.MethodDelete, one, "", http.StatusNoContent}},
+	} {
+		f.as(t, c.subject, c.call, nil)
+	}
 }

@@ -802,7 +802,43 @@ func CoverageAllowlist() []AllowEntry {
 		tokenPolicyAllowEntries(),
 		ipAllowlistAllowEntries(),
 		delegationAllowEntries(),
+		namespacePrincipalAllowEntries(),
 	)
+}
+
+// namespacePrincipalCoveringTest names the test that proves the routes of
+// the principals of a namespace instead of a CLI: no CLI calls them.
+const namespacePrincipalCoveringTest = "TestNamespacePrincipals"
+
+// namespacePrincipalAllowEntries returns the operator and console routes of
+// the principals of a namespace. The harness steps of
+// namespacePrincipalCoveringTest drive each one through the real binary on
+// each store.
+func namespacePrincipalAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages the principals of a namespace. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	const (
+		list = "/api/server/namespaces/{namespace}/principals"
+		one  = list + "/{id}"
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodPost, list},
+		{http.MethodGet, list},
+		{http.MethodGet, one},
+		{http.MethodPatch, one},
+		{http.MethodDelete, one},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: namespacePrincipalCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
 }
 
 // delegationCoveringTest names the test that proves the routes of the

@@ -524,16 +524,23 @@ WHERE deleted_at_ms IS NULL
   AND subject >= ?1
   AND (CAST(?2 AS TEXT) = '' OR subject < ?2)
   AND (CAST(?3 AS TEXT) = '' OR kind = ?3)
+  AND (CAST(?4 AS TEXT) = '' OR namespace = ?4)
 `
 
 type CountPrincipalsParams struct {
-	Low  string
-	High string
-	Kind string
+	Low       string
+	High      string
+	Kind      string
+	Namespace string
 }
 
 func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countPrincipals, arg.Low, arg.High, arg.Kind)
+	row := q.db.QueryRowContext(ctx, countPrincipals,
+		arg.Low,
+		arg.High,
+		arg.Kind,
+		arg.Namespace,
+	)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -807,8 +814,8 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 }
 
 const createPrincipal = `-- name: CreatePrincipal :execrows
-INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
@@ -820,6 +827,7 @@ type CreatePrincipalParams struct {
 	Source      string
 	CreatedAtMs int64
 	UpdatedAtMs int64
+	Namespace   string
 }
 
 func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams) (int64, error) {
@@ -831,6 +839,7 @@ func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams
 		arg.Source,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+		arg.Namespace,
 	)
 	if err != nil {
 		return 0, err
@@ -1284,16 +1293,17 @@ func (q *Queries) DeleteJournalSequencesOfStack(ctx context.Context, stackID str
 
 const deletePrincipal = `-- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = ?
-WHERE id = ? AND deleted_at_ms IS NULL
+WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL
 `
 
 type DeletePrincipalParams struct {
 	DeletedAtMs sql.NullInt64
 	ID          string
+	Namespace   string
 }
 
 func (q *Queries) DeletePrincipal(ctx context.Context, arg DeletePrincipalParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID)
+	result, err := q.db.ExecContext(ctx, deletePrincipal, arg.DeletedAtMs, arg.ID, arg.Namespace)
 	if err != nil {
 		return 0, err
 	}
@@ -2196,7 +2206,7 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 }
 
 const getPrincipal = `-- name: GetPrincipal :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.id = ? AND p.deleted_at_ms IS NULL
 `
@@ -2210,6 +2220,7 @@ type GetPrincipalRow struct {
 	CreatedAtMs  int64
 	UpdatedAtMs  int64
 	DisabledAtMs sql.NullInt64
+	Namespace    string
 	GroupCount   int64
 }
 
@@ -2225,13 +2236,14 @@ func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow,
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
 		&i.DisabledAtMs,
+		&i.Namespace,
 		&i.GroupCount,
 	)
 	return i, err
 }
 
 const getPrincipalBySubject = `-- name: GetPrincipalBySubject :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.subject = ?1 AND p.deleted_at_ms IS NULL
 `
@@ -2245,6 +2257,7 @@ type GetPrincipalBySubjectRow struct {
 	CreatedAtMs  int64
 	UpdatedAtMs  int64
 	DisabledAtMs sql.NullInt64
+	Namespace    string
 	GroupCount   int64
 }
 
@@ -2260,9 +2273,23 @@ func (q *Queries) GetPrincipalBySubject(ctx context.Context, subject string) (Ge
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
 		&i.DisabledAtMs,
+		&i.Namespace,
 		&i.GroupCount,
 	)
 	return i, err
+}
+
+const getPrincipalNamespace = `-- name: GetPrincipalNamespace :one
+SELECT namespace FROM principals WHERE id = ? AND deleted_at_ms IS NULL
+`
+
+// The namespace of a current principal: empty for a principal of the
+// installation. A grant write reads it in its own transaction.
+func (q *Queries) GetPrincipalNamespace(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getPrincipalNamespace, id)
+	var namespace string
+	err := row.Scan(&namespace)
+	return namespace, err
 }
 
 const getRestore = `-- name: GetRestore :one
@@ -3803,7 +3830,7 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 }
 
 const listGroupMembers = `-- name: ListGroupMembers :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
   m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
@@ -3832,6 +3859,7 @@ type ListGroupMembersRow struct {
 	CreatedAtMs  int64
 	UpdatedAtMs  int64
 	DisabledAtMs sql.NullInt64
+	Namespace    string
 	GroupCount   int64
 	AddedAtMs    int64
 }
@@ -3860,6 +3888,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 			&i.DisabledAtMs,
+			&i.Namespace,
 			&i.GroupCount,
 			&i.AddedAtMs,
 		); err != nil {
@@ -4131,7 +4160,7 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 }
 
 const listPrincipals = `-- name: ListPrincipals :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
@@ -4139,16 +4168,18 @@ WHERE p.deleted_at_ms IS NULL
   AND p.subject >= ?2
   AND (CAST(?3 AS TEXT) = '' OR p.subject < ?3)
   AND (CAST(?4 AS TEXT) = '' OR p.kind = ?4)
+  AND (CAST(?5 AS TEXT) = '' OR p.namespace = ?5)
 ORDER BY p.subject
-LIMIT ?5
+LIMIT ?6
 `
 
 type ListPrincipalsParams struct {
-	After    string
-	Low      string
-	High     string
-	Kind     string
-	RowLimit int64
+	After     string
+	Low       string
+	High      string
+	Kind      string
+	Namespace string
+	RowLimit  int64
 }
 
 type ListPrincipalsRow struct {
@@ -4160,6 +4191,7 @@ type ListPrincipalsRow struct {
 	CreatedAtMs  int64
 	UpdatedAtMs  int64
 	DisabledAtMs sql.NullInt64
+	Namespace    string
 	GroupCount   int64
 }
 
@@ -4169,6 +4201,7 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 		arg.Low,
 		arg.High,
 		arg.Kind,
+		arg.Namespace,
 		arg.RowLimit,
 	)
 	if err != nil {
@@ -4187,6 +4220,7 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 			&i.DisabledAtMs,
+			&i.Namespace,
 			&i.GroupCount,
 		); err != nil {
 			return nil, err
@@ -5989,17 +6023,23 @@ func (q *Queries) UpdateInventoryLock(ctx context.Context, arg UpdateInventoryLo
 
 const updatePrincipal = `-- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = ?, updated_at_ms = ?
-WHERE id = ? AND deleted_at_ms IS NULL
+WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL
 `
 
 type UpdatePrincipalParams struct {
 	DisplayName string
 	UpdatedAtMs int64
 	ID          string
+	Namespace   string
 }
 
 func (q *Queries) UpdatePrincipal(ctx context.Context, arg UpdatePrincipalParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, updatePrincipal, arg.DisplayName, arg.UpdatedAtMs, arg.ID)
+	result, err := q.db.ExecContext(ctx, updatePrincipal,
+		arg.DisplayName,
+		arg.UpdatedAtMs,
+		arg.ID,
+		arg.Namespace,
+	)
 	if err != nil {
 		return 0, err
 	}

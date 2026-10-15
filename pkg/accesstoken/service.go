@@ -168,6 +168,11 @@ func (s *Service) Create(
 		return Token{}, Secret{}, err
 	}
 
+	if p.Namespace != "" {
+		return Token{}, Secret{}, fmt.Errorf("%w: principal %q belongs to the namespace %q; "+
+			"the server does not make tokens for a principal of a namespace yet", ErrInvalid, p.ID, p.Namespace.String())
+	}
+
 	if kindErr := checkKind(scope, kind); kindErr != nil {
 		return Token{}, Secret{}, kindErr
 	}

@@ -297,6 +297,7 @@ func portableSpec() []PortableTable {
 				{Name: portColDeletedAtMs, Kind: KindTime},
 				{Name: portColDisabledAtMs, Kind: KindTime},
 				{Name: "last_active_at_ms", Kind: KindTime},
+				{Name: "namespace", Kind: KindText},
 			},
 		},
 		{

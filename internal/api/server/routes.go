@@ -83,6 +83,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.namespaceOverrideRoutes()...)
 	routes = append(routes, h.ipAllowlistRoutes()...)
 	routes = append(routes, h.principalRoutes()...)
+	routes = append(routes, h.namespacePrincipalRoutes()...)
 	routes = append(routes, h.groupRoutes()...)
 	routes = append(routes, h.roleRoutes()...)
 	routes = append(routes, h.grantRoutes()...)

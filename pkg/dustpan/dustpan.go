@@ -1674,7 +1674,9 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 		guard = grants
 	}
 
-	svc, err := principal.NewService(principal.Config{Store: store, Guard: guard, Now: nil, NewID: nil})
+	svc, err := principal.NewService(principal.Config{
+		Store: store, Guard: guard, Namespaces: cfg.namespaceStore, Now: nil, NewID: nil,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)
 	}
