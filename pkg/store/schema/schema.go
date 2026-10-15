@@ -168,7 +168,7 @@ var embeddedMigrationNames = []string{
 	"0059_collections.sql",
 	"0062_sessions.sql",
 	"0064_blob_purges_age_byte_order.sql",
-	"0066_audit_chain_state.sql",
+	"0067_audit_chain_state.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary

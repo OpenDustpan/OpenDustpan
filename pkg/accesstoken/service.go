@@ -321,6 +321,52 @@ func (s *Service) ListOwn(ctx context.Context, caller identity.Principal, req Pa
 	return s.List(ctx, req)
 }
 
+// ListOfPrincipal returns one page of the tokens of the service principal
+// principalID, newest first, for caller. caller must hold
+// principal:manage-tokens on the principal: the route checks it, and this
+// check holds for every caller of the Service. req.PrincipalID is ignored.
+// The check runs first, so a caller without the action gets
+// identity.ErrDenied for every principal and learns nothing about which
+// principals exist. Then an unknown principal answers ErrPrincipalNotFound,
+// and a principal that is not a service principal ErrWrongKind:
+// principal:manage-tokens gives no right on the tokens of a person.
+func (s *Service) ListOfPrincipal(
+	ctx context.Context, caller identity.Principal, principalID string, req PageRequest,
+) (Page, error) {
+	if err := s.requireManageTokens(ctx, caller, principalID, useList); err != nil {
+		return Page{}, err
+	}
+
+	p, err := s.principals.GetPrincipal(ctx, principalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		return Page{}, fmt.Errorf("%w: %q", ErrPrincipalNotFound, principalID)
+	}
+
+	if err != nil {
+		return Page{}, fmt.Errorf("read principal: %w", err)
+	}
+
+	if p.Kind != principal.KindService {
+		return Page{}, fmt.Errorf("%w: the tokens of a %s go through /api/server/tokens", ErrWrongKind, p.Kind)
+	}
+
+	req.PrincipalID = p.ID
+
+	return s.List(ctx, req)
+}
+
+// MaxLifetime returns the longest lifetime that a create or a rotation can
+// ask for: the maximum lifetime of the installation policy, which applies
+// to every principal today.
+func (s *Service) MaxLifetime(ctx context.Context) (time.Duration, error) {
+	p, err := s.Policy(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	return p.MaxLifetime, nil
+}
+
 // RotateInput names a rotation: the token ID, the scope of the caller, and
 // the times. A nil OldEndsAt keeps the old token for
 // DefaultRotationOverlap, or until its expiry when that is earlier. A zero

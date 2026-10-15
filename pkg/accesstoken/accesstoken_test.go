@@ -1546,3 +1546,55 @@ func TestAdministratorCreateAndRotateNeedASignIn(t *testing.T) {
 		}
 	}
 }
+
+// TestListOfPrincipal proves the checks of the token list of one service
+// principal in the Service: principal:manage-tokens on the principal first,
+// so a caller without it learns nothing about which principals exist; then
+// a service principal only, and the list of that principal alone.
+func TestListOfPrincipal(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	manage := string(identity.ActionPrincipalManageTokens) + " principal:"
+	authz := &recordAuthorizer{allowed: map[string]bool{
+		manage + f.service.ID:  true,
+		manage + f.person.ID:   true,
+		manage + f.workload.ID: true,
+		manage + "prn-none":    true,
+	}, checked: nil, mu: sync.Mutex{}}
+	svc := newCheckedService(t, &f, nil, authz)
+	alice := as(f.person)
+
+	f.create(t, f.service, "deploy")
+	f.create(t, f.person, "laptop")
+
+	all := accesstoken.PageRequest{PrincipalID: f.person.ID, Cursor: "", Filter: accesstoken.FilterAll, Limit: 0}
+
+	page, err := svc.ListOfPrincipal(ctx, alice, f.service.ID, all)
+	if err != nil || page.Total != 1 || page.Items[0].PrincipalID != f.service.ID {
+		t.Fatalf("tokens of the service principal = %+v, %v; want its one token", page, err)
+	}
+
+	if _, err := svc.ListOfPrincipal(ctx, alice, f.person.ID, all); !errors.Is(err, accesstoken.ErrWrongKind) {
+		t.Fatalf("tokens of a person: err = %v, want ErrWrongKind", err)
+	}
+
+	if _, err := svc.ListOfPrincipal(ctx, alice, "prn-none", all); !errors.Is(err, accesstoken.ErrPrincipalNotFound) {
+		t.Fatalf("tokens of an unknown principal: err = %v, want ErrPrincipalNotFound", err)
+	}
+
+	if _, err := svc.ListOfPrincipal(ctx, alice, f.workload.ID, all); !errors.Is(err, accesstoken.ErrWrongKind) {
+		t.Fatalf("tokens of a workload: err = %v, want ErrWrongKind", err)
+	}
+
+	authz.allowed = map[string]bool{}
+
+	for _, id := range []string{f.service.ID, f.person.ID, "prn-none"} {
+		_, err := svc.ListOfPrincipal(ctx, alice, id, all)
+		if !errors.Is(err, identity.ErrDenied) || !strings.Contains(err.Error(), "list the tokens of") {
+			t.Fatalf("tokens of %s without principal:manage-tokens: err = %v, want ErrDenied for a list", id, err)
+		}
+	}
+}
