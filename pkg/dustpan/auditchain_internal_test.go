@@ -10,6 +10,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
@@ -68,6 +69,78 @@ func approver() audit.Entry {
 		Channel: audit.ChannelAPI, Kind: "", Outcome: "", RequestID: "req-1",
 		PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0,
+	}
+}
+
+// createServicePrincipal stores a service principal with subject in the
+// store behind chain.
+func createServicePrincipal(t *testing.T, chain *auditChain, subject string) {
+	t.Helper()
+
+	st, ok := chain.namespaces.(principal.RecordStore)
+	if !ok {
+		t.Fatal("namespace store keeps no principals")
+	}
+
+	at := time.Now()
+
+	p := principal.Principal{
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          "prn-" + subject,
+		Subject:     subject,
+		DisplayName: subject,
+		Kind:        principal.KindService,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+	}
+
+	e := audit.Entry{
+		At: at, Namespace: audit.ServerScope, Subject: "admin", IDPSubject: "", TokenID: "",
+		Action: "server:manage-principals", Object: "principal:prn-" + subject, ObjectID: "",
+		Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1",
+		UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0,
+	}
+
+	if err := st.CreatePrincipal(t.Context(), p, e); err != nil {
+		t.Fatalf("create service principal %q: %v", subject, err)
+	}
+}
+
+// TestApproveOffRefusesServicePrincipal proves that an approval of a change
+// to off by a service principal is refused before it writes anything, that
+// the same caller may approve a change to on, and that a subject with no
+// principal row may approve a change to off.
+func TestApproveOffRefusesServicePrincipal(t *testing.T) {
+	t.Parallel()
+
+	off := newTestAuditChain(t, audit.ChainOff)
+	createServicePrincipal(t, off, "svc-ci")
+
+	caller := approver()
+	caller.Subject = "svc-ci"
+
+	if err := off.Approve(t.Context(), caller); !errors.Is(err, audit.ErrChainNeedsPerson) {
+		t.Fatalf("approve off as a service principal: %v, want ErrChainNeedsPerson", err)
+	}
+
+	if off.migrating.Load() || len(off.queue) != 0 {
+		t.Fatal("a refused approval holds the migration")
+	}
+
+	if err := off.Approve(t.Context(), approver()); err != nil {
+		t.Fatalf("approve off without a principal row: %v", err)
+	}
+
+	on := newTestAuditChain(t, audit.ChainOn)
+	createServicePrincipal(t, on, "svc-ci")
+
+	if err := on.Approve(t.Context(), caller); err != nil {
+		t.Fatalf("approve on as a service principal: %v", err)
 	}
 }
 

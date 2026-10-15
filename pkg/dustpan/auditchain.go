@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // auditChainCheckInterval is the time between two scheduled chain checks.
@@ -45,6 +46,7 @@ type auditChain struct {
 	entries    audit.Store
 	server     audit.ServerStore
 	namespaces namespace.Store
+	principals principalReader
 	logger     *slog.Logger
 	now        func() time.Time
 	observed   *metrics.ServerMetrics
@@ -89,6 +91,14 @@ var errMigrationsStopped = errors.New(
 	"the server does not run audit chain migrations now: start the server and approve again",
 )
 
+// principalReader answers the principal with a subject. It returns
+// principal.ErrNotFound when no principal has the subject.
+type principalReader interface {
+	// GetPrincipalBySubject answers the principal with the subject subject,
+	// or principal.ErrNotFound when no principal has it.
+	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
+}
+
 // newAuditChain answers the chain of the namespace store, or nil when the
 // store keeps no chain and the setting is on: such a store keeps its own
 // behavior. The setting off on such a store fails.
@@ -105,11 +115,18 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		return nil, nil //nolint:nilnil // No chain without an error means the store keeps its own chain.
 	}
 
+	var principals principalReader
+
+	if p, ok := cfg.namespaceStore.(principalReader); ok {
+		principals = p
+	}
+
 	return &auditChain{
 		store:             store,
 		entries:           entries,
 		server:            server,
 		namespaces:        cfg.namespaceStore,
+		principals:        principals,
 		logger:            cfg.logger,
 		now:               cfg.now,
 		observed:          observed,
@@ -163,6 +180,12 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 		return errMigrationsStopped
 	}
 
+	if c.setting == audit.ChainOff {
+		if err := c.refuseServiceCaller(ctx, caller.Subject); err != nil {
+			return err
+		}
+	}
+
 	if c.setting == audit.ChainOff && c.freshness != nil {
 		if err := c.freshness.RequireFresh(ctx, caller.Subject); err != nil {
 			return fmt.Errorf("%w: %w", audit.ErrChainStepRequired, err)
@@ -189,6 +212,30 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 
 		return audit.ErrChainMigrating
 	}
+}
+
+// refuseServiceCaller refuses an approval of a change to off when subject
+// belongs to a service principal. A subject with no principal row is a
+// person and passes.
+func (c *auditChain) refuseServiceCaller(ctx context.Context, subject string) error {
+	if c.principals == nil {
+		return nil
+	}
+
+	got, err := c.principals.GetPrincipalBySubject(ctx, subject)
+	if errors.Is(err, principal.ErrNotFound) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read principal: %w", err)
+	}
+
+	if got.Kind == principal.KindService {
+		return audit.ErrChainNeedsPerson
+	}
+
+	return nil
 }
 
 // chainNow answers the time of this instance.

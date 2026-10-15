@@ -183,6 +183,7 @@ func TestApproveAuditChainMapsItsErrors(t *testing.T) {
 		{name: "no change waits", err: audit.ErrNoChainChange, want: http.StatusConflict},
 		{name: "a migration runs", err: audit.ErrChainMigrating, want: http.StatusConflict},
 		{name: "no fresh MFA step", err: audit.ErrChainStepRequired, want: http.StatusForbidden},
+		{name: "a service principal approves turning off", err: audit.ErrChainNeedsPerson, want: http.StatusForbidden},
 		{name: "active work", err: maintenance.ErrActiveWork, want: http.StatusConflict},
 		{name: "a server fault", err: errAuditChainFault, want: http.StatusInternalServerError},
 	}

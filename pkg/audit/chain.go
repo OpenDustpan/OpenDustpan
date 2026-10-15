@@ -129,6 +129,9 @@ var (
 	// ErrChainStepRequired reports an approval of a change to off without
 	// a fresh MFA step.
 	ErrChainStepRequired = errors.New("turning the audit chain off needs a fresh MFA step")
+	// ErrChainNeedsPerson reports an approval of a change to off by a
+	// service principal. Only a person may approve turning the chain off.
+	ErrChainNeedsPerson = errors.New("a person must approve turning the audit chain off")
 )
 
 // ParseChainSetting maps an operator value to a setting. An empty value is

@@ -184,6 +184,7 @@ The approval sets the chain to the setting of the server that receives it.
 
 - Turning the chain on needs the action `server:set-audit-chain` (operator family).
 - Turning the chain off needs `server:set-audit-chain` (operator family) and `server:disable-audit-chain` (administration family).
+  A service principal cannot approve it: a person must approve turning the chain off.
   It also needs a fresh MFA step when the server asks for MFA.
 
 The approval writes an entry in `@server` with the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.

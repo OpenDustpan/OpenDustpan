@@ -435,8 +435,9 @@ func classifyNamespace(err error) (int, string, bool) {
 // message: an invalid state value answers 400, active work answers 409
 // naming each update and run, a leave while a change of the audit chain
 // holds maintenance mode answers 409, a refused approval of an audit chain
-// change answers 409 or, without a fresh MFA step, 403, and an unreadable or unknown stored state
-// answers 500 without driver text.
+// change answers 409 or, without a fresh MFA step or when a service
+// principal approves turning the chain off, 403, and an unreadable or
+// unknown stored state answers 500 without driver text.
 func classifyMaintenance(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, maintenance.ErrInvalidState):
@@ -450,6 +451,8 @@ func classifyMaintenance(err error) (int, string, bool) {
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, audit.ErrChainStepRequired):
 		return http.StatusForbidden, audit.ErrChainStepRequired.Error(), true
+	case errors.Is(err, audit.ErrChainNeedsPerson):
+		return http.StatusForbidden, audit.ErrChainNeedsPerson.Error(), true
 	case errors.Is(err, maintenance.ErrUnavailable):
 		return http.StatusInternalServerError, maintenance.ErrUnavailable.Error(), true
 	default:

@@ -79,7 +79,9 @@ and a fresh MFA step.
      (operator family).
    - Turning the chain off needs `server:set-audit-chain` (operator family)
      and `server:disable-audit-chain` (administration family), so "both
-     families" is literal, and a fresh MFA step. Until built-in MFA exists, the MFA step
+     families" is literal, and a fresh MFA step. A service principal cannot
+     approve it: an account administrator can make tokens for any service
+     principal, so one family could act through such a principal. Until built-in MFA exists, the MFA step
      asks for nothing (ADR 56 decision 5). A test proves that the step is
      required as soon as MFA asks for one.
    - The approval writes an audit entry in `@server` with the action
