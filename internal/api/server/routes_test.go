@@ -23,6 +23,7 @@ import (
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -193,6 +194,11 @@ func newServiceBackedHandler(
 		t.Fatalf("seed namespace: %v", seedErr)
 	}
 
+	allow, err := ipallow.NewService(ipallow.Config{Store: st, Namespaces: namespaces, Now: nil, Enabled: true})
+	if err != nil {
+		t.Fatalf("ip allowlist service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:  authn,
 		Authorizer:     authz,
@@ -210,6 +216,7 @@ func newServiceBackedHandler(
 		Audit:          st,
 		OnAuditFailure: nil,
 		DeletedUnits:   stubSweeper{},
+		IPAllowlists:   allow,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -444,6 +451,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 //nolint:gochecknoglobals,gosec // A constant table of request bodies; G101 reads "token" in the paths.
 var routeBodies = map[string]string{
 	"PUT /api/server/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
+	"PUT /api/server/namespaces/{namespace}/ip-allowlist":      `{"cidrs":["10.0.0.0/8"]}`,
 	"POST /api/server/namespaces":                              `{"name":"acme"}`,
 	"POST /api/server/restores": `{"backupID":"` + string(
 		testBackupID,
@@ -1105,6 +1113,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	}
 
 	cases := []struct {
@@ -1237,6 +1246,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1263,6 +1273,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)

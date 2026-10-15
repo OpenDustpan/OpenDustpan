@@ -173,6 +173,7 @@ func newStateHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *tfe.Handle
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
@@ -791,6 +792,7 @@ func newListStateHandler(t *testing.T) *tfe.Handler {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     listStateWorkspaces{stubWorkspaces: stubWorkspaces{}, versions: versions},
@@ -1083,6 +1085,7 @@ func newSensitiveStateHandler(t *testing.T) *tfe.Handler {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     allowAll(),
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},
@@ -1196,6 +1199,7 @@ func TestStateSecretsNeedReadSecrets(t *testing.T) {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{identity.ActionUnitReadSecrets: true}},
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     sensitiveOutputsWorkspaces{stubWorkspaces: stubWorkspaces{}},

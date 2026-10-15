@@ -168,6 +168,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -209,6 +210,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -277,6 +279,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

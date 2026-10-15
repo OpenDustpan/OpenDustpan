@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"maps"
 	"net/http"
 	"net/url"
@@ -134,7 +135,19 @@ func runReviewOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkReviewScopes(ctx, t, env, f)
 	checkReviewPrincipal(ctx, t, env, f)
 	checkReviewExpand(ctx, t, env, f)
+
+	secret := carolToken(ctx, t, env, f)
+	checkCallerGrants(ctx, t, env, secret, []string{
+		"account-administrator @server via reviewers", "auditor review", "installation-operator @server",
+		"maintainer pulumi:review/web/prod", "writer review via reviewers",
+	})
+
 	checkReviewHistory(ctx, t, env, f)
+
+	// The revoke and the end of the membership take their grants off the
+	// list of carol.
+	checkCallerGrants(ctx, t, env, secret, []string{"auditor review", "installation-operator @server"})
+
 	checkReviewRefusals(ctx, t, env)
 	checkCallerAccess(ctx, t, env)
 }
@@ -555,6 +568,103 @@ func checkCallerAccess(ctx context.Context, t *testing.T, env *e2e.Env) {
 			http.MethodGet, "/api/server/caller/access?" + query, "", http.StatusBadRequest,
 		}, nil)
 	}
+}
+
+// carolToken returns the secret of a personal token of carol.
+func carolToken(ctx context.Context, t *testing.T, env *e2e.Env, f reviewFixture) string {
+	t.Helper()
+
+	var token e2eToken
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/tokens", `{"principalID":"` + f.carol.ID + `","name":"review"}`,
+		http.StatusCreated,
+	}, &token)
+
+	return token.Secret
+}
+
+// checkCallerGrants reads the grants of the caller of secret two rows a
+// page, and fails unless they are want, sorted, each as its role, its
+// object and the group it comes through. The bootstrap admin holds none,
+// and a bad cursor answers 400.
+func checkCallerGrants(ctx context.Context, t *testing.T, env *e2e.Env, secret string, want []string) {
+	t.Helper()
+
+	var got []string
+
+	path := "/api/server/caller/grants?limit=2"
+
+	for page := 0; path != ""; page++ {
+		doc := callerGrantsCall(ctx, t, env, secret, path)
+
+		if (page == 0) != (doc.Total != nil) || (doc.Total != nil && *doc.Total != int64(len(want))) {
+			t.Fatalf("page %d total = %v, want %d on the first page only", page, doc.Total, len(want))
+		}
+
+		got = append(got, callerGrantRows(doc)...)
+
+		path = ""
+		if doc.NextCursor != "" {
+			path = "/api/server/caller/grants?limit=2&cursor=" + doc.NextCursor
+		}
+	}
+
+	slices.Sort(got)
+
+	if !slices.Equal(got, want) {
+		t.Fatalf("grants of the caller = %q, want %q", got, want)
+	}
+
+	var admin e2eReview
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/caller/grants", "", http.StatusOK,
+	}, &admin)
+
+	if admin.Total == nil || *admin.Total != 0 || len(admin.Grants) != 0 {
+		t.Fatalf("grants of the bootstrap admin = %+v, want none", admin)
+	}
+
+	status, body, err := env.ServerAPIStatusAs(ctx, secret, http.MethodGet, "/api/server/caller/grants?cursor=%21", "")
+	if err != nil || status != http.StatusBadRequest {
+		t.Fatalf("bad cursor = %d, %v (%s), want 400", status, err, body)
+	}
+}
+
+// callerGrantRows returns each row of doc as its role, its object and the
+// name of the group it comes through.
+func callerGrantRows(doc e2eReview) []string {
+	out := make([]string, 0, len(doc.Grants))
+
+	for i := range doc.Grants {
+		r := &doc.Grants[i]
+		row := r.Role + " " + r.Object
+
+		if r.Via != nil {
+			row += " via " + r.SubjectName
+		}
+
+		out = append(out, row)
+	}
+
+	return out
+}
+
+// callerGrantsCall sends one GET of path with the token secret, fails
+// unless it answers 200, and returns the decoded answer.
+func callerGrantsCall(ctx context.Context, t *testing.T, env *e2e.Env, secret, path string) e2eReview {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatusAs(ctx, secret, http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET %s = %d, %v (%s), want 200", path, status, err, body)
+	}
+
+	var out e2eReview
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+
+	return out
 }
 
 // checkDeletedUnitInHistory deletes the stack of the revoked unit grant:

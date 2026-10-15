@@ -11,7 +11,7 @@
 // A role is a named set of actions. Each action is in exactly one family:
 //
 //   - operator: the operation of the installation (backups, restores,
-//     maintenance, metrics),
+//     maintenance, metrics, the installation audit log),
 //   - administration: the principals, groups, roles and grants of the
 //     installation, and namespace create,
 //   - data: every action inside a namespace, its access included.
@@ -66,7 +66,7 @@ type Family string
 
 // Families of actions. No action is in two families.
 const (
-	// FamilyOperator holds the operation of the installation.
+	// FamilyOperator holds the operation of the installation, and its audit log.
 	FamilyOperator Family = "operator"
 	// FamilyAdministration holds the principals, groups, roles and grants
 	// of the installation, and namespace create.
@@ -88,6 +88,7 @@ var families = map[identity.Action]Family{
 	identity.ActionServerRestore:     FamilyOperator,
 	identity.ActionServerMaintenance: FamilyOperator,
 	identity.ActionServerObserve:     FamilyOperator,
+	identity.ActionServerReadAudit:   FamilyOperator,
 	// The installation settings (ADR 63); RFC 68 decides their API.
 	identity.ActionServerManageSettings: FamilyOperator,
 
@@ -99,10 +100,11 @@ var families = map[identity.Action]Family{
 	identity.ActionServerCreateNamespace:  FamilyAdministration,
 	identity.ActionServerReadAccess:       FamilyAdministration,
 	// The access tokens of other principals (ADR 53, decision 3).
-	identity.ActionServerReadTokens:          FamilyAdministration,
-	identity.ActionServerManageTokens:        FamilyAdministration,
-	identity.ActionServerManageServiceTokens: FamilyAdministration,
-	identity.ActionServerManageTokenPolicy:   FamilyAdministration,
+	identity.ActionServerReadTokens:           FamilyAdministration,
+	identity.ActionServerManageTokens:         FamilyAdministration,
+	identity.ActionServerManageServiceTokens:  FamilyAdministration,
+	identity.ActionServerManageTokenPolicy:    FamilyAdministration,
+	identity.ActionNamespaceManageIPAllowlist: FamilyAdministration,
 
 	identity.ActionNamespaceRead:          FamilyData,
 	identity.ActionNamespaceAdmin:         FamilyData,

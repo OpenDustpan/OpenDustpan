@@ -84,6 +84,11 @@ const (
 	// ActionNamespaceSetOverrides allows changing the override switches of a
 	// namespace. Its object is a namespace.
 	ActionNamespaceSetOverrides Action = "namespace:set-overrides"
+	// ActionNamespaceManageIPAllowlist allows reading, setting and removing
+	// the IP allowlist of a namespace. Its object is a namespace. One action
+	// covers the read: the list shows the network layout of the operator, so
+	// only a manager may read it.
+	ActionNamespaceManageIPAllowlist Action = "namespace:manage-ip-allowlist"
 	// ActionUnitSetOverrides allows changing the override switches of a unit.
 	// Its object is a unit.
 	ActionUnitSetOverrides Action = "unit:set-overrides"
@@ -99,6 +104,10 @@ const (
 	// ActionServerObserve allows reading installation metrics. Its object
 	// is ServerObject.
 	ActionServerObserve Action = "server:observe"
+	// ActionServerReadAudit allows reading the audit entries of the
+	// installation, the scope @server (ADR 60, decision 7). Its object is
+	// ServerObject.
+	ActionServerReadAudit Action = "server:read-audit"
 	// ActionServerMaintenance allows reading and changing the installation
 	// state between normal operation and maintenance mode. Its object is
 	// ServerObject.

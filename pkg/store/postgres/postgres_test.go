@@ -346,6 +346,21 @@ func TestWorkspaceConformance(t *testing.T) {
 	})
 }
 
+func TestIPAllowlistConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunIPAllowlist(t, func(t *testing.T) storetest.IPAllowlistStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
 func TestBackupConformance(t *testing.T) {
 	t.Parallel()
 
@@ -2251,6 +2266,17 @@ func BenchmarkPrincipalLists(b *testing.B) {
 	}
 
 	principaltest.Bench(b, open(b, base))
+}
+
+// BenchmarkCallerGrants measures the first page of the grants of a caller
+// at the scale of accesstest.BenchCallerGrants.
+func BenchmarkCallerGrants(b *testing.B) {
+	base := os.Getenv(envURL)
+	if base == "" {
+		b.Skipf("set %s to run the PostgreSQL benchmarks", envURL)
+	}
+
+	accesstest.BenchCallerGrants(b, open(b, base))
 }
 
 // BenchmarkAuthorizer measures one decision and one list-objects at the

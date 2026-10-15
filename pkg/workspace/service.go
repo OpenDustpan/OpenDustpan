@@ -913,26 +913,52 @@ func (s *Service) Upload(
 // a bad capability: ErrStateVersionNotFound for an unknown version,
 // ErrUploadDenied for a wrong or expired capability or a version that is not
 // pending. A retry with the capability that finalized the version passes, as
-// in Upload.
-func (s *Service) CheckUpload(ctx context.Context, id StateVersionID, tok token.Token) error {
+// in Upload. On success it also returns the namespace of the workspace of
+// the version, after the capability check passed, so a caller with a bad
+// token learns nothing about an allowlist.
+func (s *Service) CheckUpload(
+	ctx context.Context, id StateVersionID, tok token.Token,
+) (namespace.Name, error) {
 	sv, err := s.states.GetStateVersion(ctx, id)
 	if err != nil {
-		return fmt.Errorf("upload state %s: %w", id, err)
+		return "", fmt.Errorf("upload state %s: %w", id, err)
 	}
 
-	return sv.checkUploadCapability(tok, s.clock())
+	if capErr := sv.checkUploadCapability(tok, s.clock()); capErr != nil {
+		return "", capErr
+	}
+
+	w, err := s.workspaces.GetWorkspaceByID(ctx, sv.Workspace)
+	if err != nil {
+		return "", fmt.Errorf("upload state %s: %w", id, err)
+	}
+
+	return w.Ref.Namespace, nil
 }
 
 // CheckJSONRenderingUpload does the same for the JSON rendering upload (the
 // rules of DiscardJSONRendering: wrong capability or expired capability fail;
-// a finalized version with the same capability still passes).
-func (s *Service) CheckJSONRenderingUpload(ctx context.Context, id StateVersionID, tok token.Token) error {
+// a finalized version with the same capability still passes). On success it
+// also returns the namespace of the workspace of the version, after the
+// capability check passed.
+func (s *Service) CheckJSONRenderingUpload(
+	ctx context.Context, id StateVersionID, tok token.Token,
+) (namespace.Name, error) {
 	sv, err := s.states.GetStateVersion(ctx, id)
 	if err != nil {
-		return fmt.Errorf("upload JSON rendering of %s: %w", id, err)
+		return "", fmt.Errorf("upload JSON rendering of %s: %w", id, err)
 	}
 
-	return sv.checkRenderingCapability(tok, s.clock())
+	if capErr := sv.checkRenderingCapability(tok, s.clock()); capErr != nil {
+		return "", capErr
+	}
+
+	w, err := s.workspaces.GetWorkspaceByID(ctx, sv.Workspace)
+	if err != nil {
+		return "", fmt.Errorf("upload JSON rendering of %s: %w", id, err)
+	}
+
+	return w.Ref.Namespace, nil
 }
 
 // uploadedBody is what a state upload stores: the size of its bytes, and the

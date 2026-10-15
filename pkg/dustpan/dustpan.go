@@ -55,6 +55,7 @@ import (
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -62,6 +63,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -155,16 +157,25 @@ type settings struct {
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
 	checkpointDeltaCutoff int
+	backupTarget          blob.Store
+	backupTargetName      string
+	ipAllowlists          *ipAllowlistSettings
 	// disablePulumiJournaling turns Pulumi journaling off. See
 	// WithDisablePulumiJournaling.
 	disablePulumiJournaling bool
-	backupTarget            blob.Store
-	backupTargetName        string
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
+}
+
+// ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
+// exemption switch and the list store (ADR 55, decision 8).
+type ipAllowlistSettings struct {
+	store            ipallow.Store
+	enabled          bool
+	includeBootstrap bool
 }
 
 // Option configures a Server.
@@ -388,6 +399,37 @@ func WithCheckpointDeltaCutoff(n int) Option {
 	return func(o *settings) { o.checkpointDeltaCutoff = n }
 }
 
+// WithIPAllowlists turns IP allowlists on when on is true. A namespace
+// that has a list then refuses requests from addresses outside it
+// (ADR 55, decision 8). Off by default.
+func WithIPAllowlists(on bool) Option {
+	return func(o *settings) { ipAllowlistConfig(o).enabled = on }
+}
+
+// WithIPAllowlistsIncludeBootstrap applies IP allowlists to the bootstrap
+// admin token too when on is true. Off by default: the bootstrap admin token
+// is exempt, so an administrator cannot lock themselves out.
+func WithIPAllowlistsIncludeBootstrap(on bool) Option {
+	return func(o *settings) { ipAllowlistConfig(o).includeBootstrap = on }
+}
+
+// WithIPAllowlistStore sets the IP allowlist persistence port. Required when
+// IP allowlists are on: every SQL adapter serves it from the same database
+// connection as the other ports.
+func WithIPAllowlistStore(s ipallow.Store) Option {
+	return func(o *settings) { ipAllowlistConfig(o).store = s }
+}
+
+// ipAllowlistConfig returns the mutable allowlist settings of o, creating
+// them when an Option runs on zero settings.
+func ipAllowlistConfig(o *settings) *ipAllowlistSettings {
+	if o.ipAllowlists == nil {
+		o.ipAllowlists = &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false}
+	}
+
+	return o.ipAllowlists
+}
+
 // WithBackupTarget sets the backup target that holds blobs/<key>,
 // backups/<id>/sql/<table>.jsonl.gz and backups/<id>/manifest.json (ADR 30 decision 5).
 // target is the opened target store, for example a blob/fs store for
@@ -441,6 +483,10 @@ type services struct {
 	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
+	// access keeps the roles and grants (ADR 52), or is nil when the store
+	// keeps none. NewServer sets it after newServices. The installation API
+	// and the escalation check of the token service share it.
+	access *access.Service
 }
 
 // defaultSettings answers the settings of a server before its options.
@@ -481,6 +527,7 @@ func defaultSettings() *settings {
 		backupTargetName:        "",
 		beforeServe:             nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
+		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 		auditSinks:              nil,
 	}
 }
@@ -502,7 +549,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, authzErr
 	}
 
-	tokens, err := newTokenService(cfg)
+	grants, tokens, err := newIdentityServices(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -512,7 +559,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	svc.tokens = tokens
+	svc.tokens, svc.access = tokens, grants
 
 	backups, err := newBackupService(cfg, svc)
 	if err != nil {
@@ -536,11 +583,48 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 	}
 
 	cfg.authenticator = authn
-	cfg.authorizer = identity.SelfAllowed{
+	cfg.authorizer = allowlistGate(identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
-	}
+	}, cfg.ipAllowlists)
 
 	return nil
+}
+
+// allowlistGate wraps next in the IP allowlist gate when the feature is on.
+// The gate is the outermost authorizer, so it runs in the authorization step
+// of every adapter. When the feature is off it returns next with no
+// decorator, so the default path has zero cost and zero risk.
+//
+//nolint:ireturn // The adapters take the port.
+func allowlistGate(next identity.Authorizer, allow *ipAllowlistSettings) identity.Authorizer {
+	if allow == nil || !allow.enabled {
+		return next
+	}
+
+	return ipallow.Gate{
+		Next: next, Rules: allow.store,
+		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
+	}
+}
+
+// allowlistAddressGate returns the address-only gate for the capability
+// routes of the tool adapters when the feature is on, else nil. It holds
+// only the list rules: capability routes have no principal, so there is no
+// bootstrap exemption to carry. A nil interface (not a typed nil) reports
+// off, so the adapters skip the check.
+//
+//nolint:ireturn // The adapters take the port.
+func allowlistAddressGate(allow *ipAllowlistSettings) interface {
+	CheckAddress(ctx context.Context, ns namespace.Name) error
+} {
+	if allow == nil || !allow.enabled {
+		return nil
+	}
+
+	return ipallow.Gate{
+		Next: nil, Rules: allow.store,
+		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
+	}
 }
 
 // assemble mounts the adapters and routes around the services. backups is
@@ -763,6 +847,7 @@ func newTFEHandler(
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
+		AddressGate:   allowlistAddressGate(cfg.ipAllowlists),
 		Logger:        cfg.logger,
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
@@ -820,13 +905,8 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		)
 	}
 
-	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
-		missing := "WithTLS certificate file"
-		if cfg.tlsCertFile != "" {
-			missing = "WithTLS key file"
-		}
-
-		return baseurl.Resolver{}, fmt.Errorf("%w: %s", ErrMissingOption, missing)
+	if err := checkTLSAndAllowlist(cfg); err != nil {
+		return baseurl.Resolver{}, err
 	}
 
 	base, err := baseurl.Parse(cfg.publicURL)
@@ -892,6 +972,29 @@ func newUpdateService(
 	return updates, nil
 }
 
+// checkTLSAndAllowlist validates the TLS pair and the IP allowlist switch
+// of cfg. It keeps checkSettings under the complexity limit.
+func checkTLSAndAllowlist(cfg *settings) error {
+	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
+		missing := "WithTLS certificate file"
+		if cfg.tlsCertFile != "" {
+			missing = "WithTLS key file"
+		}
+
+		return fmt.Errorf("%w: %s", ErrMissingOption, missing)
+	}
+
+	allow := cfg.ipAllowlists
+	if allow != nil && allow.enabled && allow.store == nil {
+		return fmt.Errorf(
+			"%w: --ip-allowlists needs a store: pass WithIPAllowlistStore",
+			ErrMissingOption,
+		)
+	}
+
+	return nil
+}
+
 // newServices builds the domain services from validated settings. It reads
 // no database. Run runs the start-up checks (such as secret.CheckWrapper)
 // with its own context.
@@ -914,8 +1017,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	}
 
 	stacks, err := stack.NewService(stack.Config{
-		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now,
-		State: updates, Retention: cfg.softDeleteRetention,
+		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now, State: updates, Retention: cfg.softDeleteRetention,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("stack service: %w", err)
@@ -945,7 +1047,27 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		workspaces: workspaces,
 		tokens:     nil,
 		deleted:    nil,
+		access:     nil,
 	}, nil
+}
+
+// newIPAllowlistService builds the IP allowlist service from validated
+// settings, or nil when no allowlist store is configured: an SDK user who
+// did not pass WithIPAllowlistStore gets no allowlist routes.
+func newIPAllowlistService(cfg *settings, namespaces *namespace.Service) (*ipallow.Service, error) {
+	allow := cfg.ipAllowlists
+	if allow == nil || allow.store == nil {
+		return nil, nil //nolint:nilnil // No allowlist store is a valid setup: the routes stay unmounted.
+	}
+
+	svc, err := ipallow.NewService(ipallow.Config{
+		Store: allow.store, Namespaces: namespaces, Now: cfg.now, Enabled: allow.enabled,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ip allowlist service: %w", err)
+	}
+
+	return svc, nil
 }
 
 // Handler returns the server's root HTTP handler, for embedding in your own server.
@@ -1358,6 +1480,7 @@ func newPulumiHandler(
 		Namespaces:           svc.namespaces,
 		Authenticator:        cfg.authenticator,
 		Authorizer:           cfg.authorizer,
+		AddressGate:          allowlistAddressGate(cfg.ipAllowlists),
 		Logger:               cfg.logger,
 		BaseURL:              base,
 		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,
@@ -1490,12 +1613,14 @@ func newInstallationAPI(
 func newServerHandler(
 	cfg *settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
-	grants, err := newAccessService(cfg)
+	grants := deps.services.access
+
+	principals, err := newPrincipalService(cfg, grants)
 	if err != nil {
 		return nil, err
 	}
 
-	principals, err := newPrincipalService(cfg, grants)
+	allow, err := newIPAllowlistService(cfg, deps.services.namespaces)
 	if err != nil {
 		return nil, err
 	}
@@ -1514,6 +1639,7 @@ func newServerHandler(
 		Principals:    principals,
 		Access:        grants,
 		Tokens:        deps.services.tokens,
+		IPAllowlists:  allow,
 		Audit:         serverAuditOf(cfg.namespaceStore),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
@@ -1674,10 +1800,31 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 	return svc, nil
 }
 
+// newIdentityServices builds the role and grant service (ADR 52) and the
+// access token service (ADR 53). The token service takes the role and
+// grant service as its escalation check. Either is nil when the store
+// keeps none.
+func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, error) {
+	grants, err := newAccessService(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tokens, err := newTokenService(cfg, grants)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return grants, tokens, nil
+}
+
 // newTokenService builds the access token service (ADR 53) from the
 // namespace store, or returns nil when the store keeps no access tokens or
-// no principals. Every SQL adapter keeps both.
-func newTokenService(cfg *settings) (*accesstoken.Service, error) {
+// no principals. Every SQL adapter keeps both. The escalation check of a
+// token for another principal (decision 3) is the grants of grants (ADR
+// 52). With nil grants, a store that keeps none, only an administrator
+// passes it.
+func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No token store is a valid setup: the routes answer 501.
@@ -1688,8 +1835,14 @@ func newTokenService(cfg *settings) (*accesstoken.Service, error) {
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
+	var check accesstoken.GrantCheck
+	if grants != nil {
+		check = tokengrants.Check{Grants: grants, Principals: principals}
+	}
+
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: nil, Logger: cfg.logger, Now: cfg.now, NewID: nil,
+		Store: store, Principals: principals, Freshness: nil, Grants: check, Logger: cfg.logger, Now: cfg.now,
+		NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)

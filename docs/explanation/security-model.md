@@ -48,6 +48,26 @@ single sign-on with directory sync (RFC 21).
 The actions already split, for example, reading a unit from reading its
 secrets. With only administrators, that split has no effect yet.
 
+## Access tokens
+
+ADR 53 adds access tokens that the server stores (`odp_` secrets) for
+persons and services.
+
+- **The server stores only a SHA-256 digest of each secret.** It shows the
+  secret once, at create or rotation.
+- **An access token cannot make or rotate a token.** Only a caller without
+  a stored token can: today the bootstrap admin token (ADR 6), later a
+  sign-in (ADR 55). A token that could make tokens would outlive its
+  maximum lifetime and a revoke of the token that made it.
+- **A create or rotation for another principal is a grant by proxy.** The
+  caller must hold every action that the grants of that principal give,
+  through its groups too. Otherwise the server answers 403.
+- **Known gap: the check runs at create and rotation only.** A token acts
+  with the grants of its principal at the time of each request. When an
+  administrator later gives that principal a new grant, its tokens get the
+  new actions too, also tokens that a caller without those actions made.
+  Issue #531 tracks this question.
+
 ## Pulumi secrets
 
 The Pulumi CLI sends each secret config value to the server to encrypt and
@@ -181,6 +201,55 @@ A wrong setup would otherwise make every client read as an internal address.
 Allowlists and limits treat an unknown address as denied.
 A wrong list records wrong audit sources, so review the list when entries name addresses that you do not expect.
 
+## IP allowlists of a namespace
+
+IP allowlists are off by default.
+The operator turns them on with `--ip-allowlists`.
+Each namespace opts in with its own list through three routes: GET, PUT and DELETE on `/api/server/namespaces/{namespace}/ip-allowlist`.
+These routes need the action `namespace:manage-ip-allowlist` on the namespace.
+The action is in the administration family.
+Only a grant on the installation holds it.
+A namespace admin can not read the list.
+A namespace admin can not change the list.
+The lists apply to requests that act on a namespace, a stack or a workspace.
+Installation-scope routes are not gated by a namespace list.
+Backup, restore, maintenance, the access review export, metrics, and the principals, groups, roles and tokens routes run with no namespace check.
+A request whose client address (see the section about the client address) is outside the list of the namespace of its object gets 403.
+The body is the generic text `forbidden`.
+It names neither the list nor the namespace.
+An unknown address is denied.
+The bootstrap admin token is exempt unless `--ip-allowlists-include-bootstrap` is set, so an administrator cannot lock themselves out.
+Every change is audited in the chain of the namespace in the same transaction.
+The check runs in the authorization step of every route that calls Authorize.
+The Pulumi update-lease routes and the OpenTofu upload-capability routes carry no principal.
+They get an address-only check against the list of the namespace of the stack or workspace.
+The bootstrap exemption does not apply to them.
+For the OpenTofu uploads the check runs after the server checks the capability token and before it reads the body.
+For the Pulumi lease routes the check runs after the server checks the lease token of the update.
+A caller without the token gets the same answer for a namespace with and without a list.
+A caller can not learn the list.
+`::/0` matches IPv6 clients only.
+`0.0.0.0/0` matches IPv4 clients only.
+The server reads an IPv4-mapped IPv6 client address as its IPv4 address first.
+A TFE route that lists units can answer 404 for a namespace that the caller may not see.
+
+### Recovery
+
+By default the bootstrap admin token is exempt: it can read, set and delete every rule from any address.
+With `--ip-allowlists-include-bootstrap` the lists apply to it too.
+A rule that holds none of the addresses that the operator uses locks the namespace.
+The server refuses the REST calls of that namespace from outside the list, including the DELETE of the rule.
+To recover, restart the server without `--ip-allowlists-include-bootstrap`.
+The bootstrap admin token is exempt again.
+Delete the rule with `DELETE /api/server/namespaces/{namespace}/ip-allowlist`.
+Then start with the flag again if wanted.
+When the server has no bootstrap admin token, the exemption never applies.
+To recover, restart the server without `--ip-allowlists`.
+Delete the rule with `DELETE /api/server/namespaces/{namespace}/ip-allowlist`.
+Then start with the flag again if wanted.
+To stop the whole feature, restart without `--ip-allowlists`.
+The rules stay stored and do not apply.
+
 ## Logs
 
 The server writes one log line for each request: the method, the route
@@ -230,7 +299,8 @@ entry and how to read them.
   route.
 - **Who can read the log.** `GET /api/audit/entries` lists the entries and
   `GET /api/audit/check` checks the chain. Both need the action
-  `namespace:read-audit` on the namespace.
+  `namespace:read-audit` on the namespace. For the installation scope
+  `@server`, both need `server:read-audit` on the installation instead.
 - **A hash chain for each namespace.** Each entry holds the SHA-256 of its
   own fields and of the previous entry. The check finds a changed or a
   deleted entry. It does not stop a person who can write to the database:

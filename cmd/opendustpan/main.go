@@ -48,6 +48,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -242,6 +243,9 @@ type serveFlags struct {
 	// for the start log (ADR 63 decision 7).
 	file     cli.ConfigFile
 	resolved []cli.Resolved
+	// passwordFlags holds the flags that carry a password in a URL, for the
+	// warning that a flag holds a password, so the password can be moved to the variable.
+	passwordFlags []*cli.Setting
 
 	// args and lookup are the command line and the environment snapshot
 	// of the start. A reload of the configuration file resolves against
@@ -258,31 +262,33 @@ type serveFlags struct {
 	// on its own (ADR 63 decision 10).
 	instanceID string
 
-	config                  string
-	listen                  string
-	consoleDir              string
-	origins                 string
-	tlsCert                 string
-	tlsKey                  string
-	publicURL               string
-	trustedProxies          string
-	trustedProxyHeader      string
-	blobDir                 string
-	blobStore               string
-	s3Endpoint              string
-	s3Region                string
-	backupTarget            string
-	logLevel                string
-	logFormat               string
-	keyFile                 string
-	generateKey             bool
-	maxCheckpointBytes      int64
-	maxSecretBatchBytes     int64
-	maxStateBytes           int64
-	maxBodyBytesInFlight    int64
-	checkpointDeltaCutoff   int64
-	disablePulumiJournaling bool
-	softDeleteRetention     string
+	config                       string
+	listen                       string
+	consoleDir                   string
+	origins                      string
+	tlsCert                      string
+	tlsKey                       string
+	publicURL                    string
+	trustedProxies               string
+	trustedProxyHeader           string
+	ipAllowlists                 bool
+	ipAllowlistsIncludeBootstrap bool
+	blobDir                      string
+	blobStore                    string
+	s3Endpoint                   string
+	s3Region                     string
+	backupTarget                 string
+	logLevel                     string
+	logFormat                    string
+	keyFile                      string
+	generateKey                  bool
+	maxCheckpointBytes           int64
+	maxSecretBatchBytes          int64
+	maxStateBytes                int64
+	maxBodyBytesInFlight         int64
+	checkpointDeltaCutoff        int64
+	disablePulumiJournaling      bool
+	softDeleteRetention          string
 	// retention is softDeleteRetention after the check.
 	retention  time.Duration
 	auditSinks []string
@@ -385,6 +391,7 @@ func (f *serveFlags) resolveLayers(fs *flag.FlagSet, lookup cli.LookupFunc) erro
 	}
 
 	f.resolved = resolved
+	f.passwordFlags = cli.FlagsHoldingPassword(fs, resolved)
 
 	return nil
 }
@@ -418,6 +425,8 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
 	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
 	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
+	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
+	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -433,6 +442,19 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 	cli.ByFlag("checkpoint-delta-cutoff").Int64(fs, &f.checkpointDeltaCutoff)
 	cli.ByFlag("disable-pulumi-journaling").Bool(fs, &f.disablePulumiJournaling)
 	cli.ByFlag("soft-delete-retention").String(fs, &f.softDeleteRetention)
+}
+
+// warnPasswordFlags writes one WARN line for each flag that holds a URL with a
+// password. The line names the flag and the variable to use, and it never
+// shows the value, because a flag shows in a process list.
+func warnPasswordFlags(ctx context.Context, logger *slog.Logger, settings []*cli.Setting) {
+	for _, s := range settings {
+		logger.LogAttrs(ctx, slog.LevelWarn,
+			"a flag holds a password, and a process list can show it; set the URL in the variable instead",
+			slog.String("flag", "--"+s.Flag),
+			slog.String("use", s.Env),
+		)
+	}
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
@@ -453,6 +475,8 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 	defer closeAppLog(ctx, &app, stderr)
 
 	cli.LogResolved(ctx, logger, f.resolved)
+
+	warnPasswordFlags(ctx, logger, f.passwordFlags)
 
 	f.instanceID = instance.NewID()
 	logger.LogAttrs(ctx, slog.LevelInfo, "instance", slog.String("instance_id", f.instanceID))
@@ -1107,6 +1131,9 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
 		dustpan.WithSoftDeleteRetention(f.retention),
+		dustpan.WithIPAllowlists(f.ipAllowlists),
+		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
+		dustpan.WithIPAllowlistStore(st),
 	}, nil
 }
 
@@ -1454,6 +1481,7 @@ type store interface {
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
+	ipallow.Store
 	audit.ServerStore
 	close()
 }

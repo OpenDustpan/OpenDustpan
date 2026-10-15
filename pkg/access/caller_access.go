@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -159,4 +160,96 @@ func scopeObjects(scope Scope, kind ObjectKind) []identity.Object {
 	})
 
 	return out
+}
+
+// CallerGrantsRequest asks for one page of the current grants of a caller.
+// Cursor and Limit page as in ReviewRequest.
+type CallerGrantsRequest struct {
+	Cursor string
+	Limit  int
+}
+
+// CallerGrants answers one page of the current grants of p: the "my access"
+// list of the console. The page holds the grants of the principal of p and
+// the grants of each group that it is a member of, one row for each
+// membership, with the membership in Row.Via and the name of the group in
+// Row.SubjectName. It is a snapshot at the time of the first page, in the
+// order of an access-review export, with the total on the first page only.
+//
+// Each page reads the groups of p at the time of its request, and keeps a
+// grant of a group only while the membership of p is current at the time
+// of the snapshot. So a page after the first can leave out the grants of a
+// group that p joined or left since the first page, and a grant revoked
+// since. The store reads only the grants of p and its groups (ADR 52).
+//
+// A caller with no principal record, for example a bootstrap admin token
+// (ADR 6), holds no grant: its page is empty. Access answers what such a
+// caller can do. A bad request returns ErrInvalid, and a store that reads
+// no review ErrNoReview.
+func (s *Service) CallerGrants(ctx context.Context, p identity.Principal, req CallerGrantsRequest) (ReviewPage, error) {
+	rs, ok := s.store.(ReviewStore)
+	if !ok {
+		return ReviewPage{}, ErrNoReview
+	}
+
+	subjects, err := s.authz.subjectsOf(ctx, p)
+	if err != nil {
+		return ReviewPage{}, err
+	}
+
+	own, principalID, groups := "", "", []string{}
+
+	for _, subject := range subjects {
+		switch subject.Kind {
+		case SubjectPrincipal:
+			own, principalID = subject.String(), subject.ID
+		case SubjectGroup:
+			groups = append(groups, subject.ID)
+		default:
+		}
+	}
+
+	obj := identity.CallerObject()
+
+	review := ReviewRequest{From: nil, To: nil, Subject: own, Cursor: req.Cursor, Limit: req.Limit, Expand: false}
+
+	q, _, err := reviewQuery(review, obj, s.Now())
+	if err != nil {
+		return ReviewPage{}, err
+	}
+
+	if own == "" {
+		// With no subject, the query would read every grant.
+		return noGrants(q), nil
+	}
+
+	_, grantAccess, err := s.authz.reviewRoles(ctx)
+	if err != nil {
+		return ReviewPage{}, err
+	}
+
+	// The rows read only the grants of the caller: none is on a container
+	// of another object, so the scope names no object.
+	read := func(ctx context.Context, q ReviewQuery) ([]ReviewRow, int64, error) {
+		return rs.CallerGrants(ctx, CallerGrantsQuery{
+			Groups: groups, Principal: principalID, After: q.After, AsOfMs: q.AsOfMs, Limit: q.Limit, Count: q.Count,
+		})
+	}
+
+	return s.reviewEntries(ctx, rs, reviewRead{read: read, grantAccess: grantAccess, obj: obj, q: q, boot: 0})
+}
+
+// noGrants returns the page of a caller with no grant at the time of the
+// snapshot of q: no rows and no next page, and a total of 0 on the first
+// page.
+func noGrants(q ReviewQuery) ReviewPage {
+	asOf := time.UnixMilli(q.AsOfMs).UTC()
+	page := ReviewPage{AsOf: &asOf, Total: nil, NextCursor: "", Entries: []ReviewEntry{}}
+
+	if q.After == (ReviewKey{ID: "", MemberID: "", AtMs: 0, MemberAtMs: 0}) {
+		var zero int64
+		page.Total = &zero
+	}
+
+	return page
 }

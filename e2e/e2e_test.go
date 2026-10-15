@@ -4561,11 +4561,17 @@ func importCloudConfigOrg(host, org, workspace string) string {
 }
 
 // importEncryptionBlock returns the client-side encryption block shared by
-// the encrypted source and its destination.
+// the encrypted source and its destination. The pbkdf2 key provider uses
+// 200000 iterations, the OpenTofu minimum ("min. 200.000, default:
+// 600.000" in https://opentofu.org/docs/language/state/encryption). The
+// default costs much CPU time for each encrypted state read and write in
+// each leg. The test checks that the server stores the envelope unchanged,
+// not the strength of the key.
 func importEncryptionBlock() string {
 	return fmt.Sprintf(`  encryption {
     key_provider "pbkdf2" "e2e" {
       passphrase = %q
+      iterations = 200000
     }
     method "aes_gcm" "e2e" {
       keys = key_provider.pbkdf2.e2e
@@ -6492,9 +6498,14 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 }
 
 // tofuSlowConfig is the crash configuration: the built-in terraform_data
-// resource with a local-exec provisioner that sleeps, so an apply takes time
-// without a provider download. The greeting output stays, so the state after
-// recovery still holds it.
+// resource with a local-exec provisioner, so an apply runs a child process
+// without a provider download. When the apply names the marker files in
+// E2E_CRASH_STARTED and E2E_CRASH_DONE, the provisioner writes the first
+// file, sleeps and then writes the second: the harness kills the apply when
+// the first file appears, so the kill lands while the provisioner runs and
+// the sleep never ends. Without the marker files the provisioner does
+// nothing, so the apply after recovery does not wait. The greeting output
+// stays, so the state after recovery still holds it.
 func tofuSlowConfig(host string) string {
 	return `terraform {
   cloud {
@@ -6508,7 +6519,13 @@ func tofuSlowConfig(host string) string {
 
 resource "terraform_data" "slow" {
   provisioner "local-exec" {
-    command = "sleep 10"
+    command = <<-EOT
+      if [ -n "$E2E_CRASH_STARTED" ]; then
+        touch "$E2E_CRASH_STARTED"
+        sleep 10
+        touch "$E2E_CRASH_DONE"
+      fi
+    EOT
   }
 }
 
@@ -6519,7 +6536,7 @@ output "greeting" {
 }
 
 // tofuCrashScenario proves recovery after a crashed apply: the harness kills
-// an apply at its lock request, the workspace stays locked, a plan fails on
+// an apply while its provisioner runs, the workspace stays locked, a plan fails on
 // the lock, force-unlock releases it, the next apply passes and no pending
 // version is current.
 func tofuCrashScenario(t *testing.T, env *e2e.Env) {
@@ -6530,15 +6547,24 @@ func tofuCrashScenario(t *testing.T, env *e2e.Env) {
 
 	env.WriteTofuConfig(t, tofuSlowConfig(env.Host()))
 
-	// The harness kills the apply once the recorder shows its lock request,
-	// then reaps it, so no process stays behind.
-	env.KillAtRequest(ctx, t, e2e.KillSpec{
-		Name:       "crashed apply",
-		Args:       []string{"apply", "-input=false", "-auto-approve", "-no-color"},
-		Env:        nil,
-		Method:     http.MethodPost,
-		PathSuffix: "/actions/lock",
+	// The harness kills the apply and its provisioner once the provisioner
+	// writes the start marker, then reaps it, so no process stays behind.
+	// The apply holds the lock while its provisioner runs.
+	markers := t.TempDir()
+	started := filepath.Join(markers, "started")
+	done := filepath.Join(markers, "done")
+
+	env.KillAtMarker(ctx, t, e2e.KillSpec{
+		Name:   "crashed apply",
+		Args:   []string{"apply", "-input=false", "-auto-approve", "-no-color"},
+		Env:    []string{"E2E_CRASH_STARTED=" + started, "E2E_CRASH_DONE=" + done},
+		Marker: started,
 	})
+
+	// The provisioner never wrote the done marker: it still ran at the kill.
+	if _, err := os.Stat(done); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("done marker after the crashed apply: stat = %v, want the kill before the provisioner ends", err)
+	}
 
 	// The killed apply never unlocked: the workspace is still locked.
 	env.APIStepA(ctx, t, e2e.APIStepSpec{
@@ -13864,8 +13890,9 @@ func decodeMaintenanceError(t *testing.T, body string, want int, wantName string
 // the Pulumi CLI: entering refuses while the update of the renamed stack
 // runs, force cancels the update and names it, the CLI fails with the
 // maintenance message, the probes stay available, and leaving restores the
-// CLI. It runs in every matrix version, so the report shows what each
-// supported CLI does on the 503.
+// CLI. The CLI step on the 503 runs only in the oldest and the newest matrix
+// versions, so the report shows what the supported range does on the 503
+// without the retry backoff in each leg.
 func pulumiMaintenanceScenario(t *testing.T, env *e2e.Env, org string) {
 	t.Helper()
 
@@ -13901,11 +13928,15 @@ func pulumiMaintenanceScenario(t *testing.T, env *e2e.Env, org string) {
 		t.Fatalf("installation state = %q, want maintenance", got)
 	}
 
-	env.Step(ctx, t, failStep(
-		"stack ls in maintenance",
-		outputContains("maintenance"),
-		"stack", "ls", "--json",
-	))
+	// The CLI retries the 503 with a backoff for about 14 s before it fails,
+	// so this step runs only in the oldest and the newest matrix versions.
+	if e2e.Pulumi().IsMatrixEnd(env.Install().Label) {
+		env.Step(ctx, t, failStep(
+			"stack ls in maintenance",
+			outputContains("maintenance"),
+			"stack", "ls", "--json",
+		))
+	}
 
 	checkReady(ctx, t, env)
 	leaveMaintenance(ctx, t, env)

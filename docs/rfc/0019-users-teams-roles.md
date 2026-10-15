@@ -271,7 +271,21 @@ Lead decisions under owner delegation, 2026-10-13:
 - The access of the caller. `GET /api/server/caller/access` needs
   `caller:read` only. It answers the actions and grants on one object, or
   the objects of one type where an action is held, with paging. A question
-  about another principal waits for a later change.
+  about another principal waits for a later change. It lists only the
+  grants that give at least one of its actions.
+- The grants of the caller. `GET /api/server/caller/grants` needs
+  `caller:read` only, and writes no audit entry. It answers the current
+  grants of the caller, paged, in the rows of an access-review snapshot:
+  its own grants, and the grants of each of its groups with the group named
+  and the membership in `via`. The store reads only the grants of the
+  caller and its groups, so a page does not cost more as the installation
+  grows. Each page reads the groups of the caller at its request, and the
+  memberships and grants as of the snapshot time, so a page after the first
+  can leave out a group that the caller joined or left, or a grant revoked,
+  since the first page. A caller with no principal record, for example a
+  bootstrap admin token, gets an empty page. The lead accepted on
+  2026-10-14 that a row shows who made the grant (`grantedBy`) and the
+  member count of the group.
 - No escalation through a role, a membership or a revoke. The lead decided
   these on 2026-10-14, by the delegation of the owner, after the security
   review of the roles and grants change:

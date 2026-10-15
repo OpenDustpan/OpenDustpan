@@ -92,6 +92,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -412,6 +413,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		IPAllowlists:   nil,
 	})
 	if err == nil {
 		t.Fatal("NewHandler without maintenance succeeded")

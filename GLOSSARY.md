@@ -68,6 +68,10 @@ _Avoid_: Cluster, instance (one server process), deployment
 One server process of an installation. Each start makes a new instance ID, `ins-` and 20 characters, which the start log shows. The instance ID is the subject of the audit entries that the process writes on its own (ADR 63).
 _Avoid_: Node, replica, host
 
+**IP allowlist**:
+A list of CIDRs on a namespace. A request that acts on the namespace from outside the list gets 403. The feature is off unless the operator turns it on.
+_Avoid_: Whitelist
+
 **Setting**:
 One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
 _Avoid_: Option, parameter, config value
