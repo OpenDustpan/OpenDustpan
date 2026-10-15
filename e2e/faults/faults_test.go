@@ -463,13 +463,15 @@ func checkPostgresCut(t *testing.T, base string) {
 
 	first.CloseContext(ctx)
 
+	// Open the store before the cut: an open during the cut stalls in the
+	// connection handshake, not in the write.
+	second := openStore()
+
 	addToxic(t, api, "pg-proxy", "cut-pg", "timeout", "upstream", `{"timeout":0}`)
 
 	// A write while cut fails. A short timeout bounds the stall.
 	cutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-
-	second := openStore()
 
 	cutErr := second.CreateNamespace(cutCtx, pgNamespace("pgfault-cut"))
 	second.CloseContext(ctx)
