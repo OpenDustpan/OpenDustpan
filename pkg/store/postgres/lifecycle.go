@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -107,17 +108,24 @@ func restoreStackRow(ctx context.Context, q *db.Queries, ref stack.Ref, id stack
 // audit entry e, it removes the deleted stack id with every child row, its
 // data key and its deleted inventory entry (ADR 47). A live stack is not a
 // deleted stack, so it answers ErrNotFound and stays.
-func (s *Store) PurgeStack(ctx context.Context, id stack.ID, fence namespace.Fence, e audit.Entry) error {
+func (s *Store) PurgeStack(
+	ctx context.Context,
+	id stack.ID,
+	fence namespace.Fence,
+	dueBy time.Time,
+	e audit.Entry,
+) error {
 	return s.purgeUnit(ctx, fence, e, purgedUnit{tool: inventoryTool, id: id.String()}, func(q *db.Queries) error {
-		return purgeStackRows(ctx, q, fence.Namespace, id)
+		return purgeStackRows(ctx, q, fence.Namespace, id, dueBy)
 	})
 }
 
 // purgeStackRows checks that the namespace has the deleted stack id, then
 // deletes its child rows in foreign-key order, the stack row and its deleted
-// inventory entry. It returns ErrNotFound for a live or unknown stack before
-// it deletes anything.
-func purgeStackRows(ctx context.Context, q *db.Queries, ns namespace.Name, id stack.ID) error {
+// inventory entry. It returns ErrNotFound for a live or unknown stack, and
+// for a stack whose retention period ends after a non-zero dueBy, before it
+// deletes anything.
+func purgeStackRows(ctx context.Context, q *db.Queries, ns namespace.Name, id stack.ID, dueBy time.Time) error {
 	_, err := q.GetDeletedStack(ctx, db.GetDeletedStackParams{Namespace: ns.String(), ID: id.String()})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stack.ErrNotFound
@@ -125,6 +133,15 @@ func purgeStackRows(ctx context.Context, q *db.Queries, ns namespace.Name, id st
 
 	if err != nil {
 		return fmt.Errorf("select deleted stack: %w", err)
+	}
+
+	due, err := retentionEnded(ctx, q, ns, purgedUnit{tool: inventoryTool, id: id.String()}, dueBy)
+	if err != nil {
+		return err
+	}
+
+	if !due {
+		return stack.ErrNotFound
 	}
 
 	children := []struct {
@@ -243,14 +260,20 @@ func restoreWorkspaceRow(
 // PurgeWorkspace implements workspace.Store. In one fenced transaction with
 // the audit entry e, it removes the deleted workspace id with its state
 // versions, its data key and its deleted inventory entry (ADR 47).
-func (s *Store) PurgeWorkspace(ctx context.Context, id workspace.ID, fence namespace.Fence, e audit.Entry) error {
+func (s *Store) PurgeWorkspace(
+	ctx context.Context,
+	id workspace.ID,
+	fence namespace.Fence,
+	dueBy time.Time,
+	e audit.Entry,
+) error {
 	return s.purgeUnit(
 		ctx,
 		fence,
 		e,
 		purgedUnit{tool: inventoryToolOpenTofu, id: id.String()},
 		func(q *db.Queries) error {
-			return purgeWorkspaceRows(ctx, q, fence.Namespace, id)
+			return purgeWorkspaceRows(ctx, q, fence.Namespace, id, dueBy)
 		},
 	)
 }
@@ -258,8 +281,11 @@ func (s *Store) PurgeWorkspace(ctx context.Context, id workspace.ID, fence names
 // purgeWorkspaceRows checks that the namespace has the deleted workspace id,
 // then deletes its state versions, its data key, the workspace row and its
 // deleted inventory entry. It returns ErrNotFound for a live or unknown
-// workspace before it deletes anything.
-func purgeWorkspaceRows(ctx context.Context, q *db.Queries, ns namespace.Name, id workspace.ID) error {
+// workspace, and for a workspace whose retention period ends after a
+// non-zero dueBy, before it deletes anything.
+func purgeWorkspaceRows(
+	ctx context.Context, q *db.Queries, ns namespace.Name, id workspace.ID, dueBy time.Time,
+) error {
 	_, err := q.GetDeletedWorkspace(ctx, db.GetDeletedWorkspaceParams{Namespace: ns.String(), ID: id.String()})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return workspace.ErrNotFound
@@ -267,6 +293,15 @@ func purgeWorkspaceRows(ctx context.Context, q *db.Queries, ns namespace.Name, i
 
 	if err != nil {
 		return fmt.Errorf("select deleted workspace: %w", err)
+	}
+
+	due, err := retentionEnded(ctx, q, ns, purgedUnit{tool: inventoryToolOpenTofu, id: id.String()}, dueBy)
+	if err != nil {
+		return err
+	}
+
+	if !due {
+		return workspace.ErrNotFound
 	}
 
 	if err = q.DeleteStateVersionsOfWorkspace(ctx, id.String()); err != nil {
@@ -292,6 +327,36 @@ func purgeWorkspaceRows(ctx context.Context, q *db.Queries, ns namespace.Name, i
 	}
 
 	return nil
+}
+
+// retentionEnded reports whether the retention period of the deleted unit
+// ended at or before dueBy, from its deleted inventory entry, in the purge
+// transaction. A zero dueBy skips the check: an admin purge acts before the
+// end. The retention sweep sets it, so a unit that a restore and a new
+// delete gave a new retention period after the sweep listed it stays.
+func retentionEnded(
+	ctx context.Context,
+	q *db.Queries,
+	ns namespace.Name,
+	u purgedUnit,
+	dueBy time.Time,
+) (bool, error) {
+	if dueBy.IsZero() {
+		return true, nil
+	}
+
+	row, err := q.GetDeletedInventory(ctx, db.GetDeletedInventoryParams{
+		Namespace: ns.String(), Tool: u.tool, UnitID: u.id,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("select deleted inventory entry: %w", err)
+	}
+
+	return row.PurgeAfterMs <= dueBy.UnixMilli(), nil
 }
 
 // revokeUnitGrants ends every current grant on the purged unit id, at the
@@ -349,10 +414,24 @@ const maxBlobPurgeList = 10000
 
 // ListBlobPurges implements inventory.BlobPurges. It reads at most
 // maxBlobPurgeList records.
-func (s *Store) ListBlobPurges(ctx context.Context, limit int) ([]inventory.BlobPurge, error) {
+func (s *Store) ListBlobPurges(
+	ctx context.Context, after *inventory.BlobPurgeCursor, limit int,
+) ([]inventory.BlobPurge, error) {
 	size := int32(max(0, min(limit, maxBlobPurgeList))) // #nosec G115 // Bounded to 0..maxBlobPurgeList.
 
-	rows, err := s.queries.ListBlobPurges(ctx, size)
+	var (
+		rows []db.BlobPurge
+		err  error
+	)
+
+	if after == nil {
+		rows, err = s.queries.ListBlobPurges(ctx, size)
+	} else {
+		rows, err = s.queries.ListBlobPurgesAfter(ctx, db.ListBlobPurgesAfterParams{
+			AfterMs: codec.Millis(after.PurgedAt), AfterTool: after.Tool, AfterUnitID: after.UnitID, PageLimit: size,
+		})
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("list blob purges: %w", err)
 	}

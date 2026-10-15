@@ -355,6 +355,31 @@ FROM inventory_deleted
 WHERE namespace = $1
 ORDER BY tool COLLATE "C", name COLLATE "C", unit_id COLLATE "C";
 
+-- name: ListExpiredInventory :many
+-- The first page of the deleted units of every namespace whose retention
+-- ended at or before $1, for the retention sweep. Byte order
+-- (COLLATE "C"), as inventory.PageExpired orders.
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= $1
+ORDER BY purge_after_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT $2;
+
+-- name: ListExpiredInventoryAfter :many
+-- The page of ListExpiredInventory after the cursor (end of retention,
+-- tool, unit ID). The lower bound on purge_after_ms lets the index scan
+-- start at the cursor.
+SELECT namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms
+FROM inventory_deleted
+WHERE purge_after_ms <= sqlc.arg(now_ms)
+  AND purge_after_ms >= sqlc.arg(after_ms)
+  AND (purge_after_ms > sqlc.arg(after_ms)
+    OR (purge_after_ms = sqlc.arg(after_ms) AND tool COLLATE "C" > sqlc.arg(after_tool))
+    OR (purge_after_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool)
+      AND unit_id COLLATE "C" > sqlc.arg(after_unit_id)))
+ORDER BY purge_after_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT sqlc.arg(page_limit);
+
 -- name: DeleteInventory :exec
 DELETE FROM inventory
 WHERE namespace = $1 AND tool = $2 AND name = $3;
@@ -1349,6 +1374,17 @@ SELECT tool, unit_id, namespace, purged_at_ms
 FROM blob_purges
 ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
 LIMIT $1;
+
+-- name: ListBlobPurgesAfter :many
+-- The page of ListBlobPurges after the cursor (purge time, tool, unit ID).
+SELECT tool, unit_id, namespace, purged_at_ms
+FROM blob_purges
+WHERE purged_at_ms > sqlc.arg(after_ms)
+  OR (purged_at_ms = sqlc.arg(after_ms) AND tool COLLATE "C" > sqlc.arg(after_tool))
+  OR (purged_at_ms = sqlc.arg(after_ms) AND tool = sqlc.arg(after_tool)
+    AND unit_id COLLATE "C" > sqlc.arg(after_unit_id))
+ORDER BY purged_at_ms, tool COLLATE "C", unit_id COLLATE "C"
+LIMIT sqlc.arg(page_limit);
 
 -- name: GetAuditSinkCursor :one
 -- The highest sequence of a namespace that a log sink holds (ADR 60

@@ -164,6 +164,7 @@ var embeddedMigrationNames = []string{
 	"0054_token_policy.sql",
 	"0056_audit_object_id_and_blob_purges.sql",
 	"0057_namespace_ip_allowlist.sql",
+	"0058_inventory_deleted_purge_after.sql",
 	"0062_sessions.sql",
 }
 
