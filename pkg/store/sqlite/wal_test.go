@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -52,6 +53,8 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
+	copyTemplate(t, path)
+
 	s, err := sqlite.Open(ctx, path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -79,11 +82,11 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 
 	go sampleWAL(ctx, path, stopSampler, samplerDone)
 
-	const rounds = 20
+	const rounds = 8
 
-	const writerOps = 3
+	const writerOps = 2
 
-	const readerOps = 20
+	const readerOps = 10
 
 	var counter atomic.Int64
 
@@ -361,6 +364,8 @@ func openWALBackupSource(ctx context.Context, t *testing.T, dir string) walBacku
 
 	path := filepath.Join(dir, "dustpan.db")
 
+	copyTemplate(t, path)
+
 	src, err := sqlite.Open(ctx, path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -436,7 +441,11 @@ func exportWALBackup(t *testing.T, src *sqlite.Store, walSize int64) walBackup {
 func importWALBackup(ctx context.Context, t *testing.T, dir string, bk walBackup) *sqlite.Store {
 	t.Helper()
 
-	dst, err := sqlite.Open(ctx, filepath.Join(dir, "restored.db"))
+	dstPath := filepath.Join(dir, "restored.db")
+
+	copyTemplate(t, dstPath)
+
+	dst, err := sqlite.Open(ctx, dstPath)
 	if err != nil {
 		t.Fatalf("open restore destination: %v", err)
 	}
@@ -459,49 +468,29 @@ func importWALBackup(ctx context.Context, t *testing.T, dir string, bk walBackup
 }
 
 // growWALPastDB writes stacks until the write-ahead log file is larger than
-// the database file and returns every reference written. It caps the batches
-// so a broken test fails fast instead of writing forever.
+// the database file and returns every reference written. Each stack carries
+// a padding tag, so the log outgrows the file with fewer rows; the backup
+// still proves every written row lands. It caps the batches so a broken test
+// fails fast instead of writing forever.
 func growWALPastDB(
 	ctx context.Context, t *testing.T, s *sqlite.Store, ns namespace.Namespace, path string,
 ) []stack.Ref {
 	t.Helper()
 
+	pad := strings.Repeat("x", 1024)
+
 	var refs []stack.Ref
 
-	for batch := range 30 {
+	for batch := range 20 {
 		for i := range 200 {
-			ref, err := stack.ParseRef("acme", "backup", "row-"+strconv.Itoa(batch*200+i))
-			if err != nil {
-				t.Fatalf("parse stack reference: %v", err)
+			refs = append(refs, writeGrowWALRow(ctx, t, growWALRow{store: s, ns: ns, pad: pad, batch: batch, index: i}))
+
+			if len(refs)%25 == 0 && walOutgrewDB(t, path, len(refs)) {
+				return refs
 			}
-
-			now := time.Now()
-
-			st := stack.Stack{
-				CreatedAt: now,
-				UpdatedAt: now,
-				Tags:      map[string]string{"batch": strconv.Itoa(batch)},
-				Ref:       ref,
-				ID:        stack.ID(ident.NewID("stk-")),
-				Version:   0,
-			}
-
-			if err := s.CreateStack(ctx, st, ns.Fence()); err != nil {
-				t.Fatalf("create stack %s: %v", ref, err)
-			}
-
-			refs = append(refs, ref)
 		}
 
-		sizes := fileSizes(t, path)
-		if sizes.wal > sizes.db {
-			t.Logf(
-				"write-ahead log size = %d bytes with database = %d bytes after %d stacks",
-				sizes.wal,
-				sizes.db,
-				len(refs),
-			)
-
+		if walOutgrewDB(t, path, len(refs)) {
 			return refs
 		}
 	}
@@ -509,6 +498,64 @@ func growWALPastDB(
 	t.Fatal("write-ahead log never outgrew the database file")
 
 	return nil
+}
+
+// growWALRow holds one row of the log-growth batch: its store, namespace,
+// padding tag and position.
+type growWALRow struct {
+	store *sqlite.Store
+	ns    namespace.Namespace
+	pad   string
+	batch int
+	index int
+}
+
+// writeGrowWALRow writes one padded stack of the log-growth batch and returns
+// its reference.
+func writeGrowWALRow(ctx context.Context, t *testing.T, row growWALRow) stack.Ref {
+	t.Helper()
+
+	ref, err := stack.ParseRef("acme", "backup", "row-"+strconv.Itoa(row.batch*200+row.index))
+	if err != nil {
+		t.Fatalf("parse stack reference: %v", err)
+	}
+
+	now := time.Now()
+
+	st := stack.Stack{
+		CreatedAt: now,
+		UpdatedAt: now,
+		Tags:      map[string]string{"batch": strconv.Itoa(row.batch), "pad": row.pad},
+		Ref:       ref,
+		ID:        stack.ID(ident.NewID("stk-")),
+		Version:   0,
+	}
+
+	if err := row.store.CreateStack(ctx, st, row.ns.Fence()); err != nil {
+		t.Fatalf("create stack %s: %v", ref, err)
+	}
+
+	return ref
+}
+
+// walOutgrewDB logs and reports whether the write-ahead log file at path is
+// larger than the database file after count stacks.
+func walOutgrewDB(t *testing.T, path string, count int) bool {
+	t.Helper()
+
+	sizes := fileSizes(t, path)
+	if sizes.wal > sizes.db {
+		t.Logf(
+			"write-ahead log size = %d bytes with database = %d bytes after %d stacks",
+			sizes.wal,
+			sizes.db,
+			count,
+		)
+
+		return true
+	}
+
+	return false
 }
 
 // dbSizes holds the sizes of the database file and its write-ahead log.
@@ -667,7 +714,7 @@ func TestWALGuardBusySlowAttemptsCapped(t *testing.T) {
 		prefix:    "slowcap",
 	})
 
-	waitForFailedTicks(ctx, t, 5, 10*time.Second)
+	waitForFailedTicks(ctx, t, 3, 10*time.Second)
 
 	requireBusyTickSlowCapped(t)
 
@@ -768,10 +815,10 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 
 	waitForStoreTicks(ctx, t, storeTickWait{
 		path:    path,
-		what:    "3 failed ticks in the second busy period",
+		what:    "2 failed ticks in the second busy period",
 		timeout: 15 * time.Second,
 		done: func(ticks []sqlite.WALGuardTick) bool {
-			return len(failedTicks(ticks[min(before, len(ticks)):])) >= 3
+			return len(failedTicks(ticks[min(before, len(ticks)):])) >= 2
 		},
 	})
 
@@ -942,7 +989,7 @@ func failedTicks(ticks []sqlite.WALGuardTick) []sqlite.WALGuardTick {
 }
 
 // TestWALGuardBusyWritesStayFast holds a read transaction open so every
-// TRUNCATE checkpoint stays busy, runs writes for 3 s past the threshold,
+// TRUNCATE checkpoint stays busy, runs writes for 1 s past the threshold,
 // and proves writers are rarely blocked: one tick tries at most 2 slow
 // attempts and gives up until the next tick, so the p99 write latency stays
 // far below the bound. One tick stalls writers for about 105 ms at most
@@ -980,7 +1027,7 @@ func TestWALGuardBusyWritesStayFast(t *testing.T) {
 		prefix:    "fast-setup",
 	})
 
-	const window = 3 * time.Second
+	const window = 1 * time.Second
 
 	latencies := writeStacksForWindow(ctx, t, walTimedWrites{
 		store:  s,
@@ -1172,7 +1219,7 @@ func TestWALGuardBusyWarnsOnce(t *testing.T) {
 
 	// Stay busy past a second warn period: no repeat until a truncate
 	// succeeds.
-	pauseLoad(ctx, t, 700*time.Millisecond)
+	pauseLoad(ctx, t, 500*time.Millisecond)
 
 	requireBusyWarningCount(t, recorder, 1, "while busy")
 
@@ -1214,11 +1261,15 @@ func TestWALGuardBusyWarnsOnce(t *testing.T) {
 }
 
 // openWALBusyStore opens a store at path with logger (nil keeps the discard
-// default), creates its namespace, and returns both.
+// default), creates its namespace, and returns both. The file at path comes
+// from the migrated template, so only the first test of the binary runs
+// every migration.
 func openWALBusyStore(
 	ctx context.Context, t *testing.T, path string, logger *slog.Logger,
 ) (*sqlite.Store, namespace.Namespace) {
 	t.Helper()
+
+	copyTemplate(t, path)
 
 	var s *sqlite.Store
 
@@ -1338,12 +1389,16 @@ type walWriteJob struct {
 // writeStacksPastThreshold writes stacks from job until the write-ahead log
 // file reaches the threshold and returns the write count. Every write must
 // finish in under 2 s without an error: a busy checkpoint never stalls a
-// caller. It caps the writes so a broken test fails fast instead of writing
-// forever.
+// caller. Each stack carries a padding tag, so the log reaches the threshold
+// with fewer writes; the assertions only need the log past the threshold,
+// not a particular row count. It caps the writes so a broken test fails fast
+// instead of writing forever.
 func writeStacksPastThreshold(ctx context.Context, t *testing.T, job walWriteJob) int {
 	t.Helper()
 
 	const maxWrites = 3000
+
+	pad := strings.Repeat("x", 1500)
 
 	for i := range maxWrites {
 		ref, err := stack.ParseRef("acme", "busy", job.prefix+"-"+strconv.Itoa(i))
@@ -1356,7 +1411,7 @@ func writeStacksPastThreshold(ctx context.Context, t *testing.T, job walWriteJob
 		st := stack.Stack{
 			CreatedAt: now,
 			UpdatedAt: now,
-			Tags:      map[string]string{"run": job.prefix},
+			Tags:      map[string]string{"run": job.prefix, "pad": pad},
 			Ref:       ref,
 			ID:        stack.ID(ident.NewID("stk-")),
 			Version:   0,

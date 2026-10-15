@@ -19,6 +19,8 @@ func TestBackupCoverageFailsOnAddedColumn(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
+	copyTemplate(t, path)
+
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -66,6 +68,8 @@ func TestPortableExportRefusesAddedColumn(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
