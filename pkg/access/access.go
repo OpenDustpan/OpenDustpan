@@ -123,33 +123,34 @@ var families = map[identity.Action]Family{
 
 	identity.ActionPrincipalManageTokens: FamilyDelegation,
 
-	identity.ActionNamespaceRead:          FamilyData,
-	identity.ActionNamespaceAdmin:         FamilyData,
-	identity.ActionNamespaceReadAudit:     FamilyData,
-	identity.ActionNamespaceSetOverrides:  FamilyData,
-	identity.ActionNamespaceManageAccess:  FamilyData,
-	identity.ActionNamespaceReadAccess:    FamilyData,
-	identity.ActionCollectionRead:         FamilyData,
-	identity.ActionCollectionCreate:       FamilyData,
-	identity.ActionCollectionUpdate:       FamilyData,
-	identity.ActionCollectionDelete:       FamilyData,
-	identity.ActionCollectionCreateUnit:   FamilyData,
-	identity.ActionCollectionManageAccess: FamilyData,
-	identity.ActionCollectionReadAccess:   FamilyData,
-	identity.ActionUnitRead:               FamilyData,
-	identity.ActionUnitWrite:              FamilyData,
-	identity.ActionUnitManage:             FamilyData,
-	identity.ActionUnitEncrypt:            FamilyData,
-	identity.ActionUnitDecrypt:            FamilyData,
-	identity.ActionUnitWriteForced:        FamilyData,
-	identity.ActionUnitWriteUnlocked:      FamilyData,
-	identity.ActionUnitSetOverrides:       FamilyData,
-	identity.ActionUnitReadSecrets:        FamilyData,
-	identity.ActionUnitMove:               FamilyData,
-	identity.ActionUnitManageAccess:       FamilyData,
-	identity.ActionUnitRestore:            FamilyData,
-	identity.ActionUnitPurge:              FamilyData,
-	identity.ActionUnitReadAccess:         FamilyData,
+	identity.ActionNamespaceRead:             FamilyData,
+	identity.ActionNamespaceAdmin:            FamilyData,
+	identity.ActionNamespaceReadAudit:        FamilyData,
+	identity.ActionNamespaceSetOverrides:     FamilyData,
+	identity.ActionNamespaceManageAccess:     FamilyData,
+	identity.ActionNamespaceReadAccess:       FamilyData,
+	identity.ActionNamespaceManagePrincipals: FamilyData,
+	identity.ActionCollectionRead:            FamilyData,
+	identity.ActionCollectionCreate:          FamilyData,
+	identity.ActionCollectionUpdate:          FamilyData,
+	identity.ActionCollectionDelete:          FamilyData,
+	identity.ActionCollectionCreateUnit:      FamilyData,
+	identity.ActionCollectionManageAccess:    FamilyData,
+	identity.ActionCollectionReadAccess:      FamilyData,
+	identity.ActionUnitRead:                  FamilyData,
+	identity.ActionUnitWrite:                 FamilyData,
+	identity.ActionUnitManage:                FamilyData,
+	identity.ActionUnitEncrypt:               FamilyData,
+	identity.ActionUnitDecrypt:               FamilyData,
+	identity.ActionUnitWriteForced:           FamilyData,
+	identity.ActionUnitWriteUnlocked:         FamilyData,
+	identity.ActionUnitSetOverrides:          FamilyData,
+	identity.ActionUnitReadSecrets:           FamilyData,
+	identity.ActionUnitMove:                  FamilyData,
+	identity.ActionUnitManageAccess:          FamilyData,
+	identity.ActionUnitRestore:               FamilyData,
+	identity.ActionUnitPurge:                 FamilyData,
+	identity.ActionUnitReadAccess:            FamilyData,
 
 	identity.ActionCallerRead:     FamilySelf,
 	identity.ActionRoleRead:       FamilySelf,
@@ -353,8 +354,10 @@ type ListedGrant struct {
 type GrantStore interface {
 	// CreateGrant persists g. It returns ErrAlreadyExists when a current
 	// grant of the same subject, role and object exists, or when the ID is
-	// taken, and ErrInvalid for an object that takes no grant or a unit with
-	// no stable ID. It returns ErrNotFound when the record of the subject,
+	// taken, and ErrInvalid for an object that takes no grant, a unit with
+	// no stable ID, or a subject that is a principal of a namespace and an
+	// object outside that namespace. It reads the namespace of the subject
+	// in its own transaction. It returns ErrNotFound when the record of the subject,
 	// or the custom role, has ended: the write reads them in its own
 	// transaction, so a delete that commits first wins. A subject or a role
 	// with no record at all is the Service's to check.

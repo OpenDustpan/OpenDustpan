@@ -385,6 +385,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"disabled_at_ms",
 				"last_active_at_ms",
 				"last_sign_in_at_ms",
+				"namespace",
 			},
 		},
 		{

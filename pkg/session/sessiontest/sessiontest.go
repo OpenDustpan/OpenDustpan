@@ -148,7 +148,7 @@ func mustPrincipalAt(t *testing.T, s Store, id string, kind principal.Kind, crea
 
 	p := principal.Principal{
 		CreatedAt: created, UpdatedAt: created, DisabledAt: time.Time{}, ID: id, Subject: "subject of " + id,
-		DisplayName: "Name of " + id, Kind: kind, Source: principal.SourceLocal, GroupCount: 0,
+		DisplayName: "Name of " + id, Kind: kind, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
 	}
 
 	e := entry("ses-x", created)

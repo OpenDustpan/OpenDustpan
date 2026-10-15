@@ -153,8 +153,12 @@ _Avoid_: Token, guard
 ### Identity
 
 **Principal**:
-A caller whose identity OpenDustpan checked: a person, a service or a workload. A principal belongs to the whole installation, not to one namespace (ADR 52).
+A caller whose identity OpenDustpan checked: a person, a service or a workload. Most principals belong to the whole installation. A principal of a namespace is the exception.
 _Avoid_: User (when the caller can be a machine), actor
+
+**Principal of a namespace**:
+A service principal that belongs to one namespace. A holder of `namespace:manage-principals` on the namespace makes it. It can only hold grants on its namespace or on an object inside it, and it cannot be a member of a group. Its subject is unique on the whole installation.
+_Avoid_: Namespace service account, local principal
 
 **Access token**:
 The secret that a tool or the console sends to prove which principal it acts for.

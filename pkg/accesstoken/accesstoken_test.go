@@ -89,7 +89,9 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 
 	c := &clock{now: start, mu: sync.Mutex{}}
 
-	principals, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: c.Now, NewID: nil})
+	principals, err := principal.NewService(
+		principal.Config{Store: st, Guard: nil, Namespaces: nil, Now: c.Now, NewID: nil},
+	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -1597,5 +1599,69 @@ func TestListOfPrincipal(t *testing.T) {
 		if !errors.Is(err, identity.ErrDenied) || !strings.Contains(err.Error(), "list the tokens of") {
 			t.Fatalf("tokens of %s without principal:manage-tokens: err = %v, want ErrDenied for a list", id, err)
 		}
+	}
+}
+
+// namespacedReader reads the principals of the store, and reports the
+// principal id as a principal of the namespace acme.
+type namespacedReader struct {
+	accesstoken.PrincipalReader
+
+	id string
+}
+
+func (r namespacedReader) GetPrincipal(ctx context.Context, id string) (principal.Principal, error) {
+	p, err := r.PrincipalReader.GetPrincipal(ctx, id)
+	if err == nil && p.ID == r.id {
+		p.Namespace = "acme"
+	}
+
+	return p, err
+}
+
+// TestNamespacePrincipalTokensRefused proves that the service makes, rotates
+// and lists no token of a principal of a namespace, also for an
+// administrator, and that the token of such a principal stays as it is.
+func TestNamespacePrincipalTokensRefused(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+	tok, _ := f.create(t, f.service, "deploy")
+
+	svc, err := accesstoken.NewService(accesstoken.Config{
+		Store: f.store, Principals: namespacedReader{PrincipalReader: f.store, id: f.service.ID},
+		Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: f.clock.Now, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	_, _, err = svc.Create(ctx, admin(), caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "more"})
+	wantNamespaceRefusal(t, "make", err)
+
+	_, _, err = svc.Rotate(ctx, admin(), caller(), accesstoken.RotateInput{
+		ID: tok.ID, Scope: accesstoken.ScopeService, ExpiresAt: time.Time{}, OldEndsAt: nil,
+	})
+	wantNamespaceRefusal(t, "rotate", err)
+
+	all := accesstoken.PageRequest{PrincipalID: "", Cursor: "", Filter: accesstoken.FilterAll, Limit: 0}
+	_, err = svc.ListOfPrincipal(ctx, admin(), f.service.ID, all)
+	wantNamespaceRefusal(t, "list", err)
+
+	got, err := f.svc.Get(ctx, tok.ID)
+	if err != nil || got.ReplacedBy != "" || !got.RevokedAt.IsZero() {
+		t.Fatalf("token after the refused rotation = %+v, %v; want it unchanged", got, err)
+	}
+}
+
+// wantNamespaceRefusal fails unless err is the ErrInvalid of a principal of
+// a namespace.
+func wantNamespaceRefusal(t *testing.T, op string, err error) {
+	t.Helper()
+
+	if !errors.Is(err, accesstoken.ErrInvalid) || !strings.Contains(err.Error(), "principal of a namespace") {
+		t.Fatalf("%s for a principal of a namespace: err = %v, want ErrInvalid", op, err)
 	}
 }

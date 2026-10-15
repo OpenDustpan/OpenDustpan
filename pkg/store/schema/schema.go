@@ -169,6 +169,7 @@ var embeddedMigrationNames = []string{
 	"0062_sessions.sql",
 	"0064_blob_purges_age_byte_order.sql",
 	"0065_session_policy.sql",
+	"0066_namespace_principals.sql",
 	"0067_audit_chain_state.sql",
 }
 

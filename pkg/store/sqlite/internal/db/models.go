@@ -197,6 +197,7 @@ type Principal struct {
 	DisabledAtMs   sql.NullInt64
 	LastActiveAtMs int64
 	LastSignInAtMs sql.NullInt64
+	Namespace      string
 }
 
 type PrincipalGroup struct {

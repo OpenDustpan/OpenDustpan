@@ -197,6 +197,7 @@ type Principal struct {
 	DisabledAtMs   pgtype.Int8
 	LastActiveAtMs int64
 	LastSignInAtMs pgtype.Int8
+	Namespace      string
 }
 
 type PrincipalGroup struct {
