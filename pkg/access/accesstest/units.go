@@ -3,10 +3,11 @@ package accesstest
 import (
 	"context"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
-	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -19,7 +20,7 @@ type UnitStore interface {
 	namespace.Store
 	CreateStack(ctx context.Context, st stack.Stack, fence namespace.Fence) error
 	CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
-	DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence, e audit.Entry) error
+	DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence, d inventory.Deletion) error
 }
 
 // unitCases are the cases of access.Units. A store that does not keep
@@ -168,7 +169,8 @@ func testDeletedUnit(t *testing.T, s access.Store) {
 	gone.Namespace, gone.Action, gone.Object = "acme", "unit:manage", "opentofu:acme/network"
 
 	ref := workspace.Ref{Namespace: "acme", Name: name}
-	if deleteErr := us.DeleteWorkspace(ctx, ref, ns.Fence(), gone); deleteErr != nil {
+	deletion := inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(time.Hour)}
+	if deleteErr := us.DeleteWorkspace(ctx, ref, ns.Fence(), deletion); deleteErr != nil {
 		t.Fatalf("delete workspace: %v", deleteErr)
 	}
 
