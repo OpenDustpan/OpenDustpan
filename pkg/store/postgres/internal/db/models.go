@@ -98,6 +98,21 @@ type Checkpoint struct {
 	BlobMd5       []byte
 }
 
+type Collection struct {
+	ID          string
+	Namespace   string
+	NameKey     string
+	Name        string
+	CreatedAtMs int64
+}
+
+type CollectionMember struct {
+	UnitID        string
+	Namespace     string
+	CollectionKey string
+	AssignedAtMs  int64
+}
+
 type Grant struct {
 	ID          string
 	Subject     string

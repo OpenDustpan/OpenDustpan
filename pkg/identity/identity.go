@@ -174,27 +174,6 @@ const (
 	// principal holds it, so a person who grants a role can see its
 	// actions. Its object is ServerObject.
 	ActionRoleRead Action = "role:read"
-	// ActionCollectionRead allows reading a collection and listing the
-	// collections of a namespace. Its object is a collection, or the namespace
-	// for a list (ADR 51, decision 11).
-	ActionCollectionRead Action = "collection:read"
-	// ActionCollectionCreate allows making a collection. Its object is the
-	// namespace of the collection.
-	ActionCollectionCreate Action = "collection:create"
-	// ActionCollectionUpdate allows putting a unit into a collection, or
-	// taking one out of it. Its object is the collection (ADR 51, decision 6).
-	ActionCollectionUpdate Action = "collection:update"
-	// ActionCollectionDelete allows deleting an empty collection. Its object is
-	// the collection.
-	ActionCollectionDelete Action = "collection:delete"
-	// ActionCollectionCreateUnit allows making a unit in a collection, or
-	// moving a unit into it. Its object is the collection. A placement rule
-	// never grants it (ADR 61, decision 4).
-	ActionCollectionCreateUnit Action = "collection:create-unit"
-	// ActionUnitMove allows moving a unit to another collection. Its object is
-	// the unit. The caller also needs collection:update on the old and the new
-	// collection (ADR 61, decision 4; RFC 4).
-	ActionUnitMove Action = "unit:move"
 	// ActionServerReadTokens allows reading the access tokens of every
 	// principal, never their secrets (ADR 53). Its object is ServerObject.
 	ActionServerReadTokens Action = "server:read-tokens"
@@ -220,6 +199,29 @@ const (
 	// object is CallerObject. Every authenticated person holds it with no
 	// grant.
 	ActionTokenManageOwn Action = "token:manage-own"
+	// ActionCollectionRead allows reading a collection and listing the
+	// collections of a namespace. Its object is a collection, or the namespace
+	// for a list (ADR 51, decision 11).
+	ActionCollectionRead Action = "collection:read"
+	// ActionCollectionCreate allows making a collection. Its object is the
+	// namespace of the collection.
+	ActionCollectionCreate Action = "collection:create"
+	// ActionCollectionUpdate allows putting a unit into a collection, or
+	// taking one out of it. Its object is the collection (ADR 51, decision 6).
+	ActionCollectionUpdate Action = "collection:update"
+	// ActionCollectionDelete allows deleting an empty collection. Its object is
+	// the collection.
+	ActionCollectionDelete Action = "collection:delete"
+	// ActionCollectionCreateUnit allows making a unit in a collection, or
+	// moving a unit into it. Its object is the collection. A placement rule
+	// never grants it (ADR 61, decision 4).
+	ActionCollectionCreateUnit Action = "collection:create-unit"
+	// ActionUnitMove allows moving a unit to another collection. A move needs
+	// exactly these checks: unit:move on the unit (the route), unit:manage-access
+	// on the unit, collection:create-unit on the target, collection:manage-access
+	// on the target, and collection:manage-access on the collection the unit is
+	// in now, when it has one (ADR 61, decision 4; RFC 4).
+	ActionUnitMove Action = "unit:move"
 	// ActionServerManageTokenPolicy allows changing the token life cycle
 	// policy and running the inactivity disable (ADR 53, decisions 2, 4 and
 	// 6). Its object is ServerObject.
@@ -258,6 +260,9 @@ type Object struct {
 	// unitID is the stable ID of a unit reference, when the core resolved
 	// it (ADR 19). It is not part of the wire form.
 	unitID string
+	// collectionID is the stable ID of a collection reference, when the core
+	// resolved it (ADR 51). It is not part of the wire form.
+	collectionID string
 	// principal is the ID of the principal that a principal reference
 	// names, and empty for every other reference.
 	principal string
@@ -275,8 +280,8 @@ func NamespaceObject(ns namespace.Name) Object {
 		isServer:     false,
 		isCollection: false,
 		collection:   "",
-		unitID:       "",
-		principal:    "",
+		unitID:       "", collectionID: "",
+		principal: "",
 	}
 }
 
@@ -288,8 +293,18 @@ func NamespaceObject(ns namespace.Name) Object {
 // core.
 func CallerObject() Object {
 	return Object{
-		raw: "@caller", ns: namespace.Name(""), tool: "", unit: "",
-		isUnit: false, isCaller: true, isServer: false, isCollection: false, collection: "", unitID: "", principal: "",
+		raw:          "@caller",
+		ns:           namespace.Name(""),
+		tool:         "",
+		unit:         "",
+		isUnit:       false,
+		isCaller:     true,
+		isServer:     false,
+		isCollection: false,
+		collection:   "",
+		unitID:       "",
+		collectionID: "",
+		principal:    "",
 	}
 }
 
@@ -300,8 +315,18 @@ func CallerObject() Object {
 // so it lives in the core.
 func ServerObject() Object {
 	return Object{
-		raw: "@server", ns: namespace.Name(""), tool: "", unit: "",
-		isUnit: false, isCaller: false, isServer: true, isCollection: false, collection: "", unitID: "", principal: "",
+		raw:          "@server",
+		ns:           namespace.Name(""),
+		tool:         "",
+		unit:         "",
+		isUnit:       false,
+		isCaller:     false,
+		isServer:     true,
+		isCollection: false,
+		collection:   "",
+		unitID:       "",
+		collectionID: "",
+		principal:    "",
 	}
 }
 
@@ -322,7 +347,7 @@ func PrincipalObject(id string) Object {
 	return Object{
 		raw: principalObjectPrefix + id, ns: namespace.Name(""), tool: "", unit: "",
 		isUnit: false, isCaller: false, isServer: false, isCollection: false, collection: "", unitID: "",
-		principal: id,
+		collectionID: "", principal: id,
 	}
 }
 
@@ -353,6 +378,7 @@ func CollectionObject(ns namespace.Name, name string) Object {
 		isServer:     false,
 		isCollection: true,
 		collection:   name,
+		collectionID: "",
 		unitID:       "",
 		principal:    "",
 	}
@@ -382,8 +408,8 @@ func UnitObject(tool string, ns namespace.Name, name string) (Object, error) {
 		isServer:     false,
 		isCollection: false,
 		collection:   "",
-		unitID:       "",
-		principal:    "",
+		unitID:       "", collectionID: "",
+		principal: "",
 	}, nil
 }
 
@@ -419,8 +445,8 @@ func ParseObject(s string) (Object, error) {
 			isServer:     false,
 			isCollection: false,
 			collection:   "",
-			unitID:       "",
-			principal:    "",
+			unitID:       "", collectionID: "",
+			principal: "",
 		}, nil
 	}
 
@@ -486,8 +512,8 @@ func parseUnitObject(s string) (Object, error) {
 		isServer:     false,
 		isCollection: false,
 		collection:   "",
-		unitID:       "",
-		principal:    "",
+		unitID:       "", collectionID: "",
+		principal: "",
 	}, nil
 }
 
@@ -803,6 +829,22 @@ func (o Object) WithUnitID(id string) Object {
 	}
 
 	return o
+}
+
+// WithCollectionID returns the reference with the stable ID id of a collection.
+// It has no effect on any other reference.
+func (o Object) WithCollectionID(id string) Object {
+	if o.isCollection {
+		o.collectionID = id
+	}
+
+	return o
+}
+
+// CollectionID returns the stable ID of a collection reference, or "" when the
+// core has not resolved one.
+func (o Object) CollectionID() string {
+	return o.collectionID
 }
 
 // UnitID returns the stable ID of a unit reference, or "" when the core has
