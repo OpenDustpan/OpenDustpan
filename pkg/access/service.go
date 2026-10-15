@@ -1024,51 +1024,73 @@ func (s *Service) withTokenManagers(ctx context.Context, e audit.Entry, subject 
 
 		return e, nil
 	case SubjectGroup:
-		ids, err := s.servicePrincipalsOfGroup(ctx, subject.ID)
-		if err != nil {
-			return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
-		}
+		return s.groupTokenManagers(ctx, e, subject)
+	default:
+		return e, nil
+	}
+}
 
-		if len(ids) == 0 {
-			return e, nil
-		}
+// groupTokenManagers returns e with one change "tokenManagers" that lists
+// each service principal member of subject and its holders, as lines sorted
+// by principal ID, one line per principal in the form
+// "<principal ID>: <holder>, <holder>". It returns e as it is when the
+// group has no service principal members.
+func (s *Service) groupTokenManagers(
+	ctx context.Context, e audit.Entry, subject Subject,
+) (audit.Entry, error) {
+	ids, err := s.servicePrincipalsOfGroup(ctx, subject.ID)
+	if err != nil {
+		return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
+	}
 
-		installation, err := s.installationTokenHolders(ctx)
+	if len(ids) == 0 {
+		return e, nil
+	}
+
+	installation, err := s.installationTokenHolders(ctx)
+	if err != nil {
+		return e, err
+	}
+
+	base := slices.Clone(e.Changes)
+	lines := make([]string, 0, len(ids))
+
+	for _, id := range ids {
+		holders, err := s.tokenHoldersOf(ctx, installation, id)
 		if err != nil {
 			return e, err
 		}
 
-		base := slices.Clone(e.Changes)
-		lines := make([]string, 0, len(ids))
-
-		for _, id := range ids {
-			direct, err := s.directTokenHolders(ctx, id)
-			if err != nil {
-				return e, err
-			}
-
-			seen := make(map[string]bool, len(installation)+len(direct))
-			for _, h := range installation {
-				seen[h] = true
-			}
-
-			for _, h := range direct {
-				seen[h] = true
-			}
-
-			holders := slices.Sorted(maps.Keys(seen))
-			lines = append(lines, id+": "+strings.Join(holders, ", "))
-		}
-
-		base = append(base, audit.Change{
-			Key: "tokenManagers", Old: nil, New: strings.Join(lines, "\n"), Layer: "", TakesEffect: "",
-		})
-		e.Changes = base
-
-		return e, nil
-	default:
-		return e, nil
+		lines = append(lines, id+": "+strings.Join(holders, ", "))
 	}
+
+	base = append(base, audit.Change{
+		Key: "tokenManagers", Old: nil, New: strings.Join(lines, "\n"), Layer: "", TakesEffect: "",
+	})
+	e.Changes = base
+
+	return e, nil
+}
+
+// tokenHoldersOf returns the sorted union of installation and the direct
+// holders of principal:manage-tokens on the service principal with the ID
+// id.
+func (s *Service) tokenHoldersOf(ctx context.Context, installation []string, id string) ([]string, error) {
+	direct, err := s.directTokenHolders(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool, len(installation)+len(direct))
+	for _, h := range installation {
+		seen[h] = true
+	}
+
+	for _, h := range direct {
+		seen[h] = true
+	}
+
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 // fenceOf returns the fence of the namespace of obj, or the zero fence for
