@@ -60,6 +60,7 @@ func TestActionsAreToolNeutral(t *testing.T) {
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
 		identity.ActionServerRestore,
+		identity.ActionServerRestoreAccess,
 		identity.ActionServerReadPrincipals,
 		identity.ActionServerManagePrincipals,
 		identity.ActionServerManageGroups,
@@ -352,6 +353,14 @@ func TestServerActionsProveWireForms(t *testing.T) {
 		t.Fatalf("restore action = %q, want %q", identity.ActionServerRestore, "server:restore")
 	}
 
+	if identity.ActionServerRestoreAccess != "server:restore-access" {
+		t.Fatalf(
+			"restore-access action = %q, want %q",
+			identity.ActionServerRestoreAccess,
+			"server:restore-access",
+		)
+	}
+
 	for action, want := range map[identity.Action]string{
 		identity.ActionServerReadPrincipals:   "server:read-principals",
 		identity.ActionServerManagePrincipals: "server:manage-principals",
@@ -381,6 +390,7 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
 		identity.ActionServerRestore,
+		identity.ActionServerRestoreAccess,
 	}
 
 	nsObj := identity.NamespaceObject(mustName(t, "acme"))
