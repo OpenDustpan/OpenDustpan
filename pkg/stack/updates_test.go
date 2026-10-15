@@ -622,6 +622,7 @@ func newUpdatesWith(t *testing.T, clk *clock, blobs blob.Store, logger *slog.Log
 		Logger:             logger,
 		MaxCheckpointBytes: 1024,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("new updates: %v", err)
