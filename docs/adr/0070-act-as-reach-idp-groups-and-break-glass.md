@@ -56,11 +56,14 @@ primary source:
 - ISO/IEC 27001:2022 Annex A: A.5.15, A.5.16, A.5.18, A.8.2 and A.8.5.
 - ISO/IEC 27002:2022: 5.16, 5.17, 5.18 and 8.2.
 - AICPA Trust Services Criteria (SOC 2): CC6.1, CC6.2 and CC6.3.
+- CIS Controls v8.1: Safeguards 5.3, 5.4, 6.2, 6.5 and 6.8.
+- CSA Cloud Controls Matrix v4.1: IAM-07, IAM-09, IAM-10, IAM-15 and LOG-07.
+- Brucker and Petritsch, "Extending Access Control Models with
+  Break-glass" (SACMAT 2009).
 
 None of these texts names an identity provider, a minimum number of
 administrators, two break-glass accounts or a brake on bulk removals. Those
-parts of this ADR come from product practice, not from a standard. Nobody
-read the CIS Controls for this ADR. This ADR makes no claim about them.
+parts of this ADR come from product practice, not from a standard.
 
 ## Decision
 
@@ -257,13 +260,27 @@ read the CIS Controls for this ADR. This ADR makes no claim about them.
     disabling. No job disables a break-glass account. After a break-glass
     sign-in, the elevated session has a time limit, and the server then
     revokes it (AC-2(2), ISO/IEC 27002 8.2).
-26. **The server records each use.** Each break-glass sign-in needs a reason that the
-    person types. It raises an alert. The audit log records each action of
-    the session (AC-2(4), AC-6(9), PCI DSS 8.2.2, 8.6.1 and 10.2.1.2). The
-    server reminds the administrators to test each account every 90 days. A
-    test is a real sign-in, so that no account is inactive for 90 days (PCI
-    DSS 8.2.6).
-    Full sync (decision 17) cannot disable or change a break-glass account.
+26. **The server records each use.** Each break-glass sign-in needs a reason
+    that the person types. It raises an alert. The audit log records each
+    action of the session (AC-2(4), AC-6(9), PCI DSS 8.2.2, 8.6.1 and
+    10.2.1.2). When the audit log cannot record an action of a break-glass
+    session, the server refuses the action. Full sync (decision 17) cannot
+    disable or change a break-glass account.
+
+    Each use ends with a clean-up. After a break-glass session ends, the
+    server marks the account "used, not reviewed". A second
+    administrator reviews the audit entries of the session and records the
+    review. The person who used the account rotates its credential. The
+    admin access report lists each use that has no review. Approval before
+    use cannot work in a lockout, so this review after use takes the place
+    of the management approval that CSA CCM IAM-10 and IAM-15 ask for
+    (Brucker and Petritsch: monitor, then clean up).
+
+    Each account has a regular test. The server reminds the
+    administrators to test each account every 30 days. A test is a real
+    sign-in, so that no account is inactive for more than 45 days (CIS
+    Safeguard 5.3) or 90 days (PCI DSS 8.2.6). The period is a setting of at
+    most 45 days.
 
 ### Recovery (D7)
 
