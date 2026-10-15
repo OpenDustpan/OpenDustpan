@@ -36,7 +36,11 @@ package server
 // GET /api/server/caller/access answers the access of the caller: on one
 // object (?object=), or the objects of one kind where it can do an action
 // (?type=&action=), paged. It needs caller:read only, so every signed-in
-// principal reads its own access.
+// principal reads its own access. With type=principal, the default action
+// is principal:manage-tokens: the answer lists the service principals whose
+// tokens the caller can make. There, all=true means every service principal
+// of the installation, because principal:manage-tokens gives no right on a
+// person; the answer never lists a person.
 //
 // GET /api/server/caller/grants answers the current grants of the caller,
 // paged: its own grants and the grants of its groups, with the group
@@ -64,7 +68,8 @@ var (
 	)
 	errExpandQuery       = errors.New(`invalid access review query: "expand" takes the value "members" only`)
 	errCallerAccessQuery = errors.New(
-		`invalid access query: provide "object=<object>", or "type=namespace|collection|unit" and an optional "action"`,
+		`invalid access query: provide "object=<object>", or "type=namespace|collection|unit|principal" ` +
+			`and an optional "action"`,
 	)
 )
 
