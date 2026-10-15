@@ -224,6 +224,7 @@ func TestNamespacePrincipalRoutes(t *testing.T) {
 		{"olga", apiCall{http.MethodGet, principals, "", http.StatusForbidden}},
 		{"alice", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusForbidden}},
 		{"admin", apiCall{http.MethodPost, tokens, `{"name":"x"}`, http.StatusBadRequest}},
+		{"admin", apiCall{http.MethodGet, tokens, "", http.StatusBadRequest}},
 		{"admin", apiCall{
 			http.MethodPost, "/api/server/grants", `{"subject":"principal:` + bot.ID + `","role":"viewer"}`,
 			http.StatusBadRequest,

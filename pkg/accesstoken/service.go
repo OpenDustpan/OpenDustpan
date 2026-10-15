@@ -168,9 +168,8 @@ func (s *Service) Create(
 		return Token{}, Secret{}, err
 	}
 
-	if p.Namespace != "" {
-		return Token{}, Secret{}, fmt.Errorf("%w: principal %q belongs to the namespace %q; "+
-			"the server does not make tokens for a principal of a namespace yet", ErrInvalid, p.ID, p.Namespace.String())
+	if nsErr := refuseNamespacePrincipal(p, "make tokens for"); nsErr != nil {
+		return Token{}, Secret{}, nsErr
 	}
 
 	if kindErr := checkKind(scope, kind); kindErr != nil {
@@ -355,9 +354,25 @@ func (s *Service) ListOfPrincipal(
 		return Page{}, fmt.Errorf("%w: the tokens of a %s go through /api/server/tokens", ErrWrongKind, p.Kind)
 	}
 
+	if err := refuseNamespacePrincipal(p, "list the tokens of"); err != nil {
+		return Page{}, err
+	}
+
 	req.PrincipalID = p.ID
 
 	return s.List(ctx, req)
+}
+
+// refuseNamespacePrincipal returns ErrInvalid when p belongs to a
+// namespace: the token routes do not act on such a principal yet. use says
+// what the caller tried to do, for example "make tokens for".
+func refuseNamespacePrincipal(p principal.Principal, use string) error {
+	if p.Namespace == "" {
+		return nil
+	}
+
+	return fmt.Errorf("%w: principal %q belongs to the namespace %q; "+
+		"the server does not %s a principal of a namespace yet", ErrInvalid, p.ID, p.Namespace.String(), use)
 }
 
 // MaxLifetime returns the longest lifetime that a create or a rotation can
