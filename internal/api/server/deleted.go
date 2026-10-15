@@ -62,12 +62,13 @@ const noDeletedUnitsMessage = "the store of this server keeps no deleted units"
 func (h *Handler) deletedUnitRoutes() []Route {
 	return []Route{
 		{
-			Method:  http.MethodPost,
-			Path:    deletedSweepPath,
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerMaintenance},
-			Resolve: resolveServer,
-			Serve:   h.sweepDeletedUnits,
+			Method:     http.MethodPost,
+			Path:       deletedSweepPath,
+			Scope:      ScopeAuthorized,
+			Actions:    []identity.Action{identity.ActionServerMaintenance},
+			Resolve:    resolveServer,
+			ActionsFor: nil,
+			Serve:      h.sweepDeletedUnits,
 		},
 	}
 }
