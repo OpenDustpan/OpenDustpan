@@ -1220,7 +1220,7 @@ func TestSweepDisablesInactiveTokensAndAccounts(t *testing.T) {
 		t.Fatalf("token of a disabled person: err = %v, want ErrUnauthenticated", err)
 	}
 
-	if err := f.principals.EnablePrincipal(ctx, caller(), f.person.ID); err != nil {
+	if err := f.principals.EnablePrincipal(ctx, caller(), admin(), f.person.ID); err != nil {
 		t.Fatalf("enable: %v", err)
 	}
 
