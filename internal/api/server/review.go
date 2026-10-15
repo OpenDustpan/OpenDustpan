@@ -175,14 +175,11 @@ type missingActionResponse struct {
 }
 
 // grantedByResponse names the roles that give one action, by role ID: every
-// built-in role that holds it, and the custom roles that hold it when the
-// caller may see them. Built-in role names are public, so the answer always
-// lists them. CustomRolesHidden is true when the caller does not hold
-// role:read on the installation: the answer then lists no custom role.
+// built-in role that holds it, and every custom role that holds it. Every
+// signed-in principal holds role:read, so the answer always lists both.
 type grantedByResponse struct {
-	BuiltInRoles      []string `json:"builtInRoles"`
-	CustomRoles       []string `json:"customRoles"`
-	CustomRolesHidden bool     `json:"customRolesHidden"`
+	BuiltInRoles []string `json:"builtInRoles"`
+	CustomRoles  []string `json:"customRoles"`
 }
 
 // accessObjectsResponse is one page of the objects where the caller can do
@@ -537,7 +534,7 @@ func missingActionsOf(
 		return []missingActionResponse{}, nil
 	}
 
-	sets, err := roleSetsFor(ctx, svc, held)
+	sets, err := roleSetsFor(ctx, svc)
 	if err != nil {
 		return nil, err
 	}
@@ -570,29 +567,21 @@ func missingActionList(held access.Access) []identity.Action {
 }
 
 // roleSets holds the roles for missing actions: every built-in role, and
-// the custom roles when the caller may see them. HideCustom reports that
-// the answer names no custom role.
+// every custom role.
 type roleSets struct {
-	builtIn    []access.Role
-	custom     []access.Role
-	hideCustom bool
+	builtIn []access.Role
+	custom  []access.Role
 }
 
-// roleSetsFor returns the roles for the missing actions of held. A grant on
-// the installation reaches every object through its chain, so held names
-// role:read exactly when a grant gives it: the answer may then name custom
-// roles. The route check lets every signed-in principal read the role
-// catalog, so this is not that check.
-func roleSetsFor(ctx context.Context, svc *access.Service, held access.Access) (roleSets, error) {
+// roleSetsFor returns the roles for the missing actions: every built-in
+// role, and every custom role in the catalog. A grant on the installation
+// reaches every object through its chain, so each role that holds a missing
+// action can give it, whatever the object is. Every signed-in principal
+// holds role:read, so the answer always lists the custom roles.
+func roleSetsFor(ctx context.Context, svc *access.Service) (roleSets, error) {
 	var sets roleSets
 
 	sets.builtIn = access.BuiltInRoles()
-
-	if !slices.Contains(held.Actions, identity.ActionRoleRead) {
-		sets.hideCustom = true
-
-		return sets, nil
-	}
 
 	roles, err := svc.ListRoles(ctx)
 	if err != nil {
@@ -613,7 +602,7 @@ func missingActionOf(action identity.Action, sets roleSets) missingActionRespons
 	entry := missingActionResponse{
 		Action: string(action),
 		GrantedBy: grantedByResponse{
-			BuiltInRoles: []string{}, CustomRoles: []string{}, CustomRolesHidden: sets.hideCustom,
+			BuiltInRoles: []string{}, CustomRoles: []string{},
 		},
 	}
 
@@ -621,10 +610,6 @@ func missingActionOf(action identity.Action, sets roleSets) missingActionRespons
 		if sets.builtIn[i].Has(action) {
 			entry.GrantedBy.BuiltInRoles = append(entry.GrantedBy.BuiltInRoles, sets.builtIn[i].ID)
 		}
-	}
-
-	if sets.hideCustom {
-		return entry
 	}
 
 	for i := range sets.custom {

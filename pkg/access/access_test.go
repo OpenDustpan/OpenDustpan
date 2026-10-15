@@ -895,61 +895,6 @@ func TestCustomRoles(t *testing.T) {
 	assertChecks(t, f.authz, p, []check{{web, identity.ActionUnitWrite, true}, {web, identity.ActionUnitManage, false}})
 }
 
-// TestCustomRoleMayHoldRoleRead checks that a custom role may hold
-// role:read, so a grant can let a caller see custom roles in its access,
-// while the other self actions stay out of custom roles. A grant of the
-// role on the installation gives role:read on the installation and, through
-// it, on a namespace.
-func TestCustomRoleMayHoldRoleRead(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t)
-	ctx := t.Context()
-
-	reader, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
-		Name: "role-reader", Description: "", Actions: []identity.Action{identity.ActionRoleRead},
-	})
-	if err != nil {
-		t.Fatalf("create role with role:read: %v", err)
-	}
-
-	for _, c := range []struct {
-		name   string
-		action identity.Action
-	}{
-		{"no-caller", identity.ActionCallerRead},
-		{"no-token", identity.ActionTokenManageOwn},
-	} {
-		_, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
-			Name: c.name, Description: "", Actions: []identity.Action{c.action},
-		})
-		if !errors.Is(err, access.ErrInvalid) {
-			t.Errorf("create role with %s = %v, want ErrInvalid", c.action, err)
-		}
-	}
-
-	carol := f.person(t, "carol")
-	f.grant(t, prn("carol"), reader.ID, identity.ServerObject())
-
-	for _, obj := range []identity.Object{identity.ServerObject(), identity.NamespaceObject("acme")} {
-		got, err := f.svc.Access(ctx, carol, obj)
-		if err != nil {
-			t.Fatalf("access of carol on %q: %v", obj.String(), err)
-		}
-
-		actions := make([]identity.Action, 0, len(got.Actions))
-		actions = append(actions, got.Actions...)
-
-		if !slices.Contains(actions, identity.ActionRoleRead) {
-			t.Errorf("access of carol on %q = %v, want role:read", obj.String(), actions)
-		}
-
-		if slices.Contains(actions, identity.ActionUnitRead) {
-			t.Errorf("access of carol on %q = %v, want no unit:read", obj.String(), actions)
-		}
-	}
-}
-
 func TestRevokeChecksTheObject(t *testing.T) {
 	t.Parallel()
 

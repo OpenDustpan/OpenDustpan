@@ -268,10 +268,8 @@ func normalizeActions(actions []identity.Action) []identity.Action {
 
 // validateRole checks the name, the description and the actions of a custom
 // role. A name holds 1 to 64 letters, digits, '-', '_' and '.', and is not
-// the name of a built-in role. Each action is classified. A custom role may
-// hold role:read, so a grant can let a caller see custom roles in its
-// access; every other self action stays out, because every signed-in
-// principal holds it anyway.
+// the name of a built-in role. Each action is classified, and no action is
+// a self action, which every signed-in principal holds anyway.
 func validateRole(r Role) error {
 	if !ident.Valid(r.Name, maxRoleNameLength) {
 		return fmt.Errorf("%w: role name %q", ErrInvalid, r.Name)
@@ -291,7 +289,7 @@ func validateRole(r Role) error {
 
 	for _, a := range r.Actions {
 		family, known := FamilyOf(a)
-		if !known || (family == FamilySelf && a != identity.ActionRoleRead) {
+		if !known || family == FamilySelf {
 			return fmt.Errorf("%w: unknown action %q", ErrInvalid, a)
 		}
 	}
