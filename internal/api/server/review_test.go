@@ -282,6 +282,155 @@ func TestCallerAccess(t *testing.T) {
 	}
 }
 
+// grantedByDoc, missingActionDoc and callerAccessFullDoc decode the access
+// of the caller with the roles that give each missing action.
+type grantedByDoc struct {
+	BuiltInRoles      []string `json:"builtInRoles"`
+	CustomRoles       []string `json:"customRoles"`
+	CustomRolesHidden bool     `json:"customRolesHidden"`
+}
+
+type missingActionDoc struct {
+	Action    string       `json:"action"`
+	GrantedBy grantedByDoc `json:"grantedBy"`
+}
+
+type callerAccessFullDoc struct {
+	Object         string             `json:"object"`
+	Actions        []string           `json:"actions"`
+	Grants         []grantDoc         `json:"grants"`
+	MissingActions []missingActionDoc `json:"missingActions"`
+}
+
+// TestCallerAccessGrantedBy reads the access of two callers without grants
+// on acme: erin holds no role:read, so each missing action lists the
+// built-in roles and hides the custom roles, while dave holds a custom role
+// with role:read, so each missing action also lists the custom roles. The
+// bootstrap admin holds every action and misses none.
+func TestCallerAccessGrantedBy(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	var reader roleDoc
+	f.as(t, "admin", apiCall{
+		http.MethodPost, "/api/server/roles", `{"name":"role-reader","actions":["role:read"]}`,
+		http.StatusCreated,
+	}, &reader)
+
+	var revealer roleDoc
+	f.as(t, "admin", apiCall{
+		http.MethodPost, "/api/server/roles", `{"name":"secret-revealer","actions":["unit:read-secrets"]}`,
+		http.StatusCreated,
+	}, &revealer)
+
+	f.seed(t, "dave", "", identity.Object{})
+	f.seed(t, "erin", "", identity.Object{})
+	f.as(t, "admin", apiCall{
+		http.MethodPost, "/api/server/grants",
+		`{"subject":"principal:prn-dave","role":"` + reader.ID + `"}`, http.StatusCreated,
+	}, nil)
+
+	// unit:read-secrets is missing for both callers. The built-in roles
+	// that hold it are secret-viewer, admin, account-administrator and
+	// site-administrator, in catalog order.
+	wantBuiltIn := []string{"secret-viewer", "admin", "account-administrator", "site-administrator"}
+
+	hidden := callerMissing(t, f, "erin", "acme")
+	if len(hidden.Actions) != 0 || len(hidden.Grants) != 0 || hidden.Object != "acme" {
+		t.Fatalf("access of erin = %+v, want no action and no grant on acme", hidden)
+	}
+
+	checkGrantedBy(t, hidden, grantedByWant{
+		action: "unit:read-secrets", builtIn: wantBuiltIn, custom: nil, hidden: true,
+	})
+
+	listed := callerMissing(t, f, "dave", "acme")
+	if !slices.Equal(listed.Actions, []string{"role:read"}) {
+		t.Fatalf("actions of dave = %q, want only role:read through the installation grant", listed.Actions)
+	}
+
+	checkGrantedBy(t, listed, grantedByWant{
+		action: "unit:read-secrets", builtIn: wantBuiltIn, custom: []string{revealer.ID}, hidden: false,
+	})
+
+	var admin callerAccessFullDoc
+	f.as(t, "admin", apiCall{http.MethodGet, "/api/server/caller/access?object=acme", "", http.StatusOK}, &admin)
+
+	if len(admin.MissingActions) != 0 {
+		t.Fatalf("missing actions of the bootstrap admin = %+v, want none", admin.MissingActions)
+	}
+}
+
+// callerMissing reads the access of subject on object.
+func callerMissing(t *testing.T, f accessFixture, subject, object string) callerAccessFullDoc {
+	t.Helper()
+
+	var got callerAccessFullDoc
+	f.as(t, subject, apiCall{
+		http.MethodGet, "/api/server/caller/access?object=" + object, "", http.StatusOK,
+	}, &got)
+
+	return got
+}
+
+// grantedByWant is one expected missing action: its built-in roles, its
+// custom roles and whether the answer hides them.
+type grantedByWant struct {
+	action  string
+	builtIn []string
+	custom  []string
+	hidden  bool
+}
+
+// checkGrantedBy checks the missing action of got against want. It also
+// checks that every missing action is sorted, lists at least one built-in
+// role, and carries the same hidden flag.
+func checkGrantedBy(t *testing.T, got callerAccessFullDoc, want grantedByWant) {
+	t.Helper()
+
+	if len(got.MissingActions) == 0 {
+		t.Fatalf("missing actions on %s = none, want %s", got.Object, want.action)
+	}
+
+	names := make([]string, 0, len(got.MissingActions))
+
+	for i := range got.MissingActions {
+		m := &got.MissingActions[i]
+		names = append(names, m.Action)
+
+		if len(m.GrantedBy.BuiltInRoles) == 0 {
+			t.Errorf("missing %s lists no built-in role", m.Action)
+		}
+
+		if m.GrantedBy.CustomRolesHidden != want.hidden {
+			t.Errorf("missing %s hides %t, want %t", m.Action, m.GrantedBy.CustomRolesHidden, want.hidden)
+		}
+
+		if m.Action != want.action {
+			continue
+		}
+
+		if !slices.Equal(m.GrantedBy.BuiltInRoles, want.builtIn) ||
+			!slices.Equal(m.GrantedBy.CustomRoles, want.custom) {
+			t.Errorf(
+				"missing %s = built-in %q custom %q, want built-in %q custom %q",
+				m.Action, m.GrantedBy.BuiltInRoles, m.GrantedBy.CustomRoles, want.builtIn, want.custom,
+			)
+		}
+	}
+
+	if !slices.IsSorted(names) {
+		t.Errorf("missing actions = %q, want sorted", names)
+	}
+
+	for _, self := range []string{"caller:read", "role:read", "token:manage-own"} {
+		if slices.Contains(names, self) {
+			t.Errorf("missing actions = %q, want no self action %s", names, self)
+		}
+	}
+}
+
 // TestCallerGrants reads the grants of callers: bob holds a grant of his
 // own and one through a group, read one row a page.
 func TestCallerGrants(t *testing.T) {

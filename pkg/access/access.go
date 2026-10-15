@@ -82,7 +82,10 @@ const (
 	// service principal: the issue of its access tokens.
 	FamilyDelegation Family = "delegation"
 	// FamilySelf holds the actions that every signed-in principal can do:
-	// read its own record and read the role catalog. No grant gives them.
+	// read its own record and read the role catalog. A custom role may still
+	// hold role:read: a grant of it lets the access of the caller name the
+	// custom roles that give a missing action. No grant gives the other self
+	// actions.
 	FamilySelf Family = "self"
 )
 

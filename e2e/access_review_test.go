@@ -53,11 +53,28 @@ type e2eReview struct {
 }
 
 // e2eAccess and e2eAccessObjects decode the two forms of the access of the
-// caller.
+// caller. MissingActions names each other grantable action that the caller
+// does not hold on the object, with the roles that give it.
 type e2eAccess struct {
-	Object  string     `json:"object"`
-	Actions []string   `json:"actions"`
-	Grants  []e2eGrant `json:"grants"`
+	Object         string             `json:"object"`
+	Actions        []string           `json:"actions"`
+	Grants         []e2eGrant         `json:"grants"`
+	MissingActions []e2eMissingAction `json:"missingActions"`
+}
+
+// e2eMissingAction is one missing action with the roles that give it.
+type e2eMissingAction struct {
+	Action    string       `json:"action"`
+	GrantedBy e2eGrantedBy `json:"grantedBy"`
+}
+
+// e2eGrantedBy names the built-in and custom roles that give one action.
+// CustomRolesHidden is true when the caller does not hold role:read: the
+// answer then lists no custom role.
+type e2eGrantedBy struct {
+	BuiltInRoles      []string `json:"builtInRoles"`
+	CustomRoles       []string `json:"customRoles"`
+	CustomRolesHidden bool     `json:"customRolesHidden"`
 }
 
 type e2eAccessObjects struct {
@@ -150,6 +167,7 @@ func runReviewOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkReviewRefusals(ctx, t, env)
 	checkCallerAccess(ctx, t, env)
+	checkCallerAccessRoles(ctx, t, env)
 }
 
 // seedReview makes a principal in a group, a namespace and five grants:
@@ -580,6 +598,132 @@ func checkCallerAccess(ctx context.Context, t *testing.T, env *e2e.Env) {
 			http.MethodGet, "/api/server/caller/access?" + query, "", http.StatusBadRequest,
 		}, nil)
 	}
+}
+
+// checkCallerAccessRoles proves what a refused caller learns about the
+// roles that give a missing action: erin holds no grant, so the missing
+// unit:read-secrets lists the built-in roles and hides the custom roles,
+// while dave holds a custom role with role:read on the installation, so the
+// same action also lists the custom role that gives it.
+func checkCallerAccessRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces", `{"name":"roles"}`, http.StatusCreated,
+	}, nil)
+
+	var revealer e2eRole
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles", `{"name":"secret-revealer","actions":["unit:read-secrets"]}`,
+		http.StatusCreated,
+	}, &revealer)
+
+	var reader e2eRole
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles", `{"name":"role-reader","actions":["role:read"]}`,
+		http.StatusCreated,
+	}, &reader)
+
+	var dave, erin e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals", `{"subject":"dave","kind":"person"}`, http.StatusCreated,
+	}, &dave)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals", `{"subject":"erin","kind":"person"}`, http.StatusCreated,
+	}, &erin)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/grants",
+		`{"subject":"principal:` + dave.ID + `","role":"` + reader.ID + `"}`, http.StatusCreated,
+	}, nil)
+
+	daveSecret := callerToken(ctx, t, env, dave.ID)
+	erinSecret := callerToken(ctx, t, env, erin.ID)
+
+	// The built-in roles that hold unit:read-secrets, in catalog order.
+	builtIn := []string{"secret-viewer", "admin", "account-administrator", "site-administrator"}
+
+	without := callerAccessAs(ctx, t, env, erinSecret, "/api/server/caller/access?object=roles")
+	if without.Object != "roles" || len(without.Actions) != 0 || len(without.Grants) != 0 {
+		t.Fatalf("access of erin on roles = %+v, want no action and no grant", without)
+	}
+
+	checkRoleGrantedBy(t, without, roleGrantedByWant{
+		action: "unit:read-secrets", builtIn: builtIn, custom: nil, hidden: true,
+	})
+
+	with := callerAccessAs(ctx, t, env, daveSecret, "/api/server/caller/access?object=roles")
+	if !slices.Equal(with.Actions, []string{"role:read"}) {
+		t.Fatalf("actions of dave = %q, want only role:read through the installation grant", with.Actions)
+	}
+
+	checkRoleGrantedBy(t, with, roleGrantedByWant{
+		action: "unit:read-secrets", builtIn: builtIn, custom: []string{revealer.ID}, hidden: false,
+	})
+}
+
+// callerToken returns the secret of a personal token of principalID.
+func callerToken(ctx context.Context, t *testing.T, env *e2e.Env, principalID string) string {
+	t.Helper()
+
+	var token e2eToken
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/tokens", `{"principalID":"` + principalID + `","name":"roles"}`,
+		http.StatusCreated,
+	}, &token)
+
+	return token.Secret
+}
+
+// callerAccessAs reads the access of the caller of secret on path.
+func callerAccessAs(ctx context.Context, t *testing.T, env *e2e.Env, secret, path string) e2eAccess {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatusAs(ctx, secret, http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET %s = %d, %v (%s), want 200", path, status, err, body)
+	}
+
+	var out e2eAccess
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+
+	return out
+}
+
+// roleGrantedByWant is one expected missing action: its built-in roles,
+// its custom roles and whether the answer hides them.
+type roleGrantedByWant struct {
+	action  string
+	builtIn []string
+	custom  []string
+	hidden  bool
+}
+
+// checkRoleGrantedBy fails unless access names the missing action of want
+// with its built-in roles, its custom roles and the hidden flag.
+func checkRoleGrantedBy(t *testing.T, access e2eAccess, want roleGrantedByWant) {
+	t.Helper()
+
+	for i := range access.MissingActions {
+		m := &access.MissingActions[i]
+		if m.Action != want.action {
+			continue
+		}
+
+		if !slices.Equal(m.GrantedBy.BuiltInRoles, want.builtIn) ||
+			!slices.Equal(m.GrantedBy.CustomRoles, want.custom) || m.GrantedBy.CustomRolesHidden != want.hidden {
+			t.Fatalf(
+				"missing %s = built-in %q custom %q hidden %t, want built-in %q custom %q hidden %t",
+				m.Action, m.GrantedBy.BuiltInRoles, m.GrantedBy.CustomRoles, m.GrantedBy.CustomRolesHidden,
+				want.builtIn, want.custom, want.hidden,
+			)
+		}
+
+		return
+	}
+
+	t.Fatalf("missing actions = %+v, want %s", access.MissingActions, want.action)
 }
 
 // carolToken returns the secret of a personal token of carol.

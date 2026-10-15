@@ -49,9 +49,11 @@ package server
 // the grants as of the snapshot time of the first page (asOfMs).
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -153,11 +155,34 @@ type reviewResponse struct {
 }
 
 // accessResponse is the access of the caller on one object: its actions,
-// sorted, and the grants that give them.
+// sorted, and the grants that give them. MissingActions names, sorted, each
+// other grantable action that the caller does not hold on the object, with
+// the roles that give it.
+//
+// Contract: never remove or rename these fields.
 type accessResponse struct {
-	Object  string          `json:"object"`
-	Actions []string        `json:"actions"`
-	Grants  []grantResponse `json:"grants"`
+	Object         string                  `json:"object"`
+	Actions        []string                `json:"actions"`
+	Grants         []grantResponse         `json:"grants"`
+	MissingActions []missingActionResponse `json:"missingActions"`
+}
+
+// missingActionResponse is one action that the caller does not hold on the
+// object, with the roles that give it.
+type missingActionResponse struct {
+	Action    string            `json:"action"`
+	GrantedBy grantedByResponse `json:"grantedBy"`
+}
+
+// grantedByResponse names the roles that give one action, by role ID: every
+// built-in role that holds it, and the custom roles that hold it when the
+// caller may see them. Built-in role names are public, so the answer always
+// lists them. CustomRolesHidden is true when the caller does not hold
+// role:read on the installation: the answer then lists no custom role.
+type grantedByResponse struct {
+	BuiltInRoles      []string `json:"builtInRoles"`
+	CustomRoles       []string `json:"customRoles"`
+	CustomRolesHidden bool     `json:"customRolesHidden"`
 }
 
 // accessObjectsResponse is one page of the objects where the caller can do
@@ -478,21 +503,148 @@ func callerAccessOn(
 		return failed(""), err
 	}
 
-	out := accessResponse{
-		Object:  got.Object.String(),
-		Actions: make([]string, 0, len(got.Actions)),
-		Grants:  make([]grantResponse, 0, len(got.Grants)),
-	}
-
+	actions := make([]string, 0, len(got.Actions))
 	for _, a := range got.Actions {
-		out.Actions = append(out.Actions, string(a))
+		actions = append(actions, string(a))
 	}
 
+	grants := make([]grantResponse, 0, len(got.Grants))
 	for i := range got.Grants {
-		out.Grants = append(out.Grants, grantOf(got.Grants[i]))
+		grants = append(grants, grantOf(got.Grants[i]))
 	}
 
-	return ok(http.StatusOK, out, ""), nil
+	missing, err := missingActionsOf(r.Context(), svc, got)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, accessResponse{
+		Object: got.Object.String(), Actions: actions, Grants: grants, MissingActions: missing,
+	}, ""), nil
+}
+
+// missingActionsOf returns each grantable action that held does not name,
+// sorted, with the roles that give it. The self actions are not grantable:
+// every signed-in principal holds them with no grant, so they are never
+// missing. A grant on the installation gives every action of its role on
+// every object, so each role that holds a missing action can give it,
+// whatever the object is.
+func missingActionsOf(
+	ctx context.Context, svc *access.Service, held access.Access,
+) ([]missingActionResponse, error) {
+	missing := missingActionList(held)
+	if len(missing) == 0 {
+		return []missingActionResponse{}, nil
+	}
+
+	sets, err := roleSetsFor(ctx, svc, held)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]missingActionResponse, 0, len(missing))
+	for _, a := range missing {
+		out = append(out, missingActionOf(a, sets))
+	}
+
+	return out, nil
+}
+
+// missingActionList returns each grantable action that held does not name,
+// sorted.
+func missingActionList(held access.Access) []identity.Action {
+	have := make(map[identity.Action]bool, len(held.Actions))
+	for _, a := range held.Actions {
+		have[a] = true
+	}
+
+	var out []identity.Action
+
+	for _, a := range grantableActions() {
+		if !have[a] {
+			out = append(out, a)
+		}
+	}
+
+	return out
+}
+
+// roleSets holds the roles for missing actions: every built-in role, and
+// the custom roles when the caller may see them. HideCustom reports that
+// the answer names no custom role.
+type roleSets struct {
+	builtIn    []access.Role
+	custom     []access.Role
+	hideCustom bool
+}
+
+// roleSetsFor returns the roles for the missing actions of held. A grant on
+// the installation reaches every object through its chain, so held names
+// role:read exactly when a grant gives it: the answer may then name custom
+// roles. The route check lets every signed-in principal read the role
+// catalog, so this is not that check.
+func roleSetsFor(ctx context.Context, svc *access.Service, held access.Access) (roleSets, error) {
+	var sets roleSets
+
+	sets.builtIn = access.BuiltInRoles()
+
+	if !slices.Contains(held.Actions, identity.ActionRoleRead) {
+		sets.hideCustom = true
+
+		return sets, nil
+	}
+
+	roles, err := svc.ListRoles(ctx)
+	if err != nil {
+		return sets, fmt.Errorf("list roles: %w", err)
+	}
+
+	for i := range roles {
+		if !roles[i].BuiltIn {
+			sets.custom = append(sets.custom, roles[i])
+		}
+	}
+
+	return sets, nil
+}
+
+// missingActionOf returns action with the roles of sets that give it.
+func missingActionOf(action identity.Action, sets roleSets) missingActionResponse {
+	entry := missingActionResponse{
+		Action: string(action),
+		GrantedBy: grantedByResponse{
+			BuiltInRoles: []string{}, CustomRoles: []string{}, CustomRolesHidden: sets.hideCustom,
+		},
+	}
+
+	for i := range sets.builtIn {
+		if sets.builtIn[i].Has(action) {
+			entry.GrantedBy.BuiltInRoles = append(entry.GrantedBy.BuiltInRoles, sets.builtIn[i].ID)
+		}
+	}
+
+	if sets.hideCustom {
+		return entry
+	}
+
+	for i := range sets.custom {
+		if sets.custom[i].Has(action) {
+			entry.GrantedBy.CustomRoles = append(entry.GrantedBy.CustomRoles, sets.custom[i].ID)
+		}
+	}
+
+	return entry
+}
+
+// grantableActions returns every classified action that a grant can give,
+// sorted: every family but the self family.
+func grantableActions() []identity.Action {
+	out := append(access.Actions(access.FamilyOperator), access.Actions(access.FamilyAdministration)...)
+	out = append(out, access.Actions(access.FamilyData)...)
+	out = append(out, access.Actions(access.FamilyDelegation)...)
+	slices.Sort(out)
+
+	return out
 }
 
 // callerAccessByType answers one page of the objects of kind where p can
