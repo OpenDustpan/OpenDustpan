@@ -49,7 +49,9 @@ func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence n
 }
 
 // writeJournalRow answers a retry without a write (true). Otherwise it runs the
-// row's check against the stored operations and inserts the row (false).
+// row's check against the stored operations and the stored records flag and inserts
+// the row (false). When the batch holds an entry that changes the replay records,
+// the flag of the update is set in the same transaction as the write.
 func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) (bool, error) {
 	done, err := journalRetry(ctx, q, stackID, row)
 	if err != nil {
@@ -60,16 +62,30 @@ func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 		return true, nil
 	}
 
-	if verifyErr := verifyJournalRow(ctx, q, stackID, row); verifyErr != nil {
+	changed, verifyErr := verifyJournalRow(ctx, q, stackID, row)
+	if verifyErr != nil {
 		return false, verifyErr
 	}
 
-	return false, insertJournalRow(ctx, q, stackID, row)
+	if insertErr := insertJournalRow(ctx, q, stackID, row); insertErr != nil {
+		return false, insertErr
+	}
+
+	if changed {
+		params := db.SetJournalRecordsChangedParams{StackID: stackID, ID: row.Update.String()}
+		if flagErr := q.SetJournalRecordsChanged(ctx, params); flagErr != nil {
+			return false, fmt.Errorf("set journal records changed: %w", flagErr)
+		}
+	}
+
+	return false, nil
 }
 
 // checkJournalRow runs the checks of a batch that the write needs before its retry
-// check: the blob key, the lease, the update kind, and an open journal. A closed journal
-// refuses every batch, so no batch can land after the build.
+// check: the blob key, the lease, the update kind, a journaled update, and an open
+// journal. A version 0 update saves checkpoints, so it refuses every batch with
+// ErrNotJournaled. A closed journal refuses every batch, so no batch can land
+// after the build.
 func checkJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) error {
 	if err := checkJournalKey(stackID, row); err != nil {
 		return err
@@ -86,6 +102,10 @@ func checkJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 	state, err := q.JournalState(ctx, db.JournalStateParams{StackID: stackID, ID: row.Update.String()})
 	if err != nil {
 		return fmt.Errorf("read journal state: %w", err)
+	}
+
+	if state.JournalVersion == 0 {
+		return stack.ErrNotJournaled
 	}
 
 	if state.JournalClosed != 0 {
@@ -211,12 +231,19 @@ func lowestOf(seqs []int64) int64 {
 }
 
 // verifyJournalRow runs the row's Verify check against the operation IDs of the rows
-// that the update already holds. It runs in the same transaction as the write, so
-// the list it reads is the list that the write follows (ADR 43, decision 6.4). A
-// refusal wraps ErrJournalBatch.
-func verifyJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) error {
+// that the update already holds and the flag that reports whether a stored batch
+// holds an entry that changes the replay records. It runs in the same transaction
+// as the write, so the list and the flag it reads are the ones that the write
+// follows. It returns whether the batch holds such an entry.
+// A refusal wraps ErrJournalBatch.
+func verifyJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) (bool, error) {
 	if row.Verify == nil {
-		return nil
+		return false, nil
+	}
+
+	state, err := q.JournalState(ctx, db.JournalStateParams{StackID: stackID, ID: row.Update.String()})
+	if err != nil {
+		return false, fmt.Errorf("read journal state: %w", err)
 	}
 
 	stored, err := q.ListJournalOperations(ctx, db.ListJournalOperationsParams{
@@ -224,19 +251,20 @@ func verifyJournalRow(ctx context.Context, q *db.Queries, stackID string, row st
 		UpdateID: row.Update.String(),
 	})
 	if err != nil {
-		return fmt.Errorf("list journal operations: %w", err)
+		return false, fmt.Errorf("list journal operations: %w", err)
 	}
 
 	known, err := stack.KnownOperationIDs(stored)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	if err := row.Verify(known); err != nil {
-		return fmt.Errorf("%w: %w", stack.ErrJournalBatch, err)
+	changed, err := row.Verify(known, state.JournalRecordsChanged != 0)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", stack.ErrJournalBatch, err)
 	}
 
-	return nil
+	return changed, nil
 }
 
 // JournalKeys implements stack.JournalStore. It is keyed by the stack ID, as the blob
