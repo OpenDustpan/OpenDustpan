@@ -30,6 +30,10 @@
 //     IDs. Upstream writes them in the order of a map, which is not stable.
 //   - The manifest time comes from the clock that the caller gives, and the
 //     manifest version is the CLI version of the update, as upstream writes it.
+//   - The replayer runs the integrity check on the output (integrity.go) instead of
+//     copying the base metadata unchanged. It drops the integrity_error member when
+//     the check passes, and sets it with the schema version and the error text when
+//     the check fails. The server writes no command and no environment variables.
 
 package pulumijournal
 
@@ -45,6 +49,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -530,9 +535,57 @@ type baseScan struct {
 	// output. The second pass reads the base again and takes the normalized links
 	// from it (ADR 43, decision 7.3).
 	index []linkFields
+	// extras holds the integrity members of the resources of the output, in the
+	// same order as index. The integrity check reads the links from index and the
+	// other members from extras.
+	extras []integrityExtra
+	// integrityErr is the result of the integrity check on the output. The tail
+	// of the deployment writes the integrity_error metadata from it.
+	integrityErr error
+	// integrityVersion is the schema version written into the integrity_error
+	// metadata on failure, as decimal text.
+	integrityVersion string
 	// norm normalizes the URN references of the output. Its zero value changes
 	// nothing.
 	norm normalizer
+}
+
+// integrityExtra holds the members of a resource state that the integrity check
+// reads besides the links: the type, the custom flag, the provider ID and the
+// delete and pending marks of the output.
+type integrityExtra struct {
+	resourceType string
+	custom       bool
+	id           string
+	deleted      bool
+	pending      bool
+}
+
+// integrityStateView is the part of a resource state that the integrity check
+// reads besides the links.
+type integrityStateView struct {
+	Type               string `json:"type"`
+	Custom             bool   `json:"custom"`
+	ID                 string `json:"id,omitempty"`
+	Delete             bool   `json:"delete,omitempty"`
+	PendingReplacement bool   `json:"pendingReplacement,omitempty"`
+}
+
+// integrityExtraOf reads the integrity members of one resource state. deleted and
+// pending are the marks that the entries set besides the state itself.
+func integrityExtraOf(raw jsontext.Value, deleted, pending bool) (integrityExtra, error) {
+	var view integrityStateView
+	if err := json.Unmarshal(raw, &view); err != nil {
+		return integrityExtra{}, fmt.Errorf("pulumijournal: read resource integrity fields: %w", err)
+	}
+
+	return integrityExtra{
+		resourceType: view.Type,
+		custom:       view.Custom,
+		id:           view.ID,
+		deleted:      view.Delete || deleted,
+		pending:      view.PendingReplacement || pending,
+	}, nil
 }
 
 // addFeatures applies the rules of one resource to the feature set (upstream
@@ -560,14 +613,19 @@ func (s *replayState) removedIndices() map[int64]struct{} {
 // final URNs, and it keeps the base members that the output needs.
 func (s *replayState) scanBase(ctx context.Context, openBase OpenBase) (*baseScan, error) {
 	scan := &baseScan{
-		features: make(map[string]bool),
-		final:    make(map[string]bool),
-		members:  make(map[string]jsontext.Value),
-		pending:  nil,
-		index:    nil,
-		norm:     normalizer{aliased: nil},
+		features:         make(map[string]bool),
+		final:            make(map[string]bool),
+		members:          make(map[string]jsontext.Value),
+		pending:          nil,
+		index:            nil,
+		extras:           nil,
+		integrityErr:     nil,
+		integrityVersion: "",
+		norm:             normalizer{aliased: nil},
 	}
-	s.scanNewResources(scan)
+	if err := s.scanNewResources(scan); err != nil {
+		return nil, err
+	}
 	err := walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
 		return s.scanBaseResource(scan, i, raw)
 	}, func(key string, raw jsontext.Value) error {
@@ -598,8 +656,8 @@ func (s *replayState) scanBase(ctx context.Context, openBase OpenBase) (*baseSca
 }
 
 // scanNewResources adds the features and the URNs of the new resources that the
-// update keeps.
-func (s *replayState) scanNewResources(scan *baseScan) {
+// update keeps, with their integrity members.
+func (s *replayState) scanNewResources(scan *baseScan) error {
 	removed := s.removedIndices()
 	for i := range s.newRecords {
 		if _, gone := removed[int64(i)]; gone {
@@ -608,7 +666,13 @@ func (s *replayState) scanNewResources(scan *baseScan) {
 		s.addFeatures(scan.features, s.newRecords[i].view)
 		scan.final[s.newRecords[i].links.URN] = true
 		scan.index = append(scan.index, s.newRecords[i].links.clone())
+		extra, err := integrityExtraOf(s.newRecords[i].raw, s.newRecords[i].deleted, s.newRecords[i].pending)
+		if err != nil {
+			return err
+		}
+		scan.extras = append(scan.extras, extra)
 	}
+	return nil
 }
 
 // scanBaseResource adds the features and the URN of one base resource that the
@@ -628,6 +692,18 @@ func (s *replayState) scanBaseResource(scan *baseScan, i int, raw jsontext.Value
 	s.addFeatures(scan.features, rec.view)
 	scan.final[rec.links.URN] = true
 	scan.index = append(scan.index, rec.links.clone())
+	// A replaced resource counts as its replacement alone: the markings of the
+	// base index do not apply to it.
+	deleted, pending := false, false
+	if _, ok := s.toReplaceInSnapshot[idx]; !ok {
+		_, deleted = s.markAsDeletion[idx]
+		_, pending = s.markAsPending[idx]
+	}
+	extra, xerr := integrityExtraOf(rec.raw, deleted, pending)
+	if xerr != nil {
+		return xerr
+	}
+	scan.extras = append(scan.extras, extra)
 	return nil
 }
 
@@ -801,6 +877,12 @@ func (s *replayState) write(ctx context.Context, openBase OpenBase, out io.Write
 		return err
 	}
 	scan.norm = norm
+	snap, err := s.integritySnapshot(scan, r)
+	if err != nil {
+		return err
+	}
+	scan.integrityErr = VerifyIntegrity(snap)
+	scan.integrityVersion = strconv.Itoa(schemaVersion(scan.features))
 	enc := jsontext.NewEncoder(out)
 	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
 		return fmt.Errorf("pulumijournal: write deployment: %w", err)
@@ -856,6 +938,63 @@ func (s *replayState) writeDeployment(
 	return nil
 }
 
+// integritySnapshot builds the deployment that the integrity check reads from the
+// link index of the first pass, which already has the rebuild and the URN
+// normalization applied. The manifest is the manifest of the output.
+func (s *replayState) integritySnapshot(scan *baseScan, r *Replayer) (*IntegrityDeployment, error) {
+	if len(scan.index) != len(scan.extras) {
+		return nil, errLinkIndex
+	}
+	manifest := newManifest(r.now(), r.cliVersion)
+	resources := make([]IntegrityResource, len(scan.index))
+	for i := range scan.index {
+		links := scan.index[i]
+		extra := scan.extras[i]
+		resources[i] = IntegrityResource{
+			URN:                  links.URN,
+			ResourceType:         extra.resourceType,
+			Custom:               extra.custom,
+			ID:                   extra.id,
+			Provider:             links.Provider,
+			Parent:               links.Parent,
+			Dependencies:         links.Dependencies,
+			PropertyDependencies: links.PropertyDependencies,
+			DeletedWith:          links.DeletedWith,
+			Delete:               extra.deleted,
+			PendingReplacement:   extra.pending,
+		}
+	}
+	snippets, err := s.integritySnippets(scan)
+	if err != nil {
+		return nil, err
+	}
+	return &IntegrityDeployment{
+		Manifest:  IntegrityManifest{Magic: manifest.Magic, Version: manifest.Version},
+		Resources: resources,
+		Snippets:  snippets,
+		Metadata:  nil,
+	}, nil
+}
+
+// integritySnippets returns the UUIDs of the snippets of the output.
+func (s *replayState) integritySnippets(scan *baseScan) ([]IntegritySnippet, error) {
+	raws, err := s.snippetsOut(scan)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]IntegritySnippet, len(raws))
+	for i, raw := range raws {
+		var view struct {
+			UUID string `json:"uuid"`
+		}
+		if err := json.Unmarshal(raw, &view); err != nil {
+			return nil, fmt.Errorf("pulumijournal: read snippet uuid: %w", err)
+		}
+		out[i] = IntegritySnippet{UUID: view.UUID}
+	}
+	return out, nil
+}
+
 // writeTail writes the members of the deployment that follow the resources:
 // the pending operations, the metadata, the snippets and the extensions.
 func (s *replayState) writeTail(enc *jsontext.Encoder, scan *baseScan) error {
@@ -864,8 +1003,12 @@ func (s *replayState) writeTail(enc *jsontext.Encoder, scan *baseScan) error {
 			return err
 		}
 	}
-	if raw := scan.members["metadata"]; present(raw) {
-		if err := writeKeyRaw(enc, "metadata", raw); err != nil {
+	metadata, merr := s.metadataOut(scan)
+	if merr != nil {
+		return merr
+	}
+	if present(metadata) {
+		if err := writeKeyRaw(enc, "metadata", metadata); err != nil {
 			return err
 		}
 	}
@@ -886,6 +1029,42 @@ func (s *replayState) writeTail(enc *jsontext.Encoder, scan *baseScan) error {
 		return writeKeyValue(enc, "extensions", ext)
 	}
 	return nil
+}
+
+// metadataOut returns the metadata member of the output. The other members of the
+// base metadata are kept. The integrity_error member is dropped when the integrity
+// check passed, and set with the schema version and the error text when it failed.
+// An empty metadata is omitted.
+func (s *replayState) metadataOut(scan *baseScan) (jsontext.Value, error) {
+	var members map[string]jsontext.Value
+	if raw := scan.members["metadata"]; present(raw) {
+		if err := json.Unmarshal(raw, &members); err != nil {
+			return nil, fmt.Errorf("pulumijournal: read base metadata: %w", err)
+		}
+	}
+	if scan.integrityErr == nil {
+		delete(members, "integrity_error")
+	} else {
+		if members == nil {
+			members = make(map[string]jsontext.Value)
+		}
+		encoded, err := marshalDeterministic(IntegrityErrorMetadata{
+			Version: scan.integrityVersion,
+			Error:   scan.integrityErr.Error(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		members["integrity_error"] = encoded
+	}
+	if len(members) == 0 {
+		return nil, nil
+	}
+	out, err := marshalDeterministic(members)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // writeResources writes the resources array: the new resources the update keeps,

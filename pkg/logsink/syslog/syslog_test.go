@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
 	"io"
 	"math/big"
@@ -130,7 +131,101 @@ func TestNewRejectsBadConfig(t *testing.T) {
 	}
 }
 
-func TestARecordAboveTheCapIsSkippedAndTheRestArrive(t *testing.T) {
+func TestLargeRecordIsTrimmedAndDelivered(t *testing.T) {
+	t.Parallel()
+
+	r := listenStream(t, nil)
+
+	s, err := syslog.New(withMaxBytes(config(syslog.TCP, r.addr), syslog.MinMaxMessageBytes))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	closeOnCleanup(t, s)
+
+	rec := logsink.Record{
+		Time:    time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC),
+		Level:   logsink.LevelInfo,
+		Message: "audit entry",
+		Attrs: []logsink.Attr{
+			logsink.String("scope", "acme"),
+			logsink.Int64("sequence", 7),
+			logsink.String("action", "unit:read-secrets"),
+			logsink.String("object", strings.Repeat("o", 600)),
+			logsink.String("valuePath", strings.Repeat("v", 600)),
+			logsink.String("userAgent", strings.Repeat("u", 600)),
+			logsink.String("kind", "reveal"),
+			logsink.String("outcome", "success"),
+			logsink.String("prevHash", "abc"),
+			logsink.String("hash", "def"),
+		},
+	}
+
+	if err := s.Write(t.Context(), []logsink.Record{rec}); err != nil {
+		skip, ok := errors.AsType[*logsink.SkipError](err)
+		if ok {
+			t.Fatalf("write: skipped %d records, want none", skip.Skipped)
+		}
+
+		t.Fatalf("write: %v", err)
+	}
+
+	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
+	if len(msgs) != 1 {
+		t.Fatalf("received %d messages, want 1", len(msgs))
+	}
+
+	if len(msgs[0]) > syslog.MinMaxMessageBytes {
+		t.Fatalf("message holds %d bytes, want at most %d", len(msgs[0]), syslog.MinMaxMessageBytes)
+	}
+
+	fields := decodeBody(t, body(t, msgs[0]))
+
+	marked, ok := fields["truncated"].(bool)
+	if !ok || !marked {
+		t.Fatalf("message lacks truncated true: %s", body(t, msgs[0]))
+	}
+
+	checkProtectedFields(t, fields)
+	checkTrimmedFields(t, fields)
+}
+
+// checkProtectedFields fails when a protected audit field changed.
+func checkProtectedFields(t *testing.T, fields map[string]any) {
+	t.Helper()
+
+	for key, want := range map[string]any{
+		"scope":    "acme",
+		"sequence": float64(7),
+		"action":   "unit:read-secrets",
+		"kind":     "reveal",
+		"outcome":  "success",
+		"prevHash": "abc",
+		"hash":     "def",
+	} {
+		if fields[key] != want {
+			t.Fatalf("protected field %q: got %v, want %v", key, fields[key], want)
+		}
+	}
+}
+
+// checkTrimmedFields fails when no long field got shorter.
+func checkTrimmedFields(t *testing.T, fields map[string]any) {
+	t.Helper()
+
+	for _, key := range []string{"object", "valuePath", "userAgent"} {
+		text, ok := fields[key].(string)
+		if !ok {
+			t.Fatalf("field %q is not a string: %v", key, fields[key])
+		}
+
+		if len(text) >= 600 {
+			t.Fatalf("field %q was not trimmed: %d bytes", key, len(text))
+		}
+	}
+}
+
+func TestRecordThatCannotFitIsSkippedAndTheRestArrive(t *testing.T) {
 	t.Parallel()
 
 	r := listenStream(t, nil)
@@ -143,7 +238,16 @@ func TestARecordAboveTheCapIsSkippedAndTheRestArrive(t *testing.T) {
 	closeOnCleanup(t, s)
 
 	large := logsink.Record{
-		Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: strings.Repeat("x", 600), Attrs: nil,
+		Time:    time.Unix(0, 0),
+		Level:   logsink.LevelInfo,
+		Message: "audit entry",
+		Attrs: []logsink.Attr{
+			logsink.String("scope", "acme"),
+			logsink.Int64("sequence", 7),
+			logsink.String("action", strings.Repeat("a", 2000)),
+			logsink.String("kind", "reveal"),
+			logsink.String("outcome", "success"),
+		},
 	}
 	small := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "small", Attrs: nil}
 
@@ -158,6 +262,46 @@ func TestARecordAboveTheCapIsSkippedAndTheRestArrive(t *testing.T) {
 	if len(msgs) != 1 || !bytes.Contains(msgs[0], []byte(`"msg":"small"`)) {
 		t.Fatalf("received %q, want only the small record", msgs)
 	}
+}
+
+func TestSmallRecordHasNoTruncatedMark(t *testing.T) {
+	t.Parallel()
+
+	r := listenStream(t, nil)
+
+	s, err := syslog.New(withMaxBytes(config(syslog.TCP, r.addr), syslog.MinMaxMessageBytes))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	closeOnCleanup(t, s)
+
+	rec := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "small", Attrs: nil}
+
+	if err := s.Write(t.Context(), []logsink.Record{rec}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
+	if len(msgs) != 1 {
+		t.Fatalf("received %d messages, want 1", len(msgs))
+	}
+
+	if bytes.Contains(body(t, msgs[0]), []byte(`"truncated"`)) {
+		t.Fatalf("small message carries a truncated mark: %q", msgs[0])
+	}
+}
+
+// decodeBody answers the JSON document of a syslog MSG part.
+func decodeBody(t *testing.T, msg []byte) map[string]any {
+	t.Helper()
+
+	var fields map[string]any
+	if err := json.Unmarshal(msg, &fields); err != nil {
+		t.Fatalf("decode message %q: %v", msg, err)
+	}
+
+	return fields
 }
 
 func TestTCPWriteDialsAgainAfterTheReceiverDropsTheConnection(t *testing.T) {
