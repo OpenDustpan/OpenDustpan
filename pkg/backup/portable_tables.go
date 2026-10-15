@@ -28,6 +28,7 @@ const (
 	portColTool         = "tool"
 	portColUnitID       = "unit_id"
 	portColPrincipalID  = "principal_id"
+	portColDigest       = "digest"
 )
 
 // portableSpec is the portable column list of each table of Tables (ADR 42,
@@ -109,7 +110,7 @@ func portableSpec() []PortableTable {
 				{Name: "lease_digest", Kind: KindBytes},
 				{Name: "schema_version", Kind: KindInteger},
 				{Name: portColSequence, Kind: KindInteger},
-				{Name: "digest", Kind: KindBytes},
+				{Name: portColDigest, Kind: KindBytes},
 				{Name: "invalid", Kind: KindBool},
 				{Name: "features", Kind: KindJSON},
 				{Name: "deployment", Kind: KindBytes},
@@ -319,6 +320,7 @@ func portableSpec() []PortableTable {
 				{Name: portColDeletedAtMs, Kind: KindTime},
 				{Name: portColDisabledAtMs, Kind: KindTime},
 				{Name: "last_active_at_ms", Kind: KindTime},
+				{Name: "last_sign_in_at_ms", Kind: KindTime},
 			},
 		},
 		{
@@ -353,7 +355,7 @@ func portableSpec() []PortableTable {
 				{Name: portColPrincipalID, Kind: KindText},
 				{Name: portColName, Kind: KindText},
 				{Name: portColKind, Kind: KindText},
-				{Name: "digest", Kind: KindText},
+				{Name: portColDigest, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: "expires_at_ms", Kind: KindTime},
 				{Name: "last_used_at_ms", Kind: KindTime},
@@ -361,6 +363,36 @@ func portableSpec() []PortableTable {
 				{Name: "replaced_by", Kind: KindText},
 				{Name: portColCreatedBy, Kind: KindText},
 				{Name: portColDisabledAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   "sessions",
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: portColPrincipalID, Kind: KindText},
+				{Name: portColDigest, Kind: KindText},
+				{Name: "provider", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: "last_seen_at_ms", Kind: KindTime},
+				{Name: "auth_time_ms", Kind: KindTime},
+				{Name: portColEndedAtMs, Kind: KindTime},
+				{Name: "end_reason", Kind: KindText},
+				{Name: "source_ip", Kind: KindText},
+				{Name: "user_agent", Kind: KindText},
+			},
+		},
+		{
+			Table:   "sign_in_requests",
+			OrderBy: []string{portColDigest},
+			Columns: []Column{
+				{Name: portColDigest, Kind: KindText},
+				{Name: "provider", Kind: KindText},
+				{Name: "nonce", Kind: KindText},
+				{Name: "verifier", Kind: KindText},
+				{Name: "return_path", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: "expires_at_ms", Kind: KindTime},
 			},
 		},
 		{
