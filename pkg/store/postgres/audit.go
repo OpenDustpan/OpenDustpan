@@ -581,3 +581,58 @@ func toChangesText(changes []audit.Change) pgtype.Text {
 
 	return pgtype.Text{String: text, Valid: text != ""}
 }
+
+// updateServerSetting reads the one row of an installation setting with
+// read, calls update with it, and writes the new value with write and the
+// audit entry of @server that update returns, in one transaction: both
+// commit, or neither. An error of update ends the transaction with no
+// change, and updateServerSetting returns it as it is. The transaction
+// takes the advisory lock of @server first, as every audited change does.
+func updateServerSetting[T any](
+	ctx context.Context,
+	s *Store,
+	read func(*db.Queries) (T, error),
+	update func(T) (T, audit.Entry, error),
+	write func(*db.Queries, T) error,
+) (T, error) {
+	var stored T
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock server audit scope: %w", err)
+		}
+
+		old, err := read(q)
+		if err != nil {
+			return err
+		}
+
+		value, e, err := update(old)
+		if err != nil {
+			return err
+		}
+
+		if err := validServerEntry(e); err != nil {
+			return err
+		}
+
+		if err := write(q, value); err != nil {
+			return err
+		}
+
+		if _, err := s.appendAuditEntry(ctx, q, e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		stored = value
+
+		return nil
+	})
+	if err != nil {
+		var zero T
+
+		return zero, err
+	}
+
+	return stored, nil
+}

@@ -69,6 +69,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -1108,6 +1109,23 @@ func newIPAllowlistService(cfg *settings, namespaces *namespace.Service) (*ipall
 	return svc, nil
 }
 
+// newSessionPolicyService returns the session policy service over the
+// namespace store, or nil when the store keeps no session policy. Both SQL
+// adapters keep it.
+func newSessionPolicyService(cfg *settings) (*session.Policies, error) {
+	store, ok := cfg.namespaceStore.(session.PolicyStore)
+	if !ok {
+		return nil, nil //nolint:nilnil // A store without a session policy is a valid setup: the routes stay unmounted.
+	}
+
+	svc, err := session.NewPolicies(session.PolicyConfig{Store: store, Now: cfg.now})
+	if err != nil {
+		return nil, fmt.Errorf("session policy service: %w", err)
+	}
+
+	return svc, nil
+}
+
 // Handler returns the server's root HTTP handler, for embedding in your own server.
 func (s *Server) Handler() http.Handler {
 	return s.handler
@@ -1699,6 +1717,11 @@ func newServerHandler(
 		return nil, err
 	}
 
+	sessionPolicies, err := newSessionPolicyService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -1714,6 +1737,7 @@ func newServerHandler(
 		Access:        grants,
 		Tokens:        deps.services.tokens,
 		IPAllowlists:  allow,
+		SessionPolicy: sessionPolicies,
 		Audit:         serverAuditOf(cfg.namespaceStore),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()

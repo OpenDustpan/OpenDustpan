@@ -66,6 +66,7 @@ func newSweepHandler(
 		DeletedUnits:   sweeper,
 		AuditChain:     nil,
 		IPAllowlists:   nil,
+		SessionPolicy:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

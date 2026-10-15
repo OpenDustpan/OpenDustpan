@@ -158,6 +158,7 @@ func newBackupFixture(
 		DeletedUnits:   nil,
 		AuditChain:     nil,
 		IPAllowlists:   nil,
+		SessionPolicy:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -580,6 +581,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		DeletedUnits:   nil,
 		AuditChain:     nil,
 		IPAllowlists:   nil,
+		SessionPolicy:  nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

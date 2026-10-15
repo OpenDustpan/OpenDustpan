@@ -74,6 +74,11 @@ func (s *Store) loadPortableStaging(
 			return fmt.Errorf("clear staged token policy: %w", backup.ErrCorrupt)
 		}
 
+		// The migration seeds the session policy row too.
+		if _, err := tx.Exec(ctx, `DELETE FROM session_policy`); err != nil {
+			return fmt.Errorf("clear staged session policy: %w", backup.ErrCorrupt)
+		}
+
 		return nil
 	})
 	if clearErr != nil {

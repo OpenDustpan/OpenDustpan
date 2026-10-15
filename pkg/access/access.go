@@ -118,6 +118,7 @@ var families = map[identity.Action]Family{
 	// family. No route declares it.
 	identity.ActionServerManageServiceTokens:  FamilyAdministration, //nolint:staticcheck // Kept classified for stored roles.
 	identity.ActionServerManageTokenPolicy:    FamilyAdministration,
+	identity.ActionServerManageSignIn:         FamilyAdministration,
 	identity.ActionNamespaceManageIPAllowlist: FamilyAdministration,
 
 	identity.ActionPrincipalManageTokens: FamilyDelegation,

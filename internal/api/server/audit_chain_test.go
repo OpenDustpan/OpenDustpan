@@ -83,6 +83,7 @@ func newAuditChainHandler(t *testing.T, chain apiserver.AuditChain, deny ...iden
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		SessionPolicy:  nil,
 		AuditChain:     chain,
 		IPAllowlists:   nil,
 	})

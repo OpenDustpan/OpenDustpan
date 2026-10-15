@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
@@ -82,6 +83,10 @@ type Config struct {
 	// IPAllowlists keeps the IP allowlist of each namespace. Nil means no
 	// allowlist store is configured: the IP allowlist routes are not mounted.
 	IPAllowlists *ipallow.Service
+	// SessionPolicy keeps the session policy of the installation. Nil
+	// means the store keeps none: the session policy routes are not
+	// mounted. Both SQL adapters keep it.
+	SessionPolicy *session.Policies
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
@@ -121,6 +126,7 @@ type Handler struct {
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
 	ipAllowlists   *ipallow.Service
+	sessions       *session.Policies
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
 	auditChain     AuditChain
@@ -169,6 +175,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		auditChain:     cfg.AuditChain,
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
+		sessions:       cfg.SessionPolicy,
 		onAuditFailure: cfg.OnAuditFailure,
 		mux:            newPatternMux(),
 		routes:         nil,
@@ -324,6 +331,10 @@ func classify(err error) (int, string) {
 	}
 
 	if status, message, ok := classifyIPAllowlist(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifySessionPolicy(err); ok {
 		return status, message
 	}
 

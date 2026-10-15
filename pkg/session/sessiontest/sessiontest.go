@@ -1,6 +1,6 @@
-// Package sessiontest is the conformance suite for session.Store. Every
-// built-in store runs it, and a custom store passed to dustpan.NewServer
-// should too:
+// Package sessiontest is the conformance suite for session.Store and
+// session.PolicyStore. Every built-in store runs it, and a custom store
+// passed to dustpan.NewServer should too:
 //
 //	func TestSessionConformance(t *testing.T) {
 //		t.Parallel()
@@ -26,11 +26,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
-// Store is what the suite needs: the session port, the principal records
-// that own the sessions, and the access tokens, whose inactivity disable
-// counts a sign-in as activity.
+// Store is what the suite needs: the session port, the session policy
+// port, the principal records that own the sessions, and the access
+// tokens, whose inactivity disable counts a sign-in as activity.
 type Store interface {
 	session.Store
+	session.PolicyStore
 	principal.RecordStore
 	accesstoken.Store
 }
@@ -65,6 +66,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a duplicate state digest is ErrAlreadyExists", test: testDuplicateRequest},
 		{name: "prune deletes the expired sign-in requests only", test: testPruneRequests},
 		{name: "concurrent takes of one sign-in request: one wins", test: testConcurrentTakes},
+		{name: "the session policy starts at the defaults and keeps a change", test: testPolicy},
+		{name: "concurrent session policy updates: each sees the one before", test: testConcurrentPolicyUpdates},
 	}
 
 	for _, tc := range cases {
@@ -724,5 +727,133 @@ func testConcurrentTakes(t *testing.T, s Store) {
 
 	if won != 1 {
 		t.Fatalf("%d takes won, want exactly 1", won)
+	}
+}
+
+// policyEntry returns a valid audit entry of a change of the session
+// policy, as a service builds it.
+func policyEntry(when time.Time) audit.Entry {
+	e := entry("", when)
+	e.Action = "server:manage-sign-in"
+	e.Object = session.PolicyRef
+
+	return e
+}
+
+func testPolicy(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	got, err := s.GetSessionPolicy(ctx)
+	if err != nil || got != session.DefaultPolicy() {
+		t.Fatalf("seeded policy = %+v, %v; want %+v", got, err, session.DefaultPolicy())
+	}
+
+	want := session.Policy{UpdatedAt: at(5), Limits: session.Limits{Idle: 30 * time.Minute, MaxLength: 8 * time.Hour}}
+
+	stored, err := s.UpdateSessionPolicy(ctx, func(old session.Policy) (session.Policy, audit.Entry, error) {
+		if old != session.DefaultPolicy() {
+			t.Errorf("update read %+v, want the seeded policy", old)
+		}
+
+		return want, policyEntry(at(5)), nil
+	})
+	if err != nil || stored != want {
+		t.Fatalf("update policy = %+v, %v; want %+v", stored, err, want)
+	}
+
+	changed := want
+	changed.Limits.Idle = time.Hour
+
+	_, err = s.UpdateSessionPolicy(ctx, func(session.Policy) (session.Policy, audit.Entry, error) {
+		e := policyEntry(at(6))
+		e.Subject = ""
+
+		return changed, e, nil
+	})
+	wantErr(t, "update with a refused entry", err, audit.ErrInvalidEntry)
+
+	_, err = s.UpdateSessionPolicy(ctx, func(session.Policy) (session.Policy, audit.Entry, error) {
+		return changed, policyEntry(at(6)), session.ErrInvalid
+	})
+	wantErr(t, "update that refuses the change", err, session.ErrInvalid)
+
+	got, err = s.GetSessionPolicy(ctx)
+	if err != nil || got != want {
+		t.Fatalf("policy = %+v, %v; want %+v", got, err, want)
+	}
+
+	if changes, ok := policyEntries(t, s); ok && changes != 1 {
+		t.Fatalf("%d entries of %s, want 1: a refused change appends no entry", changes, session.PolicyRef)
+	}
+}
+
+// policyEntries counts the audit entries of @server whose object is the
+// session policy. It reports false when the store keeps no audit log to
+// read.
+func policyEntries(t *testing.T, s Store) (int, bool) {
+	t.Helper()
+
+	entries, ok := s.(auditLister)
+	if !ok {
+		return 0, false
+	}
+
+	listing, err := entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	var changes int
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Object == session.PolicyRef {
+			changes++
+		}
+	}
+
+	return changes, true
+}
+
+func testConcurrentPolicyUpdates(t *testing.T, s Store) {
+	t.Helper()
+
+	const updates = 8
+
+	var wg sync.WaitGroup
+
+	errs := make(chan error, updates)
+
+	for range updates {
+		wg.Go(func() {
+			_, err := s.UpdateSessionPolicy(
+				t.Context(),
+				func(old session.Policy) (session.Policy, audit.Entry, error) {
+					old.Limits.MaxLength += time.Hour
+
+					return old, policyEntry(at(7)), nil
+				},
+			)
+			errs <- err
+		})
+	}
+
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+	}
+
+	got, err := s.GetSessionPolicy(t.Context())
+	if err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+
+	if want := session.DefaultMaxLength + updates*time.Hour; got.Limits.MaxLength != want {
+		t.Fatalf("maximum length = %s, want %s: an update did not see the one before it", got.Limits.MaxLength, want)
 	}
 }
