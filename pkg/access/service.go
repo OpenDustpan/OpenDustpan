@@ -829,10 +829,10 @@ func (s *Service) checkDelegationGranter(ctx context.Context, granter identity.P
 	return err
 }
 
-// ServicePrincipalsOfGroup returns the sorted IDs of the service
+// servicePrincipalsOfGroup returns the sorted IDs of the service
 // principals that are members of the group groupID. It returns
 // principal.ErrNotFound when the group does not exist.
-func (s *Service) ServicePrincipalsOfGroup(ctx context.Context, groupID string) ([]string, error) {
+func (s *Service) servicePrincipalsOfGroup(ctx context.Context, groupID string) ([]string, error) {
 	var out []string
 
 	after := ""
@@ -894,7 +894,7 @@ func (s *Service) withTokenManagers(ctx context.Context, e audit.Entry, subject 
 
 		return e, nil
 	case SubjectGroup:
-		ids, err := s.ServicePrincipalsOfGroup(ctx, subject.ID)
+		ids, err := s.servicePrincipalsOfGroup(ctx, subject.ID)
 		if err != nil {
 			return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
 		}

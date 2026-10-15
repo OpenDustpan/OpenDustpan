@@ -52,7 +52,10 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 		{name: "a grant on a principal takes a service principal and principal actions", test: testPrincipalGrantRules},
 		{name: "an account administrator cannot act as a site administrator", test: testNoPersonalEscalation},
 		{name: "the audit entry of a grant names the token managers", test: testGrantNamesTokenManagers},
-		{name: "the audit entry of a group grant names the token managers of its service principals", test: testGroupGrantNamesTokenManagers},
+		{
+			name: "the audit entry of a group grant names the token managers of its service principals",
+			test: testGroupGrantNamesTokenManagers,
+		},
 		{name: "the audit entry of a membership add names the token managers", test: testMembershipNamesTokenManagers},
 		{name: "the export of a principal lists its token managers", test: testPrincipalExport},
 		{name: "a delete of a principal ends the grants on it", test: testDeleteEndsPrincipalGrants},

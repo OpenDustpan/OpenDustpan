@@ -203,7 +203,7 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 	ctx := b.Context()
 
 	principals, err := principal.NewService(
-		principal.Config{Store: s.principals, Guard: nil, Namespaces: nil, Now: now, NewID: nil},
+		principal.Config{Store: s.principals, Guard: nil, Namespaces: nil, Tokens: nil, Now: now, NewID: nil},
 	)
 	if err != nil {
 		b.Fatalf("principal service: %v", err)
