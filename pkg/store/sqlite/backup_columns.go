@@ -417,8 +417,18 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table:   "group_members",
-			columns: []string{"group_id", backupColPrincipalID, "added_at_ms", "removed_at_ms"},
+			table: "group_members",
+			columns: []string{
+				"group_id",
+				backupColPrincipalID,
+				"added_at_ms",
+				"removed_at_ms",
+				backupColSource,
+				"source_id",
+				backupColState,
+				"suspended_at_ms",
+				"pinned",
+			},
 		},
 		{
 			table: "access_tokens",
