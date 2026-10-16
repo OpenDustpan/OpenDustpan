@@ -60,6 +60,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntryChangesNothing},
 		{name: "a sign-in counts as activity for the inactivity disable", test: testSignInIsActivity},
 		{name: "the last sign-in never moves back", test: testLastSignInNeverMovesBack},
+		{name: "a session use counts as activity for the inactivity disable", test: testSessionUseIsActivity},
+		{name: "a session use counts as activity in the token lookup", test: testSessionUseInTokenLookup},
 		{name: "a sign-in request works once", test: testRequestOnce},
 		{name: "an expired sign-in request is gone", test: testRequestExpired},
 		{name: "a sign-in request that fails validation is ErrInvalid", test: testInvalidRequest},
@@ -568,6 +570,64 @@ func testLastSignInNeverMovesBack(t *testing.T, s Store) {
 
 	if res := mustSweep(t, s); len(res.Principals) != 0 {
 		t.Fatalf("sweep disabled %v, want none: the later sign-in counts", res.Principals)
+	}
+}
+
+// mustUseLater makes the person id with a sign-in at old, then records a
+// use of its session at a recent time, after the cutoff of mustSweep. The
+// sign-in alone is inactivity; the use alone keeps the person active, for
+// any maximum length of a session.
+func mustUseLater(t *testing.T, s Store, id string, old time.Time) time.Time {
+	t.Helper()
+
+	recent := testNow().Add(-sweepPeriod / 4).Truncate(time.Millisecond)
+
+	mustPrincipalAt(t, s, id, principal.KindPerson, old)
+	mustSession(t, s, newSession("ses-1", id, old), digest(1))
+
+	if err := s.TouchSession(t.Context(), "ses-1", recent, time.Minute); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+
+	return recent
+}
+
+func testSessionUseIsActivity(t *testing.T, s Store) {
+	t.Helper()
+
+	old := testNow().Add(-3 * sweepPeriod)
+	mustUseLater(t, s, "prn-1", old)
+
+	if res := mustSweep(t, s); len(res.Principals) != 0 {
+		t.Fatalf("sweep disabled %v, want none: a session use after the cutoff is activity", res.Principals)
+	}
+}
+
+func testSessionUseInTokenLookup(t *testing.T, s Store) {
+	t.Helper()
+
+	old := testNow().Add(-3 * sweepPeriod)
+	recent := mustUseLater(t, s, "prn-1", old)
+
+	tok := accesstoken.Token{
+		CreatedAt: old, ExpiresAt: testNow().Add(24 * time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
+		DisabledAt: time.Time{}, ID: "tok-1", PrincipalID: "prn-1", Name: "laptop", Kind: accesstoken.KindPersonal,
+		ReplacedBy: "", CreatedBy: "prn-1",
+	}
+
+	d := accesstoken.Digest(digest(9))
+
+	if err := s.CreateToken(t.Context(), tok, d, entry("tok-1", old)); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	m, err := s.GetTokenByDigest(t.Context(), d)
+	if err != nil {
+		t.Fatalf("token lookup: %v", err)
+	}
+
+	if !m.Owner.ActiveAt.Equal(recent) {
+		t.Fatalf("owner active at = %s, want the session use %s", m.Owner.ActiveAt, recent)
 	}
 }
 

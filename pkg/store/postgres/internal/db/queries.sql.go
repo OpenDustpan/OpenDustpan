@@ -1865,6 +1865,10 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
     WHERE t.principal_id = principals.id
       AND (t.created_at_ms > $2::bigint OR t.last_used_at_ms > $2::bigint)
   )
+  AND NOT EXISTS (
+    SELECT 1 FROM sessions s
+    WHERE s.principal_id = principals.id AND s.last_seen_at_ms > $2::bigint
+  )
 RETURNING id
 `
 
@@ -1874,9 +1878,11 @@ type DisableInactivePrincipalsParams struct {
 }
 
 // A person is inactive when its creation, its activity baseline, its last
-// sign-in, and the creation and the last use of each of its tokens are all
-// at or before the cutoff. A break-glass account is always exempt from the
-// inactivity disable.
+// sign-in, the creation and the last use of each of its tokens, and the
+// last use of each of its console sessions are all at or before the
+// cutoff. The session use counts by itself, so the result does not depend
+// on the maximum length of a session. A break-glass account is always
+// exempt from the inactivity disable.
 func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
 	rows, err := q.db.Query(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -2163,6 +2169,8 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
   ), 0))::bigint AS principal_active_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
@@ -3946,6 +3954,10 @@ FROM (
   SELECT s.principal_id, s.last_seen_at_ms AS used_at_ms
   FROM sessions s
   WHERE s.principal_id = ANY($1::text[])
+  UNION ALL
+  SELECT p.id AS principal_id, p.last_sign_in_at_ms AS used_at_ms
+  FROM principals p
+  WHERE p.id = ANY($1::text[]) AND p.last_sign_in_at_ms IS NOT NULL
 ) u
 GROUP BY u.principal_id
 `
@@ -3956,8 +3968,8 @@ type LastAccessByPrincipalsRow struct {
 }
 
 // The latest use of each given principal: the last use of its access
-// tokens and of its console sessions. One row for each principal with a
-// used token or a session. Revoked, replaced and expired tokens and ended
+// tokens and of its console sessions, and its last sign-in. One row for
+// each principal with a used token, a session or a sign-in. Revoked, replaced and expired tokens and ended
 // sessions count: a use is a use.
 func (q *Queries) LastAccessByPrincipals(ctx context.Context, principalIds []string) ([]LastAccessByPrincipalsRow, error) {
 	rows, err := q.db.Query(ctx, lastAccessByPrincipals, principalIds)
