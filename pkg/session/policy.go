@@ -18,12 +18,38 @@ const (
 	MinIdle = 5 * time.Minute
 	// MaxLengthBound is the longest maximum length: 7 days.
 	MaxLengthBound = 7 * 24 * time.Hour
+	// MinTokenFreshness is the shortest token freshness window that is not
+	// zero.
+	MinTokenFreshness = time.Minute
 )
+
+// DefaultTokenFreshness is the token freshness window of a policy that no
+// administrator set: how old the authentication of a console session can
+// be when the session creates or rotates an access token.
+const DefaultTokenFreshness = 15 * time.Minute
+
+// ValidTokenFreshness reports whether d is a usable token freshness window:
+// 0 (no check), or MinTokenFreshness to MaxLengthBound, in whole seconds.
+// It returns ErrInvalid otherwise.
+func ValidTokenFreshness(d time.Duration) error {
+	switch {
+	case d == 0:
+		return nil
+	case d < MinTokenFreshness || d > MaxLengthBound:
+		return fmt.Errorf("%w: the token freshness window %s is not 0 or %s to %s", ErrInvalid, d,
+			MinTokenFreshness, MaxLengthBound)
+	case d%time.Second != 0:
+		return fmt.Errorf("%w: the token freshness window is not a whole count of seconds", ErrInvalid)
+	default:
+		return nil
+	}
+}
 
 // PolicyRef is the audit object of the session policy.
 const PolicyRef = "session-policy"
 
-// ErrMissingDependency reports a PolicyConfig without a required port.
+// ErrMissingDependency reports a PolicyConfig or a SessionsConfig without a
+// required dependency.
 var ErrMissingDependency = errors.New("missing dependency")
 
 // Validate reports whether l holds usable limits: an idle limit of MinIdle
@@ -45,18 +71,25 @@ func (l Limits) Validate() error {
 }
 
 // Policy is the administrator setting of the console sessions of the
-// installation: the idle limit and the maximum length of a session.
-// UpdatedAt is the time of the last change, or zero for the seeded
-// defaults.
+// installation: the idle limit and the maximum length of a session, and
+// the token freshness window. UpdatedAt is the time of the last change, or
+// zero for the seeded defaults. TokenFreshness is the window that applies;
+// TokenFreshnessDefault is true while no administrator set it, so the
+// window is DefaultTokenFreshness and follows that constant.
 type Policy struct {
-	UpdatedAt time.Time
-	Limits    Limits
+	UpdatedAt             time.Time
+	Limits                Limits
+	TokenFreshness        time.Duration
+	TokenFreshnessDefault bool
 }
 
 // DefaultPolicy returns the policy of a new installation: the limits of
-// DefaultLimits.
+// DefaultLimits and the window DefaultTokenFreshness.
 func DefaultPolicy() Policy {
-	return Policy{UpdatedAt: time.Time{}, Limits: DefaultLimits()}
+	return Policy{
+		UpdatedAt: time.Time{}, Limits: DefaultLimits(), TokenFreshness: DefaultTokenFreshness,
+		TokenFreshnessDefault: true,
+	}
 }
 
 // PolicyStore keeps the session policy of the installation. The policy has
@@ -80,11 +113,12 @@ type PolicyStore interface {
 // the policy that the store holds. An error refuses the change.
 type PolicyUpdate func(old Policy) (Policy, audit.Entry, error)
 
-// PolicyChange names the limits that a change sets. A nil field keeps its
-// value.
+// PolicyChange names the settings that a change sets. A nil field keeps
+// its value.
 type PolicyChange struct {
-	Idle      *time.Duration
-	MaxLength *time.Duration
+	Idle           *time.Duration
+	MaxLength      *time.Duration
+	TokenFreshness *time.Duration
 }
 
 // applyTo returns l with the fields of c that are set.
@@ -148,18 +182,29 @@ func (s *Policies) Policy(ctx context.Context) (Policy, error) {
 // store reads and writes the policy in one transaction, so two changes
 // cannot lose one of them. e is the audit entry of the caller: SetPolicy
 // completes it with the time, the scope @server, the object PolicyRef and
-// the old and new value of each limit that changed. A new limit applies to
-// the next check of a session. It returns ErrInvalid when the new limits
-// fail validation.
+// the old and new value of each setting that changed. A new setting
+// applies to the next check of a session. It returns ErrInvalid when the
+// new settings fail validation.
 func (s *Policies) SetPolicy(ctx context.Context, e audit.Entry, c PolicyChange) (Policy, error) {
 	p, err := s.store.UpdateSessionPolicy(ctx, func(old Policy) (Policy, audit.Entry, error) {
-		p := Policy{UpdatedAt: s.Now(), Limits: c.applyTo(old.Limits)}
+		p := Policy{
+			UpdatedAt: s.Now(), Limits: c.applyTo(old.Limits), TokenFreshness: old.TokenFreshness,
+			TokenFreshnessDefault: old.TokenFreshnessDefault,
+		}
+
+		if c.TokenFreshness != nil {
+			p.TokenFreshness, p.TokenFreshnessDefault = *c.TokenFreshness, false
+		}
 
 		if err := p.Limits.Validate(); err != nil {
 			return Policy{}, audit.Entry{}, err
 		}
 
-		return p, policyEntry(e, p.UpdatedAt, old.Limits, p.Limits), nil
+		if err := ValidTokenFreshness(p.TokenFreshness); err != nil {
+			return Policy{}, audit.Entry{}, err
+		}
+
+		return p, policyEntry(e, p.UpdatedAt, old, p), nil
 	})
 
 	if errors.Is(err, ErrInvalid) {
@@ -175,7 +220,7 @@ func (s *Policies) SetPolicy(ctx context.Context, e audit.Entry, c PolicyChange)
 
 // policyEntry returns e as the audit entry of a change of the policy from
 // old to updated at the time at.
-func policyEntry(e audit.Entry, at time.Time, old, updated Limits) audit.Entry {
+func policyEntry(e audit.Entry, at time.Time, old, updated Policy) audit.Entry {
 	e.At = at
 	e.Namespace = audit.ServerScope
 	e.Kind = audit.KindChange
@@ -187,8 +232,9 @@ func policyEntry(e audit.Entry, at time.Time, old, updated Limits) audit.Entry {
 		key        string
 		old, value time.Duration
 	}{
-		{key: "idleSeconds", old: old.Idle, value: updated.Idle},
-		{key: "maxLengthSeconds", old: old.MaxLength, value: updated.MaxLength},
+		{key: "idleSeconds", old: old.Limits.Idle, value: updated.Limits.Idle},
+		{key: "maxLengthSeconds", old: old.Limits.MaxLength, value: updated.Limits.MaxLength},
+		{key: "tokenFreshnessSeconds", old: old.TokenFreshness, value: updated.TokenFreshness},
 	} {
 		if c.old == c.value {
 			continue

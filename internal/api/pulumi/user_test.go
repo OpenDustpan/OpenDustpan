@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -174,6 +175,17 @@ func newUserHandler(
 ) *pulumi.Handler {
 	t.Helper()
 
+	return newUserHandlerWithSessions(t, nsStore, stStore, authz, nil)
+}
+
+// newUserHandlerWithSessions is newUserHandler with the session cookie
+// check sessions; nil takes access tokens only.
+func newUserHandlerWithSessions(
+	t *testing.T, nsStore *memNamespaceStore, stStore *memStackStore, authz identity.Authorizer,
+	sessions *sessionauth.Checker,
+) *pulumi.Handler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
 	)
@@ -196,6 +208,7 @@ func newUserHandler(
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		Sessions:                sessions,
 		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},

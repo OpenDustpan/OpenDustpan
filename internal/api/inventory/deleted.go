@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -443,7 +444,7 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		Changes:      nil,
 		SourceIP:     clientip.String(r),
 		UserAgent:    truncateUserAgent(r.UserAgent()),
-		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Channel:      sessionauth.AuditChannel(r, channelHeader),
 		Kind:         audit.KindChange,
 		Outcome:      audit.OutcomeSuccess,
 		RequestID:    requestid.FromContext(r.Context()),

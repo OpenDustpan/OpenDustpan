@@ -20,9 +20,11 @@ import (
 
 // sessionPolicyDoc is the session policy on the wire.
 type sessionPolicyDoc struct {
-	UpdatedAt        *string `json:"updatedAt"`
-	IdleSeconds      int64   `json:"idleSeconds"`
-	MaxLengthSeconds int64   `json:"maxLengthSeconds"`
+	UpdatedAt             *string `json:"updatedAt"`
+	IdleSeconds           int64   `json:"idleSeconds"`
+	MaxLengthSeconds      int64   `json:"maxLengthSeconds"`
+	TokenFreshnessSeconds int64   `json:"tokenFreshnessSeconds"`
+	TokenFreshnessDefault bool    `json:"tokenFreshnessDefault"`
 }
 
 // newSessionPolicyHandler builds a Handler over a fresh SQLite store whose
@@ -44,27 +46,29 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:  tokenAuthenticator{},
-		Authorizer:     authz,
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     nss,
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "test",
-		Schema:         st,
-		Journal:        nil,
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          st,
-		OnAuditFailure: nil,
-		IPAllowlists:   nil,
-		SessionPolicy:  policies,
-		DeletedUnits:   nil,
-		AuditChain:     nil,
-		AuditSinks:     nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       authz,
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       nss,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           st,
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            st,
+		OnAuditFailure:   nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    policies,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -195,6 +199,29 @@ func wantIdleChangeEntry(t *testing.T, e audit.Entry) {
 	}
 }
 
+func TestSessionPolicyTokenFreshness(t *testing.T) {
+	t.Parallel()
+
+	st, h := newSessionPolicyHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+	defaults := decodeSessionPolicy(t, serveSessionPolicy(t, h, http.MethodGet, ""))
+	if defaults.TokenFreshnessSeconds != 900 || !defaults.TokenFreshnessDefault {
+		t.Fatalf("default window = %d (default %t), want 900 from the server default", defaults.TokenFreshnessSeconds,
+			defaults.TokenFreshnessDefault)
+	}
+
+	got := decodeSessionPolicy(t, serveSessionPolicy(t, h, http.MethodPatch, `{"tokenFreshnessSeconds":0}`))
+	if got.TokenFreshnessSeconds != 0 || got.TokenFreshnessDefault || got.IdleSeconds != 900 {
+		t.Fatalf("window after a change to 0 = %+v, want 0 that an administrator set", got)
+	}
+
+	entries := sessionPolicyEntries(t, st)
+	if len(entries) != 1 || len(entries[0].Changes) != 1 || entries[0].Changes[0].Key != "tokenFreshnessSeconds" ||
+		entries[0].Changes[0].New != "0" {
+		t.Fatalf("entries = %+v, want one change of tokenFreshnessSeconds to 0", entries)
+	}
+}
+
 func TestSessionPolicyRefusesBadChanges(t *testing.T) {
 	t.Parallel()
 
@@ -203,6 +230,7 @@ func TestSessionPolicyRefusesBadChanges(t *testing.T) {
 	bodies := []string{
 		`{}`, `{"other":1}`, `{"idleSeconds":-1}`, `{"idleSeconds":60}`, `{"maxLengthSeconds":600}`,
 		`{"maxLengthSeconds":604801}`, `{"maxLengthSeconds":9223372036854775807}`, `not json`,
+		`{"tokenFreshnessSeconds":30}`, `{"tokenFreshnessSeconds":604801}`, `{"tokenFreshnessSeconds":-1}`,
 	}
 
 	for _, body := range bodies {

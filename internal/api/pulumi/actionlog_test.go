@@ -84,6 +84,7 @@ func loggedUpdateFixture(t *testing.T, authz identity.Authorizer, buf *bytes.Buf
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		Sessions:                nil,
 		AddressGate:             nil,
 		Logger:                  logger,
 		BaseURL:                 baseurl.Resolver{},

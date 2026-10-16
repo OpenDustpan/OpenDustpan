@@ -289,6 +289,30 @@ func TestAuditConformance(t *testing.T) {
 	})
 }
 
+// TestAuditEntryReaderConformance runs the audit.EntryReader cases: one
+// entry at a sequence and the last entry of a scope.
+func TestAuditEntryReaderConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	audittest.RunEntryReader(t, func(t *testing.T) audittest.EntryStore {
+		t.Helper()
+
+		s, err := postgres.Open(t.Context(), isolatedURL(t, base))
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(s.Close)
+
+		return s
+	})
+}
+
 // TestAuditChainConformance runs the chain switch cases: entries without a
 // hash, runs of chained entries, and the recorded chain state.
 func TestAuditChainConformance(t *testing.T) {

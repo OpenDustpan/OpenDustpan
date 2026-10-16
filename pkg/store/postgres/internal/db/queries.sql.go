@@ -1272,8 +1272,8 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 }
 
 const createSignInRequest = `-- name: CreateSignInRequest :execrows
-INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING
 `
 
@@ -1285,6 +1285,7 @@ type CreateSignInRequestParams struct {
 	ReturnPath  string
 	CreatedAtMs int64
 	ExpiresAtMs int64
+	MaxAgeMs    pgtype.Int8
 }
 
 func (q *Queries) CreateSignInRequest(ctx context.Context, arg CreateSignInRequestParams) (int64, error) {
@@ -1296,6 +1297,7 @@ func (q *Queries) CreateSignInRequest(ctx context.Context, arg CreateSignInReque
 		arg.ReturnPath,
 		arg.CreatedAtMs,
 		arg.ExpiresAtMs,
+		arg.MaxAgeMs,
 	)
 	if err != nil {
 		return 0, err
@@ -1880,6 +1882,10 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
     WHERE t.principal_id = principals.id
       AND (t.created_at_ms > $2::bigint OR t.last_used_at_ms > $2::bigint)
   )
+  AND NOT EXISTS (
+    SELECT 1 FROM sessions s
+    WHERE s.principal_id = principals.id AND s.last_seen_at_ms > $2::bigint
+  )
 RETURNING id
 `
 
@@ -1889,9 +1895,11 @@ type DisableInactivePrincipalsParams struct {
 }
 
 // A person is inactive when its creation, its activity baseline, its last
-// sign-in, and the creation and the last use of each of its tokens are all
-// at or before the cutoff. A break-glass account is always exempt from the
-// inactivity disable.
+// sign-in, the creation and the last use of each of its tokens, and the
+// last use of each of its console sessions are all at or before the
+// cutoff. The session use counts by itself, so the result does not depend
+// on the maximum length of a session. A break-glass account is always
+// exempt from the inactivity disable.
 func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
 	rows, err := q.db.Query(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -2178,6 +2186,8 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
   ), 0))::bigint AS principal_active_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
@@ -2291,6 +2301,51 @@ func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow
 		&i.EnteredMaintenance,
 		&i.LogReplaced,
 		&i.MigratingAtMs,
+	)
+	return i, err
+}
+
+const getAuditEntry = `-- name: GetAuditEntry :one
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
+FROM audit_entries
+WHERE namespace = $1 AND sequence = $2
+`
+
+type GetAuditEntryParams struct {
+	Namespace string
+	Sequence  int64
+}
+
+// The entry of a scope at one sequence, for the check of signed
+// checkpoints. A missing entry matches no row.
+func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (AuditEntry, error) {
+	row := q.db.QueryRow(ctx, getAuditEntry, arg.Namespace, arg.Sequence)
+	var i AuditEntry
+	err := row.Scan(
+		&i.Namespace,
+		&i.Sequence,
+		&i.Subject,
+		&i.IdpSubject,
+		&i.TokenID,
+		&i.Action,
+		&i.Object,
+		&i.Version,
+		&i.ValuePath,
+		&i.AtMs,
+		&i.SourceIp,
+		&i.UserAgent,
+		&i.Channel,
+		&i.Kind,
+		&i.Outcome,
+		&i.RequestID,
+		&i.PrevHash,
+		&i.Hash,
+		&i.ValueCount,
+		&i.Changes,
+		&i.ObjectID,
+		&i.FenceVersion,
 	)
 	return i, err
 }
@@ -2850,6 +2905,17 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 	return ip_allowlist, err
 }
 
+const getOIDCProviderIssuer = `-- name: GetOIDCProviderIssuer :one
+SELECT issuer FROM oidc_providers WHERE provider_id = $1
+`
+
+func (q *Queries) GetOIDCProviderIssuer(ctx context.Context, providerID string) (string, error) {
+	row := q.db.QueryRow(ctx, getOIDCProviderIssuer, providerID)
+	var issuer string
+	err := row.Scan(&issuer)
+	return issuer, err
+}
+
 const getPrincipal = `-- name: GetPrincipal :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -3056,7 +3122,12 @@ func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, err
 const getSessionByDigest = `-- name: GetSessionByDigest :one
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
+  GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
+    SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
+  ), 0))::bigint AS principal_active_at_ms
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 WHERE s.digest = $1 AND p.deleted_at_ms IS NULL
@@ -3078,8 +3149,12 @@ type GetSessionByDigestRow struct {
 	DisplayName           string
 	PrincipalKind         string
 	PrincipalDisabledAtMs pgtype.Int8
+	PrincipalBreakGlass   bool
+	PrincipalActiveAtMs   int64
 }
 
+// principal_active_at_ms is the latest activity of the owner by the account
+// rule of the inactivity disable, as in GetAccessTokenByDigest.
 func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getSessionByDigest, digest)
 	var i GetSessionByDigestRow
@@ -3099,24 +3174,32 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.DisplayName,
 		&i.PrincipalKind,
 		&i.PrincipalDisabledAtMs,
+		&i.PrincipalBreakGlass,
+		&i.PrincipalActiveAtMs,
 	)
 	return i, err
 }
 
 const getSessionPolicy = `-- name: GetSessionPolicy :one
-SELECT idle_ms, max_length_ms, updated_at_ms FROM session_policy WHERE id = 1
+SELECT idle_ms, max_length_ms, updated_at_ms, token_freshness_ms FROM session_policy WHERE id = 1
 `
 
 type GetSessionPolicyRow struct {
-	IdleMs      int64
-	MaxLengthMs int64
-	UpdatedAtMs int64
+	IdleMs           int64
+	MaxLengthMs      int64
+	UpdatedAtMs      int64
+	TokenFreshnessMs pgtype.Int8
 }
 
 func (q *Queries) GetSessionPolicy(ctx context.Context) (GetSessionPolicyRow, error) {
 	row := q.db.QueryRow(ctx, getSessionPolicy)
 	var i GetSessionPolicyRow
-	err := row.Scan(&i.IdleMs, &i.MaxLengthMs, &i.UpdatedAtMs)
+	err := row.Scan(
+		&i.IdleMs,
+		&i.MaxLengthMs,
+		&i.UpdatedAtMs,
+		&i.TokenFreshnessMs,
+	)
 	return i, err
 }
 
@@ -3899,6 +3982,24 @@ func (q *Queries) InsertJournalSequence(ctx context.Context, arg InsertJournalSe
 	return err
 }
 
+const insertOIDCProvider = `-- name: InsertOIDCProvider :exec
+INSERT INTO oidc_providers (provider_id, issuer, created_at_ms) VALUES ($1, $2, $3)
+ON CONFLICT (provider_id) DO NOTHING
+`
+
+type InsertOIDCProviderParams struct {
+	ProviderID  string
+	Issuer      string
+	CreatedAtMs int64
+}
+
+// The first start with a provider ID records its issuer. A later start
+// keeps the record.
+func (q *Queries) InsertOIDCProvider(ctx context.Context, arg InsertOIDCProviderParams) error {
+	_, err := q.db.Exec(ctx, insertOIDCProvider, arg.ProviderID, arg.Issuer, arg.CreatedAtMs)
+	return err
+}
+
 const journalBlobKeys = `-- name: JournalBlobKeys :many
 SELECT blob_key FROM update_journal
 WHERE stack_id = $1 AND update_id = $2
@@ -3978,11 +4079,21 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 }
 
 const lastAccessByPrincipals = `-- name: LastAccessByPrincipals :many
-SELECT principal_id, MAX(last_used_at_ms)::bigint AS last_used_at_ms
-FROM access_tokens
-WHERE principal_id = ANY($1::text[])
-  AND last_used_at_ms IS NOT NULL
-GROUP BY principal_id
+SELECT u.principal_id, MAX(u.used_at_ms)::bigint AS last_used_at_ms
+FROM (
+  SELECT t.principal_id, t.last_used_at_ms AS used_at_ms
+  FROM access_tokens t
+  WHERE t.principal_id = ANY($1::text[]) AND t.last_used_at_ms IS NOT NULL
+  UNION ALL
+  SELECT s.principal_id, s.last_seen_at_ms AS used_at_ms
+  FROM sessions s
+  WHERE s.principal_id = ANY($1::text[])
+  UNION ALL
+  SELECT p.id AS principal_id, p.last_sign_in_at_ms AS used_at_ms
+  FROM principals p
+  WHERE p.id = ANY($1::text[]) AND p.last_sign_in_at_ms IS NOT NULL
+) u
+GROUP BY u.principal_id
 `
 
 type LastAccessByPrincipalsRow struct {
@@ -3990,9 +4101,10 @@ type LastAccessByPrincipalsRow struct {
 	LastUsedAtMs int64
 }
 
-// The latest last-use time of the access tokens of each given principal:
-// one row for each principal with a used token. Revoked, replaced and
-// expired tokens count: a use is a use.
+// The latest use of each given principal: the last use of its access
+// tokens and of its console sessions, and its last sign-in. One row for
+// each principal with a used token, a session or a sign-in. Revoked, replaced and expired tokens and ended
+// sessions count: a use is a use.
 func (q *Queries) LastAccessByPrincipals(ctx context.Context, principalIds []string) ([]LastAccessByPrincipalsRow, error) {
 	rows, err := q.db.Query(ctx, lastAccessByPrincipals, principalIds)
 	if err != nil {
@@ -7074,18 +7186,24 @@ func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingConten
 const setSessionPolicy = `-- name: SetSessionPolicy :execrows
 UPDATE session_policy
 SET idle_ms = $1::bigint, max_length_ms = $2::bigint,
-  updated_at_ms = $3::bigint
+  updated_at_ms = $3::bigint, token_freshness_ms = $4::bigint
 WHERE id = 1
 `
 
 type SetSessionPolicyParams struct {
-	IdleMs      int64
-	MaxLengthMs int64
-	UpdatedAtMs int64
+	IdleMs           int64
+	MaxLengthMs      int64
+	UpdatedAtMs      int64
+	TokenFreshnessMs pgtype.Int8
 }
 
 func (q *Queries) SetSessionPolicy(ctx context.Context, arg SetSessionPolicyParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setSessionPolicy, arg.IdleMs, arg.MaxLengthMs, arg.UpdatedAtMs)
+	result, err := q.db.Exec(ctx, setSessionPolicy,
+		arg.IdleMs,
+		arg.MaxLengthMs,
+		arg.UpdatedAtMs,
+		arg.TokenFreshnessMs,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -7230,7 +7348,7 @@ func (q *Queries) SubjectsOfCaller(ctx context.Context, subject string) ([]Subje
 
 const takeSignInRequest = `-- name: TakeSignInRequest :one
 DELETE FROM sign_in_requests WHERE digest = $1
-RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms
+RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms
 `
 
 type TakeSignInRequestRow struct {
@@ -7240,6 +7358,7 @@ type TakeSignInRequestRow struct {
 	ReturnPath  string
 	CreatedAtMs int64
 	ExpiresAtMs int64
+	MaxAgeMs    pgtype.Int8
 }
 
 func (q *Queries) TakeSignInRequest(ctx context.Context, digest string) (TakeSignInRequestRow, error) {
@@ -7252,6 +7371,7 @@ func (q *Queries) TakeSignInRequest(ctx context.Context, digest string) (TakeSig
 		&i.ReturnPath,
 		&i.CreatedAtMs,
 		&i.ExpiresAtMs,
+		&i.MaxAgeMs,
 	)
 	return i, err
 }
@@ -7275,16 +7395,27 @@ func (q *Queries) TouchAccessToken(ctx context.Context, arg TouchAccessTokenPara
 const touchSession = `-- name: TouchSession :exec
 UPDATE sessions SET last_seen_at_ms = $1::bigint
 WHERE id = $2 AND ended_at_ms IS NULL AND last_seen_at_ms <= $3::bigint
+  AND last_seen_at_ms > $4::bigint AND created_at_ms > $5::bigint
 `
 
 type TouchSessionParams struct {
-	AtMs     int64
-	ID       string
-	BeforeMs int64
+	AtMs           int64
+	ID             string
+	BeforeMs       int64
+	SeenAfterMs    int64
+	CreatedAfterMs int64
 }
 
+// An idle or expired session keeps its last use: seen_after_ms and
+// created_after_ms are the bounds of an active session at at_ms.
 func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) error {
-	_, err := q.db.Exec(ctx, touchSession, arg.AtMs, arg.ID, arg.BeforeMs)
+	_, err := q.db.Exec(ctx, touchSession,
+		arg.AtMs,
+		arg.ID,
+		arg.BeforeMs,
+		arg.SeenAfterMs,
+		arg.CreatedAfterMs,
+	)
 	return err
 }
 

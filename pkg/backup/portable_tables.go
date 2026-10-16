@@ -416,6 +416,16 @@ func portableSpec() []PortableTable {
 				{Name: "return_path", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColExpiresAtMs, Kind: KindTime},
+				{Name: "max_age_ms", Kind: KindInteger},
+			},
+		},
+		{
+			Table:   "oidc_providers",
+			OrderBy: []string{"provider_id"},
+			Columns: []Column{
+				{Name: "provider_id", Kind: KindText},
+				{Name: "issuer", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
 			},
 		},
 		{
@@ -492,6 +502,7 @@ func portableSpec() []PortableTable {
 				{Name: "idle_ms", Kind: KindInteger},
 				{Name: "max_length_ms", Kind: KindInteger},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
+				{Name: "token_freshness_ms", Kind: KindInteger},
 			},
 		},
 		{

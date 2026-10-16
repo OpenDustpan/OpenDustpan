@@ -126,6 +126,31 @@ type Session struct {
 	UserAgent   string
 }
 
+// ActiveBounds are the times after which the last use and the creation of
+// a session must be for the session to be active. A zero time is no bound.
+type ActiveBounds struct {
+	// LastSeen: a session whose last use is at or before it is idle.
+	LastSeen time.Time
+	// Created: a session whose creation is at or before it is expired.
+	Created time.Time
+}
+
+// ActiveAfter returns the bounds of an active session for a use at the
+// time when, under l. A limit of zero does not apply and gives no bound.
+func (l Limits) ActiveAfter(when time.Time) ActiveBounds {
+	var b ActiveBounds
+
+	if l.Idle > 0 {
+		b.LastSeen = when.Add(-l.Idle)
+	}
+
+	if l.MaxLength > 0 {
+		b.Created = when.Add(-l.MaxLength)
+	}
+
+	return b
+}
+
 // StatusAt returns the status of s at the time now under the limits l. A
 // limit of zero does not apply.
 func (s Session) StatusAt(now time.Time, l Limits) Status {
@@ -142,13 +167,20 @@ func (s Session) StatusAt(now time.Time, l Limits) Status {
 }
 
 // Owner is the principal of a session, as a lookup answers it. DisabledAt is
-// zero for a principal that the inactivity disable did not end.
+// zero for a principal that the inactivity disable did not end. ActiveAt is
+// the latest activity of the principal by the account rule of the
+// inactivity disable: the latest of its creation, its activity baseline,
+// its last sign-in, the creation and the last use of each of its access
+// tokens, and the last use of each of its sessions. BreakGlass marks a
+// break-glass account, which is always exempt from the inactivity disable.
 type Owner struct {
+	ActiveAt    time.Time
 	DisabledAt  time.Time
 	ID          string
 	Subject     string
 	DisplayName string
 	Kind        principal.Kind
+	BreakGlass  bool
 }
 
 // Match is the answer of a lookup by digest: the session, its owner and the
@@ -163,7 +195,9 @@ type Match struct {
 // Provider names the sign-in method. Nonce goes into the ID token, and
 // Verifier is the PKCE code verifier (RFC 7636): both are secret until the
 // callback. ReturnPath is where the browser goes after the sign-in: a path
-// of this server. A request expires at ExpiresAt and works once.
+// of this server. MaxAge is the max_age that the start sent to the provider,
+// when HasMaxAge is true: the callback refuses an authentication older
+// than it. A request expires at ExpiresAt and works once.
 type Request struct {
 	CreatedAt  time.Time
 	ExpiresAt  time.Time
@@ -171,6 +205,8 @@ type Request struct {
 	Nonce      string
 	Verifier   string
 	ReturnPath string
+	MaxAge     time.Duration
+	HasMaxAge  bool
 }
 
 // RequestLifetime is how long a sign-in can take from its start to its
@@ -280,6 +316,9 @@ func (r Request) Validate() error {
 		return fmt.Errorf("%w: return path %q is not a path of this server", ErrInvalid, r.ReturnPath)
 	case r.CreatedAt.IsZero() || !r.ExpiresAt.After(r.CreatedAt):
 		return fmt.Errorf("%w: the expiry is not after the creation time", ErrInvalid)
+	case r.MaxAge < 0 || r.MaxAge%time.Second != 0 || (!r.HasMaxAge && r.MaxAge != 0):
+		return fmt.Errorf("%w: max_age %s is not a count of whole seconds that the request sent", ErrInvalid,
+			r.MaxAge)
 	default:
 		return nil
 	}

@@ -240,6 +240,10 @@ const (
 	// on the target, and collection:manage-access on the collection the unit is
 	// in now, when it has one (ADR 61, decision 4; RFC 4).
 	ActionUnitMove Action = "unit:move"
+	// ActionServerManageAudit allows changing how the audit log protects
+	// itself, for example starting a new epoch of the signed audit
+	// checkpoints. Its object is ServerObject.
+	ActionServerManageAudit Action = "server:manage-audit"
 	// ActionServerManageTokenPolicy allows changing the token life cycle
 	// policy and running the inactivity disable (ADR 53, decisions 2, 4 and
 	// 6). Its object is ServerObject.

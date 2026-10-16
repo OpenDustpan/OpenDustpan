@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -440,7 +441,7 @@ func (h *Handler) newAuditEntry(
 		Changes:      nil,
 		SourceIP:     clientip.String(r),
 		UserAgent:    truncateUserAgent(r.UserAgent()),
-		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Channel:      sessionauth.AuditChannel(r, channelHeader),
 		Kind:         detail.kind,
 		Outcome:      audit.OutcomeSuccess,
 		RequestID:    requestid.FromContext(ctx),

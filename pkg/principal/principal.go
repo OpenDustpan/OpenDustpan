@@ -57,6 +57,12 @@ var (
 	// ErrBreakGlassKind reports a break-glass account that is not a person.
 	// Only a person can be a break-glass account.
 	ErrBreakGlassKind = errors.New("break-glass account must be a person")
+	// ErrDisabled reports a principal that is disabled.
+	ErrDisabled = errors.New("principal is disabled")
+	// ErrNotSignInTarget reports a principal that a sign-in through an
+	// identity provider cannot name: one that is not a person, a principal
+	// of a namespace, or a break-glass account.
+	ErrNotSignInTarget = errors.New("principal cannot sign in through an identity provider")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -88,8 +94,8 @@ func ParseKind(s string) (Kind, error) {
 // Source names where a principal or a group comes from.
 type Source string
 
-// Sources of records (ADR 55). Only SourceLocal exists today: the directory
-// sync sets the others.
+// Sources of records. The directory sync sets SourceLDAP and
+// SourceSCIM.
 const (
 	// SourceLocal is a record made through the API.
 	SourceLocal Source = "local"
@@ -97,6 +103,9 @@ const (
 	SourceLDAP Source = "ldap"
 	// SourceSCIM is a record that a SCIM sync keeps.
 	SourceSCIM Source = "scim"
+	// SourceOIDC is a person that the first sign-in through an OpenID
+	// Connect provider made.
+	SourceOIDC Source = "oidc"
 )
 
 // Limits of the text fields, in bytes.
@@ -242,7 +251,7 @@ func (m Membership) Validate() error {
 		return fmt.Errorf("%w: a membership from %s names its identity provider or SCIM token", ErrInvalid, def.Source)
 	}
 
-	if err := validateText("source ID", def.SourceID, maxSubjectLength, false); err != nil {
+	if err := validateText("source ID", def.SourceID, maxSubjectLength); err != nil {
 		return err
 	}
 
@@ -350,11 +359,9 @@ func ValidateGroupName(s string) error {
 	return nil
 }
 
-// validateText checks one text field. A required field must not be empty.
-func validateText(field, s string, maxLen int, required bool) error {
+// validateText checks one optional text field. An empty field is valid.
+func validateText(field, s string, maxLen int) error {
 	switch {
-	case s == "" && required:
-		return fmt.Errorf("%w: missing %s", ErrInvalid, field)
 	case len(s) > maxLen:
 		return fmt.Errorf("%w: %s longer than %d bytes", ErrInvalid, field, maxLen)
 	case !utf8.ValidString(s):
@@ -384,7 +391,7 @@ func (p Principal) Validate() error {
 		return err
 	}
 
-	if err := validateText("display name", p.DisplayName, maxDisplayNameLength, false); err != nil {
+	if err := validateText("display name", p.DisplayName, maxDisplayNameLength); err != nil {
 		return err
 	}
 
@@ -421,11 +428,11 @@ func (p Principal) validateNamespace() error {
 	return nil
 }
 
-// validateSource returns ErrInvalid for a source that is not local, ldap or
-// scim.
+// validateSource returns ErrInvalid for a source that is not local, ldap,
+// scim or oidc.
 func validateSource(s Source) error {
 	switch s {
-	case SourceLocal, SourceLDAP, SourceSCIM:
+	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC:
 		return nil
 	default:
 		return fmt.Errorf("%w: unknown source %q", ErrInvalid, s)
@@ -443,7 +450,7 @@ func (g Group) Validate() error {
 		return err
 	}
 
-	return validateText("description", g.Description, maxDescriptionLength, false)
+	return validateText("description", g.Description, maxDescriptionLength)
 }
 
 // Audit object names of the records that a change acts on (ADR 60,

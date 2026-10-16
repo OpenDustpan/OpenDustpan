@@ -198,6 +198,12 @@ type Namespace struct {
 	IpAllowlist         string
 }
 
+type OidcProvider struct {
+	ProviderID  string
+	Issuer      string
+	CreatedAtMs int64
+}
+
 type Principal struct {
 	ID             string
 	Subject        string
@@ -270,10 +276,11 @@ type Session struct {
 }
 
 type SessionPolicy struct {
-	ID          int64
-	IdleMs      int64
-	MaxLengthMs int64
-	UpdatedAtMs int64
+	ID               int64
+	IdleMs           int64
+	MaxLengthMs      int64
+	UpdatedAtMs      int64
+	TokenFreshnessMs sql.NullInt64
 }
 
 type SignInRequest struct {
@@ -284,6 +291,7 @@ type SignInRequest struct {
 	ReturnPath  string
 	CreatedAtMs int64
 	ExpiresAtMs int64
+	MaxAgeMs    sql.NullInt64
 }
 
 type Stack struct {

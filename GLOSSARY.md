@@ -160,6 +160,9 @@ _Avoid_: User (when the caller can be a machine), actor
 A service principal that belongs to one namespace. A holder of `namespace:manage-principals` on the namespace makes it. It can only hold grants on its namespace or on an object inside it, and it cannot be a member of a group. Its subject is unique on the whole installation. A holder of `namespace:manage-principal-tokens` on the namespace makes the tokens of its principals.
 _Avoid_: Namespace service account, local principal
 
+**Principal source**:
+Where a principal comes from. The API makes a `local` principal. The first sign-in of a person through an OpenID Connect provider makes an `oidc` principal. A directory sync keeps an `ldap` or `scim` principal. The subject of an `oidc` principal is the provider ID and the subject of the identity provider, separated by a colon. So a provider ID must never change after its first sign-in.
+
 **Access token**:
 The secret that a tool or the console sends to prove which principal it acts for.
 _Avoid_: API key, password
@@ -389,6 +392,10 @@ _Avoid_: Audit log line, event, audit event
 **Audit log**:
 The port in `pkg/audit` that keeps the audit entries of each namespace and of the installation (scope `@server`). The SQL table is its record. It is fully on or fully off for an installation (ADR 60).
 _Avoid_: Audit trail, activity log
+
+**Audit checkpoint**:
+An Ed25519 signature over the hash at one sequence of one audit scope. It holds the scope, the sequence, the time and the key ID. The server keeps it in the blob store under `audit-checkpoints/`. It is opt-in and needs the chain on. It is not a **Checkpoint** of the Pulumi CLI: in code and docs outside the audit log, always write "audit checkpoint".
+_Avoid_: Signed head, anchor, checkpoint (alone, outside the audit log)
 
 **Log sink**:
 An output adapter of the port `pkg/logsink` that delivers structured records to one target: stdout, a file, syslog, a webhook, OTLP logs or object storage. The audit log and the application log use the same port (ADR 60).

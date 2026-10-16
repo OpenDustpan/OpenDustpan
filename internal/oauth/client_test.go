@@ -1,12 +1,15 @@
 package oauth_test
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -146,8 +149,8 @@ func (s setup) signIn(t *testing.T, opts oauth.Options) (oauth.Identity, error) 
 	authURL, pending := s.client.Begin(opts)
 	back := authorize(t, s.provider, authURL)
 
-	if back.state != pending.State {
-		t.Fatal("state of the callback differs from the state of the request")
+	if err := oauth.CheckState(back.state, pending); err != nil {
+		t.Fatalf("state of the callback: %v", err)
 	}
 
 	return s.client.Finish(t.Context(), back.code, pending)
@@ -162,7 +165,7 @@ func TestSignInEachAlgorithm(t *testing.T) {
 
 			s := newSetup(t, alg, noFaults())
 
-			got, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false})
+			got, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 			if err != nil {
 				t.Fatalf("sign in: %v", err)
 			}
@@ -188,8 +191,8 @@ func TestBeginRequest(t *testing.T) {
 
 	s := newSetup(t, oauthtest.RS256, noFaults())
 
-	firstURL, first := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
-	_, second := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	firstURL, first := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
+	_, second := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 
 	if first.State == second.State || first.Nonce == second.Nonce || first.Verifier == second.Verifier {
 		t.Error("two requests share a state, a nonce or a verifier")
@@ -239,7 +242,7 @@ func TestBeginMaxAge(t *testing.T) {
 		{maxAge: 1500 * time.Millisecond, want: "1"},
 		{maxAge: -time.Minute, want: "0"},
 	} {
-		authURL, pending := s.client.Begin(oauth.Options{MaxAge: tc.maxAge, HasMaxAge: true})
+		authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: tc.maxAge, HasMaxAge: true})
 
 		u, err := url.Parse(authURL)
 		if err != nil {
@@ -288,7 +291,7 @@ func TestFinishRefusesBadIDToken(t *testing.T) {
 
 			s := newSetup(t, oauthtest.RS256, tc.faults)
 
-			authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+			authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 			code := authorize(t, s.provider, authURL).code
 
 			_, err := s.client.Finish(t.Context(), code, pending)
@@ -320,12 +323,12 @@ func TestFinishRefusesOtherNonce(t *testing.T) {
 
 	s := newSetup(t, oauthtest.ES256, noFaults())
 
-	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	code := authorize(t, s.provider, authURL).code
 
 	// The callback of another request: the same code, with the nonce of
 	// another pending request.
-	_, other := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	_, other := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	pending.Nonce = other.Nonce
 
 	_, err := s.client.Finish(t.Context(), code, pending)
@@ -339,7 +342,7 @@ func TestFinishRefusesEmptyPendingNonce(t *testing.T) {
 
 	s := newSetup(t, oauthtest.RS256, noFaults())
 
-	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	code := authorize(t, s.provider, authURL).code
 
 	pending.Nonce = ""
@@ -365,7 +368,7 @@ func TestFinishRefusedExchange(t *testing.T) {
 
 			s := newSetup(t, oauthtest.RS256, noFaults())
 
-			authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+			authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 			code := authorize(t, s.provider, authURL).code
 			tc.change(&code, &pending)
 
@@ -388,7 +391,7 @@ func TestFinishCodeUsedOnce(t *testing.T) {
 
 	s := newSetup(t, oauthtest.RS256, noFaults())
 
-	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	code := authorize(t, s.provider, authURL).code
 
 	if _, err := s.client.Finish(t.Context(), code, pending); err != nil {
@@ -405,7 +408,7 @@ func TestMaxAgeSignsInAgain(t *testing.T) {
 
 	s := newSetup(t, oauthtest.EdDSA, noFaults())
 
-	first, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false})
+	first, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	if err != nil {
 		t.Fatalf("first sign-in: %v", err)
 	}
@@ -414,7 +417,7 @@ func TestMaxAgeSignsInAgain(t *testing.T) {
 
 	// The authentication is 10 minutes old, inside a max_age of 15
 	// minutes: the provider does not authenticate again.
-	kept, err := s.signIn(t, oauth.Options{MaxAge: 15 * time.Minute, HasMaxAge: true})
+	kept, err := s.signIn(t, oauth.Options{State: "", MaxAge: 15 * time.Minute, HasMaxAge: true})
 	if err != nil {
 		t.Fatalf("sign-in inside max_age: %v", err)
 	}
@@ -424,7 +427,7 @@ func TestMaxAgeSignsInAgain(t *testing.T) {
 	}
 
 	// max_age=0 makes the provider authenticate again, so auth_time is now.
-	again, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: true})
+	again, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: true})
 	if err != nil {
 		t.Fatalf("sign-in with max_age 0: %v", err)
 	}
@@ -439,7 +442,7 @@ func TestFinishRefusesAuthenticationOlderThanMaxAge(t *testing.T) {
 
 	s := newSetup(t, oauthtest.RS256, noFaults())
 
-	if _, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false}); err != nil {
+	if _, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false}); err != nil {
 		t.Fatalf("first sign-in: %v", err)
 	}
 
@@ -447,7 +450,7 @@ func TestFinishRefusesAuthenticationOlderThanMaxAge(t *testing.T) {
 
 	// A provider that ignores max_age: the request sends none, but the
 	// pending request expects an authentication of at most 5 minutes.
-	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	code := authorize(t, s.provider, authURL).code
 
 	pending.MaxAge, pending.HasMaxAge = 5*time.Minute, true
@@ -527,6 +530,8 @@ func TestNewRefusesConfig(t *testing.T) {
 		{name: "relative issuer", change: func(c *oauth.Config) { c.Issuer = "idp.example" }},
 		{name: "http issuer", change: func(c *oauth.Config) { c.Issuer = "http://idp.example" }},
 		{name: "other scheme", change: func(c *oauth.Config) { c.Issuer = "ftp://idp.example" }},
+		{name: "http on a private address", change: func(c *oauth.Config) { c.Issuer = "http://10.0.0.1" }},
+		{name: "http on a name like loopback", change: func(c *oauth.Config) { c.Issuer = "http://localhost.example" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -611,5 +616,411 @@ func TestNewRefusesUnsupportedAlgorithms(t *testing.T) {
 				t.Fatalf("New error = %v, want ErrProvider", err)
 			}
 		})
+	}
+}
+
+func TestNewAcceptsHTTPOnIPv6Loopback(t *testing.T) {
+	t.Parallel()
+
+	// Nothing listens on port 1: the configuration passes, and the
+	// discovery fails.
+	_, err := oauth.New(t.Context(), oauth.Config{
+		HTTPClient: nil, Now: nil, Issuer: "http://[::1]:1", ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+	if errors.Is(err, oauth.ErrConfig) || !errors.Is(err, oauth.ErrProvider) {
+		t.Fatalf("New error = %v, want ErrProvider and not ErrConfig", err)
+	}
+}
+
+// discoveryServer serves the discovery document that doc returns for the
+// base URL of the server, with HTTPS.
+func discoveryServer(t *testing.T, doc func(base string) map[string]any) *httptest.Server {
+	t.Helper()
+
+	var srv *httptest.Server
+
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body, err := json.Marshal(doc(srv.URL))
+		if err != nil {
+			t.Errorf("encode discovery: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if _, err := w.Write(body); err != nil {
+			t.Errorf("write discovery: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+// discoveryDoc returns a valid discovery document for base.
+func discoveryDoc(base string) map[string]any {
+	return map[string]any{
+		"issuer": base, "authorization_endpoint": base + "/authorize", "token_endpoint": base + "/token",
+		"jwks_uri": base + "/jwks", "id_token_signing_alg_values_supported": []string{"RS256"},
+	}
+}
+
+// newFrom makes a client of the discovery server srv.
+func newFrom(t *testing.T, srv *httptest.Server) error {
+	t.Helper()
+
+	_, err := oauth.New(t.Context(), oauth.Config{
+		HTTPClient: srv.Client(), Now: nil, Issuer: srv.URL, ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+
+	return err
+}
+
+func TestNewAcceptsValidDiscovery(t *testing.T) {
+	t.Parallel()
+
+	if err := newFrom(t, discoveryServer(t, discoveryDoc)); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+}
+
+func TestNewRefusesInsecureEndpoints(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range []string{"authorization_endpoint", "token_endpoint", "jwks_uri"} {
+		for _, value := range []string{"http://idp.example/x", "/relative", ""} {
+			t.Run(field+" "+value, func(t *testing.T) {
+				t.Parallel()
+
+				srv := discoveryServer(t, func(base string) map[string]any {
+					doc := discoveryDoc(base)
+					doc[field] = value
+
+					return doc
+				})
+
+				if err := newFrom(t, srv); !errors.Is(err, oauth.ErrProvider) {
+					t.Fatalf("New error = %v, want ErrProvider", err)
+				}
+			})
+		}
+	}
+}
+
+func TestNewRefusesOtherIssuer(t *testing.T) {
+	t.Parallel()
+
+	srv := discoveryServer(t, func(base string) map[string]any {
+		doc := discoveryDoc(base)
+		doc["issuer"] = "https://other-issuer.example"
+
+		return doc
+	})
+
+	if err := newFrom(t, srv); !errors.Is(err, oauth.ErrProvider) {
+		t.Fatalf("New error = %v, want ErrProvider", err)
+	}
+}
+
+func TestNewRefusesLargeAnswer(t *testing.T) {
+	t.Parallel()
+
+	srv := discoveryServer(t, func(base string) map[string]any {
+		doc := discoveryDoc(base)
+		doc["padding"] = strings.Repeat("x", 2<<20)
+
+		return doc
+	})
+
+	err := newFrom(t, srv)
+	if !errors.Is(err, oauth.ErrProvider) || !strings.Contains(err.Error(), "1 MiB") {
+		t.Fatalf("New error = %v, want ErrProvider about 1 MiB", err)
+	}
+}
+
+func TestNewRefusesRedirectToHTTP(t *testing.T) {
+	t.Parallel()
+
+	plain := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(plain.Close)
+
+	// The provider sends every request to one fixed HTTP URL.
+	target := plain.URL + "/.well-known/openid-configuration"
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target, http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	err := newFrom(t, srv)
+	if !errors.Is(err, oauth.ErrProvider) || !strings.Contains(err.Error(), "from https to http") {
+		t.Fatalf("New error = %v, want ErrProvider about the redirect", err)
+	}
+}
+
+func TestFinishRefusesEmptySubject(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.RS256, noFaults())
+	s.provider.SetUser(oauthtest.User{Subject: "", Name: "No One", PreferredUsername: "", Email: ""})
+
+	_, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
+	if !errors.Is(err, oauth.ErrIDToken) || !strings.Contains(err.Error(), "sub") {
+		t.Fatalf("Finish error = %v, want ErrIDToken about sub", err)
+	}
+}
+
+func TestFinishAuthorizedParty(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		faults  oauthtest.Faults
+		wantErr bool
+	}{
+		{name: "two audiences, no azp", faults: fault(func(f *oauthtest.Faults) { f.ExtraAudience = true }), wantErr: true},
+		{name: "two audiences, azp of this client", faults: fault(func(f *oauthtest.Faults) {
+			f.ExtraAudience, f.AuthorizedParty = true, clientID
+		}), wantErr: false},
+		{name: "two audiences, azp of another client", faults: fault(func(f *oauthtest.Faults) {
+			f.ExtraAudience, f.AuthorizedParty = true, "another-client"
+		}), wantErr: true},
+		{name: "one audience, azp of this client", faults: fault(func(f *oauthtest.Faults) {
+			f.AuthorizedParty = clientID
+		}), wantErr: false},
+		{name: "one audience, azp of another client", faults: fault(func(f *oauthtest.Faults) {
+			f.AuthorizedParty = "another-client"
+		}), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t, oauthtest.RS256, tc.faults)
+
+			_, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("Finish error = %v, want an error: %v", err, tc.wantErr)
+			}
+
+			if tc.wantErr && !errors.Is(err, oauth.ErrIDToken) {
+				t.Fatalf("Finish error = %v, want ErrIDToken", err)
+			}
+		})
+	}
+}
+
+func TestFinishIssuedAt(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		issuedIn time.Duration
+		wantErr  bool
+	}{
+		{name: "issued within the skew", issuedIn: 30 * time.Second, wantErr: false},
+		{name: "issued in the future", issuedIn: 2 * time.Minute, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t, oauthtest.RS256, fault(func(f *oauthtest.Faults) { f.IssuedIn = tc.issuedIn }))
+
+			_, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("Finish error = %v, want an error: %v", err, tc.wantErr)
+			}
+
+			if tc.wantErr && (!errors.Is(err, oauth.ErrIDToken) || !strings.Contains(err.Error(), "iat")) {
+				t.Fatalf("Finish error = %v, want ErrIDToken about iat", err)
+			}
+		})
+	}
+}
+
+func TestCheckState(t *testing.T) {
+	t.Parallel()
+
+	pending := func(state string) oauth.Pending {
+		return oauth.Pending{State: state, Nonce: "", Verifier: "", MaxAge: 0, HasMaxAge: false}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		got     string
+		pending oauth.Pending
+		wantErr bool
+	}{
+		{name: "same state", got: "state-1", pending: pending("state-1"), wantErr: false},
+		{name: "other state", got: "state-2", pending: pending("state-1"), wantErr: true},
+		{name: "prefix", got: "state", pending: pending("state-1"), wantErr: true},
+		{name: "empty state", got: "", pending: pending("state-1"), wantErr: true},
+		{name: "empty pending", got: "", pending: pending(""), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := oauth.CheckState(tc.got, tc.pending)
+			if tc.wantErr && !errors.Is(err, oauth.ErrState) {
+				t.Fatalf("CheckState error = %v, want ErrState", err)
+			}
+
+			if !tc.wantErr && err != nil {
+				t.Fatalf("CheckState error = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestBeginWithState(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.RS256, noFaults())
+
+	const state = "dps_state-of-the-caller"
+
+	authURL, pending := s.client.Begin(oauth.Options{State: state, MaxAge: 0, HasMaxAge: false})
+
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("parse URL: %v", err)
+	}
+
+	if got := u.Query().Get("state"); got != state || pending.State != state {
+		t.Fatalf("state = %q, pending %q; want %q", got, pending.State, state)
+	}
+}
+
+func TestLazyReadsDiscoveryAtFirstUse(t *testing.T) {
+	t.Parallel()
+
+	var ready atomic.Bool
+
+	inner := discoveryServer(t, discoveryDoc)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !ready.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+
+			return
+		}
+
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	// The discovery of inner names inner as the issuer: serve it under the
+	// URL of srv instead.
+	inner.URL = srv.URL
+
+	lazy, err := oauth.NewLazy(oauth.Config{
+		HTTPClient: srv.Client(), Now: nil, Issuer: srv.URL, ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+	if err != nil {
+		t.Fatalf("NewLazy: %v", err)
+	}
+
+	opts := oauth.Options{State: "", MaxAge: 0, HasMaxAge: false}
+
+	if _, _, downErr := lazy.Begin(t.Context(), opts); !errors.Is(downErr, oauth.ErrProvider) {
+		t.Fatalf("Begin with the provider down = %v, want ErrProvider", downErr)
+	}
+
+	ready.Store(true)
+
+	authURL, pending, err := lazy.Begin(t.Context(), opts)
+	if err != nil || pending.State == "" || !strings.HasPrefix(authURL, srv.URL+"/authorize?") {
+		t.Fatalf("Begin with the provider up = %q, %+v, %v", authURL, pending, err)
+	}
+}
+
+// slowProvider is a Lazy client whose provider holds each request until
+// release closes. hit gets a value for each request that the provider holds.
+type slowProvider struct {
+	lazy    *oauth.Lazy
+	hit     <-chan struct{}
+	release chan<- struct{}
+}
+
+func slowLazy(t *testing.T) slowProvider {
+	t.Helper()
+
+	hits := make(chan struct{}, 8)
+	gate := make(chan struct{})
+
+	inner := discoveryServer(t, discoveryDoc)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits <- struct{}{}
+		<-gate
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	inner.URL = srv.URL
+
+	l, err := oauth.NewLazy(oauth.Config{
+		HTTPClient: srv.Client(), Now: nil, Issuer: srv.URL, ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+	if err != nil {
+		t.Fatalf("NewLazy: %v", err)
+	}
+
+	return slowProvider{lazy: l, hit: hits, release: gate}
+}
+
+// TestLazyWaiterLeavesAtItsDeadline proves that a use that waits for the
+// read of another use returns when its own context ends, and that the read
+// of the first use ends although the context of its request was canceled.
+func TestLazyWaiterLeavesAtItsDeadline(t *testing.T) {
+	t.Parallel()
+
+	slow := slowLazy(t)
+	lazy := slow.lazy
+	opts := oauth.Options{State: "", MaxAge: 0, HasMaxAge: false}
+
+	firstCtx, cancelFirst := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+
+	go func() {
+		_, _, err := lazy.Begin(firstCtx, opts)
+		first <- err
+	}()
+
+	<-slow.hit
+	cancelFirst()
+
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancelWait()
+
+	start := time.Now()
+	if _, _, err := lazy.Begin(waitCtx, opts); !errors.Is(err, oauth.ErrProvider) ||
+		!errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Begin while another use reads = %v, want ErrProvider and DeadlineExceeded", err)
+	}
+
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Fatalf("the waiting use returned after %s", waited)
+	}
+
+	close(slow.release)
+
+	if err := <-first; err != nil {
+		t.Fatalf("Begin of the first use, with its request canceled = %v, want the read to end", err)
+	}
+
+	if _, _, err := lazy.Begin(t.Context(), opts); err != nil {
+		t.Fatalf("Begin after the read: %v", err)
+	}
+}
+
+func TestNewLazyRefusesConfig(t *testing.T) {
+	t.Parallel()
+
+	_, err := oauth.NewLazy(oauth.Config{
+		HTTPClient: nil, Now: nil, Issuer: "http://idp.example", ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+	if !errors.Is(err, oauth.ErrConfig) {
+		t.Fatalf("NewLazy error = %v, want ErrConfig", err)
 	}
 }

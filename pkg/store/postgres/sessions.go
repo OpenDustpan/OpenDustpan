@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -131,20 +133,27 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 			UserAgent:   row.UserAgent,
 		},
 		Owner: session.Owner{
+			ActiveAt:    codec.FromMillis(row.PrincipalActiveAtMs),
 			DisabledAt:  codec.FromOptionalMillis(row.PrincipalDisabledAtMs.Int64),
 			ID:          row.PrincipalID,
 			Subject:     row.Subject,
 			DisplayName: row.DisplayName,
 			Kind:        principal.Kind(row.PrincipalKind),
+			BreakGlass:  row.PrincipalBreakGlass,
 		},
 		Digest: stored,
 	}, nil
 }
 
 // TouchSession implements session.Store.
-func (s *Store) TouchSession(ctx context.Context, id string, at time.Time, every time.Duration) error {
+func (s *Store) TouchSession(
+	ctx context.Context, id string, at time.Time, every time.Duration, l session.Limits,
+) error {
+	bounds := l.ActiveAfter(at)
+
 	err := s.queries.TouchSession(ctx, db.TouchSessionParams{
 		AtMs: codec.Millis(at), ID: id, BeforeMs: codec.Millis(at.Add(-every)),
+		SeenAfterMs: boundMillis(bounds.LastSeen), CreatedAfterMs: boundMillis(bounds.Created),
 	})
 	if err != nil {
 		return fmt.Errorf("touch session: %w", err)
@@ -196,6 +205,7 @@ func (s *Store) CreateRequest(ctx context.Context, r session.Request, d session.
 		ReturnPath:  r.ReturnPath,
 		CreatedAtMs: codec.Millis(r.CreatedAt),
 		ExpiresAtMs: codec.Millis(r.ExpiresAt),
+		MaxAgeMs:    pgtype.Int8{Int64: r.MaxAge.Milliseconds(), Valid: r.HasMaxAge},
 	})
 	if err != nil {
 		return fmt.Errorf("insert sign-in request: %w", err)
@@ -230,6 +240,8 @@ func (s *Store) TakeRequest(ctx context.Context, d session.Digest, at time.Time)
 		Nonce:      row.Nonce,
 		Verifier:   row.Verifier,
 		ReturnPath: row.ReturnPath,
+		MaxAge:     time.Duration(row.MaxAgeMs.Int64) * time.Millisecond,
+		HasMaxAge:  row.MaxAgeMs.Valid,
 	}, nil
 }
 
@@ -272,6 +284,7 @@ func (s *Store) UpdateSessionPolicy(ctx context.Context, update session.PolicyUp
 func sessionPolicyOf(row db.GetSessionPolicyRow) session.Policy {
 	return codec.FromSessionPolicyRow(codec.SessionPolicyRow{
 		IdleMs: row.IdleMs, MaxLengthMs: row.MaxLengthMs, UpdatedAtMs: row.UpdatedAtMs,
+		TokenFreshnessMs: row.TokenFreshnessMs.Int64, TokenFreshnessSet: row.TokenFreshnessMs.Valid,
 	})
 }
 
@@ -281,6 +294,7 @@ func setSessionPolicy(ctx context.Context, q *db.Queries, p session.Policy) erro
 
 	n, err := q.SetSessionPolicy(ctx, db.SetSessionPolicyParams{
 		IdleMs: row.IdleMs, MaxLengthMs: row.MaxLengthMs, UpdatedAtMs: row.UpdatedAtMs,
+		TokenFreshnessMs: pgtype.Int8{Int64: row.TokenFreshnessMs, Valid: row.TokenFreshnessSet},
 	})
 	if err != nil {
 		return fmt.Errorf("update session policy: %w", err)
@@ -296,3 +310,31 @@ func setSessionPolicy(ctx context.Context, q *db.Queries, p session.Policy) erro
 // errNoSessionPolicyRow reports a database without the seeded session
 // policy row.
 var errNoSessionPolicyRow = errors.New("session policy row is missing")
+
+// boundMillis returns t in Unix milliseconds, or the lowest value for the
+// zero time: a bound that every stored time passes.
+func boundMillis(t time.Time) int64 {
+	if t.IsZero() {
+		return math.MinInt64
+	}
+
+	return codec.Millis(t)
+}
+
+// BindProvider implements session.ProviderStore. The insert keeps an
+// earlier record, so the read answers the issuer of the first start.
+func (s *Store) BindProvider(ctx context.Context, id, issuer string, at time.Time) (string, error) {
+	err := s.queries.InsertOIDCProvider(ctx, db.InsertOIDCProviderParams{
+		ProviderID: id, Issuer: issuer, CreatedAtMs: codec.Millis(at),
+	})
+	if err != nil {
+		return "", fmt.Errorf("insert sign-in provider: %w", err)
+	}
+
+	recorded, err := s.queries.GetOIDCProviderIssuer(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("select sign-in provider: %w", err)
+	}
+
+	return recorded, nil
+}

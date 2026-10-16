@@ -274,6 +274,101 @@ The server checks the chain of every namespace and of `@server` at start and eve
           summary: A restored OpenDustpan audit log does not match its chain
 ```
 
+## Sign checkpoints
+
+Signed checkpoints are opt-in.
+They show a rewrite of the log by a person who can write to the database and compute the chain again.
+`--audit-checkpoints` (`DUSTPAN_AUDIT_CHECKPOINTS=true`) turns them on.
+They need `--audit-chain=on` and the signing key file that `--audit-signing-key-file` (`DUSTPAN_AUDIT_SIGNING_KEY_FILE`) names.
+The server does not start when one of the two is missing.
+
+The key file holds a 32-byte Ed25519 seed in base64.
+The file must not be readable by group or others.
+The server never makes the key and never derives it from the key-encryption key.
+Make a key with this command:
+
+```sh
+(umask 077 && openssl rand -base64 32 > audit-signing.key)
+```
+
+At each check, the server does these steps for each scope whose chain matches:
+
+1. It checks the checkpoints of the scope in the current epoch.
+   It reads every checkpoint that is newer than the last checkpoint that matched, up to 256.
+   It also reads a random sample of 8 older checkpoints.
+   It always reads the newest checkpoint of the scope.
+   When the log ends before that checkpoint, the check fails.
+   The next check finds a cut at the end of the log.
+   For each checkpoint, it checks the key ID, the signature, the epoch, and the hash of the entry at its sequence.
+   The epoch in the checkpoint must match the epoch of its directory.
+2. If all of them match, it signs the hash of the last entry of the scope.
+   The checkpoint holds the scope, the sequence, the epoch, the hash, the time, the key ID and the signature.
+   The key ID is the first 16 hexadecimal characters of the SHA-256 hash of the public key.
+3. It writes the checkpoint to the blob store under `audit-checkpoints/<epoch>/<scope in hexadecimal>/<sequence>.json`.
+   A key holds one checkpoint and the server never writes it again, so two instances write it once.
+
+A scope with a checkpoint that does not match counts in `dustpan_audit_chain_invalid`, and the server logs the scope and the sequence.
+The server never signs a scope whose chain or checkpoints do not match.
+Once a checkpoint does not match, later checks fail until a new epoch starts.
+When a stored checkpoint holds another hash, the write fails and the scope stays invalid.
+While a change of the chain waits or migrates, the server checks the checkpoints but signs none.
+
+The server logs the key ID and the public key in base64 at start.
+Keep a copy of the public key outside the server.
+
+Keep the blob store apart from the database: give the two stores different credentials.
+If the blob store has object lock, turn it on for the prefix `audit-checkpoints/`.
+An entry is safe from a rewrite only after a checkpoint signs it, so the window is at most one hour.
+A person who can delete checkpoints can hide a rewrite of the entries that came before the next checkpoint.
+The server remembers the newest checkpoint that matched, so a later check finds deleted checkpoints.
+The server forgets this at a restart, so without object lock only later checks find a deletion from before a restart.
+
+### Epochs
+
+An epoch is one history of the log.
+The check reads only the checkpoints of the current epoch.
+The server keeps the current epoch in the blob store under `audit-checkpoints/epochs/`.
+Each epoch object holds the epoch number, the time, the key ID and a signature.
+The server signs each epoch object with the same key as the checkpoints.
+The signed message holds a fixed context line, the epoch, the time in Unix milliseconds and the key ID.
+The check reads every epoch object and verifies each one.
+It checks the signature, the key ID, and the body number against the key number.
+An unsigned or badly signed epoch object makes the check fail and stops new signatures.
+A bad epoch object counts the scope in `dustpan_audit_chain_invalid`.
+After an investigation, the operator deletes the bad epoch object.
+The next check then reads the fixed store.
+
+A restore starts a new epoch, because a restore of an older backup deletes entries that older checkpoints sign.
+The restore writes a change entry in the scope `@server` with the value path `/audit/checkpoints/epoch/<number>`.
+The checkpoints of older epochs stay in the blob store.
+The server does not check them again.
+
+### Change the signing key
+
+A checkpoint or an epoch object that a key signed passes the check only while the server knows that key.
+Before you change the signing key, put the old public key in a file and name the file with `--audit-verify-keys-file` (`DUSTPAN_AUDIT_VERIFY_KEYS_FILE`).
+The file holds one public key in base64 on each line.
+The server ignores empty lines and lines that start with `#`.
+The server uses these keys only to check checkpoints and never signs with them.
+The server does not start when the file holds a line that is not a 32-byte Ed25519 public key in base64.
+
+### Clear the alarm
+
+A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero.
+First find the cause: compare the entries of the scope with your audit log sinks and with the backups.
+When you know the cause, start a new epoch.
+The server then checks only the checkpoints that it signs after this time.
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  https://dustpan.example/api/server/audit/checkpoint-epochs
+```
+
+The request needs the action `server:manage-audit`.
+It answers 201 with the number of the new epoch, and it writes a change entry in the scope `@server`.
+It answers 409 when signed checkpoints are off.
+Each instance reads the new epoch at its next check.
+
 ## What the chain protects against
 
 The chain shows a change or a deletion of an entry.
@@ -290,7 +385,7 @@ The chain does not stop a person who can write to the database and compute
 the chain again.
 Such a person can rewrite the entries and their hashes, and the check still
 answers valid.
-An anchor outside the database is RFC 22.
+Signed checkpoints in the blob store are the anchor outside the database (see above).
 Protect the database and its backups as the guide for backups says.
 
 ## Alert on failed logging
@@ -415,6 +510,7 @@ The server does not follow a redirect: a 3xx answer is a failed batch, and the s
 
 `blob:<prefix>` writes to the blob store of the server: the directory of `--blob-dir` or the bucket of `--blob-store`.
 The prefixes `tofu` and `pulumi` hold state, so the server refuses them.
+The prefix `audit-checkpoints` holds signed audit checkpoints, so the server refuses it.
 Each object is `<prefix>/<scope>/<yyyy-mm-dd>/<first>-<last>-<random>.jsonl.gz`.
 The two times are the first and the last entry of the file in Unix milliseconds.
 A key holds the characters `a-z`, `0-9`, `.` and `-` only.

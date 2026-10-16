@@ -91,6 +91,9 @@ type Config struct {
 	// means the store keeps none: the session policy routes are not
 	// mounted. Both SQL adapters keep it.
 	SessionPolicy *session.Policies
+	// CheckpointEpochs starts a new epoch of the signed audit checkpoints.
+	// Nil means signed checkpoints are off: the epoch route answers 409.
+	CheckpointEpochs CheckpointEpochs
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
@@ -105,6 +108,11 @@ type Config struct {
 	// AuditSinks lists the configured audit sinks with their delivery
 	// state. Nil means no sink is configured: the sink list is empty.
 	AuditSinks AuditSinkSource
+	// SignIn is the console sign-in through OpenID Connect providers. Nil
+	// means no sign-in: the sign-in routes are not mounted, and the
+	// session cookie authenticates nothing. With SignIn set, Principals is
+	// required.
+	SignIn *SignIn
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -144,10 +152,12 @@ type Handler struct {
 	audit          audit.ServerStore
 	ipAllowlists   *ipallow.Service
 	sessions       *session.Policies
+	epochs         CheckpointEpochs
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
 	auditChain     AuditChain
 	auditSinks     AuditSinkSource
+	signIn         *signInState
 	mux            *patternMux
 	routes         []Route
 }
@@ -156,23 +166,13 @@ type Handler struct {
 // Namespaces, Maintenance and Metrics are required. Backups is optional: nil
 // means no backup target is configured.
 func NewHandler(cfg Config) (*Handler, error) {
-	switch {
-	case cfg.Authenticator == nil:
-		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
-	case cfg.Authorizer == nil:
-		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
-	case cfg.Logger == nil:
-		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Maintenance == nil:
-		return nil, fmt.Errorf("%w: maintenance", ErrMissingDependency)
-	case cfg.Metrics == nil:
-		return nil, fmt.Errorf("%w: metrics", ErrMissingDependency)
-	case cfg.Access != nil && !keepsNamespaceAudit(cfg.Audit):
-		// Each access-review export writes an audit entry, in @server or in
-		// the namespace of the export (ADR 52, decision 13).
-		return nil, fmt.Errorf("%w: an audit store with namespace entries, for the access review", ErrMissingDependency)
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	signIn, err := newSignInState(cfg.SignIn)
+	if err != nil {
+		return nil, err
 	}
 
 	h := &Handler{
@@ -195,8 +195,10 @@ func NewHandler(cfg Config) (*Handler, error) {
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
 		sessions:       cfg.SessionPolicy,
+		epochs:         cfg.CheckpointEpochs,
 		onAuditFailure: cfg.OnAuditFailure,
 		auditSinks:     cfg.AuditSinks,
+		signIn:         signIn,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
@@ -207,6 +209,33 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	return h, nil
+}
+
+// validate returns ErrMissingDependency when cfg lacks a required
+// dependency.
+func (cfg Config) validate() error {
+	switch {
+	case cfg.Authenticator == nil:
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Maintenance == nil:
+		return fmt.Errorf("%w: maintenance", ErrMissingDependency)
+	case cfg.Metrics == nil:
+		return fmt.Errorf("%w: metrics", ErrMissingDependency)
+	case cfg.Access != nil && !keepsNamespaceAudit(cfg.Audit):
+		// Each access-review export writes an audit entry, in @server or in
+		// the namespace of the export.
+		return fmt.Errorf("%w: an audit store with namespace entries, for the access review", ErrMissingDependency)
+	case cfg.SignIn != nil && cfg.Principals == nil:
+		return fmt.Errorf("%w: principal service, for the sign-in", ErrMissingDependency)
+	}
+
+	return nil
 }
 
 // keepsNamespaceAudit reports whether entries keeps the entries of @server
@@ -288,15 +317,24 @@ func (c *notFoundWriter) Write(p []byte) (int, error) {
 	return c.ResponseWriter.Write(p) //nolint:wrapcheck // Transparent wrapper: callers must see the original error.
 }
 
-// authenticate resolves the "Authorization: Bearer <token>" header to a
-// principal.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), bearerScheme)
-	if !ok || raw == "" {
-		return identity.Principal{}, identity.ErrUnauthenticated
+// authenticate resolves the caller of r: the "Authorization: Bearer
+// <token>" header, or, for a request with no Authorization header, the
+// console session cookie. A request with both uses the header and ignores
+// the cookie. The session is nil for a caller with a token.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, *sessionCaller, error) {
+	header := r.Header.Get("Authorization")
+	if header == "" {
+		return h.authenticateSession(r)
 	}
 
-	return h.authn.AuthenticateToken(r.Context(), raw)
+	raw, ok := strings.CutPrefix(header, bearerScheme)
+	if !ok || raw == "" {
+		return identity.Principal{}, nil, identity.ErrUnauthenticated
+	}
+
+	p, err := h.authn.AuthenticateToken(r.Context(), raw)
+
+	return p, nil, err
 }
 
 // errorResponse is the error body the installation API answers.
@@ -311,6 +349,12 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		// The log names the status only, never the error text: the text
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+	}
+
+	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
+		h.writeJSON(ctx, w, status, reauthenticateResponse{Code: status, Message: message, Reauthenticate: fresh.url})
+
+		return
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
@@ -330,24 +374,12 @@ func classifyIdentity(err error) (int, string, bool) {
 // callers. Backup errors map in classifyBackup, namespace errors in
 // classifyNamespace and maintenance errors in classifyMaintenance.
 func classify(err error) (int, string) {
-	if status, message, ok := classifyMaintenance(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyNamespace(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyBackup(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyPrincipal(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyIdentity(err); ok {
-		return status, message
+	for _, try := range []func(error) (int, string, bool){
+		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity,
+	} {
+		if status, message, ok := try(err); ok {
+			return status, message
+		}
 	}
 
 	if status, message, ok := classifyIPAllowlist(err); ok {
@@ -355,6 +387,10 @@ func classify(err error) (int, string) {
 	}
 
 	if status, message, ok := classifySessionPolicy(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifySignIn(err); ok {
 		return status, message
 	}
 
@@ -380,6 +416,8 @@ func classifyRequest(err error) (int, string, bool) {
 		return http.StatusBadRequest, errInvalidBody.Error(), true
 	case errors.Is(err, errOverrideSwitchesBody):
 		return http.StatusBadRequest, errOverrideSwitchesBody.Error(), true
+	case errors.Is(err, errCheckpointsOff):
+		return http.StatusConflict, errCheckpointsOff.Error(), true
 	default:
 		return 0, "", false
 	}

@@ -236,6 +236,7 @@ func keepSessionDigest(n int) session.Digest {
 // keepSignInRequest returns a sign-in request made at created.
 func keepSignInRequest(created time.Time) session.Request {
 	return session.Request{
+		MaxAge: 0, HasMaxAge: false,
 		CreatedAt:  created,
 		ExpiresAt:  created.Add(session.RequestLifetime),
 		Provider:   "corp-idp",
@@ -383,6 +384,7 @@ func createLiveSignInRequest(t *testing.T, sessions session.Store) {
 	t.Helper()
 
 	req := session.Request{
+		MaxAge: 0, HasMaxAge: false,
 		CreatedAt:  now().Add(3 * time.Hour),
 		ExpiresAt:  now().Add(3*time.Hour + session.RequestLifetime),
 		Provider:   "corp-idp",

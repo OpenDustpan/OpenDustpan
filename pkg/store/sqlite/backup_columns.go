@@ -372,7 +372,12 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 				"return_path",
 				backupColCreatedAtMs,
 				backupColExpiresAtMs,
+				"max_age_ms",
 			},
+		},
+		{
+			table:   "oidc_providers",
+			columns: []string{"provider_id", "issuer", backupColCreatedAtMs},
 		},
 	}
 }
@@ -510,7 +515,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "session_policy",
-			columns: []string{"id", "idle_ms", "max_length_ms", backupColUpdatedAtMs},
+			columns: []string{"id", "idle_ms", "max_length_ms", backupColUpdatedAtMs, "token_freshness_ms"},
 		},
 	}
 }
