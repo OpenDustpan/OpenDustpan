@@ -263,6 +263,48 @@ func TestSchedulerRunsMissedTicksOnce(t *testing.T) {
 	}
 }
 
+func TestARestartOfManySchedulersGivesOneCatchUp(t *testing.T) {
+	t.Parallel()
+
+	mem := durabletest.NewMem()
+
+	const instances = 3
+
+	startAll := func() func() {
+		stops := make([]func(), 0, instances)
+
+		for i := range instances {
+			// Each instance draws its own first delay.
+			cfg := schedulerConfig(mem.ScheduleStore(0), float64(i)/instances, sweepSpec(testInterval))
+			stops = append(stops, runScheduler(t, newScheduler(t, cfg)))
+		}
+
+		return func() {
+			for _, stop := range stops {
+				stop()
+			}
+		}
+	}
+
+	stopAll := startAll()
+
+	waitForOps(t, mem.Store(), 1)
+	stopAll()
+
+	// All instances are down for three intervals, then all start again.
+	pause(t, 3*testInterval)
+
+	before := countOps(t, mem.Store())
+	startAll()
+
+	waitForOps(t, mem.Store(), before+1)
+	pause(t, testInterval/2)
+
+	if got := countOps(t, mem.Store()); got != before+1 {
+		t.Fatalf("%d catch-up operations after a restart of %d instances, want 1", got-before, instances)
+	}
+}
+
 func TestSchedulerKeepsTryingAfterStoreErrors(t *testing.T) {
 	t.Parallel()
 
