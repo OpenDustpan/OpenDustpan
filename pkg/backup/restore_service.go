@@ -81,8 +81,9 @@ type RestoreConfig struct {
 	Region string
 	// AfterApply runs after the swap with the rows preserved, while the
 	// server still holds maintenance mode, so a restore of data that
-	// predates a later change converges to it: the server seals rows that
-	// the backup holds unsealed. A failure fails the restore. Nil skips it.
+	// predates a later change converges to it: for example, the server
+	// compares the restored audit log with the stored chain state. A failure
+	// fails the restore. Nil skips it.
 	AfterApply func(ctx context.Context) error
 	// Admit runs when a restore starts, before it records the restore. An
 	// error refuses the restore: the server refuses a restore while a
@@ -925,9 +926,9 @@ func (s *RestoreService) afterSwap(ctx context.Context, id RestoreID, before Res
 	return nil
 }
 
-// runAfterApply runs the after-apply step of the restore id. A backup from before
-// the seal change holds unsealed rows: the step runs while maintenance
-// mode still holds, so those rows end sealed. A failure fails the restore.
+// runAfterApply runs the after-apply step of the restore id. The step runs
+// while maintenance mode still holds, so the restored data converges before
+// tool traffic returns. A failure fails the restore.
 func (s *RestoreService) runAfterApply(ctx context.Context, id RestoreID) error {
 	if s.afterApply == nil {
 		return nil

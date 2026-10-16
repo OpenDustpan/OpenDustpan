@@ -1498,7 +1498,7 @@ func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error
 
 // runStartUp runs the start-up steps of Run in order: the key check and the
 // running backups of startUp (ADR 23, ADR 30 decision 9), then the running
-// restores of failStoppedRestores (ADR 38 decision 9). A done context during
+// restores of failStoppedRestores. A done context during
 // the steps is a stop, not a failure, so it answers nil: the caller asked
 // the server to stop.
 func (s *Server) runStartUp(ctx context.Context) error {

@@ -148,13 +148,6 @@ The server seals each new OpenTofu state version before it stores it:
 - **A download answers the same bytes that the CLI sent.** The MD5 and the
   size of a state version stay those of the plain bytes.
 
-The server also seals the state versions that an older server wrote
-(ADR 41, decision 11). At each start, and after each restore, it seals
-each version that still holds plain content. It writes the sealed content
-to a new blob key, moves the version to that key in a fenced transaction,
-and then deletes the plain blob. It seals only the versions of namespaces
-whose home region is this region.
-
 ## The key-encryption key
 
 `serve` needs a key-encryption key before it opens the database. It takes

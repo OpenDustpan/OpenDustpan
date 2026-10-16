@@ -11,15 +11,15 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
-// sealFixture holds one plain service and one sealing service over the same
-// stores, so tests write plain and sealed rows into one workspace.
+// sealFixture holds one sealing service and one service without a sealer
+// over the same stores, so tests write sealed and plain rows into one
+// workspace and prove which calls need the sealer.
 type sealFixture struct {
 	store      *memStore
 	namespaces *namespace.Service
 	blobs      blob.Store
 	plain      *workspace.Service
 	sealed     *workspace.Service
-	sealer     workspace.Sealer
 	now        *time.Time
 	ws         workspace.Workspace
 }
@@ -103,7 +103,6 @@ func newSealFixture(t *testing.T) sealFixture {
 		blobs:      blobs,
 		plain:      plain,
 		sealed:     sealed,
-		sealer:     secrets,
 		now:        &now,
 		ws:         ws,
 	}
@@ -114,13 +113,35 @@ func newSealFixture(t *testing.T) sealFixture {
 func (f sealFixture) pushSealed(t *testing.T, content string, outputs []byte, serial int64) {
 	t.Helper()
 
+	if sv := f.pushWith(t, f.sealed, content, outputs, serial); !sv.Sealed {
+		t.Fatal("upload through the sealing service reads unsealed, want sealed")
+	}
+}
+
+// pushPlain locks the fixture workspace and uploads content through the
+// service without a sealer, as a server before the seal change did.
+func (f sealFixture) pushPlain(t *testing.T, content string, serial int64) {
+	t.Helper()
+
+	if sv := f.pushWith(t, f.plain, content, nil, serial); sv.Sealed {
+		t.Fatal("upload through the plain service reads sealed, want unsealed")
+	}
+}
+
+// pushWith locks the fixture workspace and uploads content with outputs
+// through svc, returning the finalized version.
+func (f sealFixture) pushWith(
+	t *testing.T, svc *workspace.Service, content string, outputs []byte, serial int64,
+) workspace.StateVersion {
+	t.Helper()
+
 	ctx := t.Context()
 
 	if _, err := f.plain.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending, err := f.sealed.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
+	pending, err := svc.BeginState(ctx, f.ws.ID, "alice", workspace.NewState{
 		Lineage: "l1",
 		MD5:     sum(content),
 		Outputs: outputs,
@@ -131,16 +152,14 @@ func (f sealFixture) pushSealed(t *testing.T, content string, outputs []byte, se
 		t.Fatalf("begin: %v", err)
 	}
 
-	sv, err := f.sealed.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader(content))
+	sv, err := svc.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader(content))
 	if err != nil {
 		t.Fatalf("upload: %v", err)
-	}
-
-	if !sv.Sealed {
-		t.Fatal("upload through the sealing service reads unsealed, want sealed")
 	}
 
 	if _, err := f.plain.Unlock(ctx, f.ws.ID, "alice"); err != nil {
 		t.Fatalf("unlock: %v", err)
 	}
+
+	return sv
 }
