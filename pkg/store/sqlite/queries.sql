@@ -1238,6 +1238,8 @@ SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_
 FROM access_tokens WHERE id = ?;
 
 -- name: GetAccessTokenByDigest :one
+-- The token, its owner and the token policy of the installation in one read,
+-- so a policy change applies to the next lookup on every instance.
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
@@ -1245,10 +1247,14 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
-  ), 0)) AS INTEGER) AS principal_active_at_ms
+  ), 0)) AS INTEGER) AS principal_active_at_ms,
+  ap.max_lifetime_ms AS policy_max_lifetime_ms, ap.inactivity_ms AS policy_inactivity_ms,
+  ap.disable_tokens AS policy_disable_tokens, ap.disable_accounts AS policy_disable_accounts,
+  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
-WHERE t.digest = ? AND p.deleted_at_ms IS NULL;
+CROSS JOIN access_token_policy ap
+WHERE t.digest = ? AND p.deleted_at_ms IS NULL AND ap.id = 1;
 
 -- name: ListAccessTokens :many
 SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
