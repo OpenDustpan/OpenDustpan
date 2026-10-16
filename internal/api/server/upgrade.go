@@ -23,10 +23,13 @@ var errNoSchemaStore = errors.New("no schema store is configured")
 // RunningJournaledUpdates counts the updates that run now with journal
 // version 1 or higher: a downgrade to a binary without the journal route
 // answers their journal batches with 404, which the Pulumi CLI does not
-// retry. It writes nothing.
+// retry. MinimumBinaryVersion is the minimum binary version the database
+// schema records, or "" when it records none: a binary below it cannot
+// start on the database. It writes nothing.
 type upgradeCheckResponse struct {
 	Version                 string   `json:"version"`
 	SchemaVersion           int64    `json:"schemaVersion"`
+	MinimumBinaryVersion    string   `json:"minimumBinaryVersion"`
 	AppliedMigrations       []string `json:"appliedMigrations"`
 	KeyEncryptionKey        bool     `json:"keyEncryptionKey"`
 	RunningJournaledUpdates int64    `json:"runningJournaledUpdates"`
@@ -54,6 +57,13 @@ func (h *Handler) serveUpgradeCheck(
 		return
 	}
 
+	minimum, err := schema.HighestMinimum(appliedMinimums(applied))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	var journaled int64
 
 	if h.journal != nil {
@@ -73,6 +83,7 @@ func (h *Handler) serveUpgradeCheck(
 	h.writeJSON(ctx, w, http.StatusOK, upgradeCheckResponse{
 		Version:                 version,
 		SchemaVersion:           schema.DatabaseVersion(appliedVersions(applied)),
+		MinimumBinaryVersion:    minimum,
 		AppliedMigrations:       appliedNames(applied),
 		KeyEncryptionKey:        true,
 		RunningJournaledUpdates: journaled,
@@ -87,6 +98,17 @@ func appliedVersions(applied []schema.AppliedMigration) []int64 {
 	}
 
 	return versions
+}
+
+// appliedMinimums returns the minimum binary versions of the applied
+// migrations.
+func appliedMinimums(applied []schema.AppliedMigration) []string {
+	minimums := make([]string, 0, len(applied))
+	for _, migration := range applied {
+		minimums = append(minimums, migration.MinBinaryVersion)
+	}
+
+	return minimums
 }
 
 // appliedNames returns the file names of the applied migrations in order.

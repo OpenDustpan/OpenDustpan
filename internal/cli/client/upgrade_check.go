@@ -46,7 +46,8 @@ const (
 	VerdictUpToDate = "up to date"
 	// VerdictUpgradePossible reports a database with pending migrations and no unknown versions.
 	VerdictUpgradePossible = "upgrade possible"
-	// VerdictCannotStart reports a database with a version the binary does not embed.
+	// VerdictCannotStart reports a database whose schema minimum binary
+	// version is above the version of the binary.
 	VerdictCannotStart = "cannot start"
 )
 
@@ -119,11 +120,22 @@ func UpgradeCheck(
 		return err
 	}
 
-	if len(inspection.Unknown) > 0 {
-		return withBinaryVersion(&schema.NewerError{
-			DatabaseVersion: inspection.DatabaseVersion,
-			BinaryVersion:   inspection.BinaryVersion,
-		}, binaryVersion)
+	return startRefusal(inspection, binaryVersion)
+}
+
+// startRefusal returns why a binary of version binaryVersion cannot start on
+// the database of inspection, or nil when it can: the schema minimum is above
+// binaryVersion, or the schema and the binary have diverged.
+func startRefusal(inspection schema.Inspection, binaryVersion string) error {
+	if err := schema.CheckMinimum(inspection.Minimum, binaryVersion); err != nil {
+		return err
+	}
+
+	if len(inspection.Unknown) > 0 && len(inspection.Pending) > 0 {
+		return fmt.Errorf(
+			"%w: the database records migrations %v that this binary does not know, and lacks %d of its migrations",
+			schema.ErrSchemaDiverged, inspection.Unknown, len(inspection.Pending),
+		)
 	}
 
 	return nil
@@ -143,13 +155,15 @@ func (f *upgradeCheckFlags) register(fs *flag.FlagSet) {
 }
 
 // UpgradeCheckAnswer is the server answer the upgrade check compares: the
-// server version, the schema version of its database, the names of the
+// server version, the schema version of its database, the minimum binary
+// version of its schema ("" when none), the names of the
 // applied migrations ordered by version and the count of running journaled
 // updates. KeyEncryptionKey is nil when the server is older and does not
 // answer the field.
 type UpgradeCheckAnswer struct {
 	ServerVersion           string   `json:"version"`
 	SchemaVersion           int64    `json:"schemaVersion"`
+	MinimumBinaryVersion    string   `json:"minimumBinaryVersion"`
 	AppliedMigrations       []string `json:"appliedMigrations"`
 	KeyEncryptionKey        *bool    `json:"keyEncryptionKey"`
 	RunningJournaledUpdates int64    `json:"runningJournaledUpdates"`
@@ -162,6 +176,17 @@ const KeyWarning = "warning: this release needs a key-encryption key (ADR 41): "
 	"set DUSTPAN_KEY_ENCRYPTION_KEY or --key-encryption-key-file " +
 	"(DUSTPAN_KEY_ENCRYPTION_KEY_FILE), or start serve once with " +
 	"--generate-key-encryption-key (DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true)"
+
+// DevBinaryWarning is the upgrade report line for a binary with no release
+// version. A dev build counts as newer than every release, so the minimum
+// binary version of the schema never stops it.
+const DevBinaryWarning = "warning: this binary is a dev build. " +
+	"It ignores the minimum binary version of the database schema."
+
+// DevServerWarning is the upgrade report line for a server that runs a build
+// with no release version, so that a dev build on a production schema shows.
+const DevServerWarning = "warning: the server runs a dev build. " +
+	"It ignores the minimum binary version of the database schema."
 
 // keyWarningFor returns KeyWarning when the server answer shows no
 // key-encryption key (the field is missing on an older server, or false),
@@ -259,6 +284,14 @@ func compareUpgradeCheck(answer UpgradeCheckAnswer) (schema.Inspection, error) {
 		)
 	}
 
+	if minimum := answer.MinimumBinaryVersion; minimum != "" {
+		if err := schema.ValidMinimum(minimum); err != nil {
+			return schema.Inspection{}, fmt.Errorf(
+				"server minimum binary version: %w: check the server log and run opendustpan upgrade check again", err,
+			)
+		}
+	}
+
 	embeddedSet := make(map[int64]bool, len(embedded))
 
 	var pending []string
@@ -289,28 +322,25 @@ func compareUpgradeCheck(answer UpgradeCheckAnswer) (schema.Inspection, error) {
 		BinaryVersion:   binaryVersion,
 		Pending:         pending,
 		Unknown:         unknown,
+		Minimum:         answer.MinimumBinaryVersion,
 	}, nil
 }
 
-// withBinaryVersion adds the version of the binary to a newer-schema refusal,
-// so the message names the schema version of the database, the schema version
-// of the binary and the version of the binary.
-func withBinaryVersion(err error, binaryVersion string) error {
-	newer, ok := errors.AsType[*schema.NewerError](err)
-	if !ok {
-		return err
-	}
-
-	return fmt.Errorf("binary version is %s. %w", binaryVersion, newer)
-}
-
-// upgradeVerdict returns the one verdict for inspection: `cannot start` when
-// the database records a version the binary does not embed, `upgrade
-// possible` when migrations are pending, else `up to date`.
-func upgradeVerdict(inspection schema.Inspection) string {
+// upgradeVerdict returns the one verdict for inspection and a binary of
+// version binaryVersion: `cannot start` when the schema minimum binary
+// version is above binaryVersion, `upgrade possible` when migrations are
+// pending, else `up to date`. A database that records migrations the binary
+// does not embed is `up to date` when the binary is at or above the minimum:
+// the binary starts on it and applies nothing. A database that also lacks
+// migrations of the binary has diverged from it: `cannot start`.
+func upgradeVerdict(inspection schema.Inspection, binaryVersion string) string {
 	switch {
-	case len(inspection.Unknown) > 0:
+	case schema.CheckMinimum(inspection.Minimum, binaryVersion) != nil:
 		return VerdictCannotStart
+	case len(inspection.Unknown) > 0 && len(inspection.Pending) > 0:
+		return VerdictCannotStart
+	case len(inspection.Unknown) > 0:
+		return VerdictUpToDate
 	case len(inspection.Pending) > 0:
 		return VerdictUpgradePossible
 	default:
@@ -365,6 +395,14 @@ func writeUpgradeReport(report upgradeReport) error {
 		"server version: " + report.serverVersion,
 		fmt.Sprintf("database schema version: %d", report.inspection.DatabaseVersion),
 		fmt.Sprintf("binary schema version: %d", report.inspection.BinaryVersion),
+		"schema minimum binary version: " + minimumText(report.inspection.Minimum),
+	}
+
+	if n := len(report.inspection.Unknown); n > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"Migrations in the database that this binary does not know: %d. "+
+				"A binary at or above the schema minimum starts on it and applies nothing.", n,
+		))
 	}
 
 	if len(report.inspection.Pending) == 0 {
@@ -394,7 +432,15 @@ func writeUpgradeReport(report upgradeReport) error {
 		lines = append(lines, report.warning)
 	}
 
-	lines = append(lines, "verdict: "+upgradeVerdict(report.inspection))
+	if schema.IsDevBuild(report.binaryVersion) {
+		lines = append(lines, DevBinaryWarning)
+	}
+
+	if schema.IsDevBuild(report.serverVersion) {
+		lines = append(lines, DevServerWarning)
+	}
+
+	lines = append(lines, "verdict: "+upgradeVerdict(report.inspection, report.binaryVersion))
 
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(report.stdout, line); err != nil {
@@ -403,4 +449,13 @@ func writeUpgradeReport(report upgradeReport) error {
 	}
 
 	return nil
+}
+
+// minimumText returns minimum, or "none" when the schema records none.
+func minimumText(minimum string) string {
+	if minimum == "" {
+		return "none"
+	}
+
+	return minimum
 }
