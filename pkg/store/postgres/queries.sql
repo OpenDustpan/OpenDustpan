@@ -718,8 +718,11 @@ FROM namespaces
 ORDER BY home_region;
 
 -- name: BackupWrapperIDs :many
-SELECT DISTINCT wrapper_id
-FROM secret_keys
+-- The wrapper IDs of the namespace keys and of the installation keys, so the
+-- restore check finds the key-encryption key of each.
+SELECT wrapper_id FROM secret_keys
+UNION
+SELECT wrapper_id FROM installation_secret_keys
 ORDER BY wrapper_id;
 
 -- name: BackupBlobs :many

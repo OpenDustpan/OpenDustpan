@@ -198,3 +198,54 @@ func TestInstallationLimitsAndScope(t *testing.T) {
 		t.Fatalf("no key store = %v, want ErrMissingDependency", err)
 	}
 }
+
+// TestOpenInstallationKey proves that OpenInstallationKey opens a stored
+// installation key with its key-encryption key only, and binds it to its
+// installation scope.
+func TestOpenInstallationKey(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	keys := newMemInstallationKeys()
+	wrapper := newWrapper(t, "kek-1")
+
+	if _, err := newInstallationSecrets(t, keys, wrapper).Seal(ctx, "sign-in-corp", []byte("x")); err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+
+	stored, err := keys.GetInstallationKey(ctx, "sign-in-corp")
+	if err != nil {
+		t.Fatalf("get installation key: %v", err)
+	}
+
+	opened, err := secret.OpenInstallationKey(ctx, wrapper, stored)
+	if err != nil || len(opened) == 0 {
+		t.Fatalf("open installation key = %d bytes, %v; want the data key", len(opened), err)
+	}
+
+	if _, openErr := secret.OpenInstallationKey(ctx, newWrapper(t, "kek-2"), stored); !errors.Is(
+		openErr, secret.ErrDecrypt,
+	) {
+		t.Fatalf("open with another key-encryption key = %v, want ErrDecrypt", openErr)
+	}
+
+	if _, openErr := secret.OpenInstallationKey(ctx, nil, stored); !errors.Is(openErr, secret.ErrKeyNotConfigured) {
+		t.Fatalf("open with no wrapper = %v, want ErrKeyNotConfigured", openErr)
+	}
+
+	moved := stored
+	moved.Scope.ID = "sign-in-other"
+
+	if _, openErr := secret.OpenInstallationKey(ctx, wrapper, moved); !errors.Is(openErr, secret.ErrDecrypt) {
+		t.Fatalf("open in another installation scope = %v, want ErrDecrypt", openErr)
+	}
+
+	inNamespace := stored
+	inNamespace.Scope.Namespace = "acme"
+
+	if _, openErr := secret.OpenInstallationKey(ctx, wrapper, inNamespace); !errors.Is(
+		openErr, secret.ErrInvalidScope,
+	) {
+		t.Fatalf("open a key of a namespace = %v, want ErrInvalidScope", openErr)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // The manifest records MD5 per ADR 30, for integrity, not security.
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -271,21 +272,79 @@ func (c backupKeyCheck) run(ctx context.Context) error {
 			c.id, c.key.ID(), c.manifest.WrapperIDs, secret.ErrWrapperMismatch)
 	}
 
-	wrapped, err := peekBackupKey(ctx, c.peeker, portableOpener(ctx, c.target, c.id), c.manifest.SQLFiles, c.key.ID())
+	err := OpenPortableKey(ctx, c.peeker, portableOpener(ctx, c.target, c.id), c.manifest.SQLFiles, c.key)
+	if err != nil {
+		return fmt.Errorf("restore backup %s: %w", c.id, err)
+	}
+
+	return nil
+}
+
+// OpenPortableKey proves that key opens one data key of the SQL part in
+// files, read with open, before a restore writes anything. It reads a key of
+// key.ID() from the secret_keys file. When that file holds none, it reads one
+// from the installation_secret_keys file through the InstallationKeyPeeker of
+// peeker, and returns ErrKeyUnchecked when peeker does not implement it.
+// Every error about the key names DUSTPAN_KEY_ENCRYPTION_KEY.
+func OpenPortableKey(
+	ctx context.Context, peeker KeyPeeker, open PortableOpener, files []PortableFile, key secret.Wrapper,
+) error {
+	if key == nil {
+		return fmt.Errorf("open a data key of the backup: set DUSTPAN_KEY_ENCRYPTION_KEY: %w",
+			secret.ErrKeyNotConfigured)
+	}
+
+	wrapped, installation, err := peekAnyBackupKey(ctx, peeker, open, files, key.ID())
 	if err != nil {
 		return err
 	}
 
-	opened, err := secret.OpenKey(ctx, c.key, wrapped)
+	openKey := secret.OpenKey
+	if installation {
+		openKey = secret.OpenInstallationKey
+	}
+
+	opened, err := openKey(ctx, key, wrapped)
 	if err != nil {
-		return fmt.Errorf("restore backup %s: key %q does not open the backup: "+
-			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key: %w",
-			c.id, c.key.ID(), err)
+		return fmt.Errorf("key %q does not open the backup: "+
+			"set DUSTPAN_KEY_ENCRYPTION_KEY to the matching key: %w", key.ID(), err)
 	}
 
 	clear(opened)
 
 	return nil
+}
+
+// peekAnyBackupKey reads one data key of wrapperID from the secret_keys file,
+// or else from the installation_secret_keys file. It reports whether the key
+// is an installation key.
+func peekAnyBackupKey(
+	ctx context.Context, peeker KeyPeeker, open PortableOpener, files []PortableFile, wrapperID string,
+) (secret.WrappedKey, bool, error) {
+	var none secret.WrappedKey
+
+	wrapped, err := peekBackupKey(ctx, peeker, open, files, wrapperID)
+	if err == nil || !errors.Is(err, ErrNoDataKey) {
+		return wrapped, false, err
+	}
+
+	installation, ok := peeker.(InstallationKeyPeeker)
+	if !ok {
+		return none, false, fmt.Errorf("the store cannot read the installation keys of the backup, "+
+			"so the restore cannot check the key-encryption key: %w", ErrKeyUnchecked)
+	}
+
+	file, ok := portableFileOf(files, "installation_secret_keys")
+	if !ok {
+		return none, false, fmt.Errorf("the SQL part holds no installation_secret_keys file: %w", ErrCorrupt)
+	}
+
+	wrapped, err = installation.PeekPortableInstallationKey(ctx, open, file, wrapperID)
+	if err != nil {
+		return none, false, fmt.Errorf("read backup key of %q: %w", file.Path, err)
+	}
+
+	return wrapped, true, nil
 }
 
 // peekBackupKey reads one data key of wrapperID from the secret_keys file of the

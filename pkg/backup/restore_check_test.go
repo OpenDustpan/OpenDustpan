@@ -446,6 +446,24 @@ func TestCheckRestoreNoKey(t *testing.T) {
 	s.assertTargetIntact(t)
 }
 
+// TestCheckRestoreInstallationKeysUnchecked proves that the check refuses a
+// backup whose key is not in secret_keys when the store cannot read the
+// installation keys, before any write.
+func TestCheckRestoreInstallationKeysUnchecked(t *testing.T) {
+	t.Parallel()
+
+	s := newCheckSetup(t)
+	s.live.keyErr = fmt.Errorf("secret_keys of the backup holds no data key: %w", backup.ErrNoDataKey)
+
+	_, _, err := s.check(t, testWrapper(), "")
+	if !errors.Is(err, backup.ErrKeyUnchecked) {
+		t.Fatalf("err = %v, want ErrKeyUnchecked", err)
+	}
+
+	s.assertNoStage(t)
+	s.assertTargetIntact(t)
+}
+
 // assertCheckKeyErr proves that a key error names the key-encryption key setting.
 func assertCheckKeyErr(t *testing.T, err error) {
 	t.Helper()

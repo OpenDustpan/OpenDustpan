@@ -201,3 +201,24 @@ func CheckInstallationWrapper(ctx context.Context, keys InstallationKeyStore, wr
 
 	return checkWrapperIDs(ids, wrapper)
 }
+
+// OpenInstallationKey is OpenKey for the key of an installation scope: it
+// binds the ciphertext to the installation scope of k. It returns
+// ErrInvalidScope for a key with a namespace, and ErrDecrypt when wrapper
+// does not open k.
+func OpenInstallationKey(ctx context.Context, wrapper Wrapper, k WrappedKey) ([]byte, error) {
+	if k.Scope.Namespace != "" {
+		return nil, fmt.Errorf("%w: installation key of namespace %q", ErrInvalidScope, k.Scope.Namespace)
+	}
+
+	if wrapper == nil {
+		return nil, fmt.Errorf("open installation key of %s: %w", k.Scope.ID, ErrKeyNotConfigured)
+	}
+
+	key, err := wrapper.Unwrap(ctx, k.Ciphertext, installationAAD(k.Scope.ID))
+	if err != nil {
+		return nil, fmt.Errorf("open installation key of %s: %w", k.Scope.ID, err)
+	}
+
+	return key, nil
+}

@@ -259,11 +259,14 @@ func (q *Queries) BackupHomeRegions(ctx context.Context) ([]string, error) {
 }
 
 const backupWrapperIDs = `-- name: BackupWrapperIDs :many
-SELECT DISTINCT wrapper_id
-FROM secret_keys
+SELECT wrapper_id FROM secret_keys
+UNION
+SELECT wrapper_id FROM installation_secret_keys
 ORDER BY wrapper_id
 `
 
+// The wrapper IDs of the namespace keys and of the installation keys, so the
+// restore check finds the key-encryption key of each.
 func (q *Queries) BackupWrapperIDs(ctx context.Context) ([]string, error) {
 	rows, err := q.db.Query(ctx, backupWrapperIDs)
 	if err != nil {

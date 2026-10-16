@@ -692,7 +692,7 @@ func (s *Store) summarizeStaging(
 		return backup.Summary{}, err
 	}
 
-	wrappers, err := stagingStrings(ctx, s.pool, staging, "secret_keys", "wrapper_id")
+	wrappers, err := stagingWrapperIDs(ctx, s.pool, staging)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -849,6 +849,25 @@ func stagingSchemaVersion(ctx context.Context, pool *pgxpool.Pool, staging strin
 // queries. Both names come from constants, never from the network.
 func stagingTable(staging, table string) string {
 	return pgIdent(staging) + "." + pgIdent(table)
+}
+
+// stagingWrapperIDs returns the distinct wrapper IDs of the namespace keys and
+// of the installation keys in the staging schema, ordered, never nil.
+func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]string, error) {
+	keys, err := stagingStrings(ctx, pool, staging, "secret_keys", "wrapper_id")
+	if err != nil {
+		return nil, err
+	}
+
+	installation, err := stagingStrings(ctx, pool, staging, "installation_secret_keys", "wrapper_id")
+	if err != nil {
+		return nil, err
+	}
+
+	out := slices.Concat(keys, installation)
+	slices.Sort(out)
+
+	return slices.Compact(out), nil
 }
 
 // stagingStrings returns the distinct values of column in the staging table,
@@ -1011,6 +1030,15 @@ func (s *Store) PeekPortableKey(
 	ctx context.Context, open backup.PortableOpener, file backup.PortableFile, wrapperID string,
 ) (secret.WrappedKey, error) {
 	return codec.PeekPortableSecretKey(ctx, open, file, wrapperID)
+}
+
+// PeekPortableInstallationKey implements backup.InstallationKeyPeeker: it
+// reads one installation key of wrapperID from the installation_secret_keys
+// file of a portable backup.
+func (s *Store) PeekPortableInstallationKey(
+	ctx context.Context, open backup.PortableOpener, file backup.PortableFile, wrapperID string,
+) (secret.WrappedKey, error) {
+	return codec.PeekPortableInstallationKey(ctx, open, file, wrapperID)
 }
 
 // schemaVersion returns the highest applied migration version.
