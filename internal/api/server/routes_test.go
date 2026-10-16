@@ -1070,17 +1070,20 @@ func (r *recordingAuthorizer) Authorize(
 	return nil
 }
 
-// denyObjectAuthorizer denies the one object wire form in deny and allows
-// everything else, so tests prove a route authorizes the resolved object:
-// denying it answers 403.
-type denyObjectAuthorizer struct {
-	deny string
+// denyRouteAuthorizer denies exactly the actions in deny on the object wire
+// form in object and allows everything else, so tests prove a route
+// authorizes the resolved object: denying its declared actions answers 403.
+// A resolver may check a read action first and answer 404, so denying every
+// action on the object would hide the manage check behind that 404.
+type denyRouteAuthorizer struct {
+	object string
+	deny   map[identity.Action]bool
 }
 
-func (d denyObjectAuthorizer) Authorize(
+func (d denyRouteAuthorizer) Authorize(
 	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
 ) error {
-	if obj.String() == d.deny {
+	if obj.String() == d.object && d.deny[action] {
 		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 	}
 
@@ -1146,7 +1149,18 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 
 	rec := httptest.NewRecorder()
 
-	expected, err := route.Resolve(rec, routeRequest(t, route, "test-token"))
+	// enforce stores the caller before it resolves, and a resolver may read it.
+	caller, err := tokenAuthenticator{}.AuthenticateToken(t.Context(), "test-token")
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	// A resolver may authorize a read before it answers the object, so the
+	// route resolves on a handler that allows every action.
+	resolving := sameRoute(t, newEnforcingHandler(t, &recordingAuthorizer{calls: nil}), route)
+	req := routeRequest(t, route, "test-token")
+
+	expected, err := resolving.Resolve(rec, req.WithContext(apiserver.WithPrincipalForTest(req.Context(), caller)))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -1167,7 +1181,12 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 		}
 	}
 
-	denied := newEnforcingHandler(t, denyObjectAuthorizer{deny: expected.String()})
+	deny := map[identity.Action]bool{}
+	for _, action := range route.ActionsOn(expected) {
+		deny[action] = true
+	}
+
+	denied := newEnforcingHandler(t, denyRouteAuthorizer{object: expected.String(), deny: deny})
 
 	rec = httptest.NewRecorder()
 	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
@@ -1175,6 +1194,21 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("request denied on %q answers %d, want %d", expected.String(), rec.Code, http.StatusForbidden)
 	}
+}
+
+// sameRoute returns the row of h with the method and the path of route.
+func sameRoute(t *testing.T, h *apiserver.Handler, route apiserver.Route) apiserver.Route {
+	t.Helper()
+
+	for _, r := range h.Routes() {
+		if r.Method == route.Method && r.Path == route.Path {
+			return r
+		}
+	}
+
+	t.Fatalf("no route %s %s", route.Method, route.Path)
+
+	return route
 }
 
 // containsCall reports whether calls holds want.
