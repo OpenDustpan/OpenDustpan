@@ -185,11 +185,30 @@ func (s *Store) UpdateProviderConfig(ctx context.Context, p session.ProviderConf
 			return missingOrChanged(ctx, q, p.ID)
 		}
 
+		if !p.Enabled {
+			ended, endErr := q.EndSessionsWithSubjectPrefix(ctx, db.EndSessionsWithSubjectPrefixParams{
+				AtMs: codec.Millis(e.At), EndReason: string(session.ReasonEnded), Prefix: session.SubjectPrefix(p.ID),
+			})
+			if endErr != nil {
+				return fmt.Errorf("end sessions of sign-in provider: %w", endErr)
+			}
+
+			e = session.WithSessionsEnded(e, ended)
+		}
+
 		return appendProviderEntry(ctx, q, e)
 	})
 }
 
 // DeleteProviderConfig implements session.ProviderConfigStore.
+//
+// The count of principals and the delete run at READ COMMITTED, so a first
+// sign-in through the provider that is in progress can create a principal
+// of the prefix between them. That principal is not an orphan of another
+// identity: the sign-in found this provider enabled, and the delete keeps
+// the issuer of the ID in oidc_providers. A new provider with the ID must
+// use the same issuer, so the subject names the same person at the same
+// identity provider, and a delete of the new provider counts it.
 func (s *Store) DeleteProviderConfig(ctx context.Context, id string, e audit.Entry) error {
 	return s.inTx(ctx, func(q *db.Queries) error {
 		if err := validServerEntry(e); err != nil {

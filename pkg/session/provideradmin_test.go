@@ -362,3 +362,46 @@ func TestProviderAdminDelete(t *testing.T) {
 		t.Fatalf("delete: %v", err)
 	}
 }
+
+// errNoKey is the error of failSealer.
+var errNoKey = errors.New("no key-encryption key")
+
+// failSealer is a SecretSealer with no key-encryption key.
+type failSealer struct{}
+
+func (failSealer) Seal(context.Context, string, []byte) ([]byte, error) {
+	return nil, errNoKey
+}
+
+func (failSealer) Open(context.Context, string, []byte) ([]byte, error) {
+	return nil, errNoKey
+}
+
+// TestProviderAdminCreateWithNoKeyBindsNothing proves that a create that
+// fails to seal the client secret binds no issuer to the provider ID and
+// stores no provider.
+func TestProviderAdminCreateWithNoKeyBindsNothing(t *testing.T) {
+	t.Parallel()
+
+	store := newMemProviderConfigs()
+	binder := &memoryProviders{err: nil, issuers: map[string]string{}}
+
+	admin, err := session.NewProviderAdmin(session.ProviderAdminConfig{
+		Store: store, Binder: binder, Secrets: failSealer{}, Now: time.Now, Static: nil,
+	})
+	if err != nil {
+		t.Fatalf("provider admin: %v", err)
+	}
+
+	if _, err := admin.Create(t.Context(), sessionCallerEntry(), corpInput()); !errors.Is(err, errNoKey) {
+		t.Fatalf("create with no key-encryption key = %v, want the seal error", err)
+	}
+
+	if issuer, ok := binder.issuers["corp"]; ok {
+		t.Fatalf("a failed create bound the issuer %q to corp, want no binding", issuer)
+	}
+
+	if _, err := store.GetProviderConfig(t.Context(), "corp"); !errors.Is(err, session.ErrProviderNotFound) {
+		t.Fatalf("get after a failed create = %v, want ErrProviderNotFound", err)
+	}
+}

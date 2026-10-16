@@ -35,6 +35,8 @@ func TestProviderConfigValidate(t *testing.T) {
 		{"relative issuer", func(p *session.ProviderConfig) { p.Issuer = "idp.example" }},
 		{"issuer with a query", func(p *session.ProviderConfig) { p.Issuer = "https://idp.example?x=1" }},
 		{"other scheme", func(p *session.ProviderConfig) { p.Issuer = "ftp://idp.example" }},
+		{"http issuer", func(p *session.ProviderConfig) { p.Issuer = "http://idp.example" }},
+		{"http issuer with a fragment", func(p *session.ProviderConfig) { p.Issuer = "http://127.0.0.1:9000#x" }},
 		{"no display name", func(p *session.ProviderConfig) { p.DisplayName = "" }},
 		{"control character", func(p *session.ProviderConfig) { p.DisplayName = "Corp\n" }},
 		{"no client ID", func(p *session.ProviderConfig) { p.ClientID = "" }},
@@ -50,6 +52,15 @@ func TestProviderConfigValidate(t *testing.T) {
 
 		if err := p.Validate(); !errors.Is(err, session.ErrInvalidProvider) {
 			t.Errorf("%s: Validate = %v, want ErrInvalidProvider", tc.name, err)
+		}
+	}
+
+	for _, issuer := range []string{"http://127.0.0.1:9000", "http://localhost:9000/realms/corp", "http://[::1]:9000"} {
+		p := validProviderConfig()
+		p.Issuer = issuer
+
+		if err := p.Validate(); err != nil {
+			t.Errorf("issuer %q on a loopback host: Validate = %v, want nil", issuer, err)
 		}
 	}
 

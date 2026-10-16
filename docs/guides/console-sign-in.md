@@ -84,11 +84,19 @@ The rules:
   has another version, the change answers 409. Read the provider again
   and send the change again.
 - A change applies at the next sign-in, with no restart.
+- The issuer must be an `https` URL. The server accepts an `http` URL only
+  on a loopback host, for tests.
 - The server does not read the discovery document of a new provider. The
   first sign-in through a provider with a bad issuer answers 502.
+- At a sign-in, the server reads the discovery document from the issuer.
+  So only a site administrator may set the issuer: give
+  `server:manage-sign-in` to no other person.
 - Disable a provider with `"enabled": false`. A disabled provider answers
-  404 at the start of a sign-in. The server deletes a provider only when
-  no principal has a subject of its ID. Else the delete answers 409.
+  404 at the start of a sign-in. The disable also ends every active
+  session of a person with a subject of the provider, and its audit entry
+  holds the count as `sessionsEnded`. The server deletes a provider only
+  when no principal has a subject of its ID. Else the delete answers 409.
+  So a provider that the server deletes has no session.
 - A change from a console session needs a sign-in inside the token
   freshness window, as a new token does.
 

@@ -171,13 +171,9 @@ func (a *ProviderAdmin) Create(ctx context.Context, e audit.Entry, in ProviderIn
 		AutoCreate: in.AutoCreate, Enabled: in.Enabled,
 	}
 
-	// Validate before the binding and the seal, so a refused provider
-	// records nothing. The placeholder secret passes the length check.
+	// Validate and seal before the binding, so a refused provider binds no
+	// issuer to the ID. The placeholder secret passes the length check.
 	if err := p.Validate(); err != nil {
-		return ProviderConfig{}, err
-	}
-
-	if err := a.bind(ctx, p.ID, p.Issuer, at); err != nil {
 		return ProviderConfig{}, err
 	}
 
@@ -187,6 +183,10 @@ func (a *ProviderAdmin) Create(ctx context.Context, e audit.Entry, in ProviderIn
 	}
 
 	p.SealedSecret = sealed
+
+	if err := a.bind(ctx, p.ID, p.Issuer, at); err != nil {
+		return ProviderConfig{}, err
+	}
 
 	if err := a.store.CreateProviderConfig(ctx, p, providerEntry(e, at, p.ID, createdChanges(p))); err != nil {
 		return ProviderConfig{}, fmt.Errorf("create sign-in provider: %w", err)
@@ -227,12 +227,6 @@ func (a *ProviderAdmin) Update(
 		return ProviderConfig{}, err
 	}
 
-	if NormalizeIssuer(p.Issuer) != NormalizeIssuer(old.Issuer) {
-		if err := a.bind(ctx, id, p.Issuer, at); err != nil {
-			return ProviderConfig{}, err
-		}
-	}
-
 	if c.ClientSecret != nil {
 		if *c.ClientSecret == "" {
 			return ProviderConfig{}, fmt.Errorf("%w: the client secret cannot be empty", ErrInvalidProvider)
@@ -244,6 +238,13 @@ func (a *ProviderAdmin) Update(
 		}
 
 		p.SealedSecret = sealed
+	}
+
+	// Bind after the seal, so a refused change binds no new issuer.
+	if NormalizeIssuer(p.Issuer) != NormalizeIssuer(old.Issuer) {
+		if err := a.bind(ctx, id, p.Issuer, at); err != nil {
+			return ProviderConfig{}, err
+		}
 	}
 
 	changes := changedChanges(old, p)

@@ -2126,6 +2126,29 @@ func (q *Queries) EndSession(ctx context.Context, arg EndSessionParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const endSessionsWithSubjectPrefix = `-- name: EndSessionsWithSubjectPrefix :execrows
+UPDATE sessions SET ended_at_ms = $1::bigint, end_reason = $2
+WHERE ended_at_ms IS NULL
+  AND principal_id IN (SELECT id FROM principals WHERE starts_with(subject, $3))
+`
+
+type EndSessionsWithSubjectPrefixParams struct {
+	AtMs      int64
+	EndReason string
+	Prefix    string
+}
+
+// Ends every active session of a principal whose subject starts with the
+// prefix "<provider ID>:". The compare is exact, as in
+// CountPrincipalsWithSubjectPrefix.
+func (q *Queries) EndSessionsWithSubjectPrefix(ctx context.Context, arg EndSessionsWithSubjectPrefixParams) (int64, error) {
+	result, err := q.db.Exec(ctx, endSessionsWithSubjectPrefix, arg.AtMs, arg.EndReason, arg.Prefix)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const failRunningBackups = `-- name: FailRunningBackups :exec
 UPDATE backups
 SET state = 'failed', error = $1, ended_at_ms = $2

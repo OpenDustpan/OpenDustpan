@@ -281,6 +281,16 @@ func TestSignInProvidersRefusals(t *testing.T) {
 func (e providerEnv) signInWith(t *testing.T, idp *oauthtest.Provider, id string) string {
 	t.Helper()
 
+	subject, _ := e.signInSession(t, idp, id)
+
+	return subject
+}
+
+// signInSession signs in through the provider id at idp and returns the
+// subject and the session cookie.
+func (e providerEnv) signInSession(t *testing.T, idp *oauthtest.Provider, id string) (string, *http.Cookie) {
+	t.Helper()
+
 	rec := e.get(t, "/api/server/sign-in/"+id)
 	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), idp.Issuer()) {
 		t.Fatalf("start of %s = %d to %q, want 302 to %s", id, rec.Code, rec.Header().Get("Location"), idp.Issuer())
@@ -319,7 +329,7 @@ func (e providerEnv) signInWith(t *testing.T, idp *oauthtest.Provider, id string
 
 	_, body := e.readSession(t, sess)
 
-	return body.Subject
+	return body.Subject, sess
 }
 
 // TestSignInTwoProvidersSideBySide proves that a static provider and a
@@ -347,7 +357,8 @@ func TestSignInTwoProvidersSideBySide(t *testing.T) {
 }
 
 // TestSignInStoredProviderChangesApplyAtOnce proves that a disabled stored
-// provider refuses the start of a sign-in, that enabling it again applies
+// provider refuses the start of a sign-in and ends the sessions of its
+// people, and not the sessions of another provider, that enabling it again applies
 // with no restart, and that a provider with principals is not deleted.
 func TestSignInStoredProviderChangesApplyAtOnce(t *testing.T) {
 	t.Parallel()
@@ -355,7 +366,10 @@ func TestSignInStoredProviderChangesApplyAtOnce(t *testing.T) {
 	e := newProviderEnv(t)
 	created := e.createBeta(t)
 
-	if subject := e.signInWith(t, e.beta, "beta"); subject != "beta:248289761001" {
+	_, corpSession := e.signInSession(t, e.idp, "corp")
+
+	subject, betaSession := e.signInSession(t, e.beta, "beta")
+	if subject != "beta:248289761001" {
 		t.Fatalf("subject = %q", subject)
 	}
 
@@ -373,6 +387,14 @@ func TestSignInStoredProviderChangesApplyAtOnce(t *testing.T) {
 
 	if start := e.get(t, "/api/server/sign-in/beta"); start.Code != http.StatusNotFound {
 		t.Fatalf("start of a disabled provider = %d, want 404", start.Code)
+	}
+
+	if code, _ := e.readSession(t, betaSession); code != http.StatusUnauthorized {
+		t.Fatalf("session of a disabled provider = %d, want 401", code)
+	}
+
+	if code, _ := e.readSession(t, corpSession); code != http.StatusOK {
+		t.Fatalf("session of another provider after the disable = %d, want 200", code)
 	}
 
 	rec = e.adminDo(t, http.MethodDelete, "/api/server/sign-in-providers/beta", "")
@@ -425,5 +447,76 @@ func TestSignInProviderChangeNeedsAFreshSession(t *testing.T) {
 
 	if rec := e.adminDo(t, http.MethodGet, "/api/server/sign-in-providers/beta", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("provider after a refused create = %d, want 404", rec.Code)
+	}
+
+	e.createBeta(t)
+
+	refused := []*httptest.ResponseRecorder{
+		e.sendWithSession(t, http.MethodPatch, stale, "/api/server/sign-in-providers/beta",
+			`{"enabled":false,"version":1}`),
+		e.sendWithSession(t, http.MethodDelete, stale, "/api/server/sign-in-providers/beta", ""),
+	}
+
+	for _, rec := range refused {
+		if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "reauthenticate") {
+			t.Fatalf("change from a stale session = %d %s, want 401 with reauthenticate", rec.Code, rec.Body.String())
+		}
+	}
+
+	got := decodeProvider(t, e.adminDo(t, http.MethodGet, "/api/server/sign-in-providers/beta", ""))
+	if got.Version != 1 || !got.Enabled {
+		t.Fatalf("provider after a refused change and delete = version %d, enabled %t; want version 1, enabled",
+			got.Version, got.Enabled)
+	}
+}
+
+// TestSignInProviderReadsHoldNoSecret proves that neither the read of one
+// provider nor the list holds the client secret, only clientSecretSet.
+func TestSignInProviderReadsHoldNoSecret(t *testing.T) {
+	t.Parallel()
+
+	e := newProviderEnv(t)
+	e.createBeta(t)
+
+	for _, target := range []string{"/api/server/sign-in-providers/beta", "/api/server/sign-in-providers"} {
+		rec := e.adminDo(t, http.MethodGet, target, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d %s, want 200", target, rec.Code, rec.Body.String())
+		}
+
+		body := rec.Body.String()
+		if strings.Contains(body, betaSecret) || strings.Contains(body, `"clientSecret"`) {
+			t.Fatalf("GET %s holds the client secret: %s", target, body)
+		}
+
+		if !strings.Contains(body, `"clientSecretSet":true`) {
+			t.Fatalf("GET %s = %s, want clientSecretSet true", target, body)
+		}
+	}
+}
+
+// TestSignInProviderRefusalNamesNoInvalidID proves that the failure entry
+// of a change of an ID that is not valid names no part of that ID.
+func TestSignInProviderRefusalNamesNoInvalidID(t *testing.T) {
+	t.Parallel()
+
+	e := newProviderEnv(t)
+	long := strings.Repeat("x", 300)
+
+	rec := e.adminDo(t, http.MethodPatch, "/api/server/sign-in-providers/"+long, `{"enabled":false,"version":1}`)
+	if rec.Code == http.StatusOK {
+		t.Fatal("change of an invalid ID = 200, want a refusal")
+	}
+
+	var objects []string
+
+	for _, entry := range e.serverEntries(t) {
+		if entry.Outcome == audit.OutcomeFailure && strings.HasPrefix(entry.Object, "sign-in-provider:") {
+			objects = append(objects, entry.Object)
+		}
+	}
+
+	if len(objects) != 1 || objects[0] != "sign-in-provider:?" {
+		t.Fatalf("failure entries of the change = %q, want one of sign-in-provider:?", objects)
 	}
 }

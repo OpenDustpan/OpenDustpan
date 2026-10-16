@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -97,8 +100,8 @@ func (p ProviderConfig) validateNames() error {
 	case !ValidProviderID(p.ID):
 		return fmt.Errorf("%w: the provider ID %q does not match %s", ErrInvalidProvider, p.ID, providerIDPattern)
 	case !validIssuer(p.Issuer):
-		return fmt.Errorf("%w: the issuer must be an absolute http or https URL of at most %d bytes",
-			ErrInvalidProvider, maxIssuer)
+		return fmt.Errorf("%w: the issuer must be an absolute https URL, or http on a loopback host, "+
+			"of at most %d bytes", ErrInvalidProvider, maxIssuer)
 	case p.DisplayName == "" || len(p.DisplayName) > maxDisplayName || hasControl(p.DisplayName):
 		return fmt.Errorf("%w: the display name must have 1 to %d bytes and no control character",
 			ErrInvalidProvider, maxDisplayName)
@@ -110,21 +113,32 @@ func (p ProviderConfig) validateNames() error {
 	}
 }
 
-// validIssuer reports whether issuer is an absolute http or https URL with
-// a host. The sign-in client checks the stricter rule for the scheme when
-// it uses the issuer.
+// validIssuer reports whether issuer is an absolute https URL with a host,
+// or an http URL on a loopback host, with no query and no fragment. The
+// sign-in client applies the same scheme rule when it fetches the
+// discovery document, so a stored issuer never fails it.
 func validIssuer(issuer string) bool {
 	if issuer == "" || len(issuer) > maxIssuer {
 		return false
 	}
 
 	u, err := url.Parse(issuer)
-	if err != nil || u == nil {
+	if err != nil || u == nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" {
 		return false
 	}
 
-	return (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" &&
-		u.RawQuery == "" && u.Fragment == ""
+	return u.Scheme == "https" || (u.Scheme == "http" && loopbackHost(u.Hostname()))
+}
+
+// loopbackHost reports whether host is localhost or a loopback IP address.
+func loopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+
+	ip := net.ParseIP(host)
+
+	return ip != nil && ip.IsLoopback()
 }
 
 // validScopes refuses more than maxScopes scopes, an empty scope, a scope
@@ -165,11 +179,32 @@ type ProviderConfigStore interface {
 	// stored version is p.Version-1. It returns ErrProviderNotFound for an
 	// unknown ID, ErrProviderChanged for another stored version, and
 	// ErrInvalidProvider for a provider that fails Validate. The creation
-	// time stays.
+	// time stays. When p is disabled, the same write ends every active
+	// session of a principal whose subject starts with SubjectPrefix(p.ID),
+	// at e.At with ReasonEnded, and writes e through WithSessionsEnded.
 	UpdateProviderConfig(ctx context.Context, p ProviderConfig, e audit.Entry) error
 	// DeleteProviderConfig deletes the provider id. It returns
 	// ErrProviderNotFound for an unknown ID, and ErrProviderInUse while a
 	// principal, also a deleted one, has a subject that starts with
 	// SubjectPrefix(id).
 	DeleteProviderConfig(ctx context.Context, id string, e audit.Entry) error
+}
+
+// ChangeSessionsEnded is the key of the audit change that counts the
+// sessions that the disable of a sign-in provider ended.
+const ChangeSessionsEnded = "sessionsEnded"
+
+// WithSessionsEnded returns e with the change ChangeSessionsEnded when n
+// sessions ended, and e as it is when n is 0. A store calls it inside the
+// write that ends the sessions, so the entry holds the count of that write.
+func WithSessionsEnded(e audit.Entry, n int64) audit.Entry {
+	if n == 0 {
+		return e
+	}
+
+	e.Changes = append(slices.Clone(e.Changes), audit.Change{
+		Key: ChangeSessionsEnded, Old: nil, New: strconv.FormatInt(n, 10), Layer: "", TakesEffect: "",
+	})
+
+	return e
 }

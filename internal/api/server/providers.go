@@ -312,16 +312,27 @@ func (h *Handler) deleteSignInProvider(
 }
 
 // failProviderChange writes the failure entry of a refused change of the
-// provider id and answers err.
+// provider id and answers err. The entry names an invalid ID with
+// invalidProviderRef, so a request cannot put text of any length into
+// the audit log.
 func (h *Handler) failProviderChange(
 	w http.ResponseWriter, r *http.Request, caller identity.Principal, id string, err error,
 ) {
+	object := invalidProviderRef
+	if session.ValidProviderID(id) {
+		object = session.ProviderRef(id)
+	}
+
 	h.appendServerChange(r, caller, serverChange{
-		at: h.signIn.sessions.Now(), action: identity.ActionServerManageSignIn, object: session.ProviderRef(id),
+		at: h.signIn.sessions.Now(), action: identity.ActionServerManageSignIn, object: object,
 		outcome: audit.OutcomeFailure,
 	})
 	h.writeError(r.Context(), w, err)
 }
+
+// invalidProviderRef is the audit object of a refused change of a provider
+// ID that is not valid. No valid ID holds "?", so it names no provider.
+const invalidProviderRef = "sign-in-provider:?"
 
 // storedProviderOf returns the wire form of a provider of the API.
 func storedProviderOf(p *session.ProviderConfig) providerResponse {

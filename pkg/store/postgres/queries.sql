@@ -1879,6 +1879,14 @@ SELECT COUNT(*) FROM sign_in_providers WHERE provider_id = $1;
 -- name: DeleteSignInProvider :execrows
 DELETE FROM sign_in_providers WHERE provider_id = $1;
 
+-- name: EndSessionsWithSubjectPrefix :execrows
+-- Ends every active session of a principal whose subject starts with the
+-- prefix "<provider ID>:". The compare is exact, as in
+-- CountPrincipalsWithSubjectPrefix.
+UPDATE sessions SET ended_at_ms = sqlc.arg('at_ms')::bigint, end_reason = sqlc.arg('end_reason')
+WHERE ended_at_ms IS NULL
+  AND principal_id IN (SELECT id FROM principals WHERE starts_with(subject, sqlc.arg('prefix')));
+
 -- name: CountPrincipalsWithSubjectPrefix :one
 -- The prefix is "<provider ID>:". The compare is exact, with no pattern
 -- and no case folding. Deleted principals count too.

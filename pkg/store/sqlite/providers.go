@@ -212,6 +212,17 @@ func (s *Store) UpdateProviderConfig(ctx context.Context, p session.ProviderConf
 			return missingOrChanged(ctx, q, p.ID)
 		}
 
+		if !p.Enabled {
+			ended, endErr := q.EndSessionsWithSubjectPrefix(ctx, db.EndSessionsWithSubjectPrefixParams{
+				AtMs: codec.Millis(e.At), EndReason: string(session.ReasonEnded), Prefix: session.SubjectPrefix(p.ID),
+			})
+			if endErr != nil {
+				return fmt.Errorf("end sessions of sign-in provider: %w", endErr)
+			}
+
+			e = session.WithSessionsEnded(e, ended)
+		}
+
 		return appendProviderEntry(ctx, q, e)
 	})
 }

@@ -64,6 +64,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "an update of a provider checks its version", test: testProviderUpdate},
 		{name: "a provider with principals is not deleted", test: testProviderDelete},
 		{name: "each provider change appends its entry", test: testProviderChangeAppendsEntry},
+		{name: "a disable of a provider ends its sessions", test: testProviderDisableEndsSessions},
 		{name: "end sets the end time and the reason once", test: testEnd},
 		{name: "a change appends its audit entry in @server", test: testChangeAppendsEntry},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntryChangesNothing},
