@@ -7,11 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
-	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // fenceLineagePrefix starts the lineage of a fence version. A fence changes the
@@ -47,6 +48,15 @@ func (s *Service) releaseWithFence(
 		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, err)
 	}
 
+	// The pending row names the key before the bytes land, so no sweep
+	// deletes the blob before the commit names it. When the commit outcome
+	// stays unknown, the expired-version sweep deletes the row and the blob.
+	// A force-unlock is the way out of a stuck lock, so the pending cap does
+	// not stop it.
+	if stageErr := s.states.CreateStateVersion(ctx, sv, fence, math.MaxInt); stageErr != nil {
+		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, stageErr)
+	}
+
 	size, err := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
@@ -57,9 +67,11 @@ func (s *Service) releaseWithFence(
 		unchecked: false,
 	})
 	if err != nil {
-		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, err)
+		return Workspace{}, fmt.Errorf("force-unlock %s: %w", w.Ref, errors.Join(err, s.dropFence(ctx, sv, fence)))
 	}
 
+	sv.Status = StatusFinalized
+	sv.FinalizedAt = sv.CreatedAt
 	sv.Size = size
 
 	released := w
@@ -68,17 +80,18 @@ func (s *Service) releaseWithFence(
 	released.Revision++
 
 	if fenceErr := s.states.FenceAndUnlock(ctx, released, sv, cur.ID, fence); fenceErr != nil {
-		return Workspace{}, s.fenceRefused(ctx, w, sv.Content, fenceErr)
+		return Workspace{}, s.fenceRefused(ctx, w, sv, fence, fenceErr)
 	}
 
 	return released, nil
 }
 
-// buildFence returns the fence version of w that follows cur, and the plain
-// content it holds. The version has a new lineage and the next serial, keeps
-// the outputs and the kept marks of cur, and names by. Its content key is set,
-// and its MD5 is that of the plain content. It is sealed when the service
-// seals; the outputs of a plain cur are sealed for it.
+// buildFence returns the pending fence version of w that follows cur, and the
+// plain content it holds. The version has a new lineage and the next serial,
+// keeps the outputs and the kept marks of cur, and names by. Its content key
+// is set, and its MD5 is that of the plain content. It is sealed when the
+// service seals; the outputs of a plain cur are sealed for it. It has no
+// upload capability, so no client uploads into it.
 func (s *Service) buildFence(
 	ctx context.Context, w Workspace, cur StateVersion, by string,
 ) (StateVersion, []byte, error) {
@@ -105,15 +118,15 @@ func (s *Service) buildFence(
 
 	sv := StateVersion{
 		CreatedAt:       now,
-		FinalizedAt:     now,
-		UploadExpiresAt: time.Time{},
+		FinalizedAt:     time.Time{},
+		UploadExpiresAt: now.Add(UploadWindow),
 		Upload:          token.Digest{},
 		ID:              StateVersionID(ident.NewID("sv-")),
 		Workspace:       w.ID,
 		Holder:          "",
 		LockID:          "",
 		Lineage:         lineage,
-		Status:          StatusFinalized,
+		Status:          StatusPending,
 		Content:         "",
 		Outputs:         outputs,
 		MD5:             md5.Sum(content), //nolint:gosec // The TFE protocol names state by MD5 for integrity.
@@ -208,15 +221,29 @@ func fenceContent(plain []byte, lineage string, serial int64) ([]byte, error) {
 	return out, nil
 }
 
-// fenceRefused removes the content of a fence that the store refused without
-// writing it. An error with an unknown outcome keeps the content, because the
-// version may have become current; the sweeper then owns it.
-func (s *Service) fenceRefused(ctx context.Context, w Workspace, key blob.Key, err error) error {
+// fenceRefused removes the content and the pending row of a fence that the
+// store refused without writing it. An error with an unknown outcome keeps
+// both, because the version may have become current; the expired-version
+// sweep then owns them.
+func (s *Service) fenceRefused(
+	ctx context.Context, w Workspace, sv StateVersion, fence namespace.Fence, err error,
+) error {
 	refused := errors.Is(err, ErrNotLocked) || errors.Is(err, ErrConcurrentModification) ||
-		errors.Is(err, ErrStaleSerial) || errors.Is(err, ErrNotFound)
+		errors.Is(err, ErrStaleSerial) || errors.Is(err, ErrNotFound) || errors.Is(err, ErrUploadDenied)
 	if !refused {
 		return fmt.Errorf("force-unlock %s: %w", w.Ref, err)
 	}
 
-	return fmt.Errorf("force-unlock %s: %w", w.Ref, errors.Join(err, s.blobs.Delete(ctx, key)))
+	return fmt.Errorf("force-unlock %s: %w", w.Ref, errors.Join(err, s.dropFence(ctx, sv, fence)))
+}
+
+// dropFence deletes the content of the pending fence sv, then its row. When
+// the delete fails, the row stays, so the expired-version sweep still finds
+// the blob.
+func (s *Service) dropFence(ctx context.Context, sv StateVersion, fence namespace.Fence) error {
+	if err := s.blobs.Delete(ctx, sv.Content); err != nil {
+		return err
+	}
+
+	return s.states.DiscardStateVersion(ctx, sv.ID, fence)
 }

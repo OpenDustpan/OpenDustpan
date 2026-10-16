@@ -342,10 +342,11 @@ entry and how to read them.
   `tofu state pull` makes a `tool-operation` entry. The server records a
   reveal from the Pulumi CLI only when the CLI calls a `log-decryption`
   route.
-- **Who can read the log.** `GET /api/audit/entries` lists the entries and
-  `GET /api/audit/check` checks the chain. Both need the action
+- **Who can read the log.** `GET /api/audit/entries` lists the entries,
+  `GET /api/audit/entries/{sequence}` reads one entry and
+  `GET /api/audit/check` checks the chain. Each needs the action
   `namespace:read-audit` on the namespace. For the installation scope
-  `@server`, both need `server:read-audit` on the installation instead.
+  `@server`, each needs `server:read-audit` on the installation instead.
 - **A hash chain for each namespace.** Each entry holds the SHA-256 of its
   own fields and of the previous entry. The check finds a changed or a
   deleted entry. It does not stop a person who can write to the database:
