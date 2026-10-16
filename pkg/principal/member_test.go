@@ -72,7 +72,9 @@ func TestAddMemberRecordsMembershipFields(t *testing.T) {
 	}
 
 	caller := identity.Principal{
-		Subject: "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 	}
 
 	if _, err := svc.AddMember(t.Context(), testEntry(), caller, "grp-1", "prn-1"); err != nil {

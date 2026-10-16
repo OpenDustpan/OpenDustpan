@@ -336,6 +336,8 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 	t.Helper()
 
 	cfg := apiserver.Config{
+		TempAdmins:    nil,
+		Now:           nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),

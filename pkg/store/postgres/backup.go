@@ -332,8 +332,6 @@ func pgCopyPrincipalsTable() pgCopyTable {
 
 // pgCopyIdentityTables holds the COPY columns of the principal, group,
 // role and grant tables (ADR 52).
-//
-//nolint:funlen // A constant table of column names; its length is the schema.
 func pgCopyIdentityTables() []pgCopyTable {
 	return append(pgCopyPrincipalTables(), pgCopyGrantTables()...)
 }

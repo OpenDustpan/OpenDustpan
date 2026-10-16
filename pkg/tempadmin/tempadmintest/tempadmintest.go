@@ -55,6 +55,11 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a second expiry is ErrExpired and writes nothing", test: testExpireTwice},
 		{name: "expiry ends the site-administrator grant", test: testExpireEndsGrant},
 		{name: "expiry ends the host-recovery tokens", test: testExpireEndsTokens},
+		{
+			name: "expiry after a manual disable still ends the grants and the tokens",
+			test: testExpireAfterManualDisable,
+		},
+		{name: "read by subject returns the new record after a recreate", test: testBySubjectAfterRecreate},
 		{name: "each write appends its audit entry in @server", test: testAuditEntries},
 	}
 
@@ -97,27 +102,28 @@ const tokenLifetimeHours = 48
 // @server, with the object object.
 func entry(object string) audit.Entry {
 	return audit.Entry{
-		At:         at(minuteBase),
-		Namespace:  audit.ServerScope,
-		Subject:    createdBy,
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     tempadmin.Action,
-		Object:     object,
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "",
-		UserAgent:  "",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		FenceVersion: 0,
+		At:           at(minuteBase),
+		Namespace:    audit.ServerScope,
+		Subject:      createdBy,
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       tempadmin.Action,
+		Object:       object,
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "",
+		UserAgent:    "",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
 	}
 }
 
@@ -126,6 +132,7 @@ func mustPrincipal(t *testing.T, s Store, id, subject string) {
 	t.Helper()
 
 	p := principal.Principal{
+		BreakGlass:  false,
 		CreatedAt:   at(0),
 		UpdatedAt:   at(0),
 		DisabledAt:  time.Time{},
@@ -351,9 +358,8 @@ func mustGrant(t *testing.T, s Store, id, principalID string) {
 	}
 }
 
-// mustToken issues the token id of the principal principalID with the name
-// name.
-func mustToken(t *testing.T, s Store, id, principalID, name string) {
+// mustToken issues the token id of the principal alice with the name name.
+func mustToken(t *testing.T, s Store, id, name string) {
 	t.Helper()
 
 	tok := accesstoken.Token{
@@ -363,7 +369,7 @@ func mustToken(t *testing.T, s Store, id, principalID, name string) {
 		RevokedAt:   time.Time{},
 		DisabledAt:  time.Time{},
 		ID:          id,
-		PrincipalID: principalID,
+		PrincipalID: alicePrincipalID,
 		Name:        name,
 		Kind:        accesstoken.KindPersonal,
 		ReplacedBy:  "",
@@ -407,12 +413,70 @@ func testExpireEndsTokens(t *testing.T, s Store) {
 
 	mustPrincipal(t, s, alicePrincipalID, "alice")
 	mustRecord(t, s, alicePrincipalID, "alice", 0)
-	mustToken(t, s, "tok-host", alicePrincipalID, tempadmin.HostTokenName)
-	mustToken(t, s, "tok-laptop", alicePrincipalID, "laptop")
+	mustToken(t, s, "tok-host", tempadmin.HostTokenName)
+	mustToken(t, s, "tok-laptop", "laptop")
 
 	if err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID))); err != nil {
 		t.Fatalf("expire temporary administrator: %v", err)
 	}
+
+	checkHostRevoked(t, s)
+}
+
+// disableBySweep disables the principal id through the inactivity sweep,
+// before its temporary administrator record exists, so the sweep does not
+// exempt it.
+func disableBySweep(t *testing.T, s Store, id string) {
+	t.Helper()
+
+	sweepEntry := func(at time.Time, object string) audit.Entry {
+		e := entry(object)
+		e.At = at
+
+		return e
+	}
+
+	_, err := s.SweepInactive(
+		t.Context(),
+		accesstoken.Sweep{Inactivity: time.Hour, Tokens: false, Accounts: true},
+		sweepEntry,
+	)
+	if err != nil {
+		t.Fatalf("sweep to disable %q: %v", id, err)
+	}
+
+	p, err := s.GetPrincipal(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get principal after the sweep: %v", err)
+	}
+
+	if p.DisabledAt.IsZero() {
+		t.Fatalf("principal %q after the sweep is not disabled", id)
+	}
+}
+
+// checkGrantsGone fails unless no live grant of the principal id remains.
+func checkGrantsGone(t *testing.T, s Store, id string) {
+	t.Helper()
+
+	grants, err := s.GrantsOn(
+		t.Context(),
+		[]access.Subject{{Kind: access.SubjectPrincipal, ID: id}},
+		[]identity.Object{identity.ServerObject()},
+	)
+	if err != nil {
+		t.Fatalf("grants after expiry: %v", err)
+	}
+
+	if len(grants) != 0 {
+		t.Fatalf("grants after expiry = %+v, want none live", grants)
+	}
+}
+
+// checkHostRevoked fails unless the host-recovery token is revoked and the
+// token of another name still works.
+func checkHostRevoked(t *testing.T, s Store) {
+	t.Helper()
 
 	host, err := s.GetToken(t.Context(), "tok-host")
 	if err != nil {
@@ -430,6 +494,57 @@ func testExpireEndsTokens(t *testing.T, s Store) {
 
 	if !other.RevokedAt.IsZero() {
 		t.Fatal("token of another name is revoked, want only the host-recovery tokens ended")
+	}
+}
+
+func testExpireAfterManualDisable(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	disableBySweep(t, s, alicePrincipalID)
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
+	mustGrant(t, s, "grt-alice", alicePrincipalID)
+	mustToken(t, s, "tok-host", tempadmin.HostTokenName)
+	mustToken(t, s, "tok-laptop", "laptop")
+
+	if err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID))); err != nil {
+		t.Fatalf("expire after a manual disable: %v, want no error", err)
+	}
+
+	checkGrantsGone(t, s, alicePrincipalID)
+	checkHostRevoked(t, s)
+}
+
+func testBySubjectAfterRecreate(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustRecord(t, s, alicePrincipalID, "alice", minuteBase)
+
+	if err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID))); err != nil {
+		t.Fatalf("expire temporary administrator: %v", err)
+	}
+
+	if err := s.DeletePrincipal(t.Context(), alicePrincipalID, entry(principal.Ref(alicePrincipalID))); err != nil {
+		t.Fatalf("delete principal: %v", err)
+	}
+
+	const newID = "prn-alice-2"
+
+	mustPrincipal(t, s, newID, "alice")
+	mustRecord(t, s, newID, "alice", minuteLater)
+
+	got, err := s.GetTempAdminBySubject(t.Context(), "alice")
+	if err != nil {
+		t.Fatalf("get temporary administrator by subject after a recreate: %v", err)
+	}
+
+	if got.PrincipalID != newID {
+		t.Fatalf("record after a recreate = %+v, want the new principal %q", got, newID)
+	}
+
+	if !got.ActiveAt(at(minuteLater)) {
+		t.Fatalf("record after a recreate is not active at %s, want a sign-in to work", at(minuteLater))
 	}
 }
 

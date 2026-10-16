@@ -190,15 +190,16 @@ func principalOf(p principal.Principal) principalResponse {
 // markTempAdmin sets the banner flag on each principal of the installation
 // in body that still works as a temporary administrator. Without a reader
 // the body passes through unchanged. It reads every record once, not one
-// per principal. Only persons are marked: only a person holds a record.
-func (h *Handler) markTempAdmin(ctx context.Context, body any) any {
+// per principal. Only persons are marked: only a person holds a record. A
+// failed read returns the error, so the handler answers 500.
+func (h *Handler) markTempAdmin(ctx context.Context, body any) (any, error) {
 	if h.tempAdmins == nil {
-		return body
+		return body, nil
 	}
 
 	records, err := h.tempAdmins.ListTempAdmins(ctx)
 	if err != nil {
-		return body
+		return nil, err
 	}
 
 	active := activeTempAdmins(records, h.now())
@@ -209,17 +210,17 @@ func (h *Handler) markTempAdmin(ctx context.Context, body any) any {
 
 	switch v := body.(type) {
 	case principalResponse:
-		return mark(v)
+		return mark(v), nil
 	case principalListResponse:
-		return markTempAdminPage(v, mark)
+		return markTempAdminPage(v, mark), nil
 	case memberResponse:
 		v.Principal = mark(v.Principal)
 
-		return v
+		return v, nil
 	case memberListResponse:
-		return markTempAdminMembers(v, mark)
+		return markTempAdminMembers(v, mark), nil
 	default:
-		return body
+		return body, nil
 	}
 }
 
@@ -382,7 +383,7 @@ func (h *Handler) runPrincipalOp(
 
 // writePrincipalResult writes the status and the body of a success. A body
 // that holds principals carries the banner flag of each working temporary
-// administrator.
+// administrator. A failed flag read answers 500 with the usual error body.
 func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, res principalResult) {
 	if res.body == nil {
 		w.WriteHeader(res.status)
@@ -390,7 +391,14 @@ func (h *Handler) writePrincipalResult(w http.ResponseWriter, r *http.Request, r
 		return
 	}
 
-	h.writeJSON(r.Context(), w, res.status, h.markTempAdmin(r.Context(), res.body))
+	marked, err := h.markTempAdmin(r.Context(), res.body)
+	if err != nil {
+		h.writeError(r.Context(), w, err)
+
+		return
+	}
+
+	h.writeJSON(r.Context(), w, res.status, marked)
 }
 
 // ok returns the result of a success.

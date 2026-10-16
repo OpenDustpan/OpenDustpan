@@ -78,27 +78,28 @@ func hostCaller() identity.Principal {
 // the object.
 func hostEntry(action string) audit.Entry {
 	return audit.Entry{
-		At:         time.Time{},
-		Namespace:  "",
-		Subject:    hostSubject,
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     action,
-		Object:     "",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "",
-		UserAgent:  "",
-		Channel:    audit.ChannelAPI,
-		Kind:       "",
-		Outcome:    "",
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		FenceVersion: 0,
+		At:           time.Time{},
+		Namespace:    "",
+		Subject:      hostSubject,
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       action,
+		Object:       "",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "",
+		UserAgent:    "",
+		Channel:      audit.ChannelAPI,
+		Kind:         "",
+		Outcome:      "",
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
 	}
 }
 
@@ -184,7 +185,7 @@ func createTempAdmin(ctx context.Context, st store, person string) (hostMade, er
 	}
 
 	principals, principalsErr := principal.NewService(
-		principal.Config{Store: st, Guard: nil, Namespaces: nil, Now: nil, NewID: nil},
+		principal.Config{Tokens: nil, Store: st, Guard: nil, Namespaces: nil, Now: nil, NewID: nil},
 	)
 	if principalsErr != nil {
 		return made, fmt.Errorf("principal service: %w", principalsErr)

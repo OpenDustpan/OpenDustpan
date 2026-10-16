@@ -68,7 +68,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "the sweep disables inactive tokens", test: testSweepTokens},
 		{name: "the sweep disables inactive user accounts", test: testSweepAccounts},
 		{name: "the sweep keeps the temporary administrators that still work", test: testSweepExceptTempAdmins},
-		{name: "the unsupported break-glass disable keeps the temporary administrators", test: testSweepIgnoresBreakGlassDisable},
+		{
+			name: "the unsupported break-glass disable keeps the temporary administrators",
+			test: testSweepIgnoresBreakGlassDisable,
+		},
 		{name: "a sweep with a refused entry changes nothing", test: testSweepRefused},
 		{name: "enable, then sweep: the principal stays enabled", test: testEnablePrincipal},
 		{name: "the sweep never disables a break-glass account", test: testSweepSkipsBreakGlass},

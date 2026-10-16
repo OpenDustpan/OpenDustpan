@@ -53,7 +53,9 @@ func TestPolicyChangeThroughOneHandleAppliesToTheOther(t *testing.T) {
 	}
 
 	admin := identity.Principal{
-		Subject: "admin", DisplayName: "admin", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "admin", DisplayName: "admin", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 	}
 
 	secrets := make([]accesstoken.Secret, 0, 2)
@@ -117,7 +119,8 @@ func tokenService(t *testing.T, s *postgres.Store, now func() time.Time) *access
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: s, Principals: s, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: now, NewID: nil,
+		TempAdmins: nil,
+		Store:      s, Principals: s, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

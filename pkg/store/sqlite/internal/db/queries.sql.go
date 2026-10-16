@@ -3616,6 +3616,7 @@ func (q *Queries) GetTempAdmin(ctx context.Context, principalID string) (TempAdm
 const getTempAdminBySubject = `-- name: GetTempAdminBySubject :one
 SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
 FROM temp_admins WHERE subject = ?
+ORDER BY expires_at_ms DESC, created_at_ms DESC
 `
 
 func (q *Queries) GetTempAdminBySubject(ctx context.Context, subject string) (TempAdmin, error) {

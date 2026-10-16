@@ -32,27 +32,28 @@ func tempadminBase() time.Time {
 // store write of the expiry test at at.
 func tempadminEntry(at time.Time, subject, action, object string) audit.Entry {
 	return audit.Entry{
-		At:         at,
-		Namespace:  audit.ServerScope,
-		Subject:    subject,
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     action,
-		Object:     object,
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "",
-		UserAgent:  "",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		FenceVersion: 0,
+		At:           at,
+		Namespace:    audit.ServerScope,
+		Subject:      subject,
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       action,
+		Object:       object,
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "",
+		UserAgent:    "",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
 	}
 }
 
@@ -264,6 +265,7 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 	ctx := t.Context()
 
 	p := principal.Principal{
+		BreakGlass:  false,
 		CreatedAt:   base,
 		UpdatedAt:   base,
 		DisabledAt:  time.Time{},

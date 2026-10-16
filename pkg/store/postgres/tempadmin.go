@@ -97,51 +97,99 @@ func (s *Store) ListTempAdmins(ctx context.Context) ([]tempadmin.TempAdmin, erro
 // principal, ends every site-administrator grant of the principal on the
 // installation and ends the host-recovery tokens of the principal, with the
 // entry e in the same transaction. The record stays as a tombstone, so a
-// later use is still denied. A record that already ended answers
-// tempadmin.ErrExpired and writes no second entry.
+// later use is still denied. When the principal is already disabled, the
+// expiry still ends the grants and the tokens. A record that already ended
+// answers tempadmin.ErrExpired and writes no second entry.
 func (s *Store) ExpireTempAdmin(ctx context.Context, principalID string, e audit.Entry) error {
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		if _, err := q.GetTempAdmin(ctx, principalID); errors.Is(err, pgx.ErrNoRows) {
-			return tempadmin.ErrNotFound
-		} else if err != nil {
-			return fmt.Errorf("read temporary administrator: %w", err)
-		}
-
-		disable := db.DisablePrincipalForExpiryParams{DisabledAtMs: codec.Millis(e.At), ID: principalID}
-
-		n, err := q.DisablePrincipalForExpiry(ctx, disable)
-		if err != nil {
-			return fmt.Errorf("disable principal %q: %w", principalID, err)
-		}
-
-		if n == 0 {
-			return tempadmin.ErrExpired
-		}
-
-		grants := db.RevokeTempAdminSiteGrantsParams{
-			RevokedAtMs: nullMillis(codec.Millis(e.At)),
-			RevokedBy:   e.Subject,
-			SubjectID:   principalID,
-			Target:      identity.ServerObject().String(),
-		}
-
-		if _, err := q.RevokeTempAdminSiteGrants(ctx, grants); err != nil {
-			return fmt.Errorf("end site-administrator grants of %q: %w", principalID, err)
-		}
-
-		tokens := db.RevokeTempAdminHostTokensParams{
-			RevokedAtMs: nullMillis(codec.Millis(e.At)),
-			PrincipalID: principalID,
-			Name:        tempadmin.HostTokenName,
-			ExpiresAtMs: codec.Millis(e.At),
-		}
-
-		if _, err := q.RevokeTempAdminHostTokens(ctx, tokens); err != nil {
-			return fmt.Errorf("end host-recovery tokens of %q: %w", principalID, err)
-		}
-
-		return nil
+		return expireTempAdminTx(ctx, q, principalID, e)
 	})
+}
+
+// expireTempAdminTx ends one temporary administrator in the transaction of
+// q. It still ends the grants and the tokens when the principal is already
+// disabled, and only answers ErrExpired when nothing changed.
+func expireTempAdminTx(ctx context.Context, q *db.Queries, principalID string, e audit.Entry) error {
+	if _, err := q.GetTempAdmin(ctx, principalID); errors.Is(err, pgx.ErrNoRows) {
+		return tempadmin.ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("read temporary administrator: %w", err)
+	}
+
+	disabled, err := disableTempAdminPrincipal(ctx, q, principalID, e)
+	if err != nil {
+		return err
+	}
+
+	grants, err := revokeTempAdminGrants(ctx, q, principalID, e)
+	if err != nil {
+		return err
+	}
+
+	tokens, err := revokeTempAdminTokens(ctx, q, principalID, e)
+	if err != nil {
+		return err
+	}
+
+	if disabled == 0 && grants == 0 && tokens == 0 {
+		return tempadmin.ErrExpired
+	}
+
+	return nil
+}
+
+// disableTempAdminPrincipal disables the principal at the time of e.
+func disableTempAdminPrincipal(
+	ctx context.Context, q *db.Queries, principalID string, e audit.Entry,
+) (int64, error) {
+	disable := db.DisablePrincipalForExpiryParams{DisabledAtMs: codec.Millis(e.At), ID: principalID}
+
+	n, err := q.DisablePrincipalForExpiry(ctx, disable)
+	if err != nil {
+		return 0, fmt.Errorf("disable principal %q: %w", principalID, err)
+	}
+
+	return n, nil
+}
+
+// revokeTempAdminGrants ends every live site-administrator grant of the
+// principal on the installation at the time of e.
+func revokeTempAdminGrants(
+	ctx context.Context, q *db.Queries, principalID string, e audit.Entry,
+) (int64, error) {
+	grants := db.RevokeTempAdminSiteGrantsParams{
+		RevokedAtMs: nullMillis(codec.Millis(e.At)),
+		RevokedBy:   e.Subject,
+		SubjectID:   principalID,
+		Target:      identity.ServerObject().String(),
+	}
+
+	n, err := q.RevokeTempAdminSiteGrants(ctx, grants)
+	if err != nil {
+		return 0, fmt.Errorf("end site-administrator grants of %q: %w", principalID, err)
+	}
+
+	return n, nil
+}
+
+// revokeTempAdminTokens ends the live host-recovery tokens of the principal
+// at the time of e.
+func revokeTempAdminTokens(
+	ctx context.Context, q *db.Queries, principalID string, e audit.Entry,
+) (int64, error) {
+	tokens := db.RevokeTempAdminHostTokensParams{
+		RevokedAtMs: nullMillis(codec.Millis(e.At)),
+		PrincipalID: principalID,
+		Name:        tempadmin.HostTokenName,
+		ExpiresAtMs: codec.Millis(e.At),
+	}
+
+	n, err := q.RevokeTempAdminHostTokens(ctx, tokens)
+	if err != nil {
+		return 0, fmt.Errorf("end host-recovery tokens of %q: %w", principalID, err)
+	}
+
+	return n, nil
 }
 
 // tempAdminOf converts a row into its domain record.

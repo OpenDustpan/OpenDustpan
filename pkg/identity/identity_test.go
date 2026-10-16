@@ -764,7 +764,9 @@ func TestSelfAllowedListObjectsForwards(t *testing.T) {
 	})
 	authz := identity.SelfAllowed{Next: next, Actions: []identity.Action{identity.ActionTokenManageOwn}}
 	alice := identity.Principal{
-		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "alice", DisplayName: "alice", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 	}
 
 	scope, err := authz.ListObjects(t.Context(), alice, identity.ActionUnitRead)

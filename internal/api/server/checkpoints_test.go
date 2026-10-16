@@ -52,6 +52,8 @@ func newEpochHandler(t *testing.T, epochs apiserver.CheckpointEpochs, st *sqlite
 	t.Helper()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:       nil,
+		Now:              nil,
 		Authenticator:    tokenAuthenticator{},
 		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:           slog.New(slog.DiscardHandler),

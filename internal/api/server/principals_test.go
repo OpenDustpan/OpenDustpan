@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // principalDoc, groupDoc and memberDoc decode the wire forms in tests.
@@ -874,4 +875,80 @@ func TestPrincipalCountsAndSource(t *testing.T) {
 	mustCall(t, h, apiCall{
 		http.MethodDelete, "/api/server/groups/grp-ldap/members/" + alice.ID, "", http.StatusConflict,
 	}, nil)
+}
+
+var errTempAdminList = errors.New("temp admin list: disk I/O error")
+
+// failingTempAdmins is a temporary administrator reader whose list fails.
+type failingTempAdmins struct {
+	err error
+}
+
+func (f failingTempAdmins) GetTempAdminBySubject(
+	_ context.Context, _ string,
+) (tempadmin.TempAdmin, error) {
+	return tempadmin.TempAdmin{}, f.err
+}
+
+func (f failingTempAdmins) ListTempAdmins(_ context.Context) ([]tempadmin.TempAdmin, error) {
+	return nil, f.err
+}
+
+// TestPrincipalListFailsWhenTempAdminReadFails proves that a failed read of
+// the temporary administrator records answers 500 with the usual error body
+// and no driver text.
+func TestPrincipalListFailsWhenTempAdminReadFails(t *testing.T) {
+	t.Parallel()
+
+	svc := newTestPrincipals(t)
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Backups:          nil,
+		Restores:         nil,
+		Version:          "",
+		Journal:          nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
+		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     nil,
+		Now:              nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		TempAdmins:       failingTempAdmins{err: errTempAdminList},
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Schema:           stubSchema{migrations: nil},
+		Principals:       svc,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	status, body := call(
+		t,
+		handler,
+		apiCall{http.MethodGet, "/api/server/principals", "", http.StatusInternalServerError},
+	)
+	if status != http.StatusInternalServerError || strings.Contains(body, "disk") {
+		t.Fatalf("list with a failed read = %d %s, want 500 with no driver text", status, body)
+	}
+
+	var doc struct {
+		Message string `json:"message"`
+		Code    int    `json:"code"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &doc); err != nil || doc.Code != http.StatusInternalServerError ||
+		doc.Message == "" {
+		t.Fatalf("error body = %q, want a JSON error with code 500", body)
+	}
 }

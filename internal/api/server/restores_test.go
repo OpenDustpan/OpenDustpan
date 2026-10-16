@@ -866,6 +866,8 @@ func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:       nil,
+		Now:              nil,
 		CheckpointEpochs: nil,
 		SignIn:           nil,
 		Authenticator:    tokenAuthenticator{},
@@ -974,6 +976,8 @@ func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, 
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:       nil,
+		Now:              nil,
 		CheckpointEpochs: nil,
 		SignIn:           nil,
 		Authenticator:    tokenAuthenticator{},

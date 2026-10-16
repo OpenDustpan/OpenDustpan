@@ -1722,7 +1722,8 @@ FROM temp_admins WHERE principal_id = ?;
 
 -- name: GetTempAdminBySubject :one
 SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by
-FROM temp_admins WHERE subject = ?;
+FROM temp_admins WHERE subject = ?
+ORDER BY expires_at_ms DESC, created_at_ms DESC;
 
 -- name: ListTempAdmins :many
 SELECT principal_id, subject, expires_at_ms, created_at_ms, created_by

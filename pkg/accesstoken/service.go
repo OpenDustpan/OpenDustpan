@@ -649,6 +649,29 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	}, nil
 }
 
+// AccountInactive reports whether the user account o is past the
+// inactivity period of the policy at the time of the service, as the token
+// lookup decides for the owner of a token: the account disable is on, the
+// period is not zero, o is a person that is not a break-glass account, and
+// o.ActiveAt is at or before now minus the period. Another sign-in, such as
+// a console session, applies it, so that its use does not keep an account
+// alive that the sweep would disable. A failed read of the policy answers
+// its error, so the caller fails closed.
+func (s *Service) AccountInactive(ctx context.Context, o Owner) (bool, error) {
+	if o.BreakGlass {
+		return false, nil
+	}
+
+	now := s.Now()
+
+	p, err := s.Policy(ctx)
+	if err != nil {
+		return false, fmt.Errorf("account inactivity: %w", err)
+	}
+
+	return p.accountInactiveAt(o, now), nil
+}
+
 // checkPolicyActive refuses the token of m when the policy of m disables
 // the token, or the user account of its owner, as inactive at now, before
 // the sweep writes the disable: the sweep runs once an hour, and a use would
@@ -704,29 +727,6 @@ func (s *Service) breakGlassExempt(ctx context.Context, subject string, now time
 	}
 
 	return rec.ActiveAt(now), nil
-}
-
-// AccountInactive reports whether the user account o is past the
-// inactivity period of the policy at the time of the service, as the token
-// lookup decides for the owner of a token: the account disable is on, the
-// period is not zero, o is a person that is not a break-glass account, and
-// o.ActiveAt is at or before now minus the period. Another sign-in, such as
-// a console session, applies it, so that its use does not keep an account
-// alive that the sweep would disable. A failed read of the policy answers
-// its error, so the caller fails closed.
-func (s *Service) AccountInactive(ctx context.Context, o Owner) (bool, error) {
-	if o.BreakGlass {
-		return false, nil
-	}
-
-	now := s.Now()
-
-	p, err := s.Policy(ctx)
-	if err != nil {
-		return false, fmt.Errorf("account inactivity: %w", err)
-	}
-
-	return p.accountInactiveAt(o, now), nil
 }
 
 // touch records the use of t at now, at most once for each touchEvery. A
