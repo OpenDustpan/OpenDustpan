@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -744,14 +745,16 @@ func change(e audit.Entry, at time.Time, object string) audit.Entry {
 }
 
 // policyEntry returns e as the audit entry of a change of the policy from
-// old to updated at the time at.
+// old to updated at the time at. It keeps the changes of the caller, for
+// example the session ID of a console session, and adds the changed
+// settings.
 func policyEntry(e audit.Entry, at time.Time, old, updated Policy) audit.Entry {
 	e.At = at
 	e.Namespace = audit.ServerScope
 	e.Kind = audit.KindChange
 	e.Outcome = audit.OutcomeSuccess
 	e.Object = PolicyRef
-	e.Changes = nil
+	e.Changes = slices.Clone(e.Changes)
 
 	for _, c := range []struct {
 		key        string
