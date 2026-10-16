@@ -71,15 +71,23 @@ func (s State) Terminal() bool {
 
 // Operation is what any instance can read about an operation.
 type Operation struct {
-	ID    ID
-	Key   string
-	Kind  Kind
-	Input []byte
-	State State
+	ID   ID
+	Key  string
+	Kind Kind
+	// Version is the version of the kind that started the operation. A
+	// runner refuses an operation of a version that it does not support.
+	Version int
+	Input   []byte
+	State   State
 	// Steps are the recorded steps, in the order of their record.
 	Steps []StepRecord
 	// Attempt is the number of claims so far. The first claim sets 1.
 	Attempt int
+	// Expiries is the number of claims that took the operation over after
+	// the claim before them expired: the number of holders that stopped
+	// without an end write. A release, a retry and a first claim do not
+	// count.
+	Expiries int
 	// LastError is the message of the last failed attempt, or empty.
 	LastError string
 	// Claim is the claim of a running operation. It is the zero Claim when
@@ -144,9 +152,12 @@ type StepFence struct {
 // StartRequest asks for an operation. Two starts with one Key give one
 // operation.
 type StartRequest struct {
-	Key   string
-	Kind  Kind
-	Input []byte
+	Key  string
+	Kind Kind
+	// Version is the version of the kind, from its registration. It is 0 or
+	// more.
+	Version int
+	Input   []byte
 }
 
 // ClaimRequest asks for one operation to run. Lease is the time from the
@@ -174,9 +185,10 @@ type Filter struct {
 	Limit  int
 }
 
-// Validate returns ErrInvalid when req has an empty key or kind.
+// Validate returns ErrInvalid when req has an empty key or kind, or a
+// negative version.
 func (req StartRequest) Validate() error {
-	if req.Key == "" || req.Kind == "" {
+	if req.Key == "" || req.Kind == "" || req.Version < 0 {
 		return ErrInvalid
 	}
 

@@ -15,9 +15,10 @@ func TestStartRequestValidate(t *testing.T) {
 		req  durable.StartRequest
 		want error
 	}{
-		{durable.StartRequest{Key: "k", Kind: "backup", Input: nil}, nil},
-		{durable.StartRequest{Key: "", Kind: "backup", Input: nil}, durable.ErrInvalid},
-		{durable.StartRequest{Key: "k", Kind: "", Input: []byte("x")}, durable.ErrInvalid},
+		{durable.StartRequest{Key: "k", Kind: "backup", Version: 1, Input: nil}, nil},
+		{durable.StartRequest{Key: "", Kind: "backup", Version: 0, Input: nil}, durable.ErrInvalid},
+		{durable.StartRequest{Key: "k", Kind: "", Version: 0, Input: []byte("x")}, durable.ErrInvalid},
+		{durable.StartRequest{Key: "k", Kind: "backup", Version: -1, Input: nil}, durable.ErrInvalid},
 	}
 
 	for _, tc := range cases {
@@ -78,9 +79,9 @@ func TestClaimStepAndOperationStep(t *testing.T) {
 	}
 
 	op := durable.Operation{
-		ID: "op-1", Key: "k", Kind: "backup", Input: nil, State: durable.StateRunning,
+		ID: "op-1", Key: "k", Kind: "backup", Version: 1, Input: nil, State: durable.StateRunning,
 		Steps:   []durable.StepRecord{{Name: "export", Result: []byte("r"), DoneAt: time.Time{}}},
-		Attempt: 1, LastError: "", Claim: c, CancelRequested: false,
+		Attempt: 1, Expiries: 0, LastError: "", Claim: c, CancelRequested: false,
 		NotBefore: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
 
