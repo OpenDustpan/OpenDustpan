@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -381,9 +382,22 @@ func (s *Service) AddMember(
 		kind = p.Kind
 	}
 
-	m := Membership{AddedAt: s.Now(), GroupID: groupID, PrincipalID: principalID}
+	m := Membership{
+		AddedAt: s.Now(), SuspendedAt: time.Time{}, GroupID: groupID, PrincipalID: principalID,
+		Source: MembershipSourceLocal, SourceID: "", State: MembershipStateActive, Pinned: false,
+	}
+
+	if err := m.Validate(); err != nil {
+		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+	}
 
 	entry := change(e, m.AddedAt, MemberRef(groupID, principalID))
+	entry.Changes = append(entry.Changes,
+		audit.Change{Key: "source", Old: nil, New: string(m.Source), Layer: "", TakesEffect: ""},
+		audit.Change{Key: "sourceID", Old: nil, New: m.SourceID, Layer: "", TakesEffect: ""},
+		audit.Change{Key: "state", Old: nil, New: string(m.State), Layer: "", TakesEffect: ""},
+		audit.Change{Key: "pinned", Old: nil, New: strconv.FormatBool(m.Pinned), Layer: "", TakesEffect: ""},
+	)
 
 	if kind == KindService && s.tokens != nil {
 		holders, err := s.tokens.TokenManagers(ctx, principalID)
