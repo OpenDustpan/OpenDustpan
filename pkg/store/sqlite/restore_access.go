@@ -28,10 +28,10 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
 
 	staged := s.stagingPath
 
-	// The chain state is bookkeeping of this installation: the staged file
-	// takes the record of the live database. Read it before the write lock,
-	// because ChainRecord takes the read lock.
-	chain, err := s.ChainRecord(ctx)
+	// The chain state and the installation state are bookkeeping of this
+	// installation: the staged file takes the values of the live database.
+	// Read them before the write lock, because the reads take the read lock.
+	keep, err := s.liveBookkeeping(ctx)
 	if err != nil {
 		return err
 	}
@@ -46,7 +46,7 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
 		return err
 	}
 
-	if err := fenceStagedFile(ctx, staged, chain); err != nil {
+	if err := fenceStagedFile(ctx, staged, keep); err != nil {
 		return err
 	}
 

@@ -11,6 +11,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -214,14 +215,14 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 
 	staged := s.stagingPath
 
-	// The chain state is bookkeeping of this installation: the staged file
-	// takes the record of the live database.
-	chain, err := s.ChainRecord(ctx)
+	// The chain state and the installation state are bookkeeping of this
+	// installation: the staged file takes the values of the live database.
+	keep, err := s.liveBookkeeping(ctx)
 	if err != nil {
 		return err
 	}
 
-	if err := fenceStagedFile(ctx, staged, chain); err != nil {
+	if err := fenceStagedFile(ctx, staged, keep); err != nil {
 		return err
 	}
 
@@ -240,7 +241,9 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 // transaction. It opens the
 // file in rollback-journal mode, so no write-ahead-log sidecar survives the
 // fence to leak beside the renamed database.
-func fenceStagedFile(ctx context.Context, path string, chain audit.ChainRecord) error {
+func fenceStagedFile(ctx context.Context, path string, keep bookkeeping) error {
+	chain := keep.chain
+
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
@@ -300,6 +303,16 @@ func fenceStagedFile(ctx context.Context, path string, chain audit.ChainRecord) 
 		return errors.Join(fmt.Errorf("keep audit chain state: %w", err), tx.Rollback())
 	}
 
+	// A restore runs in maintenance mode. The installation row from the
+	// backup would end maintenance mode when the rename lands, before the
+	// restore has finished, so the staged file takes the live state.
+	const keepState = `INSERT INTO installation (id, state) VALUES (1, ?)
+    ON CONFLICT (id) DO UPDATE SET state = excluded.state`
+
+	if _, err := tx.ExecContext(ctx, keepState, string(keep.state)); err != nil {
+		return errors.Join(fmt.Errorf("keep installation state: %w", err), tx.Rollback())
+	}
+
 	// The restored log can reuse sequences that a sink already holds, and
 	// a restored cursor can point past the restored entries. A reset makes
 	// every sink receive the restored log again from its first entry. A
@@ -334,4 +347,26 @@ func (s *Store) BumpFailoverVersions(ctx context.Context) (int64, error) {
 	}
 
 	return n, nil
+}
+
+// bookkeeping holds the rows of the live database that a swap keeps: the
+// audit chain record and the installation state.
+type bookkeeping struct {
+	chain audit.ChainRecord
+	state maintenance.State
+}
+
+// liveBookkeeping reads the rows of the live database that a swap keeps.
+func (s *Store) liveBookkeeping(ctx context.Context) (bookkeeping, error) {
+	chain, err := s.ChainRecord(ctx)
+	if err != nil {
+		return bookkeeping{}, err
+	}
+
+	state, err := s.GetState(ctx)
+	if err != nil {
+		return bookkeeping{}, fmt.Errorf("read installation state: %w", err)
+	}
+
+	return bookkeeping{chain: chain, state: state}, nil
 }
