@@ -296,8 +296,8 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 // PutCheckpoint implements stack.CheckpointStore. The row keeps the blob key
 // with the size, the digest and the sequence, and no content. A checkpoint
 // without a blob key returns stack.ErrCheckpointNoKey. Each write of the
-// running update overwrites the row of that update. The row stores no resource count, so
-// the save path never scans the deployment.
+// running update overwrites the row of that update. The row stores no
+// resource count, so the save path never scans the deployment.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, cp.Ref)

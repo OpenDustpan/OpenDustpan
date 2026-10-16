@@ -942,7 +942,10 @@ type sqlUpdatesStore struct {
 	t   *testing.T
 }
 
-var _ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
+var (
+	_ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
+	_ storetest.KeyEraser    = (*sqlUpdatesStore)(nil)
+)
 
 // errNoJournalCount reports a wrapped store without the journaled count.
 var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
@@ -1009,6 +1012,26 @@ var errNoAuditList = errors.New("wrapped store lists no audit entries")
 // BreakAuditAppends implements storetest.AuditBreaker.
 func (s *sqlUpdatesStore) BreakAuditAppends(ctx context.Context) error {
 	return breakAuditAppends(ctx, s.url)
+}
+
+// EraseCheckpointKeys implements storetest.KeyEraser.
+func (s *sqlUpdatesStore) EraseCheckpointKeys(ctx context.Context) (err error) {
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close: %w", closeErr))
+		}
+	}()
+
+	if _, err = conn.Exec(ctx, `UPDATE checkpoints SET blob_key = NULL`); err != nil {
+		return fmt.Errorf("erase the checkpoint keys: %w", err)
+	}
+
+	return nil
 }
 
 // auditedWorkspaces is a store for the workspace suite that can break its

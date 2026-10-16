@@ -892,8 +892,12 @@ func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) e
 // so equal stored bytes mean equal content, which is the same guarantee the
 // gunzip and hash below give. That fast path hashes the compressed bytes
 // once, instead of paying a gunzip with two hash passes over a large
-// checkpoint. Every save compresses at the same level, so stored bytes that
-// differ hold other content.
+// checkpoint. The same binary compresses the same content to the same bytes,
+// so stored bytes that differ hold other content. Across Go releases the
+// compressed bytes may differ. During a rolling upgrade, a retried save with
+// a sequence number whose first attempt ran on a binary of another release
+// can then get ErrConcurrentModification instead of an adopt. A retried save
+// without a sequence number mints the next key and succeeds.
 func (s *Updates) adoptCheckpointBlob(ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte) error {
 	raw, err := s.blobs.Get(ctx, save.key)
 	if err != nil {

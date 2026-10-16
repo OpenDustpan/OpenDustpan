@@ -222,8 +222,7 @@ type Update struct {
 	CreatedBy string
 	// TokenID is the ID of the access token that started the update. It is
 	// empty when no access token started it, as with a bootstrap administrator
-	// token. A lease request
-	// checks this token (ADR 53).
+	// token. A lease request checks this token.
 	TokenID string
 	// RestoredFrom is the stack version that a restore copied. It is 0 for
 	// any update that is not a restore.

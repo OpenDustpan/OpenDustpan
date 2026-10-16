@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 )
 
 // UpdatesStore is every port of the update cycle, plus the namespace and
@@ -31,6 +32,14 @@ type UpdatesStore interface {
 	stack.EventStore
 	stack.JournalStore
 	stack.BuiltCheckpointStore
+}
+
+// KeyEraser is an optional UpdatesStore capability for the keyless row case:
+// it sets the blob key of every checkpoint row to NULL with a direct SQL
+// update. The port refuses such a write, so only SQL plants such a row.
+type KeyEraser interface {
+	// EraseCheckpointKeys sets the blob key of every checkpoint row to NULL.
+	EraseCheckpointKeys(ctx context.Context) error
 }
 
 // UpdatesFactory returns a fresh, empty store for one subtest.
@@ -93,6 +102,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "checkpoint by version returns only that version", test: testCheckpointByVersion},
 		{name: "checkpoint of a preview is rejected", test: testCheckpointPreviewRejected},
 		{name: "checkpoint without a blob key is refused", test: testCheckpointWithoutKeyRefused},
+		{name: "checkpoint row without a blob key reads as corrupt", test: testKeylessRowCorrupt},
 		{name: "canceled or failed update keeps its checkpoint", test: testCheckpointKeepsAfterEnd},
 		{name: "children of a deleted stack are not reachable by name", test: testDeletedStackChildrenUnreachable},
 		{name: "delete during a running update is ErrUpdateConflict", test: testDeleteDuringRunningUpdate},
@@ -1683,6 +1693,41 @@ func testCheckpointWithoutKeyRefused(t *testing.T, f fixture) {
 
 	if _, err := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID); !errors.Is(err, stack.ErrNoState) {
 		t.Fatalf("checkpoint after refused writes: err = %v, want ErrNoState", err)
+	}
+}
+
+// testKeylessRowCorrupt checks that every checkpoint read answers a row
+// without a blob key with ErrCorruptRow: the store keeps no content, so it
+// never answers such a row as a checkpoint.
+func testKeylessRowCorrupt(t *testing.T, f fixture) {
+	t.Helper()
+
+	eraser, ok := f.s.(KeyEraser)
+	if !ok {
+		t.Skip("store cannot plant a checkpoint row without a blob key")
+	}
+
+	u := f.run(t, f.ref, "u1", mutating())
+	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, `{"v":1}`), f.fence); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	ended := f.end(t, u, stack.StatusSucceeded)
+
+	if err := eraser.EraseCheckpointKeys(t.Context()); err != nil {
+		t.Fatalf("erase the checkpoint keys: %v", err)
+	}
+
+	if _, err := f.s.LatestCheckpoint(t.Context(), f.ref); !errors.Is(err, codec.ErrCorruptRow) {
+		t.Fatalf("latest checkpoint of a keyless row: err = %v, want ErrCorruptRow", err)
+	}
+
+	if _, err := f.s.CheckpointByVersion(t.Context(), f.ref, ended.Version); !errors.Is(err, codec.ErrCorruptRow) {
+		t.Fatalf("checkpoint by version of a keyless row: err = %v, want ErrCorruptRow", err)
+	}
+
+	if _, err := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID); !errors.Is(err, codec.ErrCorruptRow) {
+		t.Fatalf("checkpoint by update of a keyless row: err = %v, want ErrCorruptRow", err)
 	}
 }
 
