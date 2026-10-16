@@ -30,6 +30,7 @@ func worstCaseEntry() audit.Entry {
 		Version:      "sv-aaaaaaaaaaaaaaaaaaaa",
 		ValuePath:    strings.Repeat("v", audit.MaxValuePathLen),
 		ValueCount:   nil,
+		Changes:      nil,
 		SourceIP:     "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
 		UserAgent:    strings.Repeat("u", audit.MaxUserAgentLen),
 		Channel:      audit.ChannelAPI,
@@ -44,7 +45,13 @@ func worstCaseEntry() audit.Entry {
 	}
 
 	for i := range audit.MaxChanges {
-		e.Changes = append(e.Changes, audit.Change{Key: fmt.Sprintf("k%03d", i), New: "v"})
+		e.Changes = append(e.Changes, audit.Change{
+			Key:         fmt.Sprintf("k%03d", i),
+			Old:         nil,
+			New:         "v",
+			Layer:       "",
+			TakesEffect: "",
+		})
 	}
 
 	return e
@@ -108,6 +115,7 @@ func newSizeFeed(entries []audit.Entry) *sizeFeed {
 			CreatedAt:       time.Unix(0, 0),
 			Name:            "acme",
 			HomeRegion:      "eu-west",
+			Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 			FailoverVersion: 1,
 		}},
 	}
@@ -126,9 +134,10 @@ func (f *sizeFeed) After(_ context.Context, ns namespace.Name, after int64, limi
 
 	var out []audit.Entry
 
-	for _, e := range f.entries[ns] {
-		if e.Sequence > after && len(out) < limit {
-			out = append(out, e)
+	entries := f.entries[ns]
+	for i := range entries {
+		if entries[i].Sequence > after && len(out) < limit {
+			out = append(out, entries[i])
 		}
 	}
 
@@ -185,17 +194,19 @@ func TestSkippedRecordProducesMarkerAndCountsSkip(t *testing.T) {
 	var skipped int
 
 	shipper, err := audit.NewShipper(audit.ShipperConfig{
-		Feed:       feed,
-		Namespaces: feed,
-		Logger:     nil,
-		OnShipped:  nil,
-		OnFailure:  nil,
-		OnSkipped:  func(_ string, n int) { skipped += n },
-		OnLag:      nil,
-		Now:        nil,
-		Sinks:      []audit.ShipSink{{Sink: s, Name: "siem", Kind: "syslog", Interval: 0}},
-		InstanceID: "",
-		Leases:     nil,
+		Feed:          feed,
+		Namespaces:    feed,
+		Logger:        nil,
+		OnShipped:     nil,
+		OnFailure:     nil,
+		OnSkipped:     func(_ string, n int) { skipped += n },
+		OnLag:         nil,
+		Now:           nil,
+		Sinks:         []audit.ShipSink{{Sink: s, Name: "siem", Kind: "syslog", Interval: 0}},
+		InstanceID:    "",
+		Leases:        nil,
+		LeaseTTL:      0,
+		RenewInterval: 0,
 	})
 	if err != nil {
 		t.Fatalf("new shipper: %v", err)
@@ -214,6 +225,15 @@ func TestSkippedRecordProducesMarkerAndCountsSkip(t *testing.T) {
 	}
 
 	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
+	assertSizeMarker(t, msgs, entry)
+}
+
+// assertSizeMarker checks that msgs holds exactly the skip marker for entry:
+// one message within the minimum cap, with the scope, sequence and hash of
+// the entry plus the skipped reason, and none of the trimmed entry fields.
+func assertSizeMarker(t *testing.T, msgs [][]byte, entry audit.Entry) {
+	t.Helper()
+
 	if len(msgs) != 1 {
 		t.Fatalf("received %d messages, want the one marker", len(msgs))
 	}

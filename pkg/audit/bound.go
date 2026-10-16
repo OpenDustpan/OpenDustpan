@@ -93,14 +93,14 @@ func capOld(old *string) *string {
 	return &capped
 }
 
-// capText caps s at max bytes without splitting a UTF-8 sequence. A value
+// capText caps s at limit bytes without splitting a UTF-8 sequence. A value
 // that already fits reads back unchanged.
-func capText(s string, max int) string {
-	if len(s) <= max {
+func capText(s string, limit int) string {
+	if len(s) <= limit {
 		return s
 	}
 
-	cut := max
+	cut := limit
 	for cut > 0 && s[cut]&0xC0 == 0x80 {
 		cut--
 	}

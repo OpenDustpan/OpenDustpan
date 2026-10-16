@@ -35,19 +35,24 @@ func TestServerAnswers431PastTheHeaderCap(t *testing.T) {
 	client := &http.Client{Timeout: 10 * time.Second}
 	url := "http://" + ln.Addr().String() + "/health/ready"
 
-	small, err := client.Get(url) //nolint:gosec,noctx // A test request to the test server.
+	small, err := client.Get(url) //nolint:noctx // A test request to the test server.
 	if err != nil {
 		t.Fatalf("small request: %v", err)
 	}
 
-	_, _ = io.Copy(io.Discard, small.Body)
-	_ = small.Body.Close()
+	if _, copyErr := io.Copy(io.Discard, small.Body); copyErr != nil {
+		t.Fatalf("read small body: %v", copyErr)
+	}
+
+	if closeErr := small.Body.Close(); closeErr != nil {
+		t.Fatalf("close small body: %v", closeErr)
+	}
 
 	if small.StatusCode != http.StatusOK {
 		t.Fatalf("small request status: got %d, want %d", small.StatusCode, http.StatusOK)
 	}
 
-	big, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, nil)
+	big, err := http.NewRequestWithContext(t.Context(), http.MethodGet, url, http.NoBody)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
@@ -63,8 +68,13 @@ func TestServerAnswers431PastTheHeaderCap(t *testing.T) {
 		t.Fatalf("oversized request: %v", err)
 	}
 
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
+	if _, copyErr := io.Copy(io.Discard, resp.Body); copyErr != nil {
+		t.Fatalf("read oversized body: %v", copyErr)
+	}
+
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("close oversized body: %v", closeErr)
+	}
 
 	if resp.StatusCode != http.StatusRequestHeaderFieldsTooLarge {
 		t.Fatalf("oversized request status: got %d, want %d", resp.StatusCode, http.StatusRequestHeaderFieldsTooLarge)

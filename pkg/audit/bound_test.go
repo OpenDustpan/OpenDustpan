@@ -174,7 +174,15 @@ func TestBoundLongUserAgentStores512AndChainPasses(t *testing.T) {
 		t.Fatalf("bounded entry fails validation: %v", err)
 	}
 
-	walk := audit.NewChainWalk(audit.ChainScope{Record: audit.ChainRecord{State: audit.ChainStateOn}, Start: 0})
+	walk := audit.NewChainWalk(audit.ChainScope{Record: audit.ChainRecord{
+		ChangedAt:          time.Time{},
+		ChangedBy:          "",
+		State:              audit.ChainStateOn,
+		Pending:            false,
+		EnteredMaintenance: false,
+		MigratingAt:        time.Time{},
+		LogReplaced:        false,
+	}, Start: 0})
 
 	first := stored
 	first.Sequence = 1
