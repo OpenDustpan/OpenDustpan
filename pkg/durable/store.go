@@ -28,12 +28,13 @@ import (
 //
 //nolint:interfacebloat // One contract for one row per operation: every method reads or changes that row.
 type Store interface {
-	// Start creates a pending operation for req, or returns the operation
-	// that req.Key already names. created is true only for a new operation.
+	// Start creates a pending operation for req, with req.Version, or
+	// returns the operation that req.Key already names. created is true only
+	// for a new operation.
 	// It returns ErrInvalid for a request that fails Validate, and
 	// ErrKeyConflict when the key names an operation of another kind. A
 	// second start with the same key and kind returns the first operation,
-	// whatever its input and state.
+	// whatever its input, version and state.
 	Start(ctx context.Context, req StartRequest) (op Operation, created bool, err error)
 
 	// Get returns the operation id, or ErrNotFound.
@@ -43,11 +44,14 @@ type Store interface {
 	// operations with one creation time are ordered by ID.
 	List(ctx context.Context, f Filter) ([]Operation, error)
 
-	// Claim takes one operation of req.Kinds that can run now, and returns
-	// it with its new claim. An operation can run when it is pending and its
+	// Claim takes one operation that req.Allows and that can run now, and
+	// returns it with its new claim. An operation of a version above the
+	// limit of its kind in req.MaxVersions stays for another claimer. An operation can run when it is pending and its
 	// NotBefore has passed, or when it is running and its claim expired.
 	// The claim sets the state to running, increments the token and the
 	// attempt, records req.Owner, and sets the expiry to now plus req.Lease.
+	// A claim of a running operation whose claim expired also increments
+	// Expiries.
 	// An operation with an expired claim and a requested cancel ends
 	// canceled instead, and Claim looks for another one. The claim commits before Claim returns, and Claim holds no
 	// lock after it returns. Of several concurrent claims of one operation,
@@ -76,7 +80,8 @@ type Store interface {
 	// then calls Release, which ends the operation canceled.
 	Complete(ctx context.Context, c Claim) error
 
-	// Fail ends the attempt of c and records f.Message as the last error.
+	// Fail ends the attempt of c, records f.Message as the last error and
+	// increments Failures.
 	// With f.Final, the operation ends failed. Otherwise it returns to
 	// pending with NotBefore at now plus f.RetryAfter. The claim is cleared
 	// in both cases. It returns ErrClaimLost when c is not the live claim,

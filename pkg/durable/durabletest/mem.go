@@ -67,6 +67,10 @@ const (
 	// breakTxStart takes the time of a step write at the start of its
 	// transaction, as now() does on PostgreSQL.
 	breakTxStart = "tx-start"
+	// breakExpiryCount counts every claim as an expiry.
+	breakExpiryCount = "expiry-count"
+	// breakMaxVersions ignores the version limits of a claim.
+	breakMaxVersions = "max-versions"
 )
 
 // memDB is a reference store in memory. Its lock makes each method one
@@ -227,10 +231,13 @@ func (m *memDB) start(req durable.StartRequest, now time.Time) (durable.Operatio
 		ID:              durable.ID(fmt.Sprintf("op-%06d", m.nextID)),
 		Key:             req.Key,
 		Kind:            req.Kind,
+		Version:         req.Version,
 		Input:           slices.Clone(req.Input),
 		State:           durable.StatePending,
 		Steps:           nil,
 		Attempt:         0,
+		Expiries:        0,
+		Failures:        0,
 		LastError:       "",
 		Claim:           zeroClaim(),
 		CancelRequested: false,
@@ -323,7 +330,7 @@ func (s memStore) Claim(_ context.Context, req durable.ClaimRequest) (durable.Op
 	now := s.db.clock(s.skew)
 
 	for _, op := range s.db.sorted() {
-		if !slices.Contains(req.Kinds, op.Kind) {
+		if !s.db.allows(req, op) {
 			continue
 		}
 
@@ -336,6 +343,10 @@ func (s memStore) Claim(_ context.Context, req durable.ClaimRequest) (durable.Op
 		default:
 			if due == dueTakeover && s.db.broken == breakTakeoverSteps {
 				op.Steps = nil
+			}
+
+			if due == dueTakeover || s.db.broken == breakExpiryCount {
+				op.Expiries++
 			}
 
 			s.db.take(op, req, now)
@@ -357,6 +368,16 @@ const (
 	// dueTakeover is a running operation whose claim expired.
 	dueTakeover
 )
+
+// allows reports whether req lets a claim take op. The broken store
+// ignores the version limits.
+func (m *memDB) allows(req durable.ClaimRequest, op *durable.Operation) bool {
+	if m.broken == breakMaxVersions {
+		return slices.Contains(req.Kinds, op.Kind)
+	}
+
+	return req.Allows(op.Kind, op.Version)
+}
 
 // due reports whether a claim can take op at now.
 func (m *memDB) due(op *durable.Operation, now time.Time) dueKind {
@@ -432,6 +453,7 @@ func (s memStore) Complete(_ context.Context, c durable.Claim) error {
 
 func (s memStore) Fail(_ context.Context, c durable.Claim, f durable.Failure) error {
 	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
+		op.Failures++
 		op.LastError = f.Message
 		if f.Final {
 			op.State = durable.StateFailed

@@ -50,7 +50,9 @@ func makeOperatorToken(ctx context.Context, t *testing.T, env *e2e.Env) string {
 
 	var operator e2ePrincipal
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"operator","kind":"person"}`,
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("operator") + `","kind":"person"}`,
 		http.StatusCreated,
 	}, &operator)
 
@@ -60,38 +62,20 @@ func makeOperatorToken(ctx context.Context, t *testing.T, env *e2e.Env) string {
 		http.StatusCreated,
 	}, nil)
 
-	var token e2eToken
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens",
-		`{"principalID":"` + operator.ID + `","name":"operator"}`,
-		http.StatusCreated,
-	}, &token)
-
-	if token.Secret == "" {
-		t.Fatal("operator token holds no secret")
-	}
-
-	return token.Secret
+	return env.PersonalToken(ctx, t, operator.ID, "operator").Secret
 }
 
 // makeVictimToken creates a principal with a token and returns the token.
-func makeVictimToken(ctx context.Context, t *testing.T, env *e2e.Env) e2eToken {
+func makeVictimToken(ctx context.Context, t *testing.T, env *e2e.Env) e2e.PersonalToken {
 	t.Helper()
 
 	var victim e2ePrincipal
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"victim","kind":"person"}`,
+		http.MethodPost, "/api/server/principals", `{"subject":"` + e2e.SignInSubject("victim") + `","kind":"person"}`,
 		http.StatusCreated,
 	}, &victim)
 
-	var token e2eToken
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens",
-		`{"principalID":"` + victim.ID + `","name":"victim"}`,
-		http.StatusCreated,
-	}, &token)
-
-	return token
+	return env.PersonalToken(ctx, t, victim.ID, "victim")
 }
 
 // revokeToken revokes the token id through the installation API.
