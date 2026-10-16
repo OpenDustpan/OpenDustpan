@@ -561,6 +561,37 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   TableDurableOperations,
+			OrderBy: []string{"id"},
+			Columns: []Column{
+				{Name: "id", Kind: KindText},
+				{Name: "start_key", Kind: KindText},
+				{Name: "kind", Kind: KindText},
+				{Name: "input", Kind: KindBytes},
+				{Name: portColState, Kind: KindText},
+				{Name: "attempt", Kind: KindInteger},
+				{Name: "last_error", Kind: KindText},
+				{Name: "claim_owner", Kind: KindText},
+				{Name: "claim_token", Kind: KindInteger},
+				{Name: "claim_expires_at_ms", Kind: KindTime},
+				{Name: "cancel_requested", Kind: KindBool},
+				{Name: "not_before_ms", Kind: KindTime},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: portColUpdatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   TableDurableSteps,
+			OrderBy: []string{"operation_id", "seq"},
+			Columns: []Column{
+				{Name: "operation_id", Kind: KindText},
+				{Name: "name", Kind: KindText},
+				{Name: "seq", Kind: KindInteger},
+				{Name: "result", Kind: KindBytes},
+				{Name: "done_at_ms", Kind: KindTime},
+			},
+		},
+		{
 			Table:   "installation",
 			OrderBy: []string{"id"},
 			Columns: []Column{

@@ -131,6 +131,31 @@ type CollectionMember struct {
 	AssignedAtMs  int64
 }
 
+type DurableOperation struct {
+	ID               string
+	StartKey         string
+	Kind             string
+	Input            []byte
+	State            string
+	Attempt          int64
+	LastError        string
+	ClaimOwner       pgtype.Text
+	ClaimToken       int64
+	ClaimExpiresAtMs pgtype.Int8
+	CancelRequested  bool
+	NotBeforeMs      int64
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+type DurableStep struct {
+	OperationID string
+	Name        string
+	Seq         int64
+	Result      []byte
+	DoneAtMs    int64
+}
+
 type Grant struct {
 	ID          string
 	Subject     string
