@@ -3,6 +3,7 @@ package sqlite
 // Column names that more than one table of the list holds. goconst keeps
 // each one a constant.
 const (
+	backupColArrival     = "arrival"
 	backupColCreatedAtMs = "created_at_ms"
 	backupColCreatedBy   = "created_by"
 	backupColDigest      = "digest"
@@ -27,6 +28,7 @@ const (
 	backupColDeletedName = "deleted_name"
 	backupColTool        = "tool"
 	backupColUnitID      = "unit_id"
+	backupColExpiresAtMs = "expires_at_ms"
 )
 
 // sqliteBackupTable is the column list of one backup table: the columns of the
@@ -138,7 +140,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColStackID,
 				backupColUpdateID,
-				"arrival",
+				backupColArrival,
 				"blob_key",
 				"sha256",
 				"md5",
@@ -154,8 +156,19 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColStackID,
 				backupColUpdateID,
 				backupColSequence,
-				"arrival",
+				backupColArrival,
 				"sha256",
+			},
+		},
+		{
+			table: "update_journal_refusals",
+			columns: []string{
+				backupColStackID,
+				backupColUpdateID,
+				backupColArrival,
+				"sequence_ids",
+				"status",
+				"reason",
 			},
 		},
 		{
@@ -358,7 +371,7 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 				"verifier",
 				"return_path",
 				backupColCreatedAtMs,
-				"expires_at_ms",
+				backupColExpiresAtMs,
 			},
 		},
 	}
@@ -404,8 +417,18 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table:   "group_members",
-			columns: []string{"group_id", backupColPrincipalID, "added_at_ms", "removed_at_ms"},
+			table: "group_members",
+			columns: []string{
+				"group_id",
+				backupColPrincipalID,
+				"added_at_ms",
+				"removed_at_ms",
+				backupColSource,
+				"source_id",
+				backupColState,
+				"suspended_at_ms",
+				"pinned",
+			},
 		},
 		{
 			table: "access_tokens",
@@ -416,7 +439,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColKind,
 				backupColDigest,
 				backupColCreatedAtMs,
-				"expires_at_ms",
+				backupColExpiresAtMs,
 				"last_used_at_ms",
 				"revoked_at_ms",
 				"replaced_by",
@@ -463,6 +486,14 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				backupColNamespace,
 				backupColSequence,
 				backupColUpdatedAtMs,
+			},
+		},
+		{
+			table: "audit_sink_leases",
+			columns: []string{
+				"sink",
+				"holder",
+				backupColExpiresAtMs,
 			},
 		},
 		{

@@ -293,6 +293,8 @@ How-to guides:
   the units that a delete keeps until its retention period ends.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
+- [Console sign-in](docs/guides/console-sign-in.md) with an OpenID Connect
+  provider.
 
 Reference:
 

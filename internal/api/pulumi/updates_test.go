@@ -21,6 +21,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -64,6 +65,8 @@ type memUpdateStore struct {
 	checkpoints  map[stack.UpdateID]stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
 	journal      map[stack.UpdateID][]blob.Key
+	refusals     map[stack.UpdateID][]stack.JournalRefusal
+	seqs         map[stack.UpdateID][]int64
 	mu           sync.Mutex
 }
 
@@ -74,6 +77,8 @@ func newMemUpdateStore() *memUpdateStore {
 		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
 		events:       map[stack.UpdateID][]stack.Event{},
 		journal:      map[stack.UpdateID][]blob.Key{},
+		refusals:     map[stack.UpdateID][]stack.JournalRefusal{},
+		seqs:         map[stack.UpdateID][]int64{},
 		mu:           sync.Mutex{},
 	}
 }
@@ -451,6 +456,9 @@ func newUpdateFixtureWithAuthenticator(
 
 	limit, cutoff, checker := opts.limit, opts.cutoff, opts.checker
 	replayer := opts.replayer
+	if replayer == nil {
+		replayer = pulumijournal.NewReplayer(time.Now, "")
+	}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
@@ -505,6 +513,7 @@ func newUpdateFixtureWithAuthenticator(
 		Namespaces:              namespaces,
 		Authenticator:           authn,
 		Authorizer:              authz,
+		Sessions:                nil,
 		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -2715,6 +2724,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              allowAll(),
+		Sessions:                nil,
 		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},

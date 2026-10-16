@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -221,11 +222,16 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		p, err := h.authenticate(r)
+		p, session, err := h.authenticate(r)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
+		}
+
+		if session {
+			ctx = sessionauth.WithSession(ctx)
+			r = r.WithContext(ctx)
 		}
 
 		obj, err := route.Resolve(w, r)

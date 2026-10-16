@@ -207,6 +207,7 @@ func newMoveFixtureWith(t *testing.T, authz identity.Authorizer, moves apiinvent
 		Now:           nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {

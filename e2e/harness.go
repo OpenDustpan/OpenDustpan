@@ -184,6 +184,8 @@ type Env struct {
 	binPath string
 	// backupDir is the backup target directory of the in-process server.
 	backupDir string
+	// signIn is the console sign-in of an env from NewEnvWithSignIn, or nil.
+	signIn *signInSetup
 	// backendCfg holds the database URL, blob directory, certificate and
 	// key files and tokens of the binary backend.
 	backendCfg backendConfig
@@ -248,28 +250,30 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	return NewEnvWithDeltaCutoff(ctx, tb, cli, store, 0)
 }
 
-// NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
-// journaling turned off, so each update answers journalVersion 0.
-func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+// defaultEnvInput returns the input of an env for cli and store with new
+// tokens, a new directory and every feature switch off.
+func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 	tb.Helper()
 
-	dir := tb.TempDir()
-	token := newToken(tb)
-	tokenB := newToken(tb)
-	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
-	in := envInput{
+	return envInput{
 		deltaCutoff:       0,
-		disableJournaling: true,
+		disableJournaling: false,
 		ipAllowlists:      false,
+		signIn:            false,
+		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
-		dir:               dir,
-		token:             token,
-		tokenB:            tokenB,
-		rec:               rec,
+		dir:               tb.TempDir(),
+		token:             newToken(tb),
+		tokenB:            newToken(tb),
+		rec:               &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
 	}
+}
 
+// startEnv starts the env of in: the server binary with E2E_SERVER=binary,
+// else an in-process server.
+func startEnv(ctx context.Context, in envInput) *Env {
 	if UseBinaryServer() {
 		return newBinaryEnv(ctx, in)
 	}
@@ -277,10 +281,36 @@ func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, st
 	return newInprocessEnv(ctx, in)
 }
 
+// NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
+// journaling turned off, so each update answers journalVersion 0.
+func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	in := defaultEnvInput(tb, cli, store)
+	in.disableJournaling = true
+
+	return startEnv(ctx, in)
+}
+
 // NewEnvWithIPAllowlists starts a server as NewEnv does, with IP allowlists
 // turned on and applied to the bootstrap admin token too, so a step can lock
 // one namespace to one source address and prove the 403 answers.
 func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	in := defaultEnvInput(tb, cli, store)
+	in.ipAllowlists = true
+
+	return startEnv(ctx, in)
+}
+
+// NewEnvWithJournalRefuser starts a server as NewEnv does, with the refuser
+// corrupting the first outputs-only journal batch on the way to the server,
+// so the server refuses it and records the refusal. The test reads how many
+// batches the refuser corrupted.
+func NewEnvWithJournalRefuser(
+	ctx context.Context, tb testing.TB, cli Install, store Store, refuser *JournalRefuser,
+) *Env {
 	tb.Helper()
 
 	dir := tb.TempDir()
@@ -290,7 +320,9 @@ func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, sto
 	in := envInput{
 		deltaCutoff:       0,
 		disableJournaling: false,
-		ipAllowlists:      true,
+		ipAllowlists:      false,
+		signIn:            false,
+		journalRefuser:    refuser,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -321,6 +353,8 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		deltaCutoff:       cutoff,
 		disableJournaling: false,
 		ipAllowlists:      false,
+		signIn:            false,
+		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -337,13 +371,27 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 	return newInprocessEnv(ctx, in)
 }
 
-// newInprocessEnv starts an in-process server for cli and returns the
-// environment.
-func newInprocessEnv(ctx context.Context, in envInput) *Env {
+// startInprocessServer builds the in-process server of in and starts it.
+// The handler is set before the server starts. The listener exists
+// already, so the sign-in knows its public URL before the build.
+func startInprocessServer(
+	ctx context.Context,
+	in envInput,
+	member string,
+) (*httptest.Server, serverBuild, *signInSetup) {
 	tb := in.tb
 	tb.Helper()
 
-	member := newToken(tb)
+	var handler http.Handler
+
+	ts := httptest.NewUnstartedServer(in.rec.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+	})))
+
+	var signIn *signInSetup
+	if in.signIn {
+		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), newTestClock())
+	}
 
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
@@ -352,14 +400,29 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		deltaCutoff:       in.deltaCutoff,
 		disableJournaling: in.disableJournaling,
 		ipAllowlists:      in.ipAllowlists,
+		signIn:            signIn,
 	})
 
-	ts := httptest.NewUnstartedServer(in.rec.Middleware(build.handler))
-	if in.cli.Tool == ToolTofu {
+	handler = faultedHandler(build.handler, in.journalRefuser)
+
+	if in.cli.Tool == ToolTofu || in.signIn {
 		ts.StartTLS()
 	} else {
 		ts.Start()
 	}
+
+	return ts, build, signIn
+}
+
+// newInprocessEnv starts an in-process server for cli and returns the
+// environment.
+func newInprocessEnv(ctx context.Context, in envInput) *Env {
+	tb := in.tb
+	tb.Helper()
+
+	member := newToken(tb)
+
+	ts, build, signIn := startInprocessServer(ctx, in, member)
 
 	tb.Cleanup(ts.Close)
 
@@ -384,7 +447,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
 		steps:         nil,
-		tls:           in.cli.Tool == ToolTofu,
+		tls:           in.cli.Tool == ToolTofu || in.signIn,
 		binPath:       "",
 		backendCfg:    backendConfig{}, //nolint:exhaustruct_v5 // The in-process mode has no binary backend.
 		backendPort:   "",
@@ -392,6 +455,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		backendLogs:   nil,
 		certBundle:    "",
 		dbProxy:       build.dbProxy,
+		signIn:        signIn,
 		backupDir:     build.backupDir,
 	}
 
@@ -485,6 +549,9 @@ type serverArgs struct {
 	// ipAllowlists turns IP allowlists on for the in-process server and
 	// applies them to the bootstrap admin token too.
 	ipAllowlists bool
+	// signIn turns on the console sign-in of the in-process server, or is
+	// nil.
+	signIn *signInSetup
 }
 
 // ipAllowlistOptions adds the IP allowlist options to opts when args turns
@@ -539,7 +606,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	workspaces := newWorkspaceService(tb, st, blobs, namespaces)
 	target, targetName := openBackupTarget(tb, args.dbPath)
 
-	srv, err := dustpan.NewServer(ipAllowlistOptions(
+	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
 		st,
 		args,
 		[]dustpan.Option{
@@ -560,7 +627,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 			dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 			dustpan.WithDisablePulumiJournaling(args.disableJournaling),
 		},
-	)...)
+	), args.signIn.options()...)...)
 	if err != nil {
 		tb.Fatalf("new server: %v", err)
 	}
@@ -2110,7 +2177,7 @@ func (e *Env) apiCall(ctx context.Context, tb testing.TB, req apiRequest) {
 func (e *Env) writeTofuFiles(tb testing.TB, ts *httptest.Server) {
 	tb.Helper()
 
-	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Headers: nil, Bytes: ts.Certificate().Raw})
+	cert := pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Headers: nil, Bytes: ts.Certificate().Raw})
 	e.write(tb, filepath.Join(e.home, "server.pem"), string(cert))
 	e.write(tb, filepath.Join(e.home, "tofurc"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.token))
 	e.write(tb, filepath.Join(e.home, "tofurc-b"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.tokenB))

@@ -2,9 +2,11 @@ package dustpan
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -38,6 +41,20 @@ func WithAuditChain(setting audit.ChainSetting) Option {
 	return func(o *settings) { o.auditChain = setting }
 }
 
+// WithAuditCheckpoints turns signed checkpoints of the audit log on. They
+// are off by default. They need the chain on and a blob store: the server
+// start fails when the chain is off. While they are on, each scheduled
+// chain check signs the last hash of each scope whose chain matches with
+// signer, stores the checkpoint in the blob store, and checks every stored
+// checkpoint. A scope with a checkpoint that does not match counts in
+// dustpan_audit_chain_invalid.
+func WithAuditCheckpoints(signer *audit.Signer) Option {
+	return func(o *settings) { o.auditSigner = signer }
+}
+
+// ErrCheckpointsNeedChain reports signed checkpoints with the chain off.
+var ErrCheckpointsNeedChain = errors.New("audit checkpoints need the audit chain on: set --audit-chain=on")
+
 // auditChain holds the setting of this instance, the ports of the chain and
 // the last state of the chain that the instance read. The zero value is not
 // usable: call newAuditChain.
@@ -50,6 +67,9 @@ type auditChain struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	observed   *metrics.ServerMetrics
+	// checkpoints signs and checks the signed checkpoints of the log, or
+	// nil while they are off.
+	checkpoints *audit.Checkpoints
 	// maint, restoreRunning and freshness are set after the services that
 	// need the chain exist. A nil freshness asks for no MFA step: built-in
 	// MFA does not exist yet.
@@ -102,8 +122,8 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 	server, okServer := cfg.namespaceStore.(audit.ServerStore)
 
 	if !okChain || !okEntries || !okServer {
-		if cfg.auditChain != audit.ChainOn {
-			return nil, fmt.Errorf("namespace store cannot turn the audit chain off: %w", ErrMissingOption)
+		if cfg.auditChain != audit.ChainOn || cfg.auditSigner != nil {
+			return nil, fmt.Errorf("namespace store cannot turn the audit chain on or off: %w", ErrMissingOption)
 		}
 
 		return nil, nil //nolint:nilnil // No chain without an error means the store keeps its own chain.
@@ -115,6 +135,11 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		principals = p
 	}
 
+	checkpoints, err := newCheckpoints(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	return &auditChain{
 		store:             store,
 		entries:           entries,
@@ -124,6 +149,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		logger:            cfg.logger,
 		now:               cfg.now,
 		observed:          observed,
+		checkpoints:       checkpoints,
 		maint:             nil,
 		restoreRunning:    nil,
 		freshness:         nil,
@@ -140,6 +166,31 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		readAt: time.Time{},
 		read:   false,
 	}, nil
+}
+
+// newCheckpoints answers the signed checkpoints of cfg, or nil while they
+// are off. They need a blob store and a store that reads one entry at a
+// sequence.
+func newCheckpoints(cfg *settings) (*audit.Checkpoints, error) {
+	if cfg.auditSigner == nil {
+		return nil, nil //nolint:nilnil // Nil without an error means signed checkpoints are off.
+	}
+
+	if cfg.blobStore == nil {
+		return nil, fmt.Errorf("audit checkpoints need a blob store: %w", ErrMissingOption)
+	}
+
+	reader, ok := cfg.namespaceStore.(audit.EntryReader)
+	if !ok {
+		return nil, fmt.Errorf("audit checkpoints need a store that reads one audit entry: %w", ErrMissingOption)
+	}
+
+	return audit.NewCheckpoints(audit.CheckpointsConfig{
+		Blobs:   cfg.blobStore,
+		Entries: reader,
+		Signer:  cfg.auditSigner,
+		Now:     cfg.now,
+	}), nil
 }
 
 // Setting implements serverapi.AuditChain.
@@ -267,6 +318,10 @@ func (c *auditChain) held(ctx context.Context) (bool, error) {
 // state first. When the setting differs, or the log does not agree, the
 // change waits for an approval and the installation enters maintenance mode.
 func (c *auditChain) startUp(ctx context.Context) error {
+	if c.checkpoints != nil && c.setting != audit.ChainOn {
+		return ErrCheckpointsNeedChain
+	}
+
 	rec, err := c.store.ChainRecord(ctx)
 	if err != nil {
 		return fmt.Errorf("audit chain: %w", err)
@@ -293,6 +348,13 @@ func (c *auditChain) startUp(ctx context.Context) error {
 	}
 
 	c.remember(rec)
+
+	if c.checkpoints != nil {
+		signer := c.checkpoints.Signer()
+		c.logger.InfoContext(ctx, "audit checkpoints are on",
+			slog.String("key_id", signer.KeyID()),
+			slog.String("public_key", base64.StdEncoding.EncodeToString(signer.PublicKey())))
+	}
 
 	if !rec.Pending {
 		return nil
@@ -497,6 +559,66 @@ func (c *auditChain) afterRestore(ctx context.Context) error {
 	c.remember(rec)
 
 	return nil
+}
+
+// newEpochAfterRestore returns the after-apply step of a restore for the
+// signed audit checkpoints: it starts a new epoch, because the restored log
+// can lose entries that older checkpoints sign, and writes one entry of the
+// kind change in @server. Without checkpoints it does nothing.
+func newEpochAfterRestore(
+	checkpoints *audit.Checkpoints, server audit.ServerStore, now func() time.Time,
+) restoreStep {
+	return func(ctx context.Context) error {
+		if checkpoints == nil {
+			return nil
+		}
+
+		at := now()
+
+		epoch, err := checkpoints.NewEpoch(ctx, at)
+		if err != nil {
+			return fmt.Errorf("audit checkpoints after restore: %w", err)
+		}
+
+		if server == nil {
+			return nil
+		}
+
+		if _, err := server.AppendServer(ctx, epochEntry(epoch, at)); err != nil {
+			return fmt.Errorf("record audit checkpoint epoch: %w", err)
+		}
+
+		return nil
+	}
+}
+
+// epochEntry returns the entry that records the checkpoint epoch that a
+// restore started.
+func epochEntry(epoch int64, at time.Time) audit.Entry {
+	return audit.Entry{
+		At:           at,
+		Namespace:    audit.ServerScope,
+		Subject:      "opendustpan serve",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       string(identity.ActionServerManageAudit),
+		Object:       audit.ServerScope.String(),
+		ObjectID:     "",
+		Version:      "",
+		ValuePath:    "/audit/checkpoints/epoch/" + strconv.FormatInt(epoch, 10),
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "",
+		UserAgent:    "",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
+	}
 }
 
 // admitRestore refuses a restore while a change of the chain waits or
@@ -825,7 +947,121 @@ func (c *auditChain) check(ctx context.Context) {
 		return
 	}
 
+	if c.checkpoints == nil {
+		c.checkChain(ctx, scopes)
+
+		return
+	}
+
+	c.checkChainAndCheckpoints(ctx, scopes)
+}
+
+// checkChain runs the chain check of every scope of scopes and reports the
+// result.
+func (c *auditChain) checkChain(ctx context.Context, scopes []namespace.Name) {
 	invalid, err := audit.CheckScopes(ctx, c.entries, scopes)
+
+	c.reportCheck(ctx, invalid, err)
+}
+
+// checkChainAndCheckpoints runs the chain check of each scope, then the
+// checkpoint step: it checks the stored checkpoints of the scope and signs
+// a new checkpoint only when both match. While a change of the chain waits
+// or a restore runs, it checks but signs nothing. A scope that fails either
+// check counts in dustpan_audit_chain_invalid.
+func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []namespace.Name) {
+	rec, err := c.store.ChainRecord(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.logger.WarnContext(ctx, "audit chain check: read chain state", slog.String("error", err.Error()))
+		}
+
+		return
+	}
+
+	restoring := c.restoring(ctx)
+
+	var (
+		invalid int
+		errs    []error
+	)
+
+	for _, scope := range scopes {
+		ok, err := c.checkScope(ctx, scope)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("check %s: %w", scope, err))
+		}
+
+		if !ok {
+			invalid++
+
+			continue
+		}
+
+		if rec.Pending || restoring {
+			continue
+		}
+
+		if _, err := c.checkpoints.Write(ctx, scope, c.chainNow()); err != nil {
+			errs = append(errs, fmt.Errorf("check %s: checkpoint: %w", scope, err))
+			invalid++
+		}
+	}
+
+	c.reportCheck(ctx, invalid, errors.Join(errs...))
+}
+
+// restoring reports whether a restore runs. A nil check means no restore
+// runs. A failed check logs the error and skips the writes of this check.
+func (c *auditChain) restoring(ctx context.Context) bool {
+	if c.restoreRunning == nil {
+		return false
+	}
+
+	running, err := c.restoreRunning(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.logger.WarnContext(ctx, "audit chain check: read running restores", slog.String("error", err.Error()))
+		}
+
+		return true
+	}
+
+	return running
+}
+
+// checkScope checks the chain of scope and the stored checkpoints of
+// scope. It answers false when either does not match, and an error when a
+// check fails. It never signs: the caller signs the head after both match.
+func (c *auditChain) checkScope(ctx context.Context, scope namespace.Name) (bool, error) {
+	chain, err := c.entries.Check(ctx, scope)
+	if err != nil {
+		return false, fmt.Errorf("chain: %w", err)
+	}
+
+	if !chain.Valid {
+		return false, nil
+	}
+
+	result, err := c.checkpoints.Verify(ctx, scope)
+	if err != nil {
+		return false, fmt.Errorf("checkpoints: %w", err)
+	}
+
+	if !result.Valid {
+		c.logger.ErrorContext(ctx, "audit checkpoint does not match",
+			slog.String("scope", scope.String()), slog.Int64("sequence", result.BadSequence),
+			slog.String("reason", result.Reason))
+
+		return false, nil
+	}
+
+	return true, nil
+}
+
+// reportCheck sets dustpan_audit_chain_invalid to invalid and logs the
+// result of a check. A check that the caller stopped reports nothing.
+func (c *auditChain) reportCheck(ctx context.Context, invalid int, err error) {
 	if err != nil && ctx.Err() != nil {
 		return
 	}
@@ -892,6 +1128,18 @@ func auditChainPort(chain *auditChain) serverapi.AuditChain {
 	}
 
 	return chain
+}
+
+// checkpointEpochsOf answers the checkpoint epochs of chain for the server
+// API, or nil while signed checkpoints are off.
+//
+//nolint:ireturn // A nil *audit.Checkpoints in the interface is not nil, so the route would call it; answer a nil interface.
+func checkpointEpochsOf(chain *auditChain) serverapi.CheckpointEpochs {
+	if chain == nil || chain.checkpoints == nil {
+		return nil
+	}
+
+	return chain.checkpoints
 }
 
 // chainChangeWaits reports whether a change of the chain waits for

@@ -58,6 +58,8 @@ const (
 	pgColTool        = "tool"
 	pgColPrincipalID = "principal_id"
 	pgColDisplayName = "display_name"
+	pgColSink        = "sink"
+	pgColExpiresAtMs = "expires_at_ms"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -151,6 +153,13 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{pgColStackID, pgColUpdateID, pgColSequence, pgColArrival, "sha256"},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColSequence},
 		},
+		{
+			table: "update_journal_refusals",
+			columns: []string{
+				pgColStackID, pgColUpdateID, pgColArrival, "sequence_ids", "status", "reason",
+			},
+			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
+		},
 	}
 }
 
@@ -237,8 +246,13 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 		},
 		{
 			table:   "audit_sink_cursors",
-			columns: []string{"sink", pgColNamespace, pgColSequence, pgColUpdatedAtMs},
-			orderBy: []string{"sink", pgColNamespace},
+			columns: []string{pgColSink, pgColNamespace, pgColSequence, pgColUpdatedAtMs},
+			orderBy: []string{pgColSink, pgColNamespace},
+		},
+		{
+			table:   "audit_sink_leases",
+			columns: []string{pgColSink, "holder", pgColExpiresAtMs},
+			orderBy: []string{pgColSink},
 		},
 		{
 			table:   "backups",
@@ -276,7 +290,7 @@ func pgCopySessionTables() []pgCopyTable {
 		{
 			table: "sign_in_requests",
 			columns: []string{
-				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, "expires_at_ms",
+				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, pgColExpiresAtMs,
 			},
 			orderBy: []string{pgColDigest},
 		},
@@ -299,6 +313,12 @@ func pgCopyPrincipalsTable() pgCopyTable {
 // pgCopyIdentityTables holds the COPY columns of the principal, group,
 // role and grant tables (ADR 52).
 func pgCopyIdentityTables() []pgCopyTable {
+	return append(pgCopyPrincipalTables(), pgCopyGrantTables()...)
+}
+
+// pgCopyPrincipalTables holds the COPY columns of the principal, group,
+// member and token tables.
+func pgCopyPrincipalTables() []pgCopyTable {
 	return []pgCopyTable{
 		pgCopyPrincipalsTable(),
 		{
@@ -310,8 +330,11 @@ func pgCopyIdentityTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table:   "group_members",
-			columns: []string{"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms"},
+			table: "group_members",
+			columns: []string{
+				"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms", pgColSource, "source_id",
+				pgColState, "suspended_at_ms", "pinned",
+			},
 			orderBy: []string{"group_id", pgColPrincipalID, "added_at_ms"},
 		},
 		{
@@ -323,7 +346,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 				pgColKind,
 				pgColDigest,
 				pgColCreatedAtMs,
-				"expires_at_ms",
+				pgColExpiresAtMs,
 				"last_used_at_ms",
 				"revoked_at_ms",
 				"replaced_by",
@@ -332,6 +355,13 @@ func pgCopyIdentityTables() []pgCopyTable {
 			},
 			orderBy: []string{"id"},
 		},
+	}
+}
+
+// pgCopyGrantTables holds the COPY columns of the role, grant and policy
+// tables.
+func pgCopyGrantTables() []pgCopyTable {
+	return []pgCopyTable{
 		{
 			table: "roles",
 			columns: []string{

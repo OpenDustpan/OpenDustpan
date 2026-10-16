@@ -1628,6 +1628,12 @@ func (s *Updates) completeJournaled(
 		return Update{}, fmt.Errorf("update %s of %s: %w", id, ref, err)
 	}
 
+	if status == StatusSucceeded {
+		if err := s.checkJournalComplete(ctx, ref, id, u); err != nil {
+			return Update{}, err
+		}
+	}
+
 	if err := s.buildBeforeEnd(ctx, ref, id, u); err != nil {
 		return Update{}, err
 	}

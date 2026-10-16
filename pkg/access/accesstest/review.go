@@ -34,7 +34,9 @@ func reviewCases() []struct {
 		{name: "review counts only when asked", test: testReviewCount},
 		{name: "review units reads live and deleted units", test: testReviewUnits},
 		{name: "review last access reads the latest use of each principal", test: testLastAccess},
+		{name: "review last access counts the use of a console session", test: testLastAccessSessions},
 		{name: "caller grants read the current grants of a principal and its groups", test: testCallerGrants},
+		{name: "review hides a suspended member", test: testReviewHidesSuspendedMember},
 	}
 }
 
@@ -389,7 +391,9 @@ func seedMemberships(t *testing.T, ps principal.Store) {
 		var err error
 		if step.add {
 			err = ps.AddMember(ctx, principal.Membership{
-				AddedAt: at(step.minute), GroupID: "grp-ops", PrincipalID: "prn-a",
+				AddedAt: at(step.minute), SuspendedAt: time.Time{}, GroupID: "grp-ops", PrincipalID: "prn-a",
+				Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+				Pinned: false,
 			}, entryAt(at(step.minute)))
 		} else {
 			err = ps.RemoveMember(ctx, "grp-ops", "prn-a", entryAt(at(step.minute)))

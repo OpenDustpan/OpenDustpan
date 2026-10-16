@@ -205,6 +205,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Namespaces:              namespaces,
 		Authenticator:           coverageAuthenticator{},
 		Authorizer:              coverageAuthorizer{},
+		Sessions:                nil,
 		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -535,6 +536,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		ReadScope:     coverageScope{},
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})
@@ -637,6 +639,7 @@ func coverageAuditRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 		Entries:       coverageAuditStore{},
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
@@ -765,33 +768,35 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator:  coverageAuthenticator{},
-		Authorizer:     coverageAuthorizer{},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     coverageNamespaces(tb),
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    coverageMaintenance{},
-		Metrics:        coverageMetrics{},
-		Version:        "test",
-		Schema:         coverageSchema{},
-		Journal:        nil,
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
-		DeletedUnits:   nil,
-		AuditChain:     nil,
-		AuditSinks:     nil,
-		IPAllowlists:   coverageIPAllowlists(tb),
-		SessionPolicy:  coverageSessionPolicies(tb),
+		Authenticator:    coverageAuthenticator{},
+		Authorizer:       coverageAuthorizer{},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       coverageNamespaces(tb),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      coverageMaintenance{},
+		Metrics:          coverageMetrics{},
+		Version:          "test",
+		Schema:           coverageSchema{},
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     coverageIPAllowlists(tb),
+		SessionPolicy:    coverageSessionPolicies(tb),
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
 	}
 
-	return serverRefs(handler.Routes())
+	return append(serverRefs(handler.Routes()), coverageSignInRoutes(tb)...)
 }
 
 // routeRefs formats one adapter's table as method and path pairs. Each
@@ -890,6 +895,7 @@ func CoverageAllowlist() []AllowEntry {
 		tokenAllowEntries(),
 		tokenPolicyAllowEntries(),
 		sessionPolicyAllowEntries(),
+		signInAllowEntries(),
 		ipAllowlistAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
@@ -1155,6 +1161,30 @@ func tokenPolicyAllowEntries() []AllowEntry {
 	return out
 }
 
+// signInAllowEntries returns the console sign-in routes. The steps of
+// TestSignIn drive each one in the browser flow against a test OpenID
+// provider, on each store.
+func signInAllowEntries() []AllowEntry {
+	reason := "Console route: no CLI signs in through a browser. " +
+		"The harness plays the browser with a cookie jar against a test OpenID provider and checks each answer."
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, "/api/server/sign-in/{provider}"},
+		{http.MethodGet, "/api/server/sign-in/{provider}/callback"},
+		{http.MethodGet, "/api/server/session"},
+		{http.MethodPost, "/api/server/sign-out"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestSignIn", Reason: reason,
+		})
+	}
+
+	return out
+}
+
 // sessionPolicyAllowEntries returns the operator and console routes of the
 // session policy. The harness steps of TestSessionPolicy drive each one
 // through the real binary on each store.
@@ -1334,6 +1364,12 @@ func operatorAllowEntries() []AllowEntry {
 			Method: http.MethodGet, Path: "/api/server/metrics",
 			CoveringTest: "TestBothToolsSameServer (checkServerMetrics)",
 			Reason:       "Operator route (ADR 32): no CLI calls it.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/audit/checkpoint-epochs",
+			CoveringTest: "TestNewCheckpointEpochIsAChange",
+			Reason: "Operator route: no CLI calls it. An administrator starts a new " +
+				"checkpoint epoch after a restore or a failed check of the signed checkpoints.",
 		},
 		{
 			Method: http.MethodGet, Path: "/health/live",

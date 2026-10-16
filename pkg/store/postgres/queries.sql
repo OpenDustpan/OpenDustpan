@@ -133,6 +133,11 @@ SELECT id
 FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;
 
+-- name: StackRefByID :one
+SELECT namespace, project, name
+FROM stacks
+WHERE id = $1;
+
 -- name: LockStackForUpdates :one
 -- Serializes starts and ends of the stack's updates. NO KEY UPDATE does not
 -- block the foreign-key checks of checkpoint and event writes.
@@ -734,6 +739,15 @@ SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
 ORDER BY content_key;
 
+-- name: GetAuditEntry :one
+-- The entry of a scope at one sequence, for the check of signed
+-- checkpoints. A missing entry matches no row.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
+FROM audit_entries
+WHERE namespace = $1 AND sequence = $2;
+
 -- name: LastAuditEntry :one
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.
@@ -833,6 +847,29 @@ WHERE stack_id = $1 AND update_id = $2;
 DELETE FROM update_journal
 WHERE stack_id = $1 AND update_id = $2;
 
+-- name: NextRefusalArrival :one
+SELECT (COALESCE(MAX(arrival), 0) + 1)::BIGINT AS arrival
+FROM update_journal_refusals
+WHERE stack_id = $1 AND update_id = $2;
+
+-- name: InsertJournalRefusal :exec
+INSERT INTO update_journal_refusals (stack_id, update_id, arrival, sequence_ids, status, reason)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: ListJournalRefusals :many
+SELECT sequence_ids, status, reason FROM update_journal_refusals
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY arrival;
+
+-- name: ListJournalSequences :many
+SELECT sequence FROM update_journal_sequences
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY sequence;
+
+-- name: DeleteJournalRefusals :exec
+DELETE FROM update_journal_refusals
+WHERE stack_id = $1 AND update_id = $2;
+
 -- name: JournalState :one
 SELECT journal_closed, journal_version, journal_records_changed, status FROM updates
 WHERE stack_id = $1 AND id = $2;
@@ -853,19 +890,19 @@ ON CONFLICT DO NOTHING;
 -- name: GetPrincipal :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p WHERE p.id = $1 AND p.deleted_at_ms IS NULL;
 
 -- name: GetPrincipalBySubject :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p WHERE p.subject COLLATE "C" = @subject::text AND p.deleted_at_ms IS NULL;
 
 -- name: ListPrincipals :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
   AND p.subject COLLATE "C" > @after::text
@@ -908,7 +945,7 @@ ON CONFLICT DO NOTHING;
 
 -- name: GetGroup :one
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL;
 
 -- name: GroupIDByNameKey :one
@@ -916,7 +953,7 @@ SELECT id FROM principal_groups WHERE name_key COLLATE "C" = @name_key::text AND
 
 -- name: ListGroups :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
   AND g.name_key COLLATE "C" > @after::text
@@ -950,8 +987,8 @@ SELECT COUNT(*) FROM principals WHERE id = $1 AND deleted_at_ms IS NULL;
 SELECT source FROM principal_groups WHERE id = $1 AND deleted_at_ms IS NULL;
 
 -- name: AddGroupMember :execrows
-INSERT INTO group_members (group_id, principal_id, added_at_ms)
-VALUES ($1, $2, $3)
+INSERT INTO group_members (group_id, principal_id, added_at_ms, source, source_id, state, suspended_at_ms, pinned)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING;
 
 -- name: RemoveGroupMember :execrows
@@ -961,8 +998,9 @@ WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL;
 -- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
-  (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
-  m.added_at_ms
+  (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS group_count,
+  m.added_at_ms, m.source AS member_source, m.source_id AS member_source_id, m.state AS member_state,
+  m.suspended_at_ms AS member_suspended_at_ms, m.pinned AS member_pinned
 FROM group_members m JOIN principals p ON p.id = m.principal_id
 WHERE m.group_id = @group_id AND m.removed_at_ms IS NULL
   AND p.subject COLLATE "C" > @after::text
@@ -980,7 +1018,7 @@ WHERE m.group_id = @group_id AND m.removed_at_ms IS NULL
 
 -- name: ListGroupsOfPrincipal :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = @principal_id AND m.removed_at_ms IS NULL
   AND g.name_key COLLATE "C" > @after::text
@@ -1111,7 +1149,7 @@ SELECT (SELECT COUNT(*) FROM principals p WHERE @subject_kind::text = 'principal
 -- name: SubjectsOfCaller :many
 SELECT p.id AS principal_id, COALESCE(m.group_id, '')::text AS group_id
 FROM principals p
-LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
 WHERE p.subject COLLATE "C" = @subject::text AND p.deleted_at_ms IS NULL;
 
 -- name: ReviewGrants :many
@@ -1132,13 +1170,15 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
      AND c.added_at_ms <= @as_of_ms::bigint
-     AND COALESCE(c.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint) AS member_count
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint
+     AND c.state = 'active') AS member_count
 FROM grants g
 LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
 LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((@principal::text <> '' AND m.principal_id = @principal::text)
     OR (@principal::text = '' AND @expand::boolean))
+  AND m.state = 'active'
   AND CASE WHEN @history::boolean THEN
     m.added_at_ms < @to_ms::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
@@ -1176,6 +1216,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((@principal::text <> '' AND m.principal_id = @principal::text)
     OR (@principal::text = '' AND @expand::boolean))
+  AND m.state = 'active'
   AND CASE WHEN @history::boolean THEN
     m.added_at_ms < @to_ms::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > @from_ms::bigint
@@ -1217,13 +1258,15 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
      AND c.added_at_ms <= @as_of_ms::bigint
-     AND COALESCE(c.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint) AS member_count
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint
+     AND c.state = 'active') AS member_count
 FROM holders h
 JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
 LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
 LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND m.principal_id = @principal::text
+  AND m.state = 'active'
   AND m.added_at_ms <= @as_of_ms::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint
 LEFT JOIN principals mp ON mp.id = m.principal_id
 WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
@@ -1248,6 +1291,7 @@ FROM holders h
 JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND m.principal_id = @principal::text
+  AND m.state = 'active'
   AND m.added_at_ms <= @as_of_ms::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > @as_of_ms::bigint
 WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
   AND g.created_at_ms <= @as_of_ms::bigint;
@@ -1306,6 +1350,8 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
   ), 0))::bigint AS principal_active_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
@@ -1406,14 +1452,25 @@ ON CONFLICT (unit_id) DO UPDATE SET
 
 
 -- name: LastAccessByPrincipals :many
--- The latest last-use time of the access tokens of each given principal:
--- one row for each principal with a used token. Revoked, replaced and
--- expired tokens count: a use is a use.
-SELECT principal_id, MAX(last_used_at_ms)::bigint AS last_used_at_ms
-FROM access_tokens
-WHERE principal_id = ANY(sqlc.arg('principal_ids')::text[])
-  AND last_used_at_ms IS NOT NULL
-GROUP BY principal_id;
+-- The latest use of each given principal: the last use of its access
+-- tokens and of its console sessions, and its last sign-in. One row for
+-- each principal with a used token, a session or a sign-in. Revoked, replaced and expired tokens and ended
+-- sessions count: a use is a use.
+SELECT u.principal_id, MAX(u.used_at_ms)::bigint AS last_used_at_ms
+FROM (
+  SELECT t.principal_id, t.last_used_at_ms AS used_at_ms
+  FROM access_tokens t
+  WHERE t.principal_id = ANY(sqlc.arg('principal_ids')::text[]) AND t.last_used_at_ms IS NOT NULL
+  UNION ALL
+  SELECT s.principal_id, s.last_seen_at_ms AS used_at_ms
+  FROM sessions s
+  WHERE s.principal_id = ANY(sqlc.arg('principal_ids')::text[])
+  UNION ALL
+  SELECT p.id AS principal_id, p.last_sign_in_at_ms AS used_at_ms
+  FROM principals p
+  WHERE p.id = ANY(sqlc.arg('principal_ids')::text[]) AND p.last_sign_in_at_ms IS NOT NULL
+) u
+GROUP BY u.principal_id;
 
 -- name: GetAuditChainState :one
 -- The audit chain state that this installation keeps: the state, when it
@@ -1583,6 +1640,25 @@ ON CONFLICT (sink, namespace) DO UPDATE
 SET sequence = EXCLUDED.sequence, updated_at_ms = EXCLUDED.updated_at_ms
 WHERE EXCLUDED.sequence > audit_sink_cursors.sequence;
 
+-- name: AcquireAuditSinkLease :execrows
+-- Takes or renews the lease of one sink in one conditional write. It writes
+-- when no row exists, when the stored lease ended, or when the caller holds
+-- it, and changes nothing while another instance holds a live lease. The
+-- caller reads the changed row count: one means it holds the lease. The
+-- expiry is the database clock plus the TTL, so a wrong clock on one
+-- instance cannot hold every lease.
+INSERT INTO audit_sink_leases (sink, holder, expires_at_ms)
+VALUES ($1, $2, FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + sqlc.arg('ttl_ms')::bigint)
+ON CONFLICT (sink) DO UPDATE
+SET holder = EXCLUDED.holder, expires_at_ms = EXCLUDED.expires_at_ms
+WHERE audit_sink_leases.holder = EXCLUDED.holder OR audit_sink_leases.expires_at_ms <= FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint;
+
+-- name: ReleaseAuditSinkLease :execrows
+-- Releases the lease of one sink only when holder holds it. It changes
+-- nothing when no row exists or another instance holds the lease.
+DELETE FROM audit_sink_leases
+WHERE sink = $1 AND holder = $2;
+
 -- Token policy and the inactivity disable (ADR 53).
 
 -- name: GetAccessTokenPolicy :one
@@ -1615,9 +1691,11 @@ RETURNING id, principal_id;
 
 -- name: DisableInactivePrincipals :many
 -- A person is inactive when its creation, its activity baseline, its last
--- sign-in, and the creation and the last use of each of its tokens are all
--- at or before the cutoff. A break-glass account is always exempt from the
--- inactivity disable.
+-- sign-in, the creation and the last use of each of its tokens, and the
+-- last use of each of its console sessions are all at or before the
+-- cutoff. The session use counts by itself, so the result does not depend
+-- on the maximum length of a session. A break-glass account is always
+-- exempt from the inactivity disable.
 UPDATE principals SET disabled_at_ms = sqlc.arg('at_ms')::bigint
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
   AND break_glass = FALSE
@@ -1628,6 +1706,10 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
     SELECT 1 FROM access_tokens t
     WHERE t.principal_id = principals.id
       AND (t.created_at_ms > sqlc.arg('cutoff_ms')::bigint OR t.last_used_at_ms > sqlc.arg('cutoff_ms')::bigint)
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM sessions s
+    WHERE s.principal_id = principals.id AND s.last_seen_at_ms > sqlc.arg('cutoff_ms')::bigint
   )
 RETURNING id;
 
@@ -1685,16 +1767,26 @@ SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms,
 FROM sessions WHERE id = $1;
 
 -- name: GetSessionByDigest :one
+-- principal_active_at_ms is the latest activity of the owner by the account
+-- rule of the inactivity disable, as in GetAccessTokenByDigest.
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
+  GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
+    SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
+  ), 0))::bigint AS principal_active_at_ms
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 WHERE s.digest = $1 AND p.deleted_at_ms IS NULL;
 
 -- name: TouchSession :exec
+-- An idle or expired session keeps its last use: seen_after_ms and
+-- created_after_ms are the bounds of an active session at at_ms.
 UPDATE sessions SET last_seen_at_ms = sqlc.arg('at_ms')::bigint
-WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL AND last_seen_at_ms <= sqlc.arg('before_ms')::bigint;
+WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL AND last_seen_at_ms <= sqlc.arg('before_ms')::bigint
+  AND last_seen_at_ms > sqlc.arg('seen_after_ms')::bigint AND created_at_ms > sqlc.arg('created_after_ms')::bigint;
 
 -- name: EndSession :execrows
 UPDATE sessions SET ended_at_ms = sqlc.arg('at_ms')::bigint, end_reason = sqlc.arg('end_reason')

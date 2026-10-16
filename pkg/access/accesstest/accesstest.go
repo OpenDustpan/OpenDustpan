@@ -64,6 +64,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a deleted role frees its name and its grants give nothing", test: testDeletedRole},
 		{name: "get roles reads several custom roles", test: testGetRoles},
 		{name: "subjects of a caller are its principal and current groups", test: testSubjectsOf},
+		{name: "a suspended membership gives no group", test: testSuspendedMembershipGivesNoRights},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntry},
 		{name: "grants of a subject are its current grants on every object", test: testGrantsOf},
 		{name: "a role granted below the installation or on a principal is reported", test: testRoleGrantedBelow},
@@ -71,7 +72,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
 	}
 
-	for _, tc := range slices.Concat(cases, reviewCases(), unitCases(), moveCases()) {
+	for _, tc := range slices.Concat(cases, reviewCases(), unitCases(), moveCases(), reachCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -954,7 +955,11 @@ func seedCaller(t *testing.T, ps principal.Store) {
 			t.Fatalf("create group: %v", err)
 		}
 
-		m := principal.Membership{AddedAt: at(1), GroupID: id, PrincipalID: "prn-a"}
+		m := principal.Membership{
+			AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: id, PrincipalID: "prn-a",
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		}
 		if err := ps.AddMember(ctx, m, entry()); err != nil {
 			t.Fatalf("add member: %v", err)
 		}

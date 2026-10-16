@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -39,7 +40,7 @@ func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
 		Changes:      nil,
 		SourceIP:     clientip.String(a.request),
 		UserAgent:    truncateUserAgent(a.request.UserAgent()),
-		Channel:      audit.NormalizeChannel(a.request.Header.Get(channelHeader)),
+		Channel:      sessionauth.AuditChannel(a.request, channelHeader),
 		Kind:         audit.KindChange,
 		Outcome:      audit.OutcomeSuccess,
 		RequestID:    requestid.FromContext(ctx),

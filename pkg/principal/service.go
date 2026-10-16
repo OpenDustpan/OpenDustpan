@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -381,9 +382,22 @@ func (s *Service) AddMember(
 		kind = p.Kind
 	}
 
-	m := Membership{AddedAt: s.Now(), GroupID: groupID, PrincipalID: principalID}
+	m := Membership{
+		AddedAt: s.Now(), SuspendedAt: time.Time{}, GroupID: groupID, PrincipalID: principalID,
+		Source: MembershipSourceLocal, SourceID: "", State: MembershipStateActive, Pinned: false,
+	}
+
+	if err := m.Validate(); err != nil {
+		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+	}
 
 	entry := change(e, m.AddedAt, MemberRef(groupID, principalID))
+	entry.Changes = append(entry.Changes,
+		audit.Change{Key: "source", Old: nil, New: string(m.Source), Layer: "", TakesEffect: ""},
+		audit.Change{Key: "sourceID", Old: nil, New: m.SourceID, Layer: "", TakesEffect: ""},
+		audit.Change{Key: "state", Old: nil, New: string(m.State), Layer: "", TakesEffect: ""},
+		audit.Change{Key: "pinned", Old: nil, New: strconv.FormatBool(m.Pinned), Layer: "", TakesEffect: ""},
+	)
 
 	if kind == KindService && s.tokens != nil {
 		holders, err := s.tokens.TokenManagers(ctx, principalID)
@@ -478,6 +492,69 @@ func exactKey(s string) string { return s }
 // groupKey is the sort key of a group: its name in lower case.
 func groupKey(g Group) string { return strings.ToLower(g.Name) }
 
+// SignInInput names the person of a sign-in through an identity provider.
+// Subject is the subject of the principal: "<provider>:<sub>". Names are
+// the display name candidates in order of preference; the first one that
+// is a valid display name wins, and the subject wins when none is. Create
+// allows a new principal when no principal has the subject.
+type SignInInput struct {
+	Subject string
+	Names   []string
+	Create  bool
+}
+
+// SignInPrincipal returns the principal of a sign-in through an identity
+// provider: the principal with the subject in.Subject. When none exists
+// and in.Create is true, it makes a person with the source oidc, no grant
+// and no group, with the entry e, and created is true.
+//
+// It returns ErrNotFound when no principal has the subject and in.Create
+// is false, ErrDisabled for a disabled principal, ErrNotSignInTarget for a
+// principal that is not a person, a principal of a namespace or a
+// break-glass account, and ErrInvalid or ErrReservedSubject for a subject
+// that is not valid.
+func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInInput) (Principal, bool, error) {
+	p, err := s.store.GetPrincipalBySubject(ctx, in.Subject)
+
+	switch {
+	case err == nil:
+		return p, false, signInTarget(p)
+	case !errors.Is(err, ErrNotFound):
+		return Principal{}, false, fmt.Errorf("get principal %q: %w", in.Subject, err)
+	case !in.Create:
+		return Principal{}, false, fmt.Errorf("principal %q: %w", in.Subject, ErrNotFound)
+	}
+
+	at := s.Now()
+	p = Principal{
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          s.newID(principalIDPrefix),
+		Subject:     in.Subject,
+		DisplayName: signInDisplayName(in),
+		Kind:        KindPerson,
+		Source:      SourceOIDC,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
+	}
+
+	if validErr := p.Validate(); validErr != nil {
+		return Principal{}, false, validErr
+	}
+
+	err = s.store.CreatePrincipal(ctx, p, change(e, at, Ref(p.ID)))
+	if errors.Is(err, ErrAlreadyExists) {
+		// A parallel first sign-in of the same person made it.
+		return s.existingSignIn(ctx, in.Subject)
+	}
+
+	if err != nil {
+		return Principal{}, false, fmt.Errorf("create principal %q: %w", in.Subject, err)
+	}
+
+	return p, true, nil
+}
+
 // checkGroup asks the Guard whether caller may change who holds the grants
 // of the group groupID.
 func (s *Service) checkGroup(ctx context.Context, caller identity.Principal, groupID string) error {
@@ -496,4 +573,40 @@ func (s *Service) checkPrincipal(ctx context.Context, caller identity.Principal,
 	}
 
 	return s.guard.CheckPrincipalGrants(ctx, caller, principalID)
+}
+
+// existingSignIn returns the principal with the subject for a sign-in,
+// after a create found it taken.
+func (s *Service) existingSignIn(ctx context.Context, subject string) (Principal, bool, error) {
+	p, err := s.store.GetPrincipalBySubject(ctx, subject)
+	if err != nil {
+		return Principal{}, false, fmt.Errorf("get principal %q: %w", subject, err)
+	}
+
+	return p, false, signInTarget(p)
+}
+
+// signInTarget returns why a sign-in through an identity provider cannot
+// name p, or nil.
+func signInTarget(p Principal) error {
+	switch {
+	case p.Kind != KindPerson || p.Namespace != "" || p.BreakGlass:
+		return fmt.Errorf("%w: %s", ErrNotSignInTarget, Ref(p.ID))
+	case !p.DisabledAt.IsZero():
+		return fmt.Errorf("%w: %s", ErrDisabled, Ref(p.ID))
+	default:
+		return nil
+	}
+}
+
+// signInDisplayName returns the first name of in.Names that is a valid,
+// non-empty display name, or the subject.
+func signInDisplayName(in SignInInput) string {
+	for _, name := range in.Names {
+		if name != "" && validateText("display name", name, maxDisplayNameLength) == nil {
+			return name
+		}
+	}
+
+	return in.Subject
 }

@@ -359,8 +359,8 @@ func (s *Service) unitStates(ctx context.Context, rs ReviewStore, rows []ReviewR
 	return states, nil
 }
 
-// lastAccess reads the latest last-use time of the access tokens of each
-// principal of rows, with one lookup for the page.
+// lastAccess reads the latest last-use time of the access tokens and the
+// console sessions of each principal of rows, with one lookup for the page.
 func (s *Service) lastAccess(ctx context.Context, rs ReviewStore, rows []ReviewRow) (map[string]time.Time, error) {
 	uses, err := rs.LastAccess(ctx, principalIDsOf(rows))
 	if err != nil {
@@ -404,8 +404,8 @@ func principalIDsOf(rows []ReviewRow) []string {
 }
 
 // setLastAccess sets the last access of each row of rows from uses: a row
-// of a principal is tracked, with the latest use of its tokens, or with no
-// time when no token was ever used. A group row with no Via keeps neither.
+// of a principal is tracked, with the latest use of its tokens and its
+// console sessions, or with no time when none was ever used. A group row with no Via keeps neither.
 func setLastAccess(rows []ReviewRow, uses map[string]time.Time) {
 	for i := range rows {
 		id := principalOfRow(&rows[i])

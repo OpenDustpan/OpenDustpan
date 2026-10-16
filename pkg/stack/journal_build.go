@@ -356,6 +356,37 @@ func (s *Updates) commitBuiltRow(ctx context.Context, save checkpointSave, size 
 	return nil
 }
 
+// checkJournalComplete refuses a complete with succeeded while the journaled
+// update holds a recorded refusal or a gap in its stored sequence IDs. The
+// update stays in progress and the stack stays locked; the message names the
+// one command that ends it. A preview, an update that saves checkpoints, and
+// any other end status need no check.
+func (s *Updates) checkJournalComplete(ctx context.Context, ref Ref, id UpdateID, u Update) error {
+	if !u.Mutates() || u.JournalVersion == 0 {
+		return nil
+	}
+
+	if s.journal == nil {
+		return fmt.Errorf("complete update %s of %s: %w", id, ref, ErrMissingDependency)
+	}
+
+	st, err := s.stacks.GetStack(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("complete update %s of %s: %w", id, ref, err)
+	}
+
+	incomplete, err := s.journal.Incomplete(ctx, st.ID, id)
+	if err != nil {
+		return fmt.Errorf("complete update %s of %s: %w", id, ref, err)
+	}
+
+	if incomplete {
+		return fmt.Errorf("complete update %s of %s: %w", id, ref, ErrJournalIncomplete)
+	}
+
+	return nil
+}
+
 // buildBeforeEnd builds and stores the checkpoint of a journaled update
 // before it ends. An update that already ended, a preview, an update that
 // saves checkpoints, and an update with no stored batches need no build. A

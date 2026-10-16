@@ -228,6 +228,33 @@ func (g *Gate) AuthenticateToken(ctx context.Context, token string) (identity.Pr
 	return p, err
 }
 
+// Admit waits as a charged token lookup of the request in ctx waits: it
+// returns at once while the source of the request has budget, else after
+// the penalty. It returns ErrLimited when the waiting cap of the source is
+// full, and identity.ErrRateLimited when ctx ends during the wait. A step
+// that is not a token lookup, such as the callback of a sign-in through an
+// identity provider, calls it before it does any work. With no request in
+// ctx, it returns nil at once.
+func (g *Gate) Admit(ctx context.Context) error {
+	req, ok := ctx.Value(key{}).(*request)
+	if !ok || req == nil {
+		return nil
+	}
+
+	return g.waitTurn(ctx, req.source)
+}
+
+// Fail uses one unit of the budget of the source of the request in ctx, as
+// a failed token lookup does. With no request in ctx, it does nothing.
+func (g *Gate) Fail(ctx context.Context) {
+	req, ok := ctx.Value(key{}).(*request)
+	if !ok || req == nil {
+		return
+	}
+
+	g.spend(req.source)
+}
+
 // recall returns the answer that the request kept for digest, or nil.
 func (r *request) recall(digest [sha256.Size]byte) *memo {
 	r.mu.Lock()
@@ -254,7 +281,7 @@ func (g *Gate) lookup(ctx context.Context, source, token string) (identity.Princ
 		return g.next.AuthenticateToken(ctx, token)
 	}
 
-	if err := g.admit(ctx, source); err != nil {
+	if err := g.waitTurn(ctx, source); err != nil {
 		var none identity.Principal
 
 		return none, err
@@ -268,11 +295,11 @@ func (g *Gate) lookup(ctx context.Context, source, token string) (identity.Princ
 	return p, err
 }
 
-// admit returns nil when a request of source can go to the store: at once
+// waitTurn returns nil when a request of source can go to the store: at once
 // while the source has budget, else after the penalty. It returns ErrLimited
 // when the waiting cap of the source is full, and identity.ErrRateLimited
 // when ctx ends during the wait.
-func (g *Gate) admit(ctx context.Context, source string) error {
+func (g *Gate) waitTurn(ctx context.Context, source string) error {
 	if !g.reserve(ctx, source) {
 		return nil
 	}
