@@ -163,7 +163,7 @@ func TestSignInEachAlgorithm(t *testing.T) {
 
 			s := newSetup(t, alg, noFaults())
 
-			got, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false})
+			got, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 			if err != nil {
 				t.Fatalf("sign in: %v", err)
 			}
@@ -189,8 +189,8 @@ func TestBeginRequest(t *testing.T) {
 
 	s := newSetup(t, oauthtest.RS256, noFaults())
 
-	firstURL, first := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
-	_, second := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	firstURL, first := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
+	_, second := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 
 	if first.State == second.State || first.Nonce == second.Nonce || first.Verifier == second.Verifier {
 		t.Error("two requests share a state, a nonce or a verifier")
@@ -240,7 +240,7 @@ func TestBeginMaxAge(t *testing.T) {
 		{maxAge: 1500 * time.Millisecond, want: "1"},
 		{maxAge: -time.Minute, want: "0"},
 	} {
-		authURL, pending := s.client.Begin(oauth.Options{MaxAge: tc.maxAge, HasMaxAge: true})
+		authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: tc.maxAge, HasMaxAge: true})
 
 		u, err := url.Parse(authURL)
 		if err != nil {
@@ -289,7 +289,7 @@ func TestFinishRefusesBadIDToken(t *testing.T) {
 
 			s := newSetup(t, oauthtest.RS256, tc.faults)
 
-			authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+			authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 			code := authorize(t, s.provider, authURL).code
 
 			_, err := s.client.Finish(t.Context(), code, pending)
@@ -321,12 +321,12 @@ func TestFinishRefusesOtherNonce(t *testing.T) {
 
 	s := newSetup(t, oauthtest.ES256, noFaults())
 
-	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	code := authorize(t, s.provider, authURL).code
 
 	// The callback of another request: the same code, with the nonce of
 	// another pending request.
-	_, other := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	_, other := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	pending.Nonce = other.Nonce
 
 	_, err := s.client.Finish(t.Context(), code, pending)
@@ -340,7 +340,7 @@ func TestFinishRefusesEmptyPendingNonce(t *testing.T) {
 
 	s := newSetup(t, oauthtest.RS256, noFaults())
 
-	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	code := authorize(t, s.provider, authURL).code
 
 	pending.Nonce = ""
@@ -366,7 +366,7 @@ func TestFinishRefusedExchange(t *testing.T) {
 
 			s := newSetup(t, oauthtest.RS256, noFaults())
 
-			authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+			authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 			code := authorize(t, s.provider, authURL).code
 			tc.change(&code, &pending)
 
@@ -389,7 +389,7 @@ func TestFinishCodeUsedOnce(t *testing.T) {
 
 	s := newSetup(t, oauthtest.RS256, noFaults())
 
-	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	code := authorize(t, s.provider, authURL).code
 
 	if _, err := s.client.Finish(t.Context(), code, pending); err != nil {
@@ -406,7 +406,7 @@ func TestMaxAgeSignsInAgain(t *testing.T) {
 
 	s := newSetup(t, oauthtest.EdDSA, noFaults())
 
-	first, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false})
+	first, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	if err != nil {
 		t.Fatalf("first sign-in: %v", err)
 	}
@@ -415,7 +415,7 @@ func TestMaxAgeSignsInAgain(t *testing.T) {
 
 	// The authentication is 10 minutes old, inside a max_age of 15
 	// minutes: the provider does not authenticate again.
-	kept, err := s.signIn(t, oauth.Options{MaxAge: 15 * time.Minute, HasMaxAge: true})
+	kept, err := s.signIn(t, oauth.Options{State: "", MaxAge: 15 * time.Minute, HasMaxAge: true})
 	if err != nil {
 		t.Fatalf("sign-in inside max_age: %v", err)
 	}
@@ -425,7 +425,7 @@ func TestMaxAgeSignsInAgain(t *testing.T) {
 	}
 
 	// max_age=0 makes the provider authenticate again, so auth_time is now.
-	again, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: true})
+	again, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: true})
 	if err != nil {
 		t.Fatalf("sign-in with max_age 0: %v", err)
 	}
@@ -440,7 +440,7 @@ func TestFinishRefusesAuthenticationOlderThanMaxAge(t *testing.T) {
 
 	s := newSetup(t, oauthtest.RS256, noFaults())
 
-	if _, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false}); err != nil {
+	if _, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false}); err != nil {
 		t.Fatalf("first sign-in: %v", err)
 	}
 
@@ -448,7 +448,7 @@ func TestFinishRefusesAuthenticationOlderThanMaxAge(t *testing.T) {
 
 	// A provider that ignores max_age: the request sends none, but the
 	// pending request expects an authentication of at most 5 minutes.
-	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	authURL, pending := s.client.Begin(oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	code := authorize(t, s.provider, authURL).code
 
 	pending.MaxAge, pending.HasMaxAge = 5*time.Minute, true
@@ -762,7 +762,7 @@ func TestFinishRefusesEmptySubject(t *testing.T) {
 	s := newSetup(t, oauthtest.RS256, noFaults())
 	s.provider.SetUser(oauthtest.User{Subject: "", Name: "No One", PreferredUsername: "", Email: ""})
 
-	_, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false})
+	_, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 	if !errors.Is(err, oauth.ErrIDToken) || !strings.Contains(err.Error(), "sub") {
 		t.Fatalf("Finish error = %v, want ErrIDToken about sub", err)
 	}
@@ -795,7 +795,7 @@ func TestFinishAuthorizedParty(t *testing.T) {
 
 			s := newSetup(t, oauthtest.RS256, tc.faults)
 
-			_, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false})
+			_, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
 			if tc.wantErr != (err != nil) {
 				t.Fatalf("Finish error = %v, want an error: %v", err, tc.wantErr)
 			}
@@ -838,5 +838,24 @@ func TestCheckState(t *testing.T) {
 				t.Fatalf("CheckState error = %v, want nil", err)
 			}
 		})
+	}
+}
+
+func TestBeginWithState(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.RS256, noFaults())
+
+	const state = "dps_state-of-the-caller"
+
+	authURL, pending := s.client.Begin(oauth.Options{State: state, MaxAge: 0, HasMaxAge: false})
+
+	u, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatalf("parse URL: %v", err)
+	}
+
+	if got := u.Query().Get("state"); got != state || pending.State != state {
+		t.Fatalf("state = %q, pending %q; want %q", got, pending.State, state)
 	}
 }

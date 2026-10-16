@@ -354,11 +354,14 @@ func providerAlgorithms(p *oidc.Provider) ([]string, error) {
 	return algs, nil
 }
 
-// Options are the choices of one authorization request. When HasMaxAge is
-// true, the request sends max_age with MaxAge in whole seconds, and Finish
-// refuses an authentication that is older. A MaxAge of 0 asks the
-// provider to authenticate the person again.
+// Options are the choices of one authorization request. State is the
+// state to send: a caller that keys its stored requests by the state gives
+// one. An empty State makes a new one of 256 bits. When HasMaxAge is true,
+// the request sends max_age with MaxAge in whole seconds, and Finish
+// refuses an authentication that is older. A MaxAge of 0 asks the provider
+// to authenticate the person again.
 type Options struct {
+	State     string
 	MaxAge    time.Duration
 	HasMaxAge bool
 }
@@ -390,8 +393,13 @@ func CheckState(got string, p Pending) error {
 // PKCE verifier. The request sends MaxAge in whole seconds, and a
 // negative MaxAge sends 0.
 func (c *Client) Begin(opts Options) (string, Pending) {
+	state := opts.State
+	if state == "" {
+		state = randomText()
+	}
+
 	p := Pending{
-		State:     randomText(),
+		State:     state,
 		Nonce:     randomText(),
 		Verifier:  oauth2.GenerateVerifier(),
 		MaxAge:    max(opts.MaxAge, 0).Truncate(time.Second),
