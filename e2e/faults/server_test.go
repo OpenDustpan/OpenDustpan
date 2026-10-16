@@ -96,13 +96,15 @@ func startFaultServer(t *testing.T) *faultServer {
 	ts.Start()
 	t.Cleanup(ts.Close)
 
-	if err := st.CreateNamespace(ctx, namespace.Namespace{
+	faultNamespace := namespace.Namespace{
 		CreatedAt:       time.Now(),
 		Name:            namespace.Name(faultNS),
 		HomeRegion:      namespace.Region(faultRegion),
 		FailoverVersion: 1,
 		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
-	}); err != nil {
+	}
+
+	if err := st.CreateNamespace(ctx, faultNamespace); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
