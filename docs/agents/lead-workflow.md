@@ -1,8 +1,11 @@
 # Lead workflow: how work items run
 
 These rules are for the lead session, the session that assigns work and
-merges pull requests. A worker session follows its brief and ignores this
-file. The project owner set these rules. Only the owner changes them.
+merges pull requests. No session loads this file automatically. The lead
+reads it at the start of each session. A worker session gets only its brief
+(`docs/agents/worker-brief.md`) and does not read this file. The project
+owner set these rules. Only the owner changes them, through a pull request
+that the owner merges.
 
 ## Who does the work
 
@@ -15,15 +18,20 @@ file. The project owner set these rules. Only the owner changes them.
    every placeholder. The brief tells the worker each step. Do not let a
    worker improvise.
 4. Archive each worker session when the worker completes its work item.
-5. Do not give a new work item to a session that uses a large model. Such a
-   session only finishes its open pull requests. Then archive it.
-6. Do not run implementation or review work in your own subagents. A
+5. Do not run implementation or review work in your own subagents. A
    subagent stops when the owner interrupts the lead, and it costs too much.
    Put review work in a worker session too.
 
 Reason: the implementation model costs about $0.20 for each million output
 tokens. This cost is what makes the project possible. Use Claude tokens for
 coordination, not for code.
+
+## Timers
+
+1. A worker does not schedule check-ins. Pull request events and messages
+   wake a session. A timer that wakes an idle session costs money and does
+   no work.
+2. Delete each check-in that a worker schedules.
 
 ## Merging
 
@@ -34,5 +42,5 @@ coordination, not for code.
    - When main changed the same files, a test of the pull request merged
      with current main passes.
 2. Before each merge, read the pull request body for closing keywords
-   ("Fixes", "Closes"). Remove a keyword that closes the wrong issue.
+   ("Fixes", "Closes"). Delete a keyword that closes the wrong issue.
 3. Only the lead merges. A worker never merges.
