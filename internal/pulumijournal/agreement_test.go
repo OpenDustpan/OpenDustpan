@@ -297,3 +297,41 @@ func TestVerifierAndReplayerAgreeOnSelfReference(t *testing.T) {
 		t.Fatalf("replayer self reference: %v", err)
 	}
 }
+
+// TestVerifierAndReplayerAgreeAfterRebuild checks that a reference to an
+// operation from before a rebuild is refused by both: the replay drops its
+// records at the rebuild, and the verifier refuses because the known set
+// starts again from the rebuild batch. A reference to an operation completed
+// after the rebuild passes both.
+func TestVerifierAndReplayerAgreeAfterRebuild(t *testing.T) {
+	t.Parallel()
+
+	success := agreementPrior(1, 1, 5, agreementResource)
+	rebuild := `{"version":1,"kind":7,"sequenceID":2,"operationID":6,"removeOld":null,"removeNew":null}`
+	prior := success + `,` + rebuild
+	referrer := agreementReferrer(3, 7, "removeNew", 5)
+	verifierBody := `{"entries":[` + referrer + `]}`
+
+	// The stored rebuild clears the known set, so the batch after it is
+	// verified with no known operations.
+	if err := agreementVerify(verifierBody, nil); !errors.Is(err, pulumijournal.ErrMissingReference) {
+		t.Fatalf("verifier reference before a rebuild: err = %v, want ErrMissingReference", err)
+	}
+
+	if err := agreementReplay(t, prior, referrer); !errors.Is(err, pulumijournal.ErrMissingReference) {
+		t.Fatalf("replayer reference before a rebuild: err = %v, want ErrMissingReference", err)
+	}
+
+	completed := agreementPrior(1, 3, 8, agreementResource)
+	after := prior + `,` + completed
+	next := agreementReferrer(4, 9, "removeNew", 8)
+	nextBody := `{"entries":[` + next + `]}`
+
+	if err := agreementVerify(nextBody, []int64{8}); err != nil {
+		t.Fatalf("verifier reference after a rebuild: %v", err)
+	}
+
+	if err := agreementReplay(t, after, next); err != nil {
+		t.Fatalf("replayer reference after a rebuild: %v", err)
+	}
+}

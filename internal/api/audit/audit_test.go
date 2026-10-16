@@ -132,14 +132,19 @@ func (m *memAuditStore) Check(_ context.Context, ns namespace.Name) (audit.Check
 	for i := range chain {
 		e := &chain[i]
 		if e.Sequence != wantSeq || e.PrevHash != prevHash || audit.ComputeHash(*e, e.PrevHash) != e.Hash {
-			return audit.CheckResult{Checked: int64(len(chain)), BadSequence: e.Sequence, Valid: false}, nil
+			return audit.CheckResult{
+				Checked:     int64(len(chain)),
+				BadSequence: e.Sequence,
+				Unchained:   0,
+				Valid:       false,
+			}, nil
 		}
 
 		prevHash = e.Hash
 		wantSeq++
 	}
 
-	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Valid: true}, nil
+	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
 // changeEntrySubject rewrites the subject of one stored entry behind the
@@ -210,27 +215,28 @@ func seedEntry(t *testing.T, store *memAuditStore, ns namespace.Name, subject st
 	t.Helper()
 
 	stored, err := store.Append(t.Context(), namespace.Fence{Namespace: ns, FailoverVersion: 1}, audit.Entry{
-		At:         changeTime(),
-		Namespace:  ns,
-		Subject:    subject,
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:decrypt",
-		Object:     "pulumi:" + ns.String() + "/web/prod",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "pulumi-cli/3.200.0",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindReveal,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "req-" + subject,
-		ObjectID:   "id-" + subject,
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           changeTime(),
+		Namespace:    ns,
+		Subject:      subject,
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:decrypt",
+		Object:       "pulumi:" + ns.String() + "/web/prod",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "pulumi-cli/3.200.0",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindReveal,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "req-" + subject,
+		ObjectID:     "id-" + subject,
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	})
 	if err != nil {
 		t.Fatalf("seed audit entry: %v", err)

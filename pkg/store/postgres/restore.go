@@ -253,16 +253,27 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 			return fmt.Errorf("move staged schema live: %w", err)
 		}
 
-		if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
-			return fmt.Errorf("drop previous schema: %w", err)
-		}
-
-		return fenceRestored(ctx, tx, live)
+		return finishSwap(ctx, tx, live, previous)
 	})
 }
 
+// finishSwap ends the swap in tx: it keeps the audit chain state of this
+// installation, drops the schema previous, and fences the restored schema
+// live (see fenceRestored).
+func finishSwap(ctx context.Context, tx pgx.Tx, live, previous string) error {
+	if err := keepChainState(ctx, tx, live, previous); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
+		return fmt.Errorf("drop previous schema: %w", err)
+	}
+
+	return fenceRestored(ctx, tx, live)
+}
+
 // fenceRestored increments the failover version of every namespace of the
-// restored schema live and resets the audit sink cursors, in tx.
+// restored schema live and resets the audit sink cursors and leases, in tx.
 func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 	fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
 
@@ -272,9 +283,49 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 
 	// The restored log can reuse sequences that a sink already holds, and
 	// a restored cursor can point past the restored entries. A reset makes
-	// every sink receive the restored log again from its first entry.
+	// every sink receive the restored log again from its first entry. A
+	// restored lease could block that reship, so the reset releases every
+	// lease too.
 	if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(live)+".audit_sink_cursors"); err != nil {
 		return fmt.Errorf("reset audit sink cursors after restore: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(live)+".audit_sink_leases"); err != nil {
+		return fmt.Errorf("reset audit sink leases after restore: %w", err)
+	}
+
+	return nil
+}
+
+// keepChainState copies the audit chain state from the schema previous to
+// the restored schema live, in tx. The chain state is bookkeeping of this
+// installation: a restore keeps the row of the target. The swap replaces
+// the log, so the copy sets log_replaced: the server compares the restored
+// log with the state, also after a crash. The copy keeps no migration: a
+// new approval starts it again. The copy keeps entered_maintenance false:
+// the chain enters maintenance mode again when it still waits. Without a
+// row, the copy writes the state that a missing row reads as: the chain on.
+func keepChainState(ctx context.Context, tx pgx.Tx, live, previous string) error {
+	const columns = "id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms"
+
+	keep := "INSERT INTO " + pgIdent(live) + ".audit_chain_state (" + columns + ")" +
+		" SELECT id, state, changed_at_ms, changed_by, pending, false, true, 0 FROM " +
+		pgIdent(previous) + ".audit_chain_state"
+
+	tag, err := tx.Exec(ctx, keep)
+	if err != nil {
+		return fmt.Errorf("keep audit chain state: %w", err)
+	}
+
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+
+	seed := "INSERT INTO " + pgIdent(live) +
+		".audit_chain_state (id, state, changed_at_ms, changed_by, pending, log_replaced, entered_maintenance, migrating_at_ms)" +
+		" VALUES (1, 'on', 0, '', false, true, false, 0)"
+	if _, err := tx.Exec(ctx, seed); err != nil {
+		return fmt.Errorf("keep audit chain state: %w", err)
 	}
 
 	return nil

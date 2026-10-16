@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -30,7 +31,14 @@ func TestLatencyThroughProxy(t *testing.T) {
 	srv := startFaultServer(t)
 	listen := createProxy(t, api, "latency-proxy", srv.upstream)
 
-	addToxic(t, api, "latency-proxy", "latency-down", "latency", "downstream", `{"latency":500,"jitter":0}`)
+	addToxic(t, toxicSpec{
+		api:        api,
+		proxy:      "latency-proxy",
+		name:       "latency-down",
+		typ:        "latency",
+		stream:     "downstream",
+		attributes: `{"latency":500,"jitter":0}`,
+	})
 
 	client := &http.Client{Timeout: 10 * time.Second}
 
@@ -69,7 +77,14 @@ func TestTimeoutThroughProxy(t *testing.T) {
 	srv := startFaultServer(t)
 	listen := createProxy(t, api, "timeout-proxy", srv.upstream)
 
-	addToxic(t, api, "timeout-proxy", "stall", "timeout", "upstream", `{"timeout":0}`)
+	addToxic(t, toxicSpec{
+		api:        api,
+		proxy:      "timeout-proxy",
+		name:       "stall",
+		typ:        "timeout",
+		stream:     "upstream",
+		attributes: `{"timeout":0}`,
+	})
 
 	stalled := &http.Client{Timeout: time.Second}
 
@@ -83,13 +98,15 @@ func TestTimeoutThroughProxy(t *testing.T) {
 		t.Fatalf("build stalled request: %v", err)
 	}
 
-	_, err = stalled.Do(stalledReq)
-	if err == nil {
+	stalledResp, stalledErr := stalled.Do(stalledReq)
+	if stalledErr == nil {
+		discardBody(stalledResp)
+
 		t.Fatal("GET /health/live through stalled proxy succeeded, want a timeout error")
 	}
 
-	if !isTimeoutError(err) {
-		t.Fatalf("GET /health/live through stalled proxy: err = %v, want a timeout error", err)
+	if !isTimeoutError(stalledErr) {
+		t.Fatalf("GET /health/live through stalled proxy: err = %v, want a timeout error", stalledErr)
 	}
 
 	removeToxic(t, api, "timeout-proxy", "stall")
@@ -131,7 +148,11 @@ func TestLimitDataKeepsOldState(t *testing.T) {
 	createStack(t, direct, srv.url, tokenAuth)
 
 	firstLease := startUpdate(t, direct, srv.url, tokenAuth)
-	saveCheckpoint(t, direct, srv.url, tokenAuth, firstLease, `{"manifest":{},"resources":[]}`)
+	saveCheckpoint(t, direct, checkpointSave{
+		base:       srv.url,
+		lease:      firstLease,
+		deployment: `{"manifest":{},"resources":[]}`,
+	})
 	completeUpdate(t, direct, srv.url, firstLease, "succeeded")
 
 	before := exportStack(t, direct, srv.url, tokenAuth)
@@ -140,7 +161,14 @@ func TestLimitDataKeepsOldState(t *testing.T) {
 
 	listen := createProxy(t, api, "limit-proxy", srv.upstream)
 
-	addToxic(t, api, "limit-proxy", "cut-body", "limit_data", "upstream", `{"bytes":1024}`)
+	addToxic(t, toxicSpec{
+		api:        api,
+		proxy:      "limit-proxy",
+		name:       "cut-body",
+		typ:        "limit_data",
+		stream:     "upstream",
+		attributes: `{"bytes":1024}`,
+	})
 
 	large := `{"manifest":{},"resources":[],"padding":"` + strings.Repeat("a", 256*1024) + `"}`
 
@@ -185,11 +213,11 @@ func patchCheckpointThroughProxy(t *testing.T, proxyBase, lease, deployment stri
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("patch checkpoint through proxy: %w", err)
 	}
 
 	defer func() {
-		_ = resp.Body.Close() //nolint:errcheck // The status is the check; the body is drained by readBody callers.
+		closeBody(t, resp.Body)
 	}()
 
 	_ = readBody(t, resp)
@@ -197,20 +225,26 @@ func patchCheckpointThroughProxy(t *testing.T, proxyBase, lease, deployment stri
 	return resp.StatusCode, nil
 }
 
+// closeBody closes a response body and reports a close failure.
+func closeBody(t *testing.T, body io.Closer) {
+	t.Helper()
+	if err := body.Close(); err != nil {
+		t.Errorf("close response body: %v", err)
+	}
+}
+
 // leaseID splits the lease "updateID/token" form used below. The start
 // helper returns them joined, so the checkpoint path can name the update.
 func leaseID(lease string) string {
-	if i := strings.Index(lease, "/"); i >= 0 {
-		return lease[:i]
-	}
+	id, _, _ := strings.Cut(lease, "/")
 
-	return lease
+	return id
 }
 
 // leaseToken splits the joined lease into its token part.
 func leaseToken(lease string) string {
-	if i := strings.Index(lease, "/"); i >= 0 {
-		return lease[i+1:]
+	if _, token, ok := strings.Cut(lease, "/"); ok {
+		return token
 	}
 
 	return lease
@@ -238,6 +272,10 @@ func createStack(t *testing.T, client *http.Client, base, auth string) {
 		t.Fatalf("create stack: %v", err)
 	}
 
+	defer func() {
+		closeBody(t, resp.Body)
+	}()
+
 	body := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("create stack: status %d, want %d (body %s)", resp.StatusCode, http.StatusOK, body)
@@ -252,7 +290,12 @@ func startUpdate(t *testing.T, client *http.Client, base, auth string) string {
 		UpdateID string `json:"updateID"`
 	}
 
-	postJSON(t, client, base+"/api/stacks/acme/web/prod/update", auth, `{}`, &created)
+	postJSON(t, client, jsonPost{
+		target: base + "/api/stacks/acme/web/prod/update",
+		auth:   auth,
+		body:   `{}`,
+		out:    &created,
+	})
 	if created.UpdateID == "" {
 		t.Fatal("create update: no update id")
 	}
@@ -261,7 +304,12 @@ func startUpdate(t *testing.T, client *http.Client, base, auth string) string {
 		Token string `json:"token"`
 	}
 
-	postJSON(t, client, base+"/api/stacks/acme/web/prod/update/"+created.UpdateID, auth, `{}`, &started)
+	postJSON(t, client, jsonPost{
+		target: base + "/api/stacks/acme/web/prod/update/" + created.UpdateID,
+		auth:   auth,
+		body:   `{}`,
+		out:    &started,
+	})
 	if started.Token == "" {
 		t.Fatal("start update: no lease token")
 	}
@@ -269,18 +317,25 @@ func startUpdate(t *testing.T, client *http.Client, base, auth string) string {
 	return created.UpdateID + "/" + started.Token
 }
 
+// checkpointSave bundles one checkpoint save through the API.
+type checkpointSave struct {
+	base       string
+	lease      string
+	deployment string
+}
+
 // saveCheckpoint saves deployment in the running update named by lease.
-func saveCheckpoint(t *testing.T, client *http.Client, base, _, lease, deployment string) {
+func saveCheckpoint(t *testing.T, client *http.Client, save checkpointSave) {
 	t.Helper()
 
-	id := leaseID(lease)
-	tok := leaseToken(lease)
-	body := `{"version":3,"deployment":` + deployment + `}`
+	id := leaseID(save.lease)
+	tok := leaseToken(save.lease)
+	body := `{"version":3,"deployment":` + save.deployment + `}`
 
 	req, err := http.NewRequestWithContext(
 		t.Context(),
 		http.MethodPatch,
-		base+"/api/stacks/acme/web/prod/update/"+id+"/checkpoint",
+		save.base+"/api/stacks/acme/web/prod/update/"+id+"/checkpoint",
 		strings.NewReader(body),
 	)
 	if err != nil {
@@ -294,6 +349,10 @@ func saveCheckpoint(t *testing.T, client *http.Client, base, _, lease, deploymen
 	if err != nil {
 		t.Fatalf("save checkpoint: %v", err)
 	}
+
+	defer func() {
+		closeBody(t, resp.Body)
+	}()
 
 	respBody := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
@@ -326,6 +385,10 @@ func completeUpdate(t *testing.T, client *http.Client, base, lease, status strin
 		t.Fatalf("complete update: %v", err)
 	}
 
+	defer func() {
+		closeBody(t, resp.Body)
+	}()
+
 	body := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("complete update: status %d, want %d (body %s)", resp.StatusCode, http.StatusOK, body)
@@ -353,6 +416,10 @@ func exportStack(t *testing.T, client *http.Client, base, auth string) string {
 		t.Fatalf("export stack: %v", err)
 	}
 
+	defer func() {
+		closeBody(t, resp.Body)
+	}()
+
 	body := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("export stack: status %d, want %d (body %s)", resp.StatusCode, http.StatusOK, body)
@@ -361,29 +428,41 @@ func exportStack(t *testing.T, client *http.Client, base, auth string) string {
 	return body
 }
 
+// jsonPost bundles one authenticated POST with its JSON response target.
+type jsonPost struct {
+	target string
+	auth   string
+	body   string
+	out    any
+}
+
 // postJSON sends one authenticated POST with body and decodes the JSON response into out.
-func postJSON(t *testing.T, client *http.Client, target, auth, body string, out any) {
+func postJSON(t *testing.T, client *http.Client, call jsonPost) {
 	t.Helper()
 
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, target, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, call.target, strings.NewReader(call.body))
 	if err != nil {
-		t.Fatalf("build POST %s: %v", target, err)
+		t.Fatalf("build POST %s: %v", call.target, err)
 	}
 
-	req.Header.Set("Authorization", auth)
+	req.Header.Set("Authorization", call.auth)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("POST %s: %v", target, err)
+		t.Fatalf("POST %s: %v", call.target, err)
 	}
+
+	defer func() {
+		closeBody(t, resp.Body)
+	}()
 
 	data := readBody(t, resp)
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("POST %s: status %d, want %d (body %s)", target, resp.StatusCode, http.StatusOK, data)
+		t.Fatalf("POST %s: status %d, want %d (body %s)", call.target, resp.StatusCode, http.StatusOK, data)
 	}
 
-	decodeJSON(t, "POST "+target, []byte(data), out)
+	decodeJSON(t, "POST "+call.target, []byte(data), call.out)
 }
 
 // TestPostgresCutThroughProxy proves a proxy in front of PostgreSQL that is
@@ -447,18 +526,18 @@ func checkPostgresCut(t *testing.T, base string) {
 	openStore := func() *postgres.Store {
 		t.Helper()
 
-		st, err := postgres.Open(ctx, proxied)
-		if err != nil {
-			t.Fatalf("open postgres store through proxy: %v", err)
+		st, openErr := postgres.Open(ctx, proxied)
+		if openErr != nil {
+			t.Fatalf("open postgres store through proxy: %v", openErr)
 		}
 
 		return st
 	}
 
 	first := openStore()
-	if err := first.CreateNamespace(ctx, pgNamespace("pgfault-ok")); err != nil {
+	if createErr := first.CreateNamespace(ctx, pgNamespace("pgfault-ok")); createErr != nil {
 		first.CloseContext(ctx)
-		t.Fatalf("write before cut: %v", err)
+		t.Fatalf("write before cut: %v", createErr)
 	}
 
 	first.CloseContext(ctx)
@@ -467,7 +546,14 @@ func checkPostgresCut(t *testing.T, base string) {
 	// connection handshake, not in the write.
 	second := openStore()
 
-	addToxic(t, api, "pg-proxy", "cut-pg", "timeout", "upstream", `{"timeout":0}`)
+	addToxic(t, toxicSpec{
+		api:        api,
+		proxy:      "pg-proxy",
+		name:       "cut-pg",
+		typ:        "timeout",
+		stream:     "upstream",
+		attributes: `{"timeout":0}`,
+	})
 
 	// A write while cut fails. A short timeout bounds the stall.
 	cutCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -485,9 +571,9 @@ func checkPostgresCut(t *testing.T, base string) {
 	// The next write after the toxic is removed succeeds.
 	third := openStore()
 
-	if err := third.CreateNamespace(ctx, pgNamespace("pgfault-after")); err != nil {
+	if createErr := third.CreateNamespace(ctx, pgNamespace("pgfault-after")); createErr != nil {
 		third.CloseContext(ctx)
-		t.Fatalf("write after cut: %v", err)
+		t.Fatalf("write after cut: %v", createErr)
 	}
 
 	got, err := third.GetNamespace(ctx, namespace.Name("pgfault-after"))

@@ -68,7 +68,10 @@ func TestFrozenMigrations(t *testing.T) {
 		"0064_blob_purges_age_byte_order.sql":      "e2a6965f07096da54f1e00240016a349cb046571b05a3ddec0544ec593c86d2d",
 		"0065_session_policy.sql":                  "851a98fd2a4cbc0bd13d1365a9639a3208962870782e2cf7b262d4782bd01112",
 		"0066_namespace_principals.sql":            "1f8013ffa3162a5bcaf313ef65dbd74de34b728bcb24a2f15c34e930d0201923",
+		"0067_audit_chain_state.sql":               "1c23fdc4de99e2a7a5d10a3aa71446582c2ec56738394867be8840df4faadfb0",
 		"0068_update_journal_records_changed.sql":  "41672a0c124301d6a3448a3c5171dcb978d95fd5332696c6ff305b2d3608ecb9",
+		"0069_audit_sink_leases.sql":               "e506a8096d0bb5a0d756ecfbba498b8e868f3c26341ee92a08fcdca01485e7aa",
+		"0071_break_glass_accounts.sql":            "4808b43c4492416709520b3c868185084791694c078eb1b59c05dbc1ed7a8aa3",
 		"0074_update_journal_refusals.sql":         "5b7c61626ef1913f4aba46a199c9ca52fe60e01aa37bea2ebc041358b977bc91",
 	}
 

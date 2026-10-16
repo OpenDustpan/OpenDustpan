@@ -51,7 +51,10 @@ func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence n
 // writeJournalRow answers a retry without a write (true). Otherwise it runs the
 // row's check against the stored operations and the stored records flag and inserts
 // the row (false). When the batch holds an entry that changes the replay records,
-// the flag of the update is set in the same transaction as the write.
+// the flag of the update is set in the same transaction as the write. When the
+// batch holds a rebuilt base state entry, the operation IDs of earlier batches
+// are cleared in the same transaction, so the known set starts again from this
+// batch.
 func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) (bool, error) {
 	done, err := journalRetry(ctx, q, stackID, row)
 	if err != nil {
@@ -65,6 +68,13 @@ func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 	changed, verifyErr := verifyJournalRow(ctx, q, stackID, row)
 	if verifyErr != nil {
 		return false, verifyErr
+	}
+
+	if row.HasRebuild {
+		params := db.ClearJournalOperationsParams{StackID: stackID, UpdateID: row.Update.String()}
+		if clearErr := q.ClearJournalOperations(ctx, params); clearErr != nil {
+			return false, fmt.Errorf("clear journal operations: %w", clearErr)
+		}
 	}
 
 	if insertErr := insertJournalRow(ctx, q, stackID, row); insertErr != nil {

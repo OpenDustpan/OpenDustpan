@@ -58,6 +58,8 @@ const (
 	pgColTool        = "tool"
 	pgColPrincipalID = "principal_id"
 	pgColDisplayName = "display_name"
+	pgColSink        = "sink"
+	pgColExpiresAtMs = "expires_at_ms"
 )
 
 // pgQuerier is the QueryRow of a pool or a transaction, for the hand-written
@@ -238,14 +240,19 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
-				"changes", "object_id",
+				"changes", "object_id", "fence_version",
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},
 		{
 			table:   "audit_sink_cursors",
-			columns: []string{"sink", pgColNamespace, pgColSequence, pgColUpdatedAtMs},
-			orderBy: []string{"sink", pgColNamespace},
+			columns: []string{pgColSink, pgColNamespace, pgColSequence, pgColUpdatedAtMs},
+			orderBy: []string{pgColSink, pgColNamespace},
+		},
+		{
+			table:   "audit_sink_leases",
+			columns: []string{pgColSink, "holder", pgColExpiresAtMs},
+			orderBy: []string{pgColSink},
 		},
 		{
 			table:   "backups",
@@ -283,10 +290,23 @@ func pgCopySessionTables() []pgCopyTable {
 		{
 			table: "sign_in_requests",
 			columns: []string{
-				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, "expires_at_ms",
+				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, pgColExpiresAtMs,
 			},
 			orderBy: []string{pgColDigest},
 		},
+	}
+}
+
+// pgCopyPrincipalsTable holds the COPY columns of the principals table.
+func pgCopyPrincipalsTable() pgCopyTable {
+	return pgCopyTable{
+		table: "principals",
+		columns: []string{
+			"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
+			pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
+			"break_glass",
+		},
+		orderBy: []string{"id"},
 	}
 }
 
@@ -294,14 +314,7 @@ func pgCopySessionTables() []pgCopyTable {
 // role and grant tables (ADR 52).
 func pgCopyIdentityTables() []pgCopyTable {
 	return []pgCopyTable{
-		{
-			table: "principals",
-			columns: []string{
-				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
-			},
-			orderBy: []string{"id"},
-		},
+		pgCopyPrincipalsTable(),
 		{
 			table: "principal_groups",
 			columns: []string{
@@ -324,7 +337,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 				pgColKind,
 				pgColDigest,
 				pgColCreatedAtMs,
-				"expires_at_ms",
+				pgColExpiresAtMs,
 				"last_used_at_ms",
 				"revoked_at_ms",
 				"replaced_by",
@@ -1114,11 +1127,12 @@ func backupEndedAt(endedAt time.Time) pgtype.Int8 {
 
 // SchemaTables implements backup.Inspector: it reads the table catalog, so a
 // table missing from backup.Tables fails the conformance suite. Bookkeeping
-// (schema_migrations) is not data and stays out.
+// (schema_migrations, and audit_chain_state, the chain state of this
+// installation) is not data and stays out.
 func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables`+
 		` WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'`+
-		` AND table_name <> 'schema_migrations' ORDER BY table_name`)
+		` AND table_name NOT IN ('schema_migrations', 'audit_chain_state') ORDER BY table_name`)
 	if err != nil {
 		return nil, fmt.Errorf("select schema tables: %w", err)
 	}

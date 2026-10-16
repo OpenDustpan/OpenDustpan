@@ -170,6 +170,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
@@ -215,6 +216,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
@@ -287,6 +289,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
@@ -342,6 +345,7 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 		DeletedUnits:   nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
+		AuditChain:     nil,
 		AuditSinks:     nil,
 	}
 
