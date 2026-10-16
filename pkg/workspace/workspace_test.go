@@ -687,6 +687,12 @@ func checkMemFinalize(m *memStore, w workspace.Workspace, sv workspace.StateVers
 		}
 	}
 
+	if cur, ok := m.current[sv.Workspace]; ok && sv.RestoredFrom != "" {
+		if current := m.versions[cur]; current.RestoredFrom == sv.RestoredFrom && current.Holder == sv.Holder {
+			return workspace.ErrAlreadyRestored
+		}
+	}
+
 	return nil
 }
 

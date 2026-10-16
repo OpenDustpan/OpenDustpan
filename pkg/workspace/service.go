@@ -131,7 +131,11 @@ type StateStore interface {
 	//   - the workspace is held by lock sv.LockID, else ErrNotLocked or
 	//     ErrLockedByOther;
 	//   - unless sv.Force, the current state (if any) has sv.Lineage, else
-	//     ErrLineageMismatch, and a lower serial, else ErrStaleSerial.
+	//     ErrLineageMismatch, and a lower serial, else ErrStaleSerial;
+	//   - when sv.RestoredFrom is set, the current state (if any) does not
+	//     restore sv.RestoredFrom for sv.Holder, else ErrAlreadyRestored: two
+	//     concurrent restores of one version write one version, also across
+	//     services.
 	// Those errors, ErrNotFound, ErrStateVersionNotFound,
 	// namespace.ErrNotFound and namespace.ErrFenced mean nothing was
 	// written. Any other error leaves the outcome unknown: the version may
@@ -1335,6 +1339,10 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	}
 
 	sv, err := s.copyState(ctx, w, src)
+	if errors.Is(err, ErrAlreadyRestored) {
+		sv, err = s.answerDuplicateRestore(ctx, id, from, holder, err)
+	}
+
 	if !release {
 		return sv, err
 	}
@@ -1342,6 +1350,25 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	_, unlockErr := s.Unlock(ctx, id, holder)
 
 	return sv, errors.Join(err, unlockErr)
+}
+
+// answerDuplicateRestore answers the version that a concurrent restore of from
+// made current, after the store refused this restore as a duplicate with
+// dupErr. The duplicate wrote nothing. When the current state no longer
+// restores from, dupErr stays the answer.
+func (s *Service) answerDuplicateRestore(
+	ctx context.Context, id ID, from StateVersionID, holder string, dupErr error,
+) (StateVersion, error) {
+	retried, found, err := s.restoredCurrent(ctx, id, from, holder)
+	if err != nil {
+		return StateVersion{}, errors.Join(dupErr, err)
+	}
+
+	if !found {
+		return StateVersion{}, dupErr
+	}
+
+	return retried, nil
 }
 
 // followedState returns the current state version of the unit, and whether the
@@ -1671,6 +1698,15 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
 		err = fmt.Errorf("finalize restored state %s: %w", sv.ID, err)
+		if errors.Is(err, ErrAlreadyRestored) {
+			// A concurrent restore of src won. Nothing was written, so this
+			// attempt's blob and its pending row go, and the pending row
+			// does not fill the cap.
+			return StateVersion{}, errors.Join(
+				err, s.blobs.Delete(ctx, key), s.states.DiscardStateVersion(ctx, sv.ID, fence),
+			)
+		}
+
 		if rejected(err) {
 			// Nothing was written, so this attempt's blob is an orphan.
 			return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
@@ -1957,6 +1993,7 @@ func (s *Service) lockKey(key string) func() {
 func rejected(err error) bool {
 	for _, sentinel := range []error{
 		ErrUploadDenied,
+		ErrAlreadyRestored,
 		ErrNotLocked,
 		ErrLockedByOther,
 		ErrLineageMismatch,

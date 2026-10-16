@@ -81,6 +81,14 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 		{name: "finalize with a stale serial is ErrStaleSerial", test: testFinalizeStaleSerial},
 		{name: "force skips the lineage and serial checks but not the lock check", test: testFinalizeForce},
 		{name: "two concurrent finalizes admit exactly one", test: testConcurrentFinalize},
+		{
+			name: "concurrent restores of one version through two services write one version",
+			test: testRestoreAcrossServicesWritesOnce,
+		},
+		{
+			name: "finalize of a duplicate restore is ErrAlreadyRestored and writes nothing",
+			test: testFinalizeDuplicateRestore,
+		},
 		{name: "a fenced finalize leaves the old state current", test: testFencedFinalizeKeepsCurrent},
 		{
 			name: "a superseded attempt never finalizes over a newer one",
@@ -1971,6 +1979,70 @@ func testListStateVersionsRestoredFrom(t *testing.T, s WorkspaceStore) {
 
 	if list[1].RestoredFrom != "" {
 		t.Errorf("restored-from of the source version = %q, want empty", list[1].RestoredFrom)
+	}
+}
+
+// testFinalizeDuplicateRestore proves a finalize refuses a restored version
+// with ErrAlreadyRestored when the current state already restores the same
+// version for the same holder, and writes nothing. A restore of another
+// version still finalizes.
+func testFinalizeDuplicateRestore(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	sources := make([]workspace.StateVersion, 2)
+
+	for i := range sources {
+		pending := createPendingVersion(t, s, ns, newPendingVersion(
+			t, locked, locked.Lock.ID, stateInput("l1", "v1", int64(i+1)),
+		))
+		sources[i] = finalizedVersion(pending, now().Add(time.Duration(i+1)*time.Hour), "v1")
+
+		if err := finalizeRecorded(t, s, ns.Fence(), sources[i]); err != nil {
+			t.Fatalf("finalize source %d: %v", i, err)
+		}
+	}
+
+	restores := make([]workspace.StateVersion, 3)
+
+	for i := range restores {
+		pending := newPendingVersion(t, locked, locked.Lock.ID, forcedInput("l1", "v1", 1))
+		pending.RestoredFrom = sources[0].ID
+
+		if i == 2 {
+			pending.RestoredFrom = sources[1].ID
+		}
+
+		createPendingVersion(t, s, ns, pending)
+		restores[i] = finalizedVersion(pending, now().Add(time.Duration(i+3)*time.Hour), "v1")
+	}
+
+	if err := finalizeRecorded(t, s, ns.Fence(), restores[0]); err != nil {
+		t.Fatalf("finalize first restore: %v", err)
+	}
+
+	err := finalizeRecorded(t, s, ns.Fence(), restores[1])
+	if !errors.Is(err, workspace.ErrAlreadyRestored) {
+		t.Fatalf("finalize duplicate restore: err = %v, want ErrAlreadyRestored", err)
+	}
+
+	stored, err := s.GetStateVersion(t.Context(), restores[1].ID)
+	if err != nil || stored.Status != workspace.StatusPending {
+		t.Fatalf("duplicate restore after the refusal: status %v, err %v; want pending", stored.Status, err)
+	}
+
+	current, err := s.CurrentStateVersion(t.Context(), w.ID)
+	if err != nil {
+		t.Fatalf("current state after the duplicate restore: %v", err)
+	}
+
+	assertStateVersion(t, current, restores[0])
+
+	if err := finalizeRecorded(t, s, ns.Fence(), restores[2]); err != nil {
+		t.Fatalf("finalize restore of another version: %v", err)
 	}
 }
 
@@ -3931,6 +4003,15 @@ func testDiscardStaleFence(t *testing.T, s WorkspaceStore) {
 func serviceOver(t *testing.T, s WorkspaceStore) *workspace.Service {
 	t.Helper()
 
+	return servicesOver(t, s, 1)[0]
+}
+
+// servicesOver returns n workspace services over s that share one blob store
+// in a temporary directory. Each service has its own in-process lock stripes,
+// like the services of n instances over one database.
+func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
+	t.Helper()
+
 	nsSvc, err := namespace.NewService(namespace.Config{Store: s, Now: nil, Region: "eu-west"})
 	if err != nil {
 		t.Fatalf("namespace service: %v", err)
@@ -3947,23 +4028,112 @@ func serviceOver(t *testing.T, s WorkspaceStore) *workspace.Service {
 		}
 	})
 
-	svc, err := workspace.NewService(workspace.Config{
-		Workspaces:         s,
-		States:             s,
-		Blobs:              blobs,
-		Namespaces:         nsSvc,
-		Sealer:             nil,
-		Logger:             nil,
-		Now:                now,
-		MaxStateBytes:      0,
-		MaxPendingVersions: 0,
-		Retention:          0,
-	})
-	if err != nil {
-		t.Fatalf("workspace service: %v", err)
+	services := make([]*workspace.Service, n)
+
+	for i := range services {
+		svc, err := workspace.NewService(workspace.Config{
+			Workspaces:         s,
+			States:             s,
+			Blobs:              blobs,
+			Namespaces:         nsSvc,
+			Sealer:             nil,
+			Logger:             nil,
+			Now:                now,
+			MaxStateBytes:      0,
+			MaxPendingVersions: 0,
+			Retention:          0,
+		})
+		if err != nil {
+			t.Fatalf("workspace service: %v", err)
+		}
+
+		services[i] = svc
 	}
 
-	return svc
+	return services
+}
+
+// testRestoreAcrossServicesWritesOnce proves that concurrent restores of one
+// version through two services over one store write one restored version:
+// every caller gets that version, and the history grows by one. The services
+// share no lock stripe, so only the store can refuse the duplicate.
+func testRestoreAcrossServicesWritesOnce(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	services := servicesOver(t, s, 2)
+	ctx := t.Context()
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+
+	if _, err := services[0].Lock(ctx, w.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	first := pushThrough(t, services[0], w.ID, 1, "{\"v\":1}")
+	pushThrough(t, services[0], w.ID, 2, "{\"v\":2}")
+
+	const callers = 8
+
+	ids := make([]workspace.StateVersionID, callers)
+	errs := make([]error, callers)
+
+	var wg sync.WaitGroup
+
+	for i := range callers {
+		wg.Go(func() {
+			restored, err := services[i%len(services)].Restore(ctx, w.ID, first.ID, "alice")
+			ids[i], errs[i] = restored.ID, err
+		})
+	}
+
+	wg.Wait()
+
+	for i := range callers {
+		if errs[i] != nil {
+			t.Fatalf("restore %d: %v", i, errs[i])
+		}
+
+		if ids[i] != ids[0] {
+			t.Fatalf("restore %d answered %s, restore 0 answered %s: want one restored version", i, ids[i], ids[0])
+		}
+	}
+
+	_, total, err := s.ListStateVersions(ctx, w.ID, workspace.Page{Limit: 10, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	if total != 3 {
+		t.Fatalf("history holds %d versions, want 3: two pushes and one restore", total)
+	}
+}
+
+// pushThrough declares and uploads one state version through svc as alice,
+// who must hold the lock, and returns the finalized version.
+func pushThrough(
+	t *testing.T, svc *workspace.Service, id workspace.ID, serial int64, content string,
+) workspace.StateVersion {
+	t.Helper()
+
+	sum := md5.Sum([]byte(content)) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
+	in := workspace.NewState{
+		Lineage: "l1", MD5: fmt.Sprintf("%x", sum), Outputs: nil, Serial: serial, Force: false,
+	}
+
+	pending, err := svc.BeginState(t.Context(), id, "alice", in, workspace.Authority{
+		Allow:  namespace.Overrides{Forced: false, Unlocked: false},
+		Record: nil,
+	})
+	if err != nil {
+		t.Fatalf("begin serial %d: %v", serial, err)
+	}
+
+	sv, err := svc.Upload(t.Context(), pending.Version.ID, pending.Upload, strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("upload serial %d: %v", serial, err)
+	}
+
+	return sv
 }
 
 // testConditionalUnlock proves UnlockLock and ForceUnlockLock release only the
