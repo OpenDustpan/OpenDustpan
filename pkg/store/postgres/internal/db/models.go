@@ -260,6 +260,12 @@ type Role struct {
 	DeletedAtMs pgtype.Int8
 }
 
+type SchemaMigration struct {
+	Version          int64
+	Name             string
+	MinBinaryVersion string
+}
+
 type SecretKey struct {
 	Namespace   string
 	StackID     string
