@@ -193,8 +193,9 @@ var Settings = []*Setting{
 	).WithFile("blob-store").WithURL(),
 	intSetting(
 		"blob-cache-bytes", "DUSTPAN_BLOB_CACHE_BYTES", "0",
-		"bytes of blob store objects to keep in memory, 0 means no cache (DUSTPAN_BLOB_CACHE_BYTES)",
-		"`0`: no cache. A repeat read of a cached object does not reach the blob store",
+		"bytes of OpenTofu state blobs to keep in memory, 0 means no cache (DUSTPAN_BLOB_CACHE_BYTES)",
+		"`0`: no cache. The cache keeps only blobs that are written once: OpenTofu state versions. "+
+			"One blob takes at most one eighth of the cache",
 	).WithFile("blob-cache-bytes"),
 	stringSetting(
 		"s3-endpoint", "DUSTPAN_S3_ENDPOINT", "",

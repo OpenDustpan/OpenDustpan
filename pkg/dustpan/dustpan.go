@@ -35,6 +35,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -129,17 +130,21 @@ const restoreStoppedText = "server stopped during restore"
 
 // settings collects every option before NewServer validates them.
 type settings struct {
-	namespaceStore       namespace.Store
-	stackStore           stack.Store
-	updateStore          stack.UpdateStore
-	checkpointStore      stack.CheckpointStore
-	eventStore           stack.EventStore
-	secretKeys           secret.KeyStore
-	secretWrapper        secret.Wrapper
-	workspaceStore       workspace.Store
-	stateStore           workspace.StateStore
-	blobStore            blob.Store
-	blobCacheBytes       int64
+	namespaceStore  namespace.Store
+	stackStore      stack.Store
+	updateStore     stack.UpdateStore
+	checkpointStore stack.CheckpointStore
+	eventStore      stack.EventStore
+	secretKeys      secret.KeyStore
+	secretWrapper   secret.Wrapper
+	workspaceStore  workspace.Store
+	stateStore      workspace.StateStore
+	blobStore       blob.Store
+	blobCacheBytes  int64
+	// workspaceBlobs is the blob store of the workspace service: the blob
+	// store behind the in-process cache when WithBlobCache sets a size, else
+	// blobStore. Every other user reads blobStore.
+	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -264,10 +269,12 @@ func WithBlobStore(s blob.Store) Option {
 	return func(o *settings) { o.blobStore = s }
 }
 
-// WithBlobCache keeps up to maxBytes of blob store objects in memory, so a
-// repeat read of an object does not reach the blob store. Zero, the default,
-// turns the cache off. A negative value makes NewServer fail with
-// ErrInvalidOption. The cache relies on the write-once keys of blob.Store.
+// WithBlobCache keeps up to maxBytes of OpenTofu state blobs in memory, so a
+// repeat read of a state version does not reach the blob store. Zero, the
+// default, turns the cache off. A negative value makes NewServer fail with
+// ErrInvalidOption. The cache keeps only key families that are written once,
+// so several instances can each keep one over a shared blob store. One
+// object takes at most one eighth of maxBytes.
 func WithBlobCache(maxBytes int64) Option {
 	return func(o *settings) { o.blobCacheBytes = maxBytes }
 }
@@ -555,6 +562,7 @@ func defaultSettings() *settings {
 		stateStore:              nil,
 		blobStore:               nil,
 		blobCacheBytes:          0,
+		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		authenticator:           nil,
 		authorizer:              nil,
@@ -1054,10 +1062,17 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 func newWorkspaceService(
 	cfg *settings, namespaces *namespace.Service, secrets *secret.Service,
 ) (*workspace.Service, error) {
+	// The workspace service reads through the blob cache when
+	// wrapBlobCache set one.
+	blobs := cfg.workspaceBlobs
+	if blobs == nil {
+		blobs = cfg.blobStore
+	}
+
 	workspaces, err := workspace.NewService(workspace.Config{
 		Workspaces:         cfg.workspaceStore,
 		States:             cfg.stateStore,
-		Blobs:              cfg.blobStore,
+		Blobs:              blobs,
 		Namespaces:         namespaces,
 		Sealer:             secrets,
 		Logger:             cfg.logger,
@@ -1722,9 +1737,22 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	return handler, nil
 }
 
-// wrapBlobCache puts the in-process blob cache in front of the blob store
-// when WithBlobCache sets a size.
+// writeOnceFamilies are the blob key families that are written once: a key
+// in them never holds other bytes, also after a delete. OpenTofu state
+// versions and signed audit checkpoints have such keys. Pulumi checkpoints
+// and journal batches do not: a retry or a restore can write a deleted key
+// again.
+//
+//nolint:gochecknoglobals // A fixed list; Go has no constant slices.
+var writeOnceFamilies = []string{"tofu/", audit.CheckpointPrefix + "/"}
+
+// wrapBlobCache sets the blob store of the workspace service: the in-process
+// cache over the blob store when WithBlobCache sets a size, else the blob
+// store itself. Backups, restores, Pulumi updates and audit checkpoints read
+// the blob store without the cache.
 func wrapBlobCache(cfg *settings) error {
+	cfg.workspaceBlobs = cfg.blobStore
+
 	switch {
 	case cfg.blobCacheBytes < 0:
 		return fmt.Errorf("%w: WithBlobCache needs 0 or more bytes, got %d", ErrInvalidOption, cfg.blobCacheBytes)
@@ -1733,14 +1761,35 @@ func wrapBlobCache(cfg *settings) error {
 	default:
 	}
 
-	cached, err := blobcache.New(cfg.blobStore, cfg.blobCacheBytes)
+	cached, err := blobcache.New(cfg.blobStore, blobcache.Config{
+		MaxBytes:       cfg.blobCacheBytes,
+		MaxObjectBytes: 0,
+		Cacheable:      blobcache.WriteOncePrefixes(writeOnceFamilies...),
+	})
 	if err != nil {
 		return fmt.Errorf("blob cache: %w", err)
 	}
 
-	cfg.blobStore = cached
+	cfg.workspaceBlobs = cached
 
 	return nil
+}
+
+// uncachedStateOpener opens OpenTofu state blobs for the backup copy check
+// without the blob cache, so the check reads the stored bytes and a backup
+// does not fill the cache.
+type uncachedStateOpener struct {
+	workspaces *workspace.Service
+}
+
+// OpenStateBlob implements backup.StateOpener.
+func (o uncachedStateOpener) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	reader, err := o.workspaces.OpenStateBlob(blobcache.WithoutCache(ctx), key)
+	if err != nil {
+		return nil, fmt.Errorf("open state blob: %w", err)
+	}
+
+	return reader, nil
 }
 
 // checkRetention refuses a soft-delete retention below
@@ -2248,11 +2297,16 @@ func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 		maxSQL = backup.S3ObjectLimit
 	}
 
+	var opener backup.StateOpener
+	if svc.workspaces != nil {
+		opener = uncachedStateOpener{workspaces: svc.workspaces}
+	}
+
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
 		Registry:    registry,
 		Blobs:       cfg.blobStore,
-		StateOpener: svc.workspaces,
+		StateOpener: opener,
 		Target:      cfg.backupTarget,
 		TargetName:  cfg.backupTargetName,
 		Now:         cfg.now,
