@@ -1738,28 +1738,36 @@ ORDER BY wrapper_id;
 -- name: CreateSignInProvider :execrows
 INSERT INTO sign_in_providers (
     provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 WHERE provider_id = ?;
 
 -- name: ListSignInProviders :many
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 ORDER BY provider_id;
 
 -- name: UpdateSignInProvider :execrows
--- The update applies only to the version that the change read.
+-- The update applies only to the version that the change read. The mode
+-- never changes.
 UPDATE sign_in_providers
 SET issuer = sqlc.arg('issuer'), display_name = sqlc.arg('display_name'), client_id = sqlc.arg('client_id'),
     client_secret = sqlc.arg('client_secret'), scopes = sqlc.arg('scopes'),
     auto_create = sqlc.arg('auto_create'), enabled = sqlc.arg('enabled'),
+    authorization_url = sqlc.arg('authorization_url'), token_url = sqlc.arg('token_url'),
+    userinfo_url = sqlc.arg('userinfo_url'), subject_claim = sqlc.arg('subject_claim'),
+    name_claim = sqlc.arg('name_claim'), username_claim = sqlc.arg('username_claim'),
+    email_claim = sqlc.arg('email_claim'),
     updated_at_ms = sqlc.arg('updated_at_ms'), version = sqlc.arg('version')
 WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version') - 1;
 

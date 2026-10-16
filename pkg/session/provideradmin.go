@@ -1,6 +1,7 @@
 package session
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -44,29 +45,70 @@ type SecretSealer interface {
 }
 
 // ProviderInput is a new sign-in provider. ClientSecret is the secret
-// itself: the service seals it and never stores or records it.
+// itself: the service seals it and never stores or records it. An empty
+// Mode is ModeOIDC. For ModeOAuth, an empty claim name of OAuth takes its
+// default (see OAuthSettings.WithDefaultClaims).
 type ProviderInput struct {
 	ID           string
+	Mode         ProviderMode
 	Issuer       string
 	DisplayName  string
 	ClientID     string
 	ClientSecret string
 	Scopes       []string
+	OAuth        OAuthSettings
 	AutoCreate   bool
 	Enabled      bool
 }
 
 // ProviderChange is a change of a sign-in provider. A nil field keeps its
-// value. Version is the version that the change read.
+// value. Version is the version that the change read. Mode cannot change:
+// a Mode that differs from the stored one is refused.
 type ProviderChange struct {
+	Mode         *ProviderMode
 	Issuer       *string
 	DisplayName  *string
 	ClientID     *string
 	ClientSecret *string
 	Scopes       *[]string
+	OAuth        OAuthChange
 	AutoCreate   *bool
 	Enabled      *bool
 	Version      int64
+}
+
+// OAuthChange is a change of the OAuth settings of a provider in
+// ModeOAuth. A nil field keeps its value.
+type OAuthChange struct {
+	AuthorizationURL *string
+	TokenURL         *string
+	UserinfoURL      *string
+	SubjectClaim     *string
+	NameClaim        *string
+	UsernameClaim    *string
+	EmailClaim       *string
+}
+
+// apply returns s with the fields of c that are set.
+func (c OAuthChange) apply(s OAuthSettings) OAuthSettings {
+	for _, f := range []struct {
+		to   *string
+		from *string
+	}{
+		{&s.AuthorizationURL, c.AuthorizationURL},
+		{&s.TokenURL, c.TokenURL},
+		{&s.UserinfoURL, c.UserinfoURL},
+		{&s.SubjectClaim, c.SubjectClaim},
+		{&s.NameClaim, c.NameClaim},
+		{&s.UsernameClaim, c.UsernameClaim},
+		{&s.EmailClaim, c.EmailClaim},
+	} {
+		if f.from != nil {
+			*f.to = *f.from
+		}
+	}
+
+	return s
 }
 
 // ProviderAdminConfig holds the dependencies of ProviderAdmin. Static
@@ -166,9 +208,13 @@ func (a *ProviderAdmin) Create(ctx context.Context, e audit.Entry, in ProviderIn
 
 	at := a.now().UTC()
 	p := ProviderConfig{
-		CreatedAt: at, UpdatedAt: at, ID: in.ID, Issuer: in.Issuer, DisplayName: in.DisplayName,
-		ClientID: in.ClientID, SealedSecret: []byte{0}, Scopes: cleanScopes(in.Scopes), Version: 1,
-		AutoCreate: in.AutoCreate, Enabled: in.Enabled,
+		CreatedAt: at, UpdatedAt: at, ID: in.ID, Mode: cmp.Or(in.Mode, ModeOIDC), Issuer: in.Issuer,
+		DisplayName: in.DisplayName, ClientID: in.ClientID, SealedSecret: []byte{0}, Scopes: cleanScopes(in.Scopes),
+		OAuth: in.OAuth, Version: 1, AutoCreate: in.AutoCreate, Enabled: in.Enabled,
+	}
+
+	if p.Mode == ModeOAuth {
+		p.OAuth = p.OAuth.WithDefaultClaims()
 	}
 
 	// Validate and seal before the binding, so a refused provider binds no
@@ -184,7 +230,7 @@ func (a *ProviderAdmin) Create(ctx context.Context, e audit.Entry, in ProviderIn
 
 	p.SealedSecret = sealed
 
-	if err := a.bind(ctx, p.ID, p.Issuer, at); err != nil {
+	if err := a.bind(ctx, p.Binding(), at); err != nil {
 		return ProviderConfig{}, err
 	}
 
@@ -214,9 +260,8 @@ func (a *ProviderAdmin) Update(
 		return ProviderConfig{}, fmt.Errorf("get sign-in provider: %w", err)
 	}
 
-	if old.Version != c.Version {
-		return ProviderConfig{}, fmt.Errorf("%w: %s has version %d, the change read version %d",
-			ErrProviderChanged, id, old.Version, c.Version)
+	if err := checkChange(old, c); err != nil {
+		return ProviderConfig{}, err
 	}
 
 	at := a.now().UTC()
@@ -227,22 +272,13 @@ func (a *ProviderAdmin) Update(
 		return ProviderConfig{}, err
 	}
 
-	if c.ClientSecret != nil {
-		if *c.ClientSecret == "" {
-			return ProviderConfig{}, fmt.Errorf("%w: the client secret cannot be empty", ErrInvalidProvider)
-		}
-
-		sealed, sealErr := a.secrets.Seal(ctx, SecretScope(id), []byte(*c.ClientSecret))
-		if sealErr != nil {
-			return ProviderConfig{}, fmt.Errorf("seal the client secret of sign-in provider %s: %w", id, sealErr)
-		}
-
-		p.SealedSecret = sealed
+	if err := a.sealChange(ctx, &p, c); err != nil {
+		return ProviderConfig{}, err
 	}
 
 	// Bind after the seal, so a refused change binds no new issuer.
-	if NormalizeIssuer(p.Issuer) != NormalizeIssuer(old.Issuer) {
-		if err := a.bind(ctx, id, p.Issuer, at); err != nil {
+	if p.Binding().binding() != old.Binding().binding() {
+		if err := a.bind(ctx, p.Binding(), at); err != nil {
 			return ProviderConfig{}, err
 		}
 	}
@@ -258,6 +294,22 @@ func (a *ProviderAdmin) Update(
 	}
 
 	return p, nil
+}
+
+// checkChange refuses c when old has another version than the change
+// read, or when c changes the mode.
+func checkChange(old ProviderConfig, c ProviderChange) error {
+	if old.Version != c.Version {
+		return fmt.Errorf("%w: %s has version %d, the change read version %d",
+			ErrProviderChanged, old.ID, old.Version, c.Version)
+	}
+
+	if c.Mode != nil && *c.Mode != old.Mode {
+		return fmt.Errorf("%w: sign-in provider %q has the mode %q, and a mode cannot change, "+
+			"so make a new provider with a new ID", ErrInvalidProvider, old.ID, old.Mode)
+	}
+
+	return nil
 }
 
 // Delete deletes the provider id. It returns ErrProviderStatic,
@@ -280,10 +332,30 @@ func (a *ProviderAdmin) Delete(ctx context.Context, e audit.Entry, id string) er
 	return nil
 }
 
-// bind records issuer for the provider ID id, and returns an error that
-// matches ErrIssuerChanged when the ID has another issuer.
-func (a *ProviderAdmin) bind(ctx context.Context, id, issuer string, at time.Time) error {
-	return BindProviders(ctx, a.binder, []Provider{{ID: id, Issuer: issuer}}, at)
+// sealChange seals the new client secret of c into p, when c has one.
+func (a *ProviderAdmin) sealChange(ctx context.Context, p *ProviderConfig, c ProviderChange) error {
+	if c.ClientSecret == nil {
+		return nil
+	}
+
+	if *c.ClientSecret == "" {
+		return fmt.Errorf("%w: the client secret cannot be empty", ErrInvalidProvider)
+	}
+
+	sealed, err := a.secrets.Seal(ctx, SecretScope(p.ID), []byte(*c.ClientSecret))
+	if err != nil {
+		return fmt.Errorf("seal the client secret of sign-in provider %s: %w", p.ID, err)
+	}
+
+	p.SealedSecret = sealed
+
+	return nil
+}
+
+// bind records what identifies the people of the provider p, and returns
+// an error that matches ErrIssuerChanged when the ID has another binding.
+func (a *ProviderAdmin) bind(ctx context.Context, p Provider, at time.Time) error {
+	return BindProviders(ctx, a.binder, []Provider{p}, at)
 }
 
 // staticError is the refusal of a change of a provider of the
@@ -337,6 +409,8 @@ func applyChange(old ProviderConfig, c ProviderChange) ProviderConfig {
 		p.Enabled = *c.Enabled
 	}
 
+	p.OAuth = c.OAuth.apply(old.OAuth)
+
 	return p
 }
 
@@ -386,6 +460,10 @@ func createdChanges(p ProviderConfig) []audit.Change {
 	out := make([]audit.Change, 0, len(fields)+1)
 
 	for _, f := range fields {
+		if f.optional && f.value(p) == "" {
+			continue
+		}
+
 		out = append(out, audit.Change{Key: f.key, Old: nil, New: f.value(p), Layer: "", TakesEffect: ""})
 	}
 
@@ -416,20 +494,41 @@ func secretChanged() audit.Change {
 }
 
 // providerField is one recorded field of a provider, by its name in the
-// API.
+// API. A create does not record an optional field with no value.
 type providerField struct {
-	value func(ProviderConfig) string
-	key   string
+	value    func(ProviderConfig) string
+	key      string
+	optional bool
 }
 
 // providerFields returns the recorded fields of a provider.
 func providerFields() []providerField {
 	return []providerField{
-		{key: "issuer", value: func(p ProviderConfig) string { return p.Issuer }},
-		{key: "displayName", value: func(p ProviderConfig) string { return p.DisplayName }},
-		{key: "clientID", value: func(p ProviderConfig) string { return p.ClientID }},
-		{key: "scopes", value: func(p ProviderConfig) string { return strings.Join(p.Scopes, " ") }},
-		{key: "autoCreate", value: func(p ProviderConfig) string { return strconv.FormatBool(p.AutoCreate) }},
-		{key: "enabled", value: func(p ProviderConfig) string { return strconv.FormatBool(p.Enabled) }},
+		{key: "mode", value: func(p ProviderConfig) string { return string(p.Mode) }, optional: false},
+		{key: "issuer", value: func(p ProviderConfig) string { return p.Issuer }, optional: true},
+		{key: "displayName", value: func(p ProviderConfig) string { return p.DisplayName }, optional: false},
+		{key: "clientID", value: func(p ProviderConfig) string { return p.ClientID }, optional: false},
+		{key: "scopes", value: func(p ProviderConfig) string { return strings.Join(p.Scopes, " ") }, optional: false},
+		{
+			key:      "autoCreate",
+			value:    func(p ProviderConfig) string { return strconv.FormatBool(p.AutoCreate) },
+			optional: false,
+		},
+		{
+			key:      "enabled",
+			value:    func(p ProviderConfig) string { return strconv.FormatBool(p.Enabled) },
+			optional: false,
+		},
+		{
+			key:      "authorizationURL",
+			value:    func(p ProviderConfig) string { return p.OAuth.AuthorizationURL },
+			optional: true,
+		},
+		{key: "tokenURL", value: func(p ProviderConfig) string { return p.OAuth.TokenURL }, optional: true},
+		{key: "userinfoURL", value: func(p ProviderConfig) string { return p.OAuth.UserinfoURL }, optional: true},
+		{key: "claims.subject", value: func(p ProviderConfig) string { return p.OAuth.SubjectClaim }, optional: true},
+		{key: "claims.name", value: func(p ProviderConfig) string { return p.OAuth.NameClaim }, optional: true},
+		{key: "claims.username", value: func(p ProviderConfig) string { return p.OAuth.UsernameClaim }, optional: true},
+		{key: "claims.email", value: func(p ProviderConfig) string { return p.OAuth.EmailClaim }, optional: true},
 	}
 }

@@ -1329,23 +1329,32 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 const createSignInProvider = `-- name: CreateSignInProvider :execrows
 INSERT INTO sign_in_providers (
     provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 ON CONFLICT DO NOTHING
 `
 
 type CreateSignInProviderParams struct {
-	ProviderID   string
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   bool
-	Enabled      bool
-	CreatedAtMs  int64
-	UpdatedAtMs  int64
-	Version      int64
+	ProviderID       string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       bool
+	Enabled          bool
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	Version          int64
+	Mode             string
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
 }
 
 func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProviderParams) (int64, error) {
@@ -1361,6 +1370,14 @@ func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProv
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 		arg.Version,
+		arg.Mode,
+		arg.AuthorizationUrl,
+		arg.TokenUrl,
+		arg.UserinfoUrl,
+		arg.SubjectClaim,
+		arg.NameClaim,
+		arg.UsernameClaim,
+		arg.EmailClaim,
 	)
 	if err != nil {
 		return 0, err
@@ -3379,7 +3396,8 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 
 const getSignInProvider = `-- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 WHERE provider_id = $1
 `
@@ -3399,6 +3417,14 @@ func (q *Queries) GetSignInProvider(ctx context.Context, providerID string) (Sig
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
 		&i.Version,
+		&i.Mode,
+		&i.AuthorizationUrl,
+		&i.TokenUrl,
+		&i.UserinfoUrl,
+		&i.SubjectClaim,
+		&i.NameClaim,
+		&i.UsernameClaim,
+		&i.EmailClaim,
 	)
 	return i, err
 }
@@ -5717,7 +5743,8 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 
 const listSignInProviders = `-- name: ListSignInProviders :many
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 ORDER BY provider_id COLLATE "C"
 `
@@ -5743,6 +5770,14 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 			&i.Version,
+			&i.Mode,
+			&i.AuthorizationUrl,
+			&i.TokenUrl,
+			&i.UserinfoUrl,
+			&i.SubjectClaim,
+			&i.NameClaim,
+			&i.UsernameClaim,
+			&i.EmailClaim,
 		); err != nil {
 			return nil, err
 		}
@@ -7863,24 +7898,36 @@ UPDATE sign_in_providers
 SET issuer = $1, display_name = $2, client_id = $3,
     client_secret = $4, scopes = $5,
     auto_create = $6, enabled = $7,
-    updated_at_ms = $8, version = $9
-WHERE provider_id = $10 AND version = $9 - 1
+    authorization_url = $8, token_url = $9,
+    userinfo_url = $10, subject_claim = $11,
+    name_claim = $12, username_claim = $13,
+    email_claim = $14,
+    updated_at_ms = $15, version = $16
+WHERE provider_id = $17 AND version = $16 - 1
 `
 
 type UpdateSignInProviderParams struct {
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   bool
-	Enabled      bool
-	UpdatedAtMs  int64
-	Version      int64
-	ProviderID   string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       bool
+	Enabled          bool
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
+	UpdatedAtMs      int64
+	Version          int64
+	ProviderID       string
 }
 
-// The update applies only to the version that the change read.
+// The update applies only to the version that the change read. The mode
+// never changes.
 func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProviderParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateSignInProvider,
 		arg.Issuer,
@@ -7890,6 +7937,13 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		arg.Scopes,
 		arg.AutoCreate,
 		arg.Enabled,
+		arg.AuthorizationUrl,
+		arg.TokenUrl,
+		arg.UserinfoUrl,
+		arg.SubjectClaim,
+		arg.NameClaim,
+		arg.UsernameClaim,
+		arg.EmailClaim,
 		arg.UpdatedAtMs,
 		arg.Version,
 		arg.ProviderID,

@@ -22,6 +22,14 @@ func providerEntry(id string, when time.Time) audit.Entry {
 	return e
 }
 
+// noOAuth returns the empty OAuth settings of a provider in the OIDC mode.
+func noOAuth() session.OAuthSettings {
+	return session.OAuthSettings{
+		AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+		EmailClaim: "",
+	}
+}
+
 // newProviderConfig returns a valid provider id, made and changed at
 // minute 5.
 func newProviderConfig(id string) session.ProviderConfig {
@@ -29,11 +37,13 @@ func newProviderConfig(id string) session.ProviderConfig {
 		CreatedAt:    at(5),
 		UpdatedAt:    at(5),
 		ID:           id,
+		Mode:         session.ModeOIDC,
 		Issuer:       "https://" + id + ".idp.example",
 		DisplayName:  "Provider " + id,
 		ClientID:     "dustpan-" + id,
 		SealedSecret: []byte("sealed secret of " + id),
 		Scopes:       []string{"profile", "email"},
+		OAuth:        noOAuth(),
 		Version:      1,
 		AutoCreate:   true,
 		Enabled:      true,
@@ -43,12 +53,69 @@ func newProviderConfig(id string) session.ProviderConfig {
 func equalProviderConfig(t *testing.T, got, want session.ProviderConfig) {
 	t.Helper()
 
-	if !got.CreatedAt.Equal(want.CreatedAt) || !got.UpdatedAt.Equal(want.UpdatedAt) || got.ID != want.ID ||
+	if !sameProviderTimes(got, want) || got.ID != want.ID || !sameProviderMode(got, want) ||
 		got.Issuer != want.Issuer || got.DisplayName != want.DisplayName || got.ClientID != want.ClientID ||
 		!bytes.Equal(got.SealedSecret, want.SealedSecret) || !slices.Equal(got.Scopes, want.Scopes) ||
 		got.Version != want.Version || got.AutoCreate != want.AutoCreate || got.Enabled != want.Enabled {
 		t.Fatalf("provider = %+v, want %+v", got, want)
 	}
+}
+
+// sameProviderMode reports whether got and want have the same mode and
+// OAuth settings.
+func sameProviderMode(got, want session.ProviderConfig) bool {
+	return got.Mode == want.Mode && got.OAuth == want.OAuth
+}
+
+// sameProviderTimes reports whether got and want have the same creation
+// and update times.
+func sameProviderTimes(got, want session.ProviderConfig) bool {
+	return got.CreatedAt.Equal(want.CreatedAt) && got.UpdatedAt.Equal(want.UpdatedAt)
+}
+
+// newOAuthProviderConfig returns a valid provider id in the OAuth mode,
+// made and changed at minute 5.
+func newOAuthProviderConfig(id string) session.ProviderConfig {
+	p := newProviderConfig(id)
+	p.Mode, p.Issuer = session.ModeOAuth, ""
+	p.OAuth = session.OAuthSettings{
+		AuthorizationURL: "https://" + id + ".example/login/oauth/authorize",
+		TokenURL:         "https://" + id + ".example/login/oauth/access_token",
+		UserinfoURL:      "https://api." + id + ".example/user", SubjectClaim: "id", NameClaim: "name",
+		UsernameClaim: "login", EmailClaim: "email",
+	}
+
+	return p
+}
+
+// testProviderOAuthRoundTrip proves that a provider in the OAuth mode
+// keeps its mode, its empty issuer, its endpoints and its claims, through
+// a create, an update and a list.
+func testProviderOAuthRoundTrip(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	hub := newOAuthProviderConfig("hub")
+	mustCreateProvider(t, s, hub)
+
+	got, err := s.GetProviderConfig(ctx, "hub")
+	if err != nil {
+		t.Fatalf("get provider: %v", err)
+	}
+
+	equalProviderConfig(t, got, hub)
+
+	hub.Version, hub.UpdatedAt, hub.OAuth.NameClaim = 2, at(6), "display_name"
+	if updateErr := s.UpdateProviderConfig(ctx, hub, providerEntry("hub", at(6))); updateErr != nil {
+		t.Fatalf("update: %v", updateErr)
+	}
+
+	list, err := s.ListProviderConfigs(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("list = %+v, %v; want hub", list, err)
+	}
+
+	equalProviderConfig(t, list[0], hub)
 }
 
 func mustCreateProvider(t *testing.T, s Store, p session.ProviderConfig) {
