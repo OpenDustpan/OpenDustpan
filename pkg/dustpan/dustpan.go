@@ -496,6 +496,9 @@ type Server struct {
 	// signInRequests deletes the expired sign-in requests on a schedule, or
 	// is nil with no console sign-in.
 	signInRequests *session.Sessions
+	// signInProviders binds each provider of the console sign-in to its
+	// issuer at the start, or is the zero value with no console sign-in.
+	signInProviders providerBinding
 }
 
 // services holds the domain services that NewServer wires together.
@@ -736,6 +739,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		beforeServe:     cfg.beforeServe,
 		deleted:         deleted,
 		signInRequests:  adapters.signInSessions(),
+		signInProviders: bindingOf(cfg, adapters.signIn),
 	}, nil
 }
 
@@ -1500,6 +1504,10 @@ func (s *Server) runStartUp(ctx context.Context) error {
 
 	if startErr == nil {
 		startErr = s.startUpAuditChain(ctx)
+	}
+
+	if startErr == nil {
+		startErr = s.bindSignInProviders(ctx)
 	}
 
 	if startErr != nil && ctx.Err() == nil {

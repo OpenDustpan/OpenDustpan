@@ -3,7 +3,6 @@ package session_test
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -54,10 +53,10 @@ func TestBindProviders(t *testing.T) {
 		t.Fatalf("start with another issuer = %v, want ErrIssuerChanged", err)
 	}
 
-	for _, part := range []string{`"corp"`, `"https://idp.example"`, `"https://other.example"`, "new provider ID"} {
-		if !strings.Contains(err.Error(), part) {
-			t.Errorf("error %q does not name %s", err, part)
-		}
+	want := `sign-in provider "corp" has the issuer "https://idp.example" in the database and the issuer ` +
+		`"https://other.example" in the configuration, so set a new provider ID for the new issuer`
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err, want)
 	}
 
 	store.err = errProviderStoreDown

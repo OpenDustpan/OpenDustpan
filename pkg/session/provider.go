@@ -22,6 +22,21 @@ type ProviderStore interface {
 	BindProvider(ctx context.Context, id, issuer string, at time.Time) (string, error)
 }
 
+// issuerChangedError is the refusal of a provider ID whose issuer changed.
+// Its text is one sentence that names the provider ID, both issuers and
+// the fix.
+type issuerChangedError struct {
+	id, recorded, configured string
+}
+
+func (e issuerChangedError) Error() string {
+	return fmt.Sprintf("sign-in provider %q has the issuer %q in the database and the issuer %q in the "+
+		"configuration, so set a new provider ID for the new issuer", e.id, e.recorded, e.configured)
+}
+
+// Unwrap returns ErrIssuerChanged.
+func (issuerChangedError) Unwrap() error { return ErrIssuerChanged }
+
 // Provider is one provider of the console sign-in: its ID and its issuer.
 type Provider struct {
 	ID     string
@@ -30,9 +45,9 @@ type Provider struct {
 
 // BindProviders records the issuer of each provider of providers at the
 // time at, and checks that no provider ID changed its issuer. It returns
-// ErrIssuerChanged, with a message that names the provider ID, both
-// issuers and the fix, for the first provider whose recorded issuer is
-// another one.
+// an error that matches ErrIssuerChanged, whose text is one sentence that
+// names the provider ID, both issuers and the fix, for the first provider
+// whose recorded issuer is another one.
 func BindProviders(ctx context.Context, store ProviderStore, providers []Provider, at time.Time) error {
 	for _, p := range providers {
 		recorded, err := store.BindProvider(ctx, p.ID, p.Issuer, at)
@@ -41,9 +56,7 @@ func BindProviders(ctx context.Context, store ProviderStore, providers []Provide
 		}
 
 		if recorded != p.Issuer {
-			return fmt.Errorf("%w: sign-in provider %q has the issuer %q in the database and the issuer %q in the "+
-				"configuration, so set a new provider ID for the new issuer", ErrIssuerChanged, p.ID, recorded,
-				p.Issuer)
+			return issuerChangedError{id: p.ID, recorded: recorded, configured: p.Issuer}
 		}
 	}
 
