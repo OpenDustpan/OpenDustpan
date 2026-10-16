@@ -21,9 +21,8 @@ var (
 	// A no-op update on a large base adds no links, so it passes whatever the base holds.
 	MaxLinkIndexEntriesPerUpdate = 25000 //nolint:gochecknoglobals // The bound stays tunable in tests; each test restores it.
 	// MaxNewStatePlusLinkBytesPerUpdate bounds the new-state plus added-link bytes
-	// of one build, in bytes. It is not a bound on heap: the measured heap is about
-	// 9 times the counted bytes.
-	// Measured by BenchmarkJournalBuildChange10000: 2680000 counted bytes, peak heap 24775632 bytes.
+	// of one build, in bytes. It is not a bound on heap.
+	// Measured by BenchmarkJournalBuildChange10000: peak heap 24780912 bytes, measured under load.
 	MaxNewStatePlusLinkBytesPerUpdate = 64 << 20 //nolint:gochecknoglobals // The bound stays tunable in tests; each test restores it.
 )
 
