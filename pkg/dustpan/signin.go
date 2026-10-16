@@ -223,14 +223,14 @@ func (r tokenInactivity) AccountInactive(ctx context.Context, o session.Owner) (
 const signInRequestPruneEvery = session.RequestLifetime
 
 // pruneSignInRequests deletes the expired sign-in requests once each
-// signInRequestPruneEvery, until ctx is done. A failed run logs no error
+// signInPruneEvery, until ctx is done. A failed run logs no error
 // text, which may hold driver detail, and the next run tries again.
 func (s *Server) pruneSignInRequests(ctx context.Context) {
 	if s.signInRequests == nil {
 		return
 	}
 
-	ticker := time.NewTicker(signInRequestPruneEvery)
+	ticker := time.NewTicker(s.signInPruneEvery)
 	defer ticker.Stop()
 
 	for {
