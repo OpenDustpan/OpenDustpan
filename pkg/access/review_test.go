@@ -31,7 +31,7 @@ func TestReviewShowsTheStateOfEachUnit(t *testing.T) {
 	err := f.store.CreateGrant(ctx, access.Grant{
 		CreatedAt: time.Unix(0, 0), Condition: nil, Object: purged, ID: "grt-purged", Role: access.RoleViewer,
 		CreatedBy: "admin", Subject: prn("alice"),
-	}, fence, e)
+	}, fence, e, nil)
 	if err != nil {
 		t.Fatalf("grant on a purged unit: %v", err)
 	}

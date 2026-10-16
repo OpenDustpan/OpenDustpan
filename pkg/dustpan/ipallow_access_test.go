@@ -83,7 +83,7 @@ func storeGrant(t *testing.T, st *sqlite.Store, subject, role string, obj identi
 		Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: "prn-" + subject},
 	}
 
-	if err := st.CreateGrant(t.Context(), g, fence, e); err != nil {
+	if err := st.CreateGrant(t.Context(), g, fence, e, nil); err != nil {
 		t.Fatalf("create grant of %q on %q: %v", role, obj.String(), err)
 	}
 }

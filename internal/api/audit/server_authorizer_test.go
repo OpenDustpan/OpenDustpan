@@ -65,7 +65,7 @@ func seedRealPrincipal(t *testing.T, st *sqlite.Store, subject, role string, obj
 	}
 
 	fence, e := storetest.GrantWrite(t, st, obj, at, "grant:"+grt.ID)
-	if err := st.CreateGrant(t.Context(), grt, fence, e); err != nil {
+	if err := st.CreateGrant(t.Context(), grt, fence, e, nil); err != nil {
 		t.Fatalf("seed grant %s: %v", subject, err)
 	}
 }
