@@ -62,6 +62,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "the last sign-in never moves back", test: testLastSignInNeverMovesBack},
 		{name: "a session use counts as activity for the inactivity disable", test: testSessionUseIsActivity},
 		{name: "a session use counts as activity in the token lookup", test: testSessionUseInTokenLookup},
+		{name: "a session use never enables a disabled person", test: testSessionUseKeepsDisable},
 		{name: "a sign-in request works once", test: testRequestOnce},
 		{name: "an expired sign-in request is gone", test: testRequestExpired},
 		{name: "a sign-in request that fails validation is ErrInvalid", test: testInvalidRequest},
@@ -609,17 +610,7 @@ func testSessionUseInTokenLookup(t *testing.T, s Store) {
 	old := testNow().Add(-3 * sweepPeriod)
 	recent := mustUseLater(t, s, "prn-1", old)
 
-	tok := accesstoken.Token{
-		CreatedAt: old, ExpiresAt: testNow().Add(24 * time.Hour), LastUsedAt: time.Time{}, RevokedAt: time.Time{},
-		DisabledAt: time.Time{}, ID: "tok-1", PrincipalID: "prn-1", Name: "laptop", Kind: accesstoken.KindPersonal,
-		ReplacedBy: "", CreatedBy: "prn-1",
-	}
-
-	d := accesstoken.Digest(digest(9))
-
-	if err := s.CreateToken(t.Context(), tok, d, entry("tok-1", old)); err != nil {
-		t.Fatalf("create token: %v", err)
-	}
+	d := mustOldToken(t, s, "prn-1", old)
 
 	m, err := s.GetTokenByDigest(t.Context(), d)
 	if err != nil {
@@ -629,6 +620,79 @@ func testSessionUseInTokenLookup(t *testing.T, s Store) {
 	if !m.Owner.ActiveAt.Equal(recent) {
 		t.Fatalf("owner active at = %s, want the session use %s", m.Owner.ActiveAt, recent)
 	}
+}
+
+// testSessionUseKeepsDisable proves that a session use only feeds the
+// activity time: a use after the disable does not enable the person, and a
+// later sweep keeps the first disable time.
+func testSessionUseKeepsDisable(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	old := testNow().Add(-3 * sweepPeriod)
+
+	mustPrincipalAt(t, s, "prn-1", principal.KindPerson, old)
+	mustSession(t, s, newSession("ses-1", "prn-1", old), digest(1))
+
+	first := mustSweep(t, s)
+	if !slices.Equal(first.Principals, []string{"prn-1"}) {
+		t.Fatalf("first sweep disabled %v, want [prn-1]", first.Principals)
+	}
+
+	recent := testNow().Truncate(time.Millisecond)
+	if err := s.TouchSession(ctx, "ses-1", recent, time.Minute); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+
+	if again := mustSweep(t, s); len(again.Principals) != 0 {
+		t.Fatalf("second sweep disabled %v, want none", again.Principals)
+	}
+
+	m, err := s.GetSessionByDigest(ctx, digest(1))
+	if err != nil {
+		t.Fatalf("get by digest: %v", err)
+	}
+
+	if !m.Owner.DisabledAt.Equal(first.At) {
+		t.Fatalf("owner disabled at = %s after a session use, want the first sweep time %s",
+			m.Owner.DisabledAt, first.At)
+	}
+
+	err = s.CreateSession(ctx, newSession("ses-2", "prn-1", recent), digest(2), entry("ses-2", recent))
+	wantErr(t, "session of a disabled person after a session use", err, session.ErrPrincipalDisabled)
+
+	// The token lookup shows the recent use as activity, and still the
+	// disable time, which refuses the token before any activity check.
+	d := mustOldToken(t, s, "prn-1", old)
+
+	tm, err := s.GetTokenByDigest(ctx, d)
+	if err != nil {
+		t.Fatalf("token lookup: %v", err)
+	}
+
+	if !tm.Owner.DisabledAt.Equal(first.At) || !tm.Owner.ActiveAt.Equal(recent) {
+		t.Fatalf("token owner disabled at %s, active at %s; want disabled at %s, active at %s",
+			tm.Owner.DisabledAt, tm.Owner.ActiveAt, first.At, recent)
+	}
+}
+
+// mustOldToken creates the personal token tok-1 of principalID, made at
+// created and live for a day from now, and returns its digest.
+func mustOldToken(t *testing.T, s Store, principalID string, created time.Time) accesstoken.Digest {
+	t.Helper()
+
+	tok := accesstoken.Token{
+		CreatedAt: created, ExpiresAt: testNow().Add(24 * time.Hour), LastUsedAt: time.Time{},
+		RevokedAt: time.Time{}, DisabledAt: time.Time{}, ID: "tok-1", PrincipalID: principalID, Name: "laptop",
+		Kind: accesstoken.KindPersonal, ReplacedBy: "", CreatedBy: principalID,
+	}
+	d := accesstoken.Digest(digest(9))
+
+	if err := s.CreateToken(t.Context(), tok, d, entry("tok-1", created)); err != nil {
+		t.Fatalf("create token: %v", err)
+	}
+
+	return d
 }
 
 // newRequest returns a sign-in request made at created, that expires after
