@@ -272,6 +272,18 @@ var Settings = []*Setting{
 		"`on`. `off` turns the chain off. A change starts the server in maintenance mode until a person "+
 			"runs `opendustpan audit-chain approve`",
 	).WithFile("audit-chain"),
+	boolSetting(
+		"audit-checkpoints", "DUSTPAN_AUDIT_CHECKPOINTS",
+		"sign a checkpoint of the audit chain of each scope every hour and store it in the blob store; "+
+			"needs --audit-chain=on and --audit-signing-key-file (DUSTPAN_AUDIT_CHECKPOINTS=true)",
+		"(none: off). Set `true` to sign checkpoints. Needs `--audit-chain=on` and a signing key file",
+	).WithFile("audit-checkpoints"),
+	stringSetting(
+		"audit-signing-key-file", "DUSTPAN_AUDIT_SIGNING_KEY_FILE", "",
+		"file holding the base64 32-byte Ed25519 seed that signs audit checkpoints "+
+			"(DUSTPAN_AUDIT_SIGNING_KEY_FILE)",
+		referenceNone,
+	).WithFile("audit-signing-key-file").WithDoc("A file that holds the base64 32-byte Ed25519 seed. Only its owner can read it."),
 	stringSetting(
 		"log-sink", "DUSTPAN_LOG_SINK", "",
 		"a target of the application log instead of stderr; repeat the flag for more targets. Each is "+
@@ -286,6 +298,12 @@ var Settings = []*Setting{
 			"webhook:<https URL> or blob:<prefix> (DUSTPAN_AUDIT_SINK, sinks separated by white space)",
 		"(none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit`",
 	).WithFile("audit-sink").WithSensitive(),
+	stringSetting(
+		"audit-verify-keys-file", "DUSTPAN_AUDIT_VERIFY_KEYS_FILE", "",
+		"file of base64 Ed25519 public keys, one on each line, that may verify audit checkpoints "+
+			"but never sign them, for example the key before a key change (DUSTPAN_AUDIT_VERIFY_KEYS_FILE)",
+		referenceNone,
+	).WithFile("audit-verify-keys-file"),
 	stringSetting(
 		"oidc-issuer", "DUSTPAN_OIDC_ISSUER", "",
 		"issuer URL of the OpenID Connect provider of the console sign-in, with https; the sign-in also needs "+

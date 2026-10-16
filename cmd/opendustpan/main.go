@@ -300,7 +300,10 @@ type serveFlags struct {
 	auditSinks []string
 	logSinks   []string
 	// app is the application logger and its sinks, set by run.
-	app appLog
+	app                 appLog
+	auditSigningKeyFile string
+	auditVerifyKeysFile string
+	auditCheckpoints    bool
 }
 
 // check refuses settings that are wrong together or out of range: the TLS
@@ -342,6 +345,10 @@ func (f *serveFlags) check() error {
 	}
 
 	f.retention = retention
+
+	if err := f.checkCheckpointFlags(); err != nil {
+		return err
+	}
 
 	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
 }
@@ -423,6 +430,9 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
 	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
+	cli.ByFlag("audit-checkpoints").Bool(fs, &f.auditCheckpoints)
+	cli.ByFlag("audit-signing-key-file").String(fs, &f.auditSigningKeyFile)
+	cli.ByFlag("audit-verify-keys-file").String(fs, &f.auditVerifyKeysFile)
 }
 
 // registerNet registers the network and console flags.
@@ -1090,7 +1100,7 @@ func closeTargetStore(ctx context.Context, logger *slog.Logger, s blob.Store) {
 
 // serverOptions returns the NewServer options for the opened store, blob
 // store, authenticator, key wrapper and logger, with the audit chain
-// setting.
+// setting and the signed audit checkpoints.
 func (f *serveFlags) serverOptions(
 	st store,
 	blobs blob.Store,
@@ -1112,6 +1122,11 @@ func (f *serveFlags) serverOptions(
 	chain, chainErr := audit.ParseChainSetting(f.auditChain)
 	if chainErr != nil {
 		return nil, fmt.Errorf("--audit-chain: %w", chainErr)
+	}
+
+	checkpoints, cpErr := f.checkpointOptions()
+	if cpErr != nil {
+		return nil, cpErr
 	}
 
 	return append([]dustpan.Option{
@@ -1149,7 +1164,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
 		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithInstanceID(f.instanceID),
-	}, signIn...), nil
+	}, append(signIn, checkpoints...)...), nil
 }
 
 // blobOpenConfig holds the live blob store settings of serve.

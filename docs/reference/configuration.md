@@ -40,6 +40,9 @@ the same list.
 | `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `max-state-bytes` | `0`: 32 MiB, the largest OpenTofu state |
 | `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `max-body-bytes-in-flight` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One sealed state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
 | `--audit-chain` | `DUSTPAN_AUDIT_CHAIN` | `audit-chain` | `on`. `off` turns the chain off. A change starts the server in maintenance mode until a person runs `opendustpan audit-chain approve` |
+| `--audit-checkpoints` | `DUSTPAN_AUDIT_CHECKPOINTS` | `audit-checkpoints` | (none: off). Set `true` to sign checkpoints. Needs `--audit-chain=on` and a signing key file |
+| `--audit-signing-key-file` | `DUSTPAN_AUDIT_SIGNING_KEY_FILE` | `audit-signing-key-file` | (none) |
+| `--audit-verify-keys-file` | `DUSTPAN_AUDIT_VERIFY_KEYS_FILE` | `audit-verify-keys-file` | (none) |
 | `--soft-delete-retention` | `DUSTPAN_SOFT_DELETE_RETENTION` | `soft-delete-retention` | `720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records the end of its retention, so a change applies to later deletes |
 | `--audit-sink` | `DUSTPAN_AUDIT_SINK` | `audit-sink` | (none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit` |
 | `--oidc-issuer` | `DUSTPAN_OIDC_ISSUER` | `oidc-issuer` | (none: no console sign-in). The identity of a person does not hold the issuer. To use another issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a person of the old issuer with the same `sub`. |
