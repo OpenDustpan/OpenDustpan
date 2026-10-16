@@ -1864,7 +1864,8 @@ func TestOpenBeforeMinimumColumn(t *testing.T) {
 		t.Fatal("applied migrations are empty, want the recorded migrations")
 	}
 
-	if !slices.ContainsFunc(applied, func(m schema.AppliedMigration) bool { return m.Name == "0079_schema_minimum.sql" }) {
+	isMinimum := func(m schema.AppliedMigration) bool { return m.Name == "0079_schema_minimum.sql" }
+	if !slices.ContainsFunc(applied, isMinimum) {
 		t.Fatalf("applied migrations = %+v, want 0079_schema_minimum.sql among them", applied)
 	}
 }
