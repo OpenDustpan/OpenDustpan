@@ -189,6 +189,12 @@ type Summary struct {
 // snapshot that the restore applied, so no process runs it here.
 const RestoredRunningText = "the backup was running in the restored data"
 
+// RestoredRunningRestoreText is the error text of a restore row that a
+// restore brought back as checking or applying: a restore takes a backup of
+// the live data before it applies, and that backup holds the restore row as
+// running, so no process runs it here.
+const RestoredRunningRestoreText = "the restore was running in the restored data"
+
 // Sentinel errors returned by this package and by its ports.
 var (
 	// ErrNotFound reports that a backup row does not exist.

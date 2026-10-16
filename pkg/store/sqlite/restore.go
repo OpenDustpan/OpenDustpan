@@ -313,7 +313,7 @@ func fenceStagedFile(ctx context.Context, path string, chain audit.ChainRecord) 
 
 // resetStagedRuntimeRows clears the rows of the staged file that describe
 // work of the installation the backup came from, in tx: the audit sink
-// cursors and leases, and the running backup rows.
+// cursors and leases, and the running backup and restore rows.
 func resetStagedRuntimeRows(ctx context.Context, tx *sql.Tx) error {
 	// The restored log can reuse sequences that a sink already holds, and
 	// a restored cursor can point past the restored entries. A reset makes
@@ -334,8 +334,21 @@ func resetStagedRuntimeRows(ctx context.Context, tx *sql.Tx) error {
 	// every later backup.
 	const failRunning = `UPDATE backups SET state = 'failed', error = ?, ended_at_ms = ? WHERE state = 'running'`
 
-	if _, err := tx.ExecContext(ctx, failRunning, backup.RestoredRunningText, codec.Millis(time.Now())); err != nil {
+	end := codec.Millis(time.Now())
+
+	if _, err := tx.ExecContext(ctx, failRunning, backup.RestoredRunningText, end); err != nil {
 		return fmt.Errorf("fail staged running backups: %w", err)
+	}
+
+	// The same holds for a restore row: the backup that a restore takes
+	// before it applies holds that restore as running. The restore that
+	// runs now stores its row again after the swap, and the one running
+	// restore the data would hold blocks that row.
+	const failRestores = `UPDATE restores SET state = 'failed', error = ?, ended_at_ms = ?
+    WHERE state IN ('checking', 'applying')`
+
+	if _, err := tx.ExecContext(ctx, failRestores, backup.RestoredRunningRestoreText, end); err != nil {
+		return fmt.Errorf("fail staged running restores: %w", err)
 	}
 
 	return nil

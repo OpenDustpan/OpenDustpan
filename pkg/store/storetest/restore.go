@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -60,6 +61,8 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "restart marks every running restore failed", test: testRestoreRestartFailsRunning},
 		{name: "one restore runs at a time", test: testRestoreOneRunning},
 		{name: "a backup starts after a restore of a running snapshot", test: testRestoreThenBackup},
+		{name: "a restore starts after a restore of a running snapshot", test: testRestoreThenRestore},
+		{name: "the running restore records its end after the swap", test: testRestoreRecordsEndAfterSwap},
 		{name: "a restore row survives close and reopen", test: testRestoreRowSurvivesReopen},
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
@@ -394,6 +397,106 @@ func testRestoreThenBackup(t *testing.T, newStore RestoreFactory) {
 	next := newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour))
 	if err := ps.dst.CreateBackup(ctx, next); err != nil {
 		t.Fatalf("start a backup after the restore: %v, want nil", err)
+	}
+}
+
+// testRestoreThenRestore applies a snapshot that holds a restore in checking
+// or in applying, then starts a new restore. The restored row is not
+// running after the swap, so it does not block the new one.
+func testRestoreThenRestore(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	for _, applying := range []bool{false, true} {
+		t.Run(fmt.Sprintf("applying=%t", applying), func(t *testing.T) {
+			ctx := t.Context()
+			ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+			held := mustCreateRestore(
+				t,
+				ps.src,
+				newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+			)
+
+			if applying {
+				if err := ps.src.MarkRestoreApplying(ctx, held.ID, backup.ID(ident.NewID("bkp-"))); err != nil {
+					t.Fatalf("mark restore applying: %v", err)
+				}
+			}
+
+			applySnapshot(t, ps)
+
+			got := mustGetRestore(t, ps.dst, held.ID)
+			if got.State != backup.RestoreFailed || got.Error != backup.RestoredRunningRestoreText ||
+				got.EndedAt.IsZero() {
+				t.Fatalf("restore row of the snapshot after the swap = %+v, want failed with %q and an end time",
+					got, backup.RestoredRunningRestoreText)
+			}
+
+			next := newRestoreRecord(
+				backup.RestoreID(ident.NewID("rst-")),
+				backup.ID(ident.NewID("bkp-")),
+				now().Add(time.Hour),
+			)
+			if err := ps.dst.CreateRestore(ctx, next); err != nil {
+				t.Fatalf("start a restore after the restore: %v, want nil", err)
+			}
+		})
+	}
+}
+
+// testRestoreRecordsEndAfterSwap runs a restore on the target while it
+// applies a snapshot that holds another running restore. The swap replaces
+// the row of the running restore, so the restore stores it again in
+// applying, as the restore service does, and then records its end.
+func testRestoreRecordsEndAfterSwap(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ctx := t.Context()
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+	mustCreateRestore(
+		t, ps.src, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+
+	current := mustCreateRestore(
+		t, ps.dst, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+
+	preBackupID := backup.ID(ident.NewID("bkp-"))
+	if err := ps.dst.MarkRestoreApplying(ctx, current.ID, preBackupID); err != nil {
+		t.Fatalf("mark restore applying: %v", err)
+	}
+
+	applySnapshot(t, ps)
+
+	recreated := current
+	recreated.State = backup.RestoreApplying
+	recreated.PreBackupID = preBackupID
+
+	if err := ps.dst.CreateRestore(ctx, recreated); err != nil {
+		t.Fatalf("store the running restore again after the swap: %v, want nil", err)
+	}
+
+	end := now().Add(time.Hour)
+	mustFinishRestore(t, ps.dst, restoreFinish{ID: current.ID, State: backup.RestoreSucceeded, Error: "", EndedAt: end})
+
+	if got := mustGetRestore(t, ps.dst, current.ID); got.State != backup.RestoreSucceeded || !got.EndedAt.Equal(end) {
+		t.Fatalf("running restore after its end = %+v, want succeeded at %v", got, end)
+	}
+}
+
+// applySnapshot exports ps.src, stages the export on ps.dst and applies it.
+func applySnapshot(t *testing.T, ps portableStores) {
+	t.Helper()
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(t.Context(), sink.read, sum, files); err != nil {
+		t.Fatalf("stage the snapshot: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(t.Context()); err != nil {
+		t.Fatalf("apply staging area: %v", err)
 	}
 }
 
