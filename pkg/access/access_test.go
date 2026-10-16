@@ -951,7 +951,7 @@ func TestRevokeByID(t *testing.T) {
 	svcErr := f.store.CreatePrincipal(ctx, principal.Principal{
 		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: svcID, Subject: "svc-byid",
 		DisplayName: "", Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
-		DisabledAt: time.Time{}, Namespace: "",
+		DisabledAt: time.Time{}, Namespace: "", BreakGlass: false,
 	}, storetest.ServerChange(time.Unix(0, 0), "principal:"+svcID))
 	if svcErr != nil {
 		t.Fatalf("create service principal: %v", svcErr)
