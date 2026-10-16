@@ -797,7 +797,7 @@ func TestServeRefusesBinaryBelowMinimum(t *testing.T) {
 	path := newerSchemaDatabase(t, "v0.2.0")
 
 	err := serveDatabase(t, path)
-	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+	if err == nil || !errors.Is(err, schema.ErrBinaryBelowMinimum) {
 		t.Fatalf("serve below the schema minimum: err = %v, want ErrBinaryBelowMinimum", err)
 	}
 

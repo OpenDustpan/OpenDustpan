@@ -303,7 +303,7 @@ func TestUpgradeCheckBelowMinimum(t *testing.T) {
 		http.StatusOK, upgradeCheckBodyWithMinimum(t, names, "v0.2.0"))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
-	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+	if err == nil || !errors.Is(err, schema.ErrBinaryBelowMinimum) {
 		t.Fatalf("upgrade check below the schema minimum: err = %v, want ErrBinaryBelowMinimum", err)
 	}
 

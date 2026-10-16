@@ -1844,6 +1844,10 @@ func openNewerSchemaAt(t *testing.T, binary string) {
 		t.Fatalf("applied migrations: %v", err)
 	}
 
+	if len(applied) == 0 {
+		t.Fatal("applied migrations are empty, want the recorded migrations")
+	}
+
 	if last := applied[len(applied)-1]; last.MinBinaryVersion != "v0.3.0" {
 		t.Fatalf("newest applied migration %+v, want minimum v0.3.0", last)
 	}
@@ -1899,6 +1903,10 @@ func TestOpenBeforeMinimumColumn(t *testing.T) {
 
 	if err != nil || len(applied) == 0 {
 		t.Fatalf("applied migrations = %v, %v, want the embedded migrations", applied, err)
+	}
+
+	if len(applied) == 0 {
+		t.Fatal("applied migrations are empty, want the recorded migrations")
 	}
 
 	if last := applied[len(applied)-1]; last.Name != "0079_schema_minimum.sql" {

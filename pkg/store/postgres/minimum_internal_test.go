@@ -41,6 +41,10 @@ func TestContractMigrationRaisesMinimum(t *testing.T) {
 		t.Fatalf("apply contract migration: %v, %v", applyErr, readErr)
 	}
 
+	if len(applied) == 0 {
+		t.Fatal("applied migrations are empty, want the recorded migrations")
+	}
+
 	if last := applied[len(applied)-1]; last.Version != 9999 || last.MinBinaryVersion != "v0.5.0" {
 		t.Fatalf("newest applied migration = %+v, want 9999 with minimum v0.5.0", last)
 	}

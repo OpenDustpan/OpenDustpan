@@ -56,6 +56,9 @@ func TestMinimumErrorNamesBothVersions(t *testing.T) {
 	t.Parallel()
 
 	err := schema.CheckMinimum("v0.3.0", "v0.2.0")
+	if err == nil {
+		t.Fatal("CheckMinimum below the minimum = nil, want a *MinimumError")
+	}
 
 	minimum, ok := errors.AsType[*schema.MinimumError](err)
 	if !ok {
