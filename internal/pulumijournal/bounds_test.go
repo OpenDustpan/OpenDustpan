@@ -206,9 +206,9 @@ func TestReplayCountsMigrationAndPatchBytes(t *testing.T) {
 // a patch at the exact limit passes, and one more byte fails with
 // ErrNewStateTooLarge. Removing the patch bytes from the count passes the
 // over-limit case.
+//
+//nolint:paralleltest // The test lowers the state bound, so it runs alone.
 func TestReplayCountsNewStatePatchBytes(t *testing.T) {
-	t.Parallel()
-
 	ctx := t.Context()
 	if err := ctx.Err(); err != nil {
 		t.Fatalf("test context: %v", err)
