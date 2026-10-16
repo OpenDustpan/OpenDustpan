@@ -71,6 +71,12 @@ const (
 	breakExpiryCount = "expiry-count"
 	// breakMaxVersions ignores the version limits of a claim.
 	breakMaxVersions = "max-versions"
+	// breakTickBacklog moves the next run of a schedule by one interval
+	// from the tick it claims, so missed ticks run one by one.
+	breakTickBacklog = "tick-backlog"
+	// breakNoScheduleOnNoWork answers a tick that is not due with no
+	// schedule, so a caller sees a wait of 0.
+	breakNoScheduleOnNoWork = "noschedule-on-nowork"
 )
 
 // memDB is a reference store in memory. Its lock makes each method one
@@ -79,6 +85,7 @@ const (
 type memDB struct {
 	ops       map[durable.ID]*durable.Operation
 	byKey     map[string]durable.ID
+	schedules map[string]*memSchedule
 	fences    map[namespace.Name]int64
 	values    []string
 	broken    string
@@ -91,6 +98,7 @@ func newMemDB(broken string) *memDB {
 	return &memDB{
 		ops:       map[durable.ID]*durable.Operation{},
 		byKey:     map[string]durable.ID{},
+		schedules: map[string]*memSchedule{},
 		fences:    map[namespace.Name]int64{},
 		values:    nil,
 		broken:    broken,
@@ -501,42 +509,6 @@ func (s memStore) Cancel(_ context.Context, id durable.ID) error {
 	return nil
 }
 
-// end ends the attempt of c with fn, after the checks that Complete, Fail and
-// Release share. A requested cancel makes Complete fail with no change, and
-// makes Fail and Release end the operation canceled.
-func (s memStore) end(c durable.Claim, onCancel cancelRule, fn func(op *durable.Operation, now time.Time)) error {
-	s.db.mu.Lock()
-	defer s.db.mu.Unlock()
-
-	now := s.db.clock(s.skew)
-
-	rule := checkExpiry
-	if onCancel == endOnCancel && s.db.broken == breakEndExpiry {
-		rule = skipExpiry
-	}
-
-	op, err := s.db.live(c, now, rule)
-	if err != nil {
-		return err
-	}
-
-	if op.CancelRequested {
-		if onCancel == refuseOnCancel {
-			return durable.ErrCanceled
-		}
-
-		s.db.endCanceled(op, now)
-
-		return nil
-	}
-
-	fn(op, now)
-	op.Claim = zeroClaim()
-	op.UpdatedAt = now
-
-	return nil
-}
-
 // memDomain is the domain side of a memDB.
 type memDomain struct {
 	db *memDB
@@ -635,4 +607,147 @@ func (d memDomain) Values(context.Context) ([]string, error) {
 	defer d.db.mu.Unlock()
 
 	return slices.Clone(d.db.values), nil
+}
+
+// memSchedule is the stored state of one schedule.
+type memSchedule struct {
+	interval time.Duration
+	next     time.Time
+	last     time.Time
+}
+
+func (m *memDB) schedule(name string, sc *memSchedule, now time.Time) durable.Schedule {
+	return durable.Schedule{Name: name, Interval: sc.interval, NextRunAt: sc.next, LastClaimedAt: sc.last, Now: now}
+}
+
+// ScheduleStore returns a schedule handle on m, with the clock skew of an
+// instance.
+//
+//nolint:ireturn // A test of code that uses the port takes the port, as the store adapters give it.
+func (m *Mem) ScheduleStore(skew time.Duration) ScheduledStore {
+	return memStore{db: m.db, skew: skew}
+}
+
+// ScheduleHarness returns a schedule suite harness on m.
+func (m *Mem) ScheduleHarness() ScheduleHarness {
+	return m.db.scheduleHarness()
+}
+
+func (m *memDB) scheduleHarness() ScheduleHarness {
+	return ScheduleHarness{
+		Open: func(_ *testing.T, skew time.Duration) ScheduledStore { return memStore{db: m, skew: skew} },
+	}
+}
+
+func (s memStore) EnsureSchedule(_ context.Context, spec durable.ScheduleSpec) (durable.Schedule, error) {
+	if err := spec.Validate(); err != nil {
+		return durable.Schedule{}, err
+	}
+
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	now := s.db.clock(s.skew)
+
+	sc := s.db.schedules[spec.Name]
+	if sc == nil {
+		sc = &memSchedule{interval: spec.Interval, next: now, last: time.Time{}}
+		s.db.schedules[spec.Name] = sc
+	}
+
+	sc.interval = spec.Interval
+	if soonest := now.Add(spec.Interval); soonest.Before(sc.next) {
+		sc.next = soonest
+	}
+
+	return s.db.schedule(spec.Name, sc, now), nil
+}
+
+func (s memStore) GetSchedule(_ context.Context, name string) (durable.Schedule, error) {
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	sc := s.db.schedules[name]
+	if sc == nil {
+		return durable.Schedule{}, durable.ErrNotFound
+	}
+
+	return s.db.schedule(name, sc, s.db.clock(s.skew)), nil
+}
+
+func (s memStore) ClaimTick(_ context.Context, spec durable.ScheduleSpec) (durable.Tick, error) {
+	if err := spec.Validate(); err != nil {
+		return durable.Tick{}, err
+	}
+
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	now := s.db.clock(s.skew)
+
+	sc := s.db.schedules[spec.Name]
+	if sc == nil {
+		return durable.Tick{}, durable.ErrNotFound
+	}
+
+	if now.Before(sc.next) {
+		var none durable.Tick
+		if s.db.broken != breakNoScheduleOnNoWork {
+			none.Schedule = s.db.schedule(spec.Name, sc, now)
+		}
+
+		return none, durable.ErrNoWork
+	}
+
+	dueAt := sc.next
+
+	op, _, err := s.db.start(durable.StartRequest{
+		Key: durable.TickKey(spec.Name, dueAt), Kind: spec.Kind, Version: spec.Version, Input: spec.Input,
+	}, now)
+	if err != nil {
+		return durable.Tick{}, err
+	}
+
+	sc.next, sc.last = now.Add(sc.interval), now
+	if s.db.broken == breakTickBacklog {
+		sc.next = dueAt.Add(sc.interval)
+	}
+
+	return durable.Tick{Operation: op, Schedule: s.db.schedule(spec.Name, sc, now)}, nil
+}
+
+// end ends the attempt of c with fn, after the checks that Complete, Fail and
+// Release share. A requested cancel makes Complete fail with no change, and
+// makes Fail and Release end the operation canceled.
+func (s memStore) end(c durable.Claim, onCancel cancelRule, fn func(op *durable.Operation, now time.Time)) error {
+	s.db.mu.Lock()
+	defer s.db.mu.Unlock()
+
+	now := s.db.clock(s.skew)
+
+	rule := checkExpiry
+	if onCancel == endOnCancel && s.db.broken == breakEndExpiry {
+		rule = skipExpiry
+	}
+
+	op, err := s.db.live(c, now, rule)
+	if err != nil {
+		return err
+	}
+
+	if op.CancelRequested {
+		if onCancel == refuseOnCancel {
+			return durable.ErrCanceled
+		}
+
+		s.db.endCanceled(op, now)
+
+		return nil
+	}
+
+	fn(op, now)
+	op.Claim = zeroClaim()
+	op.UpdatedAt = now
+
+	return nil
 }
