@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/identity/identitytest"
 	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -169,5 +170,42 @@ func TestGateListObjectsFailsClosed(t *testing.T) {
 		identity.ActionUnitRead)
 	if !errors.Is(err, errStoreDown) {
 		t.Fatalf("list objects = %v, want the store error", err)
+	}
+}
+
+// TestGateListWithinAuthorize runs the conformance check that a list is
+// never wider than Authorize against the gate, for a client address outside
+// the list of acme and inside no other list.
+func TestGateListWithinAuthorize(t *testing.T) {
+	t.Parallel()
+
+	unitIn := func(ns namespace.Name) identity.Object {
+		obj, err := identity.UnitObject("pulumi", ns, "web/prod")
+		if err != nil {
+			t.Fatalf("unit object: %v", err)
+		}
+
+		return obj
+	}
+
+	next := identitytest.NewPolicyAuthorizer("alice", map[identity.Action][]string{
+		identity.ActionNamespaceRead: {"acme", "beta"},
+		identity.ActionUnitRead:      {unitIn("acme").String(), unitIn("beta").String()},
+	})
+	rules := &fakeRules{
+		calls: 0,
+		lists: map[namespace.Name]ipallow.List{"acme": mustList(t, []string{"198.51.100.0/24"})},
+		errs:  map[namespace.Name]error{},
+	}
+	gate := ipallow.Gate{Next: next, Rules: rules, Enabled: true, IncludeBootstrap: false}
+
+	every := []identity.Object{
+		identity.NamespaceObject("acme"), identity.NamespaceObject("beta"), unitIn("acme"), unitIn("beta"),
+	}
+
+	for _, action := range []identity.Action{identity.ActionNamespaceRead, identity.ActionUnitRead} {
+		identitytest.CheckListWithinAuthorize(ctxWithAddr(netip.MustParseAddr("192.0.2.10")), t, identitytest.ListCheck{
+			Authorizer: gate, Principal: userPrincipal("alice"), Action: action, Every: every,
+		})
 	}
 }
