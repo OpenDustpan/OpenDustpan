@@ -156,6 +156,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
+// Routes returns a copy of the route table. The Actions lists are copied
+// too, so callers cannot change handler state through the result.
+func (h *Handler) Routes() []Route {
+	out := make([]Route, len(h.routes))
+	for i, route := range h.routes {
+		out[i] = route
+		out[i].Actions = slices.Clone(route.Actions)
+	}
+
+	return out
+}
+
 // buildRoutes returns the route table. It is the single source of the patterns
 // that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {

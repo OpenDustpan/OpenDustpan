@@ -15,7 +15,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -206,7 +205,10 @@ func portsOfPostgres(store *postgres.Store) ports {
 const harnessRegion = namespace.Region("eu-west")
 
 // openServers starts one SQLite instance, or two PostgreSQL instances on the
-// same URL, and answers their URLs with a cleanup func.
+// same URL, and answers their URLs with a cleanup func. The instances share
+// one blob directory and one key-encryption key, as several instances of one
+// installation do, so a write through one instance reads back through the
+// other.
 func openServers(
 	ctx context.Context,
 	logger *slog.Logger,
@@ -245,8 +247,8 @@ func openServers(
 
 	served := make([]instance, 0, instances)
 
-	for i := range instances {
-		one, instanceErr := openInstance(ctx, logger, dir, i, pgURL)
+	for range instances {
+		one, instanceErr := openInstance(ctx, logger, dir, pgURL)
 		if instanceErr != nil {
 			return onErr(ctx, instanceErr)
 		}
@@ -259,10 +261,15 @@ func openServers(
 		return onErr(ctx, err)
 	}
 
+	wrapper, err := newHarnessWrapper()
+	if err != nil {
+		return onErr(ctx, err)
+	}
+
 	urls := make([]string, 0, instances)
 
 	for i := range served {
-		instanceURL, closeServer, serveErr := serveInstance(served[i])
+		instanceURL, closeServer, serveErr := serveInstance(served[i], wrapper)
 		if serveErr != nil {
 			return onErr(ctx, serveErr)
 		}
@@ -281,15 +288,15 @@ type instance struct {
 	cleanup func(context.Context)
 }
 
-// openInstance opens the store and blob handles of instance i.
+// openInstance opens the store and blob handles of one instance. Each
+// instance opens its own handles on the shared blob directory and database.
 func openInstance(
 	ctx context.Context,
 	logger *slog.Logger,
 	dir string,
-	i int,
 	pgURL string,
 ) (instance, error) {
-	blobs, blobsErr := fs.Open(filepath.Join(dir, "blobs-"+strconv.Itoa(i)))
+	blobs, blobsErr := fs.Open(filepath.Join(dir, "blobs"))
 	if blobsErr != nil {
 		return instance{}, fmt.Errorf("open blob store: %w", blobsErr)
 	}
@@ -441,13 +448,14 @@ func testServerCloser(ts *httptest.Server) func(context.Context) {
 	}
 }
 
-// harnessKeyBytes is the size of the key-encryption key of one instance.
+// harnessKeyBytes is the size of the key-encryption key of the instances.
 const harnessKeyBytes = 32
 
 // newHarnessWrapper returns a key-encryption key wrapper over 32 random
-// bytes. Each instance starts on empty stores, so a new key per instance is
-// enough. The server seals OpenTofu state with it (ADR 41 decision 10) and
-// cannot store state without one.
+// bytes. The instances start on empty stores, so a new key per run is
+// enough. Every instance uses the same wrapper, so each one opens what the
+// other sealed. The server seals OpenTofu state with it and cannot store
+// state without one.
 func newHarnessWrapper() (*secret.BuiltinWrapper, error) {
 	key := make([]byte, harnessKeyBytes)
 	if _, err := rand.Read(key); err != nil {
@@ -463,17 +471,13 @@ func newHarnessWrapper() (*secret.BuiltinWrapper, error) {
 }
 
 // serveInstance builds the server for one instance and answers its test URL.
-func serveInstance(served instance) (string, func(context.Context), error) {
+// wrapper is the key-encryption key that all instances share.
+func serveInstance(served instance, wrapper *secret.BuiltinWrapper) (string, func(context.Context), error) {
 	noop := func(context.Context) {}
 
 	authn, err := identity.NewStaticToken("load", harnessToken())
 	if err != nil {
 		return "", noop, fmt.Errorf("authenticator: %w", err)
-	}
-
-	wrapper, err := newHarnessWrapper()
-	if err != nil {
-		return "", noop, err
 	}
 
 	srv, err := dustpan.NewServer(
