@@ -9,7 +9,6 @@ each work item. Replace each placeholder first:
 | `<SLUG>` | A short branch name, for example `session-policy-join`. |
 | `<LEAD_SESSION>` | The ID of the lead session. |
 | `<LEAD_SESSION_URL>` | The URL of the lead session. |
-| `<TRAILERS>` | The commit trailer lines that the lead gives. |
 | `<IMPLEMENTATION_MODEL>` | The OpenCode model ID of the implementation model. |
 | `<ISSUE BRIEF>` | The task: the issue text, the files, the tests, a migration number or "no migration", and "e2e: yes" or "e2e: no". |
 
@@ -136,8 +135,6 @@ git commit -F - <<'MSG'
 <2 to 5 lines: what changed and why, in plain words>
 
 Closes #N
-
-<TRAILERS>
 MSG
 ```
 Before every push, run TruffleHog:
@@ -170,7 +167,7 @@ Then call `subscribe_pr_activity` (claude-code-remote MCP server) for the new PR
 ## Step 10. Ready for review
 
 When `make check` passes (and `make e2e` if required):
-1. Commit any new changes (later commits may use a short message, still with the two trailer lines), TruffleHog, push.
+1. Commit any new changes (later commits may use a short message), TruffleHog, push.
 2. Mark the PR ready: `update_pull_request` with draft `false`. CI runs only on a ready PR.
 3. Update the PR body "Checks" section with the real results.
 4. Send the lead ONE message: `#N ready: PR <number>, head <full 40-char SHA from git rev-parse HEAD>, <one line on the change>`.
