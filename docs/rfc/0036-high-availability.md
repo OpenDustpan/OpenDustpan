@@ -424,8 +424,7 @@ two rows.
    one write lock, and `Launch` retries its first write with no limit. The
    first attempt ran into a 30-minute test timeout.
 4. On SQLite, the stalled step of A holds the one write lock, so B cannot
-   claim until A ends. SQLite serves one instance, so this matters only for
-   a stall inside one process.
+   claim until A ends. See the finding below.
 5. DBOS has no takeover of a live but stalled owner: the operation waits for
    A. With the atomic mode, a late write of A is still fenced by the owner
    check.
@@ -449,6 +448,15 @@ Other results of the spike:
   license scan, passes with the module added.
 - **goleak.** The passing cases of both adapters end with goleak clean, so a
   clean shutdown leaves no goroutine in both adapters.
+
+A finding for the suite: on SQLite, one stalled write transaction blocks
+every writer, so no other worker can take over or even claim. The "stalled
+holder" case must therefore be defined per dialect: on PostgreSQL, another
+instance takes over and the late write is fenced; on SQLite, the case needs
+a bound on the step transaction (a statement or transaction timeout) so that
+a stall ends, or the case does not apply. The port must state which, and a
+step that does slow work outside the database must not hold its transaction
+open while it waits.
 
 What the results say about each adapter:
 
