@@ -37,6 +37,7 @@ func RunSchema(t *testing.T, newStore SchemaFactory) {
 		{name: "applied names match their versions", test: testAppliedNamesMatchVersions},
 		{name: "applied names are the embedded list", test: testAppliedAreEmbedded},
 		{name: "repeat reads match without migrating", test: testAppliedRepeatReads},
+		{name: "applied minimums are empty or release versions", test: testAppliedMinimumsValid},
 	}
 
 	for _, tc := range cases {
@@ -146,5 +147,22 @@ func testAppliedRepeatReads(t *testing.T, s SchemaStore) {
 
 	if !slices.Equal(first, second) {
 		t.Fatalf("second read = %v, want the first read %v", second, first)
+	}
+}
+
+// testAppliedMinimumsValid proves that each applied migration records no
+// minimum binary version or a version of the form vMAJOR.MINOR.PATCH, so the
+// schema minimum reads back.
+func testAppliedMinimumsValid(t *testing.T, s SchemaStore) {
+	t.Helper()
+
+	for _, applied := range readApplied(t, s) {
+		if applied.MinBinaryVersion == "" {
+			continue
+		}
+
+		if err := schema.ValidMinimum(applied.MinBinaryVersion); err != nil {
+			t.Fatalf("migration %s records minimum %q: %v", applied.Name, applied.MinBinaryVersion, err)
+		}
 	}
 }
