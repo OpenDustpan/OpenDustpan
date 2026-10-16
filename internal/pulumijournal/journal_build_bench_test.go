@@ -17,7 +17,7 @@ import (
 // realistic JSON.
 func benchState(i int) string {
 	return fmt.Sprintf(
-		`{"urn":"urn:pulumi:dev::web::pkg:index:Type::res-%06d","custom":true,"type":"pkg:index:Type","id":"res-%06d","inputs":{"value":"%s"},"outputs":{}}`,
+		`{"urn":"urn:pulumi:dev::web::pkg:index:Type::res-%06d","custom":true,"type":"pkg:index:Type","id":"res-%06d","inputs":{"value":%q},"outputs":{}}`,
 		i,
 		i,
 		strings.Repeat("x", 64),
@@ -27,7 +27,7 @@ func benchState(i int) string {
 // benchStateChange returns the changed form of benchState.
 func benchStateChange(i int) string {
 	return fmt.Sprintf(
-		`{"urn":"urn:pulumi:dev::web::pkg:index:Type::res-%06d","custom":true,"type":"pkg:index:Type","id":"res-%06d","inputs":{"value":"%s"},"outputs":{"value":2}}`,
+		`{"urn":"urn:pulumi:dev::web::pkg:index:Type::res-%06d","custom":true,"type":"pkg:index:Type","id":"res-%06d","inputs":{"value":%q},"outputs":{"value":2}}`,
 		i,
 		i,
 		strings.Repeat("y", 64),
@@ -38,7 +38,7 @@ func benchStateChange(i int) string {
 func benchBase(n int) string {
 	var sb strings.Builder
 	sb.WriteString(`{"resources":[`)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i > 0 {
 			sb.WriteString(",")
 		}
@@ -53,7 +53,7 @@ func benchBase(n int) string {
 func benchCreateEntries(n int) []byte {
 	var b strings.Builder
 	b.WriteString(`{"entries":[`)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i > 0 {
 			b.WriteString(",")
 		}
@@ -82,7 +82,7 @@ func benchCreateEntries(n int) []byte {
 func benchChangeEntries(n int) []byte {
 	var b strings.Builder
 	b.WriteString(`{"entries":[`)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if i > 0 {
 			b.WriteString(",")
 		}
@@ -108,8 +108,8 @@ func benchChangeEntries(n int) []byte {
 }
 
 // benchBuild runs the replayer on base and entries and reports the peak heap
-// in bytes. It returns the output size, so the caller can log it.
-func benchBuild(b *testing.B, base string, entries []byte) int {
+// in bytes.
+func benchBuild(b *testing.B, base string, entries []byte) {
 	b.Helper()
 
 	now := func() time.Time { return time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC) }
@@ -117,7 +117,7 @@ func benchBuild(b *testing.B, base string, entries []byte) int {
 		return io.NopCloser(strings.NewReader(base)), nil
 	}
 
-	runtime.GC()
+	runtime.GC() //nolint:revive // The heap measurement needs a quiet runtime, so the benchmark collects first.
 
 	var peak uint64
 	done := make(chan struct{})
@@ -151,8 +151,6 @@ func benchBuild(b *testing.B, base string, entries []byte) int {
 	b.ReportMetric(float64(peak), "peak-heap-bytes")
 	b.ReportMetric(float64(len(entries)), "batch-bytes")
 	b.ReportMetric(float64(out.Len()), "out-bytes")
-
-	return out.Len()
 }
 
 // BenchmarkJournalBuildCreate3000 builds a create of 3,000 resources and

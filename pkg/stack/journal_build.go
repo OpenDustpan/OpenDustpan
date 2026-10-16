@@ -76,7 +76,7 @@ func (s *Updates) buildJournalCheckpoint(
 
 	base, err := s.journalBase(buildCtx, ref, u)
 	if err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && buildCtx.Err() != nil && ctx.Err() == nil {
+		if buildCtx.Err() != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
 			return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, ErrJournalBuildTimeout)
 		}
 		return zero, err
@@ -94,7 +94,7 @@ func (s *Updates) buildJournalCheckpoint(
 	var out bytes.Buffer
 
 	if err := s.replayer.Replay(buildCtx, open, bytes.NewReader(combined), &out); err != nil {
-		if errors.Is(err, context.DeadlineExceeded) && buildCtx.Err() != nil && ctx.Err() == nil {
+		if buildCtx.Err() != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
 			return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, ErrJournalBuildTimeout)
 		}
 		return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, err)

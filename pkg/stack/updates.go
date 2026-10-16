@@ -1608,6 +1608,12 @@ func (s *Updates) completeJournaled(
 
 	u, err := s.leaseGet(ctx, ref, id)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if uncancelled, gerr := s.leaseGet(context.WithoutCancel(ctx), ref, id); gerr == nil &&
+				uncancelled.JournalVersion != 0 && uncancelled.Mutates() && !uncancelled.Status.Terminal() {
+				return Update{}, fmt.Errorf("build checkpoint of update %s: %w", id, ErrJournalBuildTimeout)
+			}
+		}
 		return Update{}, err
 	}
 

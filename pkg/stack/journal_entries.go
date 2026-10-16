@@ -280,7 +280,12 @@ func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update Upd
 // refused with ErrTooLarge before anything is stored.
 func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence namespace.Fence) error {
 	if len(batch.Content) > MaxJournalBatchBytes {
-		return fmt.Errorf("%w: journal batch of %d bytes, limit %d", ErrTooLarge, len(batch.Content), MaxJournalBatchBytes)
+		return fmt.Errorf(
+			"%w: journal batch of %d bytes, limit %d",
+			ErrTooLarge,
+			len(batch.Content),
+			MaxJournalBatchBytes,
+		)
 	}
 
 	ids, err := batchIDs(batch.Content)

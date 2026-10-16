@@ -107,11 +107,17 @@ func TestBuildJournalCheckpointPropagatesReplayBounds(t *testing.T) {
 		if i > 0 {
 			buf.WriteString(",")
 		}
-		buf.WriteString(`{"version":1,"kind":0,"sequenceID":` + itoa(i+1) + `,"operationID":` + itoa(i+1) + `,"removeOld":null,"removeNew":null}`)
+		buf.WriteString(
+			`{"version":1,"kind":0,"sequenceID":` + itoa(
+				i+1,
+			) + `,"operationID":` + itoa(
+				i+1,
+			) + `,"removeOld":null,"removeNew":null}`,
+		)
 	}
 	buf.WriteString(`]}`)
 
-	if err := f.svc.AppendJournal(ctx, f.ref, s.Update.ID, s.Token, buf.Bytes()); err != nil {
+	if err = f.svc.AppendJournal(ctx, f.ref, s.Update.ID, s.Token, buf.Bytes()); err != nil {
 		t.Fatalf("append many entries: %v", err)
 	}
 

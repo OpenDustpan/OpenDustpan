@@ -104,7 +104,7 @@ func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, entries io.Rea
 	state := newReplayState(openBase, r)
 	decode := func(entry JournalEntry) error {
 		if err := ctx.Err(); err != nil {
-			return err
+			return fmt.Errorf("pulumijournal: replay canceled: %w", err)
 		}
 		if err := state.countEntry(entry); err != nil {
 			return err
@@ -205,6 +205,8 @@ func newReplayState(base OpenBase, replayer *Replayer) *replayState {
 		newRecords:          nil,
 		hasRefresh:          false,
 		byteString:          false,
+		entryCount:          0,
+		newStateBytes:       0,
 		secrets:             nil,
 		snippets:            nil,
 		snippetsSet:         false,
@@ -305,19 +307,19 @@ func (s *replayState) checkIndex(scan *baseScan) error {
 // linkBytes returns the bytes of the link fields of the indexed resources.
 func linkBytes(index []linkFields) int64 {
 	var n int64
-	for i := range index {
-		n += int64(len(index[i].URN) + len(index[i].Parent) + len(index[i].Provider) +
-			len(index[i].ViewOf) + len(index[i].DeletedWith))
-		for _, urn := range index[i].Dependencies {
+	for _, fields := range index { //nolint:gocritic // The struct holds only string headers, so the copy stays small.
+		n += int64(len(fields.URN) + len(fields.Parent) + len(fields.Provider) +
+			len(fields.ViewOf) + len(fields.DeletedWith))
+		for _, urn := range fields.Dependencies {
 			n += int64(len(urn))
 		}
-		for _, urn := range index[i].Aliases {
+		for _, urn := range fields.Aliases {
 			n += int64(len(urn))
 		}
-		for _, urn := range index[i].ReplaceWith {
+		for _, urn := range fields.ReplaceWith {
 			n += int64(len(urn))
 		}
-		for _, urns := range index[i].PropertyDependencies {
+		for _, urns := range fields.PropertyDependencies {
 			for _, urn := range urns {
 				n += int64(len(urn))
 			}
@@ -330,7 +332,7 @@ func linkBytes(index []linkFields) int64 {
 // each entry before the later entries of the batch are checked.
 func (s *replayState) apply(ctx context.Context, entry JournalEntry) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("pulumijournal: replay canceled: %w", err)
 	}
 	name := entryLabel(entry)
 	if entry.RequiresByteString {
@@ -736,12 +738,12 @@ func (s *replayState) scanBase(ctx context.Context, openBase OpenBase) (*baseSca
 	}
 	err := walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
 		if cerr := ctx.Err(); cerr != nil {
-			return cerr
+			return fmt.Errorf("pulumijournal: replay canceled: %w", cerr)
 		}
 		return s.scanBaseResource(scan, i, raw)
 	}, func(key string, raw jsontext.Value) error {
 		if cerr := ctx.Err(); cerr != nil {
-			return cerr
+			return fmt.Errorf("pulumijournal: replay canceled: %w", cerr)
 		}
 		if key == "pending_operations" {
 			return s.addBasePending(scan, raw)
@@ -984,7 +986,7 @@ func newManifest(now time.Time, version string) manifestJSON {
 // therefore writes nothing.
 func (s *replayState) write(ctx context.Context, openBase OpenBase, out io.Writer, scan *baseScan, r *Replayer) error {
 	if err := ctx.Err(); err != nil {
-		return err
+		return fmt.Errorf("pulumijournal: replay canceled: %w", err)
 	}
 	if s.hasRefresh {
 		rebuildIndex(scan.index, scan.final)
@@ -1234,7 +1236,7 @@ func (s *replayState) writeNewRecords(w *resourceWriter) error {
 func (s *replayState) writeBaseRecords(ctx context.Context, openBase OpenBase, w *resourceWriter) error {
 	return walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
 		if cerr := ctx.Err(); cerr != nil {
-			return cerr
+			return fmt.Errorf("pulumijournal: replay canceled: %w", cerr)
 		}
 		idx := int64(i)
 		if _, gone := s.toDeleteInSnapshot[idx]; gone {
