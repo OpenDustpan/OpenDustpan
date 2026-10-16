@@ -160,7 +160,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	}
 
 	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Providers: st, Policies: policies, Inactivity: nil, Now: clock.Now},
+		session.SessionsConfig{Store: st, Providers: st, Inactivity: nil, Now: clock.Now},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
@@ -991,7 +991,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Providers: nil, Policies: policies, Inactivity: nil, Now: nil},
+		session.SessionsConfig{Store: st, Providers: nil, Inactivity: nil, Now: nil},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)

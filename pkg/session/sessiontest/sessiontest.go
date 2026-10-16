@@ -77,6 +77,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a session use never enables a disabled person", test: testSessionUseKeepsDisable},
 		{name: "a touch leaves an idle or expired session as it is", test: testTouchKeepsInactiveSession},
 		{name: "the lookup answers the activity and the break-glass flag of the owner", test: testOwnerActivity},
+		{name: "the lookup answers the policies of the moment", test: testLookupAnswersPolicies},
 		{name: "a sign-in request works once", test: testRequestOnce},
 		{name: "a sign-in request keeps its max_age", test: testRequestMaxAge},
 		{name: "the token freshness window keeps the default until it is set", test: testPolicyTokenFreshness},

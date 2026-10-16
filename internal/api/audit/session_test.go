@@ -27,7 +27,9 @@ func (aliceSessions) Authenticate(context.Context, session.Secret) (session.Matc
 			ActiveAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-1", Subject: "corp:alice", DisplayName: "Alice",
 			Kind: principal.KindPerson, BreakGlass: false,
 		},
-		Digest: session.Digest{},
+		Digest:   session.Digest{},
+		Policy:   session.DefaultPolicy(),
+		Accounts: session.AccountPolicy{Inactivity: 0, DisableAccounts: false},
 	}, nil
 }
 

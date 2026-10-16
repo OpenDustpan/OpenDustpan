@@ -161,6 +161,25 @@ func TestSessionConformance(t *testing.T) {
 	})
 }
 
+// TestSessionFreshConformance runs the session cases that change a policy
+// on one handle and use a session on the other: two pools on one schema.
+func TestSessionFreshConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	sessiontest.RunFresh(t, func(t *testing.T) (sessiontest.Store, sessiontest.Store) {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return openURL(t, schemaURL), openURL(t, schemaURL)
+	})
+}
+
 // TestNamespacePrincipalConformance runs the suite of the principals of a
 // namespace.
 func TestNamespacePrincipalConformance(t *testing.T) {

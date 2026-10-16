@@ -123,7 +123,7 @@ func newSignInSessions(
 
 	var inactivity session.InactivityRule
 	if tokens != nil {
-		inactivity = tokenInactivity{tokens: tokens}
+		inactivity = tokenInactivity{}
 	}
 
 	var providers session.ProviderSessionStore
@@ -132,7 +132,7 @@ func newSignInSessions(
 	}
 
 	sessions, err := session.NewSessions(session.SessionsConfig{
-		Store: store, Providers: providers, Policies: policies, Inactivity: inactivity, Now: cfg.now,
+		Store: store, Providers: providers, Inactivity: inactivity, Now: cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session service: %w", err)
@@ -260,23 +260,20 @@ func (s *Server) bindSignInProviders(ctx context.Context) error {
 }
 
 // tokenInactivity applies the account inactivity rule of the access token
-// service to the owner of a console session, so that a session does not
-// keep an account alive that the token lookup and the sweep would end.
-type tokenInactivity struct {
-	tokens *accesstoken.Service
-}
+// policy to the owner of a console session, so that a session does not
+// keep an account alive that the token lookup and the sweep would end. The
+// policy comes from the session lookup.
+type tokenInactivity struct{}
 
 // AccountInactive implements session.InactivityRule.
-func (r tokenInactivity) AccountInactive(ctx context.Context, o session.Owner) (bool, error) {
-	inactive, err := r.tokens.AccountInactive(ctx, accesstoken.Owner{
+func (tokenInactivity) AccountInactive(o session.Owner, p session.AccountPolicy, now time.Time) bool {
+	policy := accesstoken.DefaultPolicy()
+	policy.Inactivity, policy.DisableAccounts = p.Inactivity, p.DisableAccounts
+
+	return policy.AccountInactiveAt(accesstoken.Owner{
 		ActiveAt: o.ActiveAt, DisabledAt: o.DisabledAt, ID: o.ID, Subject: o.Subject, DisplayName: o.DisplayName,
 		Kind: o.Kind, BreakGlass: o.BreakGlass,
-	})
-	if err != nil {
-		return false, fmt.Errorf("account inactivity of %s: %w", o.ID, err)
-	}
-
-	return inactive, nil
+	}, now)
 }
 
 // signInRequestPruneEvery is the period of the deletion of the expired
