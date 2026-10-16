@@ -45,7 +45,10 @@ func (m *Mem) Harness() Harness {
 var errUnknownState = errors.New("unknown operation state")
 
 // The rules that a broken memDB breaks, for the sensitivity tests of the
-// suite. Each one is a mutation that the suite must kill.
+// suite. Each one is a mutation that the suite must kill. The switch is
+// unexported: only the tests of this package can make a broken store, with
+// newMemDB. It sits in this file because the store that it breaks is the
+// exported Mem.
 const (
 	// breakToken accepts a write with a stale token.
 	breakToken = "token"

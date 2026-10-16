@@ -32,10 +32,11 @@ type Harness struct {
 	// Open returns a new store handle on the database of the harness. Two
 	// handles act as two instances. Each case opens the handles it needs.
 	// skew is the offset of the clock of the instance that holds the
-	// handle. An adapter that reads a time in Go gives the handle a clock
-	// at time.Now plus skew, so the clock cases catch a decision that uses
-	// that clock instead of the clock of the store. An adapter that reads
-	// no time in Go ignores skew.
+	// handle. An adapter must take an injected clock for every time that it
+	// reads in Go, and Open must give the handle a clock at time.Now plus
+	// skew. Then the clock cases catch a decision that uses the clock of the
+	// instance instead of the clock of the store. Only an adapter that reads
+	// no time in Go can ignore skew.
 	Open func(t *testing.T, skew time.Duration) durable.Store
 	// Domain writes domain rows in the transactions of the store. The
 	// adapter implements it with test tables or with real domain tables.
@@ -1005,12 +1006,12 @@ func testInstanceClockSkew(t *testing.T, h Harness) {
 
 	ahead, behind, plain := h.Open(t, instanceSkew), h.Open(t, -instanceSkew), h.Open(t, 0)
 
-	// An instance behind by one hour holds a short claim.
+	// An instance behind by one hour holds a claim.
 	mustStart(t, behind, "k1", kindA)
-	held := mustClaim(t, behind, ownerB, shortLease, kindA)
+	held := mustClaim(t, behind, ownerB, liveLease, kindA)
 
-	if gap := held.Claim.ExpiresAt.Sub(held.UpdatedAt); gap < shortLease-clockSlack || gap > shortLease+clockSlack {
-		t.Fatalf("expiry minus claim time from an instance behind = %v, want the lease %v", gap, shortLease)
+	if gap := held.Claim.ExpiresAt.Sub(held.UpdatedAt); gap < liveLease-clockSlack || gap > liveLease+clockSlack {
+		t.Fatalf("expiry minus claim time from an instance behind = %v, want the lease %v", gap, liveLease)
 	}
 
 	// An instance ahead by one hour cannot take it over early.
