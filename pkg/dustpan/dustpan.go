@@ -494,8 +494,10 @@ type Server struct {
 	// deleted runs the retention sweep of the deleted units on a schedule.
 	deleted *deletedSweeper
 	// signInRequests deletes the expired sign-in requests on a schedule, or
-	// is nil with no console sign-in.
-	signInRequests *session.Sessions
+	// is nil with no console sign-in. signInPruneEvery is the period of
+	// that schedule.
+	signInRequests   *session.Sessions
+	signInPruneEvery time.Duration
 }
 
 // services holds the domain services that NewServer wires together.
@@ -713,29 +715,30 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	}
 
 	return &Server{
-		handler:         handler,
-		logger:          cfg.logger,
-		listenAddr:      cfg.listenAddr,
-		listener:        cfg.listener,
-		secrets:         svc.secrets,
-		secretKeys:      cfg.secretKeys,
-		secretWrapper:   cfg.secretWrapper,
-		workspaces:      svc.workspaces,
-		backups:         backups,
-		backupRegistry:  backupRegistry,
-		restores:        adapters.restores,
-		restoreRegistry: restoreRegistry,
-		now:             cfg.now,
-		registry:        registry,
-		tlsCertFile:     cfg.tlsCertFile,
-		tlsKeyFile:      cfg.tlsKeyFile,
-		observed:        observed,
-		chain:           adapters.chain,
-		tokens:          svc.tokens,
-		shipper:         shipper,
-		beforeServe:     cfg.beforeServe,
-		deleted:         deleted,
-		signInRequests:  adapters.signInSessions(),
+		handler:          handler,
+		logger:           cfg.logger,
+		listenAddr:       cfg.listenAddr,
+		listener:         cfg.listener,
+		secrets:          svc.secrets,
+		secretKeys:       cfg.secretKeys,
+		secretWrapper:    cfg.secretWrapper,
+		workspaces:       svc.workspaces,
+		backups:          backups,
+		backupRegistry:   backupRegistry,
+		restores:         adapters.restores,
+		restoreRegistry:  restoreRegistry,
+		now:              cfg.now,
+		registry:         registry,
+		tlsCertFile:      cfg.tlsCertFile,
+		tlsKeyFile:       cfg.tlsKeyFile,
+		observed:         observed,
+		chain:            adapters.chain,
+		tokens:           svc.tokens,
+		shipper:          shipper,
+		beforeServe:      cfg.beforeServe,
+		deleted:          deleted,
+		signInRequests:   adapters.signInSessions(),
+		signInPruneEvery: signInRequestPruneEvery,
 	}, nil
 }
 
