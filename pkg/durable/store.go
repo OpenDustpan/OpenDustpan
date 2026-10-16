@@ -17,6 +17,11 @@ import (
 // A store method of another port can also take a StepFence or a
 // StartRequest. Such a method checks the fence, or starts the operation, in
 // the transaction of its own write, with the rules of RecordStep or Start.
+// It takes the time of the expiry check when it checks, not when its
+// transaction starts, so a claim that expires during a long transaction
+// cannot write.
+//
+// A method that returns an error changes nothing.
 // Then a domain write and its step record, or a domain write and the start of
 // an operation, commit together or not at all.
 //
@@ -52,40 +57,44 @@ type Store interface {
 	// Extend moves the expiry of c to now plus lease, and returns the new
 	// claim. It returns ErrClaimLost when c is not the live claim, also when
 	// c expired and no other claim took the operation. It returns
-	// ErrCanceled, and changes nothing, when a cancel is requested. It
-	// returns ErrInvalid for a lease that is not positive.
+	// ErrCanceled when a cancel is requested. It returns ErrInvalid for a
+	// lease that is not positive. On an error it changes nothing.
 	Extend(ctx context.Context, c Claim, lease time.Duration) (Claim, error)
 
-	// RecordStep records the step f.Step with result. It returns
-	// ErrClaimLost when f does not carry the live claim, and ErrStepDone,
-	// with no change, when the operation already recorded the step. When a
-	// cancel is requested, it records nothing, ends the operation canceled
-	// and returns ErrCanceled.
+	// RecordStep records the step f.Step with result. It checks in this
+	// order, and returns the error of the first check that fails:
+	// ErrClaimLost when f does not carry the live claim, ErrCanceled when a
+	// cancel is requested, and ErrStepDone when the operation already
+	// recorded the step. On an error it changes nothing. So a replaced
+	// holder that writes a done step gets ErrClaimLost.
 	RecordStep(ctx context.Context, f StepFence, result []byte) error
 
 	// Complete ends the operation of c as succeeded and clears its claim.
-	// It returns ErrClaimLost when c is not the live claim. When a cancel
-	// is requested, it ends the operation canceled and returns ErrCanceled.
+	// It returns ErrClaimLost when c is not the live claim, and ErrCanceled
+	// when a cancel is requested. On an error it changes nothing: the holder
+	// then calls Release, which ends the operation canceled.
 	Complete(ctx context.Context, c Claim) error
 
 	// Fail ends the attempt of c and records f.Message as the last error.
 	// With f.Final, the operation ends failed. Otherwise it returns to
 	// pending with NotBefore at now plus f.RetryAfter. The claim is cleared
-	// in both cases. It returns ErrClaimLost when c is not the live claim.
-	// When a cancel is requested, it ends the operation canceled and
-	// returns ErrCanceled.
+	// in both cases. It returns ErrClaimLost when c is not the live claim,
+	// and then changes nothing. When a cancel is requested, it ends the
+	// operation canceled instead, and returns nil.
 	Fail(ctx context.Context, c Claim, f Failure) error
 
 	// Release returns the operation of c to pending without a failure, for
 	// a holder that stops before the operation ends. The attempt count
 	// stays. It returns ErrClaimLost when c is not the live claim, and then
 	// changes nothing. When a cancel is requested, it ends the operation
-	// canceled and returns ErrCanceled.
+	// canceled instead, and returns nil.
 	Release(ctx context.Context, c Claim) error
 
 	// Cancel stops the operation id. A pending operation ends canceled at
-	// once. A running operation records the request, and its holder sees
-	// ErrCanceled at its next write. A second cancel changes nothing. It
+	// once. A running operation records the request. Its holder then gets
+	// ErrCanceled from Extend, RecordStep, a step write of another port and
+	// Complete, which change nothing. Fail, Release, or a claim after the
+	// expiry ends the operation canceled. A second cancel changes nothing. It
 	// returns ErrNotFound for an unknown ID, and ErrFinished for an
 	// operation that succeeded or failed.
 	Cancel(ctx context.Context, id ID) error

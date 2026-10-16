@@ -82,11 +82,13 @@ type Operation struct {
 	Attempt int
 	// LastError is the message of the last failed attempt, or empty.
 	LastError string
-	// Claim is the live or last claim. It is the zero Claim before the
-	// first claim and after a release or a failed attempt.
+	// Claim is the claim of a running operation. It is the zero Claim when
+	// no instance holds the operation: before the first claim, and after
+	// Complete, Fail, Release or the end of a cancel. A running operation
+	// whose claim expired keeps it until the next claim.
 	Claim Claim
 	// CancelRequested is true after a cancel of a running operation. The
-	// holder sees it at its next write.
+	// holder sees ErrCanceled at its next write.
 	CancelRequested bool
 	// NotBefore is the earliest time of the next claim of a pending
 	// operation, on the clock of the store. A retry sets it.

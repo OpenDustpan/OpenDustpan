@@ -2,7 +2,8 @@ package durable
 
 import "time"
 
-// halves splits the capped delay: jitter keeps the upper half.
+// halves is the factor of the growth per attempt, and the jitter keeps the
+// upper half of the delay.
 const halves = 2
 
 // Backoff is the retry policy for a failed attempt: capped exponential
@@ -25,12 +26,17 @@ func (b Backoff) Delay(attempt int, rnd func() float64) time.Duration {
 		return 0
 	}
 
-	d := b.Base
+	d := min(b.Base, b.Max)
 	for i := 1; i < attempt && d < b.Max; i++ {
-		d *= 2
-	}
+		// Cap before the doubling, so a large Max cannot overflow.
+		if d > b.Max/halves {
+			d = b.Max
 
-	d = min(d, b.Max)
+			break
+		}
+
+		d *= halves
+	}
 
 	half := d / halves
 

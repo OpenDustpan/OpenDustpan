@@ -31,10 +31,33 @@ var ErrInjected = errors.New("durabletest: injected failure")
 type Harness struct {
 	// Open returns a new store handle on the database of the harness. Two
 	// handles act as two instances. Each case opens the handles it needs.
-	Open func(t *testing.T) durable.Store
+	// skew is the offset of the clock of the instance that holds the
+	// handle. An adapter that reads a time in Go gives the handle a clock
+	// at time.Now plus skew, so the clock cases catch a decision that uses
+	// that clock instead of the clock of the store. An adapter that reads
+	// no time in Go ignores skew.
+	Open func(t *testing.T, skew time.Duration) durable.Store
 	// Domain writes domain rows in the transactions of the store. The
 	// adapter implements it with test tables or with real domain tables.
 	Domain Domain
+}
+
+// Hooks are the calls that a Domain method makes inside its transaction.
+// When a hook returns an error, the transaction rolls back and the method
+// returns that error. A nil hook does nothing. The hooks never use the
+// store.
+type Hooks struct {
+	Before func() error
+	After  func() error
+}
+
+// Run calls h, or does nothing for a nil h.
+func (Hooks) Run(h func() error) error {
+	if h == nil {
+		return nil
+	}
+
+	return h()
 }
 
 // Factory returns a fresh harness for one case.
@@ -52,17 +75,13 @@ type Domain interface {
 	// WriteStep checks ns and checks and records the step of f with the
 	// rules of durable.Store.RecordStep, and stores value in a domain row.
 	// It returns namespace.ErrFenced for a stale ns, and the errors of
-	// RecordStep. After all its writes, inside the transaction, it calls
-	// after. When after returns an error, the transaction rolls back and
-	// WriteStep returns that error.
-	WriteStep(ctx context.Context, f durable.StepFence, ns namespace.Fence, value string, after func() error) error
+	// RecordStep. Inside the transaction, it calls hooks.Before first,
+	// before any check, and hooks.After last, after all its writes.
+	WriteStep(ctx context.Context, f durable.StepFence, ns namespace.Fence, value string, hooks Hooks) error
 	// StartWith stores value in a domain row and starts the operation of
 	// req with the rules of durable.Store.Start. After both writes, inside
-	// the transaction, it calls after. When after returns an error, the
-	// transaction rolls back and StartWith returns that error.
-	StartWith(
-		ctx context.Context, req durable.StartRequest, value string, after func() error,
-	) (durable.Operation, error)
+	// the transaction, it calls hooks.After.
+	StartWith(ctx context.Context, req durable.StartRequest, value string, hooks Hooks) (durable.Operation, error)
 	// Values returns the stored domain values, in any order.
 	Values(ctx context.Context) ([]string, error)
 }
@@ -70,6 +89,11 @@ type Domain interface {
 const (
 	// shortLease expires inside one case.
 	shortLease = 300 * time.Millisecond
+	// liveLease stays live for the few calls of a case that needs a live
+	// claim, also on a busy database under -race.
+	liveLease = 2 * time.Second
+	// instanceSkew is the clock offset of the instances in the clock case.
+	instanceSkew = time.Hour
 	// longLease does not expire inside one case.
 	longLease = 5 * time.Minute
 	// expiryWait is the longest time a case waits for a short lease or a
@@ -108,8 +132,10 @@ func Run(t *testing.T, newHarness Factory) {
 		{"concurrent claims of one operation give one claim", testClaimRace},
 		{"a live claim blocks another claim", testLiveClaimBlocks},
 		{"the expiry comes from the clock of the store", testExpiryFromStoreClock},
+		{"an instance clock ahead or behind cannot move a claim", testInstanceClockSkew},
 		{"another instance claims an expired operation with a new token", testTakeover},
-		{"an expired claim cannot extend, record or complete", testExpiredClaimCannotWrite},
+		{"an expired claim cannot write", testExpiredClaimCannotWrite},
+		{"a claim that expires inside a step transaction cannot write", testExpiryInsideStepTx},
 		{"a replaced claim cannot write", testReplacedClaimCannotWrite},
 		{"extend moves the expiry and keeps the claim live", testExtend},
 		{"a release by a non-holder changes nothing", testReleaseByNonHolder},
@@ -120,7 +146,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a retry waits for its delay on the clock of the store", testRetryDelay},
 		{"a cancel ends a pending operation", testCancelPending},
 		{"a cancel stops a running operation at its next write", testCancelRunning},
-		{"a canceled operation cannot succeed", testCancelBlocksComplete},
+		{"a canceled operation cannot succeed, and fail or release ends it", testCancelBlocksComplete},
 		{"a claim ends an expired operation with a cancel", testCancelExpired},
 		{"a cancel of an ended operation is ErrFinished", testCancelFinished},
 		{"status from another instance shows holder, expiry and attempt", testStatusFromOtherInstance},
@@ -128,6 +154,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a start in a rolled-back domain write leaves no operation", testStartInDomainTx},
 		{"a step write and its step record commit together", testStepWriteAtomic},
 		{"a lost claim cannot write a domain row", testStepWriteLostClaim},
+		{"a step write after a cancel changes nothing", testStepWriteCanceled},
 		{"a step write from before a restore fails", testStepWriteAfterRestore},
 	}
 
@@ -142,7 +169,7 @@ func Run(t *testing.T, newHarness Factory) {
 func testStartValidates(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 
 	for _, req := range []durable.StartRequest{
 		{Key: "", Kind: kindA, Input: nil},
@@ -157,7 +184,7 @@ func testStartValidates(t *testing.T, h Harness) {
 func testStartKeyOnce(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 
 	first, created, err := a.Start(t.Context(), durable.StartRequest{Key: "k1", Kind: kindA, Input: []byte("one")})
 	if err != nil || !created {
@@ -183,7 +210,7 @@ func testStartKeyOnce(t *testing.T, h Harness) {
 func testStartKeyRace(t *testing.T, h Harness) {
 	t.Helper()
 
-	stores := []durable.Store{h.Open(t), h.Open(t)}
+	stores := []durable.Store{h.Open(t, 0), h.Open(t, 0)}
 
 	ids := make([]durable.ID, racers)
 	errs := make([]error, racers)
@@ -227,7 +254,7 @@ func testStartKeyRace(t *testing.T, h Harness) {
 func testStartKeyConflict(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 	mustStart(t, s, "k", kindA)
 
 	if _, _, err := s.Start(t.Context(), durable.StartRequest{Key: "k", Kind: kindB, Input: nil}); !errors.Is(
@@ -240,7 +267,7 @@ func testStartKeyConflict(t *testing.T, h Harness) {
 func testGetUnknown(t *testing.T, h Harness) {
 	t.Helper()
 
-	if _, err := h.Open(t).Get(t.Context(), "no-such-operation"); !errors.Is(err, durable.ErrNotFound) {
+	if _, err := h.Open(t, 0).Get(t.Context(), "no-such-operation"); !errors.Is(err, durable.ErrNotFound) {
 		t.Fatalf("Get of an unknown ID: error = %v, want ErrNotFound", err)
 	}
 }
@@ -248,7 +275,7 @@ func testGetUnknown(t *testing.T, h Harness) {
 func testClaimValidates(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 	mustStart(t, s, "k", kindA)
 
 	for _, req := range []durable.ClaimRequest{
@@ -266,7 +293,7 @@ func testClaimValidates(t *testing.T, h Harness) {
 func testClaimKinds(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 	op := mustStart(t, s, "k", kindA)
 
 	if _, err := s.Claim(t.Context(), claimReq(ownerA, longLease, kindB)); !errors.Is(err, durable.ErrNoWork) {
@@ -286,7 +313,7 @@ func testClaimKinds(t *testing.T, h Harness) {
 func testClaimRace(t *testing.T, h Harness) {
 	t.Helper()
 
-	stores := []durable.Store{h.Open(t), h.Open(t)}
+	stores := []durable.Store{h.Open(t, 0), h.Open(t, 0)}
 	op := mustStart(t, stores[0], "k", kindA)
 
 	results := make([]durable.Operation, racers)
@@ -332,7 +359,7 @@ func testClaimRace(t *testing.T, h Harness) {
 func testLiveClaimBlocks(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	op := mustStart(t, a, "k", kindA)
 	held := mustClaim(t, a, ownerA, longLease, kindA)
 
@@ -349,7 +376,7 @@ func testLiveClaimBlocks(t *testing.T, h Harness) {
 func testExpiryFromStoreClock(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 	mustStart(t, s, "k", kindA)
 	held := mustClaim(t, s, ownerA, longLease, kindA)
 
@@ -363,7 +390,7 @@ func testExpiryFromStoreClock(t *testing.T, h Harness) {
 func testTakeover(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	op := mustStart(t, a, "k", kindA)
 	first := mustClaim(t, a, ownerA, shortLease, kindA)
 
@@ -381,7 +408,7 @@ func testTakeover(t *testing.T, h Harness) {
 func testExpiredClaimCannotWrite(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 	mustStart(t, s, "k", kindA)
 	held := mustClaim(t, s, ownerA, shortLease, kindA)
 	waitPast(t, s, held.ID, held.Claim.ExpiresAt)
@@ -398,15 +425,26 @@ func testExpiredClaimCannotWrite(t *testing.T, h Harness) {
 		t.Errorf("Complete with an expired claim: error = %v, want ErrClaimLost", err)
 	}
 
-	if got := mustGet(t, s, held.ID); got.State != durable.StateRunning || len(got.Steps) != 0 {
-		t.Fatalf("operation after writes of an expired claim = %+v, want running with no step", got)
+	err := s.Fail(t.Context(), held.Claim, durable.Failure{Message: "late", Final: true, RetryAfter: 0})
+	if !errors.Is(err, durable.ErrClaimLost) {
+		t.Errorf("Fail with an expired claim: error = %v, want ErrClaimLost", err)
+	}
+
+	if err := s.Release(t.Context(), held.Claim); !errors.Is(err, durable.ErrClaimLost) {
+		t.Errorf("Release of an expired claim: error = %v, want ErrClaimLost", err)
+	}
+
+	got := mustGet(t, s, held.ID)
+	if got.State != durable.StateRunning || len(got.Steps) != 0 || got.LastError != "" ||
+		!sameClaim(got.Claim, held.Claim) {
+		t.Fatalf("operation after writes of an expired claim = %+v, want it unchanged", got)
 	}
 }
 
 func testReplacedClaimCannotWrite(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
 	old := mustClaim(t, a, ownerA, shortLease, kindA)
 	live := claimWhenExpired(t, b)
@@ -438,9 +476,9 @@ func testReplacedClaimCannotWrite(t *testing.T, h Harness) {
 func testExtend(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
-	held := mustClaim(t, a, ownerA, shortLease, kindA)
+	held := mustClaim(t, a, ownerA, liveLease, kindA)
 
 	extended, err := a.Extend(t.Context(), held.Claim, longLease)
 	if err != nil {
@@ -453,7 +491,7 @@ func testExtend(t *testing.T, h Harness) {
 			held.Claim.ExpiresAt)
 	}
 
-	pause(t, shortLease+2*pollEvery)
+	pause(t, liveLease+2*pollEvery)
 
 	if _, err := b.Claim(t.Context(), claimReq(ownerB, longLease, kindA)); !errors.Is(err, durable.ErrNoWork) {
 		t.Fatalf("Claim after the first lease, before the extended expiry: error = %v, want ErrNoWork", err)
@@ -467,7 +505,7 @@ func testExtend(t *testing.T, h Harness) {
 func testReleaseByNonHolder(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
 	held := mustClaim(t, a, ownerA, longLease, kindA)
 
@@ -487,7 +525,7 @@ func testReleaseByNonHolder(t *testing.T, h Harness) {
 func testRelease(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
 	held := mustClaim(t, a, ownerA, longLease, kindA)
 
@@ -510,9 +548,9 @@ func testRelease(t *testing.T, h Harness) {
 func testStepDoneAfterTakeover(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
-	first := mustClaim(t, a, ownerA, shortLease, kindA)
+	first := mustClaim(t, a, ownerA, liveLease, kindA)
 
 	if err := a.RecordStep(t.Context(), first.Claim.Step("one"), []byte("result-one")); err != nil {
 		t.Fatalf("RecordStep by the holder: %v", err)
@@ -530,8 +568,15 @@ func testStepDoneAfterTakeover(t *testing.T, h Harness) {
 		t.Fatalf("steps after a takeover = %+v, want step one with result-one", second.Steps)
 	}
 
-	if err := b.RecordStep(t.Context(), second.Claim.Step("one"), []byte("new")); !errors.Is(err, durable.ErrStepDone) {
+	err = b.RecordStep(t.Context(), second.Claim.Step("one"), []byte("new"))
+	if !errors.Is(err, durable.ErrStepDone) {
 		t.Fatalf("RecordStep of a done step by the new holder: error = %v, want ErrStepDone", err)
+	}
+
+	// The claim check comes before the step check.
+	err = a.RecordStep(t.Context(), first.Claim.Step("one"), []byte("stale"))
+	if !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("RecordStep of a done step by the replaced holder: error = %v, want ErrClaimLost", err)
 	}
 
 	if err := b.RecordStep(t.Context(), second.Claim.Step("two"), []byte("result-two")); err != nil {
@@ -547,7 +592,7 @@ func testStepDoneAfterTakeover(t *testing.T, h Harness) {
 func testComplete(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
 	held := mustClaim(t, a, ownerA, longLease, kindA)
 
@@ -572,7 +617,7 @@ func testComplete(t *testing.T, h Harness) {
 func testFinalFailure(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
 	held := mustClaim(t, a, ownerA, longLease, kindA)
 
@@ -595,11 +640,11 @@ func testFinalFailure(t *testing.T, h Harness) {
 func testRetryDelay(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
 	held := mustClaim(t, a, ownerA, longLease, kindA)
 
-	err := a.Fail(t.Context(), held.Claim, durable.Failure{Message: "timeout", Final: false, RetryAfter: shortLease})
+	err := a.Fail(t.Context(), held.Claim, durable.Failure{Message: "timeout", Final: false, RetryAfter: liveLease})
 	if err != nil {
 		t.Fatalf("Fail with a retry: %v", err)
 	}
@@ -609,9 +654,9 @@ func testRetryDelay(t *testing.T, h Harness) {
 		t.Fatalf("operation after a retry = %+v, want pending with last error %q", got, "timeout")
 	}
 
-	if gap := got.NotBefore.Sub(got.UpdatedAt); gap < shortLease-clockSlack || gap > shortLease+clockSlack {
+	if gap := got.NotBefore.Sub(got.UpdatedAt); gap < liveLease-clockSlack || gap > liveLease+clockSlack {
 		t.Fatalf("NotBefore %v minus update time %v = %v, want the retry delay %v", got.NotBefore, got.UpdatedAt,
-			gap, shortLease)
+			gap, liveLease)
 	}
 
 	if _, err := b.Claim(t.Context(), claimReq(ownerB, longLease, kindA)); !errors.Is(err, durable.ErrNoWork) {
@@ -627,7 +672,7 @@ func testRetryDelay(t *testing.T, h Harness) {
 func testCancelPending(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	op := mustStart(t, a, "k", kindA)
 
 	if err := b.Cancel(t.Context(), op.ID); err != nil {
@@ -654,7 +699,7 @@ func testCancelPending(t *testing.T, h Harness) {
 func testCancelRunning(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
 	held := mustClaim(t, a, ownerA, longLease, kindA)
 
@@ -675,9 +720,15 @@ func testCancelRunning(t *testing.T, h Harness) {
 		t.Fatalf("RecordStep after Cancel: error = %v, want ErrCanceled", err)
 	}
 
+	mustBeUnchanged(t, b, held, "holder writes that a cancel refused")
+
+	if err := a.Release(t.Context(), held.Claim); err != nil {
+		t.Fatalf("Release after Cancel: %v", err)
+	}
+
 	got = mustGet(t, b, held.ID)
 	if got.State != durable.StateCanceled || len(got.Steps) != 0 || !noClaim(got.Claim) {
-		t.Fatalf("operation after the next write = %+v, want canceled, no step, no claim", got)
+		t.Fatalf("operation after the release = %+v, want canceled, no step, no claim", got)
 	}
 }
 
@@ -688,7 +739,7 @@ func testCancelBlocksComplete(t *testing.T, h Harness) {
 		t.Run(end, func(t *testing.T) {
 			t.Parallel()
 
-			s := h.Open(t)
+			s := h.Open(t, 0)
 			kind := durable.Kind("kind-" + end)
 			mustStart(t, s, "k-"+end, kind)
 			held := mustClaim(t, s, ownerA, longLease, kind)
@@ -699,21 +750,24 @@ func testCancelBlocksComplete(t *testing.T, h Harness) {
 
 			var err error
 
+			want, wantState := error(nil), durable.StateCanceled
+
 			switch end {
 			case "complete":
 				err = s.Complete(t.Context(), held.Claim)
+				want, wantState = durable.ErrCanceled, durable.StateRunning
 			case "fail":
 				err = s.Fail(t.Context(), held.Claim, durable.Failure{Message: "x", Final: false, RetryAfter: 0})
 			default:
 				err = s.Release(t.Context(), held.Claim)
 			}
 
-			if !errors.Is(err, durable.ErrCanceled) {
-				t.Fatalf("%s after Cancel: error = %v, want ErrCanceled", end, err)
+			if !errors.Is(err, want) {
+				t.Fatalf("%s after Cancel: error = %v, want %v", end, err, want)
 			}
 
-			if got := mustGet(t, s, held.ID); got.State != durable.StateCanceled {
-				t.Fatalf("state after %s of a canceled operation = %s, want canceled", end, got.State)
+			if got := mustGet(t, s, held.ID); got.State != wantState {
+				t.Fatalf("state after %s of a canceled operation = %s, want %s", end, got.State, wantState)
 			}
 		})
 	}
@@ -722,9 +776,9 @@ func testCancelBlocksComplete(t *testing.T, h Harness) {
 func testCancelExpired(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	op := mustStart(t, a, "k", kindA)
-	held := mustClaim(t, a, ownerA, shortLease, kindA)
+	held := mustClaim(t, a, ownerA, liveLease, kindA)
 
 	if err := b.Cancel(t.Context(), op.ID); err != nil {
 		t.Fatalf("Cancel: %v", err)
@@ -744,7 +798,7 @@ func testCancelExpired(t *testing.T, h Harness) {
 func testCancelFinished(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 	mustStart(t, s, "k", kindA)
 	held := mustClaim(t, s, ownerA, longLease, kindA)
 
@@ -764,7 +818,7 @@ func testCancelFinished(t *testing.T, h Harness) {
 func testStatusFromOtherInstance(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	mustStart(t, a, "k", kindA)
 	held := mustClaim(t, a, ownerA, longLease, kindA)
 
@@ -783,7 +837,7 @@ func testStatusFromOtherInstance(t *testing.T, h Harness) {
 func testList(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 
 	// The pauses give each operation its own creation time on a store that
 	// keeps milliseconds, so the order does not depend on the IDs.
@@ -821,10 +875,11 @@ func testList(t *testing.T, h Harness) {
 func testStartInDomainTx(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 	req := durable.StartRequest{Key: "k", Kind: kindA, Input: nil}
 
-	if _, err := h.Domain.StartWith(t.Context(), req, "rolled-back", failAfter); !errors.Is(err, ErrInjected) {
+	_, err := h.Domain.StartWith(t.Context(), req, "rolled-back", Hooks{Before: nil, After: failAfter})
+	if !errors.Is(err, ErrInjected) {
 		t.Fatalf("StartWith that fails: error = %v, want ErrInjected", err)
 	}
 
@@ -836,7 +891,7 @@ func testStartInDomainTx(t *testing.T, h Harness) {
 		t.Fatalf("domain values after a rolled-back start = %v, want none", vals)
 	}
 
-	op, err := h.Domain.StartWith(t.Context(), req, "kept", commitAfter)
+	op, err := h.Domain.StartWith(t.Context(), req, "kept", Hooks{Before: nil, After: nil})
 	if err != nil {
 		t.Fatalf("StartWith: %v", err)
 	}
@@ -853,12 +908,18 @@ func testStartInDomainTx(t *testing.T, h Harness) {
 func testStepWriteAtomic(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 	ns := mustNamespace(t, h.Domain, "ns-atomic")
 	mustStart(t, s, "k", kindA)
 	held := mustClaim(t, s, ownerA, longLease, kindA)
 
-	err := h.Domain.WriteStep(t.Context(), held.Claim.Step("one"), ns, "rolled-back", failAfter)
+	err := h.Domain.WriteStep(
+		t.Context(),
+		held.Claim.Step("one"),
+		ns,
+		"rolled-back",
+		Hooks{Before: nil, After: failAfter},
+	)
 	if !errors.Is(err, ErrInjected) {
 		t.Fatalf("WriteStep that fails: error = %v, want ErrInjected", err)
 	}
@@ -871,7 +932,7 @@ func testStepWriteAtomic(t *testing.T, h Harness) {
 		t.Fatalf("domain values after a rolled-back step write = %v, want none", vals)
 	}
 
-	err = h.Domain.WriteStep(t.Context(), held.Claim.Step("one"), ns, "kept", commitAfter)
+	err = h.Domain.WriteStep(t.Context(), held.Claim.Step("one"), ns, "kept", Hooks{Before: nil, After: nil})
 	if err != nil {
 		t.Fatalf("WriteStep: %v", err)
 	}
@@ -880,7 +941,7 @@ func testStepWriteAtomic(t *testing.T, h Harness) {
 		t.Fatal("step one is not recorded after a committed step write")
 	}
 
-	err = h.Domain.WriteStep(t.Context(), held.Claim.Step("one"), ns, "twice", commitAfter)
+	err = h.Domain.WriteStep(t.Context(), held.Claim.Step("one"), ns, "twice", Hooks{Before: nil, After: nil})
 	if !errors.Is(err, durable.ErrStepDone) {
 		t.Fatalf("second WriteStep of one step: error = %v, want ErrStepDone", err)
 	}
@@ -893,13 +954,13 @@ func testStepWriteAtomic(t *testing.T, h Harness) {
 func testStepWriteLostClaim(t *testing.T, h Harness) {
 	t.Helper()
 
-	a, b := h.Open(t), h.Open(t)
+	a, b := h.Open(t, 0), h.Open(t, 0)
 	ns := mustNamespace(t, h.Domain, "ns-lost")
 	mustStart(t, a, "k", kindA)
 	old := mustClaim(t, a, ownerA, shortLease, kindA)
 	live := claimWhenExpired(t, b)
 
-	err := h.Domain.WriteStep(t.Context(), old.Claim.Step("one"), ns, "late", commitAfter)
+	err := h.Domain.WriteStep(t.Context(), old.Claim.Step("one"), ns, "late", Hooks{Before: nil, After: nil})
 	if !errors.Is(err, durable.ErrClaimLost) {
 		t.Fatalf("WriteStep with a replaced claim: error = %v, want ErrClaimLost", err)
 	}
@@ -916,7 +977,7 @@ func testStepWriteLostClaim(t *testing.T, h Harness) {
 func testStepWriteAfterRestore(t *testing.T, h Harness) {
 	t.Helper()
 
-	s := h.Open(t)
+	s := h.Open(t, 0)
 	ns := mustNamespace(t, h.Domain, "ns-restore")
 	mustStart(t, s, "k", kindA)
 	held := mustClaim(t, s, ownerA, longLease, kindA)
@@ -925,7 +986,7 @@ func testStepWriteAfterRestore(t *testing.T, h Harness) {
 		t.Fatalf("BumpFences: %v", err)
 	}
 
-	err := h.Domain.WriteStep(t.Context(), held.Claim.Step("one"), ns, "late", commitAfter)
+	err := h.Domain.WriteStep(t.Context(), held.Claim.Step("one"), ns, "late", Hooks{Before: nil, After: nil})
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("WriteStep with a fence from before the restore: error = %v, want namespace.ErrFenced", err)
 	}
@@ -939,11 +1000,117 @@ func testStepWriteAfterRestore(t *testing.T, h Harness) {
 	}
 }
 
+func testInstanceClockSkew(t *testing.T, h Harness) {
+	t.Helper()
+
+	ahead, behind, plain := h.Open(t, instanceSkew), h.Open(t, -instanceSkew), h.Open(t, 0)
+
+	// An instance behind by one hour holds a short claim.
+	mustStart(t, behind, "k1", kindA)
+	held := mustClaim(t, behind, ownerB, shortLease, kindA)
+
+	if gap := held.Claim.ExpiresAt.Sub(held.UpdatedAt); gap < shortLease-clockSlack || gap > shortLease+clockSlack {
+		t.Fatalf("expiry minus claim time from an instance behind = %v, want the lease %v", gap, shortLease)
+	}
+
+	// An instance ahead by one hour cannot take it over early.
+	if _, err := ahead.Claim(t.Context(), claimReq(ownerA, longLease, kindA)); !errors.Is(err, durable.ErrNoWork) {
+		t.Fatalf("Claim of a live claim from an instance one hour ahead: error = %v, want ErrNoWork", err)
+	}
+
+	// The instance behind cannot keep it after the expiry on the store clock.
+	waitPast(t, plain, held.ID, held.Claim.ExpiresAt)
+
+	if _, err := behind.Extend(t.Context(), held.Claim, longLease); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("Extend of an expired claim from an instance one hour behind: error = %v, want ErrClaimLost", err)
+	}
+
+	err := behind.RecordStep(t.Context(), held.Claim.Step("one"), nil)
+	if !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("RecordStep of an expired claim from an instance one hour behind: error = %v, want ErrClaimLost", err)
+	}
+
+	// A retry delay that the instance behind sets is not one hour short.
+	again := mustClaim(t, behind, ownerB, longLease, kindA)
+
+	err = behind.Fail(t.Context(), again.Claim, durable.Failure{Message: "x", Final: false, RetryAfter: liveLease})
+	if err != nil {
+		t.Fatalf("Fail with a retry from an instance one hour behind: %v", err)
+	}
+
+	if _, err := plain.Claim(t.Context(), claimReq(ownerA, longLease, kindA)); !errors.Is(err, durable.ErrNoWork) {
+		t.Fatalf("Claim before a retry delay that an instance one hour behind set: error = %v, want ErrNoWork", err)
+	}
+}
+
+func testExpiryInsideStepTx(t *testing.T, h Harness) {
+	t.Helper()
+
+	s := h.Open(t, 0)
+	ns := mustNamespace(t, h.Domain, "ns-long-tx")
+	mustStart(t, s, "k", kindA)
+	held := mustClaim(t, s, ownerA, shortLease, kindA)
+
+	// The pause inside the transaction outlasts the lease. A store that
+	// takes the time of the check from the start of the transaction sees
+	// the claim as live.
+	outlast := func() error {
+		pause(t, shortLease+4*pollEvery)
+
+		return nil
+	}
+
+	err := h.Domain.WriteStep(t.Context(), held.Claim.Step("one"), ns, "late", Hooks{Before: outlast, After: nil})
+	if !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("WriteStep whose claim expired inside the transaction: error = %v, want ErrClaimLost", err)
+	}
+
+	if vals := mustValues(t, h.Domain); len(vals) != 0 {
+		t.Fatalf("domain values after a write of an expired claim = %v, want none", vals)
+	}
+
+	if got := mustGet(t, s, held.ID); len(got.Steps) != 0 {
+		t.Fatalf("steps after a write of an expired claim = %+v, want none", got.Steps)
+	}
+}
+
+func testStepWriteCanceled(t *testing.T, h Harness) {
+	t.Helper()
+
+	s := h.Open(t, 0)
+	ns := mustNamespace(t, h.Domain, "ns-cancel")
+	mustStart(t, s, "k", kindA)
+	held := mustClaim(t, s, ownerA, longLease, kindA)
+
+	if err := s.Cancel(t.Context(), held.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	err := h.Domain.WriteStep(t.Context(), held.Claim.Step("one"), ns, "after-cancel", Hooks{Before: nil, After: nil})
+	if !errors.Is(err, durable.ErrCanceled) {
+		t.Fatalf("WriteStep after Cancel: error = %v, want ErrCanceled", err)
+	}
+
+	if vals := mustValues(t, h.Domain); len(vals) != 0 {
+		t.Fatalf("domain values after a write that a cancel refused = %v, want none", vals)
+	}
+
+	mustBeUnchanged(t, s, held, "a write that a cancel refused")
+}
+
+// mustBeUnchanged fails the test unless the operation of held is still
+// running under the claim of held, with no step.
+func mustBeUnchanged(t *testing.T, s durable.Store, held durable.Operation, after string) {
+	t.Helper()
+
+	got := mustGet(t, s, held.ID)
+	if got.State != durable.StateRunning || len(got.Steps) != 0 || !sameClaim(got.Claim, held.Claim) {
+		t.Fatalf("operation after %s = %+v, want it unchanged", after, got)
+	}
+}
+
 // failAfter makes a Domain method roll back after its writes.
 func failAfter() error { return ErrInjected }
-
-// commitAfter lets a Domain method commit.
-func commitAfter() error { return nil }
 
 // checkNew fails the test unless op is a new pending operation with key,
 // kind and input.
