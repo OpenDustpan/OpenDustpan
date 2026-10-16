@@ -140,7 +140,7 @@ func runReviewOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -182,7 +182,10 @@ func seedReview(ctx context.Context, t *testing.T, env *e2e.Env) reviewFixture {
 	f.beforeAtMs = time.Now().UnixMilli() - 1
 
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"carol","kind":"person"}`, http.StatusCreated,
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("carol") + `","kind":"person"}`,
+		http.StatusCreated,
 	}, &f.carol)
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/groups", `{"name":"reviewers"}`, http.StatusCreated,
@@ -400,7 +403,7 @@ func checkReviewRow(t *testing.T, f reviewFixture, r *e2eReviewRow) {
 // isCarolRow reports whether r is a row of carol. No token of carol was
 // used yet, so a principal row is tracked with no last access time.
 func isCarolRow(f reviewFixture, r *e2eReviewRow) bool {
-	return r.Subject == f.carolRef && r.SubjectName == "carol" && r.LastAccessTracked != nil &&
+	return r.Subject == f.carolRef && r.SubjectName == e2e.SignInSubject("carol") && r.LastAccessTracked != nil &&
 		*r.LastAccessTracked && r.LastAccessAtMs == nil && r.MemberCount == nil
 }
 
@@ -463,7 +466,8 @@ func checkReviewExpand(ctx context.Context, t *testing.T, env *e2e.Env, f review
 			continue
 		}
 
-		if r.Via == nil || r.Via.Member != f.carolRef || r.Via.MemberSubject != "carol" || r.EffectiveFromMs == nil ||
+		if r.Via == nil || r.Via.Member != f.carolRef || r.Via.MemberSubject != e2e.SignInSubject("carol") ||
+			r.EffectiveFromMs == nil ||
 			*r.EffectiveFromMs < r.Via.MemberFromMs {
 			t.Fatalf("expanded row = %+v, want carol through the group", r)
 		}
@@ -616,7 +620,10 @@ func checkCallerAccessRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	var erin e2ePrincipal
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"erin","kind":"person"}`, http.StatusCreated,
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("erin") + `","kind":"person"}`,
+		http.StatusCreated,
 	}, &erin)
 
 	erinSecret := callerToken(ctx, t, env, erin.ID)
@@ -634,17 +641,12 @@ func checkCallerAccessRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
 	})
 }
 
-// callerToken returns the secret of a personal token of principalID.
+// callerToken returns the secret of a personal token that the person
+// principalID makes after a sign-in.
 func callerToken(ctx context.Context, t *testing.T, env *e2e.Env, principalID string) string {
 	t.Helper()
 
-	var token e2eToken
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + principalID + `","name":"roles"}`,
-		http.StatusCreated,
-	}, &token)
-
-	return token.Secret
+	return env.PersonalToken(ctx, t, principalID, "roles").Secret
 }
 
 // callerAccessAs reads the access of the caller of secret on path.
@@ -698,17 +700,12 @@ func checkRoleGrantedBy(t *testing.T, access e2eAccess, want roleGrantedByWant) 
 	t.Fatalf("missing actions = %+v, want %s", access.MissingActions, want.action)
 }
 
-// carolToken returns the secret of a personal token of carol.
+// carolToken returns the secret of a personal token that carol makes after
+// a sign-in.
 func carolToken(ctx context.Context, t *testing.T, env *e2e.Env, f reviewFixture) string {
 	t.Helper()
 
-	var token e2eToken
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + f.carol.ID + `","name":"review"}`,
-		http.StatusCreated,
-	}, &token)
-
-	return token.Secret
+	return env.PersonalToken(ctx, t, f.carol.ID, "review").Secret
 }
 
 // checkCallerGrants reads the grants of the caller of secret two rows a
