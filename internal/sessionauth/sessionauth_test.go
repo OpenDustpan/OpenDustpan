@@ -1,0 +1,221 @@
+package sessionauth_test
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
+)
+
+const consoleOrigin = "https://dustpan.example"
+
+var errStoreDown = errors.New("store down")
+
+// fakeSessions answers a fixed match or error, and counts its calls.
+type fakeSessions struct {
+	err   error
+	match session.Match
+	calls int
+}
+
+func (f *fakeSessions) Authenticate(context.Context, session.Secret) (session.Match, error) {
+	f.calls++
+
+	return f.match, f.err
+}
+
+func aliceMatch() session.Match {
+	return session.Match{
+		Session: session.Session{
+			CreatedAt: time.Time{}, LastSeenAt: time.Time{}, AuthTime: time.Time{}, EndedAt: time.Time{},
+			ID: "ses-1", PrincipalID: "prn-1", Provider: "corp", EndReason: "", SourceIP: "", UserAgent: "",
+		},
+		Owner: session.Owner{
+			DisabledAt: time.Time{}, ID: "prn-1", Subject: "corp:alice", DisplayName: "Alice",
+			Kind: principal.KindPerson,
+		},
+		Digest: session.Digest{},
+	}
+}
+
+func newSecret(t *testing.T) session.Secret {
+	t.Helper()
+
+	s, err := session.NewSecret()
+	if err != nil {
+		t.Fatalf("new secret: %v", err)
+	}
+
+	return s
+}
+
+func newChecker(t *testing.T, f *fakeSessions) *sessionauth.Checker {
+	t.Helper()
+
+	c, err := sessionauth.New(f, []string{consoleOrigin})
+	if err != nil {
+		t.Fatalf("new checker: %v", err)
+	}
+
+	return c
+}
+
+// request returns a request of method with the cookie of secret, when it
+// is not empty, and the headers.
+func request(t *testing.T, method, secret string, headers map[string]string) *http.Request {
+	t.Helper()
+
+	r := httptest.NewRequestWithContext(t.Context(), method, "/api/inventory/namespaces", http.NoBody)
+	if secret != "" {
+		r.AddCookie(&http.Cookie{
+			Name: sessionauth.Cookie, Value: secret, Path: "/", Secure: true, HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+
+	for k, v := range headers {
+		r.Header.Set(k, v)
+	}
+
+	return r
+}
+
+func TestNewNeedsSessions(t *testing.T) {
+	t.Parallel()
+
+	if _, err := sessionauth.New(nil, nil); err == nil {
+		t.Fatal("New with no sessions: err = nil")
+	}
+}
+
+func TestNilCheckerIsUnauthenticated(t *testing.T) {
+	t.Parallel()
+
+	var c *sessionauth.Checker
+
+	_, _, err := c.Authenticate(request(t, http.MethodGet, newSecret(t).Reveal(), nil))
+	if !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("nil checker: err = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// authCase is one request of TestAuthenticate. A nil want expects the
+// session of aliceMatch. wantStore tells whether the request reaches the
+// store.
+type authCase struct {
+	headers   map[string]string
+	storeErr  error
+	want      error
+	name      string
+	method    string
+	cookie    string
+	wantStore bool
+}
+
+func authCases(secret session.Secret) []authCase {
+	raw := secret.Reveal()
+	csrf := session.CSRFValue(secret)
+	none := map[string]string{}
+
+	return []authCase{
+		{
+			name: "GET with the cookie", method: http.MethodGet, cookie: raw, headers: none, storeErr: nil, want: nil,
+			wantStore: true,
+		},
+		{
+			name: "POST with the CSRF value and the console origin", method: http.MethodPost, cookie: raw,
+			headers: map[string]string{sessionauth.CSRFHeader: csrf, "Origin": consoleOrigin}, storeErr: nil,
+			want: nil, wantStore: true,
+		},
+		{
+			name: "no cookie", method: http.MethodGet, cookie: "", headers: none, storeErr: nil,
+			want: identity.ErrUnauthenticated, wantStore: false,
+		},
+		{
+			name: "a cookie of the wrong form", method: http.MethodGet, cookie: "odps_short", headers: none,
+			storeErr: nil, want: identity.ErrUnauthenticated, wantStore: false,
+		},
+		{
+			name: "another origin", method: http.MethodGet, cookie: raw,
+			headers: map[string]string{"Origin": "https://evil.example"}, storeErr: nil,
+			want: sessionauth.ErrOtherSite, wantStore: false,
+		},
+		{
+			name: "a cross-site request with no origin", method: http.MethodGet, cookie: raw,
+			headers: map[string]string{"Sec-Fetch-Site": "cross-site"}, storeErr: nil,
+			want: sessionauth.ErrOtherSite, wantStore: false,
+		},
+		{
+			name: "POST with no CSRF value", method: http.MethodPost, cookie: raw, headers: none, storeErr: nil,
+			want: sessionauth.ErrCSRF, wantStore: false,
+		},
+		{
+			name: "DELETE with a wrong CSRF value", method: http.MethodDelete, cookie: raw,
+			headers: map[string]string{sessionauth.CSRFHeader: "wrong"}, storeErr: nil,
+			want: sessionauth.ErrCSRF, wantStore: false,
+		},
+		{
+			name: "a session that the store refuses", method: http.MethodGet, cookie: raw, headers: none,
+			storeErr: session.ErrUnauthenticated, want: identity.ErrUnauthenticated, wantStore: true,
+		},
+		{
+			name: "a store failure", method: http.MethodGet, cookie: raw, headers: none, storeErr: errStoreDown,
+			want: errStoreDown, wantStore: true,
+		},
+	}
+}
+
+func TestAuthenticate(t *testing.T) {
+	t.Parallel()
+
+	secret := newSecret(t)
+
+	for _, tc := range authCases(secret) {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := &fakeSessions{err: tc.storeErr, match: aliceMatch(), calls: 0}
+
+			p, caller, err := newChecker(t, f).Authenticate(request(t, tc.method, tc.cookie, tc.headers))
+
+			if got := f.calls > 0; got != tc.wantStore {
+				t.Errorf("store read = %t, want %t", got, tc.wantStore)
+			}
+
+			if tc.want != nil {
+				if !errors.Is(err, tc.want) {
+					t.Fatalf("err = %v, want %v", err, tc.want)
+				}
+
+				return
+			}
+
+			checkAlice(t, err, p, caller, secret)
+		})
+	}
+}
+
+// checkAlice checks that a request authenticated as the session of
+// aliceMatch with secret.
+func checkAlice(t *testing.T, err error, p identity.Principal, caller sessionauth.Caller, secret session.Secret) {
+	t.Helper()
+
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	if p.Subject != "corp:alice" || p.DisplayName != "Alice" || p.Admin || p.TokenID != "" {
+		t.Fatalf("principal = %+v, want corp:alice with no admin and no token", p)
+	}
+
+	if caller.Match.Session.ID != "ses-1" || caller.Secret.Reveal() != secret.Reveal() {
+		t.Fatalf("caller = session %q, want ses-1 with the cookie secret", caller.Match.Session.ID)
+	}
+}

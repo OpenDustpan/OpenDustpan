@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -23,14 +23,14 @@ import (
 // a Domain, or whose Path is not "/".
 const (
 	// SessionCookie carries the secret of a console session.
-	SessionCookie = "__Host-dustpan_session"
+	SessionCookie = sessionauth.Cookie
 	// SignInCookie binds the browser to the state of one sign-in, from its
 	// start to its callback.
 	SignInCookie = "__Host-dustpan_signin"
 	// CSRFHeader carries the CSRF value of the session on each request with
 	// the session cookie whose method is not GET, HEAD or OPTIONS. Header
 	// names ignore case: the docs write it X-Dustpan-CSRF.
-	CSRFHeader = "X-Dustpan-Csrf"
+	CSRFHeader = sessionauth.CSRFHeader
 )
 
 // Paths of the sign-in routes.
@@ -66,8 +66,8 @@ var (
 	errSignInFailed    = errors.New("sign-in failed: start the sign-in again")
 	errSignInRefused   = fmt.Errorf("%w: sign-in refused", identity.ErrDenied)
 	errNoSession       = errors.New("the request has no console session")
-	errCSRF            = fmt.Errorf("%w: the X-Dustpan-CSRF header is missing or wrong", identity.ErrDenied)
-	errOtherSite       = fmt.Errorf("%w: a request with the session cookie comes from another site", identity.ErrDenied)
+	errCSRF            = sessionauth.ErrCSRF
+	errOtherSite       = sessionauth.ErrOtherSite
 	errSessionToken    = fmt.Errorf("%w: a console session cannot create or rotate a token yet: use an access token",
 		identity.ErrDenied)
 )
@@ -121,7 +121,7 @@ type signInState struct {
 	sessions  *session.Sessions
 	limiter   SignInLimiter
 	providers map[string]SignInProvider
-	origins   []string
+	checker   *sessionauth.Checker
 }
 
 // newSignInState returns the sign-in of cfg, or nil when cfg is nil.
@@ -143,9 +143,12 @@ func newSignInState(cfg *SignIn) (*signInState, error) {
 		providers[p.ID] = p
 	}
 
-	return &signInState{
-		sessions: cfg.Sessions, limiter: cfg.Limiter, providers: providers, origins: slices.Clone(cfg.Origins),
-	}, nil
+	checker, err := sessionauth.New(cfg.Sessions, cfg.Origins)
+	if err != nil {
+		return nil, fmt.Errorf("session cookie check: %w", err)
+	}
+
+	return &signInState{sessions: cfg.Sessions, limiter: cfg.Limiter, providers: providers, checker: checker}, nil
 }
 
 // signInRoutes returns the sign-in rows of the route table. No sign-in
@@ -546,17 +549,17 @@ func (h *Handler) readSession(w http.ResponseWriter, r *http.Request, _ identity
 		limits = policy.Limits
 	}
 
-	s := caller.match.Session
+	s := caller.Match.Session
 
 	noStore(w)
 	h.writeJSON(ctx, w, http.StatusOK, sessionResponse{
-		Subject:     caller.match.Owner.Subject,
-		DisplayName: caller.match.Owner.DisplayName,
+		Subject:     caller.Match.Owner.Subject,
+		DisplayName: caller.Match.Owner.DisplayName,
 		Provider:    s.Provider,
 		CreatedAt:   s.CreatedAt.UTC().Format(time.RFC3339Nano),
 		AuthTime:    s.AuthTime.UTC().Format(time.RFC3339Nano),
 		ExpiresAt:   s.CreatedAt.Add(limits.MaxLength).UTC().Format(time.RFC3339Nano),
-		CSRFToken:   session.CSRFValue(caller.secret),
+		CSRFToken:   session.CSRFValue(caller.Secret),
 	})
 }
 
@@ -573,7 +576,7 @@ func (h *Handler) signOut(w http.ResponseWriter, r *http.Request, p identity.Pri
 	}
 
 	e := signInEntry(r, p.Subject, "", session.ActionSignOut)
-	if err := h.signIn.sessions.SignOut(ctx, e, caller.match.Owner.ID, caller.match.Session.ID); err != nil {
+	if err := h.signIn.sessions.SignOut(ctx, e, caller.Match.Owner.ID, caller.Match.Session.ID); err != nil {
 		h.writeError(ctx, w, err)
 
 		return
@@ -584,10 +587,7 @@ func (h *Handler) signOut(w http.ResponseWriter, r *http.Request, p identity.Pri
 }
 
 // sessionCaller is the console session that authenticated a request.
-type sessionCaller struct {
-	match  session.Match
-	secret session.Secret
-}
+type sessionCaller = sessionauth.Caller
 
 // sessionKey carries the sessionCaller of a request.
 type sessionKey struct{}
@@ -600,70 +600,19 @@ func sessionFromRequest(r *http.Request) (sessionCaller, bool) {
 	return c, ok
 }
 
-// authenticateSession resolves the session cookie of r. A request with
-// the cookie must come from an allowed origin, and a request whose method
-// changes state must carry the CSRF value of the session. Both checks run
-// before the store is read.
+// authenticateSession resolves the session cookie of r with the cookie
+// check that every API of the console shares.
 func (h *Handler) authenticateSession(r *http.Request) (identity.Principal, *sessionCaller, error) {
 	if h.signIn == nil {
 		return identity.Principal{}, nil, identity.ErrUnauthenticated
 	}
 
-	cookie, err := r.Cookie(SessionCookie)
-	if err != nil {
-		return identity.Principal{}, nil, identity.ErrUnauthenticated
-	}
-
-	secret, err := session.ParseSecret(cookie.Value)
-	if err != nil {
-		return identity.Principal{}, nil, identity.ErrUnauthenticated
-	}
-
-	if !h.sameSite(r) {
-		return identity.Principal{}, nil, errOtherSite
-	}
-
-	if changesState(r.Method) && !session.CheckCSRF(secret, r.Header.Get(CSRFHeader)) {
-		return identity.Principal{}, nil, errCSRF
-	}
-
-	m, err := h.signIn.sessions.Authenticate(r.Context(), secret)
-	if errors.Is(err, session.ErrUnauthenticated) {
-		return identity.Principal{}, nil, fmt.Errorf("%w: %w", identity.ErrUnauthenticated, err)
-	}
-
+	p, caller, err := h.signIn.checker.Authenticate(r)
 	if err != nil {
 		return identity.Principal{}, nil, err
 	}
 
-	p := identity.Principal{
-		Subject: m.Owner.Subject, DisplayName: m.Owner.DisplayName, Admin: false, TokenID: "",
-		TokenExpiresAt: time.Time{},
-	}
-
-	return p, &sessionCaller{match: m, secret: secret}, nil
-}
-
-// sameSite reports whether a request with the session cookie may come from
-// where it comes from: its Origin header, when present, must be an allowed
-// origin; without one, the browser must not mark it as cross-site.
-func (h *Handler) sameSite(r *http.Request) bool {
-	if origin := r.Header.Get("Origin"); origin != "" {
-		return slices.Contains(h.signIn.origins, origin)
-	}
-
-	return r.Header.Get("Sec-Fetch-Site") != "cross-site"
-}
-
-// changesState reports whether a request with method can change state:
-// every method other than GET, HEAD and OPTIONS.
-func changesState(method string) bool {
-	switch method {
-	case http.MethodGet, http.MethodHead, http.MethodOptions:
-		return false
-	default:
-		return true
-	}
+	return p, &caller, nil
 }
 
 // browserCookie returns a cookie of the console: Secure, HttpOnly,
