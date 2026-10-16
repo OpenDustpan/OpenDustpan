@@ -2484,7 +2484,8 @@ func adapterForRequest(pattern, path string) string {
 		return adapterServer
 	case strings.HasPrefix(name, "/api/server/"):
 		return adapterServer
-	case strings.HasPrefix(name, "/api/v2/"), strings.HasPrefix(name, "/.well-known/"):
+	case strings.HasPrefix(name, "/api/v2/"), strings.HasPrefix(name, "/.well-known/"),
+		strings.HasPrefix(name, "/tofu/"):
 		return "opentofu"
 	case strings.HasPrefix(name, "/api/"):
 		return "pulumi"

@@ -523,12 +523,23 @@ func (c *auditChain) compareRestoredLog(ctx context.Context, rec audit.ChainReco
 }
 
 // checkRestoredLog checks the chain of every scope of a restored log that
-// agrees with the stored state. A failed check counts the restore in
-// dustpan_audit_restore_check_failures_total and logs an error; the restore
-// still succeeds.
+// agrees with the stored state. A scope that does not match counts the
+// restore in dustpan_audit_restore_check_failures_total and logs an error;
+// the restore still succeeds. A failed call counts in
+// dustpan_audit_chain_check_errors_total, and the scheduled check checks
+// the log again.
 func (c *auditChain) checkRestoredLog(ctx context.Context, scopes []namespace.Name) {
 	invalid, err := audit.CheckScopes(ctx, c.entries, scopes)
-	if err == nil && invalid == 0 {
+	if err != nil {
+		c.logger.WarnContext(ctx, "restored audit log check could not check every scope",
+			slog.String("error", err.Error()))
+
+		if c.observed != nil {
+			c.observed.IncAuditChainCheckError()
+		}
+	}
+
+	if invalid == 0 {
 		return
 	}
 
@@ -967,8 +978,9 @@ func (c *auditChain) checkChain(ctx context.Context, scopes []namespace.Name) {
 // checkChainAndCheckpoints runs the chain check of each scope, then the
 // checkpoint step: it checks the stored checkpoints of the scope and signs
 // a new checkpoint only when both match. While a change of the chain waits
-// or a restore runs, it checks but signs nothing. A scope that fails either
-// check counts in dustpan_audit_chain_invalid.
+// or a restore runs, it checks but signs nothing. A scope that does not
+// match either check counts in dustpan_audit_chain_invalid. A failed read
+// or checkpoint write counts only as a check error.
 func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []namespace.Name) {
 	rec, err := c.store.ChainRecord(ctx)
 	if err != nil {
@@ -989,7 +1001,10 @@ func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []name
 	for _, scope := range scopes {
 		ok, err := c.checkScope(ctx, scope)
 		if err != nil {
+			// A failed call checks nothing: it is not a mismatch.
 			errs = append(errs, fmt.Errorf("check %s: %w", scope, err))
+
+			continue
 		}
 
 		if !ok {
@@ -1002,9 +1017,18 @@ func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []name
 			continue
 		}
 
-		if _, err := c.checkpoints.Write(ctx, scope, c.chainNow()); err != nil {
-			errs = append(errs, fmt.Errorf("check %s: checkpoint: %w", scope, err))
+		_, err = c.checkpoints.Write(ctx, scope, c.chainNow())
+
+		switch {
+		case errors.Is(err, audit.ErrCheckpointMismatch):
+			c.logger.ErrorContext(ctx, "audit checkpoint does not match",
+				slog.String("scope", scope.String()), slog.String("error", err.Error()))
+
 			invalid++
+		case err != nil:
+			errs = append(errs, fmt.Errorf("check %s: checkpoint: %w", scope, err))
+		default:
+			// The checkpoint is stored, or the scope needs none.
 		}
 	}
 
@@ -1060,18 +1084,28 @@ func (c *auditChain) checkScope(ctx context.Context, scope namespace.Name) (bool
 }
 
 // reportCheck sets dustpan_audit_chain_invalid to invalid and logs the
-// result of a check. A check that the caller stopped reports nothing.
+// result of a check. A check that the caller stopped reports nothing. A
+// check with err did not check every scope: it adds one to
+// dustpan_audit_chain_check_errors_total and sets the gauge only when it
+// found a scope that does not match, so a failed call never clears an
+// alarm of an earlier check.
 func (c *auditChain) reportCheck(ctx context.Context, invalid int, err error) {
 	if err != nil && ctx.Err() != nil {
 		return
 	}
 
 	if err != nil {
-		c.logger.WarnContext(ctx, "audit chain check failed", slog.String("error", err.Error()))
+		c.logger.WarnContext(ctx, "audit chain check could not check every scope", slog.String("error", err.Error()))
 	}
 
 	if c.observed != nil {
-		c.observed.SetAuditChainInvalid(invalid)
+		if err != nil {
+			c.observed.IncAuditChainCheckError()
+		}
+
+		if err == nil || invalid > 0 {
+			c.observed.SetAuditChainInvalid(invalid)
+		}
 	}
 
 	if invalid > 0 {

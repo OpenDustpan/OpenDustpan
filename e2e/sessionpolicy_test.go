@@ -62,7 +62,7 @@ func runSessionPolicyOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -129,7 +129,9 @@ func checkSessionPolicyRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
 	for _, s := range steps {
 		var person e2ePrincipal
 		principalCall(ctx, t, env, principalStep{
-			http.MethodPost, "/api/server/principals", `{"subject":"` + s.subject + `","kind":"person"}`,
+			http.MethodPost,
+			"/api/server/principals",
+			`{"subject":"` + e2e.SignInSubject(s.subject) + `","kind":"person"}`,
 			http.StatusCreated,
 		}, &person)
 
@@ -138,11 +140,7 @@ func checkSessionPolicyRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
 			`{"subject":"principal:` + person.ID + `","role":"` + s.role + `"}`, http.StatusCreated,
 		}, nil)
 
-		var token e2eToken
-		principalCall(ctx, t, env, principalStep{
-			http.MethodPost, "/api/server/tokens", `{"principalID":"` + person.ID + `","name":"session-policy"}`,
-			http.StatusCreated,
-		}, &token)
+		token := env.PersonalToken(ctx, t, person.ID, "session-policy")
 
 		status, body, err := env.ServerAPIStatusAs(ctx, token.Secret, http.MethodGet, "/api/server/session-policy", "")
 		if err != nil || status != http.StatusOK {
