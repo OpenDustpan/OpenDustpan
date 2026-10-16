@@ -113,6 +113,7 @@ func TestServerScopeWithBuiltInRoles(t *testing.T) {
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
 		Namespaces:    namespaces,
 		Entries:       st,
+		EntryReader:   st,
 		Authenticator: realTokenAuthenticator{},
 		Authorizer:    authz,
 		Sessions:      nil,

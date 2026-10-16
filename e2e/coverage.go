@@ -723,6 +723,7 @@ func coverageAuditRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 	handler, err := auditapi.NewHandler(auditapi.Config{
 		Namespaces:    namespaces,
 		Entries:       coverageAuditStore{},
+		EntryReader:   nil,
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
 		Sessions:      nil,
@@ -966,6 +967,7 @@ type AllowEntry struct {
 func CoverageAllowlist() []AllowEntry {
 	return slices.Concat(
 		consoleAllowEntries(),
+		auditReadAllowEntries(),
 		deletedUnitAllowEntries(),
 		backupAllowEntries(),
 		namespaceAllowEntries(),
@@ -1423,15 +1425,10 @@ func deletedUnitAllowEntries() []AllowEntry {
 	}
 }
 
-// consoleAllowEntries returns the allowlist rows for console-only routes and
-// routes the CLI never calls.
-func consoleAllowEntries() []AllowEntry {
+// auditReadAllowEntries returns the allowlist rows for the audit read
+// routes, which only the console and audit sink receivers call.
+func auditReadAllowEntries() []AllowEntry {
 	return []AllowEntry{
-		{
-			Method: http.MethodGet, Path: "/api/inventory/units",
-			CoveringTest: "TestListUnitsBothTools",
-			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
-		},
 		{
 			Method: http.MethodGet, Path: "/api/audit/entries",
 			CoveringTest: "TestCLIs (checkAuditLog)",
@@ -1440,11 +1437,30 @@ func consoleAllowEntries() []AllowEntry {
 				"decrypt audit route and checks the chain.",
 		},
 		{
+			Method: http.MethodGet, Path: "/api/audit/entries/{sequence}",
+			CoveringTest: "TestCLIs (checkAuditLog), TestServerAuditScope",
+			Reason: "Console-only and for audit sink receivers: no CLI reads " +
+				"one audit entry. The harness steps read an entry of the " +
+				"namespace and of @server by its sequence.",
+		},
+		{
 			Method: http.MethodGet, Path: "/api/audit/check",
 			CoveringTest: "TestCLIs (checkAuditLog)",
 			Reason: "Console-only: no CLI checks the audit chain. The " +
 				"harness step checks it after a CLI command that calls the " +
 				"decrypt audit route.",
+		},
+	}
+}
+
+// consoleAllowEntries returns the allowlist rows for console-only routes and
+// routes the CLI never calls.
+func consoleAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/inventory/units",
+			CoveringTest: "TestListUnitsBothTools",
+			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/v2/workspaces/{id}",

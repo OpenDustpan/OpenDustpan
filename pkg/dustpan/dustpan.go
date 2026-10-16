@@ -1692,9 +1692,17 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
 	}
 
+	// A store that keeps no EntryReader answers 501 on the read of one
+	// entry; the SQL stores keep one.
+	reader, ok := cfg.namespaceStore.(audit.EntryReader)
+	if !ok {
+		reader = nil
+	}
+
 	handler, err := auditapi.NewHandler(auditapi.Config{
 		Namespaces:    svc.namespaces,
 		Entries:       entries,
+		EntryReader:   reader,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Sessions:      cfg.sessionCookies,

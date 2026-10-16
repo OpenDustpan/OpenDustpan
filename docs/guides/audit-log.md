@@ -135,6 +135,16 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=acme&page[size]=50"
 ```
 
+`GET /api/audit/entries/<sequence>?organization=<namespace>` reads one
+entry of the namespace by its sequence, in the same shape as an entry of the
+list. It needs the same action. A sequence that the namespace does not hold
+answers 404.
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/audit/entries/7?organization=acme"
+```
+
 `GET /api/audit/check?organization=<namespace>` walks the chain of the
 namespace oldest first and answers whether it is valid.
 It needs the same action.
@@ -152,7 +162,8 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 The installation writes the entries of an action that is not in a namespace,
 such as a namespace create, to the scope `@server`. Read that scope with
 `organization=@server`. It needs the action `server:read-audit` on the
-installation instead, and the same paging. The check works the same way:
+installation instead, and the same paging. The read of one entry and the
+check work the same way:
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
@@ -492,8 +503,7 @@ Trim never shortens `truncated`, `scope`, `sequence`, `time`, `action`, `kind`, 
 `scope`, `sequence`, `prevHash` and `hash` stay whole. A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
 A record with `"truncated": true` has a `hash` that the receiver cannot recompute from the shipped fields.
 The full entry stays in the server audit log, and the chain check on the server covers it.
-Read the full entry through the entry list, for example `GET /api/audit/entries?organization=acme&page[size]=50`, and find the entry with the same `sequence`.
-There is no route that reads one entry by scope and sequence.
+Read the full entry by its `scope` and `sequence`, for example `GET /api/audit/entries/7?organization=acme`.
 Only an entry that cannot fit even with every trimmable field empty is skipped.
 The server counts it in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
 

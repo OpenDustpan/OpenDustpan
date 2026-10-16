@@ -34,13 +34,15 @@ func TestAuditRoutes(t *testing.T) {
 	handler := newTestHandler(t)
 
 	want := map[string][]identity.Action{
-		"GET /api/audit/entries": {identity.ActionNamespaceReadAudit},
-		"GET /api/audit/check":   {identity.ActionNamespaceReadAudit},
+		"GET /api/audit/entries":            {identity.ActionNamespaceReadAudit},
+		"GET /api/audit/entries/{sequence}": {identity.ActionNamespaceReadAudit},
+		"GET /api/audit/check":              {identity.ActionNamespaceReadAudit},
 	}
 
 	wantServer := map[string][]identity.Action{
-		"GET /api/audit/entries": {identity.ActionServerReadAudit},
-		"GET /api/audit/check":   {identity.ActionServerReadAudit},
+		"GET /api/audit/entries":            {identity.ActionServerReadAudit},
+		"GET /api/audit/entries/{sequence}": {identity.ActionServerReadAudit},
+		"GET /api/audit/check":              {identity.ActionServerReadAudit},
 	}
 
 	routes := handler.Routes()
@@ -242,12 +244,13 @@ func probeRoute(t *testing.T, handler *apitaudit.Handler, route apitaudit.Route)
 }
 
 // routeRequest builds a valid request for route: the organization query
-// value where the route reads it. token is sent as the Authorization header
+// value where the route reads it, and the sequence 1 where the path has
+// one. token is sent as the Authorization header
 // when not empty.
 func routeRequest(t *testing.T, route apitaudit.Route, token string) *http.Request {
 	t.Helper()
 
-	target := route.Path + "?organization=acme"
+	target := strings.ReplaceAll(route.Path, "{sequence}", "1") + "?organization=acme"
 
 	req := httptest.NewRequestWithContext(t.Context(), route.Method, target, http.NoBody)
 
@@ -293,7 +296,8 @@ func checkRouteEnforcement(t *testing.T, route apitaudit.Route) {
 		return
 	}
 
-	allowed, _ := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	allowed, store := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+	seedEntry(t, store, "acme", "alice")
 
 	rec := httptest.NewRecorder()
 	allowed.ServeHTTP(rec, routeRequest(t, route, "test-token"))
@@ -380,7 +384,8 @@ func TestRoutesAuthorizeTheNamespace(t *testing.T) {
 
 	for _, route := range auditRoutes(t) {
 		recorder := &recordingAuthorizer{calls: nil}
-		handler, _ := newEnforcingHandler(t, recorder)
+		handler, store := newEnforcingHandler(t, recorder)
+		seedEntry(t, store, "acme", "alice")
 
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, routeRequest(t, route, "test-token"))
