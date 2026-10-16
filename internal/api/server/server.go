@@ -91,6 +91,9 @@ type Config struct {
 	// means the store keeps none: the session policy routes are not
 	// mounted. Both SQL adapters keep it.
 	SessionPolicy *session.Policies
+	// CheckpointEpochs starts a new epoch of the signed audit checkpoints.
+	// Nil means signed checkpoints are off: the epoch route answers 409.
+	CheckpointEpochs CheckpointEpochs
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
@@ -149,6 +152,7 @@ type Handler struct {
 	audit          audit.ServerStore
 	ipAllowlists   *ipallow.Service
 	sessions       *session.Policies
+	epochs         CheckpointEpochs
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
 	auditChain     AuditChain
@@ -191,6 +195,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
 		sessions:       cfg.SessionPolicy,
+		epochs:         cfg.CheckpointEpochs,
 		onAuditFailure: cfg.OnAuditFailure,
 		auditSinks:     cfg.AuditSinks,
 		signIn:         signIn,
@@ -369,24 +374,12 @@ func classifyIdentity(err error) (int, string, bool) {
 // callers. Backup errors map in classifyBackup, namespace errors in
 // classifyNamespace and maintenance errors in classifyMaintenance.
 func classify(err error) (int, string) {
-	if status, message, ok := classifyMaintenance(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyNamespace(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyBackup(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyPrincipal(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyIdentity(err); ok {
-		return status, message
+	for _, try := range []func(error) (int, string, bool){
+		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity,
+	} {
+		if status, message, ok := try(err); ok {
+			return status, message
+		}
 	}
 
 	if status, message, ok := classifyIPAllowlist(err); ok {
@@ -423,6 +416,8 @@ func classifyRequest(err error) (int, string, bool) {
 		return http.StatusBadRequest, errInvalidBody.Error(), true
 	case errors.Is(err, errOverrideSwitchesBody):
 		return http.StatusBadRequest, errOverrideSwitchesBody.Error(), true
+	case errors.Is(err, errCheckpointsOff):
+		return http.StatusConflict, errCheckpointsOff.Error(), true
 	default:
 		return 0, "", false
 	}
