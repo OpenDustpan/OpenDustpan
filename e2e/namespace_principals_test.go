@@ -56,7 +56,7 @@ func runNamespacePrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Stor
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -67,10 +67,15 @@ func runNamespacePrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Stor
 
 	var lead, outsider e2ePrincipal
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"lead@example.com","kind":"person"}`, http.StatusCreated,
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("lead@example.com") + `","kind":"person"}`,
+		http.StatusCreated,
 	}, &lead)
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"outsider@example.com","kind":"person"}`,
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("outsider@example.com") + `","kind":"person"}`,
 		http.StatusCreated,
 	}, &outsider)
 	principalCall(ctx, t, env, principalStep{
@@ -78,14 +83,8 @@ func runNamespacePrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Stor
 		`{"subject":"principal:` + lead.ID + `","role":"admin"}`, http.StatusCreated,
 	}, nil)
 
-	var leadTok, outsiderTok e2eToken
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + lead.ID + `","name":"lead"}`, http.StatusCreated,
-	}, &leadTok)
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + outsider.ID + `","name":"outsider"}`,
-		http.StatusCreated,
-	}, &outsiderTok)
+	leadTok := env.PersonalToken(ctx, t, lead.ID, "lead")
+	outsiderTok := env.PersonalToken(ctx, t, outsider.ID, "outsider")
 
 	var bot e2ePrincipal
 
@@ -195,8 +194,8 @@ func checkNamespacePrincipalReview(
 // namespaceTokenFixture holds the stored tokens and the bot of the token
 // test.
 type namespaceTokenFixture struct {
-	lead     e2eToken
-	outsider e2eToken
+	lead     e2e.PersonalToken
+	outsider e2e.PersonalToken
 	bot      e2ePrincipal
 }
 

@@ -12710,7 +12710,7 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, tools.pulumi, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, tools.pulumi, store)
 
 	target := env.BackupTarget(t)
 	if !validBackupTarget(target) {
