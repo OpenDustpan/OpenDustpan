@@ -347,6 +347,30 @@ func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditCh
 	return result.RowsAffected()
 }
 
+const claimDurableScheduleTick = `-- name: ClaimDurableScheduleTick :execrows
+UPDATE durable_schedules
+SET next_run_at_ms = CAST(?1 AS INTEGER) + interval_ms,
+    last_claimed_at_ms = CAST(?1 AS INTEGER)
+WHERE name = ?2 AND next_run_at_ms = ?3
+    AND next_run_at_ms <= CAST(?1 AS INTEGER)
+`
+
+type ClaimDurableScheduleTickParams struct {
+	NowMs   int64
+	Name    string
+	DueAtMs int64
+}
+
+// The conditional update that claims a due tick: it changes the row only
+// when next_run_at_ms is the value that the claim read and is due at now.
+func (q *Queries) ClaimDurableScheduleTick(ctx context.Context, arg ClaimDurableScheduleTickParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimDurableScheduleTick, arg.NowMs, arg.Name, arg.DueAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
 UPDATE update_journal SET operation_ids = '[]'
 WHERE stack_id = ? AND update_id = ?
@@ -2797,6 +2821,25 @@ func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string)
 	return i, err
 }
 
+const getDurableSchedule = `-- name: GetDurableSchedule :one
+
+SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = ?
+`
+
+// Durable schedules. Every time comes from DatabaseNowMs, the clock of the
+// store, and each write runs in an IMMEDIATE transaction.
+func (q *Queries) GetDurableSchedule(ctx context.Context, name string) (DurableSchedule, error) {
+	row := q.db.QueryRowContext(ctx, getDurableSchedule, name)
+	var i DurableSchedule
+	err := row.Scan(
+		&i.Name,
+		&i.IntervalMs,
+		&i.NextRunAtMs,
+		&i.LastClaimedAtMs,
+	)
+	return i, err
+}
+
 const getFailoverVersion = `-- name: GetFailoverVersion :one
 SELECT failover_version
 FROM namespaces
@@ -4165,6 +4208,21 @@ func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableO
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 	)
+	return err
+}
+
+const insertDurableSchedule = `-- name: InsertDurableSchedule :exec
+INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms) VALUES (?, ?, ?, NULL)
+`
+
+type InsertDurableScheduleParams struct {
+	Name        string
+	IntervalMs  int64
+	NextRunAtMs int64
+}
+
+func (q *Queries) InsertDurableSchedule(ctx context.Context, arg InsertDurableScheduleParams) error {
+	_, err := q.db.ExecContext(ctx, insertDurableSchedule, arg.Name, arg.IntervalMs, arg.NextRunAtMs)
 	return err
 }
 
@@ -7381,6 +7439,26 @@ func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainState
 		arg.LogReplaced,
 		arg.MigratingAtMs,
 	)
+	return err
+}
+
+const setDurableScheduleInterval = `-- name: SetDurableScheduleInterval :exec
+UPDATE durable_schedules
+SET interval_ms = ?1,
+    next_run_at_ms = MIN(next_run_at_ms, CAST(?2 AS INTEGER) + ?1)
+WHERE name = ?3
+`
+
+type SetDurableScheduleIntervalParams struct {
+	IntervalMs int64
+	NowMs      int64
+	Name       string
+}
+
+// Sets the interval, and moves the next run to now plus the interval when
+// that is earlier.
+func (q *Queries) SetDurableScheduleInterval(ctx context.Context, arg SetDurableScheduleIntervalParams) error {
+	_, err := q.db.ExecContext(ctx, setDurableScheduleInterval, arg.IntervalMs, arg.NowMs, arg.Name)
 	return err
 }
 

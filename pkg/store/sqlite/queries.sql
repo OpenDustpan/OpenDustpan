@@ -1837,3 +1837,29 @@ VALUES (
     (SELECT COALESCE(MAX(seq), 0) + 1 FROM durable_steps WHERE operation_id = sqlc.arg('operation_id')),
     sqlc.arg('result'), sqlc.arg('done_at_ms')
 );
+
+-- Durable schedules. Every time comes from DatabaseNowMs, the clock of the
+-- store, and each write runs in an IMMEDIATE transaction.
+
+-- name: GetDurableSchedule :one
+SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = ?;
+
+-- name: InsertDurableSchedule :exec
+INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms) VALUES (?, ?, ?, NULL);
+
+-- name: SetDurableScheduleInterval :exec
+-- Sets the interval, and moves the next run to now plus the interval when
+-- that is earlier.
+UPDATE durable_schedules
+SET interval_ms = sqlc.arg('interval_ms'),
+    next_run_at_ms = MIN(next_run_at_ms, CAST(sqlc.arg('now_ms') AS INTEGER) + sqlc.arg('interval_ms'))
+WHERE name = sqlc.arg('name');
+
+-- name: ClaimDurableScheduleTick :execrows
+-- The conditional update that claims a due tick: it changes the row only
+-- when next_run_at_ms is the value that the claim read and is due at now.
+UPDATE durable_schedules
+SET next_run_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER) + interval_ms,
+    last_claimed_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER)
+WHERE name = sqlc.arg('name') AND next_run_at_ms = sqlc.arg('due_at_ms')
+    AND next_run_at_ms <= CAST(sqlc.arg('now_ms') AS INTEGER);

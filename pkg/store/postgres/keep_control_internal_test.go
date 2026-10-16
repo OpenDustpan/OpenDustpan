@@ -8,8 +8,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// durableSchema creates a schema with the tables of migration 0080 on conn
-// and holds one operation with key and token in it, with one step.
+// durableSchema creates a schema with the tables of migrations 0080 and
+// 0081 on conn and holds one operation with key and token in it, with one
+// step, and one schedule called key whose next run is token.
 func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string {
 	t.Helper()
 
@@ -28,7 +29,12 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 		t.Fatalf("read migration: %v", err)
 	}
 
-	for _, stmt := range []string{"CREATE SCHEMA " + ident, "SET search_path TO " + ident, string(ddl)} {
+	schedules, err := migrations.ReadFile("migrations/0081_durable_schedules.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+
+	for _, stmt := range []string{"CREATE SCHEMA " + ident, "SET search_path TO " + ident, string(ddl), string(schedules)} {
 		if _, execErr := conn.Exec(ctx, stmt); execErr != nil {
 			t.Fatalf("create durable schema: %v", execErr)
 		}
@@ -44,6 +50,11 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 	insertStep := "INSERT INTO durable_steps (operation_id, name, seq, result, done_at_ms) VALUES ($1, 'one', 1, '', 0)"
 	if _, execErr := conn.Exec(ctx, insertStep, "op-"+key); execErr != nil {
 		t.Fatalf("insert step: %v", execErr)
+	}
+
+	insertSchedule := "INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms) VALUES ($1, 1000, $2)"
+	if _, execErr := conn.Exec(ctx, insertSchedule, key, token); execErr != nil {
+		t.Fatalf("insert schedule: %v", execErr)
 	}
 
 	if _, execErr := conn.Exec(ctx, "RESET search_path"); execErr != nil {
@@ -99,5 +110,30 @@ func TestKeepControlTablesKeepsTheLiveRows(t *testing.T) {
 	if key != "live" || token != 5 || count != 1 || steps != 1 {
 		t.Fatalf("restored operations = key %q token %d (%d rows, %d steps), want the live key at token 5, "+
 			"one row and its step", key, token, count, steps)
+	}
+
+	checkKeptSchedules(t, conn, ident)
+}
+
+// checkKeptSchedules fails t unless the schema ident holds only the live
+// schedule, with the next run that it had before the swap.
+func checkKeptSchedules(t *testing.T, conn *pgx.Conn, ident string) {
+	t.Helper()
+
+	var (
+		schedule string
+		nextRun  int64
+		rows     int
+	)
+
+	readSchedule := "SELECT name, next_run_at_ms, (SELECT count(*) FROM " + ident + ".durable_schedules) FROM " +
+		ident + ".durable_schedules"
+	if scanErr := conn.QueryRow(t.Context(), readSchedule).Scan(&schedule, &nextRun, &rows); scanErr != nil {
+		t.Fatalf("read restored schedules: %v", scanErr)
+	}
+
+	if schedule != "live" || nextRun != 5 || rows != 1 {
+		t.Fatalf("restored schedules = %q next run %d (%d rows), want only the live schedule with next run 5",
+			schedule, nextRun, rows)
 	}
 }

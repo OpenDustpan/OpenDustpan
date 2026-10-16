@@ -151,6 +151,13 @@ type DurableOperation struct {
 	UpdatedAtMs      int64
 }
 
+type DurableSchedule struct {
+	Name            string
+	IntervalMs      int64
+	NextRunAtMs     int64
+	LastClaimedAtMs pgtype.Int8
+}
+
 type DurableStep struct {
 	OperationID string
 	Name        string
