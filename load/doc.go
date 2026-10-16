@@ -17,7 +17,8 @@
 //
 // With SQLite (the default) the harness runs one instance. With
 // DUSTPAN_TEST_POSTGRES_URL set it opens the URL twice and runs two
-// instances against it, so the report covers several instances. Point the
+// instances against it, so the report covers several instances. The two
+// instances share one blob directory and one key-encryption key. Point the
 // URL at an empty database; the store migrates it on open.
 //
 // docs/guides/load.md names each JSON field.
