@@ -676,6 +676,19 @@ func (q *Queries) CountPrincipals(ctx context.Context, arg CountPrincipalsParams
 	return count, err
 }
 
+const countPrincipalsWithSubjectPrefix = `-- name: CountPrincipalsWithSubjectPrefix :one
+SELECT COUNT(*) FROM principals WHERE substr(subject, 1, length(?1)) = ?1
+`
+
+// The prefix is "<provider ID>:". The compare is exact, with no pattern
+// and no case folding. Deleted principals count too.
+func (q *Queries) CountPrincipalsWithSubjectPrefix(ctx context.Context, prefix interface{}) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPrincipalsWithSubjectPrefix, prefix)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countReviewGrants = `-- name: CountReviewGrants :one
 SELECT COUNT(*)
 FROM grants g
@@ -791,6 +804,17 @@ SELECT COUNT(*) FROM sessions WHERE id = ?
 
 func (q *Queries) CountSession(ctx context.Context, id string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countSession, id)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countSignInProvider = `-- name: CountSignInProvider :one
+SELECT COUNT(*) FROM sign_in_providers WHERE provider_id = ?
+`
+
+func (q *Queries) CountSignInProvider(ctx context.Context, providerID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countSignInProvider, providerID)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -975,6 +999,34 @@ func (q *Queries) CreateGroup(ctx context.Context, arg CreateGroupParams) (int64
 		arg.Source,
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const createInstallationSecretKey = `-- name: CreateInstallationSecretKey :execrows
+INSERT INTO installation_secret_keys (scope_id, wrapper_id, ciphertext, created_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type CreateInstallationSecretKeyParams struct {
+	ScopeID     string
+	WrapperID   string
+	Ciphertext  []byte
+	CreatedAtMs int64
+}
+
+// The first seal in an installation scope stores its key. A concurrent
+// first seal keeps the stored key.
+func (q *Queries) CreateInstallationSecretKey(ctx context.Context, arg CreateInstallationSecretKeyParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createInstallationSecretKey,
+		arg.ScopeID,
+		arg.WrapperID,
+		arg.Ciphertext,
+		arg.CreatedAtMs,
 	)
 	if err != nil {
 		return 0, err
@@ -1170,6 +1222,48 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 		arg.SourceIp,
 		arg.UserAgent,
 		arg.PrincipalID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const createSignInProvider = `-- name: CreateSignInProvider :execrows
+INSERT INTO sign_in_providers (
+    provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
+    created_at_ms, updated_at_ms, version
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING
+`
+
+type CreateSignInProviderParams struct {
+	ProviderID   string
+	Issuer       string
+	DisplayName  string
+	ClientID     string
+	ClientSecret []byte
+	Scopes       string
+	AutoCreate   int64
+	Enabled      int64
+	CreatedAtMs  int64
+	UpdatedAtMs  int64
+	Version      int64
+}
+
+func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProviderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, createSignInProvider,
+		arg.ProviderID,
+		arg.Issuer,
+		arg.DisplayName,
+		arg.ClientID,
+		arg.ClientSecret,
+		arg.Scopes,
+		arg.AutoCreate,
+		arg.Enabled,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+		arg.Version,
 	)
 	if err != nil {
 		return 0, err
@@ -1683,6 +1777,18 @@ WHERE stack_id = ?
 func (q *Queries) DeleteSecretKeysOfStack(ctx context.Context, stackID string) error {
 	_, err := q.db.ExecContext(ctx, deleteSecretKeysOfStack, stackID)
 	return err
+}
+
+const deleteSignInProvider = `-- name: DeleteSignInProvider :execrows
+DELETE FROM sign_in_providers WHERE provider_id = ?
+`
+
+func (q *Queries) DeleteSignInProvider(ctx context.Context, providerID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteSignInProvider, providerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteStackTags = `-- name: DeleteStackTags :exec
@@ -2609,6 +2715,24 @@ func (q *Queries) GetGroup(ctx context.Context, id string) (GetGroupRow, error) 
 	return i, err
 }
 
+const getInstallationSecretKey = `-- name: GetInstallationSecretKey :one
+SELECT scope_id, wrapper_id, ciphertext, created_at_ms
+FROM installation_secret_keys
+WHERE scope_id = ?
+`
+
+func (q *Queries) GetInstallationSecretKey(ctx context.Context, scopeID string) (InstallationSecretKey, error) {
+	row := q.db.QueryRowContext(ctx, getInstallationSecretKey, scopeID)
+	var i InstallationSecretKey
+	err := row.Scan(
+		&i.ScopeID,
+		&i.WrapperID,
+		&i.Ciphertext,
+		&i.CreatedAtMs,
+	)
+	return i, err
+}
+
 const getInstallationState = `-- name: GetInstallationState :one
 SELECT state
 FROM installation
@@ -3034,6 +3158,32 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 	row := q.db.QueryRowContext(ctx, getSessionPrincipal, id)
 	var i GetSessionPrincipalRow
 	err := row.Scan(&i.Kind, &i.DisabledAtMs)
+	return i, err
+}
+
+const getSignInProvider = `-- name: GetSignInProvider :one
+SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
+    created_at_ms, updated_at_ms, version
+FROM sign_in_providers
+WHERE provider_id = ?
+`
+
+func (q *Queries) GetSignInProvider(ctx context.Context, providerID string) (SignInProvider, error) {
+	row := q.db.QueryRowContext(ctx, getSignInProvider, providerID)
+	var i SignInProvider
+	err := row.Scan(
+		&i.ProviderID,
+		&i.Issuer,
+		&i.DisplayName,
+		&i.ClientID,
+		&i.ClientSecret,
+		&i.Scopes,
+		&i.AutoCreate,
+		&i.Enabled,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+		&i.Version,
+	)
 	return i, err
 }
 
@@ -5094,6 +5244,35 @@ func (q *Queries) ListGroupsOfPrincipal(ctx context.Context, arg ListGroupsOfPri
 	return items, nil
 }
 
+const listInstallationWrapperIDs = `-- name: ListInstallationWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM installation_secret_keys
+ORDER BY wrapper_id
+`
+
+func (q *Queries) ListInstallationWrapperIDs(ctx context.Context) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listInstallationWrapperIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var wrapper_id string
+		if err := rows.Scan(&wrapper_id); err != nil {
+			return nil, err
+		}
+		items = append(items, wrapper_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInventory = `-- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,
@@ -5491,6 +5670,48 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 			return nil, err
 		}
 		items = append(items, wrapper_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSignInProviders = `-- name: ListSignInProviders :many
+SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
+    created_at_ms, updated_at_ms, version
+FROM sign_in_providers
+ORDER BY provider_id
+`
+
+func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, error) {
+	rows, err := q.db.QueryContext(ctx, listSignInProviders)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SignInProvider
+	for rows.Next() {
+		var i SignInProvider
+		if err := rows.Scan(
+			&i.ProviderID,
+			&i.Issuer,
+			&i.DisplayName,
+			&i.ClientID,
+			&i.ClientSecret,
+			&i.Scopes,
+			&i.AutoCreate,
+			&i.Enabled,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -7592,6 +7813,48 @@ func (q *Queries) UpdateRole(ctx context.Context, arg UpdateRoleParams) (int64, 
 		arg.Actions,
 		arg.UpdatedAtMs,
 		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const updateSignInProvider = `-- name: UpdateSignInProvider :execrows
+UPDATE sign_in_providers
+SET issuer = ?1, display_name = ?2, client_id = ?3,
+    client_secret = ?4, scopes = ?5,
+    auto_create = ?6, enabled = ?7,
+    updated_at_ms = ?8, version = ?9
+WHERE provider_id = ?10 AND version = ?9 - 1
+`
+
+type UpdateSignInProviderParams struct {
+	Issuer       string
+	DisplayName  string
+	ClientID     string
+	ClientSecret []byte
+	Scopes       string
+	AutoCreate   int64
+	Enabled      int64
+	UpdatedAtMs  int64
+	Version      int64
+	ProviderID   string
+}
+
+// The update applies only to the version that the change read.
+func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProviderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateSignInProvider,
+		arg.Issuer,
+		arg.DisplayName,
+		arg.ClientID,
+		arg.ClientSecret,
+		arg.Scopes,
+		arg.AutoCreate,
+		arg.Enabled,
+		arg.UpdatedAtMs,
+		arg.Version,
+		arg.ProviderID,
 	)
 	if err != nil {
 		return 0, err

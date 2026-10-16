@@ -83,6 +83,8 @@ var Tables = []string{
 	"sessions",
 	"sign_in_requests",
 	"oidc_providers",
+	"installation_secret_keys",
+	"sign_in_providers",
 	"roles",
 	"grants",
 	"audit_sink_cursors",

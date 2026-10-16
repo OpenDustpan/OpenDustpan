@@ -58,6 +58,7 @@ const (
 	pgColTool        = "tool"
 	pgColPrincipalID = "principal_id"
 	pgColDisplayName = "display_name"
+	pgColProviderID  = "provider_id"
 	pgColSink        = "sink"
 	pgColExpiresAtMs = "expires_at_ms"
 )
@@ -297,8 +298,21 @@ func pgCopySessionTables() []pgCopyTable {
 		},
 		{
 			table:   "oidc_providers",
-			columns: []string{"provider_id", "issuer", pgColCreatedAtMs},
-			orderBy: []string{"provider_id"},
+			columns: []string{pgColProviderID, "issuer", pgColCreatedAtMs},
+			orderBy: []string{pgColProviderID},
+		},
+		{
+			table:   "installation_secret_keys",
+			columns: []string{"scope_id", "wrapper_id", "ciphertext", pgColCreatedAtMs},
+			orderBy: []string{"scope_id"},
+		},
+		{
+			table: "sign_in_providers",
+			columns: []string{
+				pgColProviderID, "issuer", pgColDisplayName, "client_id", "client_secret", "scopes", "auto_create",
+				"enabled", pgColCreatedAtMs, pgColUpdatedAtMs, "version",
+			},
+			orderBy: []string{pgColProviderID},
 		},
 	}
 }

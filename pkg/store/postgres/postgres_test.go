@@ -212,6 +212,21 @@ func TestSecretsConformance(t *testing.T) {
 	})
 }
 
+func TestInstallationSecretsConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	secrettest.RunInstallation(t, func(t *testing.T) secrettest.InstallationStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
 func TestUpdatesConformance(t *testing.T) {
 	t.Parallel()
 
