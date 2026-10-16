@@ -119,8 +119,11 @@ func validIssuer(issuer string) bool {
 	}
 
 	u, err := url.Parse(issuer)
+	if err != nil || u == nil {
+		return false
+	}
 
-	return err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" &&
+	return (u.Scheme == "https" || u.Scheme == "http") && u.Host != "" &&
 		u.RawQuery == "" && u.Fragment == ""
 }
 

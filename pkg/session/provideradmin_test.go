@@ -343,6 +343,9 @@ func TestProviderAdminDelete(t *testing.T) {
 	f.store.inUse = []string{"corp"}
 
 	err := f.admin.Delete(ctx, sessionCallerEntry(), "corp")
+	if err == nil {
+		t.Fatal("delete of a provider with principals succeeded, want ErrProviderInUse")
+	}
 
 	want := `sign-in provider "corp" has principals, so disable it with PATCH and "enabled": false instead of a delete`
 	if !errors.Is(err, session.ErrProviderInUse) || err.Error() != want {

@@ -163,6 +163,8 @@ database may be the other kind.
 
 A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants, tokens and sign-in providers. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
 
+A restore needs the key-encryption key that sealed every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
+
 ## Move a format 1 backup
 
 A format 1 backup holds the native format of the older server. An older server

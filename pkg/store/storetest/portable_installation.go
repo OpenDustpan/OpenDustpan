@@ -183,6 +183,10 @@ func testPortableKeyWrongKey(t *testing.T, newStore PortableFactory) {
 	wrong := otherKeyWrapper{Wrapper: newBuiltinKey(t, 4), id: key.ID()}
 
 	err := backup.OpenPortableKey(t.Context(), dst, sink.read, files, wrong)
+	if err == nil {
+		t.Fatal("open with the wrong key succeeded, want ErrDecrypt")
+	}
+
 	if !errors.Is(err, secret.ErrDecrypt) || !strings.Contains(err.Error(), "DUSTPAN_KEY_ENCRYPTION_KEY") {
 		t.Fatalf("open with the wrong key: err = %v, want ErrDecrypt that names DUSTPAN_KEY_ENCRYPTION_KEY", err)
 	}
