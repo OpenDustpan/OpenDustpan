@@ -297,11 +297,12 @@ func checkUpgradeSurvived(ctx context.Context, t *testing.T, env *e2e.Env, tools
 }
 
 // checkOldBinaryRefuses starts the old binary on the upgraded database. A
-// binary with the schema check of decision 1 refuses with a non-zero exit
-// and a message that names the schema versions. A binary without the check
-// starts instead: the test says so and skips only this assertion. A binary
-// with the check also starts when the schema is unchanged, and the test
-// says that too.
+// binary with a schema check refuses with a non-zero exit and a message that
+// names the versions. A binary with the minimum binary version rule starts
+// when its version is at or above the minimum of the upgraded schema, and a
+// binary with the older newer-schema rule starts when the schema is
+// unchanged: the test says so and skips only this assertion. A binary
+// without any check also starts, and the test says that too.
 func checkOldBinaryRefuses(ctx context.Context, t *testing.T, env *e2e.Env, tag, oldBin string) {
 	t.Helper()
 
@@ -310,10 +311,10 @@ func checkOldBinaryRefuses(ctx context.Context, t *testing.T, env *e2e.Env, tag,
 
 	if res.ExitCode == 0 {
 		if oldHasSchemaCheck(ctx, t, tag) {
-			t.Logf("old binary at %s has the schema check and starts: "+
-				"the schema is unchanged, skipping the refusal assertion", tag)
+			t.Logf("old binary at %s has a schema check and starts: "+
+				"it is at or above the schema minimum, skipping the refusal assertion", tag)
 		} else {
-			t.Logf("old binary at %s does not have the schema check of decision 1, "+
+			t.Logf("old binary at %s does not have a schema check, "+
 				"skipping the refusal assertion", tag)
 		}
 
@@ -328,9 +329,9 @@ func checkOldBinaryRefuses(ctx context.Context, t *testing.T, env *e2e.Env, tag,
 	t.Logf("old binary at %s refuses the upgraded database with exit %d", tag, res.ExitCode)
 }
 
-// oldHasSchemaCheck reports whether the source at tag holds the
-// newer-schema refusal of decision 1. It reads with `git grep`, so the
-// working tree and the index never change.
+// oldHasSchemaCheck reports whether the source at tag holds a schema
+// refusal: the minimum binary version rule or the older newer-schema rule.
+// It reads with `git grep`, so the working tree and the index never change.
 func oldHasSchemaCheck(ctx context.Context, t *testing.T, tag string) bool {
 	t.Helper()
 
@@ -338,7 +339,8 @@ func oldHasSchemaCheck(ctx context.Context, t *testing.T, tag string) bool {
 	defer cancel()
 
 	//nolint:gosec // The tag comes from git describe of this repository.
-	cmd := exec.CommandContext(ctx, "git", "grep", "-q", "ErrSchemaNewer", tag, "--", "store", "pkg/store")
+	cmd := exec.CommandContext(ctx, "git", "grep", "-q", "-e", "ErrSchemaNewer", "-e", "ErrBinaryBelowMinimum",
+		tag, "--", "store", "pkg/store")
 	cmd.Dir = e2e.GitTopLevel(ctx, t)
 
 	return cmd.Run() == nil

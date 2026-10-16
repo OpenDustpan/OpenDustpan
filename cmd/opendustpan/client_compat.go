@@ -23,6 +23,8 @@ const (
 	verdictUpgradePossible = client.VerdictUpgradePossible
 	verdictCannotStart     = client.VerdictCannotStart
 	keyWarning             = client.KeyWarning
+	devBinaryWarning       = client.DevBinaryWarning
+	devServerWarning       = client.DevServerWarning
 )
 
 var (
