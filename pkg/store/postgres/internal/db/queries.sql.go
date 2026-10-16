@@ -2303,6 +2303,51 @@ func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow
 	return i, err
 }
 
+const getAuditEntry = `-- name: GetAuditEntry :one
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
+FROM audit_entries
+WHERE namespace = $1 AND sequence = $2
+`
+
+type GetAuditEntryParams struct {
+	Namespace string
+	Sequence  int64
+}
+
+// The entry of a scope at one sequence, for the check of signed
+// checkpoints. A missing entry matches no row.
+func (q *Queries) GetAuditEntry(ctx context.Context, arg GetAuditEntryParams) (AuditEntry, error) {
+	row := q.db.QueryRow(ctx, getAuditEntry, arg.Namespace, arg.Sequence)
+	var i AuditEntry
+	err := row.Scan(
+		&i.Namespace,
+		&i.Sequence,
+		&i.Subject,
+		&i.IdpSubject,
+		&i.TokenID,
+		&i.Action,
+		&i.Object,
+		&i.Version,
+		&i.ValuePath,
+		&i.AtMs,
+		&i.SourceIp,
+		&i.UserAgent,
+		&i.Channel,
+		&i.Kind,
+		&i.Outcome,
+		&i.RequestID,
+		&i.PrevHash,
+		&i.Hash,
+		&i.ValueCount,
+		&i.Changes,
+		&i.ObjectID,
+		&i.FenceVersion,
+	)
+	return i, err
+}
+
 const getAuditSinkCursor = `-- name: GetAuditSinkCursor :one
 SELECT sequence FROM audit_sink_cursors
 WHERE sink = $1 AND namespace = $2

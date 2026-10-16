@@ -190,6 +190,8 @@ type settings struct {
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
+	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
+	auditSigner *audit.Signer
 }
 
 // ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
@@ -568,6 +570,7 @@ func defaultSettings() *settings {
 		auditSinks:              nil,
 		instanceID:              "",
 		auditShipper:            nil,
+		auditSigner:             nil,
 	}
 }
 
@@ -1816,23 +1819,24 @@ func newServerHandler(
 	}
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Authenticator: cfg.authenticator,
-		Authorizer:    cfg.authorizer,
-		Logger:        cfg.logger,
-		Namespaces:    deps.services.namespaces,
-		Backups:       deps.backups,
-		Restores:      restores,
-		Maintenance:   deps.maint,
-		Metrics:       deps.observed,
-		Version:       cfg.version,
-		Schema:        schemaReporterOf(cfg.namespaceStore),
-		Journal:       journalReporterOf(cfg.namespaceStore),
-		Principals:    principals,
-		Access:        grants,
-		Tokens:        deps.services.tokens,
-		IPAllowlists:  allow,
-		SessionPolicy: deps.policies,
-		Audit:         serverAuditOf(cfg.namespaceStore),
+		Authenticator:    cfg.authenticator,
+		Authorizer:       cfg.authorizer,
+		Logger:           cfg.logger,
+		Namespaces:       deps.services.namespaces,
+		Backups:          deps.backups,
+		Restores:         restores,
+		Maintenance:      deps.maint,
+		Metrics:          deps.observed,
+		Version:          cfg.version,
+		Schema:           schemaReporterOf(cfg.namespaceStore),
+		Journal:          journalReporterOf(cfg.namespaceStore),
+		Principals:       principals,
+		Access:           grants,
+		Tokens:           deps.services.tokens,
+		IPAllowlists:     allow,
+		SessionPolicy:    deps.policies,
+		Audit:            serverAuditOf(cfg.namespaceStore),
+		CheckpointEpochs: checkpointEpochsOf(deps.chain),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
 		},
@@ -2242,6 +2246,12 @@ func newRestoreService(
 	if deps.chain != nil {
 		admit = deps.chain.admitRestore
 		steps = append(steps, deps.chain.afterRestore)
+
+		if deps.chain.checkpoints != nil {
+			steps = append(steps, newEpochAfterRestore(
+				deps.chain.checkpoints, serverAuditOf(cfg.namespaceStore), cfg.now,
+			))
+		}
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
