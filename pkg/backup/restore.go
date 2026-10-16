@@ -24,7 +24,8 @@ import (
 type KeyPeeker interface {
 	// PeekPortableKey returns one data key wrapped by wrapperID from the table
 	// file of secret_keys. It returns ErrCorrupt when the file holds no key of
-	// wrapperID.
+	// wrapperID; ErrNoDataKey, which wraps ErrCorrupt, lets the restore check
+	// look for the key in the installation keys.
 	PeekPortableKey(
 		ctx context.Context,
 		open PortableOpener,
@@ -32,6 +33,34 @@ type KeyPeeker interface {
 		wrapperID string,
 	) (secret.WrappedKey, error)
 }
+
+// InstallationKeyPeeker reads one wrapped data key from the table file of
+// installation_secret_keys without loading it into a store. A KeyPeeker
+// implements it to let the restore check open a backup whose key-encryption
+// key wraps installation keys only. When the backup holds no data key of the
+// key in secret_keys and the peeker does not implement it, the restore check
+// refuses the backup.
+type InstallationKeyPeeker interface {
+	// PeekPortableInstallationKey returns one installation key wrapped by
+	// wrapperID from the table file of installation_secret_keys. Its Scope has
+	// an empty Namespace. It returns ErrNoDataKey when the file holds no key
+	// of wrapperID, and ErrCorrupt for a bad file.
+	PeekPortableInstallationKey(
+		ctx context.Context,
+		open PortableOpener,
+		file PortableFile,
+		wrapperID string,
+	) (secret.WrappedKey, error)
+}
+
+var (
+	// ErrNoDataKey means that a table file of the backup holds no data key of
+	// the wrapper. It wraps ErrCorrupt.
+	ErrNoDataKey = fmt.Errorf("backup holds no data key of the wrapper: %w", ErrCorrupt)
+	// ErrKeyUnchecked means that the store cannot read the installation keys
+	// of the backup, so the restore check cannot prove the key-encryption key.
+	ErrKeyUnchecked = errors.New("backup key-encryption key is not checked")
+)
 
 // parseSQLSHA decodes the SHA-256 of the manifest. A bad value is a corrupt
 // manifest.

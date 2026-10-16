@@ -68,6 +68,7 @@ type keepAccessPorts struct {
 	principals principal.Store
 	sessions   session.Store
 	sessionPol session.PolicyStore
+	providers  keepProviderPorts
 }
 
 // keepAccessStores returns the ports that a keep-access restore needs, or
@@ -118,6 +119,7 @@ func keepAccessStores(t *testing.T, s RestoreStore) keepAccessPorts {
 		principals: principals,
 		sessions:   sessions,
 		sessionPol: policy,
+		providers:  keepProviderStores(t, s),
 	}
 }
 
@@ -263,6 +265,7 @@ func mutateAccessForKeepTest(t *testing.T, s RestoreStore, ports keepAccessPorts
 	createLiveSignInRequest(t, ports.sessions)
 	updateKeepTokenPolicy(t, ports.tokens)
 	updateKeepSessionPolicy(t, ports.sessionPol)
+	mutateKeepProviders(t, ports.providers)
 }
 
 // revokeAccessForKeepTest revokes one token and one grant, so the keep
@@ -496,6 +499,7 @@ func checkKeptAccess(t *testing.T, ports keepAccessPorts, want backupAccess) {
 	checkKeptLiveRequest(t, ports.sessions)
 	checkKeptTokenPolicy(t, ports.tokens, want)
 	checkKeptSessionPolicy(t, ports.sessionPol, want)
+	checkKeptProviders(t, ports.providers)
 }
 
 // checkKeptRole proves the role change survived the keep restore. Without
@@ -636,6 +640,7 @@ func checkReplacedAccess(t *testing.T, ports keepAccessPorts, want backupAccess)
 	checkReplacedRequest(t, ports.sessions)
 	checkReplacedTokenPolicy(t, ports.tokens, want)
 	checkReplacedSessionPolicy(t, ports.sessionPol, want)
+	checkReplacedProviders(t, ports.providers)
 }
 
 // checkReplacedTokenGrant proves the replacing restore brought the token

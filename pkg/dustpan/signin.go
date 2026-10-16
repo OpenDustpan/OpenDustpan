@@ -56,10 +56,13 @@ var providerIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 // errSignInSetup reports a sign-in configuration that the server cannot use.
 var errSignInSetup = errors.New("console sign-in")
 
-// newSignIn returns the console sign-in of cfg, or nil when cfg names no
-// provider.
+// newSignIn returns the console sign-in of cfg, or nil when cfg has none.
+// The sign-in runs when cfg names a provider, or when the store keeps the
+// providers of the API and cfg has an HTTPS public URL. With a store that
+// keeps them, the API manages the providers in addition to those of cfg.
 func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Service) (*serverapi.SignIn, error) {
-	if len(cfg.oidcProviders) == 0 {
+	stores, stored := cfg.namespaceStore.(providerStores)
+	if len(cfg.oidcProviders) == 0 && (!stored || !storedSignInReady(cfg, policies)) {
 		return nil, nil //nolint:nilnil // No provider is a valid setup: the sign-in routes stay unmounted.
 	}
 
@@ -70,14 +73,52 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 
 	base := resolver.String()
 
-	store, ok := cfg.namespaceStore.(session.Store)
-	if !ok || policies == nil {
-		return nil, fmt.Errorf("%w: the store keeps no sessions", errSignInSetup)
-	}
-
 	origin, err := signInOrigin(base)
 	if err != nil {
 		return nil, err
+	}
+
+	sessions, err := newSignInSessions(cfg, policies, tokens)
+	if err != nil {
+		return nil, err
+	}
+
+	providers, err := staticSignInProviders(cfg, base)
+	if err != nil {
+		return nil, err
+	}
+
+	in := &serverapi.SignIn{
+		Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: providers,
+		Origins: append([]string{origin}, cfg.allowedOrigins...),
+	}
+
+	if cfg.gate != nil {
+		in.Limiter = cfg.gate
+	}
+
+	if stored {
+		admin, adminErr := newProviderAdmin(cfg, stores)
+		if adminErr != nil {
+			return nil, adminErr
+		}
+
+		in.Admin = admin
+		in.Stored = newStoredProviders(admin, base, cfg.signInHTTPClient, cfg.now)
+	}
+
+	return in, nil
+}
+
+// newSignInSessions returns the session service of the console sign-in
+// of cfg. A session applies the account inactivity rule of tokens, when
+// tokens is not nil.
+func newSignInSessions(
+	cfg *settings, policies *session.Policies, tokens *accesstoken.Service,
+) (*session.Sessions, error) {
+	store, ok := cfg.namespaceStore.(session.Store)
+	if !ok || policies == nil {
+		return nil, fmt.Errorf("%w: the store keeps no sessions", errSignInSetup)
 	}
 
 	var inactivity session.InactivityRule
@@ -85,13 +126,24 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 		inactivity = tokenInactivity{tokens: tokens}
 	}
 
+	var providers session.ProviderSessionStore
+	if ps, isProviderStore := store.(session.ProviderSessionStore); isProviderStore {
+		providers = ps
+	}
+
 	sessions, err := session.NewSessions(session.SessionsConfig{
-		Store: store, Policies: policies, Inactivity: inactivity, Now: cfg.now,
+		Store: store, Providers: providers, Policies: policies, Inactivity: inactivity, Now: cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session service: %w", err)
 	}
 
+	return sessions, nil
+}
+
+// staticSignInProviders returns the providers of cfg for the public URL
+// base.
+func staticSignInProviders(cfg *settings, base string) ([]serverapi.SignInProvider, error) {
 	providers := make([]serverapi.SignInProvider, 0, len(cfg.oidcProviders))
 
 	for _, p := range cfg.oidcProviders {
@@ -103,16 +155,25 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 		providers = append(providers, provider)
 	}
 
-	in := &serverapi.SignIn{
-		Sessions: sessions, Limiter: nil, Providers: providers,
-		Origins: append([]string{origin}, cfg.allowedOrigins...),
+	return providers, nil
+}
+
+// storedSignInReady reports whether cfg can run the console sign-in with
+// only the providers of the API: the store keeps sessions, and cfg has a
+// public URL with HTTPS (HTTP only on a loopback host).
+func storedSignInReady(cfg *settings, policies *session.Policies) bool {
+	if _, ok := cfg.namespaceStore.(session.Store); !ok || policies == nil {
+		return false
 	}
 
-	if cfg.gate != nil {
-		in.Limiter = cfg.gate
+	resolver, err := baseurl.Parse(cfg.publicURL)
+	if err != nil {
+		return false
 	}
 
-	return in, nil
+	_, err = signInOrigin(resolver.String())
+
+	return err == nil
 }
 
 // newConsoleSignIn builds the session policy service and the console
@@ -309,5 +370,7 @@ func signInProvider(
 		displayName = p.ID
 	}
 
-	return serverapi.SignInProvider{Client: client, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate}, nil
+	return serverapi.SignInProvider{
+		Client: client, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
+	}, nil
 }

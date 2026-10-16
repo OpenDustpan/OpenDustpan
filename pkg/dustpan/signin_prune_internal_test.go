@@ -39,7 +39,7 @@ func TestPruneSignInRequestsOnce(t *testing.T) {
 	}
 
 	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Policies: policies, Inactivity: nil, Now: now},
+		session.SessionsConfig{Store: st, Providers: nil, Policies: policies, Inactivity: nil, Now: now},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)

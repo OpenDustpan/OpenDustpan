@@ -5,6 +5,8 @@ package sqlite
 const (
 	backupColArrival     = "arrival"
 	backupColCreatedAtMs = "created_at_ms"
+	backupColDisplayName = "display_name"
+	backupColProviderID  = "provider_id"
 	backupColCreatedBy   = "created_by"
 	backupColDigest      = "digest"
 	backupColPrincipalID = "principal_id"
@@ -188,7 +190,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColTool,
 				backupColName,
 				backupColUnitID,
-				"display_name",
+				backupColDisplayName,
 				"last_changed_ms",
 				backupColStatus,
 				"resource_count",
@@ -377,7 +379,27 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "oidc_providers",
-			columns: []string{"provider_id", "issuer", backupColCreatedAtMs},
+			columns: []string{backupColProviderID, "issuer", backupColCreatedAtMs},
+		},
+		{
+			table:   "installation_secret_keys",
+			columns: []string{"scope_id", "wrapper_id", "ciphertext", backupColCreatedAtMs},
+		},
+		{
+			table: "sign_in_providers",
+			columns: []string{
+				backupColProviderID,
+				"issuer",
+				backupColDisplayName,
+				"client_id",
+				"client_secret",
+				"scopes",
+				"auto_create",
+				"enabled",
+				backupColCreatedAtMs,
+				"updated_at_ms",
+				"version",
+			},
 		},
 	}
 }
@@ -395,7 +417,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColSubject,
-				"display_name",
+				backupColDisplayName,
 				backupColKind,
 				backupColSource,
 				backupColCreatedAtMs,

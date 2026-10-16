@@ -1,5 +1,6 @@
-// Package sessiontest is the conformance suite for session.Store and
-// session.PolicyStore. Every built-in store runs it, and a custom store
+// Package sessiontest is the conformance suite for session.Store,
+// session.PolicyStore, session.ProviderStore, session.ProviderConfigStore
+// and session.ProviderSessionStore. Every built-in store runs it, and a custom store
 // passed to dustpan.NewServer should too:
 //
 //	func TestSessionConformance(t *testing.T) {
@@ -33,6 +34,8 @@ type Store interface {
 	session.Store
 	session.PolicyStore
 	session.ProviderStore
+	session.ProviderConfigStore
+	session.ProviderSessionStore
 	principal.RecordStore
 	accesstoken.Store
 }
@@ -57,6 +60,13 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a disabled owner comes back with its disable time", test: testDisabledOwner},
 		{name: "touch records the last use at most once for each period", test: testTouch},
 		{name: "touch keeps the authentication time", test: testTouchKeepsAuthTime},
+		{name: "a stored sign-in provider round trips", test: testProviderRoundTrip},
+		{name: "an invalid sign-in provider is refused", test: testProviderRefusesInvalid},
+		{name: "an update of a provider checks its version", test: testProviderUpdate},
+		{name: "a provider with principals is not deleted", test: testProviderDelete},
+		{name: "each provider change appends its entry", test: testProviderChangeAppendsEntry},
+		{name: "a disable of a provider ends its sessions", test: testProviderDisableEndsSessions},
+		{name: "a session of a stored provider needs the provider enabled", test: testProviderSessionNeedsEnabled},
 		{name: "end sets the end time and the reason once", test: testEnd},
 		{name: "a change appends its audit entry in @server", test: testChangeAppendsEntry},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntryChangesNothing},

@@ -174,6 +174,9 @@ type settings struct {
 	// oidcProviders are the OpenID Connect providers of the console
 	// sign-in. See WithOIDCProvider.
 	oidcProviders []OIDCProvider
+	// signInHTTPClient makes the requests to the sign-in providers of the
+	// API. Nil uses the default client of the sign-in.
+	signInHTTPClient *http.Client
 	// gate is the per-address failure limit of the token lookups. The
 	// sign-in routes share it. wireTokens sets it; nil means no limit.
 	gate *authgate.Gate
@@ -556,6 +559,7 @@ func defaultSettings() *settings {
 		tlsKeyFile:              "",
 		publicURL:               "",
 		oidcProviders:           nil,
+		signInHTTPClient:        nil,
 		gate:                    nil,
 		sessionCookies:          nil,
 		version:                 "",
@@ -1587,6 +1591,12 @@ func (s *Server) fenceStoppedRestore(ctx context.Context) error {
 func (s *Server) startUp(ctx context.Context) error {
 	if err := secret.CheckWrapper(ctx, s.secretKeys, s.secretWrapper); err != nil {
 		return err
+	}
+
+	if keys, ok := s.secretKeys.(secret.InstallationKeyStore); ok {
+		if err := secret.CheckInstallationWrapper(ctx, keys, s.secretWrapper); err != nil {
+			return err
+		}
 	}
 
 	if s.backupRegistry == nil {

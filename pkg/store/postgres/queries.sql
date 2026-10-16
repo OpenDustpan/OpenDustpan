@@ -718,8 +718,11 @@ FROM namespaces
 ORDER BY home_region;
 
 -- name: BackupWrapperIDs :many
-SELECT DISTINCT wrapper_id
-FROM secret_keys
+-- The wrapper IDs of the namespace keys and of the installation keys, so the
+-- restore check finds the key-encryption key of each.
+SELECT wrapper_id FROM secret_keys
+UNION
+SELECT wrapper_id FROM installation_secret_keys
 ORDER BY wrapper_id;
 
 -- name: BackupBlobs :many
@@ -1824,3 +1827,73 @@ ON CONFLICT (provider_id) DO NOTHING;
 
 -- name: GetOIDCProviderIssuer :one
 SELECT issuer FROM oidc_providers WHERE provider_id = $1;
+
+-- name: CreateInstallationSecretKey :execrows
+-- The first seal in an installation scope stores its key. A concurrent
+-- first seal keeps the stored key.
+INSERT INTO installation_secret_keys (scope_id, wrapper_id, ciphertext, created_at_ms)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING;
+
+-- name: GetInstallationSecretKey :one
+SELECT scope_id, wrapper_id, ciphertext, created_at_ms
+FROM installation_secret_keys
+WHERE scope_id = $1;
+
+-- name: ListInstallationWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM installation_secret_keys
+ORDER BY wrapper_id;
+
+-- name: CreateSignInProvider :execrows
+INSERT INTO sign_in_providers (
+    provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
+    created_at_ms, updated_at_ms, version
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT DO NOTHING;
+
+-- name: GetSignInProvider :one
+SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
+    created_at_ms, updated_at_ms, version
+FROM sign_in_providers
+WHERE provider_id = $1;
+
+-- name: ListSignInProviders :many
+SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
+    created_at_ms, updated_at_ms, version
+FROM sign_in_providers
+ORDER BY provider_id COLLATE "C";
+
+-- name: UpdateSignInProvider :execrows
+-- The update applies only to the version that the change read.
+UPDATE sign_in_providers
+SET issuer = sqlc.arg('issuer'), display_name = sqlc.arg('display_name'), client_id = sqlc.arg('client_id'),
+    client_secret = sqlc.arg('client_secret'), scopes = sqlc.arg('scopes'),
+    auto_create = sqlc.arg('auto_create'), enabled = sqlc.arg('enabled'),
+    updated_at_ms = sqlc.arg('updated_at_ms'), version = sqlc.arg('version')
+WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version') - 1;
+
+-- name: CountSignInProvider :one
+SELECT COUNT(*) FROM sign_in_providers WHERE provider_id = $1;
+
+-- name: GetSignInProviderEnabled :one
+-- Reads whether a stored provider is enabled, with a shared lock, in the
+-- transaction that inserts a session of it. A disable waits for that
+-- transaction, and its session end then sees the new session.
+SELECT enabled FROM sign_in_providers WHERE provider_id = $1 FOR SHARE;
+
+-- name: DeleteSignInProvider :execrows
+DELETE FROM sign_in_providers WHERE provider_id = $1;
+
+-- name: EndSessionsWithSubjectPrefix :execrows
+-- Ends every active session of a principal whose subject starts with the
+-- prefix "<provider ID>:". The compare is exact, as in
+-- CountPrincipalsWithSubjectPrefix.
+UPDATE sessions SET ended_at_ms = sqlc.arg('at_ms')::bigint, end_reason = sqlc.arg('end_reason')
+WHERE ended_at_ms IS NULL
+  AND principal_id IN (SELECT id FROM principals WHERE starts_with(subject, sqlc.arg('prefix')));
+
+-- name: CountPrincipalsWithSubjectPrefix :one
+-- The prefix is "<provider ID>:". The compare is exact, with no pattern
+-- and no case folding. Deleted principals count too.
+SELECT COUNT(*) FROM principals WHERE starts_with(subject, sqlc.arg('prefix'));

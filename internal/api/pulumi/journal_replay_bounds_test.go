@@ -6,19 +6,12 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
-
-// replayBoundMu serializes the replay bound tests below. Each test lowers one
-// replay bound, and every replay reads every bound, so two of these tests
-// must never run together. The rest of the suite never touches these bounds,
-// so the tests stay parallel with it.
-var replayBoundMu sync.Mutex //nolint:gochecknoglobals // The mutex guards the lowered bounds, which tests restore.
 
 // replayBoundFixture builds an update fixture with the real journal replayer,
 // so complete replays the stored batches through the complete route.
@@ -164,12 +157,9 @@ func completeReplayBound(t *testing.T, f updateFixture, id stack.UpdateID, lease
 // TestJournalCompleteAnswers413OnStateBound checks that completing a
 // journaled update past the new-state bound answers 413 with the one-sentence
 // message that names the bound, its limit and pulumi up.
+//
+//nolint:paralleltest // The test lowers the state bound, so it runs alone.
 func TestJournalCompleteAnswers413OnStateBound(t *testing.T) {
-	t.Parallel()
-
-	replayBoundMu.Lock()
-	defer replayBoundMu.Unlock()
-
 	old := pulumijournal.MaxNewStateBytesPerUpdate
 	pulumijournal.MaxNewStateBytesPerUpdate = 2000
 	defer func() { pulumijournal.MaxNewStateBytesPerUpdate = old }()
@@ -196,12 +186,9 @@ func TestJournalCompleteAnswers413OnStateBound(t *testing.T) {
 // TestJournalCompleteAnswers413OnLinkBound checks that completing a journaled
 // update past the added-link bound answers 413 with the one-sentence message
 // that names the bound, its limit and pulumi up.
+//
+//nolint:paralleltest // The test lowers the link bound, so it runs alone.
 func TestJournalCompleteAnswers413OnLinkBound(t *testing.T) {
-	t.Parallel()
-
-	replayBoundMu.Lock()
-	defer replayBoundMu.Unlock()
-
 	old := pulumijournal.MaxLinkIndexEntriesPerUpdate
 	pulumijournal.MaxLinkIndexEntriesPerUpdate = 4
 	defer func() { pulumijournal.MaxLinkIndexEntriesPerUpdate = old }()
@@ -233,12 +220,9 @@ func TestJournalCompleteAnswers413OnLinkBound(t *testing.T) {
 // TestJournalCompleteAnswers413OnAddedBytesBound checks that completing a
 // journaled update past the new-state plus added-link bound answers 413 with
 // the one-sentence message that names the bound, its limit and pulumi up.
+//
+//nolint:paralleltest // The test lowers the added-bytes bound, so it runs alone.
 func TestJournalCompleteAnswers413OnAddedBytesBound(t *testing.T) {
-	t.Parallel()
-
-	replayBoundMu.Lock()
-	defer replayBoundMu.Unlock()
-
 	old := pulumijournal.MaxNewStatePlusLinkBytesPerUpdate
 	pulumijournal.MaxNewStatePlusLinkBytesPerUpdate = 1000
 	defer func() { pulumijournal.MaxNewStatePlusLinkBytesPerUpdate = old }()

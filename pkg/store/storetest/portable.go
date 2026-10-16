@@ -57,6 +57,10 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "peek returns one key of the wrapper without loading", test: testPortablePeekKey},
 		{name: "peek refuses an unknown wrapper", test: testPortablePeekUnknownWrapper},
 		{name: "peek refuses a corrupt key file", test: testPortablePeekCorrupt},
+		{name: "peek returns one installation key without loading", test: testPortablePeekInstallationKey},
+		{name: "the key check opens a backup with installation keys only", test: testPortableKeyOnlyInstallation},
+		{name: "the key check opens a backup with both kinds of keys", test: testPortableKeyBothKinds},
+		{name: "the key check refuses the wrong key of installation keys", test: testPortableKeyWrongKey},
 		{name: "a soft delete keeps every child row of the stack", test: testPortableDeleteKeepsChildren},
 		{name: "a purge removes every row of the stack", test: testPortablePurgeRemovesChildren},
 		{name: "a purge removes every row of the workspace", test: testPortablePurgeRemovesWorkspaceRows},
@@ -473,8 +477,8 @@ func testPortablePeekUnknownWrapper(t *testing.T, newStore PortableFactory) {
 	dst := newStore(t)
 
 	_, err := dst.PeekPortableKey(t.Context(), sink.read, portableFileNamed(t, files, "secret_keys"), "kek-unknown")
-	if !errors.Is(err, backup.ErrCorrupt) {
-		t.Fatalf("peek key of an unknown wrapper: err = %v, want ErrCorrupt", err)
+	if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, backup.ErrNoDataKey) {
+		t.Fatalf("peek key of an unknown wrapper: err = %v, want ErrNoDataKey", err)
 	}
 
 	assertBackupEmpty(t, dst)
