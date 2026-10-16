@@ -105,6 +105,11 @@ func (stubAuthorizer) Authorize(
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (stubAuthorizer) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // readOnlyAuthorizer allows the read actions of a namespace and a unit and
 // denies the rest: a caller that sees an object but cannot change it.
 type readOnlyAuthorizer struct{}
@@ -120,6 +125,15 @@ func (readOnlyAuthorizer) Authorize(
 	}
 
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (readOnlyAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // failingReadAuthorizer denies every action except the read actions, and
@@ -138,6 +152,15 @@ func (failingReadAuthorizer) Authorize(
 	}
 
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (failingReadAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // errStoreDown is the store error of failingReadAuthorizer.
@@ -161,6 +184,15 @@ func (s selectiveAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (selectiveAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // recordedCall is one Authorize call: the action on the object wire form.
 type recordedCall struct {
 	action identity.Action
@@ -181,6 +213,15 @@ func (r *recordingAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordingAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // denyObjectAuthorizer denies the one object wire form in deny and allows
 // everything else, so tests prove a route authorizes the resolved object:
 // denying it answers 403.
@@ -196,6 +237,15 @@ func (d denyObjectAuthorizer) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (denyObjectAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // newObjectHandler returns a production Handler (no test-only routes) with
