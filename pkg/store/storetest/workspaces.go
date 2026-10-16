@@ -222,6 +222,10 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			test: testFenceAndUnlockNeedsStagedVersion,
 		},
 		{
+			name: "fence and unlock of a version that is already finalized is ErrUploadDenied",
+			test: testFenceAndUnlockRefusesFinalizedVersion,
+		},
+		{
 			name: "a staged fence version names its content and is neither current nor in the history",
 			test: testStagedFenceNamesItsContent,
 		},
@@ -3632,6 +3636,43 @@ func testFenceAndUnlockNeedsStagedVersion(t *testing.T, s WorkspaceStore) {
 	if id := currentVersionID(t, s, locked.ID); id != v1.ID {
 		t.Fatalf("current version after refused fences = %s, want %s", id, v1.ID)
 	}
+}
+
+// testFenceAndUnlockRefusesFinalizedVersion proves FenceAndUnlock refuses a
+// fence that names a version that is already finalized, also with its own
+// content key: only a pending row finalizes. The lock and the current version
+// stay.
+func testFenceAndUnlockRefusesFinalizedVersion(t *testing.T, s WorkspaceStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	locked, v1 := lockedWithState(t, s, ns)
+	released := releasedWorkspace(locked, now().Add(2*time.Hour))
+
+	again := v1
+	again.Lineage = "lin-b"
+	again.Serial = v1.Serial + 1
+	again.FinalizedAt = now().Add(2 * time.Hour)
+	again.FenceBy = "admin"
+
+	err := s.FenceAndUnlock(t.Context(), released, again, v1.ID, ns.Fence())
+	if !errors.Is(err, workspace.ErrUploadDenied) {
+		t.Fatalf("fence naming the finalized version %s: err = %v, want ErrUploadDenied", v1.ID, err)
+	}
+
+	got, err := s.GetWorkspaceByID(t.Context(), locked.ID)
+	if err != nil {
+		t.Fatalf("get workspace: %v", err)
+	}
+
+	assertWorkspace(t, got, locked)
+
+	stored, err := s.GetStateVersion(t.Context(), v1.ID)
+	if err != nil {
+		t.Fatalf("get state version: %v", err)
+	}
+
+	assertStateVersion(t, stored, v1)
 }
 
 // testStagedFenceNamesItsContent proves a staged fence version names its
