@@ -257,17 +257,23 @@ func (r *Runner) runClaimed(ctx context.Context, op Operation) {
 	cause := context.Cause(work)
 
 	switch {
-	case errors.Is(cause, ErrClaimLost):
+	case errors.Is(cause, ErrClaimLost), outcome == outcomeLost:
 		log.WarnContext(ctx, "durable operation claim lost; another instance owns the operation")
-	case errors.Is(cause, ErrCanceled):
+	case errors.Is(cause, ErrCanceled), outcome == outcomeCanceled, ctx.Err() != nil:
+		// After a cancel, Release ends the operation canceled. At shutdown,
+		// it returns the operation to pending for another instance.
 		r.release(ctx, claim, log)
-	case ctx.Err() != nil:
-		r.release(ctx, claim, log)
-	case outcome == outcomeStopped:
 	case stepErr != nil:
 		r.fail(ctx, claim, op, stepErr, log)
 	default:
-		r.end(ctx, log, "complete", r.cfg.Store.Complete(ctx, claim))
+		err := r.cfg.Store.Complete(ctx, claim)
+		if errors.Is(err, ErrCanceled) {
+			r.release(ctx, claim, log)
+
+			return
+		}
+
+		r.end(ctx, log, "complete", err)
 	}
 }
 
@@ -276,9 +282,24 @@ type outcome int
 const (
 	// outcomeDone means every step is recorded, or a step failed.
 	outcomeDone outcome = iota
-	// outcomeStopped means the store already ended the attempt.
-	outcomeStopped
+	// outcomeLost means the claim is lost: the runner writes nothing more.
+	outcomeLost
+	// outcomeCanceled means a write answered that a cancel is requested.
+	outcomeCanceled
 )
+
+// stopOutcome returns the outcome for err from a write of the store, or
+// outcomeDone when err does not stop the attempt.
+func stopOutcome(err error) outcome {
+	switch {
+	case errors.Is(err, ErrClaimLost):
+		return outcomeLost
+	case errors.Is(err, ErrCanceled):
+		return outcomeCanceled
+	default:
+		return outcomeDone
+	}
+}
 
 // runSteps runs the steps of op that are not recorded, in order. It adds
 // each recorded step to op.
@@ -305,6 +326,12 @@ func (r *Runner) runSteps(ctx context.Context, op *Operation) (outcome, error) {
 		}
 
 		if err != nil {
+			// A domain write of the step can answer that the claim is lost
+			// or that a cancel is requested. That is no failure of the step.
+			if stop := stopOutcome(err); stop != outcomeDone {
+				return stop, nil
+			}
+
 			return outcomeDone, fmt.Errorf("step %q: %w", st.Name, err)
 		}
 
@@ -313,12 +340,8 @@ func (r *Runner) runSteps(ctx context.Context, op *Operation) (outcome, error) {
 		switch {
 		case err == nil, errors.Is(err, ErrStepDone):
 			// ErrStepDone: the domain write of the step recorded it.
-		case errors.Is(err, ErrClaimLost), errors.Is(err, ErrCanceled):
-			r.cfg.Logger.WarnContext(ctx, "durable operation step not recorded",
-				slog.String("operation", string(op.ID)), slog.String("step", st.Name),
-				slog.String("error", ErrorClass(err)))
-
-			return outcomeStopped, nil
+		case stopOutcome(err) != outcomeDone:
+			return stopOutcome(err), nil
 		default:
 			return outcomeDone, fmt.Errorf("record step %q: %w", st.Name, err)
 		}
@@ -381,19 +404,16 @@ func (r *Runner) release(ctx context.Context, claim Claim, log *slog.Logger) {
 	r.end(rctx, log, "release", r.cfg.Store.Release(rctx, claim))
 }
 
-// end logs the result of the write that ends an attempt. ErrCanceled means
-// the store ended the operation canceled, which is the expected end after a
-// cancel.
+// end logs the result of the write that ends an attempt.
 func (r *Runner) end(ctx context.Context, log *slog.Logger, what string, err error) {
-	switch {
-	case err == nil:
-		log.DebugContext(ctx, "durable operation attempt ended", slog.String("end", what))
-	case errors.Is(err, ErrCanceled):
-		log.InfoContext(ctx, "durable operation canceled")
-	default:
+	if err != nil {
 		log.WarnContext(ctx, "durable operation attempt did not end", slog.String("end", what),
 			slog.String("error", ErrorClass(err)))
+
+		return
 	}
+
+	log.DebugContext(ctx, "durable operation attempt ended", slog.String("end", what))
 }
 
 // ErrorClass names the class of err for a log line. A log line can go to a

@@ -361,6 +361,39 @@ func TestRunnerStopsAtCancel(t *testing.T) {
 	}
 }
 
+func TestRunnerEndsCanceledWhenAStepWriteIsRefused(t *testing.T) {
+	t.Parallel()
+
+	mem := durabletest.NewMem()
+	store := mem.Store()
+	domain := mem.Harness().Domain
+
+	ns, err := domain.CreateNamespace(t.Context(), "ns")
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	write := durable.Step{Name: "one", Run: func(ctx context.Context, sc durable.StepContext) ([]byte, error) {
+		if err := store.Cancel(ctx, sc.Operation.ID); err != nil {
+			return nil, err
+		}
+
+		return nil, domain.WriteStep(ctx, sc.Fence, ns, "v", durabletest.Hooks{Before: nil, After: nil})
+	}}
+
+	r := newTestRunner(t, store, "a", write)
+	op := start(t, store, "k")
+
+	if err := r.RunOnce(t.Context()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	got := waitFor(t, store, op.ID, "canceled", inState(durable.StateCanceled))
+	if got.Attempt != 1 || got.LastError != "" || len(got.Steps) != 0 {
+		t.Fatalf("operation = %+v, want canceled after one attempt, with no failure and no step", got)
+	}
+}
+
 // lossyStore answers every renewal with ErrClaimLost and counts the writes
 // that end an attempt.
 type lossyStore struct {
