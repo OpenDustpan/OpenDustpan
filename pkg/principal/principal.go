@@ -57,6 +57,12 @@ var (
 	// ErrBreakGlassKind reports a break-glass account that is not a person.
 	// Only a person can be a break-glass account.
 	ErrBreakGlassKind = errors.New("break-glass account must be a person")
+	// ErrDisabled reports a principal that is disabled.
+	ErrDisabled = errors.New("principal is disabled")
+	// ErrNotSignInTarget reports a principal that a sign-in through an
+	// identity provider cannot name: one that is not a person, a principal
+	// of a namespace, or a break-glass account.
+	ErrNotSignInTarget = errors.New("principal cannot sign in through an identity provider")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -88,8 +94,8 @@ func ParseKind(s string) (Kind, error) {
 // Source names where a principal or a group comes from.
 type Source string
 
-// Sources of records (ADR 55). Only SourceLocal exists today: the directory
-// sync sets the others.
+// Sources of records (ADR 55). The directory sync sets SourceLDAP and
+// SourceSCIM.
 const (
 	// SourceLocal is a record made through the API.
 	SourceLocal Source = "local"
@@ -97,6 +103,9 @@ const (
 	SourceLDAP Source = "ldap"
 	// SourceSCIM is a record that a SCIM sync keeps.
 	SourceSCIM Source = "scim"
+	// SourceOIDC is a person that the first sign-in through an OpenID
+	// Connect provider made.
+	SourceOIDC Source = "oidc"
 )
 
 // Limits of the text fields, in bytes.
@@ -303,11 +312,11 @@ func (p Principal) validateNamespace() error {
 	return nil
 }
 
-// validateSource returns ErrInvalid for a source that is not local, ldap or
-// scim.
+// validateSource returns ErrInvalid for a source that is not local, ldap,
+// scim or oidc.
 func validateSource(s Source) error {
 	switch s {
-	case SourceLocal, SourceLDAP, SourceSCIM:
+	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC:
 		return nil
 	default:
 		return fmt.Errorf("%w: unknown source %q", ErrInvalid, s)
