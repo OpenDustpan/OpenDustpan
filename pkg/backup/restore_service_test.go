@@ -529,7 +529,9 @@ func newRestoreServiceSetup(t *testing.T) *restoreServiceSetup {
 		applyGate:   nil,
 		stageCalls:  0,
 		applied:     0,
+		kept:        0,
 		bumped:      0,
+		keepingErr:  nil,
 		resurrect:   nil,
 		wipeBackups: nil,
 	}
@@ -643,11 +645,12 @@ func TestRestoreErrorTextHoldsNoDriverDetail(t *testing.T) {
 	id := backup.RestoreID("rst-driver0000000001")
 
 	startErr := setup.service.Start(t.Context(), id, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if startErr != nil {
 		t.Fatalf("start restore: %v", startErr)
@@ -685,11 +688,12 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 	first := backup.RestoreID("rst-first00000000001")
 
 	startErr := setup.service.Start(t.Context(), first, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if startErr != nil {
 		t.Fatalf("start first restore: %v", startErr)
@@ -698,11 +702,12 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 	second := backup.RestoreID("rst-second0000000001")
 
 	err := setup.service.Start(t.Context(), second, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if !errors.Is(err, backup.ErrRestoreRunning) {
 		t.Fatalf("second start: err = %v, want ErrRestoreRunning", err)
@@ -726,11 +731,12 @@ func TestRestoreSecondStartWhileRunningConflicts(t *testing.T) {
 	}
 
 	err = other.Start(t.Context(), second, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if !errors.Is(err, backup.ErrRestoreRunning) {
 		t.Fatalf("start on another service: err = %v, want ErrRestoreRunning", err)
@@ -759,11 +765,12 @@ func TestRestoreSlotFreesOnlyAfterTheRowFinishes(t *testing.T) {
 	first := backup.RestoreID("rst-first00000000002")
 
 	startErr := setup.service.Start(t.Context(), first, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if startErr != nil {
 		t.Fatalf("start first restore: %v", startErr)
@@ -774,11 +781,12 @@ func TestRestoreSlotFreesOnlyAfterTheRowFinishes(t *testing.T) {
 
 	for time.Now().Before(deadline) {
 		err := setup.service.Start(t.Context(), "rst-blocked000000001", backup.RestoreRequest{
-			BackupID:    setup.id,
-			PreBackupID: "",
-			CheckOnly:   false,
-			Force:       false,
-			RequestedBy: "tester",
+			BackupID:         setup.id,
+			PreBackupID:      "",
+			CheckOnly:        false,
+			Force:            false,
+			RequestedBy:      "tester",
+			KeepAccessTables: false,
 		})
 
 		if errors.Is(err, backup.ErrRestoreRunning) {
@@ -812,11 +820,12 @@ func TestRestoreSlotFreesOnlyAfterTheRowFinishes(t *testing.T) {
 	next := backup.RestoreID("rst-next0000000000001")
 
 	nextErr := setup.service.Start(t.Context(), next, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if nextErr != nil {
 		t.Fatalf("start after the row finished: %v", nextErr)
@@ -917,11 +926,12 @@ func TestRestoreMutatedTargetCannotApply(t *testing.T) {
 	id := backup.RestoreID("rst-mutated000000001")
 
 	mutatedErr := service.Start(t.Context(), id, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if mutatedErr != nil {
 		t.Fatalf("start restore: %v", mutatedErr)
@@ -954,11 +964,12 @@ func TestRestoreBacksUpAfterEnteringMaintenance(t *testing.T) {
 	id := backup.RestoreID("rst-order00000000001")
 
 	startErr := setup.service.Start(t.Context(), id, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       true,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            true,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if startErr != nil {
 		t.Fatalf("start restore: %v", startErr)
@@ -981,11 +992,12 @@ func TestRestoreBacksUpAfterEnteringMaintenance(t *testing.T) {
 	denied := backup.RestoreID("rst-order00000000002")
 
 	denyErr := refused.service.Start(t.Context(), denied, backup.RestoreRequest{
-		BackupID:    refused.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         refused.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if denyErr != nil {
 		t.Fatalf("start refused restore: %v", denyErr)
@@ -1016,11 +1028,12 @@ func TestRestoreBackToBackStartsAfterPollSucceeds(t *testing.T) {
 		id := backup.RestoreID(fmt.Sprintf("rst-backtoback%08d", i))
 
 		startErr := setup.service.Start(t.Context(), id, backup.RestoreRequest{
-			BackupID:    setup.id,
-			PreBackupID: "",
-			CheckOnly:   false,
-			Force:       false,
-			RequestedBy: "tester",
+			BackupID:         setup.id,
+			PreBackupID:      "",
+			CheckOnly:        false,
+			Force:            false,
+			RequestedBy:      "tester",
+			KeepAccessTables: false,
 		})
 		if startErr != nil {
 			t.Fatalf("start restore %s: %v", id, startErr)
@@ -1138,11 +1151,12 @@ func TestRestoreFailureLogsCauseWithoutDriverDetail(t *testing.T) {
 	id := backup.RestoreID("rst-logcause000000001")
 
 	logErr := logged.Start(t.Context(), id, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if logErr != nil {
 		t.Fatalf("start restore: %v", logErr)
@@ -1222,11 +1236,12 @@ func TestRestoreSwapSupersedesResurrectedRows(t *testing.T) {
 	id := backup.RestoreID("rst-supersede00000001")
 
 	startErr := setup.service.Start(t.Context(), id, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if startErr != nil {
 		t.Fatalf("start restore: %v", startErr)
@@ -1248,11 +1263,12 @@ func TestRestoreSwapSupersedesResurrectedRows(t *testing.T) {
 	next := backup.RestoreID("rst-supersede00000002")
 
 	nextErr := setup.service.Start(t.Context(), next, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if nextErr != nil {
 		t.Fatalf("start after a superseded row: %v", nextErr)
@@ -1292,7 +1308,9 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 		applyGate:   nil,
 		stageCalls:  0,
 		applied:     0,
+		kept:        0,
 		bumped:      0,
+		keepingErr:  nil,
 		resurrect:   nil,
 		wipeBackups: backupRegs,
 	}
@@ -1331,11 +1349,12 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 
 	id := backup.RestoreID("rst-prebackup0000001")
 	req := backup.RestoreRequest{
-		BackupID:    check.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         check.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	}
 
 	if startErr := service.Start(t.Context(), id, req); startErr != nil {
@@ -1449,11 +1468,12 @@ func startSwapWindowRestore(t *testing.T, setup *restoreServiceSetup, id backup.
 	t.Helper()
 
 	req := backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	}
 
 	if err := setup.service.Start(t.Context(), id, req); err != nil {
@@ -1611,11 +1631,12 @@ func TestRestoreRunsAfterApplyAfterTheSwap(t *testing.T) {
 	id := backup.RestoreID("rst-afterapply00000001")
 
 	req := backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	}
 
 	if err := service.Start(t.Context(), id, req); err != nil {
@@ -1649,11 +1670,12 @@ func TestRestoreFailsWhenAfterApplyFails(t *testing.T) {
 	id := backup.RestoreID("rst-afterapplyfail001")
 
 	req := backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	}
 
 	if err := service.Start(t.Context(), id, req); err != nil {
@@ -1714,11 +1736,12 @@ func TestRestoreRefusesForeignDescriptorPath(t *testing.T) {
 	id := backup.RestoreID("rst-foreignpath0000001")
 
 	startErr := service.Start(t.Context(), id, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if startErr != nil {
 		t.Fatalf("start restore: %v", startErr)
@@ -1805,11 +1828,12 @@ func TestRestoreRefusesNativeFormat(t *testing.T) {
 	id := backup.RestoreID("rst-nativeformat00001")
 
 	startErr := service.Start(t.Context(), id, backup.RestoreRequest{
-		BackupID:    setup.id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if startErr != nil {
 		t.Fatalf("start restore: %v", startErr)
@@ -1844,14 +1868,15 @@ func TestRestoreKeepAccessTablesCallsKeepingApply(t *testing.T) {
 	kept := newRestoreServiceSetup(t)
 
 	keepID := backup.RestoreID("rst-keepaccess000001")
-	if err := kept.service.Start(t.Context(), keepID, backup.RestoreRequest{
+	keepReq := backup.RestoreRequest{
 		BackupID:         kept.id,
 		PreBackupID:      "",
 		CheckOnly:        false,
 		Force:            false,
 		RequestedBy:      "tester",
 		KeepAccessTables: true,
-	}); err != nil {
+	}
+	if err := kept.service.Start(t.Context(), keepID, keepReq); err != nil {
 		t.Fatalf("start restore that keeps the access tables: %v", err)
 	}
 
@@ -1867,14 +1892,15 @@ func TestRestoreKeepAccessTablesCallsKeepingApply(t *testing.T) {
 	replaced := newRestoreServiceSetup(t)
 
 	replaceID := backup.RestoreID("rst-keepaccess000002")
-	if err := replaced.service.Start(t.Context(), replaceID, backup.RestoreRequest{
+	replaceReq := backup.RestoreRequest{
 		BackupID:         replaced.id,
 		PreBackupID:      "",
 		CheckOnly:        false,
 		Force:            false,
 		RequestedBy:      "tester",
 		KeepAccessTables: false,
-	}); err != nil {
+	}
+	if err := replaced.service.Start(t.Context(), replaceID, replaceReq); err != nil {
 		t.Fatalf("start restore that replaces the access tables: %v", err)
 	}
 
@@ -1898,14 +1924,15 @@ func TestRestoreKeepAccessMismatchFailsTheRestore(t *testing.T) {
 	setup.live.keepingErr = backup.ErrRestoreAccessMismatch
 
 	id := backup.RestoreID("rst-keepaccess000003")
-	if err := setup.service.Start(t.Context(), id, backup.RestoreRequest{
+	keepReq := backup.RestoreRequest{
 		BackupID:         setup.id,
 		PreBackupID:      "",
 		CheckOnly:        false,
 		Force:            false,
 		RequestedBy:      "tester",
 		KeepAccessTables: true,
-	}); err != nil {
+	}
+	if err := setup.service.Start(t.Context(), id, keepReq); err != nil {
 		t.Fatalf("start restore that keeps the access tables: %v", err)
 	}
 

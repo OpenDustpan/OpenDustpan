@@ -25,7 +25,45 @@ func testRestoreKeepsAccessTables(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
 	s := newStore(t)
-	ctx := t.Context()
+	ports := keepAccessStores(t, s)
+
+	seed := seedBackupStore(t, s)
+	sink, sum, files := exportPortable(t, ports.stager)
+
+	revokeAccessForKeepTest(t, s, ports.tokens, ports.grants)
+
+	extra := mustCreateStack(t, s, seed.acme, "extra")
+
+	stageKeepBackup(t, ports.stager, sink, sum, files)
+
+	if err := ports.keeper.ApplyStagingKeepingAccess(t.Context()); err != nil {
+		t.Fatalf("apply keeping the access tables: %v", err)
+	}
+
+	checkKeptTokenGrant(t, ports.tokens, ports.grants)
+	checkKeptStacks(t, s, &seed, extra)
+
+	stageKeepBackup(t, ports.stager, sink, sum, files)
+
+	if err := s.ApplyStaging(t.Context()); err != nil {
+		t.Fatalf("apply replacing the access tables: %v", err)
+	}
+
+	checkReplacedAccess(t, ports.tokens, ports.grants)
+}
+
+// keepAccessPorts holds the ports that a keep-access restore needs.
+type keepAccessPorts struct {
+	stager PortableRestoreStore
+	keeper backup.AccessKeepingApplier
+	tokens accesstoken.Store
+	grants access.Store
+}
+
+// keepAccessStores returns the ports that a keep-access restore needs, or
+// skips when the store misses one.
+func keepAccessStores(t *testing.T, s RestoreStore) keepAccessPorts {
+	t.Helper()
 
 	ps, ok := s.(PortableRestoreStore)
 	if !ok {
@@ -42,6 +80,8 @@ func testRestoreKeepsAccessTables(t *testing.T, newStore RestoreFactory) {
 		t.Skip("the store keeps no principals")
 	}
 
+	_ = principals
+
 	tokens, ok := s.(accesstoken.Store)
 	if !ok {
 		t.Skip("the store keeps no access tokens")
@@ -52,10 +92,15 @@ func testRestoreKeepsAccessTables(t *testing.T, newStore RestoreFactory) {
 		t.Skip("the store keeps no grants")
 	}
 
-	_ = principals
+	return keepAccessPorts{stager: ps, keeper: keeper, tokens: tokens, grants: grants}
+}
 
-	seed := seedBackupStore(t, s)
-	sink, sum, files := exportPortable(t, ps)
+// revokeAccessForKeepTest revokes one token and one grant, so the keep
+// restore must keep the revocations and the replacing restore must undo them.
+func revokeAccessForKeepTest(t *testing.T, s RestoreStore, tokens accesstoken.Store, grants access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
 
 	if err := tokens.RevokeToken(ctx, "tok-used", ServerChange(now(), "token:tok-used")); err != nil {
 		t.Fatalf("revoke token: %v", err)
@@ -66,16 +111,25 @@ func testRestoreKeepsAccessTables(t *testing.T, newStore RestoreFactory) {
 	if err := grants.RevokeGrant(ctx, "grt-ops", fence, entry); err != nil {
 		t.Fatalf("revoke grant: %v", err)
 	}
+}
 
-	extra := mustCreateStack(t, s, seed.acme, "extra")
+// stageKeepBackup stages the exported backup, failing on error.
+func stageKeepBackup(
+	t *testing.T, ps PortableRestoreStore, sink *portableSink, sum backup.Summary, files []backup.PortableFile,
+) {
+	t.Helper()
 
-	if _, err := ps.StagePortable(ctx, sink.read, sum, files); err != nil {
+	if _, err := ps.StagePortable(t.Context(), sink.read, sum, files); err != nil {
 		t.Fatalf("stage backup: %v", err)
 	}
+}
 
-	if err := keeper.ApplyStagingKeepingAccess(ctx); err != nil {
-		t.Fatalf("apply keeping the access tables: %v", err)
-	}
+// checkKeptTokenGrant proves the keep restore kept the token revoked and the
+// grant revoked.
+func checkKeptTokenGrant(t *testing.T, tokens accesstoken.Store, grants access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
 
 	kept, err := tokens.GetToken(ctx, "tok-used")
 	if err != nil {
@@ -86,25 +140,33 @@ func testRestoreKeepsAccessTables(t *testing.T, newStore RestoreFactory) {
 		t.Fatal("token tok-used is active after a restore that keeps the access tables, want revoked")
 	}
 
-	if _, err := grants.GetGrant(ctx, "grt-ops"); !errors.Is(err, access.ErrNotFound) {
-		t.Fatalf("get kept grant: err = %v, want ErrNotFound", err)
+	_, grantErr := grants.GetGrant(ctx, "grt-ops")
+	if !errors.Is(grantErr, access.ErrNotFound) {
+		t.Fatalf("get kept grant: err = %v, want ErrNotFound", grantErr)
 	}
+}
 
-	if _, err := s.GetStack(ctx, extra.Ref); !errors.Is(err, stack.ErrNotFound) {
-		t.Fatalf("get extra stack after a keep restore: err = %v, want ErrNotFound", err)
+// checkKeptStacks proves the keep restore removed the extra stack and
+// restored the seeded stack.
+func checkKeptStacks(t *testing.T, s RestoreStore, seed *backupSeed, extra stack.Stack) {
+	t.Helper()
+
+	_, stackErr := s.GetStack(t.Context(), extra.Ref)
+	if !errors.Is(stackErr, stack.ErrNotFound) {
+		t.Fatalf("get extra stack after a keep restore: err = %v, want ErrNotFound", stackErr)
 	}
 
 	if got := mustGetStack(t, s, seed.prod.Ref); got.ID != seed.prod.ID {
 		t.Fatalf("restored stack = %s, want %s", got.ID, seed.prod.ID)
 	}
+}
 
-	if _, err := ps.StagePortable(ctx, sink.read, sum, files); err != nil {
-		t.Fatalf("stage backup again: %v", err)
-	}
+// checkReplacedAccess proves the replacing restore brought the token and the
+// grant back from the backup.
+func checkReplacedAccess(t *testing.T, tokens accesstoken.Store, grants access.Store) {
+	t.Helper()
 
-	if err := s.ApplyStaging(ctx); err != nil {
-		t.Fatalf("apply replacing the access tables: %v", err)
-	}
+	ctx := t.Context()
 
 	replaced, err := tokens.GetToken(ctx, "tok-used")
 	if err != nil {

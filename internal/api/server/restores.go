@@ -127,10 +127,15 @@ func (h *Handler) startRestore(
 		return
 	}
 
+	accessMode := "replaced"
+	if keepAccess {
+		accessMode = "kept"
+	}
+
 	h.appendServerChange(r, p, serverChange{
 		at:      time.Now().UTC(),
 		action:  identity.ActionServerRestore,
-		object:  restoreAuditObject(id.String(), req.BackupID, keepAccess),
+		object:  restoreAuditObject(id.String(), req.BackupID, accessMode),
 		outcome: audit.OutcomeSuccess,
 	})
 
@@ -157,13 +162,8 @@ func canReplaceAccess(
 
 // restoreAuditObject names one restore for its audit entry, with whether the
 // access tables were replaced or kept.
-func restoreAuditObject(restoreID, backupID string, keepAccess bool) string {
-	mode := "replaced"
-	if keepAccess {
-		mode = "kept"
-	}
-
-	return "restore " + restoreID + " of backup " + backupID + " (access tables " + mode + ")"
+func restoreAuditObject(restoreID, backupID, accessMode string) string {
+	return "restore " + restoreID + " of backup " + backupID + " (access tables " + accessMode + ")"
 }
 
 // parseStartRestoreRequest decodes the start body: the whole body must be one

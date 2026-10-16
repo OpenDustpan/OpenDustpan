@@ -1,17 +1,32 @@
 package backup
 
-import "errors"
+import (
+	"errors"
+	"slices"
+)
+
+// Access table names. A restore replaces these tables only when the caller
+// holds server:restore-access. The constants give every list one source:
+// AccessTables, Tables and the portable spec share them.
+const (
+	TablePrincipals      = "principals"
+	TablePrincipalGroups = "principal_groups"
+	TableGroupMembers    = "group_members"
+	TableAccessTokens    = "access_tokens"
+	TableRoles           = "roles"
+	TableGrants          = "grants"
+)
 
 // AccessTables lists the tables that a restore replaces only when the
 // caller holds server:restore-access. A restore by any other caller keeps
 // the current rows of these tables and replaces the other tables.
 var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, like Tables.
-	"principals",
-	"principal_groups",
-	"group_members",
-	"access_tokens",
-	"roles",
-	"grants",
+	TablePrincipals,
+	TablePrincipalGroups,
+	TableGroupMembers,
+	TableAccessTokens,
+	TableRoles,
+	TableGrants,
 }
 
 // ErrRestoreAccessMismatch reports that the backup names a principal,
@@ -24,11 +39,5 @@ var ErrRestoreAccessMismatch = errors.New(
 
 // IsAccessTable reports whether table is one of AccessTables.
 func IsAccessTable(table string) bool {
-	for _, name := range AccessTables {
-		if name == table {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(AccessTables, table)
 }

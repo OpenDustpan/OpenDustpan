@@ -92,20 +92,19 @@ func keepAccessTables(ctx context.Context, tx pgx.Tx, live, staging string) erro
 		return err
 	}
 
-	for _, table := range []string{"group_members", "access_tokens", "grants", "roles"} {
-		if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(staging)+"."+pgIdent(table)); err != nil {
+	for _, table := range keepChildTables() {
+		clearQuery := "DELETE FROM " + pgIdent(staging) + "." + pgIdent(table)
+		if _, err := tx.Exec(ctx, clearQuery); err != nil {
 			return fmt.Errorf("clear staged access table %q: %w", table, backup.ErrExportRead)
 		}
 	}
 
-	if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(staging)+"."+pgIdent("principal_groups")); err != nil {
-		return fmt.Errorf("clear staged access table %q: %w", "principal_groups", backup.ErrExportRead)
+	clearGroups := "DELETE FROM " + pgIdent(staging) + "." + pgIdent(backup.TablePrincipalGroups)
+	if _, err := tx.Exec(ctx, clearGroups); err != nil {
+		return fmt.Errorf("clear staged access table %q: %w", backup.TablePrincipalGroups, backup.ErrExportRead)
 	}
 
-	if _, err := tx.Exec(ctx,
-		"INSERT INTO "+pgIdent(staging)+"."+pgIdent("principal_groups")+
-			" SELECT * FROM "+pgIdent(live)+"."+pgIdent("principal_groups"),
-	); err != nil {
+	if err := copyAccessTable(ctx, tx, live, staging, backup.TablePrincipalGroups); err != nil {
 		return keepAccessError("keep staged groups", err)
 	}
 
@@ -113,13 +112,46 @@ func keepAccessTables(ctx context.Context, tx pgx.Tx, live, staging string) erro
 		return err
 	}
 
-	for _, table := range []string{"group_members", "access_tokens", "grants", "roles"} {
-		if _, err := tx.Exec(ctx,
-			"INSERT INTO "+pgIdent(staging)+"."+pgIdent(table)+
-				" SELECT * FROM "+pgIdent(live)+"."+pgIdent(table),
-		); err != nil {
+	for _, table := range keepChildTables() {
+		if err := copyAccessTable(ctx, tx, live, staging, table); err != nil {
 			return keepAccessError("keep staged access table "+table, err)
 		}
+	}
+
+	return nil
+}
+
+// keepChildTables lists the access tables that a keep copies wholesale,
+// after principals. Principal groups go first so group members keep their
+// parent, and principals merge by ID in mergePrincipals.
+func keepChildTables() []string {
+	return []string{backup.TableGroupMembers, backup.TableAccessTokens, backup.TableGrants, backup.TableRoles}
+}
+
+// copyAccessTable copies every row of table from the live schema into the
+// staged schema, naming every column so no query selects star.
+func copyAccessTable(ctx context.Context, tx pgx.Tx, live, staging, table string) error {
+	columns, err := tableColumns(ctx, tx, live, table)
+	if err != nil {
+		return err
+	}
+
+	quoted := make([]string, 0, len(columns))
+	for _, column := range columns {
+		quoted = append(quoted, pgIdent(column))
+	}
+
+	from := make([]string, 0, len(columns))
+	for _, column := range columns {
+		from = append(from, pgIdent(live)+"."+pgIdent(column))
+	}
+
+	query := "INSERT INTO " + pgIdent(staging) + "." + pgIdent(table) +
+		" (" + strings.Join(quoted, ", ") + ")" +
+		" SELECT " + strings.Join(from, ", ") +
+		" FROM " + pgIdent(live) + "." + pgIdent(table)
+	if _, err := tx.Exec(ctx, query); err != nil {
+		return keepAccessError("copy access table "+table, err)
 	}
 
 	return nil
@@ -144,7 +176,7 @@ func checkSessionsHavePrincipals(ctx context.Context, tx pgx.Tx, live, staging s
 		)
 	}
 
-	if err != nil && !isNoRows(err) {
+	if !isNoRows(err) {
 		return fmt.Errorf("check staged sessions: %w", backup.ErrExportRead)
 	}
 
@@ -156,7 +188,7 @@ func checkSessionsHavePrincipals(ctx context.Context, tx pgx.Tx, live, staging s
 // already gone and the sessions name only live principals, so every delete
 // keeps the foreign keys.
 func mergePrincipals(ctx context.Context, tx pgx.Tx, live, staging string) error {
-	columns, err := tableColumns(ctx, tx, live, "principals")
+	columns, err := tableColumns(ctx, tx, live, backup.TablePrincipals)
 	if err != nil {
 		return err
 	}
@@ -166,12 +198,12 @@ func mergePrincipals(ctx context.Context, tx pgx.Tx, live, staging string) error
 		quoted = append(quoted, pgIdent(column))
 	}
 
-	if _, err := tx.Exec(ctx,
-		"INSERT INTO "+pgIdent(staging)+".principals ("+strings.Join(quoted, ", ")+")"+
-			" SELECT "+strings.Join(qualifiedColumns(live, columns), ", ")+
-			" FROM "+pgIdent(live)+".principals"+
-			" WHERE id NOT IN (SELECT id FROM "+pgIdent(staging)+".principals)",
-	); err != nil {
+	insertQuery := "INSERT INTO " + pgIdent(staging) + "." + pgIdent(backup.TablePrincipals) +
+		" (" + strings.Join(quoted, ", ") + ")" +
+		" SELECT " + strings.Join(qualifiedColumns(live, columns), ", ") +
+		" FROM " + pgIdent(live) + "." + pgIdent(backup.TablePrincipals) +
+		" WHERE id NOT IN (SELECT id FROM " + pgIdent(staging) + "." + pgIdent(backup.TablePrincipals) + ")"
+	if _, err := tx.Exec(ctx, insertQuery); err != nil {
 		return keepAccessError("keep staged principals", err)
 	}
 
@@ -179,10 +211,9 @@ func mergePrincipals(ctx context.Context, tx pgx.Tx, live, staging string) error
 		return err
 	}
 
-	if _, err := tx.Exec(ctx,
-		"DELETE FROM "+pgIdent(staging)+".principals"+
-			" WHERE id NOT IN (SELECT id FROM "+pgIdent(live)+".principals)",
-	); err != nil {
+	deleteQuery := "DELETE FROM " + pgIdent(staging) + "." + pgIdent(backup.TablePrincipals) +
+		" WHERE id NOT IN (SELECT id FROM " + pgIdent(live) + "." + pgIdent(backup.TablePrincipals) + ")"
+	if _, err := tx.Exec(ctx, deleteQuery); err != nil {
 		return keepAccessError("clear extra staged principals", err)
 	}
 
@@ -201,17 +232,17 @@ func updateExistingPrincipals(
 			continue
 		}
 
-		sets = append(sets, pgIdent(column)+" = "+pgIdent("live")+ "."+pgIdent(column))
+		sets = append(sets, pgIdent(column)+" = "+pgIdent("live")+"."+pgIdent(column))
 	}
 
 	if len(sets) == 0 {
 		return nil
 	}
 
-	if _, err := tx.Exec(ctx,
-		"UPDATE "+pgIdent(staging)+".principals AS staged SET "+strings.Join(sets, ", ")+
-			" FROM "+pgIdent(live)+".principals AS live WHERE staged.id = live.id",
-	); err != nil {
+	updateQuery := "UPDATE " + pgIdent(staging) + "." + pgIdent(backup.TablePrincipals) +
+		" AS staged SET " + strings.Join(sets, ", ") +
+		" FROM " + pgIdent(live) + "." + pgIdent(backup.TablePrincipals) + " AS live WHERE staged.id = live.id"
+	if _, err := tx.Exec(ctx, updateQuery); err != nil {
 		return keepAccessError("keep staged principals", err)
 	}
 
@@ -270,7 +301,7 @@ func qualifiedColumns(schema string, columns []string) []string {
 // of driver text. Any other failure keeps its cause.
 func keepAccessError(op string, err error) error {
 	if err == nil {
-		return nil //nolint:nilnil // No failure needs no error.
+		return nil
 	}
 
 	if isForeignKeyError(err) {

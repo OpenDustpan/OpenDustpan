@@ -61,7 +61,7 @@ func (s *Store) keepLiveAccessTables(ctx context.Context, path string) error {
 		return err
 	}
 
-	if err := checkStagedSessions(path, live.principalIDs()); err != nil {
+	if err := checkStagedSessions(ctx, path, live.principalIDs()); err != nil {
 		return err
 	}
 
@@ -130,28 +130,9 @@ func (s *Store) readLiveAccessTables(
 	out := accessRows{columns: map[string][]string{}, rows: map[string][][]any{}}
 
 	for _, spec := range specs {
-		columns := make([]string, 0, len(spec.Columns))
-		for _, column := range spec.Columns {
-			columns = append(columns, `"`+sqliteColumnName(spec.Table, column.Name)+`"`)
-		}
-
-		query := "SELECT " + strings.Join(columns, ", ") + // #nosec G202 // Constant names from the portable spec.
-			` FROM "` + spec.Table + `"`
-
-		rows, err := s.conn.QueryContext(ctx, query)
+		columns, values, err := s.readOneAccessTable(ctx, spec)
 		if err != nil {
-			return accessRows{}, fmt.Errorf("read live access table %q: %w", spec.Table, backup.ErrExportRead)
-		}
-
-		values, scanErr := scanAllRows(rows, spec.Table)
-		closeErr := rows.Close()
-
-		if scanErr != nil {
-			return accessRows{}, scanErr
-		}
-
-		if closeErr != nil {
-			return accessRows{}, fmt.Errorf("read live access table %q: %w", spec.Table, backup.ErrExportRead)
+			return accessRows{}, err
 		}
 
 		out.columns[spec.Table] = columns
@@ -159,6 +140,35 @@ func (s *Store) readLiveAccessTables(
 	}
 
 	return out, nil
+}
+
+// readOneAccessTable reads one access table from the live database.
+func (s *Store) readOneAccessTable(
+	ctx context.Context, spec backup.PortableTable,
+) ([]string, [][]any, error) {
+	columns := make([]string, 0, len(spec.Columns))
+	for _, column := range spec.Columns {
+		columns = append(columns, `"`+sqliteColumnName(spec.Table, column.Name)+`"`)
+	}
+
+	query := "SELECT " + strings.Join(columns, ", ") + // #nosec G202 // Constant names from the portable spec.
+		` FROM "` + spec.Table + `"`
+
+	rows, err := s.conn.QueryContext(ctx, query)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read live access table %q: %w", spec.Table, backup.ErrExportRead)
+	}
+
+	defer func() {
+		_ = rows.Close() //nolint:errcheck // Rows read fully; close is best effort.
+	}()
+
+	values, scanErr := scanAllRows(rows, spec.Table)
+	if scanErr != nil {
+		return nil, nil, scanErr
+	}
+
+	return columns, values, nil
 }
 
 // scanAllRows scans every row of rows into storage values.
@@ -194,8 +204,8 @@ func scanAllRows(rows *sql.Rows, table string) ([][]any, error) {
 
 // checkStagedSessions reports ErrRestoreAccessMismatch when the staged backup
 // holds a session of a principal the live access tables do not hold.
-func checkStagedSessions(path string, livePrincipals map[string]bool) error {
-	conn, err := openStagedAccess(path)
+func checkStagedSessions(ctx context.Context, path string, livePrincipals map[string]bool) error {
+	conn, err := openStagedAccess(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -204,7 +214,7 @@ func checkStagedSessions(path string, livePrincipals map[string]bool) error {
 		_ = conn.Close() //nolint:errcheck // Read-only check handle.
 	}()
 
-	rows, err := conn.Query(`SELECT DISTINCT principal_id FROM sessions`)
+	rows, err := conn.QueryContext(ctx, `SELECT DISTINCT principal_id FROM sessions`)
 	if err != nil {
 		return fmt.Errorf("check staged sessions: %w", backup.ErrExportRead)
 	}
@@ -248,7 +258,7 @@ func overwriteStagedAccessTables(
 		return fmt.Errorf("keep access tables: %w", err)
 	}
 
-	conn, err := openStagedAccess(path)
+	conn, err := openStagedAccess(ctx, path)
 	if err != nil {
 		return err
 	}
@@ -270,8 +280,15 @@ func overwriteStagedAccessTables(
 		}
 	}()
 
-	for _, table := range []string{"group_members", "access_tokens", "grants", "roles", "principal_groups"} {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM "`+table+`"`); err != nil {
+	for _, table := range []string{
+		backup.TableGroupMembers,
+		backup.TableAccessTokens,
+		backup.TableGrants,
+		backup.TableRoles,
+		backup.TablePrincipalGroups,
+	} {
+		clearQuery := `DELETE FROM "` + table + `"` // #nosec G202 // Table names are the fixed access tables.
+		if _, err := tx.ExecContext(ctx, clearQuery); err != nil {
 			return fmt.Errorf("clear staged access table %q: %w", table, backup.ErrExportRead)
 		}
 	}
@@ -281,7 +298,7 @@ func overwriteStagedAccessTables(
 	}
 
 	for _, spec := range specs {
-		if spec.Table == "principals" {
+		if spec.Table == backup.TablePrincipals {
 			continue
 		}
 
@@ -304,57 +321,104 @@ func overwriteStagedAccessTables(
 // already gone and the sessions name only live principals, so every delete
 // keeps the foreign keys.
 func mergeStagedPrincipals(ctx context.Context, tx *sql.Tx, live accessRows) error {
-	columns := live.columns["principals"]
+	columns := live.columns[backup.TablePrincipals]
 	byID := columnIndex(columns, `"id"`)
 
 	if byID < 0 {
 		return fmt.Errorf("keep staged principals: %w", backup.ErrExportRead)
 	}
 
-	stagedIDs, err := stagedIDs(ctx, tx, "principals")
+	staged, err := stagedIDs(ctx, tx, backup.TablePrincipals)
 	if err != nil {
 		return err
 	}
 
-	for _, row := range live.rows["principals"] {
-		id, _ := row[byID].(string)
+	keep := principalKeep{columns: columns, byID: byID, staged: staged}
+	if err := upsertLivePrincipals(ctx, tx, live, keep); err != nil {
+		return err
+	}
 
-		if stagedIDs[id] {
-			if err := updateStagedRow(ctx, tx, "principals", columns, byID, row); err != nil {
+	return deleteExtraPrincipals(ctx, tx, live, byID, staged)
+}
+
+// principalKeep holds the columns and IDs for a principal merge: the live
+// columns, the ID column, and the staged IDs.
+type principalKeep struct {
+	columns []string
+	byID    int
+	staged  map[string]bool
+}
+
+// upsertLivePrincipals adds the live principals the staged file misses and
+// updates the ones both hold.
+func upsertLivePrincipals(ctx context.Context, tx *sql.Tx, live accessRows, keep principalKeep) error {
+	for _, row := range live.rows[backup.TablePrincipals] {
+		id, ok := row[keep.byID].(string)
+		if !ok {
+			return fmt.Errorf("keep staged principals: %w", backup.ErrExportRead)
+		}
+
+		if !keep.staged[id] {
+			if err := insertStagedRows(ctx, tx, backup.TablePrincipals, keep.columns, [][]any{row}); err != nil {
 				return err
 			}
 
 			continue
 		}
 
-		if err := insertStagedRows(ctx, tx, "principals", columns, [][]any{row}); err != nil {
+		update := stagedRowUpdate{
+			table:   backup.TablePrincipals,
+			columns: keep.columns,
+			idIndex: keep.byID,
+			row:     row,
+		}
+		if err := updateStagedRow(ctx, tx, update); err != nil {
 			return err
-		}
-	}
-
-	for id := range stagedIDs {
-		found := false
-
-		for _, row := range live.rows["principals"] {
-			if current, _ := row[byID].(string); current == id {
-				found = true
-
-				break
-			}
-		}
-		if !found {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM "principals" WHERE "id" = ?`, id); err != nil {
-				return fmt.Errorf("clear extra staged principal: %w", backup.ErrExportRead)
-			}
 		}
 	}
 
 	return nil
 }
 
+// deleteExtraPrincipals deletes the staged principals the live access tables
+// do not hold.
+func deleteExtraPrincipals(
+	ctx context.Context, tx *sql.Tx, live accessRows, byID int, staged map[string]bool,
+) error {
+	liveIDs := livePrincipalIDs(live, byID)
+
+	for id := range staged {
+		if liveIDs[id] {
+			continue
+		}
+
+		deleteQuery := `DELETE FROM "` + backup.TablePrincipals +
+			`" WHERE "id" = ?` // #nosec G202 // Table name is the fixed principals table.
+		if _, err := tx.ExecContext(ctx, deleteQuery, id); err != nil {
+			return fmt.Errorf("clear extra staged principal: %w", backup.ErrExportRead)
+		}
+	}
+
+	return nil
+}
+
+// livePrincipalIDs returns the IDs of the live principals.
+func livePrincipalIDs(live accessRows, byID int) map[string]bool {
+	out := map[string]bool{}
+
+	for _, row := range live.rows[backup.TablePrincipals] {
+		if id, ok := row[byID].(string); ok {
+			out[id] = true
+		}
+	}
+
+	return out
+}
+
 // stagedIDs returns the IDs of the staged table.
 func stagedIDs(ctx context.Context, tx *sql.Tx, table string) (map[string]bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT "id" FROM "`+table+`"`)
+	selectQuery := `SELECT "id" FROM "` + table + `"` // #nosec G202 // Table name is a fixed access table.
+	rows, err := tx.QueryContext(ctx, selectQuery)
 	if err != nil {
 		return nil, fmt.Errorf("read staged access table %q: %w", table, backup.ErrExportRead)
 	}
@@ -382,28 +446,35 @@ func stagedIDs(ctx context.Context, tx *sql.Tx, table string) (map[string]bool, 
 	return out, nil
 }
 
-// updateStagedRow writes one live row over the staged row with the same ID.
-func updateStagedRow(
-	ctx context.Context, tx *sql.Tx, table string, columns []string, idIndex int, row []any,
-) error {
-	sets := make([]string, 0, len(columns)-1)
-	args := make([]any, 0, len(columns))
+// stagedRowUpdate holds one live row to write over the staged row with the
+// same ID. The struct keeps updateStagedRow to five arguments or fewer.
+type stagedRowUpdate struct {
+	table   string
+	columns []string
+	idIndex int
+	row     []any
+}
 
-	for i, name := range columns {
-		if i == idIndex {
+// updateStagedRow writes one live row over the staged row with the same ID.
+func updateStagedRow(ctx context.Context, tx *sql.Tx, update stagedRowUpdate) error {
+	sets := make([]string, 0, len(update.columns)-1)
+	args := make([]any, 0, len(update.columns))
+
+	for i, name := range update.columns {
+		if i == update.idIndex {
 			continue
 		}
 
 		sets = append(sets, name+` = ?`)
-		args = append(args, row[i])
+		args = append(args, update.row[i])
 	}
 
-	args = append(args, row[idIndex])
+	args = append(args, update.row[update.idIndex])
 
-	if _, err := tx.ExecContext(
-		ctx, `UPDATE "`+table+`" SET `+strings.Join(sets, ", ")+` WHERE "id" = ?`, args...,
-	); err != nil {
-		return fmt.Errorf("keep staged access table %q: %w", table, backup.ErrExportRead)
+	updateQuery := `UPDATE "` + update.table + `" SET ` + strings.Join(sets, ", ") +
+		` WHERE "id" = ?` // #nosec G202 // Table name is a fixed access table.
+	if _, err := tx.ExecContext(ctx, updateQuery, args...); err != nil {
+		return fmt.Errorf("keep staged access table %q: %w", update.table, backup.ErrExportRead)
 	}
 
 	return nil
@@ -414,10 +485,7 @@ func insertStagedRows(
 	ctx context.Context, tx *sql.Tx, table string, columns []string, rows [][]any,
 ) error {
 	for start := 0; start < len(rows); start += portableBatchRows {
-		end := start + portableBatchRows
-		if end > len(rows) {
-			end = len(rows)
-		}
+		end := min(start+portableBatchRows, len(rows))
 
 		batch := rows[start:end]
 
@@ -434,10 +502,9 @@ func insertStagedRows(
 			args = append(args, row...)
 		}
 
-		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO "`+table+`" (`+strings.Join(columns, ", ")+`) VALUES `+strings.Join(groups, ", "),
-			args...,
-		); err != nil {
+		insertQuery := `INSERT INTO "` + table + `" (` + strings.Join(columns, ", ") + `) VALUES ` +
+			strings.Join(groups, ", ") // #nosec G202 // Table and column names come from the portable spec.
+		if _, err := tx.ExecContext(ctx, insertQuery, args...); err != nil {
 			return fmt.Errorf("keep staged access table %q: %w", table, backup.ErrExportRead)
 		}
 	}
@@ -457,7 +524,7 @@ func columnIndex(columns []string, name string) int {
 }
 
 // openStagedAccess opens the staged file read-write with foreign keys on.
-func openStagedAccess(path string) (*sql.DB, error) {
+func openStagedAccess(ctx context.Context, path string) (*sql.DB, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return nil, fmt.Errorf("open staged access tables: %w", backup.ErrExportRead)
@@ -475,7 +542,7 @@ func openStagedAccess(path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("open staged access tables: %w", backup.ErrExportRead)
 	}
 
-	if err := conn.Ping(); err != nil {
+	if err := conn.PingContext(ctx); err != nil {
 		_ = conn.Close() //nolint:errcheck // Best-effort close after a failed open.
 
 		return nil, fmt.Errorf("open staged access tables: %w", backup.ErrExportRead)
@@ -488,7 +555,7 @@ func openStagedAccess(path string) (*sql.DB, error) {
 // after the access tables were kept: any row reports
 // ErrRestoreAccessMismatch, so the apply changes nothing.
 func checkStagedForeignKeys(ctx context.Context, path string) error {
-	conn, err := openStagedAccess(path)
+	conn, err := openStagedAccess(ctx, path)
 	if err != nil {
 		return err
 	}

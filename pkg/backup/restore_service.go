@@ -48,11 +48,11 @@ type RestoreMaintenance interface {
 // hold server:restore-access: the restore replaces the other data and keeps
 // the current rows of the access tables.
 type RestoreRequest struct {
-	BackupID    ID
-	PreBackupID ID
-	CheckOnly   bool
-	Force       bool
-	RequestedBy string
+	BackupID         ID
+	PreBackupID      ID
+	CheckOnly        bool
+	Force            bool
+	RequestedBy      string
 	KeepAccessTables bool
 }
 
@@ -837,16 +837,8 @@ func (s *RestoreService) applyPinned(
 	// and Get serves the held row until recreateAfterSwap stores it again.
 	s.trackRestore(before)
 
-	if req.KeepAccessTables {
-		if keeper, ok := s.live.(AccessKeepingApplier); ok {
-			if applyErr := keeper.ApplyStagingKeepingAccess(ctx); applyErr != nil {
-				return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
-			}
-		} else {
-			return fmt.Errorf("apply staged data for restore %s: %w", id, ErrMissingDependency)
-		}
-	} else if applyErr := s.live.ApplyStaging(ctx); applyErr != nil {
-		return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
+	if err := s.applyStaged(ctx, id, req); err != nil {
+		return err
 	}
 
 	// The swapped-in snapshot predates this restore, so it may hold running
@@ -888,6 +880,30 @@ func (s *RestoreService) applyPinned(
 // finish. The text holds only the superseding restore ID.
 func restoreSupersededText(id RestoreID) string {
 	return fmt.Sprintf("restore superseded by restore %s", id)
+}
+
+// applyStaged swaps the staged backup live. When req keeps the access
+// tables, the swap keeps the current rows of the access tables and replaces
+// the other tables.
+func (s *RestoreService) applyStaged(ctx context.Context, id RestoreID, req RestoreRequest) error {
+	if !req.KeepAccessTables {
+		if applyErr := s.live.ApplyStaging(ctx); applyErr != nil {
+			return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
+		}
+
+		return nil
+	}
+
+	keeper, ok := s.live.(AccessKeepingApplier)
+	if !ok {
+		return fmt.Errorf("apply staged data for restore %s: %w", id, ErrMissingDependency)
+	}
+
+	if applyErr := keeper.ApplyStagingKeepingAccess(ctx); applyErr != nil {
+		return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
+	}
+
+	return nil
 }
 
 // pinnedManifest pins the manifest fields the second stage must still match,

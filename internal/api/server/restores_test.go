@@ -799,96 +799,111 @@ func TestStartRestoreWritesAccessModeAuditEntry(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			stores := openBackupDeps(t)
-
-			backups, err := backup.NewService(backup.Config{
-				Exporter:    stores.registry,
-				Registry:    stores.registry,
-				Blobs:       stores.live,
-				StateOpener: nil,
-				Target:      stores.target,
-				TargetName:  "dir:test",
-				Now:         nil,
-				Version:     "test",
-				MaxSQLBytes: 0,
-			})
-			if err != nil {
-				t.Fatalf("new backup service: %v", err)
-			}
-
-			restores, err := backup.NewRestoreService(backup.RestoreConfig{
-				Live:        stores.registry,
-				Registry:    stores.registry,
-				Backups:     backups,
-				Maintenance: newFakeMaintenance(maintenance.StateNormal),
-				Blobs:       stores.live,
-				Target:      stores.target,
-				Key:         nil,
-				Region:      "test",
-				AfterApply:  nil,
-				Now:         nil,
-				Logger:      nil,
-			})
-			if err != nil {
-				t.Fatalf("new restore service: %v", err)
-			}
-
-			namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
-			if err != nil {
-				t.Fatalf("namespace service: %v", err)
-			}
-
-			handler, err := apiserver.NewHandler(apiserver.Config{
-				Authenticator:  tokenAuthenticator{},
-				Authorizer:     selectiveAuthorizer{deny: tc.deny},
-				Logger:         slog.New(slog.DiscardHandler),
-				Namespaces:     namespaces,
-				Backups:        backups,
-				Restores:       restores,
-				Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-				Metrics:        stubMetrics{},
-				Version:        "test",
-				Schema:         stubSchema{migrations: nil},
-				Journal:        nil,
-				Principals:     nil,
-				Access:         nil,
-				Tokens:         nil,
-				Audit:          stores.registry,
-				OnAuditFailure: nil,
-				DeletedUnits:   nil,
-				AuditSinks:     nil,
-				IPAllowlists:   nil,
-				SessionPolicy:  nil,
-			})
-			if err != nil {
-				t.Fatalf("handler: %v", err)
-			}
-
-			doc := startRestore(t, handler, `{"backupID":"bkp-missing000000000001"}`)
-
-			listing, err := stores.registry.List(
-				t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
-			)
-			if err != nil {
-				t.Fatalf("list entries: %v", err)
-			}
-
-			for i := range listing.Entries {
-				entry := listing.Entries[i]
-				if entry.Action != string(identity.ActionServerRestore) {
-					continue
-				}
-
-				if !strings.Contains(entry.Object, doc.ID) || !strings.Contains(entry.Object, tc.want) {
-					t.Fatalf("restore audit object = %q, want restore %s with %q",
-						entry.Object, doc.ID, tc.want)
-				}
-
-				return
-			}
-
-			t.Fatalf("no audit entry names restore %s with %q", doc.ID, tc.want)
+			checkAccessModeAuditEntry(t, tc.deny, tc.want)
 		})
 	}
+}
+
+// checkAccessModeAuditEntry starts a restore with deny controlling
+// server:restore-access and proves the restore audit entry names want.
+func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want string) {
+	t.Helper()
+
+	stores := openBackupDeps(t)
+
+	backups, err := backup.NewService(backup.Config{
+		Exporter:    stores.registry,
+		Registry:    stores.registry,
+		Blobs:       stores.live,
+		StateOpener: nil,
+		Target:      stores.target,
+		TargetName:  "dir:test",
+		Now:         nil,
+		Version:     "test",
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("new backup service: %v", err)
+	}
+
+	restores, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        stores.registry,
+		Registry:    stores.registry,
+		Backups:     backups,
+		Maintenance: newFakeMaintenance(maintenance.StateNormal),
+		Blobs:       stores.live,
+		Target:      stores.target,
+		Key:         nil,
+		Region:      "test",
+		AfterApply:  nil,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service: %v", err)
+	}
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Authenticator:  tokenAuthenticator{},
+		Authorizer:     selectiveAuthorizer{deny: deny},
+		Logger:         slog.New(slog.DiscardHandler),
+		Namespaces:     namespaces,
+		Backups:        backups,
+		Restores:       restores,
+		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
+		Metrics:        stubMetrics{},
+		Version:        "test",
+		Schema:         stubSchema{migrations: nil},
+		Journal:        nil,
+		Principals:     nil,
+		Access:         nil,
+		Tokens:         nil,
+		Audit:          stores.registry,
+		OnAuditFailure: nil,
+		DeletedUnits:   nil,
+		AuditSinks:     nil,
+		IPAllowlists:   nil,
+		SessionPolicy:  nil,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	doc := startRestore(t, handler, `{"backupID":"bkp-missing000000000001"}`)
+
+	checkAuditEntryNamesAccessMode(t, stores, doc.ID, want)
+}
+
+// checkAuditEntryNamesAccessMode proves the restore audit entry for id names
+// want.
+func checkAuditEntryNamesAccessMode(t *testing.T, stores backupStores, id, want string) {
+	t.Helper()
+
+	listing, err := stores.registry.List(
+		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+	)
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	for i := range listing.Entries {
+		entry := listing.Entries[i]
+		if entry.Action != string(identity.ActionServerRestore) {
+			continue
+		}
+
+		if !strings.Contains(entry.Object, id) || !strings.Contains(entry.Object, want) {
+			t.Fatalf("restore audit object = %q, want restore %s with %q",
+				entry.Object, id, want)
+		}
+
+		return
+	}
+
+	t.Fatalf("no audit entry names restore %s with %q", id, want)
 }

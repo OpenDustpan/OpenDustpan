@@ -308,7 +308,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "principals",
+			Table:   TablePrincipals,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -326,7 +326,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "principal_groups",
+			Table:   TablePrincipalGroups,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -340,7 +340,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "group_members",
+			Table:   TableGroupMembers,
 			OrderBy: []string{"group_id", portColPrincipalID, "added_at_ms"},
 			Columns: []Column{
 				{Name: "group_id", Kind: KindText},
@@ -350,7 +350,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "access_tokens",
+			Table:   TableAccessTokens,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -398,7 +398,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "roles",
+			Table:   TableRoles,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -412,7 +412,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "grants",
+			Table:   TableGrants,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},

@@ -288,7 +288,7 @@ func pgCopySessionTables() []pgCopyTable {
 func pgCopyIdentityTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
-			table: "principals",
+			table: backup.TablePrincipals,
 			columns: []string{
 				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
@@ -296,7 +296,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table: "principal_groups",
+			table: backup.TablePrincipalGroups,
 			columns: []string{
 				"id", pgColName, "name_key", "description", pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs,
@@ -304,12 +304,12 @@ func pgCopyIdentityTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table:   "group_members",
+			table:   backup.TableGroupMembers,
 			columns: []string{"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms"},
 			orderBy: []string{"group_id", pgColPrincipalID, "added_at_ms"},
 		},
 		{
-			table: "access_tokens",
+			table: backup.TableAccessTokens,
 			columns: []string{
 				"id",
 				pgColPrincipalID,
@@ -327,7 +327,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table: "roles",
+			table: backup.TableRoles,
 			columns: []string{
 				"id", pgColName, "name_key", "description", "actions", pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs,
@@ -335,7 +335,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table: "grants",
+			table: backup.TableGrants,
 			columns: []string{
 				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "target", "object_kind",
 				pgColNamespace, "condition", pgColCreatedAtMs, pgColCreatedBy, "revoked_at_ms", "revoked_by",
