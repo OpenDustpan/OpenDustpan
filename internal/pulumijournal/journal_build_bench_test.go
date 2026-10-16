@@ -210,6 +210,54 @@ func BenchmarkJournalBuildChange10000(b *testing.B) {
 	}
 }
 
+// smallestState returns the smallest realistic resource state: a short but
+// well-formed URN with custom and type. It is 60 bytes and replays cleanly.
+func smallestState() string {
+	return `{"urn":"urn:pulumi:v::p::t:t::r","custom":true,"type":"t:t"}`
+}
+
+// benchSmallestCreateEntries returns a batch body that creates n smallest
+// realistic states: a begin and a success entry for each one.
+func benchSmallestCreateEntries(n int) []byte {
+	var b strings.Builder
+	b.WriteString(`{"entries":[`)
+	for i := range n {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		seq := int64(2*i + 1)
+		op := int64(i + 1)
+		fmt.Fprintf(
+			&b,
+			`{"version":1,"kind":0,"sequenceID":%d,"operationID":%d,"removeOld":null,"removeNew":null},`,
+			seq,
+			op,
+		)
+		fmt.Fprintf(
+			&b,
+			`{"version":1,"kind":1,"sequenceID":%d,"operationID":%d,"removeOld":null,"removeNew":null,"state":%s}`,
+			seq+1,
+			op,
+			smallestState(),
+		)
+	}
+	b.WriteString(`]}`)
+	return []byte(b.String())
+}
+
+// BenchmarkJournalBuildSmallestState builds a create of 10,000 smallest
+// realistic states and reports its peak heap. In one run it reports 60
+// smallest-state bytes: the size each count bound derives from.
+func BenchmarkJournalBuildSmallestState(b *testing.B) {
+	entries := benchSmallestCreateEntries(10000)
+	b.SetBytes(int64(len(entries)))
+	b.ResetTimer()
+	b.ReportMetric(float64(len(smallestState())), "smallest-state-bytes")
+	for b.Loop() {
+		benchBuild(b, `{"resources":[]}`, entries)
+	}
+}
+
 // BenchmarkJournalBuildChange10in10000 builds a change of 10 resources on a
 // base of 10,000 resources and reports its peak heap. In one run it reports
 // 13895952 peak-heap bytes against 25826176 for the full change of 10,000

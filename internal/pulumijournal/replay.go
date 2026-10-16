@@ -241,25 +241,25 @@ func (s *replayState) lookup(op int64, name, field string) (int64, error) {
 
 // countEntry counts one entry toward the per-update bounds before it is
 // applied. It refuses an update with more entries or more new state bytes
-// than the bounds allow.
+// than the bounds allow, with a BoundError that names the count and the limit.
 func (s *replayState) countEntry(entry JournalEntry) error {
 	s.entryCount++
 	if s.entryCount > int64(MaxEntriesPerUpdate) {
-		return fmt.Errorf(
-			"%d entries, limit %d: %w",
-			s.entryCount,
-			MaxEntriesPerUpdate,
-			ErrTooManyEntries,
-		)
+		return &BoundError{
+			Bound: "journal entries",
+			Count: s.entryCount,
+			Limit: int64(MaxEntriesPerUpdate),
+			Cause: ErrTooManyEntries,
+		}
 	}
 	s.newStateBytes += int64(EntryStateBytes(entry))
 	if s.newStateBytes > int64(MaxNewStateBytesPerUpdate) {
-		return fmt.Errorf(
-			"%d new state bytes, limit %d: %w",
-			s.newStateBytes,
-			MaxNewStateBytesPerUpdate,
-			ErrNewStateTooLarge,
-		)
+		return &BoundError{
+			Bound: "new state bytes",
+			Count: s.newStateBytes,
+			Limit: int64(MaxNewStateBytesPerUpdate),
+			Cause: ErrNewStateTooLarge,
+		}
 	}
 	return nil
 }
@@ -287,21 +287,21 @@ func EntryStateBytes(entry JournalEntry) int {
 // which the build streams one at a time.
 func (s *replayState) checkIndex(scan *baseScan) error {
 	if int64(scan.added) > int64(MaxLinkIndexEntriesPerUpdate) {
-		return fmt.Errorf(
-			"%d added links, limit %d: %w",
-			scan.added,
-			MaxLinkIndexEntriesPerUpdate,
-			ErrLinkIndexTooLarge,
-		)
+		return &BoundError{
+			Bound: "added links",
+			Count: int64(scan.added),
+			Limit: int64(MaxLinkIndexEntriesPerUpdate),
+			Cause: ErrLinkIndexTooLarge,
+		}
 	}
 	counted := s.newStateBytes + scan.addedLinkBytes
 	if counted > int64(MaxNewStatePlusLinkBytesPerUpdate) {
-		return fmt.Errorf(
-			"%d new-state plus added-link bytes, limit %d: %w",
-			counted,
-			MaxNewStatePlusLinkBytesPerUpdate,
-			ErrAddedBytesTooLarge,
-		)
+		return &BoundError{
+			Bound: "new-state plus added-link bytes",
+			Count: counted,
+			Limit: int64(MaxNewStatePlusLinkBytesPerUpdate),
+			Cause: ErrAddedBytesTooLarge,
+		}
 	}
 	return nil
 }

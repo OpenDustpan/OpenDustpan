@@ -294,8 +294,8 @@ func checkTooLargeText(t *testing.T, err error) {
 	if !strings.Contains(text, "pulumi up") {
 		t.Fatalf("bound refusal names no command that helps: %v", err)
 	}
-	if n := strings.Count(text, "pulumijournal:"); n != 1 {
-		t.Fatalf("bound refusal names pulumijournal: %d times, want once: %v", n, err)
+	if n := strings.Count(text, "exceed the limit of"); n != 1 {
+		t.Fatalf("bound refusal names its limit %d times, want once: %v", n, err)
 	}
 }
 
