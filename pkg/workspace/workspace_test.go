@@ -3618,7 +3618,7 @@ func TestRestoreFailedCopyKeepsCurrent(t *testing.T) {
 		t.Fatalf("read tampered content: %v", err)
 	}
 
-	if err := blobs.Put(ctx, first.Content, bytes.NewReader(tampered)); err != nil {
+	if err = blobs.Put(ctx, first.Content, bytes.NewReader(tampered)); err != nil {
 		t.Fatalf("tamper source blob: %v", err)
 	}
 

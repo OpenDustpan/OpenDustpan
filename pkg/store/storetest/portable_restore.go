@@ -253,7 +253,8 @@ func unsealStateVersionsFile(
 	}
 
 	for i, row := range lines {
-		if row["sealed"] != true {
+		sealed, ok := row["sealed"].(bool)
+		if !ok || !sealed {
 			t.Fatalf("state versions row %d sealed = %v, want true", i, row["sealed"])
 		}
 	}
