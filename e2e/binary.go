@@ -193,6 +193,7 @@ func serverBinary(ctx context.Context, tb testing.TB, dir string) string {
 		buildCtx,
 		"go",
 		"build",
+		"-tags="+serverBuildTags,
 		"-o",
 		out,
 		"opendustpan.org/opendustpan/cmd/opendustpan",
