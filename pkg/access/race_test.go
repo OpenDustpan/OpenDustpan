@@ -460,3 +460,31 @@ func TestRevokeRefusedAfterARacingRoleUpdate(t *testing.T) {
 		t.Fatalf("grant after the refused revoke: %v", err)
 	}
 }
+
+// TestRevokeRefusedAfterARacingRevokeOfManageAccess checks that a revoke
+// reads the manage-access right of its caller in its own write: a revoke
+// of the grant that gave the caller manage-access, committed after the
+// route authorized the request, refuses the revoke, even when another
+// grant still gives every action of the revoked grant.
+func TestRevokeRefusedAfterARacingRevokeOfManageAccess(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	acme := identity.NamespaceObject("acme")
+	bob := f.person(t, "bob")
+	f.person(t, "carol")
+	f.grant(t, prn("bob"), access.RoleAdmin, acme)
+	f.grant(t, prn("bob"), access.RoleViewer, acme)
+	f.grant(t, prn("carol"), access.RoleViewer, acme)
+
+	svc, _ := racingService(t, f, revokeRace(t, f, prn("bob"), access.RoleAdmin, acme))
+
+	target := grantID(prn("carol"), access.RoleViewer, acme)
+	if _, err := svc.RevokeByID(t.Context(), testEntry(), bob, target); !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("revoke after a racing revoke of the caller's manage-access: err = %v, want ErrDenied", err)
+	}
+
+	if _, err := f.store.GetGrant(t.Context(), target); err != nil {
+		t.Fatalf("grant after the refused revoke: %v", err)
+	}
+}
