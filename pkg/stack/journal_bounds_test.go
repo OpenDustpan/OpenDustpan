@@ -110,7 +110,9 @@ func (d deadlineReplayer) Replay(
 
 // TestBuildJournalCheckpointTimesOut checks that a build past a short build
 // timeout is refused with ErrJournalBuildTimeout and stores nothing. It also
-// checks that the build runs under the configured timeout, not a longer one.
+// checks that the refused build runs under the configured timeout, not a
+// longer one: a timeout 100x larger turns both the elapsed and the deadline
+// checks red.
 //
 //nolint:paralleltest // The test lowers the build timeout, so it runs alone.
 func TestBuildJournalCheckpointTimesOut(t *testing.T) {
@@ -124,15 +126,21 @@ func TestBuildJournalCheckpointTimesOut(t *testing.T) {
 
 	s := f.startJournaled(t)
 
+	start := time.Now()
 	_, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded)
+	elapsed := time.Since(start)
 	if !errors.Is(err, stack.ErrJournalBuildTimeout) {
 		t.Fatalf("complete with a timed-out build: err = %v, want ErrJournalBuildTimeout", err)
 	}
 
+	if elapsed > time.Second {
+		t.Fatalf("refused build took %v, want under a second for a 20ms timeout", elapsed)
+	}
+
 	select {
 	case deadline := <-deadlines:
-		if left := time.Until(deadline); left > time.Second {
-			t.Fatalf("build deadline is %v away, want under a second for a 20ms timeout", left)
+		if got := deadline.Sub(start); got > time.Second {
+			t.Fatalf("build deadline is %v after the start, want under a second for a 20ms timeout", got)
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("build did not report its deadline")
@@ -709,4 +717,14 @@ func itoa(n int64) string {
 		n /= 10
 	}
 	return string(b[pos:])
+}
+
+// TestJournalBuildDurationDefaultIsFiveMinutes checks the default build timeout.
+// The timeout tests lower it and restore it, so the default is read as serial.
+//
+//nolint:paralleltest // The test reads the default, which the lowering tests restore before it runs.
+func TestJournalBuildDurationDefaultIsFiveMinutes(t *testing.T) {
+	if want := 5 * time.Minute; stack.MaxJournalBuildDuration != want {
+		t.Fatalf("default build timeout is %v, want %v", stack.MaxJournalBuildDuration, want)
+	}
 }

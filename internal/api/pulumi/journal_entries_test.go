@@ -102,3 +102,100 @@ func TestJournalEntriesReservesConfiguredCheckpointBound(t *testing.T) {
 		)
 	}
 }
+
+// TestJournalEntriesReservesBodyBytesForSingleEntry checks that the route
+// reserves the bytes it reads, not the batch bound: a single-entry batch
+// over the batch bound but within the checkpoint bound answers 503 while the
+// gate holds room for the batch bound but not for the body. Reserving only
+// the batch bound would answer 409 or 413 instead of 503.
+func TestJournalEntriesReservesBodyBytesForSingleEntry(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("test context: %v", err)
+	}
+
+	batchBound := stack.MaxJournalBatchBytes
+	checkpointBound := stack.DefaultMaxCheckpointBytes
+	bodyLen := batchBound + (1 << 20)
+	gateBytes := batchBound + (1 << 19)
+
+	f := newUpdateFixtureWithGate(t, allowAll(), checkpointBound, int64(gateBytes))
+	id, lease := mintForLease(t, f, journalPatterns()[0])
+	target := journalTarget(id)
+
+	prefix := `{"entries":[{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}]}`
+	body := prefix + strings.Repeat(" ", bodyLen-len(prefix))
+	if len(body) <= batchBound {
+		t.Fatal("test batch fits the batch bound, want a batch over it")
+	}
+	if len(body) <= gateBytes {
+		t.Fatal("test batch fits the gate, want a batch over it")
+	}
+	if len(body) >= checkpointBound {
+		t.Fatal("test batch reaches the checkpoint bound, want a batch within it")
+	}
+
+	status, resp := f.doUpdate(t, leaseRequest(http.MethodPatch, target, lease, body))
+	if status != http.StatusServiceUnavailable {
+		t.Fatalf(
+			"single-entry batch over the gate answers %d, want %d (%s)",
+			status, http.StatusServiceUnavailable, resp,
+		)
+	}
+}
+
+// TestJournalEntriesAnswersBatchBoundWithSingleEntryException checks the batch
+// bound at the handler: a multi-entry batch over the batch bound answers 413,
+// while a single-entry batch over the batch bound but within the checkpoint
+// bound is accepted. Removing the single-entry check answers 413 for both.
+func TestJournalEntriesAnswersBatchBoundWithSingleEntryException(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("test context: %v", err)
+	}
+
+	bodyLen := stack.MaxJournalBatchBytes + (1 << 20)
+
+	f := newUpdateFixture(t, allowAll())
+	id, lease := mintReplayBound(t, f)
+	target := journalTarget(id)
+
+	singlePrefix := `{"entries":[{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}]}`
+	single := singlePrefix + strings.Repeat(" ", bodyLen-len(singlePrefix))
+	if len(single) <= stack.MaxJournalBatchBytes {
+		t.Fatal("single-entry batch fits the batch bound, want a batch over it")
+	}
+	if len(single) >= stack.DefaultMaxCheckpointBytes {
+		t.Fatal("single-entry batch reaches the checkpoint bound, want a batch within it")
+	}
+
+	multiPrefix := `{"entries":[{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null},` +
+		`{"version":1,"kind":0,"sequenceID":2,"operationID":2,"removeOld":null,"removeNew":null}]}`
+	multi := multiPrefix + strings.Repeat(" ", bodyLen-len(multiPrefix))
+	if len(multi) <= stack.MaxJournalBatchBytes {
+		t.Fatal("multi-entry batch fits the batch bound, want a batch over it")
+	}
+	if len(multi) >= stack.DefaultMaxCheckpointBytes {
+		t.Fatal("multi-entry batch reaches the checkpoint bound, want a batch within it")
+	}
+
+	status, resp := f.doUpdate(t, leaseRequest(http.MethodPatch, target, lease, multi))
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf(
+			"multi-entry batch over the bound answers %d, want %d (%s)",
+			status, http.StatusRequestEntityTooLarge, resp,
+		)
+	}
+
+	status, resp = f.doUpdate(t, leaseRequest(http.MethodPatch, target, lease, single))
+	if status != http.StatusOK {
+		t.Fatalf(
+			"single-entry batch over the bound answers %d, want %d (%s)",
+			status, http.StatusOK, resp,
+		)
+	}
+}

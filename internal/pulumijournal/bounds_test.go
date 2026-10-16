@@ -201,6 +201,43 @@ func TestReplayCountsMigrationAndPatchBytes(t *testing.T) {
 	}
 }
 
+// TestReplayCountsNewStatePatchBytes checks that the states of new-state
+// patches count toward the new-state bound when nothing else carries bytes:
+// a patch at the exact limit passes, and one more byte fails with
+// ErrNewStateTooLarge. Removing the patch bytes from the count passes the
+// over-limit case.
+func TestReplayCountsNewStatePatchBytes(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("test context: %v", err)
+	}
+
+	patch := `{"urn":"urn:pulumi:dev::web::t:mod:T::p","custom":true,"type":"t:mod:T","pad":"` +
+		strings.Repeat("x", 64) + `"}`
+	body := []byte(
+		`{"entries":[{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null,` +
+			`"newStatePatches":[{"operationID":1,"state":` + patch + `}]}]}`,
+	)
+
+	old := pulumijournal.MaxNewStateBytesPerUpdate
+	t.Cleanup(func() { pulumijournal.MaxNewStateBytesPerUpdate = old })
+
+	pulumijournal.MaxNewStateBytesPerUpdate = len(patch)
+	if err := boundReplayer(t, `{"resources":[]}`, body); err != nil {
+		t.Fatalf("replay with new-state patches at the bound: err = %v, want nil", err)
+	}
+
+	pulumijournal.MaxNewStateBytesPerUpdate = len(patch) - 1
+	if err := boundReplayer(t, `{"resources":[]}`, body); !errors.Is(
+		err,
+		pulumijournal.ErrNewStateTooLarge,
+	) {
+		t.Fatalf("replay with new-state patches one byte over: err = %v, want ErrNewStateTooLarge", err)
+	}
+}
+
 // TestReplayNoOpOnLargeBasePasses checks that a no-op update on a base with
 // more resources than the link-index bound still completes: the bound counts
 // only the links the update adds.
