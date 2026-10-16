@@ -118,7 +118,6 @@ func portableSpec() []PortableTable {
 				{Name: portColDigest, Kind: KindBytes},
 				{Name: "invalid", Kind: KindBool},
 				{Name: "features", Kind: KindJSON},
-				{Name: "deployment", Kind: KindBytes},
 				{Name: "saved_at_ms", Kind: KindTime},
 				{Name: "blob_key", Kind: KindText},
 				{Name: portColSize, Kind: KindInteger},

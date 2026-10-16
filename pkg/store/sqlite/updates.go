@@ -257,11 +257,11 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 	return codec.FromUpdateRows(converted, ref)
 }
 
-// PutCheckpoint implements stack.CheckpointStore. A row with a blob key keeps
-// the key with the size, the digest and the sequence, and no content; a row
-// without a key keeps the content as given. Each write of the running update
-// overwrites the row of that update. The row stores no resource count, so
-// the save path never scans the deployment.
+// PutCheckpoint implements stack.CheckpointStore. The row keeps the blob key
+// with the size, the digest and the sequence, and no content. A checkpoint
+// without a blob key returns stack.ErrCheckpointNoKey. Each write of the
+// running update overwrites the row of that update. The row stores no
+// resource count, so the save path never scans the deployment.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -314,16 +314,11 @@ func writeCheckpoint(
 		Digest:        row.Digest,
 		Invalid:       row.Invalid,
 		FeaturesJson:  string(row.Features),
-		Deployment:    row.Deployment,
 		SavedAtMs:     row.SavedAtMs,
-		BlobKey:       sql.NullString{String: row.BlobKey, Valid: row.BlobKey != ""},
-		// Size is always stored: rows from before blobs hold the content
-		// length, so history needs no fallback for new rows, while reads
-		// still fall back to the content length for old NULL rows. Only the
-		// blob columns stay NULL without a key.
-		Size:     sql.NullInt64{Int64: row.Size, Valid: true},
-		BlobSize: sql.NullInt64{Int64: row.BlobSize, Valid: row.BlobKey != ""},
-		BlobMd5:  row.BlobMD5,
+		BlobKey:       row.BlobKey,
+		Size:          sql.NullInt64{Int64: row.Size, Valid: true},
+		BlobSize:      sql.NullInt64{Int64: row.BlobSize, Valid: true},
+		BlobMd5:       row.BlobMD5,
 	})
 	if putErr != nil {
 		return fmt.Errorf("upsert checkpoint: %w", putErr)
@@ -443,9 +438,9 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 	out := make([]blob.Key, 0, len(rows))
 
 	for _, row := range rows {
-		key, err := blob.ParseKey(row.String)
+		key, err := blob.ParseKey(row)
 		if err != nil {
-			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row.String, err)
+			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row, err)
 		}
 
 		out = append(out, key)
@@ -778,18 +773,14 @@ func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
 		LeaseDigest:   row.LeaseDigest,
 		Digest:        row.Digest,
 		Features:      []byte(row.FeaturesJson),
-		Deployment:    row.Deployment,
 		SchemaVersion: row.SchemaVersion,
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
-		// A NULL key predates blobs; the row keeps content instead. A NULL
-		// size reads as 0 here; history falls back to the content length in
-		// SQL itself.
-		BlobKey:  row.BlobKey.String,
-		Size:     row.Size.Int64,
-		BlobSize: row.BlobSize.Int64,
-		BlobMD5:  row.BlobMd5,
+		BlobKey:       row.BlobKey,
+		Size:          row.Size.Int64,
+		BlobSize:      row.BlobSize.Int64,
+		BlobMD5:       row.BlobMd5,
 	}
 }
 

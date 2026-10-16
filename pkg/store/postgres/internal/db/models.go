@@ -106,10 +106,9 @@ type Checkpoint struct {
 	Digest        []byte
 	Invalid       bool
 	Features      []byte
-	Deployment    []byte
 	SavedAtMs     int64
 	StackID       string
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte

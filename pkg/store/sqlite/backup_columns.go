@@ -118,7 +118,6 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColDigest,
 				"invalid",
 				"features_json",
-				"deployment",
 				"saved_at_ms",
 				"blob_key",
 				backupColSize,

@@ -791,7 +791,6 @@ func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
 	const query = `SELECT content_key, size, md5, sealed FROM state_versions WHERE content_key <> ''
 		UNION ALL
 		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM checkpoints
-		WHERE blob_key IS NOT NULL AND blob_key <> ''
 		UNION ALL
 		SELECT blob_key AS content_key, size AS size, md5 AS md5, 0 AS sealed FROM update_journal
 		ORDER BY content_key`

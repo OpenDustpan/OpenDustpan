@@ -1,6 +1,6 @@
 -- minimum-binary-version: v0.1.0
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the sqlite migrations of origin/main (6be2f2a0661a).
+-- from the sqlite migrations of origin/main (df02452a3dc2).
 -- This baseline replaced every migration before it, as a one-time exception
 -- to the rule that an applied migration never changes. No binary opens a
 -- database or restores a backup from before it.
@@ -37,22 +37,6 @@ CREATE TABLE "updates" (
     ended_at_ms         INTEGER NOT NULL, created_by TEXT NOT NULL DEFAULT '', restored_from INTEGER NOT NULL DEFAULT 0, journal_version INTEGER NOT NULL DEFAULT 0, journal_closed INTEGER NOT NULL DEFAULT 0, token_id TEXT NOT NULL DEFAULT '', journal_records_changed INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (stack_id, id),
     FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE
-) STRICT;
-
-CREATE TABLE checkpoints (
-    stack_id       TEXT    NOT NULL REFERENCES stacks (id) ON DELETE CASCADE,
-    update_id      TEXT    NOT NULL,
-    lease_digest   BLOB    NOT NULL,
-    schema_version INTEGER NOT NULL,
-    sequence       INTEGER NOT NULL,
-    digest         BLOB    NOT NULL,
-    invalid        INTEGER NOT NULL,
-    features_json  TEXT    NOT NULL,
-    deployment     BLOB    NOT NULL,
-    saved_at_ms    INTEGER NOT NULL, blob_key TEXT, size INTEGER, blob_size INTEGER, blob_md5 BLOB,
-    PRIMARY KEY (stack_id, update_id),
-    FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE,
-    FOREIGN KEY (stack_id, update_id) REFERENCES updates (stack_id, id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE update_events (
@@ -410,6 +394,25 @@ CREATE TABLE sign_in_providers (
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
     version       INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE "checkpoints" (
+    stack_id       TEXT    NOT NULL REFERENCES stacks (id) ON DELETE CASCADE,
+    update_id      TEXT    NOT NULL,
+    lease_digest   BLOB    NOT NULL,
+    schema_version INTEGER NOT NULL,
+    sequence       INTEGER NOT NULL,
+    digest         BLOB    NOT NULL,
+    invalid        INTEGER NOT NULL,
+    features_json  TEXT    NOT NULL,
+    saved_at_ms    INTEGER NOT NULL,
+    blob_key       TEXT    NOT NULL CHECK (blob_key <> ''),
+    size           INTEGER,
+    blob_size      INTEGER,
+    blob_md5       BLOB,
+    PRIMARY KEY (stack_id, update_id),
+    FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE,
+    FOREIGN KEY (stack_id, update_id) REFERENCES updates (stack_id, id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE UNIQUE INDEX stacks_id ON stacks (id);
