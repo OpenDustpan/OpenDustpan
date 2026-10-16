@@ -12720,7 +12720,7 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	after := captureExitState(ctx, t, env, tools, "after backup")
 	checkExitStateStable(t, before, after)
 	runBackupCheck(ctx, t, env, id)
-	backupVersions := readFailoverVersions(ctx, t, env, store)
+	backupVersions := readFailoverVersions(ctx, t, env)
 
 	// Restore into an empty installation through the API: stop A, wipe the
 	// destination, start the server on the empty database, and restore
@@ -12733,7 +12733,7 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 
 	restored := captureExitState(ctx, t, env, tools, "after restore")
 	checkExitStateMatches(t, after, restored)
-	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env, store))
+	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env))
 
 	// Restore over live data: back up the restored state, restore the
 	// first backup over it, and prove the state matches the first backup.
@@ -12762,7 +12762,7 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	runRestoreRefused(ctx, t, env, id, "active")
 	runRestoreCommandForced(ctx, t, env, id)
 	checkHeldLeaseFenced(ctx, t, env, held)
-	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env, store))
+	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env))
 	env.NoteStep(t, "lease fenced after restore", "old lease from before the restore no longer writes")
 
 	// Undo with the backup taken before the restore: the restore names its
@@ -13598,132 +13598,59 @@ func checkHeldLeaseFenced(ctx context.Context, t *testing.T, env *e2e.Env, held 
 	env.EndHeldUpdate(ctx, t, fresh, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
 }
 
-// readFailoverVersions returns the failover version of every namespace in the
-// live database, read directly: the server API exposes no namespace read, and
-// the fencing proof needs the stored versions before and after the restore.
-func readFailoverVersions(
-	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store,
-) map[string]int64 {
-	t.Helper()
-
-	switch store {
-	case e2e.StoreSQLite:
-		return readSQLiteFailoverVersions(ctx, t, env)
-	case e2e.StorePostgres:
-		return readPostgresFailoverVersions(ctx, t, env)
-	default:
-		t.Fatalf("unknown store: %s", store)
-	}
-
-	return nil
+// failoverNamespace is one namespace of GET /api/server/namespaces: its name
+// and failover version.
+type failoverNamespace struct {
+	Name            string `json:"name"`
+	FailoverVersion int64  `json:"failoverVersion"`
 }
 
-// readSQLiteFailoverVersions reads the failover version of every namespace
-// from the live SQLite file while the server runs: a single ordered select,
-// so a concurrent write only waits out the read.
-func readSQLiteFailoverVersions(ctx context.Context, t *testing.T, env *e2e.Env) map[string]int64 {
-	t.Helper()
-
-	path, ok := strings.CutPrefix(env.DatabaseURL(t), "sqlite:")
-	if !ok {
-		t.Fatalf("database URL %q is not a SQLite URL", env.DatabaseURL(t))
-	}
-
-	conn, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(10000)")
-	if err != nil {
-		t.Fatalf("open database for failover versions: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close database: %v", closeErr)
-		}
-	}()
-
-	return queryFailoverVersions(ctx, t, conn)
+// failoverNamespacePage is one page of GET /api/server/namespaces.
+type failoverNamespacePage struct {
+	Namespaces []failoverNamespace `json:"namespaces"`
+	NextCursor string              `json:"nextCursor"`
 }
 
-// queryFailoverVersions returns the failover version of every namespace
-// through conn, which reads the live database of the running server.
-func queryFailoverVersions(ctx context.Context, t *testing.T, conn *sql.DB) map[string]int64 {
+// readFailoverVersions returns the failover version of every namespace
+// through the installation API as the bootstrap admin, page by page. The
+// fencing proof needs the versions before and after the restore. The test
+// reads no database file of the running server.
+func readFailoverVersions(ctx context.Context, t *testing.T, env *e2e.Env) map[string]int64 {
 	t.Helper()
-
-	rows, err := conn.QueryContext(ctx, `SELECT name, failover_version FROM namespaces ORDER BY name`)
-	if err != nil {
-		t.Fatalf("read failover versions: %v", err)
-	}
-
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			t.Errorf("close failover versions: %v", closeErr)
-		}
-	}()
 
 	out := map[string]int64{}
+	cursor := ""
 
-	for rows.Next() {
-		var (
-			name    string
-			version int64
-		)
-
-		if scanErr := rows.Scan(&name, &version); scanErr != nil {
-			t.Fatalf("scan failover version: %v", scanErr)
+	for {
+		path := "/api/server/namespaces"
+		if cursor != "" {
+			path += "?cursor=" + url.QueryEscape(cursor)
 		}
 
-		out[name] = version
-	}
-
-	if iterErr := rows.Err(); iterErr != nil {
-		t.Fatalf("read failover versions: %v", iterErr)
-	}
-
-	return out
-}
-
-// readPostgresFailoverVersions reads the failover version of every namespace
-// from the live PostgreSQL schema of the running server.
-func readPostgresFailoverVersions(ctx context.Context, t *testing.T, env *e2e.Env) map[string]int64 {
-	t.Helper()
-
-	conn, err := pgx.Connect(ctx, env.DatabaseURL(t))
-	if err != nil {
-		t.Fatalf("connect to postgres for failover versions: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			t.Errorf("close postgres connection: %v", closeErr)
-		}
-	}()
-
-	rows, err := conn.Query(ctx, `SELECT name, failover_version FROM namespaces ORDER BY name`)
-	if err != nil {
-		t.Fatalf("read failover versions: %v", err)
-	}
-
-	defer rows.Close()
-
-	out := map[string]int64{}
-
-	for rows.Next() {
-		var (
-			name    string
-			version int64
-		)
-
-		if scanErr := rows.Scan(&name, &version); scanErr != nil {
-			t.Fatalf("scan failover version: %v", scanErr)
+		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, path, "")
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
 		}
 
-		out[name] = version
-	}
+		if status != http.StatusOK {
+			t.Fatalf("GET %s answers %d, want %d (%s)", path, status, http.StatusOK, body)
+		}
 
-	if iterErr := rows.Err(); iterErr != nil {
-		t.Fatalf("read failover versions: %v", iterErr)
-	}
+		var page failoverNamespacePage
+		if err := json.Unmarshal([]byte(body), &page); err != nil {
+			t.Fatalf("decode namespaces %q: %v", body, err)
+		}
 
-	return out
+		for _, ns := range page.Namespaces {
+			out[ns.Name] = ns.FailoverVersion
+		}
+
+		if page.NextCursor == "" {
+			return out
+		}
+
+		cursor = page.NextCursor
+	}
 }
 
 // checkRestoreFenced proves the restore fenced every namespace the backup
