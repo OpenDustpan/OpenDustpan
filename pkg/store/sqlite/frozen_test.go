@@ -76,6 +76,7 @@ func TestFrozenMigrations(t *testing.T) {
 		"0074_update_journal_refusals.sql":         "0076fd4b3ae489c70d510daa0799732e278f76e41a4cead25657ca4c3a485440",
 		"0075_sign_in_freshness.sql":               "c6c257043962cf6560209a0624d95e5953324c3d3e1e837961490ffdab71c2e3",
 		"0076_sign_in_providers.sql":               "cd8231c0fc536a4e5b66871abbb94dc72d0ad5ef813dfaa44772e6f73d5e2230",
+		"0078_one_running_backup_and_restore.sql":  "2db237e90e87ec44dae80f9f868a9095f0258dfaaa8a91ae060f15d2df943734",
 		"0080_durable_operations.sql":              "1beb34fe24954420e87f0be7e98dd04293f4603fc44b544ce55d78e18e81f385",
 	}
 

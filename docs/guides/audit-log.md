@@ -83,13 +83,17 @@ An entry holds these fields:
   restore and purge of a unit. The list omits it when the entry has none.
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
-  After `prevHash`, the encoding appends each optional field that the entry
-  sets, in this fixed order: `value_count=` with the decimal count, then
-  `object_id=` with the stable ID of the unit (ADR 47), then `changes=` with
-  the canonical JSON of the changes (sorted by key), as the store holds
-  it. An
-  optional field that the entry does not set adds nothing, so an entry
-  written before the field keeps its hash.
+  The encoding writes each field as its length in bytes (decimal), a
+  colon and the bytes of the field, with nothing between the fields. For
+  example, the subject `admin` is `5:admin` and an empty field is `0:`.
+  After `prevHash`, the encoding always writes four more fields, in this
+  fixed order: the decimal value count, the stable ID of the unit, the
+  canonical JSON of the changes (sorted by key) as the store holds it, and
+  the decimal failover version of the namespace (0 in `@server`). No field
+  is optional. An entry with no value count writes one `-` in place of the
+  count, so an entry with no count (`-`) and an entry with the count 0
+  (`1:0`) have different hashes. Because each field carries its length,
+  two different entries never give the same encoding.
   The first entry of a namespace has an empty `prevHash`.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
@@ -225,7 +229,7 @@ The entry hash is the hash of the stored fields of the entry with an empty `prev
 The hash takes no key: any installation can compute it again from the stored fields.
 Each entry of a namespace holds `fenceVersion`, the failover version of the namespace when the server appended it.
 The hash covers it, so a verifier can see where a forced failover forked the chain of a namespace.
-Entries in `@server`, and entries from before the field, hold 0, and the audit API omits the field for them.
+Entries in `@server` hold 0. The hash covers the 0, and the audit API omits the field for them.
 A verifier who kept a digest outside the database can compute it again from the old rows.
 So the verifier can prove that the old rows did not change after the chain started.
 

@@ -40,6 +40,10 @@ func RunShared(t *testing.T, newPair PairFactory) {
 		},
 		{name: "a stack written on one handle reads on the other", test: testSharedStack},
 		{name: "an installation state written on one handle reads on the other", test: testSharedMaintenanceState},
+		{
+			name: "a backup and a restore started on both handles at once give one running row each",
+			test: testSharedOneRunning,
+		},
 	}
 
 	for _, tc := range cases {
