@@ -62,6 +62,10 @@ var (
 	// ErrEscalation reports a grant that gives more than the granter holds
 	// on its object.
 	ErrEscalation = errors.New("grant gives more than the granter holds")
+	// ErrUnitMoved reports a grant or a revoke on a unit that moved to
+	// another collection after the Service read the collection of the unit.
+	// The request can be sent again.
+	ErrUnitMoved = errors.New("the unit moved to another collection")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -424,6 +428,12 @@ type GrantReads interface {
 	GetRoles(ctx context.Context, ids []string) ([]Role, error)
 	RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error)
 	RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error)
+	// UnitCollectionID returns the stable ID of the collection that the
+	// unit with the stable ID unitID is in now, and false when the unit is
+	// in no collection or does not exist. A store that keeps the
+	// collections of units in another place must answer it from the same
+	// source as the UnitCollections port of the Authorizer.
+	UnitCollectionID(ctx context.Context, unitID string) (string, bool, error)
 }
 
 // GrantCheck is a rule that a write of a grant or of a role runs in its own

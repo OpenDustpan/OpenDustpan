@@ -58,6 +58,20 @@ type grantReads struct {
 
 var _ access.GrantReads = grantReads{q: nil}
 
+// UnitCollectionID implements access.GrantReads.
+func (r grantReads) UnitCollectionID(ctx context.Context, unitID string) (string, bool, error) {
+	id, err := r.q.UnitCollectionID(ctx, unitID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("select collection of unit: %w", err)
+	}
+
+	return id, true, nil
+}
+
 // insertGrant inserts g with q.
 func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
 	kind, ok := access.KindOf(g.Object)

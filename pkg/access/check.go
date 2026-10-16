@@ -98,6 +98,10 @@ func (s *Service) grantCheck(
 	granter identity.Principal, obj identity.Object, chain []identity.Object, role string,
 ) GrantCheck {
 	return func(ctx context.Context, reads GrantReads) error {
+		if err := s.checkUnitCollection(ctx, reads, obj, chain); err != nil {
+			return err
+		}
+
 		w, ctx := s.within(ctx, reads, obj, chain)
 
 		r, err := w.GetRole(ctx, role)
@@ -145,8 +149,49 @@ func (s *Service) roleCheck(caller identity.Principal, r Role) GrantCheck {
 // role of g as it is now.
 func (s *Service) revokeCheck(caller identity.Principal, g Grant, chain []identity.Object) GrantCheck {
 	return func(ctx context.Context, reads GrantReads) error {
+		if err := s.checkUnitCollection(ctx, reads, g.Object, chain); err != nil {
+			return err
+		}
+
 		w, ctx := s.within(ctx, reads, g.Object, chain)
 
 		return w.checkGrantHeld(ctx, caller, g)
 	}
+}
+
+// checkUnitCollection refuses with ErrUnitMoved when obj is a unit and the
+// collection that it is in now, as reads answers in the transaction of the
+// write, is not the collection in chain: the chain that the Service read
+// before the write, through the collection port. An Authorizer with no
+// collection port puts no unit in a collection, so it checks nothing.
+func (s *Service) checkUnitCollection(
+	ctx context.Context, reads GrantReads, obj identity.Object, chain []identity.Object,
+) error {
+	if !obj.IsUnit() || obj.UnitID() == "" || s.authz.collections == nil {
+		return nil
+	}
+
+	want := ""
+
+	for i := range chain {
+		if chain[i].IsCollection() {
+			want = chain[i].CollectionID()
+		}
+	}
+
+	got, found, err := reads.UnitCollectionID(ctx, obj.UnitID())
+	if err != nil {
+		return fmt.Errorf("read collection of unit in the write: %w", err)
+	}
+
+	if !found {
+		got = ""
+	}
+
+	if got != want {
+		return fmt.Errorf("%w: unit %q changed collection during the request; send the request again",
+			ErrUnitMoved, obj.String())
+	}
+
+	return nil
 }

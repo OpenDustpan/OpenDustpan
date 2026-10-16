@@ -8,6 +8,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -50,10 +51,19 @@ func (r *racingStore) RevokeGrant(
 func racingService(t *testing.T, f *fixture, race func()) (*access.Service, *access.Authorizer) {
 	t.Helper()
 
+	return racingServiceWith(t, f, f.units, race)
+}
+
+// racingServiceWith is racingService with the collection port port.
+func racingServiceWith(
+	t *testing.T, f *fixture, port access.UnitCollections, race func(),
+) (*access.Service, *access.Authorizer) {
+	t.Helper()
+
 	st := &racingStore{Store: f.store, race: race}
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: st, Callers: f.store, Collections: f.units, Units: f.store, Principals: f.store,
+		Store: st, Callers: f.store, Collections: port, Units: f.store, Principals: f.store,
 	})
 	if err != nil {
 		t.Fatalf("new authorizer: %v", err)
@@ -352,6 +362,122 @@ func TestRevokeRefusedAfterARacingRoleUpdate(t *testing.T) {
 	target := grantID(prn("carol"), role.ID, acme)
 	if _, err := svc.RevokeByID(t.Context(), testEntry(), bob, target); !errors.Is(err, access.ErrEscalation) {
 		t.Fatalf("revoke after a racing role update: err = %v, want ErrEscalation", err)
+	}
+
+	if _, err := f.store.GetGrant(t.Context(), target); err != nil {
+		t.Fatalf("grant after the refused revoke: %v", err)
+	}
+}
+
+// collectionPort returns the collection port over the store of f: the
+// collection service, as a server configures it.
+func collectionPort(t *testing.T, f *fixture) *collection.Service {
+	t.Helper()
+
+	svc, err := collection.NewService(collection.Config{Store: f.store, Namespaces: f.store, Now: nil})
+	if err != nil {
+		t.Fatalf("new collection service: %v", err)
+	}
+
+	return svc
+}
+
+// webInCollection stores the unit acme web/prod and the collections blue (ID
+// col-1) and green (ID col-2), and puts the unit in blue. It returns the unit.
+func webInCollection(t *testing.T, f *fixture) identity.Object {
+	t.Helper()
+
+	unit := f.unit(t, unitObject(t, "acme", "web/prod"))
+	fence, e := storetest.GrantWrite(t, f.store, unit, time.Unix(0, 0), "collection:test")
+
+	for _, c := range []collection.Collection{
+		{CreatedAt: time.Unix(0, 0), ID: "col-1", Ref: collection.Ref{Namespace: "acme", Name: "blue"}},
+		{CreatedAt: time.Unix(0, 0), ID: "col-2", Ref: collection.Ref{Namespace: "acme", Name: "green"}},
+	} {
+		if err := f.store.CreateCollection(t.Context(), c, fence, e); err != nil {
+			t.Fatalf("create collection %s: %v", c.Ref.Name, err)
+		}
+	}
+
+	moveWeb(t, f, "", "blue", "col-1")
+
+	return unit
+}
+
+// moveWeb moves the unit acme web/prod from the collection from to the
+// collection to, whose stable ID is toID.
+func moveWeb(t *testing.T, f *fixture, from, to collection.Name, toID string) {
+	t.Helper()
+
+	fence, e := storetest.GrantWrite(t, f.store, identity.NamespaceObject("acme"), time.Unix(1, 0), "collection:test")
+	m := collection.Move{
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"},
+		From: from, To: collection.Ref{Namespace: "acme", Name: to}, ToID: toID,
+	}
+
+	if err := f.store.SetUnitCollection(t.Context(), m, fence, e); err != nil {
+		t.Errorf("move the unit to %s: %v", to, err)
+	}
+}
+
+// grantOnBlue stores a grant of role on the collection blue to subject.
+func grantOnBlue(t *testing.T, f *fixture, subject access.Subject, role string) {
+	t.Helper()
+
+	obj := identity.CollectionObject("acme", "blue").WithCollectionID("col-1")
+	fence, e := storetest.GrantWrite(t, f.store, obj, time.Unix(0, 0), "grant:test")
+
+	err := f.store.CreateGrant(t.Context(), access.Grant{
+		CreatedAt: time.Unix(0, 0), Condition: nil, Object: obj, ID: "grt-blue-" + subject.ID,
+		Role: role, CreatedBy: "admin", Subject: subject,
+	}, fence, e, nil)
+	if err != nil {
+		t.Fatalf("grant on blue: %v", err)
+	}
+}
+
+// TestGrantRefusedAfterARacingMove checks that a grant on a unit reads the
+// collection of the unit in its own write: a move of the unit out of the
+// collection of the granter's grant, committed after the checks of the
+// Service, refuses the grant.
+func TestGrantRefusedAfterARacingMove(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	bob := f.person(t, "bob")
+	f.person(t, "carol")
+	unit := webInCollection(t, f)
+	grantOnBlue(t, f, prn("bob"), access.RoleAdmin)
+
+	svc, _ := racingServiceWith(t, f, collectionPort(t, f), once(func() { moveWeb(t, f, "blue", "green", "col-2") }))
+
+	_, err := svc.Grant(t.Context(), testEntry(), bob, access.GrantInput{
+		Object: unit, Role: access.RoleViewer, Subject: prn("carol"),
+	})
+	if !errors.Is(err, access.ErrUnitMoved) {
+		t.Fatalf("grant on a unit after a racing move: err = %v, want ErrUnitMoved", err)
+	}
+
+	assertNoGrants(t, f, prn("carol"), unit)
+}
+
+// TestRevokeRefusedAfterARacingMove checks that a revoke of a grant on a
+// unit reads the collection of the unit in its own write.
+func TestRevokeRefusedAfterARacingMove(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	bob := f.person(t, "bob")
+	f.person(t, "carol")
+	unit := webInCollection(t, f)
+	grantOnBlue(t, f, prn("bob"), access.RoleAdmin)
+	f.grant(t, prn("carol"), access.RoleViewer, unit)
+
+	svc, _ := racingServiceWith(t, f, collectionPort(t, f), once(func() { moveWeb(t, f, "blue", "green", "col-2") }))
+
+	target := grantID(prn("carol"), access.RoleViewer, unit)
+	if _, err := svc.RevokeByID(t.Context(), testEntry(), bob, target); !errors.Is(err, access.ErrUnitMoved) {
+		t.Fatalf("revoke on a unit after a racing move: err = %v, want ErrUnitMoved", err)
 	}
 
 	if _, err := f.store.GetGrant(t.Context(), target); err != nil {
