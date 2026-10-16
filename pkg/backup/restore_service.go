@@ -43,13 +43,17 @@ type RestoreMaintenance interface {
 }
 
 // RestoreRequest asks for one restore: the backup to apply, whether to check
-// only, whether to cancel active work, and who asked.
+// only, whether to cancel active work, who asked, and whether to keep the
+// current access tables. KeepAccessTables is true when the caller does not
+// hold server:restore-access: the restore replaces the other data and keeps
+// the current rows of the access tables.
 type RestoreRequest struct {
 	BackupID    ID
 	PreBackupID ID
 	CheckOnly   bool
 	Force       bool
 	RequestedBy string
+	KeepAccessTables bool
 }
 
 // RestoreConfig holds the dependencies of a RestoreService.
@@ -464,6 +468,8 @@ func sanitizeRestoreError(err error) string {
 	switch {
 	case errors.Is(err, ErrRestoreRunning):
 		return ErrRestoreRunning.Error()
+	case errors.Is(err, ErrRestoreAccessMismatch):
+		return ErrRestoreAccessMismatch.Error()
 	case errors.Is(err, ErrCorrupt):
 		return ErrCorrupt.Error()
 	case errors.Is(err, ErrNativeFormat):
@@ -518,10 +524,11 @@ func secretRestoreMessage(err error) (string, bool) {
 }
 
 // logRestore writes one log line for a finished restore (issue 140): the
-// restore ID, the backup ID, the backup taken before it, who asked, and the
-// end state. It holds no secret and no driver text. The sanitized detail of
-// the failure goes to a second error line, so the operator can tell which
-// table, blob or check failed from the log alone.
+// restore ID, the backup ID, the backup taken before it, who asked, whether
+// the access tables were replaced or kept, and the end state. It holds no
+// secret and no driver text. The sanitized detail of the failure goes to a
+// second error line, so the operator can tell which table, blob or check
+// failed from the log alone.
 func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
 	record, getErr := s.registry.GetRestore(ctx, out.id)
 	pre := out.req.PreBackupID.String()
@@ -530,10 +537,16 @@ func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
 		pre = record.PreBackupID.String()
 	}
 
+	accessMode := "replaced"
+	if out.req.KeepAccessTables {
+		accessMode = "kept"
+	}
+
 	attrs := []slog.Attr{
 		slog.String("restore_id", out.id.String()),
 		slog.String("backup_id", out.req.BackupID.String()),
 		slog.String("requested_by", out.req.RequestedBy),
+		slog.String("access_tables", accessMode),
 		slog.String("state", string(out.state)),
 	}
 
@@ -694,6 +707,7 @@ func isLogSentinel(err error) bool {
 		errors.Is(err, ErrRestoreExists),
 		errors.Is(err, ErrRestoreNotRunning),
 		errors.Is(err, ErrRestoreRunning),
+		errors.Is(err, ErrRestoreAccessMismatch),
 		errors.Is(err, maintenance.ErrActiveWork),
 		errors.Is(err, maintenance.ErrUnavailable),
 		errors.Is(err, maintenance.ErrInvalidState),
@@ -779,17 +793,19 @@ func (s *RestoreService) restore(ctx context.Context, id RestoreID, req RestoreR
 		s.trackRestore(marked)
 	}
 
-	return s.applyPinned(ctx, id, req.BackupID, pinned, pre)
+	return s.applyPinned(ctx, id, req, pinned, pre)
 }
 
 // applyPinned stages the pinned backup, copies its blobs, swaps the staged
 // data in one fenced step, fails the running rows the swap resurrected, and
 // preserves the restore row and the pre-backup row across the swap. The
 // manifest is pinned again first, so a target mutated after the checks cannot
-// be applied.
+// be applied. When req keeps the access tables, the swap keeps the current
+// rows of the access tables and replaces the other tables.
 func (s *RestoreService) applyPinned(
-	ctx context.Context, id RestoreID, backupID ID, pinned pinnedManifest, pre Record,
+	ctx context.Context, id RestoreID, req RestoreRequest, pinned pinnedManifest, pre Record,
 ) error {
+	backupID := req.BackupID
 	if repinErr := s.repinManifest(ctx, backupID, pinned); repinErr != nil {
 		return repinErr
 	}
@@ -821,7 +837,15 @@ func (s *RestoreService) applyPinned(
 	// and Get serves the held row until recreateAfterSwap stores it again.
 	s.trackRestore(before)
 
-	if applyErr := s.live.ApplyStaging(ctx); applyErr != nil {
+	if req.KeepAccessTables {
+		if keeper, ok := s.live.(AccessKeepingApplier); ok {
+			if applyErr := keeper.ApplyStagingKeepingAccess(ctx); applyErr != nil {
+				return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
+			}
+		} else {
+			return fmt.Errorf("apply staged data for restore %s: %w", id, ErrMissingDependency)
+		}
+	} else if applyErr := s.live.ApplyStaging(ctx); applyErr != nil {
 		return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
 	}
 

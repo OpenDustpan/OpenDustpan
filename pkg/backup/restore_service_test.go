@@ -88,7 +88,9 @@ type restoreServiceLive struct {
 	applyGate  chan struct{}
 	stageCalls int
 	applied    int
+	kept       int
 	bumped     int
+	keepingErr error
 	resurrect  *backup.RestoreRecord
 	// wipeBackups, when non-nil, emulates the shared store: the swap drops
 	// the backup rows with the old live data, so only a preserved pre-backup
@@ -162,6 +164,22 @@ func (l *restoreServiceLive) ApplyStaging(ctx context.Context) error {
 	return nil
 }
 
+// ApplyStagingKeepingAccess implements backup.AccessKeepingApplier for the
+// service tests: it counts keeping applies separately. When keepingErr is
+// set it reports it instead, so tests prove a mismatch fails the restore.
+func (l *restoreServiceLive) ApplyStagingKeepingAccess(ctx context.Context) error {
+	l.mu.Lock()
+	l.kept++
+	keepingErr := l.keepingErr
+	l.mu.Unlock()
+
+	if keepingErr != nil {
+		return keepingErr
+	}
+
+	return l.ApplyStaging(ctx)
+}
+
 func (l *restoreServiceLive) BumpFailoverVersions(_ context.Context) (int64, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -174,6 +192,7 @@ func (l *restoreServiceLive) BumpFailoverVersions(_ context.Context) (int64, err
 // liveCounts counts the applies and fences of the fake live store.
 type liveCounts struct {
 	applied int
+	kept    int
 	bumped  int
 }
 
@@ -181,7 +200,7 @@ func (l *restoreServiceLive) counts() liveCounts {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return liveCounts{applied: l.applied, bumped: l.bumped}
+	return liveCounts{applied: l.applied, kept: l.kept, bumped: l.bumped}
 }
 
 // setStageBlock sets the stage gate under the lock: StageRestore reads it on
@@ -1812,5 +1831,91 @@ func TestRestoreRefusesNativeFormat(t *testing.T) {
 
 	if got := setup.live.counts(); got.applied != 0 || got.bumped != 0 {
 		t.Fatalf("applied = %d, bumped = %d, want no apply for a native backup", got.applied, got.bumped)
+	}
+}
+
+// TestRestoreKeepAccessTablesCallsKeepingApply proves the restore service
+// routes the apply by the request: a request that keeps the access tables
+// calls ApplyStagingKeepingAccess, and one that replaces them calls
+// ApplyStaging.
+func TestRestoreKeepAccessTablesCallsKeepingApply(t *testing.T) {
+	t.Parallel()
+
+	kept := newRestoreServiceSetup(t)
+
+	keepID := backup.RestoreID("rst-keepaccess000001")
+	if err := kept.service.Start(t.Context(), keepID, backup.RestoreRequest{
+		BackupID:         kept.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: true,
+	}); err != nil {
+		t.Fatalf("start restore that keeps the access tables: %v", err)
+	}
+
+	if row := waitRestoreEnd(t, kept.regs, keepID); row.State != backup.RestoreSucceeded {
+		t.Fatalf("restore that keeps the access tables state = %q, want succeeded (%q)",
+			row.State, row.Error)
+	}
+
+	if got := kept.live.counts(); got.kept != 1 || got.applied != 1 {
+		t.Fatalf("kept = %d, applied = %d, want 1 keeping apply", got.kept, got.applied)
+	}
+
+	replaced := newRestoreServiceSetup(t)
+
+	replaceID := backup.RestoreID("rst-keepaccess000002")
+	if err := replaced.service.Start(t.Context(), replaceID, backup.RestoreRequest{
+		BackupID:         replaced.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
+	}); err != nil {
+		t.Fatalf("start restore that replaces the access tables: %v", err)
+	}
+
+	if row := waitRestoreEnd(t, replaced.regs, replaceID); row.State != backup.RestoreSucceeded {
+		t.Fatalf("restore that replaces the access tables state = %q, want succeeded (%q)",
+			row.State, row.Error)
+	}
+
+	if got := replaced.live.counts(); got.kept != 0 || got.applied != 1 {
+		t.Fatalf("kept = %d, applied = %d, want 1 replacing apply", got.kept, got.applied)
+	}
+}
+
+// TestRestoreKeepAccessMismatchFailsTheRestore proves a keeping apply that
+// reports ErrRestoreAccessMismatch fails the restore with the mismatch text,
+// which names the site administrator who can restore the access tables.
+func TestRestoreKeepAccessMismatchFailsTheRestore(t *testing.T) {
+	t.Parallel()
+
+	setup := newRestoreServiceSetup(t)
+	setup.live.keepingErr = backup.ErrRestoreAccessMismatch
+
+	id := backup.RestoreID("rst-keepaccess000003")
+	if err := setup.service.Start(t.Context(), id, backup.RestoreRequest{
+		BackupID:         setup.id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: true,
+	}); err != nil {
+		t.Fatalf("start restore that keeps the access tables: %v", err)
+	}
+
+	row := waitRestoreEnd(t, setup.regs, id)
+
+	if row.State != backup.RestoreFailed {
+		t.Fatalf("restore state = %q, want failed", row.State)
+	}
+
+	if !strings.Contains(row.Error, "site administrator") {
+		t.Fatalf("restore error = %q, want it to name the site administrator", row.Error)
 	}
 }

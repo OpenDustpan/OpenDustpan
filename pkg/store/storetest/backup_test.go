@@ -2247,6 +2247,12 @@ func (s *fakeBackupStore) ApplyStaging(_ context.Context) error {
 	return nil
 }
 
+// ApplyStagingKeepingAccess implements backup.AccessKeepingApplier: the fake
+// keeps no access tables, so it swaps like ApplyStaging.
+func (s *fakeBackupStore) ApplyStagingKeepingAccess(ctx context.Context) error {
+	return s.ApplyStaging(ctx)
+}
+
 // BumpFailoverVersions implements backup.Fencer: it increments the failover
 // version of every namespace by one, so writes with an older fence fail
 // fenced.
