@@ -120,17 +120,18 @@ func TestSessionConformance(t *testing.T) {
 }
 
 // TestSessionFreshConformance runs the session cases that change a policy
-// on one handle and use a session on the other. One SQLite file allows one
-// store, so the suite gets that store twice.
+// on one handle and read it through the other handle of one SQLite file.
 func TestSessionFreshConformance(t *testing.T) {
 	t.Parallel()
 
 	sessiontest.RunFresh(t, func(t *testing.T) (sessiontest.Store, sessiontest.Store) {
 		t.Helper()
 
-		s := open(t)
+		path := filepath.Join(t.TempDir(), "dustpan.db")
 
-		return s, s
+		copyTemplate(t, path)
+
+		return openPath(t, path), openPath(t, path)
 	})
 }
 
