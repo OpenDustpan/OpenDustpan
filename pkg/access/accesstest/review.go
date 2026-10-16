@@ -35,6 +35,7 @@ func reviewCases() []struct {
 		{name: "review units reads live and deleted units", test: testReviewUnits},
 		{name: "review last access reads the latest use of each principal", test: testLastAccess},
 		{name: "caller grants read the current grants of a principal and its groups", test: testCallerGrants},
+		{name: "review hides a suspended member", test: testReviewHidesSuspendedMember},
 	}
 }
 

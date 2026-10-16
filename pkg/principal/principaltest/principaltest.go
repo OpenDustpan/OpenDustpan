@@ -1345,7 +1345,28 @@ func testLocalMembershipDefaults(t *testing.T, s principal.Store) {
 		t.Fatalf("add a local membership: %v", err)
 	}
 
-	members, _, err := s.ListMembers(ctx, "grp-1", all())
+	checkLocalActive(t, s, "grp-1")
+
+	mustCreatePrincipal(t, s, newPrincipal("prn-2", "bob", principal.KindPerson))
+	mustCreateGroup(t, s, newGroup("grp-2", "dev"))
+
+	empty := principal.Membership{
+		AddedAt: at(2), SuspendedAt: time.Time{}, GroupID: "grp-2", PrincipalID: "prn-2",
+		Source: "", SourceID: "", State: "", Pinned: false,
+	}
+	if addErr := s.AddMember(ctx, empty, entry()); addErr != nil {
+		t.Fatalf("add a membership with no source or state: %v", addErr)
+	}
+
+	checkLocalActive(t, s, "grp-2")
+}
+
+// checkLocalActive proves that groupID holds one local active member with
+// no source ID, no suspend time and no pin.
+func checkLocalActive(t *testing.T, s principal.Store, groupID string) {
+	t.Helper()
+
+	members, _, err := s.ListMembers(t.Context(), groupID, all())
 	if err != nil {
 		t.Fatalf("list members: %v", err)
 	}
