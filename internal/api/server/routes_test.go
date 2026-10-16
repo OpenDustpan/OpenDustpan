@@ -160,7 +160,7 @@ func (stubNamespaceStore) Ping(_ context.Context) error { return nil }
 func newTestHandler(t *testing.T) *apiserver.Handler {
 	t.Helper()
 
-	return newServiceBackedHandler(t, stubAuthenticator{}, stubAuthorizer{}, runningSeed())
+	return newServiceBackedHandler(t, stubAuthenticator{}, stubAuthorizer{}, failedSeed())
 }
 
 // newEnforcingHandler builds a Handler whose authorization the caller
@@ -169,7 +169,7 @@ func newTestHandler(t *testing.T) *apiserver.Handler {
 func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiserver.Handler {
 	t.Helper()
 
-	return newServiceBackedHandler(t, tokenAuthenticator{}, authz, runningSeed())
+	return newServiceBackedHandler(t, tokenAuthenticator{}, authz, failedSeed())
 }
 
 // testBackupID is the running backup the handler builders seed, so the
@@ -187,16 +187,18 @@ const testNamespace = "routes"
 // manifest read that only succeeded rows need.
 const testRestoreID = backup.RestoreID("rst-test00000000000001")
 
-// runningSeed returns a running backup row: the state a killed backup leaves,
-// which the next server start marks failed.
-func runningSeed() backup.Record {
+// failedSeed returns a failed backup row, so the GET-by-id route answers 200
+// in the generic enforcement tests. The seed is failed, never running, so the
+// POST route answers 202 in the same tests instead of 409: one backup runs at
+// a time. GET skips the manifest read that only succeeded rows need.
+func failedSeed() backup.Record {
 	return backup.Record{
 		StartedAt: time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
-		EndedAt:   time.Time{},
+		EndedAt:   time.Date(2026, time.October, 11, 12, 5, 0, 0, time.UTC),
 		ID:        testBackupID,
 		Target:    "dir:test",
-		Error:     "",
-		State:     backup.StateRunning,
+		Error:     "server stopped during backup",
+		State:     backup.StateFailed,
 	}
 }
 
