@@ -78,7 +78,8 @@ Other verified failures, with their issue where one exists:
 - A restore ends maintenance mode when its swap commits: the staged data
   holds the backup's installation row, and the swap keeps only the audit chain
   state (`pkg/store/postgres/restore.go:264-326`). Reproduced on both
-  dialects (#678).
+  dialects (#678). Fixed on `main` by #695: the swap now keeps the
+  installation state of the target.
 - A running backup races the retention sweep: a purge that commits after the
   backup's snapshot deletes blobs that the backup still copies (#683).
 - Writes at installation scope (tokens, sessions, principals, grants) carry
@@ -798,5 +799,5 @@ refuses a second instance on one SQLite file.
 
 ## Outcome
 
-Questions 1 to 7 decided on 2026-10-16. The ADR for them is proposed in its
-own pull request. Questions 8 and 9 are open.
+Questions 1 to 7 decided on 2026-10-16. ADR 72 records them, proposed in
+#699. Questions 8 and 9 are open.
