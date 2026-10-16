@@ -19,6 +19,7 @@ func ServeFlags() []*Setting {
 		"max-secret-batch-bytes", "max-state-bytes", "max-body-bytes-in-flight",
 		"soft-delete-retention",
 		"audit-sink",
+		"oidc-issuer", "oidc-provider", "oidc-display-name", "oidc-client-id", "oidc-scopes", "oidc-no-auto-create",
 	)
 }
 
