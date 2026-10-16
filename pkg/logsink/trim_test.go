@@ -28,6 +28,7 @@ func trimSample() logsink.Record {
 			logsink.String("outcome", "success"),
 			logsink.String("prevHash", "abc"),
 			logsink.String("hash", "def"),
+			logsink.String("note", strings.Repeat("n", 1000)),
 		},
 	}
 }
@@ -68,13 +69,16 @@ func checkProtected(t *testing.T, got logsink.Record) {
 	t.Helper()
 
 	for key, want := range map[string]string{
-		"scope":    "acme",
-		"time":     "2026-10-13T12:00:00.000Z",
-		"action":   "unit:read-secrets",
-		"kind":     "reveal",
-		"outcome":  "success",
-		"prevHash": "abc",
-		"hash":     "def",
+		"scope":     "acme",
+		"time":      "2026-10-13T12:00:00.000Z",
+		"action":    "unit:read-secrets",
+		"object":    strings.Repeat("o", 500),
+		"valuePath": strings.Repeat("v", 500),
+		"userAgent": strings.Repeat("u", 500),
+		"kind":      "reveal",
+		"outcome":   "success",
+		"prevHash":  "abc",
+		"hash":      "def",
 	} {
 		gotVal, found := attrValue(got.Attrs, key)
 		text, ok := gotVal.(string)
@@ -95,11 +99,9 @@ func checkProtected(t *testing.T, got logsink.Record) {
 func checkShortened(t *testing.T, got logsink.Record) {
 	t.Helper()
 
-	for _, key := range []string{"object", "valuePath", "userAgent"} {
-		gotVal, _ := attrValue(got.Attrs, key)
-		if text, ok := gotVal.(string); ok && len(text) < 500 {
-			return
-		}
+	gotVal, _ := attrValue(got.Attrs, "note")
+	if text, ok := gotVal.(string); ok && len(text) < 1000 {
+		return
 	}
 
 	t.Fatal("trim: no long field got shorter")
@@ -194,6 +196,83 @@ func TestTrimToFitRejectsBadJSON(t *testing.T) {
 	}
 }
 
+func TestTrimToFitNeverShortensProtectedAttribute(t *testing.T) {
+	t.Parallel()
+
+	protected := []string{
+		"scope",
+		"sequence",
+		"subject",
+		"idpSubject",
+		"tokenID",
+		"action",
+		"object",
+		"version",
+		"valuePath",
+		"atMs",
+		"time",
+		"sourceIP",
+		"userAgent",
+		"channel",
+		"kind",
+		"outcome",
+		"requestID",
+		"prevHash",
+		"hash",
+		"valueCount",
+		"objectID",
+		"changes",
+		"fenceVersion",
+	}
+
+	for _, key := range protected {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+
+			long := strings.Repeat("x", 5000)
+			rec := logsink.Record{
+				Time:    time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC),
+				Level:   logsink.LevelInfo,
+				Message: "audit entry",
+				Attrs: []logsink.Attr{
+					logsink.String(key, long),
+					logsink.String("note", strings.Repeat("n", 5000)),
+				},
+			}
+
+			got, ok, err := logsink.TrimToFit(rec, 480)
+			if err != nil {
+				t.Fatalf("trim: %v", err)
+			}
+
+			if ok {
+				kept, found := attrValue(got.Attrs, key)
+				if !found {
+					t.Fatalf("protected field %q is missing after trim", key)
+				}
+
+				if text, isString := kept.(string); !isString || text != long {
+					t.Fatalf("protected field %q was shortened: got %d bytes, want %d", key, len(text), len(long))
+				}
+
+				return
+			}
+
+			// A record that still exceeds the limit after trimming is
+			// skipped and the caller keeps the original: the protected
+			// value never ships shortened.
+			kept, found := attrValue(rec.Attrs, key)
+			if !found {
+				t.Fatalf("protected field %q is missing", key)
+			}
+
+			if text, isString := kept.(string); !isString || text != long {
+				t.Fatalf("protected field %q was shortened: got %d bytes, want %d", key, len(text), len(long))
+			}
+		})
+	}
+}
+
 func TestTrimToFitKeepsAuditChainFields(t *testing.T) {
 	t.Parallel()
 
@@ -223,6 +302,7 @@ func TestTrimToFitKeepsAuditChainFields(t *testing.T) {
 	}
 
 	rec := audit.ToRecord(entry)
+	rec.Attrs = append(rec.Attrs, logsink.String("note", strings.Repeat("n", 800)))
 	budget := len(marshalLine(t, rec)) - 500
 
 	got, ok, err := logsink.TrimToFit(rec, budget)
@@ -240,7 +320,7 @@ func TestTrimToFitKeepsAuditChainFields(t *testing.T) {
 
 	checkMarked(t, got)
 
-	for _, key := range []string{"scope", "prevHash", "hash"} {
+	for _, key := range []string{"scope", "subject", "object", "valuePath", "userAgent", "requestID", "prevHash", "hash"} {
 		want, _ := attrValue(rec.Attrs, key)
 		kept, found := attrValue(got.Attrs, key)
 
@@ -254,5 +334,10 @@ func TestTrimToFitKeepsAuditChainFields(t *testing.T) {
 
 	if !found || keptSeq != wantSeq {
 		t.Fatalf("chain field sequence: got %v, want %v", keptSeq, wantSeq)
+	}
+
+	keptNote, _ := attrValue(got.Attrs, "note")
+	if text, ok := keptNote.(string); !ok || len(text) >= 800 {
+		t.Fatalf("trimmable field note was not shortened: %v", keptNote)
 	}
 }
