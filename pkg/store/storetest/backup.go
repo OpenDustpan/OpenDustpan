@@ -642,7 +642,7 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 	}
 	for i := range grants {
 		fence, e := GrantWrite(t, s, grants[i].Object, now(), "grant:"+grants[i].ID)
-		if err := as.CreateGrant(ctx, grants[i], fence, e); err != nil {
+		if err := as.CreateGrant(ctx, grants[i], fence, e, nil); err != nil {
 			t.Fatalf("create grant %q: %v", grants[i].ID, err)
 		}
 	}

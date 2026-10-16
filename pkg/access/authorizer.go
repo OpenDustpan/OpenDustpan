@@ -76,6 +76,10 @@ type Authorizer struct {
 	collections UnitCollections
 	units       Units
 	principals  PrincipalNamespaces
+	// chains holds the chain of an object by its wire form, read before
+	// the transaction of a write: the copy of an Authorizer that checks in
+	// that transaction reads no other port. Nil reads each chain.
+	chains map[string][]identity.Object
 }
 
 var _ identity.Authorizer = (*Authorizer)(nil)
@@ -91,7 +95,7 @@ func NewAuthorizer(cfg AuthorizerConfig) (*Authorizer, error) {
 
 	return &Authorizer{
 		store: cfg.Store, callers: cfg.Callers, collections: cfg.Collections, units: cfg.Units,
-		principals: cfg.Principals,
+		principals: cfg.Principals, chains: nil,
 	}, nil
 }
 
@@ -641,6 +645,10 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 // in no chain. An unknown principal keeps the principal and the
 // installation.
 func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity.Object, error) {
+	if chain, ok := a.chains[obj.String()]; ok {
+		return chain, nil
+	}
+
 	return chainObjects(ctx, obj, a.collections, a.withUnitID, a.principals)
 }
 

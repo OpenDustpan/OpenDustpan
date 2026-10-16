@@ -114,7 +114,7 @@ func (f scopeFixture) seed(t *testing.T, subject string, obj identity.Object) {
 	}
 	fence, e := storetest.GrantWrite(t, f.store, obj, scopeAt(), "grant:"+grt.ID)
 
-	if err := f.store.CreateGrant(t.Context(), grt, fence, e); err != nil {
+	if err := f.store.CreateGrant(t.Context(), grt, fence, e, nil); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 }

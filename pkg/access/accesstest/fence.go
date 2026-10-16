@@ -55,7 +55,7 @@ func createGrant(t *testing.T, s access.Store, g access.Grant, e audit.Entry) er
 
 	ns := g.Object.Namespace()
 
-	return s.CreateGrant(t.Context(), g, fenceOf(t, s, ns), scoped(e, ns))
+	return s.CreateGrant(t.Context(), g, fenceOf(t, s, ns), scoped(e, ns), nil)
 }
 
 // revokeGrant revokes the grant id in ns with the fence of ns and e in the
@@ -96,7 +96,7 @@ func testGrantFence(t *testing.T, s access.Store) {
 
 	for i := range refusals {
 		rc := &refusals[i]
-		if err := s.CreateGrant(ctx, g, rc.fence, rc.e); !errors.Is(err, rc.want) {
+		if err := s.CreateGrant(ctx, g, rc.fence, rc.e, nil); !errors.Is(err, rc.want) {
 			t.Errorf("grant with %s = %v, want %v", rc.name, err, rc.want)
 		}
 	}

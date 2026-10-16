@@ -65,7 +65,7 @@ func grantViewerOn(t *testing.T, f accessFixture, principalID, ns, grantID strin
 	}
 
 	fence, e := storetest.GrantWrite(t, f.store, obj, at, "grant:"+grantID)
-	if err := f.store.CreateGrant(t.Context(), grt, fence, e); err != nil {
+	if err := f.store.CreateGrant(t.Context(), grt, fence, e, nil); err != nil {
 		t.Fatalf("seed grant on %q: %v", ns, err)
 	}
 }
@@ -311,7 +311,7 @@ func TestNamespaceListSkipsUnitGrant(t *testing.T) {
 	}
 
 	fence, e := storetest.GrantWrite(t, f.store, unit, at, "grant:grt-list-unit")
-	if err := f.store.CreateGrant(t.Context(), grt, fence, e); err != nil {
+	if err := f.store.CreateGrant(t.Context(), grt, fence, e, nil); err != nil {
 		t.Fatalf("seed unit grant: %v", err)
 	}
 
@@ -343,7 +343,7 @@ func TestNamespaceListSkipsCollectionGrant(t *testing.T) {
 	}
 
 	fence, e := storetest.GrantWrite(t, f.store, obj, at, "grant:grt-list-collection")
-	if grantErr := f.store.CreateGrant(t.Context(), grt, fence, e); grantErr != nil {
+	if grantErr := f.store.CreateGrant(t.Context(), grt, fence, e, nil); grantErr != nil {
 		t.Fatalf("seed collection grant: %v", grantErr)
 	}
 

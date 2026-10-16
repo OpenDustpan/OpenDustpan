@@ -218,7 +218,7 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 		CreatedAt: time.Unix(0, 0), Condition: nil, Object: obj,
 		ID:   fmt.Sprintf("grt-%s-%s-%s", subject.ID, role, obj.String()),
 		Role: role, CreatedBy: "admin", Subject: subject,
-	}, fence, e)
+	}, fence, e, nil)
 	if err != nil {
 		tb.Fatalf("create grant: %v", err)
 	}

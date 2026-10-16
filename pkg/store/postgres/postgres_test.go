@@ -75,6 +75,40 @@ func TestAccessConformance(t *testing.T) {
 	})
 }
 
+// TestAccessConcurrency runs the cases of a grant or role check that races
+// a write on a second handle of the same schema.
+func TestAccessConcurrency(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL concurrency suite", envURL)
+	}
+
+	accesstest.RunConcurrent(t, func(t *testing.T) (access.Store, access.Store) {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return openURL(t, schemaURL), openURL(t, schemaURL)
+	})
+}
+
+// openURL opens the store at the schema URL u and closes it at the end of
+// t.
+func openURL(t *testing.T, u string) *postgres.Store {
+	t.Helper()
+
+	s, err := postgres.Open(t.Context(), u)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	return s
+}
+
 // TestDelegation runs the suite of the tokens of service principals.
 func TestDelegation(t *testing.T) {
 	t.Parallel()

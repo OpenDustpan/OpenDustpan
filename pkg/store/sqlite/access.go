@@ -21,15 +21,42 @@ var (
 	_ access.Callers = (*Store)(nil)
 )
 
-// CreateGrant implements access.GrantStore.
-func (s *Store) CreateGrant(ctx context.Context, g access.Grant, fence namespace.Fence, e audit.Entry) error {
+// CreateGrant implements access.GrantStore. It runs check in the
+// transaction of the write, after the fence check.
+func (s *Store) CreateGrant(
+	ctx context.Context, g access.Grant, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
+) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.inGrantTx(ctx, g.Object.Namespace(), fence, e, func(q *db.Queries) error {
+		if err := runCheck(ctx, q, check); err != nil {
+			return err
+		}
+
 		return insertGrant(ctx, q, g)
 	})
 }
+
+// runCheck runs check, when it is not nil, with reads in the transaction of
+// q. The transaction is IMMEDIATE, so it holds the write lock of the
+// database.
+func runCheck(ctx context.Context, q *db.Queries, check access.GrantCheck) error {
+	if check == nil {
+		return nil
+	}
+
+	return check(ctx, grantReads{q: q})
+}
+
+// grantReads implements access.GrantReads with the queries of one
+// transaction, or of the database. It takes no lock of the Store: the
+// caller holds it.
+type grantReads struct {
+	q *db.Queries
+}
+
+var _ access.GrantReads = grantReads{q: nil}
 
 // insertGrant inserts g with q.
 func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
@@ -215,7 +242,18 @@ func (s *Store) GrantsOn(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.queries.GrantsOn(ctx, db.GrantsOnParams{
+	return grantReads{q: s.queries}.GrantsOn(ctx, subjects, objects)
+}
+
+// GrantsOn implements access.GrantReads.
+func (r grantReads) GrantsOn(
+	ctx context.Context, subjects []access.Subject, objects []identity.Object,
+) ([]access.Grant, error) {
+	if len(subjects) == 0 || len(objects) == 0 {
+		return nil, nil
+	}
+
+	rows, err := r.q.GrantsOn(ctx, db.GrantsOnParams{
 		Subjects: subjectStrings(subjects),
 		Targets:  targetStrings(objects),
 	})
@@ -246,7 +284,12 @@ func (s *Store) RoleGrantedBelowInstallation(ctx context.Context, role string) (
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	n, err := s.queries.CountRoleGrantsBelowInstallation(ctx, role)
+	return grantReads{q: s.queries}.RoleGrantedBelowInstallation(ctx, role)
+}
+
+// RoleGrantedBelowInstallation implements access.GrantReads.
+func (r grantReads) RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error) {
+	n, err := r.q.CountRoleGrantsBelowInstallation(ctx, role)
 	if err != nil {
 		return false, fmt.Errorf("count grants of role: %w", err)
 	}
@@ -259,7 +302,12 @@ func (s *Store) RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	n, err := s.queries.CountRoleGrantsOnPrincipal(ctx, role)
+	return grantReads{q: s.queries}.RoleGrantedOnPrincipal(ctx, role)
+}
+
+// RoleGrantedOnPrincipal implements access.GrantReads.
+func (r grantReads) RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error) {
+	n, err := r.q.CountRoleGrantsOnPrincipal(ctx, role)
 	if err != nil {
 		return false, fmt.Errorf("count grants of role: %w", err)
 	}
@@ -403,7 +451,12 @@ func (s *Store) SubjectsOf(ctx context.Context, subject string) ([]access.Subjec
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.queries.SubjectsOfCaller(ctx, subject)
+	return grantReads{q: s.queries}.SubjectsOf(ctx, subject)
+}
+
+// SubjectsOf implements access.GrantReads.
+func (r grantReads) SubjectsOf(ctx context.Context, subject string) ([]access.Subject, error) {
+	rows, err := r.q.SubjectsOfCaller(ctx, subject)
 	if err != nil {
 		return nil, fmt.Errorf("select subjects of caller: %w", err)
 	}
@@ -483,7 +536,16 @@ func (s *Store) GetRoles(ctx context.Context, ids []string) ([]access.Role, erro
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.queries.RolesByIDs(ctx, ids)
+	return grantReads{q: s.queries}.GetRoles(ctx, ids)
+}
+
+// GetRoles implements access.GrantReads.
+func (r grantReads) GetRoles(ctx context.Context, ids []string) ([]access.Role, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	rows, err := r.q.RolesByIDs(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("select roles by ID: %w", err)
 	}
@@ -504,15 +566,20 @@ func (s *Store) ListRoles(ctx context.Context) ([]access.Role, error) {
 	return mapRows(rows, func(r db.ListRolesRow) access.Role { return fromRoleRow(roleRow(r)) }), nil
 }
 
-// UpdateRole implements access.RoleStore. It refuses a name that another
-// role holds without regard to case, in the same transaction as the write.
-func (s *Store) UpdateRole(ctx context.Context, r access.Role, e audit.Entry) error {
+// UpdateRole implements access.RoleStore. It runs check, then refuses a
+// name that another role holds without regard to case, in the transaction
+// of the write.
+func (s *Store) UpdateRole(ctx context.Context, r access.Role, e audit.Entry, check access.GrantCheck) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	key := strings.ToLower(r.Name)
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		if err := runCheck(ctx, q, check); err != nil {
+			return err
+		}
+
 		holder, err := q.RoleIDByNameKey(ctx, key)
 
 		switch {
