@@ -20,6 +20,7 @@ func ServeFlags() []*Setting {
 		"audit-chain",
 		"soft-delete-retention",
 		"audit-sink",
+		"oidc-issuer", "oidc-provider", "oidc-display-name", "oidc-client-id", "oidc-scopes", "oidc-no-auto-create",
 	)
 }
 

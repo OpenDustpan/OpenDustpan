@@ -331,3 +331,79 @@ func TestForgetsTheSourceSeenLeastRecently(t *testing.T) {
 		t.Fatal("the source seen least recently was kept")
 	}
 }
+
+func TestFailSpendsTheBudgetOfTheSource(t *testing.T) {
+	t.Parallel()
+
+	next := &countingAuthenticator{lookups: atomic.Int64{}}
+	g := newGate(t, next, newClock(), gateOptions{penalty: time.Hour, maxWaiting: 4, maxSources: 0})
+
+	ctx := authgate.WithRequest(t.Context(), "192.0.2.1")
+
+	if err := g.Admit(ctx); err != nil {
+		t.Fatalf("admit within the budget: %v", err)
+	}
+
+	for range 3 {
+		g.Fail(authgate.WithRequest(t.Context(), "192.0.2.1"))
+	}
+
+	// Three failures of sign-in callbacks spend the burst of the source,
+	// as three failed token lookups do.
+	if !overBudget(t, g, "192.0.2.1") {
+		t.Fatal("the source was within the budget after three failures")
+	}
+
+	if err := g.Admit(authgate.WithRequest(canceled(t), "192.0.2.1")); !errors.Is(err, identity.ErrRateLimited) {
+		t.Fatalf("admit over the budget with a done context: err = %v, want ErrRateLimited", err)
+	}
+
+	if next.lookups.Load() != 0 {
+		t.Fatalf("Admit and Fail made %d lookups, want 0", next.lookups.Load())
+	}
+
+	if overBudget(t, g, "192.0.2.2") {
+		t.Fatal("another source was over the budget")
+	}
+}
+
+// TestTokenAndSignInFailuresShareTheBudget proves that failed token
+// lookups and failed sign-in callbacks of one source spend one budget.
+func TestTokenAndSignInFailuresShareTheBudget(t *testing.T) {
+	t.Parallel()
+
+	g := newGate(t, &countingAuthenticator{lookups: atomic.Int64{}}, newClock(),
+		gateOptions{penalty: time.Hour, maxWaiting: 4, maxSources: 0})
+
+	for i := range 2 {
+		if err := attempt(t.Context(), g, "192.0.2.1", "bad"); !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Fatalf("miss %d: err = %v, want ErrUnauthenticated", i+1, err)
+		}
+	}
+
+	// Admit spends no budget, so it probes the source with no side effect.
+	if err := g.Admit(authgate.WithRequest(canceled(t), "192.0.2.1")); err != nil {
+		t.Fatalf("admit after two failed token lookups: %v", err)
+	}
+
+	g.Fail(authgate.WithRequest(t.Context(), "192.0.2.1"))
+
+	if err := g.Admit(authgate.WithRequest(canceled(t), "192.0.2.1")); !errors.Is(err, identity.ErrRateLimited) {
+		t.Fatalf("admit after two failed token lookups and one failed callback: err = %v, want ErrRateLimited", err)
+	}
+}
+
+func TestAdmitAndFailWithoutRequestState(t *testing.T) {
+	t.Parallel()
+
+	g := newGate(t, &countingAuthenticator{lookups: atomic.Int64{}}, newClock(),
+		gateOptions{penalty: time.Hour, maxWaiting: 4, maxSources: 0})
+
+	for range 10 {
+		g.Fail(t.Context())
+	}
+
+	if err := g.Admit(canceled(t)); err != nil {
+		t.Fatalf("admit with no request state: %v", err)
+	}
+}

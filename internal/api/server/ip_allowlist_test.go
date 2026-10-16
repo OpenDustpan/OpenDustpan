@@ -116,6 +116,7 @@ func newIPAllowHandler(
 		DeletedUnits:   nil,
 		AuditChain:     nil,
 		AuditSinks:     nil,
+		SignIn:         nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

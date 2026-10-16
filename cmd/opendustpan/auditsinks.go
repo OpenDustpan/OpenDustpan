@@ -323,13 +323,20 @@ func webhookSecret(lookup func(string) (string, bool)) ([]byte, error) {
 // the file that the variable fileEnv names. The variable wins when both
 // are set. The file must not be readable by group or others.
 func webhookSecretFrom(lookup func(string) (string, bool), env, fileEnv string) ([]byte, error) {
+	return secretFrom(lookup, env, fileEnv, errNoWebhookSecret)
+}
+
+// secretFrom reads a secret from the variable env, else from the file that
+// the variable fileEnv names. The file must allow no group or other
+// access. A missing or empty secret answers errMissing.
+func secretFrom(lookup func(string) (string, bool), env, fileEnv string, errMissing error) ([]byte, error) {
 	if raw, ok := lookup(env); ok && strings.TrimSpace(raw) != "" {
 		return []byte(strings.TrimSpace(raw)), nil
 	}
 
 	path, ok := lookup(fileEnv)
 	if !ok || strings.TrimSpace(path) == "" {
-		return nil, fmt.Errorf("%w: set %s or %s", errNoWebhookSecret, env, fileEnv)
+		return nil, fmt.Errorf("%w: set %s or %s", errMissing, env, fileEnv)
 	}
 
 	info, err := os.Stat(path)
@@ -349,7 +356,7 @@ func webhookSecretFrom(lookup func(string) (string, bool), env, fileEnv string) 
 
 	secret := strings.TrimSpace(string(raw))
 	if secret == "" {
-		return nil, fmt.Errorf("%w: %s is empty", errNoWebhookSecret, fileEnv)
+		return nil, fmt.Errorf("%w: %s is empty", errMissing, fileEnv)
 	}
 
 	return []byte(secret), nil

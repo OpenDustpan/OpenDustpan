@@ -268,6 +268,12 @@ type serveFlags struct {
 	tlsCert                      string
 	tlsKey                       string
 	publicURL                    string
+	oidcIssuer                   string
+	oidcProvider                 string
+	oidcDisplayName              string
+	oidcClientID                 string
+	oidcScopes                   string
+	oidcNoAutoCreate             bool
 	trustedProxies               string
 	trustedProxyHeader           string
 	ipAllowlists                 bool
@@ -431,6 +437,12 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
 	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
 	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
+	cli.ByFlag("oidc-issuer").String(fs, &f.oidcIssuer)
+	cli.ByFlag("oidc-provider").String(fs, &f.oidcProvider)
+	cli.ByFlag("oidc-display-name").String(fs, &f.oidcDisplayName)
+	cli.ByFlag("oidc-client-id").String(fs, &f.oidcClientID)
+	cli.ByFlag("oidc-scopes").String(fs, &f.oidcScopes)
+	cli.ByFlag("oidc-no-auto-create").Bool(fs, &f.oidcNoAutoCreate)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -1091,13 +1103,18 @@ func (f *serveFlags) serverOptions(
 		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
 	}
 
+	signIn, signInErr := f.signInOptions()
+	if signInErr != nil {
+		return nil, signInErr
+	}
+
 	// check refused a bad value, so the parse fails only on a bug.
 	chain, chainErr := audit.ParseChainSetting(f.auditChain)
 	if chainErr != nil {
 		return nil, fmt.Errorf("--audit-chain: %w", chainErr)
 	}
 
-	return []dustpan.Option{
+	return append([]dustpan.Option{
 		dustpan.WithRegion(namespace.Region(f.region)),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -1132,7 +1149,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
 		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithInstanceID(f.instanceID),
-	}, nil
+	}, signIn...), nil
 }
 
 // blobOpenConfig holds the live blob store settings of serve.

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -38,10 +39,42 @@ import (
 //go:embed *.go
 var packageSources embed.FS
 
-// publicPatterns lists the routes that need no sign-in. The installation API
-// serves no public route: every route needs a signed-in principal.
+// testProvider is the sign-in provider of the test handler.
+const testProvider = "corp"
+
+// wantPublicStatus returns the status of a public route for a request with
+// no cookie: the start of a sign-in sends the browser to the identity
+// provider, and a callback with no sign-in cookie fails.
+func wantPublicStatus(route apiserver.Route) int {
+	if route.Path == "/api/server/sign-in/{provider}" {
+		return http.StatusFound
+	}
+
+	return http.StatusBadRequest
+}
+
+// publicPatterns lists the routes that need no sign-in: the start and the
+// callback of a sign-in, which run before the person has a session.
 func publicPatterns() []string {
-	return nil
+	return []string{
+		"GET /api/server/sign-in/{provider}",
+		"GET /api/server/sign-in/{provider}/callback",
+	}
+}
+
+// stubOIDC is an identity provider that the route tests never reach: its
+// authorization URL goes nowhere, and every callback fails.
+type stubOIDC struct{}
+
+func (stubOIDC) Begin(_ context.Context, opts oauth.Options) (string, oauth.Pending, error) {
+	return "https://idp.example/authorize?state=" + opts.State, oauth.Pending{
+		State: opts.State, Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43), MaxAge: 0,
+		HasMaxAge: false,
+	}, nil
+}
+
+func (stubOIDC) Finish(context.Context, string, oauth.Pending) (oauth.Identity, error) {
+	return oauth.Identity{}, oauth.ErrIDToken
 }
 
 // stubAuthenticator denies every token. Tests that send no token never reach it.
@@ -205,6 +238,13 @@ func newServiceBackedHandler(
 		t.Fatalf("session policy service: %v", err)
 	}
 
+	sessions, err := session.NewSessions(
+		session.SessionsConfig{Store: st, Policies: sessionPolicies, Inactivity: nil, Now: nil},
+	)
+	if err != nil {
+		t.Fatalf("session service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:  authn,
 		Authorizer:     authz,
@@ -227,6 +267,12 @@ func newServiceBackedHandler(
 		AuditSinks:     nil,
 		IPAllowlists:   allow,
 		SessionPolicy:  sessionPolicies,
+		SignIn: &apiserver.SignIn{
+			Sessions: sessions, Limiter: nil, Origins: nil,
+			Providers: []apiserver.SignInProvider{
+				{Client: stubOIDC{}, ID: testProvider, DisplayName: "Corp", AutoCreate: true},
+			},
+		},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -873,6 +919,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	path = strings.ReplaceAll(path, "{namespace}", testNamespace)
 	path = strings.ReplaceAll(path, "{principal}", owner.principal)
 	path = strings.ReplaceAll(path, "{collection}", testCollection)
+	path = strings.ReplaceAll(path, "{provider}", testProvider)
 
 	path += routeQuery(route.Path)
 
@@ -889,6 +936,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	req.SetPathValue("id", id)
 	req.SetPathValue("principal", owner.principal)
 	req.SetPathValue("collection", testCollection)
+	req.SetPathValue("provider", testProvider)
 
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -994,6 +1042,12 @@ func wantSuccessStatus(route apiserver.Route) int {
 		return http.StatusNoContent
 	}
 
+	if route.Path == "/api/server/session" || route.Path == "/api/server/sign-out" {
+		// The test caller signs in with a token, so it has no console
+		// session to read or to end.
+		return http.StatusNotFound
+	}
+
 	return http.StatusOK
 }
 
@@ -1025,8 +1079,8 @@ func checkRouteEnforcement(t *testing.T, route apiserver.Route) {
 		rec := httptest.NewRecorder()
 		allowed.ServeHTTP(rec, routeRequest(t, route, ""))
 
-		if rec.Code != http.StatusOK {
-			t.Fatalf("public route answers %d, want %d", rec.Code, http.StatusOK)
+		if want := wantPublicStatus(route); rec.Code != want {
+			t.Fatalf("public route answers %d, want %d", rec.Code, want)
 		}
 
 		return
@@ -1138,8 +1192,8 @@ func checkPublicRouteObject(t *testing.T, route apiserver.Route) {
 	rec := httptest.NewRecorder()
 	allowed.ServeHTTP(rec, routeRequest(t, route, ""))
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("public route answers %d, want %d", rec.Code, http.StatusOK)
+	if want := wantPublicStatus(route); rec.Code != want {
+		t.Fatalf("public route answers %d, want %d", rec.Code, want)
 	}
 
 	if len(recorder.calls) != 0 {
@@ -1280,6 +1334,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
+		SignIn:         nil,
 	}
 
 	cases := []struct {
@@ -1417,6 +1472,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
+		SignIn:         nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1448,6 +1504,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
+		SignIn:         nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)

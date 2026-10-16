@@ -42,6 +42,12 @@ the same list.
 | `--audit-chain` | `DUSTPAN_AUDIT_CHAIN` | `audit-chain` | `on`. `off` turns the chain off. A change starts the server in maintenance mode until a person runs `opendustpan audit-chain approve` |
 | `--soft-delete-retention` | `DUSTPAN_SOFT_DELETE_RETENTION` | `soft-delete-retention` | `720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records the end of its retention, so a change applies to later deletes |
 | `--audit-sink` | `DUSTPAN_AUDIT_SINK` | `audit-sink` | (none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit` |
+| `--oidc-issuer` | `DUSTPAN_OIDC_ISSUER` | `oidc-issuer` | (none: no console sign-in). The identity of a person does not hold the issuer. To use another issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a person of the old issuer with the same `sub`. |
+| `--oidc-provider` | `DUSTPAN_OIDC_PROVIDER` | `oidc-provider` | (none). The ID is part of the identity of each person who signs in: the subject `<provider ID>:<sub>`. A principal with that subject, a local one too, is the principal of that person. Never change the ID after the first sign-in. A new issuer needs a new ID. |
+| `--oidc-display-name` | `DUSTPAN_OIDC_DISPLAY_NAME` | `oidc-display-name` | (the provider ID) |
+| `--oidc-client-id` | `DUSTPAN_OIDC_CLIENT_ID` | `oidc-client-id` | (none) |
+| `--oidc-scopes` | `DUSTPAN_OIDC_SCOPES` | `oidc-scopes` | `profile,email` |
+| `--oidc-no-auto-create` | `DUSTPAN_OIDC_NO_AUTO_CREATE` | `oidc-no-auto-create` | false |
 
 With journaling on, the server refuses to complete an update with
 `succeeded` while the server has not stored a journal batch of the update. The

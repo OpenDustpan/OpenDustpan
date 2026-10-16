@@ -448,6 +448,10 @@ func createPrincipalToken(
 	id := r.PathValue("principal")
 	object := principal.Ref(id)
 
+	if _, ok := sessionFromRequest(r); ok {
+		return failed(object), errSessionToken
+	}
+
 	var req principalTokenRequest
 	if err := decodeStrict(w, r, &req, errPrincipalTokenBody); err != nil {
 		return failed(object), err
@@ -546,6 +550,10 @@ func createToken(scope accesstoken.Scope) tokenOp {
 	return func(
 		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
 	) (principalResult, error) {
+		if _, ok := sessionFromRequest(r); ok {
+			return failed("tokens"), errSessionToken
+		}
+
 		var req createTokenRequest
 		if err := decodeStrict(w, r, &req, errTokenBody); err != nil {
 			return failed("tokens"), err
@@ -730,6 +738,10 @@ func rotateToken(scope accesstoken.Scope) tokenOp {
 		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
 	) (principalResult, error) {
 		object := tokenObject(r, svc)
+
+		if _, ok := sessionFromRequest(r); ok {
+			return failed(object), errSessionToken
+		}
 
 		var req rotateTokenRequest
 		if err := decodeStrict(w, r, &req, errRotateBody); err != nil {
