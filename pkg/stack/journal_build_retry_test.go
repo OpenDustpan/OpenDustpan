@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"testing"
@@ -69,9 +70,11 @@ func (r *changeAfterFirstReplayer) Replay(
 		got = bytes.ReplaceAll(got, []byte(`"id":"b"`), []byte(`"id":"c"`))
 	}
 
-	_, err := out.Write(got)
+	if _, err := out.Write(got); err != nil {
+		return fmt.Errorf("write replay output: %w", err)
+	}
 
-	return err
+	return nil
 }
 
 // newRetryFixture returns a build fixture whose first built checkpoint

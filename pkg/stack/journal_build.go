@@ -349,30 +349,40 @@ func (s *Updates) adoptBuiltBlob(ctx context.Context, stored builtBlob) error {
 // time in their manifest. The replay writes the time of the build there, so
 // a retry after the clock moved builds the same deployment with a new time.
 func sameBuild(a, b []byte) bool {
-	aMembers, aManifest, aok := buildMembers(a)
-	bMembers, bManifest, bok := buildMembers(b)
+	aParts, aok := splitBuild(a)
+	bParts, bok := splitBuild(b)
 
-	return aok && bok && equalMembers(aMembers, bMembers) && equalMembers(aManifest, bManifest)
+	return aok && bok &&
+		equalMembers(aParts.members, bParts.members) &&
+		equalMembers(aParts.manifest, bParts.manifest)
 }
 
-// buildMembers returns the members of a deployment without its manifest, and
-// the members of the manifest without its time. It reports false when the
-// deployment or its manifest is not a JSON object.
-func buildMembers(deployment []byte) (members, manifest map[string]json.RawMessage, ok bool) {
-	if err := json.Unmarshal(deployment, &members); err != nil {
-		return nil, nil, false
+// buildParts holds the members of a deployment without its manifest, and the
+// members of the manifest without its time.
+type buildParts struct {
+	members  map[string]json.RawMessage
+	manifest map[string]json.RawMessage
+}
+
+// splitBuild returns the parts of a deployment that sameBuild compares. It
+// reports false when the deployment or its manifest is not a JSON object.
+func splitBuild(deployment []byte) (buildParts, bool) {
+	var parts buildParts
+
+	if err := json.Unmarshal(deployment, &parts.members); err != nil {
+		return buildParts{members: nil, manifest: nil}, false
 	}
 
-	if raw, found := members["manifest"]; found {
-		if err := json.Unmarshal(raw, &manifest); err != nil {
-			return nil, nil, false
+	if raw, found := parts.members["manifest"]; found {
+		if err := json.Unmarshal(raw, &parts.manifest); err != nil {
+			return buildParts{members: nil, manifest: nil}, false
 		}
 	}
 
-	delete(members, "manifest")
-	delete(manifest, "time")
+	delete(parts.members, "manifest")
+	delete(parts.manifest, "time")
 
-	return members, manifest, true
+	return parts, true
 }
 
 // equalMembers reports whether two sets of JSON members hold the same bytes.
