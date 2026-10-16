@@ -56,6 +56,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a deleted owner hides its sessions from the lookup", test: testDeletedOwner},
 		{name: "a disabled owner comes back with its disable time", test: testDisabledOwner},
 		{name: "touch records the last use at most once for each period", test: testTouch},
+		{name: "touch keeps the authentication time", test: testTouchKeepsAuthTime},
 		{name: "end sets the end time and the reason once", test: testEnd},
 		{name: "a change appends its audit entry in @server", test: testChangeAppendsEntry},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntryChangesNothing},
@@ -426,6 +427,32 @@ func testTouch(t *testing.T, s Store) {
 
 	if got := mustGet(t, s).LastSeenAt; !got.Equal(at(6)) {
 		t.Fatalf("last use after a touch of an ended session = %s, want %s", got, at(6))
+	}
+}
+
+// testTouchKeepsAuthTime proves that a touch after the touch period
+// records the last use and keeps the authentication time: the token
+// freshness check reads it, so a use of the session must not make an old
+// sign-in fresh.
+func testTouchKeepsAuthTime(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPerson(t, s, "prn-1")
+
+	created := newSession("ses-1", "prn-1", at(5))
+	mustSession(t, s, created, digest(1))
+
+	if err := s.TouchSession(t.Context(), "ses-1", at(8), time.Minute, noLimits()); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+
+	got := mustGet(t, s)
+	if !got.LastSeenAt.Equal(at(8)) {
+		t.Fatalf("last use after a touch = %s, want %s", got.LastSeenAt, at(8))
+	}
+
+	if !got.AuthTime.Equal(created.AuthTime) {
+		t.Fatalf("authentication time after a touch = %s, want %s", got.AuthTime, created.AuthTime)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -24,14 +26,16 @@ type ProviderStore interface {
 
 // issuerChangedError is the refusal of a provider ID whose issuer changed.
 // Its text is one sentence that names the provider ID, both issuers and
-// the fix.
+// the fix: in most cases the configuration has a mistake, and a new
+// provider ID would give each person a new principal.
 type issuerChangedError struct {
 	id, recorded, configured string
 }
 
 func (e issuerChangedError) Error() string {
 	return fmt.Sprintf("sign-in provider %q has the issuer %q in the database and the issuer %q in the "+
-		"configuration, so set a new provider ID for the new issuer", e.id, e.recorded, e.configured)
+		"configuration, so set the issuer (--oidc-issuer) back to %q, or set a new provider ID only if the "+
+		"identity provider changed", e.id, e.recorded, e.configured, e.recorded)
 }
 
 // Unwrap returns ErrIssuerChanged.
@@ -48,17 +52,40 @@ type Provider struct {
 // an error that matches ErrIssuerChanged, whose text is one sentence that
 // names the provider ID, both issuers and the fix, for the first provider
 // whose recorded issuer is another one.
+//
+// It records and compares the issuer in the form of NormalizeIssuer, so a
+// change of the case of the scheme or the host, or a trailing slash, is
+// the same issuer.
 func BindProviders(ctx context.Context, store ProviderStore, providers []Provider, at time.Time) error {
 	for _, p := range providers {
-		recorded, err := store.BindProvider(ctx, p.ID, p.Issuer, at)
+		issuer := NormalizeIssuer(p.Issuer)
+
+		recorded, err := store.BindProvider(ctx, p.ID, issuer, at)
 		if err != nil {
 			return fmt.Errorf("record the issuer of sign-in provider %q: %w", p.ID, err)
 		}
 
-		if recorded != p.Issuer {
+		if NormalizeIssuer(recorded) != issuer {
 			return issuerChangedError{id: p.ID, recorded: recorded, configured: p.Issuer}
 		}
 	}
 
 	return nil
+}
+
+// NormalizeIssuer returns issuer with a lowercase scheme and host and with
+// no trailing slash. An issuer that is not a URL keeps its text, with no
+// trailing slash.
+func NormalizeIssuer(issuer string) string {
+	u, err := url.Parse(issuer)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return strings.TrimRight(issuer, "/")
+	}
+
+	u.Scheme = strings.ToLower(u.Scheme)
+	u.Host = strings.ToLower(u.Host)
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawPath = strings.TrimRight(u.RawPath, "/")
+
+	return u.String()
 }

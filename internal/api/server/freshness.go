@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/url"
 	"time"
+
+	"opendustpan.org/opendustpan/pkg/session"
 )
 
 // errReauthenticate reports a console session whose sign-in is older than
@@ -23,7 +25,7 @@ type reauthenticateError struct {
 
 func (e reauthenticateError) Error() string {
 	return fmt.Sprintf("the sign-in of this console session is older than %s, so sign in again at the identity "+
-		"provider before you create or rotate a token", e.window)
+		"provider before this change", e.window)
 }
 
 // Unwrap returns errReauthenticate.
@@ -79,21 +81,32 @@ func freshParam(r *http.Request) (bool, error) {
 	}
 }
 
-// checkTokenFreshness refuses a token change from a console session whose
-// sign-in is older than the token freshness window of the session policy.
-// A request with an access token, and a window of 0, pass.
+// checkTokenFreshness refuses a token change, or a change of the session
+// policy, from a console session whose sign-in is older than the token
+// freshness window of the session policy. A request with an access token,
+// and a window of 0, pass. With no session policy service, the window is
+// session.DefaultTokenFreshness.
 func (h *Handler) checkTokenFreshness(r *http.Request) error {
 	caller, ok := sessionFromRequest(r)
-	if !ok || h.signIn == nil || h.sessions == nil {
+	if !ok {
 		return nil
 	}
 
-	policy, err := h.sessions.Policy(r.Context())
-	if err != nil {
-		return fmt.Errorf("read the token freshness window: %w", err)
+	if h.signIn == nil {
+		return errNoFreshnessCheck
 	}
 
-	window := policy.TokenFreshness
+	window := session.DefaultTokenFreshness
+
+	if h.sessions != nil {
+		policy, err := h.sessions.Policy(r.Context())
+		if err != nil {
+			return fmt.Errorf("read the token freshness window: %w", err)
+		}
+
+		window = policy.TokenFreshness
+	}
+
 	if window == 0 || h.signIn.sessions.Now().Sub(caller.Match.Session.AuthTime) <= window {
 		return nil
 	}

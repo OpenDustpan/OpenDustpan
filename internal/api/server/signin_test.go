@@ -109,6 +109,20 @@ func alice() oauthtest.User {
 func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 	t.Helper()
 
+	return newSignInEnvWith(t, signInEnvOptions{autoCreate: autoCreate, noPolicyRoutes: false})
+}
+
+// signInEnvOptions are the options of a sign-in environment. autoCreate
+// lets the sign-in create a principal. noPolicyRoutes gives the handler no
+// session policy service, so it mounts no session policy route.
+type signInEnvOptions struct {
+	autoCreate     bool
+	noPolicyRoutes bool
+}
+
+func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
+	t.Helper()
+
 	var noFaults oauthtest.Faults
 
 	clock := &envClock{mu: sync.Mutex{}, now: time.Now().UTC().Truncate(time.Second)}
@@ -152,6 +166,11 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 	limiter := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
 	principals := seedRoutePrincipals(t, st)
 
+	policyRoutes := policies
+	if opts.noPolicyRoutes {
+		policyRoutes = nil
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
@@ -173,11 +192,11 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 		AuditSinks:     nil,
 		AuditChain:     nil,
 		IPAllowlists:   nil,
-		SessionPolicy:  policies,
+		SessionPolicy:  policyRoutes,
 		SignIn: &apiserver.SignIn{
 			Sessions: sessions, Limiter: limiter, Origins: []string{signInBase, consoleOrigin},
 			Providers: []apiserver.SignInProvider{
-				{Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: autoCreate},
+				{Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate},
 			},
 		},
 		CheckpointEpochs: nil,
@@ -558,9 +577,19 @@ func tokenTargets() []string {
 func (e signInEnv) postWithSession(t *testing.T, sess *http.Cookie, target, body string) *httptest.ResponseRecorder {
 	t.Helper()
 
+	return e.sendWithSession(t, http.MethodPost, sess, target, body)
+}
+
+// sendWithSession sends a request with method, the session cookie and its
+// CSRF value.
+func (e signInEnv) sendWithSession(
+	t *testing.T, method string, sess *http.Cookie, target, body string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+
 	_, s := e.readSession(t, sess)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, target, strings.NewReader(body))
 	req.AddCookie(sess)
 	req.Header.Set(apiserver.CSRFHeader, s.CSRFToken)
 
@@ -1060,4 +1089,121 @@ func (e signInEnv) sessionChanges(t *testing.T) []audit.Entry {
 	}
 
 	return changes
+}
+
+// freshSignIn signs in with fresh=1, so the identity provider
+// authenticates again, and returns the session cookie.
+func (e signInEnv) freshSignIn(t *testing.T) *http.Cookie {
+	t.Helper()
+
+	binding, authURL := e.startQuery(t, url.Values{"fresh": {"1"}})
+
+	rec := e.callback(t, e.authorize(t, authURL), binding)
+
+	sess := cookieOf(rec, apiserver.SessionCookie)
+	if rec.Code != http.StatusSeeOther || sess == nil {
+		t.Fatalf("fresh callback = %d %s, want 303 with a session", rec.Code, rec.Body.String())
+	}
+
+	return sess
+}
+
+// TestSignInSessionPolicyChangeNeedsAFreshSignIn proves that a console
+// session whose sign-in is older than the token freshness window cannot
+// change the session policy: it answers 401 with the path of a new sign-in
+// and the policy stays. A fresh session changes it.
+func TestSignInSessionPolicyChangeNeedsAFreshSignIn(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+	stale := e.staleSession(t)
+
+	rec := e.sendWithSession(t, http.MethodPatch, stale, "/api/server/session-policy", `{"tokenFreshnessSeconds":0}`)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "/api/server/sign-in/corp?fresh=1") {
+		t.Fatalf("policy change from a stale session = %d %s, want 401 with the path of a new sign-in",
+			rec.Code, rec.Body.String())
+	}
+
+	policy, err := e.store.GetSessionPolicy(t.Context())
+	if err != nil {
+		t.Fatalf("read the policy: %v", err)
+	}
+
+	if !policy.TokenFreshnessDefault {
+		t.Fatalf("token freshness after a refused change = %s (default %t), want the default",
+			policy.TokenFreshness, policy.TokenFreshnessDefault)
+	}
+
+	rec = e.sendWithSession(t, http.MethodPatch, e.freshSignIn(t), "/api/server/session-policy",
+		`{"tokenFreshnessSeconds":600}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("policy change from a fresh session = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSignInFreshnessWithNoPolicyService proves that a token change from a
+// console session uses the default token freshness window when the
+// handler has no session policy service: it fails closed.
+func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnvWith(t, signInEnvOptions{autoCreate: true, noPolicyRoutes: true})
+
+	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
+	if created.Code != http.StatusCreated {
+		t.Fatalf("own token from a fresh session = %d %s, want 201", created.Code, created.Body.String())
+	}
+
+	rec := e.postWithSession(t, e.staleSession(t), "/api/server/caller/tokens", ownTokenBody())
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("own token from a stale session with no policy service = %d %s, want 401",
+			rec.Code, rec.Body.String())
+	}
+}
+
+// TestSignInTokenEntryNamesTheSession proves that the audit entry of a
+// token that a console session creates records the session ID, and that
+// the sign-in entry of that session names the same session.
+func TestSignInTokenEntryNamesTheSession(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+
+	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
+	if created.Code != http.StatusCreated {
+		t.Fatalf("own token from a fresh session = %d %s, want 201", created.Code, created.Body.String())
+	}
+
+	entries := e.serverEntries(t)
+
+	sessionID := tokenEntrySession(entries)
+	if sessionID == "" {
+		t.Fatal("the token entry records no session ID")
+	}
+
+	for i := range entries {
+		if entries[i].Action == session.ActionSignIn && strings.HasSuffix(entries[i].Object, sessionID) {
+			return
+		}
+	}
+
+	t.Fatalf("no sign-in entry names the session %q of the token entry", sessionID)
+}
+
+// tokenEntrySession returns the session ID that the successful own token
+// entry of entries records, or "".
+func tokenEntrySession(entries []audit.Entry) string {
+	for i := range entries {
+		if entries[i].Action != string(identity.ActionTokenManageOwn) || entries[i].Outcome != audit.OutcomeSuccess {
+			continue
+		}
+
+		for _, c := range entries[i].Changes {
+			if c.Key == "sessionId" && c.Old == nil {
+				return c.New
+			}
+		}
+	}
+
+	return ""
 }

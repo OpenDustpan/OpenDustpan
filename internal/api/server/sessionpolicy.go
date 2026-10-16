@@ -122,10 +122,17 @@ func (h *Handler) changeSessionPolicy(w http.ResponseWriter, r *http.Request, p 
 	h.writeJSON(ctx, w, http.StatusOK, sessionPolicyOf(stored))
 }
 
-// setSessionPolicy decodes the change body of r and applies it.
+// setSessionPolicy decodes the change body of r and applies it. A change
+// from a console session needs a sign-in within the token freshness
+// window, as a token change does: an old session could otherwise turn the
+// window off and then create a token.
 func (h *Handler) setSessionPolicy(
 	w http.ResponseWriter, r *http.Request, p identity.Principal,
 ) (session.Policy, error) {
+	if err := h.checkTokenFreshness(r); err != nil {
+		return session.Policy{}, err
+	}
+
 	var req sessionPolicyRequest
 
 	empty := func() bool {
