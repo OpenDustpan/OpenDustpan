@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -323,16 +324,60 @@ func (s *Updates) adoptBuiltBlob(ctx context.Context, stored builtBlob) error {
 
 	if storedSize, storedSum := storedAttrs(gave); storedSize != stored.size || storedSum != stored.sum {
 		deployment, derr := gunzipBytes(gave, s.maxCheckpoints)
-		if derr != nil || sha256.Sum256(deployment) != stored.save.built.Digest {
+		if derr != nil {
 			return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, ErrConcurrentModification)
 		}
 
-		size, sum := storedAttrs(gave)
+		digest := sha256.Sum256(deployment)
+		if digest != stored.save.built.Digest && !sameBuild(deployment, stored.save.built.Deployment) {
+			return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, ErrConcurrentModification)
+		}
 
-		return s.commitBuiltRow(ctx, builtRow(stored.save, stored.key, stored.prev), size, sum)
+		// The row describes the stored blob, which may hold the manifest
+		// time of the first build.
+		save := stored.save
+		save.built.Deployment = deployment
+		save.built.Digest = digest
+
+		return s.commitBuiltRow(ctx, builtRow(save, stored.key, stored.prev), storedSize, storedSum)
 	}
 
 	return s.commitBuiltRow(ctx, builtRow(stored.save, stored.key, stored.prev), stored.size, stored.sum)
+}
+
+// sameBuild reports whether two built deployments are equal apart from the
+// time in their manifest. The replay writes the time of the build there, so
+// a retry after the clock moved builds the same deployment with a new time.
+func sameBuild(a, b []byte) bool {
+	aMembers, aManifest, aok := buildMembers(a)
+	bMembers, bManifest, bok := buildMembers(b)
+
+	return aok && bok && equalMembers(aMembers, bMembers) && equalMembers(aManifest, bManifest)
+}
+
+// buildMembers returns the members of a deployment without its manifest, and
+// the members of the manifest without its time. It reports false when the
+// deployment or its manifest is not a JSON object.
+func buildMembers(deployment []byte) (members, manifest map[string]json.RawMessage, ok bool) {
+	if err := json.Unmarshal(deployment, &members); err != nil {
+		return nil, nil, false
+	}
+
+	if raw, found := members["manifest"]; found {
+		if err := json.Unmarshal(raw, &manifest); err != nil {
+			return nil, nil, false
+		}
+	}
+
+	delete(members, "manifest")
+	delete(manifest, "time")
+
+	return members, manifest, true
+}
+
+// equalMembers reports whether two sets of JSON members hold the same bytes.
+func equalMembers(a, b map[string]json.RawMessage) bool {
+	return maps.EqualFunc(a, b, func(x, y json.RawMessage) bool { return bytes.Equal(x, y) })
 }
 
 // commitBuiltRow writes the row of a built checkpoint with the delete of its
