@@ -464,6 +464,8 @@ func overwriteStagedAccessTables(
 		}
 	}
 
+	// Merge the principals before the child rows are reloaded: each reloaded
+	// child row names a principal, so the principal row must exist first.
 	if err := mergeStagedPrincipals(ctx, tx, live); err != nil {
 		return err
 	}

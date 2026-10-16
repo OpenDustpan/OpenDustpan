@@ -68,12 +68,12 @@ func (s *Store) swapStagingSchemaKeepingAccess(ctx context.Context, staging stri
 			return err
 		}
 
-		if err := keepAccessTables(ctx, tx, live, staging); err != nil {
-			return err
-		}
-
 		if s.keepAccessHook != nil {
 			s.keepAccessHook(ctx, tx, live)
+		}
+
+		if err := keepAccessTables(ctx, tx, live, staging); err != nil {
+			return err
 		}
 
 		return swapSchemas(ctx, tx, live, staging)
@@ -141,6 +141,8 @@ func keepAccessTables(ctx context.Context, tx pgx.Tx, live, staging string) erro
 		return keepAccessError("keep staged groups", err)
 	}
 
+	// Merge the principals before the child rows are copied: each copied child
+	// row names a principal, so the principal row must exist first.
 	if err := mergePrincipals(ctx, tx, live, staging); err != nil {
 		return err
 	}

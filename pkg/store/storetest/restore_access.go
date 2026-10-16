@@ -1041,3 +1041,129 @@ func checkKeepMismatchPrincipal(t *testing.T, s RestoreStore) {
 		principalID: "prn-fresh",
 	})
 }
+
+// testRestoreKeepsLiveOnlyPrincipal proves that a principal created after the
+// backup keeps its child rows through a keep-access restore. The live
+// principal has an access token, a session and a group membership that the
+// backup does not hold. The keep must keep all of them, and the merge must not
+// fail on a foreign key. A merge that runs in the wrong order fails here.
+func testRestoreKeepsLiveOnlyPrincipal(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	ports := keepAccessStores(t, s)
+
+	seedBackupStore(t, s)
+	sink, sum, files := exportPortable(t, ports.stager)
+
+	createLiveOnlyPrincipal(t, ports)
+	stageKeepBackup(t, ports.stager, sink, sum, files)
+
+	if err := ports.keeper.ApplyStagingKeepingAccess(t.Context()); err != nil {
+		t.Fatalf("apply keeping the access tables with a live-only principal: %v", err)
+	}
+
+	checkKeptLiveOnlyPrincipal(t, ports)
+}
+
+// createLiveOnlyPrincipal creates prn-live-only after the backup, with one
+// access token, one session and one membership of grp-ops.
+func createLiveOnlyPrincipal(t *testing.T, ports keepAccessPorts) {
+	t.Helper()
+
+	ctx := t.Context()
+	at := now().Add(3 * time.Hour)
+
+	live := principal.Principal{
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          "prn-live-only",
+		Subject:     "live-only@example.com",
+		DisplayName: "Live only",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
+	}
+
+	if err := ports.principals.CreatePrincipal(ctx, live, ServerChange(at, "principal:prn-live-only")); err != nil {
+		t.Fatalf("create live-only principal: %v", err)
+	}
+
+	token := backupToken("tok-live-only", "prn-live-only", accesstoken.KindPersonal)
+	token.CreatedAt = at
+
+	entry := ServerChange(at, "token:tok-live-only")
+
+	if err := ports.tokens.CreateToken(ctx, token, accesstoken.Digest{4}, entry); err != nil {
+		t.Fatalf("create live-only token: %v", err)
+	}
+
+	ses := session.Session{
+		CreatedAt:   at,
+		LastSeenAt:  at,
+		AuthTime:    at.Add(-time.Minute),
+		EndedAt:     time.Time{},
+		ID:          "ses-live-only",
+		PrincipalID: "prn-live-only",
+		Provider:    "corp-idp",
+		EndReason:   "",
+		SourceIP:    "192.0.2.11",
+		UserAgent:   "storetest",
+	}
+
+	digest := session.Digest(sha256.Sum256([]byte("live-only session")))
+
+	if err := ports.sessions.CreateSession(ctx, ses, digest, ServerChange(at, "session:ses-live-only")); err != nil {
+		t.Fatalf("create live-only session: %v", err)
+	}
+
+	member := principal.Membership{
+		AddedAt: at, SuspendedAt: time.Time{}, GroupID: "grp-ops", PrincipalID: "prn-live-only",
+		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+		Pinned: false,
+	}
+
+	memberEntry := ServerChange(at, "group:grp-ops#member:prn-live-only")
+
+	if err := ports.principals.AddMember(ctx, member, memberEntry); err != nil {
+		t.Fatalf("add live-only member: %v", err)
+	}
+}
+
+// checkKeptLiveOnlyPrincipal proves the live-only principal and each of its
+// child rows survived the keep restore.
+func checkKeptLiveOnlyPrincipal(t *testing.T, ports keepAccessPorts) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if _, err := ports.principals.GetPrincipal(ctx, "prn-live-only"); err != nil {
+		t.Fatalf("get kept live-only principal: %v", err)
+	}
+
+	if _, err := ports.tokens.GetToken(ctx, "tok-live-only"); err != nil {
+		t.Fatalf("get kept live-only token: %v", err)
+	}
+
+	if _, err := ports.sessions.GetSession(ctx, "ses-live-only"); err != nil {
+		t.Fatalf("get kept live-only session: %v", err)
+	}
+
+	query := principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1}
+
+	members, _, err := ports.principals.ListMembers(ctx, "grp-ops", query)
+	if err != nil {
+		t.Fatalf("list kept members of grp-ops: %v", err)
+	}
+
+	for i := range members {
+		if members[i].PrincipalID == "prn-live-only" {
+			return
+		}
+	}
+
+	t.Fatalf("kept members of grp-ops = %d, none is prn-live-only", len(members))
+}

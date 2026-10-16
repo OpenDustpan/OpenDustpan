@@ -562,9 +562,31 @@ func (restoreAuditMaintenance) Leave(_ context.Context) error {
 // swap leaves the restore audit entry, with the access mode, in the restored
 // audit log: an entry written before the swap would go away with the old
 // live data. It runs the same restore service the server wires, over a real
-// store, with a backup taken just before.
+// store, with a backup taken just before, once replacing the access tables
+// and once keeping the current rows.
 func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
 	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		keep bool
+		want string
+	}{
+		{name: "replaces access tables", keep: false, want: "access tables replaced"},
+		{name: "keeps access tables", keep: true, want: "access tables kept"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkRestoreAuditEntryAfterSwap(t, tc.keep, tc.want)
+		})
+	}
+}
+
+// checkRestoreAuditEntryAfterSwap restores a backup taken just before, keeping
+// the access tables when keep is true, and proves the restored audit log
+// holds the restore audit entry naming want.
+func checkRestoreAuditEntryAfterSwap(t *testing.T, keep bool, want string) {
+	t.Helper()
 
 	base := os.Getenv(envURL)
 	if base == "" {
@@ -589,7 +611,7 @@ func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
 		CheckOnly:        false,
 		Force:            false,
 		RequestedBy:      "tester",
-		KeepAccessTables: false,
+		KeepAccessTables: keep,
 	}
 
 	if startErr := restores.Start(ctx, restoreID, req); startErr != nil {
@@ -597,7 +619,7 @@ func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
 	}
 
 	waitRestoreSucceeded(t, restores, restoreID)
-	assertRestoreAuditEntry(t, st, restoreID, backupID)
+	assertRestoreAuditEntry(t, st, restoreID, backupID, want)
 }
 
 // openRestoreAuditBlobs opens the live and target blob stores of the
@@ -712,9 +734,9 @@ func waitRestoreSucceeded(t *testing.T, restores *backup.RestoreService, id back
 }
 
 // assertRestoreAuditEntry proves the restored audit log holds the restore
-// audit entry of id over backupID, with the replaced access mode.
+// audit entry of id over backupID, naming the want access mode.
 func assertRestoreAuditEntry(
-	t *testing.T, st *backupStore, id backup.RestoreID, backupID backup.ID,
+	t *testing.T, st *backupStore, id backup.RestoreID, backupID backup.ID, wantMode string,
 ) {
 	t.Helper()
 
@@ -725,7 +747,7 @@ func assertRestoreAuditEntry(
 		t.Fatalf("list entries: %v", err)
 	}
 
-	want := "restore " + id.String() + " of backup " + backupID.String() + " (access tables replaced)"
+	want := "restore " + id.String() + " of backup " + backupID.String() + " (" + wantMode + ")"
 
 	for i := range listing.Entries {
 		entry := listing.Entries[i]
