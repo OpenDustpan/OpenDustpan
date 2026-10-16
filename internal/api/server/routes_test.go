@@ -113,6 +113,11 @@ func (stubAuthorizer) Authorize(
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (stubAuthorizer) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // selectiveAuthorizer denies exactly the actions in deny and allows the rest.
 type selectiveAuthorizer struct {
 	deny map[identity.Action]bool
@@ -129,6 +134,15 @@ func (s selectiveAuthorizer) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (selectiveAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // stubMetrics writes a fixed exposition. Tests that check the body use
@@ -315,6 +329,11 @@ type allowAll struct{}
 
 func (allowAll) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (allowAll) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // seedRouteTokens writes the person record of the test caller and one
@@ -1139,6 +1158,15 @@ func (r *recordingAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordingAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // denyRouteAuthorizer denies exactly the actions in deny on the object wire
 // form in object and allows everything else, so tests prove a route
 // authorizes the resolved object: denying its declared actions answers 403.
@@ -1157,6 +1185,15 @@ func (d denyRouteAuthorizer) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (denyRouteAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // TestRoutesAuthorizeDeclaredObject proves every authorized route asks for

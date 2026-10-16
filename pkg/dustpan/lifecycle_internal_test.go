@@ -121,8 +121,8 @@ func (f scopeFixture) seed(t *testing.T, subject string, obj identity.Object) {
 
 // TestDeletedReadScope proves the read scope of the deleted-units list: a
 // grant on the namespace covers every unit of that namespace and none of
-// another, a grant on a unit covers its stable ID, and a caller with no grant
-// reads nothing.
+// another, a grant on a unit covers its stable ID in its own namespace only,
+// and a caller with no grant reads nothing.
 func TestDeletedReadScope(t *testing.T) {
 	t.Parallel()
 
@@ -140,6 +140,7 @@ func TestDeletedReadScope(t *testing.T) {
 		{name: "namespace grant", subject: "nina", ns: "acme", wantIDs: nil, wantAll: true},
 		{name: "namespace grant elsewhere", subject: "nina", ns: "other", wantIDs: []string{}, wantAll: false},
 		{name: "unit grant", subject: "uma", ns: "acme", wantIDs: []string{"stk-scope"}, wantAll: false},
+		{name: "unit grant elsewhere", subject: "uma", ns: "other", wantIDs: []string{}, wantAll: false},
 		{name: "no grant", subject: "nobody", ns: "acme", wantIDs: []string{}, wantAll: false},
 	}
 
@@ -169,9 +170,8 @@ func TestDeletedReadScope(t *testing.T) {
 	}
 }
 
-// TestDeletedReadScopeFailsClosed proves that an authorizer that lists no
-// scope gives every deleted unit to an administrator and none to anyone
-// else.
+// TestDeletedReadScopeFailsClosed proves that the scope of AdminOnly gives
+// every deleted unit to an administrator and none to anyone else.
 func TestDeletedReadScopeFailsClosed(t *testing.T) {
 	t.Parallel()
 

@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/identity/identitytest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -1378,4 +1379,63 @@ func TestNamespaceTokenGrantRule(t *testing.T) {
 	if !errors.Is(installErr, access.ErrEscalation) {
 		t.Fatalf("grant on the installation without server:manage-access = %v, want ErrEscalation", installErr)
 	}
+}
+
+// TestListObjectsWithinAuthorize proves that each object that ListObjects
+// lists for a grant passes Authorize, alone and behind SelfAllowed: a grant
+// on a unit, on a namespace, through a group, and on the installation.
+func TestListObjectsWithinAuthorize(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	webProd := f.unit(t, mustUnit(t, "acme", "web/prod"))
+	betaUnit := f.unit(t, mustUnit(t, "beta", "api/prod"))
+
+	una := f.person(t, "una")
+	nora := f.person(t, "nora")
+	gale := f.person(t, "gale")
+	ida := f.person(t, "ida")
+
+	f.grant(t, access.Subject{Kind: access.SubjectPrincipal, ID: "prn-una"}, access.RoleViewer, webProd)
+	f.grant(t, access.Subject{Kind: access.SubjectPrincipal, ID: "prn-nora"}, access.RoleViewer,
+		identity.NamespaceObject("acme"))
+	f.grant(t, f.group(t, "readers", "gale"), access.RoleWriter, identity.NamespaceObject("beta"))
+	f.grant(t, access.Subject{Kind: access.SubjectPrincipal, ID: "prn-ida"}, access.RoleViewer, identity.ServerObject())
+
+	every := []identity.Object{
+		identity.NamespaceObject("acme"), identity.NamespaceObject("beta"), webProd, betaUnit,
+	}
+
+	for _, p := range []identity.Principal{una, nora, gale, ida} {
+		scope, err := f.authz.ListObjects(t.Context(), p, identity.ActionUnitRead)
+		if err != nil || scope.IsEmpty() {
+			t.Fatalf("%s lists unit:read = %+v, %v, want an object", p.Subject, scope, err)
+		}
+	}
+	actions := []identity.Action{identity.ActionNamespaceRead, identity.ActionUnitRead, identity.ActionUnitWrite}
+
+	for _, authz := range []identity.Authorizer{
+		f.authz,
+		identity.SelfAllowed{Next: f.authz, Actions: []identity.Action{identity.ActionTokenManageOwn}},
+	} {
+		for _, p := range []identity.Principal{una, nora, gale, ida} {
+			for _, action := range actions {
+				identitytest.CheckListWithinAuthorize(t.Context(), t, identitytest.ListCheck{
+					Authorizer: authz, Principal: p, Action: action, Every: every,
+				})
+			}
+		}
+	}
+}
+
+// mustUnit returns the Pulumi unit name in ns.
+func mustUnit(t *testing.T, ns namespace.Name, name string) identity.Object {
+	t.Helper()
+
+	obj, err := identity.UnitObject("pulumi", ns, name)
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	return obj
 }

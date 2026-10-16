@@ -141,6 +141,11 @@ func (stubAuthorizer) Authorize(
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (stubAuthorizer) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // selectiveAuthorizer denies exactly the actions in deny and allows the rest.
 type selectiveAuthorizer struct {
 	deny map[identity.Action]bool
@@ -157,6 +162,15 @@ func (s selectiveAuthorizer) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (selectiveAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // denyUnits denies unit:read on the references in deny and allows the rest.
@@ -176,6 +190,11 @@ func (d denyUnits) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (denyUnits) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 func newBehaviorHandler(
