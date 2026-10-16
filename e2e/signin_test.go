@@ -216,6 +216,8 @@ func runSignInOnStore(t *testing.T, cli, tofu e2e.Install, store e2e.Store) {
 
 	checkSignOut(t, b)
 	checkStoredProvider(t, env)
+	checkStoredProviderDelete(t, env)
+	checkProviderAuditHoldsNoSecret(t, env)
 }
 
 // doBody sends one request with body and the headers, and returns its
@@ -638,5 +640,82 @@ func checkStoredProviderList(ctx context.Context, t *testing.T, env *e2e.Env) {
 		"/api/server/sign-in-providers/"+e2e.StoredSignInProvider, "")
 	if err != nil || status != http.StatusOK || strings.Contains(raw, e2e.StoredClientSecret) {
 		t.Fatalf("read of the stored provider = %d, %v: %s", status, err, raw)
+	}
+}
+
+// storedProviderGamma is a stored provider with no principal, which the
+// API deletes.
+const storedProviderGamma = "gamma"
+
+// checkStoredProviderDelete proves that the API deletes a stored provider
+// with no principal: the delete answers 204, and a read then answers 404.
+func checkStoredProviderDelete(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	body := `{"id":"` + storedProviderGamma + `","issuer":"` + env.StoredIdentityProvider(t).Issuer() + `",` +
+		`"displayName":"Gamma","clientID":"` + e2e.StoredClientID + `","clientSecret":"` + e2e.StoredClientSecret + `"}`
+
+	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/sign-in-providers", body)
+	if err != nil || status != http.StatusCreated {
+		t.Fatalf("create the provider %s = %d, %v: %s", storedProviderGamma, status, err, raw)
+	}
+
+	target := "/api/server/sign-in-providers/" + storedProviderGamma
+
+	status, raw, err = env.ServerAPIStatus(ctx, http.MethodDelete, target, "")
+	if err != nil || status != http.StatusNoContent {
+		t.Fatalf("delete of a provider with no principal = %d, %v: %s", status, err, raw)
+	}
+
+	status, raw, err = env.ServerAPIStatus(ctx, http.MethodGet, target, "")
+	if err != nil || status != http.StatusNotFound {
+		t.Fatalf("read of a deleted provider = %d, %v: %s", status, err, raw)
+	}
+}
+
+// checkProviderAuditHoldsNoSecret proves that the audit log of the
+// installation holds the changes of the stored providers and no client
+// secret: not the first one and not the rotated one.
+func checkProviderAuditHoldsNoSecret(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	const size = 200
+
+	ctx := t.Context()
+	providerEntries := 0
+
+	for number := 1; ; number++ {
+		path := "/api/audit/entries?organization=@server&page[number]=" + strconv.Itoa(number) +
+			"&page[size]=" + strconv.Itoa(size)
+
+		status, raw, err := env.APIStatus(ctx, http.MethodGet, path, "")
+		if err != nil || status != http.StatusOK {
+			t.Fatalf("list @server audit entries = %d, %v: %s", status, err, raw)
+		}
+
+		for _, secret := range []string{e2e.StoredClientSecret, "a-wrong-secret"} {
+			if strings.Contains(raw, secret) {
+				t.Fatal("the audit log of the installation holds a client secret of a stored provider")
+			}
+		}
+
+		providerEntries += strings.Count(raw, `"sign-in-provider:`)
+
+		var page struct {
+			Entries []json.RawMessage `json:"entries"`
+		}
+
+		if decodeErr := json.Unmarshal([]byte(raw), &page); decodeErr != nil {
+			t.Fatalf("decode @server audit entries: %v", decodeErr)
+		}
+
+		if len(page.Entries) < size {
+			break
+		}
+	}
+
+	if providerEntries == 0 {
+		t.Fatal("the audit log of the installation holds no change of a stored provider")
 	}
 }

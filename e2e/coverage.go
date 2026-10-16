@@ -896,6 +896,7 @@ func CoverageAllowlist() []AllowEntry {
 		tokenPolicyAllowEntries(),
 		sessionPolicyAllowEntries(),
 		signInAllowEntries(),
+		signInProviderAllowEntries(),
 		ipAllowlistAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
@@ -1173,6 +1174,34 @@ func signInAllowEntries() []AllowEntry {
 		{http.MethodGet, "/api/server/sign-in/{provider}/callback"},
 		{http.MethodGet, "/api/server/session"},
 		{http.MethodPost, "/api/server/sign-out"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestSignIn", Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// signInProviderAllowEntries returns the operator and console routes of
+// the sign-in providers. The steps of TestSignIn drive each one through the
+// real binary on each store: a create, the list, a read, a change, a
+// refused delete and a delete.
+func signInProviderAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages sign-in providers. " +
+		"The harness calls each route through the real binary and checks the answer."
+
+	const list, one = "/api/server/sign-in-providers", "/api/server/sign-in-providers/{id}"
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, list},
+		{http.MethodPost, list},
+		{http.MethodGet, one},
+		{http.MethodPatch, one},
+		{http.MethodDelete, one},
 	}
 
 	out := make([]AllowEntry, 0, len(routes))
