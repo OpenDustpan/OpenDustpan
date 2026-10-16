@@ -174,3 +174,45 @@ func TestStoredProvidersPlainOAuth(t *testing.T) {
 		t.Fatalf("client of hub = %T, want *oauth.PlainClient", got.Client)
 	}
 }
+
+// TestStoredProvidersRecreatedID proves that a provider that a delete and
+// a create gave the same ID and version gets a new client: the lookup
+// answers the settings of the new record, not of the old one.
+func TestStoredProvidersRecreatedID(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	f := newStoredFixture(t)
+	in := session.ProviderInput{
+		ID: "beta", Mode: session.ModeOIDC, Issuer: "https://beta.example", DisplayName: "Beta", ClientID: "dustpan",
+		ClientSecret: "secret", Scopes: nil, AutoCreate: true, Enabled: true,
+		OAuth: session.OAuthSettings{
+			AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+			EmailClaim: "",
+		},
+	}
+
+	if _, err := f.admin.Create(ctx, adminEntry(), in); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	first, ok, err := f.lookup.Provider(ctx, "beta")
+	if err != nil || !ok || !first.AutoCreate {
+		t.Fatalf("lookup = %+v, %t, %v; want beta with autoCreate", first, ok, err)
+	}
+
+	if deleteErr := f.admin.Delete(ctx, adminEntry(), "beta"); deleteErr != nil {
+		t.Fatalf("delete: %v", deleteErr)
+	}
+
+	in.AutoCreate, in.ClientSecret = false, "another-secret"
+	if _, createErr := f.admin.Create(ctx, adminEntry(), in); createErr != nil {
+		t.Fatalf("create again: %v", createErr)
+	}
+
+	again, ok, err := f.lookup.Provider(ctx, "beta")
+	if err != nil || !ok || again.AutoCreate || again.Client == first.Client {
+		t.Fatalf("lookup after a delete and a create = %+v, %t, %v; want a new client with no autoCreate",
+			again, ok, err)
+	}
+}

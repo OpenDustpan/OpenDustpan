@@ -106,9 +106,19 @@ func NewPlain(cfg PlainConfig) (*PlainClient, error) {
 		},
 		userinfo: cfg.UserinfoURL,
 		claims:   cfg.Claims.WithDefaults(),
-		http:     safeClient(cfg.HTTPClient),
+		http:     noRedirect(safeClient(cfg.HTTPClient)),
 		now:      now,
 	}, nil
+}
+
+// noRedirect returns c with no redirect: a redirect answers as it is, and
+// the client refuses it as an answer that is not 200. The identity of a
+// person must come from the configured user-info URL, and the code from
+// the configured token URL, never from a host that a redirect names.
+func noRedirect(c *http.Client) *http.Client {
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	return c
 }
 
 // validate returns ErrConfig when cfg cannot make a client.
@@ -237,10 +247,18 @@ func decodeUserinfo(r io.Reader) (map[string]any, error) {
 
 	var info map[string]any
 	if err := dec.Decode(&info); err != nil || info == nil {
+		if errors.Is(err, errResponseTooLarge) {
+			return nil, fmt.Errorf("%w: %w", ErrUserInfo, errResponseTooLarge)
+		}
+
 		return nil, fmt.Errorf("%w: user-info answer is not a JSON object", ErrUserInfo)
 	}
 
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		if errors.Is(err, errResponseTooLarge) {
+			return nil, fmt.Errorf("%w: %w", ErrUserInfo, errResponseTooLarge)
+		}
+
 		return nil, fmt.Errorf("%w: user-info answer has data after the JSON object", ErrUserInfo)
 	}
 

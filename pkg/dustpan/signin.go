@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -372,5 +373,6 @@ func signInProvider(
 
 	return serverapi.SignInProvider{
 		Client: client, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
+		Source: principal.SourceOIDC,
 	}, nil
 }

@@ -100,8 +100,10 @@ type providersResponse struct {
 }
 
 // providerCreateRequest is the body of a new provider. displayName is the
-// ID when absent; scopes is empty when absent; autoCreate and enabled are
-// true when absent; mode is "oidc" when absent. A provider in the oidc mode
+// ID when absent; scopes is empty when absent; enabled is true when
+// absent; mode is "oidc" when absent. autoCreate is true when absent for
+// the oidc mode, and false for the oauth mode: any account at a plain
+// OAuth 2.0 provider, such as any GitHub user, can sign in. A provider in the oidc mode
 // needs issuer; a provider in the oauth mode needs authorizationURL,
 // tokenURL and userinfoURL, and no issuer.
 type providerCreateRequest struct {
@@ -274,7 +276,7 @@ func (h *Handler) createProvider(
 			UserinfoURL: valueOr(req.UserinfoURL, ""), SubjectClaim: req.Claims.subject(), NameClaim: req.Claims.name(),
 			UsernameClaim: req.Claims.username(), EmailClaim: req.Claims.email(),
 		},
-		AutoCreate: valueOr(req.AutoCreate, true), Enabled: valueOr(req.Enabled, true),
+		AutoCreate: valueOr(req.AutoCreate, mode != session.ModeOAuth), Enabled: valueOr(req.Enabled, true),
 	}
 
 	p, err := h.signIn.admin.Create(r.Context(), callerEntry(r, caller, identity.ActionServerManageSignIn), in)

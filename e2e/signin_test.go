@@ -734,7 +734,7 @@ func checkPlainProvider(t *testing.T, env *e2e.Env) {
 	body := `{"id":"` + e2e.PlainSignInProvider + `","mode":"oauth","displayName":"Hub",` +
 		`"clientID":"` + e2e.PlainClientID + `","clientSecret":"` + e2e.PlainClientSecret + `",` +
 		`"authorizationURL":"` + hub.AuthorizationEndpoint() + `","tokenURL":"` + hub.TokenEndpoint() + `",` +
-		`"userinfoURL":"` + hub.UserinfoEndpoint() + `","claims":{"subject":"sub"}}`
+		`"userinfoURL":"` + hub.UserinfoEndpoint() + `","claims":{"subject":"sub"},"autoCreate":true}`
 
 	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/sign-in-providers", body)
 	if err != nil || status != http.StatusCreated || strings.Contains(raw, e2e.PlainClientSecret) ||

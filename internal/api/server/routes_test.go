@@ -270,7 +270,14 @@ func newServiceBackedHandler(
 		SignIn: &apiserver.SignIn{
 			Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			Providers: []apiserver.SignInProvider{
-				{Client: stubOIDC{}, ID: testProvider, DisplayName: "Corp", AutoCreate: true, Stored: false},
+				{
+					Client:      stubOIDC{},
+					ID:          testProvider,
+					DisplayName: "Corp",
+					AutoCreate:  true,
+					Stored:      false,
+					Source:      principal.SourceOIDC,
+				},
 			},
 		},
 		CheckpointEpochs: fakeEpochs{},

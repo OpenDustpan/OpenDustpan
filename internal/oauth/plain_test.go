@@ -3,7 +3,10 @@ package oauth_test
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,10 +26,18 @@ type plainSetup struct {
 func newPlainSetup(t *testing.T, f oauthtest.Faults, c oauth.Claims) plainSetup {
 	t.Helper()
 
+	return newPlainSetupTLS(t, f, c, true)
+}
+
+// newPlainSetupTLS is newPlainSetup with a provider that serves HTTPS when
+// tls is true, and HTTP on a loopback host when it is false.
+func newPlainSetupTLS(t *testing.T, f oauthtest.Faults, c oauth.Claims, tls bool) plainSetup {
+	t.Helper()
+
 	clk := newClock()
 	p := oauthtest.New(t, oauthtest.Config{
 		Now: clk.Now, ClientID: clientID, ClientSecret: clientSecret, RedirectURI: redirectURI,
-		Algorithm: oauthtest.RS256, User: alice(), Mode: oauthtest.ModeOAuth, Faults: f, TLS: true,
+		Algorithm: oauthtest.RS256, User: alice(), Mode: oauthtest.ModeOAuth, Faults: f, TLS: tls,
 	})
 
 	client, err := oauth.NewPlain(oauth.PlainConfig{
@@ -286,5 +297,77 @@ func TestClaimsWithDefaults(t *testing.T) {
 
 	if got != want {
 		t.Fatalf("WithDefaults = %+v, want %+v", got, want)
+	}
+}
+
+// TestPlainRefusesRedirects proves that Finish follows no redirect of the
+// user-info endpoint or of the token endpoint: the subject of a person
+// comes only from the configured user-info URL.
+func TestPlainRefusesRedirects(t *testing.T) {
+	t.Parallel()
+
+	var reached atomic.Int32
+
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"sub":"mallory"}`)) //nolint:errcheck // The client of the test sees a broken answer.
+	}))
+	t.Cleanup(other.Close)
+
+	for name, set := range map[string]func(*oauthtest.Faults){
+		"user-info redirect": func(f *oauthtest.Faults) { f.UserinfoRedirect = other.URL + "/user" },
+		"token redirect":     func(f *oauthtest.Faults) { f.TokenRedirect = other.URL + "/token" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			// The provider serves HTTP, as the other host does, so the rule
+			// against a redirect from HTTPS to HTTP does not apply: only the
+			// rule against every redirect refuses it.
+			s := newPlainSetupTLS(t, fault(set), oauth.Claims{Subject: "", Name: "", Username: "", Email: ""}, false)
+
+			got := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
+			if !errors.Is(got.err, oauth.ErrProvider) || got.id.Subject != "" {
+				t.Fatalf("finish = %+v, %v; want ErrProvider and no identity", got.id, got.err)
+			}
+		})
+	}
+
+	t.Cleanup(func() {
+		if n := reached.Load(); n != 0 {
+			t.Errorf("the client followed a redirect to another host %d times", n)
+		}
+	})
+}
+
+// TestPlainRefusesLargeUserinfo proves that a user-info answer over 1 MiB
+// is refused.
+func TestPlainRefusesLargeUserinfo(t *testing.T) {
+	t.Parallel()
+
+	body := `{"sub":"alice","pad":"` + strings.Repeat("a", 1<<20) + `"}`
+	s := newPlainSetup(t, fault(func(f *oauthtest.Faults) { f.UserinfoBody = body }),
+		oauth.Claims{Subject: "", Name: "", Username: "", Email: ""})
+
+	got := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
+	if !errors.Is(got.err, oauth.ErrUserInfo) || !strings.Contains(got.err.Error(), "1 MiB") {
+		t.Fatalf("finish = %v, want ErrUserInfo that names the 1 MiB limit", got.err)
+	}
+}
+
+// TestPlainKeepsLargeSubjects proves that a whole-number subject above
+// 2^53 keeps every digit.
+func TestPlainKeepsLargeSubjects(t *testing.T) {
+	t.Parallel()
+
+	for _, subject := range []string{"9007199254740993", "18446744073709551615"} {
+		s := newPlainSetup(t, fault(func(f *oauthtest.Faults) { f.UserinfoBody = `{"sub":` + subject + `}` }),
+			oauth.Claims{Subject: "", Name: "", Username: "", Email: ""})
+
+		got := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
+		if got.err != nil || got.id.Subject != subject {
+			t.Fatalf("subject %s = %q, %v; want every digit", subject, got.id.Subject, got.err)
+		}
 	}
 }

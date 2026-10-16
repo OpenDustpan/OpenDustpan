@@ -7,7 +7,7 @@
 -- the identity of the person. name_claim, username_claim and email_claim
 -- give the display name. The URLs and the claims are empty for a provider
 -- in the oidc mode.
-ALTER TABLE sign_in_providers ADD COLUMN mode TEXT NOT NULL DEFAULT 'oidc';
+ALTER TABLE sign_in_providers ADD COLUMN mode TEXT NOT NULL DEFAULT 'oidc' CHECK (mode IN ('oidc', 'oauth'));
 ALTER TABLE sign_in_providers ADD COLUMN authorization_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE sign_in_providers ADD COLUMN token_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE sign_in_providers ADD COLUMN userinfo_url TEXT NOT NULL DEFAULT '';

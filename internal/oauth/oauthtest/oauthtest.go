@@ -101,6 +101,12 @@ type Faults struct {
 	// UserinfoType sets the Content-Type of a user-info answer when it is
 	// not empty.
 	UserinfoType string
+	// UserinfoRedirect answers a user-info request with a redirect to this
+	// URL when it is not empty.
+	UserinfoRedirect string
+	// TokenRedirect answers a token request with a redirect to this URL
+	// when it is not empty.
+	TokenRedirect string
 }
 
 // User is the person whom the provider signs in.
@@ -544,6 +550,10 @@ func hasScope(scopes, want string) bool {
 // token exchanges an authorization code for an access token and, in the
 // OIDC mode, an ID token.
 func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
+	if p.redirectToken(w, r) {
+		return
+	}
+
 	if err := r.ParseForm(); err != nil {
 		tokenError(w, http.StatusBadRequest, "invalid_request")
 
@@ -606,6 +616,22 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, body)
+}
+
+// redirectToken answers a redirect to the TokenRedirect fault, if one is
+// set, and reports whether it did.
+func (p *Provider) redirectToken(w http.ResponseWriter, r *http.Request) bool {
+	p.mu.Lock()
+	redirect := p.cfg.Faults.TokenRedirect
+	p.mu.Unlock()
+
+	if redirect == "" {
+		return false
+	}
+
+	http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
+
+	return true
 }
 
 // clientAuthenticated reports whether r carries the client credentials,
@@ -784,6 +810,12 @@ func (p *Provider) userinfo(w http.ResponseWriter, r *http.Request) {
 	if !ok || !known {
 		w.Header().Set("WWW-Authenticate", `Bearer error="invalid_token"`)
 		w.WriteHeader(http.StatusUnauthorized)
+
+		return
+	}
+
+	if faults.UserinfoRedirect != "" {
+		http.Redirect(w, r, faults.UserinfoRedirect, http.StatusFound)
 
 		return
 	}

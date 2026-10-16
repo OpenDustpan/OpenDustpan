@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -87,6 +88,7 @@ func (s testStored) Provider(ctx context.Context, id string) (apiserver.SignInPr
 		DisplayName: p.DisplayName,
 		AutoCreate:  p.AutoCreate,
 		Stored:      true,
+		Source:      sourceOf(p.Mode),
 	}, true, nil
 }
 
@@ -111,6 +113,16 @@ func (s testStored) openIDClient(p *session.ProviderConfig, clientSecret string)
 		HTTPClient: s.client, Now: s.now, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: clientSecret,
 		RedirectURL: signInBase + "/api/server/sign-in/" + p.ID + "/callback", Scopes: p.Scopes,
 	})
+}
+
+// sourceOf returns the principal source of a provider in mode, as the
+// server sets it.
+func sourceOf(mode session.ProviderMode) principal.Source {
+	if mode == session.ModeOAuth {
+		return principal.SourceOAuth
+	}
+
+	return principal.SourceOIDC
 }
 
 func newProviderEnv(t *testing.T) providerEnv {
@@ -618,7 +630,7 @@ func TestSignInDisableBeforeTheCallback(t *testing.T) {
 func (e providerEnv) hubBody() string {
 	return `{"id":"hub","mode":"oauth","displayName":"Hub","clientID":"dustpan-hub","clientSecret":"` + hubSecret +
 		`","authorizationURL":"` + e.hub.AuthorizationEndpoint() + `","tokenURL":"` + e.hub.TokenEndpoint() +
-		`","userinfoURL":"` + e.hub.UserinfoEndpoint() + `","claims":{"subject":"sub"}}`
+		`","userinfoURL":"` + e.hub.UserinfoEndpoint() + `","claims":{"subject":"sub"},"autoCreate":true}`
 }
 
 // TestSignInPlainOAuthProvider proves a stored provider in the oauth mode:
@@ -649,7 +661,18 @@ func TestSignInPlainOAuthProvider(t *testing.T) {
 		t.Fatalf("subject = %q, want hub:248289761001", subject)
 	}
 
+	e.checkSource(t, "hub:248289761001", principal.SourceOAuth)
 	e.checkHubChanges(t)
+}
+
+// checkSource proves that the principal of subject has the source want.
+func (e providerEnv) checkSource(t *testing.T, subject string, want principal.Source) {
+	t.Helper()
+
+	made, err := e.store.GetPrincipalBySubject(t.Context(), subject)
+	if err != nil || made.Source != want {
+		t.Fatalf("principal of the first sign-in = %+v, %v; want the source %s", made, err, want)
+	}
 }
 
 // checkHubChanges proves that a change of the mode, the user-info URL or
@@ -702,5 +725,36 @@ func TestSignInPlainOAuthProviderRefusals(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Errorf("create %s = %d %s, want 400", body, rec.Code, rec.Body.String())
 		}
+	}
+}
+
+// TestSignInPlainOAuthProviderNoAutoCreate proves that a provider in the
+// oauth mode makes no principal at a first sign-in unless the create asks
+// for it, and that a provider in the oidc mode still does.
+func TestSignInPlainOAuthProviderNoAutoCreate(t *testing.T) {
+	t.Parallel()
+
+	e := newProviderEnv(t)
+	body := strings.Replace(e.hubBody(), `,"autoCreate":true`, "", 1)
+
+	rec := e.adminDo(t, http.MethodPost, "/api/server/sign-in-providers", body)
+	if rec.Code != http.StatusCreated || strings.Contains(rec.Body.String(), `"autoCreate":true`) {
+		t.Fatalf("create with no autoCreate = %d %s, want 201 with autoCreate false", rec.Code, rec.Body.String())
+	}
+
+	binding, back := e.authorizeWith(t, e.hub, "hub")
+
+	cb := e.get(t, "/api/server/sign-in/hub/callback?"+back.Encode(), binding)
+	if cb.Code == http.StatusSeeOther || cookieOf(cb, apiserver.SessionCookie) != nil {
+		t.Fatalf("first sign-in with no principal = %d %s, want a refusal", cb.Code, cb.Body.String())
+	}
+
+	if _, err := e.store.GetPrincipalBySubject(t.Context(), "hub:248289761001"); err == nil {
+		t.Fatal("a refused first sign-in made a principal")
+	}
+
+	rec = e.adminDo(t, http.MethodPost, "/api/server/sign-in-providers", e.betaBody())
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"autoCreate":true`) {
+		t.Fatalf("create of an OpenID provider = %d %s, want autoCreate true", rec.Code, rec.Body.String())
 	}
 }

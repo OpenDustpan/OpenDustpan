@@ -120,7 +120,8 @@ curl -X POST https://dustpan.example/api/server/sign-in-providers \
        "authorizationURL":"https://github.com/login/oauth/authorize",
        "tokenURL":"https://github.com/login/oauth/access_token",
        "userinfoURL":"https://api.github.com/user",
-       "claims":{"subject":"id","name":"name","username":"login","email":"email"}}'
+       "claims":{"subject":"id","name":"name","username":"login","email":"email"},
+       "autoCreate":false}'
 ```
 
 The rules:
@@ -132,6 +133,11 @@ The rules:
   person. Use an ID, not a name or an email address. The defaults are
   `sub`, `name`, `preferred_username` and `email`.
 - The subject of a person is `<provider ID>:<value of the subject claim>`.
+- `autoCreate` is false when absent: any account at such a provider, for
+  example any GitHub user, can complete a sign-in. So an administrator
+  makes the principal of each person first, with that subject. Set
+  `"autoCreate": true` only for a provider whose accounts are all your
+  people.
 - The server records the user-info URL and the subject claim of each
   provider ID. A change of either one answers 409, as a change of the
   issuer of an OpenID provider does. A change of the mode answers 400.
@@ -170,8 +176,10 @@ The server never links a person by email address.
 
 ## The first sign-in of a person
 
-By default, the first sign-in of a person makes a principal with the
-source `oidc`, no grant and no group. The person can sign in, but can do
+By default, the first sign-in of a person through an OpenID provider
+makes a principal with the source `oidc`, no grant and no group. A plain
+OAuth 2.0 provider does so only with `"autoCreate": true`, and the
+principal has the source `oauth`. The person can sign in, but can do
 nothing until an administrator gives a role. Give the first roles with the
 bootstrap admin token, through the grants API.
 
