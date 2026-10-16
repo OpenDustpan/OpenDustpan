@@ -28,6 +28,7 @@ the same list.
 | `--log-sink` | `DUSTPAN_LOG_SINK` | `log-sink` | (none: stderr). For example `stderr syslog+tls://logs.example:6514` |
 | `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blob-dir` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
 | `--blob-store` | `DUSTPAN_BLOB_STORE` | `blob-store` | `fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]` |
+| `--blob-cache-bytes` | `DUSTPAN_BLOB_CACHE_BYTES` | `blob-cache-bytes` | `0`: no cache. The cache keeps only blobs that are written once: OpenTofu state versions. One blob takes at most one eighth of the cache |
 | `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | `s3-endpoint` | (none: AWS) |
 | `--s3-region` | `DUSTPAN_S3_REGION` | `s3-region` | `us-east-1` |
 | `--backup-target` | `DUSTPAN_BACKUP_TARGET` | `backup-target` | (none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]` |
