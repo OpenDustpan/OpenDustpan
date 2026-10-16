@@ -47,6 +47,7 @@ func journalRow(t *testing.T, s UpdatesStore, u stack.Update, sha byte, seqs ...
 		Size:         1,
 		SequenceIDs:  seqs,
 		OperationIDs: ops,
+		HasRebuild:   false,
 		Verify:       nil,
 	}
 }
@@ -364,14 +365,14 @@ func testJournalRefusesWriteAfterStoredChange(t *testing.T, f fixture) {
 	u := f.runJournaled(t, f.ref, "u1")
 
 	change := journalRowWithBody(t, f.s, u, journalBatchDef{
-		sha: 1, body: journalBeginBody(1, 10), seqs: []int64{1}, ops: []int64{10},
+		sha: 1, body: journalBeginBody(1, 10), seqs: []int64{1}, ops: nil,
 	})
 	if retried, err := f.s.PutJournalRow(t.Context(), change, f.fence); err != nil || retried {
 		t.Fatalf("batch with a record change: retried %t, err %v; want stored", retried, err)
 	}
 
 	write := journalRowWithBody(t, f.s, u, journalBatchDef{
-		sha: 2, body: journalWriteBody(2, 11), seqs: []int64{2}, ops: []int64{11},
+		sha: 2, body: journalWriteBody(2, 11), seqs: []int64{2}, ops: nil,
 	})
 
 	_, err := f.s.PutJournalRow(t.Context(), write, f.fence)
@@ -394,14 +395,14 @@ func testJournalRefusesWriteAfterStoredChange(t *testing.T, f fixture) {
 	clean := f.runJournaled(t, f.other(t), "d1")
 
 	first := journalRowWithBody(t, f.s, clean, journalBatchDef{
-		sha: 4, body: journalWriteBody(1, 10), seqs: []int64{1}, ops: []int64{10},
+		sha: 4, body: journalWriteBody(1, 10), seqs: []int64{1}, ops: nil,
 	})
 	if retried, err := f.s.PutJournalRow(t.Context(), first, f.fence); err != nil || retried {
 		t.Fatalf("write with no record change: retried %t, err %v; want stored", retried, err)
 	}
 
 	second := journalRowWithBody(t, f.s, clean, journalBatchDef{
-		sha: 5, body: journalWriteBody(2, 11), seqs: []int64{2}, ops: []int64{11},
+		sha: 5, body: journalWriteBody(2, 11), seqs: []int64{2}, ops: nil,
 	})
 	if retried, err := f.s.PutJournalRow(t.Context(), second, f.fence); err != nil || retried {
 		t.Fatalf("second write with no record change: retried %t, err %v; want stored", retried, err)
@@ -437,6 +438,65 @@ func testJournalBegunRefusal(t *testing.T, f fixture) {
 
 	if retried, err := f.s.PutJournalRow(t.Context(), free, f.fence); err != nil || retried {
 		t.Fatalf("sequences 1 and 2 after a refusal: retried %t, err %v; want stored", retried, err)
+	}
+}
+
+// testJournalRefusesReferenceAfterStoredRebuild shows that a stored rebuild
+// starts the known set again: batch A holds a success for operation 5, batch B
+// holds a rebuild entry, and batch C that names operation 5 is refused at
+// arrival with ErrJournalBatch, as the replay refuses it. The refused batch
+// stores nothing, so its sequences stay free.
+func testJournalRefusesReferenceAfterStoredRebuild(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	state := `{"urn":"urn:a","custom":true,"type":"t:mod:T","id":"x"}`
+
+	success := []byte(`{"entries":[` +
+		`{"version":1,"kind":1,"sequenceID":1,"operationID":5,"removeOld":null,"removeNew":null,` +
+		`"state":` + state + `}]}`)
+
+	first := journalRowWithBody(t, f.s, u, journalBatchDef{
+		sha: 1, body: success, seqs: []int64{1}, ops: []int64{5},
+	})
+	if retried, err := f.s.PutJournalRow(t.Context(), first, f.fence); err != nil || retried {
+		t.Fatalf("batch with operation 5: retried %t, err %v; want stored", retried, err)
+	}
+
+	rebuild := []byte(`{"entries":[` +
+		`{"version":1,"kind":7,"sequenceID":2,"operationID":6,"removeOld":null,"removeNew":null}]}`)
+
+	second := journalRowWithBody(t, f.s, u, journalBatchDef{
+		sha: 2, body: rebuild, seqs: []int64{2}, ops: nil,
+	})
+	second.HasRebuild = true
+
+	if retried, err := f.s.PutJournalRow(t.Context(), second, f.fence); err != nil || retried {
+		t.Fatalf("batch with a rebuild: retried %t, err %v; want stored", retried, err)
+	}
+
+	referrer := []byte(`{"entries":[` +
+		`{"version":1,"kind":1,"sequenceID":3,"operationID":7,"removeOld":null,"removeNew":5,` +
+		`"state":` + state + `}]}`)
+
+	third := journalRowWithBody(t, f.s, u, journalBatchDef{
+		sha: 3, body: referrer, seqs: []int64{3}, ops: []int64{7},
+	})
+
+	_, err := f.s.PutJournalRow(t.Context(), third, f.fence)
+	if !errors.Is(err, pulumijournal.ErrMissingReference) {
+		t.Fatalf("reference after a stored rebuild: err = %v, want ErrMissingReference", err)
+	}
+
+	if !errors.Is(err, stack.ErrJournalBatch) {
+		t.Fatalf("reference after a stored rebuild: err = %v, want ErrJournalBatch", err)
+	}
+
+	// The refused batch stored nothing, so sequence 3 is still free.
+	free := journalRow(t, f.s, u, 4, 3)
+	if retried, err := f.s.PutJournalRow(t.Context(), free, f.fence); err != nil || retried {
+		t.Fatalf("sequence 3 after a refusal: retried %t, err %v; want stored", retried, err)
 	}
 }
 

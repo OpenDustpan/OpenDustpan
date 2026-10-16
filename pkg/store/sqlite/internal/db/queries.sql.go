@@ -303,6 +303,24 @@ func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditCh
 	return result.RowsAffected()
 }
 
+const clearJournalOperations = `-- name: ClearJournalOperations :exec
+UPDATE update_journal SET operation_ids = '[]'
+WHERE stack_id = ? AND update_id = ?
+`
+
+type ClearJournalOperationsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+// A batch that holds a rebuilt base state entry starts the known set again:
+// earlier batches keep their rows for the replay, but their operation IDs no
+// longer count.
+func (q *Queries) ClearJournalOperations(ctx context.Context, arg ClearJournalOperationsParams) error {
+	_, err := q.db.ExecContext(ctx, clearJournalOperations, arg.StackID, arg.UpdateID)
+	return err
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?

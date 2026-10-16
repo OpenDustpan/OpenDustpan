@@ -728,6 +728,13 @@ SELECT operation_ids FROM update_journal
 WHERE stack_id = ? AND update_id = ?
 ORDER BY arrival;
 
+-- name: ClearJournalOperations :exec
+-- A batch that holds a rebuilt base state entry starts the known set again:
+-- earlier batches keep their rows for the replay, but their operation IDs no
+-- longer count.
+UPDATE update_journal SET operation_ids = '[]'
+WHERE stack_id = ? AND update_id = ?;
+
 -- name: JournalBlobKeys :many
 SELECT blob_key FROM update_journal
 WHERE stack_id = ? AND update_id = ?
