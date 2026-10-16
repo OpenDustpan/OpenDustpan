@@ -16,10 +16,10 @@ import (
 
 // journalWriterFor returns the journal writer of the recording build, over the
 // fixture's blobs and update store, with the replay verifier.
-func journalWriterFor(t *testing.T, blobs *memBlob, rows *memUpdateStore) *stack.JournalEntries {
+func journalWriterFor(t *testing.T, blobs *memBlob, rows *memUpdateStore, limit int) *stack.JournalEntries {
 	t.Helper()
 
-	journal, err := stack.NewJournalEntries(blobs, rows, pulumijournal.Verifier{})
+	journal, err := stack.NewJournalEntries(blobs, rows, pulumijournal.Verifier{}, limit)
 	if err != nil {
 		t.Fatalf("journal writer: %v", err)
 	}

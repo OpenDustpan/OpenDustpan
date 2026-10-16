@@ -220,19 +220,27 @@ type journalEntryIDs struct {
 // JournalEntries writes journal batches: the blob first, then the row in a fenced
 // transaction (ADR 43, decision 6.1). It holds no state of its own.
 type JournalEntries struct {
-	blobs    blob.Store
-	rows     JournalStore
-	verifier BatchVerifier
+	blobs              blob.Store
+	rows               JournalStore
+	verifier           BatchVerifier
+	maxCheckpointBytes int
 }
 
 // NewJournalEntries returns a writer over the blob store, the row store and the
-// batch verifier.
-func NewJournalEntries(blobs blob.Store, rows JournalStore, verifier BatchVerifier) (*JournalEntries, error) {
+// batch verifier. maxCheckpointBytes bounds a batch that holds one entry;
+// zero or less means DefaultMaxCheckpointBytes.
+func NewJournalEntries(
+	blobs blob.Store, rows JournalStore, verifier BatchVerifier, maxCheckpointBytes int,
+) (*JournalEntries, error) {
 	if verifier == nil {
 		return nil, ErrNilVerifier
 	}
 
-	return &JournalEntries{blobs: blobs, rows: rows, verifier: verifier}, nil
+	if maxCheckpointBytes <= 0 {
+		maxCheckpointBytes = DefaultMaxCheckpointBytes
+	}
+
+	return &JournalEntries{blobs: blobs, rows: rows, verifier: verifier, maxCheckpointBytes: maxCheckpointBytes}, nil
 }
 
 // RemoveBlobs deletes the blobs of journal batches after the build has removed their
@@ -396,11 +404,11 @@ func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update Upd
 // deletes the blob that this call wrote, as a previous save does. Any other
 // failure keeps the blob for the sweep. A batch over MaxJournalBatchBytes is
 // refused with ErrTooLarge before anything is stored, unless it holds one
-// entry and fits DefaultMaxCheckpointBytes, because the CLI cannot split one
-// entry. Each refusal and each failed store is recorded against the update,
-// so a later complete with succeeded finds it.
+// entry and fits the configured checkpoint bound, because the CLI cannot split
+// one entry. Each refusal and each failed store is recorded against the
+// update, so a later complete with succeeded finds it.
 func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence namespace.Fence) error {
-	if batchTooLarge(batch.Content, DefaultMaxCheckpointBytes) {
+	if batchTooLarge(batch.Content, j.maxCheckpointBytes) {
 		return fmt.Errorf(
 			"%w: journal batch of %d bytes exceeds the limit of %d bytes: split the change into smaller updates and run `pulumi up` again",
 			ErrTooLarge,

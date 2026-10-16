@@ -508,6 +508,65 @@ func TestMaxJournalBatchBytesFollowsBound(t *testing.T) {
 	}
 }
 
+// TestJournalEntriesUsesConfiguredCheckpointBound checks that the writer
+// refuses a batch by the bound it was built with: a batch that fits the
+// larger bound but not the smaller one is stored only by the larger writer,
+// while the default bound would store both.
+func TestJournalEntriesUsesConfiguredCheckpointBound(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	smallBound := 1 << 20
+	largeBound := 16 << 20
+
+	if smallBound >= stack.DefaultMaxCheckpointBytes || largeBound >= stack.DefaultMaxCheckpointBytes {
+		t.Fatal("test bounds must stay below the default bound")
+	}
+
+	body := journalBatch(successEntry(1, 1, paddedState("big", 8<<20)))
+
+	if len(body) <= stack.MaxJournalBatchBytes {
+		t.Fatal("test batch is below the batch bound, want a batch over it")
+	}
+
+	if len(body) <= smallBound {
+		t.Fatal("test batch fits the small bound, want a batch over it")
+	}
+
+	if len(body) >= largeBound {
+		t.Fatal("test batch reaches the large bound, want a batch below it")
+	}
+
+	small, err := stack.NewJournalEntries(
+		newFakeBlobs(),
+		newFakeRows(),
+		allowAll{},
+		smallBound,
+	)
+	if err != nil {
+		t.Fatalf("new journal writer with the small bound: %v", err)
+	}
+
+	if appendErr := small.Append(ctx, journalBatchFor(body), fence()); !errors.Is(appendErr, stack.ErrTooLarge) {
+		t.Fatalf("append with the small bound: err = %v, want ErrTooLarge", appendErr)
+	}
+
+	large, err := stack.NewJournalEntries(
+		newFakeBlobs(),
+		newFakeRows(),
+		allowAll{},
+		largeBound,
+	)
+	if err != nil {
+		t.Fatalf("new journal writer with the large bound: %v", err)
+	}
+
+	if err := large.Append(ctx, journalBatchFor(body), fence()); err != nil {
+		t.Fatalf("append with the large bound: err = %v, want nil", err)
+	}
+}
+
 // TestJournalBuildTimeoutDefault checks the default build timeout: the build
 // of 10,000 resources takes a fraction of a second, and the bound holds the
 // answer to complete far below the 20 minutes after which the CLI stops.

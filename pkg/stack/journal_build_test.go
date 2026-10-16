@@ -374,7 +374,7 @@ func newBuildFixtureWith(
 		t.Fatalf("namespace service: %v", err)
 	}
 
-	journal, err := stack.NewJournalEntries(blobs, store, pulumijournal.Verifier{})
+	journal, err := stack.NewJournalEntries(blobs, store, pulumijournal.Verifier{}, 1<<20)
 	if err != nil {
 		t.Fatalf("journal writer: %v", err)
 	}

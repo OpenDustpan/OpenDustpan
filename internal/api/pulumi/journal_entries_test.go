@@ -62,3 +62,43 @@ func TestJournalEntriesRefusesUnleasedWritesAndAnswersVersionZero(t *testing.T) 
 		t.Fatalf("refusal lacks the approved message %q: %s", message, resp)
 	}
 }
+
+// TestJournalEntriesReservesConfiguredCheckpointBound checks that the route
+// reserves the configured checkpoint bound before it reads the batch: a batch
+// over that bound answers with the oversized status while the gate holds room
+// for the batch bound, so the reserve follows the configured value.
+func TestJournalEntriesReservesConfiguredCheckpointBound(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	const checkpointBound = 2048
+	const gateBytes = 4096
+
+	f := newUpdateFixtureWithGate(t, allowAll(), checkpointBound, gateBytes)
+	id, lease := mintForLease(t, f, journalPatterns()[0])
+	target := journalTarget(id)
+
+	prefix := `{"entries":[]}`
+	padding := checkpointBound
+	for len(prefix)+padding < gateBytes+1024 {
+		padding += checkpointBound
+	}
+
+	body := prefix + strings.Repeat(" ", padding)
+	if len(body) <= checkpointBound {
+		t.Fatal("test batch fits the checkpoint bound, want a batch over it")
+	}
+
+	if err := ctx.Err(); err != nil {
+		t.Fatalf("test context: %v", err)
+	}
+
+	status, resp := f.doUpdate(t, leaseRequest(http.MethodPatch, target, lease, body))
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf(
+			"batch over the configured bound answers %d, want %d (%s)",
+			status, http.StatusRequestEntityTooLarge, resp,
+		)
+	}
+}

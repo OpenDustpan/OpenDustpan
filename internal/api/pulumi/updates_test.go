@@ -497,7 +497,7 @@ func newUpdateFixtureWithAuthenticator(
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
-		Journal:            journalWriterFor(t, blobs, mem),
+		Journal:            journalWriterFor(t, blobs, mem, limit),
 		Replayer:           replayer,
 		Tokens:             checker,
 	})

@@ -29,15 +29,16 @@ func (h *Handler) journalEntries(w http.ResponseWriter, r *http.Request, _ ident
 	}
 
 	limit := int64(h.updates.MaxJournalBatchBytes())
+	readLimit := int64(h.updates.MaxCheckpointBytes())
 
-	releaseHold, ok := h.hold(w, r, limit)
+	releaseHold, ok := h.hold(w, r, readLimit)
 	if !ok {
 		return
 	}
 
 	defer releaseHold()
 
-	body, ok := h.readJournalBody(w, r, int64(h.updates.MaxCheckpointBytes()))
+	body, ok := h.readJournalBody(w, r, readLimit)
 	if !ok {
 		return
 	}
