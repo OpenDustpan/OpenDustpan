@@ -59,6 +59,16 @@ const (
 // ErrInvalidShipper reports a shipper configuration that fails validation.
 var ErrInvalidShipper = errors.New("invalid audit shipper configuration")
 
+// ErrInvalidLeaseTiming reports a shipper lease timing where the renew
+// interval is not shorter than the lease TTL. A holder must renew well
+// before its lease ends, so NewShipper rejects such a timing.
+var ErrInvalidLeaseTiming = errors.New("invalid audit shipper lease timing")
+
+// errRoundEnded reports that a round stopped at its round deadline or lost
+// its sink lease. The round ends cleanly: the shipper logs the handover,
+// keeps its wait, and starts the next round with no failure.
+var errRoundEnded = errors.New("audit sink round ended")
+
 // errLeaseLost reports that another instance holds the sink lease.
 var errLeaseLost = errors.New("sink lease lost")
 
@@ -107,7 +117,8 @@ type ShipSink struct {
 // server process. Leases keeps those leases; when it is nil and Feed serves
 // SinkLeaser, the shipper uses Feed. LeaseTTL is how long a taken lease
 // lasts and defaults to SinkLeaseDuration. RenewInterval is how often the
-// holder renews and defaults to SinkLeaseRenewInterval.
+// holder renews and defaults to SinkLeaseRenewInterval. RenewInterval must
+// stay shorter than LeaseTTL, so a holder renews well before its lease ends.
 type ShipperConfig struct {
 	Feed          Feed
 	Namespaces    NamespaceLister
@@ -215,6 +226,11 @@ func applyLeaseDefaults(cfg *ShipperConfig) error {
 		cfg.RenewInterval = SinkLeaseRenewInterval
 	}
 
+	if cfg.RenewInterval >= cfg.LeaseTTL {
+		return fmt.Errorf("%w: renew interval %s must be shorter than lease TTL %s",
+			ErrInvalidLeaseTiming, cfg.RenewInterval, cfg.LeaseTTL)
+	}
+
 	return nil
 }
 
@@ -262,9 +278,10 @@ func (s *Shipper) Run(ctx context.Context) {
 }
 
 // ShipOnce runs one round for every sink: it takes or renews the lease of
-// the sink and copies every entry above the cursors while it holds it. A
-// sink held by another instance is skipped without an error. It answers the
-// joined errors of the failed sinks.
+// the sink and copies the entries above the cursors while it holds it.
+// Delivery is at least once: after a lease is lost or a round fails, a sink
+// can receive an entry twice. A sink held by another instance is skipped
+// without an error. It answers the joined errors of the failed sinks.
 func (s *Shipper) ShipOnce(ctx context.Context) error {
 	var errs []error
 
@@ -289,7 +306,9 @@ func (s *Shipper) ShipOnce(ctx context.Context) error {
 }
 
 // loop runs rounds for sink until ctx is done. After a failed round it
-// waits twice as long as before, up to MaxShipBackoff. It takes or renews
+// waits twice as long as before, up to MaxShipBackoff. A round that ends at
+// its round deadline or loses its lease ends cleanly with no failure. It
+// takes or renews
 // the lease of the sink before every round and ships only while it holds
 // it. It wakes at least every renew interval to renew, so a ship interval
 // longer than the lease still holds it, and it releases the lease when the
@@ -394,12 +413,24 @@ func (s *Shipper) handleLeaseError(ctx context.Context, name string, err error, 
 	return true
 }
 
-// shipAndAccount ships one round and records its outcome in state. It
+// shipAndAccount ships one round and records its outcome in state. A round
+// that ends at its round deadline or loses its lease ends cleanly: it keeps
+// the wait of the loop and starts the next round with no failure. It
 // answers whether the loop goes on: false when ctx ends.
 func (s *Shipper) shipAndAccount(ctx context.Context, sink ShipSink, interval time.Duration, state *leasedState) bool {
 	if err := s.round(ctx, sink); err != nil {
 		if ctx.Err() != nil {
 			return false
+		}
+
+		if errors.Is(err, errRoundEnded) {
+			s.cfg.Logger.DebugContext(ctx, "audit sink round ended",
+				slog.String("sink", sink.Name), slog.String("error", ErrorClass(err)))
+
+			state.wait = interval
+			state.lastShip = time.Now()
+
+			return true
 		}
 
 		s.fail(ctx, sink.Name, err)
@@ -539,17 +570,47 @@ func (s *Shipper) withRoundTimeout(ctx context.Context) (context.Context, contex
 // deadline passes or another instance holds the lease, the round stops at
 // once without moving a cursor past what the sink acknowledged.
 func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
+	outer := ctx
+
 	ctx, cancel := s.withRoundTimeout(ctx)
 	defer cancel()
 
 	namespaces, err := s.cfg.Namespaces.ListNamespaces(ctx)
 	if err != nil {
-		return &shipError{step: stepList, err: err}
+		return markRoundEnded(outer, &shipError{step: stepList, err: err})
 	}
 
 	namespaces = append(namespaces, serverScope())
 
-	return s.shipScopes(ctx, sink, namespaces)
+	return markRoundEnded(outer, s.shipScopes(ctx, sink, namespaces))
+}
+
+// markRoundEnded reports a round that stopped at its round deadline or lost
+// its sink lease as a clean round end. When the outer context is done the
+// round stops for shutdown instead, and the error stays as it is. A round
+// with any other failure stays a failure, so the loop still counts it.
+func markRoundEnded(outer context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if outer.Err() != nil {
+		return err
+	}
+
+	if errors.Is(err, errRoundEnded) {
+		return err
+	}
+
+	if errors.Is(err, errLeaseLost) {
+		return fmt.Errorf("%w: %w", errRoundEnded, err)
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%w: %w", errRoundEnded, err)
+	}
+
+	return err
 }
 
 // shipScopes ships every namespace of one round in order. Before every
@@ -604,7 +665,7 @@ func (s *Shipper) renewLease(ctx context.Context, sink string) error {
 	}
 
 	if !held {
-		return &shipError{step: stepLease, err: errLeaseLost}
+		return &shipError{step: stepLease, err: fmt.Errorf("%w: %w", errRoundEnded, errLeaseLost)}
 	}
 
 	return nil
@@ -653,11 +714,11 @@ func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, ns namespace
 }
 
 // nextBatch answers the entries above cursor, oldest first. It answers no
-// entries when the scope holds no more, and a read error when the round
-// deadline passed, so the cursor stays where the sink acknowledged.
+// entries when the scope holds no more, and a clean round end when the
+// round deadline passed, so the cursor stays where the sink acknowledged.
 func (s *Shipper) nextBatch(ctx context.Context, ns namespace.Namespace, cursor int64) ([]Entry, error) {
 	if ctx.Err() != nil {
-		return nil, &shipError{step: stepRead, err: fmt.Errorf("round deadline: %w", ctx.Err())}
+		return nil, &shipError{step: stepRead, err: fmt.Errorf("%w: round deadline: %w", errRoundEnded, ctx.Err())}
 	}
 
 	entries, err := s.cfg.Feed.After(ctx, ns.Name, cursor, ShipBatchSize)

@@ -6,10 +6,11 @@ import (
 	"time"
 )
 
-// Lease timing for audit sinks. Only the holder of the lease of a sink ships
-// to it, so two instances never ship one entry twice. The holder renews well
-// before the lease ends, and the sink cursor stays the source of truth, so a
-// new holder goes on from the cursor.
+// Lease timing for audit sinks. While its lease holds, one instance ships
+// a sink. After a lease is lost or a round fails, a sink can receive an
+// entry twice. Delivery is at least once. The holder renews well before
+// the lease ends, and the sink cursor stays the source of truth, so a new
+// holder goes on from the cursor.
 const (
 	// SinkLeaseDuration is how long a taken or renewed sink lease lasts.
 	SinkLeaseDuration = 30 * time.Second

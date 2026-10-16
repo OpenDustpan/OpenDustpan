@@ -102,6 +102,14 @@ func (f *memFeed) acmeCursor(sink string) int64 {
 	return f.cursors[sink+"/acme"]
 }
 
+// scopeCursor answers the cursor of sink in ns.
+func (f *memFeed) scopeCursor(sink string, ns namespace.Name) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.cursors[sink+"/"+ns.String()]
+}
+
 // memSink keeps each batch it accepts. While down, it refuses every batch.
 // It refuses every batch of the scope refuse.
 type memSink struct {
@@ -735,9 +743,122 @@ func newLeasedShipper(t *testing.T, feed *memFeed, leases *memLeaser, holder str
 	return s
 }
 
+// newLeasedShipperFull builds a shipper with its own lease timing, ship
+// interval, logger and failure hook.
+func newLeasedShipperFull(t *testing.T, cfg leasedShipperConfig) *audit.Shipper {
+	t.Helper()
+
+	s, err := audit.NewShipper(audit.ShipperConfig{
+		Feed:          cfg.feed,
+		Namespaces:    cfg.feed,
+		Logger:        cfg.logger,
+		OnShipped:     nil,
+		OnFailure:     cfg.onFailure,
+		OnSkipped:     nil,
+		Sinks:         []audit.ShipSink{{Sink: cfg.sink, Name: "siem", Interval: cfg.interval}},
+		InstanceID:    cfg.holder,
+		Leases:        cfg.leases,
+		LeaseTTL:      cfg.ttl,
+		RenewInterval: cfg.renew,
+	})
+	if err != nil {
+		t.Fatalf("new shipper: %v", err)
+	}
+
+	return s
+}
+
+// leasedShipperConfig carries the inputs of newLeasedShipperFull.
+type leasedShipperConfig struct {
+	feed      *memFeed
+	leases    audit.SinkLeaser
+	holder    string
+	sink      logsink.Sink
+	ttl       time.Duration
+	renew     time.Duration
+	interval  time.Duration
+	logger    *slog.Logger
+	onFailure func(string)
+}
+
+// failureCounter counts OnFailure calls across goroutines.
+type failureCounter struct {
+	mu sync.Mutex
+	n  int
+}
+
+func (c *failureCounter) hook(string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.n++
+}
+
+func (c *failureCounter) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.n
+}
+
+// lockedBuffer is a bytes buffer safe for a logger that writes from the
+// shipper loop while the test reads.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	n, err := b.buf.Write(p)
+	if err != nil {
+		return n, fmt.Errorf("locked buffer write: %w", err)
+	}
+
+	return n, nil
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.String()
+}
+
+// debugLogger answers a logger that writes debug lines to logs.
+func debugLogger(logs *lockedBuffer) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// waitUntil polls cond until it holds, the test context ends, or the
+// deadline passes. It uses channels and timers, never sleeps.
+func waitUntil(t *testing.T, deadline time.Time, what string, cond func() bool) {
+	t.Helper()
+
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+
+	bound := time.NewTimer(time.Until(deadline))
+	defer bound.Stop()
+
+	for !cond() {
+		select {
+		case <-t.Context().Done():
+			t.Fatal("test ended while it waited")
+		case <-bound.C:
+			t.Fatalf("timed out waiting for %s", what)
+		case <-tick.C:
+		}
+	}
+}
+
 // TestTwoShippersShareOneSinkLease proves that two shippers on one feed and
-// one lease store never ship one entry twice: only the holder ships, and
-// when it stops renewing, the other takes over from the cursor.
+// one lease store share one sink through its lease: only the holder ships,
+// and when it stops renewing, the other takes over from the cursor.
+// Delivery is at least once: after a lease is lost or a round fails, a sink
+// can receive an entry twice.
 func TestTwoShippersShareOneSinkLease(t *testing.T) {
 	t.Parallel()
 
@@ -754,7 +875,7 @@ func TestTwoShippersShareOneSinkLease(t *testing.T) {
 	appendAcmeEntries(feed, 4, 5)
 	waitStandbyTakeover(t, second, sinkB)
 	checkStandbyShipment(t, sinkB)
-	checkNoDuplicateShipments(t, sinkA, sinkB)
+	checkNoDuplicateShipments(t, sinkA, sinkB, 5)
 }
 
 // shipInitialLeaseRounds runs one round on each shipper while the first holds
@@ -827,8 +948,9 @@ func checkStandbyShipment(t *testing.T, sinkB *memSink) {
 	}
 }
 
-// checkNoDuplicateShipments checks that every entry shipped exactly once.
-func checkNoDuplicateShipments(t *testing.T, sinkA, sinkB *memSink) {
+// checkNoDuplicateShipments checks that the two sinks shipped want entries
+// together with none twice.
+func checkNoDuplicateShipments(t *testing.T, sinkA, sinkB *memSink, want int) {
 	t.Helper()
 
 	combined := append(append([]string{}, sinkA.sequences()...), sinkB.sequences()...)
@@ -843,8 +965,8 @@ func checkNoDuplicateShipments(t *testing.T, sinkA, sinkB *memSink) {
 		}
 	}
 
-	if got := len(combined); got != 5 {
-		t.Fatalf("shipped %d entries, want 5: %v", got, combined)
+	if got := len(combined); got != want {
+		t.Fatalf("shipped %d entries, want %d: %v", got, want, combined)
 	}
 }
 
@@ -903,6 +1025,14 @@ func (s *slowSink) Write(ctx context.Context, records []logsink.Record) error {
 
 func (s *slowSink) Close() error { return nil }
 
+// count answers how many batches the sink saw.
+func (s *slowSink) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.calls
+}
+
 // loseOnceLeaser grants the first lease take and answers not held after
 // that, as when another instance took the lease in the middle of a round.
 type loseOnceLeaser struct {
@@ -928,9 +1058,21 @@ func (l *loseOnceLeaser) ReleaseSinkLease(ctx context.Context, sink, holder stri
 	return l.inner.ReleaseSinkLease(ctx, sink, holder)
 }
 
+// acquires answers how many lease takes the leaser saw.
+func (l *loseOnceLeaser) acquires() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return l.calls
+}
+
 // TestASlowSinkStopsItsRoundAndDoesNotShipAfterTakeover proves that a sink
 // slower than the lease stops its round at the round deadline: it keeps
 // only its first batch and its cursor, and the next holder ships the rest.
+// NewShipper keeps the renew interval shorter than the lease TTL, so the
+// round timeout stays below the TTL. The standby runs at the same time as
+// the slow round, and the test proves that the two shippers never ship the
+// same entry.
 func TestASlowSinkStopsItsRoundAndDoesNotShipAfterTakeover(t *testing.T) {
 	t.Parallel()
 
@@ -945,31 +1087,30 @@ func TestASlowSinkStopsItsRoundAndDoesNotShipAfterTakeover(t *testing.T) {
 
 	first := newLeasedShipper(t, feed, leases, "ins-holder-a", slow)
 
-	if err := first.ShipOnce(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("slow ship once: got %v, want context.DeadlineExceeded", err)
-	}
+	ctx := t.Context()
 
-	checkSlowRoundKeptFirstBatch(t, slow, feed)
+	firstErr := make(chan error, 1)
+
+	go func() {
+		firstErr <- first.ShipOnce(ctx)
+	}()
+
+	// Wait until the slow round holds the lease and shipped its first batch,
+	// so the standby below can only take over after the lease expires.
+	waitUntil(t, time.Now().Add(10*time.Second), "the slow round to ship its first batch",
+		func() bool { return slow.count() >= 1 })
 
 	standbySink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
 	second := newLeasedShipper(t, feed, leases, "ins-holder-b", standbySink)
 
 	waitTakeoverShipsLast(t, second, standbySink)
+
+	if err := <-firstErr; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("slow ship once: got %v, want context.DeadlineExceeded", err)
+	}
+
 	checkTakeoverShipment(t, slow, feed, standbySink, total)
-}
-
-// checkSlowRoundKeptFirstBatch checks that a slow round shipped one batch
-// and moved the cursor past only that batch.
-func checkSlowRoundKeptFirstBatch(t *testing.T, slow *slowSink, feed *memFeed) {
-	t.Helper()
-
-	if got := len(slow.inner.sequences()); got != audit.ShipBatchSize {
-		t.Fatalf("slow sink shipped %d records, want %d", got, audit.ShipBatchSize)
-	}
-
-	if got := feed.acmeCursor("siem"); got != int64(audit.ShipBatchSize) {
-		t.Fatalf("cursor after a slow round: got %d, want %d", got, audit.ShipBatchSize)
-	}
+	checkNoDuplicateShipments(t, slow.inner, standbySink, total)
 }
 
 // waitTakeoverShipsLast polls the standby shipper until it ships one entry
@@ -1121,5 +1262,385 @@ func TestShipperReleasesItsLeaseOnShutdown(t *testing.T) {
 
 	if !held {
 		t.Fatal("lease after shutdown: got false, want true")
+	}
+}
+
+// TestALostRenewBetweenScopesStopsTheRound proves that the renew between
+// scopes stops a round that lost its lease: the first scope ships and moves
+// its cursor, the later scopes keep their cursors, and the next holder
+// ships them. Without that renew the round would ship every scope after the
+// lease was lost.
+func TestALostRenewBetweenScopesStopsTheRound(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 1, "globex": 1})
+	inner := newMemLeaser()
+	leases := &loseOnceLeaser{inner: inner, mu: sync.Mutex{}, calls: 0}
+	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
+
+	s, err := audit.NewShipper(audit.ShipperConfig{
+		Feed:          feed,
+		Namespaces:    feed,
+		Logger:        nil,
+		OnShipped:     nil,
+		OnFailure:     nil,
+		OnSkipped:     nil,
+		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Interval: 0}},
+		InstanceID:    "ins-holder-a",
+		Leases:        leases,
+		LeaseTTL:      300 * time.Millisecond,
+		RenewInterval: 50 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("new shipper: %v", err)
+	}
+
+	if err := s.ShipOnce(t.Context()); err == nil {
+		t.Fatal("ship once after losing the lease between scopes: got nil, want an error")
+	}
+
+	if got := sink.sequences(); fmt.Sprint(got) != "[acme/1]" {
+		t.Fatalf("shipped %v, want [acme/1]", got)
+	}
+
+	if got := feed.scopeCursor("siem", "acme"); got != 1 {
+		t.Fatalf("acme cursor after a lost renew: got %d, want 1", got)
+	}
+
+	if got := feed.scopeCursor("siem", "globex"); got != 0 {
+		t.Fatalf("globex cursor after a lost renew: got %d, want 0", got)
+	}
+
+	standbySink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
+	second := newLeasedShipperFull(t, leasedShipperConfig{
+		feed:      feed,
+		leases:    inner,
+		holder:    "ins-holder-b",
+		sink:      standbySink,
+		ttl:       300 * time.Millisecond,
+		renew:     50 * time.Millisecond,
+		interval:  0,
+		logger:    nil,
+		onFailure: nil,
+	})
+
+	waitTakeoverShipsLast(t, second, standbySink)
+
+	if got := standbySink.sequences(); fmt.Sprint(got) != "[globex/1]" {
+		t.Fatalf("standby shipped %v, want [globex/1]", got)
+	}
+
+	checkNoDuplicateShipments(t, sink, standbySink, 2)
+}
+
+// blockingReleaseLeaser is a memLeaser whose release blocks until its
+// context ends. It records that the release ran and how long the release
+// context allowed.
+type blockingReleaseLeaser struct {
+	inner     *memLeaser
+	entered   chan struct{}
+	mu        sync.Mutex
+	remaining time.Duration
+	seen      bool
+}
+
+func (l *blockingReleaseLeaser) AcquireSinkLease(
+	ctx context.Context,
+	sink, holder string,
+	ttl time.Duration,
+) (bool, error) {
+	return l.inner.AcquireSinkLease(ctx, sink, holder, ttl)
+}
+
+func (l *blockingReleaseLeaser) ReleaseSinkLease(ctx context.Context, _, _ string) error {
+	l.mu.Lock()
+	if dl, ok := ctx.Deadline(); ok {
+		l.remaining, l.seen = time.Until(dl), true
+	}
+	l.mu.Unlock()
+
+	select {
+	case l.entered <- struct{}{}:
+	default:
+	}
+
+	<-ctx.Done()
+
+	return fmt.Errorf("sink lease release wait: %w", ctx.Err())
+}
+
+// TestShipperReleaseRespectsShipReleaseTimeout proves that the release of a
+// sink lease at shutdown is bounded: against a leaser that blocks past
+// ShipReleaseTimeout, the shipper still stops, after about the timeout.
+func TestShipperReleaseRespectsShipReleaseTimeout(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 1})
+	leases := &blockingReleaseLeaser{
+		inner:     newMemLeaser(),
+		entered:   make(chan struct{}, 1),
+		mu:        sync.Mutex{},
+		remaining: 0,
+		seen:      false,
+	}
+	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
+
+	s := newLeasedShipperFull(t, leasedShipperConfig{
+		feed:      feed,
+		leases:    leases,
+		holder:    "ins-holder-a",
+		sink:      sink,
+		ttl:       150 * time.Millisecond,
+		renew:     10 * time.Millisecond,
+		interval:  time.Millisecond,
+		logger:    nil,
+		onFailure: nil,
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		s.Run(ctx)
+	}()
+
+	waitUntil(t, time.Now().Add(10*time.Second), "the first batch to ship",
+		func() bool { return feed.acmeCursor("siem") == 1 })
+
+	start := time.Now()
+	cancel()
+
+	bound := time.NewTimer(audit.ShipReleaseTimeout + 10*time.Second)
+	defer bound.Stop()
+
+	select {
+	case <-t.Context().Done():
+		t.Fatal("test ended while the shipper shut down")
+	case <-bound.C:
+		t.Fatal("shipper blocked longer than ShipReleaseTimeout plus slack")
+	case <-done:
+	}
+
+	if elapsed := time.Since(start); elapsed < audit.ShipReleaseTimeout {
+		t.Fatalf("shutdown took %s, want at least ShipReleaseTimeout %s", elapsed, audit.ShipReleaseTimeout)
+	}
+
+	select {
+	case <-leases.entered:
+	default:
+		t.Fatal("shipper stopped without releasing its sink lease")
+	}
+
+	leases.mu.Lock()
+	remaining, seen := leases.remaining, leases.seen
+	leases.mu.Unlock()
+
+	if !seen {
+		t.Fatal("release ran without a context deadline")
+	}
+
+	if remaining <= 0 || remaining > audit.ShipReleaseTimeout {
+		t.Fatalf("release context allowed %s, want up to ShipReleaseTimeout %s", remaining, audit.ShipReleaseTimeout)
+	}
+}
+
+// TestARoundDeadlineEndsCleanlyWithoutFailureOrBackoff proves that a round
+// that hits its round deadline ends cleanly: no failure hook call, no
+// warning, and the next round starts after the ship interval, not after a
+// doubled backoff.
+func TestARoundDeadlineEndsCleanlyWithoutFailureOrBackoff(t *testing.T) {
+	t.Parallel()
+
+	total := audit.ShipBatchSize + 1
+	feed := newMemFeed(map[namespace.Name]int{"acme": total})
+	leases := newMemLeaser()
+	slow := &slowSink{
+		inner: &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false},
+		mu:    sync.Mutex{},
+		calls: 0,
+	}
+
+	var logs lockedBuffer
+
+	failures := &failureCounter{mu: sync.Mutex{}, n: 0}
+
+	s := newLeasedShipperFull(t, leasedShipperConfig{
+		feed:      feed,
+		leases:    leases,
+		holder:    "ins-holder-a",
+		sink:      slow,
+		ttl:       4 * time.Second,
+		renew:     2500 * time.Millisecond,
+		interval:  1500 * time.Millisecond,
+		logger:    debugLogger(&logs),
+		onFailure: failures.hook,
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		s.Run(ctx)
+	}()
+
+	// The first round blocks in its second write until the round deadline.
+	waitUntil(t, time.Now().Add(10*time.Second), "the slow round to block",
+		func() bool { return slow.count() >= 2 })
+
+	start := time.Now()
+
+	// A clean round keeps the ship interval of 1.5 seconds, so the next
+	// round starts its write about 3 seconds later. A failed round would
+	// double its wait first and start about 4 seconds later.
+	waitUntil(t, start.Add(3750*time.Millisecond), "the next round to start",
+		func() bool { return slow.count() >= 3 })
+
+	cancel()
+	<-done
+
+	if got := failures.count(); got != 0 {
+		t.Fatalf("failure hook calls: got %d, want 0", got)
+	}
+
+	if out := logs.String(); !strings.Contains(out, "audit sink round ended") {
+		t.Fatalf("log lacks the clean round end: %s", out)
+	}
+
+	if out := logs.String(); strings.Contains(out, "audit sink delivery failed") {
+		t.Fatalf("log holds a delivery failure for a clean round end: %s", out)
+	}
+
+	if got := feed.acmeCursor("siem"); got != int64(audit.ShipBatchSize) {
+		t.Fatalf("cursor after a round deadline: got %d, want %d", got, audit.ShipBatchSize)
+	}
+
+	if got := len(slow.inner.sequences()); got != audit.ShipBatchSize {
+		t.Fatalf("slow sink shipped %d records, want %d", got, audit.ShipBatchSize)
+	}
+}
+
+// TestALostLeaseEndsCleanlyWithoutFailureOrBackoff proves that a round that
+// loses its sink lease ends cleanly: no failure hook call, no warning, and
+// the loop takes the lease again after the ship interval, not after a
+// doubled backoff.
+func TestALostLeaseEndsCleanlyWithoutFailureOrBackoff(t *testing.T) {
+	t.Parallel()
+
+	total := audit.ShipBatchSize + 1
+	feed := newMemFeed(map[namespace.Name]int{"acme": total})
+	leases := &loseOnceLeaser{inner: newMemLeaser(), mu: sync.Mutex{}, calls: 0}
+	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
+
+	var logs lockedBuffer
+
+	failures := &failureCounter{mu: sync.Mutex{}, n: 0}
+
+	s := newLeasedShipperFull(t, leasedShipperConfig{
+		feed:      feed,
+		leases:    leases,
+		holder:    "ins-holder-a",
+		sink:      sink,
+		ttl:       3 * time.Second,
+		renew:     1800 * time.Millisecond,
+		interval:  1200 * time.Millisecond,
+		logger:    debugLogger(&logs),
+		onFailure: failures.hook,
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		s.Run(ctx)
+	}()
+
+	// The first round ships one batch, then loses its renew and ends.
+	waitUntil(t, time.Now().Add(10*time.Second), "the clean round end to be logged",
+		func() bool { return strings.Contains(logs.String(), "audit sink round ended") })
+
+	start := time.Now()
+	before := leases.acquires()
+
+	// A clean round keeps the ship interval of 1.2 seconds, so the loop
+	// takes the lease again about 1.2 seconds later. A failed round would
+	// double its wait first and take it about 1.8 seconds later.
+	waitUntil(t, start.Add(1600*time.Millisecond), "the next lease take",
+		func() bool { return leases.acquires() > before })
+
+	cancel()
+	<-done
+
+	if got := failures.count(); got != 0 {
+		t.Fatalf("failure hook calls: got %d, want 0", got)
+	}
+
+	if out := logs.String(); strings.Contains(out, "audit sink delivery failed") {
+		t.Fatalf("log holds a delivery failure for a clean round end: %s", out)
+	}
+
+	if got := feed.acmeCursor("siem"); got != int64(audit.ShipBatchSize) {
+		t.Fatalf("cursor after a lost lease: got %d, want %d", got, audit.ShipBatchSize)
+	}
+
+	if got := len(sink.sequences()); got != audit.ShipBatchSize {
+		t.Fatalf("shipped %d records after a lost lease, want %d", got, audit.ShipBatchSize)
+	}
+}
+
+// TestNewShipperRejectsRenewIntervalNotShorterThanLeaseTTL proves that a
+// renew interval at or past the lease TTL is rejected, while a shorter one
+// is accepted.
+func TestNewShipperRejectsRenewIntervalNotShorterThanLeaseTTL(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(nil)
+	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
+
+	cases := []struct {
+		name  string
+		ttl   time.Duration
+		renew time.Duration
+		valid bool
+	}{
+		{name: "renew equal to lease TTL", ttl: 150 * time.Millisecond, renew: 150 * time.Millisecond, valid: false},
+		{name: "renew past lease TTL", ttl: 150 * time.Millisecond, renew: 200 * time.Millisecond, valid: false},
+		{name: "renew shorter than lease TTL", ttl: 150 * time.Millisecond, renew: 50 * time.Millisecond, valid: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := audit.NewShipper(audit.ShipperConfig{
+				Feed:          feed,
+				Namespaces:    feed,
+				Logger:        nil,
+				OnShipped:     nil,
+				OnFailure:     nil,
+				OnSkipped:     nil,
+				Sinks:         []audit.ShipSink{shipSink("siem", sink)},
+				InstanceID:    "ins-test",
+				Leases:        newMemLeaser(),
+				LeaseTTL:      tc.ttl,
+				RenewInterval: tc.renew,
+			})
+
+			if tc.valid {
+				if err != nil {
+					t.Fatalf("new shipper with a shorter renew interval: got %v, want nil", err)
+				}
+			} else if !errors.Is(err, audit.ErrInvalidLeaseTiming) {
+				t.Fatalf("new shipper: got %v, want ErrInvalidLeaseTiming", err)
+			}
+		})
 	}
 }
