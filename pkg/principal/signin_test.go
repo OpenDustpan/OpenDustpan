@@ -59,7 +59,7 @@ func stored(id, subject string) principal.Principal {
 }
 
 func signIn(subject string, create bool, names ...string) principal.SignInInput {
-	return principal.SignInInput{Subject: subject, Names: names, Create: create}
+	return principal.SignInInput{Subject: subject, Source: "", Names: names, Create: create}
 }
 
 func TestSignInPrincipalCreates(t *testing.T) {
@@ -80,6 +80,21 @@ func TestSignInPrincipalCreates(t *testing.T) {
 	again, created, err := f.svc.SignInPrincipal(t.Context(), testEntry(), signIn("corp:248289761001", true, "Other"))
 	if err != nil || created || again.ID != p.ID {
 		t.Fatalf("second SignInPrincipal = %s, created %v, %v; want %s, not created", again.ID, created, err, p.ID)
+	}
+}
+
+// TestSignInPrincipalSource proves that the first sign-in through a plain
+// OAuth 2.0 provider makes a principal with the source oauth.
+func TestSignInPrincipalSource(t *testing.T) {
+	t.Parallel()
+
+	f := newSignInFixture(t)
+	in := signIn("hub:12345678901", true, "Mona")
+	in.Source = principal.SourceOAuth
+
+	p, created, err := f.svc.SignInPrincipal(t.Context(), testEntry(), in)
+	if err != nil || !created || p.Source != principal.SourceOAuth {
+		t.Fatalf("SignInPrincipal = %+v, created %v, %v; want a new principal with the source oauth", p, created, err)
 	}
 }
 

@@ -346,7 +346,8 @@ func pgCopySessionTables() []pgCopyTable {
 			table: "sign_in_providers",
 			columns: []string{
 				pgColProviderID, "issuer", pgColDisplayName, "client_id", "client_secret", "scopes", "auto_create",
-				"enabled", pgColCreatedAtMs, pgColUpdatedAtMs, "version",
+				"enabled", pgColCreatedAtMs, pgColUpdatedAtMs, "version", "mode", "authorization_url", "token_url",
+				"userinfo_url", "subject_claim", "name_claim", "username_claim", "email_claim",
 			},
 			orderBy: []string{pgColProviderID},
 		},

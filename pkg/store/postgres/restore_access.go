@@ -93,6 +93,10 @@ func swapSchemas(ctx context.Context, tx pgx.Tx, live, staging string) error {
 		return fmt.Errorf("move staged schema live: %w", err)
 	}
 
+	if err := keepControlTables(ctx, tx, live, previous); err != nil {
+		return err
+	}
+
 	if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
 		return fmt.Errorf("drop previous schema: %w", err)
 	}

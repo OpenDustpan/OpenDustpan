@@ -100,6 +100,9 @@ _Avoid_: Export format, dump format
 The installation API operation that replaces the SQL data of an installation with a backup (ADR 38). The server checks the backup before it changes live data, applies it in maintenance mode, and takes a backup of the live data first. It is not the restore of one older version of a unit (ADR 28). It is also not the restore of a deleted unit (ADR 47).
 _Avoid_: Recovery, load, import
 
+**Control table**:
+A table that a restore does not replace (ADR 72, decision 5). The live rows stay across the swap. The installation, backups, restores and durable operation tables are control tables. The claim tokens of durable operations only grow, and an older token from a backup would let a stale holder write.
+
 **Deleted unit**:
 A unit after a delete through its tool (ADR 47). It leaves every list and its name is free at once. OpenDustpan keeps its state, history, secrets and grants until a purge. The inventory API lists the deleted units of a namespace, and a restore of a deleted unit brings one back with its stable ID.
 _Avoid_: Tombstone (except for the stored row), trashed unit, archived unit
@@ -161,10 +164,10 @@ A service principal that belongs to one namespace. A holder of `namespace:manage
 _Avoid_: Namespace service account, local principal
 
 **Principal source**:
-Where a principal comes from. The API makes a `local` principal. The first sign-in of a person through an OpenID Connect provider makes an `oidc` principal. A directory sync keeps an `ldap` or `scim` principal. The subject of an `oidc` principal is the provider ID and the subject of the identity provider, separated by a colon. So a provider ID must never change after its first sign-in.
+Where a principal comes from. The API makes a `local` principal. The first sign-in of a person through an OpenID Connect provider makes an `oidc` principal, and through a plain OAuth 2.0 provider an `oauth` principal. A directory sync keeps an `ldap` or `scim` principal. The subject of an `oidc` principal is the provider ID and the subject of the identity provider, separated by a colon. So a provider ID must never change after its first sign-in.
 
 **Sign-in provider**:
-An OpenID Connect provider through which persons sign in to the console. A provider of the flags or the configuration file has the source `static`, and the API cannot change it. A provider that the API creates has the source `api`. Each provider has an ID that is part of the subject of each person who signs in through it.
+An OpenID Connect provider or a plain OAuth 2.0 provider through which persons sign in to the console. Its mode is `oidc` or `oauth`. A plain OAuth 2.0 provider identifies a person by a claim of its user-info answer. A provider of the flags or the configuration file has the source `static`, and the API cannot change it. A provider that the API creates has the source `api`. Each provider has an ID that is part of the subject of each person who signs in through it.
 _Avoid_: Identity source, IdP connection
 
 **Installation scope**:

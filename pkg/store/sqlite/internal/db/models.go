@@ -319,17 +319,25 @@ type SessionPolicy struct {
 }
 
 type SignInProvider struct {
-	ProviderID   string
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   int64
-	Enabled      int64
-	CreatedAtMs  int64
-	UpdatedAtMs  int64
-	Version      int64
+	ProviderID       string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       int64
+	Enabled          int64
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	Version          int64
+	Mode             string
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
 }
 
 type SignInRequest struct {
