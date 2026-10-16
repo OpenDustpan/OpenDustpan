@@ -1859,9 +1859,10 @@ func openNewerSchemaAt(t *testing.T, binary string) {
 	}
 }
 
-// TestOpenAddsMinimumColumn proves that open adds the minimum column to a
-// schema_migrations table from before the column existed.
-func TestOpenAddsMinimumColumn(t *testing.T) {
+// TestOpenBeforeMinimumColumn proves that a database from before the
+// migration that adds the minimum column opens with no minimum, applies that
+// migration and then records minimums.
+func TestOpenBeforeMinimumColumn(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
@@ -1873,9 +1874,13 @@ func TestOpenAddsMinimumColumn(t *testing.T) {
 		t.Fatalf("open raw database: %v", err)
 	}
 
-	const dropColumn = `ALTER TABLE schema_migrations DROP COLUMN min_binary_version`
-	if _, execErr := conn.ExecContext(t.Context(), dropColumn); execErr != nil {
-		t.Fatalf("drop minimum column: %v", execErr)
+	for _, stmt := range []string{
+		`ALTER TABLE schema_migrations DROP COLUMN min_binary_version`,
+		`DELETE FROM schema_migrations WHERE name = '0079_schema_minimum.sql'`,
+	} {
+		if _, execErr := conn.ExecContext(t.Context(), stmt); execErr != nil {
+			t.Fatalf("%s: %v", stmt, execErr)
+		}
 	}
 
 	if closeErr := conn.Close(); closeErr != nil {
@@ -1894,6 +1899,10 @@ func TestOpenAddsMinimumColumn(t *testing.T) {
 
 	if err != nil || len(applied) == 0 {
 		t.Fatalf("applied migrations = %v, %v, want the embedded migrations", applied, err)
+	}
+
+	if last := applied[len(applied)-1]; last.Name != "0079_schema_minimum.sql" {
+		t.Fatalf("newest applied migration = %+v, want 0079_schema_minimum.sql", last)
 	}
 }
 

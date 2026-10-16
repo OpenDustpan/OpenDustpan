@@ -221,9 +221,9 @@ Back up the database before each upgrade. `serve` applies pending migrations at 
 
 ### Minimum binary version
 
-The schema records the oldest binary version that can use it: the minimum binary version. A migration that deletes or narrows a table or a column raises the minimum. A binary starts on a schema when its version is at or above the minimum, also when the schema is newer than the binary. It then applies no migration. A binary below the minimum does not start. The error names the binary version and the minimum, and it changes nothing in the database.
+The schema records the oldest binary version that can use it: the minimum binary version. A migration that deletes or narrows a table or a column raises the minimum. A schema from before the minimum column records no minimum. A binary starts on a schema when its version is at or above the minimum, also when the schema is newer than the binary. It then applies no migration. A binary below the minimum does not start. The error names the binary version and the minimum, and it changes nothing in the database.
 
-The server compares only `vMAJOR.MINOR.PATCH`. A version that `git describe` makes, for example `v0.2.0-3-gabc1234-dirty`, counts as its tag `v0.2.0`. A build with no release version, for example `dev` or a commit hash, counts as newer than every release. No minimum stops it. When such a build starts on a schema with a minimum, it logs the warning `dev build ignores the minimum binary version of the database schema`.
+The server compares only `vMAJOR.MINOR.PATCH`. A version that `git describe` makes, for example `v0.2.0-3-gabc1234-dirty`, counts as its tag `v0.2.0`. A build with no release version, for example `dev` or a commit hash, counts as newer than every release. No minimum stops it. When such a build starts on a schema with a minimum, it logs the warning `dev build ignores the minimum binary version of the database schema`. The upgrade check prints a warning when the command or the server is such a build.
 
 For several nodes, start one new node first. The first new node migrates the database. An older node that still runs does not stop. Its next start fails only when the new schema raised the minimum above its version. Then start the other new nodes.
 

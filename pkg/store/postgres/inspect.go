@@ -42,7 +42,12 @@ func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigratio
 		return nil, nil
 	}
 
-	rows, err := tx.Query(ctx, `SELECT version, name, min_binary_version FROM schema_migrations ORDER BY version`)
+	query, err := appliedQuery(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("read schema migrations: %w", err)
 	}

@@ -775,18 +775,12 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, binaryVe
 	}
 
 	const createTable = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version            BIGINT NOT NULL PRIMARY KEY,
-		name               TEXT   NOT NULL,
-		min_binary_version TEXT   NOT NULL DEFAULT ''
+		version BIGINT NOT NULL PRIMARY KEY,
+		name    TEXT   NOT NULL
 	)`
 
 	if _, err := tx.Exec(ctx, createTable); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
-	}
-
-	const addColumn = `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS min_binary_version TEXT NOT NULL DEFAULT ''`
-	if _, err := tx.Exec(ctx, addColumn); err != nil {
-		return fmt.Errorf("add schema_migrations minimum column: %w", err)
 	}
 
 	recorded, err := recordedMigrations(ctx, tx)
@@ -811,7 +805,12 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, binaryVe
 // recordedMigrations returns the rows of schema_migrations, ordered by
 // version. The caller holds the migration lock in the same transaction.
 func recordedMigrations(ctx context.Context, tx pgx.Tx) ([]schema.AppliedMigration, error) {
-	rows, err := tx.Query(ctx, `SELECT version, name, min_binary_version FROM schema_migrations ORDER BY version`)
+	query, err := appliedQuery(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := tx.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("read schema versions: %w", err)
 	}
@@ -852,6 +851,66 @@ func apply(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
 	// No arguments, so pgx uses the simple protocol, which allows several statements.
 	if _, err := tx.Exec(ctx, m.SQL); err != nil {
 		return fmt.Errorf("apply migration %s: %w", m.Name, err)
+	}
+
+	return recordMigration(ctx, tx, m)
+}
+
+// hasMinimumColumn reports whether schema_migrations in the current schema
+// has the min_binary_version column. A migration adds it. Before that
+// migration, the schema records no minimum.
+func hasMinimumColumn(ctx context.Context, tx pgx.Tx) (bool, error) {
+	var exists bool
+
+	err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'schema_migrations'
+			AND column_name = 'min_binary_version'
+	)`).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check schema_migrations columns: %w", err)
+	}
+
+	return exists, nil
+}
+
+// appliedQuery returns the query that reads the rows of schema_migrations
+// ordered by version: with the minimum binary version when the column
+// exists, and with the empty value before.
+func appliedQuery(ctx context.Context, tx pgx.Tx) (string, error) {
+	exists, err := hasMinimumColumn(ctx, tx)
+	if err != nil {
+		return "", err
+	}
+
+	if exists {
+		return `SELECT version, name, min_binary_version FROM schema_migrations ORDER BY version`, nil
+	}
+
+	return `SELECT version, name, '' FROM schema_migrations ORDER BY version`, nil
+}
+
+// recordMigration records m in schema_migrations in tx, after its SQL ran.
+// It records the minimum binary version of m when the column exists. A
+// migration that sets a minimum before the column exists fails.
+func recordMigration(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
+	hasMinimum, err := hasMinimumColumn(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	if !hasMinimum {
+		if m.MinBinaryVersion != "" {
+			return fmt.Errorf("record migration %s: %w: schema_migrations has no min_binary_version column",
+				m.Name, schema.ErrBadMinimum)
+		}
+
+		const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+		if _, err := tx.Exec(ctx, record, m.Version, m.Name); err != nil {
+			return fmt.Errorf("record migration %s: %w", m.Name, err)
+		}
+
+		return nil
 	}
 
 	const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES ($1, $2, $3)`

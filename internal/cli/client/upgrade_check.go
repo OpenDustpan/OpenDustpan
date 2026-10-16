@@ -177,6 +177,17 @@ const KeyWarning = "warning: this release needs a key-encryption key (ADR 41): "
 	"(DUSTPAN_KEY_ENCRYPTION_KEY_FILE), or start serve once with " +
 	"--generate-key-encryption-key (DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true)"
 
+// DevBinaryWarning is the upgrade report line for a binary with no release
+// version. A dev build counts as newer than every release, so the minimum
+// binary version of the schema never stops it.
+const DevBinaryWarning = "warning: this binary is a dev build. " +
+	"It ignores the minimum binary version of the database schema."
+
+// DevServerWarning is the upgrade report line for a server that runs a build
+// with no release version, so that a dev build on a production schema shows.
+const DevServerWarning = "warning: the server runs a dev build. " +
+	"It ignores the minimum binary version of the database schema."
+
 // keyWarningFor returns KeyWarning when the server answer shows no
 // key-encryption key (the field is missing on an older server, or false),
 // else "".
@@ -419,6 +430,14 @@ func writeUpgradeReport(report upgradeReport) error {
 
 	if report.warning != "" {
 		lines = append(lines, report.warning)
+	}
+
+	if schema.IsDevBuild(report.binaryVersion) {
+		lines = append(lines, DevBinaryWarning)
+	}
+
+	if schema.IsDevBuild(report.serverVersion) {
+		lines = append(lines, DevServerWarning)
 	}
 
 	lines = append(lines, "verdict: "+upgradeVerdict(report.inspection, report.binaryVersion))

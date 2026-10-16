@@ -320,6 +320,10 @@ func TestUpgradeCheckBelowMinimum(t *testing.T) {
 			t.Fatalf("upgrade check error %q does not name %q", err, want)
 		}
 	}
+
+	if strings.Contains(out, devBinaryWarning) {
+		t.Fatalf("upgrade check output of a release binary holds the dev build warning:\n%s", out)
+	}
 }
 
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
@@ -341,6 +345,12 @@ func TestUpgradeCheckDevBuildIgnoresMinimum(t *testing.T) {
 		pending:       false,
 		verdict:       verdictUpToDate,
 	})
+
+	for _, warning := range []string{devBinaryWarning, devServerWarning} {
+		if !strings.Contains(out, warning) {
+			t.Fatalf("upgrade check output of dev builds lacks %q:\n%s", warning, out)
+		}
+	}
 }
 
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.

@@ -26,8 +26,12 @@ func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigratio
 		return nil, nil
 	}
 
-	rows, err := s.conn.QueryContext(ctx,
-		`SELECT version, name, min_binary_version FROM schema_migrations ORDER BY version`)
+	query, err := appliedQuery(ctx, s.conn)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("read schema migrations: %w", err)
 	}

@@ -805,9 +805,8 @@ func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 		}
 
 		const createMigrations = `CREATE TABLE schema_migrations (
-			version            BIGINT NOT NULL PRIMARY KEY,
-			name               TEXT   NOT NULL,
-			min_binary_version TEXT   NOT NULL DEFAULT ''
+			version BIGINT NOT NULL PRIMARY KEY,
+			name    TEXT   NOT NULL
 		)`
 
 		if _, err := tx.Exec(ctx, createMigrations); err != nil {
@@ -821,10 +820,8 @@ func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 				return fmt.Errorf("build staging schema at migration %s: %w", m.Name, err)
 			}
 
-			const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES ($1, $2, $3)`
-
-			if _, err := tx.Exec(ctx, record, m.Version, m.Name, m.MinBinaryVersion); err != nil {
-				return fmt.Errorf("record staging migration %s: %w", m.Name, err)
+			if err := recordMigration(ctx, tx, m); err != nil {
+				return fmt.Errorf("record staging migration: %w", err)
 			}
 		}
 
