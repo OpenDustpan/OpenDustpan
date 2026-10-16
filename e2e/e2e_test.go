@@ -11006,7 +11006,7 @@ func checkNoSourceWrite(t *testing.T, pair *e2e.Pair, srcWS, step string) {
 
 // TestUpgradeCheck proves `opendustpan upgrade check` with RunBinary against
 // the running binary server: on the migrated database the verdict is
-// `up to date` with exit 0, and on the newer, old and fresh states reached by
+// `up to date` with exit 0, and on the newer, before-baseline and fresh states reached by
 // editing schema_migrations while the server runs the verdicts of ADR 33 and
 // the exit codes match, with the command writing nothing to the server
 // database. It runs only with E2E_SERVER=binary, on every store under test.
@@ -11047,7 +11047,7 @@ func TestUpgradeCheck(t *testing.T) {
 
 // runUpgradeCheckOnStore runs the upgrade check cases on one store through
 // the running binary server: the migrated database is up to date, and the
-// newer, old and fresh states are reached by editing schema_migrations while
+// newer, before-baseline and fresh states are reached by editing schema_migrations while
 // the server runs, each through `upgrade check --server` with the environment
 // token. The cases run in order on one server and restore its rows, so they
 // never run in parallel.
@@ -11063,7 +11063,7 @@ func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkUpgradeUpToDateServer(ctx, t, env, store)
 	checkUpgradeNewerServer(ctx, t, env, store)
-	checkUpgradeOldServer(ctx, t, env, store)
+	checkUpgradeBeforeBaselineServer(ctx, t, env, store)
 	checkUpgradeFreshServer(ctx, t, env, store)
 }
 
@@ -11583,33 +11583,46 @@ func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, st
 	checkRestoredServerDB(ctx, t, env, store, pristine)
 }
 
-// checkUpgradeOldServer proves upgrade check with only versions 1 through
-// oldFixtureMaxVersion in the server database: it exits 0 with `upgrade
-// possible` and writes nothing. It restores the removed rows after the
-// check.
-func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+// checkUpgradeBeforeBaselineServer proves upgrade check with only a version
+// from before the baseline in the server database: it exits 1 with `cannot
+// start`, names the baseline and writes nothing. It restores the removed rows
+// after the check.
+func checkUpgradeBeforeBaselineServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
 	t.Helper()
 
 	pristine := snapshotServerDB(ctx, t, env, store)
-	removed := trimServerVersions(ctx, t, env, store, oldFixtureMaxVersion)
+	removed := trimServerVersions(ctx, t, env, store, 0)
 
 	if len(removed) == 0 {
-		t.Fatalf("trim above %d removed nothing, want pending migrations", oldFixtureMaxVersion)
+		t.Fatal("trim above 0 removed nothing, want the baseline row")
 	}
+
+	restoreServerVersions(
+		ctx,
+		t,
+		env,
+		store,
+		[]serverMigrationRow{{version: beforeBaselineVersion, name: beforeBaselineName}},
+	)
 
 	before := snapshotServerDB(ctx, t, env, store)
 	res := runUpgradeCheckServer(ctx, t, env)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: true})
 
 	if out := res.Stdout; !strings.Contains(
 		out,
-		"database schema version: "+strconv.FormatInt(oldFixtureMaxVersion, 10),
+		"database schema version: "+strconv.FormatInt(beforeBaselineVersion, 10),
 	) {
-		t.Fatalf("old output lacks database schema version %d:\n%s", oldFixtureMaxVersion, out)
+		t.Fatalf("output lacks database schema version %d:\n%s", beforeBaselineVersion, out)
+	}
+
+	if !strings.Contains(res.Stderr, "older than baseline schema version") {
+		t.Fatalf("error lacks the baseline refusal:\n%s%s", res.Stdout, res.Stderr)
 	}
 
 	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
 
+	deleteServerVersion(ctx, t, env, store, beforeBaselineVersion)
 	restoreServerVersions(ctx, t, env, store, removed)
 	checkRestoredServerDB(ctx, t, env, store, pristine)
 }
@@ -11743,10 +11756,12 @@ func parseUpgradeVersions(t *testing.T, out string) (database, binary int64) {
 	return database, binary
 }
 
-// oldFixtureMaxVersion is the newest version in the fixed old-database
-// fixture. The fixture stays below the binary version, so the check reports
-// pending migrations. Bump it only with the fixture name and assertions.
-const oldFixtureMaxVersion = 8
+// beforeBaselineVersion and beforeBaselineName name a migration from before
+// the baseline, which the baseline replaced.
+const (
+	beforeBaselineVersion = 76
+	beforeBaselineName    = "0076_sign_in_providers.sql"
+)
 
 // postgresSnapshot holds the table list and schema_migrations rows of one
 // PostgreSQL schema, so the test proves upgrade check wrote nothing.

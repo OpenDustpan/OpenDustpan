@@ -795,6 +795,10 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration) error {
 		return err
 	}
 
+	if baselineErr := schema.CheckBaseline(recorded); baselineErr != nil {
+		return fmt.Errorf("check schema versions: %w", baselineErr)
+	}
+
 	if unknown := migrate.UnknownRecorded(recorded, all); len(unknown) > 0 {
 		return schema.NewSchemaNewerError(recorded, embeddedVersions(all))
 	}

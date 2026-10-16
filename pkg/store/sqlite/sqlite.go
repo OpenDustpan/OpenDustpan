@@ -1069,6 +1069,10 @@ func (s *Store) migrate(ctx context.Context) error {
 		return recordedErr
 	}
 
+	if baselineErr := schema.CheckBaseline(recorded); baselineErr != nil {
+		return fmt.Errorf("check schema versions: %w", baselineErr)
+	}
+
 	if unknown := migrate.UnknownRecorded(recorded, all); len(unknown) > 0 {
 		return schema.NewSchemaNewerError(recorded, embeddedVersions(all))
 	}

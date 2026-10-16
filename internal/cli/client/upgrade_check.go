@@ -119,6 +119,10 @@ func UpgradeCheck(
 		return err
 	}
 
+	if baselineErr := baselineOf(answer); baselineErr != nil {
+		return baselineErr
+	}
+
 	if len(inspection.Unknown) > 0 {
 		return withBinaryVersion(&schema.NewerError{
 			DatabaseVersion: inspection.DatabaseVersion,
@@ -290,6 +294,26 @@ func compareUpgradeCheck(answer UpgradeCheckAnswer) (schema.Inspection, error) {
 		Pending:         pending,
 		Unknown:         unknown,
 	}, nil
+}
+
+// baselineOf returns the refusal for a server whose database records a
+// migration from before the baseline, or nil. compareUpgradeCheck already
+// refused a name without a version, so a name that does not parse here is
+// skipped.
+func baselineOf(answer UpgradeCheckAnswer) error {
+	versions := make([]int64, 0, len(answer.AppliedMigrations))
+
+	for _, name := range answer.AppliedMigrations {
+		if version, err := schema.ParseMigrationVersion(name); err == nil {
+			versions = append(versions, version)
+		}
+	}
+
+	if err := schema.CheckBaseline(versions); err != nil {
+		return fmt.Errorf("server database: %w", err)
+	}
+
+	return nil
 }
 
 // withBinaryVersion adds the version of the binary to a newer-schema refusal,

@@ -57,6 +57,63 @@ func (e *NewerError) Unwrap() error {
 	return ErrSchemaNewer
 }
 
+// BaselineVersion is the version of the baseline migration. The baseline
+// replaced every migration before it, so a database that records a version
+// below it is from before the baseline, and no binary can upgrade it.
+const BaselineVersion int64 = 100
+
+// BaselineName is the file name of the baseline migration.
+const BaselineName = "0100_baseline.sql"
+
+// ErrSchemaBeforeBaseline reports a database that records a migration
+// version from before the baseline.
+var ErrSchemaBeforeBaseline = errors.New("database schema is older than the baseline schema of the binary")
+
+// BeforeBaselineError reports the schema version of a database from before
+// the baseline and the baseline version. The adapters return it.
+type BeforeBaselineError struct {
+	// DatabaseVersion is the newest version below the baseline that the
+	// database records.
+	DatabaseVersion int64
+	// BaselineVersion is the version of the baseline migration.
+	BaselineVersion int64
+}
+
+// Error describes the refusal and the one action: start on an empty
+// database.
+func (e *BeforeBaselineError) Error() string {
+	return fmt.Sprintf(
+		"database schema version %d is older than baseline schema version %d: "+
+			"no binary can upgrade this database. Start the server on an empty database",
+		e.DatabaseVersion,
+		e.BaselineVersion,
+	)
+}
+
+// Unwrap returns ErrSchemaBeforeBaseline, so errors.Is finds the sentinel.
+func (e *BeforeBaselineError) Unwrap() error {
+	return ErrSchemaBeforeBaseline
+}
+
+// CheckBaseline returns a *BeforeBaselineError when recorded holds a
+// version below BaselineVersion, and nil otherwise. An empty database
+// records nothing and passes.
+func CheckBaseline(recorded []int64) error {
+	var newest int64
+
+	for _, v := range recorded {
+		if v < BaselineVersion && v > newest {
+			newest = v
+		}
+	}
+
+	if newest == 0 {
+		return nil
+	}
+
+	return &BeforeBaselineError{DatabaseVersion: newest, BaselineVersion: BaselineVersion}
+}
+
 // DatabaseVersion returns the newest version the database records, or zero
 // when it records none.
 func DatabaseVersion(recorded []int64) int64 {
@@ -125,59 +182,7 @@ func ParseMigrationVersion(name string) (int64, error) {
 //
 //nolint:gochecknoglobals // The shared frozen migration list: Go has no constant slices, and both dialects use this one source.
 var embeddedMigrationNames = []string{
-	"0001_init.sql",
-	"0002_updates.sql",
-	"0003_stack_id.sql",
-	"0004_updates_stack_id.sql",
-	"0005_updates_drop_names.sql",
-	"0006_checkpoints_per_update.sql",
-	"0007_stack_tags.sql",
-	"0008_secret_keys.sql",
-	"0009_inventory.sql",
-	"0010_workspaces.sql",
-	"0011_restored_from.sql",
-	"0012_update_history_fields.sql",
-	"0013_backups.sql",
-	"0014_checkpoint_resource_count.sql",
-	"0015_maintenance.sql",
-	"0016_checkpoint_blobs.sql",
-	"0017_inventory_lock.sql",
-	"0018_restores.sql",
-	"0019_audit_entries.sql",
-	"0020_sealed_state.sql",
-	"0021_sensitive_marks.sql",
-	"0022_audit_value_count.sql",
-	"0023_update_journal_version.sql",
-	"0024_state_fence.sql",
-	"0025_update_journal.sql",
-	"0026_override_switches.sql",
-	"0027_update_journal_md5.sql",
-	"0028_principals_and_groups.sql",
-	"0029_audit_server_scope.sql",
-	"0031_soft_delete_stacks.sql",
-	"0032_soft_delete_workspaces.sql",
-	"0035_access_tokens.sql",
-	"0042_roles_and_grants.sql",
-	"0048_audit_changes.sql",
-	"0049_audit_sink_cursors.sql",
-	"0050_update_token_id.sql",
-	"0054_token_policy.sql",
-	"0056_audit_object_id_and_blob_purges.sql",
-	"0057_namespace_ip_allowlist.sql",
-	"0058_inventory_deleted_purge_after.sql",
-	"0059_collections.sql",
-	"0062_sessions.sql",
-	"0064_blob_purges_age_byte_order.sql",
-	"0065_session_policy.sql",
-	"0066_namespace_principals.sql",
-	"0067_audit_chain_state.sql",
-	"0068_update_journal_records_changed.sql",
-	"0069_audit_sink_leases.sql",
-	"0070_membership_source_state.sql",
-	"0071_break_glass_accounts.sql",
-	"0074_update_journal_refusals.sql",
-	"0075_sign_in_freshness.sql",
-	"0076_sign_in_providers.sql",
+	BaselineName,
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary

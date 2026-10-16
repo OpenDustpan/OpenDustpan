@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -323,15 +324,20 @@ func keepInstallationState(ctx context.Context, tx pgx.Tx, live, previous string
 	return nil
 }
 
-// keepChainState copies the audit chain state from the schema previous to
-// the restored schema live, in tx. The chain state is bookkeeping of this
-// installation: a restore keeps the row of the target. The swap replaces
-// the log, so the copy sets log_replaced: the server compares the restored
-// log with the state, also after a crash. The copy keeps no migration: a
-// new approval starts it again. The copy keeps entered_maintenance false:
-// the chain enters maintenance mode again when it still waits. Without a
-// row, the copy writes the state that a missing row reads as: the chain on.
+// keepChainState replaces the audit chain state of the restored schema live
+// with the row of the schema previous, in tx. The chain state is bookkeeping
+// of this installation: a restore keeps the row of the target. The swap
+// replaces the log, so the copy sets log_replaced: the server compares the
+// restored log with the state, also after a crash. The copy keeps no
+// migration: a new approval starts it again. The copy keeps
+// entered_maintenance false: the chain enters maintenance mode again when it
+// still waits. Every schema seeds the row, so a previous schema without it
+// is audit.ErrChainStateMissing.
 func keepChainState(ctx context.Context, tx pgx.Tx, live, previous string) error {
+	if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(live)+".audit_chain_state"); err != nil {
+		return fmt.Errorf("keep audit chain state: %w", err)
+	}
+
 	const columns = "id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms"
 
 	keep := "INSERT INTO " + pgIdent(live) + ".audit_chain_state (" + columns + ")" +
@@ -343,15 +349,8 @@ func keepChainState(ctx context.Context, tx pgx.Tx, live, previous string) error
 		return fmt.Errorf("keep audit chain state: %w", err)
 	}
 
-	if tag.RowsAffected() > 0 {
-		return nil
-	}
-
-	seed := "INSERT INTO " + pgIdent(live) +
-		".audit_chain_state (id, state, changed_at_ms, changed_by, pending, log_replaced, entered_maintenance, migrating_at_ms)" +
-		" VALUES (1, 'on', 0, '', false, true, false, 0)"
-	if _, err := tx.Exec(ctx, seed); err != nil {
-		return fmt.Errorf("keep audit chain state: %w", err)
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("keep audit chain state: %w", audit.ErrChainStateMissing)
 	}
 
 	return nil

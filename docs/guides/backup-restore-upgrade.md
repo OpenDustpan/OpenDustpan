@@ -144,6 +144,11 @@ The command refuses a backup of another schema version. The error names both
 versions. Restore into the same schema version only. To change version, upgrade
 the server instead.
 
+The command also refuses a backup with a schema version below 100, the
+baseline schema version. The baseline migration replaced every migration
+before it, so no binary can restore such a backup. The error names the
+baseline.
+
 Before the server changes anything, it checks the manifest, the
 key-encryption key, each table file against its descriptor, and each blob
 against its size and MD5. It loads the table files into a staging area. The
@@ -208,8 +213,8 @@ The command takes only `--server` and `--ca-file`. Against a local server with n
 ```text
 binary version: dev
 server version: dev
-database schema version: 19
-binary schema version: 19
+database schema version: 100
+binary schema version: 100
 pending migrations: none
 verdict: up to date
 ```
@@ -217,6 +222,8 @@ verdict: up to date
 The command prints the binary version, the schema version of the database, the schema version that the binary needs, and the names of pending migrations. It ends with one verdict: `up to date`, `upgrade possible`, or `cannot start`. The exit code is 0 for the first two verdicts and 1 for the third and for errors. When migrations are pending, it says to back up the database first and that no downgrade path exists. When the server runs without a key-encryption key, or is older than ADR 41, the command also prints a warning. The warning names `--generate-key-encryption-key` (`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`), `--key-encryption-key-file` (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`) and `DUSTPAN_KEY_ENCRYPTION_KEY`. Set one of them before the upgrade.
 
 Back up the database before each upgrade. `serve` applies pending migrations at start.
+
+`serve` refuses a database that records a schema version below 100, the baseline schema version. The baseline migration replaced every migration before it, so no binary can upgrade such a database. The error names both versions. Start the server on an empty database. The upgrade check gives the verdict `cannot start` for such a database and names the baseline.
 
 For several nodes, start one new node first. The first new node migrates the database. An older node that still runs does not stop. Its next start fails because the schema is newer than the binary knows. Then start the other new nodes.
 

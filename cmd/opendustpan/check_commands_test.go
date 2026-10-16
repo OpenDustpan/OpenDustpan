@@ -206,30 +206,31 @@ func TestUpgradeCheckFresh(t *testing.T) {
 }
 
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
-func TestUpgradeCheckOld(t *testing.T) {
-	names, binVersion := embeddedNames(t)
+func TestUpgradeCheckBeforeBaseline(t *testing.T) {
+	_, binVersion := embeddedNames(t)
 
-	const oldMax = 8
+	const oldVersion = 76
 
-	old := slices.Clone(names[:oldMax])
 	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
-		http.StatusOK, upgradeCheckBody(t, old))
+		http.StatusOK, upgradeCheckBody(t, []string{"0075_sign_in_freshness.sql", "0076_sign_in_providers.sql"}))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
-	if err != nil {
-		t.Fatalf("upgrade check on an old database: %v", err)
+	if err == nil || !errors.Is(err, schema.ErrSchemaBeforeBaseline) {
+		t.Fatalf("upgrade check on a database from before the baseline: err = %v, want ErrSchemaBeforeBaseline", err)
 	}
 
 	checkUpgradeReport(t, out, wantUpgradeReport{
 		serverVersion: checkServerVersion,
-		dbVersion:     oldMax,
+		dbVersion:     oldVersion,
 		binVersion:    binVersion,
 		pending:       true,
-		verdict:       verdictUpgradePossible,
+		verdict:       verdictCannotStart,
 	})
 
-	if !strings.Contains(out, names[oldMax]) {
-		t.Fatalf("upgrade check output lacks pending migration %q:\n%s", names[oldMax], out)
+	for _, want := range []string{strconv.FormatInt(oldVersion, 10), strconv.FormatInt(schema.BaselineVersion, 10)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("upgrade check error %q does not name %q", err, want)
+		}
 	}
 }
 

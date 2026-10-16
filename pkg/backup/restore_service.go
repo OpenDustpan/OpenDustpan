@@ -513,6 +513,8 @@ func sanitizeRestoreError(err error) string {
 		return ErrCorrupt.Error()
 	case errors.Is(err, ErrNativeFormat):
 		return ErrNativeFormat.Error()
+	case errors.Is(err, ErrSchemaBeforeBaseline):
+		return ErrSchemaBeforeBaseline.Error()
 	case errors.Is(err, ErrSchemaMismatch):
 		return ErrSchemaMismatch.Error()
 	case errors.Is(err, maintenance.ErrActiveWork):
@@ -736,6 +738,7 @@ func isLogSentinel(err error) bool {
 	case errors.Is(err, ErrCorrupt),
 		errors.Is(err, ErrNativeFormat),
 		errors.Is(err, ErrSchemaMismatch),
+		errors.Is(err, ErrSchemaBeforeBaseline),
 		errors.Is(err, ErrNotFound),
 		errors.Is(err, ErrAlreadyExists),
 		errors.Is(err, ErrNotRunning),

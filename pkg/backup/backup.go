@@ -184,6 +184,13 @@ type Summary struct {
 	SchemaVersion int
 }
 
+// BaselineSchemaVersion is the schema version of the baseline migration of
+// the store adapters. The baseline replaced every migration before it, so a
+// backup with a lower schema version cannot be restored by any binary. It
+// equals schema.BaselineVersion of the store package, which this package
+// cannot import; a test pins the two.
+const BaselineSchemaVersion = 100
+
 // Sentinel errors returned by this package and by its ports.
 var (
 	// ErrNotFound reports that a backup row does not exist.
@@ -196,6 +203,11 @@ var (
 	// the schema version of the destination. A backup restores into the same
 	// schema version only.
 	ErrSchemaMismatch = errors.New("backup schema version differs from destination schema version")
+	// ErrSchemaBeforeBaseline reports a backup with a schema version from
+	// before BaselineSchemaVersion. No binary can restore it.
+	ErrSchemaBeforeBaseline = errors.New(
+		"backup schema version is older than the baseline schema version: no binary can restore this backup",
+	)
 	// ErrCorrupt reports that the backup data is incomplete, or that it does
 	// not match its descriptors, row counts or manifest.
 	ErrCorrupt = errors.New("backup data is corrupt")
