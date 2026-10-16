@@ -81,7 +81,7 @@ func TestClaimStepAndOperationStep(t *testing.T) {
 	op := durable.Operation{
 		ID: "op-1", Key: "k", Kind: "backup", Version: 1, Input: nil, State: durable.StateRunning,
 		Steps:   []durable.StepRecord{{Name: "export", Result: []byte("r"), DoneAt: time.Time{}}},
-		Attempt: 1, Expiries: 0, LastError: "", Claim: c, CancelRequested: false,
+		Attempt: 1, Expiries: 0, Failures: 0, LastError: "", Claim: c, CancelRequested: false,
 		NotBefore: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
 

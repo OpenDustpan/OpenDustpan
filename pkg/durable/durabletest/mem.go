@@ -235,6 +235,7 @@ func (m *memDB) start(req durable.StartRequest, now time.Time) (durable.Operatio
 		Steps:           nil,
 		Attempt:         0,
 		Expiries:        0,
+		Failures:        0,
 		LastError:       "",
 		Claim:           zeroClaim(),
 		CancelRequested: false,
@@ -440,6 +441,7 @@ func (s memStore) Complete(_ context.Context, c durable.Claim) error {
 
 func (s memStore) Fail(_ context.Context, c durable.Claim, f durable.Failure) error {
 	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
+		op.Failures++
 		op.LastError = f.Message
 		if f.Final {
 			op.State = durable.StateFailed

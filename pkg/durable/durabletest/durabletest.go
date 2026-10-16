@@ -137,6 +137,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"an instance clock ahead or behind cannot move a claim", testInstanceClockSkew},
 		{"another instance claims an expired operation with a new token", testTakeover},
 		{"only a takeover of an expired claim counts an expiry", testExpiries},
+		{"only Fail counts a failure", testFailures},
 		{"an expired claim cannot write", testExpiredClaimCannotWrite},
 		{"a claim that expires inside a step transaction cannot write", testExpiryInsideStepTx},
 		{"a replaced claim cannot write", testReplacedClaimCannotWrite},
@@ -466,6 +467,46 @@ func testExpiries(t *testing.T, h Harness) {
 	taken := claimWhenExpired(t, b)
 	if taken.ID != op.ID || taken.Expiries != 1 || mustGet(t, a, op.ID).Expiries != 1 {
 		t.Fatalf("expiries after a takeover of an expired claim = %d, want 1", taken.Expiries)
+	}
+}
+
+func testFailures(t *testing.T, h Harness) {
+	t.Helper()
+
+	a, b := h.Open(t, 0), h.Open(t, 0)
+	op := mustStart(t, a, "k", kindA)
+
+	first := mustClaim(t, a, ownerA, longLease, kindA)
+	if err := a.Release(t.Context(), first.Claim); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	second := mustClaim(t, b, ownerB, longLease, kindA)
+	if second.Failures != 0 {
+		t.Fatalf("failures after a release = %d, want 0", second.Failures)
+	}
+
+	retry := durable.Failure{Message: "x", Final: false, RetryAfter: 0}
+	if err := b.Fail(t.Context(), second.Claim, retry); err != nil {
+		t.Fatalf("Fail with a retry: %v", err)
+	}
+
+	short := mustClaim(t, a, ownerA, shortLease, kindA)
+	if short.Failures != 1 {
+		t.Fatalf("failures after one Fail = %d, want 1", short.Failures)
+	}
+
+	taken := claimWhenExpired(t, b)
+	if taken.Failures != 1 {
+		t.Fatalf("failures after a takeover = %d, want 1", taken.Failures)
+	}
+
+	if err := b.Fail(t.Context(), taken.Claim, durable.Failure{Message: "y", Final: true, RetryAfter: 0}); err != nil {
+		t.Fatalf("final Fail: %v", err)
+	}
+
+	if got := mustGet(t, a, op.ID); got.Failures != 2 || got.State != durable.StateFailed {
+		t.Fatalf("operation after a final Fail = %+v, want failed with 2 failures", got)
 	}
 }
 
@@ -1182,7 +1223,7 @@ func checkNew(t *testing.T, op durable.Operation, key string, kind durable.Kind,
 	t.Helper()
 
 	if op.ID == "" || op.State != durable.StatePending || string(op.Input) != input || op.Kind != kind ||
-		op.Key != key || op.Attempt != 0 || op.Expiries != 0 || len(op.Steps) != 0 {
+		op.Key != key || op.Attempt != 0 || op.Expiries != 0 || op.Failures != 0 || len(op.Steps) != 0 {
 		t.Fatalf(
 			"Start returned %+v, want a new pending operation of %s with key %s and input %s",
 			op,
