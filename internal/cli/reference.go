@@ -46,6 +46,12 @@ func writeServeSettings(out *strings.Builder) {
 	}
 
 	out.WriteString("\n")
+	out.WriteString("With journaling on, the server refuses to complete an update with\n")
+	out.WriteString("`succeeded` while the server has not stored a journal batch of the update. The\n")
+	out.WriteString("server does not detect a missing last batch: if the last journal batch of an\n")
+	out.WriteString("update is never sent, complete does not refuse it. Cancel the update when its\n")
+	out.WriteString("batches stop arriving.\n")
+	out.WriteString("\n")
 }
 
 // ConfigExample is the example configuration file of the reference: the

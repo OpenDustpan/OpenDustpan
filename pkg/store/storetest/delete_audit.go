@@ -255,7 +255,7 @@ func testTombstoneNameFindsNothing(t *testing.T, f fixture) {
 func keptChildTables() []string {
 	return []string{
 		"stack_tags", "updates", "checkpoints", "update_events",
-		"update_journal", "update_journal_sequences", "secret_keys",
+		"update_journal", "update_journal_sequences", "update_journal_refusals", "secret_keys",
 	}
 }
 
