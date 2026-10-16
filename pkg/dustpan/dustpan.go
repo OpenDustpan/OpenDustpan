@@ -168,6 +168,12 @@ type settings struct {
 	disablePulumiJournaling bool
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
+	// oidcProviders are the OpenID Connect providers of the console
+	// sign-in. See WithOIDCProvider.
+	oidcProviders []OIDCProvider
+	// gate is the per-address failure limit of the token lookups. The
+	// sign-in routes share it. wireTokens sets it; nil means no limit.
+	gate *authgate.Gate
 	// auditShipper ships to auditSinks. assemble sets it before it mounts
 	// the adapters, so the installation API lists it.
 	auditShipper *audit.Shipper
@@ -526,6 +532,8 @@ func defaultSettings() *settings {
 		tlsCertFile:             "",
 		tlsKeyFile:              "",
 		publicURL:               "",
+		oidcProviders:           nil,
+		gate:                    nil,
 		version:                 "",
 		maxCheckpointBytes:      0,
 		maxSecretBatchBytes:     0,
@@ -1691,6 +1699,11 @@ func newServerHandler(
 		return nil, err
 	}
 
+	signIn, err := newSignIn(cfg, sessionPolicies)
+	if err != nil {
+		return nil, err
+	}
+
 	var sinks serverapi.AuditSinkSource
 	if cfg.auditShipper != nil {
 		sinks = cfg.auditShipper
@@ -1719,6 +1732,7 @@ func newServerHandler(
 		},
 		DeletedUnits: deps.services.deleted,
 		AuditSinks:   sinks,
+		SignIn:       signIn,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -2008,6 +2022,8 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 	if err != nil {
 		return nil, fmt.Errorf("authentication gate: %w", err)
 	}
+
+	cfg.gate = gate
 
 	return identity.Chain{cfg.authenticator, gate}, nil
 }
