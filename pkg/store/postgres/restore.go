@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -330,8 +331,9 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 // live with the row of the schema previous, in tx. The installation state is
 // bookkeeping of this installation: a restore runs in maintenance mode, and
 // the row from the backup would end maintenance mode when the swap commits,
-// before the restore has finished. Without a row in previous, live keeps no
-// row either, and reads normal as previous did.
+// before the restore has finished. The migration seeds the row, so previous
+// holds it: without a row in previous, the copy reports
+// maintenance.ErrUnavailable and the swap fails, so live never lacks the row.
 func keepInstallationState(ctx context.Context, tx pgx.Tx, live, previous string) error {
 	if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(live)+".installation"); err != nil {
 		return fmt.Errorf("keep installation state: %w", err)
@@ -340,8 +342,13 @@ func keepInstallationState(ctx context.Context, tx pgx.Tx, live, previous string
 	keep := "INSERT INTO " + pgIdent(live) + ".installation (id, state) SELECT id, state FROM " +
 		pgIdent(previous) + ".installation"
 
-	if _, err := tx.Exec(ctx, keep); err != nil {
+	tag, err := tx.Exec(ctx, keep)
+	if err != nil {
 		return fmt.Errorf("keep installation state: %w", err)
+	}
+
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("keep installation state: row is missing: %w", maintenance.ErrUnavailable)
 	}
 
 	return nil

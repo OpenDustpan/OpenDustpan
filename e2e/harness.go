@@ -260,6 +260,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
+		signInRealTime:    false,
 		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
@@ -322,6 +323,7 @@ func NewEnvWithJournalRefuser(
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
+		signInRealTime:    false,
 		journalRefuser:    refuser,
 		tb:                tb,
 		cli:               cli,
@@ -354,6 +356,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
+		signInRealTime:    false,
 		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
@@ -390,7 +393,12 @@ func startInprocessServer(
 
 	var signIn *signInSetup
 	if in.signIn {
-		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), newTestClock())
+		var shared *TestClock
+		if !in.signInRealTime {
+			shared = newTestClock()
+		}
+
+		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), shared)
 	}
 
 	build := newServer(ctx, tb, serverArgs{
@@ -920,6 +928,26 @@ func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) workspace.StateV
 func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {
 	tb.Helper()
 	e.createNamespaceThroughAPI(ctx, tb, name)
+}
+
+// CreateForeignNamespace stores a namespace homed in region through a direct
+// store call, so a step can prove what the server answers for a namespace
+// that another region owns. The installation API creates namespaces in the
+// server's own region only.
+func (e *Env) CreateForeignNamespace(ctx context.Context, tb testing.TB, name, region string) {
+	tb.Helper()
+
+	ns := namespace.Namespace{
+		CreatedAt:       time.Now(),
+		Name:            namespace.Name(name),
+		HomeRegion:      namespace.Region(region),
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if err := e.server.CreateNamespace(ctx, ns); err != nil {
+		tb.Fatalf("create namespace %q homed in %q: %v", name, region, err)
+	}
 }
 
 // ListInventory returns the inventory entries of ns, so scenarios can prove

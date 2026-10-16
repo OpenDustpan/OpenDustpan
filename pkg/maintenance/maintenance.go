@@ -93,12 +93,14 @@ func ParseState(s string) (State, error) {
 // backup registry. Every SQL adapter serves it from one database connection.
 type Store interface {
 	// GetState returns the installation state. A fresh database reads
-	// normal: the migration seeds it. It reports ErrUnavailable when the
-	// state cannot be read, and when the stored value is outside the known
-	// set: an unknown stored value is a server fault, never a bad request.
+	// normal: the migration seeds the one row. It reports ErrUnavailable
+	// when the state cannot be read, when the row is missing, and when the
+	// stored value is outside the known set: an unknown stored value is a
+	// server fault, never a bad request.
 	GetState(ctx context.Context) (State, error)
-	// SetState stores state. It reports ErrInvalidState for any other value
-	// and ErrUnavailable when the state cannot be stored.
+	// SetState stores state in the seeded row. It reports ErrInvalidState
+	// for any other value and ErrUnavailable when the state cannot be
+	// stored, also when the row is missing: it never creates the row.
 	SetState(ctx context.Context, state State) error
 	// SetStateIf stores next only when the stored state is expected: one
 	// compare-and-set, so enters on several instances of one database stay
@@ -628,9 +630,10 @@ func NewWatcher(store Store, now func() time.Time, limit time.Duration) *Watcher
 }
 
 // State returns the installation state, reading the database at most once
-// per cache limit. A read failure keeps the last state it read, or normal
-// when no read ever passed: the request then meets the adapter, which
-// answers the database failure itself.
+// per cache limit. A read failure keeps the last state it read. Before the
+// first good read, a read failure answers maintenance: the watcher does not
+// know the state, so it refuses the request instead of letting it write
+// during maintenance mode.
 func (w *Watcher) State(ctx context.Context) State {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -642,7 +645,7 @@ func (w *Watcher) State(ctx context.Context) State {
 	state, err := w.store.GetState(ctx)
 	if err != nil {
 		if !w.read {
-			return StateNormal
+			return StateMaintenance
 		}
 
 		return w.state

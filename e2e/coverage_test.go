@@ -133,3 +133,22 @@ func TestUncoveredRoutesRejectsPartialSegments(t *testing.T) {
 		t.Fatalf("uncovered = %v, want the state version route", uncovered)
 	}
 }
+
+// TestServedRoutesIncludeHTTPBackend proves the served routes hold every
+// route of the OpenTofu http backend, so the coverage check sees a new
+// http backend route as it sees a route of any other adapter.
+func TestServedRoutesIncludeHTTPBackend(t *testing.T) {
+	t.Parallel()
+
+	served := map[e2e.RouteRef]bool{}
+	for _, route := range e2e.ServedRoutes(t) {
+		served[route] = true
+	}
+
+	for _, method := range []string{"GET", "POST", "LOCK", "UNLOCK"} {
+		ref := e2e.RouteRef{Method: method, Path: "/tofu/state/{namespace}/{workspace}"}
+		if !served[ref] {
+			t.Errorf("served routes miss %q", ref)
+		}
+	}
+}
