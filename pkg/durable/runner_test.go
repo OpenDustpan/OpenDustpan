@@ -377,7 +377,7 @@ func TestRunnerSkipsRecordedStepAfterTakeover(t *testing.T) {
 
 	// An older holder recorded step one and stopped.
 	old, err := store.Claim(t.Context(), durable.ClaimRequest{
-		Owner: "old", Kinds: []durable.Kind{testKind}, Lease: testLease,
+		Owner: "old", Kinds: []durable.Kind{testKind}, MaxVersions: nil, Lease: testLease,
 	})
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
@@ -512,7 +512,7 @@ func TestRunnerReleasesDoNotUseUpAttempts(t *testing.T) {
 	// Five holders release the operation, as at five restarts.
 	for range 5 {
 		held, err := store.Claim(t.Context(), durable.ClaimRequest{
-			Owner: "restarting", Kinds: []durable.Kind{testKind}, Lease: testLease,
+			Owner: "restarting", Kinds: []durable.Kind{testKind}, MaxVersions: nil, Lease: testLease,
 		})
 		if err != nil {
 			t.Fatalf("Claim: %v", err)
@@ -595,7 +595,7 @@ func TestRunnerFailsAfterTheExpiryLimit(t *testing.T) {
 	for range 3 {
 		waitFor(t, store, op.ID, "claimable", func(durable.Operation) bool {
 			_, err := store.Claim(t.Context(), durable.ClaimRequest{
-				Owner: "crashing", Kinds: []durable.Kind{testKind}, Lease: 50 * time.Millisecond,
+				Owner: "crashing", Kinds: []durable.Kind{testKind}, MaxVersions: nil, Lease: 50 * time.Millisecond,
 			})
 
 			return err == nil
@@ -610,10 +610,39 @@ func TestRunnerFailsAfterTheExpiryLimit(t *testing.T) {
 	}
 }
 
-func TestRunnerReleasesANewerVersion(t *testing.T) {
+func TestRunnerDoesNotClaimANewerVersion(t *testing.T) {
 	t.Parallel()
 
 	store := durabletest.NewMem().Store()
+	rec := newRecorder()
+	op := startVersion(t, store, "k", 2)
+
+	err := newTestRunner(t, store, "a", rec.step("one", nil)).RunOnce(t.Context())
+	if !errors.Is(err, durable.ErrNoWork) {
+		t.Fatalf("RunOnce with only a newer version: error = %v, want ErrNoWork", err)
+	}
+
+	if got := mustGet(t, store, op.ID); got.State != durable.StatePending || got.Attempt != 0 || rec.count("one") != 0 {
+		t.Fatalf("operation of a newer version = %+v, want pending and never claimed", got)
+	}
+}
+
+// unlimitedClaims drops the version limits of each claim, as a store that
+// does not follow them.
+type unlimitedClaims struct {
+	durable.Store
+}
+
+func (s unlimitedClaims) Claim(ctx context.Context, req durable.ClaimRequest) (durable.Operation, error) {
+	req.MaxVersions = nil
+
+	return s.Store.Claim(ctx, req)
+}
+
+func TestRunnerReleasesANewerVersionThatTheStoreGave(t *testing.T) {
+	t.Parallel()
+
+	store := unlimitedClaims{Store: durabletest.NewMem().Store()}
 	rec := newRecorder()
 	op := startVersion(t, store, "k", 2)
 
@@ -653,7 +682,7 @@ func TestRunnerFailsUnknownStep(t *testing.T) {
 	op := start(t, store, "k")
 
 	old, err := store.Claim(t.Context(), durable.ClaimRequest{
-		Owner: "old", Kinds: []durable.Kind{testKind}, Lease: testLease,
+		Owner: "old", Kinds: []durable.Kind{testKind}, MaxVersions: nil, Lease: testLease,
 	})
 	if err != nil {
 		t.Fatalf("Claim: %v", err)

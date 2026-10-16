@@ -124,6 +124,8 @@ type Runner struct {
 	cfg   RunnerConfig
 	kinds map[Kind]KindSpec
 	names []Kind
+	// versions limits each claim to the versions that this binary runs.
+	versions map[Kind]int
 }
 
 // permanentError marks an error that no retry can fix.
@@ -161,7 +163,10 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		return nil, fmt.Errorf("%w: a runner needs a store, an owner and at least one kind", ErrInvalid)
 	}
 
-	r := &Runner{cfg: withDefaults(cfg), kinds: make(map[Kind]KindSpec, len(cfg.Kinds)), names: nil}
+	r := &Runner{
+		cfg: withDefaults(cfg), kinds: make(map[Kind]KindSpec, len(cfg.Kinds)), names: nil,
+		versions: make(map[Kind]int, len(cfg.Kinds)),
+	}
 
 	if r.cfg.RenewEvery >= r.cfg.Lease {
 		return nil, fmt.Errorf("%w: renewal every %v is not shorter than the lease %v", ErrInvalid,
@@ -179,6 +184,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 
 		r.kinds[k.Kind] = k
 		r.names = append(r.names, k.Kind)
+		r.versions[k.Kind] = k.Version
 	}
 
 	return r, nil
@@ -315,7 +321,9 @@ func (r *Runner) RunOnce(ctx context.Context) error {
 	// ends before the expiry that the store sets.
 	claimedAt := time.Now()
 
-	op, err := r.cfg.Store.Claim(ctx, ClaimRequest{Owner: r.cfg.Owner, Kinds: r.names, Lease: r.cfg.Lease})
+	op, err := r.cfg.Store.Claim(ctx, ClaimRequest{
+		Owner: r.cfg.Owner, Kinds: r.names, MaxVersions: r.versions, Lease: r.cfg.Lease,
+	})
 	if err != nil {
 		return fmt.Errorf("claim a durable operation: %w", err)
 	}
@@ -382,6 +390,8 @@ func (r *Runner) check(ctx context.Context, op Operation, log *slog.Logger) (boo
 
 		return true, nil
 	case op.Version > spec.Version:
+		// The claim limits the version, so only a store that ignores the
+		// limit gets here. Release it for a newer instance.
 		r.release(ctx, op.Claim, log)
 
 		return true, fmt.Errorf("%w: operation %s has version %d, and this binary runs %d to %d",
