@@ -1,41 +1,39 @@
-package postgres_test
+package storetest
 
 import (
+	"context"
 	"errors"
-	"os"
 	"sync"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
-// TestTwoHandlesStartOneBackupAndOneRestore opens two store handles on one
-// schema, as two server instances do, and starts a backup and a restore on
-// both at the same moment. The database admits one running backup and one
-// running restore: the other start of each fails with the running error.
-func TestTwoHandlesStartOneBackupAndOneRestore(t *testing.T) {
-	t.Parallel()
+// runningStarter starts the backup and restore rows. Every store adapter
+// implements it with backup.Registry and backup.RestoreRegistry.
+type runningStarter interface {
+	CreateBackup(ctx context.Context, r backup.Record) error
+	CreateRestore(ctx context.Context, r backup.RestoreRecord) error
+}
 
-	base := os.Getenv(envURL)
-	if base == "" {
-		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
-	}
+// testSharedOneRunning starts a backup and a restore on both handles at the
+// same moment, as two server instances do. The database admits one running
+// backup and one running restore: the other start of each fails with the
+// running error.
+func testSharedOneRunning(t *testing.T, a, b Store) {
+	t.Helper()
 
-	schemaURL := isolatedURL(t, base)
-	handles := make([]*postgres.Store, 0, 2)
+	handles := make([]runningStarter, 0, 2)
 
-	for range 2 {
-		s, err := postgres.Open(t.Context(), schemaURL)
-		if err != nil {
-			t.Fatalf("open store: %v", err)
+	for _, s := range []Store{a, b} {
+		h, ok := s.(runningStarter)
+		if !ok {
+			t.Fatalf("store %T does not start backup and restore rows", s)
 		}
 
-		t.Cleanup(s.Close)
-
-		handles = append(handles, s)
+		handles = append(handles, h)
 	}
 
 	start := time.Date(2026, time.October, 16, 12, 0, 0, 0, time.UTC)

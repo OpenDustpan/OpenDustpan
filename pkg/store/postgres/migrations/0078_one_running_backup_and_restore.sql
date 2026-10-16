@@ -5,6 +5,22 @@
 -- so two instances could start two at once. These partial unique indexes
 -- make the database refuse a second running row. The indexed expression is
 -- the same value for every running row, so at most one such row exists.
+--
+-- A database can already hold more than one running row: from two starts at
+-- once, or from a finish write that failed. The index cannot be built over
+-- them, so the store would not open. The migration runs while the server
+-- starts, and a start marks every running backup and restore failed anyway.
+-- So the migration marks them failed first, with the same error text.
+UPDATE backups
+SET state = 'failed', error = 'server stopped during backup',
+    ended_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+WHERE state = 'running';
+
+UPDATE restores
+SET state = 'failed', error = 'server stopped during restore',
+    ended_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+WHERE state IN ('checking', 'applying');
+
 CREATE UNIQUE INDEX backups_one_running ON backups ((state = 'running'))
     WHERE state = 'running';
 
