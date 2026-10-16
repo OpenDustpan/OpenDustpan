@@ -1,6 +1,6 @@
 # 72. Scale out on one database with durable operations
 
-Status: proposed · 2026-10-16 · supersedes ADR 48 decisions 1 to 3 and 5 to 11 when accepted
+Status: accepted · 2026-10-16 · supersedes ADR 33, ADR 48, ADR 60 and ADR 64 in part (see "Superseded decisions")
 
 ## Context
 
@@ -26,13 +26,13 @@ commercial product. RFC 36 gives the results.
 restore ask every live instance over the network whether it sees maintenance
 mode. RFC 36 proposes a check in the write path instead.
 
-The project owner answered RFC 36 questions 1 to 7 on 2026-10-16. RFC 36
-keeps two questions open: the policy for a missed schedule tick, and the
-versions that can run together during a rolling deploy.
+The project owner answered every question of RFC 36 on 2026-10-16, and
+accepted this ADR on the same day.
 
 ## Decision
 
-The project owner decided on 2026-10-16:
+The project owner decided on 2026-10-16. The owner is the decider of each
+decision below.
 
 1. **A port for durable operations, with our own adapter.** A tool-neutral
    package in `pkg` defines a port for durable operations: operations with a
@@ -58,8 +58,20 @@ The project owner decided on 2026-10-16:
    claim rule.
 3. **A schedule is a row.** A periodic job that needs one runner per
    installation is a schedule row with `next_run_at`. One conditional
-   `UPDATE` claims a due row and moves `next_run_at` forward. The policy for
-   a tick that no instance ran stays open in RFC 36.
+   `UPDATE` claims a due row and moves `next_run_at` forward.
+   - **A missed tick runs once.** When `next_run_at` is in the past, the
+     schedule is due once, whatever the number of ticks that no instance
+     ran. The claim sets `next_run_at` to the database clock plus the
+     interval, so the missed ticks collapse into one run.
+   - **One instance claims it.** The instance that gets the row from the
+     conditional `UPDATE` starts the operation, with the schedule and the
+     claimed `next_run_at` as its start key. The other instances never run
+     the job without a claim.
+   - **A random first delay.** At start-up, each instance waits a random
+     delay before its first claim of each schedule. The delay is uniform from
+     0 to the smaller of 60 s and one tenth of the interval, and each
+     schedule draws its own delay. So a start of many instances does not
+     claim every schedule at the same moment.
 4. **A write-path installation check.** Every write transaction reads the
    installation state in the same statement that reads its namespace fence.
    On PostgreSQL the statement takes a shared advisory transaction lock.
@@ -79,6 +91,15 @@ The project owner decided on 2026-10-16:
    that exists only for data from older pre-release builds. The list is in
    RFC 36, "Pre-release compatibility code". The first item is the seal of
    unsealed OpenTofu state at start, which deletes the cause of #668.
+   - **A fixed audit hash encoding.** No audit entry from before the first
+     release has to keep its hash. So the hash encoding of an audit entry
+     writes every field in a fixed order, with an empty value when the field
+     is not set. No field is optional in the encoding. For `valueCount`, a
+     value that is not set and the value 0 stay different. This supersedes
+     ADR 60 decision 5 (a new field is optional in the hash encoding) and
+     the "when it is above 0" part of ADR 64 decision 10: `fence_version` is
+     always in the encoding. The digest of ADR 64 decision 8 then covers the
+     fixed field list.
 7. **One baseline migration per dialect, now.** The migrations of each
    dialect collapse into one baseline before the first tag. The baseline has
    a new version number, so that the server refuses a database or a portable
@@ -93,6 +114,60 @@ The project owner decided on 2026-10-16:
    in-process cache of write-once blob keys as a `blob.Store` decorator. The
    server adds groupcache only after a load measurement shows a need, and
    only with peer authentication.
+10. **Upgrades can skip releases.** The migration runner applies every
+    embedded migration that the database does not record, in order. So an
+    installation that stopped can start a new release directly, with no
+    release in between. A data migration must work from every older schema in
+    the chain. Two tests prove the path:
+    - A schema test for each released tag applies the migrations of that
+      tag, then the new migrations, and compares the schema with a fresh
+      install. It runs in `make check`.
+    - A full upgrade test from each supported old release straight to the new
+      binary writes data with the real Pulumi CLI and OpenTofu, and checks
+      the data, the secrets and the held lock. This extends ADR 33 decision
+      7, which tests only from the newest tag.
+11. **Rolling deploys: expand and contract with K = 2.** Binaries of release
+    R-2 to R can run together on one schema.
+    - **Expand.** A release adds tables, columns and indexes only in a way
+      that older binaries ignore. A release that changes a shape writes both
+      the old and the new shape.
+    - **Contract after K releases.** A step that deletes or narrows something
+      ships 2 releases after the expand that made it unused.
+    - **A minimum binary version in the schema.** The schema records the
+      oldest binary version that can use it. A contract migration raises it.
+      A binary refuses to start only on a schema whose minimum is above its
+      own version. The error names both versions. A binary at or above the
+      minimum starts on a newer schema. This rule must be in `v0.1.0`,
+      because a released binary keeps its rule.
+    - **Version rows at start-up.** Each instance writes one row with its
+      binary version and start time at start-up, and a clean stop deletes it.
+      The row is not a liveness lease: nothing renews it, and nothing reads
+      it to decide that an instance is live. The installation API lists the
+      rows, and an administrator can delete the row of a crashed instance,
+      with its own action. A contract migration that raises the minimum does
+      not run while a row below the new minimum exists.
+    - **The write path checks the minimum.** The statement of decision 4
+      also compares the minimum of the schema with the version of the
+      writing binary. A write of a binary below the minimum fails in its own
+      transaction. So an old instance that still runs after the minimum goes
+      up cannot write.
+    - **A test matrix.** CI runs the new schema against each of the last 2
+      release binaries, with an old binary and a new binary serving on one
+      database.
+
+## Superseded decisions
+
+| ADR | Decision | Superseded by | What changes |
+| --- | --- | --- | --- |
+| 33 | 1 | Decision 11 | A binary refuses only a schema whose minimum binary version is above its own, not every newer schema. |
+| 33 | 5, last sentence | Decision 11 | An older binary at or above the minimum starts on the newer schema. |
+| 48 | 1 to 3, 9 to 11 | Decision 2 | No instance registry. A lease per operation tells whether its owner is live. |
+| 48 | 5 to 8 | Decision 4 | The write-path check replaces the calls to each instance before a restore applies. |
+| 60 | 5, "a new field is optional" | Decision 6 | Every field is in the hash encoding, in a fixed order. |
+| 64 | 10, "when it is above 0" | Decision 6 | `fence_version` is always in the hash encoding. |
+
+ADR 48 decisions 4, 12 and 13 stay. For ADR 48 decision 4, a binary supports
+a schema when the minimum binary version of the schema is not above its own.
 
 ## Consequences
 
@@ -121,6 +196,9 @@ The project owner decided on 2026-10-16:
   decision 7.
 - The server gets no registry table, no `--advertise-address` and no routes
   for calls between instances.
-- RFC 36 proposes that each instance writes its version in a row at start-up,
-  for upgrades. Such a row is not a registry: nothing renews it, and nothing
-  reads it to decide that an instance is live.
+- The version rows of decision 11 are not a registry: nothing renews them,
+  and nothing reads them to decide that an instance is live.
+- Each shape change takes two releases or more, and the code writes both
+  shapes for 2 releases. Each release builds 2 old binaries and runs a mixed
+  e2e test per dialect.
+- The audit hash of every entry changes once, before the first release.
