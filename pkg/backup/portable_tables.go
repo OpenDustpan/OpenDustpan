@@ -572,6 +572,7 @@ func portableSpec() []PortableTable {
 				{Name: portColState, Kind: KindText},
 				{Name: "attempt", Kind: KindInteger},
 				{Name: "expiries", Kind: KindInteger},
+				{Name: "failures", Kind: KindInteger},
 				{Name: "last_error", Kind: KindText},
 				{Name: "claim_owner", Kind: KindText},
 				{Name: "claim_token", Kind: KindInteger},

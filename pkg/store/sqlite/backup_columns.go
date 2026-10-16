@@ -345,6 +345,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColState,
 				"attempt",
 				"expiries",
+				"failures",
 				"last_error",
 				"claim_owner",
 				"claim_token",

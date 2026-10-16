@@ -330,9 +330,11 @@ func (d *DurableStore) Fail(ctx context.Context, c durable.Claim, f durable.Fail
 		case row.CancelRequested:
 			return endParams(row, durable.StateCanceled, row.LastError, row.NotBeforeMs, now), nil
 		case f.Final:
-			return endParams(row, durable.StateFailed, f.Message, row.NotBeforeMs, now), nil
+			return failedAttempt(endParams(row, durable.StateFailed, f.Message, row.NotBeforeMs, now)), nil
 		default:
-			return endParams(row, durable.StatePending, f.Message, now+f.RetryAfter.Milliseconds(), now), nil
+			next := now + f.RetryAfter.Milliseconds()
+
+			return failedAttempt(endParams(row, durable.StatePending, f.Message, next, now)), nil
 		}
 	})
 	if err != nil {
@@ -432,12 +434,22 @@ func (d *DurableStore) end(
 	})
 }
 
+// endParams returns the end of the claim of row with the next state, the
+// last error and the earliest next claim, at now. It adds no failure.
 func endParams(
 	row db.DurableOperation, state durable.State, lastError string, notBeforeMs, now int64,
 ) db.EndDurableClaimParams {
 	return db.EndDurableClaimParams{
-		State: string(state), LastError: lastError, NotBeforeMs: notBeforeMs, NowMs: now, ID: row.ID,
+		State: string(state), LastError: lastError, AddFailures: 0, NotBeforeMs: notBeforeMs, NowMs: now, ID: row.ID,
 	}
+}
+
+// failedAttempt returns p with one more failure: the end of a failed
+// attempt. A cancel that Fail finds ends the operation without one.
+func failedAttempt(p db.EndDurableClaimParams) db.EndDurableClaimParams {
+	p.AddFailures = 1
+
+	return p
 }
 
 // errUnknownDurableState reports a stored operation state that the adapter
