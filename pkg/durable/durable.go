@@ -71,15 +71,27 @@ func (s State) Terminal() bool {
 
 // Operation is what any instance can read about an operation.
 type Operation struct {
-	ID    ID
-	Key   string
-	Kind  Kind
-	Input []byte
-	State State
+	ID   ID
+	Key  string
+	Kind Kind
+	// Version is the version of the kind that started the operation. A
+	// runner refuses an operation of a version that it does not support.
+	Version int
+	Input   []byte
+	State   State
 	// Steps are the recorded steps, in the order of their record.
 	Steps []StepRecord
-	// Attempt is the number of claims so far. The first claim sets 1.
+	// Attempt is the number of claims so far. The first claim sets 1. A
+	// release and a takeover also count, so Attempt is no limit for
+	// retries: use Failures.
 	Attempt int
+	// Failures is the number of failed attempts: the calls of Fail.
+	Failures int
+	// Expiries is the number of claims that took the operation over after
+	// the claim before them expired: the number of holders that stopped
+	// without an end write. A release, a retry and a first claim do not
+	// count.
+	Expiries int
 	// LastError is the message of the last failed attempt, or empty.
 	LastError string
 	// Claim is the claim of a running operation. It is the zero Claim when
@@ -144,9 +156,12 @@ type StepFence struct {
 // StartRequest asks for an operation. Two starts with one Key give one
 // operation.
 type StartRequest struct {
-	Key   string
-	Kind  Kind
-	Input []byte
+	Key  string
+	Kind Kind
+	// Version is the version of the kind, from its registration. It is 0 or
+	// more.
+	Version int
+	Input   []byte
 }
 
 // ClaimRequest asks for one operation to run. Lease is the time from the
@@ -154,7 +169,11 @@ type StartRequest struct {
 type ClaimRequest struct {
 	Owner string
 	Kinds []Kind
-	Lease time.Duration
+	// MaxVersions limits the version of each kind that the claimer runs. A
+	// claim never takes an operation whose version is above the limit of its
+	// kind. A kind with no entry has no limit, so a nil map limits nothing.
+	MaxVersions map[Kind]int
+	Lease       time.Duration
 }
 
 // Failure ends one attempt of an operation that failed. When Final is true,
@@ -174,21 +193,40 @@ type Filter struct {
 	Limit  int
 }
 
-// Validate returns ErrInvalid when req has an empty key or kind.
+// Validate returns ErrInvalid when req has an empty key or kind, or a
+// negative version.
 func (req StartRequest) Validate() error {
-	if req.Key == "" || req.Kind == "" {
+	if req.Key == "" || req.Kind == "" || req.Version < 0 {
 		return ErrInvalid
 	}
 
 	return nil
 }
 
-// Validate returns ErrInvalid when req has no owner, no kind, an empty kind
-// or a lease that is not positive.
+// Validate returns ErrInvalid when req has no owner, no kind, an empty kind,
+// a negative version limit or a lease that is not positive.
 func (req ClaimRequest) Validate() error {
 	if req.Owner == "" || len(req.Kinds) == 0 || req.Lease <= 0 || slices.Contains(req.Kinds, "") {
 		return ErrInvalid
 	}
 
+	for _, v := range req.MaxVersions {
+		if v < 0 {
+			return ErrInvalid
+		}
+	}
+
 	return nil
+}
+
+// Allows reports whether req lets a claim take an operation of kind at
+// version: kind is in Kinds, and version is not above its limit.
+func (req ClaimRequest) Allows(kind Kind, version int) bool {
+	if !slices.Contains(req.Kinds, kind) {
+		return false
+	}
+
+	limit, ok := req.MaxVersions[kind]
+
+	return !ok || version <= limit
 }
