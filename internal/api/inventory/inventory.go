@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
@@ -55,8 +56,11 @@ type Config struct {
 	Moves         MoveChecker
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
-	Logger        *slog.Logger
-	Now           func() time.Time
+	// Sessions checks the console session cookie of a request with no
+	// Authorization header. Nil accepts access tokens only.
+	Sessions *sessionauth.Checker
+	Logger   *slog.Logger
+	Now      func() time.Time
 }
 
 // Handler serves the inventory API under /api/inventory/.
@@ -69,6 +73,7 @@ type Handler struct {
 	collections *collection.Service
 	moves       MoveChecker
 	authn       identity.Authenticator
+	sessions    *sessionauth.Checker
 	authz       identity.Authorizer
 	logger      *slog.Logger
 	now         func() time.Time
@@ -76,8 +81,8 @@ type Handler struct {
 	routes      []Route
 }
 
-// NewHandler returns a Handler. Every Config field except Now and Collections
-// is required.
+// NewHandler returns a Handler. Every Config field except Now, Collections
+// and Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Namespaces == nil:
@@ -112,6 +117,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		collections: cfg.Collections,
 		moves:       cfg.Moves,
 		authn:       cfg.Authenticator,
+		sessions:    cfg.Sessions,
 		authz:       cfg.Authorizer,
 		logger:      cfg.Logger,
 		now:         now,
@@ -272,9 +278,17 @@ func unitObject(e coreinventory.Entry) (identity.Object, error) {
 }
 
 // authenticate resolves the "Authorization: token <t>" or the
-// "Authorization: Bearer <t>" header to a principal.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
+// "Authorization: Bearer <t>" header to a principal. A request with no
+// Authorization header uses the console session cookie, and the bool
+// reports that the cookie signed it in. A request with an
+// Authorization header never uses the cookie.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
 	header := r.Header.Get("Authorization")
+	if header == "" {
+		p, _, err := h.sessions.Authenticate(r)
+
+		return p, err == nil, err
+	}
 
 	raw, ok := strings.CutPrefix(header, tokenScheme)
 	if !ok {
@@ -282,10 +296,12 @@ func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
 	}
 
 	if !ok || raw == "" {
-		return identity.Principal{}, identity.ErrUnauthenticated
+		return identity.Principal{}, false, identity.ErrUnauthenticated
 	}
 
-	return h.authn.AuthenticateToken(r.Context(), raw)
+	p, err := h.authn.AuthenticateToken(r.Context(), raw)
+
+	return p, false, err
 }
 
 // errorResponse is the error body the console expects, as in the API the
@@ -306,15 +322,30 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
-// classify maps domain errors to an HTTP status and a message safe to show callers.
-func classify(err error) (int, string) {
+// classifyAuth maps the errors of the authentication and the
+// authorization of a request.
+func classifyAuth(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
+		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated"
+		return http.StatusUnauthorized, "unauthenticated", true
+	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
+		return http.StatusForbidden, err.Error(), true
 	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden"
+		return http.StatusForbidden, "forbidden", true
+	default:
+		return 0, "", false
+	}
+}
+
+// classify maps domain errors to an HTTP status and a message safe to show callers.
+func classify(err error) (int, string) {
+	if status, message, ok := classifyAuth(err); ok {
+		return status, message
+	}
+
+	switch {
 	case errors.Is(err, errMissingOrganization):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, identity.ErrInvalidObject):

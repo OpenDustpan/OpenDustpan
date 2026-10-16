@@ -115,6 +115,7 @@ func TestServerScopeWithBuiltInRoles(t *testing.T) {
 		Entries:       st,
 		Authenticator: realTokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {

@@ -59,6 +59,7 @@ func newCollectionRouteHandler(t *testing.T, authz identity.Authorizer) *apiinve
 		Now:           nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
