@@ -75,10 +75,9 @@ type UpdateStore interface {
 
 // CheckpointStore persists checkpoint metadata, one row for each mutating
 // update. Each write of the running update overwrites the row of that update.
-// The content lives in the blob store under the row's blob key; rows from
-// before blobs keep the content in the SQL column instead. The store never
-// touches the blob store: callers write the content before they call Put and
-// read it back after they read a row with a key.
+// The content lives in the blob store under the row's blob key. The store
+// never touches the blob store: callers write the content before they call
+// Put and read it back after they read a row.
 type CheckpointStore interface {
 	// PutCheckpoint saves cp as the state of update cp.Update, in the same
 	// transaction as checking that update cp.Update is still running under
@@ -88,9 +87,9 @@ type CheckpointStore interface {
 	// never saves state. For cp.Sequence > 0 it is idempotent: if the
 	// update's last checkpoint has the same sequence and digest it returns
 	// nil without writing, a different digest returns ErrCheckpointConflict,
-	// and a lower sequence returns ErrStaleCheckpoint. A row with a blob key
-	// keeps the key with the size, the digest and the sequence, and no
-	// content; a row without a key keeps the content as given.
+	// and a lower sequence returns ErrStaleCheckpoint. The row keeps the
+	// blob key with the size, the digest and the sequence, and no content.
+	// A checkpoint without a blob key returns ErrCheckpointNoKey.
 	PutCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) error
 	// LatestCheckpoint returns the checkpoint of the stack's highest version
 	// that has one, or ErrNoState.
@@ -893,9 +892,8 @@ func (s *Updates) storeNewCheckpoint(ctx context.Context, save checkpointSave) e
 // so equal stored bytes mean equal content, which is the same guarantee the
 // gunzip and hash below give. That fast path hashes the compressed bytes
 // once, instead of paying a gunzip with two hash passes over a large
-// checkpoint. When they differ, the blob may still hold the same deployment
-// compressed at another level by an older binary, so the slow path below
-// decides that before reporting a collision.
+// checkpoint. Every save compresses at the same level, so stored bytes that
+// differ hold other content.
 func (s *Updates) adoptCheckpointBlob(ctx context.Context, save checkpointSave, size int64, sum [md5.Size]byte) error {
 	raw, err := s.blobs.Get(ctx, save.key)
 	if err != nil {
@@ -919,30 +917,11 @@ func (s *Updates) adoptCheckpointBlob(ctx context.Context, save checkpointSave, 
 		return fmt.Errorf("save checkpoint of update %s: %w", save.id, ErrCheckpointUnavailable)
 	}
 
-	if storedSize, storedSum := storedAttrs(gave); storedSize == size && storedSum == sum {
-		if commitErr := s.commitCheckpointRow(ctx, save, size, sum); commitErr != nil {
-			return fmt.Errorf("save checkpoint of update %s: %w", save.id, commitErr)
-		}
-
-		s.afterCheckpointSave(ctx, save)
-
-		return nil
-	}
-
-	deployment, err := gunzipBytes(gave, s.maxCheckpoints)
-	if err != nil {
+	if storedSize, storedSum := storedAttrs(gave); storedSize != size || storedSum != sum {
 		return s.checkpointCollision(ctx, save)
 	}
 
-	if sha256.Sum256(deployment) != save.digest {
-		return s.checkpointCollision(ctx, save)
-	}
-
-	// The stored bytes hold the same deployment at another level: the row
-	// names their size and MD5, not those of this save.
-	storedSize, storedSum := storedAttrs(gave)
-
-	if commitErr := s.commitCheckpointRow(ctx, save, storedSize, storedSum); commitErr != nil {
+	if commitErr := s.commitCheckpointRow(ctx, save, size, sum); commitErr != nil {
 		return fmt.Errorf("save checkpoint of update %s: %w", save.id, commitErr)
 	}
 
@@ -1042,7 +1021,7 @@ func (s *Updates) commitCheckpointRow(
 // failure never fails the save, and the rows stay for the next sweep. No log
 // line names a blob key.
 func (s *Updates) afterCheckpointSave(ctx context.Context, save checkpointSave) {
-	if save.prev != nil && save.prev.BlobKey != "" && save.prev.BlobKey != save.key {
+	if save.prev != nil && save.prev.BlobKey != save.key {
 		if err := s.deleteBlobRetried(ctx, save.prev.BlobKey); err != nil {
 			s.logger.WarnContext(
 				ctx,
@@ -1291,15 +1270,11 @@ func (s *Updates) sweepStackBlobs(ctx context.Context, ref Ref, stackID ID) {
 	}
 }
 
-// resolveCheckpoint fills the deployment of a checkpoint row: rows from
-// before blobs carry it, while rows with a blob key read and decompress it.
-// The bytes match the stored digest, so a blob with other content fails
-// instead of serving foreign state. The read holds one decompressed copy.
+// resolveCheckpoint fills the deployment of a checkpoint row: it reads and
+// decompresses the blob of the row. The bytes match the stored digest, so a
+// blob with other content fails instead of serving foreign state. The read
+// holds one decompressed copy.
 func (s *Updates) resolveCheckpoint(ctx context.Context, cp Checkpoint) (Checkpoint, error) {
-	if cp.BlobKey == "" {
-		return cp, nil
-	}
-
 	raw, err := s.blobs.Get(ctx, cp.BlobKey)
 	if err != nil {
 		if cerr := ctx.Err(); cerr != nil {
@@ -1511,7 +1486,7 @@ func checkpointKnown(prev *Checkpoint, seq int64, digest [sha256.Size]byte) (boo
 func checkpointBlobKey(stackID ID, id UpdateID, seq int64, prev *Checkpoint) (blob.Key, error) {
 	prefix := "pulumi/" + stackID.String() + "/" + id.String() + "/"
 
-	if seq > 0 || prev == nil || prev.BlobKey == "" {
+	if seq > 0 || prev == nil {
 		key, err := blob.ParseKey(prefix + strconv.FormatInt(seq, 10))
 		if err != nil {
 			return "", ErrCheckpointMismatch

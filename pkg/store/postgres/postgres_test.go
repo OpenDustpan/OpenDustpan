@@ -1244,7 +1244,6 @@ func TestMigration0005KeepsHistory(t *testing.T) {
 	checkMigratedStack(t, s, ref)
 	checkMigratedUpdate(t, s, ref)
 	checkMigratedHistory(t, s, ref)
-	checkMigratedCheckpoint(t, s, ref)
 	checkMigratedEvents(t, s, ref)
 }
 
@@ -1287,19 +1286,6 @@ func checkMigratedHistory(t *testing.T, s *postgres.Store, ref stack.Ref) {
 	}
 }
 
-func checkMigratedCheckpoint(t *testing.T, s *postgres.Store, ref stack.Ref) {
-	t.Helper()
-
-	cp, err := s.LatestCheckpoint(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("latest checkpoint: %v", err)
-	}
-
-	if string(cp.Deployment) != "{}" || cp.Update != "u1" {
-		t.Fatalf("migrated checkpoint = deployment %q update %q, want {} u1", cp.Deployment, cp.Update)
-	}
-}
-
 func checkMigratedEvents(t *testing.T, s *postgres.Store, ref stack.Ref) {
 	t.Helper()
 
@@ -1310,173 +1296,6 @@ func checkMigratedEvents(t *testing.T, s *postgres.Store, ref stack.Ref) {
 
 	if len(events) != 2 {
 		t.Fatalf("migrated events = %d, want 2", len(events))
-	}
-}
-
-func TestMigration0006KeepsOneRowData(t *testing.T) {
-	t.Parallel()
-
-	base := os.Getenv(envURL)
-	if base == "" {
-		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
-	}
-
-	migrated := isolatedURL(t, base)
-	seedAt0005WithOneRow(t, migrated)
-
-	s, err := postgres.Open(t.Context(), migrated)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-
-	t.Cleanup(s.Close)
-
-	ref, err := stack.ParseRef("acme", "web", "prod")
-	if err != nil {
-		t.Fatalf("parse ref: %v", err)
-	}
-
-	cp, err := s.LatestCheckpoint(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("latest checkpoint: %v", err)
-	}
-
-	if string(cp.Deployment) != `{"v":1}` || cp.Update != "u1" {
-		t.Fatalf("migrated checkpoint = deployment %q update %q, want {\"v\":1} u1", cp.Deployment, cp.Update)
-	}
-
-	byVersion, err := s.CheckpointByVersion(t.Context(), ref, 1)
-	if err != nil {
-		t.Fatalf("checkpoint of version 1: %v", err)
-	}
-
-	if string(byVersion.Deployment) != `{"v":1}` || byVersion.Update != "u1" {
-		t.Fatalf(
-			"migrated checkpoint of version 1 = deployment %q update %q, want {\"v\":1} u1",
-			byVersion.Deployment,
-			byVersion.Update,
-		)
-	}
-
-	if _, err := s.CheckpointByVersion(t.Context(), ref, 2); !errors.Is(err, stack.ErrNoState) {
-		t.Fatalf("checkpoint of missing version 2: err = %v, want ErrNoState", err)
-	}
-}
-
-// seedAt0005WithOneRow creates a database at migration 0005 with a stack, one
-// finished update and its checkpoint: the one-row-per-stack layout.
-func seedAt0005WithOneRow(t *testing.T, migrated string) {
-	t.Helper()
-
-	conn, err := pgx.Connect(t.Context(), migrated)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(t.Context()); closeErr != nil {
-			t.Errorf("close: %v", closeErr)
-		}
-	}()
-
-	applyMigrations0005(t, conn)
-	recordMigrations0005(t, conn)
-	seedOneRowNamespace(t, conn)
-	seedOneRowStack(t, conn)
-	seedOneRowUpdate(t, conn)
-	seedOneRowCheckpoint(t, conn)
-}
-
-func applyMigrations0005(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	for _, name := range []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql",
-	} {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		if _, execErr := conn.Exec(t.Context(), string(data)); execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-}
-
-func recordMigrations0005(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version BIGINT NOT NULL PRIMARY KEY,
-		name    TEXT   NOT NULL
-	)`
-
-	if _, err := conn.Exec(t.Context(), createMigrations); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql",
-	}
-
-	for i, name := range names {
-		if _, err := conn.Exec(t.Context(), record, int64(i+1), name); err != nil {
-			t.Fatalf("record migration %s: %v", name, err)
-		}
-	}
-}
-
-func seedOneRowNamespace(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'eu-west', 1, 0)`
-
-	if _, err := conn.Exec(t.Context(), seed); err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-}
-
-func seedOneRowStack(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const seed = `INSERT INTO stacks (namespace, project, name, id, tags, version, created_at_ms, updated_at_ms)
-		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', '{}', 1, 0, 0)`
-
-	if _, err := conn.Exec(t.Context(), seed); err != nil {
-		t.Fatalf("seed stack: %v", err)
-	}
-}
-
-func seedOneRowUpdate(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const seed = `INSERT INTO updates (stack_id, id, kind, dry_run, status, version, revision,
-		lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms)
-		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', 'update', false, 'succeeded', 1, 3, ''::bytea, 0, 1000, 2000, 3000)`
-
-	if _, err := conn.Exec(t.Context(), seed); err != nil {
-		t.Fatalf("seed update: %v", err)
-	}
-}
-
-func seedOneRowCheckpoint(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const seed = `INSERT INTO checkpoints (stack_id, update_id, lease_digest, schema_version, sequence,
-		digest, invalid, features, deployment, saved_at_ms)
-		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', ''::bytea, 3, 0,
-		'\x0000000000000000000000000000000000000000000000000000000000000000', false, '[]', '{"v":1}', 4000)`
-
-	if _, err := conn.Exec(t.Context(), seed); err != nil {
-		t.Fatalf("seed checkpoint: %v", err)
 	}
 }
 
@@ -1701,45 +1520,30 @@ func TestMigration0012FillsHistoryFields(t *testing.T) {
 	checkMigratedHistoryList(t, s, ref)
 }
 
-// checkMigratedHistoryUpdates checks the migrated updates carry empty history fields
-// and the checkpoint size of u1.
+// checkMigratedHistoryUpdates checks the migrated updates carry empty history
+// fields.
 func checkMigratedHistoryUpdates(t *testing.T, s *postgres.Store, ref stack.Ref) {
 	t.Helper()
 
-	for _, want := range []struct {
-		id   stack.UpdateID
-		size int64
-	}{
-		{id: "u1", size: int64(len(`{"v":1}`))},
-		{id: "u2", size: 0},
-	} {
-		checkMigratedHistoryUpdate(t, s, ref, want.id, want.size)
-	}
-}
+	for _, id := range []stack.UpdateID{"u1", "u2"} {
+		got, getErr := s.GetUpdate(t.Context(), ref, id)
+		if getErr != nil {
+			t.Fatalf("get update %s: %v", id, getErr)
+		}
 
-// checkMigratedHistoryUpdate checks one migrated update against its expected size.
-func checkMigratedHistoryUpdate(t *testing.T, s *postgres.Store, ref stack.Ref, id stack.UpdateID, size int64) {
-	t.Helper()
-
-	got, getErr := s.GetUpdate(t.Context(), ref, id)
-	if getErr != nil {
-		t.Fatalf("get update %s: %v", id, getErr)
-	}
-
-	if got.CreatedBy != "" || got.RestoredFrom != 0 || got.CheckpointBytes != size {
-		t.Fatalf(
-			"migrated update %s = creator %q restored %d size %d, want empty, 0 and %d",
-			id,
-			got.CreatedBy,
-			got.RestoredFrom,
-			got.CheckpointBytes,
-			size,
-		)
+		if got.CreatedBy != "" || got.RestoredFrom != 0 {
+			t.Fatalf(
+				"migrated update %s = creator %q restored %d, want empty and 0",
+				id,
+				got.CreatedBy,
+				got.RestoredFrom,
+			)
+		}
 	}
 }
 
 // checkMigratedHistoryList checks the migrated history holds u2 then u1
-// with empty history fields and the size of u1.
+// with empty history fields.
 func checkMigratedHistoryList(t *testing.T, s *postgres.Store, ref stack.Ref) {
 	t.Helper()
 
@@ -1748,9 +1552,8 @@ func checkMigratedHistoryList(t *testing.T, s *postgres.Store, ref stack.Ref) {
 		t.Fatalf("list updates: %v", err)
 	}
 
-	if len(history) != 2 || history[0].ID != "u2" || history[0].CheckpointBytes != 0 ||
-		history[1].ID != "u1" || history[1].CheckpointBytes != int64(len(`{"v":1}`)) {
-		t.Fatalf("migrated history = %+v, want [u2 without checkpoint, u1 with size]", history)
+	if len(history) != 2 || history[0].ID != "u2" || history[1].ID != "u1" {
+		t.Fatalf("migrated history = %+v, want [u2 u1]", history)
 	}
 
 	for i := range history {
