@@ -165,6 +165,13 @@ type Installation struct {
 	State string
 }
 
+type InstallationSecretKey struct {
+	ScopeID     string
+	WrapperID   string
+	Ciphertext  []byte
+	CreatedAtMs int64
+}
+
 type Inventory struct {
 	Namespace     string
 	Tool          string
@@ -281,6 +288,20 @@ type SessionPolicy struct {
 	MaxLengthMs      int64
 	UpdatedAtMs      int64
 	TokenFreshnessMs pgtype.Int8
+}
+
+type SignInProvider struct {
+	ProviderID   string
+	Issuer       string
+	DisplayName  string
+	ClientID     string
+	ClientSecret []byte
+	Scopes       string
+	AutoCreate   bool
+	Enabled      bool
+	CreatedAtMs  int64
+	UpdatedAtMs  int64
+	Version      int64
 }
 
 type SignInRequest struct {

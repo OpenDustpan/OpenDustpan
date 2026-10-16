@@ -1,6 +1,9 @@
 package codec
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/session"
@@ -46,4 +49,54 @@ func ToSessionPolicyRow(p session.Policy) SessionPolicyRow {
 		TokenFreshnessMs:  p.TokenFreshness.Milliseconds(),
 		TokenFreshnessSet: !p.TokenFreshnessDefault,
 	}
+}
+
+// ProviderConfigRow is the column representation of a sign-in provider.
+// Scopes is a JSON list.
+type ProviderConfigRow struct {
+	ProviderID   string
+	Issuer       string
+	DisplayName  string
+	ClientID     string
+	Scopes       string
+	ClientSecret []byte
+	CreatedAtMs  int64
+	UpdatedAtMs  int64
+	Version      int64
+	AutoCreate   bool
+	Enabled      bool
+}
+
+// ToProviderConfigRow converts a provider into its columns.
+func ToProviderConfigRow(p session.ProviderConfig) (ProviderConfigRow, error) {
+	scopes := p.Scopes
+	if scopes == nil {
+		scopes = []string{}
+	}
+
+	data, err := json.Marshal(scopes)
+	if err != nil {
+		return ProviderConfigRow{}, fmt.Errorf("encode the scopes of sign-in provider %s: %w", p.ID, err)
+	}
+
+	return ProviderConfigRow{
+		ProviderID: p.ID, Issuer: p.Issuer, DisplayName: p.DisplayName, ClientID: p.ClientID,
+		Scopes: string(data), ClientSecret: p.SealedSecret, CreatedAtMs: Millis(p.CreatedAt),
+		UpdatedAtMs: Millis(p.UpdatedAt), Version: p.Version, AutoCreate: p.AutoCreate, Enabled: p.Enabled,
+	}, nil
+}
+
+// FromProviderConfigRow converts a row into the provider.
+func FromProviderConfigRow(row ProviderConfigRow) (session.ProviderConfig, error) {
+	scopes := []string{}
+	if err := json.Unmarshal([]byte(row.Scopes), &scopes); err != nil {
+		return session.ProviderConfig{}, fmt.Errorf("decode the scopes of sign-in provider %s: %w", row.ProviderID, err)
+	}
+
+	return session.ProviderConfig{
+		CreatedAt: FromMillis(row.CreatedAtMs), UpdatedAt: FromMillis(row.UpdatedAtMs), ID: row.ProviderID,
+		Issuer: row.Issuer, DisplayName: row.DisplayName, ClientID: row.ClientID,
+		SealedSecret: bytes.Clone(row.ClientSecret), Scopes: scopes, Version: row.Version,
+		AutoCreate: row.AutoCreate, Enabled: row.Enabled,
+	}, nil
 }

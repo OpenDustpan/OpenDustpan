@@ -22,11 +22,21 @@ import (
 // NewEnvWithSignIn.
 const SignInProvider = "corp"
 
+// StoredSignInProvider is the ID that a test gives the second test
+// provider of an env from NewEnvWithSignIn when it creates the provider
+// through the API.
+const StoredSignInProvider = "beta"
+
 // Client of the server at the test provider. The test provider knows only
 // this client, so the values are not secrets.
 const (
 	signInClientID     = "dustpan"
 	signInClientSecret = "client-secret-for-e2e"
+	// StoredClientID is the client of the server at the second test
+	// provider.
+	StoredClientID = "dustpan-beta"
+	// StoredClientSecret is the client secret at the second test provider.
+	StoredClientSecret = "client-secret-of-beta-for-e2e"
 )
 
 // TestClock is a clock that a test moves. The server and the test provider
@@ -63,6 +73,7 @@ func (c *TestClock) Advance(d time.Duration) {
 type signInSetup struct {
 	publicURL string
 	idp       *oauthtest.Provider
+	beta      *oauthtest.Provider
 	clock     *TestClock
 	shared    bool
 }
@@ -81,6 +92,7 @@ func (s *signInSetup) options() []dustpan.Option {
 			ClientID: signInClientID, ClientSecret: signInClientSecret, Scopes: []string{"profile", "email"},
 			AutoCreate: true,
 		}),
+		dustpan.WithSignInHTTPClient(s.beta.Client()),
 	}
 }
 
@@ -111,7 +123,22 @@ func newSignInSetup(tb testing.TB, publicURL string, shared *TestClock) *signInS
 		TLS: true,
 	})
 
-	return &signInSetup{publicURL: publicURL, idp: idp, clock: clock, shared: shared != nil}
+	beta := oauthtest.New(tb, oauthtest.Config{
+		Now: now, ClientID: StoredClientID, ClientSecret: StoredClientSecret,
+		RedirectURI: publicURL + "/api/server/sign-in/" + StoredSignInProvider + "/callback",
+		Algorithm:   oauthtest.RS256,
+		User: oauthtest.User{
+			Subject: "248289761001", Name: "Alice Doe", PreferredUsername: "alice", Email: "alice@example.com",
+		},
+		Mode: oauthtest.ModeOIDC, Faults: oauthtest.Faults{
+			WrongIssuer: false, WrongAudience: false, WrongNonce: false, Expired: false, BadSignature: false,
+			AlgNone: false, UnknownKey: false, SkipPKCE: false, ExtraAudience: false, AuthorizedParty: "",
+			IssuedIn: 0, IgnoreMaxAge: false,
+		},
+		TLS: true,
+	})
+
+	return &signInSetup{publicURL: publicURL, idp: idp, beta: beta, clock: clock, shared: shared != nil}
 }
 
 // writeBinarySignIn writes the client secret and the certificate of the
@@ -120,8 +147,14 @@ func newSignInSetup(tb testing.TB, publicURL string, shared *TestClock) *signInS
 func writeBinarySignIn(tb testing.TB, dir string, s *signInSetup) *binarySignIn {
 	tb.Helper()
 
+	// One file trusts both test providers: the provider of the flags and
+	// the provider that a test creates through the API.
 	caFile := filepath.Join(dir, "oidc-ca.pem")
 	ca := pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Headers: nil, Bytes: s.idp.Certificate().Raw})
+	ca = append(
+		ca,
+		pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Headers: nil, Bytes: s.beta.Certificate().Raw})...,
+	)
 
 	if err := os.WriteFile(caFile, ca, 0o600); err != nil {
 		tb.Fatalf("write the certificate of the test provider: %v", err)
@@ -175,6 +208,19 @@ func (e *Env) IdentityProvider(tb testing.TB) *oauthtest.Provider {
 	}
 
 	return e.signIn.idp
+}
+
+// StoredIdentityProvider returns the second test provider of an env from
+// NewEnvWithSignIn, which a test creates through the API as the provider
+// StoredSignInProvider. It fails the test for any other env.
+func (e *Env) StoredIdentityProvider(tb testing.TB) *oauthtest.Provider {
+	tb.Helper()
+
+	if e.signIn == nil || e.signIn.beta == nil {
+		tb.Fatal("the env has no second test OpenID provider: use NewEnvWithSignIn")
+	}
+
+	return e.signIn.beta
 }
 
 // SharesClock reports whether the server of the env runs on the TestClock

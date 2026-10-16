@@ -239,7 +239,7 @@ func newServiceBackedHandler(
 	}
 
 	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Policies: sessionPolicies, Inactivity: nil, Now: nil},
+		session.SessionsConfig{Store: st, Providers: nil, Policies: sessionPolicies, Inactivity: nil, Now: nil},
 	)
 	if err != nil {
 		t.Fatalf("session service: %v", err)
@@ -268,9 +268,9 @@ func newServiceBackedHandler(
 		IPAllowlists:   allow,
 		SessionPolicy:  sessionPolicies,
 		SignIn: &apiserver.SignIn{
-			Sessions: sessions, Limiter: nil, Origins: nil,
+			Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			Providers: []apiserver.SignInProvider{
-				{Client: stubOIDC{}, ID: testProvider, DisplayName: "Corp", AutoCreate: true},
+				{Client: stubOIDC{}, ID: testProvider, DisplayName: "Corp", AutoCreate: true, Stored: false},
 			},
 		},
 		CheckpointEpochs: fakeEpochs{},

@@ -177,6 +177,7 @@ var embeddedMigrationNames = []string{
 	"0071_break_glass_accounts.sql",
 	"0074_update_journal_refusals.sql",
 	"0075_sign_in_freshness.sql",
+	"0076_sign_in_providers.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary

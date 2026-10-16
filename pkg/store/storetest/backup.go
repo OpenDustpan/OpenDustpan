@@ -439,6 +439,39 @@ func seedBackupSignIn(t *testing.T, s BackupStore) {
 			t.Fatalf("set the token freshness window: %v", err)
 		}
 	}
+
+	seedBackupProviders(t, s)
+}
+
+// seedBackupProviders writes an installation key and a sign-in provider
+// that the API manages, so the round trip carries both tables.
+func seedBackupProviders(t *testing.T, s BackupStore) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if ks, ok := s.(secret.InstallationKeyStore); ok {
+		scope, err := secret.InstallationScope("sign-in-corp")
+		if err != nil {
+			t.Fatalf("installation scope: %v", err)
+		}
+
+		k := secret.WrappedKey{CreatedAt: now(), Scope: scope, WrapperID: "kek-test", Ciphertext: []byte("wrapped key")}
+		if _, err := ks.CreateInstallationKey(ctx, k); err != nil {
+			t.Fatalf("create installation key: %v", err)
+		}
+	}
+
+	if pc, ok := s.(session.ProviderConfigStore); ok {
+		p := session.ProviderConfig{
+			CreatedAt: now(), UpdatedAt: now(), ID: "corp", Issuer: "https://idp.example", DisplayName: "Corp",
+			ClientID: "dustpan", SealedSecret: []byte("sealed secret"), Scopes: []string{"profile"}, Version: 1,
+			AutoCreate: true, Enabled: false,
+		}
+		if err := pc.CreateProviderConfig(ctx, p, ServerChange(now(), "sign-in-provider:corp")); err != nil {
+			t.Fatalf("create sign-in provider: %v", err)
+		}
+	}
 }
 
 // seedBackupSweep changes the token policy and runs one sweep, so the round

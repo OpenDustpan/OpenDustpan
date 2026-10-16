@@ -394,6 +394,10 @@ func classify(err error) (int, string) {
 		return status, message
 	}
 
+	if status, message, ok := classifyProviders(err); ok {
+		return status, message
+	}
+
 	if status, message, ok := classifyRequest(err); ok {
 		return status, message
 	}
