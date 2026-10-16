@@ -33,7 +33,7 @@ release tag that `git ls-remote` showed on 2026-10-16.
 ## Summary
 
 - **The foundations are old and agree.** Sagas (1987) split a long
-  transaction into steps with compensations. Helland (2007, 2009) shows that
+  transaction into steps with compensations. Helland (2007, 2009) argues that
   at scale, messages arrive at least once, so each step must be idempotent.
   Gray and Cheriton (1989) and Chubby (2006) show that a lease is safe only
   under a bound on clock drift. Chubby and Kleppmann (2016) show that a lease
@@ -47,9 +47,9 @@ release tag that `git ls-remote` showed on 2026-10-16.
   (d) A state machine in domain rows, with a lease on the row. OpenDustpan
   already uses (d) for updates, workspace locks and audit sinks.
 - **Replay engines cost the most.** The code must be deterministic. A code
-  change to a running workflow needs patching or versioning. Temporal
-  terminates a workflow whose history passes 51,200 events or 50 MB. Each
-  needs a separate server cluster.
+  change to a running workflow needs patching or versioning. By default,
+  Temporal terminates a workflow whose history passes 51,200 events or
+  50 MB. Temporal and Cadence each need a separate server cluster.
 - **DBOS Transact for Go fits the shape, with three gaps.** It is an MIT
   library (v1.7.0, 2026-10-15) that runs on PostgreSQL, CockroachDB and
   SQLite, in the process, with one database write for each step. The gaps:
@@ -61,8 +61,8 @@ release tag that `git ls-remote` showed on 2026-10-16.
   outside our per-dialect store, our migrations and our backup format.
 - **Most failures in hand-rolled systems are known.** A takeover runs a job
   twice (River, Graphile Worker). A paused holder writes after its lease ends
-  (Kleppmann, the HBase case). A schedule fires twice (Kubernetes CronJob). A
-  job runs before its transaction commits (Brandur Leach). A long transaction
+  (Kleppmann reports that HBase had this problem). A schedule fires twice
+  (Kubernetes CronJob). A job runs before its transaction commits (Brandur Leach). A long transaction
   stops vacuum and slows the queue table (Brandur Leach, 2015). A clock goes
   backwards (Cloudflare, 2017).
 - **Recommendation (analysis).** Our own small framework behind a port, with
@@ -156,8 +156,9 @@ sink can receive an entry twice".
   than a known constant factor faster than the client's" [chubby].
 - **Kleppmann (2016).** A lease with a timeout alone is unsafe "if the GC
   pause lasts longer than the lease expiry period", and a write "may reach
-  the storage server a minute later" because of network delay. He cites HBase
-  as a system that had this bug. A fencing token is "simply a number that
+  the storage server a minute later" because of network delay. Kleppmann
+  reports that HBase had this problem. This note did not read a primary
+  HBase source. A fencing token is "simply a number that
   increases" on each acquisition. The storage server remembers the highest
   token that it processed and rejects a write with a lower one. He separates
   locks for efficiency (a failure costs duplicate work) from locks for
@@ -208,7 +209,8 @@ on one instance cannot hold every lease".
   "write long running persistent workflows in C# using the async/await
   capabilities". It is Apache-2.0 and "community-maintained", with storage
   providers for Azure Storage, Service Fabric, Netherite and SQL Server
-  [durabletask]. Durable Functions is the supported Azure product on top.
+  [durabletask]. The README recommends Durable Functions, which has official
+  Microsoft support, for serverless orchestration on Azure [durabletask].
 - **Cadence.** Uber open-sourced Cadence in 2017 [cadence-uber]. It is
   Apache-2.0 (latest tag v1.4.2), and its backend is "multiple services, a
   database (Cassandra/MySQL/PostgreSQL) and optionally Kafka+Elasticsearch"
@@ -251,9 +253,12 @@ the state of the workflow function by replaying it:
   code. A Go developer cannot use the standard concurrency tools there.
 - **Versioning.** A code change to a running workflow needs patching or a
   version split. This applies to every deploy while workflows run.
-- **History size.** Temporal warns at 10,240 events or 10 MB and terminates
-  the workflow at 51,200 events or 50 MB. A payload is limited to 2 MB
-  [temporal-limits] [temporal-defaults]. Step Functions Standard fails an
+- **History size.** By default, Temporal warns at 10,240 events or 10 MB and
+  terminates the workflow at 51,200 events or 50 MB. A payload is limited to
+  2 MB. The history limit "is non-configurable for Temporal Cloud". A
+  self-hosted server can change it with `HistoryCountLimitError` and
+  `HistorySizeLimitError` [temporal-limits] [temporal-defaults]. Step
+  Functions Standard fails an
   execution at 25,000 history events and limits a state's input or output to
   256 KiB [sfn-quotas]. Long-running workflows use "continue as new" or a new
   execution.
@@ -353,8 +358,9 @@ RFC 36:
   record a step after a hand-off (`dbos/internal/sysdb/system_database.go`,
   lines 3049 to 3065). Side effects inside the step, outside these records,
   are not fenced.
-- The package `dbos/internals` is public and exposes
-  `RecoverPendingWorkflows(executorIDs)` to that module. An application can
+- The package `dbos/internals` is public. `internals.RuntimeOf(ctx)` returns
+  a `Runtime` whose method `RecoverPendingWorkflows(executorIDs)` the
+  commercial module calls (`dbos/internals/internals.go`). An application can
   call it with its own liveness signal. This note did not test that path.
 - Versioning: by default the application version is a SHA-256 of the binary
   and the application name (`computeApplicationVersion`). DBOS "only
@@ -398,13 +404,13 @@ Both are separate servers that an OpenDustpan operator would have to run.
 
 | Library | Language | License | Databases | Crash rescue | Schedules |
 | --- | --- | --- | --- | --- | --- |
-| River v0.49.0 | Go | MPL-2.0 | PostgreSQL, SQLite | A job running longer than `RescueStuckJobsAfter` (default 1 hour) is retried. The docs warn: "this can result in repeat or duplicate execution of a job that is not actually stuck" (`client.go`). | Periodic jobs need leader election (`client.go`, line 611). |
+| River v0.49.0 | Go | MPL-2.0 | PostgreSQL. SQLite through the separate module `riversqlite`, which the changelog calls preliminary | A job running longer than `RescueStuckJobsAfter` (default 1 hour) is retried. The docs warn: "this can result in repeat or duplicate execution of a job that is not actually stuck" (`client.go`). | Periodic jobs need leader election (`client.go`, line 612). |
 | Graphile Worker v0.18.0 | Node.js | MIT | PostgreSQL | After a hard kill, jobs "remain locked for at least 4 hours". Workers sweep every 8 to 10 minutes. | A `known_crontabs` table makes the first worker that queues a tick win. |
 | Oban v2.24.2 | Elixir | Apache-2.0 | PostgreSQL, MySQL, SQLite | Jobs left after the shutdown grace period "may be rescued later". | Not checked. |
 | Que v2.4.1 | Ruby | MIT | PostgreSQL | Advisory locks. | Not checked. |
 | Solid Queue v1.7.0 | Ruby | MIT | PostgreSQL, MySQL, SQLite | Process heartbeats every 60 s. A process is dead after 5 minutes. Its claimed jobs are marked failed with `ProcessPrunedError`. A stuck job in a live process stays claimed. | A unique index on `task_key` and `run_at` in `solid_queue_recurring_executions`. |
 
-Sources: [river], [graphile-errors], [graphile-cron], [oban], [que],
+Sources: [river], [river-sqlite], [graphile-errors], [graphile-cron], [oban], [que],
 [solid-queue]. Graphile Worker states the guarantee of the class: "each job
 will execute at least once. Most jobs will execute exactly once"
 [graphile-index]. Solid Queue runs "20 million jobs per day for HEY alone at
@@ -459,7 +465,7 @@ licenses research note records why OpenTofu left the BSL.
 | Code rule | Deterministic workflow code, replay-safe APIs | Deterministic order of steps. Steps idempotent | Handler idempotent | Each transition idempotent and fenced |
 | Code change while running | Patching or versioning | Patching or versioning (DBOS) | Free, if the job input stays readable | Free, if states stay readable |
 | Side effect guarantee | Activity at least once | Step at least once. A transaction step in the same database exactly once | At least once | At least once, unless the effect is in the same transaction |
-| Limits | History size (Temporal 51,200 events / 50 MB) | Rows per step. Output size | Queue table churn | None beyond the domain |
+| Limits | History size (Temporal default: terminate at 51,200 events / 50 MB) | Rows per step. Output size | Queue table churn | None beyond the domain |
 | Operations | Separate cluster | Library tables in our database | Library tables in our database | Our own tables |
 
 The failure modes that each paradigm must handle:
@@ -489,7 +495,8 @@ The failure modes that each paradigm must handle:
   [job-drain]. A queue in the same database, written in the same
   transaction, removes this case.
 - **Long transactions.** An old open transaction stops vacuum. In Brandur
-  Leach's test, dead rows in the job table reached about 100,000, lock time
+  Leach's test, dead rows in the job table approached 100,000, a manual
+  vacuum reported 247,311 dead row versions that it could not remove, lock time
   rose from under 10 ms to over 100 ms, and the queue grew to about 60,000
   jobs in one hour [mvcc-queue].
 
@@ -532,7 +539,7 @@ own code and tests.
   policy for missed ticks explicitly (skip, run once, or backfill a bounded
   window).
 - **Cancellation.** A cancel is a state change in the row. The worker reads
-  it at the next step, as DBOS does. A cancelled run must not move to
+  it at the next step, as DBOS does. A canceled run must not move to
   `succeeded` later.
 - **Retries and backoff.** Retries are "selfish" and can "make the overload
   worse". Use exponential backoff with a cap and jitter, retry at one layer
@@ -615,7 +622,7 @@ stores. On SQLite with one instance where the case needs two.
     limit in a terminal state with the last error. (SQS dead-letter queue.)
 15. **Backoff.** The next attempt time grows, has a cap, and has jitter
     inside stated bounds. (AWS Builders' Library.)
-16. **Cancellation.** A cancel is seen at the next step. A cancelled run
+16. **Cancellation.** A cancel is seen at the next step. A canceled run
     cannot complete as succeeded. (DBOS.)
 17. **Restore.** A run that holds a lease from before a restore cannot write
     after the restore moves the fences. (ADR 38 decision 7.)
@@ -635,7 +642,8 @@ Adopting DBOS Transact Go behind the port:
 - Against, from the sources above:
   - Without Conductor, cross-instance recovery is by executor ID only
     (tests 7 and 8 fail as shipped). Conductor is proprietary. We would
-    call `internals.RecoverPendingWorkflows` from our own liveness signal
+    call `internals.RuntimeOf(ctx).RecoverPendingWorkflows(...)` from our own
+    liveness signal
     (the ADR 48 registry), which is an internal contract between DBOS and
     its commercial module.
   - Recovery requires the same application version by default (test 9).
@@ -758,7 +766,7 @@ Accessed 2026-10-16 unless a commit is named.
   10.1007/s00778-024-00899-0:
   <https://mast.stanford.edu/pubs/dbos_three_years_later>
 - [dbos-arch] DBOS docs, "Architecture" (dbos-docs commit `5c118aacd4b0`):
-  <https://docs.dbos.dev/architecture>
+  <https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/architecture.md>
 - [dbos-recovery] DBOS docs, "Workflow Recovery":
   <https://github.com/dbos-inc/dbos-docs/blob/5c118aacd4b07a8988c63041cf3e61482299403a/docs/production/workflow-recovery.md>
 - [dbos-conductor] DBOS docs, "Distributed Recovery":
@@ -799,8 +807,16 @@ Accessed 2026-10-16 unless a commit is named.
   <https://docs.hatchet.run/self-hosting>
 - hatchet-dev/hatchet, README and LICENSE, tag v0.112.9:
   <https://github.com/hatchet-dev/hatchet>
-- [river] riverqueue/river, `client.go` and `docs/README.md` at commit
-  `0b1e96d8fe1d`, tag v0.49.0: <https://github.com/riverqueue/river>
+- [river] riverqueue/river, `client.go` at tag v0.49.0 (commit
+  `da5a26e21c18`): <https://github.com/riverqueue/river/tree/v0.49.0>
+- [river-sqlite] riverqueue/river, `CHANGELOG.md` at tag v0.49.0, entry for
+  0.23.0 (2025-06-04): "Preliminary River driver for SQLite
+  (`riverdriver/riversqlite`). This driver seems to produce good results as
+  judged by the test suite, but so far has minimal real world vetting." The
+  driver is a separate Go module,
+  `github.com/riverqueue/river/riverdriver/riversqlite`, with its own tags
+  (for example `riverdriver/riversqlite/v0.49.0`):
+  <https://github.com/riverqueue/river/blob/v0.49.0/CHANGELOG.md>
 - [graphile-index] [graphile-errors] [graphile-cron] graphile/worker,
   `website/docs/index.md`, `error-handling.md`, `cron.md` at commit
   `4cda192c5df2`, tag v0.18.0: <https://github.com/graphile/worker>
@@ -821,8 +837,8 @@ Accessed 2026-10-16 unless a commit is named.
 - [k8s-cron] Kubernetes docs, "CronJob", section "CronJob limitations":
   <https://kubernetes.io/docs/concepts/workloads/controllers/cron-jobs/>
 - [aws-retries] Amazon Builders' Library, "Timeouts, retries, and backoff
-  with jitter," 2019-12-05 (the page names the author as Marc, an AWS
-  engineer):
+  with jitter," 2019-12-05 (the byline gives only "Marc" and the handle
+  "@mbrooker". The full name is unverified):
   <https://builder.aws.com/content/3EumjoZascWd1oZiEgL8ORlv3qE/timeouts-retries-and-backoff-with-jitter>
 - [sqs-dlq] Amazon SQS, "Using dead-letter queues":
   <https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html>
