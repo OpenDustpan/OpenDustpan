@@ -595,6 +595,16 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   TableDurableSchedules,
+			OrderBy: []string{portColName},
+			Columns: []Column{
+				{Name: portColName, Kind: KindText},
+				{Name: "interval_ms", Kind: KindInteger},
+				{Name: "next_run_at_ms", Kind: KindTime},
+				{Name: "last_claimed_at_ms", Kind: KindTime},
+			},
+		},
+		{
 			Table:   "installation",
 			OrderBy: []string{"id"},
 			Columns: []Column{

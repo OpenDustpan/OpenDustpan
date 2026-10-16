@@ -39,11 +39,12 @@ const (
 	DialectPostgres Dialect = "postgres"
 )
 
-// The tables of durable operations: one row for each operation, and one row
-// for each recorded step.
+// The tables of durable operations: one row for each operation, one row for
+// each recorded step, and one row for each schedule.
 const (
 	TableDurableOperations = "durable_operations"
 	TableDurableSteps      = "durable_steps"
+	TableDurableSchedules  = "durable_schedules"
 )
 
 // Tables lists every table that an export covers, in foreign-key order, so an
@@ -102,6 +103,7 @@ var Tables = []string{
 	"restores",
 	TableDurableOperations,
 	TableDurableSteps,
+	TableDurableSchedules,
 	"installation",
 }
 

@@ -367,6 +367,10 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table:   "durable_schedules",
+			columns: []string{"name", "interval_ms", "next_run_at_ms", "last_claimed_at_ms"},
+		},
+		{
 			table: "installation",
 			columns: []string{
 				"id",

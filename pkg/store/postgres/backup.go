@@ -309,6 +309,11 @@ func pgCopyDurableTables() []pgCopyTable {
 			columns: []string{"operation_id", "name", "seq", "result", "done_at_ms"},
 			orderBy: []string{"operation_id", "seq"},
 		},
+		{
+			table:   backup.TableDurableSchedules,
+			columns: []string{pgColName, "interval_ms", "next_run_at_ms", "last_claimed_at_ms"},
+			orderBy: []string{pgColName},
+		},
 	}
 }
 
