@@ -233,7 +233,7 @@ func bindingOf(cfg *settings, signIn *serverapi.SignIn) providerBinding {
 
 	providers := make([]session.Provider, 0, len(cfg.oidcProviders))
 	for _, p := range cfg.oidcProviders {
-		providers = append(providers, session.Provider{ID: p.ID, Issuer: p.Issuer})
+		providers = append(providers, session.Provider{ID: p.ID, Issuer: p.Issuer, UserinfoURL: "", SubjectClaim: ""})
 	}
 
 	return providerBinding{store: store, providers: providers}

@@ -72,8 +72,12 @@ func TestStoredProvidersFollowTheStore(t *testing.T) {
 	f := newStoredFixture(t)
 
 	_, err := f.admin.Create(ctx, adminEntry(), session.ProviderInput{
-		ID: "beta", Issuer: "https://beta.example", DisplayName: "Beta", ClientID: "dustpan", ClientSecret: "secret",
-		Scopes: nil, AutoCreate: true, Enabled: true,
+		ID: "beta", Mode: session.ModeOIDC, Issuer: "https://beta.example", DisplayName: "Beta", ClientID: "dustpan",
+		ClientSecret: "secret", Scopes: nil, AutoCreate: true, Enabled: true,
+		OAuth: session.OAuthSettings{
+			AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+			EmailClaim: "",
+		},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -91,7 +95,11 @@ func TestStoredProvidersFollowTheStore(t *testing.T) {
 
 	name := "Beta SSO"
 	f.update(t, session.ProviderChange{
-		Issuer: nil, DisplayName: &name, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
+		Mode: nil, Issuer: nil, DisplayName: &name, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
+		OAuth: session.OAuthChange{
+			AuthorizationURL: nil, TokenURL: nil, UserinfoURL: nil, SubjectClaim: nil, NameClaim: nil,
+			UsernameClaim: nil, EmailClaim: nil,
+		},
 		Enabled: nil, Version: 1,
 	})
 
@@ -102,7 +110,11 @@ func TestStoredProvidersFollowTheStore(t *testing.T) {
 
 	disabled := false
 	f.update(t, session.ProviderChange{
-		Issuer: nil, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
+		Mode: nil, Issuer: nil, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
+		OAuth: session.OAuthChange{
+			AuthorizationURL: nil, TokenURL: nil, UserinfoURL: nil, SubjectClaim: nil, NameClaim: nil,
+			UsernameClaim: nil, EmailClaim: nil,
+		},
 		Enabled: &disabled, Version: 2,
 	})
 
