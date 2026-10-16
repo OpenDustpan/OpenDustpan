@@ -216,6 +216,7 @@ func runSignInOnStore(t *testing.T, cli, tofu e2e.Install, store e2e.Store) {
 
 	checkSignOut(t, b)
 	checkStoredProvider(t, env)
+	checkPlainProvider(t, env)
 	checkStoredProviderDelete(t, env)
 	checkProviderAuditHoldsNoSecret(t, env)
 }
@@ -676,7 +677,8 @@ func checkStoredProviderDelete(t *testing.T, env *e2e.Env) {
 
 // checkProviderAuditHoldsNoSecret proves that the audit log of the
 // installation holds the changes of the stored providers and no client
-// secret: not the first one and not the rotated one.
+// secret: not the first one, not the rotated one, and not the one of the
+// plain OAuth provider.
 func checkProviderAuditHoldsNoSecret(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
@@ -694,7 +696,7 @@ func checkProviderAuditHoldsNoSecret(t *testing.T, env *e2e.Env) {
 			t.Fatalf("list @server audit entries = %d, %v: %s", status, err, raw)
 		}
 
-		for _, secret := range []string{e2e.StoredClientSecret, "a-wrong-secret"} {
+		for _, secret := range []string{e2e.StoredClientSecret, "a-wrong-secret", e2e.PlainClientSecret} {
 			if strings.Contains(raw, secret) {
 				t.Fatal("the audit log of the installation holds a client secret of a stored provider")
 			}
@@ -717,5 +719,39 @@ func checkProviderAuditHoldsNoSecret(t *testing.T, env *e2e.Env) {
 
 	if providerEntries == 0 {
 		t.Fatal("the audit log of the installation holds no change of a stored provider")
+	}
+}
+
+// checkPlainProvider proves a stored provider in the plain OAuth 2.0
+// mode: the bootstrap token creates it through the API with its endpoints
+// and its subject claim, the answer holds no client secret, and a person
+// signs in through it with a subject of its own.
+func checkPlainProvider(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	hub := env.PlainIdentityProvider(t)
+	body := `{"id":"` + e2e.PlainSignInProvider + `","mode":"oauth","displayName":"Hub",` +
+		`"clientID":"` + e2e.PlainClientID + `","clientSecret":"` + e2e.PlainClientSecret + `",` +
+		`"authorizationURL":"` + hub.AuthorizationEndpoint() + `","tokenURL":"` + hub.TokenEndpoint() + `",` +
+		`"userinfoURL":"` + hub.UserinfoEndpoint() + `","claims":{"subject":"sub"},"autoCreate":true}`
+
+	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/sign-in-providers", body)
+	if err != nil || status != http.StatusCreated || strings.Contains(raw, e2e.PlainClientSecret) ||
+		!strings.Contains(raw, `"mode":"oauth"`) {
+		t.Fatalf("create the plain OAuth provider = %d, %v: %s", status, err, raw)
+	}
+
+	idp := *hub.Client()
+	idp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	b := browser{env: env, server: env.BrowserClient(t), idp: &idp}
+
+	if back := b.signInWith(t, b.idp, e2e.PlainSignInProvider); back.status != http.StatusSeeOther {
+		t.Fatalf("sign-in through the plain OAuth provider = %d: %s", back.status, back.body)
+	}
+
+	sess, code := b.session(t)
+	if code != http.StatusOK || sess.Subject != e2e.PlainSignInProvider+":248289761001" {
+		t.Fatalf("session of the plain OAuth provider = %d %+v", code, sess)
 	}
 }

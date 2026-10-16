@@ -549,8 +549,8 @@ func testCheckPagesLongChain(t *testing.T, ts TestStore) {
 
 // testValueCountRoundTrip proves that an entry with a nil count and an
 // entry with a set count round-trip through Append and List, and that the
-// chain check passes on a chain that holds an old-format entry (nil count)
-// next to a new one (set count).
+// chain check passes on a chain that holds both: the hash covers the
+// count field of each entry.
 func testValueCountRoundTrip(t *testing.T, ts TestStore) {
 	t.Helper()
 
@@ -579,7 +579,7 @@ func testValueCountRoundTrip(t *testing.T, ts TestStore) {
 	}
 
 	// The list answers newest first: the entry with the set count, then
-	// the old-format entry with a nil count.
+	// the entry with a nil count.
 	if got := listing.Entries[0].ValueCount; got == nil || *got != count {
 		t.Fatalf("newest value count = %+v, want %d", got, count)
 	}
@@ -878,8 +878,8 @@ func testChangeKind(t *testing.T, ts TestStore) {
 }
 
 // testObjectIDRoundTrip appends an entry without an object ID and one with
-// it: both list back as written, and the chain stays valid, so the hash of the
-// old-format entry is unchanged and the new field is covered.
+// it: both list back as written, and the chain stays valid, so the hash
+// covers the object ID field of each entry.
 func testObjectIDRoundTrip(t *testing.T, ts TestStore) {
 	t.Helper()
 

@@ -54,7 +54,7 @@ func runUpgradeCheck(t *testing.T, srv *httptest.Server) string {
 
 	args := []string{"--server", srv.URL}
 
-	err := client.UpgradeCheck(t.Context(), args, &stdout, &stderr, "test-binary")
+	err := client.UpgradeCheck(t.Context(), args, &stdout, &stderr, "v1.0.0")
 	if err != nil {
 		t.Fatalf("upgrade check: %v", err)
 	}

@@ -36,7 +36,7 @@ func TestBindProviders(t *testing.T) {
 
 	ctx := t.Context()
 	store := &memoryProviders{err: nil, issuers: map[string]string{}}
-	corp := session.Provider{ID: "corp", Issuer: "https://idp.example"}
+	corp := session.Provider{ID: "corp", Issuer: "https://idp.example", UserinfoURL: "", SubjectClaim: ""}
 
 	if err := session.BindProviders(ctx, store, []session.Provider{corp}, time.Now()); err != nil {
 		t.Fatalf("first start: %v", err)
@@ -46,7 +46,7 @@ func TestBindProviders(t *testing.T) {
 		t.Fatalf("second start with the same issuer: %v", err)
 	}
 
-	moved := session.Provider{ID: "corp", Issuer: "https://other.example"}
+	moved := session.Provider{ID: "corp", Issuer: "https://other.example", UserinfoURL: "", SubjectClaim: ""}
 
 	err := session.BindProviders(ctx, store, []session.Provider{moved}, time.Now())
 	if err == nil || !errors.Is(err, session.ErrIssuerChanged) {
@@ -77,7 +77,7 @@ func TestBindProvidersNormalizesTheIssuer(t *testing.T) {
 	ctx := t.Context()
 	store := &memoryProviders{err: nil, issuers: map[string]string{}}
 
-	first := session.Provider{ID: "corp", Issuer: "HTTPS://IdP.Example/tenant/"}
+	first := session.Provider{ID: "corp", Issuer: "HTTPS://IdP.Example/tenant/", UserinfoURL: "", SubjectClaim: ""}
 	if err := session.BindProviders(ctx, store, []session.Provider{first}, time.Now()); err != nil {
 		t.Fatalf("first start: %v", err)
 	}
@@ -87,13 +87,13 @@ func TestBindProvidersNormalizesTheIssuer(t *testing.T) {
 	}
 
 	for _, issuer := range []string{"https://idp.example/tenant", "https://IDP.example/tenant/"} {
-		same := session.Provider{ID: "corp", Issuer: issuer}
+		same := session.Provider{ID: "corp", Issuer: issuer, UserinfoURL: "", SubjectClaim: ""}
 		if err := session.BindProviders(ctx, store, []session.Provider{same}, time.Now()); err != nil {
 			t.Errorf("start with %q: %v, want the same issuer", issuer, err)
 		}
 	}
 
-	other := session.Provider{ID: "corp", Issuer: "https://idp.example/other"}
+	other := session.Provider{ID: "corp", Issuer: "https://idp.example/other", UserinfoURL: "", SubjectClaim: ""}
 	if err := session.BindProviders(ctx, store, []session.Provider{other}, time.Now()); !errors.Is(
 		err, session.ErrIssuerChanged,
 	) {

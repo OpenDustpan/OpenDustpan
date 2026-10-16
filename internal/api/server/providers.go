@@ -65,6 +65,31 @@ type providerResponse struct {
 	AutoCreate      bool     `json:"autoCreate"`
 	Enabled         bool     `json:"enabled"`
 	ClientSecretSet bool     `json:"clientSecretSet"`
+	// Mode is "oidc" or "oauth". The fields below are set for "oauth"
+	// only.
+	Mode             string          `json:"mode"`
+	AuthorizationURL string          `json:"authorizationURL,omitempty"`
+	TokenURL         string          `json:"tokenURL,omitempty"`
+	UserinfoURL      string          `json:"userinfoURL,omitempty"`
+	Claims           *providerClaims `json:"claims,omitempty"`
+}
+
+// providerClaims is the claim mapping of a provider in the oauth mode: the
+// names of the claims of the user-info answer.
+type providerClaims struct {
+	Subject  string `json:"subject"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+}
+
+// providerClaimsChange is the claim mapping in a request. A missing claim
+// takes its default at a create, and keeps its value at a change.
+type providerClaimsChange struct {
+	Subject  *string `json:"subject"`
+	Name     *string `json:"name"`
+	Username *string `json:"username"`
+	Email    *string `json:"email"`
 }
 
 // providersResponse is the list of the sign-in providers, ordered by ID.
@@ -75,30 +100,44 @@ type providersResponse struct {
 }
 
 // providerCreateRequest is the body of a new provider. displayName is the
-// ID when absent; scopes is empty when absent; autoCreate and enabled are
-// true when absent.
+// ID when absent; scopes is empty when absent; enabled is true when
+// absent; mode is "oidc" when absent. autoCreate is true when absent for
+// the oidc mode, and false for the oauth mode: any account at a plain
+// OAuth 2.0 provider, such as any GitHub user, can sign in. A provider in the oidc mode
+// needs issuer; a provider in the oauth mode needs authorizationURL,
+// tokenURL and userinfoURL, and no issuer.
 type providerCreateRequest struct {
-	ID           *string   `json:"id"`
-	Issuer       *string   `json:"issuer"`
-	DisplayName  *string   `json:"displayName"`
-	ClientID     *string   `json:"clientID"`
-	ClientSecret *string   `json:"clientSecret"`
-	Scopes       *[]string `json:"scopes"`
-	AutoCreate   *bool     `json:"autoCreate"`
-	Enabled      *bool     `json:"enabled"`
+	ID               *string               `json:"id"`
+	Mode             *string               `json:"mode"`
+	AuthorizationURL *string               `json:"authorizationURL"`
+	TokenURL         *string               `json:"tokenURL"`
+	UserinfoURL      *string               `json:"userinfoURL"`
+	Claims           *providerClaimsChange `json:"claims"`
+	Issuer           *string               `json:"issuer"`
+	DisplayName      *string               `json:"displayName"`
+	ClientID         *string               `json:"clientID"`
+	ClientSecret     *string               `json:"clientSecret"`
+	Scopes           *[]string             `json:"scopes"`
+	AutoCreate       *bool                 `json:"autoCreate"`
+	Enabled          *bool                 `json:"enabled"`
 }
 
 // providerChangeRequest is the body of a provider change. version is the
 // version that the change read. A missing field keeps its value.
 type providerChangeRequest struct {
-	Issuer       *string   `json:"issuer"`
-	DisplayName  *string   `json:"displayName"`
-	ClientID     *string   `json:"clientID"`
-	ClientSecret *string   `json:"clientSecret"`
-	Scopes       *[]string `json:"scopes"`
-	AutoCreate   *bool     `json:"autoCreate"`
-	Enabled      *bool     `json:"enabled"`
-	Version      *int64    `json:"version"`
+	Mode             *string               `json:"mode"`
+	AuthorizationURL *string               `json:"authorizationURL"`
+	TokenURL         *string               `json:"tokenURL"`
+	UserinfoURL      *string               `json:"userinfoURL"`
+	Claims           *providerClaimsChange `json:"claims"`
+	Issuer           *string               `json:"issuer"`
+	DisplayName      *string               `json:"displayName"`
+	ClientID         *string               `json:"clientID"`
+	ClientSecret     *string               `json:"clientSecret"`
+	Scopes           *[]string             `json:"scopes"`
+	AutoCreate       *bool                 `json:"autoCreate"`
+	Enabled          *bool                 `json:"enabled"`
+	Version          *int64                `json:"version"`
 }
 
 // signInProviderRoutes returns the sign-in provider rows of the route
@@ -218,16 +257,26 @@ func (h *Handler) createProvider(
 		return none, err
 	}
 
-	if req.ID == nil || req.Issuer == nil || req.ClientID == nil || req.ClientSecret == nil {
+	if req.ID == nil || req.ClientID == nil || req.ClientSecret == nil {
 		return none, errProviderCreateBody
 	}
 
 	none.ID = *req.ID
 
+	mode := session.ProviderMode(valueOr(req.Mode, string(session.ModeOIDC)))
+	if mode == session.ModeOIDC && req.Issuer == nil {
+		return none, errProviderCreateBody
+	}
+
 	in := session.ProviderInput{
-		ID: *req.ID, Issuer: *req.Issuer, DisplayName: valueOr(req.DisplayName, *req.ID), ClientID: *req.ClientID,
-		ClientSecret: *req.ClientSecret, Scopes: valueOr(req.Scopes, []string{}),
-		AutoCreate: valueOr(req.AutoCreate, true), Enabled: valueOr(req.Enabled, true),
+		ID: *req.ID, Mode: mode, Issuer: valueOr(req.Issuer, ""), DisplayName: valueOr(req.DisplayName, *req.ID),
+		ClientID: *req.ClientID, ClientSecret: *req.ClientSecret, Scopes: valueOr(req.Scopes, []string{}),
+		OAuth: session.OAuthSettings{
+			AuthorizationURL: valueOr(req.AuthorizationURL, ""), TokenURL: valueOr(req.TokenURL, ""),
+			UserinfoURL: valueOr(req.UserinfoURL, ""), SubjectClaim: req.Claims.subject(), NameClaim: req.Claims.name(),
+			UsernameClaim: req.Claims.username(), EmailClaim: req.Claims.email(),
+		},
+		AutoCreate: valueOr(req.AutoCreate, mode != session.ModeOAuth), Enabled: valueOr(req.Enabled, true),
 	}
 
 	p, err := h.signIn.admin.Create(r.Context(), callerEntry(r, caller, identity.ActionServerManageSignIn), in)
@@ -267,18 +316,14 @@ func (h *Handler) changeProvider(
 
 	var req providerChangeRequest
 
-	empty := func() bool {
-		return req.Version == nil || (req.Issuer == nil && req.DisplayName == nil && req.ClientID == nil &&
-			req.ClientSecret == nil && req.Scopes == nil && req.AutoCreate == nil && req.Enabled == nil)
-	}
-
-	if err := decodeChange(w, r, &req, errProviderChangeBody, empty); err != nil {
+	if err := decodeChange(w, r, &req, errProviderChangeBody, req.empty); err != nil {
 		return session.ProviderConfig{}, err
 	}
 
 	c := session.ProviderChange{
-		Issuer: req.Issuer, DisplayName: req.DisplayName, ClientID: req.ClientID, ClientSecret: req.ClientSecret,
-		Scopes: req.Scopes, AutoCreate: req.AutoCreate, Enabled: req.Enabled, Version: *req.Version,
+		Mode: (*session.ProviderMode)(req.Mode), Issuer: req.Issuer, DisplayName: req.DisplayName,
+		ClientID: req.ClientID, ClientSecret: req.ClientSecret, Scopes: req.Scopes, OAuth: req.oauthChange(),
+		AutoCreate: req.AutoCreate, Enabled: req.Enabled, Version: *req.Version,
 	}
 
 	p, err := h.signIn.admin.Update(r.Context(), callerEntry(r, caller, identity.ActionServerManageSignIn), id, c)
@@ -336,12 +381,88 @@ const invalidProviderRef = "sign-in-provider:?"
 
 // storedProviderOf returns the wire form of a provider of the API.
 func storedProviderOf(p *session.ProviderConfig) providerResponse {
-	return providerResponse{
+	out := providerResponse{
 		CreatedAt: optionalWireTime(p.CreatedAt), UpdatedAt: optionalWireTime(p.UpdatedAt), ID: p.ID,
 		Source: providerSourceAPI, Issuer: p.Issuer, DisplayName: p.DisplayName, ClientID: p.ClientID,
 		Scopes: valueOr(&p.Scopes, []string{}), Version: p.Version, AutoCreate: p.AutoCreate, Enabled: p.Enabled,
-		ClientSecretSet: len(p.SealedSecret) > 0,
+		ClientSecretSet: len(p.SealedSecret) > 0, Mode: string(p.Mode), AuthorizationURL: "", TokenURL: "",
+		UserinfoURL: "", Claims: nil,
 	}
+
+	if p.Mode == session.ModeOAuth {
+		out.AuthorizationURL, out.TokenURL, out.UserinfoURL = p.OAuth.AuthorizationURL, p.OAuth.TokenURL,
+			p.OAuth.UserinfoURL
+		out.Claims = &providerClaims{
+			Subject: p.OAuth.SubjectClaim, Name: p.OAuth.NameClaim, Username: p.OAuth.UsernameClaim,
+			Email: p.OAuth.EmailClaim,
+		}
+	}
+
+	return out
+}
+
+// empty reports whether req has no version or changes nothing.
+func (req *providerChangeRequest) empty() bool {
+	return req.Version == nil || (req.Issuer == nil && req.DisplayName == nil && req.ClientID == nil &&
+		req.ClientSecret == nil && req.Scopes == nil && req.AutoCreate == nil && req.Enabled == nil &&
+		req.Mode == nil && req.noOAuth())
+}
+
+// noOAuth reports whether req changes no OAuth setting.
+func (req *providerChangeRequest) noOAuth() bool {
+	return req.AuthorizationURL == nil && req.TokenURL == nil && req.UserinfoURL == nil && req.Claims == nil
+}
+
+// oauthChange returns the change of the OAuth settings of req.
+func (req *providerChangeRequest) oauthChange() session.OAuthChange {
+	c := session.OAuthChange{
+		AuthorizationURL: req.AuthorizationURL, TokenURL: req.TokenURL, UserinfoURL: req.UserinfoURL,
+		SubjectClaim: nil, NameClaim: nil, UsernameClaim: nil, EmailClaim: nil,
+	}
+
+	if req.Claims != nil {
+		c.SubjectClaim, c.NameClaim, c.UsernameClaim, c.EmailClaim = req.Claims.Subject, req.Claims.Name,
+			req.Claims.Username, req.Claims.Email
+	}
+
+	return c
+}
+
+// subject returns the subject claim of c, or "" when c or the claim is
+// absent.
+func (c *providerClaimsChange) subject() string {
+	if c == nil {
+		return ""
+	}
+
+	return valueOr(c.Subject, "")
+}
+
+// name returns the name claim of c, or "".
+func (c *providerClaimsChange) name() string {
+	if c == nil {
+		return ""
+	}
+
+	return valueOr(c.Name, "")
+}
+
+// username returns the username claim of c, or "".
+func (c *providerClaimsChange) username() string {
+	if c == nil {
+		return ""
+	}
+
+	return valueOr(c.Username, "")
+}
+
+// email returns the email claim of c, or "".
+func (c *providerClaimsChange) email() string {
+	if c == nil {
+		return ""
+	}
+
+	return valueOr(c.Email, "")
 }
 
 // staticProviderOf returns the wire form of a provider of the
@@ -350,7 +471,8 @@ func staticProviderOf(p SignInProvider) providerResponse {
 	return providerResponse{
 		CreatedAt: nil, UpdatedAt: nil, ID: p.ID, Source: providerSourceStatic, Issuer: "",
 		DisplayName: p.DisplayName, ClientID: "", Scopes: []string{}, Version: 0, AutoCreate: p.AutoCreate,
-		Enabled: true, ClientSecretSet: true,
+		Enabled: true, ClientSecretSet: true, Mode: string(session.ModeOIDC), AuthorizationURL: "", TokenURL: "",
+		UserinfoURL: "", Claims: nil,
 	}
 }
 

@@ -75,9 +75,12 @@ func mutateKeepProviders(t *testing.T, ports keepProviderPorts) {
 	}
 
 	gamma := session.ProviderConfig{
-		CreatedAt: now(), UpdatedAt: now(), ID: keepLiveProvider, Issuer: keepLiveIssuer, DisplayName: "Gamma",
-		ClientID: "dustpan", SealedSecret: []byte("gamma sealed secret"), Scopes: nil, Version: 1,
-		AutoCreate: false, Enabled: false,
+		CreatedAt: now(), UpdatedAt: now(), ID: keepLiveProvider, Mode: session.ModeOIDC, Issuer: keepLiveIssuer,
+		DisplayName: "Gamma", ClientID: "dustpan", SealedSecret: []byte("gamma sealed secret"), Scopes: nil,
+		OAuth: session.OAuthSettings{
+			AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+			EmailClaim: "",
+		}, Version: 1, AutoCreate: false, Enabled: false,
 	}
 	createErr := ports.configs.CreateProviderConfig(ctx, gamma, ServerChange(now(), "sign-in-provider:gamma"))
 	if createErr != nil {
