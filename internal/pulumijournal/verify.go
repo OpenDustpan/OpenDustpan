@@ -9,9 +9,11 @@ import (
 // stack.BatchVerifier without importing that package. Each entry must pass
 // the rules of decision 5.5, which DecodeEntries applies. Each entry must also
 // be one that the replayer can apply, and each reference to an earlier entry must
-// name an operation that the update holds or an earlier entry of the batch. Then
-// every stored entry can replay, and the stored set never refers to a missing
-// entry.
+// name an operation that the update holds or an earlier entry of the batch. A
+// rebuilt base state entry drops the held operations, as the replay drops its
+// records, and the store clears the operations of earlier batches when it
+// stores such a batch. Then every stored entry can replay, and the stored set
+// never refers to a missing entry.
 //
 // Only a success entry with a state creates a resource that later entries can
 // name. The held set therefore holds only those operations, matching the index

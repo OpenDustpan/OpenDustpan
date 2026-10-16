@@ -27,27 +27,38 @@ var errPolicyBody = errors.New(
 		`"disableTokens":true,"disableAccounts":true,"disableBreakGlass":false}`,
 )
 
+// errBreakGlassGone reports a policy change that turns on the deprecated
+// break-glass disable. A break-glass account is always exempt, with no
+// setting.
+var errBreakGlassGone = errors.New(
+	`invalid token policy body: the disableBreakGlass setting is no longer supported`,
+)
+
 // tokenPolicyResponse is the policy on the wire. A null updatedAt means that
 // no administrator changed the defaults.
 //
-// Contract: never remove or rename these fields.
+// Contract: never remove or rename these fields. DisableBreakGlass is
+// deprecated and always false: a break-glass account is always exempt from
+// the inactivity disable.
 type tokenPolicyResponse struct {
 	UpdatedAt          *string `json:"updatedAt"`
 	MaxLifetimeSeconds int64   `json:"maxLifetimeSeconds"`
 	InactivitySeconds  int64   `json:"inactivitySeconds"`
 	DisableTokens      bool    `json:"disableTokens"`
 	DisableAccounts    bool    `json:"disableAccounts"`
-	DisableBreakGlass  bool    `json:"disableBreakGlass"`
+	// DisableBreakGlass is deprecated and always false.
+	DisableBreakGlass bool `json:"disableBreakGlass"`
 }
 
 // tokenPolicyRequest is the body of a policy change. A missing field keeps
-// its value.
+// its value. DisableBreakGlass is deprecated: only false is accepted.
 type tokenPolicyRequest struct {
 	MaxLifetimeSeconds *int64 `json:"maxLifetimeSeconds"`
 	InactivitySeconds  *int64 `json:"inactivitySeconds"`
 	DisableTokens      *bool  `json:"disableTokens"`
 	DisableAccounts    *bool  `json:"disableAccounts"`
-	DisableBreakGlass  *bool  `json:"disableBreakGlass"`
+	// DisableBreakGlass is deprecated: only false is accepted.
+	DisableBreakGlass *bool `json:"disableBreakGlass"`
 }
 
 // sweepResponse names the tokens and the principals that a sweep disabled.
@@ -73,7 +84,7 @@ func tokenPolicyOf(p accesstoken.Policy) tokenPolicyResponse {
 		InactivitySeconds:  int64(p.Inactivity / time.Second),
 		DisableTokens:      p.DisableTokens,
 		DisableAccounts:    p.DisableAccounts,
-		DisableBreakGlass:  p.DisableBreakGlass,
+		DisableBreakGlass:  false,
 	}
 }
 
@@ -120,7 +131,8 @@ func getTokenPolicy(
 
 // changeTokenPolicy serves PATCH /api/server/token-policy: it changes the
 // fields of the body and answers 200 with the stored policy. A body that
-// sets no field, or a period out of range, answers 400.
+// sets no field, or a period out of range, answers 400. The deprecated
+// disableBreakGlass field accepts only false: true answers 400.
 func changeTokenPolicy(
 	w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, _ identity.Principal, e audit.Entry,
 ) (principalResult, error) {
@@ -133,6 +145,10 @@ func changeTokenPolicy(
 
 	if err := decodeChange(w, r, &req, errPolicyBody, empty); err != nil {
 		return failed(accesstoken.PolicyRef), err
+	}
+
+	if req.DisableBreakGlass != nil && *req.DisableBreakGlass {
+		return failed(accesstoken.PolicyRef), errBreakGlassGone
 	}
 
 	maxLifetime, err := secondsOf(req.MaxLifetimeSeconds)

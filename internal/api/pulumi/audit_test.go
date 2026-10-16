@@ -87,7 +87,7 @@ func (m *memAuditStore) Check(_ context.Context, _ namespace.Name) (audit.CheckR
 		return audit.CheckResult{}, m.err
 	}
 
-	return audit.CheckResult{Checked: int64(len(m.entries)), BadSequence: 0, Valid: true}, nil
+	return audit.CheckResult{Checked: int64(len(m.entries)), BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
 // errAuditBoom is the injected store failure of the failure test.

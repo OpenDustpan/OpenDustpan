@@ -186,6 +186,7 @@ func restoreStreamedBackup(
 		Key:         testWrapper(),
 		Region:      "eu-west",
 		AfterApply:  nil,
+		Admit:       nil,
 		Now:         nil,
 		Logger:      nil,
 	})

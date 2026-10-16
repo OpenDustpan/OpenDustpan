@@ -97,6 +97,7 @@ func (s *Store) GetTokenByDigest(ctx context.Context, d accesstoken.Digest) (acc
 		Owner: codec.FromAccessTokenOwnerRow(codec.AccessTokenOwnerRow{
 			ID: row.PrincipalID, Subject: row.Subject, DisplayName: row.DisplayName, Kind: row.PrincipalKind,
 			DisabledAtMs: row.PrincipalDisabledAtMs.Int64, ActiveAtMs: row.PrincipalActiveAtMs,
+			BreakGlass: row.PrincipalBreakGlass,
 		}),
 		Digest: stored,
 	}, nil
@@ -294,7 +295,7 @@ func (s *Store) SweepInactive(
 			return err
 		}
 
-		return appendSweepEntries(ctx, q, res, entry)
+		return s.appendSweepEntries(ctx, q, res, entry)
 	})
 	if err != nil {
 		return accesstoken.SweepResult{}, err
@@ -341,7 +342,7 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 
 // appendSweepEntries appends one entry for each record of res, in the
 // transaction of q.
-func appendSweepEntries(
+func (s *Store) appendSweepEntries(
 	ctx context.Context, q *db.Queries, res accesstoken.SweepResult, entry accesstoken.SweepEntryFunc,
 ) error {
 	objects := make([]string, 0, len(res.Tokens)+len(res.Principals))

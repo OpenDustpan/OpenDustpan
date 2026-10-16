@@ -28,6 +28,14 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
 
 	staged := s.stagingPath
 
+	// The chain state is bookkeeping of this installation: the staged file
+	// takes the record of the live database. Read it before the write lock,
+	// because ChainRecord takes the read lock.
+	chain, err := s.ChainRecord(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Hold the write lock from the live snapshot through the swap, so a
 	// revoke between the copy and the swap cannot be lost. Lock order is
 	// stagingMu before mu.
@@ -38,7 +46,7 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
 		return err
 	}
 
-	if err := fenceStagedFile(ctx, staged); err != nil {
+	if err := fenceStagedFile(ctx, staged, chain); err != nil {
 		return err
 	}
 

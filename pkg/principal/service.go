@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +12,15 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
+
+// Tokens reports the holders of principal:manage-tokens on a service
+// principal, for the audit entry of a membership add. access.Service meets
+// it.
+type Tokens interface {
+	// TokenManagers returns the current holders of principal:manage-tokens
+	// on the service principal with the ID id, sorted and each once.
+	TokenManagers(ctx context.Context, id string) ([]string, error)
+}
 
 // Config holds the dependencies of a Service.
 type Config struct {
@@ -23,6 +33,10 @@ type Config struct {
 	// Namespaces reads the fence of the namespace of a principal of a
 	// namespace. Nil means the Service keeps no principal of a namespace.
 	Namespaces Namespaces
+	// Tokens reports the token managers of a service principal for the
+	// audit entry of a membership add. Nil means the Service writes no
+	// such change.
+	Tokens Tokens
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
 	// NewID returns a new opaque ID with the prefix it takes. Nil means
@@ -40,6 +54,7 @@ type Service struct {
 	store      Store
 	guard      Guard
 	namespaces Namespaces
+	tokens     Tokens
 	now        func() time.Time
 	newID      func(prefix string) string
 }
@@ -60,7 +75,14 @@ func NewService(cfg Config) (*Service, error) {
 		newID = ident.NewID
 	}
 
-	return &Service{store: cfg.Store, guard: cfg.Guard, namespaces: cfg.Namespaces, now: now, newID: newID}, nil
+	return &Service{
+		store:      cfg.Store,
+		guard:      cfg.Guard,
+		namespaces: cfg.Namespaces,
+		tokens:     cfg.Tokens,
+		now:        now,
+		newID:      newID,
+	}, nil
 }
 
 // Now returns the time of the Service clock, in UTC to the millisecond:
@@ -94,7 +116,7 @@ func (s *Service) CreatePrincipal(ctx context.Context, e audit.Entry, in Input) 
 		DisplayName: displayName,
 		Kind:        in.Kind,
 		Source:      SourceLocal,
-		Namespace:   "", GroupCount: 0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 
 	if err := p.Validate(); err != nil {
@@ -334,6 +356,11 @@ func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, caller identit
 // AddMember puts the principal principalID in the group groupID, with the
 // entry e. A membership gives the grants of the group, so it is a grant by
 // proxy: the Guard checks that caller holds every action that they give.
+//
+// The audit entry of a membership add of a service principal names, in the
+// change "tokenManagers", every holder of principal:manage-tokens on that
+// principal: each of them can act as the principal, with the grants of the
+// group too. The entry of a person or a workload names none.
 func (s *Service) AddMember(
 	ctx context.Context, e audit.Entry, caller identity.Principal, groupID, principalID string,
 ) (Membership, error) {
@@ -341,14 +368,49 @@ func (s *Service) AddMember(
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
 	}
 
-	if p, err := s.store.GetPrincipal(ctx, principalID); err == nil && p.Namespace != "" {
-		return Membership{}, fmt.Errorf("add principal %q to group %q: %w: a principal of a namespace cannot be "+
-			"a member of a group, because a group belongs to the whole installation", principalID, groupID, ErrInvalid)
+	kind := Kind("")
+	if p, err := s.store.GetPrincipal(ctx, principalID); err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+		}
+	} else {
+		if p.Namespace != "" {
+			return Membership{}, fmt.Errorf("add principal %q to group %q: %w: a principal of a namespace cannot be "+
+				"a member of a group, because a group belongs to the whole installation", principalID, groupID, ErrInvalid)
+		}
+
+		kind = p.Kind
 	}
 
-	m := Membership{AddedAt: s.Now(), GroupID: groupID, PrincipalID: principalID}
+	m := Membership{
+		AddedAt: s.Now(), SuspendedAt: time.Time{}, GroupID: groupID, PrincipalID: principalID,
+		Source: MembershipSourceLocal, SourceID: "", State: MembershipStateActive, Pinned: false,
+	}
 
-	err := s.store.AddMember(ctx, m, change(e, m.AddedAt, MemberRef(groupID, principalID)))
+	if err := m.Validate(); err != nil {
+		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+	}
+
+	entry := change(e, m.AddedAt, MemberRef(groupID, principalID))
+	entry.Changes = append(entry.Changes,
+		audit.Change{Key: "source", Old: nil, New: string(m.Source), Layer: "", TakesEffect: ""},
+		audit.Change{Key: "sourceID", Old: nil, New: m.SourceID, Layer: "", TakesEffect: ""},
+		audit.Change{Key: "state", Old: nil, New: string(m.State), Layer: "", TakesEffect: ""},
+		audit.Change{Key: "pinned", Old: nil, New: strconv.FormatBool(m.Pinned), Layer: "", TakesEffect: ""},
+	)
+
+	if kind == KindService && s.tokens != nil {
+		holders, err := s.tokens.TokenManagers(ctx, principalID)
+		if err != nil {
+			return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+		}
+
+		entry.Changes = append(entry.Changes, audit.Change{
+			Key: "tokenManagers", Old: nil, New: strings.Join(holders, ", "), Layer: "", TakesEffect: "",
+		})
+	}
+
+	err := s.store.AddMember(ctx, m, entry)
 	if errors.Is(err, ErrAlreadyExists) {
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w: the principal is a member of the group, "+
 			"or it left the group in this millisecond. If it is not a member, try again", principalID, groupID, err)

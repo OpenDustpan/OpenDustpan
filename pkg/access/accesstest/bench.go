@@ -182,7 +182,7 @@ func seedBenchPrincipals(b *testing.B, s BenchStore) {
 
 		p := principal.Principal{
 			CreatedAt: at(0), UpdatedAt: at(0), ID: id, Subject: fmt.Sprintf("user-%05d", i), DisplayName: "",
-			Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+			Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 			DisabledAt: time.Time{},
 		}
 		if err := s.CreatePrincipal(ctx, p, entry()); err != nil {
@@ -197,8 +197,13 @@ func seedBenchPrincipals(b *testing.B, s BenchStore) {
 		for k := range groups {
 			m := principal.Membership{
 				AddedAt:     at(1),
+				SuspendedAt: time.Time{},
 				GroupID:     fmt.Sprintf("grp-%04d", (i+k)%benchGroups),
 				PrincipalID: id,
+				Source:      principal.MembershipSourceLocal,
+				SourceID:    "",
+				State:       principal.MembershipStateActive,
+				Pinned:      false,
 			}
 			if err := s.AddMember(ctx, m, entry()); err != nil {
 				b.Fatalf("seed member: %v", err)

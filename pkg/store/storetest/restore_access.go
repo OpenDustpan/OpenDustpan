@@ -187,6 +187,7 @@ func createKeepSession(t *testing.T, ports keepAccessPorts) {
 		Source:      principal.SourceLocal,
 		Namespace:   "",
 		GroupCount:  0,
+		BreakGlass:  false,
 	}
 
 	if err := ports.principals.CreatePrincipal(ctx, person, ServerChange(now(), "principal:prn-ses")); err != nil {
@@ -355,6 +356,7 @@ func recreateKeepPrincipal(t *testing.T, principals principal.Store) {
 		Source:      principal.SourceLocal,
 		Namespace:   "",
 		GroupCount:  0,
+		BreakGlass:  false,
 	}
 
 	creation := ServerChange(recreated.CreatedAt, "principal:prn-deploy2")

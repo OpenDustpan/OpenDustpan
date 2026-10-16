@@ -35,8 +35,13 @@ func (s *Store) CreatePrincipal(ctx context.Context, p principal.Principal, e au
 }
 
 // insertPrincipal inserts p with q, and returns ErrAlreadyExists when its
-// ID or its subject is taken.
+// ID or its subject is taken. It returns ErrBreakGlassKind when a principal
+// that is not a person is marked as a break-glass account.
 func insertPrincipal(ctx context.Context, q *db.Queries, p principal.Principal) error {
+	if p.BreakGlass && p.Kind != principal.KindPerson {
+		return fmt.Errorf("%w: kind %q", principal.ErrBreakGlassKind, p.Kind)
+	}
+
 	n, err := q.CreatePrincipal(ctx, db.CreatePrincipalParams{
 		ID:          p.ID,
 		Subject:     p.Subject,
@@ -46,6 +51,7 @@ func insertPrincipal(ctx context.Context, q *db.Queries, p principal.Principal) 
 		CreatedAtMs: codec.Millis(p.CreatedAt),
 		UpdatedAtMs: codec.Millis(p.UpdatedAt),
 		Namespace:   p.Namespace.String(),
+		BreakGlass:  p.BreakGlass,
 	})
 	if err != nil {
 		return fmt.Errorf("insert principal: %w", err)
@@ -428,7 +434,8 @@ func (s *Store) DeleteGroup(ctx context.Context, id string, e audit.Entry) error
 }
 
 // AddMember implements principal.Store. It checks the group and the
-// principal in the same transaction as the insert.
+// principal in the same transaction as the insert. An empty source or state
+// defaults to local and active.
 func (s *Store) AddMember(ctx context.Context, m principal.Membership, e audit.Entry) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -438,10 +445,21 @@ func (s *Store) AddMember(ctx context.Context, m principal.Membership, e audit.E
 			return err
 		}
 
+		m = m.WithDefaults()
+
+		if err := m.Validate(); err != nil {
+			return err
+		}
+
 		n, err := q.AddGroupMember(ctx, db.AddGroupMemberParams{
-			GroupID:     m.GroupID,
-			PrincipalID: m.PrincipalID,
-			AddedAtMs:   codec.Millis(m.AddedAt),
+			GroupID:       m.GroupID,
+			PrincipalID:   m.PrincipalID,
+			AddedAtMs:     codec.Millis(m.AddedAt),
+			Source:        string(m.Source),
+			SourceID:      m.SourceID,
+			State:         string(m.State),
+			SuspendedAtMs: codec.OptionalMillis(m.SuspendedAt),
+			Pinned:        m.Pinned,
 		})
 		if err != nil {
 			return fmt.Errorf("insert group member: %w", err)
@@ -562,11 +580,18 @@ func (s *Store) ListMembers(
 
 		out = mapRows(rows, func(r db.ListGroupMembersRow) principal.Member {
 			return principal.Member{
-				AddedAt: codec.FromMillis(r.AddedAtMs),
+				AddedAt:     codec.FromMillis(r.AddedAtMs),
+				SuspendedAt: codec.FromOptionalMillis(r.MemberSuspendedAtMs),
+				GroupID:     groupID,
+				PrincipalID: r.ID,
+				Source:      principal.MembershipSource(r.MemberSource),
+				SourceID:    r.MemberSourceID,
+				State:       principal.MembershipState(r.MemberState),
+				Pinned:      r.MemberPinned,
 				Principal: principalOf(principalFields{
 					id: r.ID, subject: r.Subject, displayName: r.DisplayName, kind: r.Kind, source: r.Source,
 					createdAtMs: r.CreatedAtMs, updatedAtMs: r.UpdatedAtMs, groupCount: r.GroupCount,
-					disabledAtMs: r.DisabledAtMs.Int64, namespace: r.Namespace,
+					disabledAtMs: r.DisabledAtMs.Int64, namespace: r.Namespace, breakGlass: r.BreakGlass,
 				}),
 			}
 		})
@@ -642,6 +667,7 @@ type principalFields struct {
 	// disabledAtMs is 0 when the column is NULL.
 	disabledAtMs int64
 	namespace    string
+	breakGlass   bool
 }
 
 // principalRow maps any generated principal row to its fields. The reads
@@ -652,7 +678,7 @@ func principalRow[T db.GetPrincipalRow | db.GetPrincipalBySubjectRow | db.ListPr
 	return principalFields{
 		id: r.ID, subject: r.Subject, displayName: r.DisplayName, kind: r.Kind, source: r.Source,
 		createdAtMs: r.CreatedAtMs, updatedAtMs: r.UpdatedAtMs, groupCount: r.GroupCount,
-		disabledAtMs: r.DisabledAtMs.Int64, namespace: r.Namespace,
+		disabledAtMs: r.DisabledAtMs.Int64, namespace: r.Namespace, breakGlass: r.BreakGlass,
 	}
 }
 
@@ -669,6 +695,7 @@ func principalOf(f principalFields) principal.Principal {
 		Source:      principal.Source(f.source),
 		Namespace:   namespace.Name(f.namespace),
 		GroupCount:  f.groupCount,
+		BreakGlass:  f.breakGlass,
 	}
 }
 

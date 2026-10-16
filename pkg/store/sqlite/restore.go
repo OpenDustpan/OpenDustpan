@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -213,7 +214,14 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 
 	staged := s.stagingPath
 
-	if err := fenceStagedFile(ctx, staged); err != nil {
+	// The chain state is bookkeeping of this installation: the staged file
+	// takes the record of the live database.
+	chain, err := s.ChainRecord(ctx)
+	if err != nil {
+		return err
+	}
+
+	if err := fenceStagedFile(ctx, staged, chain); err != nil {
 		return err
 	}
 
@@ -227,10 +235,12 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 }
 
 // fenceStagedFile increments the failover version of every namespace in the
-// staged file at path, so the rename carries fenced versions. It opens the
+// staged file at path, so the rename carries fenced versions, and writes the
+// audit chain record chain of the live database into it, in one
+// transaction. It opens the
 // file in rollback-journal mode, so no write-ahead-log sidecar survives the
 // fence to leak beside the renamed database.
-func fenceStagedFile(ctx context.Context, path string) error {
+func fenceStagedFile(ctx context.Context, path string, chain audit.ChainRecord) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
@@ -269,15 +279,38 @@ func fenceStagedFile(ctx context.Context, path string) error {
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE namespaces SET failover_version = failover_version + 1`); err != nil {
+	const fence = `UPDATE namespaces SET failover_version = failover_version + 1`
+
+	_, err = tx.ExecContext(ctx, fence)
+	if err != nil {
 		return errors.Join(fmt.Errorf("fence staged namespaces: %w", err), tx.Rollback())
+	}
+
+	// The swap replaces the log, so the copy of the record sets
+	// log_replaced: the server compares the restored log with the state,
+	// also after a crash. The copy keeps no migration: a new approval
+	// starts it again. The copy keeps entered_maintenance false: the chain
+	// enters maintenance mode again when it still waits.
+	const keepChain = `INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+    VALUES (1, ?, ?, ?, ?, 0, 1, 0)`
+
+	_, err = tx.ExecContext(ctx, keepChain, string(chain.State), codec.Millis(chain.ChangedAt), chain.ChangedBy,
+		chain.Pending)
+	if err != nil {
+		return errors.Join(fmt.Errorf("keep audit chain state: %w", err), tx.Rollback())
 	}
 
 	// The restored log can reuse sequences that a sink already holds, and
 	// a restored cursor can point past the restored entries. A reset makes
-	// every sink receive the restored log again from its first entry.
+	// every sink receive the restored log again from its first entry. A
+	// restored lease could block that reship, so the reset releases every
+	// lease too.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM audit_sink_cursors`); err != nil {
 		return errors.Join(fmt.Errorf("reset staged audit sink cursors: %w", err), tx.Rollback())
+	}
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM audit_sink_leases`); err != nil {
+		return errors.Join(fmt.Errorf("reset staged audit sink leases: %w", err), tx.Rollback())
 	}
 
 	if err := tx.Commit(); err != nil {

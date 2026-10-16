@@ -139,28 +139,33 @@ var (
 // when the object is not a unit or the ID is not known. PrevHash holds the
 // hash of the previous entry of the namespace and is empty for the first
 // entry. Hash holds the SHA-256 of this entry (see ComputeHash).
+// FenceVersion is the failover version of the namespace when the store
+// appended the entry, and 0 in ServerScope. The store sets it in the
+// transaction of the append, and the hash covers it, so a verifier can see
+// where a forced failover forked the chain of a namespace.
 type Entry struct {
-	At         time.Time
-	Namespace  namespace.Name
-	Subject    string
-	IDPSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	ValueCount *int64
-	Changes    []Change
-	SourceIP   string
-	UserAgent  string
-	Channel    Channel
-	Kind       Kind
-	Outcome    Outcome
-	RequestID  string
-	ObjectID   string
-	PrevHash   string
-	Hash       string
-	Sequence   int64
+	At           time.Time
+	Namespace    namespace.Name
+	Subject      string
+	IDPSubject   string
+	TokenID      string
+	Action       string
+	Object       string
+	Version      string
+	ValuePath    string
+	ValueCount   *int64
+	Changes      []Change
+	SourceIP     string
+	UserAgent    string
+	Channel      Channel
+	Kind         Kind
+	Outcome      Outcome
+	RequestID    string
+	ObjectID     string
+	PrevHash     string
+	Hash         string
+	Sequence     int64
+	FenceVersion int64
 }
 
 // AtMs returns the time of the entry in Unix milliseconds, as stored.
@@ -264,8 +269,10 @@ const hashFieldSeparator = 0x1F
 // fields that e sets, each as "<name>=<value>" with the same separator, in
 // this fixed order: value_count (the decimal count), then object_id (ADR 47,
 // which its own change adds), then changes (the canonical JSON of
-// EncodeChanges). An optional field that e does not set adds nothing, so an
-// entry written before the field keeps its hash. The separator never
+// EncodeChanges), then fence_version (the decimal failover version, when
+// it is above 0). An optional field that e does not set adds nothing, so an
+// entry written before the field keeps its hash. The hash takes no key:
+// any installation can compute it again from the stored fields. The separator never
 // appears in a validated field except the user agent and free-form names,
 // where it is kept as is: the encoding is fixed and documented, not
 // ambiguous-free, and its only use is the chain check of the same code.
@@ -322,6 +329,10 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 		write("changes=" + changesText)
 	}
 
+	if e.FenceVersion > 0 {
+		write("fence_version=" + strconv.FormatInt(e.FenceVersion, 10))
+	}
+
 	sum := sha256.Sum256([]byte(sb.String()))
 
 	return hex.EncodeToString(sum[:])
@@ -367,13 +378,17 @@ type Listing struct {
 }
 
 // CheckResult reports the chain check of a namespace. Valid is true when
-// every entry matches its stored hash and links to its predecessor. When
-// Valid is false, BadSequence holds the sequence of the first entry that
-// does not match: a changed field, a broken link or a gap after a deleted
-// entry. Checked counts the entries the check read.
+// every chained entry matches its stored hash and links to its
+// predecessor. When Valid is false, BadSequence holds the sequence of the
+// first entry that does not match: a changed field, a broken link or a gap
+// after a deleted entry. Checked counts the entries the check read.
+// Unchained counts the entries without a hash: the chain was off when they
+// were appended. The check cannot prove such an entry
+// unchanged.
 type CheckResult struct {
 	Checked     int64
 	BadSequence int64
+	Unchained   int64
 	Valid       bool
 }
 

@@ -83,8 +83,13 @@ type RestoreConfig struct {
 	// predates a later change converges to it: the server seals rows that
 	// the backup holds unsealed. A failure fails the restore. Nil skips it.
 	AfterApply func(ctx context.Context) error
-	Now        func() time.Time
-	Logger     *slog.Logger
+	// Admit runs when a restore starts, before it records the restore. An
+	// error refuses the restore: the server refuses a restore while a
+	// change of the audit chain waits for an approval. Nil admits every
+	// restore.
+	Admit  func(ctx context.Context) error
+	Now    func() time.Time
+	Logger *slog.Logger
 }
 
 // RestoreService runs online restores of a whole installation (ADR 38): it
@@ -102,6 +107,7 @@ type RestoreService struct {
 	key         secret.Wrapper
 	region      string
 	afterApply  func(ctx context.Context) error
+	admit       func(ctx context.Context) error
 	now         func() time.Time
 	logger      *slog.Logger
 	mu          sync.Mutex
@@ -155,6 +161,7 @@ func NewRestoreService(cfg RestoreConfig) (*RestoreService, error) {
 		key:         cfg.Key,
 		region:      cfg.Region,
 		afterApply:  cfg.AfterApply,
+		admit:       cfg.Admit,
 		now:         now,
 		logger:      logger,
 		mu:          sync.Mutex{},
@@ -192,6 +199,12 @@ func (s *RestoreService) Start(
 
 	if runningErr := s.runningElsewhere(ctx, id); runningErr != nil {
 		return fmt.Errorf("begin restore %s: %w", id, runningErr)
+	}
+
+	if s.admit != nil {
+		if err := s.admit(ctx); err != nil {
+			return fmt.Errorf("begin restore %s: %w", id, err)
+		}
 	}
 
 	create := RestoreRecord{
@@ -264,6 +277,30 @@ func (s *RestoreService) List(ctx context.Context) ([]RestoreRecord, error) {
 	}
 
 	return records, nil
+}
+
+// Running reports whether a restore runs: one that this service started
+// and that did not end, or a row of the registry that is still checking or
+// applying, from this instance or from another one.
+func (s *RestoreService) Running(ctx context.Context) (bool, error) {
+	s.mu.Lock()
+	local := s.running
+	s.mu.Unlock()
+
+	if local {
+		return true, nil
+	}
+
+	err := s.runningElsewhere(ctx, "")
+	if errors.Is(err, ErrRestoreRunning) {
+		return true, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("list restores: %w", err)
+	}
+
+	return false, nil
 }
 
 // claim takes the single restore slot, or reports ErrRestoreRunning.
@@ -842,6 +879,26 @@ func (s *RestoreService) applyPinned(
 		return err
 	}
 
+	// The swap replaced the live data. A later step that fails still runs
+	// the after-apply step, which the restored data needs, and the restore
+	// fails with both errors.
+	if err := s.afterSwap(ctx, id, before, pre); err != nil {
+		return errors.Join(err, s.runAfterApply(ctx, id))
+	}
+
+	// The audit entry for the start went away with the old live data: the
+	// swap replaced audit_entries from the backup. Write the entry after the
+	// swap, in the restored data, so it survives. The access mode lives in
+	// the existing object field: no new column. A lost entry does not fail
+	// the restore.
+	s.appendRestoreAudit(ctx, id, req)
+
+	return s.runAfterApply(ctx, id)
+}
+
+// afterSwap fails the running rows that the swap resurrected and preserves
+// the restore row and the pre-backup row across the swap.
+func (s *RestoreService) afterSwap(ctx context.Context, id RestoreID, before RestoreRecord, pre Record) error {
 	// The swapped-in snapshot predates this restore, so it may hold running
 	// rows of restores that finished since: the pre-backup of an undo holds
 	// the running row of the restore it undoes. Those rows will never finish,
@@ -864,20 +921,19 @@ func (s *RestoreService) applyPinned(
 		return fmt.Errorf("record pre-backup %s after the swap: %w", pre.ID, err)
 	}
 
-	// The audit entry for the start went away with the old live data: the
-	// swap replaced audit_entries from the backup. Write the entry after the
-	// swap, in the restored data, so it survives. The access mode lives in
-	// the existing object field: no new column. A lost entry does not fail
-	// the restore.
-	s.appendRestoreAudit(ctx, id, req)
+	return nil
+}
 
-	// A backup from before the seal change holds unsealed rows: run the
-	// after-apply step while maintenance mode still holds, so those rows
-	// end sealed. A failure fails the restore.
-	if s.afterApply != nil {
-		if err := s.afterApply(ctx); err != nil {
-			return fmt.Errorf("seal restored state: %w", err)
-		}
+// runAfterApply runs the after-apply step of the restore id. A backup from before
+// the seal change holds unsealed rows: the step runs while maintenance
+// mode still holds, so those rows end sealed. A failure fails the restore.
+func (s *RestoreService) runAfterApply(ctx context.Context, id RestoreID) error {
+	if s.afterApply == nil {
+		return nil
+	}
+
+	if err := s.afterApply(ctx); err != nil {
+		return fmt.Errorf("after the apply of restore %s: %w", id, err)
 	}
 
 	return nil
@@ -903,27 +959,28 @@ func (s *RestoreService) appendRestoreAudit(ctx context.Context, id RestoreID, r
 	}
 
 	entry := audit.Entry{
-		At:         s.now().UTC(),
-		Namespace:  audit.ServerScope,
-		Subject:    req.RequestedBy,
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "server:restore",
-		Object:     "restore " + id.String() + " of backup " + req.BackupID.String() + " (access tables " + mode + ")",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "",
-		UserAgent:  "",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           s.now().UTC(),
+		Namespace:    audit.ServerScope,
+		Subject:      req.RequestedBy,
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "server:restore",
+		Object:       "restore " + id.String() + " of backup " + req.BackupID.String() + " (access tables " + mode + ")",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "",
+		UserAgent:    "",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 
 	if _, err := store.AppendServer(ctx, entry); err != nil {

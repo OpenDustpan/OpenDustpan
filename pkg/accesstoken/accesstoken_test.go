@@ -55,6 +55,7 @@ func caller() audit.Entry {
 		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
 		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0,
 	}
 }
 
@@ -89,7 +90,7 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 	c := &clock{now: start, mu: sync.Mutex{}}
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: nil, Namespaces: nil, Now: c.Now, NewID: nil},
+		principal.Config{Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: c.Now, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -1231,6 +1232,70 @@ func TestSweepDisablesInactiveTokensAndAccounts(t *testing.T) {
 	}
 }
 
+func TestSweepNeverDisablesBreakGlass(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	at := f.clock.Now()
+	glass := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-glass",
+		Subject: "glass@example.com", DisplayName: "Break Glass", Kind: principal.KindPerson,
+		Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: true,
+	}
+
+	e := caller()
+	e.At, e.Namespace, e.Kind, e.Outcome, e.Object = at, audit.ServerScope, audit.KindChange,
+		audit.OutcomeSuccess, principal.Ref(glass.ID)
+
+	if err := f.store.CreatePrincipal(ctx, glass, e); err != nil {
+		t.Fatalf("create break-glass principal: %v", err)
+	}
+
+	_, glassSecret := func() (accesstoken.Token, accesstoken.Secret) {
+		t.Helper()
+
+		tok, secret, err := f.svc.Create(ctx, admin(), caller(), accesstoken.ScopePersonal,
+			accesstoken.Input{
+				ExpiresAt: f.clock.Now().Add(200 * 24 * time.Hour), PrincipalID: glass.ID, Name: "emergency",
+			})
+		if err != nil {
+			t.Fatalf("create token of a break-glass account: %v", err)
+		}
+
+		return tok, secret
+	}()
+
+	f.createLong(t, f.person, "laptop")
+
+	f.clock.Advance(accesstoken.DefaultInactivity + time.Hour)
+
+	res, err := f.svc.SweepInactive(ctx, caller())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	for _, id := range res.Principals {
+		if id == glass.ID {
+			t.Fatalf("sweep = %+v, disabled a break-glass account", res)
+		}
+	}
+
+	if len(res.Principals) != 1 || res.Principals[0] != f.person.ID {
+		t.Fatalf("sweep = %+v, want only the idle person", res)
+	}
+
+	got, err := f.store.GetPrincipal(ctx, glass.ID)
+	if err != nil || !got.DisabledAt.IsZero() || !got.BreakGlass {
+		t.Fatalf("break-glass principal = %+v, %v; want it enabled with the flag", got, err)
+	}
+
+	if _, err := f.svc.AuthenticateToken(ctx, glassSecret.Reveal()); err != nil {
+		t.Fatalf("token of a break-glass account after the sweep: %v", err)
+	}
+}
+
 func TestSweepFollowsThePolicy(t *testing.T) {
 	t.Parallel()
 
@@ -1347,8 +1412,20 @@ func TestBreakGlassDisableIsRefused(t *testing.T) {
 	_, err := f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(true),
 	})
-	if !errors.Is(err, accesstoken.ErrBreakGlassUnavailable) || !strings.Contains(err.Error(), "ADR 57") {
-		t.Fatalf("err = %v, want ErrBreakGlassUnavailable that names ADR 57", err)
+	if !errors.Is(err, accesstoken.ErrInvalid) || !strings.Contains(err.Error(), "no longer supported") {
+		t.Fatalf("err = %v, want ErrInvalid that says the setting is no longer supported", err)
+	}
+
+	_, err = f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(false),
+	})
+	if err != nil {
+		t.Fatalf("set policy with the deprecated field false: %v", err)
+	}
+
+	p, err := f.svc.Policy(t.Context())
+	if err != nil || p.DisableBreakGlass {
+		t.Fatalf("policy = %+v, %v; want the deprecated field always false", p, err)
 	}
 }
 

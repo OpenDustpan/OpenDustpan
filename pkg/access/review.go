@@ -22,13 +22,18 @@ import (
 // The service fills Containers with the objects that hold the object of
 // the export, and ContainerRoles with the roles that give a data action or
 // an access-management action, so that an export answers who can access
-// its object, and who can give access to it.
+// its object, and who can give access to it. TokenNamespace is the
+// namespace whose grants count with TokenNamespaceRoles: the export of a
+// principal of a namespace lists the holders of the token action on its
+// namespace there. Empty means none.
 type ReviewScope struct {
-	Object         identity.Object
-	Namespace      string
-	Containers     []string
-	ContainerRoles []string
-	All            bool
+	Object              identity.Object
+	Namespace           string
+	Containers          []string
+	ContainerRoles      []string
+	TokenNamespace      string
+	TokenNamespaceRoles []string
+	All                 bool
 }
 
 // ReviewKey is the position of a row in the order of an export: the time of

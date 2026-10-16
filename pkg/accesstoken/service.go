@@ -496,7 +496,8 @@ func (s *Service) Policy(ctx context.Context) (Policy, error) {
 }
 
 // PolicyChange names the fields of the policy that a change sets. A nil
-// field keeps its value.
+// field keeps its value. DisableBreakGlass is deprecated: the server
+// refuses true, and always keeps false.
 type PolicyChange struct {
 	MaxLifetime       *time.Duration
 	Inactivity        *time.Duration
@@ -564,9 +565,9 @@ func (c PolicyChange) applyTo(p Policy) Policy {
 // the entry e for each record that it disables. It reads the policy: with
 // an inactivity period of zero, or with tokens and accounts both off, it
 // changes nothing. The store takes the time of the run from the database
-// clock, and the entries carry that time. The break-glass credential of
-// ADR 57 has no stored record yet, so the bootstrap admin tokens are never
-// disabled here.
+// clock, and the entries carry that time. A break-glass account is always
+// exempt, with no setting. The bootstrap admin tokens have no stored
+// record, so a sweep never disables them here.
 func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult, error) {
 	p, err := s.Policy(ctx)
 	if err != nil {
@@ -645,9 +646,14 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 // checkPolicyActive refuses the token t of the owner o when the policy disables
 // t, or the user account o, as inactive at now, before the sweep writes the
 // disable: the sweep runs once an hour, and a use would else move the last
-// use forward and keep t, or o, alive. A failed read of the policy answers
-// its error, so the caller fails closed.
+// use forward and keep t, or o, alive. A break-glass account is always
+// exempt. A failed read of the policy answers its error, so the caller
+// fails closed.
 func (s *Service) checkPolicyActive(ctx context.Context, t Token, o Owner, now time.Time) error {
+	if o.BreakGlass {
+		return nil
+	}
+
 	p, err := s.policies.get(ctx, now, s.Policy)
 	if err != nil {
 		return fmt.Errorf("authenticate access token: %w", err)

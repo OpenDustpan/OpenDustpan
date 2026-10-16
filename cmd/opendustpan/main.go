@@ -8,6 +8,8 @@
 //	opendustpan backup check [flags]
 //	opendustpan backup [flags]
 //	opendustpan restore [flags]
+//	opendustpan audit-chain status [flags]
+//	opendustpan audit-chain approve [flags]
 //
 // Every flag can also be set through the environment variable shown in its
 // help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN or
@@ -285,6 +287,7 @@ type serveFlags struct {
 	maxBodyBytesInFlight         int64
 	checkpointDeltaCutoff        int64
 	disablePulumiJournaling      bool
+	auditChain                   string
 	softDeleteRetention          string
 	// retention is softDeleteRetention after the check.
 	retention  time.Duration
@@ -321,6 +324,10 @@ func (f *serveFlags) check() error {
 
 	if f.checkpointDeltaCutoff < 0 {
 		return errDeltaCutoff
+	}
+
+	if _, err := audit.ParseChainSetting(f.auditChain); err != nil {
+		return fmt.Errorf("--audit-chain: %w", err)
 	}
 
 	retention, err := parseRetention(f.softDeleteRetention)
@@ -408,6 +415,7 @@ func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
+	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
 }
 
@@ -1069,7 +1077,8 @@ func closeTargetStore(ctx context.Context, logger *slog.Logger, s blob.Store) {
 }
 
 // serverOptions returns the NewServer options for the opened store, blob
-// store, authenticator, key wrapper and logger.
+// store, authenticator, key wrapper and logger, with the audit chain
+// setting.
 func (f *serveFlags) serverOptions(
 	st store,
 	blobs blob.Store,
@@ -1080,6 +1089,12 @@ func (f *serveFlags) serverOptions(
 	proxies, parseErr := clientip.ParseList(f.trustedProxies)
 	if parseErr != nil {
 		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
+	}
+
+	// check refused a bad value, so the parse fails only on a bug.
+	chain, chainErr := audit.ParseChainSetting(f.auditChain)
+	if chainErr != nil {
+		return nil, fmt.Errorf("--audit-chain: %w", chainErr)
 	}
 
 	return []dustpan.Option{
@@ -1111,10 +1126,12 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
+		dustpan.WithAuditChain(chain),
 		dustpan.WithSoftDeleteRetention(f.retention),
 		dustpan.WithIPAllowlists(f.ipAllowlists),
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
 		dustpan.WithIPAllowlistStore(st),
+		dustpan.WithInstanceID(f.instanceID),
 	}, nil
 }
 

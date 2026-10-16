@@ -29,6 +29,8 @@ func commandTable() cli.Table {
 		cli.HealthCommand(client.RunHealth),
 		cli.BackupCommand(client.BackupCommand),
 		cli.RestoreCommand(client.RestoreCommand),
+		cli.AuditChainStatusCommand(client.AuditChainStatus),
+		cli.AuditChainApproveCommand(client.AuditChainApprove),
 	}
 }
 

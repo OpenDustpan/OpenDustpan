@@ -1002,6 +1002,26 @@ func (s *Store) inTx(ctx context.Context, fn func(q *db.Queries) error) error {
 	return nil
 }
 
+// inReadTx runs fn in a read-only transaction. It begins as DEFERRED, not
+// IMMEDIATE, so it takes no write lock, and every read of fn sees one
+// snapshot of the database.
+func (s *Store) inReadTx(ctx context.Context, fn func(q *db.Queries) error) error {
+	tx, err := s.conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelDefault, ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("begin read transaction: %w", err)
+	}
+
+	if err := fn(s.queries.WithTx(tx)); err != nil {
+		return errors.Join(err, rollback(tx))
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit read transaction: %w", err)
+	}
+
+	return nil
+}
+
 // inFencedTx runs fn in a transaction that first checks fence. The write lock
 // is held from the start, so the failover version cannot change before commit.
 func (s *Store) inFencedTx(ctx context.Context, fence namespace.Fence, fn func(q *db.Queries) error) error {

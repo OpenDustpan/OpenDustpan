@@ -11,6 +11,34 @@ import (
 	"strings"
 )
 
+const acquireAuditSinkLease = `-- name: AcquireAuditSinkLease :execrows
+INSERT INTO audit_sink_leases (sink, holder, expires_at_ms)
+VALUES (?1, ?2, CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) + CAST(?3 AS INTEGER))
+ON CONFLICT (sink) DO UPDATE
+SET holder = excluded.holder, expires_at_ms = excluded.expires_at_ms
+WHERE audit_sink_leases.holder = excluded.holder OR audit_sink_leases.expires_at_ms <= CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
+`
+
+type AcquireAuditSinkLeaseParams struct {
+	Sink   string
+	Holder string
+	TtlMs  int64
+}
+
+// Takes or renews the lease of one sink in one conditional write. It writes
+// when no row exists, when the stored lease ended, or when the caller holds
+// it, and changes nothing while another instance holds a live lease. The
+// caller reads the changed row count: one means it holds the lease. The
+// expiry is the database clock plus the TTL, so a wrong clock on one
+// instance cannot hold every lease.
+func (q *Queries) AcquireAuditSinkLease(ctx context.Context, arg AcquireAuditSinkLeaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, acquireAuditSinkLease, arg.Sink, arg.Holder, arg.TtlMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -68,19 +96,33 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdat
 }
 
 const addGroupMember = `-- name: AddGroupMember :execrows
-INSERT INTO group_members (group_id, principal_id, added_at_ms)
-VALUES (?, ?, ?)
+INSERT INTO group_members (group_id, principal_id, added_at_ms, source, source_id, state, suspended_at_ms, pinned)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
 type AddGroupMemberParams struct {
-	GroupID     string
-	PrincipalID string
-	AddedAtMs   int64
+	GroupID       string
+	PrincipalID   string
+	AddedAtMs     int64
+	Source        string
+	SourceID      string
+	State         string
+	SuspendedAtMs int64
+	Pinned        bool
 }
 
 func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, addGroupMember, arg.GroupID, arg.PrincipalID, arg.AddedAtMs)
+	result, err := q.db.ExecContext(ctx, addGroupMember,
+		arg.GroupID,
+		arg.PrincipalID,
+		arg.AddedAtMs,
+		arg.Source,
+		arg.SourceID,
+		arg.State,
+		arg.SuspendedAtMs,
+		arg.Pinned,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -170,13 +212,15 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
      AND c.added_at_ms <= CAST(?1 AS INTEGER)
-     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER)) AS member_count
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER)
+     AND c.state = 'active') AS member_count
 FROM holders h
 CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
 LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
 LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND m.principal_id = CAST(?2 AS TEXT)
+  AND m.state = 'active'
   AND m.added_at_ms <= CAST(?1 AS INTEGER)
   AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER)
 LEFT JOIN principals mp ON mp.id = m.principal_id
@@ -282,6 +326,45 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 	return items, nil
 }
 
+const claimAuditChainMigration = `-- name: ClaimAuditChainMigration :execrows
+UPDATE audit_chain_state
+SET migrating_at_ms = ?
+WHERE id = 1 AND pending = 1 AND (migrating_at_ms = 0 OR migrating_at_ms < ?)
+`
+
+type ClaimAuditChainMigrationParams struct {
+	MigratingAtMs   int64
+	MigratingAtMs_2 int64
+}
+
+// Starts the migration of a waiting change in one write: it stamps the start
+// time only when a change waits and no claim within the lease holds.
+func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditChainMigrationParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimAuditChainMigration, arg.MigratingAtMs, arg.MigratingAtMs_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const clearJournalOperations = `-- name: ClearJournalOperations :exec
+UPDATE update_journal SET operation_ids = '[]'
+WHERE stack_id = ? AND update_id = ?
+`
+
+type ClearJournalOperationsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+// A batch that holds a rebuilt base state entry starts the known set again:
+// earlier batches keep their rows for the replay, but their operation IDs no
+// longer count.
+func (q *Queries) ClearJournalOperations(ctx context.Context, arg ClearJournalOperationsParams) error {
+	_, err := q.db.ExecContext(ctx, clearJournalOperations, arg.StackID, arg.UpdateID)
+	return err
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?
@@ -359,6 +442,7 @@ FROM holders h
 CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND m.principal_id = CAST(?1 AS TEXT)
+  AND m.state = 'active'
   AND m.added_at_ms <= CAST(?2 AS INTEGER)
   AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?2 AS INTEGER)
 WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
@@ -598,6 +682,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(?1 AS TEXT) <> '' AND m.principal_id = CAST(?1 AS TEXT))
     OR (CAST(?1 AS TEXT) = '' AND CAST(?2 AS BOOLEAN) = 1))
+  AND m.state = 'active'
   AND CASE WHEN CAST(?3 AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(?4 AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?5 AS INTEGER)
@@ -610,8 +695,11 @@ WHERE (CAST(?7 AS BOOLEAN) = 1
     OR g.target = CAST(?9 AS TEXT)
     OR (g.target IN (SELECT value FROM json_each(CAST(?10 AS TEXT)))
       AND (g.role IN (SELECT value FROM json_each(CAST(?11 AS TEXT)))
+        OR (CAST(?3 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR (CAST(?12 AS TEXT) <> '' AND g.target = CAST(?12 AS TEXT)
+      AND (g.role IN (SELECT value FROM json_each(CAST(?13 AS TEXT)))
         OR (CAST(?3 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND (CAST(?12 AS TEXT) = '' OR g.subject = CAST(?12 AS TEXT)
+  AND (CAST(?14 AS TEXT) = '' OR g.subject = CAST(?14 AS TEXT)
     OR (CAST(?1 AS TEXT) <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN CAST(?3 AS BOOLEAN) = 1 THEN
     g.created_at_ms < CAST(?4 AS INTEGER)
@@ -620,18 +708,20 @@ WHERE (CAST(?7 AS BOOLEAN) = 1
 `
 
 type CountReviewGrantsParams struct {
-	Principal      string
-	Expand         bool
-	History        bool
-	ToMs           int64
-	FromMs         int64
-	AsOfMs         int64
-	AllGrants      bool
-	Namespace      string
-	Target         string
-	Containers     string
-	ContainerRoles string
-	Subject        string
+	Principal           string
+	Expand              bool
+	History             bool
+	ToMs                int64
+	FromMs              int64
+	AsOfMs              int64
+	AllGrants           bool
+	Namespace           string
+	Target              string
+	Containers          string
+	ContainerRoles      string
+	TokenNamespace      string
+	TokenNamespaceRoles string
+	Subject             string
 }
 
 func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsParams) (int64, error) {
@@ -647,6 +737,8 @@ func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsPa
 		arg.Target,
 		arg.Containers,
 		arg.ContainerRoles,
+		arg.TokenNamespace,
+		arg.TokenNamespaceRoles,
 		arg.Subject,
 	)
 	var count int64
@@ -917,8 +1009,8 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 }
 
 const createPrincipal = `-- name: CreatePrincipal :execrows
-INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace, break_glass)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
@@ -931,6 +1023,7 @@ type CreatePrincipalParams struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	Namespace   string
+	BreakGlass  bool
 }
 
 func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams) (int64, error) {
@@ -943,6 +1036,7 @@ func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 		arg.Namespace,
+		arg.BreakGlass,
 	)
 	if err != nil {
 		return 0, err
@@ -1624,6 +1718,10 @@ const disableInactiveAccessTokens = `-- name: DisableInactiveAccessTokens :many
 UPDATE access_tokens SET disabled_at_ms = CAST(?1 AS INTEGER)
 WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > CAST(?1 AS INTEGER)
   AND COALESCE(last_used_at_ms, created_at_ms) <= CAST(?2 AS INTEGER)
+  AND NOT EXISTS (
+    SELECT 1 FROM principals p
+    WHERE p.id = access_tokens.principal_id AND p.break_glass = 1
+  )
 RETURNING id, principal_id
 `
 
@@ -1637,6 +1735,8 @@ type DisableInactiveAccessTokensRow struct {
 	PrincipalID string
 }
 
+// A token of a break-glass account is always exempt from the inactivity
+// disable.
 func (q *Queries) DisableInactiveAccessTokens(ctx context.Context, arg DisableInactiveAccessTokensParams) ([]DisableInactiveAccessTokensRow, error) {
 	rows, err := q.db.QueryContext(ctx, disableInactiveAccessTokens, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -1663,6 +1763,7 @@ func (q *Queries) DisableInactiveAccessTokens(ctx context.Context, arg DisableIn
 const disableInactivePrincipals = `-- name: DisableInactivePrincipals :many
 UPDATE principals SET disabled_at_ms = CAST(?1 AS INTEGER)
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND break_glass = 0
   AND created_at_ms <= CAST(?2 AS INTEGER)
   AND last_active_at_ms <= CAST(?2 AS INTEGER)
   AND COALESCE(last_sign_in_at_ms, 0) <= CAST(?2 AS INTEGER)
@@ -1681,7 +1782,8 @@ type DisableInactivePrincipalsParams struct {
 
 // A person is inactive when its creation, its activity baseline, its last
 // sign-in, and the creation and the last use of each of its tokens are all
-// at or before the cutoff.
+// at or before the cutoff. A break-glass account is always exempt from the
+// inactivity disable.
 func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -1979,7 +2081,7 @@ func (q *Queries) GetAccessToken(ctx context.Context, id string) (GetAccessToken
 const getAccessTokenByDigest = `-- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms,
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0)) AS INTEGER) AS principal_active_at_ms
@@ -2005,6 +2107,7 @@ type GetAccessTokenByDigestRow struct {
 	DisplayName           string
 	PrincipalKind         string
 	PrincipalDisabledAtMs sql.NullInt64
+	PrincipalBreakGlass   bool
 	PrincipalActiveAtMs   int64
 }
 
@@ -2028,6 +2131,7 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 		&i.DisplayName,
 		&i.PrincipalKind,
 		&i.PrincipalDisabledAtMs,
+		&i.PrincipalBreakGlass,
 		&i.PrincipalActiveAtMs,
 	)
 	return i, err
@@ -2059,6 +2163,40 @@ func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolic
 		&i.DisableAccounts,
 		&i.DisableBreakGlass,
 		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getAuditChainState = `-- name: GetAuditChainState :one
+SELECT state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1
+`
+
+type GetAuditChainStateRow struct {
+	State              string
+	ChangedAtMs        int64
+	ChangedBy          string
+	Pending            int64
+	EnteredMaintenance int64
+	LogReplaced        int64
+	MigratingAtMs      int64
+}
+
+// The audit chain state that this installation keeps: the state, when it
+// last changed, who changed it, whether a change waits for an approval,
+// whether the chain entered maintenance mode itself, whether a restore
+// replaced the log, and when the running migration started, 0 when none
+// runs. No row means the chain is on.
+func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getAuditChainState)
+	var i GetAuditChainStateRow
+	err := row.Scan(
+		&i.State,
+		&i.ChangedAtMs,
+		&i.ChangedBy,
+		&i.Pending,
+		&i.EnteredMaintenance,
+		&i.LogReplaced,
+		&i.MigratingAtMs,
 	)
 	return i, err
 }
@@ -2372,7 +2510,7 @@ func (q *Queries) GetGrant(ctx context.Context, id string) (GetGrantRow, error) 
 
 const getGroup = `-- name: GetGroup :one
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = ? AND g.deleted_at_ms IS NULL
 `
 
@@ -2515,7 +2653,8 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 
 const getPrincipal = `-- name: GetPrincipal :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+  p.break_glass,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p WHERE p.id = ? AND p.deleted_at_ms IS NULL
 `
 
@@ -2529,6 +2668,7 @@ type GetPrincipalRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs sql.NullInt64
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 }
 
@@ -2545,6 +2685,7 @@ func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow,
 		&i.UpdatedAtMs,
 		&i.DisabledAtMs,
 		&i.Namespace,
+		&i.BreakGlass,
 		&i.GroupCount,
 	)
 	return i, err
@@ -2552,7 +2693,8 @@ func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow,
 
 const getPrincipalBySubject = `-- name: GetPrincipalBySubject :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+  p.break_glass,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p WHERE p.subject = ?1 AND p.deleted_at_ms IS NULL
 `
 
@@ -2566,6 +2708,7 @@ type GetPrincipalBySubjectRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs sql.NullInt64
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 }
 
@@ -2582,6 +2725,7 @@ func (q *Queries) GetPrincipalBySubject(ctx context.Context, subject string) (Ge
 		&i.UpdatedAtMs,
 		&i.DisabledAtMs,
 		&i.Namespace,
+		&i.BreakGlass,
 		&i.GroupCount,
 	)
 	return i, err
@@ -3429,32 +3573,34 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    fence_version
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertAuditEntryParams struct {
-	Namespace  string
-	Sequence   int64
-	Subject    string
-	IdpSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	AtMs       int64
-	SourceIp   string
-	UserAgent  string
-	Channel    string
-	Kind       string
-	Outcome    string
-	RequestID  string
-	PrevHash   string
-	Hash       string
-	ValueCount sql.NullInt64
-	Changes    sql.NullString
-	ObjectID   string
+	Namespace    string
+	Sequence     int64
+	Subject      string
+	IdpSubject   string
+	TokenID      string
+	Action       string
+	Object       string
+	Version      string
+	ValuePath    string
+	AtMs         int64
+	SourceIp     string
+	UserAgent    string
+	Channel      string
+	Kind         string
+	Outcome      string
+	RequestID    string
+	PrevHash     string
+	Hash         string
+	ValueCount   sql.NullInt64
+	Changes      sql.NullString
+	ObjectID     string
+	FenceVersion int64
 }
 
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
@@ -3480,6 +3626,7 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.ValueCount,
 		arg.Changes,
 		arg.ObjectID,
+		arg.FenceVersion,
 	)
 	return err
 }
@@ -3718,9 +3865,24 @@ func (q *Queries) LastAccessByPrincipals(ctx context.Context, principals string)
 	return items, nil
 }
 
+const lastAuditChainStartSequence = `-- name: LastAuditChainStartSequence :one
+SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) FROM audit_entries
+WHERE namespace = ? AND action = 'server:start-audit-chain' AND sequence >= 1
+`
+
+// The sequence of the last start entry of the audit chain of a namespace,
+// or 0 when there is none. The chain check starts there.
+func (q *Queries) LastAuditChainStartSequence(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, lastAuditChainStartSequence, namespace)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -3754,6 +3916,7 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.ValueCount,
 		&i.Changes,
 		&i.ObjectID,
+		&i.FenceVersion,
 	)
 	return i, err
 }
@@ -3884,7 +4047,8 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC
@@ -3932,6 +4096,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.ValueCount,
 			&i.Changes,
 			&i.ObjectID,
+			&i.FenceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -3948,7 +4113,8 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -3994,6 +4160,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.ValueCount,
 			&i.Changes,
 			&i.ObjectID,
+			&i.FenceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -4552,8 +4719,10 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 
 const listGroupMembers = `-- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
-  (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
-  m.added_at_ms
+  p.break_glass,
+  (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS group_count,
+  m.added_at_ms, m.source AS member_source, m.source_id AS member_source_id, m.state AS member_state,
+  m.suspended_at_ms AS member_suspended_at_ms, m.pinned AS member_pinned
 FROM group_members m JOIN principals p ON p.id = m.principal_id
 WHERE m.group_id = ?1 AND m.removed_at_ms IS NULL
   AND p.subject > ?2
@@ -4572,17 +4741,23 @@ type ListGroupMembersParams struct {
 }
 
 type ListGroupMembersRow struct {
-	ID           string
-	Subject      string
-	DisplayName  string
-	Kind         string
-	Source       string
-	CreatedAtMs  int64
-	UpdatedAtMs  int64
-	DisabledAtMs sql.NullInt64
-	Namespace    string
-	GroupCount   int64
-	AddedAtMs    int64
+	ID                  string
+	Subject             string
+	DisplayName         string
+	Kind                string
+	Source              string
+	CreatedAtMs         int64
+	UpdatedAtMs         int64
+	DisabledAtMs        sql.NullInt64
+	Namespace           string
+	BreakGlass          bool
+	GroupCount          int64
+	AddedAtMs           int64
+	MemberSource        string
+	MemberSourceID      string
+	MemberState         string
+	MemberSuspendedAtMs int64
+	MemberPinned        bool
 }
 
 func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersParams) ([]ListGroupMembersRow, error) {
@@ -4610,8 +4785,14 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 			&i.UpdatedAtMs,
 			&i.DisabledAtMs,
 			&i.Namespace,
+			&i.BreakGlass,
 			&i.GroupCount,
 			&i.AddedAtMs,
+			&i.MemberSource,
+			&i.MemberSourceID,
+			&i.MemberState,
+			&i.MemberSuspendedAtMs,
+			&i.MemberPinned,
 		); err != nil {
 			return nil, err
 		}
@@ -4628,7 +4809,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 
 const listGroups = `-- name: ListGroups :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
   AND g.name_key > ?1
@@ -4693,7 +4874,7 @@ func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListG
 
 const listGroupsOfPrincipal = `-- name: ListGroupsOfPrincipal :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = ?1 AND m.removed_at_ms IS NULL
   AND g.name_key > ?2
@@ -4901,7 +5082,8 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 
 const listPrincipals = `-- name: ListPrincipals :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+  p.break_glass,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
   AND p.subject > ?1
@@ -4932,6 +5114,7 @@ type ListPrincipalsRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs sql.NullInt64
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 }
 
@@ -4961,6 +5144,7 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 			&i.UpdatedAtMs,
 			&i.DisabledAtMs,
 			&i.Namespace,
+			&i.BreakGlass,
 			&i.GroupCount,
 		); err != nil {
 			return nil, err
@@ -5519,6 +5703,19 @@ func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyi
 	return result.RowsAffected()
 }
 
+const minAuditSequence = `-- name: MinAuditSequence :one
+SELECT CAST(COALESCE(MIN(sequence), 1) AS INTEGER) FROM audit_entries WHERE namespace = ?
+`
+
+// The lowest sequence of a namespace, or 1 when it has no entry. The chain
+// check fails a namespace with a row below 1, because the walk starts at 1.
+func (q *Queries) MinAuditSequence(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, minAuditSequence, namespace)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const nextJournalArrival = `-- name: NextJournalArrival :one
 SELECT CAST(COALESCE(MAX(arrival), 0) + 1 AS INTEGER) AS arrival
 FROM update_journal
@@ -5766,6 +5963,37 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 	return err
 }
 
+const releaseAuditChainMigration = `-- name: ReleaseAuditChainMigration :exec
+UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1
+`
+
+// Releases the claim of a migration that stops without storing the new
+// state.
+func (q *Queries) ReleaseAuditChainMigration(ctx context.Context) error {
+	_, err := q.db.ExecContext(ctx, releaseAuditChainMigration)
+	return err
+}
+
+const releaseAuditSinkLease = `-- name: ReleaseAuditSinkLease :execrows
+DELETE FROM audit_sink_leases
+WHERE sink = ? AND holder = ?
+`
+
+type ReleaseAuditSinkLeaseParams struct {
+	Sink   string
+	Holder string
+}
+
+// Releases the lease of one sink only when holder holds it. It changes
+// nothing when no row exists or another instance holds the lease.
+func (q *Queries) ReleaseAuditSinkLease(ctx context.Context, arg ReleaseAuditSinkLeaseParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, releaseAuditSinkLease, arg.Sink, arg.Holder)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
 UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL
@@ -5803,6 +6031,20 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		arg.Project,
 		arg.Name_2,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const renewAuditChainMigration = `-- name: RenewAuditChainMigration :execrows
+UPDATE audit_chain_state SET migrating_at_ms = ? WHERE id = 1 AND migrating_at_ms <> 0
+`
+
+// Moves the start of the held claim to the given time. It writes only
+// when a claim holds, so a renewal without a claim changes no row.
+func (q *Queries) RenewAuditChainMigration(ctx context.Context, migratingAtMs int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, renewAuditChainMigration, migratingAtMs)
 	if err != nil {
 		return 0, err
 	}
@@ -5877,13 +6119,15 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
      AND c.added_at_ms <= CAST(?1 AS INTEGER)
-     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER)) AS member_count
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER)
+     AND c.state = 'active') AS member_count
 FROM grants g
 LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
 LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(?2 AS TEXT) <> '' AND m.principal_id = CAST(?2 AS TEXT))
     OR (CAST(?2 AS TEXT) = '' AND CAST(?3 AS BOOLEAN) = 1))
+  AND m.state = 'active'
   AND CASE WHEN CAST(?4 AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(?5 AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(?6 AS INTEGER)
@@ -5897,42 +6141,47 @@ WHERE (CAST(?7 AS BOOLEAN) = 1
     OR g.target = CAST(?9 AS TEXT)
     OR (g.target IN (SELECT value FROM json_each(CAST(?10 AS TEXT)))
       AND (g.role IN (SELECT value FROM json_each(CAST(?11 AS TEXT)))
+        OR (CAST(?4 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR (CAST(?12 AS TEXT) <> '' AND g.target = CAST(?12 AS TEXT)
+      AND (g.role IN (SELECT value FROM json_each(CAST(?13 AS TEXT)))
         OR (CAST(?4 AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND (CAST(?12 AS TEXT) = '' OR g.subject = CAST(?12 AS TEXT)
+  AND (CAST(?14 AS TEXT) = '' OR g.subject = CAST(?14 AS TEXT)
     OR (CAST(?2 AS TEXT) <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN CAST(?4 AS BOOLEAN) = 1 THEN
     g.created_at_ms < CAST(?5 AS INTEGER)
     AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(?6 AS INTEGER)
   ELSE g.created_at_ms <= CAST(?1 AS INTEGER) AND COALESCE(g.revoked_at_ms, 9223372036854775807) > CAST(?1 AS INTEGER) END
-  AND (g.created_at_ms > CAST(?13 AS INTEGER)
-    OR (g.created_at_ms = CAST(?13 AS INTEGER)
-      AND (g.id > CAST(?14 AS TEXT)
-        OR (g.id = CAST(?14 AS TEXT)
-          AND (COALESCE(m.added_at_ms, 0) > CAST(?15 AS INTEGER)
-            OR (COALESCE(m.added_at_ms, 0) = CAST(?15 AS INTEGER)
-              AND COALESCE(m.principal_id, '') > CAST(?16 AS TEXT)))))))
+  AND (g.created_at_ms > CAST(?15 AS INTEGER)
+    OR (g.created_at_ms = CAST(?15 AS INTEGER)
+      AND (g.id > CAST(?16 AS TEXT)
+        OR (g.id = CAST(?16 AS TEXT)
+          AND (COALESCE(m.added_at_ms, 0) > CAST(?17 AS INTEGER)
+            OR (COALESCE(m.added_at_ms, 0) = CAST(?17 AS INTEGER)
+              AND COALESCE(m.principal_id, '') > CAST(?18 AS TEXT)))))))
 ORDER BY g.created_at_ms, g.id, member_added_at_ms, member_id
-LIMIT ?17
+LIMIT ?19
 `
 
 type ReviewGrantsParams struct {
-	AsOfMs          int64
-	Principal       string
-	Expand          bool
-	History         bool
-	ToMs            int64
-	FromMs          int64
-	AllGrants       bool
-	Namespace       string
-	Target          string
-	Containers      string
-	ContainerRoles  string
-	Subject         string
-	AfterAtMs       int64
-	AfterID         string
-	AfterMemberAtMs int64
-	AfterMemberID   string
-	RowLimit        int64
+	AsOfMs              int64
+	Principal           string
+	Expand              bool
+	History             bool
+	ToMs                int64
+	FromMs              int64
+	AllGrants           bool
+	Namespace           string
+	Target              string
+	Containers          string
+	ContainerRoles      string
+	TokenNamespace      string
+	TokenNamespaceRoles string
+	Subject             string
+	AfterAtMs           int64
+	AfterID             string
+	AfterMemberAtMs     int64
+	AfterMemberID       string
+	RowLimit            int64
 }
 
 type ReviewGrantsRow struct {
@@ -5976,6 +6225,8 @@ func (q *Queries) ReviewGrants(ctx context.Context, arg ReviewGrantsParams) ([]R
 		arg.Target,
 		arg.Containers,
 		arg.ContainerRoles,
+		arg.TokenNamespace,
+		arg.TokenNamespaceRoles,
 		arg.Subject,
 		arg.AfterAtMs,
 		arg.AfterID,
@@ -6453,6 +6704,39 @@ func (q *Queries) SetAccessTokenPolicy(ctx context.Context, arg SetAccessTokenPo
 	return result.RowsAffected()
 }
 
+const setAuditChainState = `-- name: SetAuditChainState :exec
+INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET state = excluded.state, changed_at_ms = excluded.changed_at_ms,
+    changed_by = excluded.changed_by, pending = excluded.pending,
+    entered_maintenance = excluded.entered_maintenance, log_replaced = excluded.log_replaced,
+    migrating_at_ms = excluded.migrating_at_ms
+`
+
+type SetAuditChainStateParams struct {
+	State              string
+	ChangedAtMs        int64
+	ChangedBy          string
+	Pending            int64
+	EnteredMaintenance int64
+	LogReplaced        int64
+	MigratingAtMs      int64
+}
+
+// Stores the audit chain state of this installation.
+func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainStateParams) error {
+	_, err := q.db.ExecContext(ctx, setAuditChainState,
+		arg.State,
+		arg.ChangedAtMs,
+		arg.ChangedBy,
+		arg.Pending,
+		arg.EnteredMaintenance,
+		arg.LogReplaced,
+		arg.MigratingAtMs,
+	)
+	return err
+}
+
 const setInstallationStateIf = `-- name: SetInstallationStateIf :execrows
 UPDATE installation
 SET state = ?
@@ -6676,7 +6960,7 @@ func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspa
 const subjectsOfCaller = `-- name: SubjectsOfCaller :many
 SELECT p.id AS principal_id, CAST(COALESCE(m.group_id, '') AS TEXT) AS group_id
 FROM principals p
-LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
 WHERE p.subject = ? AND p.deleted_at_ms IS NULL
 `
 
