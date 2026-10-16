@@ -211,9 +211,10 @@ func BenchmarkJournalBuildChange10000(b *testing.B) {
 }
 
 // BenchmarkJournalBuildChange10in10000 builds a change of 10 resources on a
-// base of 10,000 resources and reports its peak heap. Its memory does not
-// grow with the base: the build streams the base and keeps only the 10 added
-// resources.
+// base of 10,000 resources and reports its peak heap. In one run it reports
+// 13895952 peak-heap bytes against 25826176 for the full change of 10,000
+// resources: the counted entries, states and links follow the 10 changed
+// resources, not the 10,000 of the base.
 func BenchmarkJournalBuildChange10in10000(b *testing.B) {
 	base := benchBase(10000)
 	entries := benchChangeEntries(10)

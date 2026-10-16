@@ -43,36 +43,6 @@ func beginOnlyEntries(n int) []byte {
 	return []byte(b.String())
 }
 
-// largeStateEntries returns a batch body with n success entries, each carrying
-// a state with pad bytes of padding.
-func largeStateEntries(n, pad int) []byte {
-	var b strings.Builder
-	b.WriteString(`{"entries":[`)
-	for i := range n {
-		if i > 0 {
-			b.WriteString(",")
-		}
-		seq := int64(2*i + 1)
-		op := int64(i + 1)
-		fmt.Fprintf(
-			&b,
-			`{"version":1,"kind":0,"sequenceID":%d,"operationID":%d,"removeOld":null,"removeNew":null},`,
-			seq,
-			op,
-		)
-		fmt.Fprintf(
-			&b,
-			`{"version":1,"kind":1,"sequenceID":%d,"operationID":%d,"removeOld":null,"removeNew":null,"state":{"urn":"urn:pulumi:dev::web::t:mod:T::r-%d","custom":true,"type":"t:mod:T","pad":"%s"}}`,
-			seq+1,
-			op,
-			i,
-			strings.Repeat("x", pad),
-		)
-	}
-	b.WriteString(`]}`)
-	return []byte(b.String())
-}
-
 // TestReplayRefusesTooManyEntries checks that a replay with more entries than
 // the bound allows fails with ErrTooManyEntries, while the bound itself passes.
 //
@@ -92,26 +62,37 @@ func TestReplayRefusesTooManyEntries(t *testing.T) {
 	}
 }
 
-// TestReplayRefusesNewStateTooLarge checks that a replay with more new state
-// bytes than the bound allows fails with ErrNewStateTooLarge, while the bound
-// itself passes.
+// oneSuccessEntry returns a batch body with one success entry carrying state.
+func oneSuccessEntry(state string) []byte {
+	return []byte(
+		`{"entries":[{"version":1,"kind":1,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null,"state":` + state + `}]}`,
+	)
+}
+
+// TestReplayRefusesNewStateTooLarge checks that new states at the byte bound
+// pass and one more byte fails with ErrNewStateTooLarge.
 //
 //nolint:paralleltest // The test lowers the state bound, so it runs alone.
 func TestReplayRefusesNewStateTooLarge(t *testing.T) {
+	state := `{"urn":"urn:pulumi:dev::web::t:mod:T::r","custom":true,"type":"t:mod:T","pad":"` + strings.Repeat(
+		"x",
+		64,
+	) + `"}`
+
 	old := pulumijournal.MaxNewStateBytesPerUpdate
-	pulumijournal.MaxNewStateBytesPerUpdate = 2000
 	t.Cleanup(func() { pulumijournal.MaxNewStateBytesPerUpdate = old })
 
-	// One entry carries about 150 state bytes, so 10 entries pass under 2,000
-	// and 20 do not.
-	if err := boundReplayer(t, `{"resources":[]}`, largeStateEntries(10, 64)); err != nil {
-		t.Fatalf("replay with small states: err = %v, want nil", err)
+	pulumijournal.MaxNewStateBytesPerUpdate = len(state)
+	if err := boundReplayer(t, `{"resources":[]}`, oneSuccessEntry(state)); err != nil {
+		t.Fatalf("replay with new states at the bound: err = %v, want nil", err)
 	}
-	if err := boundReplayer(t, `{"resources":[]}`, largeStateEntries(20, 64)); !errors.Is(
+
+	pulumijournal.MaxNewStateBytesPerUpdate = len(state) - 1
+	if err := boundReplayer(t, `{"resources":[]}`, oneSuccessEntry(state)); !errors.Is(
 		err,
 		pulumijournal.ErrNewStateTooLarge,
 	) {
-		t.Fatalf("replay with oversized states: err = %v, want ErrNewStateTooLarge", err)
+		t.Fatalf("replay with one byte over the bound: err = %v, want ErrNewStateTooLarge", err)
 	}
 }
 
@@ -133,6 +114,90 @@ func TestReplayRefusesLinkIndexTooLarge(t *testing.T) {
 		pulumijournal.ErrLinkIndexTooLarge,
 	) {
 		t.Fatalf("replay that adds 11 links: err = %v, want ErrLinkIndexTooLarge", err)
+	}
+}
+
+// refreshReplaceEntries returns a batch body that refreshes the first n base
+// resources: a begin and a refresh-success entry with a new state for each one.
+func refreshReplaceEntries(n int) []byte {
+	var b strings.Builder
+	b.WriteString(`{"entries":[`)
+	for i := range n {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		seq := int64(2*i + 1)
+		op := int64(i + 1)
+		fmt.Fprintf(
+			&b,
+			`{"version":1,"kind":0,"sequenceID":%d,"operationID":%d,"removeOld":null,"removeNew":null},`,
+			seq,
+			op,
+		)
+		fmt.Fprintf(
+			&b,
+			`{"version":1,"kind":3,"sequenceID":%d,"operationID":%d,"removeOld":%d,"removeNew":null,"state":%s}`,
+			seq+1,
+			op,
+			i,
+			benchStateChange(i),
+		)
+	}
+	b.WriteString(`]}`)
+	return []byte(b.String())
+}
+
+// TestReplayCountsRefreshReplacementsTowardLinkBound checks that a base
+// resource that a refresh replaces counts as an added link: replacements at
+// the bound pass and one more fails with ErrLinkIndexTooLarge.
+//
+//nolint:paralleltest // The test lowers the link bound, so it runs alone.
+func TestReplayCountsRefreshReplacementsTowardLinkBound(t *testing.T) {
+	old := pulumijournal.MaxLinkIndexEntriesPerUpdate
+	pulumijournal.MaxLinkIndexEntriesPerUpdate = 5
+	t.Cleanup(func() { pulumijournal.MaxLinkIndexEntriesPerUpdate = old })
+
+	base := benchBase(10)
+	if err := boundReplayer(t, base, refreshReplaceEntries(5)); err != nil {
+		t.Fatalf("replay that replaces 5 resources with link bound 5: err = %v, want nil", err)
+	}
+	if err := boundReplayer(t, base, refreshReplaceEntries(6)); !errors.Is(
+		err,
+		pulumijournal.ErrLinkIndexTooLarge,
+	) {
+		t.Fatalf("replay that replaces 6 resources with link bound 5: err = %v, want ErrLinkIndexTooLarge", err)
+	}
+}
+
+// TestReplayCountsMigrationAndPatchBytes checks that the states of a migration
+// entry and of its patches count toward the new-state bound: an entry whose
+// own state fits the bound fails with ErrNewStateTooLarge when its migration
+// states and patches put it over.
+//
+//nolint:paralleltest // The test lowers the state bound, so it runs alone.
+func TestReplayCountsMigrationAndPatchBytes(t *testing.T) {
+	old := pulumijournal.MaxNewStateBytesPerUpdate
+	pulumijournal.MaxNewStateBytesPerUpdate = 1000
+	t.Cleanup(func() { pulumijournal.MaxNewStateBytesPerUpdate = old })
+
+	migrated := `{"urn":"urn:pulumi:dev::web::t:mod:T::m1","custom":true,"type":"t:mod:T","pad":"` + strings.Repeat(
+		"x",
+		500,
+	) + `"}`
+	patched := `{"urn":"urn:pulumi:dev::web::t:mod:T::m2","custom":true,"type":"t:mod:T","pad":"` + strings.Repeat(
+		"y",
+		500,
+	) + `"}`
+	body := []byte(
+		`{"entries":[{"version":2,"kind":10,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null,"state":{},"states":[` +
+			migrated + `],"baseStatePatches":[{"index":0,"state":` + patched + `}]}]}`,
+	)
+
+	if err := boundReplayer(t, `{"resources":[]}`, body); !errors.Is(
+		err,
+		pulumijournal.ErrNewStateTooLarge,
+	) {
+		t.Fatalf("replay with migration states over the bound: err = %v, want ErrNewStateTooLarge", err)
 	}
 }
 

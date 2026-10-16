@@ -110,6 +110,11 @@ func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, entries io.Rea
 	}
 
 	if err := DecodeEntries(entries, journalVersion, decode); err != nil {
+		// A bound error already names its counts and its limit, so it passes
+		// through without a second prefix.
+		if errors.Is(err, ErrTooManyEntries) || errors.Is(err, ErrNewStateTooLarge) {
+			return err
+		}
 		return fmt.Errorf("pulumijournal: replay entries: %w", err)
 	}
 
@@ -241,7 +246,7 @@ func (s *replayState) countEntry(entry JournalEntry) error {
 	s.entryCount++
 	if s.entryCount > int64(MaxEntriesPerUpdate) {
 		return fmt.Errorf(
-			"pulumijournal: %d entries, limit %d: %w",
+			"%d entries, limit %d: %w",
 			s.entryCount,
 			MaxEntriesPerUpdate,
 			ErrTooManyEntries,
@@ -250,7 +255,7 @@ func (s *replayState) countEntry(entry JournalEntry) error {
 	s.newStateBytes += int64(EntryStateBytes(entry))
 	if s.newStateBytes > int64(MaxNewStateBytesPerUpdate) {
 		return fmt.Errorf(
-			"pulumijournal: %d new state bytes, limit %d: %w",
+			"%d new state bytes, limit %d: %w",
 			s.newStateBytes,
 			MaxNewStateBytesPerUpdate,
 			ErrNewStateTooLarge,
@@ -283,7 +288,7 @@ func EntryStateBytes(entry JournalEntry) int {
 func (s *replayState) checkIndex(scan *baseScan) error {
 	if int64(scan.added) > int64(MaxLinkIndexEntriesPerUpdate) {
 		return fmt.Errorf(
-			"pulumijournal: %d added links, limit %d: %w",
+			"%d added links, limit %d: %w",
 			scan.added,
 			MaxLinkIndexEntriesPerUpdate,
 			ErrLinkIndexTooLarge,
@@ -292,7 +297,7 @@ func (s *replayState) checkIndex(scan *baseScan) error {
 	counted := s.newStateBytes + scan.addedLinkBytes
 	if counted > int64(MaxNewStatePlusLinkBytesPerUpdate) {
 		return fmt.Errorf(
-			"pulumijournal: %d new-state plus added-link bytes, limit %d: %w",
+			"%d new-state plus added-link bytes, limit %d: %w",
 			counted,
 			MaxNewStatePlusLinkBytesPerUpdate,
 			ErrAddedBytesTooLarge,

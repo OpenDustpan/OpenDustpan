@@ -523,6 +523,9 @@ func (notJournaledError) Is(target error) bool {
 // The lease must be held. A version 0 update refuses the batch with
 // ErrNotJournaled and stores nothing. The writer checks the batch against the
 // update's journal version and refuses an invalid batch with ErrJournalBatch.
+// A batch over MaxJournalBatchBytes is refused with ErrTooLarge, unless it
+// holds one entry and fits MaxCheckpointBytes, because the CLI cannot split
+// one entry.
 func (s *Updates) AppendJournal(ctx context.Context, ref Ref, id UpdateID, tok token.Token, content []byte) error {
 	u, fence, err := s.authorized(ctx, ref, id, tok)
 	if err != nil {
@@ -535,6 +538,16 @@ func (s *Updates) AppendJournal(ctx context.Context, ref Ref, id UpdateID, tok t
 
 	if !u.Mutates() {
 		return fmt.Errorf("%w: a preview does not save state", ErrWrongUpdateState)
+	}
+
+	if batchTooLarge(content, s.maxCheckpoints) {
+		return fmt.Errorf(
+			"append journal to update %s: %w: journal batch of %d bytes exceeds the limit of %d bytes: split the change into smaller updates and run `pulumi up` again",
+			id,
+			ErrTooLarge,
+			len(content),
+			MaxJournalBatchBytes,
+		)
 	}
 
 	if s.journal == nil {

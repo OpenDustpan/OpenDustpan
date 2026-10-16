@@ -1,10 +1,14 @@
 package pulumijournal
 
 import (
+	"bytes"
+	"context"
 	"encoding/json/jsontext"
 	"errors"
+	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestCheckIndexRefusesAddedBytes checks that a build with more new-state plus
@@ -117,6 +121,51 @@ func TestCheckIndexEnforcesCountedLimit(t *testing.T) {
 	past := &baseScan{added: 1, addedLinkBytes: 301} //nolint:exhaustruct_v5 // The test sets the added counts only.
 	if err := state.checkIndex(past); !errors.Is(err, ErrAddedBytesTooLarge) {
 		t.Fatalf("checkIndex past the bound: err = %v, want ErrAddedBytesTooLarge", err)
+	}
+}
+
+// TestApplyRefusesCanceledContext checks that applying one entry with a
+// canceled context stops with the context error before touching the entry.
+func TestApplyRefusesCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	state := newReplayState(nil, nil)
+	entry := JournalEntry{} //nolint:exhaustruct_v5 // The test applies an empty entry under a canceled context.
+	if err := state.apply(ctx, entry); !errors.Is(err, context.Canceled) {
+		t.Fatalf("apply with a canceled context: err = %v, want context.Canceled", err)
+	}
+}
+
+// TestWriteRefusesCanceledContext checks that writing the deployment with a
+// canceled context stops with the context error before writing a byte.
+func TestWriteRefusesCanceledContext(t *testing.T) {
+	t.Parallel()
+
+	now := func() time.Time { return time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC) }
+	replayer := NewReplayer(now, "3.268.0")
+	open := func(context.Context) (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(`{"resources":[]}`)), nil
+	}
+
+	state := newReplayState(open, replayer)
+	scan, err := state.scanBase(t.Context(), open)
+	if err != nil {
+		t.Fatalf("scan base: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	var out bytes.Buffer
+	if err := state.write(ctx, open, &out, scan, replayer); !errors.Is(err, context.Canceled) {
+		t.Fatalf("write with a canceled context: err = %v, want context.Canceled", err)
+	}
+
+	if out.Len() != 0 {
+		t.Fatalf("write with a canceled context wrote %d bytes, want none", out.Len())
 	}
 }
 

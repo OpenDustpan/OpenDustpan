@@ -282,7 +282,27 @@ func successEntry(seq, op int64, state string) string {
 func newBuildFixture(t *testing.T, clk *clock, replayer stack.JournalReplayer) *buildFixture {
 	t.Helper()
 
+	return newBuildFixtureWith(t, clk, replayer, nil)
+}
+
+// newBuildFixtureWith finishes one update with the base checkpoint and returns
+// the fixture. wrap converts the fixture store into the checkpoint store the
+// service reads its base from; nil keeps the store itself. A wrap that blocks
+// drives the build timeout paths.
+func newBuildFixtureWith(
+	t *testing.T,
+	clk *clock,
+	replayer stack.JournalReplayer,
+	wrap func(*journalMemStore) stack.CheckpointStore,
+) *buildFixture {
+	t.Helper()
+
 	store := newJournalMemStore()
+
+	var checkpoints stack.CheckpointStore = store
+	if wrap != nil {
+		checkpoints = wrap(store)
+	}
 	blobs := newMemBlob(clk)
 
 	ns := namespace.Namespace{
@@ -307,7 +327,7 @@ func newBuildFixture(t *testing.T, clk *clock, replayer stack.JournalReplayer) *
 
 	svc, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates:            store,
-		Checkpoints:        store,
+		Checkpoints:        checkpoints,
 		Events:             store,
 		Namespaces:         namespaces,
 		Stacks:             store,

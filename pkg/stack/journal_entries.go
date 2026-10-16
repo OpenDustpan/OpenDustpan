@@ -287,11 +287,13 @@ func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update Upd
 // ErrWrongUpdateState or namespace.ErrFenced when the write is refused. A refusal
 // deletes the blob that this call wrote, as a previous save does. Any other
 // failure keeps the blob for the sweep. A batch over MaxJournalBatchBytes is
-// refused with ErrTooLarge before anything is stored.
+// refused with ErrTooLarge before anything is stored, unless it holds one
+// entry and fits DefaultMaxCheckpointBytes, because the CLI cannot split one
+// entry.
 func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence namespace.Fence) error {
-	if len(batch.Content) > MaxJournalBatchBytes {
+	if batchTooLarge(batch.Content, DefaultMaxCheckpointBytes) {
 		return fmt.Errorf(
-			"%w: journal batch of %d bytes, limit %d",
+			"%w: journal batch of %d bytes exceeds the limit of %d bytes: split the change into smaller updates and run `pulumi up` again",
 			ErrTooLarge,
 			len(batch.Content),
 			MaxJournalBatchBytes,
@@ -347,6 +349,30 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 	}
 
 	return nil
+}
+
+// singleEntryBatch reports whether body holds exactly one journal entry. A
+// batch over the batch bound still passes when it holds one entry and fits
+// the checkpoint bound, because the CLI cannot split one entry.
+func singleEntryBatch(body []byte) bool {
+	var batch journalBatchBody
+	if err := json.Unmarshal(body, &batch); err != nil {
+		return false
+	}
+
+	return len(batch.Entries) == 1
+}
+
+// batchTooLarge reports whether content of length n fails the batch bound:
+// over MaxJournalBatchBytes, unless it holds one entry and fits the
+// checkpoint bound limit. A body that does not decode has more than one
+// entry for this check, so it fails over the batch bound.
+func batchTooLarge(content []byte, checkpointLimit int) bool {
+	if len(content) <= MaxJournalBatchBytes {
+		return false
+	}
+
+	return len(content) > checkpointLimit || !singleEntryBatch(content)
 }
 
 // refused reports whether the store refused the batch for a reason that keeps it

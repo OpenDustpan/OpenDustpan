@@ -13,7 +13,8 @@ import (
 // 6). The lease token authorizes the write. The server answers 2xx only after
 // the batch is committed (decision 6.2). The body is the batch as the CLI sent
 // it, gzipped or not. A batch over the journal batch bound answers 413, and the
-// CLI splits it.
+// CLI splits it. A batch with one entry may hold up to the checkpoint bound,
+// because the CLI cannot split one entry.
 func (h *Handler) journalEntries(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -36,8 +37,12 @@ func (h *Handler) journalEntries(w http.ResponseWriter, r *http.Request, _ ident
 
 	defer releaseHold()
 
-	body, ok := h.readJournalBody(w, r, limit)
+	body, ok := h.readJournalBody(w, r, int64(h.updates.MaxCheckpointBytes()))
 	if !ok {
+		return
+	}
+
+	if int64(len(body)) > limit && !h.singleEntry(w, r, body, limit) {
 		return
 	}
 
@@ -48,6 +53,23 @@ func (h *Handler) journalEntries(w http.ResponseWriter, r *http.Request, _ ident
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, struct{}{})
+}
+
+// singleEntry reports whether body holds one journal entry. A batch over the
+// batch bound still passes when it holds one entry, so it answers 413 only
+// for larger batches. limit is the batch bound for the 413 message.
+func (h *Handler) singleEntry(w http.ResponseWriter, r *http.Request, body []byte, limit int64) bool {
+	var batch struct {
+		Entries []json.RawMessage `json:"entries"`
+	}
+
+	if err := json.Unmarshal(body, &batch); err != nil || len(batch.Entries) != 1 {
+		h.writeTooLarge(w, r, limit)
+
+		return false
+	}
+
+	return true
 }
 
 // readJournalBody reads one journal batch as the decompressed JSON the CLI

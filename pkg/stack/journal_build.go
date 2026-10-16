@@ -107,14 +107,20 @@ func (s *Updates) buildJournalCheckpoint(
 }
 
 // mapReplayBound maps a replay bound error to ErrTooLarge with a clear
-// message, so the handler answers 413. Any other error passes through with
+// message, so the handler answers 413. The message names the bound, its
+// limit and the one command that helps. Any other error passes through with
 // the update ID.
 func (s *Updates) mapReplayBound(id UpdateID, err error) error {
 	if errors.Is(err, pulumijournal.ErrTooManyEntries) ||
 		errors.Is(err, pulumijournal.ErrNewStateTooLarge) ||
 		errors.Is(err, pulumijournal.ErrLinkIndexTooLarge) ||
 		errors.Is(err, pulumijournal.ErrAddedBytesTooLarge) {
-		return fmt.Errorf("build checkpoint of update %s: %w: %w", id, ErrTooLarge, err)
+		return fmt.Errorf(
+			"build checkpoint of update %s: %w: %w: split the update into smaller updates and run `pulumi up` again",
+			id,
+			ErrTooLarge,
+			err,
+		)
 	}
 	return fmt.Errorf("build checkpoint of update %s: %w", id, err)
 }
