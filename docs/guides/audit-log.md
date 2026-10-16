@@ -296,6 +296,9 @@ At each check, the server does these steps for each scope whose chain matches:
 1. It checks the checkpoints of the scope in the current epoch.
    It reads every checkpoint that is newer than the last checkpoint that matched, up to 256.
    It also reads a random sample of 8 older checkpoints.
+   It always reads the newest checkpoint of the scope.
+   When the log ends before that checkpoint, the check fails.
+   The next check finds a cut at the end of the log.
    For each checkpoint, it checks the key ID, the signature, and the hash of the entry at its sequence.
 2. If all of them match, it signs the hash of the last entry of the scope.
    The checkpoint holds the scope, the sequence, the hash, the time, the key ID and the signature.
@@ -305,6 +308,8 @@ At each check, the server does these steps for each scope whose chain matches:
 
 A scope with a checkpoint that does not match counts in `dustpan_audit_chain_invalid`, and the server logs the scope and the sequence.
 The server never signs a scope whose chain or checkpoints do not match.
+Once a checkpoint does not match, later checks fail until a new epoch starts.
+When a stored checkpoint holds another hash, the write fails and the scope stays invalid.
 While a change of the chain waits or migrates, the server checks the checkpoints but signs none.
 
 The server logs the key ID and the public key in base64 at start.

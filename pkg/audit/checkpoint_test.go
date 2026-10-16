@@ -269,6 +269,141 @@ func TestCheckpointsFindAChangedCheckpoint(t *testing.T) {
 	}
 }
 
+func TestCheckpointsFindACutAtTheEnd(t *testing.T) {
+	t.Parallel()
+
+	const (
+		total = 200
+		runs  = 50
+	)
+
+	// Each run starts fresh, so no mismatch from an earlier run sticks and
+	// every run depends on the read of the newest checkpoint alone.
+	for run := range runs {
+		f := newCheckpointFixture(t, 0)
+
+		for range total {
+			f.entries.add()
+
+			if !f.write(t) {
+				t.Fatal("write: no checkpoint written")
+			}
+		}
+
+		if got := f.verify(t); !got.Valid {
+			t.Fatalf("run %d: verify before the cut: got %+v, want valid", run, got)
+		}
+
+		f.entries.entries = f.entries.entries[:total-5]
+
+		if got := verifyWith(t, f.cps); got.Valid || got.BadSequence != total {
+			t.Fatalf("run %d: verify after the cut: got %+v, want invalid at %d", run, got, total)
+		}
+	}
+}
+
+func TestCheckpointsWriteFindsReusedSequences(t *testing.T) {
+	t.Parallel()
+
+	f := newCheckpointFixture(t, 0)
+
+	const total = 20
+
+	for range total {
+		f.entries.add()
+
+		if !f.write(t) {
+			t.Fatal("write: no checkpoint written")
+		}
+	}
+
+	// A cut removes the last 5 entries, then new entries reuse the old
+	// sequences with other hashes.
+	f.entries.entries = f.entries.entries[:total-5]
+
+	for range 5 {
+		f.entries.add()
+
+		last := &f.entries.entries[len(f.entries.entries)-1]
+		last.Subject = "mallory"
+		last.Hash = audit.ComputeHash(*last, last.PrevHash)
+	}
+
+	wrote, err := f.cps.Write(t.Context(), "acme", time.Unix(1_700_000_100, 0))
+	if !errors.Is(err, audit.ErrCheckpointMismatch) {
+		t.Fatalf("write over reused sequences: got %v, %v, want ErrCheckpointMismatch", wrote, err)
+	}
+
+	if wrote {
+		t.Fatal("write over reused sequences: wrote a checkpoint")
+	}
+
+	if got := f.verify(t); got.Valid {
+		t.Fatalf("verify after reused sequences: got %+v, want invalid", got)
+	}
+}
+
+func TestCheckpointsMismatchSticksUntilANewEpoch(t *testing.T) {
+	t.Parallel()
+
+	f := newCheckpointFixture(t, 3)
+	f.write(t)
+
+	saved := append([]audit.Entry(nil), f.entries.entries...)
+
+	e := f.entries.entries[2]
+	e.Subject = "mallory"
+	e.Hash = audit.ComputeHash(e, e.PrevHash)
+	f.entries.entries[2] = e
+
+	if got := f.verify(t); got.Valid || got.BadSequence != 3 {
+		t.Fatalf("verify after the change: got %+v, want invalid at 3", got)
+	}
+
+	f.entries.entries = saved
+
+	if got := f.verify(t); got.Valid {
+		t.Fatalf("verify after the restore: got %+v, want still invalid", got)
+	}
+
+	stickyWrote, stickyErr := f.cps.Write(t.Context(), "acme", time.Unix(1_700_000_100, 0))
+	if !errors.Is(stickyErr, audit.ErrCheckpointMismatch) {
+		t.Fatalf("write after the mismatch: got %v, want ErrCheckpointMismatch", stickyErr)
+	}
+
+	if stickyWrote {
+		t.Fatal("write after the mismatch: wrote a checkpoint")
+	}
+
+	epoch, err := f.cps.NewEpoch(t.Context(), time.Unix(1_700_000_100, 0))
+	if err != nil || epoch != 1 {
+		t.Fatalf("new epoch: got %d, %v, want 1", epoch, err)
+	}
+
+	if got := f.verify(t); !got.Valid || got.Checked != 0 {
+		t.Fatalf("verify in the new epoch: got %+v, want valid with nothing to read", got)
+	}
+}
+
+func TestCheckpointsWriteAgainAtTheSameSequence(t *testing.T) {
+	t.Parallel()
+
+	f := newCheckpointFixture(t, 2)
+
+	if !f.write(t) {
+		t.Fatal("first write: no checkpoint written")
+	}
+
+	wrote, err := f.cps.Write(t.Context(), "acme", time.Unix(1_700_000_100, 0))
+	if err != nil {
+		t.Fatalf("second write: got %v, want no error", err)
+	}
+
+	if wrote {
+		t.Fatal("second write at the same sequence: wrote again, want once")
+	}
+}
+
 func TestCheckpointsVerifyOnlyTheNewOnesAndASample(t *testing.T) {
 	t.Parallel()
 
