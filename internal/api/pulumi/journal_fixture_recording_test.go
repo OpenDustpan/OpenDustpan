@@ -45,3 +45,37 @@ func (m *memUpdateStore) JournalKeys(context.Context, stack.ID, stack.UpdateID) 
 func (m *memUpdateStore) JournalSweepable(context.Context, stack.ID, stack.UpdateID) (bool, error) {
 	return false, nil
 }
+
+// RecordJournalRefusal keeps the refusal, as the stores do, so the complete
+// route finds it.
+func (m *memUpdateStore) RecordJournalRefusal(
+	_ context.Context, refusal stack.JournalRefusal, _ namespace.Fence,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.refusals == nil {
+		m.refusals = map[stack.UpdateID][]stack.JournalRefusal{}
+	}
+
+	m.refusals[refusal.Update] = append(m.refusals[refusal.Update], refusal)
+
+	return nil
+}
+
+// JournalRefusals returns the refusals the fixture kept.
+func (m *memUpdateStore) JournalRefusals(
+	_ context.Context, _ stack.ID, update stack.UpdateID,
+) ([]stack.JournalRefusal, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.refusals[update], nil
+}
+
+// JournalSequences returns no sequences: the fixture keeps no journal rows.
+func (m *memUpdateStore) JournalSequences(
+	context.Context, stack.ID, stack.UpdateID,
+) ([]int64, error) {
+	return nil, nil
+}

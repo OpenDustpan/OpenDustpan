@@ -114,6 +114,11 @@ SELECT id
 FROM stacks
 WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 
+-- name: StackRefByID :one
+SELECT namespace, project, name
+FROM stacks
+WHERE id = ?;
+
 -- name: CreateUpdate :exec
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
@@ -735,6 +740,29 @@ WHERE stack_id = ? AND update_id = ?;
 
 -- name: DeleteJournal :exec
 DELETE FROM update_journal
+WHERE stack_id = ? AND update_id = ?;
+
+-- name: NextRefusalArrival :one
+SELECT CAST(COALESCE(MAX(arrival), 0) + 1 AS INTEGER) AS arrival
+FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?;
+
+-- name: InsertJournalRefusal :exec
+INSERT INTO update_journal_refusals (stack_id, update_id, arrival, sequence_ids, status, reason)
+VALUES (?, ?, ?, ?, ?, ?);
+
+-- name: ListJournalRefusals :many
+SELECT sequence_ids, status, reason FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival;
+
+-- name: ListJournalSequences :many
+SELECT sequence FROM update_journal_sequences
+WHERE stack_id = ? AND update_id = ?
+ORDER BY sequence;
+
+-- name: DeleteJournalRefusals :exec
+DELETE FROM update_journal_refusals
 WHERE stack_id = ? AND update_id = ?;
 
 -- name: JournalState :one

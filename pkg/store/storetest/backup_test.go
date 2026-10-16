@@ -919,6 +919,30 @@ func (s *fakeBackupStore) PutJournalRow(context.Context, stack.JournalRow, names
 	return false, errors.ErrUnsupported
 }
 
+// RecordJournalRefusal implements stack.JournalStore. The backup fake keeps no
+// journal rows, so a write through it is an error, not a silent drop.
+func (s *fakeBackupStore) RecordJournalRefusal(
+	context.Context, stack.JournalRefusal, namespace.Fence,
+) error {
+	return errors.ErrUnsupported
+}
+
+// JournalRefusals implements stack.JournalStore. The backup fake keeps no
+// journal rows, so it holds no refusals.
+func (s *fakeBackupStore) JournalRefusals(
+	context.Context, stack.ID, stack.UpdateID,
+) ([]stack.JournalRefusal, error) {
+	return nil, nil
+}
+
+// JournalSequences implements stack.JournalStore. The backup fake keeps no
+// journal rows, so it holds no sequences.
+func (s *fakeBackupStore) JournalSequences(
+	context.Context, stack.ID, stack.UpdateID,
+) ([]int64, error) {
+	return nil, nil
+}
+
 // AppendEvents implements stack.EventStore, skipping stored sequences.
 func (s *fakeBackupStore) AppendEvents(_ context.Context, batch stack.EventBatch, fence namespace.Fence) error {
 	s.mu.Lock()

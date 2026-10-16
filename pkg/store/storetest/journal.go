@@ -440,6 +440,166 @@ func testJournalBegunRefusal(t *testing.T, f fixture) {
 	}
 }
 
+// journalRefusal returns a refusal of update u with the given sequences,
+// status and reason.
+func journalRefusal(u stack.Update, seqs []int64, status int, reason string) stack.JournalRefusal {
+	return stack.JournalRefusal{
+		Ref:         u.Ref,
+		Update:      u.ID,
+		SequenceIDs: seqs,
+		Status:      status,
+		Reason:      reason,
+	}
+}
+
+// recordRefusal stores one refusal of the fixture update.
+func recordRefusal(t *testing.T, f fixture, refusal stack.JournalRefusal) {
+	t.Helper()
+
+	if err := f.s.RecordJournalRefusal(t.Context(), refusal, f.fence); err != nil {
+		t.Fatalf("record refusal: %v", err)
+	}
+}
+
+// readRefusals returns the recorded refusals of update u.
+func readRefusals(t *testing.T, f fixture, u stack.Update) []stack.JournalRefusal {
+	t.Helper()
+
+	got, err := f.s.JournalRefusals(t.Context(), mustStackID(t, f.s, f.ref), u.ID)
+	if err != nil {
+		t.Fatalf("read refusals: %v", err)
+	}
+
+	return got
+}
+
+// checkRefusals compares recorded refusals in arrival order.
+func checkRefusals(t *testing.T, got, want []stack.JournalRefusal) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("refusals = %v, want %v", got, want)
+	}
+
+	for i := range want {
+		if got[i].Ref != want[i].Ref || got[i].Update != want[i].Update ||
+			!slices.Equal(got[i].SequenceIDs, want[i].SequenceIDs) ||
+			got[i].Status != want[i].Status || got[i].Reason != want[i].Reason {
+			t.Fatalf("refusal %d = %+v, want %+v", i, got[i], want)
+		}
+	}
+}
+
+// testJournalRefusalsRoundTrip shows that each recorded refusal reads back in
+// arrival order, with the sequence IDs, the status and the reason it was
+// given. A refusal without batches leaves no sequences.
+func testJournalRefusalsRoundTrip(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	want := []stack.JournalRefusal{
+		journalRefusal(u, []int64{5}, 400, "unknown kind"),
+		journalRefusal(u, nil, 500, "put journal blob: store unavailable"),
+	}
+
+	for _, r := range want {
+		recordRefusal(t, f, r)
+	}
+
+	checkRefusals(t, readRefusals(t, f, u), want)
+
+	seqs, err := f.s.JournalSequences(t.Context(), mustStackID(t, f.s, f.ref), u.ID)
+	if err != nil || len(seqs) != 0 {
+		t.Fatalf("sequences with only refusals = %v, %v; want none", seqs, err)
+	}
+}
+
+// testJournalRefusalsMissingUpdate shows that a refusal of a missing stack or
+// update records nothing and returns nil, and that the reads of a missing
+// update are empty.
+func testJournalRefusalsMissingUpdate(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+	id := mustStackID(t, f.s, f.ref)
+
+	foreign := journalRefusal(u, []int64{1}, 400, "refused batch")
+	foreign.Ref = stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "never-created"}
+
+	if err := f.s.RecordJournalRefusal(t.Context(), foreign, f.fence); err != nil {
+		t.Fatalf("record refusal of a missing stack: %v", err)
+	}
+
+	gone := journalRefusal(u, []int64{1}, 400, "refused batch")
+	gone.Update = "upd-missing"
+
+	if err := f.s.RecordJournalRefusal(t.Context(), gone, f.fence); err != nil {
+		t.Fatalf("record refusal of a missing update: %v", err)
+	}
+
+	if got, err := f.s.JournalRefusals(t.Context(), id, "upd-missing"); err != nil || len(got) != 0 {
+		t.Fatalf("refusals of a missing update = %v, %v; want none", got, err)
+	}
+
+	if seqs, err := f.s.JournalSequences(t.Context(), id, "upd-missing"); err != nil || len(seqs) != 0 {
+		t.Fatalf("sequences of a missing update = %v, %v; want none", seqs, err)
+	}
+}
+
+// testJournalSequences shows that the stored sequence IDs of an update read
+// back in order.
+func testJournalSequences(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 1, 3), f.fence); err != nil {
+		t.Fatalf("batch of sequence 3: %v", err)
+	}
+
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 2, 1, 2), f.fence); err != nil {
+		t.Fatalf("batch of sequences 1 and 2: %v", err)
+	}
+
+	got, err := f.s.JournalSequences(t.Context(), mustStackID(t, f.s, f.ref), u.ID)
+	if err != nil {
+		t.Fatalf("read sequences: %v", err)
+	}
+
+	if !slices.Equal(got, []int64{1, 2, 3}) {
+		t.Fatalf("sequences = %v, want [1 2 3] in order", got)
+	}
+}
+
+// testJournalBuildRemovesRefusals shows that the build removes the refusals
+// of the update with its journal rows and sequences.
+func testJournalBuildRemovesRefusals(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 1, 1), f.fence); err != nil {
+		t.Fatalf("batch: %v", err)
+	}
+
+	recordRefusal(t, f, journalRefusal(u, []int64{2}, 400, "unknown kind"))
+
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), newCheckpoint(u, 0, "{}"), f.fence); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	id := mustStackID(t, f.s, f.ref)
+
+	if got, err := f.s.JournalRefusals(t.Context(), id, u.ID); err != nil || len(got) != 0 {
+		t.Fatalf("refusals after the build = %v, %v; want none", got, err)
+	}
+
+	if seqs, err := f.s.JournalSequences(t.Context(), id, u.ID); err != nil || len(seqs) != 0 {
+		t.Fatalf("sequences after the build = %v, %v; want none", seqs, err)
+	}
+}
+
 // mustStackID returns the ID of the stack named by ref.
 func mustStackID(t *testing.T, s Store, ref stack.Ref) stack.ID {
 	t.Helper()

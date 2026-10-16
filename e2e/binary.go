@@ -95,6 +95,10 @@ type envInput struct {
 	// ipAllowlists turns IP allowlists on for the server and applies them to
 	// the bootstrap admin token too.
 	ipAllowlists bool
+	// journalRefuser corrupts one outputs-only journal batch on the way to
+	// the server, so the server refuses it and records the refusal. Nil
+	// passes every batch through untouched.
+	journalRefuser *JournalRefuser
 }
 
 // backendConfig groups the settings of one backend process.
@@ -808,7 +812,9 @@ func waitForBackend(ctx context.Context, tb testing.TB, backendURL string, logs 
 // every request, so binary runs keep the same request log as in-process
 // runs. It keeps the client-facing host, so absolute URLs the backend
 // reports point back through the proxy.
-func startRecordingProxy(tb testing.TB, rec *Recorder, backendURL string) *httptest.Server {
+func startRecordingProxy(
+	tb testing.TB, rec *Recorder, backendURL string, refuser *JournalRefuser,
+) *httptest.Server {
 	tb.Helper()
 
 	target, err := url.Parse(backendURL)
@@ -831,7 +837,7 @@ func startRecordingProxy(tb testing.TB, rec *Recorder, backendURL string) *httpt
 		Transport: transport,
 	}
 
-	ts := httptest.NewUnstartedServer(rec.Middleware(proxy))
+	ts := httptest.NewUnstartedServer(rec.Middleware(faultedHandler(proxy, refuser)))
 	ts.StartTLS()
 	tb.Cleanup(ts.Close)
 
@@ -953,7 +959,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 
 	createFirstNamespaceViaBinary(ctx, tb, cfg, backendURL)
 
-	proxy := startRecordingProxy(tb, in.rec, backendURL)
+	proxy := startRecordingProxy(tb, in.rec, backendURL, in.journalRefuser)
 
 	client := proxy.Client()
 	client.Timeout = commandTimeout

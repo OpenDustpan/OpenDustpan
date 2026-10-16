@@ -293,6 +293,141 @@ func (s *Store) JournalKeys(ctx context.Context, stackID stack.ID, update stack.
 	return journalBlobKeys(rows), nil
 }
 
+// RecordJournalRefusal implements stack.JournalStore. It stores one refused or
+// unstored batch of the update with the next arrival number of its refusals,
+// in the same fenced transaction. A missing stack or update records nothing
+// and returns nil, so a refusal that races the end of its update is dropped
+// instead of failing the error path.
+func (s *Store) RecordJournalRefusal(
+	ctx context.Context, refusal stack.JournalRefusal, fence namespace.Fence,
+) error {
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		stackID, err := stackIDFor(ctx, q, refusal.Ref)
+		if errors.Is(err, stack.ErrNotFound) {
+			return nil
+		}
+
+		if err != nil {
+			return err
+		}
+
+		// The update row is locked before the write, so two refusals of one
+		// update run one after the other: the second sees the first's row.
+		_, lockErr := q.LockUpdateForJournal(ctx, db.LockUpdateForJournalParams{
+			StackID: stackID,
+			ID:      refusal.Update.String(),
+		})
+		if lockErr != nil {
+			if errors.Is(lockErr, pgx.ErrNoRows) {
+				return nil
+			}
+
+			return fmt.Errorf("lock update for journal: %w", lockErr)
+		}
+
+		arrival, err := q.NextRefusalArrival(ctx, db.NextRefusalArrivalParams{
+			StackID:  stackID,
+			UpdateID: refusal.Update.String(),
+		})
+		if err != nil {
+			return fmt.Errorf("next refusal arrival: %w", err)
+		}
+
+		seqs, err := marshalRefusalSequences(refusal.SequenceIDs)
+		if err != nil {
+			return err
+		}
+
+		return q.InsertJournalRefusal(ctx, db.InsertJournalRefusalParams{
+			StackID:     stackID,
+			UpdateID:    refusal.Update.String(),
+			Arrival:     arrival,
+			SequenceIds: seqs,
+			Status:      int64(refusal.Status),
+			Reason:      refusal.Reason,
+		})
+	})
+}
+
+// marshalRefusalSequences encodes the sequence IDs of a refusal. An empty
+// list encodes as an empty array, never null, so reads need no second shape.
+func marshalRefusalSequences(seqs []int64) (string, error) {
+	if len(seqs) == 0 {
+		return "[]", nil
+	}
+
+	raw, err := json.Marshal(seqs)
+	if err != nil {
+		return "", fmt.Errorf("encode refusal sequence IDs: %w", err)
+	}
+
+	return string(raw), nil
+}
+
+// JournalRefusals implements stack.JournalStore. It is keyed by the stack ID,
+// as the blob keys are. A missing update yields no refusals.
+func (s *Store) JournalRefusals(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]stack.JournalRefusal, error) {
+	rows, err := s.queries.ListJournalRefusals(ctx, db.ListJournalRefusalsParams{
+		StackID:  stackID.String(),
+		UpdateID: update.String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("select journal refusals: %w", err)
+	}
+
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	names, err := s.queries.StackRefByID(ctx, stackID.String())
+	if err != nil {
+		return nil, fmt.Errorf("resolve stack: %w", err)
+	}
+
+	ref, err := stack.ParseRef(names.Namespace, names.Project, names.Name)
+	if err != nil {
+		return nil, fmt.Errorf("parse stack reference: %w", err)
+	}
+
+	out := make([]stack.JournalRefusal, 0, len(rows))
+
+	for _, row := range rows {
+		var seqs []int64
+
+		if err := json.Unmarshal([]byte(row.SequenceIds), &seqs); err != nil {
+			return nil, fmt.Errorf("decode refusal sequence IDs: %w", err)
+		}
+
+		out = append(out, stack.JournalRefusal{
+			Ref:         ref,
+			Update:      update,
+			SequenceIDs: seqs,
+			Status:      int(row.Status),
+			Reason:      row.Reason,
+		})
+	}
+
+	return out, nil
+}
+
+// JournalSequences implements stack.JournalStore. It returns the stored
+// sequence IDs of the update, in order. A missing update yields none.
+func (s *Store) JournalSequences(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]int64, error) {
+	seqs, err := s.queries.ListJournalSequences(ctx, db.ListJournalSequencesParams{
+		StackID:  stackID.String(),
+		UpdateID: update.String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("select journal sequences: %w", err)
+	}
+
+	return seqs, nil
+}
+
 // JournalSweepable implements stack.JournalStore. It reports whether the journal is
 // closed or the update no longer runs. A missing update is ErrUpdateNotFound.
 func (s *Store) JournalSweepable(ctx context.Context, stackID stack.ID, update stack.UpdateID) (bool, error) {
@@ -397,6 +532,14 @@ func removeJournal(ctx context.Context, q *db.Queries, stackID string, update st
 	rowsErr := q.DeleteJournal(ctx, db.DeleteJournalParams{StackID: stackID, UpdateID: update.String()})
 	if rowsErr != nil {
 		return nil, fmt.Errorf("delete journal rows: %w", rowsErr)
+	}
+
+	refusalsErr := q.DeleteJournalRefusals(
+		ctx,
+		db.DeleteJournalRefusalsParams{StackID: stackID, UpdateID: update.String()},
+	)
+	if refusalsErr != nil {
+		return nil, fmt.Errorf("delete journal refusals: %w", refusalsErr)
 	}
 
 	return journalBlobKeys(found), nil

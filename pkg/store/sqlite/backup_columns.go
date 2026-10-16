@@ -3,6 +3,7 @@ package sqlite
 // Column names that more than one table of the list holds. goconst keeps
 // each one a constant.
 const (
+	backupColArrival     = "arrival"
 	backupColCreatedAtMs = "created_at_ms"
 	backupColCreatedBy   = "created_by"
 	backupColDigest      = "digest"
@@ -138,7 +139,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColStackID,
 				backupColUpdateID,
-				"arrival",
+				backupColArrival,
 				"blob_key",
 				"sha256",
 				"md5",
@@ -154,8 +155,19 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColStackID,
 				backupColUpdateID,
 				backupColSequence,
-				"arrival",
+				backupColArrival,
 				"sha256",
+			},
+		},
+		{
+			table: "update_journal_refusals",
+			columns: []string{
+				backupColStackID,
+				backupColUpdateID,
+				backupColArrival,
+				"sequence_ids",
+				"status",
+				"reason",
 			},
 		},
 		{

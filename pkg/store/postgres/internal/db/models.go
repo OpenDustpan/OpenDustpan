@@ -346,6 +346,15 @@ type UpdateJournal struct {
 	Md5            []byte
 }
 
+type UpdateJournalRefusal struct {
+	StackID     string
+	UpdateID    string
+	Arrival     int64
+	SequenceIds string
+	Status      int64
+	Reason      string
+}
+
 type UpdateJournalSequence struct {
 	StackID  string
 	UpdateID string

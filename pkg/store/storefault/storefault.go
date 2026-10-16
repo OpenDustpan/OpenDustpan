@@ -439,6 +439,42 @@ func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence n
 	return s.inner.PutJournalRow(ctx, row, fence)
 }
 
+// RecordJournalRefusal stores one refused or unstored batch, unless a fault
+// fires first.
+func (s *Store) RecordJournalRefusal(
+	ctx context.Context, refusal stack.JournalRefusal, fence namespace.Fence,
+) error {
+	if err := s.before(ctx, "RecordJournalRefusal"); err != nil {
+		return err
+	}
+
+	return s.inner.RecordJournalRefusal(ctx, refusal, fence)
+}
+
+// JournalRefusals returns the recorded refusals of the update, unless a fault
+// fires first.
+func (s *Store) JournalRefusals(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]stack.JournalRefusal, error) {
+	if err := s.before(ctx, "JournalRefusals"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.JournalRefusals(ctx, stackID, update)
+}
+
+// JournalSequences returns the stored sequence IDs of the update, unless a
+// fault fires first.
+func (s *Store) JournalSequences(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]int64, error) {
+	if err := s.before(ctx, "JournalSequences"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.JournalSequences(ctx, stackID, update)
+}
+
 // ListEvents returns the events of the update, unless a fault fires first.
 func (s *Store) ListEvents(
 	ctx context.Context, ref stack.Ref, id stack.UpdateID, after int64, limit int,

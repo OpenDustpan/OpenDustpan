@@ -151,6 +151,13 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{pgColStackID, pgColUpdateID, pgColSequence, pgColArrival, "sha256"},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColSequence},
 		},
+		{
+			table: "update_journal_refusals",
+			columns: []string{
+				pgColStackID, pgColUpdateID, pgColArrival, "sequence_ids", "status", "reason",
+			},
+			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
+		},
 	}
 }
 

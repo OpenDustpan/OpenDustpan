@@ -21,6 +21,12 @@ import (
 // 6.3). The server records the refusal and stores nothing from the batch.
 var ErrJournalConflict = errors.New("journal batch differs from the batch stored with the same sequence")
 
+// ErrJournalIncomplete is returned by Complete with succeeded when the update
+// holds a recorded refusal or a gap in its stored sequence IDs. The update
+// stays in progress and the stack stays locked. The message names the one
+// command that ends the update.
+var ErrJournalIncomplete = errors.New("a journal batch was not stored: run pulumi cancel")
+
 // ErrJournalKey is returned when a row names a blob key that does not belong to
 // its stack and update. The caller builds the key, so this is a bug in the caller.
 var ErrJournalKey = errors.New("journal blob key does not belong to the update")
@@ -118,6 +124,19 @@ type JournalStore interface {
 	// be added while the sweep runs. It returns ErrUpdateNotFound for a missing update,
 	// so a sweep never deletes for a stack it cannot find.
 	JournalSweepable(ctx context.Context, stackID ID, update UpdateID) (bool, error)
+	// RecordJournalRefusal stores one refused or unstored batch of the update: the
+	// sequence IDs the server could read, the status it answered and the reason.
+	// A batch the server could not parse records no sequence IDs. It returns nil
+	// for a missing update, so a refusal that races the end of its update is
+	// dropped instead of failing the error path. It checks the fence.
+	RecordJournalRefusal(ctx context.Context, refusal JournalRefusal, fence namespace.Fence) error
+	// JournalRefusals returns the recorded refusals of the update, in arrival
+	// order. A missing update yields an empty list.
+	JournalRefusals(ctx context.Context, stackID ID, update UpdateID) ([]JournalRefusal, error)
+	// JournalSequences returns the stored sequence IDs of the update, in order.
+	// A missing update yields an empty list. The complete check finds a gap in
+	// them: a missing sequence ID between 1 and the highest stored one.
+	JournalSequences(ctx context.Context, stackID ID, update UpdateID) ([]int64, error)
 }
 
 // BuiltCheckpointStore writes the checkpoint of a built update and removes its
@@ -131,6 +150,28 @@ type BuiltCheckpointStore interface {
 	// deleted rows. The caller removes those blobs after the commit with RemoveBlobs.
 	PutBuiltCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) ([]blob.Key, error)
 }
+
+// JournalRefusal records one journal batch of an update that the server
+// refused or failed to store. SequenceIDs holds the sequence IDs the server
+// could read from the batch, in body order, and is empty when the batch did
+// not parse. Status is the HTTP status the journal route answered for the
+// batch, and Reason is the message it answered.
+type JournalRefusal struct {
+	Ref         Ref
+	Update      UpdateID
+	SequenceIDs []int64
+	Status      int
+	Reason      string
+}
+
+// refusal statuses: the HTTP statuses the journal route answers for a refused
+// or unstored batch. The domain keeps its own copy so it never imports net/http.
+const (
+	refusalBadRequest   = 400
+	refusalUnauthorized = 401
+	refusalConflict     = 409
+	refusalStoreError   = 500
+)
 
 // KnownOperationIDs returns the completed operation IDs that the stored rows of
 // an update hold. Each element is the JSON array that a row keeps (see
@@ -222,6 +263,46 @@ func (j *JournalEntries) Batches(ctx context.Context, stackID ID, update UpdateI
 	return out, nil
 }
 
+// Incomplete reports whether the update holds a recorded refusal or a gap in
+// its stored sequence IDs, so a complete with succeeded must not end it. A
+// gap is a missing sequence ID between 1 and the highest stored one. An
+// update with no stored batches and no refusal is complete, so an empty
+// journaled update still ends.
+func (j *JournalEntries) Incomplete(ctx context.Context, stackID ID, update UpdateID) (bool, error) {
+	refusals, err := j.rows.JournalRefusals(ctx, stackID, update)
+	if err != nil {
+		return false, fmt.Errorf("read journal refusals: %w", err)
+	}
+
+	if len(refusals) > 0 {
+		return true, nil
+	}
+
+	seqs, err := j.rows.JournalSequences(ctx, stackID, update)
+	if err != nil {
+		return false, fmt.Errorf("read journal sequences: %w", err)
+	}
+
+	return hasJournalGap(seqs), nil
+}
+
+// hasJournalGap reports whether seqs miss a sequence ID between 1 and the
+// highest stored one. Stored sequence IDs start at 1 and never repeat, so a
+// journal without a gap holds exactly as many as its highest.
+func hasJournalGap(seqs []int64) bool {
+	if len(seqs) == 0 {
+		return false
+	}
+
+	var highest int64
+
+	for _, s := range seqs {
+		highest = max(highest, s)
+	}
+
+	return int64(len(seqs)) != highest
+}
+
 // SweepUpdate deletes the journal blobs of one update that no row names and that are
 // older than the grace period at now: batches whose row never committed, and blobs
 // that a finished build left behind. It runs only when the store reports the journal
@@ -276,11 +357,12 @@ func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update Upd
 // It returns ErrJournalConflict when the batch differs from what is stored, and
 // ErrWrongUpdateState or namespace.ErrFenced when the write is refused. A refusal
 // deletes the blob that this call wrote, as a previous save does. Any other
-// failure keeps the blob for the sweep.
+// failure keeps the blob for the sweep. Each refusal and each failed store is
+// recorded against the update, so a later complete with succeeded finds it.
 func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence namespace.Fence) error {
 	ids, err := batchIDs(batch.Content)
 	if err != nil {
-		return err
+		return j.recorded(ctx, batch, fence, readableSequences(batch.Content), err)
 	}
 
 	// An empty batch is valid: the CLI sends {} when it has no entries (the
@@ -295,7 +377,7 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 
 	created, err := j.putBlob(ctx, key, batch.Content, sum)
 	if err != nil {
-		return err
+		return j.recorded(ctx, batch, fence, ids.sequences, err)
 	}
 
 	row := JournalRow{
@@ -322,10 +404,48 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 			}
 		}
 
-		return err
+		return j.recorded(ctx, batch, fence, ids.sequences, err)
 	}
 
 	return nil
+}
+
+// recorded stores the refusal of a batch that Append did not store, then
+// returns the refusal error. A failed record joins the refusal error, so the
+// route still answers the refusal.
+func (j *JournalEntries) recorded(
+	ctx context.Context, batch JournalBatch, fence namespace.Fence, seqs []int64, err error,
+) error {
+	refusal := JournalRefusal{
+		Ref:         batch.Ref,
+		Update:      batch.Update,
+		SequenceIDs: seqs,
+		Status:      refusalStatus(err),
+		Reason:      err.Error(),
+	}
+
+	if recErr := j.rows.RecordJournalRefusal(ctx, refusal, fence); recErr != nil {
+		return errors.Join(err, fmt.Errorf("record journal refusal: %w", recErr))
+	}
+
+	return err
+}
+
+// refusalStatus maps the error of a refused or unstored batch to the HTTP
+// status the journal route answers for it, so the refusal record names the
+// status the caller saw.
+func refusalStatus(err error) int {
+	switch {
+	case errors.Is(err, ErrLeaseInvalid), errors.Is(err, ErrLeaseExpired):
+		return refusalUnauthorized
+	case errors.Is(err, ErrJournalConflict), errors.Is(err, namespace.ErrFenced),
+		errors.Is(err, ErrWrongUpdateState), errors.Is(err, ErrNotJournaled):
+		return refusalConflict
+	case errors.Is(err, ErrJournalBatch):
+		return refusalBadRequest
+	default:
+		return refusalStoreError
+	}
 }
 
 // refused reports whether the store refused the batch for a reason that keeps it
@@ -423,6 +543,23 @@ func batchIDs(content []byte) (journalIDs, error) {
 	}
 
 	return journalIDs{sequences: seqs, operations: ops}, nil
+}
+
+// readableSequences returns the sequence IDs that decode from a batch body
+// that batchIDs refused, in body order. Entries that do not decode
+// contribute nothing, so a body that does not parse records no sequence IDs.
+func readableSequences(content []byte) []int64 {
+	var body journalBody
+	if err := json.Unmarshal(content, &body); err != nil {
+		return nil
+	}
+
+	seqs := make([]int64, 0, len(body.Entries))
+	for i := range body.Entries {
+		seqs = append(seqs, body.Entries[i].SequenceID)
+	}
+
+	return seqs
 }
 
 // journalSuccessKind is the kind of a success entry. Only such an entry with a
