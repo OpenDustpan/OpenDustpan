@@ -134,12 +134,12 @@ type Filter struct {
 }
 
 // DeleteGuard carries the domain count of the latest checkpoint into the
-// store delete transaction. Saves store a NULL resource count and blob rows
-// keep no deployment in SQL, so the service counts the one latest deployment
-// outside any transaction (reading and gunzipping its blob) and the store
-// checks the checkpoint is still the one counted. UpdateID with Digest
-// identify the counted checkpoint; HasCheckpoint is false when the stack had
-// no checkpoint; HasResources reports whether it managed resources.
+// store delete transaction. The store keeps no resource count, so the service
+// counts the one latest deployment outside any transaction (reading and
+// gunzipping its blob) and the store checks the checkpoint is still the one
+// counted. UpdateID with Digest identify the counted checkpoint;
+// HasCheckpoint is false when the stack had no checkpoint; HasResources
+// reports whether it managed resources.
 type DeleteGuard struct {
 	UpdateID      UpdateID
 	Digest        [sha256.Size]byte
@@ -147,10 +147,8 @@ type DeleteGuard struct {
 	HasResources  bool
 }
 
-// EmptyGuard returns the DeleteGuard for a delete with no domain count: the
-// store uses only its SQL fallback. Tests with inline checkpoints and stacks
-// without checkpoints use it; production deletes with blob checkpoints pass
-// the counted guard instead.
+// EmptyGuard returns the DeleteGuard of a stack without a checkpoint. The
+// store refuses it with ErrConcurrentModification when the stack has one.
 func EmptyGuard() DeleteGuard {
 	//nolint:exhaustruct_v5 // An empty guard means the stack had no checkpoint to count.
 	return DeleteGuard{}
@@ -174,13 +172,12 @@ type Store interface {
 	// and every list, and its name is free at once for a new stack. Its
 	// updates, checkpoints, events, tags and data key stay until the final
 	// delete. When the latest checkpoint manages resources, it returns
-	// ErrHasResources and changes nothing.
-	// Rows with a stored count use it; rows with SQL deployment content count
-	// it; rows with a NULL count and blob content use guard, which the caller
-	// counted outside the transaction. When the latest checkpoint is no
-	// longer the one guard names, it returns ErrConcurrentModification so the
-	// caller recounts once. The check runs in the same transaction as the
-	// delete, so an update that finishes concurrently cannot drop resources.
+	// ErrHasResources and changes nothing. The store answers from guard,
+	// which the caller counted outside the transaction. When the latest
+	// checkpoint is no longer the one guard names, it returns
+	// ErrConcurrentModification so the caller recounts once. The check runs
+	// in the same transaction as the delete, so an update that finishes
+	// concurrently cannot drop resources.
 	// It returns ErrNotFound if no live stack has ref, ErrUpdateConflict
 	// while a mutating update of the stack runs, namespace.ErrNotFound if the
 	// namespace does not exist, namespace.ErrFenced if fence is stale, or
@@ -267,10 +264,9 @@ type Config struct {
 	Namespaces *namespace.Service
 	Now        func() time.Time
 	// State resolves the latest checkpoint for the delete guard: the
-	// service counts its deployment outside any transaction, since saves
-	// store a NULL count and blob rows keep no deployment in SQL. Nil
-	// means the service passes an empty guard and the store uses only its
-	// SQL fallback, as in tests with inline checkpoints.
+	// service counts its deployment outside any transaction, since the
+	// store keeps no resource count. Nil means the service passes
+	// EmptyGuard, so it can delete only a stack without a checkpoint.
 	State LatestState
 	// Retention is how long a deleted stack stays before its final delete
 	// (ADR 47, decision 2). Zero means inventory.DeletedRetention.

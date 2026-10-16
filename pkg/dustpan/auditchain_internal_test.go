@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -13,8 +15,10 @@ import (
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
@@ -616,5 +620,158 @@ func TestCheckWritesNoCheckpointWhenRestoreCheckFails(t *testing.T) {
 
 	if got := checkpointCount(t, blobs); got != 0 {
 		t.Fatalf("checkpoints when the restore check fails: got %d objects, want none", got)
+	}
+}
+
+// invalidScopes matches a dustpan_audit_chain_invalid series above zero.
+var invalidScopes = regexp.MustCompile(`(?m)^dustpan_audit_chain_invalid [1-9]`)
+
+// errInjected is the failure that the wrappers of the check tests inject.
+var errInjected = errors.New("injected failure")
+
+// failingCheck is an audit store whose Check fails.
+type failingCheck struct {
+	audit.Store
+}
+
+func (failingCheck) Check(context.Context, namespace.Name) (audit.CheckResult, error) {
+	return audit.CheckResult{Checked: 0, BadSequence: 0, Unchained: 0, Valid: false}, errInjected
+}
+
+// failingPut is a blob store whose Put fails.
+type failingPut struct {
+	blob.Store
+}
+
+func (failingPut) Put(context.Context, blob.Key, io.Reader) error { return errInjected }
+
+// TestCheckCountsAFailedCallAsNotChecked proves that a failed read of the
+// chain or a failed checkpoint write counts in
+// dustpan_audit_chain_check_errors_total and never in
+// dustpan_audit_chain_invalid, and that such a check does not lower the
+// gauge that an earlier check set.
+func TestCheckCountsAFailedCallAsNotChecked(t *testing.T) {
+	t.Parallel()
+
+	tests := []failCase{
+		{name: "chain read fails", checkpoints: false, failRead: true, failPut: false},
+		{name: "chain read fails with checkpoints", checkpoints: true, failRead: true, failPut: false},
+		{name: "checkpoint write fails", checkpoints: true, failRead: false, failPut: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			chain := newFailingTestChain(t, tt)
+
+			chain.check(t.Context())
+
+			got := metricLine(t, chain)
+			if invalidScopes.MatchString(got) {
+				t.Fatalf("metrics after a failed call:\n%s\nwant no invalid scope", got)
+			}
+
+			wantMetric(t, got, "dustpan_audit_chain_check_errors_total 1")
+
+			chain.observed.SetAuditChainInvalid(2)
+			chain.check(t.Context())
+
+			got = metricLine(t, chain)
+			wantMetric(t, got, "dustpan_audit_chain_invalid 2")
+			wantMetric(t, got, "dustpan_audit_chain_check_errors_total 2")
+		})
+	}
+}
+
+// failCase names the calls that fail in a check of newFailingTestChain.
+// With checkpoints set, the chain signs checkpoints. failRead makes the
+// chain check fail, and failPut makes the checkpoint write fail.
+type failCase struct {
+	name        string
+	checkpoints bool
+	failRead    bool
+	failPut     bool
+}
+
+// newFailingTestChain answers a chain with one entry in @server and no
+// change that waits, whose calls fail as fc says.
+func newFailingTestChain(t *testing.T, fc failCase) *auditChain {
+	t.Helper()
+
+	chain := newTestAuditChain(t, audit.ChainOn)
+
+	reader, ok := chain.entries.(audit.EntryReader)
+	if !ok {
+		t.Fatal("audit store reads no single entry")
+	}
+
+	if fc.checkpoints {
+		var blobs blob.Store = openTestBlobs(t)
+		if fc.failPut {
+			blobs = failingPut{Store: blobs}
+		}
+
+		chain.checkpoints = audit.NewCheckpoints(audit.CheckpointsConfig{
+			Blobs:   blobs,
+			Entries: reader,
+			Signer:  newTestCheckpointSigner(t),
+			Now:     nil,
+		})
+	}
+
+	if fc.failRead {
+		chain.entries = failingCheck{Store: chain.entries}
+	}
+
+	chain.observed = metrics.NewServerMetrics("test", time.Now())
+
+	if _, err := chain.server.AppendServer(t.Context(), pendingTestEntry()); err != nil {
+		t.Fatalf("append server entry: %v", err)
+	}
+
+	rec, err := chain.store.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	rec.Pending = false
+
+	if err := chain.store.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	return chain
+}
+
+// wantMetric fails the test unless the metrics output got holds line.
+func wantMetric(t *testing.T, got, line string) {
+	t.Helper()
+
+	if !strings.Contains(got, line) {
+		t.Fatalf("metrics:\n%s\nwant %q", got, line)
+	}
+}
+
+// TestRestoredLogCheckCountsAFailedCallAsNotChecked proves that a failed
+// read in the check of a restored log counts in
+// dustpan_audit_chain_check_errors_total, not as a restore whose log
+// failed the check.
+func TestRestoredLogCheckCountsAFailedCallAsNotChecked(t *testing.T) {
+	t.Parallel()
+
+	chain := newTestAuditChain(t, audit.ChainOn)
+	chain.entries = failingCheck{Store: chain.entries}
+	chain.observed = metrics.NewServerMetrics("test", time.Now())
+
+	chain.checkRestoredLog(t.Context(), []namespace.Name{audit.ServerScope})
+
+	got := metricLine(t, chain)
+	if !strings.Contains(got, "dustpan_audit_restore_check_failures_total 0") {
+		t.Fatalf("metrics after a failed call:\n%s\nwant no failed restore check", got)
+	}
+
+	if !strings.Contains(got, "dustpan_audit_chain_check_errors_total 1") {
+		t.Fatalf("metrics after a failed call:\n%s\nwant one check error", got)
 	}
 }

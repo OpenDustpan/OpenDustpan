@@ -153,10 +153,10 @@ func TestBackupCheckInvalidID(t *testing.T) {
 	}
 }
 
-// TestBackupCheckNativeFormat proves the check of a backup in the native format
-// of ADR 30 answers complete false, with the text that tells the operator to
-// take a new backup, and not a server error.
-func TestBackupCheckNativeFormat(t *testing.T) {
+// TestBackupCheckOtherFormat proves the check of a backup whose manifest has
+// another format number answers complete false, with the text that names the
+// format, and not a server error.
+func TestBackupCheckOtherFormat(t *testing.T) {
 	t.Parallel()
 
 	held := openCheckFixture(t)
@@ -172,10 +172,10 @@ func TestBackupCheckNativeFormat(t *testing.T) {
 		t.Fatalf("delete manifest: %v", err)
 	}
 
-	native := []byte(`{"id":"` + id + `","format":1}`)
+	other := []byte(`{"id":"` + id + `","format":1}`)
 
-	if err := held.stores.target.Put(t.Context(), key, bytes.NewReader(native)); err != nil {
-		t.Fatalf("put native manifest: %v", err)
+	if err := held.stores.target.Put(t.Context(), key, bytes.NewReader(other)); err != nil {
+		t.Fatalf("put manifest of another format: %v", err)
 	}
 
 	status, doc := readBackupCheck(t, held.fixture, id)
@@ -187,7 +187,7 @@ func TestBackupCheckNativeFormat(t *testing.T) {
 		t.Fatalf("backup check = %+v, want complete false for %q", doc, id)
 	}
 
-	if !strings.Contains(doc.Error, "take a new backup") {
-		t.Fatalf("backup check error = %q, want it to tell the operator to take a new backup", doc.Error)
+	if !strings.Contains(doc.Error, "manifest format 1") {
+		t.Fatalf("backup check error = %q, want it to name manifest format 1", doc.Error)
 	}
 }
