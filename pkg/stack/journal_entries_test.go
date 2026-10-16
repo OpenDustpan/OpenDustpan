@@ -245,7 +245,7 @@ func TestJournalAppendDropsOperationsBeforeRebuild(t *testing.T) {
 		`{"sequenceID":3,"operationID":8,"kind":1,"state":` + state + `}]}`)
 
 	blobs := newFakeBlobs()
-	rows := &fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil}
+	rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
 	entries := newEntries(t, blobs, rows, allowAll{})
 
 	if err := entries.Append(t.Context(), journalBatchFor(body), fence()); err != nil {
