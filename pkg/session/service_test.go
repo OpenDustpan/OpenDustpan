@@ -84,7 +84,7 @@ func newSessionsFixture(t *testing.T) sessionsFixture {
 		t.Fatalf("policies: %v", err)
 	}
 
-	svc, err := session.NewSessions(session.SessionsConfig{Store: st, Policies: pol, Now: c.Now})
+	svc, err := session.NewSessions(session.SessionsConfig{Store: st, Policies: pol, Inactivity: nil, Now: c.Now})
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
 	}
@@ -327,7 +327,7 @@ func TestSessionsRefuseDisabledOwner(t *testing.T) {
 	}
 
 	svc, err := session.NewSessions(
-		session.SessionsConfig{Store: disabledOwner{f.store}, Policies: pol, Now: f.clock.Now},
+		session.SessionsConfig{Store: disabledOwner{f.store}, Policies: pol, Inactivity: nil, Now: f.clock.Now},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
@@ -335,6 +335,125 @@ func TestSessionsRefuseDisabledOwner(t *testing.T) {
 
 	if _, err := svc.Authenticate(t.Context(), secret); !errors.Is(err, session.ErrUnauthenticated) {
 		t.Fatalf("authenticate with a disabled owner = %v, want ErrUnauthenticated", err)
+	}
+}
+
+// errRuleDown is the failure of an inactivity rule in the tests.
+var errRuleDown = errors.New("inactivity rule down")
+
+// fixedInactivity answers a fixed result for every owner, and keeps the
+// owner of the last call.
+type fixedInactivity struct {
+	err      error
+	inactive bool
+	mu       sync.Mutex
+	last     session.Owner
+}
+
+func (f *fixedInactivity) AccountInactive(_ context.Context, o session.Owner) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.last = o
+
+	return f.inactive, f.err
+}
+
+// withInactivity returns the service of f with the inactivity rule rule.
+func (f sessionsFixture) withInactivity(t *testing.T, rule session.InactivityRule) *session.Sessions {
+	t.Helper()
+
+	pol, err := session.NewPolicies(session.PolicyConfig{Store: f.policies, Now: f.clock.Now})
+	if err != nil {
+		t.Fatalf("policies: %v", err)
+	}
+
+	svc, err := session.NewSessions(
+		session.SessionsConfig{Store: f.store, Policies: pol, Inactivity: rule, Now: f.clock.Now},
+	)
+	if err != nil {
+		t.Fatalf("sessions: %v", err)
+	}
+
+	return svc
+}
+
+// lastSeen returns the last use of the session id in the store of f.
+func (f sessionsFixture) lastSeen(t *testing.T, id string) time.Time {
+	t.Helper()
+
+	got, err := f.store.GetSession(t.Context(), id)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+
+	return got.LastSeenAt
+}
+
+func TestSessionsRefuseInactiveAccount(t *testing.T) {
+	t.Parallel()
+
+	f := newSessionsFixture(t)
+	sess, secret := f.start(t)
+
+	f.clock.Add(5 * time.Minute)
+
+	var nobody session.Owner
+
+	rule := &fixedInactivity{err: nil, inactive: true, mu: sync.Mutex{}, last: nobody}
+	svc := f.withInactivity(t, rule)
+
+	if _, err := svc.Authenticate(t.Context(), secret); !errors.Is(err, session.ErrUnauthenticated) {
+		t.Fatalf("authenticate with an inactive account = %v, want ErrUnauthenticated", err)
+	}
+
+	if rule.last.ID != personID || rule.last.ActiveAt.IsZero() {
+		t.Fatalf("rule saw owner %+v, want %s with its activity time", rule.last, personID)
+	}
+
+	if got := f.lastSeen(t, sess.ID); !got.Equal(sess.LastSeenAt) {
+		t.Fatalf("last use after a refused request = %s, want %s", got, sess.LastSeenAt)
+	}
+
+	rule.inactive = false
+	if _, err := svc.Authenticate(t.Context(), secret); err != nil {
+		t.Fatalf("authenticate with an active account: %v", err)
+	}
+
+	rule.err = errRuleDown
+	if _, err := svc.Authenticate(t.Context(), secret); !errors.Is(err, errRuleDown) {
+		t.Fatalf("authenticate when the rule fails = %v, want the rule error", err)
+	}
+}
+
+// TestSessionsRefusedKeepsLastUse proves that a request that an idle or
+// expired session refuses records no use.
+func TestSessionsRefusedKeepsLastUse(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		advance time.Duration
+	}{
+		{name: "idle", advance: session.DefaultIdle},
+		{name: "expired", advance: session.DefaultMaxLength},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newSessionsFixture(t)
+			sess, secret := f.start(t)
+
+			f.clock.Add(tc.advance)
+
+			if _, err := f.svc.Authenticate(t.Context(), secret); !errors.Is(err, session.ErrUnauthenticated) {
+				t.Fatalf("authenticate = %v, want ErrUnauthenticated", err)
+			}
+
+			if got := f.lastSeen(t, sess.ID); !got.Equal(sess.LastSeenAt) {
+				t.Fatalf("last use after a refused request = %s, want %s", got, sess.LastSeenAt)
+			}
+		})
 	}
 }
 
@@ -446,8 +565,8 @@ func TestNewSessionsNeedsDependencies(t *testing.T) {
 	}
 
 	for _, cfg := range []session.SessionsConfig{
-		{Store: nil, Policies: pol, Now: nil},
-		{Store: disabledOwner{Store: nil}, Policies: nil, Now: nil},
+		{Store: nil, Policies: pol, Inactivity: nil, Now: nil},
+		{Store: disabledOwner{Store: nil}, Policies: nil, Inactivity: nil, Now: nil},
 	} {
 		if _, err := session.NewSessions(cfg); !errors.Is(err, session.ErrMissingDependency) {
 			t.Errorf("NewSessions(%+v) = %v, want ErrMissingDependency", cfg, err)

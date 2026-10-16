@@ -1651,17 +1651,28 @@ SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms,
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByDigest :one
+-- principal_active_at_ms is the latest activity of the owner by the account
+-- rule of the inactivity disable, as in GetAccessTokenByDigest.
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
+    SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
+  ), 0)) AS INTEGER) AS principal_active_at_ms
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 WHERE s.digest = ? AND p.deleted_at_ms IS NULL;
 
 -- name: TouchSession :exec
+-- An idle or expired session keeps its last use: seen_after_ms and
+-- created_after_ms are the bounds of an active session at at_ms.
 UPDATE sessions SET last_seen_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL
-  AND last_seen_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER);
+  AND last_seen_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER)
+  AND last_seen_at_ms > CAST(sqlc.arg('seen_after_ms') AS INTEGER)
+  AND created_at_ms > CAST(sqlc.arg('created_after_ms') AS INTEGER);
 
 -- name: EndSession :execrows
 UPDATE sessions SET ended_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER), end_reason = sqlc.arg('end_reason')

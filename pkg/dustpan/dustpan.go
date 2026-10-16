@@ -781,7 +781,7 @@ func newAdapters(
 
 	gate := bodygate.New(cfg.maxBodyBytesInFlight)
 
-	sessionPolicies, signIn, err := newConsoleSignIn(cfg)
+	sessionPolicies, signIn, err := newConsoleSignIn(cfg, svc.tokens)
 	if err != nil {
 		return adapters{}, err
 	}

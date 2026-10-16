@@ -15,6 +15,7 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/oauth"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -56,7 +57,7 @@ var errSignInSetup = errors.New("console sign-in")
 
 // newSignIn returns the console sign-in of cfg, or nil when cfg names no
 // provider.
-func newSignIn(cfg *settings, policies *session.Policies) (*serverapi.SignIn, error) {
+func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Service) (*serverapi.SignIn, error) {
 	if len(cfg.oidcProviders) == 0 {
 		return nil, nil //nolint:nilnil // No provider is a valid setup: the sign-in routes stay unmounted.
 	}
@@ -78,7 +79,14 @@ func newSignIn(cfg *settings, policies *session.Policies) (*serverapi.SignIn, er
 		return nil, err
 	}
 
-	sessions, err := session.NewSessions(session.SessionsConfig{Store: store, Policies: policies, Now: cfg.now})
+	var inactivity session.InactivityRule
+	if tokens != nil {
+		inactivity = tokenInactivity{tokens: tokens}
+	}
+
+	sessions, err := session.NewSessions(session.SessionsConfig{
+		Store: store, Policies: policies, Inactivity: inactivity, Now: cfg.now,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("session service: %w", err)
 	}
@@ -107,19 +115,40 @@ func newSignIn(cfg *settings, policies *session.Policies) (*serverapi.SignIn, er
 }
 
 // newConsoleSignIn builds the session policy service and the console
-// sign-in of cfg. Each result is nil when cfg has none.
-func newConsoleSignIn(cfg *settings) (*session.Policies, *serverapi.SignIn, error) {
+// sign-in of cfg. A session applies the account inactivity rule of tokens,
+// when tokens is not nil. Each result is nil when cfg has none.
+func newConsoleSignIn(cfg *settings, tokens *accesstoken.Service) (*session.Policies, *serverapi.SignIn, error) {
 	policies, err := newSessionPolicyService(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	signIn, err := newSignIn(cfg, policies)
+	signIn, err := newSignIn(cfg, policies, tokens)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	return policies, signIn, nil
+}
+
+// tokenInactivity applies the account inactivity rule of the access token
+// service to the owner of a console session, so that a session does not
+// keep an account alive that the token lookup and the sweep would end.
+type tokenInactivity struct {
+	tokens *accesstoken.Service
+}
+
+// AccountInactive implements session.InactivityRule.
+func (r tokenInactivity) AccountInactive(ctx context.Context, o session.Owner) (bool, error) {
+	inactive, err := r.tokens.AccountInactive(ctx, accesstoken.Owner{
+		ActiveAt: o.ActiveAt, DisabledAt: o.DisabledAt, ID: o.ID, Subject: o.Subject, DisplayName: o.DisplayName,
+		Kind: o.Kind, BreakGlass: o.BreakGlass,
+	})
+	if err != nil {
+		return false, fmt.Errorf("account inactivity of %s: %w", o.ID, err)
+	}
+
+	return inactive, nil
 }
 
 // signInRequestPruneEvery is the period of the deletion of the expired
