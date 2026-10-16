@@ -80,6 +80,34 @@ func TestJournalCompleteRefusedBatchStaysInProgress(t *testing.T) {
 	}
 }
 
+// TestJournalCompleteStoredRetryEndsUpdate checks that a recorded refusal
+// does not block complete once a retry stored its sequences: the refused
+// batch stored nothing, the retry stores sequence 3, and complete with
+// succeeded ends the update.
+func TestJournalCompleteStoredRetryEndsUpdate(t *testing.T) {
+	t.Parallel()
+
+	clk := newClock()
+	f := newBuildFixture(t, clk, pulumijournal.NewReplayer(clk.Now, ""))
+
+	s := f.startJournaled(t)
+	appendRefusedBatch(t, f, s)
+
+	retry := journalBatch(beginEntry(3, 3))
+	if err := f.svc.AppendJournal(t.Context(), f.ref, s.Update.ID, s.Token, retry); err != nil {
+		t.Fatalf("retry of the refused batch: %v", err)
+	}
+
+	done, err := f.svc.Complete(t.Context(), f.ref, s.Update.ID, s.Token, stack.StatusSucceeded)
+	if err != nil {
+		t.Fatalf("complete after the retry stored the batch: %v", err)
+	}
+
+	if done.Status != stack.StatusSucceeded {
+		t.Fatalf("complete status = %q, want succeeded", done.Status)
+	}
+}
+
 // TestJournalCompleteGapStaysInProgress checks that a complete with succeeded
 // is refused while the stored sequence IDs hold a gap, even with no recorded
 // refusal. The update stays in progress.

@@ -65,6 +65,7 @@ type memUpdateStore struct {
 	checkpoints  map[stack.UpdateID]stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
 	refusals     map[stack.UpdateID][]stack.JournalRefusal
+	seqs         map[stack.UpdateID][]int64
 	mu           sync.Mutex
 }
 
@@ -75,6 +76,7 @@ func newMemUpdateStore() *memUpdateStore {
 		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
 		events:       map[stack.UpdateID][]stack.Event{},
 		refusals:     map[stack.UpdateID][]stack.JournalRefusal{},
+		seqs:         map[stack.UpdateID][]int64{},
 		mu:           sync.Mutex{},
 	}
 }

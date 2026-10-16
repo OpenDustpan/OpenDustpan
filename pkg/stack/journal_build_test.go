@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"strconv"
@@ -259,7 +260,7 @@ func (m *journalMemStore) verifyJournalRow(row stack.JournalRow) error {
 
 	changed, err := row.Verify(known, m.changed[row.Update])
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", stack.ErrJournalBatch, err)
 	}
 
 	if changed {

@@ -5,6 +5,7 @@ package pulumi_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
@@ -27,11 +28,17 @@ func journalWriterFor(t *testing.T, blobs *memBlob, rows *memUpdateStore) *stack
 }
 
 // PutJournalRow checks the row with the replay verifier, as the stores do on
-// arrival, and keeps nothing: the route tests read the answer, not the rows.
+// arrival, and keeps its sequence IDs: the route tests read the answer and
+// the complete check reads the stored sequences, not the rows.
 func (m *memUpdateStore) PutJournalRow(_ context.Context, row stack.JournalRow, _ namespace.Fence) (bool, error) {
 	if _, err := row.Verify(nil, false); err != nil {
 		return false, fmt.Errorf("%w: %w", stack.ErrJournalBatch, err)
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.seqs[row.Update] = append(m.seqs[row.Update], row.SequenceIDs...)
 
 	return false, nil
 }
@@ -73,9 +80,15 @@ func (m *memUpdateStore) JournalRefusals(
 	return m.refusals[update], nil
 }
 
-// JournalSequences returns no sequences: the fixture keeps no journal rows.
+// JournalSequences returns the sequence IDs the fixture kept, in order.
 func (m *memUpdateStore) JournalSequences(
-	context.Context, stack.ID, stack.UpdateID,
+	_ context.Context, _ stack.ID, update stack.UpdateID,
 ) ([]int64, error) {
-	return nil, nil
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	out := slices.Clone(m.seqs[update])
+	slices.Sort(out)
+
+	return out, nil
 }

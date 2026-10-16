@@ -263,19 +263,18 @@ func (j *JournalEntries) Batches(ctx context.Context, stackID ID, update UpdateI
 	return out, nil
 }
 
-// Incomplete reports whether the update holds a recorded refusal or a gap in
-// its stored sequence IDs, so a complete with succeeded must not end it. A
-// gap is a missing sequence ID between 1 and the highest stored one. An
-// update with no stored batches and no refusal is complete, so an empty
-// journaled update still ends.
+// Incomplete reports whether the update holds a recorded refusal for a batch
+// that is still unstored, or a gap in its stored sequence IDs, so a complete
+// with succeeded must not end it. A refusal whose sequence IDs are all stored
+// is a batch that a retry stored after the refusal, so it does not block the
+// end. A refusal with no sequence IDs names nothing stored, so it still
+// blocks it. A gap is a missing sequence ID between 1 and the highest stored
+// one. An update with no stored batches and no refusal is complete, so an
+// empty journaled update still ends.
 func (j *JournalEntries) Incomplete(ctx context.Context, stackID ID, update UpdateID) (bool, error) {
 	refusals, err := j.rows.JournalRefusals(ctx, stackID, update)
 	if err != nil {
 		return false, fmt.Errorf("read journal refusals: %w", err)
-	}
-
-	if len(refusals) > 0 {
-		return true, nil
 	}
 
 	seqs, err := j.rows.JournalSequences(ctx, stackID, update)
@@ -283,7 +282,35 @@ func (j *JournalEntries) Incomplete(ctx context.Context, stackID ID, update Upda
 		return false, fmt.Errorf("read journal sequences: %w", err)
 	}
 
+	if hasUnstoredRefusal(refusals, seqs) {
+		return true, nil
+	}
+
 	return hasJournalGap(seqs), nil
+}
+
+// hasUnstoredRefusal reports whether a refusal names a batch that is still
+// unstored: a refusal with no sequence IDs, or with a sequence ID missing
+// from the stored ones.
+func hasUnstoredRefusal(refusals []JournalRefusal, seqs []int64) bool {
+	stored := make(map[int64]bool, len(seqs))
+	for _, s := range seqs {
+		stored[s] = true
+	}
+
+	for _, r := range refusals {
+		if len(r.SequenceIDs) == 0 {
+			return true
+		}
+
+		for _, s := range r.SequenceIDs {
+			if !stored[s] {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // hasJournalGap reports whether seqs miss a sequence ID between 1 and the

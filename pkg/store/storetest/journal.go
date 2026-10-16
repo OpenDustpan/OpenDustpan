@@ -547,6 +547,60 @@ func testJournalRefusalsMissingUpdate(t *testing.T, f fixture) {
 	}
 }
 
+// testJournalRefusalsOnlyRunning shows that a refusal of an update that no
+// longer runs records nothing: the update ended, so the rows stay empty.
+func testJournalRefusalsOnlyRunning(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+	f.end(t, u, stack.StatusCanceled)
+
+	refusal := journalRefusal(u, []int64{1}, 400, "refused batch")
+	if err := f.s.RecordJournalRefusal(t.Context(), refusal, f.fence); err != nil {
+		t.Fatalf("record refusal after cancel: %v", err)
+	}
+
+	if got := readRefusals(t, f, u); len(got) != 0 {
+		t.Fatalf("refusals after cancel = %v, want none", got)
+	}
+}
+
+// testJournalEndDropsRefusals shows that ending the update drops its refusal
+// rows: cancel drops them, and so does failure with no stored batch.
+func testJournalEndDropsRefusals(t *testing.T, f fixture) {
+	t.Helper()
+
+	canceled := f.runJournaled(t, f.ref, "u1")
+	recordRefusal(t, f, journalRefusal(canceled, []int64{1}, 400, "refused batch"))
+	f.end(t, canceled, stack.StatusCanceled)
+
+	if got := readRefusals(t, f, canceled); len(got) != 0 {
+		t.Fatalf("refusals after cancel = %v, want none", got)
+	}
+
+	failed := f.runJournaled(t, f.ref, "u2")
+	recordRefusal(t, f, journalRefusal(failed, []int64{1}, 400, "refused batch"))
+	f.end(t, failed, stack.StatusFailed)
+
+	if got := readRefusals(t, f, failed); len(got) != 0 {
+		t.Fatalf("refusals after failure = %v, want none", got)
+	}
+}
+
+// testJournalRefusalStaleFence shows that a refusal with a stale fence is
+// refused with the fenced sentinel, like any other fenced write.
+func testJournalRefusalStaleFence(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+	stale := namespace.Fence{Namespace: f.fence.Namespace, FailoverVersion: f.fence.FailoverVersion - 1}
+
+	err := f.s.RecordJournalRefusal(t.Context(), journalRefusal(u, []int64{1}, 400, "refused batch"), stale)
+	if !errors.Is(err, namespace.ErrFenced) {
+		t.Fatalf("refusal with a stale fence: err = %v, want namespace.ErrFenced", err)
+	}
+}
+
 // testJournalSequences shows that the stored sequence IDs of an update read
 // back in order.
 func testJournalSequences(t *testing.T, f fixture) {
