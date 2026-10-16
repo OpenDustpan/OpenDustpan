@@ -35,6 +35,7 @@ The lead is the Claude session `<LEAD_SESSION>`. Send every report with the send
 8. Do not contact the Pulumi project in any way (no issues, comments, stars). You can read its public source with `git clone`.
 9. Never put a model name in a commit message, a PR title or a PR body.
 10. Only use this exact implementer command: `opencode run -m <IMPLEMENTATION_MODEL>` (with `--print-logs` as in Step 4). No other model.
+11. Never schedule a check-in, a reminder or a timer (no `send_later`, no `create_trigger`). Pull request events and messages from the lead wake you.
 
 ## Step 0. Set up (once)
 

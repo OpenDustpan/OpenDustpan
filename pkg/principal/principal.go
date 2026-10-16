@@ -106,6 +106,9 @@ const (
 	// SourceOIDC is a person that the first sign-in through an OpenID
 	// Connect provider made.
 	SourceOIDC Source = "oidc"
+	// SourceOAuth is a person that the first sign-in through a plain
+	// OAuth 2.0 provider made.
+	SourceOAuth Source = "oauth"
 )
 
 // Limits of the text fields, in bytes.
@@ -429,10 +432,10 @@ func (p Principal) validateNamespace() error {
 }
 
 // validateSource returns ErrInvalid for a source that is not local, ldap,
-// scim or oidc.
+// scim, oidc or oauth.
 func validateSource(s Source) error {
 	switch s {
-	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC:
+	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC, SourceOAuth:
 		return nil
 	default:
 		return fmt.Errorf("%w: unknown source %q", ErrInvalid, s)

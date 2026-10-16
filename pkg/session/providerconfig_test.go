@@ -9,13 +9,21 @@ import (
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
+// noOAuth returns the empty OAuth settings of a provider in the OIDC mode.
+func noOAuth() session.OAuthSettings {
+	return session.OAuthSettings{
+		AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+		EmailClaim: "",
+	}
+}
+
 func validProviderConfig() session.ProviderConfig {
 	at := time.Date(2026, time.October, 16, 9, 0, 0, 0, time.UTC)
 
 	return session.ProviderConfig{
-		CreatedAt: at, UpdatedAt: at, ID: "corp", Issuer: "https://idp.example/realms/corp", DisplayName: "Corp",
-		ClientID: "dustpan", SealedSecret: []byte("sealed"), Scopes: []string{"profile"}, Version: 1,
-		AutoCreate: true, Enabled: true,
+		CreatedAt: at, UpdatedAt: at, ID: "corp", Mode: session.ModeOIDC, Issuer: "https://idp.example/realms/corp",
+		DisplayName: "Corp", ClientID: "dustpan", SealedSecret: []byte("sealed"), Scopes: []string{"profile"},
+		OAuth: noOAuth(), Version: 1, AutoCreate: true, Enabled: true,
 	}
 }
 
