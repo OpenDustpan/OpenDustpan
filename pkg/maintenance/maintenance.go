@@ -93,12 +93,14 @@ func ParseState(s string) (State, error) {
 // backup registry. Every SQL adapter serves it from one database connection.
 type Store interface {
 	// GetState returns the installation state. A fresh database reads
-	// normal: the migration seeds it. It reports ErrUnavailable when the
-	// state cannot be read, and when the stored value is outside the known
-	// set: an unknown stored value is a server fault, never a bad request.
+	// normal: the migration seeds the one row. It reports ErrUnavailable
+	// when the state cannot be read, when the row is missing, and when the
+	// stored value is outside the known set: an unknown stored value is a
+	// server fault, never a bad request.
 	GetState(ctx context.Context) (State, error)
-	// SetState stores state. It reports ErrInvalidState for any other value
-	// and ErrUnavailable when the state cannot be stored.
+	// SetState stores state in the seeded row. It reports ErrInvalidState
+	// for any other value and ErrUnavailable when the state cannot be
+	// stored, also when the row is missing: it never creates the row.
 	SetState(ctx context.Context, state State) error
 	// SetStateIf stores next only when the stored state is expected: one
 	// compare-and-set, so enters on several instances of one database stay
