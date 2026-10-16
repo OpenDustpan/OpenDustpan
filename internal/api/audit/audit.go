@@ -277,9 +277,9 @@ func (h *Handler) getEntry(
 ) {
 	ctx := r.Context()
 
-	seq, err := strconv.ParseInt(r.PathValue("sequence"), 10, 64)
-	if err != nil || seq < 1 {
-		h.writeError(ctx, w, errInvalidSequence)
+	seq, err := parseSequence(r.PathValue("sequence"))
+	if err != nil {
+		h.writeError(ctx, w, err)
 
 		return
 	}
@@ -298,6 +298,12 @@ func (h *Handler) getEntry(
 	}
 
 	e, err := h.reader.EntryAt(ctx, ns, seq)
+	if err == nil && e.Namespace != ns {
+		// The answer holds only an entry of the scope that the request
+		// names, whatever the store answers.
+		err = audit.ErrEntryNotFound
+	}
+
 	if err != nil {
 		h.writeError(ctx, w, err)
 
@@ -342,8 +348,30 @@ func (h *Handler) checkChain(
 var errInvalidPage = errors.New("invalid page[number] or page[size]: send positive numbers")
 
 // errInvalidSequence reports a sequence in the path that is not a positive
-// number. classify maps it to 400.
-var errInvalidSequence = errors.New("invalid sequence: send a positive number")
+// number in its one decimal form. classify maps it to 400.
+var errInvalidSequence = errors.New("invalid sequence: send a positive number with no sign and no leading zero")
+
+// parseSequence reads a sequence from the path. It accepts only the decimal
+// form of a positive number, with no sign and no leading zero, so each entry
+// has one URL.
+func parseSequence(raw string) (int64, error) {
+	if raw == "" || raw[0] < '1' || raw[0] > '9' {
+		return 0, errInvalidSequence
+	}
+
+	for i := 1; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return 0, errInvalidSequence
+		}
+	}
+
+	seq, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, errInvalidSequence
+	}
+
+	return seq, nil
+}
 
 // errNoEntryReader reports a store that cannot read one entry. classify maps
 // it to 501.
