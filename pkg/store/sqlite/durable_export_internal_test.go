@@ -18,10 +18,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
-// ErrStepTransactionBoundForTest is errStepTransactionBound, for the stall
-// test of the step transaction bound.
-var ErrStepTransactionBoundForTest = errStepTransactionBound
-
 // durableTestRegion is the home region of the namespaces of the domain.
 const durableTestRegion = namespace.Region("test-region")
 
@@ -79,7 +75,7 @@ func (d durableDomain) WriteStep(
 	d.s.mu.RLock()
 	defer d.s.mu.RUnlock()
 
-	return d.s.inStepTx(ctx, func(tx *sql.Tx, q *db.Queries) error {
+	return d.s.inStepTx(ctx, func(ctx context.Context, tx *sql.Tx, q *db.Queries) error {
 		if err := hooks.Run(hooks.Before); err != nil {
 			return err
 		}
@@ -117,7 +113,7 @@ func (d durableDomain) StartWith(
 
 	var op durable.Operation
 
-	err := d.s.inStepTx(ctx, func(tx *sql.Tx, q *db.Queries) error {
+	err := d.s.inStepTx(ctx, func(ctx context.Context, tx *sql.Tx, q *db.Queries) error {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO durabletest_values (value) VALUES (?)`, value); err != nil {
 			return fmt.Errorf("insert domain value: %w", err)
 		}

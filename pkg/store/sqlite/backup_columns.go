@@ -335,42 +335,6 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table: "durable_operations",
-			columns: []string{
-				"id",
-				"start_key",
-				"kind",
-				"input",
-				"version",
-				backupColState,
-				"attempt",
-				"expiries",
-				"failures",
-				"last_error",
-				"claim_owner",
-				"claim_token",
-				"claim_expires_at_ms",
-				"cancel_requested",
-				"not_before_ms",
-				backupColCreatedAtMs,
-				backupColUpdatedAtMs,
-			},
-		},
-		{
-			table: "durable_steps",
-			columns: []string{
-				"operation_id",
-				"name",
-				"seq",
-				"result",
-				"done_at_ms",
-			},
-		},
-		{
-			table:   "durable_schedules",
-			columns: []string{"name", "interval_ms", "next_run_at_ms", "last_claimed_at_ms"},
-		},
-		{
 			table: "installation",
 			columns: []string{
 				"id",

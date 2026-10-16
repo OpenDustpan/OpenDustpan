@@ -49,9 +49,10 @@ const durableColumns = `SELECT id, start_key, kind, input, version, state, attem
 	`last_error, claim_owner, claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, ` +
 	`updated_at_ms`
 
-// errStepTransactionBound reports a step transaction that stayed open past
-// the bound of the store and rolled back.
-var errStepTransactionBound = errors.New("step transaction passed its time bound and rolled back")
+// ErrStepTransactionBound reports a step transaction that stayed open past
+// the bound of the store and rolled back. The write of the step changed
+// nothing.
+var ErrStepTransactionBound = errors.New("step transaction passed its time bound and rolled back")
 
 // WithStepTransactionBound sets the bound of a step transaction. A value
 // that is not positive keeps DefaultStepTransactionBound.
@@ -345,6 +346,7 @@ func durableClaimQuery(req durable.ClaimRequest, now int64) (string, []any) {
 
 	query := durableColumns + " FROM durable_operations" +
 		" WHERE (" + strings.Join(kinds, " OR ") + ")" +
+		" AND state IN ('pending', 'running')" +
 		" AND ((state = 'pending' AND not_before_ms <= ?)" +
 		" OR (state = 'running' AND claim_expires_at_ms <= ?))" +
 		" ORDER BY created_at_ms, id LIMIT 1"
@@ -401,7 +403,7 @@ func (o *DurableOperations) RecordStep(ctx context.Context, f durable.StepFence,
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inStepTx(ctx, func(_ *sql.Tx, q *db.Queries) error {
+	return s.inStepTx(ctx, func(ctx context.Context, _ *sql.Tx, q *db.Queries) error {
 		return recordStep(ctx, q, f, result)
 	})
 }
@@ -532,15 +534,22 @@ func (s *Store) endAttempt(
 }
 
 // inStepTx runs fn in an IMMEDIATE transaction with the bound of a step
-// transaction. At the bound, database/sql rolls the transaction back and
-// releases the write lock, and the later statements of fn fail. A store
-// method of another port that takes a durable.StepFence runs its write and
-// recordStep through it.
-func (s *Store) inStepTx(ctx context.Context, fn func(tx *sql.Tx, q *db.Queries) error) error {
+// transaction, and gives fn the bounded context. At the bound, database/sql
+// rolls the transaction back and releases the write lock, a statement of fn
+// that runs is canceled, and the later statements of fn fail. A store method
+// of another port that takes a durable.StepFence runs its write and
+// recordStep through it, with the context that it gets.
+func (s *Store) inStepTx(
+	ctx context.Context, fn func(ctx context.Context, tx *sql.Tx, q *db.Queries) error,
+) error {
 	bounded, cancel := context.WithTimeout(ctx, s.stepTxBound)
 	defer cancel()
 
-	return stepTxError(bounded, s.inWriteTx(bounded, fn))
+	err := s.inWriteTx(bounded, func(tx *sql.Tx, q *db.Queries) error {
+		return fn(bounded, tx, q)
+	})
+
+	return stepTxError(bounded, err)
 }
 
 // inWriteTx runs fn in an IMMEDIATE transaction (the _txlock of the store),
@@ -562,11 +571,11 @@ func (s *Store) inWriteTx(ctx context.Context, fn func(tx *sql.Tx, q *db.Queries
 	return nil
 }
 
-// stepTxError adds errStepTransactionBound to err when the bound of the step
+// stepTxError adds ErrStepTransactionBound to err when the bound of the step
 // transaction passed, so the caller can tell a stall from another failure.
 func stepTxError(bounded context.Context, err error) error {
 	if err != nil && errors.Is(bounded.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %w", errStepTransactionBound, err)
+		return fmt.Errorf("%w: %w", ErrStepTransactionBound, err)
 	}
 
 	return err
