@@ -688,10 +688,9 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // transaction (ADR 47): it frees the name, keeps the updates, checkpoints,
 // events, tags and wrapped data key, and removes the inventory entry. When
 // the latest checkpoint manages resources, it returns ErrHasResources and
-// changes nothing: rows with a stored count use it, rows with SQL deployment
-// content count it, and rows with a NULL count and blob content use guard,
-// which the service counted outside the transaction. A guard naming another
-// checkpoint returns ErrConcurrentModification so the service recounts once. It returns
+// changes nothing. It answers from guard, which the service counted outside
+// the transaction. A guard naming another checkpoint returns
+// ErrConcurrentModification so the service recounts once. It returns
 // ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
 // mutating update of the stack runs.
 // The transaction holds the write lock from the start, so a concurrent start
@@ -773,12 +772,10 @@ func refuseRunningStack(ctx context.Context, q *db.Queries, stackID string) erro
 }
 
 // refuseResourcedStack returns ErrHasResources when the latest checkpoint of
-// the stack with stackID manages resources. Rows with a stored count use it;
-// rows with SQL deployment content count it with stack.CountManagedResources;
-// rows with a NULL count and blob content use guard, which the service counted
-// outside the transaction: a guard naming another checkpoint returns
-// ErrConcurrentModification so the service recounts once. It reads only the
-// latest row, never a blob.
+// the stack with stackID manages resources. It answers from guard, which the
+// service counted outside the transaction: a guard naming another checkpoint
+// returns ErrConcurrentModification so the service recounts once. It reads
+// only the latest row, never a blob.
 func refuseResourcedStack(
 	ctx context.Context, q *db.Queries, stackID string, guard stack.DeleteGuard,
 ) error {
@@ -791,15 +788,7 @@ func refuseResourcedStack(
 		return fmt.Errorf("read latest checkpoint: %w", err)
 	}
 
-	if row.ResourceCount.Valid {
-		return checkStoredCount(row.ResourceCount.Int64)
-	}
-
-	if len(row.Deployment) > 0 || !row.BlobKey.Valid || row.BlobKey.String == "" {
-		return checkDeployment(row.Deployment)
-	}
-
-	return checkBlobGuard(guard, row.UpdateID, row.Digest)
+	return checkGuard(guard, row.UpdateID, row.Digest)
 }
 
 // checkNoCheckpoint answers a delete with no checkpoint row: a guard that
@@ -812,28 +801,10 @@ func checkNoCheckpoint(guard stack.DeleteGuard) error {
 	return nil
 }
 
-// checkStoredCount answers a delete from the stored count of an older binary.
-func checkStoredCount(count int64) error {
-	if count > 0 {
-		return stack.ErrHasResources
-	}
-
-	return nil
-}
-
-// checkDeployment answers a delete by counting the SQL deployment column.
-func checkDeployment(deployment []byte) error {
-	if stack.CountManagedResources(deployment) > 0 {
-		return stack.ErrHasResources
-	}
-
-	return nil
-}
-
-// checkBlobGuard answers a delete of a blob row from the domain count in
+// checkGuard answers a delete of a checkpoint row from the domain count in
 // guard: a guard naming another checkpoint means a save landed after the
 // count, so the caller recounts once.
-func checkBlobGuard(guard stack.DeleteGuard, updateID string, digest []byte) error {
+func checkGuard(guard stack.DeleteGuard, updateID string, digest []byte) error {
 	if !guard.HasCheckpoint || string(guard.UpdateID) != updateID || !equalDigest(guard.Digest, digest) {
 		return stack.ErrConcurrentModification
 	}
