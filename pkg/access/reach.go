@@ -80,11 +80,11 @@ func (r Reach) Has(action identity.Action, obj identity.Object) bool {
 		return false
 	}
 
-	if e, ok := r.entries[reachTarget(obj)]; ok && e != nil && e.actions[action] {
+	if r.entryHas(reachTarget(obj), action) {
 		return true
 	}
 
-	if e, ok := r.entries[identity.ServerObject().String()]; ok && e != nil && e.actions[action] {
+	if r.entryHas(identity.ServerObject().String(), action) {
 		return true
 	}
 
@@ -98,12 +98,7 @@ func (r Reach) Has(action identity.Action, obj identity.Object) bool {
 		return false
 	}
 
-	e, ok := r.entries[identity.NamespaceObject(ns).String()]
-	if !ok || e == nil {
-		return false
-	}
-
-	return e.actions[action]
+	return r.entryHas(identity.NamespaceObject(ns).String(), action)
 }
 
 // Covers reports whether r holds every action of other on every object of
@@ -148,6 +143,14 @@ func (r Reach) ActionsOn(obj identity.Object) []identity.Action {
 	sortActions(out)
 
 	return out
+}
+
+// entryHas reports whether the entry under key holds action. A missing or nil
+// entry holds nothing.
+func (r Reach) entryHas(key string, action identity.Action) bool {
+	e, ok := r.entries[key]
+
+	return ok && e != nil && e.actions[action]
 }
 
 // reachAdd puts action on obj in r.
