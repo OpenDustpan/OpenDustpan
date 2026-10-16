@@ -283,6 +283,19 @@ func pgCopySessionTables() []pgCopyTable {
 	}
 }
 
+// pgCopyPrincipalsTable holds the COPY columns of the principals table.
+func pgCopyPrincipalsTable() pgCopyTable {
+	return pgCopyTable{
+		table: "principals",
+		columns: []string{
+			"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
+			pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
+			"break_glass",
+		},
+		orderBy: []string{"id"},
+	}
+}
+
 // pgCopyIdentityTables holds the COPY columns of the principal, group,
 // role and grant tables (ADR 52).
 func pgCopyIdentityTables() []pgCopyTable {
@@ -293,14 +306,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 // member and token tables.
 func pgCopyPrincipalTables() []pgCopyTable {
 	return []pgCopyTable{
-		{
-			table: "principals",
-			columns: []string{
-				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
-			},
-			orderBy: []string{"id"},
-		},
+		pgCopyPrincipalsTable(),
 		{
 			table: "principal_groups",
 			columns: []string{

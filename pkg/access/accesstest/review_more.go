@@ -127,7 +127,7 @@ func seedTeam(t *testing.T, ps principal.Store) {
 	for _, p := range [][2]string{{"prn-x", "xavier"}, {"prn-y", "yvonne"}} {
 		prn := principal.Principal{
 			CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: p[0], Subject: p[1], DisplayName: "",
-			Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+			Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		}
 		if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
 			t.Fatalf("create principal: %v", err)
@@ -179,7 +179,7 @@ func testReviewCustomRoles(t *testing.T, s access.Store) {
 
 	scope := access.ReviewScope{
 		Namespace: "acme", Object: identity.Object{}, Containers: []string{"@server"},
-		ContainerRoles: []string{access.RoleViewer}, All: false,
+		ContainerRoles: []string{access.RoleViewer}, TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
 	}
 
 	q := everyRow(scope)

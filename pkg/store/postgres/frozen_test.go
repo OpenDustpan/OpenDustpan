@@ -70,6 +70,7 @@ func TestFrozenMigrations(t *testing.T) {
 		"0066_namespace_principals.sql":            "1f8013ffa3162a5bcaf313ef65dbd74de34b728bcb24a2f15c34e930d0201923",
 		"0068_update_journal_records_changed.sql":  "41672a0c124301d6a3448a3c5171dcb978d95fd5332696c6ff305b2d3608ecb9",
 		"0070_membership_source_state.sql":         "12a709490400f15e186f2fe3c8647be99c75858cce493c9d0e6738070f17a81d",
+		"0071_break_glass_accounts.sql":            "4808b43c4492416709520b3c868185084791694c078eb1b59c05dbc1ed7a8aa3",
 	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")

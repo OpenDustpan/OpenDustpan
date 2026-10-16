@@ -30,6 +30,7 @@ func reviewCases() []struct {
 		{name: "review snapshot reads the grants and memberships at its time", test: testReviewAsOf},
 		{name: "review expand puts each member of a group in its own row", test: testReviewExpand},
 		{name: "review history keeps a container grant with any custom role", test: testReviewCustomRoles},
+		{name: "review of a principal reads the grants on its token namespace", test: testReviewTokenNamespace},
 		{name: "review counts only when asked", test: testReviewCount},
 		{name: "review units reads live and deleted units", test: testReviewUnits},
 		{name: "review last access reads the latest use of each principal", test: testLastAccess},
@@ -109,7 +110,10 @@ func everyRow(scope access.ReviewScope) access.ReviewQuery {
 
 // allScope is the scope of every grant.
 func allScope() access.ReviewScope {
-	return access.ReviewScope{Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, All: true}
+	return access.ReviewScope{
+		Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+		TokenNamespaceRoles: nil, All: true,
+	}
 }
 
 // review reads q and checks the grant IDs of its rows and its total.
@@ -149,7 +153,8 @@ func testReviewScopes(t *testing.T, s access.Store) {
 
 	review(t, rs, "namespace acme", everyRow(access.ReviewScope{
 		Namespace: "acme", Object: identity.Object{}, Containers: []string{"@server"},
-		ContainerRoles: []string{access.RoleAccountAdministrator}, All: false,
+		ContainerRoles: []string{access.RoleAccountAdministrator}, TokenNamespace: "",
+		TokenNamespaceRoles: nil, All: false,
 	}), "grt-2", "grt-3", "grt-4", "grt-5")
 
 	review(t, rs, "collection acme/payments", everyRow(access.ReviewScope{
@@ -157,14 +162,47 @@ func testReviewScopes(t *testing.T, s access.Store) {
 		Object:         identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"),
 		Containers:     []string{"@server", "acme"},
 		ContainerRoles: []string{access.RoleAccountAdministrator, access.RoleWriter},
-		All:            false,
+		TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
 	}), "grt-2", "grt-3", "grt-4")
 
 	// A container grant with a role outside ContainerRoles stays out.
 	review(t, rs, "namespace beta", everyRow(access.ReviewScope{
 		Namespace: "beta", Object: identity.Object{}, Containers: []string{"@server"},
-		ContainerRoles: []string{access.RoleViewer}, All: false,
+		ContainerRoles: []string{access.RoleViewer}, TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
 	}), "grt-6")
+}
+
+// testReviewTokenNamespace checks the scope of the export of a principal
+// of a namespace: a grant of a token-namespace role on the token namespace
+// is in it, and a grant of another role on it, a grant of a token-namespace
+// role on another namespace, or a grant of a token-namespace role on the
+// installation is not, unless the installation role is in ContainerRoles.
+func testReviewTokenNamespace(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reviewStore(t, s)
+	bot := identity.PrincipalObject("prn-bot")
+
+	mustCreateGrant(t, s, grantAt(1, "grt-1", principalSubject("prn-a"), access.RoleAdmin,
+		identity.NamespaceObject("acme")))
+	mustCreateGrant(t, s, grantAt(2, "grt-2", principalSubject("prn-b"), access.RoleViewer,
+		identity.NamespaceObject("acme")))
+	mustCreateGrant(t, s, grantAt(3, "grt-3", principalSubject("prn-c"), access.RoleAdmin,
+		identity.NamespaceObject("beta")))
+	mustCreateGrant(t, s, grantAt(4, "grt-4", principalSubject("prn-d"), access.RoleAdmin,
+		identity.ServerObject()))
+
+	scope := access.ReviewScope{
+		Object: bot, Namespace: "", Containers: []string{"@server"},
+		ContainerRoles: []string{access.RoleViewer}, TokenNamespace: "acme",
+		TokenNamespaceRoles: []string{access.RoleAdmin}, All: false,
+	}
+
+	review(t, rs, "export of a principal with a token namespace", everyRow(scope), "grt-1")
+
+	scope.ContainerRoles = []string{access.RoleAdmin}
+
+	review(t, rs, "export of a principal with the installation role", everyRow(scope), "grt-1", "grt-4")
 }
 
 func testReviewSubject(t *testing.T, s access.Store) {
@@ -330,7 +368,7 @@ func seedMemberships(t *testing.T, ps principal.Store) {
 
 	prn := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 	}
 	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
 		t.Fatalf("create principal: %v", err)
@@ -374,7 +412,10 @@ func testReviewUnit(t *testing.T, s access.Store) {
 	mustCreateGrant(t, s, grantAt(1, "grt-1", principalSubject("prn-a"), access.RoleViewer, web))
 
 	scope := func(obj identity.Object) access.ReviewScope {
-		return access.ReviewScope{Object: obj, Namespace: "", Containers: nil, ContainerRoles: nil, All: false}
+		return access.ReviewScope{
+			Object: obj, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+			TokenNamespaceRoles: nil, All: false,
+		}
 	}
 
 	rows := review(t, rs, "export of the unit", everyRow(scope(web)), "grt-1")

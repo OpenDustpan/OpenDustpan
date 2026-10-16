@@ -323,6 +323,7 @@ func portableSpec() []PortableTable {
 				{Name: "last_active_at_ms", Kind: KindTime},
 				{Name: "last_sign_in_at_ms", Kind: KindTime},
 				{Name: "namespace", Kind: KindText},
+				{Name: "break_glass", Kind: KindBool},
 			},
 		},
 		{

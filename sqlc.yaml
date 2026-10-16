@@ -41,6 +41,8 @@ sql:
             go_type: bool
           - column: group_members.pinned
             go_type: bool
+          - column: principals.break_glass
+            go_type: bool
   - engine: postgresql
     schema: pkg/store/postgres/migrations
     queries: pkg/store/postgres/queries.sql
