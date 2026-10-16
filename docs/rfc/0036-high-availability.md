@@ -91,7 +91,7 @@ Other verified failures, with their issue where one exists:
   instances; partial unique indexes would (#690).
 - The maintenance watcher fails open: before its first successful read it
   answers `normal`, and after a read error it keeps the last state
-  (`pkg/maintenance/maintenance.go:634-654`).
+  (`pkg/maintenance/maintenance.go:634-654`, #685).
 
 The code also shows these gaps (read, not yet tested):
 
@@ -381,6 +381,86 @@ What the DBOS v1.7.0 source shows before the spike:
 The research note recommends our own adapter in its paradigm (d), a state
 machine in domain rows with a fencing epoch (research, part 6). This RFC
 keeps the bake-off, because the owner asked for evidence from both adapters.
+
+### Bake-off results (spike of 2026-10-16)
+
+A throwaway spike on a local branch implements a small version of the port
+(`Start`, `Get`, kinds with ordered steps, schedules) and two adapters:
+
+- **Our adapter:** 436 lines, two tables. A claim per operation with a token
+  and an expiry from the database clock (shape L1). Claims use
+  `SKIP LOCKED` on PostgreSQL. Each step updates the step record under the
+  claim token in the step's own transaction. A schedule is claimed with one
+  conditional `UPDATE`. It runs on PostgreSQL and SQLite through
+  `database/sql`.
+- **DBOS adapter:** 269 lines over DBOS v1.7.0. One registered workflow
+  dispatches by kind. Each step is a `RunAsTransaction` on the DBOS system
+  pool (the atomic mode). Each schedule is a DBOS cron schedule.
+
+The suite runs eight cases on both stores. Instance A of the kill cases runs
+in a helper process that the test kills with `SIGKILL` inside step 2. The
+domain write of every step inserts a row, so a step that runs twice shows as
+two rows.
+
+| Case | Ours, PostgreSQL | Ours, SQLite | DBOS, PostgreSQL | DBOS, SQLite |
+| --- | --- | --- | --- | --- |
+| Start key gives one operation | Pass | Pass | Pass | Pass |
+| Status from another instance | Pass | Pass | Pass | Pass |
+| A fenced step that fails rolls back its domain write | Pass | Pass | Pass | Pass |
+| Kill in step 2 while instance B runs: B completes it | Pass | Pass | **Fail** (1) | **Fail** (1) |
+| Kill in step 2; B starts later with the same executor ID | — | — | Pass | Pass |
+| A second instance starts while A runs: no step runs twice | Pass | Pass | Pass (2) | Not run (3) |
+| A stalled holder loses its claim and cannot write | Pass | **Fail** (4) | **Fail** (5) | Not run (3) |
+| A 1 s schedule on two instances fires once per tick | Pass | Pass | Pass | Pass |
+
+1. With unique executor IDs, the killed instance's workflow stays `PENDING`
+   with executor A, and step 1 is the only step done. Nothing recovers it
+   without Conductor.
+2. Both instances used the executor ID `local`. Steps did not run twice: in
+   the atomic mode, the owner check of DBOS rolls back the losing step's
+   domain write together with its checkpoint.
+3. On SQLite, opening a second DBOS instance while a step of the first one
+   stalls inside its transaction never returns. The stalled step holds the
+   one write lock, and `Launch` retries its first write with no limit. The
+   first attempt ran into a 30-minute test timeout.
+4. On SQLite, the stalled step of A holds the one write lock, so B cannot
+   claim until A ends. SQLite serves one instance, so this matters only for
+   a stall inside one process.
+5. DBOS has no takeover of a live but stalled owner: the operation waits for
+   A. With the atomic mode, a late write of A is still fenced by the owner
+   check.
+
+Other results of the spike:
+
+- **Registration.** DBOS identifies a workflow by its Go function name, even
+  with `WithWorkflowName`. Workflow closures made per kind share one name and
+  panic at registration with `ConflictingRegistration`. The adapter
+  registers one generic workflow instead.
+- **Schedules.** `CreateSchedule` is not idempotent across instances: the
+  second instance gets a unique violation. The adapter treats it as
+  "the schedule exists".
+- **Storage.** On PostgreSQL, DBOS creates 13 tables and 3 plpgsql functions
+  in its own schema, and records migration version 123. Our restore swap does
+  not touch that schema. In the atomic mode it adds no table to our schema.
+  On SQLite the DBOS tables land in our database file.
+- **Dependencies.** The DBOS module adds two modules that the binary does not
+  link today: `jackc/pgerrcode` and `robfig/cron/v3`, both MIT. `govulncheck`
+  on the spike packages finds no vulnerability. `make trivy`, with its
+  license scan, passes with the module added.
+- **goleak.** The passing cases of both adapters end with goleak clean, so a
+  clean shutdown leaves no goroutine in both adapters.
+
+What the results say about each adapter:
+
+- **Ours** passes every case on PostgreSQL. Its gap on SQLite is a property
+  of SQLite, not of the adapter.
+- **DBOS** passes the cases inside one live instance, and it fences late
+  writes well in the atomic mode. It fails takeover across instances, the
+  case that #667 is about. To pass, a DBOS adapter needs our own liveness
+  signal and the internal recovery call, which the research note calls an
+  internal contract between DBOS and its commercial module. The atomic mode
+  also needs DBOS to own the pool that our steps write through, and
+  `Shutdown` closes that pool.
 
 ### Liveness
 
