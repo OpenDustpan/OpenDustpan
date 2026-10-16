@@ -283,8 +283,8 @@ func TestNewRunnerValidates(t *testing.T) {
 			c.Kinds[0].Version, c.Kinds[0].MinVersion = 1, 2
 		}),
 		"negative min version": with(func(c *durable.RunnerConfig) { c.Kinds[0].MinVersion = -1 }),
-		"renewal not below lease": with(func(c *durable.RunnerConfig) {
-			c.Lease, c.RenewEvery = time.Second, time.Second
+		"renewal not below half the lease": with(func(c *durable.RunnerConfig) {
+			c.Lease, c.RenewEvery = time.Second, time.Second/2
 		}),
 	}
 
@@ -438,6 +438,46 @@ func TestRunnerUsesTheRecordedResultOfAStepThatItsWriteRecorded(t *testing.T) {
 
 	if seen != nil {
 		t.Fatalf("step two saw result %q of step one, want the recorded result (none)", seen)
+	}
+}
+
+// failingGet answers every Get with a network error.
+type failingGet struct {
+	durable.Store
+}
+
+func (failingGet) Get(context.Context, durable.ID) (durable.Operation, error) {
+	return durable.Operation{}, errNetwork
+}
+
+func TestRunnerFailsTheAttemptWhenTheRecordedResultCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	mem := durabletest.NewMem()
+	inner := mem.Store()
+	domain := mem.Harness().Domain
+
+	ns, err := domain.CreateNamespace(t.Context(), "ns")
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	rec := newRecorder()
+	write := rec.step("one", func(ctx context.Context, sc durable.StepContext) ([]byte, error) {
+		return nil, domain.WriteStep(ctx, sc.Fence, ns, "v", durabletest.Hooks{Before: nil, After: nil})
+	})
+
+	op := start(t, inner, "k")
+
+	err = newTestRunner(t, failingGet{Store: inner}, "a", write, rec.step("two", nil)).RunOnce(t.Context())
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	got := mustGet(t, inner, op.ID)
+	if got.State != durable.StatePending || got.Failures != 1 || rec.count("two") != 0 {
+		t.Fatalf("operation = %+v, two ran %d times; want a retry that is not final, with step two not run", got,
+			rec.count("two"))
 	}
 }
 
@@ -825,10 +865,11 @@ func TestRunnerStopsWhenClaimLost(t *testing.T) {
 	}
 }
 
-func TestRunnerStopsAStepWhenTheLeaseRunsOutWithNoRenewal(t *testing.T) {
+func TestRunnerStopsAStepBeforeTheLeaseEndsWithNoRenewal(t *testing.T) {
 	t.Parallel()
 
-	store := newCountingStore(durabletest.NewMem().Store())
+	inner := durabletest.NewMem().Store()
+	store := newCountingStore(inner)
 	store.extend = func(context.Context, durable.Claim, time.Duration) (durable.Claim, error) {
 		return durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}}, errNetwork
 	}
@@ -841,22 +882,119 @@ func TestRunnerStopsAStepWhenTheLeaseRunsOutWithNoRenewal(t *testing.T) {
 		return nil, ctx.Err()
 	}}
 
-	start(t, store, "k")
-
+	op := start(t, store, "k")
 	began := time.Now()
 
-	if err := newTestRunner(t, store, "a", step).RunOnce(t.Context()); err != nil {
+	// RunOnce answers ErrClaimLost, so that Run backs off before its next
+	// claim.
+	if err := newTestRunner(t, store, "a", step).RunOnce(t.Context()); !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("RunOnce with no renewal: error = %v, want ErrClaimLost", err)
+	}
+
+	// The step must stop before the lease ends, so that a new holder never
+	// runs it at the same time.
+	if took := (<-stopped).Sub(began); took >= testLease {
+		t.Fatalf("the step stopped %v after the claim, want before the end of the lease %v", took, testLease)
+	}
+
+	// The runner releases the claim while it is live, so the stop is no
+	// expiry and no failure.
+	got := mustGet(t, inner, op.ID)
+	if store.releases.Load() != 1 || store.completes.Load()+store.fails.Load() != 0 ||
+		got.State != durable.StatePending || got.Expiries != 0 || got.Failures != 0 {
+		t.Fatalf("after a stop near the end of the lease: %d releases, operation %+v; want one release, pending, "+
+			"no expiry and no failure", store.releases.Load(), got)
+	}
+}
+
+func TestRunnerKeepsAStepWithASlowRenewal(t *testing.T) {
+	t.Parallel()
+
+	inner := durabletest.NewMem().Store()
+	store := newCountingStore(inner)
+
+	// Each Extend takes longer than the renewal interval, and much less
+	// than the lease.
+	store.extend = func(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
+		timer := time.NewTimer(testRenew + testRenew/2)
+		defer timer.Stop()
+
+		select {
+		case <-ctx.Done():
+			return durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}}, ctx.Err()
+		case <-timer.C:
+		}
+
+		return inner.Extend(ctx, c, lease)
+	}
+
+	long := durable.Step{Name: "one", Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+		timer := time.NewTimer(2 * testLease)
+		defer timer.Stop()
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return nil, nil
+		}
+	}}
+
+	op := start(t, store, "k")
+
+	if err := newTestRunner(t, store, "a", long).RunOnce(t.Context()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
 
-	// The step must stop no later than the lease after the claim, so that a
-	// new holder never runs it at the same time.
-	if took := (<-stopped).Sub(began); took > testLease+testRenew {
-		t.Fatalf("the step stopped %v after the claim, want at most the lease %v", took, testLease)
+	if got := mustGet(t, inner, op.ID); got.State != durable.StateSucceeded || got.Expiries != 0 {
+		t.Fatalf("operation with slow renewals = %+v, want succeeded with no expiry", got)
+	}
+}
+
+func TestOneHolderRunsAStepWhenOneRunnerCannotRenew(t *testing.T) {
+	t.Parallel()
+
+	inner := durabletest.NewMem().Store()
+	broken := newCountingStore(inner)
+	broken.extend = func(context.Context, durable.Claim, time.Duration) (durable.Claim, error) {
+		return durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}}, errNetwork
 	}
 
-	if store.ends() != 0 {
-		t.Fatalf("%d end writes after the lease ran out, want none", store.ends())
+	var active, most atomic.Int32
+
+	// The step runs longer than the lease, so the runner that cannot renew
+	// never finishes it.
+	long := durable.Step{Name: "one", Run: func(ctx context.Context, _ durable.StepContext) ([]byte, error) {
+		now := active.Add(1)
+		defer active.Add(-1)
+
+		for {
+			old := most.Load()
+			if now <= old || most.CompareAndSwap(old, now) {
+				break
+			}
+		}
+
+		timer := time.NewTimer(testLease + testLease/2)
+		defer timer.Stop()
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return nil, nil
+		}
+	}}
+
+	op := start(t, inner, "k")
+
+	runInBackground(t, newTestRunner(t, broken, "a", long))
+	runInBackground(t, newTestRunner(t, inner, "b", long))
+
+	waitFor(t, inner, op.ID, "succeeded", inState(durable.StateSucceeded))
+
+	if most.Load() > 1 {
+		t.Fatalf("%d holders ran the step at one time, want at most 1", most.Load())
 	}
 }
 

@@ -26,6 +26,11 @@ const (
 	// renewShare is the part of the lease between two renewals by default:
 	// three renewals fit in one lease.
 	renewShare = 3
+	// marginShare is the smallest margin before the expiry, as a part of the
+	// lease: a quarter.
+	marginShare = 4
+	// renewLimitShare: the renewal interval must be below half the lease.
+	renewLimitShare = 2
 )
 
 var (
@@ -45,14 +50,25 @@ var (
 	ErrStepPanic = errors.New("durable operation step panicked")
 	// errStepsDone stops the renewal after the last step.
 	errStepsDone = errors.New("steps done")
+	// errLeaseDeadline stops the work when the claim comes near its expiry
+	// with no successful renewal.
+	errLeaseDeadline = errors.New("lease deadline with no renewal")
+	// errNoRecord reports a step that the store answered as done, but does
+	// not show.
+	errNoRecord = errors.New("store shows no record of a done step")
 )
 
 // StepFunc runs one step. It returns the result to record, or an error. A
 // step with a domain write passes sc.Fence to the store method of that
 // write, so the write records the step in its own transaction. A step
 // without a domain write must be safe to run again: the runner records it
-// after it returns, and a stop between the two runs it again. ctx ends when
-// the runner loses its claim, when a cancel arrives, or at shutdown.
+// after it returns, and a stop between the two runs it again.
+//
+// ctx ends when the runner can lose its claim, when a cancel arrives, or at
+// shutdown. A step must stop soon after ctx ends: after that, another
+// instance can run the same step. The fence protects only writes to the
+// store, so work outside the store, for example a blob upload, must be safe
+// to do twice.
 type StepFunc func(ctx context.Context, sc StepContext) ([]byte, error)
 
 // Step is one named step of a kind. The name is part of the stored record,
@@ -168,8 +184,8 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		versions: make(map[Kind]int, len(cfg.Kinds)),
 	}
 
-	if r.cfg.RenewEvery >= r.cfg.Lease {
-		return nil, fmt.Errorf("%w: renewal every %v is not shorter than the lease %v", ErrInvalid,
+	if r.cfg.RenewEvery*renewLimitShare >= r.cfg.Lease {
+		return nil, fmt.Errorf("%w: renewal every %v is not below half the lease %v", ErrInvalid,
 			r.cfg.RenewEvery, r.cfg.Lease)
 	}
 
@@ -283,7 +299,9 @@ func (r *Runner) StartRequest(kind Kind, key string, input []byte) (StartRequest
 // ends during a step, Run releases the claim before it returns, so another
 // instance can claim the operation at once. After a claim that found no
 // work, Run waits PollEvery. After a claim that failed, it waits the
-// ClaimBackoff delay, which grows with each failure in a row.
+// ClaimBackoff delay, which grows with each failure in a row. A stop for
+// lack of renewal counts as such a failure, so a runner that cannot reach
+// the store leaves the operation to a runner that can.
 func (r *Runner) Run(ctx context.Context) {
 	failures := 0
 
@@ -314,7 +332,8 @@ func (r *Runner) Run(ctx context.Context) {
 // RunOnce claims one operation and runs it until it ends, until the runner
 // loses its claim, or until ctx ends. It returns ErrNoWork when no operation
 // of the runner's kinds can run now, ErrNewerVersion when it released an
-// operation for a newer instance, and the error of the claim otherwise. The
+// operation for a newer instance, ErrClaimLost when it stopped the work
+// because no renewal succeeded, and the error of the claim otherwise. The
 // outcome of the operation is in the store, not in the return value.
 func (r *Runner) RunOnce(ctx context.Context) error {
 	// The local deadline of the claim counts from before the claim, so it
@@ -351,7 +370,9 @@ func (r *Runner) runClaimed(ctx context.Context, op Operation, claimedAt time.Ti
 	defer wg.Wait()
 	defer stop(errStepsDone)
 
-	wg.Go(func() { r.renew(work, stop, claim, claimedAt, log) })
+	lease := &leaseState{lastStart: claimedAt}
+
+	wg.Go(func() { r.renew(work, stop, claim, lease, log) })
 
 	outcome, stepErr := r.runSteps(work, &op, log)
 
@@ -361,6 +382,13 @@ func (r *Runner) runClaimed(ctx context.Context, op Operation, claimedAt time.Ti
 	cause := context.Cause(work)
 
 	switch {
+	case errors.Is(cause, errLeaseDeadline):
+		// The wg.Wait above makes the write of lease visible here.
+		r.releaseBefore(ctx, claim, lease.lastStart.Add(r.cfg.Lease), log)
+
+		// This runner cannot renew. A claim at once would take the operation
+		// again before a healthy runner can, so Run backs off.
+		return fmt.Errorf("%w: no renewal succeeded within the lease", ErrClaimLost)
 	case errors.Is(cause, ErrClaimLost), outcome == outcomeLost:
 		log.WarnContext(ctx, "durable operation claim lost; another instance can own the operation")
 	case errors.Is(cause, ErrCanceled), outcome == outcomeCanceled, ctx.Err() != nil:
@@ -405,8 +433,10 @@ func (r *Runner) check(ctx context.Context, op Operation, log *slog.Logger) (boo
 
 	for _, rec := range op.Steps {
 		if !slices.ContainsFunc(spec.Steps, func(s Step) bool { return s.Name == rec.Name }) {
-			r.fail(ctx, op.Claim, op, Permanent(fmt.Errorf("%w: step %q of kind %q version %d", ErrUnknownStep,
-				rec.Name, op.Kind, op.Version)), log)
+			r.fail(ctx, op.Claim, op, Permanent(fmt.Errorf(
+				"%w: step %q of kind %q version %d, and this binary runs versions %d to %d", ErrUnknownStep,
+				rec.Name, op.Kind, op.Version, spec.MinVersion, spec.Version,
+			)), log)
 
 			return true, nil
 		}
@@ -469,21 +499,12 @@ func (r *Runner) runSteps(ctx context.Context, op *Operation, log *slog.Logger) 
 			return outcomeDone, fmt.Errorf("step %q: %w", st.Name, err)
 		}
 
-		err = r.cfg.Store.RecordStep(ctx, fence, result)
-
-		switch {
-		case err == nil:
-		case errors.Is(err, ErrStepDone):
-			// The domain write of the step recorded it. The later steps get
-			// the result that the store holds.
-			result = r.recorded(ctx, op.ID, st.Name)
-		case stopOutcome(err) != outcomeDone:
-			return stopOutcome(err), nil
-		default:
-			return outcomeDone, fmt.Errorf("record step %q: %w", st.Name, err)
+		stored, stop, err := r.record(ctx, op.ID, fence, result)
+		if stop != outcomeDone || err != nil {
+			return stop, err
 		}
 
-		op.Steps = append(op.Steps, StepRecord{Name: st.Name, Result: result, DoneAt: time.Time{}})
+		op.Steps = append(op.Steps, StepRecord{Name: st.Name, Result: stored, DoneAt: time.Time{}})
 	}
 
 	return outcomeDone, nil
@@ -513,35 +534,80 @@ func (r *Runner) runStep(ctx context.Context, st Step, sc StepContext, log *slog
 	return result, err
 }
 
+// record records the step of fence with result, and returns the result that
+// the store holds for it. When the domain write of the step already recorded
+// it (ErrStepDone), that is the stored result, which later steps get.
+func (r *Runner) record(ctx context.Context, id ID, fence StepFence, result []byte) ([]byte, outcome, error) {
+	err := r.cfg.Store.RecordStep(ctx, fence, result)
+
+	switch {
+	case err == nil:
+		return result, outcomeDone, nil
+	case errors.Is(err, ErrStepDone):
+		stored, getErr := r.recorded(ctx, id, fence.Step)
+		if getErr != nil {
+			return nil, outcomeDone, fmt.Errorf("read the record of step %q: %w", fence.Step, getErr)
+		}
+
+		return stored, outcomeDone, nil
+	case stopOutcome(err) != outcomeDone:
+		return nil, stopOutcome(err), nil
+	default:
+		return nil, outcomeDone, fmt.Errorf("record step %q: %w", fence.Step, err)
+	}
+}
+
 // recorded returns the result that the store holds for the step called
-// name of operation id, or nil when the store does not answer.
-func (r *Runner) recorded(ctx context.Context, id ID, name string) []byte {
+// name of operation id.
+func (r *Runner) recorded(ctx context.Context, id ID, name string) ([]byte, error) {
 	got, err := r.cfg.Store.Get(ctx, id)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("get operation %s: %w", id, err)
 	}
 
-	rec, _ := got.Step(name)
+	rec, ok := got.Step(name)
+	if !ok {
+		return nil, errNoRecord
+	}
 
-	return rec.Result
+	return rec.Result, nil
+}
+
+// leaseState is what the renewal knows about the lease. The renewal
+// goroutine writes it, and runClaimed reads it after the goroutine ended.
+type leaseState struct {
+	// lastStart is the start of the last successful Extend, or of the
+	// claim, on the monotonic clock.
+	lastStart time.Time
+}
+
+// margin is the time before the expiry at which the runner stops the work
+// when no renewal succeeded: one renewal interval, and at least a quarter of
+// the lease.
+func (r *Runner) margin() time.Duration {
+	return max(r.cfg.RenewEvery, r.cfg.Lease/marginShare)
 }
 
 // renew extends the claim every RenewEvery until ctx ends. When the store
 // answers that the claim is lost or the operation is canceled, it stops the
-// work with that cause. Each Extend has a timeout. When the time since the
-// start of the last successful Extend, or of the claim, reaches the lease,
-// renew stops the work with ErrClaimLost: by then the store can give the
-// operation to another instance, and two holders must not run one step at
-// once. The time is monotonic, so a step of the wall clock does not move it.
+// work with that cause.
+//
+// The store sets the expiry after the start of the Extend that set it, so
+// the lease counted from that start ends no later than the expiry. When the
+// time since the start of the last successful Extend, or of the claim,
+// reaches the lease minus the margin, renew stops the work with
+// errLeaseDeadline, while the claim is still live. Each Extend has the time
+// left before that deadline as its timeout. The time is monotonic, so a
+// step of the wall clock does not move it.
 func (r *Runner) renew(
-	ctx context.Context, stop context.CancelCauseFunc, claim Claim, claimedAt time.Time, log *slog.Logger,
+	ctx context.Context, stop context.CancelCauseFunc, claim Claim, lease *leaseState, log *slog.Logger,
 ) {
 	ticker := time.NewTicker(r.cfg.RenewEvery)
 	defer ticker.Stop()
 
-	lastStart := claimedAt
+	deadlineAt := func() time.Time { return lease.lastStart.Add(r.cfg.Lease - r.margin()) }
 
-	deadline := time.NewTimer(r.cfg.Lease - time.Since(lastStart))
+	deadline := time.NewTimer(time.Until(deadlineAt()))
 	defer deadline.Stop()
 
 	for {
@@ -549,25 +615,31 @@ func (r *Runner) renew(
 		case <-ctx.Done():
 			return
 		case <-deadline.C:
-			log.WarnContext(ctx, "durable operation lease ran out with no renewal")
-			stop(ErrClaimLost)
+			log.WarnContext(ctx, "durable operation lease is near its end with no renewal")
+			stop(errLeaseDeadline)
 
 			return
 		case <-ticker.C:
 		}
 
-		left := r.cfg.Lease - time.Since(lastStart)
+		left := time.Until(deadlineAt())
+		if left <= 0 {
+			stop(errLeaseDeadline)
+
+			return
+		}
+
 		start := time.Now()
 
-		ectx, cancel := context.WithTimeout(ctx, min(r.cfg.RenewEvery, left))
+		ectx, cancel := context.WithTimeout(ctx, left)
 		next, err := r.cfg.Store.Extend(ectx, claim, r.cfg.Lease)
 
 		cancel()
 
 		switch {
 		case err == nil:
-			claim, lastStart = next, start
-			deadline.Reset(r.cfg.Lease - time.Since(lastStart))
+			claim, lease.lastStart = next, start
+			deadline.Reset(time.Until(deadlineAt()))
 		case errors.Is(err, ErrClaimLost), errors.Is(err, ErrCanceled):
 			stop(err)
 
@@ -617,6 +689,24 @@ func (r *Runner) complete(ctx context.Context, claim Claim, log *slog.Logger) {
 // instance.
 func (r *Runner) release(ctx context.Context, claim Claim, log *slog.Logger) {
 	wctx, cancel := r.writeContext(ctx)
+	defer cancel()
+
+	r.end(wctx, log, "release", r.cfg.Store.Release(wctx, claim))
+}
+
+// releaseBefore releases the claim after the runner stopped its work near the
+// end of the lease. The release must arrive before end, the expiry of the
+// claim: then the operation returns to pending and its Expiries does not
+// grow. After end, the store answers ErrClaimLost and changes nothing.
+func (r *Runner) releaseBefore(ctx context.Context, claim Claim, end time.Time, log *slog.Logger) {
+	left := time.Until(end)
+	if left <= 0 {
+		log.WarnContext(ctx, "durable operation claim expired before its release")
+
+		return
+	}
+
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), min(r.cfg.WriteTimeout, left))
 	defer cancel()
 
 	r.end(wctx, log, "release", r.cfg.Store.Release(wctx, claim))
