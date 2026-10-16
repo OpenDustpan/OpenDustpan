@@ -49,6 +49,12 @@ the same list.
 | `--oidc-scopes` | `DUSTPAN_OIDC_SCOPES` | `oidc-scopes` | `profile,email` |
 | `--oidc-no-auto-create` | `DUSTPAN_OIDC_NO_AUTO_CREATE` | `oidc-no-auto-create` | false |
 
+With journaling on, the server refuses to complete an update with
+`succeeded` while the server has not stored a journal batch of the update. The
+server does not detect a missing last batch: if the last journal batch of an
+update is never sent, complete does not refuse it. Cancel the update when its
+batches stop arriving.
+
 ## Configuration file
 
 `--config` (`DUSTPAN_CONFIG`) names one YAML file. Each key in the file is

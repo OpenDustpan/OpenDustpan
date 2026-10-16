@@ -584,16 +584,18 @@ func givenOn(action identity.Action, obj identity.Object) bool {
 	}
 }
 
-// principalNamespace returns the namespace of the principal with the ID
+// principalNamespaceOf returns the namespace of the principal with the ID
 // id, and true when it belongs to a namespace. An unknown principal has
 // none, with no error. With no principal port, no principal belongs to a
 // namespace.
-func (a *Authorizer) principalNamespace(ctx context.Context, id string) (namespace.Name, bool, error) {
-	if a.principals == nil {
+func principalNamespaceOf(
+	ctx context.Context, id string, principals PrincipalNamespaces,
+) (namespace.Name, bool, error) {
+	if principals == nil {
 		return "", false, nil
 	}
 
-	p, err := a.principals.GetPrincipal(ctx, id)
+	p, err := principals.GetPrincipal(ctx, id)
 	if errors.Is(err, principal.ErrNotFound) {
 		return "", false, nil
 	}
@@ -639,18 +641,33 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 // in no chain. An unknown principal keeps the principal and the
 // installation.
 func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity.Object, error) {
+	return chainObjects(ctx, obj, a.collections, a.withUnitID, a.principals)
+}
+
+// chainObjects returns obj and every object that holds it, innermost first,
+// for the authorizer and the reach. collections answers the collection of a
+// unit, resolveUnit answers the stable ID of a unit, and principals answers
+// the namespace of a principal of a namespace. Each answers nothing when it
+// is nil, as in the configs.
+func chainObjects(
+	ctx context.Context,
+	obj identity.Object,
+	collections UnitCollections,
+	resolveUnit func(context.Context, identity.Object) (identity.Object, error),
+	principals PrincipalNamespaces,
+) ([]identity.Object, error) {
 	kind, ok := KindOf(obj)
 	if !ok {
 		return nil, nil
 	}
 
-	obj, err := a.withStableID(ctx, kind, obj)
+	obj, err := stableIDOf(ctx, kind, obj, collections, resolveUnit)
 	if err != nil {
 		return nil, err
 	}
 
 	if kind == ObjectPrincipal {
-		ns, found, nsErr := a.principalNamespace(ctx, obj.PrincipalID())
+		ns, found, nsErr := principalNamespaceOf(ctx, obj.PrincipalID(), principals)
 		if nsErr != nil {
 			return nil, nsErr
 		}
@@ -664,7 +681,7 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 
 	out := []identity.Object{obj}
 
-	col, inCollection, err := a.collectionOfUnit(ctx, kind, obj)
+	col, inCollection, err := collectionOfUnitObject(ctx, kind, obj, collections)
 	if err != nil {
 		return nil, err
 	}
@@ -684,31 +701,37 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 	return out, nil
 }
 
-// withStableID returns obj with the stable ID of its unit or its collection,
+// stableIDOf returns obj with the stable ID of its unit or its collection,
 // when kind is one of them. Any other object is returned as it is.
-func (a *Authorizer) withStableID(ctx context.Context, kind ObjectKind, obj identity.Object) (identity.Object, error) {
+func stableIDOf(
+	ctx context.Context,
+	kind ObjectKind,
+	obj identity.Object,
+	collections UnitCollections,
+	resolveUnit func(context.Context, identity.Object) (identity.Object, error),
+) (identity.Object, error) {
 	if kind == ObjectUnit {
-		return a.withUnitID(ctx, obj)
+		return resolveUnit(ctx, obj)
 	}
 
 	if kind == ObjectCollection {
-		return a.withCollectionID(ctx, obj)
+		return collectionIDOf(ctx, obj, collections)
 	}
 
 	return obj, nil
 }
 
-// collectionOfUnit returns the collection of the unit obj, with its stable ID,
-// and true when the unit is in one. It returns false for any other object, and
-// when no collection port is configured.
-func (a *Authorizer) collectionOfUnit(
-	ctx context.Context, kind ObjectKind, obj identity.Object,
+// collectionOfUnitObject returns the collection of the unit obj, with its
+// stable ID, and true when the unit is in one. It returns false for any
+// other object, and when no collection port answers.
+func collectionOfUnitObject(
+	ctx context.Context, kind ObjectKind, obj identity.Object, collections UnitCollections,
 ) (identity.Object, bool, error) {
-	if kind != ObjectUnit || a.collections == nil {
+	if kind != ObjectUnit || collections == nil {
 		return obj, false, nil
 	}
 
-	name, inCollection, err := a.collections.CollectionOf(ctx, obj)
+	name, inCollection, err := collections.CollectionOf(ctx, obj)
 	if err != nil {
 		return obj, false, fmt.Errorf("read collection of unit: %w", err)
 	}
@@ -717,7 +740,7 @@ func (a *Authorizer) collectionOfUnit(
 		return obj, false, nil
 	}
 
-	col, err := a.withCollectionID(ctx, identity.CollectionObject(obj.Namespace(), name))
+	col, err := collectionIDOf(ctx, identity.CollectionObject(obj.Namespace(), name), collections)
 	if err != nil {
 		return obj, false, err
 	}
@@ -730,48 +753,8 @@ func (a *Authorizer) collectionOfUnit(
 // A role that no longer exists is left out, so its grants give nothing.
 func (a *Authorizer) rolesOf(ctx context.Context, grants []Grant) (map[string]Role, error) {
 	cache := cacheOf(ctx)
-	out := make(map[string]Role, len(grants))
 
-	var missing []string
-
-	for i := range grants {
-		id := grants[i].Role
-		if _, done := out[id]; done {
-			continue
-		}
-
-		if r, ok := BuiltInRole(id); ok {
-			out[id] = r
-
-			continue
-		}
-
-		if r, ok := cache.role(id); ok {
-			out[id] = r
-
-			continue
-		}
-
-		if !slices.Contains(missing, id) {
-			missing = append(missing, id)
-		}
-	}
-
-	if len(missing) == 0 {
-		return out, nil
-	}
-
-	custom, err := a.store.GetRoles(ctx, missing)
-	if err != nil {
-		return nil, fmt.Errorf("read roles: %w", err)
-	}
-
-	for i := range custom {
-		out[custom[i].ID] = custom[i]
-		cache.keepRole(custom[i])
-	}
-
-	return out, nil
+	return rolesByID(ctx, grants, cache.role, cache.keepRole, a.store)
 }
 
 // role returns the built-in or custom role with the ID id.
@@ -938,14 +921,17 @@ func (a *Authorizer) currentUnits(ctx context.Context, grants []Grant) (map[stri
 	return live, nil
 }
 
-// withCollectionID returns the collection object with its stable ID. A
-// collection that does not exist keeps an empty ID, so no grant matches it.
-func (a *Authorizer) withCollectionID(ctx context.Context, obj identity.Object) (identity.Object, error) {
-	if a.collections == nil {
+// collectionIDOf returns the collection obj with its stable ID. A
+// collection that already has one, that does not exist, or queried with no
+// collection port, keeps what it has.
+func collectionIDOf(
+	ctx context.Context, obj identity.Object, collections UnitCollections,
+) (identity.Object, error) {
+	if obj.CollectionID() != "" || collections == nil {
 		return obj, nil
 	}
 
-	id, found, err := a.collections.CollectionID(ctx, obj)
+	id, found, err := collections.CollectionID(ctx, obj)
 	if err != nil {
 		return obj, fmt.Errorf("read collection ID: %w", err)
 	}

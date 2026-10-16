@@ -250,29 +250,30 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	return NewEnvWithDeltaCutoff(ctx, tb, cli, store, 0)
 }
 
-// NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
-// journaling turned off, so each update answers journalVersion 0.
-func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+// defaultEnvInput returns the input of an env for cli and store with new
+// tokens, a new directory and every feature switch off.
+func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 	tb.Helper()
 
-	dir := tb.TempDir()
-	token := newToken(tb)
-	tokenB := newToken(tb)
-	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
-	in := envInput{
+	return envInput{
 		deltaCutoff:       0,
-		disableJournaling: true,
+		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
+		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
-		dir:               dir,
-		token:             token,
-		tokenB:            tokenB,
-		rec:               rec,
+		dir:               tb.TempDir(),
+		token:             newToken(tb),
+		tokenB:            newToken(tb),
+		rec:               &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
 	}
+}
 
+// startEnv starts the env of in: the server binary with E2E_SERVER=binary,
+// else an in-process server.
+func startEnv(ctx context.Context, in envInput) *Env {
 	if UseBinaryServer() {
 		return newBinaryEnv(ctx, in)
 	}
@@ -280,10 +281,36 @@ func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, st
 	return newInprocessEnv(ctx, in)
 }
 
+// NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
+// journaling turned off, so each update answers journalVersion 0.
+func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	in := defaultEnvInput(tb, cli, store)
+	in.disableJournaling = true
+
+	return startEnv(ctx, in)
+}
+
 // NewEnvWithIPAllowlists starts a server as NewEnv does, with IP allowlists
 // turned on and applied to the bootstrap admin token too, so a step can lock
 // one namespace to one source address and prove the 403 answers.
 func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	in := defaultEnvInput(tb, cli, store)
+	in.ipAllowlists = true
+
+	return startEnv(ctx, in)
+}
+
+// NewEnvWithJournalRefuser starts a server as NewEnv does, with the refuser
+// corrupting the first outputs-only journal batch on the way to the server,
+// so the server refuses it and records the refusal. The test reads how many
+// batches the refuser corrupted.
+func NewEnvWithJournalRefuser(
+	ctx context.Context, tb testing.TB, cli Install, store Store, refuser *JournalRefuser,
+) *Env {
 	tb.Helper()
 
 	dir := tb.TempDir()
@@ -293,8 +320,9 @@ func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, sto
 	in := envInput{
 		deltaCutoff:       0,
 		disableJournaling: false,
-		ipAllowlists:      true,
+		ipAllowlists:      false,
 		signIn:            false,
+		journalRefuser:    refuser,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -326,6 +354,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
+		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -374,7 +403,7 @@ func startInprocessServer(
 		signIn:            signIn,
 	})
 
-	handler = build.handler
+	handler = faultedHandler(build.handler, in.journalRefuser)
 
 	if in.cli.Tool == ToolTofu || in.signIn {
 		ts.StartTLS()

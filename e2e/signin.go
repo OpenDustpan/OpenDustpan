@@ -147,6 +147,7 @@ func NewEnvWithSignIn(ctx context.Context, tb testing.TB, cli Install, store Sto
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            true,
+		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,

@@ -1581,6 +1581,21 @@ func (q *Queries) DeleteJournalOfStack(ctx context.Context, stackID string) erro
 	return err
 }
 
+const deleteJournalRefusals = `-- name: DeleteJournalRefusals :exec
+DELETE FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?
+`
+
+type DeleteJournalRefusalsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) DeleteJournalRefusals(ctx context.Context, arg DeleteJournalRefusalsParams) error {
+	_, err := q.db.ExecContext(ctx, deleteJournalRefusals, arg.StackID, arg.UpdateID)
+	return err
+}
+
 const deleteJournalSequences = `-- name: DeleteJournalSequences :exec
 DELETE FROM update_journal_sequences
 WHERE stack_id = ? AND update_id = ?
@@ -3739,6 +3754,32 @@ func (q *Queries) InsertJournal(ctx context.Context, arg InsertJournalParams) er
 	return err
 }
 
+const insertJournalRefusal = `-- name: InsertJournalRefusal :exec
+INSERT INTO update_journal_refusals (stack_id, update_id, arrival, sequence_ids, status, reason)
+VALUES (?, ?, ?, ?, ?, ?)
+`
+
+type InsertJournalRefusalParams struct {
+	StackID     string
+	UpdateID    string
+	Arrival     int64
+	SequenceIds string
+	Status      int64
+	Reason      string
+}
+
+func (q *Queries) InsertJournalRefusal(ctx context.Context, arg InsertJournalRefusalParams) error {
+	_, err := q.db.ExecContext(ctx, insertJournalRefusal,
+		arg.StackID,
+		arg.UpdateID,
+		arg.Arrival,
+		arg.SequenceIds,
+		arg.Status,
+		arg.Reason,
+	)
+	return err
+}
+
 const insertJournalSequence = `-- name: InsertJournalSequence :exec
 INSERT INTO update_journal_sequences (stack_id, update_id, sequence, arrival, sha256)
 VALUES (?, ?, ?, ?, ?)
@@ -5067,6 +5108,80 @@ func (q *Queries) ListJournalOperations(ctx context.Context, arg ListJournalOper
 	return items, nil
 }
 
+const listJournalRefusals = `-- name: ListJournalRefusals :many
+SELECT sequence_ids, status, reason FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival
+`
+
+type ListJournalRefusalsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+type ListJournalRefusalsRow struct {
+	SequenceIds string
+	Status      int64
+	Reason      string
+}
+
+func (q *Queries) ListJournalRefusals(ctx context.Context, arg ListJournalRefusalsParams) ([]ListJournalRefusalsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listJournalRefusals, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListJournalRefusalsRow
+	for rows.Next() {
+		var i ListJournalRefusalsRow
+		if err := rows.Scan(&i.SequenceIds, &i.Status, &i.Reason); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJournalSequences = `-- name: ListJournalSequences :many
+SELECT sequence FROM update_journal_sequences
+WHERE stack_id = ? AND update_id = ?
+ORDER BY sequence
+`
+
+type ListJournalSequencesParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) ListJournalSequences(ctx context.Context, arg ListJournalSequencesParams) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, listJournalSequences, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var sequence int64
+		if err := rows.Scan(&sequence); err != nil {
+			return nil, err
+		}
+		items = append(items, sequence)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNamespaces = `-- name: ListNamespaces :many
 SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM namespaces
@@ -5761,6 +5876,24 @@ type NextJournalArrivalParams struct {
 
 func (q *Queries) NextJournalArrival(ctx context.Context, arg NextJournalArrivalParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, nextJournalArrival, arg.StackID, arg.UpdateID)
+	var arrival int64
+	err := row.Scan(&arrival)
+	return arrival, err
+}
+
+const nextRefusalArrival = `-- name: NextRefusalArrival :one
+SELECT CAST(COALESCE(MAX(arrival), 0) + 1 AS INTEGER) AS arrival
+FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?
+`
+
+type NextRefusalArrivalParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) NextRefusalArrival(ctx context.Context, arg NextRefusalArrivalParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextRefusalArrival, arg.StackID, arg.UpdateID)
 	var arrival int64
 	err := row.Scan(&arrival)
 	return arrival, err
@@ -6987,6 +7120,25 @@ func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspa
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const stackRefByID = `-- name: StackRefByID :one
+SELECT namespace, project, name
+FROM stacks
+WHERE id = ?
+`
+
+type StackRefByIDRow struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+func (q *Queries) StackRefByID(ctx context.Context, id string) (StackRefByIDRow, error) {
+	row := q.db.QueryRowContext(ctx, stackRefByID, id)
+	var i StackRefByIDRow
+	err := row.Scan(&i.Namespace, &i.Project, &i.Name)
+	return i, err
 }
 
 const subjectsOfCaller = `-- name: SubjectsOfCaller :many

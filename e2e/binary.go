@@ -98,6 +98,10 @@ type envInput struct {
 	// signIn turns on the console sign-in through a test OpenID provider.
 	// Only the in-process mode serves it.
 	signIn bool
+	// journalRefuser corrupts one outputs-only journal batch on the way to
+	// the server, so the server refuses it and records the refusal. Nil
+	// passes every batch through untouched.
+	journalRefuser *JournalRefuser
 }
 
 // backendConfig groups the settings of one backend process.
@@ -877,10 +881,12 @@ func binarySignInSetup(tb testing.TB, in envInput, proxy *recordingProxy, cfg *b
 // every request, so binary runs keep the same request log as in-process
 // runs. It keeps the client-facing host, so absolute URLs the backend
 // reports point back through the proxy.
-func startRecordingProxy(tb testing.TB, rec *Recorder, backendURL string) *httptest.Server {
+func startRecordingProxy(
+	tb testing.TB, rec *Recorder, backendURL string, refuser *JournalRefuser,
+) *httptest.Server {
 	tb.Helper()
 
-	p := reserveRecordingProxy(tb, rec)
+	p := reserveRecordingProxy(tb, rec, refuser)
 
 	return p.start(tb, backendURL)
 }
@@ -916,7 +922,7 @@ func (p *recordingProxy) start(tb testing.TB, backendURL string) *httptest.Serve
 
 // reserveRecordingProxy binds the listener of a recording proxy and
 // returns it, not started.
-func reserveRecordingProxy(tb testing.TB, rec *Recorder) *recordingProxy {
+func reserveRecordingProxy(tb testing.TB, rec *Recorder, refuser *JournalRefuser) *recordingProxy {
 	tb.Helper()
 
 	target := &url.URL{}
@@ -936,7 +942,7 @@ func reserveRecordingProxy(tb testing.TB, rec *Recorder) *recordingProxy {
 		Transport: transport,
 	}
 
-	ts := httptest.NewUnstartedServer(rec.Middleware(proxy))
+	ts := httptest.NewUnstartedServer(rec.Middleware(faultedHandler(proxy, refuser)))
 	tb.Cleanup(ts.Close)
 
 	return &recordingProxy{server: ts, target: target}
@@ -1060,7 +1066,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	setup := newBlobSetup(ctx, tb, in.dir)
 	cfg := binaryBackendConfig(in, bin, dbURL, setup, writeBackendCert(tb, in.dir))
 
-	reserved := reserveRecordingProxy(tb, in.rec)
+	reserved := reserveRecordingProxy(tb, in.rec, in.journalRefuser)
 	signIn := binarySignInSetup(tb, in, reserved, &cfg)
 
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
