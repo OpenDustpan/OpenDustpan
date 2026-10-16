@@ -51,8 +51,9 @@ func (g Gate) Authorize(ctx context.Context, p identity.Principal, action identi
 // ListObjects asks Next, then leaves out each object in a namespace whose
 // list does not contain the client address in ctx, as Authorize refuses
 // them. A scope with All set stays unchanged: the gate cannot name the
-// namespaces that it leaves out of every object. A store error fails the
-// whole list.
+// namespaces that it leaves out of every object, so a caller of such a
+// list must Authorize the namespace of its list through the gate first. A
+// store error fails the whole list.
 func (g Gate) ListObjects(
 	ctx context.Context, p identity.Principal, action identity.Action,
 ) (identity.Scope, error) {
