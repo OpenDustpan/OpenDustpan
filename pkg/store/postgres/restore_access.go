@@ -72,6 +72,10 @@ func (s *Store) swapStagingSchemaKeepingAccess(ctx context.Context, staging stri
 			return err
 		}
 
+		if s.keepAccessHook != nil {
+			s.keepAccessHook(ctx, tx, live)
+		}
+
 		return swapSchemas(ctx, tx, live, staging)
 	})
 }
@@ -121,7 +125,7 @@ func keepAccessTables(ctx context.Context, tx pgx.Tx, live, staging string) erro
 		return err
 	}
 
-	for _, table := range keepChildTables() {
+	for _, table := range keepCopyTables() {
 		clearQuery := "DELETE FROM " + pgIdent(staging) + "." + pgIdent(table)
 		if _, err := tx.Exec(ctx, clearQuery); err != nil {
 			return fmt.Errorf("clear staged access table %q: %w", table, backup.ErrExportRead)
@@ -141,7 +145,7 @@ func keepAccessTables(ctx context.Context, tx pgx.Tx, live, staging string) erro
 		return err
 	}
 
-	for _, table := range keepChildTables() {
+	for _, table := range keepCopyTables() {
 		if err := copyAccessTable(ctx, tx, live, staging, table); err != nil {
 			return keepAccessError("keep staged access table "+table, err)
 		}
@@ -150,20 +154,24 @@ func keepAccessTables(ctx context.Context, tx pgx.Tx, live, staging string) erro
 	return nil
 }
 
-// keepChildTables lists the access tables that a keep copies wholesale,
-// after principals. Principal groups go first so group members keep their
-// parent, and principals merge by ID in mergePrincipals.
-func keepChildTables() []string {
-	return []string{
-		backup.TableGroupMembers,
-		backup.TableAccessTokens,
-		backup.TableSessions,
-		backup.TableSignInRequests,
-		backup.TableGrants,
-		backup.TableRoles,
-		backup.TableAccessTokenPolicy,
-		backup.TableSessionPolicy,
+// keepCopyTables lists the access tables that a keep copies wholesale, in
+// the order of backup.AccessTables: principal groups first so group members
+// keep their parent, then the other children parents before children.
+// Principals merge by ID in mergePrincipals instead, so neither list names
+// them. The one list decides for both stores: dropping a table from
+// backup.AccessTables drops it from the keep on both dialects.
+func keepCopyTables() []string {
+	out := make([]string, 0, len(backup.AccessTables))
+
+	for _, table := range backup.AccessTables {
+		if table == backup.TablePrincipals || table == backup.TablePrincipalGroups {
+			continue
+		}
+
+		out = append(out, table)
 	}
+
+	return out
 }
 
 // copyAccessTable copies every row of table from the live schema into the

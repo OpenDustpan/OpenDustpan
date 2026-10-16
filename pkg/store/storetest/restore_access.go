@@ -796,6 +796,11 @@ func testRestoreKeepAccessMismatch(t *testing.T, newStore RestoreFactory) {
 		t.Parallel()
 		checkKeepMismatchUnit(t, newStore(t))
 	})
+
+	t.Run("principal on a missing namespace", func(t *testing.T) {
+		t.Parallel()
+		checkKeepMismatchPrincipal(t, newStore(t))
+	})
 }
 
 // checkKeepMismatchNamespace adds a live-only namespace with a grant on it,
@@ -847,7 +852,12 @@ func checkKeepMismatchNamespace(t *testing.T, s RestoreStore) {
 		t.Fatalf("apply with a grant on a missing namespace: err = %v, want ErrRestoreAccessMismatch", err)
 	}
 
-	assertMismatchChangedNothing(t, s, ports, mismatchWant{before: before, ns: "freshns", grantID: "grt-freshns"})
+	assertMismatchChangedNothing(t, s, ports, mismatchWant{
+		before:      before,
+		ns:          "freshns",
+		grantID:     "grt-freshns",
+		principalID: "",
+	})
 }
 
 // checkKeepMismatchUnit adds a live-only stack with a grant on its unit,
@@ -902,21 +912,28 @@ func checkKeepMismatchUnit(t *testing.T, s RestoreStore) {
 		t.Fatalf("get live stack after a refused restore: %v", err)
 	}
 
-	assertMismatchChangedNothing(t, s, ports, mismatchWant{before: before, ns: "", grantID: "grt-freshunit"})
+	assertMismatchChangedNothing(t, s, ports, mismatchWant{
+		before:      before,
+		ns:          "",
+		grantID:     "grt-freshunit",
+		principalID: "",
+	})
 }
 
 // mismatchWant holds what a refused keep restore must leave behind: the
 // live summary from before the refused apply, the live-only namespace when
-// the case made one, and the live-only grant.
+// the case made one, and the live-only grant or principal.
 type mismatchWant struct {
-	before  backup.Summary
-	ns      string
-	grantID string
+	before      backup.Summary
+	ns          string
+	grantID     string
+	principalID string
 }
 
 // assertMismatchChangedNothing proves a refused keep restore changed
 // nothing: every table still holds its live rows, the namespace still exists
-// when the case made one, and the live grant is still there.
+// when the case made one, and the live-only grant or principal is still
+// there.
 func assertMismatchChangedNothing(
 	t *testing.T,
 	s RestoreStore,
@@ -941,11 +958,86 @@ func assertMismatchChangedNothing(
 		}
 	}
 
-	if _, err := ports.grants.GetGrant(ctx, want.grantID); err != nil {
-		t.Fatalf("get live grant after a refused restore: %v", err)
+	if want.grantID != "" {
+		if _, err := ports.grants.GetGrant(ctx, want.grantID); err != nil {
+			t.Fatalf("get live grant after a refused restore: %v", err)
+		}
+	}
+
+	if want.principalID != "" {
+		if _, err := ports.principals.GetPrincipal(ctx, want.principalID); err != nil {
+			t.Fatalf("get live principal after a refused restore: %v", err)
+		}
 	}
 
 	if err := s.DiscardStaging(ctx); err != nil {
 		t.Fatalf("discard staging area after a refused restore: %v", err)
 	}
+}
+
+// checkKeepMismatchPrincipal adds a live-only namespace with a principal in
+// it, then proves the keep restore refuses with ErrRestoreAccessMismatch and
+// changes nothing.
+func checkKeepMismatchPrincipal(t *testing.T, s RestoreStore) {
+	t.Helper()
+
+	ports := keepAccessStores(t, s)
+	ctx := t.Context()
+
+	seedBackupStore(t, s)
+	sink, sum, files := exportPortable(t, ports.stager)
+
+	fresh := namespace.Namespace{
+		CreatedAt:       now(),
+		Name:            "freshprn",
+		HomeRegion:      "eu-west",
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if err := s.CreateNamespace(ctx, fresh); err != nil {
+		t.Fatalf("create live namespace: %v", err)
+	}
+
+	live, err := s.GetNamespace(ctx, fresh.Name)
+	if err != nil {
+		t.Fatalf("get live namespace: %v", err)
+	}
+
+	person := principal.Principal{
+		CreatedAt:   now(),
+		UpdatedAt:   now(),
+		DisabledAt:  time.Time{},
+		ID:          "prn-fresh",
+		Subject:     "fresh-ci",
+		DisplayName: "Fresh CI",
+		Kind:        principal.KindService,
+		Source:      principal.SourceLocal,
+		Namespace:   fresh.Name,
+		GroupCount:  0,
+		BreakGlass:  false,
+	}
+
+	entry := ServerChange(now(), "principal:prn-fresh")
+	entry.Namespace = fresh.Name
+
+	if err := ports.principals.CreateNamespacePrincipal(ctx, person, live.Fence(), entry); err != nil {
+		t.Fatalf("create live namespace principal: %v", err)
+	}
+
+	before := portableSummaryOf(t, ports.stager)
+
+	stageKeepBackup(t, ports.stager, sink, sum, files)
+
+	applyErr := ports.keeper.ApplyStagingKeepingAccess(ctx)
+	if !errors.Is(applyErr, backup.ErrRestoreAccessMismatch) {
+		t.Fatalf("apply with a principal on a missing namespace: err = %v, want ErrRestoreAccessMismatch", applyErr)
+	}
+
+	assertMismatchChangedNothing(t, s, ports, mismatchWant{
+		before:      before,
+		ns:          "freshprn",
+		grantID:     "",
+		principalID: "prn-fresh",
+	})
 }

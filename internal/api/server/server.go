@@ -423,8 +423,6 @@ func classifyBackup(err error) (int, string, bool) {
 		return http.StatusNotFound, "backup not found", true
 	case errors.Is(err, backup.ErrInvalidID):
 		return http.StatusBadRequest, "invalid backup ID", true
-	case errors.Is(err, backup.ErrRestoreAccessMismatch):
-		return http.StatusConflict, backup.ErrRestoreAccessMismatch.Error(), true
 	case errors.Is(err, errNoBackupTarget):
 		// No target is a setup problem of the server, not a bad request.
 		return http.StatusServiceUnavailable, errNoBackupTarget.Error() + ": set --backup-target", true

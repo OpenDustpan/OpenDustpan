@@ -2098,7 +2098,7 @@ func TestRestoreKeepAccessMismatchFailsTheRestore(t *testing.T) {
 		t.Fatalf("restore state = %q, want failed", row.State)
 	}
 
-	if !strings.Contains(row.Error, "site administrator") {
-		t.Fatalf("restore error = %q, want it to name the site administrator", row.Error)
+	if row.Error != backup.ErrRestoreAccessMismatch.Error() {
+		t.Fatalf("restore error = %q, want %q", row.Error, backup.ErrRestoreAccessMismatch.Error())
 	}
 }

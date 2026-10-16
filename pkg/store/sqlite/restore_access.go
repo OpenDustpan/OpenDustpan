@@ -76,6 +76,10 @@ func (s *Store) keepLiveAccessTables(ctx context.Context, path string) error {
 		return err
 	}
 
+	if s.keepAccessHook != nil {
+		s.keepAccessHook(ctx)
+	}
+
 	if err := checkKeptAccessReferences(ctx, path, live); err != nil {
 		return err
 	}
@@ -453,17 +457,7 @@ func overwriteStagedAccessTables(
 		}
 	}()
 
-	for _, table := range []string{
-		backup.TableGroupMembers,
-		backup.TableAccessTokens,
-		backup.TableSessions,
-		backup.TableSignInRequests,
-		backup.TableGrants,
-		backup.TableRoles,
-		backup.TableAccessTokenPolicy,
-		backup.TableSessionPolicy,
-		backup.TablePrincipalGroups,
-	} {
+	for _, table := range keepClearTables() {
 		clearQuery := `DELETE FROM "` + table + `"` // #nosec G202 // Table names are the fixed access tables.
 		if _, err := tx.ExecContext(ctx, clearQuery); err != nil {
 			return fmt.Errorf("clear staged access table %q: %w", table, backup.ErrExportRead)
@@ -491,6 +485,26 @@ func overwriteStagedAccessTables(
 	committed = true
 
 	return nil
+}
+
+// keepClearTables lists the access tables that a keep clears from the
+// staged file before it reloads them, children before parents so no delete
+// breaks a foreign key. Principals merge by ID in mergeStagedPrincipals
+// instead, so the list skips them. The order is the reverse of
+// backup.AccessTables: the one list decides for both stores, so dropping a
+// table from backup.AccessTables drops it from the keep on both dialects.
+func keepClearTables() []string {
+	out := make([]string, 0, len(backup.AccessTables))
+
+	for _, table := range slices.Backward(backup.AccessTables) {
+		if table == backup.TablePrincipals {
+			continue
+		}
+
+		out = append(out, table)
+	}
+
+	return out
 }
 
 // mergeStagedPrincipals updates the staged principals the live access tables

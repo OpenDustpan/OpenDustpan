@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
@@ -964,7 +965,7 @@ func (s *RestoreService) appendRestoreAudit(ctx context.Context, id RestoreID, r
 		Subject:      req.RequestedBy,
 		IDPSubject:   "",
 		TokenID:      "",
-		Action:       "server:restore",
+		Action:       string(identity.ActionServerRestore),
 		Object:       "restore " + id.String() + " of backup " + req.BackupID.String() + " (access tables " + mode + ")",
 		Version:      "",
 		ValuePath:    "",
