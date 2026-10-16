@@ -136,8 +136,10 @@ type DurableOperation struct {
 	StartKey         string
 	Kind             string
 	Input            []byte
+	Version          int64
 	State            string
 	Attempt          int64
+	Expiries         int64
 	LastError        string
 	ClaimOwner       sql.NullString
 	ClaimToken       int64

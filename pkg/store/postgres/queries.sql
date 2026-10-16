@@ -1906,30 +1906,30 @@ SELECT COUNT(*) FROM principals WHERE starts_with(subject, sqlc.arg('prefix'));
 -- Creates a pending operation that can run at once. It inserts nothing when
 -- the start key names an operation, and then returns no row.
 INSERT INTO durable_operations (
-  id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 )
 SELECT sqlc.arg('id')::text, sqlc.arg('start_key')::text, sqlc.arg('kind')::text, sqlc.arg('input')::bytea,
-  'pending', 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
+  sqlc.arg('version')::bigint, 'pending', 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
 FROM (SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms) c
 ON CONFLICT (start_key) DO NOTHING
-RETURNING id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+RETURNING id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms;
 
 -- name: GetDurableOperation :one
-SELECT id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1;
 
 -- name: GetDurableOperationByKey :one
-SELECT id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = $1;
 
 -- name: LockDurableOperation :one
 -- Holds the row of one operation until the transaction ends, so the checks
 -- and the write of a holder see one state.
-SELECT id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1
 FOR UPDATE;
@@ -1937,7 +1937,7 @@ FOR UPDATE;
 -- name: ListDurableOperations :many
 -- An empty kind or state list matches every operation. A limit of 0 means
 -- no limit.
-SELECT id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations
 WHERE (sqlc.arg('kind')::text = '' OR kind = sqlc.arg('kind')::text)
@@ -1972,7 +1972,8 @@ WHERE o.id = ended.id;
 -- whose not_before_ms passed, or a running one whose claim expired without a
 -- cancel request. A row that another claim holds is skipped, so of several
 -- concurrent claims of one operation at most one gets it. The expiry is the
--- database clock plus the lease.
+-- database clock plus the lease. A claim that takes over an expired claim
+-- counts one more expiry.
 WITH c AS MATERIALIZED (
   SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
 ), pick AS (
@@ -1987,11 +1988,12 @@ WITH c AS MATERIALIZED (
 )
 UPDATE durable_operations o
 SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
+  expiries = o.expiries + CASE WHEN o.state = 'running' THEN 1 ELSE 0 END,
   claim_owner = sqlc.arg('owner')::text, claim_expires_at_ms = c.now_ms + sqlc.arg('lease_ms')::bigint,
   updated_at_ms = c.now_ms
 FROM c, pick
 WHERE o.id = pick.id
-RETURNING o.id, o.start_key, o.kind, o.input, o.state, o.attempt, o.last_error, o.claim_owner, o.claim_token,
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.last_error, o.claim_owner, o.claim_token,
   o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
 
 -- name: ExtendDurableClaim :exec

@@ -486,11 +486,12 @@ WITH c AS MATERIALIZED (
 )
 UPDATE durable_operations o
 SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
+  expiries = o.expiries + CASE WHEN o.state = 'running' THEN 1 ELSE 0 END,
   claim_owner = $1::text, claim_expires_at_ms = c.now_ms + $2::bigint,
   updated_at_ms = c.now_ms
 FROM c, pick
 WHERE o.id = pick.id
-RETURNING o.id, o.start_key, o.kind, o.input, o.state, o.attempt, o.last_error, o.claim_owner, o.claim_token,
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.last_error, o.claim_owner, o.claim_token,
   o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms
 `
 
@@ -504,7 +505,8 @@ type ClaimDurableOperationParams struct {
 // whose not_before_ms passed, or a running one whose claim expired without a
 // cancel request. A row that another claim holds is skipped, so of several
 // concurrent claims of one operation at most one gets it. The expiry is the
-// database clock plus the lease.
+// database clock plus the lease. A claim that takes over an expired claim
+// counts one more expiry.
 func (q *Queries) ClaimDurableOperation(ctx context.Context, arg ClaimDurableOperationParams) (DurableOperation, error) {
 	row := q.db.QueryRow(ctx, claimDurableOperation, arg.Owner, arg.LeaseMs, arg.Kinds)
 	var i DurableOperation
@@ -513,8 +515,10 @@ func (q *Queries) ClaimDurableOperation(ctx context.Context, arg ClaimDurableOpe
 		&i.StartKey,
 		&i.Kind,
 		&i.Input,
+		&i.Version,
 		&i.State,
 		&i.Attempt,
+		&i.Expiries,
 		&i.LastError,
 		&i.ClaimOwner,
 		&i.ClaimToken,
@@ -2937,7 +2941,7 @@ func (q *Queries) GetDeletedWorkspace(ctx context.Context, arg GetDeletedWorkspa
 }
 
 const getDurableOperation = `-- name: GetDurableOperation :one
-SELECT id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1
 `
@@ -2950,8 +2954,10 @@ func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOp
 		&i.StartKey,
 		&i.Kind,
 		&i.Input,
+		&i.Version,
 		&i.State,
 		&i.Attempt,
+		&i.Expiries,
 		&i.LastError,
 		&i.ClaimOwner,
 		&i.ClaimToken,
@@ -2965,7 +2971,7 @@ func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOp
 }
 
 const getDurableOperationByKey = `-- name: GetDurableOperationByKey :one
-SELECT id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = $1
 `
@@ -2978,8 +2984,10 @@ func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string)
 		&i.StartKey,
 		&i.Kind,
 		&i.Input,
+		&i.Version,
 		&i.State,
 		&i.Attempt,
+		&i.Expiries,
 		&i.LastError,
 		&i.ClaimOwner,
 		&i.ClaimToken,
@@ -4309,14 +4317,14 @@ func (q *Queries) InsertDeletedInventory(ctx context.Context, arg InsertDeletedI
 const insertDurableOperation = `-- name: InsertDurableOperation :one
 
 INSERT INTO durable_operations (
-  id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 )
 SELECT $1::text, $2::text, $3::text, $4::bytea,
-  'pending', 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
+  $5::bigint, 'pending', 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
 FROM (SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms) c
 ON CONFLICT (start_key) DO NOTHING
-RETURNING id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+RETURNING id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 `
 
@@ -4325,6 +4333,7 @@ type InsertDurableOperationParams struct {
 	StartKey string
 	Kind     string
 	Input    []byte
+	Version  int64
 }
 
 // Durable operations. Every time comes from the database clock, read with
@@ -4338,6 +4347,7 @@ func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableO
 		arg.StartKey,
 		arg.Kind,
 		arg.Input,
+		arg.Version,
 	)
 	var i DurableOperation
 	err := row.Scan(
@@ -4345,8 +4355,10 @@ func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableO
 		&i.StartKey,
 		&i.Kind,
 		&i.Input,
+		&i.Version,
 		&i.State,
 		&i.Attempt,
+		&i.Expiries,
 		&i.LastError,
 		&i.ClaimOwner,
 		&i.ClaimToken,
@@ -5137,7 +5149,7 @@ func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([
 }
 
 const listDurableOperations = `-- name: ListDurableOperations :many
-SELECT id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations
 WHERE ($1::text = '' OR kind = $1::text)
@@ -5168,8 +5180,10 @@ func (q *Queries) ListDurableOperations(ctx context.Context, arg ListDurableOper
 			&i.StartKey,
 			&i.Kind,
 			&i.Input,
+			&i.Version,
 			&i.State,
 			&i.Attempt,
+			&i.Expiries,
 			&i.LastError,
 			&i.ClaimOwner,
 			&i.ClaimToken,
@@ -6559,7 +6573,7 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 }
 
 const lockDurableOperation = `-- name: LockDurableOperation :one
-SELECT id, start_key, kind, input, state, attempt, last_error, claim_owner, claim_token, claim_expires_at_ms,
+SELECT id, start_key, kind, input, version, state, attempt, expiries, last_error, claim_owner, claim_token, claim_expires_at_ms,
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE id = $1
 FOR UPDATE
@@ -6575,8 +6589,10 @@ func (q *Queries) LockDurableOperation(ctx context.Context, id string) (DurableO
 		&i.StartKey,
 		&i.Kind,
 		&i.Input,
+		&i.Version,
 		&i.State,
 		&i.Attempt,
+		&i.Expiries,
 		&i.LastError,
 		&i.ClaimOwner,
 		&i.ClaimToken,

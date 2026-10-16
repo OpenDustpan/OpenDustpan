@@ -8,8 +8,10 @@
 -- claim_expires_at_ms is its expiry on the database clock. Both are NULL
 -- when no instance holds the operation. claim_token grows on each claim and
 -- never goes back, also when a claim ends, so a holder that lost its claim
--- cannot write. attempt counts the claims. not_before_ms is the earliest
--- time of the next claim of a pending operation.
+-- cannot write. attempt counts the claims, and expiries counts the claims
+-- that took over an expired claim. version is the version of the operation
+-- that Start records. not_before_ms is the earliest time of the next claim
+-- of a pending operation.
 --
 -- durable_steps holds the recorded steps of each operation. seq keeps the
 -- order of the records.
@@ -18,9 +20,11 @@ CREATE TABLE durable_operations (
     start_key           TEXT    NOT NULL UNIQUE,
     kind                TEXT    NOT NULL,
     input               BYTEA   NOT NULL,
+    version             BIGINT  NOT NULL,
     state               TEXT    NOT NULL
         CHECK (state IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
     attempt             BIGINT  NOT NULL,
+    expiries            BIGINT  NOT NULL DEFAULT 0,
     last_error          TEXT    NOT NULL,
     claim_owner         TEXT,
     claim_token         BIGINT  NOT NULL,

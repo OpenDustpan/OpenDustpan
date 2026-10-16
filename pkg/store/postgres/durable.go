@@ -73,8 +73,10 @@ func startOperation(ctx context.Context, q *db.Queries, req durable.StartRequest
 		return durable.Operation{}, false, err
 	}
 
+	// The port has no operation version yet, so every operation records 0.
 	row, err := q.InsertDurableOperation(ctx, db.InsertDurableOperationParams{
 		ID: ident.NewID(durableIDPrefix), StartKey: req.Key, Kind: string(req.Kind), Input: nonNilBytes(req.Input),
+		Version: 0,
 	})
 	if err == nil {
 		return operationFromRow(row, nil), true, nil
