@@ -1,6 +1,7 @@
 package oauth_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -146,8 +147,8 @@ func (s setup) signIn(t *testing.T, opts oauth.Options) (oauth.Identity, error) 
 	authURL, pending := s.client.Begin(opts)
 	back := authorize(t, s.provider, authURL)
 
-	if back.state != pending.State {
-		t.Fatal("state of the callback differs from the state of the request")
+	if err := oauth.CheckState(back.state, pending); err != nil {
+		t.Fatalf("state of the callback: %v", err)
 	}
 
 	return s.client.Finish(t.Context(), back.code, pending)
@@ -527,6 +528,8 @@ func TestNewRefusesConfig(t *testing.T) {
 		{name: "relative issuer", change: func(c *oauth.Config) { c.Issuer = "idp.example" }},
 		{name: "http issuer", change: func(c *oauth.Config) { c.Issuer = "http://idp.example" }},
 		{name: "other scheme", change: func(c *oauth.Config) { c.Issuer = "ftp://idp.example" }},
+		{name: "http on a private address", change: func(c *oauth.Config) { c.Issuer = "http://10.0.0.1" }},
+		{name: "http on a name like loopback", change: func(c *oauth.Config) { c.Issuer = "http://localhost.example" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -609,6 +612,230 @@ func TestNewRefusesUnsupportedAlgorithms(t *testing.T) {
 			})
 			if !errors.Is(err, oauth.ErrProvider) {
 				t.Fatalf("New error = %v, want ErrProvider", err)
+			}
+		})
+	}
+}
+
+func TestNewAcceptsHTTPOnIPv6Loopback(t *testing.T) {
+	t.Parallel()
+
+	// Nothing listens on port 1: the configuration passes, and the
+	// discovery fails.
+	_, err := oauth.New(t.Context(), oauth.Config{
+		HTTPClient: nil, Now: nil, Issuer: "http://[::1]:1", ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+	if errors.Is(err, oauth.ErrConfig) || !errors.Is(err, oauth.ErrProvider) {
+		t.Fatalf("New error = %v, want ErrProvider and not ErrConfig", err)
+	}
+}
+
+// discoveryServer serves the discovery document that doc returns for the
+// base URL of the server, with HTTPS.
+func discoveryServer(t *testing.T, doc func(base string) map[string]any) *httptest.Server {
+	t.Helper()
+
+	var srv *httptest.Server
+
+	srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body, err := json.Marshal(doc(srv.URL))
+		if err != nil {
+			t.Errorf("encode discovery: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+
+		if _, err := w.Write(body); err != nil {
+			t.Errorf("write discovery: %v", err)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv
+}
+
+// discoveryDoc returns a valid discovery document for base.
+func discoveryDoc(base string) map[string]any {
+	return map[string]any{
+		"issuer": base, "authorization_endpoint": base + "/authorize", "token_endpoint": base + "/token",
+		"jwks_uri": base + "/jwks", "id_token_signing_alg_values_supported": []string{"RS256"},
+	}
+}
+
+// newFrom makes a client of the discovery server srv.
+func newFrom(t *testing.T, srv *httptest.Server) error {
+	t.Helper()
+
+	_, err := oauth.New(t.Context(), oauth.Config{
+		HTTPClient: srv.Client(), Now: nil, Issuer: srv.URL, ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+
+	return err
+}
+
+func TestNewAcceptsValidDiscovery(t *testing.T) {
+	t.Parallel()
+
+	if err := newFrom(t, discoveryServer(t, discoveryDoc)); err != nil {
+		t.Fatalf("New: %v", err)
+	}
+}
+
+func TestNewRefusesInsecureEndpoints(t *testing.T) {
+	t.Parallel()
+
+	for _, field := range []string{"authorization_endpoint", "token_endpoint", "jwks_uri"} {
+		for _, value := range []string{"http://idp.example/x", "/relative", ""} {
+			t.Run(field+" "+value, func(t *testing.T) {
+				t.Parallel()
+
+				srv := discoveryServer(t, func(base string) map[string]any {
+					doc := discoveryDoc(base)
+					doc[field] = value
+
+					return doc
+				})
+
+				if err := newFrom(t, srv); !errors.Is(err, oauth.ErrProvider) {
+					t.Fatalf("New error = %v, want ErrProvider", err)
+				}
+			})
+		}
+	}
+}
+
+func TestNewRefusesOtherIssuer(t *testing.T) {
+	t.Parallel()
+
+	srv := discoveryServer(t, func(base string) map[string]any {
+		doc := discoveryDoc(base)
+		doc["issuer"] = "https://other-issuer.example"
+
+		return doc
+	})
+
+	if err := newFrom(t, srv); !errors.Is(err, oauth.ErrProvider) {
+		t.Fatalf("New error = %v, want ErrProvider", err)
+	}
+}
+
+func TestNewRefusesLargeAnswer(t *testing.T) {
+	t.Parallel()
+
+	srv := discoveryServer(t, func(base string) map[string]any {
+		doc := discoveryDoc(base)
+		doc["padding"] = strings.Repeat("x", 2<<20)
+
+		return doc
+	})
+
+	err := newFrom(t, srv)
+	if !errors.Is(err, oauth.ErrProvider) || !strings.Contains(err.Error(), "1 MiB") {
+		t.Fatalf("New error = %v, want ErrProvider about 1 MiB", err)
+	}
+}
+
+func TestNewRefusesRedirectToHTTP(t *testing.T) {
+	t.Parallel()
+
+	plain := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(plain.Close)
+
+	// The provider sends every request to one fixed HTTP URL.
+	target := plain.URL + "/.well-known/openid-configuration"
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target, http.StatusFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	err := newFrom(t, srv)
+	if !errors.Is(err, oauth.ErrProvider) || !strings.Contains(err.Error(), "from https to http") {
+		t.Fatalf("New error = %v, want ErrProvider about the redirect", err)
+	}
+}
+
+func TestFinishRefusesEmptySubject(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.RS256, noFaults())
+	s.provider.SetUser(oauthtest.User{Subject: "", Name: "No One", PreferredUsername: "", Email: ""})
+
+	_, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false})
+	if !errors.Is(err, oauth.ErrIDToken) || !strings.Contains(err.Error(), "sub") {
+		t.Fatalf("Finish error = %v, want ErrIDToken about sub", err)
+	}
+}
+
+func TestFinishAuthorizedParty(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		faults  oauthtest.Faults
+		wantErr bool
+	}{
+		{name: "two audiences, no azp", faults: fault(func(f *oauthtest.Faults) { f.ExtraAudience = true }), wantErr: true},
+		{name: "two audiences, azp of this client", faults: fault(func(f *oauthtest.Faults) {
+			f.ExtraAudience, f.AuthorizedParty = true, clientID
+		}), wantErr: false},
+		{name: "two audiences, azp of another client", faults: fault(func(f *oauthtest.Faults) {
+			f.ExtraAudience, f.AuthorizedParty = true, "another-client"
+		}), wantErr: true},
+		{name: "one audience, azp of this client", faults: fault(func(f *oauthtest.Faults) {
+			f.AuthorizedParty = clientID
+		}), wantErr: false},
+		{name: "one audience, azp of another client", faults: fault(func(f *oauthtest.Faults) {
+			f.AuthorizedParty = "another-client"
+		}), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t, oauthtest.RS256, tc.faults)
+
+			_, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false})
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("Finish error = %v, want an error: %v", err, tc.wantErr)
+			}
+
+			if tc.wantErr && !errors.Is(err, oauth.ErrIDToken) {
+				t.Fatalf("Finish error = %v, want ErrIDToken", err)
+			}
+		})
+	}
+}
+
+func TestCheckState(t *testing.T) {
+	t.Parallel()
+
+	pending := func(state string) oauth.Pending {
+		return oauth.Pending{State: state, Nonce: "", Verifier: "", MaxAge: 0, HasMaxAge: false}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		got     string
+		pending oauth.Pending
+		wantErr bool
+	}{
+		{name: "same state", got: "state-1", pending: pending("state-1"), wantErr: false},
+		{name: "other state", got: "state-2", pending: pending("state-1"), wantErr: true},
+		{name: "prefix", got: "state", pending: pending("state-1"), wantErr: true},
+		{name: "empty state", got: "", pending: pending("state-1"), wantErr: true},
+		{name: "empty pending", got: "", pending: pending(""), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := oauth.CheckState(tc.got, tc.pending)
+			if tc.wantErr && !errors.Is(err, oauth.ErrState) {
+				t.Fatalf("CheckState error = %v, want ErrState", err)
+			}
+
+			if !tc.wantErr && err != nil {
+				t.Fatalf("CheckState error = %v, want nil", err)
 			}
 		})
 	}

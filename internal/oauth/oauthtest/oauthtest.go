@@ -74,6 +74,12 @@ type Faults struct {
 	UnknownKey bool
 	// SkipPKCE accepts a token request with a wrong code verifier.
 	SkipPKCE bool
+	// ExtraAudience signs an ID token for the client and for another
+	// client, so the aud claim is a list of two.
+	ExtraAudience bool
+	// AuthorizedParty sets the azp claim of an ID token when it is not
+	// empty.
+	AuthorizedParty string
 }
 
 // User is the person whom the provider signs in.
@@ -633,6 +639,14 @@ func applyClaimFaults(claims map[string]any, f Faults, now time.Time) {
 
 	if f.WrongNonce {
 		claims["nonce"] = "another-nonce"
+	}
+
+	if f.ExtraAudience {
+		claims["aud"] = []any{claims["aud"], "another-client"}
+	}
+
+	if f.AuthorizedParty != "" {
+		claims["azp"] = f.AuthorizedParty
 	}
 
 	if f.Expired {

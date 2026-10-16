@@ -5,11 +5,15 @@
 //
 // github.com/coreos/go-oidc/v3 checks the signature of the ID token, its
 // issuer, its audience, its expiry and its nbf claim. This package adds the
-// checks that go-oidc leaves to the caller: the nonce, the auth_time claim,
-// and the max_age of the request.
+// checks that go-oidc leaves to the caller: the nonce, the authorized party
+// (azp), the auth_time claim, and the max_age of the request. It also
+// refuses a provider whose endpoints do not use HTTPS, an answer larger
+// than 1 MiB, and a redirect from HTTPS to HTTP.
 //
 // The package holds no state between requests. The caller stores the
-// Pending value of each authorization request and gives it back to Finish.
+// Pending value of each authorization request. At the callback, the caller
+// checks the state with CheckState, deletes the stored Pending value so
+// that it works once, and then gives it to Finish.
 package oauth
 
 import (
@@ -19,6 +23,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -41,6 +46,16 @@ var (
 	ErrProvider = errors.New("identity provider refused the request")
 	// ErrIDToken reports an ID token that the client refuses.
 	ErrIDToken = errors.New("ID token is not valid")
+	// ErrState reports a callback whose state is empty or does not match
+	// the pending request.
+	ErrState = errors.New("state does not match the sign-in request")
+)
+
+// Errors of the HTTP client of the provider.
+var (
+	errResponseTooLarge = errors.New("answer of the identity provider is larger than 1 MiB")
+	errDowngrade        = errors.New("identity provider redirected from https to http")
+	errTooManyRedirects = errors.New("identity provider redirected too many times")
 )
 
 // signingAlgorithms returns the signature algorithms that the client
@@ -55,22 +70,35 @@ func signingAlgorithms() []string {
 const clockSkew = time.Minute
 
 // defaultTimeout is the timeout of each request to the provider when the
-// configuration gives no HTTP client.
+// configuration gives no HTTP client, or one with no timeout.
 const defaultTimeout = 10 * time.Second
+
+// maxResponseBytes is the largest answer that the client reads from the
+// provider: a discovery document, a JWKS or a token answer.
+const maxResponseBytes = 1 << 20
+
+// maxRedirects is the largest number of redirects that the client follows
+// for one request, as net/http does by default.
+const maxRedirects = 10
 
 // randomBytes is the size of a state and of a nonce: 256 bits.
 const randomBytes = 32
+
+// schemeHTTPS is the URL scheme that every endpoint of a provider uses.
+const schemeHTTPS = "https"
 
 // scopeOpenID is the scope that makes the authorization request an
 // OpenID Connect request.
 const scopeOpenID = "openid"
 
 // Config configures a client. Issuer is the issuer URL of the provider.
-// It must use HTTPS, except on a loopback host. RedirectURL is the
-// callback URL of the server, which the provider knows. Scopes are added
-// to "openid". HTTPClient makes the requests to the provider; nil uses a
-// client with a timeout of 10 seconds. Now is the clock; nil uses
-// time.Now.
+// It must use HTTPS. An HTTP issuer on a loopback host is accepted for
+// development and tests only. RedirectURL is the callback URL of the
+// server, which the provider knows. Scopes are added to "openid".
+// HTTPClient makes the requests to the provider; nil, or a client with no
+// timeout, uses a timeout of 10 seconds. The client always limits an
+// answer to 1 MiB and refuses a redirect from HTTPS to HTTP. Now is the
+// clock; nil uses time.Now.
 type Config struct {
 	HTTPClient   *http.Client
 	Now          func() time.Time
@@ -91,17 +119,15 @@ type Client struct {
 
 // New reads the discovery document of the provider and returns a client.
 // It answers ErrConfig for a configuration with a missing or wrong field,
-// and ErrProvider when the discovery document cannot be read or names no
-// signature algorithm that the client accepts.
+// and ErrProvider when the discovery document cannot be read, names an
+// endpoint that does not use HTTPS, or names no signature algorithm that
+// the client accepts.
 func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
-	client := cfg.HTTPClient
-	if client == nil {
-		client = &http.Client{Timeout: defaultTimeout}
-	}
+	client := safeClient(cfg.HTTPClient)
 
 	now := cfg.Now
 	if now == nil {
@@ -111,6 +137,10 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	provider, err := oidc.NewProvider(oidc.ClientContext(ctx, client), cfg.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("%w: discovery: %w", ErrProvider, err)
+	}
+
+	if endpointErr := checkEndpoints(provider); endpointErr != nil {
+		return nil, endpointErr
 	}
 
 	algs, err := providerAlgorithms(provider)
@@ -167,11 +197,123 @@ func (cfg Config) validate() error {
 		return fmt.Errorf("%w: issuer %q is not an absolute URL", ErrConfig, cfg.Issuer)
 	}
 
-	if issuer.Scheme != "https" && (issuer.Scheme != "http" || !loopback(issuer.Hostname())) {
+	if !secureURL(issuer) {
 		return fmt.Errorf("%w: issuer %q must use https", ErrConfig, cfg.Issuer)
 	}
 
 	return nil
+}
+
+// secureURL reports whether u uses HTTPS, or HTTP on a loopback host.
+func secureURL(u *url.URL) bool {
+	return u.Scheme == schemeHTTPS || (u.Scheme == "http" && loopback(u.Hostname()))
+}
+
+// checkEndpoints returns ErrProvider when the discovery document of p
+// names an authorization endpoint, a token endpoint or a JWKS URI that
+// is not an absolute URL with HTTPS. go-oidc does not check the scheme.
+func checkEndpoints(p *oidc.Provider) error {
+	var meta struct {
+		JWKSURI string `json:"jwks_uri"` //nolint:tagliatelle // The OpenID Connect wire name; it must not change.
+	}
+
+	if err := p.Claims(&meta); err != nil {
+		return fmt.Errorf("%w: discovery: %w", ErrProvider, err)
+	}
+
+	endpoint := p.Endpoint()
+
+	for name, raw := range map[string]string{
+		"authorization_endpoint": endpoint.AuthURL,
+		"token_endpoint":         endpoint.TokenURL,
+		"jwks_uri":               meta.JWKSURI,
+	} {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" || !secureURL(u) {
+			return fmt.Errorf("%w: discovery: %s %q must be an https URL", ErrProvider, name, raw)
+		}
+	}
+
+	return nil
+}
+
+// safeClient returns a copy of base, or a new client when base is nil,
+// that limits each answer to maxResponseBytes, refuses a redirect from
+// HTTPS to HTTP, and has a timeout.
+func safeClient(base *http.Client) *http.Client {
+	var c http.Client
+	if base != nil {
+		c = *base
+	}
+
+	if c.Timeout <= 0 {
+		c.Timeout = defaultTimeout
+	}
+
+	next := c.Transport
+	if next == nil {
+		next = http.DefaultTransport
+	}
+
+	c.Transport = limitTransport{next: next}
+	c.CheckRedirect = refuseDowngrade
+
+	return &c
+}
+
+// refuseDowngrade is the redirect rule of the client: at most maxRedirects
+// redirects, and none from HTTPS to HTTP.
+func refuseDowngrade(req *http.Request, via []*http.Request) error {
+	if len(via) >= maxRedirects {
+		return errTooManyRedirects
+	}
+
+	if len(via) > 0 && via[len(via)-1].URL.Scheme == schemeHTTPS && req.URL.Scheme != schemeHTTPS {
+		return errDowngrade
+	}
+
+	return nil
+}
+
+// limitTransport limits the body of each answer to maxResponseBytes.
+type limitTransport struct {
+	next http.RoundTripper
+}
+
+// RoundTrip implements http.RoundTripper.
+func (t limitTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.next.RoundTrip(req)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // A RoundTripper returns the error of the transport as it is.
+	}
+
+	resp.Body = &limitedBody{body: resp.Body, read: 0}
+
+	return resp, nil
+}
+
+// limitedBody is a body that fails after maxResponseBytes.
+type limitedBody struct {
+	body io.ReadCloser
+	read int64
+}
+
+// Read implements io.Reader. It returns errResponseTooLarge when the body
+// is longer than maxResponseBytes.
+func (b *limitedBody) Read(p []byte) (int, error) {
+	n, err := b.body.Read(p)
+	b.read += int64(n)
+
+	if b.read > maxResponseBytes {
+		return n, errResponseTooLarge
+	}
+
+	return n, err //nolint:wrapcheck // A body returns io.EOF as it is; a wrapped EOF breaks its readers.
+}
+
+// Close implements io.Closer.
+func (b *limitedBody) Close() error {
+	return b.body.Close() //nolint:wrapcheck // A body returns the error of the connection as it is.
 }
 
 // loopback reports whether host names the loopback interface.
@@ -232,6 +374,17 @@ type Pending struct {
 	HasMaxAge bool
 }
 
+// CheckState returns ErrState when got, the state of the callback, is
+// empty or differs from the state of the pending request p. The compare
+// takes constant time.
+func CheckState(got string, p Pending) error {
+	if got == "" || p.State == "" || subtle.ConstantTimeCompare([]byte(got), []byte(p.State)) != 1 {
+		return ErrState
+	}
+
+	return nil
+}
+
 // Begin returns the authorization URL to send the browser to, and the
 // Pending value of the request. Each call makes a new state, nonce and
 // PKCE verifier. The request sends MaxAge in whole seconds, and a
@@ -265,8 +418,9 @@ type Identity struct {
 }
 
 // Finish exchanges the code of the callback for tokens and checks the ID
-// token against the pending request p. The caller checks the state of the
-// callback against p.State before it calls Finish. Finish answers
+// token against the pending request p. Before it calls Finish, the caller
+// checks the state of the callback with CheckState and deletes the stored
+// p, so that a pending request works once. Finish answers
 // ErrProvider when the token endpoint refuses the code, and ErrIDToken
 // when the ID token is missing or fails a check.
 func (c *Client) Finish(ctx context.Context, code string, p Pending) (Identity, error) {
@@ -316,13 +470,15 @@ func exchangeError(err error) error {
 // token.
 type idClaims struct {
 	AuthTime          *int64 `json:"auth_time"` //nolint:tagliatelle // The OpenID Connect wire name; it must not change.
+	AuthorizedParty   string `json:"azp"`
 	Name              string `json:"name"`
 	PreferredUsername string `json:"preferred_username"` //nolint:tagliatelle // The OpenID Connect wire name; it must not change.
 	Email             string `json:"email"`
 }
 
 // checkClaims applies the checks that go-oidc leaves to the caller: the
-// nonce, the auth_time claim and the max_age of the request.
+// nonce, the sub claim, the authorized party, the auth_time claim and the
+// max_age of the request.
 func (c *Client) checkClaims(t *oidc.IDToken, p Pending) (Identity, error) {
 	if p.Nonce == "" || subtle.ConstantTimeCompare([]byte(t.Nonce), []byte(p.Nonce)) != 1 {
 		return Identity{}, fmt.Errorf("%w: nonce does not match the request", ErrIDToken)
@@ -335,6 +491,12 @@ func (c *Client) checkClaims(t *oidc.IDToken, p Pending) (Identity, error) {
 	var claims idClaims
 	if err := t.Claims(&claims); err != nil {
 		return Identity{}, fmt.Errorf("%w: claims: %w", ErrIDToken, err)
+	}
+
+	// OpenID Connect Core 1.0, section 3.1.3.7: a token for more than one
+	// audience, or with an azp claim, must name this client as azp.
+	if (len(t.Audience) > 1 || claims.AuthorizedParty != "") && claims.AuthorizedParty != c.oauth2.ClientID {
+		return Identity{}, fmt.Errorf("%w: azp claim %q does not name this client", ErrIDToken, claims.AuthorizedParty)
 	}
 
 	now := c.now()
