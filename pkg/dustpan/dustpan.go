@@ -54,6 +54,7 @@ import (
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
@@ -165,11 +166,16 @@ type settings struct {
 	// disablePulumiJournaling turns Pulumi journaling off. See
 	// WithDisablePulumiJournaling.
 	disablePulumiJournaling bool
+	// auditChain is the hash chain setting. See WithAuditChain.
+	auditChain audit.ChainSetting
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
 	// instanceID names this server process in the sink leases of its audit
 	// shipper. See WithInstanceID.
 	instanceID string
+	// auditShipper ships to auditSinks. assemble sets it before it mounts
+	// the adapters, so the installation API lists it.
+	auditShipper *audit.Shipper
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
@@ -466,6 +472,9 @@ type Server struct {
 	tlsCertFile     string
 	tlsKeyFile      string
 	observed        *metrics.ServerMetrics
+	// chain is the audit chain of the store, or nil when the store keeps
+	// its own chain.
+	chain *auditChain
 	// tokens runs the inactivity disable of access tokens and accounts on a
 	// schedule (ADR 53), or is nil when the store keeps no tokens.
 	tokens      *accesstoken.Service
@@ -535,9 +544,11 @@ func defaultSettings() *settings {
 		backupTargetName:        "",
 		beforeServe:             nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
+		auditChain:              audit.ChainOn,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 		auditSinks:              nil,
 		instanceID:              "",
+		auditShipper:            nil,
 	}
 }
 
@@ -657,6 +668,13 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 
 	svc.deleted = deleted
 
+	shipper, err := newAuditShipper(cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.auditShipper = shipper
+
 	adapters, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
 		return nil, err
@@ -677,11 +695,6 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		restoreRegistry = reg
 	}
 
-	shipper, err := newAuditShipper(cfg, observed)
-	if err != nil {
-		return nil, err
-	}
-
 	return &Server{
 		handler:         handler,
 		logger:          cfg.logger,
@@ -700,6 +713,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		tlsCertFile:     cfg.tlsCertFile,
 		tlsKeyFile:      cfg.tlsKeyFile,
 		observed:        observed,
+		chain:           adapters.chain,
 		tokens:          svc.tokens,
 		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
@@ -718,6 +732,7 @@ type adapters struct {
 	ready       http.Handler
 	maintenance *maintenance.Watcher
 	restores    *backup.RestoreService
+	chain       *auditChain
 }
 
 // newAdapters builds every HTTP adapter from the services and settings.
@@ -730,7 +745,12 @@ func newAdapters(
 	backups *backup.Service,
 	observed *metrics.ServerMetrics,
 ) (adapters, error) {
-	maint, watcher, err := newMaintenance(svc, cfg)
+	chain, err := newAuditChain(cfg, observed)
+	if err != nil {
+		return adapters{}, err
+	}
+
+	maint, watcher, err := newMaintenance(svc, cfg, chain)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -767,18 +787,11 @@ func newAdapters(
 		backups:  backups,
 		maint:    maint,
 		observed: observed,
+		chain:    chain,
 	})
 	if err != nil {
 		return adapters{}, err
 	}
-
-	ready := newReadinessHandler(
-		cfg.namespaceStore,
-		cfg.blobStore,
-		readinessTimeout,
-		observed.ReadinessFailures(),
-		cfg.logger,
-	)
 
 	return adapters{
 		pulumi:      api,
@@ -787,10 +800,23 @@ func newAdapters(
 		tfe:         tfeAPI,
 		tofuHTTP:    tofuHTTPAPI,
 		server:      serverAPI,
-		ready:       ready,
+		ready:       newReadiness(cfg, observed),
 		maintenance: watcher,
 		restores:    restores,
+		chain:       chain,
 	}, nil
+}
+
+// newReadiness builds the readiness probe: it pings the store and the blob
+// store, and counts its failures on observed.
+func newReadiness(cfg *settings, observed *metrics.ServerMetrics) http.Handler {
+	return newReadinessHandler(
+		cfg.namespaceStore,
+		cfg.blobStore,
+		readinessTimeout,
+		observed.ReadinessFailures(),
+		cfg.logger,
+	)
 }
 
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
@@ -819,11 +845,19 @@ func newTofuHTTPHandler(cfg *settings, svc services, gate *bodygate.Gate) (*tofu
 }
 
 // newMaintenance builds the maintenance service and the watcher that reads
-// the maintenance state for every request.
-func newMaintenance(svc services, cfg *settings) (*maintenance.Service, *maintenance.Watcher, error) {
+// the maintenance state for every request. A waiting change of the audit
+// chain holds maintenance mode.
+func newMaintenance(
+	svc services, cfg *settings, chain *auditChain,
+) (*maintenance.Service, *maintenance.Watcher, error) {
 	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
 	if !ok {
 		return nil, nil, errMaintenanceNeedsStore
+	}
+
+	var hold func(ctx context.Context) (bool, error)
+	if chain != nil {
+		hold = chain.held
 	}
 
 	maint, err := maintenance.NewService(maintenance.Config{
@@ -832,6 +866,7 @@ func newMaintenance(svc services, cfg *settings) (*maintenance.Service, *mainten
 		Stacks:     svc.stacks,
 		Updates:    svc.updates,
 		Workspaces: svc.workspaces,
+		Hold:       hold,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("maintenance service: %w", err)
@@ -955,6 +990,17 @@ func newWorkspaceService(
 	return workspaces, nil
 }
 
+// clockOf returns the clock of the server settings, defaulting to time.Now
+// like the update service does. The journal replayer stamps the manifest of
+// each checkpoint it builds with it.
+func clockOf(cfg *settings) func() time.Time {
+	if cfg.now != nil {
+		return cfg.now
+	}
+
+	return time.Now
+}
+
 // newUpdateService builds the update service. A nil token service leaves the
 // token checker nil, so the service fails closed for any update that an
 // access token started.
@@ -978,6 +1024,7 @@ func newUpdateService(
 		Logger:             cfg.logger,
 		MaxCheckpointBytes: cfg.maxCheckpointBytes,
 		Journal:            journal,
+		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
@@ -1182,6 +1229,11 @@ func (s *Server) Run(ctx context.Context) error {
 
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
+	// The chain check and the migration loop stop when Run returns, also
+	// after a serve error, and Run returns only after they stopped.
+	checkCtx, stopCheck := context.WithCancel(ctx)
+	waitCheck := s.startAuditChain(checkCtx)
+
 	sweepCtx, stopSweeps := context.WithCancel(ctx)
 
 	var sweeps sync.WaitGroup
@@ -1195,6 +1247,8 @@ func (s *Server) Run(ctx context.Context) error {
 	waitShipper := s.startAuditShipper(shipCtx)
 
 	defer func() {
+		stopCheck()
+		waitCheck()
 		stopShipper()
 		waitShipper()
 		stopSweeps()
@@ -1235,9 +1289,14 @@ func (s *Server) sweepInactive(ctx context.Context) {
 // sweepOnce runs the inactivity disable once and counts the result. A failed
 // run logs no error text, which may hold driver detail (ADR 32 decision 7),
 // and the next run tries again. A run that the server stops (ctx canceled)
-// is not a failure. A run past its time limit is.
+// is not a failure. A run past its time limit is. While a change of the
+// chain waits, it skips one run.
 func (s *Server) sweepOnce(ctx context.Context) {
 	if s.tokens == nil {
+		return
+	}
+
+	if s.chainChangeWaits(ctx) {
 		return
 	}
 
@@ -1384,6 +1443,10 @@ func (s *Server) runStartUp(ctx context.Context) error {
 		startErr = s.sealUnsealedStates(ctx)
 	}
 
+	if startErr == nil {
+		startErr = s.startUpAuditChain(ctx)
+	}
+
 	if startErr != nil && ctx.Err() == nil {
 		return startErr
 	}
@@ -1415,8 +1478,14 @@ func (s *Server) failStoppedRestores(ctx context.Context) error {
 		state := running[i].State
 		if state == backup.RestoreChecking || state == backup.RestoreApplying {
 			crashed = true
+		}
+	}
 
-			break
+	// The fence comes before the rows fail: when it fails, the next start
+	// still sees the stopped restore and fences again.
+	if crashed {
+		if err := s.fenceStoppedRestore(ctx); err != nil {
+			return err
 		}
 	}
 
@@ -1424,10 +1493,12 @@ func (s *Server) failStoppedRestores(ctx context.Context) error {
 		return fmt.Errorf("fail running restores: %w", err)
 	}
 
-	if !crashed {
-		return nil
-	}
+	return nil
+}
 
+// fenceStoppedRestore increments the failover version of every namespace
+// after a restore that stopped while it ran.
+func (s *Server) fenceStoppedRestore(ctx context.Context) error {
 	fencer, ok := s.restoreRegistry.(backup.Fencer)
 	if !ok {
 		return nil
@@ -1629,6 +1700,7 @@ type installationDeps struct {
 	backups  *backup.Service
 	maint    *maintenance.Service
 	observed *metrics.ServerMetrics
+	chain    *auditChain
 }
 
 // newInstallationAPI builds the restore service and the tool-neutral
@@ -1640,6 +1712,8 @@ func newInstallationAPI(
 	if err != nil {
 		return nil, nil, err
 	}
+
+	bindAuditChain(deps.chain, deps.maint, restores, cfg)
 
 	serverAPI, err := newServerHandler(cfg, deps, restores)
 	if err != nil {
@@ -1676,6 +1750,11 @@ func newServerHandler(
 		return nil, err
 	}
 
+	var sinks serverapi.AuditSinkSource
+	if cfg.auditShipper != nil {
+		sinks = cfg.auditShipper
+	}
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
@@ -1687,6 +1766,7 @@ func newServerHandler(
 		Metrics:       deps.observed,
 		Version:       cfg.version,
 		Schema:        schemaReporterOf(cfg.namespaceStore),
+		Journal:       journalReporterOf(cfg.namespaceStore),
 		Principals:    principals,
 		Access:        grants,
 		Tokens:        deps.services.tokens,
@@ -1697,6 +1777,8 @@ func newServerHandler(
 			deps.observed.IncAuditAppendFailure()
 		},
 		DeletedUnits: deps.services.deleted,
+		AuditChain:   auditChainPort(deps.chain),
+		AuditSinks:   sinks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -1747,12 +1829,16 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 	}
 
 	var guard principal.Guard
+
+	var tokens principal.Tokens
+
 	if grants != nil {
 		guard = grants
+		tokens = grants
 	}
 
 	svc, err := principal.NewService(principal.Config{
-		Store: store, Guard: guard, Namespaces: cfg.namespaceStore, Now: nil, NewID: nil,
+		Store: store, Guard: guard, Namespaces: cfg.namespaceStore, Tokens: tokens, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)
@@ -2002,6 +2088,20 @@ func schemaReporterOf(store namespace.Store) serverapi.SchemaReporter {
 	return reporter
 }
 
+// journalReporterOf returns the journal reporter of the namespace store, or
+// nil when the store does not count running journaled updates. Both SQL
+// adapters count them.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the
+func journalReporterOf(store namespace.Store) serverapi.JournalReporter {
+	reporter, ok := store.(serverapi.JournalReporter)
+	if !ok {
+		return nil
+	}
+
+	return reporter
+}
+
 // newBackupService builds the installation backup service when a backup
 // target is configured, else returns nil. The exporter and the registry come
 // from the namespace store: every SQL adapter serves all ports from one
@@ -2073,6 +2173,14 @@ func newRestoreService(
 		return nil, errRestoreNeedsRegistry
 	}
 
+	var admit func(ctx context.Context) error
+
+	steps := []restoreStep{sealAfterRestore(deps)}
+	if deps.chain != nil {
+		admit = deps.chain.admitRestore
+		steps = append(steps, deps.chain.afterRestore)
+	}
+
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
 		Live:        live,
 		Registry:    registry,
@@ -2082,7 +2190,8 @@ func newRestoreService(
 		Target:      cfg.backupTarget,
 		Key:         cfg.secretWrapper,
 		Region:      cfg.region.String(),
-		AfterApply:  sealAfterRestore(deps),
+		AfterApply:  afterRestore(steps...),
+		Admit:       admit,
 		Now:         cfg.now,
 		Logger:      cfg.logger,
 	})
@@ -2093,12 +2202,33 @@ func newRestoreService(
 	return service, nil
 }
 
+// restoreStep is one after-apply step of a restore.
+type restoreStep func(ctx context.Context) error
+
+// afterRestore returns the after-apply step of a restore that runs every
+// step in order, also after a step fails, and joins their errors. So a
+// failed seal never skips the comparison of the restored audit log with the
+// state of the chain.
+func afterRestore(steps ...restoreStep) restoreStep {
+	return func(ctx context.Context) error {
+		var errs []error
+
+		for _, step := range steps {
+			if err := step(ctx); err != nil {
+				errs = append(errs, err)
+			}
+		}
+
+		return errors.Join(errs...)
+	}
+}
+
 // sealAfterRestore returns the after-apply step of a restore: it seals the
 // OpenTofu state versions that the restored backup holds unsealed (ADR 41
 // decision 11), with the same job the server runs at start-up. NewServer
 // refuses to build without a key-encryption key (#367), so the step is
 // always set.
-func sealAfterRestore(deps installationDeps) func(ctx context.Context) error {
+func sealAfterRestore(deps installationDeps) restoreStep {
 	return func(ctx context.Context) error {
 		if _, err := deps.services.workspaces.SealUnsealedStates(ctx); err != nil {
 			return fmt.Errorf("seal unsealed state: %w", err)
@@ -2434,7 +2564,9 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 
 	addr := requestAddr{resolver: resolver, warns: newWarnLimiter(cfg.now)}
 
-	return withRequestCache(withRequestLog(mux, addr, cfg.logger, cfg.authenticator, observed)), nil
+	gated := withAuditChainGate(mux, a.chain, cfg.logger)
+
+	return withRequestCache(withRequestLog(gated, addr, cfg.logger, cfg.authenticator, observed)), nil
 }
 
 // newClientIPResolver builds the client address resolver of the server from

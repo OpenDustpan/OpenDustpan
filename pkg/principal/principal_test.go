@@ -115,7 +115,9 @@ func TestValidateGroupName(t *testing.T) {
 func TestNewServiceNeedsStore(t *testing.T) {
 	t.Parallel()
 
-	_, err := principal.NewService(principal.Config{Store: nil, Guard: nil, Namespaces: nil, Now: nil, NewID: nil})
+	_, err := principal.NewService(principal.Config{
+		Store: nil, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+	})
 	if !errors.Is(err, principal.ErrMissingDependency) {
 		t.Fatalf("NewService without a store = %v, want ErrMissingDependency", err)
 	}
@@ -134,7 +136,7 @@ func TestDisplayNameRefusesFormatCharacters(t *testing.T) {
 		Kind:        principal.KindPerson,
 		Source:      principal.SourceLocal,
 		Namespace:   "",
-		GroupCount:  0,
+		GroupCount:  0, BreakGlass: false,
 	}
 	if err := p.Validate(); !errors.Is(err, principal.ErrInvalid) {
 		t.Fatalf("display name with a zero-width space = %v, want ErrInvalid", err)
@@ -223,7 +225,7 @@ func TestServiceEntries(t *testing.T) {
 
 	svc, err := principal.NewService(principal.Config{
 		Store: st,
-		Guard: nil, Namespaces: nil,
+		Guard: nil, Namespaces: nil, Tokens: nil,
 		Now:   func() time.Time { return at },
 		NewID: func(prefix string) string { return prefix + "fixed" },
 	})
@@ -288,7 +290,7 @@ func newServiceOverStore(t *testing.T) *principal.Service {
 	t.Helper()
 
 	svc, err := principal.NewService(
-		principal.Config{Store: openStore(t), Guard: nil, Namespaces: nil, Now: nil, NewID: nil},
+		principal.Config{Store: openStore(t), Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -305,6 +307,7 @@ func testEntry() audit.Entry {
 		Changes:  nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
-		ObjectID: "",
+		ObjectID:     "",
+		FenceVersion: 0,
 	}
 }

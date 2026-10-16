@@ -184,6 +184,7 @@ func plainBackendConfig(binPath, dbURL, blobDir, tokens string, cert backendCert
 		keyFile:           cert.key,
 		tokens:            tokens,
 		deltaCutoff:       0,
+		auditChain:        "",
 	}
 }
 
@@ -286,6 +287,12 @@ func (e *Env) SetServerBinary(path string) {
 	e.backendCfg.bin = path
 }
 
+// SetAuditChain sets the --audit-chain value that the next StartServer
+// uses: on or off.
+func (e *Env) SetAuditChain(setting string) {
+	e.backendCfg.auditChain = setting
+}
+
 // TryServe runs binPath `serve` once on the database, blob directory,
 // certificate and port of the environment and returns what it printed. The
 // environment server must be stopped first. A refusal exits at once with a
@@ -303,7 +310,7 @@ func (e *Env) TryServe(ctx context.Context, tb testing.TB, binPath string) Binar
 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, binPath, serveArgs(cfg, e.backendPort)...)
-	cmd.Env = backendEnv(cfg.tokens)
+	cmd.Env = backendServeEnv(cfg.tokens, cfg.dbURL)
 
 	var stdout, stderr bytes.Buffer
 

@@ -38,17 +38,19 @@ const journalSweepGrace = time.Hour
 // sequence ID of 0 or less, or a sequence ID that the batch holds twice.
 var ErrJournalBatch = errors.New("journal batch is malformed")
 
-// BatchVerifier checks one journal batch before the server stores it (ADR 43,
-// decision 6.4). The types are standard library types, so an implementation
-// needs no import of this package. version is the journal version that the server
-// negotiated for the update. known holds the operation IDs that the update already
-// holds. A reference to an entry must name one of them, or an earlier entry of the
-// same batch. recordsChanged reports whether a stored batch of the update holds an
-// entry that changes the replay records. A write entry must come before all of
-// them, so a batch that holds one is refused when recordsChanged is set. It returns
-// whether the batch holds an entry that changes the records, so the store sets the
-// flag of the update in the same transaction as the write. It returns an error when
-// the batch cannot replay.
+// BatchVerifier checks one journal batch before the server stores it. The types
+// are standard library types, so an implementation needs no import of this
+// package. version is the journal version that the server negotiated for the
+// update. known holds the completed operation IDs that the update already
+// holds: the operations of success entries with a state, which are the only
+// ones that later references can name. A reference to an entry must name one
+// of them, or a completed entry earlier in the same batch. recordsChanged
+// reports whether a stored batch of the update holds an entry that changes the
+// replay records. A write entry must come before all of them, so a batch that
+// holds one is refused when recordsChanged is set. It returns whether the batch
+// holds an entry that changes the records, so the store sets the flag of the
+// update in the same transaction as the write. It returns an error when the
+// batch cannot replay.
 type BatchVerifier interface {
 	VerifyBatch(body []byte, version int, known []int64, recordsChanged bool) (changed bool, err error)
 }
@@ -68,7 +70,7 @@ type JournalBatch struct {
 }
 
 // JournalRow is the row of one stored batch: the blob that holds it, and the
-// parts that the retry check and the replay read (ADR 43, decision 6.1).
+// parts that the retry check and the replay read.
 type JournalRow struct {
 	Ref     Ref
 	Update  UpdateID
@@ -76,17 +78,27 @@ type JournalRow struct {
 	BlobKey blob.Key
 	SHA256  [sha256.Size]byte
 	// MD5 is the MD5 of the stored bytes. The backup manifest names the blob by it.
-	MD5          [md5.Size]byte
-	Size         int64
-	SequenceIDs  []int64
+	MD5         [md5.Size]byte
+	Size        int64
+	SequenceIDs []int64
+	// OperationIDs holds the completed operation IDs of the batch: the
+	// operations of success entries with a state. Only those can be named by
+	// later references, so only those are stored for the known set. When the
+	// batch holds a rebuilt base state entry, only the operations after the
+	// last such entry are kept, as the replay drops earlier records.
 	OperationIDs []int64
-	// Verify checks the batch against the operation IDs that the update holds and
-	// the flag that reports whether a stored batch holds an entry that changes the
-	// replay records. The store calls it in the fenced transaction, after the retry
-	// check and before the write, with the operation IDs of the stored rows and the
-	// flag. It returns whether the batch holds such an entry, so the store sets the
-	// flag in the same transaction as the write. A nil Verify skips the
-	// check. A non-nil error refuses the batch with ErrJournalBatch.
+	// HasRebuild reports whether the batch holds a rebuilt base state entry
+	// (kind 7). The store clears the operation IDs of earlier batches in the
+	// same transaction as the write, so the known set starts again from this
+	// batch.
+	HasRebuild bool
+	// Verify checks the batch against the completed operation IDs that the update
+	// holds and the flag that reports whether a stored batch holds an entry that
+	// changes the replay records. The store calls it in the fenced transaction,
+	// after the retry check and before the write, with the operation IDs of the
+	// stored rows and the flag. It returns whether the batch holds such an entry,
+	// so the store sets the flag in the same transaction as the write. A nil Verify
+	// skips the check. A non-nil error refuses the batch with ErrJournalBatch.
 	Verify func(known []int64, recordsChanged bool) (changed bool, err error)
 }
 
@@ -102,7 +114,10 @@ type JournalStore interface {
 	// ErrJournalConflict. The blob must already be in the blob store. A row with a
 	// Verify function that returns an error is refused with ErrJournalBatch. When
 	// Verify reports that the batch holds an entry that changes the replay records,
-	// the flag of the update is set in the same transaction as the write.
+	// the flag of the update is set in the same transaction as the write. When
+	// the row reports a rebuilt base state entry, the operation IDs of earlier
+	// batches are cleared in the same transaction, so the known set starts
+	// again from this batch.
 	PutJournalRow(ctx context.Context, row JournalRow, fence namespace.Fence) (retried bool, err error)
 	// JournalKeys returns the blob keys of the batches of the update, in arrival
 	// order. It is keyed by the stack ID, as the blob keys are. A missing update
@@ -127,9 +142,10 @@ type BuiltCheckpointStore interface {
 	PutBuiltCheckpoint(ctx context.Context, cp Checkpoint, fence namespace.Fence) ([]blob.Key, error)
 }
 
-// KnownOperationIDs returns the operation IDs that the stored rows of an update
-// hold. Each element is the JSON array that a row keeps (see JournalRow.OperationIDs).
-// It returns an error for a value that is not such an array.
+// KnownOperationIDs returns the completed operation IDs that the stored rows of
+// an update hold. Each element is the JSON array that a row keeps (see
+// JournalRow.OperationIDs). It returns an error for a value that is not such
+// an array.
 func KnownOperationIDs(stored []string) ([]int64, error) {
 	var known []int64
 	for _, raw := range stored {
@@ -144,17 +160,20 @@ func KnownOperationIDs(stored []string) ([]int64, error) {
 	return known, nil
 }
 
-// journalBody is the part of a journal batch body that the blob key and the
-// retry check read. The wire format is the batch of the Pulumi CLI (ADR 43,
-// decision 8.1).
+// journalBody is the part of a journal batch body that the blob key, the retry
+// check and the completed operation IDs read.
 type journalBody struct {
 	Entries []journalEntryIDs `json:"entries"`
 }
 
-// journalEntryIDs holds the IDs of one entry.
+// journalEntryIDs holds the IDs and the completion parts of one entry. Kind 1
+// is the success kind, and only a success entry with a state creates a resource
+// that later references can name, matching the index that the replay builds.
 type journalEntryIDs struct {
-	SequenceID  int64 `json:"sequenceID"`
-	OperationID int64 `json:"operationID"`
+	SequenceID  int64           `json:"sequenceID"`
+	OperationID int64           `json:"operationID"`
+	Kind        int             `json:"kind"`
+	State       json.RawMessage `json:"state"`
 }
 
 // JournalEntries writes journal batches: the blob first, then the row in a fenced
@@ -188,6 +207,29 @@ func (j *JournalEntries) RemoveBlobs(ctx context.Context, keys []blob.Key) error
 	}
 
 	return errors.Join(errs...)
+}
+
+// Batches returns the bodies of the stored batches of the update, in arrival
+// order, for the replay. It holds every body in memory; a later streaming
+// build reads them without holding them all.
+func (j *JournalEntries) Batches(ctx context.Context, stackID ID, update UpdateID) ([][]byte, error) {
+	keys, err := j.rows.JournalKeys(ctx, stackID, update)
+	if err != nil {
+		return nil, fmt.Errorf("read journal keys: %w", err)
+	}
+
+	out := make([][]byte, 0, len(keys))
+
+	for _, key := range keys {
+		body, err := j.batchBody(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+
+		out = append(out, body)
+	}
+
+	return out, nil
 }
 
 // SweepUpdate deletes the journal blobs of one update that no row names and that are
@@ -276,6 +318,7 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		Size:         int64(len(batch.Content)),
 		SequenceIDs:  ids.sequences,
 		OperationIDs: ids.operations,
+		HasRebuild:   ids.hasRebuild,
 		Verify: func(known []int64, recordsChanged bool) (bool, error) {
 			return j.verifier.VerifyBatch(batch.Content, batch.Version, known, recordsChanged)
 		},
@@ -358,9 +401,12 @@ func (j *JournalEntries) digestOf(ctx context.Context, key blob.Key) ([sha256.Si
 	return sum, nil
 }
 
-// batchIDs returns the sequence IDs and the operation IDs of a batch body. Each
-// sequence ID must be positive and appear once (ADR 43, decision 5.5). A body with
-// no entries returns no IDs and no error.
+// batchIDs returns the sequence IDs and the completed operation IDs of a batch
+// body. Each sequence ID must be positive and appear once. A body with no
+// entries returns no IDs and no error. Only success entries with a state
+// contribute operation IDs, as only those create resources that later
+// references can name. A rebuilt base state entry drops the operations before
+// it, as the replay drops its records.
 func batchIDs(content []byte) (journalIDs, error) {
 	var body journalBody
 	if err := json.Unmarshal(content, &body); err != nil {
@@ -370,6 +416,7 @@ func batchIDs(content []byte) (journalIDs, error) {
 	seen := make(map[int64]bool, len(body.Entries))
 	seqs := make([]int64, 0, len(body.Entries))
 	ops := make([]int64, 0, len(body.Entries))
+	rebuilt := false
 
 	for _, e := range body.Entries {
 		if e.SequenceID <= 0 {
@@ -382,17 +429,36 @@ func batchIDs(content []byte) (journalIDs, error) {
 
 		seen[e.SequenceID] = true
 		seqs = append(seqs, e.SequenceID)
-		ops = append(ops, e.OperationID)
+
+		if e.Kind == journalRebuildKind {
+			ops = nil
+			rebuilt = true
+
+			continue
+		}
+
+		if e.Kind == journalSuccessKind && len(e.State) > 0 && string(e.State) != "null" {
+			ops = append(ops, e.OperationID)
+		}
 	}
 
-	return journalIDs{sequences: seqs, operations: ops}, nil
+	return journalIDs{sequences: seqs, operations: ops, hasRebuild: rebuilt}, nil
 }
 
-// journalIDs holds the sequence IDs and the operation IDs of one batch, in the
-// order of the body.
+// journalSuccessKind is the kind of a success entry. Only such an entry with a
+// state creates a resource that later references can name.
+const journalSuccessKind = 1
+
+// journalRebuildKind is the kind of a rebuilt base state entry. It drops the
+// replay records, so earlier completed operations are no longer referenceable.
+const journalRebuildKind = 7
+
+// journalIDs holds the sequence IDs of one batch in the order of the body, its
+// completed operation IDs, and whether it holds a rebuilt base state entry.
 type journalIDs struct {
 	sequences  []int64
 	operations []int64
+	hasRebuild bool
 }
 
 // lowest returns the smallest sequence ID of a non-empty batch.
@@ -408,4 +474,25 @@ func lowest(seqs []int64) int64 {
 // journalKey returns the blob key of a batch (ADR 43, decision 6.1).
 func journalKey(stackID ID, update UpdateID, low int64) blob.Key {
 	return blob.Key(fmt.Sprintf("pulumi/%s/%s/journal/%d", stackID, update, low))
+}
+
+// batchBody reads the batch stored under key.
+func (j *JournalEntries) batchBody(ctx context.Context, key blob.Key) ([]byte, error) {
+	r, err := j.blobs.Get(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("read journal batch: %w", err)
+	}
+
+	body, readErr := io.ReadAll(r)
+	closeErr := r.Close()
+
+	if readErr != nil {
+		return nil, errors.Join(readErr, closeErr)
+	}
+
+	if closeErr != nil {
+		return nil, fmt.Errorf("close journal batch: %w", closeErr)
+	}
+
+	return body, nil
 }

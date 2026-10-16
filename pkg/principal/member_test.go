@@ -24,7 +24,7 @@ func (memberStore) GetPrincipal(_ context.Context, id string) (principal.Princip
 	return principal.Principal{
 		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), DisabledAt: time.Time{}, ID: id,
 		Subject: "ci-acme", DisplayName: "", Kind: principal.KindService, Source: principal.SourceLocal,
-		Namespace: "acme", GroupCount: 0,
+		Namespace: "acme", GroupCount: 0, BreakGlass: false,
 	}, nil
 }
 
@@ -43,7 +43,7 @@ func TestAddMemberRefusesNamespacePrincipal(t *testing.T) {
 	added := 0
 
 	svc, err := principal.NewService(principal.Config{
-		Store: memberStore{Store: nil, added: &added}, Guard: nil, Namespaces: nil, Now: nil, NewID: nil,
+		Store: memberStore{Store: nil, added: &added}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

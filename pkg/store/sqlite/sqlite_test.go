@@ -119,18 +119,7 @@ func TestAuditFeedConformance(t *testing.T) {
 	audittest.RunFeed(t, func(t *testing.T) audittest.FeedStore {
 		t.Helper()
 
-		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		t.Cleanup(func() {
-			if err := s.Close(); err != nil {
-				t.Errorf("close store: %v", err)
-			}
-		})
-
-		return s
+		return open(t)
 	})
 }
 
@@ -145,6 +134,8 @@ func TestAuditConformance(t *testing.T) {
 		t.Helper()
 
 		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
 
 		s, err := sqlite.Open(t.Context(), path)
 		if err != nil {
@@ -169,15 +160,77 @@ func TestAuditConformance(t *testing.T) {
 	})
 }
 
+// TestAuditChainConformance runs the chain switch cases: entries without a
+// hash, runs of chained entries, and the recorded chain state.
+func TestAuditChainConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.RunChain(t, func(t *testing.T) audittest.ChainTestStore {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return audittest.ChainTestStore{
+			Store: s,
+			TamperEntry: func(t *testing.T, ns namespace.Name, seq int64, field, value string) {
+				t.Helper()
+
+				change := auditFieldChange{field: field, value: value}
+				if err := tamperAuditEntry(t.Context(), path, ns, seq, change); err != nil {
+					t.Fatalf("change entry %d: %v", seq, err)
+				}
+			},
+			Reopen: func(t *testing.T) audittest.ChainStore {
+				t.Helper()
+
+				second, err := sqlite.Open(t.Context(), path)
+				if err != nil {
+					t.Fatalf("reopen store: %v", err)
+				}
+
+				t.Cleanup(func() {
+					if err := second.Close(); err != nil {
+						t.Errorf("close store: %v", err)
+					}
+				})
+
+				return second
+			},
+		}
+	})
+}
+
 // errUnknownAuditField reports a tamper hook field outside the whitelist.
 var errUnknownAuditField = errors.New("unknown audit field")
 
 // tamperAuditColumn maps a tamper hook field to its column. The column
 // equals the field; the switch keeps the field name out of SQL unless it
-// names one of the six whitelisted columns.
+// names one of the whitelisted columns.
 func tamperAuditColumn(field string) (string, bool) {
 	switch field {
-	case "subject", "action", "object", "outcome", "kind", "changes":
+	case "subject",
+		"action",
+		"object",
+		"outcome",
+		"kind",
+		"hash",
+		"prev_hash",
+		"at_ms",
+		"sequence",
+		"changes",
+		"fence_version",
+		"value_path":
 		return field, true
 	default:
 		return "", false
@@ -260,7 +313,11 @@ func TestSchemaConformance(t *testing.T) {
 func TestPingClosed(t *testing.T) {
 	t.Parallel()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -294,6 +351,8 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, openErr := sqlite.Open(t.Context(), path)
 	if openErr != nil {
@@ -458,11 +517,14 @@ var (
 	_ storetest.StagingWitness = (*backupStore)(nil)
 )
 
-// openBackup returns a fresh backup-capable store in a temporary directory.
+// openBackup returns a fresh backup-capable store in a temporary directory,
+// copied from the migrated template.
 func openBackup(t *testing.T) storetest.BackupStore { //nolint:ireturn // Factory signature returns the interface.
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -661,22 +723,13 @@ func checkUsableWorkspace(t *testing.T, s *sqlite.Store, ns namespace.Namespace,
 	}
 }
 
-// open returns a fresh store in a temporary directory.
+// open returns a fresh store in a temporary directory, copied from the
+// migrated template so only the first test of the binary runs every
+// migration.
 func open(t *testing.T) *sqlite.Store {
 	t.Helper()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("close store: %v", err)
-		}
-	})
-
-	return s
+	return openTemplated(t)
 }
 
 // uncountedStore wraps a Store with its path so the uncounted-checkpoint
@@ -694,12 +747,18 @@ var (
 	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
 )
 
+// errNoJournalCount reports a wrapped store without the journaled count.
+var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
+
 // openUncounted returns a fresh store in a temporary directory that the
-// uncounted-checkpoint case can NULL through SQL.
+// uncounted-checkpoint case can NULL through SQL, copied from the migrated
+// template.
 func openUncounted(t *testing.T) *uncountedStore {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -713,6 +772,24 @@ func openUncounted(t *testing.T) *uncountedStore {
 	})
 
 	return &uncountedStore{UpdatesStore: s, path: path}
+}
+
+// CountRunningJournaledUpdates forwards to the wrapped store, whose method
+// the embedded UpdatesStore interface hides.
+func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	counter, ok := s.UpdatesStore.(interface {
+		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("count running journaled updates: %w", errNoJournalCount)
+	}
+
+	count, err := counter.CountRunningJournaledUpdates(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count running journaled updates: %w", err)
+	}
+
+	return count, nil
 }
 
 // NullifyResourceCount implements storetest.CountNullifier.
@@ -802,11 +879,13 @@ func (s *auditedWorkspaces) BreakAuditAppends(ctx context.Context) error {
 }
 
 // openAuditedWorkspaces returns a fresh store in a temporary directory whose
-// audit appends the suite can break.
+// audit appends the suite can break, copied from the migrated template.
 func openAuditedWorkspaces(t *testing.T) *auditedWorkspaces {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -1705,6 +1784,8 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {

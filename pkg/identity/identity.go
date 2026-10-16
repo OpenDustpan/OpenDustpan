@@ -120,6 +120,15 @@ const (
 	// settings name it: the start entry and the entry of a reload of the
 	// configuration file. RFC 68 decides the settings API that checks it.
 	ActionServerManageSettings Action = "server:manage-settings"
+	// ActionServerSetAuditChain allows approving a change of the audit
+	// chain to the setting of the server, on or off. A change to off also
+	// needs ActionServerDisableAuditChain. Its object is ServerObject.
+	ActionServerSetAuditChain Action = "server:set-audit-chain"
+	// ActionServerDisableAuditChain is the second action that a change of
+	// the audit chain to off needs. It is in another family than
+	// ActionServerSetAuditChain, so one family alone cannot turn the chain
+	// off. Its object is ServerObject.
+	ActionServerDisableAuditChain Action = "server:disable-audit-chain"
 	// ActionServerReadPrincipals allows reading the principals and the
 	// groups of the installation, and the members of each group (ADR 52).
 	// Its object is ServerObject.
@@ -236,10 +245,15 @@ const (
 	// 6). Its object is ServerObject.
 	ActionServerManageTokenPolicy Action = "server:manage-token-policy"
 	// ActionServerManageSignIn allows changing the sign-in settings of the
-	// installation: the session policy, and later the sign-in methods, SCIM
-	// and MFA. Its object is ServerObject. Of the built-in roles, only the
-	// site administrator holds it.
+	// installation: the session policy, the MFA freshness settings, and later
+	// the sign-in methods, SCIM and MFA. Its object is ServerObject. Of the
+	// built-in roles, only the site administrator holds it.
 	ActionServerManageSignIn Action = "server:manage-sign-in"
+	// ActionServerRestoreAccess allows a restore to replace the access
+	// tables: principals, groups, memberships, roles, grants, access tokens
+	// and trust rules. Its object is ServerObject. Of the built-in roles,
+	// only the site administrator holds it.
+	ActionServerRestoreAccess Action = "server:restore-access"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

@@ -4,12 +4,14 @@ package faults_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
@@ -27,6 +29,7 @@ func toxiproxyAPI(t *testing.T) string {
 
 	if api := strings.TrimSpace(os.Getenv("TOXIPROXY_URL")); api != "" {
 		api = strings.TrimRight(api, "/")
+		api = validatedToxiproxyBase(t, api)
 		waitForToxiproxy(t, api)
 
 		return api
@@ -41,6 +44,27 @@ func toxiproxyAPI(t *testing.T) string {
 	return ""
 }
 
+// validatedToxiproxyBase checks that api from the test operator's
+// environment is an http or https URL with a host and no user info.
+func validatedToxiproxyBase(t *testing.T, api string) string {
+	t.Helper()
+
+	parsed, err := url.Parse(api)
+	if err != nil || parsed == nil {
+		t.Fatalf("TOXIPROXY_URL %q is not a valid URL: %v", api, err)
+	}
+
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		t.Fatalf("TOXIPROXY_URL %q must use http or https", api)
+	}
+
+	if parsed.Host == "" || parsed.User != nil {
+		t.Fatalf("TOXIPROXY_URL %q must have a host and no user info", api)
+	}
+
+	return api
+}
+
 // toxiproxyListenHost returns the host that new proxies listen on. It
 // defaults to 127.0.0.1. Set TOXIPROXY_LISTEN_HOST to 0.0.0.0 when the
 // Toxiproxy server runs in a container.
@@ -52,17 +76,96 @@ func toxiproxyListenHost() string {
 	return "127.0.0.1"
 }
 
+// proxyPortOffset returns the fixed offset from TOXIPROXY_PORT_BASE of the
+// proxy named name. A container publishes only the ports it declares, so
+// each proxy that a test creates needs a known port. CI publishes the
+// ports from the base to the base plus 3.
+func proxyPortOffset(name string) (int, bool) {
+	switch name {
+	case "latency-proxy":
+		return 0, true
+	case "timeout-proxy":
+		return 1, true
+	case "limit-proxy":
+		return 2, true
+	case "pg-proxy":
+		return 3, true
+	default:
+		return 0, false
+	}
+}
+
+// proxyListenPort returns the port that the proxy named name listens on.
+// Without TOXIPROXY_PORT_BASE it is "0", and Toxiproxy picks a free port.
+// With it, the port is the base plus the offset of the proxy.
+func proxyListenPort(t *testing.T, name string) string {
+	t.Helper()
+
+	raw := strings.TrimSpace(os.Getenv("TOXIPROXY_PORT_BASE"))
+	if raw == "" {
+		return "0"
+	}
+
+	base, err := strconv.Atoi(raw)
+	if err != nil || base <= 0 {
+		t.Fatalf("TOXIPROXY_PORT_BASE %q is not a positive port number", raw)
+	}
+
+	offset, ok := proxyPortOffset(name)
+	if !ok {
+		t.Fatalf("proxy %s has no port offset; add it to proxyPortOffset", name)
+	}
+
+	return strconv.Itoa(base + offset)
+}
+
+// toxiproxyUpstreamHost returns the host that Toxiproxy dials to reach
+// a service on the test machine, or "" to keep the host of the service.
+// Set TOXIPROXY_UPSTREAM_HOST when the Toxiproxy server runs in a
+// container, for example to host.docker.internal.
+func toxiproxyUpstreamHost() string {
+	return strings.TrimSpace(os.Getenv("TOXIPROXY_UPSTREAM_HOST"))
+}
+
+// upstreamAddr returns addr (host:port) with its host replaced by
+// TOXIPROXY_UPSTREAM_HOST, if that variable is set.
+func upstreamAddr(addr string) string {
+	host := toxiproxyUpstreamHost()
+	if host == "" {
+		return addr
+	}
+
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+
+	return net.JoinHostPort(host, port)
+}
+
 // freePort returns a free loopback port as a string. The caller binds it
 // right away, so the usual port race stays small.
 func freePort(t *testing.T) string {
 	t.Helper()
 
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	var lc net.ListenConfig
+
+	ln, err := lc.Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen for a free port: %v", err)
 	}
 
-	port := ln.Addr().(*net.TCPAddr).Port
+	tcpAddr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		addr := ln.Addr().String()
+		if closeErr := ln.Close(); closeErr != nil {
+			t.Fatalf("free port address %s is not TCP (close: %v)", addr, closeErr)
+		}
+
+		t.Fatalf("free port address %s is not TCP", addr)
+	}
+
+	port := tcpAddr.Port
 
 	if err := ln.Close(); err != nil {
 		t.Fatalf("close free port listener: %v", err)
@@ -79,7 +182,7 @@ func startToxiproxy(t *testing.T, bin string) string {
 	port := freePort(t)
 
 	//nolint:gosec // The binary path comes from TOXIPROXY_BIN, which make faults sets.
-	cmd := exec.Command(bin, "-host", "127.0.0.1", "-port", port)
+	cmd := exec.CommandContext(t.Context(), bin, "-host", "127.0.0.1", "-port", port)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 
@@ -101,20 +204,29 @@ func startToxiproxy(t *testing.T, bin string) string {
 	return api
 }
 
+// toxiproxyClient returns a client for the Toxiproxy HTTP API that keeps
+// no idle connection. A Toxiproxy server in a container runs after the
+// tests end, so an idle connection to it would stay open after the tests.
+func toxiproxyClient(timeout time.Duration) *http.Client {
+	return &http.Client{Timeout: timeout, Transport: &http.Transport{DisableKeepAlives: true}}
+}
+
 // waitForToxiproxy waits until GET /version answers 200 or the test context ends.
 func waitForToxiproxy(t *testing.T, api string) {
 	t.Helper()
 
 	ctx := t.Context()
 	deadline := time.Now().Add(10 * time.Second)
-	client := &http.Client{Timeout: time.Second}
+	client := toxiproxyClient(time.Second)
 
 	for time.Now().Before(deadline) {
+		//nolint:gosec // base URL validated to http or https with a host, from the test operator's environment.
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, api+"/version", http.NoBody)
 		if err != nil {
 			t.Fatalf("build toxiproxy version request: %v", err)
 		}
 
+		//nolint:gosec // base URL validated to http or https with a host, from the test operator's environment.
 		resp, err := client.Do(req)
 		if err == nil {
 			_, _ = io.Copy(io.Discard, resp.Body) //nolint:errcheck // The version body is not read.
@@ -136,7 +248,7 @@ func waitForToxiproxy(t *testing.T, api string) {
 }
 
 // toxiproxyDo sends one JSON request to the Toxiproxy HTTP API and returns its status and body.
-func toxiproxyDo(t *testing.T, method, url, body string) (int, []byte) {
+func toxiproxyDo(t *testing.T, method, target, body string) (int, []byte) {
 	t.Helper()
 
 	var reader io.Reader
@@ -144,18 +256,18 @@ func toxiproxyDo(t *testing.T, method, url, body string) (int, []byte) {
 		reader = strings.NewReader(body)
 	}
 
-	req, err := http.NewRequestWithContext(t.Context(), method, url, reader)
+	req, err := http.NewRequestWithContext(t.Context(), method, target, reader)
 	if err != nil {
-		t.Fatalf("build toxiproxy request %s %s: %v", method, url, err)
+		t.Fatalf("build toxiproxy request %s %s: %v", method, target, err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := toxiproxyClient(5 * time.Second)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		t.Fatalf("toxiproxy %s %s: %v", method, url, err)
+		t.Fatalf("toxiproxy %s %s: %v", method, target, err)
 	}
 
 	defer func() {
@@ -164,7 +276,7 @@ func toxiproxyDo(t *testing.T, method, url, body string) (int, []byte) {
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("read toxiproxy %s %s: %v", method, url, err)
+		t.Fatalf("read toxiproxy %s %s: %v", method, target, err)
 	}
 
 	return resp.StatusCode, data
@@ -175,16 +287,17 @@ type proxyListen struct {
 	Listen string `json:"listen"`
 }
 
-// createProxy creates a proxy named name from listen host port 0 to
-// upstream (host:port) and returns its dialable listen address. The proxy
-// is removed at test cleanup so a shared server stays clean.
+// createProxy creates a proxy named name to upstream (host:port) and
+// returns its dialable listen address. The proxy is removed at test
+// cleanup so a shared server stays clean.
 func createProxy(t *testing.T, api, name, upstream string) string {
 	t.Helper()
 
-	listen := net.JoinHostPort(toxiproxyListenHost(), "0")
+	listen := net.JoinHostPort(toxiproxyListenHost(), proxyListenPort(t, name))
+	upstream = upstreamAddr(upstream)
 	body := fmt.Sprintf(`{"name":%q,"listen":%q,"upstream":%q}`, name, listen, upstream)
 
-	deleteProxy(api, name)
+	deleteProxy(t.Context(), api, name)
 
 	status, data := toxiproxyDo(t, http.MethodPost, api+"/proxies", body)
 	if status != http.StatusCreated {
@@ -201,17 +314,17 @@ func createProxy(t *testing.T, api, name, upstream string) string {
 		t.Fatalf("create proxy %s: no listen address in %s", name, data)
 	}
 
-	t.Cleanup(func() { deleteProxy(api, name) })
+	t.Cleanup(func() { deleteProxy(context.Background(), api, name) })
 
 	return dialListen(got.Listen)
 }
 
 // deleteProxy removes the proxy named name. It reports nothing: it runs
 // at cleanup and before create to drop a stale proxy on a shared server.
-func deleteProxy(api, name string) {
-	client := &http.Client{Timeout: 5 * time.Second}
+func deleteProxy(ctx context.Context, api, name string) {
+	client := toxiproxyClient(5 * time.Second)
 
-	req, err := http.NewRequest(http.MethodDelete, api+"/proxies/"+name, http.NoBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, api+"/proxies/"+name, http.NoBody)
 	if err != nil {
 		return
 	}
@@ -241,21 +354,31 @@ func dialListen(listen string) string {
 	return listen
 }
 
+// toxicSpec bundles one toxic to add to a proxy.
+type toxicSpec struct {
+	api        string
+	proxy      string
+	name       string
+	typ        string
+	stream     string
+	attributes string
+}
+
 // addToxic adds a toxic of type typ on stream with attributes to proxy.
-func addToxic(t *testing.T, api, proxy, name, typ, stream, attributes string) {
+func addToxic(t *testing.T, spec toxicSpec) {
 	t.Helper()
 
 	body := fmt.Sprintf(
 		`{"name":%q,"type":%q,"stream":%q,"toxicity":1.0,"attributes":%s}`,
-		name,
-		typ,
-		stream,
-		attributes,
+		spec.name,
+		spec.typ,
+		spec.stream,
+		spec.attributes,
 	)
 
-	status, data := toxiproxyDo(t, http.MethodPost, api+"/proxies/"+proxy+"/toxics", body)
+	status, data := toxiproxyDo(t, http.MethodPost, spec.api+"/proxies/"+spec.proxy+"/toxics", body)
 	if status != http.StatusOK {
-		t.Fatalf("add toxic %s: status %d, want %d (body %s)", name, status, http.StatusOK, data)
+		t.Fatalf("add toxic %s: status %d, want %d (body %s)", spec.name, status, http.StatusOK, data)
 	}
 }
 

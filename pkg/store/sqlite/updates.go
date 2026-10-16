@@ -207,6 +207,21 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 	return codec.FromUpdateRow(fromActiveUpdateRow(row), ref)
 }
 
+// CountRunningJournaledUpdates returns the count of updates that run now
+// with journal version 1 or higher. The upgrade check answers it, so the
+// report can warn before a downgrade to a binary without the journal route.
+func (s *Store) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	count, err := s.queries.CountRunningJournaledUpdates(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count running journaled updates: %w", err)
+	}
+
+	return count, nil
+}
+
 // ListUpdates implements stack.UpdateStore.
 func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page) ([]stack.Update, error) {
 	s.mu.RLock()

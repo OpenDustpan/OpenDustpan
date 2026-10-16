@@ -485,6 +485,7 @@ func newUpdateFixtureWithAuthenticator(
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
 		Journal:            journalWriterFor(t, blobs, mem),
+		Replayer:           nil,
 		Tokens:             checker,
 	})
 	if err != nil {
@@ -2694,6 +2695,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 		Tokens:             nil,
 	})
 	if err != nil {

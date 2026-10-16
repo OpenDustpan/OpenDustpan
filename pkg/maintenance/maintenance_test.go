@@ -510,6 +510,7 @@ func newFixtureWith(
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -541,6 +542,7 @@ func newFixtureWith(
 		Stacks:     stacks,
 		Updates:    updates,
 		Workspaces: workspaces,
+		Hold:       nil,
 	})
 	if err != nil {
 		t.Fatalf("maintenance service: %v", err)
@@ -656,6 +658,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -683,6 +686,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Stacks:     stacks,
 		Updates:    updates,
 		Workspaces: workspaces,
+		Hold:       nil,
 	}
 
 	cases := []struct {
@@ -744,6 +748,71 @@ func TestEnterAndLeave(t *testing.T) {
 		t.Fatalf("leave again: %v", err)
 	}
 }
+
+func TestLeaveRefusedWhileHeld(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	var (
+		mu      sync.Mutex
+		held    = true
+		holdErr error
+	)
+
+	svc, err := maintenance.NewService(maintenance.Config{
+		Store:      f.state,
+		Namespaces: f.namespaces,
+		Stacks:     f.stackSvc,
+		Updates:    f.updateSvc,
+		Workspaces: f.workspaceSvc,
+		Hold: func(context.Context) (bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			return held, holdErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("maintenance service: %v", err)
+	}
+
+	if err := svc.Leave(ctx); err != nil {
+		t.Fatalf("leave in normal operation: %v, want nil: a hold keeps only maintenance mode", err)
+	}
+
+	if _, err := svc.Enter(ctx, false); err != nil {
+		t.Fatalf("enter: %v", err)
+	}
+
+	if err := svc.Leave(ctx); !errors.Is(err, maintenance.ErrHeld) {
+		t.Fatalf("leave while held: %v, want ErrHeld", err)
+	}
+
+	mu.Lock()
+	held, holdErr = false, errTestHold
+	mu.Unlock()
+
+	if err := svc.Leave(ctx); !errors.Is(err, errTestHold) {
+		t.Fatalf("leave with a failed hold: %v, want the hold error", err)
+	}
+
+	if got, err := svc.Get(ctx); err != nil || got != maintenance.StateMaintenance {
+		t.Fatalf("state after refused leaves = %q, %v, want maintenance", got, err)
+	}
+
+	mu.Lock()
+	holdErr = nil
+	mu.Unlock()
+
+	if err := svc.Leave(ctx); err != nil {
+		t.Fatalf("leave after the hold ends: %v", err)
+	}
+}
+
+// errTestHold is the failure of the hold in TestLeaveRefusedWhileHeld.
+var errTestHold = errors.New("hold unavailable")
 
 func TestEnterRefusesRunningUpdate(t *testing.T) {
 	t.Parallel()
@@ -1268,6 +1337,7 @@ func TestTwoInstancesKeepForceEnter(t *testing.T) {
 		Stacks:     f.stackSvc,
 		Updates:    f.updateSvc,
 		Workspaces: f.workspaceSvc,
+		Hold:       nil,
 	})
 	if err != nil {
 		t.Fatalf("second maintenance service: %v", err)

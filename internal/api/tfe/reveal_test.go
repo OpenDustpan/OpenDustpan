@@ -77,7 +77,7 @@ func (m *memRevealAudit) List(
 }
 
 func (m *memRevealAudit) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {
-	return audit.CheckResult{Checked: 0, BadSequence: 0, Valid: true}, nil
+	return audit.CheckResult{Checked: 0, BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
 // errRevealAuditBoom is the injected store failure of the failure test.

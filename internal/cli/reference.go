@@ -158,9 +158,9 @@ func writeConfigValues(out *strings.Builder) {
 	out.WriteString("\n")
 	out.WriteString("The file refuses a `database` URL with a password. Set such a URL in\n")
 	out.WriteString("`DUSTPAN_DATABASE`, because a secret comes only from a variable or from a\n")
-	out.WriteString("file that a `*_FILE` key names (ADR 63 decision 4). The `--database` flag\n")
-	out.WriteString("still takes a URL with a password, but it is deprecated: `serve` logs a\n")
-	out.WriteString("WARN line when it does. Use `DUSTPAN_DATABASE` instead.\n")
+	out.WriteString("file that a `*_FILE` key names. The `--database` flag refuses a URL with a\n")
+	out.WriteString("password too: `serve` stops with an error before it opens the database.\n")
+	out.WriteString("Use `DUSTPAN_DATABASE` instead.\n")
 	out.WriteString("\n")
 }
 
@@ -236,8 +236,9 @@ func writeClients(out *strings.Builder) {
 	out.WriteString("## Client commands\n")
 	out.WriteString("\n")
 	out.WriteString("`opendustpan namespace create`, `opendustpan backup`, `opendustpan backup\n")
-	out.WriteString("check`, `opendustpan upgrade check` and `opendustpan restore` call a running\n")
-	out.WriteString("server. They read the server URL from `--server` or\n")
+	out.WriteString("check`, `opendustpan upgrade check`, `opendustpan restore` and the\n")
+	out.WriteString("`opendustpan audit-chain` commands call a running server. They read the\n")
+	out.WriteString("server URL from `--server` or\n")
 	out.WriteString("`DUSTPAN_SERVER`, and the token from `DUSTPAN_ADMIN_TOKEN` or\n")
 	out.WriteString("`DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a PEM bundle of CA certificates\n")
 	out.WriteString("to the system store.\n")
@@ -255,7 +256,8 @@ func writeClients(out *strings.Builder) {
 	out.WriteString("`opendustpan health` reads `--listen`, `--tls-cert` and their variables, as\n")
 	out.WriteString("`serve` does. The [observe guide](../guides/observe.md) shows the probes.\n")
 	out.WriteString("The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of\n")
-	out.WriteString("the backup commands.\n")
+	out.WriteString("the backup commands. The [audit log guide](../guides/audit-log.md) shows\n")
+	out.WriteString("the audit chain commands.\n")
 }
 
 // clientRow is one row of the client flags table: the command and its flags
@@ -277,6 +279,8 @@ func clientRows() []clientRow {
 		{"opendustpan backup check --backup <id>", BackupCheckCommand(nil)},
 		{"opendustpan restore --backup <id>", RestoreCommand(nil)},
 		{"opendustpan upgrade check", UpgradeCheckCommand(nil)},
+		{"opendustpan audit-chain status", AuditChainStatusCommand(nil)},
+		{"opendustpan audit-chain approve", AuditChainApproveCommand(nil)},
 		{"opendustpan health", HealthCommand(nil)},
 	}
 

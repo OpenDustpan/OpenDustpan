@@ -216,12 +216,15 @@ func newServiceBackedHandler(
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         st,
+		Journal:        st,
 		Principals:     seedRoutePrincipals(t, st),
 		Tokens:         seedRouteTokens(t, st),
 		Access:         seedRouteAccess(t, st),
 		Audit:          st,
 		OnAuditFailure: nil,
 		DeletedUnits:   stubSweeper{},
+		AuditChain:     stubAuditChain{},
+		AuditSinks:     nil,
 		IPAllowlists:   allow,
 		SessionPolicy:  sessionPolicies,
 	})
@@ -277,8 +280,17 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	at := time.Now().UTC().Truncate(time.Millisecond)
 
 	caller := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testCallerID, Subject: "tester",
-		DisplayName: "Tester", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          testCallerID,
+		Subject:     "tester",
+		DisplayName: "Tester",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
 	}
 	if err := st.CreatePrincipal(ctx, caller, storetest.ServerChange(at, principal.Ref(testCallerID))); err != nil {
 		t.Fatalf("seed caller: %v", err)
@@ -457,7 +469,7 @@ func seedNamespacePrincipal(t *testing.T, st *sqlite.Store, at time.Time) {
 	p := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testNamespacePrincipalID, Subject: "ci-routes",
 		DisplayName: "CI routes", Kind: principal.KindService, Source: principal.SourceLocal,
-		Namespace: testNamespace, GroupCount: 0,
+		Namespace: testNamespace, GroupCount: 0, BreakGlass: false,
 	}
 
 	fence, e := storetest.GrantWrite(t, st, identity.NamespaceObject(testNamespace), at, principal.Ref(p.ID))
@@ -483,7 +495,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 			Kind:        principal.KindPerson,
 			Source:      principal.SourceLocal,
 			Namespace:   "",
-			GroupCount:  0,
+			GroupCount:  0, BreakGlass: false,
 		},
 		{
 			CreatedAt:   at,
@@ -495,7 +507,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 			Kind:        principal.KindService,
 			Source:      principal.SourceLocal,
 			Namespace:   "",
-			GroupCount:  0,
+			GroupCount:  0, BreakGlass: false,
 		},
 	}
 	for i := range seeds {
@@ -520,7 +532,9 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	seedNamespacePrincipal(t, st, at)
 
-	svc, err := principal.NewService(principal.Config{Store: st, Guard: nil, Namespaces: st, Now: nil, NewID: nil})
+	svc, err := principal.NewService(principal.Config{
+		Store: st, Guard: nil, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
+	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -574,22 +588,13 @@ const routeGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"wr
 // group.
 const routePrincipalGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"token-manager"}`
 
-// openRouteTestStore opens a fresh SQLite store for one route test.
+// openRouteTestStore opens a fresh SQLite store for one route test, copied
+// from the migrated template so only the first test of the binary runs every
+// migration.
 func openRouteTestStore(t *testing.T) *sqlite.Store {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	return st
+	return openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 }
 
 // openRouteTestBlobs opens a fresh file blob store for one route test.
@@ -650,6 +655,7 @@ func newRouteTestRestores(
 		Key:         nil,
 		Region:      "test",
 		AfterApply:  nil,
+		Admit:       nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -966,7 +972,8 @@ func createsRecord(path string) bool {
 // and answers 201, every other route answers 200.
 func wantSuccessStatus(route apiserver.Route) int {
 	if route.Method == http.MethodPost &&
-		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores") {
+		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores" ||
+			route.Path == "/api/server/audit/chain") {
 		return http.StatusAccepted
 	}
 
@@ -1066,17 +1073,20 @@ func (r *recordingAuthorizer) Authorize(
 	return nil
 }
 
-// denyObjectAuthorizer denies the one object wire form in deny and allows
-// everything else, so tests prove a route authorizes the resolved object:
-// denying it answers 403.
-type denyObjectAuthorizer struct {
-	deny string
+// denyRouteAuthorizer denies exactly the actions in deny on the object wire
+// form in object and allows everything else, so tests prove a route
+// authorizes the resolved object: denying its declared actions answers 403.
+// A resolver may check a read action first and answer 404, so denying every
+// action on the object would hide the manage check behind that 404.
+type denyRouteAuthorizer struct {
+	object string
+	deny   map[identity.Action]bool
 }
 
-func (d denyObjectAuthorizer) Authorize(
+func (d denyRouteAuthorizer) Authorize(
 	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
 ) error {
-	if obj.String() == d.deny {
+	if obj.String() == d.object && d.deny[action] {
 		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 	}
 
@@ -1142,7 +1152,18 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 
 	rec := httptest.NewRecorder()
 
-	expected, err := route.Resolve(rec, routeRequest(t, route, "test-token"))
+	// enforce stores the caller before it resolves, and a resolver may read it.
+	caller, err := tokenAuthenticator{}.AuthenticateToken(t.Context(), "test-token")
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	// A resolver may authorize a read before it answers the object, so the
+	// route resolves on a handler that allows every action.
+	resolving := sameRoute(t, newEnforcingHandler(t, &recordingAuthorizer{calls: nil}), route)
+	req := routeRequest(t, route, "test-token")
+
+	expected, err := resolving.Resolve(rec, req.WithContext(apiserver.WithPrincipalForTest(req.Context(), caller)))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -1163,7 +1184,12 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 		}
 	}
 
-	denied := newEnforcingHandler(t, denyObjectAuthorizer{deny: expected.String()})
+	deny := map[identity.Action]bool{}
+	for _, action := range route.ActionsOn(expected) {
+		deny[action] = true
+	}
+
+	denied := newEnforcingHandler(t, denyRouteAuthorizer{object: expected.String(), deny: deny})
 
 	rec = httptest.NewRecorder()
 	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
@@ -1171,6 +1197,21 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("request denied on %q answers %d, want %d", expected.String(), rec.Code, http.StatusForbidden)
 	}
+}
+
+// sameRoute returns the row of h with the method and the path of route.
+func sameRoute(t *testing.T, h *apiserver.Handler, route apiserver.Route) apiserver.Route {
+	t.Helper()
+
+	for _, r := range h.Routes() {
+		if r.Method == route.Method && r.Path == route.Path {
+			return r
+		}
+	}
+
+	t.Fatalf("no route %s %s", route.Method, route.Path)
+
+	return route
 }
 
 // containsCall reports whether calls holds want.
@@ -1225,12 +1266,15 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         nil,
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	}
@@ -1359,12 +1403,15 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         nil,
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})
@@ -1387,12 +1434,15 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Metrics:        stubMetrics{},
 		Version:        "test",
 		Schema:         nil,
+		Journal:        nil,
 		Principals:     nil,
 		Access:         nil,
 		Tokens:         nil,
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
+		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 	})
@@ -1407,6 +1457,21 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 // stubSweeper is an apiserver.DeletedUnitSweeper that purges nothing.
 type stubSweeper struct{}
+
+// stubAuditChain answers an instance with the setting on and approves every
+// change.
+type stubAuditChain struct{}
+
+func (stubAuditChain) Setting() audit.ChainSetting { return audit.ChainOn }
+
+func (stubAuditChain) Status(context.Context) (apiserver.AuditChainStatus, error) {
+	return apiserver.AuditChainStatus{
+		ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOn,
+		Setting: audit.ChainOn, Pending: false, Migrating: false,
+	}, nil
+}
+
+func (stubAuditChain) Approve(context.Context, audit.Entry) error { return nil }
 
 func (stubSweeper) Sweep(context.Context, audit.Entry) (inventory.SweepResult, error) {
 	return inventory.SweepResult{

@@ -783,7 +783,7 @@ func classifyToken(err error) (int, string, bool) {
 	case errors.Is(err, identity.ErrRateLimited):
 		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
 	case errors.Is(err, errTokenBody), errors.Is(err, errRotateBody), errors.Is(err, errTokenQuery),
-		errors.Is(err, errPolicyBody), errors.Is(err, errPrincipalTokenBody),
+		errors.Is(err, errPolicyBody), errors.Is(err, errBreakGlassGone), errors.Is(err, errPrincipalTokenBody),
 		errors.Is(err, accesstoken.ErrInvalid), errors.Is(err, accesstoken.ErrNoTokenForKind):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, accesstoken.ErrNotFound), errors.Is(err, accesstoken.ErrPrincipalNotFound):

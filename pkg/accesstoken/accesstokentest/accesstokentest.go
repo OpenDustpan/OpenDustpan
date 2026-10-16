@@ -60,10 +60,12 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntryChangesNothing},
 		{name: "concurrent rotations of one token: one wins", test: testConcurrentRotations},
 		{name: "the policy starts at the defaults and keeps a change", test: testPolicy},
+		{name: "the stored entry of a policy change keeps its changes", test: testPolicyKeepsChanges},
 		{name: "the sweep disables inactive tokens", test: testSweepTokens},
 		{name: "the sweep disables inactive user accounts", test: testSweepAccounts},
 		{name: "a sweep with a refused entry changes nothing", test: testSweepRefused},
 		{name: "enable, then sweep: the principal stays enabled", test: testEnablePrincipal},
+		{name: "the sweep never disables a break-glass account", test: testSweepSkipsBreakGlass},
 		{name: "concurrent policy updates: each sees the one before", test: testConcurrentPolicyUpdates},
 	}
 
@@ -84,27 +86,28 @@ func at(minute int) time.Time {
 // @server for the token id, as a Service builds it.
 func entry(id string) audit.Entry {
 	return audit.Entry{
-		At:         at(9),
-		Namespace:  audit.ServerScope,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "server:manage-tokens",
-		Object:     accesstoken.Ref(id),
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "accesstokentest",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           at(9),
+		Namespace:    audit.ServerScope,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "server:manage-tokens",
+		Object:       accesstoken.Ref(id),
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "accesstokentest",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 
@@ -162,7 +165,7 @@ func mustPrincipal(t *testing.T, s Store, id, subject string, kind principal.Kin
 		DisplayName: "Name of " + subject,
 		Kind:        kind,
 		Source:      principal.SourceLocal,
-		Namespace:   "", GroupCount: 0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 
 	e := entry("tok-x")
@@ -329,6 +332,7 @@ func testByDigest(t *testing.T, s Store) {
 		Subject:     "ci-deploy",
 		DisplayName: "Name of ci-deploy",
 		Kind:        principal.KindService,
+		BreakGlass:  false,
 	}
 	if m.Owner != want {
 		t.Fatalf("owner = %+v, want %+v", m.Owner, want)
@@ -759,7 +763,7 @@ func testPolicy(t *testing.T, s Store) {
 
 	want := accesstoken.Policy{
 		UpdatedAt: at(5), MaxLifetime: 30 * 24 * time.Hour, Inactivity: 0,
-		DisableTokens: false, DisableAccounts: true, DisableBreakGlass: true,
+		DisableTokens: false, DisableAccounts: true, DisableBreakGlass: false,
 	}
 
 	stored, err := s.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
@@ -794,6 +798,99 @@ func testPolicy(t *testing.T, s Store) {
 	if got != want {
 		t.Fatalf("policy = %+v, want %+v", got, want)
 	}
+}
+
+func testPolicyKeepsChanges(t *testing.T, s Store) {
+	t.Helper()
+
+	entries, ok := s.(auditLister)
+	if !ok {
+		t.Skip("the store keeps no audit log to read")
+	}
+
+	ctx := t.Context()
+
+	oldMax := "31536000"
+	oldDisable := "true"
+	want := []audit.Change{
+		{Key: "maxLifetimeSeconds", Old: &oldMax, New: "2592000", Layer: "", TakesEffect: ""},
+		{Key: "disableTokens", Old: &oldDisable, New: "false", Layer: "", TakesEffect: ""},
+	}
+
+	updated := accesstoken.Policy{
+		UpdatedAt: at(5), MaxLifetime: 30 * 24 * time.Hour, Inactivity: accesstoken.DefaultInactivity,
+		DisableTokens: false, DisableAccounts: true, DisableBreakGlass: false,
+	}
+
+	_, err := s.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+		e := entry("tok-x")
+		e.Object = accesstoken.PolicyRef
+		e.Changes = want
+
+		return updated, e, nil
+	})
+	if err != nil {
+		t.Fatalf("update policy: %v", err)
+	}
+
+	listing, err := entries.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Object != accesstoken.PolicyRef {
+			continue
+		}
+
+		checkStoredChanges(t, listing.Entries[i].Changes, want)
+
+		return
+	}
+
+	t.Fatalf("no %q entry in @server", accesstoken.PolicyRef)
+}
+
+// checkStoredChanges proves got holds exactly the changes of want, in any
+// order: the store keeps the canonical JSON, sorted by key.
+func checkStoredChanges(t *testing.T, got, want []audit.Change) {
+	t.Helper()
+
+	if len(got) != len(want) {
+		t.Fatalf("got %d changes, want %d", len(got), len(want))
+	}
+
+	byKey := make(map[string]audit.Change, len(got))
+	for _, c := range got {
+		byKey[c.Key] = c
+	}
+
+	for _, w := range want {
+		g, ok := byKey[w.Key]
+		if !ok {
+			t.Fatalf("missing change %q in %d changes", w.Key, len(got))
+		}
+
+		if !equalChange(g, w) {
+			t.Fatalf("change %q mismatch: got old %s new %q, want old %s new %q",
+				w.Key, oldText(g.Old), g.New, oldText(w.Old), w.New)
+		}
+	}
+}
+
+// oldText renders a change old value for a failure message.
+func oldText(old *string) string {
+	if old == nil {
+		return "<nil>"
+	}
+
+	return *old
+}
+
+func equalChange(a, b audit.Change) bool {
+	sameOld := (a.Old == nil) == (b.Old == nil) && (a.Old == nil || *a.Old == *b.Old)
+
+	return a.Key == b.Key && sameOld && a.New == b.New && a.Layer == b.Layer && a.TakesEffect == b.TakesEffect
 }
 
 func testConcurrentPolicyUpdates(t *testing.T, s Store) {
@@ -878,8 +975,17 @@ func mustPrincipalAt(t *testing.T, s Store, id string, kind principal.Kind, crea
 	t.Helper()
 
 	p := principal.Principal{
-		CreatedAt: created, UpdatedAt: created, DisabledAt: time.Time{}, ID: id, Subject: id,
-		DisplayName: "Name of " + id, Kind: kind, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		CreatedAt:   created,
+		UpdatedAt:   created,
+		DisabledAt:  time.Time{},
+		ID:          id,
+		Subject:     id,
+		DisplayName: "Name of " + id,
+		Kind:        kind,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
 	}
 
 	e := entryAt("tok-x", created)
@@ -1120,5 +1226,64 @@ func testEnablePrincipal(t *testing.T, s Store) {
 	p, err = s.GetPrincipal(ctx, "prn-1")
 	if err != nil || !p.DisabledAt.IsZero() {
 		t.Fatalf("principal after the enable and a sweep = %+v, %v; want it enabled", p, err)
+	}
+}
+
+func mustBreakGlassAt(t *testing.T, s Store, id string, created time.Time) {
+	t.Helper()
+
+	p := principal.Principal{
+		CreatedAt: created, UpdatedAt: created, DisabledAt: time.Time{}, ID: id, Subject: id,
+		DisplayName: "Name of " + id, Kind: principal.KindPerson, Source: principal.SourceLocal,
+		Namespace: "", GroupCount: 0, BreakGlass: true,
+	}
+
+	if err := p.Validate(); err != nil {
+		t.Fatalf("validate break-glass principal %q: %v", id, err)
+	}
+
+	e := entryAt("tok-x", created)
+	e.Object = principal.Ref(id)
+
+	if err := s.CreatePrincipal(t.Context(), p, e); err != nil {
+		t.Fatalf("create break-glass principal %q: %v", id, err)
+	}
+}
+
+func testSweepSkipsBreakGlass(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	ts := newSweepTimes()
+
+	mustPrincipalAt(t, s, "prn-idle", principal.KindPerson, ts.old)
+	mustBreakGlassAt(t, s, "prn-glass", ts.old)
+	mustPrincipalAt(t, s, "prn-svc", principal.KindService, ts.old)
+
+	mustToken(t, s, relToken("tok-idle", "prn-idle", ts.old, ts), digest(1))
+	mustToken(t, s, relToken("tok-glass", "prn-glass", ts.old, ts), digest(2))
+	mustToken(t, s, relToken("tok-svc", "prn-svc", ts.old, ts), digest(3))
+
+	res := mustSweep(t, s, sweep(true, true))
+
+	if slices.Contains(sweptIDs(res), "tok-glass") {
+		t.Fatalf("sweep = %+v, disabled the token of a break-glass account", res)
+	}
+
+	if slices.Contains(res.Principals, "prn-glass") {
+		t.Fatalf("sweep = %+v, disabled a break-glass account", res)
+	}
+
+	if !slices.Contains(sweptIDs(res), "tok-idle") || !slices.Contains(res.Principals, "prn-idle") {
+		t.Fatalf("sweep = %+v, want the idle token and person", res)
+	}
+
+	got, err := s.GetPrincipal(ctx, "prn-glass")
+	if err != nil || !got.DisabledAt.IsZero() || !got.BreakGlass {
+		t.Fatalf("break-glass principal = %+v, %v; want it enabled with the flag", got, err)
+	}
+
+	if got := mustGet(t, s, "tok-glass"); !got.DisabledAt.IsZero() {
+		t.Fatalf("token of a break-glass account disabled at %s, want it enabled", got.DisabledAt)
 	}
 }

@@ -4,8 +4,8 @@ This guide shows how to run the network fault tests and what each case checks.
 
 ## What the tests do
 
-Each test starts its own server on a fresh SQLite database and a
-Toxiproxy process on a free port.
+Each test starts its own server on a fresh SQLite database.
+It also starts a Toxiproxy process on a free port, unless `TOXIPROXY_URL` names a running server.
 The client sends its requests through a Toxiproxy proxy.
 Toxiproxy is a test-only tool.
 It never ships in the server binary.
@@ -57,6 +57,28 @@ TOXIPROXY_LISTEN_HOST=0.0.0.0 TOXIPROXY_URL=http://127.0.0.1:8474 go test -tags 
 
 The default host is `127.0.0.1`.
 Use `0.0.0.0` when the Toxiproxy server runs in a container.
+
+A Toxiproxy server in a container needs two more variables:
+
+- `TOXIPROXY_PORT_BASE` gives each proxy a fixed port, from the base to the base plus 3.
+  Publish these ports from the container to the same ports on the host.
+  Without the variable, Toxiproxy picks a free port for each proxy.
+- `TOXIPROXY_UPSTREAM_HOST` is the host that the proxies dial to reach the test server and PostgreSQL.
+  With the variable set, the test server listens on all interfaces.
+  Without it, the proxies dial `127.0.0.1` and the PostgreSQL host in the URL.
+
+CI runs the suite this way:
+
+```sh
+docker run -d -p 8474:8474 -p 8475-8478:8475-8478 \
+  --add-host=host.docker.internal:host-gateway \
+  ghcr.io/shopify/toxiproxy:2.12.0
+TOXIPROXY_URL=http://127.0.0.1:8474 TOXIPROXY_LISTEN_HOST=0.0.0.0 \
+  TOXIPROXY_PORT_BASE=8475 TOXIPROXY_UPSTREAM_HOST=host.docker.internal \
+  make faults
+```
+
+With `TOXIPROXY_URL` set, `make faults` downloads no binary.
 
 Run the suite against PostgreSQL with the test URL:
 

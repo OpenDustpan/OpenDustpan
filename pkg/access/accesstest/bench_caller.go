@@ -83,8 +83,8 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 		Kind:        principal.KindPerson,
 		Source:      principal.SourceLocal,
 		Namespace:   "",
-		GroupCount:  0,
-		DisabledAt:  time.Time{},
+		GroupCount:  0, BreakGlass: false,
+		DisabledAt: time.Time{},
 	}
 	if err := s.CreatePrincipal(ctx, me, entry()); err != nil {
 		b.Fatalf("seed principal: %v", err)

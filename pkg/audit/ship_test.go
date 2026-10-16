@@ -172,27 +172,28 @@ func (s *memSink) batchSizes() []int {
 // entryAt returns a stored entry of ns with sequence seq and a hash.
 func entryAt(ns namespace.Name, seq int64) audit.Entry {
 	return audit.Entry{
-		At:         time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC).Add(time.Duration(seq) * time.Second),
-		Namespace:  ns,
-		Subject:    "alice",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:read-secrets",
-		Object:     "opentofu:" + ns.String() + "/prod",
-		Version:    "sv-1",
-		ValuePath:  "",
-		ValueCount: nil,
-		ObjectID:   "",
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "OpenTofu/1.11",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindToolOperation,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "req-" + strconv.FormatInt(seq, 10),
-		PrevHash:   "prev",
-		Hash:       "hash-" + strconv.FormatInt(seq, 10),
-		Sequence:   seq,
+		At:           time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC).Add(time.Duration(seq) * time.Second),
+		Namespace:    ns,
+		Subject:      "alice",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:read-secrets",
+		Object:       "opentofu:" + ns.String() + "/prod",
+		Version:      "sv-1",
+		ValuePath:    "",
+		ValueCount:   nil,
+		ObjectID:     "",
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "OpenTofu/1.11",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindToolOperation,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "req-" + strconv.FormatInt(seq, 10),
+		PrevHash:     "prev",
+		Hash:         "hash-" + strconv.FormatInt(seq, 10),
+		Sequence:     seq,
+		FenceVersion: 0,
 	}
 }
 
@@ -206,6 +207,8 @@ func newShipper(t *testing.T, feed *memFeed, sinks ...audit.ShipSink) *audit.Shi
 		OnShipped:     nil,
 		OnFailure:     nil,
 		OnSkipped:     nil,
+		OnLag:         nil,
+		Now:           nil,
 		Sinks:         sinks,
 		InstanceID:    "",
 		Leases:        nil,
@@ -220,7 +223,7 @@ func newShipper(t *testing.T, feed *memFeed, sinks ...audit.ShipSink) *audit.Shi
 }
 
 func shipSink(name string, s logsink.Sink) audit.ShipSink {
-	return audit.ShipSink{Sink: s, Name: name, Interval: 0}
+	return audit.ShipSink{Sink: s, Name: name, Kind: "test", Interval: 0}
 }
 
 func TestShipOnceCopiesEveryEntryInOrderAndMovesTheCursors(t *testing.T) {
@@ -326,6 +329,8 @@ func TestASkippedEntryIsCountedAndTheCursorMoves(t *testing.T) {
 		OnShipped:     func(_ string, n int) { shipped += n },
 		OnFailure:     nil,
 		OnSkipped:     func(_ string, n int) { skipped += n },
+		OnLag:         nil,
+		Now:           nil,
 		Sinks:         []audit.ShipSink{shipSink("siem", sink)},
 		InstanceID:    "",
 		Leases:        nil,
@@ -387,11 +392,16 @@ func TestAFailedRoundLogsAClassNotTheDriverText(t *testing.T) {
 			}
 		},
 		OnSkipped: nil,
-		Sinks: []audit.ShipSink{{
-			Sink:     &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false},
-			Name:     "siem",
-			Interval: time.Millisecond,
-		}},
+		OnLag:     nil,
+		Now:       nil,
+		Sinks: []audit.ShipSink{
+			{
+				Sink:     &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false},
+				Name:     "siem",
+				Kind:     "test",
+				Interval: time.Millisecond,
+			},
+		},
 		InstanceID:    "",
 		Leases:        nil,
 		LeaseTTL:      0,
@@ -492,7 +502,7 @@ func TestRunShipsOnItsIntervalAndStopsWithTheContext(t *testing.T) {
 
 	feed := newMemFeed(map[namespace.Name]int{"acme": 1})
 	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
-	shipper := newShipper(t, feed, audit.ShipSink{Sink: sink, Name: "siem", Interval: time.Millisecond})
+	shipper := newShipper(t, feed, audit.ShipSink{Sink: sink, Name: "siem", Kind: "test", Interval: time.Millisecond})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -547,6 +557,8 @@ func TestNewShipperRejectsBadSinks(t *testing.T) {
 				OnShipped:     nil,
 				OnFailure:     nil,
 				OnSkipped:     nil,
+				OnLag:         nil,
+				Now:           nil,
 				Sinks:         tc.sinks,
 				InstanceID:    "",
 				Leases:        nil,
@@ -730,7 +742,9 @@ func newLeasedShipper(t *testing.T, feed *memFeed, leases *memLeaser, holder str
 		OnShipped:     nil,
 		OnFailure:     nil,
 		OnSkipped:     nil,
-		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Interval: 0}},
+		OnLag:         nil,
+		Now:           nil,
+		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Kind: "test", Interval: 0}},
 		InstanceID:    holder,
 		Leases:        leases,
 		LeaseTTL:      150 * time.Millisecond,
@@ -755,7 +769,9 @@ func newLeasedShipperFull(t *testing.T, cfg leasedShipperConfig) *audit.Shipper 
 		OnShipped:     nil,
 		OnFailure:     cfg.onFailure,
 		OnSkipped:     nil,
-		Sinks:         []audit.ShipSink{{Sink: cfg.sink, Name: "siem", Interval: cfg.interval}},
+		OnLag:         nil,
+		Now:           nil,
+		Sinks:         []audit.ShipSink{{Sink: cfg.sink, Name: "siem", Kind: "test", Interval: cfg.interval}},
 		InstanceID:    cfg.holder,
 		Leases:        cfg.leases,
 		LeaseTTL:      cfg.ttl,
@@ -1181,7 +1197,9 @@ func TestALostRenewStopsTheRound(t *testing.T) {
 		OnShipped:     nil,
 		OnFailure:     nil,
 		OnSkipped:     nil,
-		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Interval: 0}},
+		OnLag:         nil,
+		Now:           nil,
+		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Kind: "test", Interval: 0}},
 		InstanceID:    "ins-holder-a",
 		Leases:        leases,
 		LeaseTTL:      30 * time.Second,
@@ -1221,7 +1239,9 @@ func TestShipperReleasesItsLeaseOnShutdown(t *testing.T) {
 		OnShipped:     nil,
 		OnFailure:     nil,
 		OnSkipped:     nil,
-		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Interval: time.Millisecond}},
+		OnLag:         nil,
+		Now:           nil,
+		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Kind: "test", Interval: time.Millisecond}},
 		InstanceID:    "ins-holder-a",
 		Leases:        leases,
 		LeaseTTL:      30 * time.Second,
@@ -1285,7 +1305,9 @@ func TestALostRenewBetweenScopesStopsTheRound(t *testing.T) {
 		OnShipped:     nil,
 		OnFailure:     nil,
 		OnSkipped:     nil,
-		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Interval: 0}},
+		OnLag:         nil,
+		Now:           nil,
+		Sinks:         []audit.ShipSink{{Sink: sink, Name: "siem", Kind: "test", Interval: 0}},
 		InstanceID:    "ins-holder-a",
 		Leases:        leases,
 		LeaseTTL:      300 * time.Millisecond,
@@ -1753,6 +1775,8 @@ func TestNewShipperRejectsRenewIntervalNotShorterThanLeaseTTL(t *testing.T) {
 				OnShipped:     nil,
 				OnFailure:     nil,
 				OnSkipped:     nil,
+				OnLag:         nil,
+				Now:           nil,
 				Sinks:         []audit.ShipSink{shipSink("siem", sink)},
 				InstanceID:    "ins-test",
 				Leases:        newMemLeaser(),

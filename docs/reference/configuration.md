@@ -39,6 +39,7 @@ the same list.
 | `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `max-secret-batch-bytes` | `0`: 32 MiB, the largest batch of Pulumi secrets |
 | `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `max-state-bytes` | `0`: 32 MiB, the largest OpenTofu state |
 | `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `max-body-bytes-in-flight` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One sealed state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
+| `--audit-chain` | `DUSTPAN_AUDIT_CHAIN` | `audit-chain` | `on`. `off` turns the chain off. A change starts the server in maintenance mode until a person runs `opendustpan audit-chain approve` |
 | `--soft-delete-retention` | `DUSTPAN_SOFT_DELETE_RETENTION` | `soft-delete-retention` | `720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records the end of its retention, so a change applies to later deletes |
 | `--audit-sink` | `DUSTPAN_AUDIT_SINK` | `audit-sink` | (none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit` |
 
@@ -68,9 +69,9 @@ the example below quotes each string.
 
 The file refuses a `database` URL with a password. Set such a URL in
 `DUSTPAN_DATABASE`, because a secret comes only from a variable or from a
-file that a `*_FILE` key names (ADR 63 decision 4). The `--database` flag
-still takes a URL with a password, but it is deprecated: `serve` logs a
-WARN line when it does. Use `DUSTPAN_DATABASE` instead.
+file that a `*_FILE` key names. The `--database` flag refuses a URL with a
+password too: `serve` stops with an error before it opens the database.
+Use `DUSTPAN_DATABASE` instead.
 
 At start, the server writes one INFO line for each setting, with its key,
 its value and its layer: `flag`, `env`, `file` or `default`. When more than
@@ -166,8 +167,9 @@ next to the data does not protect a backup of that data.
 ## Client commands
 
 `opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
-check`, `opendustpan upgrade check` and `opendustpan restore` call a running
-server. They read the server URL from `--server` or
+check`, `opendustpan upgrade check`, `opendustpan restore` and the
+`opendustpan audit-chain` commands call a running server. They read the
+server URL from `--server` or
 `DUSTPAN_SERVER`, and the token from `DUSTPAN_ADMIN_TOKEN` or
 `DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a PEM bundle of CA certificates
 to the system store.
@@ -181,9 +183,12 @@ Each client command takes only the flags in its row:
 | `opendustpan backup check --backup <id>` | `--server`, `--ca-file`, `--backup` |
 | `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
 | `opendustpan upgrade check` | `--server`, `--ca-file` |
+| `opendustpan audit-chain status` | `--server`, `--ca-file` |
+| `opendustpan audit-chain approve` | `--server`, `--ca-file` |
 | `opendustpan health` | `--listen`, `--tls-cert` |
 
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as
 `serve` does. The [observe guide](../guides/observe.md) shows the probes.
 The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of
-the backup commands.
+the backup commands. The [audit log guide](../guides/audit-log.md) shows
+the audit chain commands.

@@ -119,27 +119,28 @@ func opsGroup() access.Subject {
 // @server, as a Service builds it.
 func entry() audit.Entry {
 	return audit.Entry{
-		At:         at(9),
-		Namespace:  audit.ServerScope,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "server:manage-access",
-		Object:     "grant:test",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "accesstest",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           at(9),
+		Namespace:    audit.ServerScope,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "server:manage-access",
+		Object:       "grant:test",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "accesstest",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 
@@ -633,8 +634,10 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 	ctx := t.Context()
 	ns := newNamespace("acme")
 	g := newGrant("grt-one", principalSubject("prn-a"), access.RoleNamespaceAdmin, identity.NamespaceObject("acme"))
+	e := entry()
+	e.Object = access.GrantRef(g)
 
-	if err := s.CreateNamespaceWithGrant(ctx, ns, g, entry()); err != nil {
+	if err := s.CreateNamespaceWithGrant(ctx, ns, g, e); err != nil {
 		t.Fatalf("create namespace with grant: %v", err)
 	}
 
@@ -651,6 +654,8 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 		}
 	}
 
+	checkCreatorGrantEntry(t, s, g, e)
+
 	var noGrant access.Grant // A grant with no ID stores the namespace alone.
 	if err = s.CreateNamespaceWithGrant(ctx, newNamespace("beta"), noGrant, entry()); err != nil {
 		t.Fatalf("create namespace without grant: %v", err)
@@ -662,6 +667,46 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 	}
 
 	assertIDs(t, "grants on beta", grantsOf(list))
+}
+
+// checkCreatorGrantEntry proves that the create wrote the grant of the
+// creator as the first entry of the chain of the new namespace, with the
+// same action and object as the entry of @server, and that the chain of the
+// new namespace checks as valid. A store without the audit log skips it.
+func checkCreatorGrantEntry(t *testing.T, s access.Store, g access.Grant, e audit.Entry) {
+	t.Helper()
+
+	log, ok := s.(audit.Store)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+	ns := g.Object.Namespace()
+
+	listing, err := log.List(ctx, ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit of %q: %v", ns, err)
+	}
+
+	if listing.Total != 1 {
+		t.Fatalf("entries of %q = %d, want the grant of its creator", ns, listing.Total)
+	}
+
+	first := listing.Entries[len(listing.Entries)-1]
+	if first.Sequence != 1 || first.Namespace != ns || first.Action != e.Action ||
+		first.Object != e.Object || first.Kind != audit.KindChange {
+		t.Fatalf("first entry of %q = %+v, want the admin grant %q", ns, first, e.Object)
+	}
+
+	check, err := log.Check(ctx, ns)
+	if err != nil {
+		t.Fatalf("check audit of %q: %v", ns, err)
+	}
+
+	if !check.Valid {
+		t.Fatalf("check of %q = %+v, want a valid chain", ns, check)
+	}
 }
 
 func testNamespaceWithGrantTaken(t *testing.T, s access.Store) {
@@ -704,7 +749,7 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 
 	prn := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		DisabledAt: time.Time{},
 	}
 	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
@@ -893,7 +938,7 @@ func seedCaller(t *testing.T, ps principal.Store) {
 
 	alice := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		DisabledAt: time.Time{},
 	}
 	if err := ps.CreatePrincipal(ctx, alice, entry()); err != nil {

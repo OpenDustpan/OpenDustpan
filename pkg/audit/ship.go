@@ -100,19 +100,23 @@ type NamespaceLister interface {
 
 // ShipSink is one sink of the shipper. Name keys the cursors of the sink
 // in the database and labels its metrics: keep it when the sink setting
-// changes, or the sink receives every entry again. Interval is the time
+// changes, or the sink receives every entry again. Kind names the adapter
+// of the sink, for example file or webhook. Interval is the time
 // between two rounds. Zero means DefaultShipInterval.
 type ShipSink struct {
 	Sink     logsink.Sink
 	Name     string
+	Kind     string
 	Interval time.Duration
 }
 
-// ShipperConfig configures a Shipper. OnShipped, OnFailure and OnSkipped
-// are hooks for metrics and may be nil. OnShipped receives the sink name
-// and the count of entries of one accepted batch. OnFailure receives the
-// sink name after a failed round. OnSkipped receives the sink name and the
-// count of entries that the sink skipped (logsink.ErrSkipped). InstanceID
+// ShipperConfig configures a Shipper. OnShipped, OnFailure, OnSkipped and
+// OnLag are hooks for metrics and may be nil. OnShipped receives the sink
+// name and the count of entries of one accepted batch. OnFailure receives
+// the sink name after a failed round. OnSkipped receives the sink name and
+// the count of entries that the sink skipped (logsink.ErrSkipped). OnLag
+// receives the sink name and its delivery lag in seconds after each round.
+// Now answers the current time for the lag; nil means time.Now. InstanceID
 // names the holder of the sink leases of this shipper: one instance ID per
 // server process. Leases keeps those leases; when it is nil and Feed serves
 // SinkLeaser, the shipper uses Feed. LeaseTTL is how long a taken lease
@@ -126,6 +130,8 @@ type ShipperConfig struct {
 	OnShipped     func(sink string, entries int)
 	OnFailure     func(sink string)
 	OnSkipped     func(sink string, entries int)
+	OnLag         func(sink string, seconds float64)
+	Now           func() time.Time
 	Sinks         []ShipSink
 	InstanceID    string
 	Leases        SinkLeaser
@@ -136,6 +142,9 @@ type ShipperConfig struct {
 // Shipper copies committed entries to sinks.
 type Shipper struct {
 	cfg ShipperConfig
+
+	mu      sync.Mutex
+	lastErr map[string]string
 }
 
 // NewShipper checks cfg and returns a shipper. Every sink needs a name of
@@ -160,7 +169,19 @@ func NewShipper(cfg ShipperConfig) (*Shipper, error) {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
 
-	return &Shipper{cfg: cfg}, nil
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
+
+	return &Shipper{cfg: cfg, mu: sync.Mutex{}, lastErr: map[string]string{}}, nil
+}
+
+// Sinks answers the configured sinks in order.
+func (s *Shipper) Sinks() []ShipSink {
+	out := make([]ShipSink, len(s.cfg.Sinks))
+	copy(out, s.cfg.Sinks)
+
+	return out
 }
 
 // checkShipSinks checks that every sink has a usable name and no name
@@ -298,8 +319,20 @@ func (s *Shipper) ShipOnce(ctx context.Context) error {
 		}
 
 		if err := s.round(ctx, sink); err != nil {
+			if errors.Is(err, errRoundEnded) {
+				s.setLastError(sink.Name, "")
+			} else {
+				s.setLastError(sink.Name, ErrorClass(err))
+			}
+
+			s.observeLag(ctx, sink.Name)
 			errs = append(errs, fmt.Errorf("sink %s: %w", sink.Name, err))
+
+			continue
 		}
+
+		s.setLastError(sink.Name, "")
+		s.observeLag(ctx, sink.Name)
 	}
 
 	return errors.Join(errs...)
@@ -427,6 +460,9 @@ func (s *Shipper) shipAndAccount(ctx context.Context, sink ShipSink, interval ti
 			s.cfg.Logger.DebugContext(ctx, "audit sink round ended",
 				slog.String("sink", sink.Name), slog.String("error", ErrorClass(err)))
 
+			s.setLastError(sink.Name, "")
+			s.observeLag(ctx, sink.Name)
+
 			state.wait = interval
 			state.lastShip = time.Now()
 
@@ -434,12 +470,17 @@ func (s *Shipper) shipAndAccount(ctx context.Context, sink ShipSink, interval ti
 		}
 
 		s.fail(ctx, sink.Name, err)
+		s.setLastError(sink.Name, ErrorClass(err))
+		s.observeLag(ctx, sink.Name)
 
 		state.wait = min(state.wait*shipBackoffFactor, MaxShipBackoff)
 		state.lastShip = time.Now()
 
 		return true
 	}
+
+	s.setLastError(sink.Name, "")
+	s.observeLag(ctx, sink.Name)
 
 	state.wait = interval
 	state.lastShip = time.Now()
@@ -470,11 +511,16 @@ func (s *Shipper) loopWithoutLease(ctx context.Context, sink ShipSink, interval 
 			}
 
 			s.fail(ctx, sink.Name, err)
+			s.setLastError(sink.Name, ErrorClass(err))
+			s.observeLag(ctx, sink.Name)
 
 			wait = min(wait*shipBackoffFactor, MaxShipBackoff)
 
 			continue
 		}
+
+		s.setLastError(sink.Name, "")
+		s.observeLag(ctx, sink.Name)
 
 		wait = interval
 	}
@@ -513,6 +559,45 @@ func (s *Shipper) release(ctx context.Context, sink string) {
 		s.cfg.Logger.DebugContext(ctx, "audit sink lease release failed",
 			slog.String("sink", sink), slog.String("error", ErrorClass(err)))
 	}
+}
+
+// setLastError records the last error class of sink: empty when the last
+// round succeeded.
+func (s *Shipper) setLastError(sink, class string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if class == "" {
+		delete(s.lastErr, sink)
+
+		return
+	}
+
+	s.lastErr[sink] = class
+}
+
+// lastErrorOf answers the last error class of sink, or empty when the last
+// round succeeded.
+func (s *Shipper) lastErrorOf(sink string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.lastErr[sink]
+}
+
+// observeLag reads the delivery lag of sink and calls the lag hook. A lag
+// read that fails keeps the last gauge value: the next round tries again.
+func (s *Shipper) observeLag(ctx context.Context, sink string) {
+	if s.cfg.OnLag == nil {
+		return
+	}
+
+	lag, err := s.Lag(ctx, sink, s.cfg.Now())
+	if err != nil {
+		return
+	}
+
+	s.cfg.OnLag(sink, lag)
 }
 
 // fail logs a failed round and calls the failure hook. The log line holds
@@ -769,7 +854,7 @@ func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Nam
 // ToRecord maps an entry to a log record. The record carries the scope (the
 // namespace) and the sequence of the entry, so a receiver can remove
 // duplicates, and every field of the entry under its audit API name. It
-// carries valueCount, objectID and changes only when the entry has them,
+// carries valueCount, objectID, fenceVersion and changes only when the entry has them,
 // and prevHash and hash when the entry has them.
 func ToRecord(e Entry) logsink.Record {
 	attrs := []logsink.Attr{
@@ -791,6 +876,10 @@ func ToRecord(e Entry) logsink.Record {
 
 	if e.ObjectID != "" {
 		attrs = append(attrs, logsink.String("objectID", e.ObjectID))
+	}
+
+	if e.FenceVersion > 0 {
+		attrs = append(attrs, logsink.Int64("fenceVersion", e.FenceVersion))
 	}
 
 	// The changes go as their canonical JSON, the text that the hash covers.
