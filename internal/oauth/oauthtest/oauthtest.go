@@ -80,6 +80,9 @@ type Faults struct {
 	// AuthorizedParty sets the azp claim of an ID token when it is not
 	// empty.
 	AuthorizedParty string
+	// IssuedIn moves the iat claim of an ID token by this duration from
+	// now, and its exp claim with it, when it is not zero.
+	IssuedIn time.Duration
 }
 
 // User is the person whom the provider signs in.
@@ -647,6 +650,11 @@ func applyClaimFaults(claims map[string]any, f Faults, now time.Time) {
 
 	if f.AuthorizedParty != "" {
 		claims["azp"] = f.AuthorizedParty
+	}
+
+	if f.IssuedIn != 0 {
+		claims["iat"] = now.Add(f.IssuedIn).Unix()
+		claims["exp"] = now.Add(f.IssuedIn + tokenLifetime).Unix()
 	}
 
 	if f.Expired {

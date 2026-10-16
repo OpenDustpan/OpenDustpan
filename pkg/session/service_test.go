@@ -393,6 +393,35 @@ func TestSessionsRequestExpires(t *testing.T) {
 	}
 }
 
+func TestSessionsPruneRequests(t *testing.T) {
+	t.Parallel()
+
+	f := newSessionsFixture(t)
+
+	_, old := begin(t, "/")
+	if err := f.svc.BeginRequest(t.Context(), old); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	f.clock.Add(session.RequestLifetime / 2)
+
+	fresh, in := begin(t, "/")
+	if err := f.svc.BeginRequest(t.Context(), in); err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	f.clock.Add(session.RequestLifetime / 2)
+
+	n, err := f.svc.PruneRequests(t.Context())
+	if err != nil || n != 1 {
+		t.Fatalf("prune = %d, %v; want 1 expired request", n, err)
+	}
+
+	if _, err := f.svc.TakeRequest(t.Context(), fresh); err != nil {
+		t.Fatalf("take of the request that did not expire: %v", err)
+	}
+}
+
 func TestSessionsRequestRefusesReturnPath(t *testing.T) {
 	t.Parallel()
 

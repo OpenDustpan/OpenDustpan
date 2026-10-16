@@ -65,8 +65,8 @@ func signingAlgorithms() []string {
 	return []string{oidc.RS256, oidc.ES256, oidc.EdDSA}
 }
 
-// clockSkew is the tolerance for the auth_time claim against the clock of
-// the server.
+// clockSkew is the tolerance for the iat and auth_time claims against the
+// clock of the server.
 const clockSkew = time.Minute
 
 // defaultTimeout is the timeout of each request to the provider when the
@@ -485,8 +485,8 @@ type idClaims struct {
 }
 
 // checkClaims applies the checks that go-oidc leaves to the caller: the
-// nonce, the sub claim, the authorized party, the auth_time claim and the
-// max_age of the request.
+// nonce, the sub claim, the authorized party, the iat claim, the auth_time
+// claim and the max_age of the request.
 func (c *Client) checkClaims(t *oidc.IDToken, p Pending) (Identity, error) {
 	if p.Nonce == "" || subtle.ConstantTimeCompare([]byte(t.Nonce), []byte(p.Nonce)) != 1 {
 		return Identity{}, fmt.Errorf("%w: nonce does not match the request", ErrIDToken)
@@ -508,6 +508,10 @@ func (c *Client) checkClaims(t *oidc.IDToken, p Pending) (Identity, error) {
 	}
 
 	now := c.now()
+
+	if t.IssuedAt.After(now.Add(clockSkew)) {
+		return Identity{}, fmt.Errorf("%w: iat %s is in the future", ErrIDToken, t.IssuedAt.UTC().Format(time.RFC3339))
+	}
 
 	authTime, err := checkAuthTime(claims.AuthTime, p, now)
 	if err != nil {

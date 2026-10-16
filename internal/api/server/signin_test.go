@@ -588,6 +588,7 @@ func TestSignInCallbackRefusals(t *testing.T) {
 			e := newSignInEnv(t, true)
 			binding, authURL := e.start(t, "")
 			q, cookies := tc.mutate(t, e, binding, e.authorize(t, authURL))
+			before := e.limiter.count()
 
 			rec := e.callback(t, q, cookies...)
 			if rec.Code != http.StatusBadRequest || cookieOf(rec, apiserver.SessionCookie) != nil {
@@ -598,8 +599,8 @@ func TestSignInCallbackRefusals(t *testing.T) {
 				t.Errorf("audit reason = %q %s, want %q failure", reason, outcome, tc.reason)
 			}
 
-			if e.limiter.count() != 1 {
-				t.Errorf("failures counted = %d, want 1", e.limiter.count())
+			if got := e.limiter.count() - before; got != 1 {
+				t.Errorf("failures counted by the callback = %d, want 1", got)
 			}
 		})
 	}
@@ -683,6 +684,23 @@ func TestSignInLimited(t *testing.T) {
 	}
 }
 
+func TestSignInStartSpendsBudget(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+
+	e.start(t, "")
+
+	if got := e.limiter.count(); got != 1 {
+		t.Fatalf("failures counted by one start that works = %d, want 1", got)
+	}
+
+	if rec := e.get(t, "/api/server/sign-in/unknown"); rec.Code != http.StatusNotFound || e.limiter.count() != 2 {
+		t.Fatalf("start of an unknown provider = %d with %d failures counted, want 404 with 2", rec.Code,
+			e.limiter.count())
+	}
+}
+
 func TestSignInSessionCookieOnlyForSignIn(t *testing.T) {
 	t.Parallel()
 
@@ -737,6 +755,8 @@ func TestSignInProviderDown(t *testing.T) {
 		t.Fatalf("sessions: %v", err)
 	}
 
+	limiter := &fakeLimiter{mu: sync.Mutex{}, failures: 0, refuse: false}
+
 	principals, err := principal.NewService(principal.Config{
 		Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
@@ -768,7 +788,7 @@ func TestSignInProviderDown(t *testing.T) {
 		SessionPolicy:  policies,
 		SignIn: &apiserver.SignIn{
 			Sessions: sessions,
-			Limiter:  nil,
+			Limiter:  limiter,
 			Origins:  nil,
 			Providers: []apiserver.SignInProvider{
 				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true},
@@ -787,5 +807,9 @@ func TestSignInProviderDown(t *testing.T) {
 
 	if rec.Code != http.StatusBadGateway || cookieOf(rec, apiserver.SignInCookie) != nil {
 		t.Fatalf("start with the provider down = %d, want 502 with no cookie: %s", rec.Code, rec.Body.String())
+	}
+
+	if limiter.count() != 1 {
+		t.Fatalf("failures counted by a start with the provider down = %d, want 1", limiter.count())
 	}
 }

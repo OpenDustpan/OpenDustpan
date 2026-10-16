@@ -216,6 +216,17 @@ func (s *Sessions) TakeRequest(ctx context.Context, state Secret) (Request, erro
 	return r, nil
 }
 
+// PruneRequests deletes the sign-in requests that expired at or before
+// now, and returns how many it deleted.
+func (s *Sessions) PruneRequests(ctx context.Context) (int64, error) {
+	n, err := s.store.PruneRequests(ctx, s.Now())
+	if err != nil {
+		return 0, fmt.Errorf("prune sign-in requests: %w", err)
+	}
+
+	return n, nil
+}
+
 // entry completes the entry of the caller for one change of the record
 // object at the time at.
 func entry(e audit.Entry, at time.Time, object string) audit.Entry {

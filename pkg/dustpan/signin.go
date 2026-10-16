@@ -1,13 +1,16 @@
 package dustpan
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
+	"time"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/baseurl"
@@ -101,6 +104,60 @@ func newSignIn(cfg *settings, policies *session.Policies) (*serverapi.SignIn, er
 	}
 
 	return in, nil
+}
+
+// newConsoleSignIn builds the session policy service and the console
+// sign-in of cfg. Each result is nil when cfg has none.
+func newConsoleSignIn(cfg *settings) (*session.Policies, *serverapi.SignIn, error) {
+	policies, err := newSessionPolicyService(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	signIn, err := newSignIn(cfg, policies)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return policies, signIn, nil
+}
+
+// signInRequestPruneEvery is the period of the deletion of the expired
+// sign-in requests: one lifetime of a request.
+const signInRequestPruneEvery = session.RequestLifetime
+
+// pruneSignInRequests deletes the expired sign-in requests once each
+// signInRequestPruneEvery, until ctx is done. A failed run logs no error
+// text, which may hold driver detail, and the next run tries again.
+func (s *Server) pruneSignInRequests(ctx context.Context) {
+	if s.signInRequests == nil {
+		return
+	}
+
+	ticker := time.NewTicker(signInRequestPruneEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.pruneSignInRequestsOnce(ctx)
+		}
+	}
+}
+
+// pruneSignInRequestsOnce deletes the expired sign-in requests once.
+func (s *Server) pruneSignInRequestsOnce(ctx context.Context) {
+	n, err := s.signInRequests.PruneRequests(ctx)
+
+	switch {
+	case err != nil && !errors.Is(ctx.Err(), context.Canceled):
+		s.logger.WarnContext(ctx, "prune of the expired sign-in requests failed")
+	case n > 0:
+		s.logger.InfoContext(ctx, "pruned the expired sign-in requests", slog.Int64("requests", n))
+	default:
+	}
 }
 
 // signInOrigin returns the origin of the public URL base, which the

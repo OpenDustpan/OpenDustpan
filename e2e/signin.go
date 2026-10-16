@@ -88,6 +88,7 @@ func newSignInSetup(tb testing.TB, publicURL string) *signInSetup {
 		Mode: oauthtest.ModeOIDC, Faults: oauthtest.Faults{
 			WrongIssuer: false, WrongAudience: false, WrongNonce: false, Expired: false, BadSignature: false,
 			AlgNone: false, UnknownKey: false, SkipPKCE: false, ExtraAudience: false, AuthorizedParty: "",
+			IssuedIn: 0,
 		},
 		TLS: true,
 	})
