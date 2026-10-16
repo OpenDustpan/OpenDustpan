@@ -18,7 +18,10 @@
 # Environment:
 #   DUSTPAN_TEST_POSTGRES_URL  PostgreSQL database for the dump (required)
 #
-# Needs git, tar, go and pg_dump. After the script, update the hashes of
+# Needs git, tar, go and pg_dump. The major version of pg_dump must be the
+# major version of the server, because the output of pg_dump can change
+# between major versions; the PostgreSQL baseline records it. Use the major
+# version that CI runs. After the script, update the hashes of
 # TestFrozenMigrations with the lines it prints, then run make generate.
 set -eu
 

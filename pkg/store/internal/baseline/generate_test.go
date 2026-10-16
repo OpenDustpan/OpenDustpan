@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,22 +54,32 @@ const schemaSuffixBytes = 8
 // loader reads the minimum binary version of the baseline from it.
 const minimumLine = "-- minimum-binary-version: v0.1.0"
 
+// pgDumpLine starts the header line of the PostgreSQL baseline that records
+// the major version of the pg_dump that wrote it.
+const pgDumpLine = "-- pg_dump major version: "
+
 // header returns the comment block that starts the baseline file of dialect,
-// written from the migrations of ref. The generator writes the rest.
-func header(dialect, ref string) string {
+// written from the migrations of ref. extra holds more comment lines, each
+// with its line end, or nothing. The generator writes the rest.
+func header(dialect, ref, extra string) string {
 	return minimumLine + `
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
 -- from the ` + dialect + ` migrations of ` + ref + `.
 -- This baseline replaced every migration before it, as a one-time exception
 -- to the rule that an applied migration never changes. No binary opens a
 -- database or restores a backup from before it.
-`
+` + extra
 }
 
-// baselineBody returns the body of a baseline file: every line after its
-// header. The header is every line up to the first empty line, and each of
-// them is a comment.
-func baselineBody(t *testing.T, file string) string {
+// baselineFile is a baseline file split in its header and its body.
+type baselineFile struct {
+	header string
+	body   string
+}
+
+// splitBaseline splits a baseline file. The header is every line up to the
+// first empty line, and each of them is a comment. The body is the rest.
+func splitBaseline(t *testing.T, file string) baselineFile {
 	t.Helper()
 
 	head, body, ok := strings.Cut(file, "\n\n")
@@ -82,7 +93,7 @@ func baselineBody(t *testing.T, file string) string {
 		}
 	}
 
-	return body
+	return baselineFile{header: head + "\n", body: body}
 }
 
 // paths holds the directory of the old migrations and the root of the
@@ -140,8 +151,9 @@ func after(t *testing.T, dialect string) string {
 	return string(data)
 }
 
-// writeBaseline writes body as the baseline file of dialect.
-func writeBaseline(t *testing.T, out, dialect, body string) {
+// writeBaseline writes body as the baseline file of dialect, after the
+// header with the extra header lines.
+func writeBaseline(t *testing.T, out, dialect, extra, body string) {
 	t.Helper()
 
 	ref := os.Getenv(envRef)
@@ -152,7 +164,7 @@ func writeBaseline(t *testing.T, out, dialect, body string) {
 	path := filepath.Join(out, "pkg", "store", dialect, "migrations", schema.BaselineName)
 
 	//nolint:gosec // out is the repository root that the regeneration script passes; the test writes only there.
-	if err := os.WriteFile(path, []byte(header(dialect, ref)+"\n"+body), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(header(dialect, ref, extra)+"\n"+body), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
@@ -180,7 +192,7 @@ func TestWriteSQLiteBaseline(t *testing.T) {
 		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(body, got))
 	}
 
-	writeBaseline(t, dir.out, "sqlite", body)
+	writeBaseline(t, dir.out, "sqlite", "", body)
 }
 
 func TestWritePostgresBaseline(t *testing.T) {
@@ -198,6 +210,15 @@ func TestWritePostgresBaseline(t *testing.T) {
 	oldSchema := newPostgresSchema(t, base)
 	old := connectPostgres(t, oldSchema.url)
 
+	// The output of pg_dump can change between major versions, so the
+	// baseline records the version, and only a pg_dump of the server's
+	// major version writes it.
+	dumpMajor, server := pgDumpMajor(t), serverMajor(ctx, t, old)
+	if dumpMajor != server {
+		t.Fatalf("pg_dump %d differs from the PostgreSQL %d server: "+
+			"install postgresql-client-%d and put its pg_dump first in PATH", dumpMajor, server, server)
+	}
+
 	for _, m := range oldMigrations(t, dir.in, "postgres") {
 		execPostgres(ctx, t, old, m.Name, m.SQL)
 	}
@@ -214,7 +235,49 @@ func TestWritePostgresBaseline(t *testing.T) {
 		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(body, got))
 	}
 
-	writeBaseline(t, dir.out, "postgres", body)
+	writeBaseline(t, dir.out, "postgres", pgDumpLine+strconv.Itoa(dumpMajor)+"\n", body)
+}
+
+// serverMajor returns the major version of the PostgreSQL server of conn.
+func serverMajor(ctx context.Context, t *testing.T, conn *pgx.Conn) int {
+	t.Helper()
+
+	var num int
+	if err := conn.QueryRow(ctx, "SELECT current_setting('server_version_num')::int").Scan(&num); err != nil {
+		t.Fatalf("read the server version: %v", err)
+	}
+
+	return num / serverVersionDivisor
+}
+
+// serverVersionDivisor turns server_version_num, for example 180006, into
+// the major version.
+const serverVersionDivisor = 10000
+
+// pgDumpVersion matches the major version in the output of pg_dump --version.
+var pgDumpVersion = regexp.MustCompile(`\(PostgreSQL\) (\d+)`)
+
+// pgDumpMajor returns the major version of the pg_dump first in PATH, or
+// fails the test when pg_dump is not installed.
+func pgDumpMajor(t *testing.T) int {
+	t.Helper()
+
+	out, err := exec.CommandContext(t.Context(), "pg_dump", "--version").Output()
+	if err != nil {
+		t.Fatalf("run pg_dump --version: %v; install the PostgreSQL client", err)
+	}
+
+	match := pgDumpVersion.FindSubmatch(out)
+	if match == nil {
+		t.Fatalf("pg_dump --version answered %q, want a PostgreSQL version", out)
+	}
+
+	major, err := strconv.Atoi(string(match[1]))
+	if err != nil {
+		t.Fatalf("parse the pg_dump version %q: %v", match[1], err)
+	}
+
+	return major
 }
 
 // firstDifference returns the first line where want and got differ.

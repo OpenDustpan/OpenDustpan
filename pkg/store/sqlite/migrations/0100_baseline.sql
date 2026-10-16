@@ -1,6 +1,6 @@
 -- minimum-binary-version: v0.1.0
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the sqlite migrations of origin/main (4b22ab13577e).
+-- from the sqlite migrations of origin/main (df0e2278aec5).
 -- This baseline replaced every migration before it, as a one-time exception
 -- to the rule that an applied migration never changes. No binary opens a
 -- database or restores a backup from before it.

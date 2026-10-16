@@ -3,19 +3,18 @@ package baseline_test
 import (
 	"bytes"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
+	"strings"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // committedBaseline reads the baseline file of dialect from the repository
-// and returns its body. It fails the test when the file does not start with
+// and returns it split. It fails the test when the file does not start with
 // the minimum binary version line.
-func committedBaseline(t *testing.T, dialect string) string {
+func committedBaseline(t *testing.T, dialect string) baselineFile {
 	t.Helper()
 
 	path := filepath.Join("..", "..", dialect, "migrations", schema.BaselineName)
@@ -30,13 +29,13 @@ func committedBaseline(t *testing.T, dialect string) string {
 		t.Fatalf("%s does not start with %q", path, minimumLine)
 	}
 
-	return baselineBody(t, string(data))
+	return splitBaseline(t, string(data))
 }
 
 func TestSQLiteBaselineRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	body := committedBaseline(t, "sqlite")
+	body := committedBaseline(t, "sqlite").body
 	ctx := t.Context()
 
 	db := openSQLite(t)
@@ -56,20 +55,22 @@ func TestPostgresBaselineRoundTrip(t *testing.T) {
 		t.Skipf("set %s to run the PostgreSQL round trip", envPostgres)
 	}
 
-	body := committedBaseline(t, "postgres")
+	file := committedBaseline(t, "postgres")
+	body := file.body
 	ctx := t.Context()
 
 	fresh := newPostgresSchema(t, base)
 	conn := connectPostgres(t, fresh.url)
 
-	var serverNum int
-	if err := conn.QueryRow(ctx, "SELECT current_setting('server_version_num')::int").Scan(&serverNum); err != nil {
-		t.Fatalf("read the server version: %v", err)
+	dumpMajor, server := pgDumpMajor(t), serverMajor(ctx, t, conn)
+	if dumpMajor < server {
+		t.Skipf("pg_dump %d cannot dump a PostgreSQL %d server: install postgresql-client-%d to run this test",
+			dumpMajor, server, server)
 	}
 
-	if dumpMajor := pgDumpMajor(t); dumpMajor < serverNum/10000 {
-		t.Skipf("pg_dump %d cannot dump a PostgreSQL %d server; install pg_dump %d or later",
-			dumpMajor, serverNum/10000, serverNum/10000)
+	if written := writtenDumpMajor(t, file.header); dumpMajor != written {
+		t.Skipf("pg_dump %d wrote the baseline, and pg_dump is %d: install postgresql-client-%d to run this test",
+			written, dumpMajor, written)
 	}
 
 	execPostgres(ctx, t, conn, schema.BaselineName, body)
@@ -80,28 +81,23 @@ func TestPostgresBaselineRoundTrip(t *testing.T) {
 	}
 }
 
-// pgDumpVersion matches the major version in the output of pg_dump --version.
-var pgDumpVersion = regexp.MustCompile(`\(PostgreSQL\) (\d+)`)
-
-// pgDumpMajor returns the major version of pg_dump, or fails the test when
-// pg_dump is not installed.
-func pgDumpMajor(t *testing.T) int {
+// writtenDumpMajor returns the pg_dump major version that the header of
+// the PostgreSQL baseline records.
+func writtenDumpMajor(t *testing.T, header string) int {
 	t.Helper()
 
-	out, err := exec.CommandContext(t.Context(), "pg_dump", "--version").Output()
-	if err != nil {
-		t.Fatalf("run pg_dump --version: %v; install the PostgreSQL client", err)
+	for line := range strings.SplitSeq(header, "\n") {
+		if value, ok := strings.CutPrefix(line, pgDumpLine); ok {
+			major, err := strconv.Atoi(value)
+			if err != nil {
+				t.Fatalf("parse the header line %q: %v", line, err)
+			}
+
+			return major
+		}
 	}
 
-	match := pgDumpVersion.FindSubmatch(out)
-	if match == nil {
-		t.Fatalf("pg_dump --version answered %q, want a PostgreSQL version", out)
-	}
+	t.Fatalf("the PostgreSQL baseline header has no %q line", pgDumpLine)
 
-	major, err := strconv.Atoi(string(match[1]))
-	if err != nil {
-		t.Fatalf("parse the pg_dump version %q: %v", match[1], err)
-	}
-
-	return major
+	return 0
 }
