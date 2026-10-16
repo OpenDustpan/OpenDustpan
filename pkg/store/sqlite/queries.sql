@@ -575,17 +575,18 @@ SET state = 'failed', error = ?, ended_at_ms = ?
 WHERE state = 'running';
 
 -- name: GetInstallationState :one
--- The installation state (ADR 38 decision 4): normal or maintenance. The
--- migration seeds the one row; a missing row reads normal.
+-- The installation state: normal or maintenance. The migration seeds the
+-- one row; a missing row is a fault.
 SELECT state
 FROM installation
 WHERE id = 1;
 
--- name: UpsertInstallationState :exec
--- Stores the installation state, creating the row when it is missing.
-INSERT INTO installation (id, state)
-VALUES (1, ?)
-ON CONFLICT (id) DO UPDATE SET state = excluded.state;
+-- name: SetInstallationState :execrows
+-- Stores the installation state in the seeded row. It changes nothing when
+-- the row is missing.
+UPDATE installation
+SET state = ?
+WHERE id = 1;
 
 -- name: SetInstallationStateIf :execrows
 -- Stores next only when the stored state is expected: a compare-and-swap, so
