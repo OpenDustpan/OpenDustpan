@@ -939,6 +939,8 @@ func classifyUpdate(err error) (int, string) {
 		return http.StatusUnauthorized, err.Error()
 	case errors.Is(err, stack.ErrTooLarge):
 		return http.StatusRequestEntityTooLarge, err.Error()
+	case errors.Is(err, stack.ErrJournalBuildTimeout):
+		return http.StatusServiceUnavailable, err.Error()
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}

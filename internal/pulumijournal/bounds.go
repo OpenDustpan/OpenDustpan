@@ -4,22 +4,27 @@ import "errors"
 
 // Bounds of one journaled update. Each number comes from the build benchmark
 // BenchmarkJournalBuildChange10000, which replays 10,000 resources. The
-// benchmark reports the measured value in its log. No number grows with the
-// base resources: the build streams the base one resource at a time and keeps
-// only the new states and the link index.
-const (
+// benchmark reports the measured value in its log. No counted number grows
+// with the base resources: the build streams the base one resource at a time,
+// and the bounds count only the entries, the new states and the added links
+// of the update.
+var (
 	// MaxEntriesPerUpdate bounds the journal entries of one update.
 	// Measured by BenchmarkJournalBuildChange10000: 20000 entries.
-	MaxEntriesPerUpdate = 60000
+	MaxEntriesPerUpdate = 60000 //nolint:gochecknoglobals // The bound stays tunable in tests; each test restores it.
 	// MaxNewStateBytesPerUpdate bounds the new resource states of one update, in bytes.
+	// Derived from the checkpoint bound of 32 MiB until corpus measurements exist.
 	// Measured by BenchmarkJournalBuildChange10000: 2210000 new-state-bytes.
-	MaxNewStateBytesPerUpdate = 12 << 20
-	// MaxLinkIndexEntriesPerUpdate bounds the link index of one build, in resources.
+	MaxNewStateBytesPerUpdate = 32 << 20 //nolint:gochecknoglobals // The bound stays tunable in tests; each test restores it.
+	// MaxLinkIndexEntriesPerUpdate bounds the added links of one update, in resources.
 	// Measured by BenchmarkJournalBuildChange10000: 10000 link-index.
-	MaxLinkIndexEntriesPerUpdate = 25000
-	// MaxBuildMemoryBytes bounds the estimated memory of one build, in bytes.
-	// Measured by BenchmarkJournalBuildChange10000: peak heap 34262392 bytes, measured under load.
-	MaxBuildMemoryBytes = 64 << 20
+	// A no-op update on a large base adds no links, so it passes whatever the base holds.
+	MaxLinkIndexEntriesPerUpdate = 25000 //nolint:gochecknoglobals // The bound stays tunable in tests; each test restores it.
+	// MaxNewStatePlusLinkBytesPerUpdate bounds the new-state plus added-link bytes
+	// of one build, in bytes. It is not a bound on heap: the measured heap is about
+	// 9 times the counted bytes.
+	// Measured by BenchmarkJournalBuildChange10000: 2680000 counted bytes, peak heap 24775632 bytes.
+	MaxNewStatePlusLinkBytesPerUpdate = 64 << 20 //nolint:gochecknoglobals // The bound stays tunable in tests; each test restores it.
 )
 
 // Errors of the bounds. Each message names the bound and the limit.
@@ -28,8 +33,9 @@ var (
 	ErrTooManyEntries = errors.New("pulumijournal: too many journal entries in one update")
 	// ErrNewStateTooLarge reports an update with more new state bytes than MaxNewStateBytesPerUpdate.
 	ErrNewStateTooLarge = errors.New("pulumijournal: new states of one update exceed the limit")
-	// ErrLinkIndexTooLarge reports a build with more indexed resources than MaxLinkIndexEntriesPerUpdate.
-	ErrLinkIndexTooLarge = errors.New("pulumijournal: link index of one build exceeds the limit")
-	// ErrBuildMemoryExceeded reports a build with more estimated memory than MaxBuildMemoryBytes.
-	ErrBuildMemoryExceeded = errors.New("pulumijournal: build memory exceeds the limit")
+	// ErrLinkIndexTooLarge reports a build with more added links than MaxLinkIndexEntriesPerUpdate.
+	ErrLinkIndexTooLarge = errors.New("pulumijournal: added links of one update exceed the limit")
+	// ErrAddedBytesTooLarge reports a build with more new-state plus added-link
+	// bytes than MaxNewStatePlusLinkBytesPerUpdate.
+	ErrAddedBytesTooLarge = errors.New("pulumijournal: new states plus added links of one update exceed the limit")
 )

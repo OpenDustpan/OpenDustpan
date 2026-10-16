@@ -107,17 +107,11 @@ func benchChangeEntries(n int) []byte {
 	return []byte(b.String())
 }
 
-// benchCounts holds the decoded entry counts that benchBuild reports.
-type benchCounts struct {
-	entryCount    int
-	newStateBytes int
-	linkIndex     int
-}
-
-// benchBuild runs the replayer on base and entries and reports the peak heap
-// in bytes. counts holds the entry count and new state bytes from decoding
-// entries, and the resources of the output as the link index.
-func benchBuild(b *testing.B, base string, entries []byte, counts benchCounts) {
+// benchBuild runs the replayer on base and entries and reports the heap after
+// the build, with the entry count, the new-state bytes and the added links
+// measured from the entries. The added links are the success entries that
+// carry a state, which is what the link-index bound counts.
+func benchBuild(b *testing.B, base string, entries []byte) {
 	b.Helper()
 
 	now := func() time.Time { return time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC) }
@@ -126,27 +120,8 @@ func benchBuild(b *testing.B, base string, entries []byte, counts benchCounts) {
 	}
 
 	runtime.GC() //nolint:revive // The heap measurement needs a quiet runtime, so the benchmark collects first.
-
-	var peak uint64
-	done := make(chan struct{})
-	defer close(done)
-
-	go func() {
-		var m runtime.MemStats
-		ticker := time.NewTicker(time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				runtime.ReadMemStats(&m)
-				if m.HeapAlloc > peak {
-					peak = m.HeapAlloc
-				}
-			}
-		}
-	}()
+	var before runtime.MemStats
+	runtime.ReadMemStats(&before)
 
 	var out bytes.Buffer
 	r := pulumijournal.NewReplayer(now, "3.268.0")
@@ -154,52 +129,49 @@ func benchBuild(b *testing.B, base string, entries []byte, counts benchCounts) {
 		b.Fatalf("replay: %v", err)
 	}
 
-	runtime.ReadMemStats(new(runtime.MemStats))
+	var after runtime.MemStats
+	runtime.ReadMemStats(&after)
 
-	b.ReportMetric(float64(peak), "peak-heap-bytes")
+	count, stateBytes, added := countBenchEntries(b, entries)
+
+	b.ReportMetric(float64(after.HeapAlloc), "peak-heap-bytes")
 	b.ReportMetric(float64(len(entries)), "batch-bytes")
 	b.ReportMetric(float64(out.Len()), "out-bytes")
-	b.ReportMetric(float64(counts.entryCount), "entries")
-	b.ReportMetric(float64(counts.newStateBytes), "new-state-bytes")
-	b.ReportMetric(float64(counts.linkIndex), "link-index")
+	b.ReportMetric(float64(count), "entries")
+	b.ReportMetric(float64(stateBytes), "new-state-bytes")
+	b.ReportMetric(float64(added), "link-index")
 }
 
-// countBenchEntries decodes entries and returns its entry count and its new
-// state bytes, counted as the replay counts them.
+// countBenchEntries decodes entries and returns its entry count, its new-state
+// bytes counted as the replay counts them, and its added links: the success
+// entries that carry a state.
 //
-//nolint:nonamedreturns // The names keep the entry count and the new state bytes in order at callers.
-func countBenchEntries(b *testing.B, entries []byte) (count, stateBytes int) {
+//nolint:nonamedreturns // The names keep the entry count, the new-state bytes and the added links in order at callers.
+func countBenchEntries(b *testing.B, entries []byte) (count, stateBytes, added int) {
 	b.Helper()
 	err := pulumijournal.DecodeEntries(bytes.NewReader(entries), 2, func(entry pulumijournal.JournalEntry) error {
 		count++
-		stateBytes += len(entry.State)
-		for _, state := range entry.States {
-			stateBytes += len(state)
-		}
-		for _, patch := range entry.BaseStatePatches {
-			stateBytes += len(patch.State)
-		}
-		for _, patch := range entry.NewStatePatches {
-			stateBytes += len(patch.State)
+		stateBytes += pulumijournal.EntryStateBytes(entry)
+		if entry.Kind == pulumijournal.JournalEntryKindSuccess && len(entry.State) > 0 &&
+			string(entry.State) != "null" {
+			added++
 		}
 		return nil
 	})
 	if err != nil {
 		b.Fatalf("decode bench entries: %v", err)
 	}
-	return count, stateBytes
+	return count, stateBytes, added
 }
 
 // BenchmarkJournalBuildCreate3000 builds a create of 3,000 resources and
 // reports its peak heap.
 func BenchmarkJournalBuildCreate3000(b *testing.B) {
 	entries := benchCreateEntries(3000)
-	count, stateBytes := countBenchEntries(b, entries)
-	counts := benchCounts{entryCount: count, newStateBytes: stateBytes, linkIndex: 3000}
 	b.SetBytes(int64(len(entries)))
 	b.ResetTimer()
 	for b.Loop() {
-		benchBuild(b, `{"resources":[]}`, entries, counts)
+		benchBuild(b, `{"resources":[]}`, entries)
 	}
 }
 
@@ -208,12 +180,10 @@ func BenchmarkJournalBuildCreate3000(b *testing.B) {
 func BenchmarkJournalBuildChange3000(b *testing.B) {
 	base := benchBase(3000)
 	entries := benchChangeEntries(3000)
-	count, stateBytes := countBenchEntries(b, entries)
-	counts := benchCounts{entryCount: count, newStateBytes: stateBytes, linkIndex: 3000}
 	b.SetBytes(int64(len(entries)))
 	b.ResetTimer()
 	for b.Loop() {
-		benchBuild(b, base, entries, counts)
+		benchBuild(b, base, entries)
 	}
 }
 
@@ -221,12 +191,10 @@ func BenchmarkJournalBuildChange3000(b *testing.B) {
 // reports its peak heap.
 func BenchmarkJournalBuildCreate10000(b *testing.B) {
 	entries := benchCreateEntries(10000)
-	count, stateBytes := countBenchEntries(b, entries)
-	counts := benchCounts{entryCount: count, newStateBytes: stateBytes, linkIndex: 10000}
 	b.SetBytes(int64(len(entries)))
 	b.ResetTimer()
 	for b.Loop() {
-		benchBuild(b, `{"resources":[]}`, entries, counts)
+		benchBuild(b, `{"resources":[]}`, entries)
 	}
 }
 
@@ -235,11 +203,23 @@ func BenchmarkJournalBuildCreate10000(b *testing.B) {
 func BenchmarkJournalBuildChange10000(b *testing.B) {
 	base := benchBase(10000)
 	entries := benchChangeEntries(10000)
-	count, stateBytes := countBenchEntries(b, entries)
-	counts := benchCounts{entryCount: count, newStateBytes: stateBytes, linkIndex: 10000}
 	b.SetBytes(int64(len(entries)))
 	b.ResetTimer()
 	for b.Loop() {
-		benchBuild(b, base, entries, counts)
+		benchBuild(b, base, entries)
+	}
+}
+
+// BenchmarkJournalBuildChange10in10000 builds a change of 10 resources on a
+// base of 10,000 resources and reports its peak heap. Its memory does not
+// grow with the base: the build streams the base and keeps only the 10 added
+// resources.
+func BenchmarkJournalBuildChange10in10000(b *testing.B) {
+	base := benchBase(10000)
+	entries := benchChangeEntries(10)
+	b.SetBytes(int64(len(entries)))
+	b.ResetTimer()
+	for b.Loop() {
+		benchBuild(b, base, entries)
 	}
 }

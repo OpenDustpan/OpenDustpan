@@ -103,9 +103,6 @@ func NewReplayer(now func() time.Time, cliVersion string) *Replayer {
 func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, entries io.Reader, out io.Writer) error {
 	state := newReplayState(openBase, r)
 	decode := func(entry JournalEntry) error {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("pulumijournal: replay canceled: %w", err)
-		}
 		if err := state.countEntry(entry); err != nil {
 			return err
 		}
@@ -242,7 +239,7 @@ func (s *replayState) lookup(op int64, name, field string) (int64, error) {
 // than the bounds allow.
 func (s *replayState) countEntry(entry JournalEntry) error {
 	s.entryCount++
-	if s.entryCount > MaxEntriesPerUpdate {
+	if s.entryCount > int64(MaxEntriesPerUpdate) {
 		return fmt.Errorf(
 			"pulumijournal: %d entries, limit %d: %w",
 			s.entryCount,
@@ -250,8 +247,8 @@ func (s *replayState) countEntry(entry JournalEntry) error {
 			ErrTooManyEntries,
 		)
 	}
-	s.newStateBytes += int64(entryStateBytes(entry))
-	if s.newStateBytes > MaxNewStateBytesPerUpdate {
+	s.newStateBytes += int64(EntryStateBytes(entry))
+	if s.newStateBytes > int64(MaxNewStateBytesPerUpdate) {
 		return fmt.Errorf(
 			"pulumijournal: %d new state bytes, limit %d: %w",
 			s.newStateBytes,
@@ -262,9 +259,9 @@ func (s *replayState) countEntry(entry JournalEntry) error {
 	return nil
 }
 
-// entryStateBytes returns the bytes of the resource states one entry carries:
+// EntryStateBytes returns the bytes of the resource states one entry carries:
 // its own state and every state of a migration entry.
-func entryStateBytes(entry JournalEntry) int {
+func EntryStateBytes(entry JournalEntry) int {
 	n := len(entry.State)
 	for _, state := range entry.States {
 		n += len(state)
@@ -278,52 +275,58 @@ func entryStateBytes(entry JournalEntry) int {
 	return n
 }
 
-// checkIndex checks the link index of the first pass against the bounds. It
-// refuses an index with more resources than the bound allows, and a build
-// with more estimated memory than the bound allows. The estimate adds the new
-// state bytes to the link bytes, so it never grows with the base resources,
+// checkIndex checks the added links of the first pass against the bounds. It
+// refuses an update that adds more links than the bound allows, and a build
+// with more new-state plus added-link bytes than the bound allows. Both counts
+// cover only what the update adds, so neither grows with the base resources,
 // which the build streams one at a time.
 func (s *replayState) checkIndex(scan *baseScan) error {
-	if int64(len(scan.index)) > MaxLinkIndexEntriesPerUpdate {
+	if int64(scan.added) > int64(MaxLinkIndexEntriesPerUpdate) {
 		return fmt.Errorf(
-			"pulumijournal: %d indexed resources, limit %d: %w",
-			len(scan.index),
+			"pulumijournal: %d added links, limit %d: %w",
+			scan.added,
 			MaxLinkIndexEntriesPerUpdate,
 			ErrLinkIndexTooLarge,
 		)
 	}
-	estimated := s.newStateBytes + linkBytes(scan.index)
-	if estimated > MaxBuildMemoryBytes {
+	counted := s.newStateBytes + scan.addedLinkBytes
+	if counted > int64(MaxNewStatePlusLinkBytesPerUpdate) {
 		return fmt.Errorf(
-			"pulumijournal: estimated build memory %d bytes, limit %d: %w",
-			estimated,
-			MaxBuildMemoryBytes,
-			ErrBuildMemoryExceeded,
+			"pulumijournal: %d new-state plus added-link bytes, limit %d: %w",
+			counted,
+			MaxNewStatePlusLinkBytesPerUpdate,
+			ErrAddedBytesTooLarge,
 		)
 	}
 	return nil
+}
+
+// linkSize returns the bytes of the link fields of one resource.
+func linkSize(fields linkFields) int64 {
+	n := int64(len(fields.URN) + len(fields.Parent) + len(fields.Provider) +
+		len(fields.ViewOf) + len(fields.DeletedWith))
+	for _, urn := range fields.Dependencies {
+		n += int64(len(urn))
+	}
+	for _, urn := range fields.Aliases {
+		n += int64(len(urn))
+	}
+	for _, urn := range fields.ReplaceWith {
+		n += int64(len(urn))
+	}
+	for _, urns := range fields.PropertyDependencies {
+		for _, urn := range urns {
+			n += int64(len(urn))
+		}
+	}
+	return n
 }
 
 // linkBytes returns the bytes of the link fields of the indexed resources.
 func linkBytes(index []linkFields) int64 {
 	var n int64
 	for _, fields := range index { //nolint:gocritic // The struct holds only string headers, so the copy stays small.
-		n += int64(len(fields.URN) + len(fields.Parent) + len(fields.Provider) +
-			len(fields.ViewOf) + len(fields.DeletedWith))
-		for _, urn := range fields.Dependencies {
-			n += int64(len(urn))
-		}
-		for _, urn := range fields.Aliases {
-			n += int64(len(urn))
-		}
-		for _, urn := range fields.ReplaceWith {
-			n += int64(len(urn))
-		}
-		for _, urns := range fields.PropertyDependencies {
-			for _, urn := range urns {
-				n += int64(len(urn))
-			}
-		}
+		n += linkSize(fields)
 	}
 	return n
 }
@@ -645,6 +648,11 @@ type baseScan struct {
 	// output. The second pass reads the base again and takes the normalized links
 	// from it (ADR 43, decision 7.3).
 	index []linkFields
+	// added counts the links the update adds: the kept new resources and the
+	// base resources a refresh or outputs entry replaces. addedLinkBytes holds
+	// their link bytes. Kept base resources without a replacement add nothing.
+	added          int
+	addedLinkBytes int64
 	// extras holds the integrity members of the resources of the output, in the
 	// same order as index. The integrity check reads the links from index and the
 	// other members from extras.
@@ -728,6 +736,8 @@ func (s *replayState) scanBase(ctx context.Context, openBase OpenBase) (*baseSca
 		members:          make(map[string]jsontext.Value),
 		pending:          nil,
 		index:            nil,
+		added:            0,
+		addedLinkBytes:   0,
 		extras:           nil,
 		integrityErr:     nil,
 		integrityVersion: "",
@@ -772,7 +782,8 @@ func (s *replayState) scanBase(ctx context.Context, openBase OpenBase) (*baseSca
 }
 
 // scanNewResources adds the features and the URNs of the new resources that the
-// update keeps, with their integrity members.
+// update keeps, with their integrity members. Each kept new resource counts as
+// an added link.
 func (s *replayState) scanNewResources(scan *baseScan) error {
 	removed := s.removedIndices()
 	for i := range s.newRecords {
@@ -782,6 +793,8 @@ func (s *replayState) scanNewResources(scan *baseScan) error {
 		s.addFeatures(scan.features, s.newRecords[i].view)
 		scan.final[s.newRecords[i].links.URN] = true
 		scan.index = append(scan.index, s.newRecords[i].links.clone())
+		scan.added++
+		scan.addedLinkBytes += linkSize(s.newRecords[i].links)
 		extra, err := integrityExtraOf(s.newRecords[i].raw, s.newRecords[i].deleted, s.newRecords[i].pending)
 		if err != nil {
 			return err
@@ -808,6 +821,10 @@ func (s *replayState) scanBaseResource(scan *baseScan, i int, raw jsontext.Value
 	s.addFeatures(scan.features, rec.view)
 	scan.final[rec.links.URN] = true
 	scan.index = append(scan.index, rec.links.clone())
+	if _, replaced := s.toReplaceInSnapshot[idx]; replaced {
+		scan.added++
+		scan.addedLinkBytes += linkSize(rec.links)
+	}
 	// A replaced resource counts as its replacement alone: the markings of the
 	// base index do not apply to it.
 	deleted, pending := false, false

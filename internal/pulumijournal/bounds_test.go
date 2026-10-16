@@ -74,34 +74,81 @@ func largeStateEntries(n, pad int) []byte {
 }
 
 // TestReplayRefusesTooManyEntries checks that a replay with more entries than
-// the bound allows fails with ErrTooManyEntries.
+// the bound allows fails with ErrTooManyEntries, while the bound itself passes.
+//
+//nolint:paralleltest // The test lowers the entry bound, so it runs alone.
 func TestReplayRefusesTooManyEntries(t *testing.T) {
-	t.Parallel()
-	entries := beginOnlyEntries(pulumijournal.MaxEntriesPerUpdate + 1)
-	if err := boundReplayer(t, `{"resources":[]}`, entries); !errors.Is(err, pulumijournal.ErrTooManyEntries) {
-		t.Fatalf("replay with %d entries: err = %v, want ErrTooManyEntries", pulumijournal.MaxEntriesPerUpdate+1, err)
+	old := pulumijournal.MaxEntriesPerUpdate
+	pulumijournal.MaxEntriesPerUpdate = 30
+	t.Cleanup(func() { pulumijournal.MaxEntriesPerUpdate = old })
+	if err := boundReplayer(t, `{"resources":[]}`, beginOnlyEntries(30)); err != nil {
+		t.Fatalf("replay with 30 entries: err = %v, want nil", err)
+	}
+	if err := boundReplayer(t, `{"resources":[]}`, beginOnlyEntries(31)); !errors.Is(
+		err,
+		pulumijournal.ErrTooManyEntries,
+	) {
+		t.Fatalf("replay with 31 entries: err = %v, want ErrTooManyEntries", err)
 	}
 }
 
 // TestReplayRefusesNewStateTooLarge checks that a replay with more new state
-// bytes than the bound allows fails with ErrNewStateTooLarge.
+// bytes than the bound allows fails with ErrNewStateTooLarge, while the bound
+// itself passes.
+//
+//nolint:paralleltest // The test lowers the state bound, so it runs alone.
 func TestReplayRefusesNewStateTooLarge(t *testing.T) {
-	t.Parallel()
-	// Twenty states of 700 KiB exceed the 12 MiB bound with few entries.
-	entries := largeStateEntries(20, 700<<10)
-	if err := boundReplayer(t, `{"resources":[]}`, entries); !errors.Is(err, pulumijournal.ErrNewStateTooLarge) {
+	old := pulumijournal.MaxNewStateBytesPerUpdate
+	pulumijournal.MaxNewStateBytesPerUpdate = 2000
+	t.Cleanup(func() { pulumijournal.MaxNewStateBytesPerUpdate = old })
+
+	// One entry carries about 150 state bytes, so 10 entries pass under 2,000
+	// and 20 do not.
+	if err := boundReplayer(t, `{"resources":[]}`, largeStateEntries(10, 64)); err != nil {
+		t.Fatalf("replay with small states: err = %v, want nil", err)
+	}
+	if err := boundReplayer(t, `{"resources":[]}`, largeStateEntries(20, 64)); !errors.Is(
+		err,
+		pulumijournal.ErrNewStateTooLarge,
+	) {
 		t.Fatalf("replay with oversized states: err = %v, want ErrNewStateTooLarge", err)
 	}
 }
 
-// TestReplayRefusesLinkIndexTooLarge checks that a replay with more indexed
-// resources than the bound allows fails with ErrLinkIndexTooLarge.
+// TestReplayRefusesLinkIndexTooLarge checks that a replay that adds more links
+// than the bound allows fails with ErrLinkIndexTooLarge, while the bound
+// itself passes.
+//
+//nolint:paralleltest // The test lowers the link bound, so it runs alone.
 func TestReplayRefusesLinkIndexTooLarge(t *testing.T) {
-	t.Parallel()
-	n := int(pulumijournal.MaxLinkIndexEntriesPerUpdate) + 1
-	entries := benchCreateEntries(n)
-	if err := boundReplayer(t, `{"resources":[]}`, entries); !errors.Is(err, pulumijournal.ErrLinkIndexTooLarge) {
-		t.Fatalf("replay with %d indexed resources: err = %v, want ErrLinkIndexTooLarge", n, err)
+	old := pulumijournal.MaxLinkIndexEntriesPerUpdate
+	pulumijournal.MaxLinkIndexEntriesPerUpdate = 10
+	t.Cleanup(func() { pulumijournal.MaxLinkIndexEntriesPerUpdate = old })
+
+	if err := boundReplayer(t, `{"resources":[]}`, benchCreateEntries(10)); err != nil {
+		t.Fatalf("replay that adds 10 links: err = %v, want nil", err)
+	}
+	if err := boundReplayer(t, `{"resources":[]}`, benchCreateEntries(11)); !errors.Is(
+		err,
+		pulumijournal.ErrLinkIndexTooLarge,
+	) {
+		t.Fatalf("replay that adds 11 links: err = %v, want ErrLinkIndexTooLarge", err)
+	}
+}
+
+// TestReplayNoOpOnLargeBasePasses checks that a no-op update on a base with
+// more resources than the link-index bound still completes: the bound counts
+// only the links the update adds.
+//
+//nolint:paralleltest // The test lowers the link bound, so it runs alone.
+func TestReplayNoOpOnLargeBasePasses(t *testing.T) {
+	old := pulumijournal.MaxLinkIndexEntriesPerUpdate
+	pulumijournal.MaxLinkIndexEntriesPerUpdate = 5
+	t.Cleanup(func() { pulumijournal.MaxLinkIndexEntriesPerUpdate = old })
+
+	base := benchBase(20)
+	if err := boundReplayer(t, base, beginOnlyEntries(2)); err != nil {
+		t.Fatalf("no-op replay on 20 resources with link bound 5: err = %v, want nil", err)
 	}
 }
 

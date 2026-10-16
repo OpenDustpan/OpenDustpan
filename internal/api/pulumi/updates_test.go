@@ -63,6 +63,7 @@ type memUpdateStore struct {
 	stackVersion map[stack.Ref]int64
 	checkpoints  map[stack.UpdateID]stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
+	journal      map[stack.UpdateID][]blob.Key
 	mu           sync.Mutex
 }
 
@@ -72,6 +73,7 @@ func newMemUpdateStore() *memUpdateStore {
 		stackVersion: map[stack.Ref]int64{},
 		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
 		events:       map[stack.UpdateID][]stack.Event{},
+		journal:      map[stack.UpdateID][]blob.Key{},
 		mu:           sync.Mutex{},
 	}
 }
@@ -425,17 +427,19 @@ func newUpdateFixtureWithCutoff(
 		t,
 		authz,
 		tokenAuthenticator{},
-		fixtureOptions{checker: nil, limit: limit, cutoff: cutoff},
+		fixtureOptions{checker: nil, limit: limit, cutoff: cutoff, replayer: nil},
 	)
 }
 
 // fixtureOptions holds the settings of an update fixture beyond its policy and
-// authenticator: the checkpoint limit, the delta cutoff, and the check of the
-// access token that started an update.
+// authenticator: the checkpoint limit, the delta cutoff, the check of the
+// access token that started an update, and the journal replayer (nil builds
+// no checkpoint).
 type fixtureOptions struct {
-	checker stack.TokenChecker
-	limit   int
-	cutoff  int
+	checker  stack.TokenChecker
+	limit    int
+	cutoff   int
+	replayer stack.JournalReplayer
 }
 
 // newUpdateFixtureWithAuthenticator builds a Handler as newUpdateFixtureWithCutoff
@@ -446,6 +450,7 @@ func newUpdateFixtureWithAuthenticator(
 	t.Helper()
 
 	limit, cutoff, checker := opts.limit, opts.cutoff, opts.checker
+	replayer := opts.replayer
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
@@ -485,7 +490,7 @@ func newUpdateFixtureWithAuthenticator(
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
 		Journal:            journalWriterFor(t, blobs, mem),
-		Replayer:           nil,
+		Replayer:           replayer,
 		Tokens:             checker,
 	})
 	if err != nil {
