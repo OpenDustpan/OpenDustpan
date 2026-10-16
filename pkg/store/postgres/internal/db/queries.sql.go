@@ -3300,34 +3300,47 @@ SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
-  ), 0))::bigint AS principal_active_at_ms
+  ), 0))::bigint AS principal_active_at_ms,
+  sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
+  sp.token_freshness_ms AS policy_token_freshness_ms,
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
-WHERE s.digest = $1 AND p.deleted_at_ms IS NULL
+CROSS JOIN session_policy sp
+CROSS JOIN access_token_policy ap
+WHERE s.digest = $1 AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1
 `
 
 type GetSessionByDigestRow struct {
-	ID                    string
-	PrincipalID           string
-	Digest                string
-	Provider              string
-	CreatedAtMs           int64
-	LastSeenAtMs          int64
-	AuthTimeMs            int64
-	EndedAtMs             pgtype.Int8
-	EndReason             string
-	SourceIp              string
-	UserAgent             string
-	Subject               string
-	DisplayName           string
-	PrincipalKind         string
-	PrincipalDisabledAtMs pgtype.Int8
-	PrincipalBreakGlass   bool
-	PrincipalActiveAtMs   int64
+	ID                     string
+	PrincipalID            string
+	Digest                 string
+	Provider               string
+	CreatedAtMs            int64
+	LastSeenAtMs           int64
+	AuthTimeMs             int64
+	EndedAtMs              pgtype.Int8
+	EndReason              string
+	SourceIp               string
+	UserAgent              string
+	Subject                string
+	DisplayName            string
+	PrincipalKind          string
+	PrincipalDisabledAtMs  pgtype.Int8
+	PrincipalBreakGlass    bool
+	PrincipalActiveAtMs    int64
+	PolicyIdleMs           int64
+	PolicyMaxLengthMs      int64
+	PolicyUpdatedAtMs      int64
+	PolicyTokenFreshnessMs pgtype.Int8
+	AccountsInactivityMs   int64
+	AccountsDisable        bool
 }
 
 // principal_active_at_ms is the latest activity of the owner by the account
-// rule of the inactivity disable, as in GetAccessTokenByDigest.
+// rule of the inactivity disable, as in GetAccessTokenByDigest. The session
+// policy and the account part of the token policy come from the same read,
+// so a policy change applies to the next lookup on every instance.
 func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getSessionByDigest, digest)
 	var i GetSessionByDigestRow
@@ -3349,6 +3362,12 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.PrincipalDisabledAtMs,
 		&i.PrincipalBreakGlass,
 		&i.PrincipalActiveAtMs,
+		&i.PolicyIdleMs,
+		&i.PolicyMaxLengthMs,
+		&i.PolicyUpdatedAtMs,
+		&i.PolicyTokenFreshnessMs,
+		&i.AccountsInactivityMs,
+		&i.AccountsDisable,
 	)
 	return i, err
 }

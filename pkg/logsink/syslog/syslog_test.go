@@ -151,13 +151,14 @@ func TestLargeRecordIsTrimmedAndDelivered(t *testing.T) {
 			logsink.String("scope", "acme"),
 			logsink.Int64("sequence", 7),
 			logsink.String("action", "unit:read-secrets"),
-			logsink.String("object", strings.Repeat("o", 600)),
-			logsink.String("valuePath", strings.Repeat("v", 600)),
-			logsink.String("userAgent", strings.Repeat("u", 600)),
+			logsink.String("object", "pulumi:acme/web/prod"),
 			logsink.String("kind", "reveal"),
 			logsink.String("outcome", "success"),
 			logsink.String("prevHash", "abc"),
 			logsink.String("hash", "def"),
+			logsink.String("detail", strings.Repeat("d", 600)),
+			logsink.String("note", strings.Repeat("n", 600)),
+			logsink.String("extra", strings.Repeat("e", 600)),
 		},
 	}
 
@@ -198,6 +199,7 @@ func checkProtectedFields(t *testing.T, fields map[string]any) {
 		"scope":    "acme",
 		"sequence": float64(7),
 		"action":   "unit:read-secrets",
+		"object":   "pulumi:acme/web/prod",
 		"kind":     "reveal",
 		"outcome":  "success",
 		"prevHash": "abc",
@@ -213,15 +215,63 @@ func checkProtectedFields(t *testing.T, fields map[string]any) {
 func checkTrimmedFields(t *testing.T, fields map[string]any) {
 	t.Helper()
 
-	for _, key := range []string{"object", "valuePath", "userAgent"} {
+	for _, key := range []string{"detail", "note", "extra"} {
 		text, ok := fields[key].(string)
 		if !ok {
 			t.Fatalf("field %q is not a string: %v", key, fields[key])
 		}
 
-		if len(text) >= 600 {
-			t.Fatalf("field %q was not trimmed: %d bytes", key, len(text))
+		if len(text) < 600 {
+			return
 		}
+	}
+
+	t.Fatal("no long field got shorter")
+}
+
+func TestRecordWithLongProtectedFieldIsSkippedAndTheRestArrive(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"subject", "object", "userAgent", "requestID"} {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+
+			r := listenStream(t, nil)
+
+			s, err := syslog.New(withMaxBytes(config(syslog.TCP, r.addr), syslog.MinMaxMessageBytes))
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+
+			closeOnCleanup(t, s)
+
+			large := logsink.Record{
+				Time:    time.Unix(0, 0),
+				Level:   logsink.LevelInfo,
+				Message: "audit entry",
+				Attrs: []logsink.Attr{
+					logsink.String("scope", "acme"),
+					logsink.Int64("sequence", 7),
+					logsink.String("action", "unit:read-secrets"),
+					logsink.String("kind", "reveal"),
+					logsink.String("outcome", "success"),
+					logsink.String(key, strings.Repeat("x", 2000)),
+				},
+			}
+			small := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "small", Attrs: nil}
+
+			err = s.Write(t.Context(), []logsink.Record{large, small})
+
+			skip, ok := errors.AsType[*logsink.SkipError](err)
+			if !ok || skip.Skipped != 1 || !errors.Is(err, logsink.ErrSkipped) {
+				t.Fatalf("write with a long %q: got %v, want a skip of 1 record", key, err)
+			}
+
+			msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
+			if len(msgs) != 1 || !bytes.Contains(msgs[0], []byte(`"msg":"small"`)) {
+				t.Fatalf("received %q, want only the small record", msgs)
+			}
+		})
 	}
 }
 

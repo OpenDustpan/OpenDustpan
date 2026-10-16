@@ -120,6 +120,21 @@ func TestSessionConformance(t *testing.T) {
 	})
 }
 
+// TestSessionFreshConformance runs the session cases that change a policy
+// on one handle and use a session on the other. One SQLite file allows one
+// store, so the suite gets that store twice.
+func TestSessionFreshConformance(t *testing.T) {
+	t.Parallel()
+
+	sessiontest.RunFresh(t, func(t *testing.T) (sessiontest.Store, sessiontest.Store) {
+		t.Helper()
+
+		s := open(t)
+
+		return s, s
+	})
+}
+
 // TestNamespacePrincipalConformance runs the suite of the principals of a
 // namespace.
 func TestNamespacePrincipalConformance(t *testing.T) {
