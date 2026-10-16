@@ -137,6 +137,14 @@ func openTemplated(t *testing.T) *sqlite.Store {
 
 	copyTemplate(t, path)
 
+	return openPath(t, path)
+}
+
+// openPath opens a store on the file at path. Each call opens its own
+// handle, so two calls give two handles on one file.
+func openPath(t *testing.T, path string) *sqlite.Store {
+	t.Helper()
+
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)

@@ -628,9 +628,10 @@ func NewWatcher(store Store, now func() time.Time, limit time.Duration) *Watcher
 }
 
 // State returns the installation state, reading the database at most once
-// per cache limit. A read failure keeps the last state it read, or normal
-// when no read ever passed: the request then meets the adapter, which
-// answers the database failure itself.
+// per cache limit. A read failure keeps the last state it read. Before the
+// first good read, a read failure answers maintenance: the watcher does not
+// know the state, so it refuses the request instead of letting it write
+// during maintenance mode.
 func (w *Watcher) State(ctx context.Context) State {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -642,7 +643,7 @@ func (w *Watcher) State(ctx context.Context) State {
 	state, err := w.store.GetState(ctx)
 	if err != nil {
 		if !w.read {
-			return StateNormal
+			return StateMaintenance
 		}
 
 		return w.state
