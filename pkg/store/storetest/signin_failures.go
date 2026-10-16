@@ -1,7 +1,9 @@
 package storetest
 
 import (
+	"errors"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +38,9 @@ const (
 	failureSkew = time.Hour
 	// failureAdds is the count of concurrent adds.
 	failureAdds = 16
+	// failureBoundaryTries bounds the tries of the prune boundary case,
+	// which needs a prune within the millisecond of an add.
+	failureBoundaryTries = 50
 )
 
 // RunSignInFailures runs the conformance suite of authgate.FailureCounter
@@ -53,6 +58,8 @@ func RunSignInFailures(t *testing.T, newHarness SignInFailureFactory) {
 		{name: "an instance clock ahead or behind does not move the window", test: testFailuresSkew},
 		{name: "concurrent adds each count once", test: testFailuresConcurrent},
 		{name: "a prune deletes old windows and keeps current ones", test: testFailuresPrune},
+		{name: "a prune deletes a window that ended exactly the age ago", test: testFailuresPruneBoundary},
+		{name: "a window under 1 ms is invalid", test: testFailuresInvalidWindow},
 	}
 
 	for _, tt := range tests {
@@ -232,14 +239,7 @@ func testFailuresPrune(t *testing.T, h SignInFailureHarness) {
 	s := h.Open(t, 0)
 	old := addFailure(t, s, "192.0.2.1", failureShortWindow)
 
-	wait := time.NewTimer(time.Until(old.End.Add(age + 500*time.Millisecond)))
-	defer wait.Stop()
-
-	select {
-	case <-t.Context().Done():
-		t.Fatalf("wait for the window to age: %v", t.Context().Err())
-	case <-wait.C:
-	}
+	waitUntil(t, old.End.Add(age+500*time.Millisecond))
 
 	sources := []string{"192.0.2.2", "192.0.2.3"}
 	current := make([]authgate.FailureCount, 0, len(sources))
@@ -258,5 +258,97 @@ func testFailuresPrune(t *testing.T, h SignInFailureHarness) {
 		if again.End.Equal(current[i].End) && again.Count != 2 {
 			t.Fatalf("add of %s after the prune = %+v, want its current window kept", source, again)
 		}
+	}
+}
+
+func testFailuresInvalidWindow(t *testing.T, h SignInFailureHarness) {
+	t.Helper()
+
+	s := h.Open(t, 0)
+
+	_, err := s.AddFailure(t.Context(), "192.0.2.1", 500*time.Microsecond)
+	if !errors.Is(err, authgate.ErrInvalidWindow) {
+		t.Fatalf("add with a window of 500 µs: err = %v, want ErrInvalidWindow", err)
+	}
+}
+
+// testFailuresPruneBoundary pins the prune at its boundary. A store prunes
+// at the time of its clock, which a case cannot set, so each try reads that
+// time from an add just before the prune and an add just after it. When
+// both adds answer the same millisecond, the prune ran in that millisecond
+// too, and the case knows its exact age: a window that ended exactly age
+// ago goes, and one that ended 1 ms less than age ago stays.
+func testFailuresPruneBoundary(t *testing.T, h SignInFailureHarness) {
+	t.Helper()
+
+	s := h.Open(t, 0)
+
+	for _, tc := range []struct {
+		name  string
+		extra time.Duration
+		want  int64
+	}{
+		{name: "ended 1 ms less than the age ago", extra: time.Millisecond, want: 0},
+		{name: "ended exactly the age ago", extra: 0, want: 1},
+	} {
+		if !pruneAtBoundary(t, s, tc.extra, tc.want) {
+			t.Fatalf("prune of a window that %s: no try ran in one millisecond in %d tries",
+				tc.name, failureBoundaryTries)
+		}
+	}
+}
+
+// pruneAtBoundary tries to prune with an age of extra more than the time
+// since an old window ended, and fails the test unless such a prune deletes
+// want windows. It reports false when no try ran within one millisecond.
+func pruneAtBoundary(t *testing.T, s authgate.FailureCounter, extra time.Duration, want int64) bool {
+	t.Helper()
+
+	for try := range failureBoundaryTries {
+		// Delete every window that ended, so the old window is the only
+		// one that the prune can delete.
+		if _, err := s.PruneFailures(t.Context(), 0); err != nil {
+			t.Fatalf("prune of ended windows: %v", err)
+		}
+
+		old := addFailure(t, s, "boundary-"+strconv.Itoa(try), failureShortWindow)
+		waitUntil(t, old.End.Add(time.Millisecond))
+
+		before := addFailure(t, s, "clock", failureLongWindow)
+		age := before.At.Sub(old.End) + extra
+
+		deleted, err := s.PruneFailures(t.Context(), age)
+		if err != nil {
+			t.Fatalf("prune with an age of %v: %v", age, err)
+		}
+
+		after := addFailure(t, s, "clock", failureLongWindow)
+		if !after.At.Equal(before.At) {
+			continue
+		}
+
+		if deleted != want {
+			t.Fatalf("prune at %v of a window that ended at %v with an age of %v = %d, want %d",
+				before.At, old.End, age, deleted, want)
+		}
+
+		return true
+	}
+
+	return false
+}
+
+// waitUntil waits until the wall clock passes at, or fails the test when
+// the test ends first.
+func waitUntil(t *testing.T, at time.Time) {
+	t.Helper()
+
+	wait := time.NewTimer(time.Until(at))
+	defer wait.Stop()
+
+	select {
+	case <-t.Context().Done():
+		t.Fatalf("wait until %v: %v", at, t.Context().Err())
+	case <-wait.C:
 	}
 }

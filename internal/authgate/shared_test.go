@@ -107,11 +107,11 @@ func TestGatesOnOneCounterShareOneBudget(t *testing.T) {
 	}
 }
 
-// TestParallelMissesPassNoMoreThanTheBudget proves that failures on two
-// gates at once all count: each gate meets the burst in the counts that its
-// own adds answer. After a refill of one unit in the process, only the
-// shared count holds the source over the budget.
-func TestParallelMissesPassNoMoreThanTheBudget(t *testing.T) {
+// TestParallelFailuresCountOnEveryGate proves that failures on two gates at
+// once all count in the shared count, and that each gate meets the burst in
+// the counts that its own adds answer. After a refill of one unit in the
+// process, only the shared count holds the source over the budget.
+func TestParallelFailuresCountOnEveryGate(t *testing.T) {
 	t.Parallel()
 
 	c := newClock()
@@ -355,4 +355,155 @@ func (l *lockedWriter) Write(p []byte) (int, error) {
 	}
 
 	return n, nil
+}
+
+// slowAuthenticator answers every token after delay, accepts "badgood",
+// and counts the lookups that reach it.
+type slowAuthenticator struct {
+	delay   time.Duration
+	lookups atomic.Int64
+}
+
+func (s *slowAuthenticator) AuthenticateToken(ctx context.Context, token string) (identity.Principal, error) {
+	s.lookups.Add(1)
+
+	timer := time.NewTimer(s.delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+	}
+
+	return (&countingAuthenticator{lookups: atomic.Int64{}}).AuthenticateToken(ctx, token)
+}
+
+// TestConcurrentLookupsReserveTheBudget proves that a burst of concurrent
+// charged lookups on two gates gets at most the burst of each gate to the
+// store: each lookup takes its unit of the budget before the store read.
+// The requests over the budget wait the penalty, and their clients go away.
+func TestConcurrentLookupsReserveTheBudget(t *testing.T) {
+	t.Parallel()
+
+	const perGate = 20
+
+	c := newClock()
+	failures := authgatetest.NewMemory(c.Now)
+	nexts := []*slowAuthenticator{
+		{delay: 50 * time.Millisecond, lookups: atomic.Int64{}},
+		{delay: 50 * time.Millisecond, lookups: atomic.Int64{}},
+	}
+
+	var wg sync.WaitGroup
+
+	for _, next := range nexts {
+		g, err := authgate.New(authgate.Config{
+			Next: next, Charge: chargeBad, Logger: nil, Now: c.Now,
+			Failures: failures, Window: 0, CounterErrors: nil,
+			Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: perGate, MaxSources: 0,
+		})
+		if err != nil {
+			t.Fatalf("new gate: %v", err)
+		}
+
+		for range perGate {
+			wg.Go(func() {
+				ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+				defer cancel()
+
+				// Each attempt misses, or ends its wait when its
+				// client goes away; the store lookups are the result.
+				err := attempt(ctx, g, "192.0.2.1", "bad")
+				if !errors.Is(err, identity.ErrUnauthenticated) && !errors.Is(err, identity.ErrRateLimited) {
+					t.Errorf("concurrent attempt: err = %v, want a miss or a rate limit", err)
+				}
+			})
+		}
+	}
+
+	wg.Wait()
+
+	for i, next := range nexts {
+		if got := next.lookups.Load(); got > 3 {
+			t.Fatalf("gate %d: %d concurrent lookups reached the store, want at most the burst of 3", i, got)
+		}
+	}
+}
+
+// TestValidLookupGivesBackItsUnit proves that a charged lookup that does
+// not miss gives back the unit that it took, so valid tokens never spend
+// the budget.
+func TestValidLookupGivesBackItsUnit(t *testing.T) {
+	t.Parallel()
+
+	c := newClock()
+	g := newSharedGate(t, c, authgatetest.NewMemory(c.Now), &operations{got: nil, mu: sync.Mutex{}})
+
+	// A done context ends a wait at once, so a valid token over the budget
+	// fails here instead of waiting the penalty.
+	for i := range 5 {
+		if err := attempt(canceled(t), g, "192.0.2.1", "badgood"); err != nil {
+			t.Fatalf("valid token %d: %v, want no wait", i+1, err)
+		}
+	}
+
+	// Each check within the budget is a miss of its own, so three checks
+	// spend the burst.
+	for i := range 3 {
+		if overBudget(t, g, "192.0.2.1") {
+			t.Fatalf("miss %d after 5 valid tokens: over budget, want within", i+1)
+		}
+	}
+
+	if !overBudget(t, g, "192.0.2.1") {
+		t.Fatal("after 5 valid tokens and the burst of misses: within, want over budget")
+	}
+}
+
+// TestStoreClockDecidesTheWindow proves that the gate takes the rest of a
+// window from the answer of the store, also when the clock of the store
+// differs from the clock of the instance by hours and part of a window.
+func TestStoreClockDecidesTheWindow(t *testing.T) {
+	t.Parallel()
+
+	const offset = 7*time.Hour + 1500*time.Millisecond
+
+	c := newClock()
+	storeNow := func() time.Time { return c.Now().Add(offset) }
+	failures := authgatetest.NewMemory(storeNow)
+	g := newSharedGate(t, c, failures, &operations{got: nil, mu: sync.Mutex{}})
+	other := newSharedGate(t, c, failures, &operations{got: nil, mu: sync.Mutex{}})
+
+	miss(t, g, "192.0.2.1")
+	miss(t, g, "192.0.2.1")
+	miss(t, other, "192.0.2.1")
+
+	left := storeNow().Truncate(sharedWindow).Add(sharedWindow).Sub(storeNow())
+
+	c.Advance(left - time.Millisecond)
+
+	if !overBudget(t, other, "192.0.2.1") {
+		t.Fatal("1 ms before the window of the store ends: within, want over budget")
+	}
+
+	c.Advance(time.Millisecond)
+
+	if overBudget(t, other, "192.0.2.1") {
+		t.Fatal("when the window of the store ends: over budget, want within")
+	}
+}
+
+// TestNewRefusesAWindowUnderOneMillisecond proves that the gate refuses a
+// window that the store cannot count in milliseconds.
+func TestNewRefusesAWindowUnderOneMillisecond(t *testing.T) {
+	t.Parallel()
+
+	_, err := authgate.New(authgate.Config{
+		Next: &countingAuthenticator{lookups: atomic.Int64{}}, Charge: nil, Logger: nil, Now: nil,
+		Failures: nil, Window: 500 * time.Microsecond, CounterErrors: nil,
+		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
+	})
+	if !errors.Is(err, authgate.ErrInvalidWindow) {
+		t.Fatalf("window of 500 µs: err = %v, want ErrInvalidWindow", err)
+	}
 }

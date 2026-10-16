@@ -78,8 +78,9 @@ type FailureCounter interface {
 	// AddFailure adds one miss of source to the current window of length
 	// length, in one atomic write, and answers the count of that window
 	// after the add, the time of the add and the end of the window.
-	// Concurrent adds each count once. It answers an error when the write
-	// fails.
+	// Concurrent adds each count once. length must be 1 ms or longer: it
+	// returns ErrInvalidWindow for a shorter one. It answers an error when
+	// the write fails.
 	AddFailure(ctx context.Context, source string, length time.Duration) (FailureCount, error)
 	// PruneFailures deletes every window that ended age or longer ago, and
 	// answers the count of windows it deleted. It answers an error when the
@@ -95,6 +96,10 @@ type FailureCount struct {
 	End   time.Time
 	Count int64
 }
+
+// ErrInvalidWindow reports a window of the shared count shorter than one
+// millisecond.
+var ErrInvalidWindow = errors.New("authgate: the failure window must be 1 ms or longer")
 
 // ErrMissingNext reports a Config without Next.
 var ErrMissingNext = errors.New("authgate: missing next authenticator")
@@ -114,9 +119,10 @@ type Config struct {
 	// Failures counts the misses of every instance. Nil keeps the budget
 	// in the process only.
 	Failures FailureCounter
-	// Window is the length of one window of Failures. A source whose count
-	// in a window reaches Burst is over the budget until the window ends.
-	// Zero means Burst times Refill.
+	// Window is the length of one window of Failures, 1 ms or longer. A
+	// source whose count in a window reaches Burst is over the budget until
+	// the window ends. Zero means Burst times Refill. New returns
+	// ErrInvalidWindow for a shorter window.
 	Window time.Duration
 	// CounterErrors is called with the operation, OperationAdd or
 	// OperationPrune, each time a call of Failures fails. Nil counts
@@ -182,6 +188,11 @@ func New(cfg Config) (*Gate, error) {
 	burst := positiveOr(cfg.Burst, DefaultBurst)
 	refill := positiveOr(cfg.Refill, DefaultRefill)
 
+	window := positiveOr(cfg.Window, time.Duration(burst)*refill)
+	if window < time.Millisecond {
+		return nil, ErrInvalidWindow
+	}
+
 	g := &Gate{
 		next:       cfg.Next,
 		charge:     cfg.Charge,
@@ -193,7 +204,7 @@ func New(cfg Config) (*Gate, error) {
 		recent:     list.New(),
 		refill:     refill,
 		penalty:    positiveOr(cfg.Penalty, DefaultPenalty),
-		window:     positiveOr(cfg.Window, time.Duration(burst)*refill),
+		window:     window,
 		burst:      float64(burst),
 		maxWaiting: positiveOr(cfg.MaxWaiting, DefaultMaxWaiting),
 		maxSources: positiveOr(cfg.MaxSources, DefaultMaxSources),
@@ -309,7 +320,9 @@ func (g *Gate) Admit(ctx context.Context) error {
 		return nil
 	}
 
-	return g.waitTurn(ctx, req.source)
+	_, err := g.waitTurn(ctx, req.source, checkOnly)
+
+	return err
 }
 
 // Fail uses one unit of the budget of the source of the request in ctx, as
@@ -343,38 +356,62 @@ func (r *request) remember(digest [sha256.Size]byte, p identity.Principal, err e
 	r.memo = &memo{err: err, principal: p, digest: digest}
 }
 
-// lookup resolves token for the source within its budget.
+// lookup resolves token for the source within its budget. A lookup within
+// the budget takes its unit before the store read, so concurrent lookups of
+// one source cannot pass the budget. A miss keeps the unit; any other
+// answer gives it back.
 func (g *Gate) lookup(ctx context.Context, source, token string) (identity.Principal, error) {
 	if !g.charge(token) {
 		return g.next.AuthenticateToken(ctx, token)
 	}
 
-	if err := g.waitTurn(ctx, source); err != nil {
+	took, err := g.waitTurn(ctx, source, takeUnit)
+	if err != nil {
 		var none identity.Principal
 
 		return none, err
 	}
 
 	p, err := g.next.AuthenticateToken(ctx, token)
-	if errors.Is(err, identity.ErrUnauthenticated) {
+
+	switch {
+	case errors.Is(err, identity.ErrUnauthenticated) && took:
+		g.countShared(ctx, source)
+	case errors.Is(err, identity.ErrUnauthenticated):
 		g.spend(ctx, source)
+	case took:
+		g.giveBack(source)
+	default:
+		// The lookup waited the penalty and took no unit.
 	}
 
 	return p, err
 }
 
+// turn says what a request takes of the budget when it is within it.
+type turn int
+
+const (
+	// checkOnly takes nothing: the caller reports a failure with Fail.
+	checkOnly turn = iota
+	// takeUnit takes one unit before the lookup.
+	takeUnit
+)
+
 // waitTurn returns nil when a request of source can go to the store: at once
-// while the source has budget, else after the penalty. It returns ErrLimited
-// when the waiting cap of the source is full, and identity.ErrRateLimited
-// when ctx ends during the wait.
-func (g *Gate) waitTurn(ctx context.Context, source string) error {
-	if !g.reserve(ctx, source) {
-		return nil
+// while the source has budget, else after the penalty. With takeUnit, a
+// request within the budget takes one unit, and waitTurn reports true. It
+// returns ErrLimited when the waiting cap of the source is full, and
+// identity.ErrRateLimited when ctx ends during the wait.
+func (g *Gate) waitTurn(ctx context.Context, source string, mode turn) (bool, error) {
+	got := g.reserve(ctx, source, mode)
+	if !got.over {
+		return got.took, nil
 	}
 
 	b, ok := g.enterWait(source)
 	if !ok {
-		return ErrLimited
+		return false, ErrLimited
 	}
 
 	defer g.leaveWait(b)
@@ -384,17 +421,25 @@ func (g *Gate) waitTurn(ctx context.Context, source string) error {
 
 	select {
 	case <-ctx.Done():
-		return fmt.Errorf("%w: the client went away during the wait", identity.ErrRateLimited)
+		return false, fmt.Errorf("%w: the client went away during the wait", identity.ErrRateLimited)
 	case <-timer.C:
-		return nil
+		return false, nil
 	}
 }
 
+// reservation is the answer of reserve: whether the source is over its
+// budget, and whether the request took one unit.
+type reservation struct {
+	over bool
+	took bool
+}
+
 // reserve reports whether source is over its budget: the budget of the
-// process, or the shared count of a window that has not ended. It reads
-// nothing from the store. It logs the first request over the budget of each
-// limit period.
-func (g *Gate) reserve(ctx context.Context, source string) bool {
+// process, or the shared count of a window that has not ended. Within the
+// budget and with takeUnit, it takes one unit in the same lock and reports
+// that it took it. It reads nothing from the store. It logs the first
+// request over the budget of each limit period.
+func (g *Gate) reserve(ctx context.Context, source string, mode turn) reservation {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -402,7 +447,11 @@ func (g *Gate) reserve(ctx context.Context, source string) bool {
 	if b.tokens >= 1 && !g.now().Before(b.sharedUntil) {
 		b.logged = false
 
-		return false
+		if mode == takeUnit {
+			b.tokens--
+		}
+
+		return reservation{over: false, took: mode == takeUnit}
 	}
 
 	if !b.logged {
@@ -410,7 +459,7 @@ func (g *Gate) reserve(ctx context.Context, source string) bool {
 		g.logger.WarnContext(ctx, "failed sign-ins limited", slog.String("source_ip", source))
 	}
 
-	return true
+	return reservation{over: true, took: false}
 }
 
 // enterWait takes a waiting place of source, or reports false when its cap
@@ -447,14 +496,18 @@ const (
 // database cannot hold the goroutines of the misses.
 const counterTimeout = 5 * time.Second
 
-// spend uses one unit of the budget of source, and adds one miss of source
-// to the shared count. When the count that the add answers reaches the
-// burst, the source is over the budget until the window ends. The add does
-// not stop when the client goes away, so a client cannot cancel the count
-// of its miss.
+// spend uses one unit of the budget of source and adds one miss of source
+// to the shared count.
 func (g *Gate) spend(ctx context.Context, source string) {
 	g.spendLocal(source)
+	g.countShared(ctx, source)
+}
 
+// countShared adds one miss of source to the shared count. When the count
+// that the add answers reaches the burst, the source is over the budget
+// until the window ends. The add does not stop when the client goes away,
+// so a client cannot cancel the count of its miss.
+func (g *Gate) countShared(ctx context.Context, source string) {
 	if g.failures == nil {
 		return
 	}
@@ -482,6 +535,19 @@ func (g *Gate) spendLocal(source string) {
 	b.tokens--
 	if b.tokens < 0 {
 		b.tokens = 0
+	}
+}
+
+// giveBack returns the unit that a lookup of source took and did not use.
+func (g *Gate) giveBack(source string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	b := g.touchLocked(source)
+
+	b.tokens++
+	if b.tokens > g.burst {
+		b.tokens = g.burst
 	}
 }
 

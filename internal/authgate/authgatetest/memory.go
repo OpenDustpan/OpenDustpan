@@ -44,8 +44,14 @@ func NewMemory(now func() time.Time) *Memory {
 // AddFailure implements authgate.FailureCounter. A done ctx fails the add,
 // as it fails a write to a SQL store.
 func (m *Memory) AddFailure(ctx context.Context, source string, length time.Duration) (authgate.FailureCount, error) {
+	none := authgate.FailureCount{Count: 0, At: time.Time{}, End: time.Time{}}
+
+	if length < time.Millisecond {
+		return none, authgate.ErrInvalidWindow
+	}
+
 	if err := ctx.Err(); err != nil {
-		return authgate.FailureCount{Count: 0, At: time.Time{}, End: time.Time{}}, fmt.Errorf("add failure: %w", err)
+		return none, fmt.Errorf("add failure: %w", err)
 	}
 
 	m.mu.Lock()
