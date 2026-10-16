@@ -5,6 +5,7 @@ package e2e
 import (
 	"context"
 	"encoding/pem"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"os"
@@ -210,4 +211,22 @@ func (e *Env) BrowserClient(tb testing.TB) *http.Client {
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	return &client
+}
+
+// RunTofuWithToken runs the OpenTofu CLI tofu with args in a new project
+// of the workspace Workspace in Namespace, with token as the credential of
+// the server in its CLI configuration. A non-zero exit is reported in the
+// Result, not as an error.
+func (e *Env) RunTofuWithToken(
+	ctx context.Context, tb testing.TB, tofu Install, token string, args ...string,
+) (Result, error) {
+	tb.Helper()
+
+	dir := tb.TempDir()
+	rc := filepath.Join(dir, "tofurc")
+
+	e.write(tb, filepath.Join(dir, "main.tf"), fmt.Sprintf(tofuConfig, e.Host(), Namespace, Workspace))
+	e.write(tb, rc, fmt.Sprintf(tofuCLIConfig, e.Host(), token))
+
+	return e.RunAs(ctx, tofu, dir, []string{"TF_CLI_CONFIG_FILE=" + rc}, args...)
 }

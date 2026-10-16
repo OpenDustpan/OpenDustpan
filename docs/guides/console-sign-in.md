@@ -59,10 +59,11 @@ subject at the provider: `<provider ID>:<sub>`. For example,
 A new ID makes new subjects, so each person gets a new principal with no
 grant.
 
-The issuer is not part of the subject. If you set `--oidc-issuer` to
-another provider and keep the provider ID, a person of the new provider
-with the same `sub` gets the principal of the person of the old provider.
-To use another issuer, set a new provider ID too.
+The issuer is not part of the subject. So the server records the issuer
+of each provider ID at its first start. A later start that gives a
+recorded provider ID another issuer stops before it serves, and the
+error names the provider ID and both issuers. To use another issuer, set
+a new provider ID too.
 
 A principal with the subject `<provider ID>:<sub>` is the principal of
 that person, also when an administrator made it as a local principal.
@@ -122,8 +123,24 @@ take the cookie: it answers 401 to a request with the cookie and no token.
 A request with an `Authorization` header uses the header and ignores the
 cookie.
 
-A console session cannot create or rotate an access token yet. Use an
-access token for that.
+## Tokens from a console session
+
+A signed-in person can create and rotate access tokens from the console,
+on the same routes as with a token. The sign-in of the session must be
+fresh: the token freshness window of the session policy sets how old it
+can be. The default is 15 minutes, and 0 turns the check off.
+
+When the sign-in is older than the window, a create or a rotation answers
+401 with the field `reauthenticate`, for example
+`/api/server/sign-in/corp?fresh=1`. The console sends the browser to that
+path, with its own `return` parameter. With `fresh=1`, the server asks the
+identity provider for a new authentication (`max_age=0`), and the callback
+refuses an authentication that is older. The new session then creates the
+token.
+
+Set the window with `PATCH /api/server/session-policy` and the field
+`tokenFreshnessSeconds` (action `server:manage-sign-in`): 0, or 60 to
+604800 seconds.
 
 ## Audit entries
 
