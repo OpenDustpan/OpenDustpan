@@ -300,8 +300,10 @@ func TestCheckpointsFindACutAtTheEnd(t *testing.T) {
 
 		f.entries.entries = f.entries.entries[:total-5]
 
-		if got := verifyWith(t, f.cps); got.Valid || got.BadSequence != total {
-			t.Fatalf("run %d: verify after the cut: got %+v, want invalid at %d", run, got, total)
+		// The sample can hold a cut checkpoint before the newest one, so
+		// the check may report any sequence of the cut.
+		if got := verifyWith(t, f.cps); got.Valid || got.BadSequence <= total-5 || got.BadSequence > total {
+			t.Fatalf("run %d: verify after the cut: got %+v, want invalid in %d..%d", run, got, total-4, total)
 		}
 	}
 }
