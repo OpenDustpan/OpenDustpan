@@ -325,21 +325,25 @@ func parsePage(r *http.Request) (audit.Page, error) {
 }
 
 // authenticate resolves the "Authorization: token <t>" header to a principal.
-// A request with no Authorization header uses the console session cookie.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
+// A request with no Authorization header uses the console session cookie,
+// and the bool reports that the cookie signed it in. A request with an
+// Authorization header never uses the cookie.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
 		p, _, err := h.sessions.Authenticate(r)
 
-		return p, err
+		return p, err == nil, err
 	}
 
 	raw, ok := strings.CutPrefix(header, tokenScheme)
 	if !ok || raw == "" {
-		return identity.Principal{}, identity.ErrUnauthenticated
+		return identity.Principal{}, false, identity.ErrUnauthenticated
 	}
 
-	return h.authn.AuthenticateToken(r.Context(), raw)
+	p, err := h.authn.AuthenticateToken(r.Context(), raw)
+
+	return p, false, err
 }
 
 // errorResponse is the error body the console expects, as in the API the

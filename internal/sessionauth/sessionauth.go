@@ -17,6 +17,7 @@ import (
 	"slices"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/session"
 )
@@ -137,4 +138,32 @@ func changesState(method string) bool {
 	default:
 		return true
 	}
+}
+
+// sessionKey marks the context of a request that the session cookie
+// authenticated.
+type sessionKey struct{}
+
+// WithSession returns ctx marked as the context of a request that the
+// session cookie authenticated.
+func WithSession(ctx context.Context) context.Context {
+	return context.WithValue(ctx, sessionKey{}, true)
+}
+
+// FromSession reports whether WithSession marked ctx.
+func FromSession(ctx context.Context) bool {
+	marked, ok := ctx.Value(sessionKey{}).(bool)
+
+	return ok && marked
+}
+
+// AuditChannel returns the audit channel of r: ChannelConsole for a request
+// that the session cookie signed in, else the channel that the client
+// declares in the header named header.
+func AuditChannel(r *http.Request, header string) audit.Channel {
+	if FromSession(r.Context()) {
+		return audit.ChannelConsole
+	}
+
+	return audit.NormalizeChannel(r.Header.Get(header))
 }

@@ -519,8 +519,9 @@ func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
 		Namespaces:    namespaces,
 		Entries:       entries,
 		Authenticator: tokenAuthenticator{},
-		Sessions:      nil, Authorizer: selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger: slog.New(slog.DiscardHandler),
+		Sessions:      nil,
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

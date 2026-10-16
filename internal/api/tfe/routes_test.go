@@ -20,6 +20,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -1288,9 +1289,32 @@ func checkRouteAuthentication(t *testing.T, route tfe.Route) {
 }
 
 // checkRouteAuthenticationUnauthorized proves one authorized route answers
-// 401 without a token and with a wrong token.
+// 401 without a token, with a wrong token, and with only a console session
+// cookie: the TFE-compatible API does not take the cookie.
 func checkRouteAuthenticationUnauthorized(t *testing.T, route tfe.Route) {
 	t.Helper()
+
+	t.Run("session cookie", func(t *testing.T) {
+		t.Parallel()
+
+		allowed := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+		req := routeRequest(t, route, "")
+		req.AddCookie(&http.Cookie{
+			Name: sessionauth.Cookie, Value: "session-secret", Path: "/", Secure: true, HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+		req.Header.Set(sessionauth.CSRFHeader, "csrf-value")
+
+		rec := httptest.NewRecorder()
+		allowed.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("request with the session cookie answers %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+
+		checkJSONAPIError(t, rec, http.StatusUnauthorized)
+	})
 
 	cases := []struct {
 		name  string

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -125,5 +126,56 @@ func TestNoSessionCheckIgnoresTheCookie(t *testing.T) {
 
 	if rec := serveCookie(cookieInventory(t, nil), req); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("unit list with the cookie and no session check = %d, want 401", rec.Code)
+	}
+}
+
+// TestAuthorizationHeaderNeverFallsBackToTheCookie proves that a request
+// with an Authorization header uses only the header: a refused header
+// answers 401 even with a valid session cookie.
+func TestAuthorizationHeaderNeverFallsBackToTheCookie(t *testing.T) {
+	t.Parallel()
+
+	h := cookieInventory(t, aliceChecker(t))
+
+	for _, header := range []string{"token bad", "Bearer x", "token "} {
+		req, _ := cookieRequest(t, http.MethodGet, "/api/inventory/units?organization=acme")
+		req.Header.Set("Authorization", header)
+
+		if rec := serveCookie(h, req); rec.Code != http.StatusUnauthorized {
+			t.Errorf("unit list with a valid cookie and %q = %d %s, want 401", header, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestSessionRestoreRecordsTheConsoleChannel proves that the audit entry of
+// a restore by a console session has the channel console and the subject of
+// the session, also when the request declares another channel.
+func TestSessionRestoreRecordsTheConsoleChannel(t *testing.T) {
+	t.Parallel()
+
+	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
+	reader := &memReader{entries: map[namespace.Name][]coreinventory.Entry{}, err: nil}
+	seedEntries(nsStore, reader)
+
+	lifecycle := &memLifecycle{err: nil, calls: nil}
+	h := newBehaviorHandlerWith(t, nsStore, reader, selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		behaviorWiring{sessions: aliceChecker(t), lifecycles: map[string]coreinventory.Lifecycle{"pulumi": lifecycle}})
+
+	req, secret := cookieRequest(t, http.MethodPost, restoreTarget)
+	req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(secret))
+	req.Header.Set("Dustpan-Channel", "api")
+
+	if rec := serveCookie(h, req); rec.Code != http.StatusOK {
+		t.Fatalf("restore with a session = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+
+	if len(lifecycle.calls) != 1 {
+		t.Fatalf("lifecycle calls = %d, want 1", len(lifecycle.calls))
+	}
+
+	e := lifecycle.calls[0].entry
+	if e.Channel != audit.ChannelConsole || e.Subject != "corp:alice" || e.TokenID != "" {
+		t.Fatalf("entry channel %q subject %q token %q, want console, corp:alice and no token",
+			e.Channel, e.Subject, e.TokenID)
 	}
 }

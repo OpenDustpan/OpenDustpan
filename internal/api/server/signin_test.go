@@ -817,3 +817,53 @@ func TestSignInProviderDown(t *testing.T) {
 		t.Fatalf("failures counted by a start with the provider down = %d, want 1", limiter.count())
 	}
 }
+
+// TestSignInSessionChangeRecordsTheConsoleChannel proves that the audit
+// entry of a change by a console session has the channel console, also
+// when the request declares another channel.
+func TestSignInSessionChangeRecordsTheConsoleChannel(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+	sess := e.signIn(t)
+	_, body := e.readSession(t, sess)
+	before := e.sessionChanges(t)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/caller/tokens",
+		strings.NewReader(`{"name":"laptop"}`))
+	req.AddCookie(sess)
+	req.Header.Set(apiserver.CSRFHeader, body.CSRFToken)
+	req.Header.Set("Dustpan-Channel", "api")
+
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	after := e.sessionChanges(t)
+	if len(after) != len(before)+1 {
+		t.Fatalf("change entries of the session = %d after the request and %d before, want one more (answer %d %s)",
+			len(after), len(before), rec.Code, rec.Body.String())
+	}
+
+	for i := range after {
+		if after[i].Channel != audit.ChannelConsole {
+			t.Fatalf("entry %s of the session has the channel %q, want console", after[i].Action, after[i].Channel)
+		}
+	}
+}
+
+// sessionChanges returns the change entries of the signed-in person.
+func (e signInEnv) sessionChanges(t *testing.T) []audit.Entry {
+	t.Helper()
+
+	entries := e.serverEntries(t)
+
+	var changes []audit.Entry
+
+	for i := range entries {
+		if entries[i].Kind == audit.KindChange && entries[i].Subject == "corp:248289761001" {
+			changes = append(changes, entries[i])
+		}
+	}
+
+	return changes
+}
