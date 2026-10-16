@@ -128,8 +128,8 @@ type auditEntry struct {
 	PrevHash  string        `json:"prevHash"`
 	Hash      string        `json:"hash"`
 	// FenceVersion is the failover version of the namespace when the entry
-	// was appended, which the hash covers. It is omitted when it is 0: in
-	// @server and in entries from before the field.
+	// was appended, which the hash covers. It is omitted when it is 0, as in
+	// @server.
 	FenceVersion int64 `json:"fenceVersion,omitempty"`
 }
 

@@ -257,27 +257,29 @@ func NormalizeChannel(raw string) Channel {
 	return ChannelAPI
 }
 
-// hashFieldSeparator splits the fields of the hash encoding. It is a fixed
-// part of the documented encoding, not a magic number.
-const hashFieldSeparator = 0x1F
+// hashLengthEnd ends the decimal byte length of each field in the hash
+// encoding. It is a fixed part of the documented encoding, not a magic
+// number.
+const hashLengthEnd = ':'
+
+// hashNoCount stands for a value count that is not set. It cannot start a
+// field, because every field starts with a decimal digit.
+const hashNoCount = '-'
 
 // ComputeHash returns the hex-encoded SHA-256 over the fixed encoding of the
-// fields of e and prevHash. The encoding joins every field below with a
-// unit separator (0x1F), in this order: namespace, sequence (decimal),
-// subject, identity provider subject, token ID, action, object, version,
-// value path, time (Unix milliseconds, decimal), source IP, user agent,
-// channel, kind, outcome, request ID, previous hash. Numeric fields use
-// decimal text. After the previous hash, the encoding appends the optional
-// fields that e sets, each as "<name>=<value>" with the same separator, in
-// this fixed order: value_count (the decimal count), then object_id (ADR 47,
-// which its own change adds), then changes (the canonical JSON of
-// EncodeChanges), then fence_version (the decimal failover version, when
-// it is above 0). An optional field that e does not set adds nothing, so an
-// entry written before the field keeps its hash. The hash takes no key:
-// any installation can compute it again from the stored fields. The separator never
-// appears in a validated field except the user agent and free-form names,
-// where it is kept as is: the encoding is fixed and documented, not
-// ambiguous-free, and its only use is the chain check of the same code.
+// fields of e and prevHash. The encoding writes each field as its byte
+// length in decimal, a colon, and its bytes, with nothing between fields,
+// in this order: namespace, sequence, subject, identity provider subject,
+// token ID, action, object, version, value path, time (Unix milliseconds),
+// source IP, user agent, channel, kind, outcome, request ID, previous hash,
+// value count, object ID, changes (the canonical JSON of EncodeChanges, empty
+// when e has no changes) and fence version. Numeric fields use decimal text.
+// A value count that is not set writes one "-" in place of the field, so no
+// count and the count 0 ("1:0") differ. No field is optional: a field that e
+// does not set writes "0:". The length prefix makes the encoding injective:
+// two different lists of field values never give the same bytes, whatever
+// bytes a field holds. The hash takes no key: any installation can compute
+// it again from the stored fields.
 func ComputeHash(e Entry, prevHash string) string {
 	return hashWithChanges(e, prevHash, EncodeChanges(e.Changes))
 }
@@ -292,13 +294,14 @@ func ComputeStoredHash(e Entry, prevHash, changesText string) string {
 }
 
 // hashWithChanges answers the hash of e and prevHash with changesText as
-// the value of the optional field changes.
+// the value of the field changes.
 func hashWithChanges(e Entry, prevHash, changesText string) string {
 	var sb strings.Builder
 
 	write := func(s string) {
+		sb.WriteString(strconv.Itoa(len(s)))
+		sb.WriteByte(hashLengthEnd)
 		sb.WriteString(s)
-		sb.WriteByte(hashFieldSeparator)
 	}
 
 	write(e.Namespace.String())
@@ -319,21 +322,15 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 	write(e.RequestID)
 	write(prevHash)
 
-	if e.ValueCount != nil {
-		write("value_count=" + strconv.FormatInt(*e.ValueCount, 10))
+	if e.ValueCount == nil {
+		sb.WriteByte(hashNoCount)
+	} else {
+		write(strconv.FormatInt(*e.ValueCount, 10))
 	}
 
-	if e.ObjectID != "" {
-		write("object_id=" + e.ObjectID)
-	}
-
-	if changesText != "" {
-		write("changes=" + changesText)
-	}
-
-	if e.FenceVersion > 0 {
-		write("fence_version=" + strconv.FormatInt(e.FenceVersion, 10))
-	}
+	write(e.ObjectID)
+	write(changesText)
+	write(strconv.FormatInt(e.FenceVersion, 10))
 
 	sum := sha256.Sum256([]byte(sb.String()))
 
