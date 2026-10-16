@@ -15,9 +15,10 @@ func TestStartRequestValidate(t *testing.T) {
 		req  durable.StartRequest
 		want error
 	}{
-		{durable.StartRequest{Key: "k", Kind: "backup", Input: nil}, nil},
-		{durable.StartRequest{Key: "", Kind: "backup", Input: nil}, durable.ErrInvalid},
-		{durable.StartRequest{Key: "k", Kind: "", Input: []byte("x")}, durable.ErrInvalid},
+		{durable.StartRequest{Key: "k", Kind: "backup", Version: 1, Input: nil}, nil},
+		{durable.StartRequest{Key: "", Kind: "backup", Version: 0, Input: nil}, durable.ErrInvalid},
+		{durable.StartRequest{Key: "k", Kind: "", Version: 0, Input: []byte("x")}, durable.ErrInvalid},
+		{durable.StartRequest{Key: "k", Kind: "backup", Version: -1, Input: nil}, durable.ErrInvalid},
 	}
 
 	for _, tc := range cases {
@@ -36,12 +37,33 @@ func TestClaimRequestValidate(t *testing.T) {
 		req  durable.ClaimRequest
 		want error
 	}{
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, Lease: time.Second}, nil},
-		{durable.ClaimRequest{Owner: "", Kinds: kinds, Lease: time.Second}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: nil, Lease: time.Second}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: []durable.Kind{"backup", ""}, Lease: time.Second}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, Lease: 0}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, Lease: -time.Second}, durable.ErrInvalid},
+		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: time.Second}, nil},
+		{durable.ClaimRequest{Owner: "", Kinds: kinds, MaxVersions: nil, Lease: time.Second}, durable.ErrInvalid},
+		{durable.ClaimRequest{Owner: "a", Kinds: nil, MaxVersions: nil, Lease: time.Second}, durable.ErrInvalid},
+		{
+			durable.ClaimRequest{Owner: "a", Kinds: []durable.Kind{"backup", ""}, MaxVersions: nil, Lease: time.Second},
+			durable.ErrInvalid,
+		},
+		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: 0}, durable.ErrInvalid},
+		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: -time.Second}, durable.ErrInvalid},
+		{
+			durable.ClaimRequest{
+				Owner:       "a",
+				Kinds:       kinds,
+				MaxVersions: map[durable.Kind]int{"backup": -1},
+				Lease:       time.Second,
+			},
+			durable.ErrInvalid,
+		},
+		{
+			durable.ClaimRequest{
+				Owner:       "a",
+				Kinds:       kinds,
+				MaxVersions: map[durable.Kind]int{"backup": 0},
+				Lease:       time.Second,
+			},
+			nil,
+		},
 	}
 
 	for _, tc := range cases {
@@ -78,9 +100,9 @@ func TestClaimStepAndOperationStep(t *testing.T) {
 	}
 
 	op := durable.Operation{
-		ID: "op-1", Key: "k", Kind: "backup", Input: nil, State: durable.StateRunning,
+		ID: "op-1", Key: "k", Kind: "backup", Version: 1, Input: nil, State: durable.StateRunning,
 		Steps:   []durable.StepRecord{{Name: "export", Result: []byte("r"), DoneAt: time.Time{}}},
-		Attempt: 1, LastError: "", Claim: c, CancelRequested: false,
+		Attempt: 1, Expiries: 0, Failures: 0, LastError: "", Claim: c, CancelRequested: false,
 		NotBefore: time.Time{}, CreatedAt: time.Time{}, UpdatedAt: time.Time{},
 	}
 
@@ -90,5 +112,31 @@ func TestClaimStepAndOperationStep(t *testing.T) {
 
 	if _, ok := op.Step("upload"); ok {
 		t.Fatal("Operation.Step(upload) found a step that is not recorded")
+	}
+}
+
+func TestClaimRequestAllows(t *testing.T) {
+	t.Parallel()
+
+	req := durable.ClaimRequest{
+		Owner: "a", Kinds: []durable.Kind{"backup", "restore"},
+		MaxVersions: map[durable.Kind]int{"backup": 2}, Lease: time.Second,
+	}
+
+	cases := []struct {
+		kind    durable.Kind
+		version int
+		want    bool
+	}{
+		{"backup", 2, true},
+		{"backup", 3, false},
+		{"restore", 99, true},
+		{"sweep", 0, false},
+	}
+
+	for _, tc := range cases {
+		if got := req.Allows(tc.kind, tc.version); got != tc.want {
+			t.Errorf("Allows(%s, %d) = %v, want %v", tc.kind, tc.version, got, tc.want)
+		}
 	}
 }

@@ -126,15 +126,19 @@ func Run(t *testing.T, newHarness Factory) {
 		{"start validates its request", testStartValidates},
 		{"two starts with one key give one operation", testStartKeyOnce},
 		{"concurrent starts with one key give one operation", testStartKeyRace},
+		{"start records the version, and a second start keeps the first", testStartVersion},
 		{"a start key of another kind conflicts", testStartKeyConflict},
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
 		{"claim validates its request", testClaimValidates},
 		{"claim takes only the requested kinds", testClaimKinds},
+		{"a claim skips a version above its limit", testClaimMaxVersions},
 		{"concurrent claims of one operation give one claim", testClaimRace},
 		{"a live claim blocks another claim", testLiveClaimBlocks},
 		{"the expiry comes from the clock of the store", testExpiryFromStoreClock},
 		{"an instance clock ahead or behind cannot move a claim", testInstanceClockSkew},
 		{"another instance claims an expired operation with a new token", testTakeover},
+		{"only a takeover of an expired claim counts an expiry", testExpiries},
+		{"only Fail counts a failure", testFailures},
 		{"an expired claim cannot write", testExpiredClaimCannotWrite},
 		{"a claim that expires inside a step transaction cannot write", testExpiryInsideStepTx},
 		{"a replaced claim cannot write", testReplacedClaimCannotWrite},
@@ -173,8 +177,9 @@ func testStartValidates(t *testing.T, h Harness) {
 	s := h.Open(t, 0)
 
 	for _, req := range []durable.StartRequest{
-		{Key: "", Kind: kindA, Input: nil},
-		{Key: "k", Kind: "", Input: nil},
+		{Key: "", Kind: kindA, Version: 0, Input: nil},
+		{Key: "k", Kind: "", Version: 0, Input: nil},
+		{Key: "k", Kind: kindA, Version: -1, Input: nil},
 	} {
 		if _, _, err := s.Start(t.Context(), req); !errors.Is(err, durable.ErrInvalid) {
 			t.Errorf("Start(%+v) error = %v, want ErrInvalid", req, err)
@@ -187,14 +192,20 @@ func testStartKeyOnce(t *testing.T, h Harness) {
 
 	a, b := h.Open(t, 0), h.Open(t, 0)
 
-	first, created, err := a.Start(t.Context(), durable.StartRequest{Key: "k1", Kind: kindA, Input: []byte("one")})
+	first, created, err := a.Start(
+		t.Context(),
+		durable.StartRequest{Key: "k1", Kind: kindA, Version: 0, Input: []byte("one")},
+	)
 	if err != nil || !created {
 		t.Fatalf("first Start = created %v, error %v; want a new operation", created, err)
 	}
 
 	checkNew(t, first, "k1", kindA, "one")
 
-	second, created, err := b.Start(t.Context(), durable.StartRequest{Key: "k1", Kind: kindA, Input: []byte("two")})
+	second, created, err := b.Start(
+		t.Context(),
+		durable.StartRequest{Key: "k1", Kind: kindA, Version: 0, Input: []byte("two")},
+	)
 	if err != nil {
 		t.Fatalf("second Start: %v", err)
 	}
@@ -223,7 +234,7 @@ func testStartKeyRace(t *testing.T, h Harness) {
 		wg.Go(func() {
 			op, c, err := stores[i%len(stores)].Start(
 				t.Context(),
-				durable.StartRequest{Key: "race", Kind: kindA, Input: nil},
+				durable.StartRequest{Key: "race", Kind: kindA, Version: 0, Input: nil},
 			)
 			ids[i], created[i], errs[i] = op.ID, c, err
 		})
@@ -252,15 +263,34 @@ func testStartKeyRace(t *testing.T, h Harness) {
 	}
 }
 
+func testStartVersion(t *testing.T, h Harness) {
+	t.Helper()
+
+	a, b := h.Open(t, 0), h.Open(t, 0)
+
+	first, _, err := a.Start(t.Context(), durable.StartRequest{Key: "k", Kind: kindA, Version: 2, Input: nil})
+	if err != nil || first.Version != 2 {
+		t.Fatalf("Start with version 2 = %+v, %v; want version 2", first, err)
+	}
+
+	second, _, err := b.Start(t.Context(), durable.StartRequest{Key: "k", Kind: kindA, Version: 3, Input: nil})
+	if err != nil || second.Version != 2 {
+		t.Fatalf("second Start with version 3 = %+v, %v; want the first operation with version 2", second, err)
+	}
+
+	if got := mustGet(t, b, first.ID); got.Version != 2 {
+		t.Fatalf("Get after two starts: version %d, want 2", got.Version)
+	}
+}
+
 func testStartKeyConflict(t *testing.T, h Harness) {
 	t.Helper()
 
 	s := h.Open(t, 0)
 	mustStart(t, s, "k", kindA)
 
-	if _, _, err := s.Start(t.Context(), durable.StartRequest{Key: "k", Kind: kindB, Input: nil}); !errors.Is(
-		err, durable.ErrKeyConflict,
-	) {
+	_, _, err := s.Start(t.Context(), durable.StartRequest{Key: "k", Kind: kindB, Version: 0, Input: nil})
+	if !errors.Is(err, durable.ErrKeyConflict) {
 		t.Fatalf("Start with a key of another kind: error = %v, want ErrKeyConflict", err)
 	}
 }
@@ -280,10 +310,11 @@ func testClaimValidates(t *testing.T, h Harness) {
 	mustStart(t, s, "k", kindA)
 
 	for _, req := range []durable.ClaimRequest{
-		{Owner: "", Kinds: []durable.Kind{kindA}, Lease: longLease},
-		{Owner: ownerA, Kinds: nil, Lease: longLease},
-		{Owner: ownerA, Kinds: []durable.Kind{""}, Lease: longLease},
-		{Owner: ownerA, Kinds: []durable.Kind{kindA}, Lease: 0},
+		{Owner: "", Kinds: []durable.Kind{kindA}, MaxVersions: nil, Lease: longLease},
+		{Owner: ownerA, Kinds: nil, MaxVersions: nil, Lease: longLease},
+		{Owner: ownerA, Kinds: []durable.Kind{""}, MaxVersions: nil, Lease: longLease},
+		{Owner: ownerA, Kinds: []durable.Kind{kindA}, MaxVersions: nil, Lease: 0},
+		{Owner: ownerA, Kinds: []durable.Kind{kindA}, MaxVersions: map[durable.Kind]int{kindA: -1}, Lease: longLease},
 	} {
 		if _, err := s.Claim(t.Context(), req); !errors.Is(err, durable.ErrInvalid) {
 			t.Errorf("Claim(%+v) error = %v, want ErrInvalid", req, err)
@@ -308,6 +339,47 @@ func testClaimKinds(t *testing.T, h Harness) {
 
 	if got.ID != op.ID {
 		t.Fatalf("Claim returned %q, want %q", got.ID, op.ID)
+	}
+}
+
+func testClaimMaxVersions(t *testing.T, h Harness) {
+	t.Helper()
+
+	old, current := h.Open(t, 0), h.Open(t, 0)
+
+	newer, _, err := current.Start(t.Context(), durable.StartRequest{Key: "k2", Kind: kindA, Version: 2, Input: nil})
+	if err != nil {
+		t.Fatalf("Start of version 2: %v", err)
+	}
+
+	pause(t, 2*clockSlack)
+
+	older, _, err := current.Start(t.Context(), durable.StartRequest{Key: "k1", Kind: kindA, Version: 1, Input: nil})
+	if err != nil {
+		t.Fatalf("Start of version 1: %v", err)
+	}
+
+	limited := claimReq(ownerA, longLease, kindA, kindB)
+	limited.MaxVersions = map[durable.Kind]int{kindA: 1}
+
+	got, err := old.Claim(t.Context(), limited)
+	if err != nil || got.ID != older.ID {
+		t.Fatalf("Claim with version limit 1 = %+v, %v; want the operation of version 1, not the older one of 2",
+			got, err)
+	}
+
+	_, err = old.Claim(t.Context(), limited)
+	if !errors.Is(err, durable.ErrNoWork) {
+		t.Fatalf("Claim with version limit 1 and only version 2 left: error = %v, want ErrNoWork", err)
+	}
+
+	// A kind with no entry in MaxVersions has no limit.
+	other := claimReq(ownerB, longLease, kindA)
+	other.MaxVersions = map[durable.Kind]int{kindB: 0}
+
+	got, err = current.Claim(t.Context(), other)
+	if err != nil || got.ID != newer.ID {
+		t.Fatalf("Claim with no limit for kind-a = %+v, %v; want the operation of version 2", got, err)
 	}
 }
 
@@ -403,6 +475,81 @@ func testTakeover(t *testing.T, h Harness) {
 	if second.Claim.Token <= first.Claim.Token || second.Claim.Owner != ownerB || second.Attempt != 2 {
 		t.Fatalf("claim after takeover = %+v (attempt %d), want owner %s, a token above %d and attempt 2",
 			second.Claim, second.Attempt, ownerB, first.Claim.Token)
+	}
+}
+
+func testExpiries(t *testing.T, h Harness) {
+	t.Helper()
+
+	a, b := h.Open(t, 0), h.Open(t, 0)
+	op := mustStart(t, a, "k", kindA)
+
+	first := mustClaim(t, a, ownerA, longLease, kindA)
+	if first.Expiries != 0 {
+		t.Fatalf("expiries after a first claim = %d, want 0", first.Expiries)
+	}
+
+	if err := a.Release(t.Context(), first.Claim); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	again := mustClaim(t, b, ownerB, longLease, kindA)
+	if again.Expiries != 0 {
+		t.Fatalf("expiries after a claim that follows a release = %d, want 0", again.Expiries)
+	}
+
+	if err := b.Fail(t.Context(), again.Claim, durable.Failure{Message: "x", Final: false, RetryAfter: 0}); err != nil {
+		t.Fatalf("Fail with a retry: %v", err)
+	}
+
+	short := mustClaim(t, a, ownerA, shortLease, kindA)
+	if short.Expiries != 0 {
+		t.Fatalf("expiries after a claim that follows a retry = %d, want 0", short.Expiries)
+	}
+
+	taken := claimWhenExpired(t, b)
+	if taken.ID != op.ID || taken.Expiries != 1 || mustGet(t, a, op.ID).Expiries != 1 {
+		t.Fatalf("expiries after a takeover of an expired claim = %d, want 1", taken.Expiries)
+	}
+}
+
+func testFailures(t *testing.T, h Harness) {
+	t.Helper()
+
+	a, b := h.Open(t, 0), h.Open(t, 0)
+	op := mustStart(t, a, "k", kindA)
+
+	first := mustClaim(t, a, ownerA, longLease, kindA)
+	if err := a.Release(t.Context(), first.Claim); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	second := mustClaim(t, b, ownerB, longLease, kindA)
+	if second.Failures != 0 {
+		t.Fatalf("failures after a release = %d, want 0", second.Failures)
+	}
+
+	retry := durable.Failure{Message: "x", Final: false, RetryAfter: 0}
+	if err := b.Fail(t.Context(), second.Claim, retry); err != nil {
+		t.Fatalf("Fail with a retry: %v", err)
+	}
+
+	short := mustClaim(t, a, ownerA, shortLease, kindA)
+	if short.Failures != 1 {
+		t.Fatalf("failures after one Fail = %d, want 1", short.Failures)
+	}
+
+	taken := claimWhenExpired(t, b)
+	if taken.Failures != 1 {
+		t.Fatalf("failures after a takeover = %d, want 1", taken.Failures)
+	}
+
+	if err := b.Fail(t.Context(), taken.Claim, durable.Failure{Message: "y", Final: true, RetryAfter: 0}); err != nil {
+		t.Fatalf("final Fail: %v", err)
+	}
+
+	if got := mustGet(t, a, op.ID); got.Failures != 2 || got.State != durable.StateFailed {
+		t.Fatalf("operation after a final Fail = %+v, want failed with 2 failures", got)
 	}
 }
 
@@ -877,7 +1024,7 @@ func testStartInDomainTx(t *testing.T, h Harness) {
 	t.Helper()
 
 	s := h.Open(t, 0)
-	req := durable.StartRequest{Key: "k", Kind: kindA, Input: nil}
+	req := durable.StartRequest{Key: "k", Kind: kindA, Version: 0, Input: nil}
 
 	_, err := h.Domain.StartWith(t.Context(), req, "rolled-back", Hooks{Before: nil, After: failAfter})
 	if !errors.Is(err, ErrInjected) {
@@ -1119,7 +1266,7 @@ func checkNew(t *testing.T, op durable.Operation, key string, kind durable.Kind,
 	t.Helper()
 
 	if op.ID == "" || op.State != durable.StatePending || string(op.Input) != input || op.Kind != kind ||
-		op.Key != key || op.Attempt != 0 || len(op.Steps) != 0 {
+		op.Key != key || op.Attempt != 0 || op.Expiries != 0 || op.Failures != 0 || len(op.Steps) != 0 {
 		t.Fatalf(
 			"Start returned %+v, want a new pending operation of %s with key %s and input %s",
 			op,
@@ -1131,13 +1278,13 @@ func checkNew(t *testing.T, op durable.Operation, key string, kind durable.Kind,
 }
 
 func claimReq(owner string, lease time.Duration, kinds ...durable.Kind) durable.ClaimRequest {
-	return durable.ClaimRequest{Owner: owner, Kinds: kinds, Lease: lease}
+	return durable.ClaimRequest{Owner: owner, Kinds: kinds, MaxVersions: nil, Lease: lease}
 }
 
 func mustStart(t *testing.T, s durable.Store, key string, kind durable.Kind) durable.Operation {
 	t.Helper()
 
-	op, _, err := s.Start(t.Context(), durable.StartRequest{Key: key, Kind: kind, Input: nil})
+	op, _, err := s.Start(t.Context(), durable.StartRequest{Key: key, Kind: kind, Version: 0, Input: nil})
 	if err != nil {
 		t.Fatalf("Start(%q): %v", key, err)
 	}
@@ -1254,7 +1401,7 @@ func waitPast(t *testing.T, s durable.Store, id durable.ID, at time.Time) {
 	for i := 0; ; i++ {
 		_, _, err := s.Start(
 			ctx,
-			durable.StartRequest{Key: fmt.Sprintf("%s-%d", probeKind, i), Kind: probeKind, Input: nil},
+			durable.StartRequest{Key: fmt.Sprintf("%s-%d", probeKind, i), Kind: probeKind, Version: 0, Input: nil},
 		)
 		if err != nil {
 			t.Fatalf("start a clock probe: %v", err)

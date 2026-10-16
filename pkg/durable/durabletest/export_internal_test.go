@@ -10,6 +10,8 @@ const (
 	BreakTokenStays    = breakTokenStays
 	BreakLive          = breakLive
 	BreakTxStart       = breakTxStart
+	BreakExpiryCount   = breakExpiryCount
+	BreakMaxVersions   = breakMaxVersions
 )
 
 // BrokenHarness returns a harness on a store in memory that breaks rule.
