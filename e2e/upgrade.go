@@ -163,6 +163,7 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 		deltaCutoff:       0,
 		disableJournaling: false,
 		ipAllowlists:      false,
+		signIn:            false,
 		journalRefuser:    nil,
 	}
 
@@ -173,6 +174,7 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 // with no blob store, no backup target and every feature switch off.
 func plainBackendConfig(binPath, dbURL, blobDir, tokens string, cert backendCert) backendConfig {
 	return backendConfig{
+		signIn:            nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		bin:               binPath,
@@ -266,6 +268,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		backendLogs:   handle.logs,
 		certBundle:    "",
 		dbProxy:       nil,
+		signIn:        nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {

@@ -23,7 +23,8 @@ const (
 // PolicyRef is the audit object of the session policy.
 const PolicyRef = "session-policy"
 
-// ErrMissingDependency reports a PolicyConfig without a required port.
+// ErrMissingDependency reports a PolicyConfig or a SessionsConfig without a
+// required dependency.
 var ErrMissingDependency = errors.New("missing dependency")
 
 // Validate reports whether l holds usable limits: an idle limit of MinIdle

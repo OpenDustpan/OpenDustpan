@@ -89,6 +89,7 @@ func newAuditChainHandler(
 		SessionPolicy:  nil,
 		AuditChain:     chain,
 		AuditSinks:     nil,
+		SignIn:         nil,
 		Journal:        nil,
 		IPAllowlists:   nil,
 	})

@@ -112,6 +112,7 @@ func newAuditedPrincipalHandler(
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
 		Audit:          entries,
+		SignIn:         nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
