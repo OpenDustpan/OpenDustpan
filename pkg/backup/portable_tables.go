@@ -164,6 +164,18 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "update_journal_refusals",
+			OrderBy: []string{portColStackID, portColUpdateID, portColArrival},
+			Columns: []Column{
+				{Name: portColStackID, Kind: KindText},
+				{Name: portColUpdateID, Kind: KindText},
+				{Name: portColArrival, Kind: KindInteger},
+				{Name: "sequence_ids", Kind: KindText},
+				{Name: "status", Kind: KindInteger},
+				{Name: "reason", Kind: KindText},
+			},
+		},
+		{
 			Table:   "secret_keys",
 			OrderBy: []string{portColNamespace, portColStackID},
 			Columns: []Column{

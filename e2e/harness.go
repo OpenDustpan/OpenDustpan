@@ -261,6 +261,7 @@ func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, st
 		deltaCutoff:       0,
 		disableJournaling: true,
 		ipAllowlists:      false,
+		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -291,6 +292,41 @@ func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, sto
 		deltaCutoff:       0,
 		disableJournaling: false,
 		ipAllowlists:      true,
+		journalRefuser:    nil,
+		tb:                tb,
+		cli:               cli,
+		store:             store,
+		dir:               dir,
+		token:             token,
+		tokenB:            tokenB,
+		rec:               rec,
+	}
+
+	if UseBinaryServer() {
+		return newBinaryEnv(ctx, in)
+	}
+
+	return newInprocessEnv(ctx, in)
+}
+
+// NewEnvWithJournalRefuser starts a server as NewEnv does, with the refuser
+// corrupting the first outputs-only journal batch on the way to the server,
+// so the server refuses it and records the refusal. The test reads how many
+// batches the refuser corrupted.
+func NewEnvWithJournalRefuser(
+	ctx context.Context, tb testing.TB, cli Install, store Store, refuser *JournalRefuser,
+) *Env {
+	tb.Helper()
+
+	dir := tb.TempDir()
+	token := newToken(tb)
+	tokenB := newToken(tb)
+	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
+	in := envInput{
+		deltaCutoff:       0,
+		disableJournaling: false,
+		ipAllowlists:      false,
+		journalRefuser:    refuser,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -321,6 +357,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		deltaCutoff:       cutoff,
 		disableJournaling: false,
 		ipAllowlists:      false,
+		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -354,7 +391,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		ipAllowlists:      in.ipAllowlists,
 	})
 
-	ts := httptest.NewUnstartedServer(in.rec.Middleware(build.handler))
+	ts := httptest.NewUnstartedServer(in.rec.Middleware(faultedHandler(build.handler, in.journalRefuser)))
 	if in.cli.Tool == ToolTofu {
 		ts.StartTLS()
 	} else {

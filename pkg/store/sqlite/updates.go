@@ -160,6 +160,10 @@ func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.
 			return saveErr
 		}
 
+		if journalErr := finishJournalEnd(ctx, q, stackID, u); journalErr != nil {
+			return journalErr
+		}
+
 		if !u.Mutates() || !u.Status.Terminal() || u.Version == 0 {
 			return nil
 		}
