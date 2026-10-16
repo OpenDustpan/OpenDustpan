@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -24,6 +25,7 @@ type memCollections struct {
 	collections map[string]collection.Name // key: namespace/name key
 	members     map[collection.UnitRef]collection.Name
 	units       map[collection.UnitRef]bool
+	entries     []audit.Entry
 }
 
 func newMemCollections() *memCollections {
@@ -31,6 +33,7 @@ func newMemCollections() *memCollections {
 		collections: map[string]collection.Name{},
 		members:     map[collection.UnitRef]collection.Name{},
 		units:       map[collection.UnitRef]bool{},
+		entries:     nil,
 	}
 }
 
@@ -39,8 +42,10 @@ func collectionKey(ns namespace.Name, name collection.Name) string {
 }
 
 func (m *memCollections) CreateCollection(
-	_ context.Context, c collection.Collection, _ namespace.Fence, _ audit.Entry,
+	_ context.Context, c collection.Collection, _ namespace.Fence, e audit.Entry,
 ) error {
+	m.entries = append(m.entries, e)
+
 	key := collectionKey(c.Ref.Namespace, c.Ref.Name)
 	if _, ok := m.collections[key]; ok {
 		return collection.ErrAlreadyExists
@@ -69,8 +74,10 @@ func (m *memCollections) ListCollections(_ context.Context, _ namespace.Name) ([
 }
 
 func (m *memCollections) DeleteCollection(
-	_ context.Context, ref collection.Ref, _ namespace.Fence, _ audit.Entry,
+	_ context.Context, ref collection.Ref, _ namespace.Fence, e audit.Entry,
 ) error {
+	m.entries = append(m.entries, e)
+
 	key := collectionKey(ref.Namespace, ref.Name)
 	if _, ok := m.collections[key]; !ok {
 		return collection.ErrNotFound
@@ -88,8 +95,10 @@ func (m *memCollections) DeleteCollection(
 }
 
 func (m *memCollections) SetUnitCollection(
-	_ context.Context, mv collection.Move, _ namespace.Fence, _ audit.Entry,
+	_ context.Context, mv collection.Move, _ namespace.Fence, e audit.Entry,
 ) error {
+	m.entries = append(m.entries, e)
+
 	if !m.units[mv.Unit] {
 		return collection.ErrUnitNotFound
 	}
@@ -173,6 +182,16 @@ func newMoveFixture(t *testing.T, authz identity.Authorizer) moveFixture {
 func newMoveFixtureWith(t *testing.T, authz identity.Authorizer, moves apiinventory.MoveChecker) moveFixture {
 	t.Helper()
 
+	return newMoveFixtureWithSessions(t, authz, moves, nil)
+}
+
+// newMoveFixtureWithSessions is newMoveFixtureWith with the session cookie
+// check sessions.
+func newMoveFixtureWithSessions(
+	t *testing.T, authz identity.Authorizer, moves apiinventory.MoveChecker, sessions *sessionauth.Checker,
+) moveFixture {
+	t.Helper()
+
 	nsStore := &memNamespaceStore{namespaces: map[namespace.Name]namespace.Namespace{}}
 	seedNamespace(t, nsStore)
 
@@ -207,7 +226,7 @@ func newMoveFixtureWith(t *testing.T, authz identity.Authorizer, moves apiinvent
 		Now:           nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
-		Sessions:      nil,
+		Sessions:      sessions,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
