@@ -14,6 +14,13 @@
 // wait ends early when the client goes away, and the request then gets no
 // store read either.
 //
+// With a FailureCounter, the misses of every instance on one database count
+// in one budget for each source: a windowed count in the database. Each
+// miss writes once; a request that does not miss writes nothing. The gate
+// also keeps its own budget in the process. A source is over the budget
+// when either budget is spent, so a counter that fails leaves the budget of
+// the process in place.
+//
 // The gate also keeps the answer of one request, so the request log and
 // the adapter resolve a token once: one store read, one last-used write and
 // one count of a miss for each request.
@@ -60,6 +67,25 @@ const (
 // identity.ErrRateLimited, so every adapter answers 429.
 var ErrLimited = fmt.Errorf("%w: try again later", identity.ErrRateLimited)
 
+// FailureCounter counts the misses of each source in fixed windows, so that
+// every instance on one database shares one budget. A window is named by
+// its start. The SQL stores implement it.
+type FailureCounter interface {
+	// AddFailure adds one miss of source to the window that starts at
+	// start, in one write, and answers the count of that window after the
+	// add. Concurrent adds each count once. It answers an error when the
+	// write fails.
+	AddFailure(ctx context.Context, source string, start time.Time) (int64, error)
+	// Failures answers the count of source in the window that starts at
+	// start, or 0 when that window holds none. It answers an error when the
+	// read fails.
+	Failures(ctx context.Context, source string, start time.Time) (int64, error)
+	// PruneFailures deletes every window that starts before before, and
+	// answers the count of windows it deleted. It answers an error when the
+	// delete fails.
+	PruneFailures(ctx context.Context, before time.Time) (int64, error)
+}
+
 // ErrMissingNext reports a Config without Next.
 var ErrMissingNext = errors.New("authgate: missing next authenticator")
 
@@ -75,6 +101,13 @@ type Config struct {
 	Logger *slog.Logger
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
+	// Failures counts the misses of every instance. Nil keeps the budget
+	// in the process only.
+	Failures FailureCounter
+	// Window is the length of one window of Failures. A source is over the
+	// budget when its count in the current window reaches Burst. Zero means
+	// Burst times Refill.
+	Window time.Duration
 	// Burst is the count of misses that a source can have at once.
 	Burst int
 	// Refill is the time that gives a source back one miss.
@@ -95,14 +128,20 @@ type Gate struct {
 	charge     func(token string) bool
 	logger     *slog.Logger
 	now        func() time.Time
+	failures   FailureCounter
 	sources    map[string]*list.Element
 	recent     *list.List
 	refill     time.Duration
 	penalty    time.Duration
+	window     time.Duration
 	burst      float64
 	maxWaiting int
 	maxSources int
-	mu         sync.Mutex
+	// prunedAt is the start of the window in which the gate last pruned
+	// Failures, and warnedAt the time of its last warning about Failures.
+	prunedAt time.Time
+	warnedAt time.Time
+	mu       sync.Mutex
 }
 
 var _ identity.Authenticator = (*Gate)(nil)
@@ -123,18 +162,25 @@ func New(cfg Config) (*Gate, error) {
 		return nil, ErrMissingNext
 	}
 
+	burst := positiveOr(cfg.Burst, DefaultBurst)
+	refill := positiveOr(cfg.Refill, DefaultRefill)
+
 	g := &Gate{
 		next:       cfg.Next,
 		charge:     cfg.Charge,
 		logger:     cfg.Logger,
 		now:        cfg.Now,
+		failures:   cfg.Failures,
 		sources:    map[string]*list.Element{},
 		recent:     list.New(),
-		refill:     positiveOr(cfg.Refill, DefaultRefill),
+		refill:     refill,
 		penalty:    positiveOr(cfg.Penalty, DefaultPenalty),
-		burst:      float64(positiveOr(cfg.Burst, DefaultBurst)),
+		window:     positiveOr(cfg.Window, time.Duration(burst)*refill),
+		burst:      float64(burst),
 		maxWaiting: positiveOr(cfg.MaxWaiting, DefaultMaxWaiting),
 		maxSources: positiveOr(cfg.MaxSources, DefaultMaxSources),
+		prunedAt:   time.Time{},
+		warnedAt:   time.Time{},
 		mu:         sync.Mutex{},
 	}
 
@@ -252,7 +298,7 @@ func (g *Gate) Fail(ctx context.Context) {
 		return
 	}
 
-	g.spend(req.source)
+	g.spend(ctx, req.source)
 }
 
 // recall returns the answer that the request kept for digest, or nil.
@@ -289,7 +335,7 @@ func (g *Gate) lookup(ctx context.Context, source, token string) (identity.Princ
 
 	p, err := g.next.AuthenticateToken(ctx, token)
 	if errors.Is(err, identity.ErrUnauthenticated) {
-		g.spend(source)
+		g.spend(ctx, source)
 	}
 
 	return p, err
@@ -322,14 +368,21 @@ func (g *Gate) waitTurn(ctx context.Context, source string) error {
 	}
 }
 
-// reserve reports whether source is over its budget. It logs the first
+// reserve reports whether source is over its budget: the budget of the
+// process, or the shared count of the current window. It reads the shared
+// count only while the budget of the process holds. It logs the first
 // request over the budget of each limit period.
 func (g *Gate) reserve(ctx context.Context, source string) bool {
+	over := g.overLocal(source)
+	if !over {
+		over = g.overShared(ctx, source)
+	}
+
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	b := g.touchLocked(source)
-	if b.tokens >= 1 {
+	if !over {
 		b.logged = false
 
 		return false
@@ -341,6 +394,38 @@ func (g *Gate) reserve(ctx context.Context, source string) bool {
 	}
 
 	return true
+}
+
+// overLocal reports whether source spent the budget of this process.
+func (g *Gate) overLocal(source string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return g.touchLocked(source).tokens < 1
+}
+
+// overShared reports whether the shared count of source in the current
+// window reached the burst. Without a counter, or when the read fails, it
+// reports false: the budget of the process still holds.
+func (g *Gate) overShared(ctx context.Context, source string) bool {
+	if g.failures == nil {
+		return false
+	}
+
+	n, err := g.failures.Failures(ctx, source, g.windowStart(g.now()))
+	if err != nil {
+		g.warnCounter(ctx, "read", err)
+
+		return false
+	}
+
+	return float64(n) >= g.burst
+}
+
+// windowStart returns the start of the window of the shared count that
+// holds now.
+func (g *Gate) windowStart(now time.Time) time.Time {
+	return now.Truncate(g.window)
 }
 
 // enterWait takes a waiting place of source, or reports false when its cap
@@ -367,8 +452,28 @@ func (g *Gate) leaveWait(b *bucket) {
 	b.waiting--
 }
 
-// spend uses one unit of the budget of source.
-func (g *Gate) spend(source string) {
+// spend uses one unit of the budget of source, and adds one miss of source
+// to the shared count. The add does not stop when the client goes away, so
+// a client cannot cancel the count of its miss.
+func (g *Gate) spend(ctx context.Context, source string) {
+	g.spendLocal(source)
+
+	if g.failures == nil {
+		return
+	}
+
+	ctx = context.WithoutCancel(ctx)
+	start := g.windowStart(g.now())
+
+	if _, err := g.failures.AddFailure(ctx, source, start); err != nil {
+		g.warnCounter(ctx, "add", err)
+	}
+
+	g.prune(ctx, start)
+}
+
+// spendLocal uses one unit of the budget of source in this process.
+func (g *Gate) spendLocal(source string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -377,6 +482,41 @@ func (g *Gate) spend(source string) {
 	b.tokens--
 	if b.tokens < 0 {
 		b.tokens = 0
+	}
+}
+
+// prune deletes the windows of the shared count that ended before the
+// window before start, once for each window in this process.
+func (g *Gate) prune(ctx context.Context, start time.Time) {
+	g.mu.Lock()
+	due := !g.prunedAt.Equal(start)
+	g.prunedAt = start
+	g.mu.Unlock()
+
+	if !due {
+		return
+	}
+
+	if _, err := g.failures.PruneFailures(ctx, start.Add(-g.window)); err != nil {
+		g.warnCounter(ctx, "prune", err)
+	}
+}
+
+// warnCounter logs a failed call of the shared count, at most once for each
+// window.
+func (g *Gate) warnCounter(ctx context.Context, call string, err error) {
+	now := g.now()
+
+	g.mu.Lock()
+	due := g.warnedAt.IsZero() || now.Sub(g.warnedAt) >= g.window
+	if due {
+		g.warnedAt = now
+	}
+	g.mu.Unlock()
+
+	if due {
+		g.logger.WarnContext(ctx, "sign-in failure count failed; the budget of this process still applies",
+			slog.String("call", call), slog.String("error", err.Error()))
 	}
 }
 

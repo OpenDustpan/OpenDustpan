@@ -2146,6 +2146,7 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 
 	gate, err := authgate.New(authgate.Config{
 		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
+		Failures: nil, Window: 0,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {

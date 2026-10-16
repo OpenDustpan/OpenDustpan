@@ -72,7 +72,7 @@ func newGate(t *testing.T, next identity.Authenticator, c *clock, o gateOptions)
 	t.Helper()
 
 	g, err := authgate.New(authgate.Config{
-		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now, Burst: 3, Refill: time.Second,
+		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, Burst: 3, Refill: time.Second,
 		Penalty: o.penalty, MaxWaiting: o.maxWaiting, MaxSources: o.maxSources,
 	})
 	if err != nil {
@@ -123,7 +123,8 @@ func TestNewNeedsNext(t *testing.T) {
 	t.Parallel()
 
 	_, err := authgate.New(authgate.Config{
-		Next: nil, Charge: nil, Logger: nil, Now: nil, Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0,
+		Next: nil, Charge: nil, Logger: nil, Now: nil, Failures: nil, Window: 0, Burst: 0, Refill: 0, Penalty: 0,
+		MaxWaiting: 0,
 		MaxSources: 0,
 	})
 	if !errors.Is(err, authgate.ErrMissingNext) {
