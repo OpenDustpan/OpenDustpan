@@ -35,6 +35,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -63,6 +64,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -128,16 +130,21 @@ const restoreStoppedText = "server stopped during restore"
 
 // settings collects every option before NewServer validates them.
 type settings struct {
-	namespaceStore       namespace.Store
-	stackStore           stack.Store
-	updateStore          stack.UpdateStore
-	checkpointStore      stack.CheckpointStore
-	eventStore           stack.EventStore
-	secretKeys           secret.KeyStore
-	secretWrapper        secret.Wrapper
-	workspaceStore       workspace.Store
-	stateStore           workspace.StateStore
-	blobStore            blob.Store
+	namespaceStore  namespace.Store
+	stackStore      stack.Store
+	updateStore     stack.UpdateStore
+	checkpointStore stack.CheckpointStore
+	eventStore      stack.EventStore
+	secretKeys      secret.KeyStore
+	secretWrapper   secret.Wrapper
+	workspaceStore  workspace.Store
+	stateStore      workspace.StateStore
+	blobStore       blob.Store
+	blobCacheBytes  int64
+	// workspaceBlobs is the blob store of the workspace service: the blob
+	// store behind the in-process cache when WithBlobCache sets a size, else
+	// blobStore. Every other user reads blobStore.
+	workspaceBlobs       blob.Store
 	inventoryReader      inventory.Reader
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -260,6 +267,16 @@ func WithStateStore(s workspace.StateStore) Option {
 // WithBlobStore sets the state content persistence port. Required.
 func WithBlobStore(s blob.Store) Option {
 	return func(o *settings) { o.blobStore = s }
+}
+
+// WithBlobCache keeps up to maxBytes of OpenTofu state blobs in memory, so a
+// repeat read of a state version does not reach the blob store. Zero, the
+// default, turns the cache off. A negative value makes NewServer fail with
+// ErrInvalidOption. The cache keeps only key families that are written once,
+// so several instances can each keep one over a shared blob store. One
+// object takes at most one eighth of maxBytes.
+func WithBlobCache(maxBytes int64) Option {
+	return func(o *settings) { o.blobCacheBytes = maxBytes }
 }
 
 // WithInventoryReader sets the inventory projection reader. Required.
@@ -544,6 +561,8 @@ func defaultSettings() *settings {
 		workspaceStore:          nil,
 		stateStore:              nil,
 		blobStore:               nil,
+		blobCacheBytes:          0,
+		workspaceBlobs:          nil,
 		inventoryReader:         nil,
 		authenticator:           nil,
 		authorizer:              nil,
@@ -592,6 +611,10 @@ func NewServer(opts ...Option) (*Server, error) {
 	base, err := checkSettings(cfg)
 	if err != nil {
 		return nil, err
+	}
+
+	if cacheErr := wrapBlobCache(cfg); cacheErr != nil {
+		return nil, cacheErr
 	}
 
 	if authzErr := setDefaultAuthorizer(cfg); authzErr != nil {
@@ -1039,10 +1062,17 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 func newWorkspaceService(
 	cfg *settings, namespaces *namespace.Service, secrets *secret.Service,
 ) (*workspace.Service, error) {
+	// The workspace service reads through the blob cache when
+	// wrapBlobCache set one.
+	blobs := cfg.workspaceBlobs
+	if blobs == nil {
+		blobs = cfg.blobStore
+	}
+
 	workspaces, err := workspace.NewService(workspace.Config{
 		Workspaces:         cfg.workspaceStore,
 		States:             cfg.stateStore,
-		Blobs:              cfg.blobStore,
+		Blobs:              blobs,
 		Namespaces:         namespaces,
 		Sealer:             secrets,
 		Logger:             cfg.logger,
@@ -1675,9 +1705,17 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
 	}
 
+	// A store that keeps no EntryReader answers 501 on the read of one
+	// entry; the SQL stores keep one.
+	reader, ok := cfg.namespaceStore.(audit.EntryReader)
+	if !ok {
+		reader = nil
+	}
+
 	handler, err := auditapi.NewHandler(auditapi.Config{
 		Namespaces:    svc.namespaces,
 		Entries:       entries,
+		EntryReader:   reader,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Sessions:      cfg.sessionCookies,
@@ -1688,6 +1726,60 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// writeOnceFamilies are the blob key families that the cache keeps: a key in
+// them never holds other bytes, also after a delete. OpenTofu state versions
+// have such keys. Pulumi checkpoints and journal batches do not: a retry or a
+// restore can write a deleted key again.
+//
+//nolint:gochecknoglobals // A fixed list; Go has no constant slices.
+var writeOnceFamilies = []string{"tofu/"}
+
+// wrapBlobCache sets the blob store of the workspace service: the in-process
+// cache over the blob store when WithBlobCache sets a size, else the blob
+// store itself. Backups, restores, Pulumi updates and audit checkpoints read
+// the blob store without the cache.
+func wrapBlobCache(cfg *settings) error {
+	cfg.workspaceBlobs = cfg.blobStore
+
+	switch {
+	case cfg.blobCacheBytes < 0:
+		return fmt.Errorf("%w: WithBlobCache needs 0 or more bytes, got %d", ErrInvalidOption, cfg.blobCacheBytes)
+	case cfg.blobCacheBytes == 0:
+		return nil
+	default:
+	}
+
+	cached, err := blobcache.New(cfg.blobStore, blobcache.Config{
+		MaxBytes:       cfg.blobCacheBytes,
+		MaxObjectBytes: 0,
+		Cacheable:      blobcache.WriteOncePrefixes(writeOnceFamilies...),
+	})
+	if err != nil {
+		return fmt.Errorf("blob cache: %w", err)
+	}
+
+	cfg.workspaceBlobs = cached
+
+	return nil
+}
+
+// uncachedStateOpener opens OpenTofu state blobs for the backup copy check
+// without the blob cache, so the check reads the stored bytes and a backup
+// does not fill the cache.
+type uncachedStateOpener struct {
+	workspaces *workspace.Service
+}
+
+// OpenStateBlob implements backup.StateOpener.
+func (o uncachedStateOpener) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	reader, err := o.workspaces.OpenStateBlob(blobcache.WithoutCache(ctx), key)
+	if err != nil {
+		return nil, fmt.Errorf("open state blob: %w", err)
+	}
+
+	return reader, nil
 }
 
 // checkRetention refuses a soft-delete retention below
@@ -2129,6 +2221,7 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 
 	gate, err := authgate.New(authgate.Config{
 		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
+		Failures: nil, Window: 0, CounterErrors: nil,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {
@@ -2195,11 +2288,16 @@ func newBackupService(cfg *settings, svc services) (*backup.Service, error) {
 		maxSQL = backup.S3ObjectLimit
 	}
 
+	var opener backup.StateOpener
+	if svc.workspaces != nil {
+		opener = uncachedStateOpener{workspaces: svc.workspaces}
+	}
+
 	service, err := backup.NewService(backup.Config{
 		Exporter:    exporter,
 		Registry:    registry,
 		Blobs:       cfg.blobStore,
-		StateOpener: svc.workspaces,
+		StateOpener: opener,
 		Target:      cfg.backupTarget,
 		TargetName:  cfg.backupTargetName,
 		Now:         cfg.now,

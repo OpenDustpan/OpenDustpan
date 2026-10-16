@@ -415,7 +415,8 @@ type Store interface {
 }
 
 // EntryReader reads one entry of a scope without a count and an offset, for
-// the check of signed checkpoints. The SQL stores implement it next to
+// the check of signed checkpoints and for the audit API route that reads one
+// entry by its scope and sequence. The SQL stores implement it next to
 // Store.
 type EntryReader interface {
 	// EntryAt answers the entry of scope ns at sequence seq. It returns
