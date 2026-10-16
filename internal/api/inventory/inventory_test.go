@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -182,6 +183,36 @@ func newBehaviorHandler(
 ) *apiinventory.Handler {
 	t.Helper()
 
+	return newBehaviorHandlerWithSessions(t, nsStore, reader, authz, nil)
+}
+
+// newBehaviorHandlerWithSessions is newBehaviorHandler with the session
+// cookie check sessions; nil takes access tokens only.
+func newBehaviorHandlerWithSessions(
+	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer,
+	sessions *sessionauth.Checker,
+) *apiinventory.Handler {
+	t.Helper()
+
+	return newBehaviorHandlerWith(t, nsStore, reader, authz, behaviorWiring{
+		sessions: sessions, lifecycles: testLifecycles(),
+	})
+}
+
+// behaviorWiring is the session cookie check and the lifecycle of each tool
+// of a behavior handler.
+type behaviorWiring struct {
+	sessions   *sessionauth.Checker
+	lifecycles map[string]coreinventory.Lifecycle
+}
+
+// newBehaviorHandlerWith is newBehaviorHandlerWithSessions with the
+// session check and the lifecycles of wiring.
+func newBehaviorHandlerWith(
+	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer, wiring behaviorWiring,
+) *apiinventory.Handler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
 	)
@@ -195,10 +226,11 @@ func newBehaviorHandler(
 		Namespaces:    namespaces,
 		Units:         reader,
 		Deleted:       seededDeleted(),
-		Lifecycles:    testLifecycles(),
+		Lifecycles:    wiring.lifecycles,
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      wiring.sessions,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})
@@ -865,6 +897,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
+		Sessions:      nil,
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,

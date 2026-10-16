@@ -89,6 +89,7 @@ func newTestHandler(t *testing.T) *apiinventory.Handler {
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})
@@ -121,6 +122,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiinventory.
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})

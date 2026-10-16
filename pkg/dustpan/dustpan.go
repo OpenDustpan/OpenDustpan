@@ -56,6 +56,7 @@ import (
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -176,6 +177,10 @@ type settings struct {
 	// gate is the per-address failure limit of the token lookups. The
 	// sign-in routes share it. wireTokens sets it; nil means no limit.
 	gate *authgate.Gate
+	// sessionCookies checks the console session cookie on the inventory,
+	// audit and Pulumi APIs. newAdapters sets it before it builds them; nil
+	// means no console sign-in.
+	sessionCookies *sessionauth.Checker
 	// instanceID names this server process in the sink leases of its audit
 	// shipper. See WithInstanceID.
 	instanceID string
@@ -549,6 +554,7 @@ func defaultSettings() *settings {
 		publicURL:               "",
 		oidcProviders:           nil,
 		gate:                    nil,
+		sessionCookies:          nil,
 		version:                 "",
 		maxCheckpointBytes:      0,
 		maxSecretBatchBytes:     0,
@@ -1638,6 +1644,7 @@ func newPulumiHandler(
 		Namespaces:           svc.namespaces,
 		Authenticator:        cfg.authenticator,
 		Authorizer:           cfg.authorizer,
+		Sessions:             cfg.sessionCookies,
 		AddressGate:          allowlistAddressGate(cfg.ipAllowlists),
 		Logger:               cfg.logger,
 		BaseURL:              base,
@@ -1672,6 +1679,7 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 		Entries:       entries,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
+		Sessions:      cfg.sessionCookies,
 		Logger:        cfg.logger,
 	})
 	if err != nil {
@@ -1730,6 +1738,7 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		Moves:         moves,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
+		Sessions:      cfg.sessionCookies,
 		Logger:        cfg.logger,
 		Now:           cfg.now,
 	})

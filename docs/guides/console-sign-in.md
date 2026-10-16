@@ -114,12 +114,22 @@ server also refuses a request with the cookie from another site. An
 `Origin` header must name the public URL or an origin of
 `--allowed-origins`.
 
-Only the installation API (`/api/server/`) takes the session cookie. The
-other APIs answer 401 to a request with the cookie and no token. A request
-with an `Authorization` header uses the header and ignores the cookie.
+The APIs of the console take the session cookie: the installation API
+(`/api/server/`), the inventory API (`/api/inventory/`), the audit API
+(`/api/audit/`) and the API that works with the Pulumi CLI. Each API
+applies the same CSRF and origin checks. The TFE-compatible API does not
+take the cookie: it answers 401 to a request with the cookie and no token.
+A request with an `Authorization` header uses the header and ignores the
+cookie. A refused header answers 401, also when the cookie is valid.
 
 A console session cannot create or rotate an access token yet. Use an
 access token for that.
+
+The API that works with the Pulumi CLI answers 403 to a console session on
+the routes that create and start an update, and on the encrypt and decrypt
+routes of the secrets provider. The Pulumi CLI uses these routes with an
+access token. A sign-out cannot stop an update, so a session cannot start
+one.
 
 ## Audit entries
 
@@ -129,3 +139,7 @@ session. A refused sign-in writes one entry with the reason, and counts in
 the failure limit of its address. A sign-out writes an entry with the
 action `session:sign-out`. No entry holds a code, a token, a state or a
 cookie value.
+
+An entry of a request with the session cookie has the channel `console`,
+whatever channel the request declares. Its subject is the subject of the
+person, and it has no token ID.

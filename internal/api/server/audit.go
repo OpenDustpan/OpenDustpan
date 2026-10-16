@@ -45,7 +45,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		Changes:      nil,
 		SourceIP:     clientip.String(r),
 		UserAgent:    truncateUserAgent(r.UserAgent()),
-		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Channel:      callerChannel(r),
 		Kind:         "",
 		Outcome:      "",
 		RequestID:    requestid.FromContext(r.Context()),
@@ -55,6 +55,17 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		Sequence:     0,
 		FenceVersion: 0,
 	}
+}
+
+// callerChannel returns the audit channel of r: the console for a request
+// that the session cookie signed in, else the channel that the client
+// declares.
+func callerChannel(r *http.Request) audit.Channel {
+	if _, ok := sessionFromRequest(r); ok {
+		return audit.ChannelConsole
+	}
+
+	return audit.NormalizeChannel(r.Header.Get(channelHeader))
 }
 
 // appendServerChange writes one entry of the kind change in the scope
