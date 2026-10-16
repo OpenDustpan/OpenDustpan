@@ -568,26 +568,8 @@ func (m *memStore) FenceAndUnlock(
 		return err
 	}
 
-	stored, ok := m.workspaces[w.ID]
-	if !ok {
-		return workspace.ErrNotFound
-	}
-
-	if !stored.Lock.Locked() {
-		return workspace.ErrNotLocked
-	}
-
-	if stored.Revision != w.Revision-1 {
-		return workspace.ErrConcurrentModification
-	}
-
-	curID, found := m.current[w.ID]
-	if (found && curID != expect) || (!found && expect != "") {
-		return workspace.ErrConcurrentModification
-	}
-
-	if found && sv.Serial != m.versions[curID].Serial+1 {
-		return fmt.Errorf("%w: fence serial %d", workspace.ErrStaleSerial, sv.Serial)
+	if err := checkMemFence(m, w, sv, expect); err != nil {
+		return err
 	}
 
 	m.versions[sv.ID] = sv
@@ -650,6 +632,52 @@ func (m *memStore) FinalizeStateVersion(
 		m.lostAck = false
 
 		return errConnectionLost
+	}
+
+	return nil
+}
+
+// checkMemFence runs the checks of FenceAndUnlock: the workspace is locked at
+// the revision before w, the current version is expect, the fence serial is
+// the next one, and sv is stored as pending with its content key. The caller
+// holds mu.
+func checkMemFence(
+	m *memStore,
+	w workspace.Workspace,
+	sv workspace.StateVersion,
+	expect workspace.StateVersionID,
+) error {
+	stored, ok := m.workspaces[w.ID]
+	if !ok {
+		return workspace.ErrNotFound
+	}
+
+	if !stored.Lock.Locked() {
+		return workspace.ErrNotLocked
+	}
+
+	if stored.Revision != w.Revision-1 {
+		return workspace.ErrConcurrentModification
+	}
+
+	curID, found := m.current[w.ID]
+	if (found && curID != expect) || (!found && expect != "") {
+		return workspace.ErrConcurrentModification
+	}
+
+	if found && sv.Serial != m.versions[curID].Serial+1 {
+		return fmt.Errorf("%w: fence serial %d", workspace.ErrStaleSerial, sv.Serial)
+	}
+
+	return checkMemStaged(m, sv)
+}
+
+// checkMemStaged refuses a fence version that is not stored as pending with
+// its content key. The caller holds mu.
+func checkMemStaged(m *memStore, sv workspace.StateVersion) error {
+	staged, ok := m.versions[sv.ID]
+	if !ok || staged.Status != workspace.StatusPending || staged.Content != sv.Content {
+		return workspace.ErrUploadDenied
 	}
 
 	return nil

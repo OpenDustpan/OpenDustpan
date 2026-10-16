@@ -592,8 +592,8 @@ func (s *Store) FinalizeStateVersion(
 }
 
 // FenceAndUnlock implements workspace.StateStore: it releases the lock of w,
-// inserts sv as the finalized current version and moves the workspace pointer
-// to it, in one fenced transaction. The inventory entry moves with the release.
+// finalizes the pending fence version sv and moves the workspace pointer to
+// it, in one fenced transaction. The inventory entry moves with the release.
 func (s *Store) FenceAndUnlock(
 	ctx context.Context, w workspace.Workspace, sv workspace.StateVersion,
 	expect workspace.StateVersionID, fence namespace.Fence,
@@ -606,8 +606,8 @@ func (s *Store) FenceAndUnlock(
 	})
 }
 
-// fenceAndUnlockInTx writes the release of w's lock and the fence version row
-// in the caller's transaction. The workspace must be locked, and its stored
+// fenceAndUnlockInTx writes the release of w's lock and finalizes the fence
+// version row in the caller's transaction. The workspace must be locked, and its stored
 // revision must be w.Revision-1; a write that fails either check changes
 // nothing.
 func fenceAndUnlockInTx(
@@ -649,8 +649,8 @@ func fenceAndUnlockInTx(
 		return workspace.ErrConcurrentModification
 	}
 
-	if insertErr := insertStateVersion(ctx, q, row); insertErr != nil {
-		return insertErr
+	if finalizeErr := finalizeFenceRow(ctx, q, row); finalizeErr != nil {
+		return finalizeErr
 	}
 
 	setErr := q.SetWorkspaceCurrent(ctx, db.SetWorkspaceCurrentParams{
@@ -737,6 +737,33 @@ func (s *Store) SealStateVersion(
 
 		return nil
 	})
+}
+
+// finalizeFenceRow finalizes the pending fence version row in the caller's
+// transaction. The write matches only a pending row that names the fence
+// content, else ErrUploadDenied: the caller stored the row before it wrote the
+// content.
+func finalizeFenceRow(ctx context.Context, q *db.Queries, row codec.StateVersionRow) error {
+	n, err := q.FinalizeStateVersion(ctx, db.FinalizeStateVersionParams{
+		Serial:        row.Serial,
+		Lineage:       row.Lineage,
+		Md5:           row.MD5,
+		Outputs:       row.Outputs,
+		Status:        string(workspace.StatusFinalized),
+		FinalizedAtMs: row.FinalizedAtMs,
+		ContentKey:    row.ContentKey,
+		Size:          row.Size,
+		ID:            row.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("finalize fence version: %w", err)
+	}
+
+	if n == 0 {
+		return workspace.ErrUploadDenied
+	}
+
+	return nil
 }
 
 // finalizeInTx runs the finalize checks and writes in one transaction.
