@@ -697,13 +697,13 @@ func (s *backupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reope
 	return b
 }
 
-// CurrentStagingID implements storetest.StagingWitness: the path of the
-// current staging file, or empty when none exists.
 // DurableStore implements storetest.DurableHolder.
 func (s *backupStore) DurableStore() durable.Store { //nolint:ireturn // The capability returns the port.
 	return s.DurableOperations()
 }
 
+// CurrentStagingID implements storetest.StagingWitness: the path of the
+// current staging file, or empty when none exists.
 func (s *backupStore) CurrentStagingID() string {
 	return s.StagingPathForTest()
 }

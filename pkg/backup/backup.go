@@ -103,21 +103,6 @@ var Tables = []string{
 	"installation",
 }
 
-// ControlTables lists the tables of the schema that a backup leaves out and
-// a restore keeps: the live rows stay across the swap. The tables of
-// durable operations hold claim tokens that only grow. A restore that
-// brought back older tokens would give a new claim the token of a live
-// holder, and the writes of that holder would pass the fence. The schema
-// holds every table of Tables and of ControlTables, and no other table
-// (schema_migrations and audit_chain_state aside, which the adapters keep
-// as bookkeeping). Treat the list as a constant and never mutate it.
-//
-//nolint:gochecknoglobals // A shared frozen table list, as Tables is.
-var ControlTables = []string{
-	TableDurableOperations,
-	TableDurableSteps,
-}
-
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list
 // must use the copy, so the shared list never changes.
 func TablesCopy() []string {
