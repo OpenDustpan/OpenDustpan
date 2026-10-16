@@ -191,6 +191,11 @@ var Settings = []*Setting{
 		"blob store fs with --blob-dir, or s3://<bucket>[/<prefix>] (DUSTPAN_BLOB_STORE)",
 		"`fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]`",
 	).WithFile("blob-store").WithURL(),
+	intSetting(
+		"blob-cache-bytes", "DUSTPAN_BLOB_CACHE_BYTES", "0",
+		"bytes of blob store objects to keep in memory, 0 means no cache (DUSTPAN_BLOB_CACHE_BYTES)",
+		"`0`: no cache. A repeat read of a cached object does not reach the blob store",
+	).WithFile("blob-cache-bytes"),
 	stringSetting(
 		"s3-endpoint", "DUSTPAN_S3_ENDPOINT", "",
 		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",

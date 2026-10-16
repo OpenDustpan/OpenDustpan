@@ -63,6 +63,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	blobcache "opendustpan.org/opendustpan/pkg/blob/cache"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -138,6 +139,7 @@ type settings struct {
 	workspaceStore       workspace.Store
 	stateStore           workspace.StateStore
 	blobStore            blob.Store
+	blobCacheBytes       int64
 	inventoryReader      inventory.Reader
 	authenticator        identity.Authenticator
 	authorizer           identity.Authorizer
@@ -260,6 +262,14 @@ func WithStateStore(s workspace.StateStore) Option {
 // WithBlobStore sets the state content persistence port. Required.
 func WithBlobStore(s blob.Store) Option {
 	return func(o *settings) { o.blobStore = s }
+}
+
+// WithBlobCache keeps up to maxBytes of blob store objects in memory, so a
+// repeat read of an object does not reach the blob store. Zero, the default,
+// turns the cache off. A negative value makes NewServer fail with
+// ErrInvalidOption. The cache relies on the write-once keys of blob.Store.
+func WithBlobCache(maxBytes int64) Option {
+	return func(o *settings) { o.blobCacheBytes = maxBytes }
 }
 
 // WithInventoryReader sets the inventory projection reader. Required.
@@ -544,6 +554,7 @@ func defaultSettings() *settings {
 		workspaceStore:          nil,
 		stateStore:              nil,
 		blobStore:               nil,
+		blobCacheBytes:          0,
 		inventoryReader:         nil,
 		authenticator:           nil,
 		authorizer:              nil,
@@ -592,6 +603,10 @@ func NewServer(opts ...Option) (*Server, error) {
 	base, err := checkSettings(cfg)
 	if err != nil {
 		return nil, err
+	}
+
+	if cacheErr := wrapBlobCache(cfg); cacheErr != nil {
+		return nil, cacheErr
 	}
 
 	if authzErr := setDefaultAuthorizer(cfg); authzErr != nil {
@@ -1705,6 +1720,27 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	}
 
 	return handler, nil
+}
+
+// wrapBlobCache puts the in-process blob cache in front of the blob store
+// when WithBlobCache sets a size.
+func wrapBlobCache(cfg *settings) error {
+	switch {
+	case cfg.blobCacheBytes < 0:
+		return fmt.Errorf("%w: WithBlobCache needs 0 or more bytes, got %d", ErrInvalidOption, cfg.blobCacheBytes)
+	case cfg.blobCacheBytes == 0:
+		return nil
+	default:
+	}
+
+	cached, err := blobcache.New(cfg.blobStore, cfg.blobCacheBytes)
+	if err != nil {
+		return fmt.Errorf("blob cache: %w", err)
+	}
+
+	cfg.blobStore = cached
+
+	return nil
 }
 
 // checkRetention refuses a soft-delete retention below
