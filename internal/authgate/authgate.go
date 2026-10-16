@@ -168,14 +168,19 @@ type Gate struct {
 var _ identity.Authenticator = (*Gate)(nil)
 
 // bucket is the budget of one source. waiting counts its requests that wait
-// the penalty now. sharedUntil is the end, on the clock of this process, of
-// the window of the shared count that the source spent.
+// the penalty now. inFlight counts the units that unresolved lookups hold:
+// tokens does not hold them, and a unit in flight is not a failure.
+// resolved is closed and replaced each time a lookup in flight resolves.
+// sharedUntil is the end, on the clock of this process, of the window of the
+// shared count that the source spent.
 type bucket struct {
 	at          time.Time
 	sharedUntil time.Time
+	resolved    chan struct{}
 	key         string
 	tokens      float64
 	waiting     int
+	inFlight    int
 	logged      bool
 }
 
@@ -359,31 +364,37 @@ func (r *request) remember(digest [sha256.Size]byte, p identity.Principal, err e
 // lookup resolves token for the source within its budget. A lookup within
 // the budget takes its unit before the store read, so concurrent lookups of
 // one source cannot pass the budget. A miss keeps the unit; any other
-// answer gives it back.
+// answer, a panic of the store read too, gives it back.
 func (g *Gate) lookup(ctx context.Context, source, token string) (identity.Principal, error) {
 	if !g.charge(token) {
 		return g.next.AuthenticateToken(ctx, token)
 	}
 
-	took, err := g.waitTurn(ctx, source, takeUnit)
+	held, err := g.waitTurn(ctx, source, takeUnit)
 	if err != nil {
 		var none identity.Principal
 
 		return none, err
 	}
 
-	p, err := g.next.AuthenticateToken(ctx, token)
-
-	switch {
-	case errors.Is(err, identity.ErrUnauthenticated) && took:
-		g.countShared(ctx, source)
-	case errors.Is(err, identity.ErrUnauthenticated):
-		g.spend(ctx, source)
-	case took:
-		g.giveBack(source)
-	default:
-		// The lookup waited the penalty and took no unit.
+	if held != nil {
+		defer g.giveBack(held)
 	}
+
+	p, err := g.next.AuthenticateToken(ctx, token)
+	if !errors.Is(err, identity.ErrUnauthenticated) {
+		return p, err
+	}
+
+	if held == nil {
+		// The lookup waited the penalty and took no unit.
+		g.spend(ctx, source)
+
+		return p, err
+	}
+
+	g.keep(held)
+	g.countShared(ctx, source)
 
 	return p, err
 }
@@ -398,20 +409,41 @@ const (
 	takeUnit
 )
 
-// waitTurn returns nil when a request of source can go to the store: at once
+// waitTurn returns when a request of source can go to the store: at once
 // while the source has budget, else after the penalty. With takeUnit, a
-// request within the budget takes one unit, and waitTurn reports true. It
-// returns ErrLimited when the waiting cap of the source is full, and
-// identity.ErrRateLimited when ctx ends during the wait.
-func (g *Gate) waitTurn(ctx context.Context, source string, mode turn) (bool, error) {
-	got := g.reserve(ctx, source, mode)
-	if !got.over {
-		return got.took, nil
-	}
+// request within the budget takes one unit, and waitTurn returns its hold;
+// the caller resolves it. While lookups in flight hold the
+// rest of the budget, a request waits for one of them to resolve, with no
+// penalty and no waiting cap: a unit in flight is not a failure. It returns
+// ErrLimited when the waiting cap of the penalty is full, and
+// identity.ErrRateLimited when ctx ends during a wait.
+func (g *Gate) waitTurn(ctx context.Context, source string, mode turn) (*hold, error) {
+	for {
+		got := g.reserve(ctx, source, mode)
 
+		switch {
+		case got.held != nil || got.state == withinBudget:
+			return got.held, nil
+		case got.state == heldInFlight:
+			select {
+			case <-ctx.Done():
+				return nil, fmt.Errorf("%w: the client went away during the wait", identity.ErrRateLimited)
+			case <-got.resolved:
+				continue
+			}
+		default:
+			return nil, g.waitPenalty(ctx, source)
+		}
+	}
+}
+
+// waitPenalty waits the penalty of a request of source over its budget. It
+// returns ErrLimited when the waiting cap of source is full, and
+// identity.ErrRateLimited when ctx ends during the wait.
+func (g *Gate) waitPenalty(ctx context.Context, source string) error {
 	b, ok := g.enterWait(source)
 	if !ok {
-		return false, ErrLimited
+		return ErrLimited
 	}
 
 	defer g.leaveWait(b)
@@ -421,45 +453,67 @@ func (g *Gate) waitTurn(ctx context.Context, source string, mode turn) (bool, er
 
 	select {
 	case <-ctx.Done():
-		return false, fmt.Errorf("%w: the client went away during the wait", identity.ErrRateLimited)
+		return fmt.Errorf("%w: the client went away during the wait", identity.ErrRateLimited)
 	case <-timer.C:
-		return false, nil
+		return nil
 	}
 }
 
-// reservation is the answer of reserve: whether the source is over its
-// budget, and whether the request took one unit.
+// budgetState is the state of the budget of a source for one request.
+type budgetState int
+
+const (
+	// withinBudget: the request can go to the store.
+	withinBudget budgetState = iota
+	// heldInFlight: lookups in flight hold the rest of the budget.
+	heldInFlight
+	// overBudget: failures spent the budget.
+	overBudget
+)
+
+// reservation is the answer of reserve: the state of the budget, the hold
+// of the unit that the request took, or nil, and the channel that closes
+// when a lookup in flight resolves.
 type reservation struct {
-	over bool
-	took bool
+	held     *hold
+	resolved <-chan struct{}
+	state    budgetState
 }
 
-// reserve reports whether source is over its budget: the budget of the
-// process, or the shared count of a window that has not ended. Within the
-// budget and with takeUnit, it takes one unit in the same lock and reports
-// that it took it. It reads nothing from the store. It logs the first
-// request over the budget of each limit period.
+// reserve reports the state of the budget of source: the budget of the
+// process, and the shared count of a window that has not ended. Within the
+// budget and with takeUnit, it takes one unit in the same lock and returns
+// its hold. It reads nothing from the store. It logs the
+// first request over the budget of each limit period.
 func (g *Gate) reserve(ctx context.Context, source string, mode turn) reservation {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	b := g.touchLocked(source)
-	if b.tokens >= 1 && !g.now().Before(b.sharedUntil) {
+	shared := g.now().Before(b.sharedUntil)
+
+	switch {
+	case b.tokens >= 1 && !shared:
 		b.logged = false
 
-		if mode == takeUnit {
-			b.tokens--
+		if mode != takeUnit {
+			return reservation{held: nil, resolved: nil, state: withinBudget}
 		}
 
-		return reservation{over: false, took: mode == takeUnit}
-	}
+		b.tokens--
+		b.inFlight++
 
-	if !b.logged {
-		b.logged = true
-		g.logger.WarnContext(ctx, "failed sign-ins limited", slog.String("source_ip", source))
-	}
+		return reservation{held: &hold{b: b, done: false}, resolved: nil, state: withinBudget}
+	case b.inFlight > 0 && !shared && b.tokens+float64(b.inFlight) >= 1:
+		return reservation{held: nil, resolved: b.resolved, state: heldInFlight}
+	default:
+		if !b.logged {
+			b.logged = true
+			g.logger.WarnContext(ctx, "failed sign-ins limited", slog.String("source_ip", source))
+		}
 
-	return reservation{over: true, took: false}
+		return reservation{held: nil, resolved: nil, state: overBudget}
+	}
 }
 
 // enterWait takes a waiting place of source, or reports false when its cap
@@ -538,17 +592,49 @@ func (g *Gate) spendLocal(source string) {
 	}
 }
 
-// giveBack returns the unit that a lookup of source took and did not use.
-func (g *Gate) giveBack(source string) {
+// hold is the unit that one lookup in flight holds in a bucket.
+type hold struct {
+	b    *bucket
+	done bool
+}
+
+// keep ends the unit of h as a failure of a miss. A second end of h does
+// nothing.
+func (g *Gate) keep(h *hold) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	b := g.touchLocked(source)
+	g.endLocked(h)
+}
 
-	b.tokens++
-	if b.tokens > g.burst {
-		b.tokens = g.burst
+// giveBack ends the unit of h and gives it back, unless the unit already
+// ended. A lookup defers it, so a panic of the store read gives the unit
+// back too.
+func (g *Gate) giveBack(h *hold) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if !h.done {
+		// The refill keeps tokens plus the units in flight within the
+		// burst, so the unit that comes back stays within it too.
+		h.b.tokens++
 	}
+
+	g.endLocked(h)
+}
+
+// endLocked ends the unit of h once and wakes the requests that wait for
+// a lookup in flight.
+func (g *Gate) endLocked(h *hold) {
+	if h.done {
+		return
+	}
+
+	h.done = true
+	h.b.inFlight--
+
+	close(h.b.resolved)
+	h.b.resolved = make(chan struct{})
 }
 
 // markShared marks source as over the budget for left, the rest of the
@@ -638,7 +724,10 @@ func (g *Gate) touchLocked(source string) *bucket {
 		}
 	}
 
-	b := &bucket{at: now, sharedUntil: time.Time{}, key: source, tokens: g.burst, waiting: 0, logged: false}
+	b := &bucket{
+		at: now, sharedUntil: time.Time{}, resolved: make(chan struct{}), key: source, tokens: g.burst,
+		waiting: 0, inFlight: 0, logged: false,
+	}
 	g.sources[source] = g.recent.PushFront(b)
 
 	return b
@@ -651,10 +740,7 @@ func (g *Gate) fillLocked(b *bucket, now time.Time) {
 		return
 	}
 
-	b.tokens += float64(elapsed) / float64(g.refill)
-	if b.tokens > g.burst {
-		b.tokens = g.burst
-	}
+	b.tokens = min(b.tokens+float64(elapsed)/float64(g.refill), g.burst-float64(b.inFlight))
 
 	b.at = now
 }

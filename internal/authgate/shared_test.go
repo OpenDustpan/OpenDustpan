@@ -507,3 +507,191 @@ func TestNewRefusesAWindowUnderOneMillisecond(t *testing.T) {
 		t.Fatalf("window of 500 µs: err = %v, want ErrInvalidWindow", err)
 	}
 }
+
+// TestConcurrentValidLookupsAreNeverLimited proves that valid tokens above
+// the burst, all in flight at once through a slow store, all pass: a unit
+// that an unresolved lookup holds is not a failure, so the next lookup
+// waits for one to finish instead of the penalty, and gets no 429.
+func TestConcurrentValidLookupsAreNeverLimited(t *testing.T) {
+	t.Parallel()
+
+	const lookups = 20
+
+	c := newClock()
+	next := &slowAuthenticator{delay: 50 * time.Millisecond, lookups: atomic.Int64{}}
+
+	g, err := authgate.New(authgate.Config{
+		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now,
+		Failures: authgatetest.NewMemory(c.Now), Window: 0, CounterErrors: nil,
+		Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: 1, MaxSources: 0,
+	})
+	if err != nil {
+		t.Fatalf("new gate: %v", err)
+	}
+
+	var wg sync.WaitGroup
+
+	for range lookups {
+		wg.Go(func() {
+			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			defer cancel()
+
+			if err := attempt(ctx, g, "192.0.2.1", "badgood"); err != nil {
+				t.Errorf("concurrent valid token: %v, want it to pass", err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	if got := next.lookups.Load(); got != lookups {
+		t.Fatalf("store lookups = %d, want %d", got, lookups)
+	}
+
+	// The valid lookups gave back every unit: the burst of misses is
+	// within the budget.
+	for i := range 3 {
+		if overBudget(t, g, "192.0.2.1") {
+			t.Fatalf("miss %d after the valid lookups: over budget, want within", i+1)
+		}
+	}
+}
+
+// panicAuthenticator panics on the token "badpanic" and answers every other
+// token as countingAuthenticator does.
+type panicAuthenticator struct {
+	countingAuthenticator
+}
+
+func (p *panicAuthenticator) AuthenticateToken(ctx context.Context, token string) (identity.Principal, error) {
+	if token == "badpanic" {
+		panic("store fails")
+	}
+
+	return p.countingAuthenticator.AuthenticateToken(ctx, token)
+}
+
+// TestPanicInTheStoreGivesBackTheUnit proves that a lookup whose store read
+// panics gives back its unit.
+func TestPanicInTheStoreGivesBackTheUnit(t *testing.T) {
+	t.Parallel()
+
+	c := newClock()
+
+	g, err := authgate.New(authgate.Config{
+		Next:   &panicAuthenticator{lookups: atomic.Int64{}},
+		Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, CounterErrors: nil,
+		Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		t.Fatalf("new gate: %v", err)
+	}
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("lookup of the panic token: no panic, want one")
+			}
+		}()
+
+		_ = attempt(t.Context(), g, "192.0.2.1", "badpanic") //nolint:errcheck // The lookup panics.
+	}()
+
+	for i := range 3 {
+		if overBudget(t, g, "192.0.2.1") {
+			t.Fatalf("miss %d after the panic: over budget, want within", i+1)
+		}
+	}
+}
+
+// blockingAuthenticator misses every token after release closes, and
+// reports each lookup that starts on started.
+type blockingAuthenticator struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingAuthenticator) AuthenticateToken(context.Context, string) (identity.Principal, error) {
+	b.started <- struct{}{}
+	<-b.release
+
+	return identity.Principal{}, identity.ErrUnauthenticated
+}
+
+// TestRefillKeepsLookupsInFlightWithinTheBurst proves that a refill while
+// lookups are in flight does not raise the budget above the burst: with
+// the whole burst in flight, another lookup waits for one of them, also
+// after a long refill.
+func TestRefillKeepsLookupsInFlightWithinTheBurst(t *testing.T) {
+	t.Parallel()
+
+	c := newClock()
+	next := &blockingAuthenticator{started: make(chan struct{}, 4), release: make(chan struct{})}
+
+	g, err := authgate.New(authgate.Config{
+		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, CounterErrors: nil,
+		Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		t.Fatalf("new gate: %v", err)
+	}
+
+	var wg sync.WaitGroup
+
+	for range 3 {
+		wg.Go(func() {
+			if err := attempt(t.Context(), g, "192.0.2.1", "bad"); !errors.Is(err, identity.ErrUnauthenticated) {
+				t.Errorf("lookup in flight: err = %v, want ErrUnauthenticated", err)
+			}
+		})
+	}
+
+	for range 3 {
+		<-next.started
+	}
+
+	c.Advance(time.Minute)
+
+	done := make(chan error, 1)
+
+	go func() { done <- attempt(canceled(t), g, "192.0.2.1", "bad") }()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, identity.ErrRateLimited) {
+			t.Errorf("lookup with the burst in flight after a refill: err = %v, want ErrRateLimited", err)
+		}
+
+		close(next.release)
+	case <-next.started:
+		t.Error("lookup with the burst in flight after a refill reached the store, want a wait")
+		close(next.release)
+		<-done
+	}
+
+	wg.Wait()
+}
+
+// TestRefillAfterMissesStaysAtTheBurst proves that misses end their units
+// once: after the burst of misses and a long refill, the budget of the
+// process holds the burst again and no more. The gate has no shared count,
+// so only the budget of the process decides.
+func TestRefillAfterMissesStaysAtTheBurst(t *testing.T) {
+	t.Parallel()
+
+	c := newClock()
+	g := newSharedGate(t, c, nil, &operations{got: nil, mu: sync.Mutex{}})
+
+	spend(t, g, "192.0.2.1")
+	c.Advance(time.Hour)
+
+	for i := range 3 {
+		if overBudget(t, g, "192.0.2.1") {
+			t.Fatalf("miss %d after a refill: over budget, want within", i+1)
+		}
+	}
+
+	if !overBudget(t, g, "192.0.2.1") {
+		t.Fatal("fourth miss after a refill: within, want over budget")
+	}
+}
