@@ -524,11 +524,12 @@ func TestJournalBuildTimeoutDefault(t *testing.T) {
 // the build timeout: loading without it hangs the build past the timeout.
 type blockingBaseStore struct {
 	*journalMemStore
+
 	started chan struct{}
 }
 
 func (b *blockingBaseStore) CheckpointByVersion(
-	ctx context.Context, ref stack.Ref, version int64,
+	ctx context.Context, _ stack.Ref, _ int64,
 ) (stack.Checkpoint, error) {
 	select {
 	case b.started <- struct{}{}:
@@ -536,11 +537,11 @@ func (b *blockingBaseStore) CheckpointByVersion(
 	}
 
 	<-ctx.Done()
-	return stack.Checkpoint{}, ctx.Err()
+	return stack.Checkpoint{}, fmt.Errorf("base load: %w", ctx.Err())
 }
 
 func (b *blockingBaseStore) LatestCheckpoint(
-	ctx context.Context, ref stack.Ref,
+	ctx context.Context, _ stack.Ref,
 ) (stack.Checkpoint, error) {
 	select {
 	case b.started <- struct{}{}:
@@ -548,7 +549,7 @@ func (b *blockingBaseStore) LatestCheckpoint(
 	}
 
 	<-ctx.Done()
-	return stack.Checkpoint{}, ctx.Err()
+	return stack.Checkpoint{}, fmt.Errorf("base load: %w", ctx.Err())
 }
 
 // TestBuildJournalCheckpointBaseTimeout checks that a base load past the build
@@ -562,9 +563,12 @@ func TestBuildJournalCheckpointBaseTimeout(t *testing.T) {
 	t.Cleanup(func() { stack.MaxJournalBuildDuration = old })
 
 	clk := newClock()
-	f := newBuildFixtureWith(t, clk, pulumijournal.NewReplayer(clk.Now, ""), func(store *journalMemStore) stack.CheckpointStore {
-		return &blockingBaseStore{journalMemStore: store, started: make(chan struct{}, 1)}
-	})
+	f := newBuildFixtureWith(
+		t, clk, pulumijournal.NewReplayer(clk.Now, ""),
+		func(store *journalMemStore) stack.CheckpointStore {
+			return &blockingBaseStore{journalMemStore: store, started: make(chan struct{}, 1)}
+		},
+	)
 
 	s := f.startJournaled(t)
 
@@ -592,9 +596,12 @@ func TestBuildJournalCheckpointBaseTimeout(t *testing.T) {
 func TestBuildJournalCheckpointBaseCancelIsNotTimeout(t *testing.T) {
 	clk := newClock()
 	started := make(chan struct{}, 1)
-	f := newBuildFixtureWith(t, clk, pulumijournal.NewReplayer(clk.Now, ""), func(store *journalMemStore) stack.CheckpointStore {
-		return &blockingBaseStore{journalMemStore: store, started: started}
-	})
+	f := newBuildFixtureWith(
+		t, clk, pulumijournal.NewReplayer(clk.Now, ""),
+		func(store *journalMemStore) stack.CheckpointStore {
+			return &blockingBaseStore{journalMemStore: store, started: started}
+		},
+	)
 
 	s := f.startJournaled(t)
 
