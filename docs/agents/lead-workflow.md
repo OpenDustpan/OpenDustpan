@@ -11,8 +11,8 @@ that the owner merges.
 
 1. Run each work item in its own worker session. Start the worker sessions
    in parallel.
-2. A worker session uses a small, low-cost Claude model. It does not write
-   code. It drives the low-cost implementation model in OpenCode with
+2. A worker session uses a Claude Haiku model. It does not write
+   code. It drives the low-cost muse-spark-1.3-contributor OpenCode Go model in OpenCode with
    `opencode run`, and it checks the result.
 3. Give each worker the brief in `docs/agents/worker-brief.md`. Fill in
    every placeholder. The brief tells the worker each step. Do not let a
@@ -22,7 +22,7 @@ that the owner merges.
    subagent stops when the owner interrupts the lead, and it costs too much.
    Put review work in a worker session too.
 
-Reason: the implementation model costs about $0.20 for each million output
+Reason: this implementation model costs about $0.20 for each million output
 tokens. This cost is what makes the project possible. Use Claude tokens for
 coordination, not for code.
 
