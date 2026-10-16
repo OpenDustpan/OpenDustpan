@@ -19,6 +19,14 @@ const (
 	TableSignInRequests    = "sign_in_requests"
 	TableAccessTokenPolicy = "access_token_policy"
 	TableSessionPolicy     = "session_policy"
+	// TableOIDCProviders keeps the issuer of each sign-in provider ID. A
+	// restore that changed it could let another issuer sign in as the
+	// people of the provider.
+	TableOIDCProviders = "oidc_providers"
+	// TableSignInProviders and TableInstallationSecretKeys move together:
+	// the client secret of a provider is sealed under an installation key.
+	TableSignInProviders        = "sign_in_providers"
+	TableInstallationSecretKeys = "installation_secret_keys"
 )
 
 // AccessTables lists the tables that a restore replaces only when the
@@ -35,6 +43,9 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TableSignInRequests,
 	TableAccessTokenPolicy,
 	TableSessionPolicy,
+	TableOIDCProviders,
+	TableSignInProviders,
+	TableInstallationSecretKeys,
 }
 
 // ErrRestoreAccessMismatch reports that the backup names access data that

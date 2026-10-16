@@ -161,7 +161,7 @@ with the same key-encryption key, then restore through the API. The
 bootstrap admin token can restore into the empty installation. The new
 database may be the other kind.
 
-A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants and tokens, so a revoked token stays revoked.
+A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants, tokens and sign-in providers. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
 
 ## Move a format 1 backup
 

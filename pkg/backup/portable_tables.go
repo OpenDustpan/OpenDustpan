@@ -422,7 +422,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "oidc_providers",
+			Table:   TableOIDCProviders,
 			OrderBy: []string{portColProviderID},
 			Columns: []Column{
 				{Name: portColProviderID, Kind: KindText},
@@ -431,7 +431,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "installation_secret_keys",
+			Table:   TableInstallationSecretKeys,
 			OrderBy: []string{"scope_id"},
 			Columns: []Column{
 				{Name: "scope_id", Kind: KindText},
@@ -441,7 +441,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "sign_in_providers",
+			Table:   TableSignInProviders,
 			OrderBy: []string{portColProviderID},
 			Columns: []Column{
 				{Name: portColProviderID, Kind: KindText},
