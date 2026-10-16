@@ -151,10 +151,7 @@ stage checks the staged data against the row counts, the blob references and
 the foreign keys of the manifest. A failed check leaves the live data unchanged.
 
 The command refuses a backup with no manifest or with an unknown format
-number. This server also refuses a backup in the native format of the older
-server (manifest format 1), and the message says to take a new backup.
-This server does not restore that format. To keep such a backup, follow the
-steps in "Move a format 1 backup". The refusal does not change the live data.
+number. The refusal does not change the live data.
 
 Disaster recovery on a new machine: start the server on an empty database
 with the same key-encryption key, then restore through the API. The
@@ -164,36 +161,6 @@ database may be the other kind.
 A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants, tokens and sign-in providers. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
 
 A restore needs the key-encryption key that sealed every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
-
-## Move a format 1 backup
-
-A format 1 backup holds the native format of the older server. An older server
-writes format 1 again, so a new backup from the older server does not help.
-The data moves through a restore into the older server, then an upgrade, then
-a new backup. Use these steps:
-
-1. Keep the format 1 backup in its target. Do not delete it.
-2. Start the older server version that wrote the backup. Use an empty
-   database and the same key-encryption key. Set `--backup-target` to the
-   target that holds the format 1 backup.
-3. Restore the format 1 backup into that server:
-
-   ```sh
-   opendustpan restore --server https://old.example --ca-file ca.pem --backup bkp-aaa
-   ```
-
-4. Check that the restore succeeded and that the data is present.
-5. Stop the older server. Run the upgrade check for this server version, then
-   start this server version on the same database. The start applies the
-   pending migrations.
-6. Take a new backup with this server version. The new backup is format 2:
-
-   ```sh
-   opendustpan backup --server https://dustpan.example --ca-file ca.pem
-   ```
-
-7. Check the new backup. Keep the format 1 backup until the format 2 backup
-   checks as complete.
 
 ## Upgrade the server
 

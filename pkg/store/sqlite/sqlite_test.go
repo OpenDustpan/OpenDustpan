@@ -44,6 +44,22 @@ func TestConformance(t *testing.T) {
 	})
 }
 
+// TestSharedConformance runs the two-handle suite: both handles open one
+// file, as two processes open one database.
+func TestSharedConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunShared(t, func(t *testing.T) (storetest.Store, storetest.Store) {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
+
+		return openPath(t, path), openPath(t, path)
+	})
+}
+
 // TestAccessConformance runs the role and grant store suite.
 func TestAccessConformance(t *testing.T) {
 	t.Parallel()
@@ -423,6 +439,63 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 	}
 }
 
+// TestMissingStateRowIsUnavailable deletes the seeded installation row and
+// proves that GetState and SetState answer ErrUnavailable, and that
+// SetState does not create the row again: the migration seeds the row, so a
+// missing row is a server fault.
+func TestMissingStateRowIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s, openErr := sqlite.Open(t.Context(), path)
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	conn, connErr := openRawDB(path)
+	if connErr != nil {
+		t.Fatalf("open raw database: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	ctx := t.Context()
+
+	if _, execErr := conn.ExecContext(ctx, `DELETE FROM installation`); execErr != nil {
+		t.Fatalf("delete installation row: %v", execErr)
+	}
+
+	if _, err := s.GetState(ctx); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("get installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	if err := s.SetState(ctx, maintenance.StateMaintenance); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("set installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	var rows int64
+	if scanErr := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM installation`).Scan(&rows); scanErr != nil {
+		t.Fatalf("count installation rows: %v", scanErr)
+	}
+
+	if rows != 0 {
+		t.Fatalf("installation rows after the writes = %d, want 0", rows)
+	}
+}
+
 func TestSecretsConformance(t *testing.T) {
 	t.Parallel()
 
@@ -449,7 +522,7 @@ func TestUpdatesConformance(t *testing.T) {
 	storetest.RunUpdates(t, func(t *testing.T) storetest.UpdatesStore {
 		t.Helper()
 
-		return openUncounted(t)
+		return openSQLUpdates(t)
 	})
 
 	// History fields of ADR 28 decision 4: creator, restore source and
@@ -765,28 +838,22 @@ func open(t *testing.T) *sqlite.Store {
 	return openTemplated(t)
 }
 
-// uncountedStore wraps a Store with its path so the uncounted-checkpoint
-// case sets the stored count to NULL with a direct SQL update: the port
-// always writes the count, so only SQL seeds rows from before the column.
-type uncountedStore struct {
+// sqlUpdatesStore wraps a Store with its path, so a case can change its rows
+// with direct SQL, as the audit case does to break audit appends.
+type sqlUpdatesStore struct {
 	storetest.UpdatesStore
 
 	path string
 }
 
-var (
-	_ storetest.CountNullifier = (*uncountedStore)(nil)
-	_ storetest.CountSetter    = (*uncountedStore)(nil)
-	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
-)
+var _ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
 
 // errNoJournalCount reports a wrapped store without the journaled count.
 var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
 
-// openUncounted returns a fresh store in a temporary directory that the
-// uncounted-checkpoint case can NULL through SQL, copied from the migrated
-// template.
-func openUncounted(t *testing.T) *uncountedStore {
+// openSQLUpdates returns a fresh store in a temporary directory that a case
+// can change through SQL, copied from the migrated template.
+func openSQLUpdates(t *testing.T) *sqlUpdatesStore {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
@@ -804,12 +871,12 @@ func openUncounted(t *testing.T) *uncountedStore {
 		}
 	})
 
-	return &uncountedStore{UpdatesStore: s, path: path}
+	return &sqlUpdatesStore{UpdatesStore: s, path: path}
 }
 
 // CountRunningJournaledUpdates forwards to the wrapped store, whose method
 // the embedded UpdatesStore interface hides.
-func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+func (s *sqlUpdatesStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
 	counter, ok := s.UpdatesStore.(interface {
 		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 	})
@@ -825,55 +892,14 @@ func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int6
 	return count, nil
 }
 
-// NullifyResourceCount implements storetest.CountNullifier.
-func (s *uncountedStore) NullifyResourceCount(ctx context.Context) (err error) {
-	conn, err := openRawDB(s.path)
-	if err != nil {
-		return fmt.Errorf("open raw database: %w", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
-		}
-	}()
-
-	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = NULL`); err != nil {
-		return fmt.Errorf("nullify the checkpoint count: %w", err)
-	}
-
-	return nil
-}
-
-// SetResourceCount implements storetest.CountSetter: it plants a stored
-// count from before saves stopped counting.
-func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) (err error) {
-	conn, err := openRawDB(s.path)
-	if err != nil {
-		return fmt.Errorf("open raw database: %w", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
-		}
-	}()
-
-	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = ?`, count); err != nil {
-		return fmt.Errorf("set the checkpoint count: %w", err)
-	}
-
-	return nil
-}
-
 // List forwards to the audit list of the wrapped store, which the embedded
 // interface hides, so the delete case can read the entry of a delete.
 // Inner implements storetest.Wrapper.
-func (s *uncountedStore) Inner() any {
+func (s *sqlUpdatesStore) Inner() any {
 	return s.UpdatesStore
 }
 
-func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
+func (s *sqlUpdatesStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
 		return audit.Listing{}, errNoAuditList
@@ -891,7 +917,7 @@ func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit
 var errNoAuditList = errors.New("wrapped store lists no audit entries")
 
 // BreakAuditAppends implements storetest.AuditBreaker.
-func (s *uncountedStore) BreakAuditAppends(ctx context.Context) error {
+func (s *sqlUpdatesStore) BreakAuditAppends(ctx context.Context) error {
 	return breakAuditAppends(ctx, s.path)
 }
 

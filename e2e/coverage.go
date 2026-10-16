@@ -18,6 +18,7 @@ import (
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
+	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -66,13 +67,18 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 
 	pulumi := coveragePulumiRoutes(tb, namespaces)
 	tfe := coverageTFERoutes(tb, namespaces)
+	tofuHTTP := coverageTofuHTTPRoutes(tb, namespaces)
 	inventory := coverageInventoryRoutes(tb, namespaces)
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
-	out := make([]RouteRef, 0, len(pulumi)+len(tfe)+len(inventory)+len(auditRoutes)+len(server)+probeRouteCount)
+	out := make(
+		[]RouteRef, 0,
+		len(pulumi)+len(tfe)+len(tofuHTTP)+len(inventory)+len(auditRoutes)+len(server)+probeRouteCount,
+	)
 	out = append(out, pulumi...)
 	out = append(out, tfe...)
+	out = append(out, tofuHTTP...)
 	out = append(out, inventory...)
 	out = append(out, auditRoutes...)
 	out = append(out, server...)
@@ -377,6 +383,86 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	}
 
 	return tfeRefs(handler.Routes())
+}
+
+// coverageTofuHTTPRoutes builds the OpenTofu http backend handler with stub
+// dependencies and returns its route table.
+func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	handler, err := tofuhttpapi.NewHandler(tofuhttpapi.Config{
+		Authenticator: coverageAuthenticator{},
+		Authorizer:    coverageAuthorizer{},
+		Logger:        slog.New(slog.DiscardHandler),
+		Workspaces:    coverageTofuHTTPWorkspaces{},
+		Namespaces:    namespaces,
+		Audit:         nil,
+		Gate:          nil,
+	})
+	if err != nil {
+		tb.Fatalf("tofu http backend handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageTofuHTTPWorkspaces answers no workspace and no state. It exists
+// only to build the http backend handler for its route table; no request is
+// ever served.
+type coverageTofuHTTPWorkspaces struct{}
+
+func (coverageTofuHTTPWorkspaces) Get(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) GetByID(_ context.Context, _ workspace.ID) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) LockWithID(
+	_ context.Context, _ workspace.ID, _, _, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) UnlockLock(
+	_ context.Context, _ workspace.ID, _, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+//nolint:revive // The port takes the lock ID beside the caller, the allowance and the audit record.
+func (coverageTofuHTTPWorkspaces) ForceUnlockLock(
+	_ context.Context, _ workspace.ID, _ workspace.Lock, _ string,
+	_ namespace.Overrides, _ func() error,
+) (workspace.Workspace, bool, error) {
+	return workspace.Workspace{}, false, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrNoState
+}
+
+func (coverageTofuHTTPWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
+	return nil, workspace.ErrNoState
+}
+
+func (coverageTofuHTTPWorkspaces) WriteState(
+	_ context.Context, _ workspace.ID, _ workspace.StreamInput,
+	_ workspace.StreamAuthority, _ io.Reader,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrNotFound
 }
 
 // coverageWorkspaces answers no workspace and no state. It exists only to
@@ -896,6 +982,7 @@ func CoverageAllowlist() []AllowEntry {
 		stateAllowEntries(),
 		restoreAllowEntries(),
 		journalAllowEntries(),
+		tofuHTTPAllowEntries(),
 		principalAllowEntries(),
 		accessAllowEntries(),
 		reviewAllowEntries(),
@@ -1270,6 +1357,26 @@ func ipAllowlistAllowEntries() []AllowEntry {
 	}
 
 	return out
+}
+
+// tofuHTTPAllowEntries returns the allowlist rows of the OpenTofu http
+// backend. The real CLI reaches all four routes in TestTofuHTTPBackend, on
+// every store and every OpenTofu version. That test writes no matrix report,
+// so the coverage check cannot see its traffic.
+func tofuHTTPAllowEntries() []AllowEntry {
+	const (
+		path         = "/tofu/state/{namespace}/{workspace}"
+		coveringTest = "TestTofuHTTPBackend"
+		reason       = "The real OpenTofu CLI reaches the route through the http backend in its own test, " +
+			"which writes no matrix report."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodGet, Path: path, CoveringTest: coveringTest, Reason: reason},
+		{Method: http.MethodPost, Path: path, CoveringTest: coveringTest, Reason: reason},
+		{Method: "LOCK", Path: path, CoveringTest: coveringTest, Reason: reason},
+		{Method: "UNLOCK", Path: path, CoveringTest: coveringTest, Reason: reason},
+	}
 }
 
 // journalAllowEntries returns the allowlist row for the journal entry route.
