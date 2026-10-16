@@ -375,6 +375,13 @@ func (s *Store) swapDatabase(ctx context.Context, temp string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.swapDatabaseLocked(ctx, temp)
+}
+
+// swapDatabaseLocked is swapDatabase with the store lock already held: the
+// keep-access apply holds the write lock from the live snapshot through the
+// swap, so it swaps without taking the lock again.
+func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close database for restore: %w", err)
 	}

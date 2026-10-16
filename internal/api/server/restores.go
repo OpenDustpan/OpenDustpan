@@ -91,7 +91,9 @@ type getRestoreResponse struct {
 // ID. A second start while one runs answers 409. The caller needs
 // server:restore; whether the restore replaces the access tables depends on
 // server:restore-access, which only the site administrator holds. Without it
-// the restore keeps the current access tables.
+// the restore keeps the current access tables. The entry below records the
+// request; the restore service writes the surviving entry after the swap,
+// because the swap replaces audit_entries from the backup.
 func (h *Handler) startRestore(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
 ) {

@@ -9,12 +9,16 @@ import (
 // holds server:restore-access. The constants give every list one source:
 // AccessTables, Tables and the portable spec share them.
 const (
-	TablePrincipals      = "principals"
-	TablePrincipalGroups = "principal_groups"
-	TableGroupMembers    = "group_members"
-	TableAccessTokens    = "access_tokens"
-	TableRoles           = "roles"
-	TableGrants          = "grants"
+	TablePrincipals        = "principals"
+	TablePrincipalGroups   = "principal_groups"
+	TableGroupMembers      = "group_members"
+	TableAccessTokens      = "access_tokens"
+	TableRoles             = "roles"
+	TableGrants            = "grants"
+	TableSessions          = "sessions"
+	TableSignInRequests    = "sign_in_requests"
+	TableAccessTokenPolicy = "access_token_policy"
+	TableSessionPolicy     = "session_policy"
 )
 
 // AccessTables lists the tables that a restore replaces only when the
@@ -27,14 +31,20 @@ var AccessTables = []string{ //nolint:gochecknoglobals // Shared frozen list, li
 	TableAccessTokens,
 	TableRoles,
 	TableGrants,
+	TableSessions,
+	TableSignInRequests,
+	TableAccessTokenPolicy,
+	TableSessionPolicy,
 }
 
-// ErrRestoreAccessMismatch reports that the backup names a principal,
-// group, unit or namespace that the kept access tables and the restored
-// data do not hold. A site administrator can restore the access tables.
+// ErrRestoreAccessMismatch reports that the backup names access data that
+// is not in the current access tables. A site administrator can restore
+// the access tables.
+//
+//nolint:staticcheck // The restore route returns this exact sentence-case text for HTTP 409.
 var ErrRestoreAccessMismatch = errors.New(
-	"restore backup names access data that the current access tables do not hold: " +
-		"a site administrator can restore the access tables",
+	"The backup names access data that is not in the current access tables. " +
+		"A site administrator can restore the access tables.",
 )
 
 // IsAccessTable reports whether table is one of AccessTables.

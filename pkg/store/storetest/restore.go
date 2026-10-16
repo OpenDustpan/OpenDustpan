@@ -69,6 +69,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "a restore keeps the journal rows of a running update", test: testRestoreJournalBlob},
 		{name: "round trip over every table keeps every row", test: testRestoreRoundTrip},
 		{name: "a restore without restore-access keeps the access tables", test: testRestoreKeepsAccessTables},
+		{name: "a restore that keeps access refuses unknown namespaces and units", test: testRestoreKeepAccessMismatch},
 	}
 
 	for _, tc := range cases {

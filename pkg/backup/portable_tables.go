@@ -368,7 +368,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "sessions",
+			Table:   TableSessions,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -385,7 +385,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "sign_in_requests",
+			Table:   TableSignInRequests,
 			OrderBy: []string{portColDigest},
 			Columns: []Column{
 				{Name: portColDigest, Kind: KindText},
@@ -442,7 +442,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "access_token_policy",
+			Table:   TableAccessTokenPolicy,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindInteger},
@@ -455,7 +455,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "session_policy",
+			Table:   TableSessionPolicy,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindInteger},

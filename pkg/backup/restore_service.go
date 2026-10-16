@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -863,6 +864,13 @@ func (s *RestoreService) applyPinned(
 		return fmt.Errorf("record pre-backup %s after the swap: %w", pre.ID, err)
 	}
 
+	// The audit entry for the start went away with the old live data: the
+	// swap replaced audit_entries from the backup. Write the entry after the
+	// swap, in the restored data, so it survives. The access mode lives in
+	// the existing object field: no new column. A lost entry does not fail
+	// the restore.
+	s.appendRestoreAudit(ctx, id, req)
+
 	// A backup from before the seal change holds unsealed rows: run the
 	// after-apply step while maintenance mode still holds, so those rows
 	// end sealed. A failure fails the restore.
@@ -873,6 +881,54 @@ func (s *RestoreService) applyPinned(
 	}
 
 	return nil
+}
+
+// appendRestoreAudit writes the audit entry of restore id after the swap, in
+// the restored data, so the entry survives the swap that replaced
+// audit_entries from the backup. The object names whether the access tables
+// were replaced or kept. The live store keeps the entry; a store without the
+// server audit port skips it. Best effort: a lost entry never fails the
+// restore.
+func (s *RestoreService) appendRestoreAudit(ctx context.Context, id RestoreID, req RestoreRequest) {
+	store, ok := s.live.(interface {
+		AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
+	})
+	if !ok {
+		return
+	}
+
+	mode := "replaced"
+	if req.KeepAccessTables {
+		mode = "kept"
+	}
+
+	entry := audit.Entry{
+		At:         s.now().UTC(),
+		Namespace:  audit.ServerScope,
+		Subject:    req.RequestedBy,
+		IDPSubject: "",
+		TokenID:    "",
+		Action:     "server:restore",
+		Object:     "restore " + id.String() + " of backup " + req.BackupID.String() + " (access tables " + mode + ")",
+		Version:    "",
+		ValuePath:  "",
+		ValueCount: nil,
+		Changes:    nil,
+		SourceIP:   "",
+		UserAgent:  "",
+		Channel:    audit.ChannelAPI,
+		Kind:       audit.KindChange,
+		Outcome:    audit.OutcomeSuccess,
+		RequestID:  "",
+		ObjectID:   "",
+		PrevHash:   "",
+		Hash:       "",
+		Sequence:   0,
+	}
+
+	if _, err := store.AppendServer(ctx, entry); err != nil {
+		s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", id.String()))
+	}
 }
 
 // restoreSupersededText explains a running row the swap resurrected: the row

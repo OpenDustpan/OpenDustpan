@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -13,8 +12,8 @@ import (
 
 // ApplyStagingKeepingAccess implements backup.AccessKeepingApplier: it keeps
 // the current rows of the access tables, replaces the other tables with the
-// staged backup, and swaps the schemas in one transaction. A backup that
-// names a session of a principal the current access tables do not hold
+// staged backup, and swaps the schemas in one transaction. A kept grant or
+// principal that names a namespace or a unit the staged backup does not hold
 // reports ErrRestoreAccessMismatch and changes nothing.
 func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
 	s.stagingMu.Lock()
@@ -36,9 +35,11 @@ func (s *Store) ApplyStagingKeepingAccess(ctx context.Context) error {
 }
 
 // swapStagingSchemaKeepingAccess copies the live access tables over the
-// staged ones, checks that every staged session names a live principal, and
-// swaps the schemas in one transaction. Principals merge by ID so sessions
-// of live principals keep their parent.
+// staged ones, checks the kept grants and principals against the staged
+// namespaces and units, and swaps the schemas in one transaction.
+// Principals merge by ID: existing ones are updated, extra ones are deleted,
+// and missing ones are inserted last. The transaction locks the live access
+// tables first, so a revoke between the copy and the swap cannot be lost.
 func (s *Store) swapStagingSchemaKeepingAccess(ctx context.Context, staging string) error {
 	if !hasStagingPrefix(staging) {
 		return fmt.Errorf("apply staging schema %q: %w", staging, backup.ErrCorrupt)
@@ -63,32 +64,60 @@ func (s *Store) swapStagingSchemaKeepingAccess(ctx context.Context, staging stri
 			return fmt.Errorf("apply staging schema %q over %q: %w", staging, live, backup.ErrCorrupt)
 		}
 
+		if err := lockLiveAccessTables(ctx, tx, live); err != nil {
+			return err
+		}
+
 		if err := keepAccessTables(ctx, tx, live, staging); err != nil {
 			return err
 		}
 
-		previous := live + "_previous"
-
-		if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
-			return fmt.Errorf("move live schema aside: %w", err)
-		}
-
-		if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(staging)+" RENAME TO "+pgIdent(live)); err != nil {
-			return fmt.Errorf("move staged schema live: %w", err)
-		}
-
-		if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
-			return fmt.Errorf("drop previous schema: %w", err)
-		}
-
-		return fenceRestored(ctx, tx, live)
+		return swapSchemas(ctx, tx, live, staging)
 	})
 }
 
+// swapSchemas moves the live schema aside, moves the staged schema live,
+// drops the old live schema, and fences the restored namespaces, in tx.
+func swapSchemas(ctx context.Context, tx pgx.Tx, live, staging string) error {
+	previous := live + "_previous"
+
+	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(live)+" RENAME TO "+pgIdent(previous)); err != nil {
+		return fmt.Errorf("move live schema aside: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, "ALTER SCHEMA "+pgIdent(staging)+" RENAME TO "+pgIdent(live)); err != nil {
+		return fmt.Errorf("move staged schema live: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
+		return fmt.Errorf("drop previous schema: %w", err)
+	}
+
+	return fenceRestored(ctx, tx, live)
+}
+
+// lockLiveAccessTables locks every live access table in share mode, so no
+// concurrent revoke or grant lands between the live snapshot and the swap.
+func lockLiveAccessTables(ctx context.Context, tx pgx.Tx, live string) error {
+	tables := make([]string, 0, len(backup.AccessTables))
+	for _, table := range backup.AccessTables {
+		tables = append(tables, pgIdent(live)+"."+pgIdent(table))
+	}
+
+	query := "LOCK TABLE " + strings.Join(tables, ", ") + " IN SHARE MODE"
+	if _, err := tx.Exec(ctx, query); err != nil {
+		return fmt.Errorf("lock live access tables: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
 // keepAccessTables replaces the access tables of staging with the live rows.
-// Sessions stay as the backup holds them.
+// Before any write it checks that every kept grant and every kept
+// namespace-scoped principal names a namespace and a unit the staged backup
+// holds: a mismatch reports ErrRestoreAccessMismatch and changes nothing.
 func keepAccessTables(ctx context.Context, tx pgx.Tx, live, staging string) error {
-	if err := checkSessionsHavePrincipals(ctx, tx, live, staging); err != nil {
+	if err := checkKeptAccessReferences(ctx, tx, live, staging); err != nil {
 		return err
 	}
 
@@ -125,11 +154,22 @@ func keepAccessTables(ctx context.Context, tx pgx.Tx, live, staging string) erro
 // after principals. Principal groups go first so group members keep their
 // parent, and principals merge by ID in mergePrincipals.
 func keepChildTables() []string {
-	return []string{backup.TableGroupMembers, backup.TableAccessTokens, backup.TableGrants, backup.TableRoles}
+	return []string{
+		backup.TableGroupMembers,
+		backup.TableAccessTokens,
+		backup.TableSessions,
+		backup.TableSignInRequests,
+		backup.TableGrants,
+		backup.TableRoles,
+		backup.TableAccessTokenPolicy,
+		backup.TableSessionPolicy,
+	}
 }
 
 // copyAccessTable copies every row of table from the live schema into the
-// staged schema, naming every column so no query selects star.
+// staged schema, naming every column so no query selects star. The source
+// table carries the alias src, and every selected column names it: a
+// schema-qualified column (live.col) is not valid SQL.
 func copyAccessTable(ctx context.Context, tx pgx.Tx, live, staging, table string) error {
 	columns, err := tableColumns(ctx, tx, live, table)
 	if err != nil {
@@ -143,13 +183,13 @@ func copyAccessTable(ctx context.Context, tx pgx.Tx, live, staging, table string
 
 	from := make([]string, 0, len(columns))
 	for _, column := range columns {
-		from = append(from, pgIdent(live)+"."+pgIdent(column))
+		from = append(from, pgIdent("src")+"."+pgIdent(column))
 	}
 
 	query := "INSERT INTO " + pgIdent(staging) + "." + pgIdent(table) +
 		" (" + strings.Join(quoted, ", ") + ")" +
 		" SELECT " + strings.Join(from, ", ") +
-		" FROM " + pgIdent(live) + "." + pgIdent(table)
+		" FROM " + pgIdent(live) + "." + pgIdent(table) + " AS src"
 	if _, err := tx.Exec(ctx, query); err != nil {
 		return keepAccessError("copy access table "+table, err)
 	}
@@ -157,54 +197,168 @@ func copyAccessTable(ctx context.Context, tx pgx.Tx, live, staging, table string
 	return nil
 }
 
-// checkSessionsHavePrincipals reports ErrRestoreAccessMismatch when the
-// staged backup holds a session of a principal the live access tables do not
-// hold.
-func checkSessionsHavePrincipals(ctx context.Context, tx pgx.Tx, live, staging string) error {
-	var principalID string
-
-	err := tx.QueryRow(ctx,
-		"SELECT s.principal_id FROM "+pgIdent(staging)+".sessions s"+
-			" LEFT JOIN "+pgIdent(live)+`.principals p ON p.id = s.principal_id`+
-			" WHERE p.id IS NULL LIMIT 1",
-	).Scan(&principalID)
-	if err == nil {
-		return fmt.Errorf(
-			"staged session names unknown principal %q: %w",
-			principalID,
-			backup.ErrRestoreAccessMismatch,
-		)
+// checkKeptAccessReferences reports ErrRestoreAccessMismatch when a kept
+// current grant names a namespace or a unit the staged backup does not hold,
+// or when a kept namespace-scoped principal names a namespace the staged
+// backup does not hold. Only current grants and principals count: revoked
+// grants and deleted principals are history and need no target.
+func checkKeptAccessReferences(ctx context.Context, tx pgx.Tx, live, staging string) error {
+	stagedNS, err := stringSet(ctx, tx, "namespaces", "SELECT "+pgIdent("name")+" FROM "+pgIdent(staging)+".namespaces")
+	if err != nil {
+		return err
 	}
 
-	if !isNoRows(err) {
-		return fmt.Errorf("check staged sessions: %w", backup.ErrExportRead)
+	stacks, err := stringSet(ctx, tx, "stacks", "SELECT "+pgIdent("id")+" FROM "+pgIdent(staging)+".stacks")
+	if err != nil {
+		return err
+	}
+
+	workspaces, err := stringSet(ctx, tx, "workspaces", "SELECT "+pgIdent("id")+" FROM "+pgIdent(staging)+".workspaces")
+	if err != nil {
+		return err
+	}
+
+	stagedUnits := map[string]bool{}
+	for id := range stacks {
+		stagedUnits[id] = true
+	}
+
+	for id := range workspaces {
+		stagedUnits[id] = true
+	}
+
+	if err := checkKeptGrants(ctx, tx, live, stagedNS, stagedUnits); err != nil {
+		return err
+	}
+
+	return checkKeptPrincipals(ctx, tx, live, stagedNS)
+}
+
+// stringSet returns the distinct text values of a one-column query over the
+// staged what. A failure maps to ErrExportRead without driver text.
+func stringSet(ctx context.Context, tx pgx.Tx, what, query string) (map[string]bool, error) {
+	rows, err := tx.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("read staged %s: %w", what, backup.ErrExportRead)
+	}
+
+	defer rows.Close()
+
+	out := map[string]bool{}
+
+	for rows.Next() {
+		var value string
+
+		if scanErr := rows.Scan(&value); scanErr != nil {
+			return nil, fmt.Errorf("read staged %s: %w", what, backup.ErrExportRead)
+		}
+
+		out[value] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read staged %s: %w", what, backup.ErrExportRead)
+	}
+
+	return out, nil
+}
+
+// checkKeptGrants reports ErrRestoreAccessMismatch when a current kept grant
+// names a namespace or a unit the staged backup does not hold.
+func checkKeptGrants(
+	ctx context.Context, tx pgx.Tx, live string, stagedNS, stagedUnits map[string]bool,
+) error {
+	rows, err := tx.Query(ctx,
+		"SELECT "+pgIdent("id")+", "+pgIdent("namespace")+", "+pgIdent("target")+
+			" FROM "+pgIdent(live)+".grants WHERE revoked_at_ms IS NULL")
+	if err != nil {
+		return fmt.Errorf("check kept grants: %w", backup.ErrExportRead)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, ns, target string
+
+		if scanErr := rows.Scan(&id, &ns, &target); scanErr != nil {
+			return fmt.Errorf("check kept grants: %w", backup.ErrExportRead)
+		}
+
+		if ns != "" && !stagedNS[ns] {
+			return fmt.Errorf(
+				"kept grant %q names missing namespace %q: %w",
+				id,
+				ns,
+				backup.ErrRestoreAccessMismatch,
+			)
+		}
+
+		if unitID, ok := strings.CutPrefix(target, "unit:"); ok && !stagedUnits[unitID] {
+			return fmt.Errorf(
+				"kept grant %q names missing unit %q: %w",
+				id,
+				target,
+				backup.ErrRestoreAccessMismatch,
+			)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("check kept grants: %w", backup.ErrExportRead)
 	}
 
 	return nil
 }
 
-// mergePrincipals adds the live principals the staging schema misses,
-// updates the ones both hold, and deletes the extra ones. The children are
-// already gone and the sessions name only live principals, so every delete
-// keeps the foreign keys.
+// checkKeptPrincipals reports ErrRestoreAccessMismatch when a current kept
+// namespace-scoped principal names a namespace the staged backup does not
+// hold.
+func checkKeptPrincipals(
+	ctx context.Context, tx pgx.Tx, live string, stagedNS map[string]bool,
+) error {
+	rows, err := tx.Query(ctx,
+		"SELECT "+pgIdent("id")+", "+pgIdent("namespace")+
+			" FROM "+pgIdent(live)+".principals WHERE deleted_at_ms IS NULL")
+	if err != nil {
+		return fmt.Errorf("check kept principals: %w", backup.ErrExportRead)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var id, ns string
+
+		if scanErr := rows.Scan(&id, &ns); scanErr != nil {
+			return fmt.Errorf("check kept principals: %w", backup.ErrExportRead)
+		}
+
+		if ns != "" && !stagedNS[ns] {
+			return fmt.Errorf(
+				"kept principal %q names missing namespace %q: %w",
+				id,
+				ns,
+				backup.ErrRestoreAccessMismatch,
+			)
+		}
+	}
+
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("check kept principals: %w", backup.ErrExportRead)
+	}
+
+	return nil
+}
+
+// mergePrincipals updates the staged principals the live schema also holds,
+// deletes the staged ones the live schema does not hold, and then inserts
+// the live ones the staging schema misses. The children are already gone,
+// so every delete keeps the foreign keys. Update and delete run before the
+// insert, so a principal deleted and created again with the same subject
+// does not hit the subject unique index.
 func mergePrincipals(ctx context.Context, tx pgx.Tx, live, staging string) error {
 	columns, err := tableColumns(ctx, tx, live, backup.TablePrincipals)
 	if err != nil {
 		return err
-	}
-
-	quoted := make([]string, 0, len(columns))
-	for _, column := range columns {
-		quoted = append(quoted, pgIdent(column))
-	}
-
-	insertQuery := "INSERT INTO " + pgIdent(staging) + "." + pgIdent(backup.TablePrincipals) +
-		" (" + strings.Join(quoted, ", ") + ")" +
-		" SELECT " + strings.Join(qualifiedColumns(live, columns), ", ") +
-		" FROM " + pgIdent(live) + "." + pgIdent(backup.TablePrincipals) +
-		" WHERE id NOT IN (SELECT id FROM " + pgIdent(staging) + "." + pgIdent(backup.TablePrincipals) + ")"
-	if _, err := tx.Exec(ctx, insertQuery); err != nil {
-		return keepAccessError("keep staged principals", err)
 	}
 
 	if err := updateExistingPrincipals(ctx, tx, live, staging, columns); err != nil {
@@ -215,6 +369,20 @@ func mergePrincipals(ctx context.Context, tx pgx.Tx, live, staging string) error
 		" WHERE id NOT IN (SELECT id FROM " + pgIdent(live) + "." + pgIdent(backup.TablePrincipals) + ")"
 	if _, err := tx.Exec(ctx, deleteQuery); err != nil {
 		return keepAccessError("clear extra staged principals", err)
+	}
+
+	quoted := make([]string, 0, len(columns))
+	for _, column := range columns {
+		quoted = append(quoted, pgIdent(column))
+	}
+
+	insertQuery := "INSERT INTO " + pgIdent(staging) + "." + pgIdent(backup.TablePrincipals) +
+		" (" + strings.Join(quoted, ", ") + ")" +
+		" SELECT " + strings.Join(qualifiedColumns("src", columns), ", ") +
+		" FROM " + pgIdent(live) + "." + pgIdent(backup.TablePrincipals) + " AS src" +
+		" WHERE id NOT IN (SELECT id FROM " + pgIdent(staging) + "." + pgIdent(backup.TablePrincipals) + ")"
+	if _, err := tx.Exec(ctx, insertQuery); err != nil {
+		return keepAccessError("keep staged principals", err)
 	}
 
 	return nil
@@ -285,12 +453,12 @@ func tableColumns(ctx context.Context, tx pgx.Tx, schema, table string) ([]strin
 	return out, nil
 }
 
-// qualifiedColumns answers live.column for every column.
-func qualifiedColumns(schema string, columns []string) []string {
+// qualifiedColumns answers alias.column for every column.
+func qualifiedColumns(alias string, columns []string) []string {
 	out := make([]string, 0, len(columns))
 
 	for _, column := range columns {
-		out = append(out, pgIdent(schema)+"."+pgIdent(column))
+		out = append(out, pgIdent(alias)+"."+pgIdent(column))
 	}
 
 	return out
@@ -319,9 +487,4 @@ func isForeignKeyError(err error) bool {
 
 	return strings.Contains(err.Error(), "violates foreign key") ||
 		strings.Contains(err.Error(), "foreign key constraint")
-}
-
-// isNoRows reports whether err is the missing-row error of pgx.
-func isNoRows(err error) bool {
-	return errors.Is(err, pgx.ErrNoRows)
 }
