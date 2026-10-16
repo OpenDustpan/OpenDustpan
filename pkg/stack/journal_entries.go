@@ -220,19 +220,27 @@ type journalEntryIDs struct {
 // JournalEntries writes journal batches: the blob first, then the row in a fenced
 // transaction (ADR 43, decision 6.1). It holds no state of its own.
 type JournalEntries struct {
-	blobs    blob.Store
-	rows     JournalStore
-	verifier BatchVerifier
+	blobs              blob.Store
+	rows               JournalStore
+	verifier           BatchVerifier
+	maxCheckpointBytes int
 }
 
 // NewJournalEntries returns a writer over the blob store, the row store and the
-// batch verifier.
-func NewJournalEntries(blobs blob.Store, rows JournalStore, verifier BatchVerifier) (*JournalEntries, error) {
+// batch verifier. maxCheckpointBytes bounds a batch that holds one entry;
+// zero or less means DefaultMaxCheckpointBytes.
+func NewJournalEntries(
+	blobs blob.Store, rows JournalStore, verifier BatchVerifier, maxCheckpointBytes int,
+) (*JournalEntries, error) {
 	if verifier == nil {
 		return nil, ErrNilVerifier
 	}
 
-	return &JournalEntries{blobs: blobs, rows: rows, verifier: verifier}, nil
+	if maxCheckpointBytes <= 0 {
+		maxCheckpointBytes = DefaultMaxCheckpointBytes
+	}
+
+	return &JournalEntries{blobs: blobs, rows: rows, verifier: verifier, maxCheckpointBytes: maxCheckpointBytes}, nil
 }
 
 // RemoveBlobs deletes the blobs of journal batches after the build has removed their
@@ -389,14 +397,55 @@ func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update Upd
 	return j.RemoveBlobs(ctx, orphans)
 }
 
+// batchLimitError reports a journal batch over MaxJournalBatchBytes. Its
+// Error text keeps the update wrapper for the log, and Message is the one
+// sentence the server answers. It wraps ErrTooLarge.
+type batchLimitError struct {
+	size  int
+	limit int
+}
+
+// Error returns the refusal with the batch size and the batch bound.
+func (e *batchLimitError) Error() string {
+	return fmt.Sprintf(
+		"%v: journal batch of %d bytes exceeds the limit of %d bytes: "+
+			"split the change into smaller updates and run `pulumi up` again",
+		ErrTooLarge, e.size, e.limit,
+	)
+}
+
+// Unwrap returns ErrTooLarge.
+func (e *batchLimitError) Unwrap() error { return ErrTooLarge }
+
+// BatchOverLimit returns the refusal of a journal batch of size bytes over the
+// batch bound limit. It wraps ErrTooLarge and answers one sentence at the edge.
+func BatchOverLimit(size, limit int) error {
+	return &batchLimitError{size: size, limit: limit}
+}
+
+// Message returns the one-sentence answer for the batch refusal.
+func (e *batchLimitError) Message() string {
+	return fmt.Sprintf(
+		"This journal batch has %d bytes, more than the limit of %d bytes: run `pulumi up` with fewer resources.",
+		e.size, e.limit,
+	)
+}
+
 // Append stores one batch. It returns nil when the batch is stored, or when it is
 // a retry of batch content that is already stored (ADR 43, decisions 6.2 and 6.3).
 // It returns ErrJournalConflict when the batch differs from what is stored, and
 // ErrWrongUpdateState or namespace.ErrFenced when the write is refused. A refusal
 // deletes the blob that this call wrote, as a previous save does. Any other
-// failure keeps the blob for the sweep. Each refusal and each failed store is
-// recorded against the update, so a later complete with succeeded finds it.
+// failure keeps the blob for the sweep. A batch over MaxJournalBatchBytes is
+// refused with ErrTooLarge before anything is stored, unless it holds one
+// entry and fits the configured checkpoint bound, because the CLI cannot split
+// one entry. Each refusal and each failed store is recorded against the
+// update, so a later complete with succeeded finds it.
 func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence namespace.Fence) error {
+	if batchTooLarge(batch.Content, j.maxCheckpointBytes) {
+		return &batchLimitError{size: len(batch.Content), limit: MaxJournalBatchBytes}
+	}
+
 	ids, err := batchIDs(batch.Content)
 	if err != nil {
 		return j.recorded(ctx, batch, fence, readableSequences(batch.Content), err)
@@ -446,6 +495,30 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 	}
 
 	return nil
+}
+
+// singleEntryBatch reports whether body holds exactly one journal entry. A
+// batch over the batch bound still passes when it holds one entry and fits
+// the checkpoint bound, because the CLI cannot split one entry.
+func singleEntryBatch(body []byte) bool {
+	var batch journalBatchBody
+	if err := json.Unmarshal(body, &batch); err != nil {
+		return false
+	}
+
+	return len(batch.Entries) == 1
+}
+
+// batchTooLarge reports whether content of length n fails the batch bound:
+// over MaxJournalBatchBytes, unless it holds one entry and fits the
+// checkpoint bound limit. A body that does not decode has more than one
+// entry for this check, so it fails over the batch bound.
+func batchTooLarge(content []byte, checkpointLimit int) bool {
+	if len(content) <= MaxJournalBatchBytes {
+		return false
+	}
+
+	return len(content) > checkpointLimit || !singleEntryBatch(content)
 }
 
 // recorded stores the refusal of a batch that Append did not store, then

@@ -16,10 +16,10 @@ import (
 
 // journalWriterFor returns the journal writer of the recording build, over the
 // fixture's blobs and update store, with the replay verifier.
-func journalWriterFor(t *testing.T, blobs *memBlob, rows *memUpdateStore) *stack.JournalEntries {
+func journalWriterFor(t *testing.T, blobs *memBlob, rows *memUpdateStore, limit int) *stack.JournalEntries {
 	t.Helper()
 
-	journal, err := stack.NewJournalEntries(blobs, rows, pulumijournal.Verifier{})
+	journal, err := stack.NewJournalEntries(blobs, rows, pulumijournal.Verifier{}, limit)
 	if err != nil {
 		t.Fatalf("journal writer: %v", err)
 	}
@@ -38,14 +38,21 @@ func (m *memUpdateStore) PutJournalRow(_ context.Context, row stack.JournalRow, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	m.journal[row.Update] = append(m.journal[row.Update], row.BlobKey)
 	m.seqs[row.Update] = append(m.seqs[row.Update], row.SequenceIDs...)
 
 	return false, nil
 }
 
-// JournalKeys returns no keys: the fixture keeps no journal rows.
-func (m *memUpdateStore) JournalKeys(context.Context, stack.ID, stack.UpdateID) ([]blob.Key, error) {
-	return nil, nil
+// JournalKeys returns the blob keys of the stored rows of the update, in
+// arrival order.
+func (m *memUpdateStore) JournalKeys(
+	_ context.Context, _ stack.ID, update stack.UpdateID,
+) ([]blob.Key, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return append([]blob.Key(nil), m.journal[update]...), nil
 }
 
 // JournalSweepable reports that no journal is sweepable.

@@ -95,6 +95,19 @@ type fakeRows struct {
 	calls    []string
 }
 
+// newFakeRows returns an empty fake of the journal rows.
+func newFakeRows() *fakeRows {
+	return &fakeRows{
+		err:      nil,
+		rows:     nil,
+		keys:     nil,
+		refusals: nil,
+		retried:  false,
+		running:  false,
+		calls:    nil,
+	}
+}
+
 func (f *fakeRows) PutJournalRow(_ context.Context, row stack.JournalRow, _ namespace.Fence) (bool, error) {
 	f.calls = append(f.calls, "row")
 	f.rows = append(f.rows, row)
@@ -112,7 +125,7 @@ func (f *fakeRows) PutJournalRow(_ context.Context, row stack.JournalRow, _ name
 func newEntries(t *testing.T, blobs blob.Store, rows stack.JournalStore, v stack.BatchVerifier) *stack.JournalEntries {
 	t.Helper()
 
-	entries, err := stack.NewJournalEntries(blobs, rows, v)
+	entries, err := stack.NewJournalEntries(blobs, rows, v, 0)
 	if err != nil {
 		t.Fatalf("new journal writer: %v", err)
 	}
@@ -568,6 +581,7 @@ func TestNewJournalEntriesRefusesNilVerifier(t *testing.T) {
 		newFakeBlobs(),
 		&fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil},
 		nil,
+		0,
 	)
 	if !errors.Is(err, stack.ErrNilVerifier) {
 		t.Fatalf("nil verifier: err = %v, want ErrNilVerifier", err)

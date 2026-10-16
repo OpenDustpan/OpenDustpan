@@ -972,7 +972,17 @@ func classifyUpdate(err error) (int, string) {
 	case errors.Is(err, stack.ErrLeaseInvalid), errors.Is(err, stack.ErrLeaseExpired):
 		return http.StatusUnauthorized, err.Error()
 	case errors.Is(err, stack.ErrTooLarge):
+		// A replay bound refusal answers its one-sentence message, which
+		// names the bound, its limit and the one command that helps,
+		// without the update wrapper prefixes. Any other oversized
+		// request answers the error text itself.
+		if msg, ok := stack.TooLargeMessage(err); ok {
+			return http.StatusRequestEntityTooLarge, msg
+		}
+
 		return http.StatusRequestEntityTooLarge, err.Error()
+	case errors.Is(err, stack.ErrJournalBuildTimeout):
+		return http.StatusServiceUnavailable, err.Error()
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}
