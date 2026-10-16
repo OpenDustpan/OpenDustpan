@@ -84,7 +84,7 @@ both together.
 | [33](0033-customer-managed-keys.md) | Customer-managed keys | draft |
 | [34](0034-server-observability.md) | Observing the OpenDustpan server | accepted |
 | [35](0035-packaging.md) | Packaging and installation | draft |
-| [36](0036-high-availability.md) | Scale out to several instances on one database | discussing |
+| [36](0036-high-availability.md) | Scale out to several instances on one database | accepted |
 | [37](0037-federation.md) | Namespace placement and routing | draft |
 | [38](0038-upgrade-checks.md) | Upgrade checks | accepted |
 | [39](0039-reading-state.md) | Reading state contents | accepted |

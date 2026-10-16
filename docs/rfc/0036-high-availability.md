@@ -1,16 +1,16 @@
 ---
 rfc: 36
 title: Scale out to several instances on one database
-status: discussing
+status: accepted
+adr: 72
 created: 2026-10-10
 ---
 
 # RFC 36. Scale out to several instances on one database
 
-Status: discussing. The project owner decided questions 1 to 7 on
-2026-10-16 (see "Decisions"). Questions 8 and 9 stay open, and each has a
-proposal below. The decided parts go to an ADR. This RFC stays open until
-the owner answers questions 8 and 9.
+Status: accepted. The project owner decided every question on 2026-10-16
+(see "Decisions"), and accepted
+[ADR 72](../adr/0072-scale-out-on-one-database.md), which records them.
 
 This RFC covers only the scale-out half of high availability: several
 server instances on one PostgreSQL database and one object store, in one
@@ -207,6 +207,23 @@ the ADR for this RFC.
    in-process cache of write-once blob keys comes first. groupcache comes
    only after a load measurement shows a need. This was the proposal of this
    RFC, and the owner raised no objection on 2026-10-16. (Question 7.)
+9. **A missed schedule tick runs once.** The proposal for question 8 below,
+   as written: one catch-up, claimed by one instance with the conditional
+   `UPDATE` of the schedule row, after a random first delay of up to the
+   smaller of 60 s and one tenth of the interval. Decider: the project
+   owner, 2026-10-16. (Question 8.)
+10. **Upgrades and rolling deploys.** The proposal for question 9 below, as
+    written. Upgrades can skip any number of releases, with a schema test
+    for each tag and an upgrade test from each supported release. Rolling
+    deploys use expand and contract with K = 2, a minimum binary version in
+    the schema, version rows at start-up and a write-path check of the
+    minimum. This supersedes ADR 33 decision 1 for `v0.1.0`. Decider: the
+    project owner, 2026-10-16. (Question 9 and open question 3.)
+11. **A fixed audit hash encoding.** No audit entry from before the first
+    release has to keep its hash, so the encoding writes every field in a
+    fixed order, with an empty value when the field is not set. This
+    supersedes ADR 60 decision 5 and part of ADR 64 decision 10. Decider:
+    the project owner, 2026-10-16.
 
 ## Design for the decided parts
 
@@ -751,16 +768,7 @@ refuses a second instance on one SQLite file.
 
 ## Open questions
 
-1. Schedules: does a missed tick run once after a random delay at start-up,
-   claimed by one instance (the proposal for question 8)?
-2. Rolling deploys: expand and contract with a support window of K = 2,
-   a minimum binary version in the schema, version rows written at start-up
-   and a write-path check of the minimum (the proposal for question 9)?
-3. **Must be decided before `v0.1.0`.** ADR 33 decision 1: does an older
-   binary keep refusing every newer schema, or does it refuse only a schema
-   whose minimum binary version is above its own? A released binary keeps
-   its rule, so the coexistence part of question 2 is possible only if the
-   first tag ships the second rule.
+None. The owner decided every question on 2026-10-16.
 
 ## Appendix: background jobs and long operations today
 
@@ -800,5 +808,5 @@ refuses a second instance on one SQLite file.
 
 ## Outcome
 
-Questions 1 to 7 decided on 2026-10-16. ADR 72 records them, proposed in
-#699. Questions 8 and 9 are open.
+Accepted on 2026-10-16 by the project owner. The decisions are in
+[ADR 72](../adr/0072-scale-out-on-one-database.md) (#699).
