@@ -211,6 +211,8 @@ func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		TempAdmins:    nil,
+		Now:           nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
