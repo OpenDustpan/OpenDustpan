@@ -83,6 +83,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_config_last_reload_success` | (none) |
 | `dustpan_inactivity_sweeps_total` | `result` |
 | `dustpan_deleted_unit_sweep_total` | `result` |
+| `dustpan_signin_failure_counter_errors_total` | `operation` |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.
@@ -95,6 +96,10 @@ The duration family also writes `_bucket`, `_sum` and `_count` series.
 append failed.
 Alert when it is above zero. The audit guide shows the rule.
 This is the alert for failed logging (PCI DSS 10.7).
+`dustpan_signin_failure_counter_errors_total` counts the failed calls of
+the failure budget that all instances share, with the label `operation`
+(`add` or `prune`).
+While these calls fail, each instance keeps only its own budget.
 `dustpan_config_reloads_total` counts the reloads of the configuration file
 with the label `result` (`success` or `failure`).
 `dustpan_config_last_reload_success` holds 1 when the last reload succeeded,

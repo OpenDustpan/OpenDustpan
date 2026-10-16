@@ -1705,9 +1705,17 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 		return nil, fmt.Errorf("namespace store keeps no audit entries: %w", ErrMissingOption)
 	}
 
+	// A store that keeps no EntryReader answers 501 on the read of one
+	// entry; the SQL stores keep one.
+	reader, ok := cfg.namespaceStore.(audit.EntryReader)
+	if !ok {
+		reader = nil
+	}
+
 	handler, err := auditapi.NewHandler(auditapi.Config{
 		Namespaces:    svc.namespaces,
 		Entries:       entries,
+		EntryReader:   reader,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Sessions:      cfg.sessionCookies,
@@ -2213,6 +2221,7 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 
 	gate, err := authgate.New(authgate.Config{
 		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
+		Failures: nil, Window: 0, CounterErrors: nil,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {

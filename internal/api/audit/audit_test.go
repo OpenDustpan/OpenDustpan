@@ -68,7 +68,33 @@ type memAuditStore struct {
 	err     error
 }
 
-var _ audit.Store = (*memAuditStore)(nil)
+var (
+	_ audit.Store       = (*memAuditStore)(nil)
+	_ audit.EntryReader = (*memAuditStore)(nil)
+)
+
+func (m *memAuditStore) EntryAt(_ context.Context, ns namespace.Name, seq int64) (audit.Entry, error) {
+	if m.err != nil {
+		return audit.Entry{}, m.err
+	}
+
+	for i := range m.entries[ns] {
+		if m.entries[ns][i].Sequence == seq {
+			return m.entries[ns][i], nil
+		}
+	}
+
+	return audit.Entry{}, audit.ErrEntryNotFound
+}
+
+func (m *memAuditStore) LastEntry(_ context.Context, ns namespace.Name) (audit.Entry, bool, error) {
+	chain := m.entries[ns]
+	if len(chain) == 0 {
+		return audit.Entry{}, false, m.err
+	}
+
+	return chain[len(chain)-1], true, m.err
+}
 
 func (m *memAuditStore) Append(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
 	if m.err != nil {
@@ -278,6 +304,7 @@ func newTestHandler(t *testing.T) *apitaudit.Handler {
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
 		Namespaces:    namespaces,
 		Entries:       entries,
+		EntryReader:   entries,
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
 		Sessions:      nil,
@@ -319,6 +346,7 @@ func newEnforcingHandlerWithSessions(
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
 		Namespaces:    namespaces,
 		Entries:       entries,
+		EntryReader:   entries,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Sessions:      sessions,
@@ -532,6 +560,7 @@ func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
 		Namespaces:    namespaces,
 		Entries:       entries,
+		EntryReader:   entries,
 		Authenticator: tokenAuthenticator{},
 		Sessions:      nil,
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
