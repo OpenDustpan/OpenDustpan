@@ -309,7 +309,13 @@ has three dialects: `postgres`, `cockroach` and `sqlite`. The docs call
 SQLite "useful for local development, testing, and single-node deployments",
 behind a blank import of the driver [dbos-golang-config]. The `go.mod`
 requires `pgx/v5`, `modernc.org/sqlite`, `robfig/cron/v3`, `spf13/cobra`,
-`spf13/viper`, `stretchr/testify`, `google/uuid` and `goleak`. Queues
+`spf13/viper`, `stretchr/testify`, `google/uuid` and `goleak`. Only
+`cmd/dbos/` imports `cobra` and `viper`, and only `_test.go` files import
+`testify` and `goleak`. These modules go into `go.sum`, but a binary that
+imports the `dbos` package does not link them. The packages that `dbos`
+links are `google/uuid`, `jackc/pgx/v5` (`pgconn`, `pgxpool`),
+`jackc/pgerrcode` and `robfig/cron/v3`, plus `modernc.org/sqlite` through
+`dbos/driver/sqlite` (imports of the non-test files at v1.7.0). Queues
 dequeue with `FOR UPDATE SKIP LOCKED` where the dialect has it.
 
 **Recovery with several instances.** This is the part that matters most for
@@ -625,7 +631,7 @@ Adopting DBOS Transact Go behind the port:
   fences its own records. Start keys, schedules
   with tick keys, queues with `SKIP LOCKED`, cancellation and patching
   already built and tested. A datasource transaction on the system database
-  pool commits a step and its writes together.
+  pool commits a step and its writes together, but see the pool item below.
 - Against, from the sources above:
   - Without Conductor, cross-instance recovery is by executor ID only
     (tests 7 and 8 fail as shipped). Conductor is proprietary. We would
@@ -643,9 +649,16 @@ Adopting DBOS Transact Go behind the port:
     must still carry the namespace fence (ADR 4). The DBOS owner token
     fences the DBOS records, not our domain rows, so tests 5 and 17 stay our
     code either way.
-  - New modules that the server does not use today, among them
-    `pgerrcode`, `robfig/cron`, `cobra`, `viper` and `testify`. The project
-    rules ask the owner before each new dependency.
+  - DBOS closes the system database pool that the caller gives it.
+    `SysDB.Shutdown` calls `Close` on the `*pgxpool.Pool` or `*sql.DB` from
+    `SystemDBPool` or `SQLiteSystemDB` (`dbos/internal/sysdb/system_database.go`
+    line 1317, adapters at `dbq.go` lines 126 and 257). So DBOS needs its own
+    pool, separate from the store's pool. Our domain writes then cannot
+    commit in the same transaction as the DBOS step record, and the atomic
+    mode above is lost for them.
+  - New linked modules that the server does not use today: `pgerrcode` and
+    `robfig/cron`. `cobra`, `viper`, `testify` and `goleak` go into `go.sum`
+    only. The project rules ask the owner before each new dependency.
 - Our own adapter: one port in a tool-neutral package, one table or two
   (job leases and runs) in each store, a conformance suite, and code that
   this repository already has in three places (update leases, the audit sink
