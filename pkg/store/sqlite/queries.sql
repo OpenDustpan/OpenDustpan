@@ -1017,6 +1017,14 @@ FROM principals p
 LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
 WHERE p.subject = ? AND p.deleted_at_ms IS NULL;
 
+-- name: SubjectsOfEnabledCaller :many
+-- The subjects of a caller as the check of a grant write reads them: a
+-- principal that is disabled has none.
+SELECT p.id AS principal_id, CAST(COALESCE(m.group_id, '') AS TEXT) AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
+WHERE p.subject = ? AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL;
+
 -- name: ReviewGrants :many
 -- One page of an access-review export (ADR 52, decision 10). The join on
 -- group_members reads the memberships of the groups of the grants: of one
@@ -1730,28 +1738,36 @@ ORDER BY wrapper_id;
 -- name: CreateSignInProvider :execrows
 INSERT INTO sign_in_providers (
     provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 WHERE provider_id = ?;
 
 -- name: ListSignInProviders :many
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 ORDER BY provider_id;
 
 -- name: UpdateSignInProvider :execrows
--- The update applies only to the version that the change read.
+-- The update applies only to the version that the change read. The mode
+-- never changes.
 UPDATE sign_in_providers
 SET issuer = sqlc.arg('issuer'), display_name = sqlc.arg('display_name'), client_id = sqlc.arg('client_id'),
     client_secret = sqlc.arg('client_secret'), scopes = sqlc.arg('scopes'),
     auto_create = sqlc.arg('auto_create'), enabled = sqlc.arg('enabled'),
+    authorization_url = sqlc.arg('authorization_url'), token_url = sqlc.arg('token_url'),
+    userinfo_url = sqlc.arg('userinfo_url'), subject_claim = sqlc.arg('subject_claim'),
+    name_claim = sqlc.arg('name_claim'), username_claim = sqlc.arg('username_claim'),
+    email_claim = sqlc.arg('email_claim'),
     updated_at_ms = sqlc.arg('updated_at_ms'), version = sqlc.arg('version')
 WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version') - 1;
 

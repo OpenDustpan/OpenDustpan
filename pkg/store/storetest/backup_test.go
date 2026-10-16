@@ -1536,6 +1536,11 @@ func (s *fakeBackupStore) FenceAndUnlock(
 		return workspace.ErrConcurrentModification
 	}
 
+	if staged, found := s.data.states[sv.ID.String()]; !found ||
+		staged.Status != workspace.StatusPending || staged.Content != sv.Content {
+		return workspace.ErrUploadDenied
+	}
+
 	s.data.states[sv.ID.String()] = sv
 	s.data.current[w.ID.String()] = sv.ID.String()
 	s.data.workspaces[w.ID.String()] = w

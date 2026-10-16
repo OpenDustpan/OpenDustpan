@@ -362,15 +362,17 @@ type GrantStore interface {
 	// in its own transaction. It returns ErrNotFound when the record of the subject,
 	// or the custom role, has ended: the write reads them in its own
 	// transaction, so a delete that commits first wins. A subject or a role
-	// with no record at all is the Service's to check.
-	CreateGrant(ctx context.Context, g Grant, fence namespace.Fence, e audit.Entry) error
+	// with no record at all is the Service's to check. It runs check, when
+	// it is not nil, as a GrantCheck runs, and returns its error.
+	CreateGrant(ctx context.Context, g Grant, fence namespace.Fence, e audit.Entry, check GrantCheck) error
 	// GetGrant returns the current grant with the ID id, or ErrNotFound.
 	GetGrant(ctx context.Context, id string) (Grant, error)
 	// RevokeGrant ends the current grant with the ID id at e.At. fence
 	// names the namespace of the grant (the zero fence for the
 	// installation). It returns ErrNotFound when no such grant exists in
-	// that namespace.
-	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
+	// that namespace. It runs check, when it is not nil, as a GrantCheck
+	// runs, and returns its error.
+	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check GrantCheck) error
 	// ListGrantsOn returns one page of the current grants on obj that
 	// match the filters of q, ordered by subject then role, each with its
 	// holder, and the count of every current grant on obj that matches the
@@ -412,6 +414,29 @@ type GrantLookups interface {
 	RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error)
 }
 
+// GrantReads reads what decides the actions that a principal holds, and
+// where a role is granted, in the transaction of a write. A store gives it
+// to a GrantCheck. Each method reads as the method of the same name of
+// Callers, GrantStore, RoleStore or GrantLookups does.
+type GrantReads interface {
+	Callers
+	GrantsOn(ctx context.Context, subjects []Subject, objects []identity.Object) ([]Grant, error)
+	GetRoles(ctx context.Context, ids []string) ([]Role, error)
+	RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error)
+	RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error)
+}
+
+// GrantCheck is a rule that a write of a grant or of a role runs in its own
+// transaction, before the write changes anything. The store runs it after
+// the write holds its locks, after the fence check: each write that can
+// change the result of the check (a grant, a revoke, a role, a membership
+// or a principal) takes one of those locks too. r reads in that
+// transaction: a change that committed before the check is visible to it,
+// and a change that starts after the check waits until the write ends. An
+// error refuses the write: the write changes nothing and returns that
+// error.
+type GrantCheck func(ctx context.Context, r GrantReads) error
+
 // RoleStore keeps the custom roles. The built-in roles live in code. The
 // writes take an audit entry as the writes of GrantStore do. A delete ends
 // a role and keeps its row for the history.
@@ -431,8 +456,9 @@ type RoleStore interface {
 	// UpdateRole replaces the name, the description, the actions and the
 	// update time of the custom role with the ID r.ID. It returns
 	// ErrNotFound when no such role exists, and ErrAlreadyExists when
-	// another role has the name without regard to case.
-	UpdateRole(ctx context.Context, r Role, e audit.Entry) error
+	// another role has the name without regard to case. It runs check,
+	// when it is not nil, as a GrantCheck runs, and returns its error.
+	UpdateRole(ctx context.Context, r Role, e audit.Entry, check GrantCheck) error
 	// DeleteRole ends the custom role with the ID id at e.At. It returns
 	// ErrNotFound when no such role exists, and ErrInUse when a current
 	// grant holds it.

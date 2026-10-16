@@ -465,12 +465,29 @@ func seedBackupProviders(t *testing.T, s BackupStore) {
 
 	if pc, ok := s.(session.ProviderConfigStore); ok {
 		p := session.ProviderConfig{
-			CreatedAt: now(), UpdatedAt: now(), ID: "corp", Issuer: "https://idp.example", DisplayName: "Corp",
-			ClientID: "dustpan", SealedSecret: []byte("sealed secret"), Scopes: []string{"profile"}, Version: 1,
-			AutoCreate: true, Enabled: false,
+			CreatedAt: now(), UpdatedAt: now(), ID: "corp", Mode: session.ModeOIDC, Issuer: "https://idp.example",
+			DisplayName: "Corp", ClientID: "dustpan", SealedSecret: []byte("sealed secret"),
+			Scopes: []string{"profile"}, OAuth: session.OAuthSettings{
+				AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+				EmailClaim: "",
+			}, Version: 1, AutoCreate: true, Enabled: false,
 		}
 		if err := pc.CreateProviderConfig(ctx, p, ServerChange(now(), "sign-in-provider:corp")); err != nil {
 			t.Fatalf("create sign-in provider: %v", err)
+		}
+
+		plain := session.ProviderConfig{
+			CreatedAt: now(), UpdatedAt: now(), ID: "hub", Mode: session.ModeOAuth, Issuer: "", DisplayName: "Hub",
+			ClientID: "dustpan", SealedSecret: []byte("sealed secret of hub"), Scopes: []string{"read:user"},
+			OAuth: session.OAuthSettings{ //nolint:gosec // Test fixture: the URLs of a provider, no credential.
+				AuthorizationURL: "https://hub.example/login/oauth/authorize",
+				TokenURL:         "https://hub.example/login/oauth/access_token",
+				UserinfoURL:      "https://api.hub.example/user", SubjectClaim: "id", NameClaim: "name",
+				UsernameClaim: "login", EmailClaim: "email",
+			}, Version: 1, AutoCreate: false, Enabled: true,
+		}
+		if err := pc.CreateProviderConfig(ctx, plain, ServerChange(now(), "sign-in-provider:hub")); err != nil {
+			t.Fatalf("create plain OAuth sign-in provider: %v", err)
 		}
 	}
 }
@@ -643,14 +660,14 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 	}
 	for i := range grants {
 		fence, e := GrantWrite(t, s, grants[i].Object, now(), "grant:"+grants[i].ID)
-		if err := as.CreateGrant(ctx, grants[i], fence, e); err != nil {
+		if err := as.CreateGrant(ctx, grants[i], fence, e, nil); err != nil {
 			t.Fatalf("create grant %q: %v", grants[i].ID, err)
 		}
 	}
 
 	fence, revoked := GrantWrite(t, s, identity.NamespaceObject("acme"), now().Add(2*time.Hour), "grant:grt-revoked")
 
-	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked)
+	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked, nil)
 	if err != nil {
 		t.Fatalf("revoke grant: %v", err)
 	}

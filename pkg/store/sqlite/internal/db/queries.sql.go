@@ -1272,23 +1272,32 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 const createSignInProvider = `-- name: CreateSignInProvider :execrows
 INSERT INTO sign_in_providers (
     provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
 type CreateSignInProviderParams struct {
-	ProviderID   string
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   int64
-	Enabled      int64
-	CreatedAtMs  int64
-	UpdatedAtMs  int64
-	Version      int64
+	ProviderID       string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       int64
+	Enabled          int64
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	Version          int64
+	Mode             string
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
 }
 
 func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProviderParams) (int64, error) {
@@ -1304,6 +1313,14 @@ func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProv
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 		arg.Version,
+		arg.Mode,
+		arg.AuthorizationUrl,
+		arg.TokenUrl,
+		arg.UserinfoUrl,
+		arg.SubjectClaim,
+		arg.NameClaim,
+		arg.UsernameClaim,
+		arg.EmailClaim,
 	)
 	if err != nil {
 		return 0, err
@@ -3369,7 +3386,8 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 
 const getSignInProvider = `-- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 WHERE provider_id = ?
 `
@@ -3389,6 +3407,14 @@ func (q *Queries) GetSignInProvider(ctx context.Context, providerID string) (Sig
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
 		&i.Version,
+		&i.Mode,
+		&i.AuthorizationUrl,
+		&i.TokenUrl,
+		&i.UserinfoUrl,
+		&i.SubjectClaim,
+		&i.NameClaim,
+		&i.UsernameClaim,
+		&i.EmailClaim,
 	)
 	return i, err
 }
@@ -5969,7 +5995,8 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 
 const listSignInProviders = `-- name: ListSignInProviders :many
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 ORDER BY provider_id
 `
@@ -5995,6 +6022,14 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 			&i.Version,
+			&i.Mode,
+			&i.AuthorizationUrl,
+			&i.TokenUrl,
+			&i.UserinfoUrl,
+			&i.SubjectClaim,
+			&i.NameClaim,
+			&i.UsernameClaim,
+			&i.EmailClaim,
 		); err != nil {
 			return nil, err
 		}
@@ -7724,6 +7759,43 @@ func (q *Queries) SubjectsOfCaller(ctx context.Context, subject string) ([]Subje
 	return items, nil
 }
 
+const subjectsOfEnabledCaller = `-- name: SubjectsOfEnabledCaller :many
+SELECT p.id AS principal_id, CAST(COALESCE(m.group_id, '') AS TEXT) AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
+WHERE p.subject = ? AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL
+`
+
+type SubjectsOfEnabledCallerRow struct {
+	PrincipalID string
+	GroupID     string
+}
+
+// The subjects of a caller as the check of a grant write reads them: a
+// principal that is disabled has none.
+func (q *Queries) SubjectsOfEnabledCaller(ctx context.Context, subject string) ([]SubjectsOfEnabledCallerRow, error) {
+	rows, err := q.db.QueryContext(ctx, subjectsOfEnabledCaller, subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SubjectsOfEnabledCallerRow
+	for rows.Next() {
+		var i SubjectsOfEnabledCallerRow
+		if err := rows.Scan(&i.PrincipalID, &i.GroupID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const takeSignInRequest = `-- name: TakeSignInRequest :one
 DELETE FROM sign_in_requests WHERE digest = ?
 RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms
@@ -8104,24 +8176,36 @@ UPDATE sign_in_providers
 SET issuer = ?1, display_name = ?2, client_id = ?3,
     client_secret = ?4, scopes = ?5,
     auto_create = ?6, enabled = ?7,
-    updated_at_ms = ?8, version = ?9
-WHERE provider_id = ?10 AND version = ?9 - 1
+    authorization_url = ?8, token_url = ?9,
+    userinfo_url = ?10, subject_claim = ?11,
+    name_claim = ?12, username_claim = ?13,
+    email_claim = ?14,
+    updated_at_ms = ?15, version = ?16
+WHERE provider_id = ?17 AND version = ?16 - 1
 `
 
 type UpdateSignInProviderParams struct {
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   int64
-	Enabled      int64
-	UpdatedAtMs  int64
-	Version      int64
-	ProviderID   string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       int64
+	Enabled          int64
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
+	UpdatedAtMs      int64
+	Version          int64
+	ProviderID       string
 }
 
-// The update applies only to the version that the change read.
+// The update applies only to the version that the change read. The mode
+// never changes.
 func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProviderParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateSignInProvider,
 		arg.Issuer,
@@ -8131,6 +8215,13 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		arg.Scopes,
 		arg.AutoCreate,
 		arg.Enabled,
+		arg.AuthorizationUrl,
+		arg.TokenUrl,
+		arg.UserinfoUrl,
+		arg.SubjectClaim,
+		arg.NameClaim,
+		arg.UsernameClaim,
+		arg.EmailClaim,
 		arg.UpdatedAtMs,
 		arg.Version,
 		arg.ProviderID,

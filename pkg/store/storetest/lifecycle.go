@@ -511,14 +511,14 @@ func createUnitGrants(t *testing.T, s namespace.Store, as access.Store, obj iden
 	ns := unitGrant("grt-namespace", identity.NamespaceObject(obj.Namespace()))
 	fence, e := GrantWrite(t, s, ns.Object, now(), "grant:"+ns.ID)
 
-	if err := as.CreateGrant(t.Context(), ns, fence, e); err != nil {
+	if err := as.CreateGrant(t.Context(), ns, fence, e, nil); err != nil {
 		t.Fatalf("create grant %q: %v", ns.ID, err)
 	}
 
 	unit := unitGrant("grt-unit", obj)
 	fence, e = GrantWrite(t, s, unit.Object, now(), "grant:"+unit.ID)
 
-	if err := as.CreateGrant(t.Context(), unit, fence, e); err != nil {
+	if err := as.CreateGrant(t.Context(), unit, fence, e, nil); err != nil {
 		return fmt.Errorf("create grant on the unit: %w", err)
 	}
 

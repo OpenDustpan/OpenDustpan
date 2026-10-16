@@ -26,15 +26,22 @@ const durableRestoreKind durable.Kind = "restore-kind"
 func testRestoreKeepsDurableOperations(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
-	ps := portableRestoreStores(t, newStore(t), newStore(t))
-	ctx := t.Context()
+	src := newStore(t)
 
-	srcOps, srcOK := ps.src.(DurableHolder)
-	dstOps, dstOK := ps.dst.(DurableHolder)
-
-	if !srcOK || !dstOK {
+	srcOps, ok := src.(DurableHolder)
+	if !ok {
 		t.Skip("the store keeps no durable operations")
 	}
+
+	dst := newStore(t)
+
+	dstOps, ok := dst.(DurableHolder)
+	if !ok {
+		t.Skip("the store keeps no durable operations")
+	}
+
+	ps := portableRestoreStores(t, src, dst)
+	ctx := t.Context()
 
 	mustStartDurable(t, srcOps.DurableStore(), "from-backup")
 

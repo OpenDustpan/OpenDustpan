@@ -286,7 +286,14 @@ func newServiceBackedHandler(
 		SignIn: &apiserver.SignIn{
 			Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			Providers: []apiserver.SignInProvider{
-				{Client: stubOIDC{}, ID: testProvider, DisplayName: "Corp", AutoCreate: true, Stored: false},
+				{
+					Client:      stubOIDC{},
+					ID:          testProvider,
+					DisplayName: "Corp",
+					AutoCreate:  true,
+					Stored:      false,
+					Source:      principal.SourceOIDC,
+				},
 			},
 		},
 		CheckpointEpochs: fakeEpochs{},
@@ -503,7 +510,7 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 	for i := range grants {
 		fence, e := storetest.GrantWrite(t, st, grants[i].Object, at, "grant:"+grants[i].ID)
 
-		seedErr := st.CreateGrant(ctx, grants[i], fence, e)
+		seedErr := st.CreateGrant(ctx, grants[i], fence, e, nil)
 		if seedErr != nil {
 			t.Fatalf("seed grant %q: %v", grants[i].ID, seedErr)
 		}

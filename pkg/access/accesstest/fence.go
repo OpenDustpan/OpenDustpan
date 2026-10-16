@@ -55,7 +55,7 @@ func createGrant(t *testing.T, s access.Store, g access.Grant, e audit.Entry) er
 
 	ns := g.Object.Namespace()
 
-	return s.CreateGrant(t.Context(), g, fenceOf(t, s, ns), scoped(e, ns))
+	return s.CreateGrant(t.Context(), g, fenceOf(t, s, ns), scoped(e, ns), nil)
 }
 
 // revokeGrant revokes the grant id in ns with the fence of ns and e in the
@@ -63,7 +63,7 @@ func createGrant(t *testing.T, s access.Store, g access.Grant, e audit.Entry) er
 func revokeGrant(t *testing.T, s access.Store, id string, ns namespace.Name, e audit.Entry) error {
 	t.Helper()
 
-	return s.RevokeGrant(t.Context(), id, fenceOf(t, s, ns), scoped(e, ns))
+	return s.RevokeGrant(t.Context(), id, fenceOf(t, s, ns), scoped(e, ns), nil)
 }
 
 // testGrantFence checks the fence of a grant write inside a namespace: a
@@ -96,7 +96,7 @@ func testGrantFence(t *testing.T, s access.Store) {
 
 	for i := range refusals {
 		rc := &refusals[i]
-		if err := s.CreateGrant(ctx, g, rc.fence, rc.e); !errors.Is(err, rc.want) {
+		if err := s.CreateGrant(ctx, g, rc.fence, rc.e, nil); !errors.Is(err, rc.want) {
 			t.Errorf("grant with %s = %v, want %v", rc.name, err, rc.want)
 		}
 	}
@@ -107,15 +107,15 @@ func testGrantFence(t *testing.T, s access.Store) {
 
 	mustCreateGrant(t, s, g)
 
-	if err := s.RevokeGrant(ctx, "grt-1", stale, scoped(entry(), "acme")); !errors.Is(err, namespace.ErrFenced) {
+	if err := s.RevokeGrant(ctx, "grt-1", stale, scoped(entry(), "acme"), nil); !errors.Is(err, namespace.ErrFenced) {
 		t.Errorf("revoke with a stale fence = %v, want ErrFenced", err)
 	}
 
-	if err := s.RevokeGrant(ctx, "grt-1", beta, scoped(entry(), "beta")); !errors.Is(err, access.ErrNotFound) {
+	if err := s.RevokeGrant(ctx, "grt-1", beta, scoped(entry(), "beta"), nil); !errors.Is(err, access.ErrNotFound) {
 		t.Errorf("revoke through another namespace = %v, want ErrNotFound", err)
 	}
 
-	if err := s.RevokeGrant(ctx, "grt-1", fenceOf(t, s, ""), entry()); !errors.Is(err, access.ErrNotFound) {
+	if err := s.RevokeGrant(ctx, "grt-1", fenceOf(t, s, ""), entry(), nil); !errors.Is(err, access.ErrNotFound) {
 		t.Errorf("revoke through the installation = %v, want ErrNotFound", err)
 	}
 
