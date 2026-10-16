@@ -45,6 +45,9 @@ var (
 	errHostNeedsPerson = errors.New(
 		"host create-temp-admin needs one person name: opendustpan host create-temp-admin <person>",
 	)
+	// ErrPersonExists reports a host run that names a person that a
+	// principal already holds.
+	ErrPersonExists = errors.New("person already exists")
 )
 
 // hostSubject is the subject of the audit entries of the host command: the
@@ -260,8 +263,9 @@ func personOf(
 	if _, err := st.GetPrincipalBySubject(ctx, person); err == nil {
 		return principal.Principal{}, fmt.Errorf(
 			"person %q already exists: pass a name that no principal holds: "+
-				"opendustpan host create-temp-admin <person>",
+				"opendustpan host create-temp-admin <person>: %w",
 			person,
+			ErrPersonExists,
 		)
 	} else if !errors.Is(err, principal.ErrNotFound) {
 		return principal.Principal{}, fmt.Errorf("read principal %q: %w", person, err)

@@ -96,7 +96,15 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: fresh, Grants: nil, Authorizer: nil, Logger: nil, Now: c.Now, NewID: nil,
+		TempAdmins: nil,
+		Store:      st,
+		Principals: st,
+		Freshness:  fresh,
+		Grants:     nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        c.Now,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -129,11 +137,13 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 // with no GrantCheck wired.
 func admin() identity.Principal {
 	return identity.Principal{
-		Subject:        "admin",
-		DisplayName:    "admin",
-		Admin:          true,
-		TokenID:        "",
-		TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "admin",
+		DisplayName:            "admin",
+		Admin:                  true,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
 	}
 }
 
@@ -200,7 +210,15 @@ func TestNewServiceNeedsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := accesstoken.NewService(accesstoken.Config{
-		Store: nil, Principals: nil, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: nil, NewID: nil,
+		TempAdmins: nil,
+		Store:      nil,
+		Principals: nil,
+		Freshness:  nil,
+		Grants:     nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if !errors.Is(err, accesstoken.ErrMissingDependency) {
 		t.Fatalf("err = %v, want ErrMissingDependency", err)
@@ -353,11 +371,13 @@ func TestAuthenticate(t *testing.T) {
 	}
 
 	want := identity.Principal{
-		Subject:        "ci-deploy",
-		DisplayName:    "ci-deploy",
-		Admin:          false,
-		TokenID:        tok.ID,
-		TokenExpiresAt: tok.ExpiresAt,
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "ci-deploy",
+		DisplayName:            "ci-deploy",
+		Admin:                  false,
+		TokenID:                tok.ID,
+		TokenExpiresAt:         tok.ExpiresAt,
 	}
 	if got != want {
 		t.Fatalf("principal = %+v, want %+v", got, want)
@@ -403,11 +423,13 @@ func TestAuthenticateRefusesEndedTokens(t *testing.T) {
 
 	_, personSecret := f.create(t, f.person, "laptop")
 	admin := identity.Principal{
-		Subject:        "admin",
-		DisplayName:    "",
-		Admin:          true,
-		TokenID:        "",
-		TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "admin",
+		DisplayName:            "",
+		Admin:                  true,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
 	}
 	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
@@ -445,11 +467,13 @@ func TestCheckActive(t *testing.T) {
 
 	orphan, _ := f.create(t, f.person, "laptop")
 	admin := identity.Principal{
-		Subject:        "admin",
-		DisplayName:    "",
-		Admin:          true,
-		TokenID:        "",
-		TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "admin",
+		DisplayName:            "",
+		Admin:                  true,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
 	}
 	if err := f.principals.DeletePrincipal(ctx, caller(), admin, f.person.ID); err != nil {
 		t.Fatalf("delete principal: %v", err)
@@ -752,11 +776,13 @@ func TestDigest(t *testing.T) {
 // as returns the caller with the subject of p, not an administrator.
 func as(p principal.Principal) identity.Principal {
 	return identity.Principal{
-		Subject:        p.Subject,
-		DisplayName:    p.DisplayName,
-		Admin:          false,
-		TokenID:        "",
-		TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                p.Subject,
+		DisplayName:            p.DisplayName,
+		Admin:                  false,
+		TokenID:                "",
+		TokenExpiresAt:         time.Time{},
 	}
 }
 
@@ -957,7 +983,8 @@ func newCheckedService(
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: f.store, Freshness: nil, Grants: grants, Authorizer: authz, Logger: nil,
+		TempAdmins: nil,
+		Store:      f.store, Principals: f.store, Freshness: nil, Grants: grants, Authorizer: authz, Logger: nil,
 		Now: f.clock.Now, NewID: nil,
 	})
 	if err != nil {
@@ -1454,7 +1481,8 @@ func TestPolicyReadErrorFailsClosed(t *testing.T) {
 	_, secret := f.createLong(t, f.service, "deploy")
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: failingPolicy{f.store}, Principals: f.store, Freshness: nil, Grants: nil, Authorizer: nil,
+		TempAdmins: nil,
+		Store:      failingPolicy{f.store}, Principals: f.store, Freshness: nil, Grants: nil, Authorizer: nil,
 		Logger: nil,
 		Now:    f.clock.Now, NewID: nil,
 	})
@@ -1632,7 +1660,8 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	alice := as(f.person)
 
 	holder, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: reader, Freshness: nil, Grants: nil,
+		TempAdmins: nil,
+		Store:      f.store, Principals: reader, Freshness: nil, Grants: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
 		Logger:     nil,
 		Now:        f.clock.Now, NewID: nil,
@@ -1642,7 +1671,8 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	}
 
 	denied, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: reader, Freshness: nil, Grants: nil,
+		TempAdmins: nil,
+		Store:      f.store, Principals: reader, Freshness: nil, Grants: nil,
 		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},
 		Logger:     nil,
 		Now:        f.clock.Now, NewID: nil,

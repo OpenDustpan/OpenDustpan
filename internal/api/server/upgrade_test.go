@@ -150,6 +150,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:           nil,
 		TempAdmins:    nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
@@ -196,6 +197,7 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:            nil,
 		TempAdmins:     nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
@@ -265,6 +267,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:           nil,
 		TempAdmins:    nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},

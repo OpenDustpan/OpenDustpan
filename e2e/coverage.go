@@ -764,6 +764,7 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
+		Now:            nil,
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
 		Logger:         slog.New(slog.DiscardHandler),

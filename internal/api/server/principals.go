@@ -201,8 +201,30 @@ func (h *Handler) markTempAdmin(ctx context.Context, body any) any {
 		return body
 	}
 
-	now := h.now()
+	active := activeTempAdmins(records, h.now())
 
+	mark := func(res principalResponse) principalResponse {
+		return markOneTempAdmin(res, active)
+	}
+
+	switch v := body.(type) {
+	case principalResponse:
+		return mark(v)
+	case principalListResponse:
+		return markTempAdminPage(v, mark)
+	case memberResponse:
+		v.Principal = mark(v.Principal)
+
+		return v
+	case memberListResponse:
+		return markTempAdminMembers(v, mark)
+	default:
+		return body
+	}
+}
+
+// activeTempAdmins answers the records that work at now, by subject.
+func activeTempAdmins(records []tempadmin.TempAdmin, now time.Time) map[string]tempadmin.TempAdmin {
 	active := make(map[string]tempadmin.TempAdmin, len(records))
 
 	for _, rec := range records {
@@ -211,45 +233,49 @@ func (h *Handler) markTempAdmin(ctx context.Context, body any) any {
 		}
 	}
 
-	mark := func(res principalResponse) principalResponse {
-		if res.Kind != string(principal.KindPerson) {
-			return res
-		}
+	return active
+}
 
-		rec, ok := active[res.Subject]
-		if !ok {
-			return res
-		}
-
-		at := wireTime(rec.ExpiresAt)
-		res.TemporaryAdministrator = true
-		res.TemporaryExpiresAt = &at
-
+// markOneTempAdmin sets the banner flag on one principal that still works
+// as a temporary administrator. Only persons are marked.
+func markOneTempAdmin(res principalResponse, active map[string]tempadmin.TempAdmin) principalResponse {
+	if res.Kind != string(principal.KindPerson) {
 		return res
 	}
 
-	switch v := body.(type) {
-	case principalResponse:
-		return mark(v)
-	case principalListResponse:
-		for i := range v.Principals {
-			v.Principals[i] = mark(v.Principals[i])
-		}
-
-		return v
-	case memberResponse:
-		v.Principal = mark(v.Principal)
-
-		return v
-	case memberListResponse:
-		for i := range v.Members {
-			v.Members[i].Principal = mark(v.Members[i].Principal)
-		}
-
-		return v
-	default:
-		return body
+	rec, ok := active[res.Subject]
+	if !ok {
+		return res
 	}
+
+	at := wireTime(rec.ExpiresAt)
+	res.TemporaryAdministrator = true
+	res.TemporaryExpiresAt = &at
+
+	return res
+}
+
+// markTempAdminPage sets the banner flag on each principal of one page.
+func markTempAdminPage(
+	v principalListResponse, mark func(principalResponse) principalResponse,
+) principalListResponse {
+	for i := range v.Principals {
+		v.Principals[i] = mark(v.Principals[i])
+	}
+
+	return v
+}
+
+// markTempAdminMembers sets the banner flag on each member principal of one
+// page.
+func markTempAdminMembers(
+	v memberListResponse, mark func(principalResponse) principalResponse,
+) memberListResponse {
+	for i := range v.Members {
+		v.Members[i].Principal = mark(v.Members[i].Principal)
+	}
+
+	return v
 }
 
 func groupOf(g principal.Group) groupResponse {

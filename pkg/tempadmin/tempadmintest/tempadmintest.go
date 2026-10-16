@@ -87,6 +87,12 @@ const wantNewEntries = 2
 // createdBy is the creator of the records of the suite.
 const createdBy = "host"
 
+// alicePrincipalID is the principal ID of alice in the suite.
+const alicePrincipalID = "prn-alice"
+
+// tokenLifetimeHours is the lifetime in hours of the tokens of the suite.
+const tokenLifetimeHours = 48
+
 // entry returns a valid audit entry of the kind change in the scope
 // @server, with the object object.
 func entry(object string) audit.Entry {
@@ -183,10 +189,10 @@ func equalRecord(t *testing.T, got, want tempadmin.TempAdmin) {
 func testRoundTrip(t *testing.T, s Store) {
 	t.Helper()
 
-	mustPrincipal(t, s, "prn-alice", "alice")
-	want := mustRecord(t, s, "prn-alice", "alice", 0)
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	want := mustRecord(t, s, alicePrincipalID, "alice", 0)
 
-	got, err := s.GetTempAdmin(t.Context(), "prn-alice")
+	got, err := s.GetTempAdmin(t.Context(), alicePrincipalID)
 	if err != nil {
 		t.Fatalf("get temporary administrator: %v", err)
 	}
@@ -197,8 +203,8 @@ func testRoundTrip(t *testing.T, s Store) {
 func testBySubject(t *testing.T, s Store) {
 	t.Helper()
 
-	mustPrincipal(t, s, "prn-alice", "alice")
-	want := mustRecord(t, s, "prn-alice", "alice", 0)
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	want := mustRecord(t, s, alicePrincipalID, "alice", 0)
 
 	got, err := s.GetTempAdminBySubject(t.Context(), "alice")
 	if err != nil {
@@ -211,18 +217,18 @@ func testBySubject(t *testing.T, s Store) {
 func testDuplicate(t *testing.T, s Store) {
 	t.Helper()
 
-	mustPrincipal(t, s, "prn-alice", "alice")
-	mustRecord(t, s, "prn-alice", "alice", 0)
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
 
 	dup := tempadmin.TempAdmin{
 		CreatedAt:   at(minuteLater),
 		ExpiresAt:   at(minuteLater).Add(tempadmin.Lifetime),
-		PrincipalID: "prn-alice",
+		PrincipalID: alicePrincipalID,
 		Subject:     "alice",
 		CreatedBy:   createdBy,
 	}
 
-	err := s.CreateTempAdmin(t.Context(), dup, entry(tempadmin.Ref("prn-alice")))
+	err := s.CreateTempAdmin(t.Context(), dup, entry(tempadmin.Ref(alicePrincipalID)))
 	wantErr(t, "duplicate record", err, tempadmin.ErrAlreadyExists)
 }
 
@@ -256,17 +262,17 @@ func testMissing(t *testing.T, s Store) {
 func testList(t *testing.T, s Store) {
 	t.Helper()
 
-	mustPrincipal(t, s, "prn-alice", "alice")
+	mustPrincipal(t, s, alicePrincipalID, "alice")
 	mustPrincipal(t, s, "prn-bob", "bob")
 	mustRecord(t, s, "prn-bob", "bob", minuteLatest)
-	mustRecord(t, s, "prn-alice", "alice", 0)
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
 
 	all, err := s.ListTempAdmins(t.Context())
 	if err != nil {
 		t.Fatalf("list temporary administrators: %v", err)
 	}
 
-	if len(all) != 2 || all[0].PrincipalID != "prn-alice" || all[1].PrincipalID != "prn-bob" {
+	if len(all) != 2 || all[0].PrincipalID != alicePrincipalID || all[1].PrincipalID != "prn-bob" {
 		t.Fatalf("list = %v, want alice then bob by expiry", all)
 	}
 }
@@ -274,21 +280,21 @@ func testList(t *testing.T, s Store) {
 func testExpire(t *testing.T, s Store) {
 	t.Helper()
 
-	mustPrincipal(t, s, "prn-alice", "alice")
-	want := mustRecord(t, s, "prn-alice", "alice", 0)
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	want := mustRecord(t, s, alicePrincipalID, "alice", 0)
 
-	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
+	if err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID))); err != nil {
 		t.Fatalf("expire temporary administrator: %v", err)
 	}
 
-	got, err := s.GetTempAdmin(t.Context(), "prn-alice")
+	got, err := s.GetTempAdmin(t.Context(), alicePrincipalID)
 	if err != nil {
 		t.Fatalf("get after expiry = %v, want the tombstone", err)
 	}
 
 	equalRecord(t, got, want)
 
-	p, err := s.GetPrincipal(t.Context(), "prn-alice")
+	p, err := s.GetPrincipal(t.Context(), alicePrincipalID)
 	if err != nil {
 		t.Fatalf("get principal after expiry: %v", err)
 	}
@@ -308,17 +314,17 @@ func testExpireMissing(t *testing.T, s Store) {
 func testExpireTwice(t *testing.T, s Store) {
 	t.Helper()
 
-	mustPrincipal(t, s, "prn-alice", "alice")
-	mustRecord(t, s, "prn-alice", "alice", 0)
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
 
-	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
+	if err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID))); err != nil {
 		t.Fatalf("expire temporary administrator: %v", err)
 	}
 
-	err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice")))
+	err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID)))
 	wantErr(t, "second expiry", err, tempadmin.ErrExpired)
 
-	if _, err := s.GetTempAdmin(t.Context(), "prn-alice"); err != nil {
+	if _, err := s.GetTempAdmin(t.Context(), alicePrincipalID); err != nil {
 		t.Fatalf("get after the second expiry = %v, want the tombstone", err)
 	}
 }
@@ -340,7 +346,7 @@ func mustGrant(t *testing.T, s Store, id, principalID string) {
 
 	e := entry(access.GrantRef(g))
 
-	if err := s.CreateGrant(t.Context(), g, namespace.Fence{}, e); err != nil {
+	if err := s.CreateGrant(t.Context(), g, namespace.Fence{Namespace: "", FailoverVersion: 0}, e); err != nil {
 		t.Fatalf("grant site-administrator to %q: %v", principalID, err)
 	}
 }
@@ -352,7 +358,7 @@ func mustToken(t *testing.T, s Store, id, principalID, name string) {
 
 	tok := accesstoken.Token{
 		CreatedAt:   at(0),
-		ExpiresAt:   at(0).Add(48 * time.Hour),
+		ExpiresAt:   at(0).Add(tokenLifetimeHours * time.Hour),
 		LastUsedAt:  time.Time{},
 		RevokedAt:   time.Time{},
 		DisabledAt:  time.Time{},
@@ -374,17 +380,17 @@ func mustToken(t *testing.T, s Store, id, principalID, name string) {
 func testExpireEndsGrant(t *testing.T, s Store) {
 	t.Helper()
 
-	mustPrincipal(t, s, "prn-alice", "alice")
-	mustRecord(t, s, "prn-alice", "alice", 0)
-	mustGrant(t, s, "grt-alice", "prn-alice")
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
+	mustGrant(t, s, "grt-alice", alicePrincipalID)
 
-	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
+	if err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID))); err != nil {
 		t.Fatalf("expire temporary administrator: %v", err)
 	}
 
 	grants, err := s.GrantsOn(
 		t.Context(),
-		[]access.Subject{{Kind: access.SubjectPrincipal, ID: "prn-alice"}},
+		[]access.Subject{{Kind: access.SubjectPrincipal, ID: alicePrincipalID}},
 		[]identity.Object{identity.ServerObject()},
 	)
 	if err != nil {
@@ -399,12 +405,12 @@ func testExpireEndsGrant(t *testing.T, s Store) {
 func testExpireEndsTokens(t *testing.T, s Store) {
 	t.Helper()
 
-	mustPrincipal(t, s, "prn-alice", "alice")
-	mustRecord(t, s, "prn-alice", "alice", 0)
-	mustToken(t, s, "tok-host", "prn-alice", tempadmin.HostTokenName)
-	mustToken(t, s, "tok-laptop", "prn-alice", "laptop")
+	mustPrincipal(t, s, alicePrincipalID, "alice")
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
+	mustToken(t, s, "tok-host", alicePrincipalID, tempadmin.HostTokenName)
+	mustToken(t, s, "tok-laptop", alicePrincipalID, "laptop")
 
-	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
+	if err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID))); err != nil {
 		t.Fatalf("expire temporary administrator: %v", err)
 	}
 
@@ -440,16 +446,16 @@ func testAuditEntries(t *testing.T, s Store) {
 		t.Skip("the store keeps no audit log to read")
 	}
 
-	mustPrincipal(t, s, "prn-alice", "alice")
+	mustPrincipal(t, s, alicePrincipalID, "alice")
 
 	before, err := listServerObjects(t.Context(), lister)
 	if err != nil {
 		t.Fatalf("list audit entries: %v", err)
 	}
 
-	mustRecord(t, s, "prn-alice", "alice", 0)
+	mustRecord(t, s, alicePrincipalID, "alice", 0)
 
-	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
+	if err := s.ExpireTempAdmin(t.Context(), alicePrincipalID, entry(tempadmin.Ref(alicePrincipalID))); err != nil {
 		t.Fatalf("expire temporary administrator: %v", err)
 	}
 
@@ -464,8 +470,8 @@ func testAuditEntries(t *testing.T, s Store) {
 	}
 
 	for _, object := range after[:2] {
-		if object != tempadmin.Ref("prn-alice") {
-			t.Fatalf("audit object = %q, want %q", object, tempadmin.Ref("prn-alice"))
+		if object != tempadmin.Ref(alicePrincipalID) {
+			t.Fatalf("audit object = %q, want %q", object, tempadmin.Ref(alicePrincipalID))
 		}
 	}
 }

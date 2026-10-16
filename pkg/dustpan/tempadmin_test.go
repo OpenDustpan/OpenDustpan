@@ -1,6 +1,7 @@
 package dustpan_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -74,6 +75,35 @@ func TestExpiredTempAdminStaysDenied(t *testing.T) {
 	ctx := t.Context()
 	base := tempadminBase()
 	now := base
+	clock := func() time.Time { return now }
+
+	st := openTempAdminStore(ctx, t)
+	blobs := openTempAdminBlobs(t)
+	ts := newTempAdminServer(t, st, blobs, clock)
+
+	token := seedTempAdmin(t, st, base, clock)
+
+	callUser := func(token string) (int, tempadminUser) {
+		t.Helper()
+
+		return fetchTempAdminUser(ctx, t, ts, token)
+	}
+
+	status, user := callUser(token)
+	requireWorkingBanner(t, status, user)
+
+	// Past the fixed expiry the token still lives, but the record ended:
+	// every answer denies the use.
+	now = base.Add(tempadmin.Lifetime).Add(time.Hour)
+
+	requireExpiredDenied(t, callUser, token)
+	checkTempAdminEnded(t, st, base)
+	checkTempAdminAudit(t, st)
+}
+
+// openTempAdminStore opens the SQLite store of the expiry test.
+func openTempAdminStore(ctx context.Context, t *testing.T) *sqlite.Store {
+	t.Helper()
 
 	st, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
@@ -86,6 +116,13 @@ func TestExpiredTempAdminStaysDenied(t *testing.T) {
 		}
 	})
 
+	return st
+}
+
+// openTempAdminBlobs opens the blob store of the expiry test.
+func openTempAdminBlobs(t *testing.T) *fs.Store {
+	t.Helper()
+
 	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
 	if err != nil {
 		t.Fatalf("open blob store: %v", err)
@@ -96,6 +133,16 @@ func TestExpiredTempAdminStaysDenied(t *testing.T) {
 			t.Errorf("close blob store: %v", closeErr)
 		}
 	})
+
+	return blobs
+}
+
+// newTempAdminServer starts the full server of the expiry test with the
+// auth gate, at the clock clock.
+func newTempAdminServer(
+	t *testing.T, st *sqlite.Store, blobs *fs.Store, clock func() time.Time,
+) *httptest.Server {
+	t.Helper()
 
 	authn, err := identity.NewStaticToken("admin", adminToken)
 	if err != nil {
@@ -121,7 +168,7 @@ func TestExpiredTempAdminStaysDenied(t *testing.T) {
 		dustpan.WithBlobStore(blobs),
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
-		dustpan.WithClock(func() time.Time { return now }),
+		dustpan.WithClock(clock),
 	)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
@@ -130,62 +177,82 @@ func TestExpiredTempAdminStaysDenied(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	token := seedTempAdmin(t, st, base, func() time.Time { return now })
+	return ts
+}
 
-	callUser := func(token string) (int, tempadminUser) {
-		t.Helper()
+// fetchTempAdminUser answers GET /api/user with token.
+func fetchTempAdminUser(ctx context.Context, t *testing.T, ts *httptest.Server, token string) (int, tempadminUser) {
+	t.Helper()
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/user", nil)
-		if err != nil {
-			t.Fatalf("new request: %v", err)
-		}
-
-		req.Header.Set("Authorization", "token "+token)
-
-		resp, err := ts.Client().Do(req)
-		if err != nil {
-			t.Fatalf("GET /api/user: %v", err)
-		}
-
-		data, err := io.ReadAll(resp.Body)
-		if closeErr := resp.Body.Close(); closeErr != nil {
-			t.Fatalf("close body: %v", closeErr)
-		}
-
-		if err != nil {
-			t.Fatalf("read body: %v", err)
-		}
-
-		var user tempadminUser
-
-		if resp.StatusCode == http.StatusOK {
-			if err := json.Unmarshal(data, &user); err != nil {
-				t.Fatalf("decode user: %v (%s)", err, data)
-			}
-		}
-
-		return resp.StatusCode, user
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/user", http.NoBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
 	}
 
-	// While the record works, the user endpoint answers the banner flag
-	// with its fixed expiry.
-	if status, user := callUser(token); status != http.StatusOK || !user.TemporaryAdministrator ||
-		user.GithubLogin != "alice" {
+	req.Header.Set("Authorization", "token "+token)
+
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/user: %v", err)
+	}
+
+	data := readTempAdminBody(t, resp)
+
+	return resp.StatusCode, decodeTempAdminUser(t, resp.StatusCode, data)
+}
+
+// readTempAdminBody reads and closes the body of resp.
+func readTempAdminBody(t *testing.T, resp *http.Response) []byte {
+	t.Helper()
+
+	data, err := io.ReadAll(resp.Body)
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("close body: %v", closeErr)
+	}
+
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	return data
+}
+
+// decodeTempAdminUser decodes the user of a 200 answer, or an empty user.
+func decodeTempAdminUser(t *testing.T, status int, data []byte) tempadminUser {
+	t.Helper()
+
+	var user tempadminUser
+
+	if status != http.StatusOK {
+		return user
+	}
+
+	if err := json.Unmarshal(data, &user); err != nil {
+		t.Fatalf("decode user: %v (%s)", err, data)
+	}
+
+	return user
+}
+
+// requireWorkingBanner proves the user endpoint answers the banner flag
+// for alice while the record works.
+func requireWorkingBanner(t *testing.T, status int, user tempadminUser) {
+	t.Helper()
+
+	if status != http.StatusOK || !user.TemporaryAdministrator || user.GithubLogin != "alice" {
 		t.Fatalf("GET /api/user = %d, %+v; want 200 for alice with the banner flag", status, user)
 	}
+}
 
-	// Past the fixed expiry the token still lives, but the record ended:
-	// every answer denies the use.
-	now = base.Add(tempadmin.Lifetime).Add(time.Hour)
+// requireExpiredDenied proves every use past the expiry answers 401.
+func requireExpiredDenied(t *testing.T, callUser func(string) (int, tempadminUser), token string) {
+	t.Helper()
 
 	for i := range 2 {
 		if status, _ := callUser(token); status != http.StatusUnauthorized {
 			t.Fatalf("expired use %d = %d, want 401", i, status)
 		}
 	}
-
-	checkTempAdminEnded(t, st, base)
-	checkTempAdminAudit(t, st)
 }
 
 // seedTempAdmin records alice as a temporary administrator at base with a
@@ -225,8 +292,13 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 		Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: p.ID},
 	}
 
-	if err := st.CreateGrant(ctx, g, namespace.Fence{}, tempadminEntry(base, tempadmin.HostSubject,
-		string(identity.ActionServerManageAccess), access.GrantRef(g))); err != nil {
+	grantEntry := tempadminEntry(
+		base,
+		tempadmin.HostSubject,
+		string(identity.ActionServerManageAccess),
+		access.GrantRef(g),
+	)
+	if err := st.CreateGrant(ctx, g, namespace.Fence{Namespace: "", FailoverVersion: 0}, grantEntry); err != nil {
 		t.Fatalf("grant site-administrator: %v", err)
 	}
 
@@ -238,11 +310,14 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 		t.Fatalf("access token service: %v", err)
 	}
 
-	admin := identity.Principal{Subject: "admin", DisplayName: "admin", Admin: true}
+	admin := identity.Principal{
+		Subject: "admin", DisplayName: "admin", Admin: true,
+		TokenID: "", TokenExpiresAt: time.Time{}, TemporaryAdministrator: false, TemporaryExpiresAt: time.Time{},
+	}
 
 	expires := base.Add(2 * tempadmin.Lifetime)
 
-	_, secret, err := tokens.Create(
+	_, issued, err := tokens.Create(
 		ctx,
 		admin,
 		tempadminEntry(base, "admin", string(identity.ActionServerManageTokens), ""),
@@ -261,12 +336,12 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 		CreatedBy:   "tester",
 	}
 
-	if err := st.CreateTempAdmin(ctx, r, tempadminEntry(base, tempadmin.HostSubject, tempadmin.Action,
-		tempadmin.Ref(p.ID))); err != nil {
+	recordEntry := tempadminEntry(base, tempadmin.HostSubject, tempadmin.Action, tempadmin.Ref(p.ID))
+	if err := st.CreateTempAdmin(ctx, r, recordEntry); err != nil {
 		t.Fatalf("record temporary administrator: %v", err)
 	}
 
-	return secret.Reveal()
+	return issued.Reveal()
 }
 
 // checkTempAdminEnded proves the expiry ended the principal, its
@@ -322,7 +397,9 @@ func checkTempAdminAudit(t *testing.T, st *sqlite.Store) {
 
 	var signIns, expiries int
 
-	for _, e := range listing.Entries {
+	for i := range listing.Entries {
+		e := listing.Entries[i]
+
 		if e.Action != tempadmin.Action {
 			continue
 		}
@@ -340,6 +417,7 @@ func checkTempAdminAudit(t *testing.T, st *sqlite.Store) {
 			}
 		case tempadmin.SweepSubject:
 			expiries++
+		default:
 		}
 	}
 

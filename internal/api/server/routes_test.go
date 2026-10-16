@@ -207,6 +207,7 @@ func newServiceBackedHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:            nil,
 		TempAdmins:     nil,
 		Authenticator:  authn,
 		Authorizer:     authz,
@@ -1224,6 +1225,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiserver.Config{
+		Now:            nil,
 		TempAdmins:     nil,
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
@@ -1359,6 +1361,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:            nil,
 		TempAdmins:     nil,
 		Authenticator:  stubAuthenticator{},
 		Authorizer:     stubAuthorizer{},
@@ -1388,6 +1391,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	}
 
 	without, err := apiserver.NewHandler(apiserver.Config{
+		Now:            nil,
 		TempAdmins:     nil,
 		Authenticator:  stubAuthenticator{},
 		Authorizer:     stubAuthorizer{},

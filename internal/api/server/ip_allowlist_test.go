@@ -95,6 +95,7 @@ func newIPAllowHandler(
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
+		Now:            nil,
 		TempAdmins:     nil,
 		Authenticator:  cfg.authn,
 		Authorizer:     cfg.authz,

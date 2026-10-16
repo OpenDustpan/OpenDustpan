@@ -113,7 +113,7 @@ type scopeKey struct{}
 // WithSignInScope returns ctx with a fresh sign-in scope for one request.
 // Call it once for each request, before any authentication.
 func WithSignInScope(ctx context.Context) context.Context {
-	return context.WithValue(ctx, scopeKey{}, &signInScope{recorded: map[string]bool{}})
+	return context.WithValue(ctx, scopeKey{}, &signInScope{mu: sync.Mutex{}, recorded: map[string]bool{}})
 }
 
 // scopeOf returns the sign-in scope of ctx, or nil when ctx holds none.
@@ -121,7 +121,8 @@ func scopeOf(ctx context.Context) *signInScope {
 	scope, ok := ctx.Value(scopeKey{}).(*signInScope)
 
 	if !ok || scope == nil {
-		return nil //nolint:nilnil // No scope is valid: the use writes its entry at once.
+		// No scope is valid: the use writes its entry at once.
+		return nil
 	}
 
 	return scope

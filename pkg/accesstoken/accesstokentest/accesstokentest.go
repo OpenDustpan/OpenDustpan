@@ -1143,11 +1143,12 @@ func testSweepWithoutExemption(t *testing.T, s Store) {
 
 	// With the break-glass disable on, the stored policy ends the working
 	// temporary administrators with the same sweep.
-	if _, err := s.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+	enableBreakGlass := func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
 		old.DisableBreakGlass = true
 
 		return old, entry("tok-x"), nil
-	}); err != nil {
+	}
+	if _, err := s.UpdatePolicy(ctx, enableBreakGlass); err != nil {
 		t.Fatalf("turn the break-glass disable on: %v", err)
 	}
 

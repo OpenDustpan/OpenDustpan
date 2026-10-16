@@ -239,19 +239,41 @@ func TestSweepDisablesOnlyExpiredRecords(t *testing.T) {
 	store := newFakeStore()
 	svc := testService(store)
 
+	seedSweepRecords(t, svc)
+	requireSweepBeforeExpiryDisablesNothing(t, svc)
+	later := sweepAfterExpiry(t, store)
+	requireTombstonesKept(t, store)
+	requireSecondSweepDisablesNothing(t, store, later)
+}
+
+// seedSweepRecords creates the alice and bob records of the sweep test.
+func seedSweepRecords(t *testing.T, svc *tempadmin.Service) {
+	t.Helper()
+
 	for _, tc := range []struct{ id, subject string }{
 		{id: "prn-alice", subject: "alice"},
 		{id: "prn-bob", subject: "bob"},
 	} {
-		in := tempadmin.Input{Subject: tc.subject, PrincipalID: tc.id, CreatedBy: "host"}
-
-		_, err := svc.Create(t.Context(), callerEntry(), in)
-		if err != nil {
-			t.Fatalf("create %s: %v", tc.subject, err)
-		}
+		createSweepRecord(t, svc, tc.id, tc.subject)
 	}
+}
 
-	// A sweep before the expiry disables nothing and writes nothing.
+// createSweepRecord creates one sweep record for subject with id.
+func createSweepRecord(t *testing.T, svc *tempadmin.Service, id, subject string) {
+	t.Helper()
+
+	in := tempadmin.Input{Subject: subject, PrincipalID: id, CreatedBy: "host"}
+
+	if _, err := svc.Create(t.Context(), callerEntry(), in); err != nil {
+		t.Fatalf("create %s: %v", subject, err)
+	}
+}
+
+// requireSweepBeforeExpiryDisablesNothing proves a sweep before the expiry
+// disables nothing and writes nothing.
+func requireSweepBeforeExpiryDisablesNothing(t *testing.T, svc *tempadmin.Service) {
+	t.Helper()
+
 	done, err := svc.Sweep(t.Context(), callerEntry())
 	if err != nil {
 		t.Fatalf("sweep before expiry: %v", err)
@@ -260,12 +282,16 @@ func TestSweepDisablesOnlyExpiredRecords(t *testing.T) {
 	if len(done) != 0 {
 		t.Fatalf("sweep disabled %v before the expiry, want none", done)
 	}
+}
 
-	// A sweep after the expiry disables both, with one audit entry for
-	// each expiry.
+// sweepAfterExpiry sweeps past the expiry and proves both records end with
+// one audit entry for each expiry. It answers the late service.
+func sweepAfterExpiry(t *testing.T, store *fakeStore) *tempadmin.Service {
+	t.Helper()
+
 	later := testServiceAt(store, baseTime().Add(tempadmin.Lifetime).Add(time.Minute))
 
-	done, err = later.Sweep(t.Context(), callerEntry())
+	done, err := later.Sweep(t.Context(), callerEntry())
 	if err != nil {
 		t.Fatalf("sweep after expiry: %v", err)
 	}
@@ -278,11 +304,27 @@ func TestSweepDisablesOnlyExpiredRecords(t *testing.T) {
 		t.Fatalf("audit entries = %d, want 2 creates and 2 expiries", len(store.entries))
 	}
 
-	for _, e := range store.entries[2:] {
+	requireExpirySubjects(t, store)
+
+	return later
+}
+
+// requireExpirySubjects proves each expiry entry carries the sweep subject.
+func requireExpirySubjects(t *testing.T, store *fakeStore) {
+	t.Helper()
+
+	for i := range store.entries[2:] {
+		e := store.entries[2:][i]
+
 		if e.Subject != tempadmin.SweepSubject {
 			t.Fatalf("expiry subject = %q, want %q", e.Subject, tempadmin.SweepSubject)
 		}
 	}
+}
+
+// requireTombstonesKept proves the sweep kept both records as tombstones.
+func requireTombstonesKept(t *testing.T, store *fakeStore) {
+	t.Helper()
 
 	rest, err := store.ListTempAdmins(t.Context())
 	if err != nil {
@@ -292,8 +334,13 @@ func TestSweepDisablesOnlyExpiredRecords(t *testing.T) {
 	if len(rest) != 2 {
 		t.Fatalf("records after sweep = %d, want both tombstones", len(rest))
 	}
+}
 
-	// A second sweep ends nothing again and writes no second entry.
+// requireSecondSweepDisablesNothing proves a second sweep ends nothing
+// again and writes no second entry.
+func requireSecondSweepDisablesNothing(t *testing.T, store *fakeStore, later *tempadmin.Service) {
+	t.Helper()
+
 	again, err := later.Sweep(t.Context(), callerEntry())
 	if err != nil {
 		t.Fatalf("second sweep after expiry: %v", err)
@@ -436,7 +483,7 @@ func TestDecoratorWritesOneSignInEntryPerRequest(t *testing.T) {
 	ctx = requestid.WithContext(ctx, "req-1")
 
 	for i := range 2 {
-		checkSignedInWith(t, dec, ctx, i)
+		checkSignedInWith(ctx, t, dec, i)
 	}
 
 	if len(audits.entries) != 1 {
@@ -456,7 +503,7 @@ func TestDecoratorWritesOneSignInEntryPerRequest(t *testing.T) {
 
 // checkSignedInWith proves one use in ctx carries the banner flag with the
 // fixed expiry.
-func checkSignedInWith(t *testing.T, dec *tempadmin.Decorator, ctx context.Context, i int) {
+func checkSignedInWith(ctx context.Context, t *testing.T, dec *tempadmin.Decorator, i int) {
 	t.Helper()
 
 	got, err := dec.AuthenticateToken(ctx, "good")

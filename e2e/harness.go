@@ -477,8 +477,9 @@ func openServerStore(
 		return openSQLiteStore(ctx, tb, dbPath), nil, "sqlite:" + dbPath
 	case StorePostgres:
 		st, proxy := openProxiedPostgresStore(ctx, tb, PostgresURL())
+		url := proxy.URL()
 
-		return st, proxy, proxy.URL()
+		return st, proxy, url
 	default:
 		tb.Fatalf("unknown store: %s", store)
 
