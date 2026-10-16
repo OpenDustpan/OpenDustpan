@@ -99,7 +99,7 @@ func (s *Store) DeleteCollection(
 			return idErr
 		}
 
-		if revokeErr := revokeCollectionGrants(ctx, q, id, e); revokeErr != nil {
+		if revokeErr := s.revokeCollectionGrants(ctx, q, id, e); revokeErr != nil {
 			return revokeErr
 		}
 
@@ -236,7 +236,7 @@ func collectionFromRow(id, ns, name string, createdAtMs int64) collection.Collec
 // stable ID id. Each grant gets its own audit entry, in the same transaction
 // as the delete, so a deleted collection leaves no grant that a re-created
 // name could inherit.
-func revokeCollectionGrants(ctx context.Context, q *db.Queries, id string, e audit.Entry) error {
+func (s *Store) revokeCollectionGrants(ctx context.Context, q *db.Queries, id string, e audit.Entry) error {
 	ids, err := q.GrantIDsOnTarget(ctx, collectionTargetPrefix+id)
 	if err != nil {
 		return fmt.Errorf("list collection grants: %w", err)

@@ -231,7 +231,7 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
-				"changes", "object_id",
+				"changes", "object_id", "fence_version",
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},
@@ -1113,11 +1113,12 @@ func backupEndedAt(endedAt time.Time) pgtype.Int8 {
 
 // SchemaTables implements backup.Inspector: it reads the table catalog, so a
 // table missing from backup.Tables fails the conformance suite. Bookkeeping
-// (schema_migrations) is not data and stays out.
+// (schema_migrations, and audit_chain_state, the chain state of this
+// installation) is not data and stays out.
 func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables`+
 		` WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'`+
-		` AND table_name <> 'schema_migrations' ORDER BY table_name`)
+		` AND table_name NOT IN ('schema_migrations', 'audit_chain_state') ORDER BY table_name`)
 	if err != nil {
 		return nil, fmt.Errorf("select schema tables: %w", err)
 	}

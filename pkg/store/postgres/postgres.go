@@ -67,7 +67,9 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		return nil, fmt.Errorf("connect to postgres: %w", err)
 	}
 
-	s := &Store{pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: ""}
+	s := &Store{
+		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "",
+	}
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()
 

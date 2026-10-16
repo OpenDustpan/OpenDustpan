@@ -153,8 +153,12 @@ func (s *Server) sweepDeleted(ctx context.Context) {
 
 // sweepDeletedOnce runs one scheduled retention sweep within
 // deletedSweepTimeout. The sweeper logs the purges, and counts and logs
-// each failure.
+// each failure. While a change of the chain waits, it skips one run.
 func (s *Server) sweepDeletedOnce(ctx context.Context) {
+	if s.chainChangeWaits(ctx) {
+		return
+	}
+
 	bounded, cancel := context.WithTimeout(ctx, deletedSweepTimeout)
 	defer cancel()
 
