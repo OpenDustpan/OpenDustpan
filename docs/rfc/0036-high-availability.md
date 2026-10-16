@@ -384,7 +384,8 @@ keeps the bake-off, because the owner asked for evidence from both adapters.
 
 ### Bake-off results (spike of 2026-10-16)
 
-A throwaway spike on a local branch implements a small version of the port
+A throwaway spike (draft #693, commit d0d9160, not for merge) implements a
+small version of the port
 (`Start`, `Get`, kinds with ordered steps, schedules) and two adapters:
 
 - **Our adapter:** 436 lines, two tables. A claim per operation with a token
