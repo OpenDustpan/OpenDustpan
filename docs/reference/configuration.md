@@ -43,19 +43,6 @@ the same list.
 | `--soft-delete-retention` | `DUSTPAN_SOFT_DELETE_RETENTION` | `soft-delete-retention` | `720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records the end of its retention, so a change applies to later deletes |
 | `--audit-sink` | `DUSTPAN_AUDIT_SINK` | `audit-sink` | (none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit` |
 
-## Journal bounds
-
-A journaled update that passes one of these bounds fails. Each size bound answers 413. The build time bound answers 503.
-
-| Bound | Limit | Answer |
-| --- | --- | --- |
-| `MaxJournalBatchBytes` | 8 MiB for one batch. A batch with one entry may hold up to the checkpoint bound. | 413 |
-| `MaxEntriesPerUpdate` | 600000 entries in one update. | 413 |
-| `MaxLinkIndexEntriesPerUpdate` | 200000 added links in one update. | 413 |
-| `MaxNewStateBytesPerUpdate` | 32 MiB of new states in one update. | 413 |
-| `MaxNewStatePlusLinkBytesPerUpdate` | 64 MiB of new states plus added links in one build. | 413 |
-| `MaxJournalBuildDuration` | 5 minutes for one build at complete. | 503 |
-
 ## Configuration file
 
 `--config` (`DUSTPAN_CONFIG`) names one YAML file. Each key in the file is
