@@ -656,10 +656,11 @@ func TestServeSizeFlagDefaults(t *testing.T) {
 		t.Fatalf("parse defaults: %v", err)
 	}
 
-	if f.maxCheckpointBytes != 0 || f.maxSecretBatchBytes != 0 || f.maxStateBytes != 0 || f.maxBodyBytesInFlight != 0 {
+	if f.maxCheckpointBytes != 0 || f.maxSecretBatchBytes != 0 || f.maxStateBytes != 0 || f.maxBodyBytesInFlight != 0 ||
+		f.blobCacheBytes != 0 {
 		t.Fatalf(
-			"size flags = %d %d %d %d, want all zero for domain defaults",
-			f.maxCheckpointBytes, f.maxSecretBatchBytes, f.maxStateBytes, f.maxBodyBytesInFlight,
+			"size flags = %d %d %d %d %d, want all zero for domain defaults",
+			f.maxCheckpointBytes, f.maxSecretBatchBytes, f.maxStateBytes, f.maxBodyBytesInFlight, f.blobCacheBytes,
 		)
 	}
 
@@ -668,17 +669,18 @@ func TestServeSizeFlagDefaults(t *testing.T) {
 		f.maxSecretBatchBytes,
 		f.maxStateBytes,
 		f.maxBodyBytesInFlight,
+		f.blobCacheBytes,
 	}
 
 	if err := checkSizeFlags(sizeLimits); err != nil {
 		t.Fatalf("default size flags: %v", err)
 	}
 
-	if err := checkSizeFlags([]int64{1, 1, 1, 1}); err != nil {
+	if err := checkSizeFlags([]int64{1, 1, 1, 1, 1}); err != nil {
 		t.Fatalf("positive size flags: %v", err)
 	}
 
-	if err := checkSizeFlags([]int64{-1, 0, 0, 0}); err == nil {
+	if err := checkSizeFlags([]int64{0, 0, 0, 0, -1}); err == nil {
 		t.Fatal("negative size flag succeeded")
 	}
 }

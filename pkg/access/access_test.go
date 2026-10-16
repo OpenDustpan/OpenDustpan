@@ -219,7 +219,7 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 		CreatedAt: time.Unix(0, 0), Condition: nil, Object: obj,
 		ID:   fmt.Sprintf("grt-%s-%s-%s", subject.ID, role, obj.String()),
 		Role: role, CreatedBy: "admin", Subject: subject,
-	}, fence, e)
+	}, fence, e, nil)
 	if err != nil {
 		tb.Fatalf("create grant: %v", err)
 	}
@@ -1347,7 +1347,9 @@ func TestNamespaceTokenGrantRule(t *testing.T) {
 
 	f.grant(t, prn("partial"), limited.ID, identity.NamespaceObject("acme"))
 	f.grant(t, prn("full"), access.RoleAdmin, identity.NamespaceObject("acme"))
-	f.grant(t, prn("root"), tokenRole.ID, identity.NamespaceObject("acme"))
+	// The route of a grant on acme authorizes namespace:manage-access on
+	// acme first, so root holds it with the token action.
+	f.grant(t, prn("root"), limited.ID, identity.NamespaceObject("acme"))
 	f.grant(t, prn("root"), accessOnly.ID, identity.ServerObject())
 
 	acme := identity.NamespaceObject("acme")

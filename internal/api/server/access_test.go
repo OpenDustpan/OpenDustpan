@@ -209,7 +209,7 @@ func (f accessFixture) seed(t *testing.T, subject, role string, obj identity.Obj
 		Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-" + subject},
 	}
 	fence, e := storetest.GrantWrite(t, f.store, obj, at, "grant:"+grt.ID)
-	if err := f.store.CreateGrant(t.Context(), grt, fence, e); err != nil {
+	if err := f.store.CreateGrant(t.Context(), grt, fence, e, nil); err != nil {
 		t.Fatalf("seed grant: %v", err)
 	}
 }

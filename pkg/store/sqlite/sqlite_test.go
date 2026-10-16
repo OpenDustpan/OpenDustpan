@@ -71,6 +71,21 @@ func TestAccessConformance(t *testing.T) {
 	})
 }
 
+// TestAccessConcurrency runs the cases of a grant or role check that races
+// a write on a second handle of the same database file.
+func TestAccessConcurrency(t *testing.T) {
+	t.Parallel()
+
+	accesstest.RunConcurrent(t, func(t *testing.T) (access.Store, access.Store) {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+		copyTemplate(t, path)
+
+		return openPath(t, path), openPath(t, path)
+	})
+}
+
 // TestDelegation runs the suite of the tokens of service principals.
 func TestDelegation(t *testing.T) {
 	t.Parallel()
