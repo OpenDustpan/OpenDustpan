@@ -393,6 +393,24 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 	return items, nil
 }
 
+const clearJournalOperations = `-- name: ClearJournalOperations :exec
+UPDATE update_journal SET operation_ids = '[]'
+WHERE stack_id = $1 AND update_id = $2
+`
+
+type ClearJournalOperationsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+// A batch that holds a rebuilt base state entry starts the known set again:
+// earlier batches keep their rows for the replay, but their operation IDs no
+// longer count.
+func (q *Queries) ClearJournalOperations(ctx context.Context, arg ClearJournalOperationsParams) error {
+	_, err := q.db.Exec(ctx, clearJournalOperations, arg.StackID, arg.UpdateID)
+	return err
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = TRUE
 WHERE stack_id = $1 AND id = $2
