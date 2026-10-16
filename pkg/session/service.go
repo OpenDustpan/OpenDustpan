@@ -199,13 +199,16 @@ func (s *Sessions) SignOut(ctx context.Context, e audit.Entry, principalID, id s
 // Begin names a new sign-in request: its state, the secret that the
 // authorization request and the binding cookie carry (NewSecret makes
 // one), the provider, the nonce and the PKCE verifier of the authorization
-// request, and the return path.
+// request, the return path, and the max_age of the authorization request
+// when HasMaxAge is true.
 type Begin struct {
 	State      Secret
 	Provider   string
 	Nonce      string
 	Verifier   string
 	ReturnPath string
+	MaxAge     time.Duration
+	HasMaxAge  bool
 }
 
 // BeginRequest stores a new sign-in request, keyed by the digest of its
@@ -220,6 +223,8 @@ func (s *Sessions) BeginRequest(ctx context.Context, in Begin) error {
 		Nonce:      in.Nonce,
 		Verifier:   in.Verifier,
 		ReturnPath: in.ReturnPath,
+		MaxAge:     in.MaxAge,
+		HasMaxAge:  in.HasMaxAge,
 	}
 
 	if err := s.store.CreateRequest(ctx, r, DigestOf(in.State)); err != nil {

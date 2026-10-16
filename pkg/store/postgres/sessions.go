@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -204,6 +205,7 @@ func (s *Store) CreateRequest(ctx context.Context, r session.Request, d session.
 		ReturnPath:  r.ReturnPath,
 		CreatedAtMs: codec.Millis(r.CreatedAt),
 		ExpiresAtMs: codec.Millis(r.ExpiresAt),
+		MaxAgeMs:    pgtype.Int8{Int64: r.MaxAge.Milliseconds(), Valid: r.HasMaxAge},
 	})
 	if err != nil {
 		return fmt.Errorf("insert sign-in request: %w", err)
@@ -238,6 +240,8 @@ func (s *Store) TakeRequest(ctx context.Context, d session.Digest, at time.Time)
 		Nonce:      row.Nonce,
 		Verifier:   row.Verifier,
 		ReturnPath: row.ReturnPath,
+		MaxAge:     time.Duration(row.MaxAgeMs.Int64) * time.Millisecond,
+		HasMaxAge:  row.MaxAgeMs.Valid,
 	}, nil
 }
 
@@ -280,6 +284,7 @@ func (s *Store) UpdateSessionPolicy(ctx context.Context, update session.PolicyUp
 func sessionPolicyOf(row db.GetSessionPolicyRow) session.Policy {
 	return codec.FromSessionPolicyRow(codec.SessionPolicyRow{
 		IdleMs: row.IdleMs, MaxLengthMs: row.MaxLengthMs, UpdatedAtMs: row.UpdatedAtMs,
+		TokenFreshnessMs: row.TokenFreshnessMs.Int64, TokenFreshnessSet: row.TokenFreshnessMs.Valid,
 	})
 }
 
@@ -289,6 +294,7 @@ func setSessionPolicy(ctx context.Context, q *db.Queries, p session.Policy) erro
 
 	n, err := q.SetSessionPolicy(ctx, db.SetSessionPolicyParams{
 		IdleMs: row.IdleMs, MaxLengthMs: row.MaxLengthMs, UpdatedAtMs: row.UpdatedAtMs,
+		TokenFreshnessMs: pgtype.Int8{Int64: row.TokenFreshnessMs, Valid: row.TokenFreshnessSet},
 	})
 	if err != nil {
 		return fmt.Errorf("update session policy: %w", err)
@@ -313,4 +319,22 @@ func boundMillis(t time.Time) int64 {
 	}
 
 	return codec.Millis(t)
+}
+
+// BindProvider implements session.ProviderStore. The insert keeps an
+// earlier record, so the read answers the issuer of the first start.
+func (s *Store) BindProvider(ctx context.Context, id, issuer string, at time.Time) (string, error) {
+	err := s.queries.InsertOIDCProvider(ctx, db.InsertOIDCProviderParams{
+		ProviderID: id, Issuer: issuer, CreatedAtMs: codec.Millis(at),
+	})
+	if err != nil {
+		return "", fmt.Errorf("insert sign-in provider: %w", err)
+	}
+
+	recorded, err := s.queries.GetOIDCProviderIssuer(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("select sign-in provider: %w", err)
+	}
+
+	return recorded, nil
 }

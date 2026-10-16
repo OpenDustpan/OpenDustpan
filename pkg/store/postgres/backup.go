@@ -291,8 +291,14 @@ func pgCopySessionTables() []pgCopyTable {
 			table: "sign_in_requests",
 			columns: []string{
 				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, pgColExpiresAtMs,
+				"max_age_ms",
 			},
 			orderBy: []string{pgColDigest},
+		},
+		{
+			table:   "oidc_providers",
+			columns: []string{"provider_id", "issuer", pgColCreatedAtMs},
+			orderBy: []string{"provider_id"},
 		},
 	}
 }
@@ -388,7 +394,7 @@ func pgCopyGrantTables() []pgCopyTable {
 		},
 		{
 			table:   "session_policy",
-			columns: []string{"id", "idle_ms", "max_length_ms", pgColUpdatedAtMs},
+			columns: []string{"id", "idle_ms", "max_length_ms", pgColUpdatedAtMs, "token_freshness_ms"},
 			orderBy: []string{"id"},
 		},
 	}

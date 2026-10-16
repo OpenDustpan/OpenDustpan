@@ -1787,22 +1787,31 @@ WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL;
 SELECT COUNT(*) FROM sessions WHERE id = $1;
 
 -- name: CreateSignInRequest :execrows
-INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING;
 
 -- name: TakeSignInRequest :one
 DELETE FROM sign_in_requests WHERE digest = $1
-RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms;
+RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms;
 
 -- name: PruneSignInRequests :execrows
 DELETE FROM sign_in_requests WHERE expires_at_ms <= $1;
 
 -- name: GetSessionPolicy :one
-SELECT idle_ms, max_length_ms, updated_at_ms FROM session_policy WHERE id = 1;
+SELECT idle_ms, max_length_ms, updated_at_ms, token_freshness_ms FROM session_policy WHERE id = 1;
 
 -- name: SetSessionPolicy :execrows
 UPDATE session_policy
 SET idle_ms = sqlc.arg('idle_ms')::bigint, max_length_ms = sqlc.arg('max_length_ms')::bigint,
-  updated_at_ms = sqlc.arg('updated_at_ms')::bigint
+  updated_at_ms = sqlc.arg('updated_at_ms')::bigint, token_freshness_ms = sqlc.narg('token_freshness_ms')::bigint
 WHERE id = 1;
+
+-- name: InsertOIDCProvider :exec
+-- The first start with a provider ID records its issuer. A later start
+-- keeps the record.
+INSERT INTO oidc_providers (provider_id, issuer, created_at_ms) VALUES ($1, $2, $3)
+ON CONFLICT (provider_id) DO NOTHING;
+
+-- name: GetOIDCProviderIssuer :one
+SELECT issuer FROM oidc_providers WHERE provider_id = $1;

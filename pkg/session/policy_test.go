@@ -102,13 +102,16 @@ func TestSetPolicy(t *testing.T) {
 	unchanged := session.DefaultMaxLength
 
 	got, err := svc.SetPolicy(t.Context(), callerEntry(), session.PolicyChange{
-		Idle: &idle, MaxLength: &unchanged,
+		Idle: &idle, MaxLength: &unchanged, TokenFreshness: nil,
 	})
 	if err != nil {
 		t.Fatalf("set policy: %v", err)
 	}
 
-	want := session.Policy{UpdatedAt: now, Limits: session.Limits{Idle: idle, MaxLength: session.DefaultMaxLength}}
+	want := session.Policy{
+		UpdatedAt: now, Limits: session.Limits{Idle: idle, MaxLength: session.DefaultMaxLength},
+		TokenFreshness: session.DefaultTokenFreshness, TokenFreshnessDefault: true,
+	}
 	if got != want {
 		t.Fatalf("policy = %+v, want %+v", got, want)
 	}
@@ -144,7 +147,7 @@ func TestSetPolicyRefusesInvalidLimits(t *testing.T) {
 	short := 10 * time.Minute
 
 	_, err = svc.SetPolicy(t.Context(), callerEntry(), session.PolicyChange{
-		Idle: nil, MaxLength: &short,
+		Idle: nil, MaxLength: &short, TokenFreshness: nil,
 	})
 	if !errors.Is(err, session.ErrInvalid) {
 		t.Fatalf("a maximum length under the idle limit = %v, want ErrInvalid", err)
@@ -152,6 +155,80 @@ func TestSetPolicyRefusesInvalidLimits(t *testing.T) {
 
 	if store.policy != session.DefaultPolicy() || len(store.entries) != 0 {
 		t.Fatalf("store = %+v, want the defaults and no entry", store)
+	}
+}
+
+// TestDefaultTokenFreshness pins the token freshness window of a policy
+// that no administrator set.
+func TestDefaultTokenFreshness(t *testing.T) {
+	t.Parallel()
+
+	if session.DefaultTokenFreshness != 15*time.Minute {
+		t.Fatalf("DefaultTokenFreshness = %s, want 15m0s", session.DefaultTokenFreshness)
+	}
+
+	if p := session.DefaultPolicy(); p.TokenFreshness != session.DefaultTokenFreshness || !p.TokenFreshnessDefault {
+		t.Fatalf("default policy window = %s (default %t), want DefaultTokenFreshness", p.TokenFreshness,
+			p.TokenFreshnessDefault)
+	}
+}
+
+func TestValidTokenFreshness(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		d     time.Duration
+		valid bool
+	}{
+		{d: 0, valid: true},
+		{d: session.MinTokenFreshness, valid: true},
+		{d: session.MaxLengthBound, valid: true},
+		{d: 30 * time.Second, valid: false},
+		{d: session.MaxLengthBound + time.Second, valid: false},
+		{d: 90*time.Second + time.Millisecond, valid: false},
+		{d: -time.Minute, valid: false},
+	} {
+		err := session.ValidTokenFreshness(tc.d)
+		if tc.valid != (err == nil) || (err != nil && !errors.Is(err, session.ErrInvalid)) {
+			t.Errorf("ValidTokenFreshness(%s) = %v, want valid %t", tc.d, err, tc.valid)
+		}
+	}
+}
+
+func TestSetPolicyTokenFreshness(t *testing.T) {
+	t.Parallel()
+
+	store := &memoryPolicies{policy: session.DefaultPolicy(), entries: nil}
+
+	svc, err := session.NewPolicies(session.PolicyConfig{Store: store, Now: nil})
+	if err != nil {
+		t.Fatalf("new policies: %v", err)
+	}
+
+	window := 5 * time.Minute
+
+	got, err := svc.SetPolicy(t.Context(), callerEntry(), session.PolicyChange{
+		Idle: nil, MaxLength: nil, TokenFreshness: &window,
+	})
+	if err != nil || got.TokenFreshness != window || got.TokenFreshnessDefault {
+		t.Fatalf("set the window = %+v, %v; want 5 minutes that an administrator set", got, err)
+	}
+
+	before := "900"
+	wantChanges := []audit.Change{{Key: "tokenFreshnessSeconds", Old: &before, New: "300", Layer: "", TakesEffect: ""}}
+
+	if len(store.entries) != 1 || !slices.EqualFunc(store.entries[0].Changes, wantChanges, equalChange) {
+		t.Fatalf("entries = %+v, want one change of tokenFreshnessSeconds from 900 to 300", store.entries)
+	}
+
+	bad := 10 * time.Second
+
+	_, err = svc.SetPolicy(t.Context(), callerEntry(), session.PolicyChange{
+		Idle: nil, MaxLength: nil, TokenFreshness: &bad,
+	})
+	if !errors.Is(err, session.ErrInvalid) || store.policy.TokenFreshness != window {
+		t.Fatalf("a window of 10 seconds = %v, window %s; want ErrInvalid and no change", err,
+			store.policy.TokenFreshness)
 	}
 }
 

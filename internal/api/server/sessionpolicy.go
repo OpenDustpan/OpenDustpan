@@ -135,7 +135,7 @@ func (h *Handler) setSessionPolicy(
 	}
 
 	return h.sessions.SetPolicy(r.Context(), callerEntry(r, p, identity.ActionServerManageSignIn),
-		session.PolicyChange{Idle: idle, MaxLength: maxLength})
+		session.PolicyChange{Idle: idle, MaxLength: maxLength, TokenFreshness: nil})
 }
 
 // limitSeconds converts a count of seconds of a body to a duration, or

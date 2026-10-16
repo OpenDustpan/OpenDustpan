@@ -254,6 +254,7 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 
 	err = h.signIn.sessions.BeginRequest(ctx, session.Begin{
 		State: state, Provider: provider.ID, Nonce: pending.Nonce, Verifier: pending.Verifier, ReturnPath: returnPath,
+		MaxAge: pending.MaxAge, HasMaxAge: pending.HasMaxAge,
 	})
 	if err != nil {
 		h.writeError(ctx, w, err)

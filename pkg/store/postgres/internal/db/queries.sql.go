@@ -1272,8 +1272,8 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 }
 
 const createSignInRequest = `-- name: CreateSignInRequest :execrows
-INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING
 `
 
@@ -1285,6 +1285,7 @@ type CreateSignInRequestParams struct {
 	ReturnPath  string
 	CreatedAtMs int64
 	ExpiresAtMs int64
+	MaxAgeMs    pgtype.Int8
 }
 
 func (q *Queries) CreateSignInRequest(ctx context.Context, arg CreateSignInRequestParams) (int64, error) {
@@ -1296,6 +1297,7 @@ func (q *Queries) CreateSignInRequest(ctx context.Context, arg CreateSignInReque
 		arg.ReturnPath,
 		arg.CreatedAtMs,
 		arg.ExpiresAtMs,
+		arg.MaxAgeMs,
 	)
 	if err != nil {
 		return 0, err
@@ -2858,6 +2860,17 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 	return ip_allowlist, err
 }
 
+const getOIDCProviderIssuer = `-- name: GetOIDCProviderIssuer :one
+SELECT issuer FROM oidc_providers WHERE provider_id = $1
+`
+
+func (q *Queries) GetOIDCProviderIssuer(ctx context.Context, providerID string) (string, error) {
+	row := q.db.QueryRow(ctx, getOIDCProviderIssuer, providerID)
+	var issuer string
+	err := row.Scan(&issuer)
+	return issuer, err
+}
+
 const getPrincipal = `-- name: GetPrincipal :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
@@ -3123,19 +3136,25 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 }
 
 const getSessionPolicy = `-- name: GetSessionPolicy :one
-SELECT idle_ms, max_length_ms, updated_at_ms FROM session_policy WHERE id = 1
+SELECT idle_ms, max_length_ms, updated_at_ms, token_freshness_ms FROM session_policy WHERE id = 1
 `
 
 type GetSessionPolicyRow struct {
-	IdleMs      int64
-	MaxLengthMs int64
-	UpdatedAtMs int64
+	IdleMs           int64
+	MaxLengthMs      int64
+	UpdatedAtMs      int64
+	TokenFreshnessMs pgtype.Int8
 }
 
 func (q *Queries) GetSessionPolicy(ctx context.Context) (GetSessionPolicyRow, error) {
 	row := q.db.QueryRow(ctx, getSessionPolicy)
 	var i GetSessionPolicyRow
-	err := row.Scan(&i.IdleMs, &i.MaxLengthMs, &i.UpdatedAtMs)
+	err := row.Scan(
+		&i.IdleMs,
+		&i.MaxLengthMs,
+		&i.UpdatedAtMs,
+		&i.TokenFreshnessMs,
+	)
 	return i, err
 }
 
@@ -3915,6 +3934,24 @@ func (q *Queries) InsertJournalSequence(ctx context.Context, arg InsertJournalSe
 		arg.Arrival,
 		arg.Sha256,
 	)
+	return err
+}
+
+const insertOIDCProvider = `-- name: InsertOIDCProvider :exec
+INSERT INTO oidc_providers (provider_id, issuer, created_at_ms) VALUES ($1, $2, $3)
+ON CONFLICT (provider_id) DO NOTHING
+`
+
+type InsertOIDCProviderParams struct {
+	ProviderID  string
+	Issuer      string
+	CreatedAtMs int64
+}
+
+// The first start with a provider ID records its issuer. A later start
+// keeps the record.
+func (q *Queries) InsertOIDCProvider(ctx context.Context, arg InsertOIDCProviderParams) error {
+	_, err := q.db.Exec(ctx, insertOIDCProvider, arg.ProviderID, arg.Issuer, arg.CreatedAtMs)
 	return err
 }
 
@@ -7104,18 +7141,24 @@ func (q *Queries) SetPendingContentKey(ctx context.Context, arg SetPendingConten
 const setSessionPolicy = `-- name: SetSessionPolicy :execrows
 UPDATE session_policy
 SET idle_ms = $1::bigint, max_length_ms = $2::bigint,
-  updated_at_ms = $3::bigint
+  updated_at_ms = $3::bigint, token_freshness_ms = $4::bigint
 WHERE id = 1
 `
 
 type SetSessionPolicyParams struct {
-	IdleMs      int64
-	MaxLengthMs int64
-	UpdatedAtMs int64
+	IdleMs           int64
+	MaxLengthMs      int64
+	UpdatedAtMs      int64
+	TokenFreshnessMs pgtype.Int8
 }
 
 func (q *Queries) SetSessionPolicy(ctx context.Context, arg SetSessionPolicyParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setSessionPolicy, arg.IdleMs, arg.MaxLengthMs, arg.UpdatedAtMs)
+	result, err := q.db.Exec(ctx, setSessionPolicy,
+		arg.IdleMs,
+		arg.MaxLengthMs,
+		arg.UpdatedAtMs,
+		arg.TokenFreshnessMs,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -7260,7 +7303,7 @@ func (q *Queries) SubjectsOfCaller(ctx context.Context, subject string) ([]Subje
 
 const takeSignInRequest = `-- name: TakeSignInRequest :one
 DELETE FROM sign_in_requests WHERE digest = $1
-RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms
+RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms
 `
 
 type TakeSignInRequestRow struct {
@@ -7270,6 +7313,7 @@ type TakeSignInRequestRow struct {
 	ReturnPath  string
 	CreatedAtMs int64
 	ExpiresAtMs int64
+	MaxAgeMs    pgtype.Int8
 }
 
 func (q *Queries) TakeSignInRequest(ctx context.Context, digest string) (TakeSignInRequestRow, error) {
@@ -7282,6 +7326,7 @@ func (q *Queries) TakeSignInRequest(ctx context.Context, digest string) (TakeSig
 		&i.ReturnPath,
 		&i.CreatedAtMs,
 		&i.ExpiresAtMs,
+		&i.MaxAgeMs,
 	)
 	return i, err
 }

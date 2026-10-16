@@ -32,6 +32,7 @@ import (
 type Store interface {
 	session.Store
 	session.PolicyStore
+	session.ProviderStore
 	principal.RecordStore
 	accesstoken.Store
 }
@@ -66,6 +67,9 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a touch leaves an idle or expired session as it is", test: testTouchKeepsInactiveSession},
 		{name: "the lookup answers the activity and the break-glass flag of the owner", test: testOwnerActivity},
 		{name: "a sign-in request works once", test: testRequestOnce},
+		{name: "a sign-in request keeps its max_age", test: testRequestMaxAge},
+		{name: "the token freshness window keeps the default until it is set", test: testPolicyTokenFreshness},
+		{name: "a provider ID keeps the issuer of its first binding", test: testBindProvider},
 		{name: "an expired sign-in request is gone", test: testRequestExpired},
 		{name: "a sign-in request that fails validation is ErrInvalid", test: testInvalidRequest},
 		{name: "a duplicate state digest is ErrAlreadyExists", test: testDuplicateRequest},
@@ -816,6 +820,8 @@ func newRequest(created time.Time) session.Request {
 		Nonce:      "n-0S6_WzA2Mj-rG7k3QpL",
 		Verifier:   "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
 		ReturnPath: "/tokens?new=1",
+		MaxAge:     0,
+		HasMaxAge:  false,
 	}
 }
 
@@ -824,7 +830,7 @@ func equalRequest(t *testing.T, got, want session.Request) {
 
 	same := got.CreatedAt.Equal(want.CreatedAt) && got.ExpiresAt.Equal(want.ExpiresAt) &&
 		got.Provider == want.Provider && got.Nonce == want.Nonce && got.Verifier == want.Verifier &&
-		got.ReturnPath == want.ReturnPath
+		got.ReturnPath == want.ReturnPath && got.MaxAge == want.MaxAge && got.HasMaxAge == want.HasMaxAge
 	if !same {
 		t.Fatalf("request = %+v, want %+v", got, want)
 	}
@@ -852,6 +858,118 @@ func testRequestOnce(t *testing.T, s Store) {
 
 	_, err = s.TakeRequest(ctx, digest(2), at(6))
 	wantErr(t, "take of an unknown state", err, session.ErrNotFound)
+}
+
+func testRequestMaxAge(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	for i, c := range []struct {
+		maxAge time.Duration
+		has    bool
+	}{
+		{maxAge: 0, has: true},
+		{maxAge: 5 * time.Minute, has: true},
+		{maxAge: 0, has: false},
+	} {
+		r := newRequest(at(5))
+		r.MaxAge, r.HasMaxAge = c.maxAge, c.has
+
+		if err := s.CreateRequest(ctx, r, digest(10+i)); err != nil {
+			t.Fatalf("create request with max_age %s (%t): %v", c.maxAge, c.has, err)
+		}
+
+		got, err := s.TakeRequest(ctx, digest(10+i), at(6))
+		if err != nil {
+			t.Fatalf("take: %v", err)
+		}
+
+		equalRequest(t, got, r)
+	}
+
+	r := newRequest(at(5))
+	r.MaxAge = time.Minute
+
+	wantErr(t, "a max_age that the request did not send", s.CreateRequest(ctx, r, digest(20)), session.ErrInvalid)
+}
+
+func testPolicyTokenFreshness(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	update := func(change func(*session.Policy)) session.Policy {
+		t.Helper()
+
+		stored, err := s.UpdateSessionPolicy(ctx, func(old session.Policy) (session.Policy, audit.Entry, error) {
+			change(&old)
+			old.UpdatedAt = at(5)
+
+			return old, policyEntry(at(5)), nil
+		})
+		if err != nil {
+			t.Fatalf("update policy: %v", err)
+		}
+
+		got, err := s.GetSessionPolicy(ctx)
+		if err != nil || got != stored {
+			t.Fatalf("policy after the update = %+v, %v; want %+v", got, err, stored)
+		}
+
+		return got
+	}
+
+	// A change of the limits only keeps the window of the server default.
+	got := update(func(p *session.Policy) { p.Limits.Idle = 30 * time.Minute })
+	if !got.TokenFreshnessDefault || got.TokenFreshness != session.DefaultTokenFreshness {
+		t.Fatalf("window after a change of the limits = %s (default %t), want the default", got.TokenFreshness,
+			got.TokenFreshnessDefault)
+	}
+
+	got = update(func(p *session.Policy) { p.TokenFreshness, p.TokenFreshnessDefault = 0, false })
+	if got.TokenFreshnessDefault || got.TokenFreshness != 0 {
+		t.Fatalf("window set to 0 = %s (default %t), want 0 that an administrator set", got.TokenFreshness,
+			got.TokenFreshnessDefault)
+	}
+
+	got = update(func(p *session.Policy) { p.TokenFreshness, p.TokenFreshnessDefault = 30*time.Minute, false })
+	if got.TokenFreshnessDefault || got.TokenFreshness != 30*time.Minute {
+		t.Fatalf("window set to 30 minutes = %s (default %t)", got.TokenFreshness, got.TokenFreshnessDefault)
+	}
+}
+
+func testBindProvider(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	bind := func(id, issuer string, when time.Time) string {
+		t.Helper()
+
+		recorded, err := s.BindProvider(ctx, id, issuer, when)
+		if err != nil {
+			t.Fatalf("bind %s to %s: %v", id, issuer, err)
+		}
+
+		return recorded
+	}
+
+	if got := bind("corp", "https://idp.example", at(5)); got != "https://idp.example" {
+		t.Fatalf("first binding = %q, want the issuer", got)
+	}
+
+	if got := bind("corp", "https://idp.example", at(6)); got != "https://idp.example" {
+		t.Fatalf("second binding with the same issuer = %q", got)
+	}
+
+	if got := bind("corp", "https://other.example", at(7)); got != "https://idp.example" {
+		t.Fatalf("binding with another issuer = %q, want the first issuer", got)
+	}
+
+	if got := bind("partner", "https://other.example", at(7)); got != "https://other.example" {
+		t.Fatalf("binding of another provider ID = %q, want its own issuer", got)
+	}
 }
 
 func testRequestExpired(t *testing.T, s Store) {
@@ -994,7 +1112,10 @@ func testPolicy(t *testing.T, s Store) {
 		t.Fatalf("seeded policy = %+v, %v; want %+v", got, err, session.DefaultPolicy())
 	}
 
-	want := session.Policy{UpdatedAt: at(5), Limits: session.Limits{Idle: 30 * time.Minute, MaxLength: 8 * time.Hour}}
+	want := session.Policy{
+		UpdatedAt: at(5), Limits: session.Limits{Idle: 30 * time.Minute, MaxLength: 8 * time.Hour},
+		TokenFreshness: 0, TokenFreshnessDefault: false,
+	}
 
 	stored, err := s.UpdateSessionPolicy(ctx, func(old session.Policy) (session.Policy, audit.Entry, error) {
 		if old != session.DefaultPolicy() {
