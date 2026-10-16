@@ -82,6 +82,7 @@ func newMetricsHandler(
 		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
+		SignIn:         nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

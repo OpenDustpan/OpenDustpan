@@ -101,6 +101,11 @@ type Config struct {
 	// AuditSinks lists the configured audit sinks with their delivery
 	// state. Nil means no sink is configured: the sink list is empty.
 	AuditSinks AuditSinkSource
+	// SignIn is the console sign-in through OpenID Connect providers. Nil
+	// means no sign-in: the sign-in routes are not mounted, and the
+	// session cookie authenticates nothing. With SignIn set, Principals is
+	// required.
+	SignIn *SignIn
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -143,6 +148,7 @@ type Handler struct {
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
 	auditSinks     AuditSinkSource
+	signIn         *signInState
 	mux            *patternMux
 	routes         []Route
 }
@@ -151,23 +157,13 @@ type Handler struct {
 // Namespaces, Maintenance and Metrics are required. Backups is optional: nil
 // means no backup target is configured.
 func NewHandler(cfg Config) (*Handler, error) {
-	switch {
-	case cfg.Authenticator == nil:
-		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
-	case cfg.Authorizer == nil:
-		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
-	case cfg.Logger == nil:
-		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Maintenance == nil:
-		return nil, fmt.Errorf("%w: maintenance", ErrMissingDependency)
-	case cfg.Metrics == nil:
-		return nil, fmt.Errorf("%w: metrics", ErrMissingDependency)
-	case cfg.Access != nil && !keepsNamespaceAudit(cfg.Audit):
-		// Each access-review export writes an audit entry, in @server or in
-		// the namespace of the export (ADR 52, decision 13).
-		return nil, fmt.Errorf("%w: an audit store with namespace entries, for the access review", ErrMissingDependency)
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	signIn, err := newSignInState(cfg.SignIn)
+	if err != nil {
+		return nil, err
 	}
 
 	h := &Handler{
@@ -191,6 +187,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		sessions:       cfg.SessionPolicy,
 		onAuditFailure: cfg.OnAuditFailure,
 		auditSinks:     cfg.AuditSinks,
+		signIn:         signIn,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
@@ -201,6 +198,33 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	return h, nil
+}
+
+// validate returns ErrMissingDependency when cfg lacks a required
+// dependency.
+func (cfg Config) validate() error {
+	switch {
+	case cfg.Authenticator == nil:
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Maintenance == nil:
+		return fmt.Errorf("%w: maintenance", ErrMissingDependency)
+	case cfg.Metrics == nil:
+		return fmt.Errorf("%w: metrics", ErrMissingDependency)
+	case cfg.Access != nil && !keepsNamespaceAudit(cfg.Audit):
+		// Each access-review export writes an audit entry, in @server or in
+		// the namespace of the export.
+		return fmt.Errorf("%w: an audit store with namespace entries, for the access review", ErrMissingDependency)
+	case cfg.SignIn != nil && cfg.Principals == nil:
+		return fmt.Errorf("%w: principal service, for the sign-in", ErrMissingDependency)
+	}
+
+	return nil
 }
 
 // keepsNamespaceAudit reports whether entries keeps the entries of @server
@@ -282,15 +306,24 @@ func (c *notFoundWriter) Write(p []byte) (int, error) {
 	return c.ResponseWriter.Write(p) //nolint:wrapcheck // Transparent wrapper: callers must see the original error.
 }
 
-// authenticate resolves the "Authorization: Bearer <token>" header to a
-// principal.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), bearerScheme)
-	if !ok || raw == "" {
-		return identity.Principal{}, identity.ErrUnauthenticated
+// authenticate resolves the caller of r: the "Authorization: Bearer
+// <token>" header, or, for a request with no Authorization header, the
+// console session cookie. A request with both uses the header and ignores
+// the cookie. The session is nil for a caller with a token.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, *sessionCaller, error) {
+	header := r.Header.Get("Authorization")
+	if header == "" {
+		return h.authenticateSession(r)
 	}
 
-	return h.authn.AuthenticateToken(r.Context(), raw)
+	raw, ok := strings.CutPrefix(header, bearerScheme)
+	if !ok || raw == "" {
+		return identity.Principal{}, nil, identity.ErrUnauthenticated
+	}
+
+	p, err := h.authn.AuthenticateToken(r.Context(), raw)
+
+	return p, nil, err
 }
 
 // errorResponse is the error body the installation API answers.
@@ -349,6 +382,10 @@ func classify(err error) (int, string) {
 	}
 
 	if status, message, ok := classifySessionPolicy(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifySignIn(err); ok {
 		return status, message
 	}
 

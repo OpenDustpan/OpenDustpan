@@ -338,9 +338,17 @@ func TestSessionsRefuseDisabledOwner(t *testing.T) {
 	}
 }
 
-func begin(returnPath string) session.Begin {
-	return session.Begin{
-		Provider: "corp", Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43), ReturnPath: returnPath,
+func begin(t *testing.T, returnPath string) (session.Secret, session.Begin) {
+	t.Helper()
+
+	state, err := session.NewSecret()
+	if err != nil {
+		t.Fatalf("state: %v", err)
+	}
+
+	return state, session.Begin{
+		State: state, Provider: "corp", Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43),
+		ReturnPath: returnPath,
 	}
 }
 
@@ -349,9 +357,13 @@ func TestSessionsRequestWorksOnce(t *testing.T) {
 
 	f := newSessionsFixture(t)
 
-	state, err := f.svc.BeginRequest(t.Context(), begin("/console/tokens"))
-	if err != nil {
+	state, in := begin(t, "/console/tokens")
+	if err := f.svc.BeginRequest(t.Context(), in); err != nil {
 		t.Fatalf("begin: %v", err)
+	}
+
+	if err := f.svc.BeginRequest(t.Context(), in); !errors.Is(err, session.ErrAlreadyExists) {
+		t.Fatalf("begin with a taken state = %v, want ErrAlreadyExists", err)
 	}
 
 	r, err := f.svc.TakeRequest(t.Context(), state)
@@ -369,8 +381,8 @@ func TestSessionsRequestExpires(t *testing.T) {
 
 	f := newSessionsFixture(t)
 
-	state, err := f.svc.BeginRequest(t.Context(), begin("/"))
-	if err != nil {
+	state, in := begin(t, "/")
+	if err := f.svc.BeginRequest(t.Context(), in); err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
@@ -387,7 +399,8 @@ func TestSessionsRequestRefusesReturnPath(t *testing.T) {
 	f := newSessionsFixture(t)
 
 	for _, path := range []string{"https://evil.example/", "//evil.example/", "relative"} {
-		if _, err := f.svc.BeginRequest(t.Context(), begin(path)); !errors.Is(err, session.ErrInvalid) {
+		_, in := begin(t, path)
+		if err := f.svc.BeginRequest(t.Context(), in); !errors.Is(err, session.ErrInvalid) {
 			t.Errorf("begin with return path %q = %v, want ErrInvalid", path, err)
 		}
 	}

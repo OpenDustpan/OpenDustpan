@@ -171,25 +171,22 @@ func (s *Sessions) SignOut(ctx context.Context, e audit.Entry, principalID, id s
 	return nil
 }
 
-// Begin names a new sign-in request: the provider, the nonce and the PKCE
-// verifier of the authorization request, and the return path.
+// Begin names a new sign-in request: its state, the secret that the
+// authorization request and the binding cookie carry (NewSecret makes
+// one), the provider, the nonce and the PKCE verifier of the authorization
+// request, and the return path.
 type Begin struct {
+	State      Secret
 	Provider   string
 	Nonce      string
 	Verifier   string
 	ReturnPath string
 }
 
-// BeginRequest stores a new sign-in request and returns its state, the
-// secret that the authorization request and the binding cookie carry. The
-// request expires after RequestLifetime. It returns ErrInvalid when in
-// fails validation.
-func (s *Sessions) BeginRequest(ctx context.Context, in Begin) (Secret, error) {
-	state, err := NewSecret()
-	if err != nil {
-		return Secret{}, err
-	}
-
+// BeginRequest stores a new sign-in request, keyed by the digest of its
+// state. The request expires after RequestLifetime. It returns ErrInvalid
+// when in fails validation, and ErrAlreadyExists when the state is taken.
+func (s *Sessions) BeginRequest(ctx context.Context, in Begin) error {
 	at := s.Now()
 	r := Request{
 		CreatedAt:  at,
@@ -200,11 +197,11 @@ func (s *Sessions) BeginRequest(ctx context.Context, in Begin) (Secret, error) {
 		ReturnPath: in.ReturnPath,
 	}
 
-	if err := s.store.CreateRequest(ctx, r, DigestOf(state)); err != nil {
-		return Secret{}, fmt.Errorf("begin sign-in: %w", err)
+	if err := s.store.CreateRequest(ctx, r, DigestOf(in.State)); err != nil {
+		return fmt.Errorf("begin sign-in: %w", err)
 	}
 
-	return state, nil
+	return nil
 }
 
 // TakeRequest returns the sign-in request with the state and deletes it, so
