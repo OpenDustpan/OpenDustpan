@@ -195,10 +195,10 @@ const (
 	// ActionServerReadTokens allows reading the access tokens of every
 	// principal, never their secrets (ADR 53). Its object is ServerObject.
 	ActionServerReadTokens Action = "server:read-tokens"
-	// ActionServerManageTokens allows creating and rotating the personal
-	// tokens of other persons, and revoking any access token (ADR 53,
-	// decision 3). Its object is ServerObject. A create or a rotation also
-	// runs the escalation check against the grants of the person.
+	// ActionServerManageTokens allows revoking the personal tokens of other
+	// persons. Its object is ServerObject. No action allows creating or
+	// rotating a personal token of another person: each person makes and
+	// rotates its own.
 	ActionServerManageTokens Action = "server:manage-tokens"
 	// ActionServerManageServiceTokens allowed creating and rotating service
 	// tokens. Its object is ServerObject.

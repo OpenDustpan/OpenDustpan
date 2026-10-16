@@ -13,7 +13,6 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
-	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -130,8 +129,7 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: tokengrants.Check{Grants: grants, Principals: st},
-		Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
+		Store: st, Principals: st, Freshness: nil, Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
