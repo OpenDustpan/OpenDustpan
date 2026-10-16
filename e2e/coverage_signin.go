@@ -11,12 +11,14 @@ import (
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
 // coverageSignInRoutes returns the sign-in rows of the installation route
-// table. The sign-in needs a principal store and a session store, so the
+// table, with the routes of the sign-in providers of the API. The sign-in needs a principal store and a session store,
+// so the
 // table comes from a handler over a temporary SQLite store.
 func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
@@ -48,6 +50,8 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		tb.Fatalf("session service: %v", err)
 	}
 
+	admin := coverageProviderAdmin(tb, st)
+
 	handler, err := serverapi.NewHandler(serverapi.Config{
 		Authenticator: coverageAuthenticator{}, Authorizer: coverageAuthorizer{}, Logger: slog.New(slog.DiscardHandler),
 		Namespaces: coverageNamespaces(tb), Backups: nil, Restores: nil, Maintenance: coverageMaintenance{},
@@ -55,7 +59,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		Access: nil, Tokens: nil, Audit: nil, OnAuditFailure: nil, DeletedUnits: nil, AuditSinks: nil, AuditChain: nil,
 		IPAllowlists: nil, SessionPolicy: nil,
 		SignIn: &serverapi.SignIn{
-			Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: nil, Origins: nil,
+			Sessions: sessions, Limiter: nil, Stored: nil, Admin: admin, Providers: nil, Origins: nil,
 		},
 		CheckpointEpochs: nil,
 	})
@@ -66,11 +70,32 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	var out []RouteRef
 
 	for _, ref := range serverRefs(handler.Routes()) {
-		if strings.Contains(ref.Path, "/sign-in/") || ref.Path == "/api/server/session" ||
+		if strings.Contains(ref.Path, "/sign-in/") || strings.HasPrefix(ref.Path, "/api/server/sign-in-providers") ||
+			ref.Path == "/api/server/session" ||
 			ref.Path == "/api/server/sign-out" {
 			out = append(out, ref)
 		}
 	}
 
 	return out
+}
+
+// coverageProviderAdmin returns a service of the sign-in providers of the
+// API over st, so the handler mounts the provider routes.
+func coverageProviderAdmin(tb testing.TB, st *sqlite.Store) *session.ProviderAdmin {
+	tb.Helper()
+
+	secrets, err := secret.NewInstallationSecrets(secret.InstallationConfig{Keys: st, Wrapper: nil, Now: nil})
+	if err != nil {
+		tb.Fatalf("installation secrets: %v", err)
+	}
+
+	admin, err := session.NewProviderAdmin(session.ProviderAdminConfig{
+		Store: st, Binder: st, Secrets: secrets, Now: nil, Static: nil,
+	})
+	if err != nil {
+		tb.Fatalf("sign-in provider service: %v", err)
+	}
+
+	return admin
 }

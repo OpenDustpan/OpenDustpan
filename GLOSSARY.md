@@ -163,6 +163,14 @@ _Avoid_: Namespace service account, local principal
 **Principal source**:
 Where a principal comes from. The API makes a `local` principal. The first sign-in of a person through an OpenID Connect provider makes an `oidc` principal. A directory sync keeps an `ldap` or `scim` principal. The subject of an `oidc` principal is the provider ID and the subject of the identity provider, separated by a colon. So a provider ID must never change after its first sign-in.
 
+**Sign-in provider**:
+An OpenID Connect provider through which persons sign in to the console. A provider of the flags or the configuration file has the source `static`, and the API cannot change it. A provider that the API creates has the source `api`. Each provider has an ID that is part of the subject of each person who signs in through it.
+_Avoid_: Identity source, IdP connection
+
+**Installation scope**:
+The scope of a secret value that belongs to the installation and to no namespace, for example the client secret of a sign-in provider. The server binds its data key to `@server`, a name that no namespace can have.
+_Avoid_: Global scope, server namespace
+
 **Access token**:
 The secret that a tool or the console sends to prove which principal it acts for.
 _Avoid_: API key, password

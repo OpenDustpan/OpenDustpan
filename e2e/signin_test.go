@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -214,6 +215,7 @@ func runSignInOnStore(t *testing.T, cli, tofu e2e.Install, store e2e.Store) {
 	}
 
 	checkSignOut(t, b)
+	checkStoredProvider(t, env)
 }
 
 // doBody sends one request with body and the headers, and returns its
@@ -484,5 +486,157 @@ func checkSignOut(t *testing.T, b browser) {
 
 	if _, status := b.session(t); status != http.StatusUnauthorized {
 		t.Fatalf("session after sign-out = %d, want 401", status)
+	}
+}
+
+// providerAnswer is a sign-in provider on the wire, in the e2e steps.
+type providerAnswer struct {
+	ID      string `json:"id"`
+	Source  string `json:"source"`
+	Version int64  `json:"version"`
+}
+
+// storedProviderBody is the create body of the provider beta.
+func storedProviderBody(issuer string) string {
+	return `{"id":"` + e2e.StoredSignInProvider + `","issuer":"` + issuer + `","displayName":"Beta",` +
+		`"clientID":"` + e2e.StoredClientID + `","clientSecret":"` + e2e.StoredClientSecret + `",` +
+		`"scopes":["profile","email"]}`
+}
+
+// signInWith runs a sign-in through the provider id with the browser
+// client of its test provider, and returns the answer of the callback.
+func (b browser) signInWith(t *testing.T, idp *http.Client, id string) answer {
+	t.Helper()
+
+	start := b.do(t, b.server, http.MethodGet, b.env.URL+"/api/server/sign-in/"+id+"?return=/console", nil)
+	if start.status != http.StatusFound {
+		return start
+	}
+
+	auth := b.do(t, idp, http.MethodGet, start.location, nil)
+	if auth.status != http.StatusFound {
+		t.Fatalf("authorization at %s = %d: %s", id, auth.status, auth.body)
+	}
+
+	return b.do(t, b.server, http.MethodGet, auth.location, nil)
+}
+
+// patchStored changes the provider beta through the API and returns its
+// new version.
+func patchStored(ctx context.Context, t *testing.T, env *e2e.Env, body string) int64 {
+	t.Helper()
+
+	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPatch,
+		"/api/server/sign-in-providers/"+e2e.StoredSignInProvider, body)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("change of the stored provider %s = %d, %v: %s", body, status, err, raw)
+	}
+
+	var p providerAnswer
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		t.Fatalf("decode the provider: %v", err)
+	}
+
+	return p.Version
+}
+
+// checkStoredProvider proves the sign-in providers of the API:
+//   - the bootstrap token creates the provider beta, and a person signs in
+//     through it, with a subject of its own;
+//   - a wrong client secret makes the next sign-in fail, and the right one
+//     makes it work again, with no restart;
+//   - the provider of the configuration cannot be changed;
+//   - a provider with principals is not deleted, and a disabled provider
+//     refuses the start of a sign-in.
+func checkStoredProvider(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	ctx := t.Context()
+	beta := env.StoredIdentityProvider(t)
+
+	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/sign-in-providers",
+		storedProviderBody(beta.Issuer()))
+	if err != nil || status != http.StatusCreated || strings.Contains(raw, e2e.StoredClientSecret) {
+		t.Fatalf("create the stored provider = %d, %v: %s", status, err, raw)
+	}
+
+	idp := *beta.Client()
+	idp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	b := browser{env: env, server: env.BrowserClient(t), idp: &idp}
+
+	if back := b.signInWith(t, b.idp, e2e.StoredSignInProvider); back.status != http.StatusSeeOther {
+		t.Fatalf("sign-in through the stored provider = %d: %s", back.status, back.body)
+	}
+
+	if sess, code := b.session(t); code != http.StatusOK || sess.Subject != e2e.StoredSignInProvider+":248289761001" {
+		t.Fatalf("session of the stored provider = %d %+v", code, sess)
+	}
+
+	version := patchStored(ctx, t, env, `{"version":1,"clientSecret":"a-wrong-secret"}`)
+	if back := b.signInWith(t, b.idp, e2e.StoredSignInProvider); back.status == http.StatusSeeOther {
+		t.Fatal("a sign-in with a wrong client secret passed")
+	}
+
+	version = patchStored(ctx, t, env,
+		`{"version":`+strconv.FormatInt(version, 10)+`,"clientSecret":"`+e2e.StoredClientSecret+`"}`)
+	if back := b.signInWith(t, b.idp, e2e.StoredSignInProvider); back.status != http.StatusSeeOther {
+		t.Fatalf("sign-in after the right secret = %d: %s", back.status, back.body)
+	}
+
+	checkStoredProviderRefusals(ctx, t, env)
+
+	patchStored(ctx, t, env, `{"version":`+strconv.FormatInt(version, 10)+`,"enabled":false}`)
+
+	start := b.do(t, b.server, http.MethodGet, env.URL+"/api/server/sign-in/"+e2e.StoredSignInProvider, nil)
+	if start.status != http.StatusNotFound {
+		t.Fatalf("start of a disabled provider = %d, want 404", start.status)
+	}
+}
+
+// checkStoredProviderRefusals proves that the provider of the
+// configuration cannot be changed and that a provider with principals is
+// not deleted, and that the list holds both providers.
+func checkStoredProviderRefusals(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	status, raw, err := env.ServerAPIStatus(ctx, http.MethodPatch,
+		"/api/server/sign-in-providers/"+e2e.SignInProvider, `{"version":0,"enabled":false}`)
+	if err != nil || status != http.StatusConflict {
+		t.Fatalf("change of the provider of the configuration = %d, %v: %s", status, err, raw)
+	}
+
+	status, raw, err = env.ServerAPIStatus(ctx, http.MethodDelete,
+		"/api/server/sign-in-providers/"+e2e.StoredSignInProvider, "")
+	if err != nil || status != http.StatusConflict || !strings.Contains(raw, "disable it") {
+		t.Fatalf("delete of a provider with principals = %d, %v: %s", status, err, raw)
+	}
+
+	checkStoredProviderList(ctx, t, env)
+}
+
+// checkStoredProviderList proves that the list holds the static corp and
+// the stored beta, and that no read holds the client secret.
+func checkStoredProviderList(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	status, raw, err := env.ServerAPIStatus(ctx, http.MethodGet, "/api/server/sign-in-providers", "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("list of the providers = %d, %v: %s", status, err, raw)
+	}
+
+	var list struct {
+		Providers []providerAnswer `json:"providers"`
+	}
+
+	decodeErr := json.Unmarshal([]byte(raw), &list)
+	if decodeErr != nil || len(list.Providers) != 2 || list.Providers[0].Source != "static" ||
+		list.Providers[1].Source != "api" {
+		t.Fatalf("providers = %+v, %v; want the static corp and the stored beta", list.Providers, decodeErr)
+	}
+
+	status, raw, err = env.ServerAPIStatus(ctx, http.MethodGet,
+		"/api/server/sign-in-providers/"+e2e.StoredSignInProvider, "")
+	if err != nil || status != http.StatusOK || strings.Contains(raw, e2e.StoredClientSecret) {
+		t.Fatalf("read of the stored provider = %d, %v: %s", status, err, raw)
 	}
 }
