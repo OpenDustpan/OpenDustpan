@@ -81,8 +81,12 @@ type Operation struct {
 	State   State
 	// Steps are the recorded steps, in the order of their record.
 	Steps []StepRecord
-	// Attempt is the number of claims so far. The first claim sets 1.
+	// Attempt is the number of claims so far. The first claim sets 1. A
+	// release and a takeover also count, so Attempt is no limit for
+	// retries: use Failures.
 	Attempt int
+	// Failures is the number of failed attempts: the calls of Fail.
+	Failures int
 	// Expiries is the number of claims that took the operation over after
 	// the claim before them expired: the number of holders that stopped
 	// without an end write. A release, a retry and a first claim do not

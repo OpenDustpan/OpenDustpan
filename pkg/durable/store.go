@@ -79,7 +79,8 @@ type Store interface {
 	// then calls Release, which ends the operation canceled.
 	Complete(ctx context.Context, c Claim) error
 
-	// Fail ends the attempt of c and records f.Message as the last error.
+	// Fail ends the attempt of c, records f.Message as the last error and
+	// increments Failures.
 	// With f.Final, the operation ends failed. Otherwise it returns to
 	// pending with NotBefore at now plus f.RetryAfter. The claim is cleared
 	// in both cases. It returns ErrClaimLost when c is not the live claim,
