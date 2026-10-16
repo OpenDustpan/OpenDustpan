@@ -116,7 +116,12 @@ func TestRevokedTokenEndsLeaseRequests(t *testing.T) {
 	t.Parallel()
 
 	authn := newRevocableTokens()
-	f := newUpdateFixtureWithAuthenticator(t, allowAll(), authn, fixtureOptions{checker: authn, limit: 0, cutoff: 0})
+	f := newUpdateFixtureWithAuthenticator(
+		t,
+		allowAll(),
+		authn,
+		fixtureOptions{checker: authn, limit: 0, cutoff: 0, replayer: nil},
+	)
 	paths, lease := startWithToken(t, f, "test-token")
 
 	status, body := f.doUpdate(t, leaseRequest(http.MethodPost, paths.Renew, lease, `{"duration":60}`))
@@ -158,7 +163,12 @@ func TestBootstrapTokenUpdateSkipsTokenCheck(t *testing.T) {
 	t.Parallel()
 
 	authn := newRevocableTokens()
-	f := newUpdateFixtureWithAuthenticator(t, allowAll(), authn, fixtureOptions{checker: authn, limit: 0, cutoff: 0})
+	f := newUpdateFixtureWithAuthenticator(
+		t,
+		allowAll(),
+		authn,
+		fixtureOptions{checker: authn, limit: 0, cutoff: 0, replayer: nil},
+	)
 	paths, lease := startWithToken(t, f, "boot-token")
 
 	authn.end("tok-1")
