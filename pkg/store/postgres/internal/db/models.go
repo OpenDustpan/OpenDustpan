@@ -76,6 +76,12 @@ type AuditSinkCursor struct {
 	UpdatedAtMs int64
 }
 
+type AuditSinkLease struct {
+	Sink        string
+	Holder      string
+	ExpiresAtMs int64
+}
+
 type Backup struct {
 	ID          string
 	State       string

@@ -365,8 +365,7 @@ The full entry stays in the server audit log, and the chain check on the server 
 The server reads the new entries of each scope in order and writes them to the sink in one batch.
 It moves the cursor of the sink only after the sink accepted the batch.
 A failed batch stays, and the server sends it again with a longer wait each time, up to 5 minutes.
-So a sink can receive an entry twice.
-Each instance of the server sends the entries, so with more than one instance a sink receives each entry about once for each instance.
+While its lease holds, one instance ships a sink. After a lease is lost or a round fails, a sink can receive an entry twice. Delivery is at least once.
 Drop duplicates by `scope` and `sequence`.
 A batch in one scope that fails does not stop the other scopes.
 The server sends a batch every 5 seconds to a file, syslog or a webhook, and every minute to object storage.

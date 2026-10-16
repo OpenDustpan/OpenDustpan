@@ -170,6 +170,9 @@ type settings struct {
 	auditChain audit.ChainSetting
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
+	// instanceID names this server process in the sink leases of its audit
+	// shipper. See WithInstanceID.
+	instanceID string
 	// auditShipper ships to auditSinks. assemble sets it before it mounts
 	// the adapters, so the installation API lists it.
 	auditShipper *audit.Shipper
@@ -544,6 +547,7 @@ func defaultSettings() *settings {
 		auditChain:              audit.ChainOn,
 		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 		auditSinks:              nil,
+		instanceID:              "",
 		auditShipper:            nil,
 	}
 }
