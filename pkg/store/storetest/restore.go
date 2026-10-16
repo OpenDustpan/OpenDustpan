@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -66,6 +67,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "a restore row survives close and reopen", test: testRestoreRowSurvivesReopen},
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
+		{name: "apply keeps the installation state of the target", test: testRestoreKeepsInstallationState},
 		{
 			name: "a restored log of another chain state checks valid after the migration",
 			test: testRestoreChainAgreesAfterMigration,
@@ -746,6 +748,70 @@ func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
 		got.Pending != want.Pending || got.EnteredMaintenance != want.EnteredMaintenance ||
 		!got.MigratingAt.Equal(want.MigratingAt) || got.LogReplaced != want.LogReplaced {
 		t.Fatalf("chain record after the restore = %+v, want the target record %+v", got, want)
+	}
+}
+
+// testRestoreKeepsInstallationState proves that the swap keeps the
+// installation state of the target in both directions: a target in
+// maintenance mode stays in maintenance mode after the swap of a backup taken
+// in normal operation, so writes stay refused until the restore leaves
+// maintenance mode itself; and a target in normal operation stays normal
+// after the swap of a backup taken in maintenance mode, such as the backup
+// that a restore takes before it applies. A store without the installation
+// state skips the case.
+func testRestoreKeepsInstallationState(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	cases := []struct {
+		source maintenance.State
+		target maintenance.State
+	}{
+		{source: maintenance.StateNormal, target: maintenance.StateMaintenance},
+		{source: maintenance.StateMaintenance, target: maintenance.StateNormal},
+	}
+
+	for _, tc := range cases {
+		ctx := t.Context()
+		ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+		from, okSrc := ps.src.(maintenance.Store)
+		to, okDst := ps.dst.(maintenance.Store)
+
+		if !okSrc || !okDst {
+			t.Skip("the store has no installation state")
+		}
+
+		setInstallationState(t, from, tc.source)
+		setInstallationState(t, to, tc.target)
+
+		sink, sum, files := exportPortable(t, ps.src)
+
+		if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+			t.Fatalf("stage restore: %v", err)
+		}
+
+		if err := ps.dst.ApplyStaging(ctx); err != nil {
+			t.Fatalf("apply staging area: %v", err)
+		}
+
+		got, err := to.GetState(ctx)
+		if err != nil {
+			t.Fatalf("installation state after the swap: %v", err)
+		}
+
+		if got != tc.target {
+			t.Fatalf("installation state after the swap of a %s backup = %q, want the target state %q",
+				tc.source, got, tc.target)
+		}
+	}
+}
+
+// setInstallationState stores state as the installation state of s.
+func setInstallationState(t *testing.T, s maintenance.Store, state maintenance.State) {
+	t.Helper()
+
+	if err := s.SetState(t.Context(), state); err != nil {
+		t.Fatalf("set installation state %q: %v", state, err)
 	}
 }
 

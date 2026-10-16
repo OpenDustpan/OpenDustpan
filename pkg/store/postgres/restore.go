@@ -258,11 +258,15 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 	})
 }
 
-// finishSwap ends the swap in tx: it keeps the audit chain state of this
-// installation, drops the schema previous, and fences the restored schema
-// live (see fenceRestored).
+// finishSwap ends the swap in tx: it keeps the audit chain state and the
+// installation state of this installation, drops the schema previous, and
+// fences the restored schema live (see fenceRestored).
 func finishSwap(ctx context.Context, tx pgx.Tx, live, previous string) error {
 	if err := keepChainState(ctx, tx, live, previous); err != nil {
+		return err
+	}
+
+	if err := keepInstallationState(ctx, tx, live, previous); err != nil {
 		return err
 	}
 
@@ -317,6 +321,27 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 
 	if _, err := tx.Exec(ctx, failRestores, backup.RestoredRunningRestoreText); err != nil {
 		return fmt.Errorf("fail restored running restores: %w", err)
+	}
+
+	return nil
+}
+
+// keepInstallationState replaces the installation row of the restored schema
+// live with the row of the schema previous, in tx. The installation state is
+// bookkeeping of this installation: a restore runs in maintenance mode, and
+// the row from the backup would end maintenance mode when the swap commits,
+// before the restore has finished. Without a row in previous, live keeps no
+// row either, and reads normal as previous did.
+func keepInstallationState(ctx context.Context, tx pgx.Tx, live, previous string) error {
+	if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(live)+".installation"); err != nil {
+		return fmt.Errorf("keep installation state: %w", err)
+	}
+
+	keep := "INSERT INTO " + pgIdent(live) + ".installation (id, state) SELECT id, state FROM " +
+		pgIdent(previous) + ".installation"
+
+	if _, err := tx.Exec(ctx, keep); err != nil {
+		return fmt.Errorf("keep installation state: %w", err)
 	}
 
 	return nil
