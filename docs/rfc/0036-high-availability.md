@@ -179,7 +179,9 @@ the ADR for this RFC.
 2. **Liveness: a lease per job (L1).** Each claimed operation has an expiry
    on the database clock. Its worker extends the expiry. Each claim has a
    fencing token that grows on each takeover, and every step write checks
-   it. There is no instance registry. Decider: the project owner,
+   it. There is no instance registry, so ADR 72 also supersedes ADR 48
+   decisions 1 to 3 and 9 to 11, which define that registry. The option that
+   the owner chose said "no instance registry". Decider: the project owner,
    2026-10-16. (Question 1.)
 3. **Maintenance: the write-path check.** Every write transaction checks the
    installation state in the same statement as its namespace fence. Writes at
@@ -753,13 +755,12 @@ refuses a second instance on one SQLite file.
    claimed by one instance (the proposal for question 8)?
 2. Rolling deploys: expand and contract with a support window of K = 2,
    a minimum binary version in the schema, version rows written at start-up
-   and a write-path check of the minimum (the proposal for question 9)? If
-   yes, it supersedes ADR 33 decision 1 and must land before the first tag.
-3. ADR 48 decisions 1 to 3 and 9 to 11 define an instance registry with a
-   lease. Decision 2 above says that there is no instance registry, and
-   decisions 5 to 8 were the only users of the registry. Are decisions 1 to
-   3 and 9 to 11 superseded too? Decision 4 (the version check at start)
-   moves to question 2.
+   and a write-path check of the minimum (the proposal for question 9)?
+3. **Must be decided before `v0.1.0`.** ADR 33 decision 1: does an older
+   binary keep refusing every newer schema, or does it refuse only a schema
+   whose minimum binary version is above its own? A released binary keeps
+   its rule, so the coexistence part of question 2 is possible only if the
+   first tag ships the second rule.
 
 ## Appendix: background jobs and long operations today
 
