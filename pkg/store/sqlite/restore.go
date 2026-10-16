@@ -46,7 +46,7 @@ func (s *Store) CreateRestore(ctx context.Context, r backup.RestoreRecord) error
 	}
 
 	if n == 0 {
-		return backup.ErrRestoreExists
+		return s.createRestoreConflict(ctx, r.ID)
 	}
 
 	return nil

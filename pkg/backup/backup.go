@@ -210,7 +210,9 @@ var (
 // not one namespace. A server that starts marks every running row failed.
 type Registry interface {
 	// CreateBackup stores r as a running backup. It returns ErrAlreadyExists
-	// if the ID is taken.
+	// if the ID is taken, and ErrAlreadyRunning when another backup of the
+	// installation is running: one backup runs at a time, across every
+	// instance on the database.
 	CreateBackup(ctx context.Context, r Record) error
 	// FinishBackup moves the running backup id to state, which is
 	// StateSucceeded or StateFailed, with the error text and the end time.

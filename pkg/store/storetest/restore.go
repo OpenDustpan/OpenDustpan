@@ -58,6 +58,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 	}{
 		{name: "restores table creates, finishes, gets and lists", test: testRestoreRegistry},
 		{name: "restart marks every running restore failed", test: testRestoreRestartFailsRunning},
+		{name: "one restore runs at a time", test: testRestoreOneRunning},
 		{name: "a restore row survives close and reopen", test: testRestoreRowSurvivesReopen},
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
@@ -322,6 +323,43 @@ func restoreIDs(rows []backup.RestoreRecord) []backup.RestoreID {
 	return ids
 }
 
+// testRestoreOneRunning refuses a second running restore with
+// ErrRestoreRunning while the first one checks and while it applies, keeps
+// ErrRestoreExists for a taken ID, and allows the next restore once the
+// running one finished.
+func testRestoreOneRunning(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	first := mustCreateRestore(
+		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+	second := newRestoreRecord(
+		backup.RestoreID(ident.NewID("rst-")),
+		backup.ID(ident.NewID("bkp-")),
+		now().Add(time.Minute),
+	)
+
+	if err := s.CreateRestore(t.Context(), second); !errors.Is(err, backup.ErrRestoreRunning) {
+		t.Fatalf("second restore while one checks: err = %v, want ErrRestoreRunning", err)
+	}
+
+	if err := s.MarkRestoreApplying(t.Context(), first.ID, backup.ID(ident.NewID("bkp-"))); err != nil {
+		t.Fatalf("mark restore applying: %v", err)
+	}
+
+	if err := s.CreateRestore(t.Context(), second); !errors.Is(err, backup.ErrRestoreRunning) {
+		t.Fatalf("second restore while one applies: err = %v, want ErrRestoreRunning", err)
+	}
+
+	if err := s.CreateRestore(t.Context(), first); !errors.Is(err, backup.ErrRestoreExists) {
+		t.Fatalf("taken restore ID: err = %v, want ErrRestoreExists", err)
+	}
+
+	mustFinishRestore(t, s, restoreFinish{ID: first.ID, State: backup.RestoreSucceeded, Error: "", EndedAt: now()})
+	mustCreateRestore(t, s, second)
+}
+
 // testRestoreRestartFailsRunning marks a running row failed at the next start,
 // with the error text, and leaves finished rows alone.
 func testRestoreRestartFailsRunning(t *testing.T, newStore RestoreFactory) {
@@ -333,9 +371,21 @@ func testRestoreRestartFailsRunning(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("fail running restores: %v", err)
 	}
 
-	running := mustCreateRestore(
-		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	// One restore runs at a time: the finished row runs and ends first, then
+	// an applying row fails at one restart, then a checking row at the next.
+	done := mustCreateRestore(
+		t,
+		s,
+		newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)),
 	)
+	endedAt := now().Add(2 * time.Hour)
+	finished := mustFinishRestore(t, s, restoreFinish{
+		ID:      done.ID,
+		State:   backup.RestoreSucceeded,
+		Error:   "",
+		EndedAt: endedAt,
+	})
+
 	applying := mustCreateRestore(
 		t,
 		s,
@@ -350,18 +400,21 @@ func testRestoreRestartFailsRunning(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("mark restore applying: %v", err)
 	}
 
-	done := mustCreateRestore(
-		t,
-		s,
-		newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)),
+	if err := s.FailRunningRestores(
+		t.Context(),
+		now().Add(150*time.Minute),
+		"server stopped during restore",
+	); err != nil {
+		t.Fatalf("fail running restores: %v", err)
+	}
+
+	if stalled := mustGetRestore(t, s, applying.ID); stalled.State != backup.RestoreFailed {
+		t.Fatalf("applying restore after restart = %+v, want failed", stalled)
+	}
+
+	running := mustCreateRestore(
+		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
 	)
-	endedAt := now().Add(2 * time.Hour)
-	finished := mustFinishRestore(t, s, restoreFinish{
-		ID:      done.ID,
-		State:   backup.RestoreSucceeded,
-		Error:   "",
-		EndedAt: endedAt,
-	})
 
 	restartedAt := now().Add(3 * time.Hour)
 
@@ -375,10 +428,6 @@ func testRestoreRestartFailsRunning(t *testing.T, newStore RestoreFactory) {
 		!got.EndedAt.Equal(restartedAt) || !got.StartedAt.Equal(running.StartedAt) ||
 		got.BackupID != running.BackupID {
 		t.Fatalf("restarted restore = %+v, want failed with the error text and end time", got)
-	}
-
-	if stalled := mustGetRestore(t, s, applying.ID); stalled.State != backup.RestoreFailed {
-		t.Fatalf("applying restore after restart = %+v, want failed", stalled)
 	}
 
 	if untouched := mustGetRestore(t, s, done.ID); untouched != finished {
@@ -399,9 +448,7 @@ func testRestoreRowSurvivesReopen(t *testing.T, newStore RestoreFactory) {
 		t.Skip("store does not support close and reopen")
 	}
 
-	running := mustCreateRestore(
-		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
-	)
+	// One restore runs at a time: the finished row runs and ends first.
 	done := mustCreateRestore(
 		t,
 		s,
@@ -413,6 +460,9 @@ func testRestoreRowSurvivesReopen(t *testing.T, newStore RestoreFactory) {
 		Error:   "",
 		EndedAt: now().Add(2 * time.Hour),
 	})
+	running := mustCreateRestore(
+		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
 
 	if err := reopenable.Close(); err != nil {
 		t.Fatalf("close store: %v", err)

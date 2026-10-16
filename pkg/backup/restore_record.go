@@ -72,7 +72,9 @@ var (
 // server that starts marks every running row failed.
 type RestoreRegistry interface {
 	// CreateRestore stores r as a running restore. It returns
-	// ErrRestoreExists if the ID is taken.
+	// ErrRestoreExists if the ID is taken, and ErrRestoreRunning when another
+	// restore of the installation is checking or applying: one restore runs
+	// at a time, across every instance on the database.
 	CreateRestore(ctx context.Context, r RestoreRecord) error
 	// FinishRestore moves the running restore id to state, which is
 	// RestoreSucceeded or RestoreFailed, with the error text and the end
