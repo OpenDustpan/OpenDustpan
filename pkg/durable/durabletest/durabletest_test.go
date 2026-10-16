@@ -55,6 +55,8 @@ func TestSuiteSensitivity(t *testing.T) {
 		{durabletest.BreakTokenStays, "another_instance_claims_an_expired_operation_with_a_new_token"},
 		{durabletest.BreakLive, "a_live_claim_blocks_another_claim"},
 		{durabletest.BreakTxStart, "a_claim_that_expires_inside_a_step_transaction_cannot_write"},
+		{durabletest.BreakExpiryCount, "only_a_takeover_of_an_expired_claim_counts_an_expiry"},
+		{durabletest.BreakMaxVersions, "a_claim_skips_a_version_above_its_limit"},
 	}
 
 	for _, tc := range cases {

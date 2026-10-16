@@ -98,6 +98,10 @@ type envInput struct {
 	// signIn turns on the console sign-in through a test OpenID provider,
 	// in process and with the server binary.
 	signIn bool
+	// signInRealTime runs the in-process server of a sign-in env on the
+	// real time instead of a TestClock, for tests that need time to pass.
+	// The server binary always keeps the real time.
+	signInRealTime bool
 	// journalRefuser corrupts one outputs-only journal batch on the way to
 	// the server, so the server refuses it and records the refusal. Nil
 	// passes every batch through untouched.
