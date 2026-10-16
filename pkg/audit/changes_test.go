@@ -96,30 +96,16 @@ func TestComputeStoredHashHashesTheStoredText(t *testing.T) {
 	}
 }
 
-// TestComputeHashCoversTheChanges pins the hash of a fixed entry with
-// changes, alone and after the value count, in the fixed order of the
-// optional fields. A script outside Go computed both values from the
-// documented encoding.
+// TestComputeHashCoversTheChanges proves that the hash covers the canonical
+// JSON of the changes, and that an empty changes list hashes as no changes.
 func TestComputeHashCoversTheChanges(t *testing.T) {
 	t.Parallel()
-
-	const (
-		wantChanges      = "c58e34fc5789a51597c6101c5f02421cbc2a8619f0a72278f7971fb1f66bc5aa"
-		wantCountChanges = "c298dfac4f3c44132113655517f0651cc579c3a243b28590b07e75c3fa60647a"
-	)
 
 	with := testEntry()
 	with.Changes = changesFixture()
 
-	if got := audit.ComputeHash(with, ""); got != wantChanges {
-		t.Fatalf("hash with changes = %s, want %s", got, wantChanges)
-	}
-
-	count := int64(2)
-	with.ValueCount = &count
-
-	if got := audit.ComputeHash(with, ""); got != wantCountChanges {
-		t.Fatalf("hash with a count and changes = %s, want %s", got, wantCountChanges)
+	if got, want := audit.ComputeHash(with, ""), encodedHash("", "", "", canonicalFixture, "0"); got != want {
+		t.Fatalf("hash with changes = %s, want %s", got, want)
 	}
 
 	empty := testEntry()

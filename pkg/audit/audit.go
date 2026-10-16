@@ -267,13 +267,13 @@ const hashFieldSeparator = 0x1F
 // subject, identity provider subject, token ID, action, object, version,
 // value path, time (Unix milliseconds, decimal), source IP, user agent,
 // channel, kind, outcome, request ID, previous hash. Numeric fields use
-// decimal text. After the previous hash, the encoding appends the optional
-// fields that e sets, each as "<name>=<value>" with the same separator, in
-// this fixed order: value_count (the decimal count), then object_id (ADR 47,
-// which its own change adds), then changes (the canonical JSON of
-// EncodeChanges), then fence_version (the decimal failover version, when
-// it is above 0). An optional field that e does not set adds nothing, so an
-// entry written before the field keeps its hash. The hash takes no key:
+// decimal text. After the previous hash, the encoding writes four named
+// fields, each as "<name>=<value>" with the same separator, in this fixed
+// order: value_count (the decimal count, empty when e has no count, so no
+// count and the count 0 differ), object_id, changes (the canonical JSON of
+// EncodeChanges, empty when e has no changes) and fence_version (the decimal
+// failover version, also when it is 0). No field is optional: a field that
+// e does not set writes an empty value. The hash takes no key:
 // any installation can compute it again from the stored fields. The separator never
 // appears in a validated field except the user agent and free-form names,
 // where it is kept as is: the encoding is fixed and documented, not
@@ -292,7 +292,7 @@ func ComputeStoredHash(e Entry, prevHash, changesText string) string {
 }
 
 // hashWithChanges answers the hash of e and prevHash with changesText as
-// the value of the optional field changes.
+// the value of the field changes.
 func hashWithChanges(e Entry, prevHash, changesText string) string {
 	var sb strings.Builder
 
@@ -319,21 +319,15 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 	write(e.RequestID)
 	write(prevHash)
 
+	valueCount := ""
 	if e.ValueCount != nil {
-		write("value_count=" + strconv.FormatInt(*e.ValueCount, 10))
+		valueCount = strconv.FormatInt(*e.ValueCount, 10)
 	}
 
-	if e.ObjectID != "" {
-		write("object_id=" + e.ObjectID)
-	}
-
-	if changesText != "" {
-		write("changes=" + changesText)
-	}
-
-	if e.FenceVersion > 0 {
-		write("fence_version=" + strconv.FormatInt(e.FenceVersion, 10))
-	}
+	write("value_count=" + valueCount)
+	write("object_id=" + e.ObjectID)
+	write("changes=" + changesText)
+	write("fence_version=" + strconv.FormatInt(e.FenceVersion, 10))
 
 	sum := sha256.Sum256([]byte(sb.String()))
 

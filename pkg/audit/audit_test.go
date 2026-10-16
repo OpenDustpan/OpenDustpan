@@ -1,6 +1,9 @@
 package audit_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,101 +105,92 @@ func TestComputeHashIsStableAndCoversTheFields(t *testing.T) {
 	}
 }
 
-func TestComputeHashKeepsEntriesWithoutACountValid(t *testing.T) {
+// encodedHash answers the hex SHA-256 of the documented encoding: the
+// fields of testEntry, each followed by the unit separator, then the four
+// named fields with the given values. The test writes the encoding out,
+// so it does not use the code under test to compute the expected hash.
+func encodedHash(prevHash, valueCount, objectID, changes, fenceVersion string) string {
+	fields := []string{
+		"acme", "1", "admin", "", "", "unit:decrypt", "pulumi:acme/web/prod", "", "",
+		"1791806400000", "192.0.2.1", "pulumi-cli/3.200.0", "api", "reveal", "success", "req-1",
+		prevHash,
+		"value_count=" + valueCount,
+		"object_id=" + objectID,
+		"changes=" + changes,
+		"fence_version=" + fenceVersion,
+	}
+
+	var sb strings.Builder
+
+	for _, field := range fields {
+		sb.WriteString(field)
+		sb.WriteByte(0x1F)
+	}
+
+	sum := sha256.Sum256([]byte(sb.String()))
+
+	return hex.EncodeToString(sum[:])
+}
+
+// TestComputeHashEncodesEveryField proves that the hash encoding writes
+// every field in a fixed order, with an empty value when the field is not
+// set: no field is optional. A value count that is not set and the value
+// count 0 give different hashes, and fence version 0 is in the encoding.
+func TestComputeHashEncodesEveryField(t *testing.T) {
 	t.Parallel()
 
-	// want pins the encoding of one fixed entry with a nil value count, as
-	// the code before the count computed it. An entry written before the
-	// count keeps its hash only while this hash stays.
-	const want = "a58b9c9f9ef0c3ce0e47e4137c6fed46c9ff48dfd1944380cdfe1d8c5de48b66"
+	zero := int64(0)
+	two := int64(2)
 
-	if got := audit.ComputeHash(testEntry(), ""); got != want {
-		t.Fatalf("hash of an entry with a nil count = %q, want %q", got, want)
+	cases := []struct {
+		name  string
+		edit  func(e *audit.Entry)
+		prev  string
+		count string
+		id    string
+		chg   string
+		fence string
+	}{
+		{"no field set", func(*audit.Entry) {}, "", "", "", "", "0"},
+		{"previous hash", func(*audit.Entry) {}, "prev", "", "", "", "0"},
+		{"value count 0", func(e *audit.Entry) { e.ValueCount = &zero }, "", "0", "", "", "0"},
+		{"value count 2", func(e *audit.Entry) { e.ValueCount = &two }, "", "2", "", "", "0"},
+		{"object ID", func(e *audit.Entry) { e.ObjectID = "stk-1" }, "", "", "stk-1", "", "0"},
+		{"fence version", func(e *audit.Entry) { e.FenceVersion = 2 }, "", "", "", "", "2"},
+		{"every field", func(e *audit.Entry) {
+			e.ValueCount = &two
+			e.ObjectID = "stk-1"
+			e.Changes = []audit.Change{{Key: "region", Old: nil, New: "eu-west", Layer: "file", TakesEffect: ""}}
+			e.FenceVersion = 3
+		}, "prev", "2", "stk-1", `[{"key":"region","new":"eu-west","layer":"file"}]`, "3"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := testEntry()
+			tc.edit(&e)
+
+			want := encodedHash(tc.prev, tc.count, tc.id, tc.chg, tc.fence)
+			if got := audit.ComputeHash(e, tc.prev); got != want {
+				t.Fatalf("hash = %s, want %s", got, want)
+			}
+		})
 	}
 }
 
-func TestComputeHashCoversTheValueCount(t *testing.T) {
+// TestComputeHashTellsANilCountFromZero proves that an entry without a
+// value count and an entry with the value count 0 hash differently.
+func TestComputeHashTellsANilCountFromZero(t *testing.T) {
 	t.Parallel()
 
-	before := audit.ComputeHash(testEntry(), "")
+	zero := int64(0)
+	counted := testEntry()
+	counted.ValueCount = &zero
 
-	with := testEntry()
-	count := int64(2)
-	with.ValueCount = &count
-
-	got := audit.ComputeHash(with, "")
-	if got == "" {
-		t.Fatal("hash is empty")
-	}
-
-	if got == before {
-		t.Fatal("hash did not change after the value count changed")
-	}
-
-	if again := audit.ComputeHash(with, ""); again != got {
-		t.Fatalf("hash = %q, want stable %q", again, got)
-	}
-
-	other := testEntry()
-	otherCount := int64(3)
-	other.ValueCount = &otherCount
-
-	if same := audit.ComputeHash(other, ""); same == got {
-		t.Fatal("hash did not change after the value count changed")
-	}
-}
-
-// TestComputeHashCoversTheObjectID proves that the hash covers a set object
-// ID, and that an entry with an empty object ID keeps the hash of the code
-// before the field: TestComputeHashKeepsEntriesWithoutACountValid pins it.
-func TestComputeHashCoversTheObjectID(t *testing.T) {
-	t.Parallel()
-
-	before := audit.ComputeHash(testEntry(), "")
-
-	with := testEntry()
-	with.ObjectID = "stk-1"
-
-	got := audit.ComputeHash(with, "")
-	if got == before {
-		t.Fatal("hash did not change after the object ID was set")
-	}
-
-	other := testEntry()
-	other.ObjectID = "stk-2"
-
-	if same := audit.ComputeHash(other, ""); same == got {
-		t.Fatal("hash did not change after the object ID changed")
-	}
-}
-
-// TestComputeHashFixesTheOrderOfTheOptionalFields pins the encoding of the
-// optional fields after prevHash: value_count, then object_id, each only
-// when it is set. The audit, settings and soft-delete PRs agreed this order
-// (value_count, object_id, then changes), so an entry keeps its hash whatever
-// order the PRs merge in.
-func TestComputeHashFixesTheOrderOfTheOptionalFields(t *testing.T) {
-	t.Parallel()
-
-	const (
-		wantObjectID = "27bf6e010faa24ec19ce291310ab009791de303c31f867f003548d541533c298"
-		wantBoth     = "7a5ab76b68f08bbde3ebccda9e91110df4f2be9b852e060c4aae00e341d51e36"
-	)
-
-	withID := testEntry()
-	withID.ObjectID = "stk-1"
-
-	if got := audit.ComputeHash(withID, ""); got != wantObjectID {
-		t.Fatalf("hash with an object ID = %q, want %q", got, wantObjectID)
-	}
-
-	both := testEntry()
-	count := int64(2)
-	both.ValueCount = &count
-	both.ObjectID = "stk-1"
-
-	if got := audit.ComputeHash(both, ""); got != wantBoth {
-		t.Fatalf("hash with a value count and an object ID = %q, want %q", got, wantBoth)
+	if audit.ComputeHash(counted, "") == audit.ComputeHash(testEntry(), "") {
+		t.Fatal("a nil value count and the value count 0 gave the same hash")
 	}
 }
 
@@ -209,39 +203,5 @@ func TestPageNormalizedAppliesDefaultsAndCaps(t *testing.T) {
 
 	if got := (audit.Page{Number: 2, Size: audit.MaxPageSize + 1}).Normalized(); got.Size != audit.MaxPageSize {
 		t.Fatalf("oversize page = %+v, want capped at %d", got, audit.MaxPageSize)
-	}
-}
-
-// TestComputeHashCoversTheFenceVersion proves that the hash covers the
-// failover version of a namespace entry after the other optional fields,
-// that an entry with version 0 keeps the hash of the code before the field,
-// and pins the encoding, so another installation computes the same hash.
-func TestComputeHashCoversTheFenceVersion(t *testing.T) {
-	t.Parallel()
-
-	const wantFenced = "9037567e190eaf00bc4c1f3bdc6d00cd289ef98e7f0d6837070bbaec69d74aea"
-
-	before := audit.ComputeHash(testEntry(), "")
-
-	zero := testEntry()
-	zero.FenceVersion = 0
-
-	if got := audit.ComputeHash(zero, ""); got != before {
-		t.Fatalf("hash with fence version 0 = %q, want the hash without the field %q", got, before)
-	}
-
-	fenced := testEntry()
-	fenced.ObjectID = "stk-1"
-	fenced.FenceVersion = 2
-
-	got := audit.ComputeHash(fenced, "")
-	if got != wantFenced {
-		t.Fatalf("hash with an object ID and fence version 2 = %q, want %q", got, wantFenced)
-	}
-
-	fenced.FenceVersion = 3
-
-	if other := audit.ComputeHash(fenced, ""); other == got {
-		t.Fatal("hash did not change after the fence version changed")
 	}
 }

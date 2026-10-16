@@ -83,13 +83,14 @@ An entry holds these fields:
   restore and purge of a unit. The list omits it when the entry has none.
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
-  After `prevHash`, the encoding appends each optional field that the entry
-  sets, in this fixed order: `value_count=` with the decimal count, then
-  `object_id=` with the stable ID of the unit (ADR 47), then `changes=` with
-  the canonical JSON of the changes (sorted by key), as the store holds
-  it. An
-  optional field that the entry does not set adds nothing, so an entry
-  written before the field keeps its hash.
+  After `prevHash`, the encoding always writes four more fields, in this
+  fixed order: `value_count=` with the decimal count, then `object_id=`
+  with the stable ID of the unit, then `changes=` with the canonical JSON
+  of the changes (sorted by key), as the store holds it, then
+  `fence_version=` with the decimal failover version of the namespace (0
+  in `@server`). No field is optional. A field that the entry does not set
+  has an empty value after the `=`, so an entry with no count and an entry
+  with the count 0 have different hashes.
   The first entry of a namespace has an empty `prevHash`.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
