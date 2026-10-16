@@ -52,7 +52,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		Authenticator: coverageAuthenticator{}, Authorizer: coverageAuthorizer{}, Logger: slog.New(slog.DiscardHandler),
 		Namespaces: coverageNamespaces(tb), Backups: nil, Restores: nil, Maintenance: coverageMaintenance{},
 		Metrics: coverageMetrics{}, Version: "test", Schema: coverageSchema{}, Journal: nil, Principals: principals,
-		Access: nil, Tokens: nil, Audit: nil, OnAuditFailure: nil, DeletedUnits: nil, AuditSinks: nil,
+		Access: nil, Tokens: nil, Audit: nil, OnAuditFailure: nil, DeletedUnits: nil, AuditSinks: nil, AuditChain: nil,
 		IPAllowlists: nil, SessionPolicy: nil,
 		SignIn: &serverapi.SignIn{Sessions: sessions, Limiter: nil, Providers: nil, Origins: nil},
 	})

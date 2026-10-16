@@ -503,6 +503,7 @@ func signInEntry(r *http.Request, subject, idpSubject, action string) audit.Entr
 		Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
 		UserAgent: truncateUserAgent(r.UserAgent()), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0,
 	}
 }
 

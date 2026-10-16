@@ -122,6 +122,9 @@ type backendConfig struct {
 	// --ip-allowlists-include-bootstrap when set, so the binary server checks
 	// the lists of every namespace, including for the bootstrap admin token.
 	ipAllowlists bool
+	// auditChain passes --audit-chain with this value when set, so a test
+	// restarts the server with another setting of the audit chain.
+	auditChain string
 }
 
 // backendCert holds the certificate and key paths of one backend.
@@ -436,6 +439,10 @@ func serveArgs(cfg backendConfig, port string) []string {
 		args = append(args, "--backup-target", cfg.backupTarget)
 	}
 
+	if cfg.auditChain != "" {
+		args = append(args, "--audit-chain", cfg.auditChain)
+	}
+
 	return args
 }
 
@@ -583,6 +590,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 		keyFile:           cert.key,
 		tokens:            e.backendCfg.tokens,
 		deltaCutoff:       0,
+		auditChain:        "",
 	}
 
 	handle := launchBinaryBackend(ctx, tb, cfg, "0")
@@ -951,6 +959,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		deltaCutoff:       in.deltaCutoff,
 		disableJournaling: in.disableJournaling,
 		ipAllowlists:      in.ipAllowlists,
+		auditChain:        "",
 	}
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 

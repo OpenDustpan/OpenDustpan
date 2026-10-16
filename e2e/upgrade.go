@@ -185,6 +185,7 @@ func plainBackendConfig(binPath, dbURL, blobDir, tokens string, cert backendCert
 		keyFile:           cert.key,
 		tokens:            tokens,
 		deltaCutoff:       0,
+		auditChain:        "",
 	}
 }
 
@@ -286,6 +287,12 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 func (e *Env) SetServerBinary(path string) {
 	e.binPath = path
 	e.backendCfg.bin = path
+}
+
+// SetAuditChain sets the --audit-chain value that the next StartServer
+// uses: on or off.
+func (e *Env) SetAuditChain(setting string) {
+	e.backendCfg.auditChain = setting
 }
 
 // TryServe runs binPath `serve` once on the database, blob directory,
