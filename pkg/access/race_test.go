@@ -14,8 +14,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
-// racingStore commits the change race just before each grant write and
-// role write: a write on another replica that commits after the checks of
+// racingStore commits the change race just before each grant write,
+// revoke and role write: a write on another replica that commits after the checks of
 // the Service read, and before the write of the Service starts.
 type racingStore struct {
 	*sqlite.Store
@@ -35,6 +35,14 @@ func (r *racingStore) UpdateRole(ctx context.Context, role access.Role, e audit.
 	r.race()
 
 	return r.Store.UpdateRole(ctx, role, e, check)
+}
+
+func (r *racingStore) RevokeGrant(
+	ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
+) error {
+	r.race()
+
+	return r.Store.RevokeGrant(ctx, id, fence, e, check)
 }
 
 // racingService returns a Service and an Authorizer over the store of f,
@@ -95,7 +103,7 @@ func revokeRace(
 
 	return once(func() {
 		fence, e := storetest.GrantWrite(t, f.store, obj, time.Unix(1, 0), "grant:held")
-		if err := f.store.RevokeGrant(t.Context(), grantID(subject, role, obj), fence, e); err != nil {
+		if err := f.store.RevokeGrant(t.Context(), grantID(subject, role, obj), fence, e, nil); err != nil {
 			t.Errorf("racing revoke: %v", err)
 		}
 	})
@@ -280,5 +288,73 @@ func TestRoleUpdateRefusedAfterARacingRevoke(t *testing.T) {
 	})
 	if !errors.Is(err, access.ErrEscalation) {
 		t.Fatalf("role update after a racing revoke of the caller's grant: err = %v, want ErrEscalation", err)
+	}
+}
+
+// TestRevokeRefusedAfterARacingRevoke checks that a revoke reads the grants
+// of its caller in its own write: a revoke of the caller's grant that
+// commits after the checks of the Service, and before the write, refuses
+// the revoke.
+func TestRevokeRefusedAfterARacingRevoke(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	acme := identity.NamespaceObject("acme")
+	bob := f.person(t, "bob")
+	f.person(t, "carol")
+	f.grant(t, prn("bob"), access.RoleAdmin, acme)
+	f.grant(t, prn("carol"), access.RoleViewer, acme)
+
+	svc, _ := racingService(t, f, revokeRace(t, f, prn("bob"), access.RoleAdmin, acme))
+
+	target := grantID(prn("carol"), access.RoleViewer, acme)
+	if _, err := svc.RevokeByID(t.Context(), testEntry(), bob, target); !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("revoke after a racing revoke of the caller's grant: err = %v, want ErrEscalation", err)
+	}
+
+	if _, err := f.store.GetGrant(t.Context(), target); err != nil {
+		t.Fatalf("grant after the refused revoke: %v", err)
+	}
+}
+
+// TestRevokeRefusedAfterARacingRoleUpdate checks that a revoke reads the
+// role of its grant in its own write: a role update that commits after the
+// checks of the Service and adds an action that the caller does not hold
+// refuses the revoke.
+func TestRevokeRefusedAfterARacingRoleUpdate(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	acme := identity.NamespaceObject("acme")
+	bob := f.person(t, "bob")
+	f.person(t, "carol")
+	f.grant(t, prn("bob"), access.RoleViewer, acme)
+
+	role, err := f.svc.CreateRole(t.Context(), testEntry(), admin(), access.RoleInput{
+		Name: "reader", Description: "", Actions: []identity.Action{identity.ActionUnitRead},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	f.grant(t, prn("carol"), role.ID, acme)
+
+	svc, _ := racingService(t, f, once(func() {
+		updated := role
+		updated.Actions = []identity.Action{identity.ActionUnitRead, identity.ActionUnitWrite}
+
+		e := storetest.ServerChange(time.Unix(1, 0), "role:"+role.ID)
+		if updateErr := f.store.UpdateRole(t.Context(), updated, e, nil); updateErr != nil {
+			t.Errorf("racing role update: %v", updateErr)
+		}
+	}))
+
+	target := grantID(prn("carol"), role.ID, acme)
+	if _, err := svc.RevokeByID(t.Context(), testEntry(), bob, target); !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("revoke after a racing role update: err = %v, want ErrEscalation", err)
+	}
+
+	if _, err := f.store.GetGrant(t.Context(), target); err != nil {
+		t.Fatalf("grant after the refused revoke: %v", err)
 	}
 }

@@ -649,7 +649,7 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 
 	fence, revoked := GrantWrite(t, s, identity.NamespaceObject("acme"), now().Add(2*time.Hour), "grant:grt-revoked")
 
-	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked)
+	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked, nil)
 	if err != nil {
 		t.Fatalf("revoke grant: %v", err)
 	}

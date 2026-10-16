@@ -139,3 +139,14 @@ func (s *Service) roleCheck(caller identity.Principal, r Role) GrantCheck {
 		return w.checkPlacement(ctx, r)
 	}
 }
+
+// revokeCheck returns the check that a revoke of g by caller runs in its
+// write: caller holds every action that g gives on its object, with the
+// role of g as it is now.
+func (s *Service) revokeCheck(caller identity.Principal, g Grant, chain []identity.Object) GrantCheck {
+	return func(ctx context.Context, reads GrantReads) error {
+		w, ctx := s.within(ctx, reads, g.Object, chain)
+
+		return w.checkGrantHeld(ctx, caller, g)
+	}
+}

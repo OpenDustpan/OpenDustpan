@@ -33,6 +33,7 @@ func checkCases() []struct {
 	}{
 		{name: "a grant that its check refuses changes nothing", test: testGrantCheckRefuses},
 		{name: "a role update that its check refuses changes nothing", test: testRoleCheckRefuses},
+		{name: "a revoke that its check refuses changes nothing", test: testRevokeCheckRefuses},
 		{name: "a grant check reads the current grants, roles and subjects", test: testGrantCheckReads},
 		{name: "a role check reads where the role is granted", test: testRoleCheckReads},
 	}
@@ -63,6 +64,35 @@ func testGrantCheckRefuses(t *testing.T, s access.Store) {
 
 		if err := s.CreateGrant(ctx, g, fenceOf(t, s, ns), scoped(entry(), ns), nil); err != nil {
 			t.Fatalf("grant on %q after the refused grant: %v", obj.String(), err)
+		}
+	}
+}
+
+// testRevokeCheckRefuses checks that a revoke whose check fails keeps the
+// grant current and returns the error of the check, on the installation
+// and inside a namespace.
+func testRevokeCheckRefuses(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	objects := []identity.Object{identity.ServerObject(), identity.NamespaceObject("acme")}
+
+	for i := range objects {
+		obj := objects[i]
+		ns := obj.Namespace()
+		g := newGrant("grt-"+obj.String(), principalSubject("prn-a"), access.RoleViewer, obj)
+
+		if err := createGrant(t, s, g, entry()); err != nil {
+			t.Fatalf("create grant on %q: %v", obj.String(), err)
+		}
+
+		err := s.RevokeGrant(ctx, g.ID, fenceOf(t, s, ns), scoped(entry(), ns), refuse)
+		if !errors.Is(err, errCheck) {
+			t.Fatalf("revoke on %q with a refusing check: err = %v, want the error of the check", obj.String(), err)
+		}
+
+		if _, err := s.GetGrant(ctx, g.ID); err != nil {
+			t.Fatalf("get grant on %q after a refused revoke: %v", obj.String(), err)
 		}
 	}
 }
@@ -294,6 +324,7 @@ func RunConcurrent(t *testing.T, newPair PairFactory) {
 		{name: "a grant check sees a revoke that committed first", test: testCheckSeesRevoke},
 		{name: "a grant waits for a role check", test: testGrantWaitsForRoleCheck},
 		{name: "a role update waits for a grant check", test: testRoleUpdateWaitsForGrantCheck},
+		{name: "a revoke of the caller's grant waits for a revoke check", test: testRevokeWaitsForRevokeCheck},
 	}
 
 	for _, tc := range cases {
@@ -395,7 +426,7 @@ func testRevokeWaits(ns namespace.Name) func(t *testing.T, a, b access.Store) {
 		}
 
 		check, done := blocking(t, func() error {
-			return b.RevokeGrant(ctx, held.ID, fence, scoped(entry(), ns))
+			return b.RevokeGrant(ctx, held.ID, fence, scoped(entry(), ns), nil)
 		}, heldBy(held))
 
 		g := newGrant("grt-new", principalSubject("prn-a"), access.RoleViewer, identity.ServerObject())
@@ -518,5 +549,37 @@ func testRoleUpdateWaitsForGrantCheck(t *testing.T, a, b access.Store) {
 
 	if err := awaitRace(t, done); err != nil {
 		t.Fatalf("role update after the grant: %v", err)
+	}
+}
+
+// testRevokeWaitsForRevokeCheck checks that a revoke of the grant of the
+// caller, on handle b, waits for a revoke of another grant on handle a
+// while its check runs: the checked revoke commits before the revoke of
+// the caller's grant, never after it.
+func testRevokeWaitsForRevokeCheck(t *testing.T, a, b access.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	held := heldGrant("acme")
+	fence := fenceOf(t, a, "acme")
+	target := newGrant("grt-target", principalSubject("prn-a"), access.RoleViewer, identity.NamespaceObject("acme"))
+
+	seeded := []access.Grant{held, target}
+	for i := range seeded {
+		if err := createGrant(t, a, seeded[i], entry()); err != nil {
+			t.Fatalf("create grant %s: %v", seeded[i].ID, err)
+		}
+	}
+
+	check, done := blocking(t, func() error {
+		return b.RevokeGrant(ctx, held.ID, fence, scoped(entry(), "acme"), nil)
+	}, heldBy(held))
+
+	if err := a.RevokeGrant(ctx, target.ID, fence, scoped(entry(), "acme"), check); err != nil {
+		t.Fatalf("revoke while the held grant is current: %v", err)
+	}
+
+	if err := awaitRace(t, done); err != nil {
+		t.Fatalf("revoke of the held grant after the checked revoke: %v", err)
 	}
 }
