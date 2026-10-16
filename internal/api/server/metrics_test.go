@@ -83,6 +83,7 @@ func newMetricsHandler(
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
+		SignIn:           nil,
 		CheckpointEpochs: nil,
 	})
 	if err != nil {

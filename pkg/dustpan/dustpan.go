@@ -170,6 +170,12 @@ type settings struct {
 	auditChain audit.ChainSetting
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
+	// oidcProviders are the OpenID Connect providers of the console
+	// sign-in. See WithOIDCProvider.
+	oidcProviders []OIDCProvider
+	// gate is the per-address failure limit of the token lookups. The
+	// sign-in routes share it. wireTokens sets it; nil means no limit.
+	gate *authgate.Gate
 	// instanceID names this server process in the sink leases of its audit
 	// shipper. See WithInstanceID.
 	instanceID string
@@ -484,6 +490,11 @@ type Server struct {
 	beforeServe func(ctx context.Context) error
 	// deleted runs the retention sweep of the deleted units on a schedule.
 	deleted *deletedSweeper
+	// signInRequests deletes the expired sign-in requests on a schedule, or
+	// is nil with no console sign-in. signInPruneEvery is the period of
+	// that schedule.
+	signInRequests   *session.Sessions
+	signInPruneEvery time.Duration
 }
 
 // services holds the domain services that NewServer wires together.
@@ -536,6 +547,8 @@ func defaultSettings() *settings {
 		tlsCertFile:             "",
 		tlsKeyFile:              "",
 		publicURL:               "",
+		oidcProviders:           nil,
+		gate:                    nil,
 		version:                 "",
 		maxCheckpointBytes:      0,
 		maxSecretBatchBytes:     0,
@@ -699,28 +712,30 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	}
 
 	return &Server{
-		handler:         handler,
-		logger:          cfg.logger,
-		listenAddr:      cfg.listenAddr,
-		listener:        cfg.listener,
-		secrets:         svc.secrets,
-		secretKeys:      cfg.secretKeys,
-		secretWrapper:   cfg.secretWrapper,
-		workspaces:      svc.workspaces,
-		backups:         backups,
-		backupRegistry:  backupRegistry,
-		restores:        adapters.restores,
-		restoreRegistry: restoreRegistry,
-		now:             cfg.now,
-		registry:        registry,
-		tlsCertFile:     cfg.tlsCertFile,
-		tlsKeyFile:      cfg.tlsKeyFile,
-		observed:        observed,
-		chain:           adapters.chain,
-		tokens:          svc.tokens,
-		shipper:         shipper,
-		beforeServe:     cfg.beforeServe,
-		deleted:         deleted,
+		handler:          handler,
+		logger:           cfg.logger,
+		listenAddr:       cfg.listenAddr,
+		listener:         cfg.listener,
+		secrets:          svc.secrets,
+		secretKeys:       cfg.secretKeys,
+		secretWrapper:    cfg.secretWrapper,
+		workspaces:       svc.workspaces,
+		backups:          backups,
+		backupRegistry:   backupRegistry,
+		restores:         adapters.restores,
+		restoreRegistry:  restoreRegistry,
+		now:              cfg.now,
+		registry:         registry,
+		tlsCertFile:      cfg.tlsCertFile,
+		tlsKeyFile:       cfg.tlsKeyFile,
+		observed:         observed,
+		chain:            adapters.chain,
+		tokens:           svc.tokens,
+		shipper:          shipper,
+		beforeServe:      cfg.beforeServe,
+		deleted:          deleted,
+		signInRequests:   adapters.signInSessions(),
+		signInPruneEvery: signInRequestPruneEvery,
 	}, nil
 }
 
@@ -736,6 +751,18 @@ type adapters struct {
 	maintenance *maintenance.Watcher
 	restores    *backup.RestoreService
 	chain       *auditChain
+	// signIn is the console sign-in, or nil with no provider.
+	signIn *serverapi.SignIn
+}
+
+// signInSessions returns the session service of the console sign-in, or
+// nil with no sign-in.
+func (a adapters) signInSessions() *session.Sessions {
+	if a.signIn == nil {
+		return nil
+	}
+
+	return a.signIn.Sessions
 }
 
 // newAdapters builds every HTTP adapter from the services and settings.
@@ -760,17 +787,17 @@ func newAdapters(
 
 	gate := bodygate.New(cfg.maxBodyBytesInFlight)
 
+	sessionPolicies, signIn, err := newConsoleSignIn(cfg, svc.tokens)
+	if err != nil {
+		return adapters{}, err
+	}
+
 	api, err := newPulumiHandler(svc, cfg, base, observed, gate)
 	if err != nil {
 		return adapters{}, err
 	}
 
-	units, err := newInventoryHandler(svc, cfg)
-	if err != nil {
-		return adapters{}, err
-	}
-
-	entries, err := newAuditHandler(svc, cfg)
+	neutral, err := newNeutralHandlers(svc, cfg)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -791,6 +818,8 @@ func newAdapters(
 		maint:    maint,
 		observed: observed,
 		chain:    chain,
+		policies: sessionPolicies,
+		signIn:   signIn,
 	})
 	if err != nil {
 		return adapters{}, err
@@ -798,8 +827,8 @@ func newAdapters(
 
 	return adapters{
 		pulumi:      api,
-		inventory:   units,
-		audit:       entries,
+		inventory:   neutral.inventory,
+		audit:       neutral.audit,
 		tfe:         tfeAPI,
 		tofuHTTP:    tofuHTTPAPI,
 		server:      serverAPI,
@@ -807,7 +836,29 @@ func newAdapters(
 		maintenance: watcher,
 		restores:    restores,
 		chain:       chain,
+		signIn:      signIn,
 	}, nil
+}
+
+// neutralHandlers are the tool-neutral inventory API and audit API.
+type neutralHandlers struct {
+	inventory http.Handler
+	audit     http.Handler
+}
+
+// newNeutralHandlers builds the tool-neutral inventory API and audit API.
+func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
+	units, err := newInventoryHandler(svc, cfg)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
+	entries, err := newAuditHandler(svc, cfg)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
+	return neutralHandlers{inventory: units, audit: entries}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob
@@ -1243,6 +1294,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
 	sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
+	sweeps.Go(func() { s.pruneSignInRequests(sweepCtx) })
 
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
@@ -1704,6 +1756,10 @@ type installationDeps struct {
 	maint    *maintenance.Service
 	observed *metrics.ServerMetrics
 	chain    *auditChain
+	// policies is the session policy service, nil for a store with no
+	// session policy. signIn is the console sign-in, nil with no provider.
+	policies *session.Policies
+	signIn   *serverapi.SignIn
 }
 
 // newInstallationAPI builds the restore service and the tool-neutral
@@ -1748,11 +1804,6 @@ func newServerHandler(
 		return nil, err
 	}
 
-	sessionPolicies, err := newSessionPolicyService(cfg)
-	if err != nil {
-		return nil, err
-	}
-
 	var sinks serverapi.AuditSinkSource
 	if cfg.auditShipper != nil {
 		sinks = cfg.auditShipper
@@ -1774,7 +1825,7 @@ func newServerHandler(
 		Access:           grants,
 		Tokens:           deps.services.tokens,
 		IPAllowlists:     allow,
-		SessionPolicy:    sessionPolicies,
+		SessionPolicy:    deps.policies,
 		Audit:            serverAuditOf(cfg.namespaceStore),
 		CheckpointEpochs: checkpointEpochsOf(deps.chain),
 		OnAuditFailure: func() {
@@ -1783,6 +1834,7 @@ func newServerHandler(
 		DeletedUnits: deps.services.deleted,
 		AuditChain:   auditChainPort(deps.chain),
 		AuditSinks:   sinks,
+		SignIn:       deps.signIn,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -2072,6 +2124,8 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 	if err != nil {
 		return nil, fmt.Errorf("authentication gate: %w", err)
 	}
+
+	cfg.gate = gate
 
 	return identity.Chain{cfg.authenticator, gate}, nil
 }

@@ -62,10 +62,11 @@ func newSessionPolicyHandler(t *testing.T, authz identity.Authorizer) (*sqlite.S
 		OnAuditFailure:   nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    policies,
-		CheckpointEpochs: nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
 		AuditSinks:       nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

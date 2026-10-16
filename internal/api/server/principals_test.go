@@ -112,6 +112,7 @@ func newAuditedPrincipalHandler(
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
 		Audit:            entries,
+		SignIn:           nil,
 		CheckpointEpochs: nil,
 	})
 	if err != nil {

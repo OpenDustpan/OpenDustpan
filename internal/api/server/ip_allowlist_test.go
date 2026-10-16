@@ -113,10 +113,11 @@ func newIPAllowHandler(
 		OnAuditFailure:   nil,
 		IPAllowlists:     svc,
 		SessionPolicy:    nil,
-		CheckpointEpochs: nil,
 		DeletedUnits:     nil,
 		AuditChain:       nil,
 		AuditSinks:       nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

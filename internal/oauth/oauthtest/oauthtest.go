@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -74,6 +75,15 @@ type Faults struct {
 	UnknownKey bool
 	// SkipPKCE accepts a token request with a wrong code verifier.
 	SkipPKCE bool
+	// ExtraAudience signs an ID token for the client and for another
+	// client, so the aud claim is a list of two.
+	ExtraAudience bool
+	// AuthorizedParty sets the azp claim of an ID token when it is not
+	// empty.
+	AuthorizedParty string
+	// IssuedIn moves the iat claim of an ID token by this duration from
+	// now, and its exp claim with it, when it is not zero.
+	IssuedIn time.Duration
 }
 
 // User is the person whom the provider signs in.
@@ -254,6 +264,12 @@ func newKey(alg string) (crypto.Signer, error) {
 // Issuer returns the issuer URL: the base URL of the provider.
 func (p *Provider) Issuer() string {
 	return p.server.URL
+}
+
+// Certificate returns the certificate of the provider, so another process
+// can trust it, or nil when the provider serves HTTP.
+func (p *Provider) Certificate() *x509.Certificate {
+	return p.server.Certificate()
 }
 
 // Client returns an HTTP client that trusts the provider.
@@ -633,6 +649,19 @@ func applyClaimFaults(claims map[string]any, f Faults, now time.Time) {
 
 	if f.WrongNonce {
 		claims["nonce"] = "another-nonce"
+	}
+
+	if f.ExtraAudience {
+		claims["aud"] = []any{claims["aud"], "another-client"}
+	}
+
+	if f.AuthorizedParty != "" {
+		claims["azp"] = f.AuthorizedParty
+	}
+
+	if f.IssuedIn != 0 {
+		claims["iat"] = now.Add(f.IssuedIn).Unix()
+		claims["exp"] = now.Add(f.IssuedIn + tokenLifetime).Unix()
 	}
 
 	if f.Expired {

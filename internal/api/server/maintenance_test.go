@@ -97,6 +97,7 @@ func newMaintenanceHandler(t *testing.T, fake *fakeMaintenance) *apiserver.Handl
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
+		SignIn:           nil,
 		CheckpointEpochs: nil,
 	})
 	if err != nil {
@@ -423,6 +424,7 @@ func TestNewHandlerRequiresMaintenance(t *testing.T) {
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
+		SignIn:           nil,
 		CheckpointEpochs: nil,
 	})
 	if err == nil {

@@ -153,6 +153,7 @@ func newBackupFixture(
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
+		SignIn:           nil,
 		CheckpointEpochs: nil,
 	})
 	if err != nil {
@@ -570,6 +571,7 @@ func TestBackupWithoutTarget(t *testing.T) {
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
+		SignIn:           nil,
 		CheckpointEpochs: nil,
 	})
 	if err != nil {

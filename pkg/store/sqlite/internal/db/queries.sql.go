@@ -1787,6 +1787,10 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
     WHERE t.principal_id = principals.id
       AND (t.created_at_ms > CAST(?2 AS INTEGER) OR t.last_used_at_ms > CAST(?2 AS INTEGER))
   )
+  AND NOT EXISTS (
+    SELECT 1 FROM sessions s
+    WHERE s.principal_id = principals.id AND s.last_seen_at_ms > CAST(?2 AS INTEGER)
+  )
 RETURNING id
 `
 
@@ -1796,9 +1800,11 @@ type DisableInactivePrincipalsParams struct {
 }
 
 // A person is inactive when its creation, its activity baseline, its last
-// sign-in, and the creation and the last use of each of its tokens are all
-// at or before the cutoff. A break-glass account is always exempt from the
-// inactivity disable.
+// sign-in, the creation and the last use of each of its tokens, and the
+// last use of each of its console sessions are all at or before the
+// cutoff. The session use counts by itself, so the result does not depend
+// on the maximum length of a session. A break-glass account is always
+// exempt from the inactivity disable.
 func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -2099,6 +2105,8 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
   ), 0)) AS INTEGER) AS principal_active_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
@@ -2917,7 +2925,12 @@ func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, err
 const getSessionByDigest = `-- name: GetSessionByDigest :one
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
+    SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
+  ), 0)) AS INTEGER) AS principal_active_at_ms
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 WHERE s.digest = ? AND p.deleted_at_ms IS NULL
@@ -2939,8 +2952,12 @@ type GetSessionByDigestRow struct {
 	DisplayName           string
 	PrincipalKind         string
 	PrincipalDisabledAtMs sql.NullInt64
+	PrincipalBreakGlass   bool
+	PrincipalActiveAtMs   int64
 }
 
+// principal_active_at_ms is the latest activity of the owner by the account
+// rule of the inactivity disable, as in GetAccessTokenByDigest.
 func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
 	row := q.db.QueryRowContext(ctx, getSessionByDigest, digest)
 	var i GetSessionByDigestRow
@@ -2960,6 +2977,8 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.DisplayName,
 		&i.PrincipalKind,
 		&i.PrincipalDisabledAtMs,
+		&i.PrincipalBreakGlass,
+		&i.PrincipalActiveAtMs,
 	)
 	return i, err
 }
@@ -3912,11 +3931,23 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 }
 
 const lastAccessByPrincipals = `-- name: LastAccessByPrincipals :many
-SELECT principal_id, CAST(MAX(last_used_at_ms) AS INTEGER) AS last_used_at_ms
-FROM access_tokens
-WHERE principal_id IN (SELECT value FROM json_each(CAST(?1 AS TEXT)))
-  AND last_used_at_ms IS NOT NULL
-GROUP BY principal_id
+SELECT u.principal_id, CAST(MAX(u.used_at_ms) AS INTEGER) AS last_used_at_ms
+FROM (
+  SELECT t.principal_id, t.last_used_at_ms AS used_at_ms
+  FROM access_tokens t
+  WHERE t.principal_id IN (SELECT value FROM json_each(CAST(?1 AS TEXT)))
+    AND t.last_used_at_ms IS NOT NULL
+  UNION ALL
+  SELECT s.principal_id, s.last_seen_at_ms AS used_at_ms
+  FROM sessions s
+  WHERE s.principal_id IN (SELECT value FROM json_each(CAST(?1 AS TEXT)))
+  UNION ALL
+  SELECT p.id AS principal_id, p.last_sign_in_at_ms AS used_at_ms
+  FROM principals p
+  WHERE p.id IN (SELECT value FROM json_each(CAST(?1 AS TEXT)))
+    AND p.last_sign_in_at_ms IS NOT NULL
+) AS u
+GROUP BY u.principal_id
 `
 
 type LastAccessByPrincipalsRow struct {
@@ -3924,9 +3955,10 @@ type LastAccessByPrincipalsRow struct {
 	LastUsedAtMs int64
 }
 
-// The latest last-use time of the access tokens of each given principal:
-// one row for each principal with a used token. A JSON array carries the
-// IDs, so the query stays fixed. Revoked, replaced and expired tokens
+// The latest use of each given principal: the last use of its access
+// tokens and of its console sessions, and its last sign-in. One row for
+// each principal with a used token, a session or a sign-in. A JSON array carries the IDs, so the query
+// stays fixed. Revoked, replaced and expired tokens and ended sessions
 // count: a use is a use.
 func (q *Queries) LastAccessByPrincipals(ctx context.Context, principals string) ([]LastAccessByPrincipalsRow, error) {
 	rows, err := q.db.QueryContext(ctx, lastAccessByPrincipals, principals)
@@ -7238,16 +7270,28 @@ const touchSession = `-- name: TouchSession :exec
 UPDATE sessions SET last_seen_at_ms = CAST(?1 AS INTEGER)
 WHERE id = ?2 AND ended_at_ms IS NULL
   AND last_seen_at_ms <= CAST(?3 AS INTEGER)
+  AND last_seen_at_ms > CAST(?4 AS INTEGER)
+  AND created_at_ms > CAST(?5 AS INTEGER)
 `
 
 type TouchSessionParams struct {
-	AtMs     int64
-	ID       string
-	BeforeMs int64
+	AtMs           int64
+	ID             string
+	BeforeMs       int64
+	SeenAfterMs    int64
+	CreatedAfterMs int64
 }
 
+// An idle or expired session keeps its last use: seen_after_ms and
+// created_after_ms are the bounds of an active session at at_ms.
 func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) error {
-	_, err := q.db.ExecContext(ctx, touchSession, arg.AtMs, arg.ID, arg.BeforeMs)
+	_, err := q.db.ExecContext(ctx, touchSession,
+		arg.AtMs,
+		arg.ID,
+		arg.BeforeMs,
+		arg.SeenAfterMs,
+		arg.CreatedAfterMs,
+	)
 	return err
 }
 

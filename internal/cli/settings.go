@@ -305,6 +305,45 @@ var Settings = []*Setting{
 		referenceNone,
 	).WithFile("audit-verify-keys-file"),
 	stringSetting(
+		"oidc-issuer", "DUSTPAN_OIDC_ISSUER", "",
+		"issuer URL of the OpenID Connect provider of the console sign-in, with https; the sign-in also needs "+
+			"--oidc-provider, --oidc-client-id, the client secret and --public-url. To use another issuer, "+
+			"also set a new --oidc-provider (DUSTPAN_OIDC_ISSUER)",
+		"(none: no console sign-in). The identity of a person does not hold the issuer. To use another "+
+			"issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a "+
+			"person of the old issuer with the same `sub`.",
+	).WithFile("oidc-issuer").WithURL().WithSensitive(),
+	stringSetting(
+		"oidc-provider", "DUSTPAN_OIDC_PROVIDER", "",
+		"ID of the OpenID Connect provider: 1 to 32 lower-case letters, digits and hyphens. It is part of the "+
+			"identity of each person who signs in: the subject <provider ID>:<sub>. Never change the ID after "+
+			"the first sign-in, and never use it for another issuer (DUSTPAN_OIDC_PROVIDER)",
+		"(none). The ID is part of the identity of each person who signs in: the subject "+
+			"`<provider ID>:<sub>`. A principal with that subject, a local one too, is the principal of that "+
+			"person. Never change the ID after the first sign-in. A new issuer needs a new ID.",
+	).WithFile("oidc-provider"),
+	stringSetting(
+		"oidc-display-name", "DUSTPAN_OIDC_DISPLAY_NAME", "",
+		"name of the OpenID Connect provider that the console shows (DUSTPAN_OIDC_DISPLAY_NAME)",
+		"(the provider ID)",
+	).WithFile("oidc-display-name"),
+	stringSetting(
+		"oidc-client-id", "DUSTPAN_OIDC_CLIENT_ID", "",
+		"client ID of the server at the OpenID Connect provider (DUSTPAN_OIDC_CLIENT_ID)",
+		referenceNone,
+	).WithFile("oidc-client-id"),
+	stringSetting(
+		"oidc-scopes", "DUSTPAN_OIDC_SCOPES", "profile,email",
+		"comma-separated scopes to ask in addition to openid (DUSTPAN_OIDC_SCOPES)",
+		"`profile,email`",
+	).WithFile("oidc-scopes"),
+	boolSetting(
+		"oidc-no-auto-create", "DUSTPAN_OIDC_NO_AUTO_CREATE",
+		"refuse the sign-in of a person who has no principal yet, instead of making one with no grant "+
+			"(DUSTPAN_OIDC_NO_AUTO_CREATE)",
+		"false",
+	).WithFile("oidc-no-auto-create"),
+	stringSetting(
 		"server", "DUSTPAN_SERVER", "",
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
 		referenceNone,
@@ -342,6 +381,16 @@ var Settings = []*Setting{
 		"A file that holds the tokens, one per line or comma-separated. Only its owner can read it. "+
 			"When you set both, `DUSTPAN_ADMIN_TOKEN` wins.",
 	).WithFile("admin-token-file"),
+	envSetting(
+		"DUSTPAN_OIDC_CLIENT_SECRET",
+		"The client secret of the server at the OpenID Connect provider. Required when you set "+
+			"`--oidc-issuer` and no secret file.",
+	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_OIDC_CLIENT_SECRET_FILE",
+		"A file that holds the OpenID Connect client secret. Only its owner can read it. "+
+			"When you set both, `DUSTPAN_OIDC_CLIENT_SECRET` wins.",
+	),
 	envSetting(
 		"DUSTPAN_AUDIT_WEBHOOK_SECRET",
 		"The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. "+

@@ -107,6 +107,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
+		SignIn:           nil,
 		CheckpointEpochs: nil,
 	})
 	if err != nil {
@@ -561,6 +562,7 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
+		SignIn:           nil,
 		CheckpointEpochs: nil,
 	})
 	if err != nil {
@@ -761,6 +763,7 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		AuditSinks:       nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
+		SignIn:           nil,
 		CheckpointEpochs: nil,
 	})
 	if err != nil {

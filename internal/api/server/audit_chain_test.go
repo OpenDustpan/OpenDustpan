@@ -87,11 +87,12 @@ func newAuditChainHandler(
 		OnAuditFailure:   nil,
 		DeletedUnits:     nil,
 		SessionPolicy:    nil,
-		CheckpointEpochs: nil,
 		AuditChain:       chain,
 		AuditSinks:       nil,
+		SignIn:           nil,
 		Journal:          nil,
 		IPAllowlists:     nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

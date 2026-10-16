@@ -59,9 +59,10 @@ func newAuditSinkHandler(t *testing.T, source apiserver.AuditSinkSource) *apiser
 		DeletedUnits:     nil,
 		IPAllowlists:     nil,
 		SessionPolicy:    nil,
-		CheckpointEpochs: nil,
 		AuditChain:       nil,
 		AuditSinks:       source,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

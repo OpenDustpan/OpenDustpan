@@ -97,6 +97,7 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.sessionPolicyRoutes()...)
 	routes = append(routes, h.auditSinkRoutes()...)
 	routes = append(routes, h.checkpointRoutes()...)
+	routes = append(routes, h.signInRoutes()...)
 
 	return routes
 }
@@ -369,14 +370,19 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		p, err := h.authenticate(r)
+		p, caller, err := h.authenticate(r)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
 
-		r = r.WithContext(withPrincipal(ctx, p))
+		ctx = withPrincipal(ctx, p)
+		if caller != nil {
+			ctx = context.WithValue(ctx, sessionKey{}, *caller)
+		}
+
+		r = r.WithContext(ctx)
 
 		obj, err := route.Resolve(w, r)
 		if err != nil {
