@@ -12,9 +12,16 @@ const (
 	BreakTxStart       = breakTxStart
 	BreakExpiryCount   = breakExpiryCount
 	BreakMaxVersions   = breakMaxVersions
+	BreakTickBacklog   = breakTickBacklog
 )
 
 // BrokenHarness returns a harness on a store in memory that breaks rule.
 func BrokenHarness(rule string) Harness {
 	return newMemDB(rule).harness()
+}
+
+// BrokenScheduleHarness returns a schedule harness on a store in memory
+// that breaks rule.
+func BrokenScheduleHarness(rule string) ScheduleHarness {
+	return newMemDB(rule).scheduleHarness()
 }
