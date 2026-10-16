@@ -2,6 +2,7 @@ package codec_test
 
 import (
 	"crypto/sha256"
+	"errors"
 	"runtime"
 	"strconv"
 	"strings"
@@ -18,10 +19,10 @@ import (
 // TestToCheckpointRowBoundsMemory proves the save path holds at most one
 // decompressed copy of a checkpoint: converting a deployment with many
 // resources peaks below twice its size plus slack. The conversion keeps no
-// decoded copy of the deployment, since saves store a NULL resource count,
-// so a retained second copy fails this test.
+// decoded copy of the deployment, since the row stores no resource count, so
+// a retained second copy fails this test.
 //
-//nolint:paralleltest // The heap bound needs a quiet heap; no other test in this package runs in parallel.
+//nolint:paralleltest // The heap bound needs a quiet heap; the parallel tests of this package run after it.
 func TestToCheckpointRowBoundsMemory(t *testing.T) {
 	const resources = 200000
 
@@ -75,6 +76,60 @@ func TestToCheckpointRowBoundsMemory(t *testing.T) {
 			len(deployment),
 			limit,
 		)
+	}
+}
+
+// TestToCheckpointRowRefusesNoKey checks that a checkpoint without a blob
+// key converts to no row: the store keeps no content, so such a row could
+// never be read.
+func TestToCheckpointRowRefusesNoKey(t *testing.T) {
+	t.Parallel()
+
+	cp := stack.Checkpoint{
+		SavedAt:       time.Now(),
+		Features:      nil,
+		Deployment:    []byte(`{}`),
+		Update:        stack.UpdateID("upd-test"),
+		Ref:           mustRef(t),
+		Lease:         token.Digest{},
+		SchemaVersion: 3,
+		Sequence:      0,
+		Digest:        sha256.Sum256([]byte(`{}`)),
+		Invalid:       false,
+		BlobKey:       "",
+		BlobSize:      0,
+		BlobMD5:       [16]byte{},
+	}
+
+	if _, err := codec.ToCheckpointRow(cp, stack.ID("stk-test")); !errors.Is(err, stack.ErrCheckpointNoKey) {
+		t.Fatalf("convert checkpoint without a key: err = %v, want ErrCheckpointNoKey", err)
+	}
+}
+
+// TestFromCheckpointRowRefusesNoKey checks that a row without a blob key
+// reads as a corrupt row, not as a checkpoint without content.
+func TestFromCheckpointRowRefusesNoKey(t *testing.T) {
+	t.Parallel()
+
+	digest := sha256.Sum256([]byte(`{}`))
+	row := codec.CheckpointRow{
+		StackID:       "stk-test",
+		UpdateID:      "upd-test",
+		LeaseDigest:   []byte{},
+		Digest:        digest[:],
+		Features:      []byte(`[]`),
+		SchemaVersion: 3,
+		Sequence:      0,
+		SavedAtMs:     0,
+		Invalid:       false,
+		BlobKey:       "",
+		Size:          2,
+		BlobSize:      0,
+		BlobMD5:       nil,
+	}
+
+	if _, err := codec.FromCheckpointRow(row, mustRef(t)); !errors.Is(err, codec.ErrCorruptRow) {
+		t.Fatalf("read a row without a key: err = %v, want ErrCorruptRow", err)
 	}
 }
 

@@ -50,6 +50,10 @@ var (
 	// match its record: a blob with other content, or a key the record cannot
 	// parse. The error carries no blob key.
 	ErrCheckpointMismatch = errors.New("checkpoint content differs from its record")
+	// ErrCheckpointNoKey reports a checkpoint write without a blob key. The
+	// store keeps checkpoint content only in the blob store, so it refuses
+	// such a write.
+	ErrCheckpointNoKey = errors.New("checkpoint has no blob key")
 	// ErrInvalidDelta reports a checkpoint delta the server does not apply:
 	// no checkpoint to apply it to, a sequence number that is not next, an
 	// edit outside the text, overlapping edits, a result over the size
@@ -214,13 +218,11 @@ type Update struct {
 	// hold Revision-1, which makes every transition a compare-and-swap.
 	Revision int64
 	// CreatedBy is the subject of the principal that created the update. It
-	// is empty when the caller gave none, as with rows from before this
-	// field existed.
+	// is empty when the caller gave none.
 	CreatedBy string
 	// TokenID is the ID of the access token that started the update. It is
 	// empty when no access token started it, as with a bootstrap administrator
-	// token, and for rows from before this field existed. A lease request
-	// checks this token (ADR 53).
+	// token. A lease request checks this token.
 	TokenID string
 	// RestoredFrom is the stack version that a restore copied. It is 0 for
 	// any update that is not a restore.
@@ -347,9 +349,8 @@ func (u Update) end(now time.Time, status UpdateStatus) Update {
 // Every save still writes its own blob key, so a repeated save without a
 // sequence number mints the next key of its update.
 //
-// New saves keep the content in the blob store under BlobKey and keep only
-// metadata in SQL. Rows from before blobs keep the content in the SQL column
-// and hold no key: reads accept either shape.
+// The content lives in the blob store under BlobKey. The checkpoint store
+// keeps only the metadata, so Deployment is empty on a read from the store.
 type Checkpoint struct {
 	SavedAt    time.Time
 	Features   []string
@@ -369,14 +370,12 @@ type Checkpoint struct {
 	// It is stored as sent.
 	Invalid bool
 	// BlobKey names the gzip content in the blob store:
-	// pulumi/<stack ID>/<update ID>/<sequence>. Empty for rows from before
-	// blobs, which keep the content in the SQL column instead.
+	// pulumi/<stack ID>/<update ID>/<sequence>. The store refuses a write
+	// without it.
 	BlobKey blob.Key
-	// BlobSize is the size of the stored gzip bytes. Zero for rows without
-	// a key.
+	// BlobSize is the size of the stored gzip bytes.
 	BlobSize int64
-	// BlobMD5 is the MD5 of the stored gzip bytes, for backups. Zero for
-	// rows without a key.
+	// BlobMD5 is the MD5 of the stored gzip bytes, for backups.
 	BlobMD5 [md5.Size]byte
 }
 
