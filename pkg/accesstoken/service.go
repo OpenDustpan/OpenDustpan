@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"slices"
 	"strconv"
-	"sync"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -94,7 +93,6 @@ type Service struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	newID      func(prefix string) string
-	policies   *policyCache
 }
 
 var _ identity.Authenticator = (*Service)(nil)
@@ -126,7 +124,6 @@ func NewService(cfg Config) (*Service, error) {
 	return &Service{
 		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness, grants: cfg.Grants,
 		authz: cfg.Authorizer, logger: logger, now: now, newID: newID,
-		policies: &policyCache{readAt: time.Time{}, policy: DefaultPolicy(), mu: sync.Mutex{}, valid: false},
 	}, nil
 }
 
@@ -524,8 +521,6 @@ func (s *Service) SetPolicy(ctx context.Context, e audit.Entry, c PolicyChange) 
 		return p, policyEntry(e, p.UpdatedAt, old, p), nil
 	})
 
-	s.policies.forget()
-
 	if errors.Is(err, ErrInvalid) {
 		return Policy{}, err
 	}
@@ -629,7 +624,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 			identity.ErrUnauthenticated)
 	}
 
-	if err := s.checkPolicyActive(ctx, m.Token, m.Owner, now); err != nil {
+	if err := checkPolicyActive(m, now); err != nil {
 		return identity.Principal{}, err
 	}
 
@@ -659,7 +654,7 @@ func (s *Service) AccountInactive(ctx context.Context, o Owner) (bool, error) {
 
 	now := s.Now()
 
-	p, err := s.policies.get(ctx, now, s.Policy)
+	p, err := s.Policy(ctx)
 	if err != nil {
 		return false, fmt.Errorf("account inactivity: %w", err)
 	}
@@ -667,20 +662,18 @@ func (s *Service) AccountInactive(ctx context.Context, o Owner) (bool, error) {
 	return p.accountInactiveAt(o, now), nil
 }
 
-// checkPolicyActive refuses the token t of the owner o when the policy disables
-// t, or the user account o, as inactive at now, before the sweep writes the
-// disable: the sweep runs once an hour, and a use would else move the last
-// use forward and keep t, or o, alive. A break-glass account is always
-// exempt. A failed read of the policy answers its error, so the caller
-// fails closed.
-func (s *Service) checkPolicyActive(ctx context.Context, t Token, o Owner, now time.Time) error {
+// checkPolicyActive refuses the token of m when the policy of m disables
+// the token, or the user account of its owner, as inactive at now, before
+// the sweep writes the disable: the sweep runs once an hour, and a use would
+// else move the last use forward and keep the token, or the account, alive.
+// A break-glass account is always exempt. The policy comes from the same
+// lookup as the token, so a change applies to the next lookup on every
+// instance.
+func checkPolicyActive(m Match, now time.Time) error {
+	t, o, p := m.Token, m.Owner, m.Policy
+
 	if o.BreakGlass {
 		return nil
-	}
-
-	p, err := s.policies.get(ctx, now, s.Policy)
-	if err != nil {
-		return fmt.Errorf("authenticate access token: %w", err)
 	}
 
 	if p.inactiveAt(t, now) {

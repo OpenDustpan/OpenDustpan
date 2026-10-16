@@ -13,8 +13,8 @@ import (
 
 var _ maintenance.Store = (*Store)(nil)
 
-// GetState implements maintenance.Store. The migration seeds the one row; a
-// missing row reads normal, so a store that predates the seed still serves.
+// GetState implements maintenance.Store. The migration seeds the one row, so
+// a missing row is a server fault: it reports maintenance.ErrUnavailable.
 // It maps any driver failure to maintenance.ErrUnavailable without driver
 // text, and so it maps a stored value outside the known set: an unknown
 // stored value is a server fault, never a bad request, and the value itself
@@ -22,7 +22,10 @@ var _ maintenance.Store = (*Store)(nil)
 func (s *Store) GetState(ctx context.Context) (maintenance.State, error) {
 	raw, err := s.queries.GetInstallationState(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return maintenance.StateNormal, nil
+		return "", fmt.Errorf(
+			"select installation state postgres database: row is missing: %w",
+			maintenance.ErrUnavailable,
+		)
 	}
 
 	if err != nil {
@@ -37,16 +40,22 @@ func (s *Store) GetState(ctx context.Context) (maintenance.State, error) {
 	return state, nil
 }
 
-// SetState implements maintenance.Store. It creates the row when it is
-// missing and reports ErrInvalidState for any other value. It maps any
-// driver failure to maintenance.ErrUnavailable without driver text.
+// SetState implements maintenance.Store. It reports ErrInvalidState for any
+// other value. It writes the seeded row only, and reports
+// maintenance.ErrUnavailable when the row is missing. It maps any driver
+// failure to maintenance.ErrUnavailable without driver text.
 func (s *Store) SetState(ctx context.Context, state maintenance.State) error {
 	if state != maintenance.StateNormal && state != maintenance.StateMaintenance {
 		return fmt.Errorf("%w: %q", maintenance.ErrInvalidState, state)
 	}
 
-	if err := s.queries.UpsertInstallationState(ctx, string(state)); err != nil {
+	n, err := s.queries.SetInstallationState(ctx, string(state))
+	if err != nil {
 		return fmt.Errorf("store installation state postgres database: %w", maintenance.ErrUnavailable)
+	}
+
+	if n == 0 {
+		return fmt.Errorf("store installation state postgres database: row is missing: %w", maintenance.ErrUnavailable)
 	}
 
 	return nil

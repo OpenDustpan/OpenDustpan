@@ -33,8 +33,11 @@ const tokenScheme = "token "
 
 // Config holds the dependencies of a Handler.
 type Config struct {
-	Namespaces    *namespace.Service
-	Entries       audit.Store
+	Namespaces *namespace.Service
+	Entries    audit.Store
+	// EntryReader reads one entry by its scope and sequence. Nil answers
+	// 501 on the route that reads one entry.
+	EntryReader   audit.EntryReader
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
 	// Sessions checks the console session cookie of a request with no
@@ -47,6 +50,7 @@ type Config struct {
 type Handler struct {
 	namespaces *namespace.Service
 	entries    audit.Store
+	reader     audit.EntryReader
 	authn      identity.Authenticator
 	sessions   *sessionauth.Checker
 	authz      identity.Authorizer
@@ -55,7 +59,8 @@ type Handler struct {
 	routes     []Route
 }
 
-// NewHandler returns a Handler. Every Config field but Sessions is required.
+// NewHandler returns a Handler. Every Config field but EntryReader and
+// Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Namespaces == nil:
@@ -73,6 +78,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		entries:    cfg.Entries,
+		reader:     cfg.EntryReader,
 		authn:      cfg.Authenticator,
 		sessions:   cfg.Sessions,
 		authz:      cfg.Authorizer,
@@ -128,8 +134,8 @@ type auditEntry struct {
 	PrevHash  string        `json:"prevHash"`
 	Hash      string        `json:"hash"`
 	// FenceVersion is the failover version of the namespace when the entry
-	// was appended, which the hash covers. It is omitted when it is 0: in
-	// @server and in entries from before the field.
+	// was appended, which the hash covers. It is omitted when it is 0, as in
+	// @server.
 	FenceVersion int64 `json:"fenceVersion,omitempty"`
 }
 
@@ -261,6 +267,52 @@ func (h *Handler) listEntries(
 	h.writeJSON(ctx, w, http.StatusOK, listEntriesResponse{Entries: entries, Total: listing.Total})
 }
 
+// getEntry answers GET /api/audit/entries/{sequence} with the one entry of
+// the scope at that sequence, in the shape of an entry of the list. The
+// route wrapper already allowed the action on the object. An unknown
+// namespace or sequence answers 404, and a store that cannot read one entry
+// answers 501.
+func (h *Handler) getEntry(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+
+	seq, err := parseSequence(r.PathValue("sequence"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if h.reader == nil {
+		h.writeError(ctx, w, errNoEntryReader)
+
+		return
+	}
+
+	ns, err := h.auditScope(ctx, obj)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	e, err := h.reader.EntryAt(ctx, ns, seq)
+	if err == nil && e.Namespace != ns {
+		// The answer holds only an entry of the scope that the request
+		// names, whatever the store answers.
+		err = audit.ErrEntryNotFound
+	}
+
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, toAuditEntry(e))
+}
+
 // checkChain answers GET /api/audit/check with the chain check of the scope.
 // The route wrapper already allowed the action on the object. An unknown
 // namespace answers 404.
@@ -294,6 +346,36 @@ func (h *Handler) checkChain(
 // errInvalidPage reports a page[number] or page[size] value that is not a
 // positive number. classify maps it to the 400 the console expects.
 var errInvalidPage = errors.New("invalid page[number] or page[size]: send positive numbers")
+
+// errInvalidSequence reports a sequence in the path that is not a positive
+// number in its one decimal form. classify maps it to 400.
+var errInvalidSequence = errors.New("invalid sequence: send a positive number with no sign and no leading zero")
+
+// parseSequence reads a sequence from the path. It accepts only the decimal
+// form of a positive number, with no sign and no leading zero, so each entry
+// has one URL.
+func parseSequence(raw string) (int64, error) {
+	if raw == "" || raw[0] < '1' || raw[0] > '9' {
+		return 0, errInvalidSequence
+	}
+
+	for i := 1; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return 0, errInvalidSequence
+		}
+	}
+
+	seq, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, errInvalidSequence
+	}
+
+	return seq, nil
+}
+
+// errNoEntryReader reports a store that cannot read one entry. classify maps
+// it to 501.
+var errNoEntryReader = errors.New("this server cannot read one audit entry: list the entries instead")
 
 // parsePage reads page[number] and page[size] from the request. Missing
 // values read the defaults of the audit port; values above the maximum read
@@ -375,12 +457,14 @@ func classify(err error) (int, string) {
 		return http.StatusForbidden, err.Error()
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden"
-	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage):
+	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage), errors.Is(err, errInvalidSequence):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, identity.ErrInvalidObject):
 		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrNotFound):
+	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, audit.ErrEntryNotFound):
 		return http.StatusNotFound, err.Error()
+	case errors.Is(err, errNoEntryReader):
+		return http.StatusNotImplemented, err.Error()
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}

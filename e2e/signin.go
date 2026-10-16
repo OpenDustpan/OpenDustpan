@@ -87,6 +87,9 @@ type signInSetup struct {
 	hub       *oauthtest.Provider
 	clock     *TestClock
 	shared    bool
+	// mu makes the sign-ins of PersonalToken take turns: the test
+	// provider signs in one person at a time.
+	mu sync.Mutex
 }
 
 // options returns the server options of the sign-in.
@@ -95,8 +98,7 @@ func (s *signInSetup) options() []dustpan.Option {
 		return nil
 	}
 
-	return []dustpan.Option{
-		dustpan.WithClock(s.clock.Now),
+	opts := []dustpan.Option{
 		dustpan.WithPublicURL(s.publicURL),
 		dustpan.WithOIDCProvider(dustpan.OIDCProvider{
 			HTTPClient: s.idp.Client(), ID: SignInProvider, DisplayName: "Corp", Issuer: s.idp.Issuer(),
@@ -105,6 +107,12 @@ func (s *signInSetup) options() []dustpan.Option {
 		}),
 		dustpan.WithSignInHTTPClient(s.beta.Client()),
 	}
+
+	if s.shared {
+		opts = append(opts, dustpan.WithClock(s.clock.Now))
+	}
+
+	return opts
 }
 
 // newSignInSetup starts a test provider for a server at publicURL. With a
@@ -148,7 +156,9 @@ func newSignInSetup(tb testing.TB, publicURL string, shared *TestClock) *signInS
 		Mode:        oauthtest.ModeOAuth, Faults: noFaults(), TLS: false,
 	})
 
-	return &signInSetup{publicURL: publicURL, idp: idp, beta: beta, hub: hub, clock: clock, shared: shared != nil}
+	return &signInSetup{
+		publicURL: publicURL, idp: idp, beta: beta, hub: hub, clock: clock, shared: shared != nil, mu: sync.Mutex{},
+	}
 }
 
 // testUser returns the person whom each test provider signs in.
@@ -203,11 +213,30 @@ func writeBinarySignIn(tb testing.TB, dir string, s *signInSetup) *binarySignIn 
 func NewEnvWithSignIn(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
+	return startSignInEnv(ctx, tb, cli, store, false)
+}
+
+// NewEnvWithRealTimeSignIn starts a server as NewEnvWithSignIn does, but the
+// in-process server and the test provider keep the real time, as the
+// server binary does. Use it for a test that signs persons in with
+// PersonalToken and needs time to pass on the server.
+func NewEnvWithRealTimeSignIn(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	return startSignInEnv(ctx, tb, cli, store, true)
+}
+
+// startSignInEnv starts a sign-in env. realTime runs the in-process
+// server on the real time instead of a TestClock.
+func startSignInEnv(ctx context.Context, tb testing.TB, cli Install, store Store, realTime bool) *Env {
+	tb.Helper()
+
 	in := envInput{
 		deltaCutoff:       0,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            true,
+		signInRealTime:    realTime,
 		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,

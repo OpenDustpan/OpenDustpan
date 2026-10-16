@@ -42,23 +42,19 @@ type UpdateRow struct {
 
 // CheckpointRow is the column representation of a checkpoint. Features is a
 // JSON array of strings. The stack is its stable ID; the caller supplies the
-// current reference. The row carries no resource count: saves store NULL, so
-// the save path never scans the deployment. The one reader of the stored
-// count, the delete guard refuseResourcedStack in each store adapter, counts
-// the one latest deployment when the count is NULL; the inventory projection
-// publishes Pulumi stacks with an unknown count, and the Pulumi list-stacks
-// route answers 0. BlobKey names the gzip content in the blob store; rows
-// with a key keep no content. Size is the uncompressed size for history;
-// rows from before blobs hold NULL, which reads as the length of the stored
-// content. BlobSize with BlobMD5 describe the stored bytes for backups; rows
-// without a key hold no stored bytes.
+// current reference. The row carries no resource count, so the save path
+// never scans the deployment: the delete guard gets the count from the
+// service, the inventory projection publishes Pulumi stacks with an unknown
+// count, and the Pulumi list-stacks route answers 0. The row carries no
+// content: BlobKey names the gzip content in the blob store, and a row without
+// a key is corrupt. Size is the uncompressed size for history. BlobSize with
+// BlobMD5 describe the stored bytes for backups.
 type CheckpointRow struct {
 	StackID       string
 	UpdateID      string
 	LeaseDigest   []byte
 	Digest        []byte
 	Features      []byte
-	Deployment    []byte
 	SchemaVersion int64
 	Sequence      int64
 	SavedAtMs     int64
@@ -166,10 +162,13 @@ func FromUpdateRows(rows []UpdateRow, ref stack.Ref) ([]stack.Update, error) {
 }
 
 // ToCheckpointRow converts a domain checkpoint into a row for the stack with
-// stackID. It never scans the deployment: the row stores a NULL resource
-// count, and the delete guard counts the latest deployment when it needs the
-// count (see CheckpointRow).
+// stackID. It never scans the deployment (see CheckpointRow). It returns
+// stack.ErrCheckpointNoKey for a checkpoint without a blob key.
 func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, error) {
+	if cp.BlobKey == "" {
+		return CheckpointRow{}, fmt.Errorf("checkpoint of update %s: %w", cp.Update, stack.ErrCheckpointNoKey)
+	}
+
 	features := cp.Features
 	if features == nil {
 		features = []string{}
@@ -178,13 +177,6 @@ func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, erro
 	encoded, err := json.Marshal(features)
 	if err != nil {
 		return CheckpointRow{}, fmt.Errorf("encode checkpoint features: %w", err)
-	}
-
-	deployment := cp.Deployment
-	if deployment == nil || cp.BlobKey != "" {
-		// NOT NULL columns: a nil slice would bind as NULL. Rows with a blob
-		// key keep the metadata only; the content lives in blobs.
-		deployment = []byte{}
 	}
 
 	var blobMD5 []byte
@@ -199,7 +191,6 @@ func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, erro
 		LeaseDigest:   EncodeDigest(cp.Lease),
 		Digest:        cp.Digest[:],
 		Features:      encoded,
-		Deployment:    deployment,
 		SchemaVersion: int64(cp.SchemaVersion),
 		Sequence:      cp.Sequence,
 		SavedAtMs:     Millis(cp.SavedAt),
@@ -246,7 +237,7 @@ func FromCheckpointRow(row CheckpointRow, ref stack.Ref) (stack.Checkpoint, erro
 	return stack.Checkpoint{
 		SavedAt:       FromMillis(row.SavedAtMs),
 		Features:      features,
-		Deployment:    row.Deployment,
+		Deployment:    nil,
 		Update:        stack.UpdateID(row.UpdateID),
 		Ref:           ref,
 		Lease:         lease,
@@ -260,13 +251,9 @@ func FromCheckpointRow(row CheckpointRow, ref stack.Ref) (stack.Checkpoint, erro
 	}, nil
 }
 
-// parseBlobKey decodes the blob key of a checkpoint row: empty for rows that
-// keep content.
+// parseBlobKey decodes the blob key of a checkpoint row. A row without a key
+// is corrupt.
 func parseBlobKey(row CheckpointRow) (blob.Key, error) {
-	if row.BlobKey == "" {
-		return "", nil
-	}
-
 	key, err := blob.ParseKey(row.BlobKey)
 	if err != nil {
 		return "", fmt.Errorf("%w: checkpoint key of update %s: %w", ErrCorruptRow, row.UpdateID, err)
@@ -276,7 +263,7 @@ func parseBlobKey(row CheckpointRow) (blob.Key, error) {
 }
 
 // parseBlobMD5 decodes the MD5 of the stored bytes of a checkpoint row: zero
-// for rows without a key.
+// when the row holds none.
 func parseBlobMD5(row CheckpointRow) ([md5.Size]byte, error) {
 	var sum [md5.Size]byte
 

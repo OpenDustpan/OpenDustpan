@@ -27,6 +27,9 @@ var (
 	ErrChecksumMismatch = errors.New("uploaded state does not match its declared MD5")
 	// ErrUploadDenied reports an upload capability that is unknown, used or expired.
 	ErrUploadDenied = errors.New("state upload not allowed")
+	// ErrAlreadyRestored reports a restored version whose source the current
+	// state already restores for the same holder: the restore is a duplicate.
+	ErrAlreadyRestored = errors.New("state version is already restored")
 	// ErrTooManyPending reports a workspace holding the maximum pending
 	// state versions: declare no new version until an old one finalizes or
 	// expires past the sweep grace period.

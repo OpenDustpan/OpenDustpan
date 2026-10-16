@@ -59,6 +59,25 @@ func TestConformance(t *testing.T) {
 	})
 }
 
+// TestSharedConformance runs the two-handle suite: both handles open one
+// schema, as two servers open one database.
+func TestSharedConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunShared(t, func(t *testing.T) (storetest.Store, storetest.Store) {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return openURL(t, schemaURL), openURL(t, schemaURL)
+	})
+}
+
 // TestAccessConformance runs the role and grant store suite.
 func TestAccessConformance(t *testing.T) {
 	t.Parallel()
@@ -72,6 +91,25 @@ func TestAccessConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t, base)
+	})
+}
+
+// TestAccessConcurrency runs the cases of a grant or role check that races
+// a write on a second handle of the same schema.
+func TestAccessConcurrency(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL concurrency suite", envURL)
+	}
+
+	accesstest.RunConcurrent(t, func(t *testing.T) (access.Store, access.Store) {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return openURL(t, schemaURL), openURL(t, schemaURL)
 	})
 }
 
@@ -240,7 +278,7 @@ func TestUpdatesConformance(t *testing.T) {
 	storetest.RunUpdates(t, func(t *testing.T) storetest.UpdatesStore {
 		t.Helper()
 
-		return openUncounted(t, base)
+		return openSQLUpdates(t, base)
 	})
 }
 
@@ -395,7 +433,16 @@ func tamperAuditColumn(field string) (string, bool) {
 		"sequence",
 		"changes",
 		"fence_version",
-		"value_path":
+		"value_path",
+		"value_count",
+		"object_id",
+		"idp_subject",
+		"token_id",
+		"version",
+		"source_ip",
+		"user_agent",
+		"channel",
+		"request_id":
 		return field, true
 	default:
 		return "", false
@@ -403,9 +450,10 @@ func tamperAuditColumn(field string) (string, bool) {
 }
 
 // tamperValue answers the parameter of the tamper hook for column: at_ms,
-// sequence and fence_version are numbers, every other column is text.
+// sequence, fence_version and value_count are numbers, every other column
+// is text.
 func tamperValue(column string) string {
-	if column == "at_ms" || column == "sequence" || column == "fence_version" {
+	if column == "at_ms" || column == "sequence" || column == "fence_version" || column == "value_count" {
 		return "$1::text::bigint"
 	}
 
@@ -896,7 +944,15 @@ func (s *backupStore) StagingAlive(id string) bool {
 func open(tb testing.TB, base string) *postgres.Store {
 	tb.Helper()
 
-	s, err := postgres.Open(tb.Context(), isolatedURL(tb, base))
+	return openURL(tb, isolatedURL(tb, base))
+}
+
+// openURL returns a store on the schema that schemaURL names. Each call
+// opens its own handle, so two calls give two handles on one schema.
+func openURL(tb testing.TB, schemaURL string) *postgres.Store {
+	tb.Helper()
+
+	s, err := postgres.Open(tb.Context(), schemaURL)
 	if err != nil {
 		tb.Fatalf("open store: %v", err)
 	}
@@ -906,10 +962,9 @@ func open(tb testing.TB, base string) *postgres.Store {
 	return s
 }
 
-// uncountedStore wraps a Store with its schema URL so the uncounted-checkpoint
-// case sets the stored count to NULL with a direct SQL update: the port
-// always writes the count, so only SQL seeds rows from before the column.
-type uncountedStore struct {
+// sqlUpdatesStore wraps a Store with its schema URL, so a case can change its
+// rows with direct SQL, as the audit case does to break audit appends.
+type sqlUpdatesStore struct {
 	storetest.UpdatesStore
 
 	url string
@@ -917,17 +972,16 @@ type uncountedStore struct {
 }
 
 var (
-	_ storetest.CountNullifier = (*uncountedStore)(nil)
-	_ storetest.CountSetter    = (*uncountedStore)(nil)
-	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
+	_ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
+	_ storetest.KeyEraser    = (*sqlUpdatesStore)(nil)
 )
 
 // errNoJournalCount reports a wrapped store without the journaled count.
 var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
 
-// openUncounted returns a store in a fresh schema of the database at base
-// that the uncounted-checkpoint case can NULL through SQL.
-func openUncounted(t *testing.T, base string) *uncountedStore {
+// openSQLUpdates returns a store in a fresh schema of the database at base
+// that a case can change through SQL.
+func openSQLUpdates(t *testing.T, base string) *sqlUpdatesStore {
 	t.Helper()
 
 	schemaURL := isolatedURL(t, base)
@@ -939,12 +993,12 @@ func openUncounted(t *testing.T, base string) *uncountedStore {
 
 	t.Cleanup(s.Close)
 
-	return &uncountedStore{UpdatesStore: s, url: schemaURL, t: t}
+	return &sqlUpdatesStore{UpdatesStore: s, url: schemaURL, t: t}
 }
 
 // CountRunningJournaledUpdates forwards to the wrapped store, whose method
 // the embedded UpdatesStore interface hides.
-func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+func (s *sqlUpdatesStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
 	counter, ok := s.UpdatesStore.(interface {
 		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 	})
@@ -960,55 +1014,14 @@ func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int6
 	return count, nil
 }
 
-// NullifyResourceCount implements storetest.CountNullifier.
-func (s *uncountedStore) NullifyResourceCount(ctx context.Context) error {
-	conn, err := pgx.Connect(ctx, s.url)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			s.t.Errorf("close: %v", closeErr)
-		}
-	}()
-
-	if _, err := conn.Exec(ctx, `UPDATE checkpoints SET resource_count = NULL`); err != nil {
-		return fmt.Errorf("nullify the checkpoint count: %w", err)
-	}
-
-	return nil
-}
-
-// SetResourceCount implements storetest.CountSetter: it plants a stored
-// count from before saves stopped counting.
-func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) error {
-	conn, err := pgx.Connect(ctx, s.url)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			s.t.Errorf("close: %v", closeErr)
-		}
-	}()
-
-	if _, err := conn.Exec(ctx, `UPDATE checkpoints SET resource_count = $1`, count); err != nil {
-		return fmt.Errorf("set the checkpoint count: %w", err)
-	}
-
-	return nil
-}
-
 // List forwards to the audit list of the wrapped store, which the embedded
 // interface hides, so the delete case can read the entry of a delete.
 // Inner implements storetest.Wrapper.
-func (s *uncountedStore) Inner() any {
+func (s *sqlUpdatesStore) Inner() any {
 	return s.UpdatesStore
 }
 
-func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
+func (s *sqlUpdatesStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
 		return audit.Listing{}, errNoAuditList
@@ -1026,8 +1039,28 @@ func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit
 var errNoAuditList = errors.New("wrapped store lists no audit entries")
 
 // BreakAuditAppends implements storetest.AuditBreaker.
-func (s *uncountedStore) BreakAuditAppends(ctx context.Context) error {
+func (s *sqlUpdatesStore) BreakAuditAppends(ctx context.Context) error {
 	return breakAuditAppends(ctx, s.url)
+}
+
+// EraseCheckpointKeys implements storetest.KeyEraser.
+func (s *sqlUpdatesStore) EraseCheckpointKeys(ctx context.Context) (err error) {
+	conn, err := pgx.Connect(ctx, s.url)
+	if err != nil {
+		return fmt.Errorf("connect: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close: %w", closeErr))
+		}
+	}()
+
+	if _, err = conn.Exec(ctx, `UPDATE checkpoints SET blob_key = NULL`); err != nil {
+		return fmt.Errorf("erase the checkpoint keys: %w", err)
+	}
+
+	return nil
 }
 
 // auditedWorkspaces is a store for the workspace suite that can break its
@@ -1143,6 +1176,62 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 
 	if strings.Contains(stateErr.Error(), "offline") {
 		t.Fatalf("get unknown installation state error %q holds the stored value", stateErr)
+	}
+}
+
+// TestMissingStateRowIsUnavailable deletes the seeded installation row and
+// proves that GetState and SetState answer ErrUnavailable, and that
+// SetState does not create the row again: the migration seeds the row, so a
+// missing row is a server fault.
+func TestMissingStateRowIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	schemaURL := isolatedURL(t, base)
+
+	s, openErr := postgres.Open(t.Context(), schemaURL)
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+
+	t.Cleanup(s.Close)
+
+	ctx := t.Context()
+
+	conn, connErr := pgx.Connect(ctx, schemaURL)
+	if connErr != nil {
+		t.Fatalf("connect: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	if _, execErr := conn.Exec(ctx, `DELETE FROM installation`); execErr != nil {
+		t.Fatalf("delete installation row: %v", execErr)
+	}
+
+	if _, err := s.GetState(ctx); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("get installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	if err := s.SetState(ctx, maintenance.StateMaintenance); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("set installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	var rows int64
+	if scanErr := conn.QueryRow(ctx, `SELECT COUNT(*) FROM installation`).Scan(&rows); scanErr != nil {
+		t.Fatalf("count installation rows: %v", scanErr)
+	}
+
+	if rows != 0 {
+		t.Fatalf("installation rows after the writes = %d, want 0", rows)
 	}
 }
 
@@ -1290,7 +1379,6 @@ func TestMigration0005KeepsHistory(t *testing.T) {
 	checkMigratedStack(t, s, ref)
 	checkMigratedUpdate(t, s, ref)
 	checkMigratedHistory(t, s, ref)
-	checkMigratedCheckpoint(t, s, ref)
 	checkMigratedEvents(t, s, ref)
 }
 
@@ -1333,19 +1421,6 @@ func checkMigratedHistory(t *testing.T, s *postgres.Store, ref stack.Ref) {
 	}
 }
 
-func checkMigratedCheckpoint(t *testing.T, s *postgres.Store, ref stack.Ref) {
-	t.Helper()
-
-	cp, err := s.LatestCheckpoint(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("latest checkpoint: %v", err)
-	}
-
-	if string(cp.Deployment) != "{}" || cp.Update != "u1" {
-		t.Fatalf("migrated checkpoint = deployment %q update %q, want {} u1", cp.Deployment, cp.Update)
-	}
-}
-
 func checkMigratedEvents(t *testing.T, s *postgres.Store, ref stack.Ref) {
 	t.Helper()
 
@@ -1356,173 +1431,6 @@ func checkMigratedEvents(t *testing.T, s *postgres.Store, ref stack.Ref) {
 
 	if len(events) != 2 {
 		t.Fatalf("migrated events = %d, want 2", len(events))
-	}
-}
-
-func TestMigration0006KeepsOneRowData(t *testing.T) {
-	t.Parallel()
-
-	base := os.Getenv(envURL)
-	if base == "" {
-		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
-	}
-
-	migrated := isolatedURL(t, base)
-	seedAt0005WithOneRow(t, migrated)
-
-	s, err := postgres.Open(t.Context(), migrated)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-
-	t.Cleanup(s.Close)
-
-	ref, err := stack.ParseRef("acme", "web", "prod")
-	if err != nil {
-		t.Fatalf("parse ref: %v", err)
-	}
-
-	cp, err := s.LatestCheckpoint(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("latest checkpoint: %v", err)
-	}
-
-	if string(cp.Deployment) != `{"v":1}` || cp.Update != "u1" {
-		t.Fatalf("migrated checkpoint = deployment %q update %q, want {\"v\":1} u1", cp.Deployment, cp.Update)
-	}
-
-	byVersion, err := s.CheckpointByVersion(t.Context(), ref, 1)
-	if err != nil {
-		t.Fatalf("checkpoint of version 1: %v", err)
-	}
-
-	if string(byVersion.Deployment) != `{"v":1}` || byVersion.Update != "u1" {
-		t.Fatalf(
-			"migrated checkpoint of version 1 = deployment %q update %q, want {\"v\":1} u1",
-			byVersion.Deployment,
-			byVersion.Update,
-		)
-	}
-
-	if _, err := s.CheckpointByVersion(t.Context(), ref, 2); !errors.Is(err, stack.ErrNoState) {
-		t.Fatalf("checkpoint of missing version 2: err = %v, want ErrNoState", err)
-	}
-}
-
-// seedAt0005WithOneRow creates a database at migration 0005 with a stack, one
-// finished update and its checkpoint: the one-row-per-stack layout.
-func seedAt0005WithOneRow(t *testing.T, migrated string) {
-	t.Helper()
-
-	conn, err := pgx.Connect(t.Context(), migrated)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(t.Context()); closeErr != nil {
-			t.Errorf("close: %v", closeErr)
-		}
-	}()
-
-	applyMigrations0005(t, conn)
-	recordMigrations0005(t, conn)
-	seedOneRowNamespace(t, conn)
-	seedOneRowStack(t, conn)
-	seedOneRowUpdate(t, conn)
-	seedOneRowCheckpoint(t, conn)
-}
-
-func applyMigrations0005(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	for _, name := range []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql",
-	} {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		if _, execErr := conn.Exec(t.Context(), string(data)); execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-}
-
-func recordMigrations0005(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version BIGINT NOT NULL PRIMARY KEY,
-		name    TEXT   NOT NULL
-	)`
-
-	if _, err := conn.Exec(t.Context(), createMigrations); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql",
-	}
-
-	for i, name := range names {
-		if _, err := conn.Exec(t.Context(), record, int64(i+1), name); err != nil {
-			t.Fatalf("record migration %s: %v", name, err)
-		}
-	}
-}
-
-func seedOneRowNamespace(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'eu-west', 1, 0)`
-
-	if _, err := conn.Exec(t.Context(), seed); err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-}
-
-func seedOneRowStack(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const seed = `INSERT INTO stacks (namespace, project, name, id, tags, version, created_at_ms, updated_at_ms)
-		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', '{}', 1, 0, 0)`
-
-	if _, err := conn.Exec(t.Context(), seed); err != nil {
-		t.Fatalf("seed stack: %v", err)
-	}
-}
-
-func seedOneRowUpdate(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const seed = `INSERT INTO updates (stack_id, id, kind, dry_run, status, version, revision,
-		lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms)
-		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', 'update', false, 'succeeded', 1, 3, ''::bytea, 0, 1000, 2000, 3000)`
-
-	if _, err := conn.Exec(t.Context(), seed); err != nil {
-		t.Fatalf("seed update: %v", err)
-	}
-}
-
-func seedOneRowCheckpoint(t *testing.T, conn *pgx.Conn) {
-	t.Helper()
-
-	const seed = `INSERT INTO checkpoints (stack_id, update_id, lease_digest, schema_version, sequence,
-		digest, invalid, features, deployment, saved_at_ms)
-		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', ''::bytea, 3, 0,
-		'\x0000000000000000000000000000000000000000000000000000000000000000', false, '[]', '{"v":1}', 4000)`
-
-	if _, err := conn.Exec(t.Context(), seed); err != nil {
-		t.Fatalf("seed checkpoint: %v", err)
 	}
 }
 
@@ -1747,45 +1655,30 @@ func TestMigration0012FillsHistoryFields(t *testing.T) {
 	checkMigratedHistoryList(t, s, ref)
 }
 
-// checkMigratedHistoryUpdates checks the migrated updates carry empty history fields
-// and the checkpoint size of u1.
+// checkMigratedHistoryUpdates checks the migrated updates carry empty history
+// fields.
 func checkMigratedHistoryUpdates(t *testing.T, s *postgres.Store, ref stack.Ref) {
 	t.Helper()
 
-	for _, want := range []struct {
-		id   stack.UpdateID
-		size int64
-	}{
-		{id: "u1", size: int64(len(`{"v":1}`))},
-		{id: "u2", size: 0},
-	} {
-		checkMigratedHistoryUpdate(t, s, ref, want.id, want.size)
-	}
-}
+	for _, id := range []stack.UpdateID{"u1", "u2"} {
+		got, getErr := s.GetUpdate(t.Context(), ref, id)
+		if getErr != nil {
+			t.Fatalf("get update %s: %v", id, getErr)
+		}
 
-// checkMigratedHistoryUpdate checks one migrated update against its expected size.
-func checkMigratedHistoryUpdate(t *testing.T, s *postgres.Store, ref stack.Ref, id stack.UpdateID, size int64) {
-	t.Helper()
-
-	got, getErr := s.GetUpdate(t.Context(), ref, id)
-	if getErr != nil {
-		t.Fatalf("get update %s: %v", id, getErr)
-	}
-
-	if got.CreatedBy != "" || got.RestoredFrom != 0 || got.CheckpointBytes != size {
-		t.Fatalf(
-			"migrated update %s = creator %q restored %d size %d, want empty, 0 and %d",
-			id,
-			got.CreatedBy,
-			got.RestoredFrom,
-			got.CheckpointBytes,
-			size,
-		)
+		if got.CreatedBy != "" || got.RestoredFrom != 0 {
+			t.Fatalf(
+				"migrated update %s = creator %q restored %d, want empty and 0",
+				id,
+				got.CreatedBy,
+				got.RestoredFrom,
+			)
+		}
 	}
 }
 
 // checkMigratedHistoryList checks the migrated history holds u2 then u1
-// with empty history fields and the size of u1.
+// with empty history fields.
 func checkMigratedHistoryList(t *testing.T, s *postgres.Store, ref stack.Ref) {
 	t.Helper()
 
@@ -1794,9 +1687,8 @@ func checkMigratedHistoryList(t *testing.T, s *postgres.Store, ref stack.Ref) {
 		t.Fatalf("list updates: %v", err)
 	}
 
-	if len(history) != 2 || history[0].ID != "u2" || history[0].CheckpointBytes != 0 ||
-		history[1].ID != "u1" || history[1].CheckpointBytes != int64(len(`{"v":1}`)) {
-		t.Fatalf("migrated history = %+v, want [u2 without checkpoint, u1 with size]", history)
+	if len(history) != 2 || history[0].ID != "u2" || history[1].ID != "u1" {
+		t.Fatalf("migrated history = %+v, want [u2 u1]", history)
 	}
 
 	for i := range history {

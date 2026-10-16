@@ -30,9 +30,17 @@ func lifecycleEntry(ns namespace.Name, action string) audit.Entry {
 func deleteFixtureStack(t *testing.T, f fixture) stack.Stack {
 	t.Helper()
 
+	return deleteFixtureStackWith(t, f, stack.EmptyGuard())
+}
+
+// deleteFixtureStackWith deletes the fixture stack under guard and returns
+// the stack as it was before the delete.
+func deleteFixtureStackWith(t *testing.T, f fixture, guard stack.DeleteGuard) stack.Stack {
+	t.Helper()
+
 	st := mustGetFixtureStack(t, f)
 
-	err := f.s.DeleteStack(t.Context(), f.ref, f.fence, stack.EmptyGuard(), inventory.Deletion{
+	err := f.s.DeleteStack(t.Context(), f.ref, f.fence, guard, inventory.Deletion{
 		Entry: deleteEntry(f.ref.Namespace), PurgeAfter: purgeAt(),
 	})
 	if err != nil {
@@ -169,7 +177,7 @@ func testPurgeStack(t *testing.T, f fixture) {
 
 	f.end(t, u, stack.StatusSucceeded)
 
-	before := deleteFixtureStack(t, f)
+	before := deleteFixtureStackWith(t, f, countedGuard(u, `{"v":1}`))
 	entry := lifecycleEntry(f.ref.Namespace, "unit:purge")
 
 	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, time.Time{}, entry); err != nil {
@@ -503,14 +511,14 @@ func createUnitGrants(t *testing.T, s namespace.Store, as access.Store, obj iden
 	ns := unitGrant("grt-namespace", identity.NamespaceObject(obj.Namespace()))
 	fence, e := GrantWrite(t, s, ns.Object, now(), "grant:"+ns.ID)
 
-	if err := as.CreateGrant(t.Context(), ns, fence, e); err != nil {
+	if err := as.CreateGrant(t.Context(), ns, fence, e, nil); err != nil {
 		t.Fatalf("create grant %q: %v", ns.ID, err)
 	}
 
 	unit := unitGrant("grt-unit", obj)
 	fence, e = GrantWrite(t, s, unit.Object, now(), "grant:"+unit.ID)
 
-	if err := as.CreateGrant(t.Context(), unit, fence, e); err != nil {
+	if err := as.CreateGrant(t.Context(), unit, fence, e, nil); err != nil {
 		return fmt.Errorf("create grant on the unit: %w", err)
 	}
 

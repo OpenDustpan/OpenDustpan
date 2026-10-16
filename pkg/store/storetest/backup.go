@@ -95,6 +95,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "column lists cover every column of the schema", test: testBackupColumnsCoverSchema},
 		{name: "backups table creates, finishes, gets and lists", test: testBackupRegistry},
 		{name: "restart marks every running backup failed", test: testBackupRestartFailsRunning},
+		{name: "one backup runs at a time", test: testBackupOneRunning},
 		{name: "a backup row survives close and reopen", test: testBackupRowSurvivesReopen},
 	}
 
@@ -659,14 +660,14 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 	}
 	for i := range grants {
 		fence, e := GrantWrite(t, s, grants[i].Object, now(), "grant:"+grants[i].ID)
-		if err := as.CreateGrant(ctx, grants[i], fence, e); err != nil {
+		if err := as.CreateGrant(ctx, grants[i], fence, e, nil); err != nil {
 			t.Fatalf("create grant %q: %v", grants[i].ID, err)
 		}
 	}
 
 	fence, revoked := GrantWrite(t, s, identity.NamespaceObject("acme"), now().Add(2*time.Hour), "grant:grt-revoked")
 
-	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked)
+	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked, nil)
 	if err != nil {
 		t.Fatalf("revoke grant: %v", err)
 	}
@@ -1173,6 +1174,32 @@ func backupIDs(rows []backup.Record) []backup.ID {
 	return ids
 }
 
+// testBackupOneRunning refuses a second running backup with
+// ErrAlreadyRunning, keeps ErrAlreadyExists for a taken ID, and allows the
+// next backup once the running one finished.
+func testBackupOneRunning(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	first := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+
+	second := newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Minute))
+	if err := s.CreateBackup(t.Context(), second); !errors.Is(err, backup.ErrAlreadyRunning) {
+		t.Fatalf("second running backup: err = %v, want ErrAlreadyRunning", err)
+	}
+
+	if _, err := s.GetBackup(t.Context(), second.ID); !errors.Is(err, backup.ErrNotFound) {
+		t.Fatalf("refused backup row: err = %v, want ErrNotFound", err)
+	}
+
+	if err := s.CreateBackup(t.Context(), first); !errors.Is(err, backup.ErrAlreadyExists) {
+		t.Fatalf("taken backup ID: err = %v, want ErrAlreadyExists", err)
+	}
+
+	mustFinishBackup(t, s, backupFinish{ID: first.ID, State: backup.StateSucceeded, Error: "", EndedAt: now()})
+	mustCreateBackup(t, s, second)
+}
+
 // testBackupRestartFailsRunning marks a running row failed at the next start,
 // with the error text, and leaves finished rows alone.
 func testBackupRestartFailsRunning(t *testing.T, newStore BackupFactory) {
@@ -1182,7 +1209,7 @@ func testBackupRestartFailsRunning(t *testing.T, newStore BackupFactory) {
 
 	mustFailRunningBackups(t, s, now(), "no backup is running")
 
-	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	// One backup runs at a time: the finished row runs and ends first.
 	done := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)))
 	endedAt := now().Add(2 * time.Hour)
 	finished := mustFinishBackup(t, s, backupFinish{
@@ -1191,6 +1218,7 @@ func testBackupRestartFailsRunning(t *testing.T, newStore BackupFactory) {
 		Error:   "",
 		EndedAt: endedAt,
 	})
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
 
 	restartedAt := now().Add(3 * time.Hour)
 	mustFailRunningBackups(t, s, restartedAt, "server stopped during backup")
@@ -1228,7 +1256,7 @@ func testBackupRowSurvivesReopen(t *testing.T, newStore BackupFactory) {
 		t.Skip("store does not support close and reopen")
 	}
 
-	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	// One backup runs at a time: the finished row runs and ends first.
 	done := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)))
 	finished := mustFinishBackup(t, s, backupFinish{
 		ID:      done.ID,
@@ -1236,6 +1264,7 @@ func testBackupRowSurvivesReopen(t *testing.T, newStore BackupFactory) {
 		Error:   "",
 		EndedAt: now().Add(2 * time.Hour),
 	})
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
 
 	if err := reopenable.Close(); err != nil {
 		t.Fatalf("close store: %v", err)

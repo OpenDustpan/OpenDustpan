@@ -39,6 +39,9 @@ const (
 	// maxDeletedSweepResults holds one series for each outcome of the
 	// retention sweep.
 	maxDeletedSweepResults = 4
+	// maxSignInCounterOperations holds one series for each operation of
+	// the shared sign-in failure counter.
+	maxSignInCounterOperations = 2
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -51,8 +54,16 @@ const (
 	labelVersion = "version"
 	// labelSink names a configured audit sink, for example "siem". The
 	// operator sets the name; it never holds an address or a secret.
-	labelSink   = "sink"
-	labelResult = "result"
+	labelSink      = "sink"
+	labelResult    = "result"
+	labelOperation = "operation"
+)
+
+// Operations of the shared sign-in failure counter: the add of a miss and
+// the prune of old windows.
+const (
+	SignInCounterAdd   = "add"
+	SignInCounterPrune = "prune"
 )
 
 // Results of a reload of the configuration file (ADR 63 decision 5).
@@ -93,6 +104,7 @@ type ServerMetrics struct {
 	reloadOK *Gauge
 	sweeps   *Counter
 	deleted  *Counter
+	signin   *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -128,12 +140,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			[]string{labelAdapter},
 			maxInFlightCount,
 		),
-		ready: reg.NewCounter(
-			"dustpan_readiness_failures_total",
-			"Readiness check failures.",
-			nil,
-			1,
-		),
+		ready: newReadinessCounter(reg),
 		audit: reg.NewCounter(
 			"dustpan_audit_append_failures_total",
 			"Audit entries lost because the append failed.",
@@ -156,6 +163,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 		),
 		sweeps:  newSweepCounter(reg),
 		deleted: newDeletedSweepCounter(reg),
+		signin:  newSignInCounterErrors(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -245,11 +253,20 @@ func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
 	m.chain.invalid.Set(float64(scopes))
 }
 
+// IncAuditChainCheckError adds one to the count of audit chain checks
+// that could not check every scope, because a read or a checkpoint write
+// failed. Such a scope does not count in dustpan_audit_chain_invalid.
+// Operators alert when it increases on each check.
+func (m *ServerMetrics) IncAuditChainCheckError() {
+	m.chain.checkErr.Inc()
+}
+
 // chainFamilies holds the audit chain families: the count of scopes whose
-// check failed, and the count of restores whose restored log failed the
-// check.
+// check failed, the count of checks that could not check every scope, and
+// the count of restores whose restored log failed the check.
 type chainFamilies struct {
 	invalid    *Gauge
+	checkErr   *Counter
 	restoreBad *Counter
 }
 
@@ -257,8 +274,22 @@ type chainFamilies struct {
 func newChainFamilies(reg *Registry) chainFamilies {
 	return chainFamilies{
 		invalid:    reg.NewGauge("dustpan_audit_chain_invalid", chainInvalidHelp, nil, 1),
+		checkErr:   newChainCheckErrorCounter(reg),
 		restoreBad: newRestoreCheckCounter(reg),
 	}
+}
+
+// newChainCheckErrorCounter registers
+// dustpan_audit_chain_check_errors_total in reg.
+func newChainCheckErrorCounter(reg *Registry) *Counter {
+	c := reg.NewCounter("dustpan_audit_chain_check_errors_total",
+		"Audit chain checks that could not check every scope because a call failed.", nil, 1)
+
+	// The series starts at 0, so an alert on increase() sees the first
+	// error.
+	c.Add(0, []string{}...)
+
+	return c
 }
 
 // newRestoreCheckCounter registers dustpan_audit_restore_check_failures_total
@@ -476,4 +507,32 @@ func NormalizeRoute(route string) string {
 	}
 
 	return route
+}
+
+// newReadinessCounter creates dustpan_readiness_failures_total in reg.
+func newReadinessCounter(reg *Registry) *Counter {
+	return reg.NewCounter("dustpan_readiness_failures_total", "Readiness check failures.", nil, 1)
+}
+
+// newSignInCounterErrors creates
+// dustpan_signin_failure_counter_errors_total in reg.
+func newSignInCounterErrors(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_signin_failure_counter_errors_total",
+		"Failed calls of the shared sign-in failure counter by operation.",
+		[]string{labelOperation},
+		maxSignInCounterOperations,
+	)
+}
+
+// IncSignInCounterError adds one to the failed calls of the shared sign-in
+// failure counter for operation: SignInCounterAdd or SignInCounterPrune.
+// Any other operation counts nothing. While calls fail, each instance keeps
+// only its own budget of failed sign-ins. Operators alert when it grows.
+func (m *ServerMetrics) IncSignInCounterError(operation string) {
+	if operation != SignInCounterAdd && operation != SignInCounterPrune {
+		return
+	}
+
+	m.signin.Inc(operation)
 }

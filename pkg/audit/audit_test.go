@@ -1,6 +1,10 @@
 package audit_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,101 +106,235 @@ func TestComputeHashIsStableAndCoversTheFields(t *testing.T) {
 	}
 }
 
-func TestComputeHashKeepsEntriesWithoutACountValid(t *testing.T) {
+// encodedHash answers the hex SHA-256 of the documented encoding of
+// testEntry with the given previous hash, value count, object ID, changes
+// text and fence version: each field as its byte length, a colon and its
+// bytes. A count of "-" writes the marker of a count that is not set. The
+// test writes the encoding out, so it does not use the code under test to
+// compute the expected hash.
+func encodedHash(prevHash, valueCount, objectID, changes, fenceVersion string) string {
+	fields := []string{
+		"acme", "1", "admin", "", "", "unit:decrypt", "pulumi:acme/web/prod", "", "",
+		"1791806400000", "192.0.2.1", "pulumi-cli/3.200.0", "api", "reveal", "success", "req-1",
+		prevHash,
+	}
+
+	var sb strings.Builder
+
+	frame := func(s string) {
+		sb.WriteString(strconv.Itoa(len(s)))
+		sb.WriteByte(':')
+		sb.WriteString(s)
+	}
+
+	for _, field := range fields {
+		frame(field)
+	}
+
+	if valueCount == "-" {
+		sb.WriteByte('-')
+	} else {
+		frame(valueCount)
+	}
+
+	frame(objectID)
+	frame(changes)
+	frame(fenceVersion)
+
+	sum := sha256.Sum256([]byte(sb.String()))
+
+	return hex.EncodeToString(sum[:])
+}
+
+// TestComputeHashEncodesEveryField proves that the hash encoding writes
+// every field in a fixed order, each with its length, also when the field
+// is not set: no field is optional. A value count that is not set and the
+// value count 0 give different hashes, and fence version 0 is in the
+// encoding.
+func TestComputeHashEncodesEveryField(t *testing.T) {
 	t.Parallel()
 
-	// want pins the encoding of one fixed entry with a nil value count, as
-	// the code before the count computed it. An entry written before the
-	// count keeps its hash only while this hash stays.
-	const want = "a58b9c9f9ef0c3ce0e47e4137c6fed46c9ff48dfd1944380cdfe1d8c5de48b66"
+	zero := int64(0)
+	two := int64(2)
 
-	if got := audit.ComputeHash(testEntry(), ""); got != want {
-		t.Fatalf("hash of an entry with a nil count = %q, want %q", got, want)
+	cases := []struct {
+		name  string
+		edit  func(e *audit.Entry)
+		prev  string
+		count string
+		id    string
+		chg   string
+		fence string
+	}{
+		{"no field set", func(*audit.Entry) {}, "", "-", "", "", "0"},
+		{"previous hash", func(*audit.Entry) {}, "prev", "-", "", "", "0"},
+		{"value count 0", func(e *audit.Entry) { e.ValueCount = &zero }, "", "0", "", "", "0"},
+		{"value count 2", func(e *audit.Entry) { e.ValueCount = &two }, "", "2", "", "", "0"},
+		{"object ID", func(e *audit.Entry) { e.ObjectID = "stk-1" }, "", "-", "stk-1", "", "0"},
+		{"fence version", func(e *audit.Entry) { e.FenceVersion = 2 }, "", "-", "", "", "2"},
+		{"every field", func(e *audit.Entry) {
+			e.ValueCount = &two
+			e.ObjectID = "stk-1"
+			e.Changes = []audit.Change{{Key: "region", Old: nil, New: "eu-west", Layer: "file", TakesEffect: ""}}
+			e.FenceVersion = 3
+		}, "prev", "2", "stk-1", `[{"key":"region","new":"eu-west","layer":"file"}]`, "3"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			e := testEntry()
+			tc.edit(&e)
+
+			want := encodedHash(tc.prev, tc.count, tc.id, tc.chg, tc.fence)
+			if got := audit.ComputeHash(e, tc.prev); got != want {
+				t.Fatalf("hash = %s, want %s", got, want)
+			}
+		})
 	}
 }
 
-func TestComputeHashCoversTheValueCount(t *testing.T) {
+// TestComputeHashGoldenVector pins the hash of one entry in which every
+// field holds its own value, so a swap of two fields changes the hash. A
+// script outside Go computed the value from the documented encoding.
+func TestComputeHashGoldenVector(t *testing.T) {
 	t.Parallel()
 
-	before := audit.ComputeHash(testEntry(), "")
+	const want = "823dbad2fc04d01605baad7c996d536821e0ddfb729a262aeb0e2f44e3c9ff1d"
 
-	with := testEntry()
-	count := int64(2)
-	with.ValueCount = &count
+	count := int64(4)
+	e := testEntry()
+	e.Sequence = 7
+	e.IDPSubject = "idp-sub-1"
+	e.TokenID = "tok-1"
+	e.Version = "v3"
+	e.ValuePath = "secret.db"
+	e.RequestID = "req-9"
+	e.ValueCount = &count
+	e.ObjectID = "stk-1"
+	e.Changes = []audit.Change{{Key: "region", Old: nil, New: "eu-west", Layer: "file", TakesEffect: ""}}
+	e.FenceVersion = 5
 
-	got := audit.ComputeHash(with, "")
-	if got == "" {
-		t.Fatal("hash is empty")
-	}
-
-	if got == before {
-		t.Fatal("hash did not change after the value count changed")
-	}
-
-	if again := audit.ComputeHash(with, ""); again != got {
-		t.Fatalf("hash = %q, want stable %q", again, got)
-	}
-
-	other := testEntry()
-	otherCount := int64(3)
-	other.ValueCount = &otherCount
-
-	if same := audit.ComputeHash(other, ""); same == got {
-		t.Fatal("hash did not change after the value count changed")
+	if got := audit.ComputeHash(e, "prev-hash-6"); got != want {
+		t.Fatalf("hash = %s, want %s", got, want)
 	}
 }
 
-// TestComputeHashCoversTheObjectID proves that the hash covers a set object
-// ID, and that an entry with an empty object ID keeps the hash of the code
-// before the field: TestComputeHashKeepsEntriesWithoutACountValid pins it.
-func TestComputeHashCoversTheObjectID(t *testing.T) {
+// TestComputeHashTellsANilCountFromZero proves that an entry without a
+// value count and an entry with the value count 0 hash differently.
+func TestComputeHashTellsANilCountFromZero(t *testing.T) {
 	t.Parallel()
 
-	before := audit.ComputeHash(testEntry(), "")
+	zero := int64(0)
+	counted := testEntry()
+	counted.ValueCount = &zero
 
-	with := testEntry()
-	with.ObjectID = "stk-1"
-
-	got := audit.ComputeHash(with, "")
-	if got == before {
-		t.Fatal("hash did not change after the object ID was set")
-	}
-
-	other := testEntry()
-	other.ObjectID = "stk-2"
-
-	if same := audit.ComputeHash(other, ""); same == got {
-		t.Fatal("hash did not change after the object ID changed")
+	if audit.ComputeHash(counted, "") == audit.ComputeHash(testEntry(), "") {
+		t.Fatal("a nil value count and the value count 0 gave the same hash")
 	}
 }
 
-// TestComputeHashFixesTheOrderOfTheOptionalFields pins the encoding of the
-// optional fields after prevHash: value_count, then object_id, each only
-// when it is set. The audit, settings and soft-delete PRs agreed this order
-// (value_count, object_id, then changes), so an entry keeps its hash whatever
-// order the PRs merge in.
-func TestComputeHashFixesTheOrderOfTheOptionalFields(t *testing.T) {
+// hashSlot is one text field of the hash encoding that a collision test
+// can set: a field of the entry, the previous hash or the changes text.
+type hashSlot struct {
+	set  func(e *audit.Entry, prev, changes *string, v string)
+	name string
+}
+
+// hashSlots lists the text fields of the hash encoding in their order.
+// next is true when the slot after it in the list is also the field after
+// it in the encoding.
+//
+//nolint:gochecknoglobals // A fixed test table that several tests read.
+var hashSlots = []struct {
+	slot hashSlot
+	next bool
+}{
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.Subject = v }, "subject"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.IDPSubject = v }, "idp subject"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.TokenID = v }, "token ID"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.Action = v }, "action"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.Object = v }, "object"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.Version = v }, "version"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.ValuePath = v }, "value path"}, false},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.SourceIP = v }, "source IP"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.UserAgent = v }, "user agent"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.Channel = audit.Channel(v) }, "channel"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.Kind = audit.Kind(v) }, "kind"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.Outcome = audit.Outcome(v) }, "outcome"}, true},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.RequestID = v }, "request ID"}, true},
+	{hashSlot{func(_ *audit.Entry, prev, _ *string, v string) { *prev = v }, "previous hash"}, false},
+	{hashSlot{func(e *audit.Entry, _, _ *string, v string) { e.ObjectID = v }, "object ID"}, true},
+	{hashSlot{func(_ *audit.Entry, _, changes *string, v string) { *changes = v }, "changes"}, false},
+}
+
+// slotHash answers the stored hash of testEntry with the two slots set to
+// first and second.
+func slotHash(a, b hashSlot, first, second string) string {
+	e := testEntry()
+	prev, changes := "", ""
+	a.set(&e, &prev, &changes, first)
+	b.set(&e, &prev, &changes, second)
+
+	return audit.ComputeStoredHash(e, prev, changes)
+}
+
+// TestComputeHashHasNoCollisionAcrossAdjacentFields proves that bytes moved
+// from one field to the next change the hash, for each pair of adjacent
+// text fields, also when the bytes hold the old separator 0x1F.
+func TestComputeHashHasNoCollisionAcrossAdjacentFields(t *testing.T) {
 	t.Parallel()
 
-	const (
-		wantObjectID = "27bf6e010faa24ec19ce291310ab009791de303c31f867f003548d541533c298"
-		wantBoth     = "7a5ab76b68f08bbde3ebccda9e91110df4f2be9b852e060c4aae00e341d51e36"
-	)
+	for i := range len(hashSlots) - 1 {
+		if !hashSlots[i].next {
+			continue
+		}
+
+		a, b := hashSlots[i].slot, hashSlots[i+1].slot
+
+		t.Run(a.name+" and "+b.name, func(t *testing.T) {
+			t.Parallel()
+
+			left := slotHash(a, b, "x\x1fy", "z")
+			right := slotHash(a, b, "x", "y\x1fz")
+
+			if left == right {
+				t.Fatalf("moving bytes from %s to %s kept the hash %s", a.name, b.name, left)
+			}
+
+			if slotHash(a, b, "xy", "z") == slotHash(a, b, "x", "yz") {
+				t.Fatalf("moving one byte from %s to %s kept the hash", a.name, b.name)
+			}
+		})
+	}
+}
+
+// TestComputeHashHasNoKnownCollision proves that two pairs of entries that
+// gave the same hash under the old separator encoding now hash differently.
+func TestComputeHashHasNoKnownCollision(t *testing.T) {
+	t.Parallel()
+
+	first := testEntry()
+	first.Version = "v1\x1fsecret.a"
+	first.ValuePath = "b"
+
+	second := testEntry()
+	second.Version = "v1"
+	second.ValuePath = "secret.a\x1fb"
+
+	if audit.ComputeHash(first, "") == audit.ComputeHash(second, "") {
+		t.Fatal("a version and value path split at another place gave the same hash")
+	}
 
 	withID := testEntry()
-	withID.ObjectID = "stk-1"
+	withID.ObjectID = "stk-1\x1fchanges=X"
 
-	if got := audit.ComputeHash(withID, ""); got != wantObjectID {
-		t.Fatalf("hash with an object ID = %q, want %q", got, wantObjectID)
-	}
+	plain := testEntry()
+	plain.ObjectID = "stk-1"
 
-	both := testEntry()
-	count := int64(2)
-	both.ValueCount = &count
-	both.ObjectID = "stk-1"
-
-	if got := audit.ComputeHash(both, ""); got != wantBoth {
-		t.Fatalf("hash with a value count and an object ID = %q, want %q", got, wantBoth)
+	if audit.ComputeStoredHash(withID, "", "Y") == audit.ComputeStoredHash(plain, "", "X\x1fchanges=Y") {
+		t.Fatal("an object ID and changes split at another place gave the same hash")
 	}
 }
 
@@ -209,39 +347,5 @@ func TestPageNormalizedAppliesDefaultsAndCaps(t *testing.T) {
 
 	if got := (audit.Page{Number: 2, Size: audit.MaxPageSize + 1}).Normalized(); got.Size != audit.MaxPageSize {
 		t.Fatalf("oversize page = %+v, want capped at %d", got, audit.MaxPageSize)
-	}
-}
-
-// TestComputeHashCoversTheFenceVersion proves that the hash covers the
-// failover version of a namespace entry after the other optional fields,
-// that an entry with version 0 keeps the hash of the code before the field,
-// and pins the encoding, so another installation computes the same hash.
-func TestComputeHashCoversTheFenceVersion(t *testing.T) {
-	t.Parallel()
-
-	const wantFenced = "9037567e190eaf00bc4c1f3bdc6d00cd289ef98e7f0d6837070bbaec69d74aea"
-
-	before := audit.ComputeHash(testEntry(), "")
-
-	zero := testEntry()
-	zero.FenceVersion = 0
-
-	if got := audit.ComputeHash(zero, ""); got != before {
-		t.Fatalf("hash with fence version 0 = %q, want the hash without the field %q", got, before)
-	}
-
-	fenced := testEntry()
-	fenced.ObjectID = "stk-1"
-	fenced.FenceVersion = 2
-
-	got := audit.ComputeHash(fenced, "")
-	if got != wantFenced {
-		t.Fatalf("hash with an object ID and fence version 2 = %q, want %q", got, wantFenced)
-	}
-
-	fenced.FenceVersion = 3
-
-	if other := audit.ComputeHash(fenced, ""); other == got {
-		t.Fatal("hash did not change after the fence version changed")
 	}
 }

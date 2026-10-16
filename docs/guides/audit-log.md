@@ -83,13 +83,17 @@ An entry holds these fields:
   restore and purge of a unit. The list omits it when the entry has none.
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
-  After `prevHash`, the encoding appends each optional field that the entry
-  sets, in this fixed order: `value_count=` with the decimal count, then
-  `object_id=` with the stable ID of the unit (ADR 47), then `changes=` with
-  the canonical JSON of the changes (sorted by key), as the store holds
-  it. An
-  optional field that the entry does not set adds nothing, so an entry
-  written before the field keeps its hash.
+  The encoding writes each field as its length in bytes (decimal), a
+  colon and the bytes of the field, with nothing between the fields. For
+  example, the subject `admin` is `5:admin` and an empty field is `0:`.
+  After `prevHash`, the encoding always writes four more fields, in this
+  fixed order: the decimal value count, the stable ID of the unit, the
+  canonical JSON of the changes (sorted by key) as the store holds it, and
+  the decimal failover version of the namespace (0 in `@server`). No field
+  is optional. An entry with no value count writes one `-` in place of the
+  count, so an entry with no count (`-`) and an entry with the count 0
+  (`1:0`) have different hashes. Because each field carries its length,
+  two different entries never give the same encoding.
   The first entry of a namespace has an empty `prevHash`.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
@@ -135,6 +139,16 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=acme&page[size]=50"
 ```
 
+`GET /api/audit/entries/<sequence>?organization=<namespace>` reads one
+entry of the namespace by its sequence, in the same shape as an entry of the
+list. It needs the same action. A sequence that the namespace does not hold
+answers 404.
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/audit/entries/7?organization=acme"
+```
+
 `GET /api/audit/check?organization=<namespace>` walks the chain of the
 namespace oldest first and answers whether it is valid.
 It needs the same action.
@@ -152,7 +166,8 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 The installation writes the entries of an action that is not in a namespace,
 such as a namespace create, to the scope `@server`. Read that scope with
 `organization=@server`. It needs the action `server:read-audit` on the
-installation instead, and the same paging. The check works the same way:
+installation instead, and the same paging. The read of one entry and the
+check work the same way:
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
@@ -225,7 +240,7 @@ The entry hash is the hash of the stored fields of the entry with an empty `prev
 The hash takes no key: any installation can compute it again from the stored fields.
 Each entry of a namespace holds `fenceVersion`, the failover version of the namespace when the server appended it.
 The hash covers it, so a verifier can see where a forced failover forked the chain of a namespace.
-Entries in `@server`, and entries from before the field, hold 0, and the audit API omits the field for them.
+Entries in `@server` hold 0. The hash covers the 0, and the audit API omits the field for them.
 A verifier who kept a digest outside the database can compute it again from the old rows.
 So the verifier can prove that the old rows did not change after the chain started.
 
@@ -257,7 +272,11 @@ A restore that stops after the swap gets the comparison at the next start.
 A restore trusts the audit log in the backup: signed checkpoints (see below) protect a backup.
 
 The server checks the chain of every namespace and of `@server` at start and every hour.
-`dustpan_audit_chain_invalid` holds the count of scopes whose check failed.
+`dustpan_audit_chain_invalid` holds the count of scopes whose chain or checkpoints do not match.
+When a database read, a blob read or a checkpoint write fails, the server does not check that scope.
+It logs a warning and adds one to `dustpan_audit_chain_check_errors_total`.
+Such a check does not lower `dustpan_audit_chain_invalid`.
+A failed read during the check of a restored log also adds one to `dustpan_audit_chain_check_errors_total`.
 
 ```yaml
       - alert: DustpanAuditChainInvalid
@@ -266,6 +285,12 @@ The server checks the chain of every namespace and of `@server` at start and eve
           severity: critical
         annotations:
           summary: An OpenDustpan audit chain does not match
+      - alert: DustpanAuditChainCheckErrors
+        expr: increase(dustpan_audit_chain_check_errors_total[3h]) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: The OpenDustpan audit chain check cannot read the log
       - alert: DustpanAuditRestoreCheckFailed
         expr: increase(dustpan_audit_restore_check_failures_total[1h]) > 0
         labels:
@@ -482,8 +507,7 @@ Trim never shortens `truncated`, `scope`, `sequence`, `time`, `action`, `kind`, 
 `scope`, `sequence`, `prevHash` and `hash` stay whole. A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
 A record with `"truncated": true` has a `hash` that the receiver cannot recompute from the shipped fields.
 The full entry stays in the server audit log, and the chain check on the server covers it.
-Read the full entry through the entry list, for example `GET /api/audit/entries?organization=acme&page[size]=50`, and find the entry with the same `sequence`.
-There is no route that reads one entry by scope and sequence.
+Read the full entry by its `scope` and `sequence`, for example `GET /api/audit/entries/7?organization=acme`.
 Only an entry that cannot fit even with every trimmable field empty is skipped.
 The server counts it in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
 

@@ -983,6 +983,8 @@ func classifyUpdate(err error) (int, string) {
 		return http.StatusRequestEntityTooLarge, err.Error()
 	case errors.Is(err, stack.ErrJournalBuildTimeout):
 		return http.StatusServiceUnavailable, err.Error()
+	case errors.Is(err, namespace.ErrUnavailable):
+		return http.StatusServiceUnavailable, namespace.ErrUnavailable.Error() + ": try again"
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}
