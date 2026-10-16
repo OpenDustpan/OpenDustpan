@@ -1804,6 +1804,7 @@ func newServerHandler(
 		},
 		DeletedUnits: deps.services.deleted,
 		TempAdmins:   tempReaderOf(cfg.namespaceStore),
+		Now:          cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -2419,6 +2420,10 @@ func withRequestLog(
 
 		ctx = requestid.WithContext(ctx, id)
 		ctx = authgate.WithRequest(ctx, gateSource(resolved))
+		// The request log and the adapter resolve the token separately. The
+		// scope keeps one sign-in entry of a temporary administrator for
+		// the request.
+		ctx = tempadmin.WithSignInScope(ctx)
 
 		r = r.WithContext(ctx)
 

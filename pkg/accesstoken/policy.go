@@ -28,6 +28,11 @@ const (
 	MinInactivity = time.Hour
 )
 
+// ErrBreakGlassUnavailable reports a policy that turns on the disable of
+// the break-glass credential. That credential has no stored record until
+// ADR 57, so the switch would have no effect.
+var ErrBreakGlassUnavailable = fmt.Errorf("%w: disableBreakGlass has no effect until ADR 57", ErrInvalid)
+
 // Policy is the administrator setting of the token life cycle (ADR 53,
 // decisions 2, 4, 5 and 6). It belongs to the installation.
 //
@@ -36,11 +41,9 @@ const (
 // token or a user account. Zero turns the disable off: an administrator can
 // set no limit. DisableTokens and DisableAccounts turn the disable on for
 // access tokens and for user accounts (principals of the kind person).
-// DisableBreakGlass turns it on for temporary administrators, which are
-// exempt by default (decision 5). Break-glass is on by default: the flag is
-// false. A site administrator can turn it off by setting the flag, without
-// any effect on the host recovery path, which works either way. UpdatedAt
-// is the time of the last change, or zero for the seeded defaults.
+// DisableBreakGlass turns it on for the break-glass credential of ADR 57,
+// which is exempt by default (decision 5). UpdatedAt is the time of the last
+// change, or zero for the seeded defaults.
 type Policy struct {
 	UpdatedAt         time.Time
 	MaxLifetime       time.Duration
@@ -64,8 +67,8 @@ func DefaultPolicy() Policy {
 
 // Validate reports whether p holds usable values: a maximum lifetime of one
 // second to MaxPolicyDuration, an inactivity period of zero or MinInactivity
-// to MaxPolicyDuration, both whole milliseconds. The break-glass disable is
-// a plain switch: on or off both validate.
+// to MaxPolicyDuration, both whole milliseconds, and the break-glass disable
+// off. It returns ErrBreakGlassUnavailable when DisableBreakGlass is set.
 func (p Policy) Validate() error {
 	switch {
 	case p.MaxLifetime < time.Second || p.MaxLifetime > MaxPolicyDuration:
@@ -75,6 +78,8 @@ func (p Policy) Validate() error {
 			MinInactivity, MaxPolicyDuration)
 	case p.MaxLifetime%time.Millisecond != 0 || p.Inactivity%time.Millisecond != 0:
 		return fmt.Errorf("%w: a period is not a whole count of milliseconds", ErrInvalid)
+	case p.DisableBreakGlass:
+		return ErrBreakGlassUnavailable
 	default:
 		return nil
 	}
@@ -127,15 +132,11 @@ func (p Policy) accountInactiveAt(o Owner, now time.Time) bool {
 // its creation, its activity baseline (set by an enable and, for the
 // records that existed before the policy, by its migration), and the
 // creation and the last use of each of its tokens. Tokens and Accounts name
-// what the run disables. ExceptTempAdmins keeps the temporary
-// administrators that still work: while break-glass is on, the run never
-// disables their tokens or their accounts for inactivity. Their fixed
-// expiry still ends them.
+// what the run disables.
 type Sweep struct {
-	Inactivity       time.Duration
-	Tokens           bool
-	Accounts         bool
-	ExceptTempAdmins bool
+	Inactivity time.Duration
+	Tokens     bool
+	Accounts   bool
 }
 
 // SweptToken names one token that a sweep disabled and its principal.

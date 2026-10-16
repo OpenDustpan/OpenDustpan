@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -103,8 +104,12 @@ func (s *Store) ListTempAdmins(ctx context.Context) ([]tempadmin.TempAdmin, erro
 	return out, nil
 }
 
-// ExpireTempAdmin implements tempadmin.Store: it disables the principal at
-// e.At and drops its record, with the entry e in the same transaction.
+// ExpireTempAdmin implements tempadmin.Store: at e.At it disables the
+// principal, ends every site-administrator grant of the principal on the
+// installation and ends the host-recovery tokens of the principal, with the
+// entry e in the same transaction. The record stays as a tombstone, so a
+// later use is still denied. A record that already ended answers
+// tempadmin.ErrExpired and writes no second entry.
 func (s *Store) ExpireTempAdmin(ctx context.Context, principalID string, e audit.Entry) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -118,17 +123,35 @@ func (s *Store) ExpireTempAdmin(ctx context.Context, principalID string, e audit
 
 		disable := db.DisablePrincipalForExpiryParams{DisabledAtMs: codec.Millis(e.At), ID: principalID}
 
-		if _, err := q.DisablePrincipalForExpiry(ctx, disable); err != nil {
+		n, err := q.DisablePrincipalForExpiry(ctx, disable)
+		if err != nil {
 			return fmt.Errorf("disable principal %q: %w", principalID, err)
 		}
 
-		n, err := q.DeleteTempAdmin(ctx, principalID)
-		if err != nil {
-			return fmt.Errorf("delete temporary administrator: %w", err)
+		if n == 0 {
+			return tempadmin.ErrExpired
 		}
 
-		if n == 0 {
-			return tempadmin.ErrNotFound
+		grants := db.RevokeTempAdminSiteGrantsParams{
+			RevokedAtMs: nullMillis(codec.Millis(e.At)),
+			RevokedBy:   e.Subject,
+			SubjectID:   principalID,
+			Target:      identity.ServerObject().String(),
+		}
+
+		if _, err := q.RevokeTempAdminSiteGrants(ctx, grants); err != nil {
+			return fmt.Errorf("end site-administrator grants of %q: %w", principalID, err)
+		}
+
+		tokens := db.RevokeTempAdminHostTokensParams{
+			RevokedAtMs: nullMillis(codec.Millis(e.At)),
+			PrincipalID: principalID,
+			Name:        tempadmin.HostTokenName,
+			ExpiresAtMs: codec.Millis(e.At),
+		}
+
+		if _, err := q.RevokeTempAdminHostTokens(ctx, tokens); err != nil {
+			return fmt.Errorf("end host-recovery tokens of %q: %w", principalID, err)
 		}
 
 		return nil

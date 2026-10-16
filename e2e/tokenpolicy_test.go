@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,35 +110,20 @@ func runTokenPolicyOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		http.StatusCreated,
 	}, &person)
 
-	checkBreakGlassStored(ctx, t, env)
+	checkBreakGlassRefused(ctx, t, env)
 	checkMaxLifetime(ctx, t, env, service)
 	checkInactivityPolicy(ctx, t, env, service, person)
 }
 
-// checkBreakGlassStored turns the break-glass disable on and off again: a
-// site administrator can turn break-glass off, and the stored policy keeps
-// the switch. The host recovery path works either way.
-func checkBreakGlassStored(ctx context.Context, t *testing.T, env *e2e.Env) {
+// checkBreakGlassRefused turns on the disable of the break-glass credential:
+// it answers 400, because that credential has no stored record yet.
+func checkBreakGlassRefused(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	var on e2eTokenPolicy
-
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPatch, "/api/server/token-policy", `{"disableBreakGlass":true}`, http.StatusOK,
-	}, &on)
-
-	if !on.DisableBreakGlass {
-		t.Fatalf("policy after disable = %+v, want the break-glass disable on", on)
-	}
-
-	var off e2eTokenPolicy
-
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPatch, "/api/server/token-policy", `{"disableBreakGlass":false}`, http.StatusOK,
-	}, &off)
-
-	if off.DisableBreakGlass {
-		t.Fatalf("policy after enable = %+v, want the break-glass disable off", off)
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodPatch, "/api/server/token-policy",
+		`{"disableBreakGlass":true}`)
+	if err != nil || status != http.StatusBadRequest || !strings.Contains(body, "disableBreakGlass has no effect") {
+		t.Fatalf("break-glass disable = %d, %v (%s); want 400 that names the break-glass switch", status, err, body)
 	}
 }
 

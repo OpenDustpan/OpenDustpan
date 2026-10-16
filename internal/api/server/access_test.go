@@ -596,10 +596,9 @@ func TestEnableNeedsGrantActions(t *testing.T) {
 	f.seed(t, "sam", access.RoleSiteAdministrator, identity.ServerObject())
 
 	_, err := f.store.SweepInactive(t.Context(), accesstoken.Sweep{
-		ExceptTempAdmins: false,
-		Inactivity:       time.Hour,
-		Tokens:           false,
-		Accounts:         true,
+		Inactivity: time.Hour,
+		Tokens:     false,
+		Accounts:   true,
 	}, storetest.ServerChange)
 	if err != nil {
 		t.Fatalf("sweep inactive: %v", err)

@@ -189,11 +189,11 @@ The administrator settings of the access token life cycle for the installation: 
 The job that disables an access token or a user account after a set period with no use. The default period is 90 days. An administrator can change the period or turn the job off (ADR 53).
 
 **Temporary administrator**:
-A principal of the kind person that the host command makes for one named person after every administrator is lost. It works until a fixed expiry of 24 hours, and then the server disables it. The API marks it with a flag, so the console shows a banner for it. Each step writes an audit entry: the create, each sign-in, and the expiry. A second host run for the same person issues a new token for the time that is left.
+A principal of the kind person that the host command makes for one named person after every administrator is lost. It works until a fixed expiry of 24 hours, and then the server disables it. The API marks it with a flag, so the console shows a banner for it. Each step writes an audit entry: the create, each sign-in, and the expiry. A second host run for the same person is refused: the name must name no principal that exists.
 _Avoid_: Shared admin account, emergency account
 
 **Break-glass**:
-The recovery path through the host command. It is on by default: the inactivity disable never ends a temporary administrator that still works. A site administrator can turn it off in the token policy. The host command works whether it is on or off.
+The recovery path through the host command. It is on: the inactivity disable never ends a temporary administrator that still works, and only the fixed expiry ends it.
 _Avoid_: Backdoor
 
 **Service token**:

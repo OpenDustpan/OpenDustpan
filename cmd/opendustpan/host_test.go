@@ -105,8 +105,7 @@ func openHostStore(ctx context.Context, t *testing.T, db string) *sqlite.Store {
 // TestHostCreateTempAdmin makes a temporary administrator for one named
 // person through the database only: no listener serves. It proves the
 // fixed expiry, the banner record, the usable token, and one audit entry
-// for each step, then proves that a second run issues a new token for the
-// time that is left.
+// for each step.
 func TestHostCreateTempAdmin(t *testing.T) {
 	t.Parallel()
 
@@ -122,18 +121,31 @@ func TestHostCreateTempAdmin(t *testing.T) {
 	p := checkHostRecords(ctx, t, st, creds)
 	checkHostToken(ctx, t, st, creds.token, "alice")
 	checkHostAudit(ctx, t, st, p)
+}
 
-	again := parseHostOutput(t, runHost(ctx, t, "host", "create-temp-admin", "--database", db, "alice"))
+// TestHostRefusesAnExistingPerson refuses a host run for a person that a
+// principal already holds, with an error that names the person and the one
+// command that helps. Reusing the principal would end a normal account at
+// the expiry of the record.
+func TestHostRefusesAnExistingPerson(t *testing.T) {
+	t.Parallel()
 
-	if again.token == creds.token {
-		t.Fatal("second run issued the same secret, want a new token")
+	ctx := t.Context()
+	db := hostTestDB(t)
+
+	runHost(ctx, t, "host", "create-temp-admin", "--database", db, "alice")
+
+	var stdout, stderr bytes.Buffer
+
+	err := run(ctx, []string{"host", "create-temp-admin", "--database", db, "alice"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("second host run succeeded, want a refusal")
 	}
 
-	if !again.expires.Equal(creds.expires) {
-		t.Fatalf("second expiry = %s, want the fixed %s", again.expires, creds.expires)
+	if !strings.Contains(err.Error(), `person "alice" already exists`) ||
+		!strings.Contains(err.Error(), "opendustpan host create-temp-admin <person>") {
+		t.Fatalf("refusal = %v, want the person and the command that helps", err)
 	}
-
-	checkHostToken(ctx, t, st, again.token, "alice")
 }
 
 // checkHostExpiry proves the printed expiry is the fixed lifetime away.
@@ -163,6 +175,10 @@ func checkHostRecords(
 
 	if !rec.ExpiresAt.Equal(creds.expires) {
 		t.Fatalf("record expiry = %s, want the printed %s", rec.ExpiresAt, creds.expires)
+	}
+
+	if rec.CreatedBy == "" {
+		t.Fatal("temporary administrator names no creator, want the OS user of the host run")
 	}
 
 	p, err := st.GetPrincipalBySubject(ctx, "alice")
@@ -257,9 +273,10 @@ func TestHostNeedsAPerson(t *testing.T) {
 	}
 }
 
-// TestHostTokenSurvivesBreakGlassOff proves the host path works with the
-// break-glass disable on: the policy switch never gates recovery.
-func TestHostTokenSurvivesBreakGlassOff(t *testing.T) {
+// TestHostWorksWhileBreakGlassDisableIsRefused proves the host path works
+// while the break-glass disable stays refused: turning the switch on
+// answers ErrBreakGlassUnavailable, and the host recovery still signs in.
+func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
@@ -281,8 +298,8 @@ func TestHostTokenSurvivesBreakGlassOff(t *testing.T) {
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: &off,
 	}
 
-	if _, err := tokens.SetPolicy(ctx, hostPolicyEntry(), change); err != nil {
-		t.Fatalf("turn break-glass off: %v", err)
+	if _, err := tokens.SetPolicy(ctx, hostPolicyEntry(), change); !errors.Is(err, accesstoken.ErrBreakGlassUnavailable) {
+		t.Fatalf("set break-glass disable = %v, want ErrBreakGlassUnavailable", err)
 	}
 
 	creds := parseHostOutput(t, runHost(ctx, t, "host", "create-temp-admin", "--database", db, "bob"))
@@ -292,7 +309,7 @@ func TestHostTokenSurvivesBreakGlassOff(t *testing.T) {
 	}
 
 	if _, err := tokens.AuthenticateToken(ctx, creds.token); err != nil {
-		t.Fatalf("authenticate with break-glass off: %v", err)
+		t.Fatalf("authenticate with the break-glass disable refused: %v", err)
 	}
 }
 
@@ -301,7 +318,7 @@ func hostPolicyEntry() audit.Entry {
 	return audit.Entry{
 		At:         time.Time{},
 		Namespace:  "",
-		Subject:    "host",
+		Subject:    tempadmin.HostSubject,
 		IDPSubject: "",
 		TokenID:    "",
 		Action:     "server:manage-token-policy",

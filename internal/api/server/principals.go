@@ -33,6 +33,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // maxPrincipalBodyBytes bounds a principal or group body. The fields hold at
@@ -188,11 +189,26 @@ func principalOf(p principal.Principal) principalResponse {
 
 // markTempAdmin sets the banner flag on each principal of the installation
 // in body that still works as a temporary administrator. Without a reader
-// the body passes through unchanged. Only persons are looked up: only a
-// person holds a record.
+// the body passes through unchanged. It reads every record once, not one
+// per principal. Only persons are marked: only a person holds a record.
 func (h *Handler) markTempAdmin(ctx context.Context, body any) any {
 	if h.tempAdmins == nil {
 		return body
+	}
+
+	records, err := h.tempAdmins.ListTempAdmins(ctx)
+	if err != nil {
+		return body
+	}
+
+	now := h.now()
+
+	active := make(map[string]tempadmin.TempAdmin, len(records))
+
+	for _, rec := range records {
+		if rec.ActiveAt(now) {
+			active[rec.Subject] = rec
+		}
 	}
 
 	mark := func(res principalResponse) principalResponse {
@@ -200,8 +216,8 @@ func (h *Handler) markTempAdmin(ctx context.Context, body any) any {
 			return res
 		}
 
-		rec, err := h.tempAdmins.GetTempAdminBySubject(ctx, res.Subject)
-		if err != nil || !rec.ActiveAt(time.Now().UTC()) {
+		rec, ok := active[res.Subject]
+		if !ok {
 			return res
 		}
 

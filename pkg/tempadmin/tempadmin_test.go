@@ -3,10 +3,13 @@ package tempadmin_test
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"slices"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/clientip"
+	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -19,14 +22,16 @@ func baseTime() time.Time {
 }
 
 // fakeStore is an in-memory tempadmin.Store that records the audit entries
-// of its writes.
+// of its writes. Like the SQL adapters it keeps an expired record as a
+// tombstone and ends it only once.
 type fakeStore struct {
-	records map[string]tempadmin.TempAdmin
-	entries []audit.Entry
+	records  map[string]tempadmin.TempAdmin
+	disabled map[string]bool
+	entries  []audit.Entry
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{records: map[string]tempadmin.TempAdmin{}, entries: nil}
+	return &fakeStore{records: map[string]tempadmin.TempAdmin{}, disabled: map[string]bool{}, entries: nil}
 }
 
 func (f *fakeStore) CreateTempAdmin(
@@ -84,7 +89,11 @@ func (f *fakeStore) ExpireTempAdmin(_ context.Context, id string, e audit.Entry)
 		return tempadmin.ErrNotFound
 	}
 
-	delete(f.records, id)
+	if f.disabled[id] {
+		return tempadmin.ErrExpired
+	}
+
+	f.disabled[id] = true
 	f.entries = append(f.entries, e)
 
 	return nil
@@ -280,8 +289,22 @@ func TestSweepDisablesOnlyExpiredRecords(t *testing.T) {
 		t.Fatalf("list after sweep: %v", err)
 	}
 
-	if len(rest) != 0 {
-		t.Fatalf("records after sweep = %d, want none", len(rest))
+	if len(rest) != 2 {
+		t.Fatalf("records after sweep = %d, want both tombstones", len(rest))
+	}
+
+	// A second sweep ends nothing again and writes no second entry.
+	again, err := later.Sweep(t.Context(), callerEntry())
+	if err != nil {
+		t.Fatalf("second sweep after expiry: %v", err)
+	}
+
+	if len(again) != 0 {
+		t.Fatalf("second sweep disabled %v, want none", again)
+	}
+
+	if len(store.entries) != 4 {
+		t.Fatalf("audit entries = %d, want no second expiry entry", len(store.entries))
 	}
 }
 
@@ -375,6 +398,78 @@ func TestDecoratorSetsTheFlagAndWritesASignInEntry(t *testing.T) {
 			e.Object != tempadmin.Ref("prn-alice") {
 			t.Fatalf("sign-in entry = %+v, want the subject, the token and the record", e)
 		}
+	}
+}
+
+// TestDecoratorWritesOneSignInEntryPerRequest proves the request log and
+// the adapter resolve the token twice but write one entry: the second use
+// in the scope of one request carries the flag with no second entry. The
+// entry holds the client address and the request ID of the request.
+func TestDecoratorWritesOneSignInEntryPerRequest(t *testing.T) {
+	t.Parallel()
+
+	store := newFakeStore()
+	svc := testService(store)
+
+	in := tempadmin.Input{Subject: "alice", PrincipalID: "prn-alice", CreatedBy: "host"}
+
+	if _, err := svc.Create(t.Context(), callerEntry(), in); err != nil {
+		t.Fatalf("create temporary administrator: %v", err)
+	}
+
+	audits := newFakeAudit()
+
+	caller := identity.Principal{
+		Subject:                "alice",
+		DisplayName:            "alice",
+		Admin:                  false,
+		TokenID:                "tok-alice",
+		TokenExpiresAt:         time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+	}
+
+	dec := signInDecorator(t, store, audits, caller)
+
+	ctx := tempadmin.WithSignInScope(t.Context())
+	ctx = clientip.WithAddr(ctx, netip.MustParseAddr("192.0.2.7"))
+	ctx = requestid.WithContext(ctx, "req-1")
+
+	for i := range 2 {
+		checkSignedInWith(t, dec, ctx, i)
+	}
+
+	if len(audits.entries) != 1 {
+		t.Fatalf("sign-in entries = %d, want one for the request", len(audits.entries))
+	}
+
+	e := audits.entries[0]
+
+	if e.SourceIP != "192.0.2.7" || e.RequestID != "req-1" {
+		t.Fatalf("sign-in entry = %+v, want the client address and the request ID", e)
+	}
+
+	if e.Subject != "alice" || e.Outcome != audit.OutcomeSuccess {
+		t.Fatalf("sign-in entry = %+v, want the subject with a success outcome", e)
+	}
+}
+
+// checkSignedInWith proves one use in ctx carries the banner flag with the
+// fixed expiry.
+func checkSignedInWith(t *testing.T, dec *tempadmin.Decorator, ctx context.Context, i int) {
+	t.Helper()
+
+	got, err := dec.AuthenticateToken(ctx, "good")
+	if err != nil {
+		t.Fatalf("sign-in %d: %v", i, err)
+	}
+
+	if !got.TemporaryAdministrator {
+		t.Fatalf("sign-in %d: flag is false, want true for the banner", i)
+	}
+
+	if !got.TemporaryExpiresAt.Equal(baseTime().Add(tempadmin.Lifetime)) {
+		t.Fatalf("sign-in %d: expiry = %s, want the fixed expiry", i, got.TemporaryExpiresAt)
 	}
 }
 
@@ -479,9 +574,13 @@ func TestDecoratorDeniesAnExpiredRecordAndDisablesIt(t *testing.T) {
 		t.Fatalf("expired sign-in = %v, want unauthenticated wrapping expired", err)
 	}
 
-	_, err = store.GetTempAdmin(t.Context(), "prn-alice")
-	if !errors.Is(err, tempadmin.ErrNotFound) {
-		t.Fatalf("record after expiry = %v, want ErrNotFound", err)
+	rec, err = store.GetTempAdmin(t.Context(), "prn-alice")
+	if err != nil {
+		t.Fatalf("record after expiry = %v, want the tombstone", err)
+	}
+
+	if rec.ActiveAt(baseTime().Add(tempadmin.Lifetime)) {
+		t.Fatal("tombstone is still active after its expiry")
 	}
 
 	if len(store.entries) != 2 {
@@ -490,6 +589,16 @@ func TestDecoratorDeniesAnExpiredRecordAndDisablesIt(t *testing.T) {
 
 	if len(audits.entries) != 0 {
 		t.Fatalf("sign-in entries = %d, want none for a denied use", len(audits.entries))
+	}
+
+	// A later use is still denied and writes no second expiry entry.
+	_, err = dec.AuthenticateToken(t.Context(), "good")
+	if !errors.Is(err, identity.ErrUnauthenticated) || !errors.Is(err, tempadmin.ErrExpired) {
+		t.Fatalf("second expired sign-in = %v, want unauthenticated wrapping expired", err)
+	}
+
+	if len(store.entries) != 2 {
+		t.Fatalf("store entries = %d, want no second expiry entry", len(store.entries))
 	}
 }
 

@@ -1690,7 +1690,7 @@ const disableInactiveAccessTokensExceptTemp = `-- name: DisableInactiveAccessTok
 UPDATE access_tokens SET disabled_at_ms = CAST(?1 AS INTEGER)
 WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > CAST(?1 AS INTEGER)
   AND COALESCE(last_used_at_ms, created_at_ms) <= CAST(?2 AS INTEGER)
-  AND principal_id NOT IN (SELECT principal_id FROM temp_admins)
+  AND principal_id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > CAST(?1 AS INTEGER))
 RETURNING id, principal_id
 `
 
@@ -1706,7 +1706,8 @@ type DisableInactiveAccessTokensExceptTempRow struct {
 
 // As DisableInactiveAccessTokens, but keeps the tokens of the principals
 // that still work as temporary administrators: while break-glass is on,
-// the inactivity disable never ends them.
+// the inactivity disable never ends them. An expired record is a tombstone,
+// not an exemption: it never keeps a token.
 func (q *Queries) DisableInactiveAccessTokensExceptTemp(ctx context.Context, arg DisableInactiveAccessTokensExceptTempParams) ([]DisableInactiveAccessTokensExceptTempRow, error) {
 	rows, err := q.db.QueryContext(ctx, disableInactiveAccessTokensExceptTemp, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -1786,7 +1787,7 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
     WHERE t.principal_id = principals.id
       AND (t.created_at_ms > CAST(?2 AS INTEGER) OR t.last_used_at_ms > CAST(?2 AS INTEGER))
   )
-  AND id NOT IN (SELECT principal_id FROM temp_admins)
+  AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > CAST(?1 AS INTEGER))
 RETURNING id
 `
 
@@ -1796,7 +1797,8 @@ type DisableInactivePrincipalsExceptTempParams struct {
 }
 
 // As DisableInactivePrincipals, but keeps the principals that still work as
-// temporary administrators.
+// temporary administrators. An expired record is a tombstone, not an
+// exemption: it never keeps a principal.
 func (q *Queries) DisableInactivePrincipalsExceptTemp(ctx context.Context, arg DisableInactivePrincipalsExceptTempParams) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, disableInactivePrincipalsExceptTemp, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -6406,6 +6408,65 @@ type RevokeGrantsOnTargetParams struct {
 // access-review history (ADR 52, decision 10).
 func (q *Queries) RevokeGrantsOnTarget(ctx context.Context, arg RevokeGrantsOnTargetParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, revokeGrantsOnTarget, arg.RevokedAtMs, arg.RevokedBy, arg.Target)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const revokeTempAdminHostTokens = `-- name: RevokeTempAdminHostTokens :execrows
+UPDATE access_tokens SET revoked_at_ms = ?
+WHERE principal_id = ? AND name = ? AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND expires_at_ms > CAST(?4 AS INTEGER)
+`
+
+type RevokeTempAdminHostTokensParams struct {
+	RevokedAtMs sql.NullInt64
+	PrincipalID string
+	Name        string
+	ExpiresAtMs int64
+}
+
+// Ends the live host-recovery tokens of the principal at the expiry of its
+// temporary administrator record. Tokens that already ended stay as they
+// are.
+func (q *Queries) RevokeTempAdminHostTokens(ctx context.Context, arg RevokeTempAdminHostTokensParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeTempAdminHostTokens,
+		arg.RevokedAtMs,
+		arg.PrincipalID,
+		arg.Name,
+		arg.ExpiresAtMs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const revokeTempAdminSiteGrants = `-- name: RevokeTempAdminSiteGrants :execrows
+UPDATE grants SET revoked_at_ms = ?, revoked_by = ?
+WHERE subject_kind = 'principal' AND subject_id = ? AND role = 'site-administrator'
+  AND target = ? AND revoked_at_ms IS NULL
+`
+
+type RevokeTempAdminSiteGrantsParams struct {
+	RevokedAtMs sql.NullInt64
+	RevokedBy   string
+	SubjectID   string
+	Target      string
+}
+
+// Ends every live site-administrator grant of the principal on the
+// installation at the expiry of its temporary administrator record. The
+// rows stay for the access-review history. Revoked grants never come back:
+// an enable after the expiry finds no grant to restore.
+func (q *Queries) RevokeTempAdminSiteGrants(ctx context.Context, arg RevokeTempAdminSiteGrantsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeTempAdminSiteGrants,
+		arg.RevokedAtMs,
+		arg.RevokedBy,
+		arg.SubjectID,
+		arg.Target,
+	)
 	if err != nil {
 		return 0, err
 	}

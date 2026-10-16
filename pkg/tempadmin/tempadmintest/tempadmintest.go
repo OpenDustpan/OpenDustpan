@@ -9,21 +9,28 @@ package tempadmintest
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
 // Store is the store under test: the temporary administrator port with the
-// principal records that it refers to.
+// principal records that it refers to, and the grants and the access tokens
+// that the expiry ends.
 type Store interface {
 	tempadmin.Store
 	principal.RecordStore
+	access.GrantStore
+	accesstoken.Store
 }
 
 // Factory returns a fresh, empty store for one subtest.
@@ -43,8 +50,11 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "record of a missing principal is principal.ErrNotFound", test: testMissingPrincipal},
 		{name: "missing record is ErrNotFound", test: testMissing},
 		{name: "list orders by expiry", test: testList},
-		{name: "expiry disables the principal and drops the record", test: testExpire},
+		{name: "expiry disables the principal and keeps the record", test: testExpire},
 		{name: "expiry of a missing record is ErrNotFound", test: testExpireMissing},
+		{name: "a second expiry is ErrExpired and writes nothing", test: testExpireTwice},
+		{name: "expiry ends the site-administrator grant", test: testExpireEndsGrant},
+		{name: "expiry ends the host-recovery tokens", test: testExpireEndsTokens},
 		{name: "each write appends its audit entry in @server", test: testAuditEntries},
 	}
 
@@ -265,15 +275,18 @@ func testExpire(t *testing.T, s Store) {
 	t.Helper()
 
 	mustPrincipal(t, s, "prn-alice", "alice")
-	mustRecord(t, s, "prn-alice", "alice", 0)
+	want := mustRecord(t, s, "prn-alice", "alice", 0)
 
 	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
 		t.Fatalf("expire temporary administrator: %v", err)
 	}
 
-	if _, err := s.GetTempAdmin(t.Context(), "prn-alice"); !errors.Is(err, tempadmin.ErrNotFound) {
-		t.Fatalf("get after expiry = %v, want ErrNotFound", err)
+	got, err := s.GetTempAdmin(t.Context(), "prn-alice")
+	if err != nil {
+		t.Fatalf("get after expiry = %v, want the tombstone", err)
 	}
+
+	equalRecord(t, got, want)
 
 	p, err := s.GetPrincipal(t.Context(), "prn-alice")
 	if err != nil {
@@ -290,6 +303,128 @@ func testExpireMissing(t *testing.T, s Store) {
 
 	err := s.ExpireTempAdmin(t.Context(), "prn-ghost", entry(tempadmin.Ref("prn-ghost")))
 	wantErr(t, "expiry of a missing record", err, tempadmin.ErrNotFound)
+}
+
+func testExpireTwice(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, "prn-alice", "alice")
+	mustRecord(t, s, "prn-alice", "alice", 0)
+
+	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
+		t.Fatalf("expire temporary administrator: %v", err)
+	}
+
+	err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice")))
+	wantErr(t, "second expiry", err, tempadmin.ErrExpired)
+
+	if _, err := s.GetTempAdmin(t.Context(), "prn-alice"); err != nil {
+		t.Fatalf("get after the second expiry = %v, want the tombstone", err)
+	}
+}
+
+// mustGrant gives the principal id the site-administrator role on the
+// installation, as the host command does.
+func mustGrant(t *testing.T, s Store, id, principalID string) {
+	t.Helper()
+
+	g := access.Grant{
+		CreatedAt: at(0),
+		Condition: nil,
+		Object:    identity.ServerObject(),
+		ID:        id,
+		Role:      access.RoleSiteAdministrator,
+		CreatedBy: tempadmin.HostSubject,
+		Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: principalID},
+	}
+
+	e := entry(access.GrantRef(g))
+
+	if err := s.CreateGrant(t.Context(), g, namespace.Fence{}, e); err != nil {
+		t.Fatalf("grant site-administrator to %q: %v", principalID, err)
+	}
+}
+
+// mustToken issues the token id of the principal principalID with the name
+// name.
+func mustToken(t *testing.T, s Store, id, principalID, name string) {
+	t.Helper()
+
+	tok := accesstoken.Token{
+		CreatedAt:   at(0),
+		ExpiresAt:   at(0).Add(48 * time.Hour),
+		LastUsedAt:  time.Time{},
+		RevokedAt:   time.Time{},
+		DisabledAt:  time.Time{},
+		ID:          id,
+		PrincipalID: principalID,
+		Name:        name,
+		Kind:        accesstoken.KindPersonal,
+		ReplacedBy:  "",
+		CreatedBy:   tempadmin.HostSubject,
+	}
+
+	d := sha256.Sum256([]byte("secret of " + id))
+
+	if err := s.CreateToken(t.Context(), tok, d, entry(accesstoken.Ref(id))); err != nil {
+		t.Fatalf("create token %q: %v", id, err)
+	}
+}
+
+func testExpireEndsGrant(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, "prn-alice", "alice")
+	mustRecord(t, s, "prn-alice", "alice", 0)
+	mustGrant(t, s, "grt-alice", "prn-alice")
+
+	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
+		t.Fatalf("expire temporary administrator: %v", err)
+	}
+
+	grants, err := s.GrantsOn(
+		t.Context(),
+		[]access.Subject{{Kind: access.SubjectPrincipal, ID: "prn-alice"}},
+		[]identity.Object{identity.ServerObject()},
+	)
+	if err != nil {
+		t.Fatalf("grants after expiry: %v", err)
+	}
+
+	if len(grants) != 0 {
+		t.Fatalf("grants after expiry = %+v, want none live", grants)
+	}
+}
+
+func testExpireEndsTokens(t *testing.T, s Store) {
+	t.Helper()
+
+	mustPrincipal(t, s, "prn-alice", "alice")
+	mustRecord(t, s, "prn-alice", "alice", 0)
+	mustToken(t, s, "tok-host", "prn-alice", tempadmin.HostTokenName)
+	mustToken(t, s, "tok-laptop", "prn-alice", "laptop")
+
+	if err := s.ExpireTempAdmin(t.Context(), "prn-alice", entry(tempadmin.Ref("prn-alice"))); err != nil {
+		t.Fatalf("expire temporary administrator: %v", err)
+	}
+
+	host, err := s.GetToken(t.Context(), "tok-host")
+	if err != nil {
+		t.Fatalf("get host token after expiry: %v", err)
+	}
+
+	if host.RevokedAt.IsZero() {
+		t.Fatal("host token after expiry is not revoked")
+	}
+
+	other, err := s.GetToken(t.Context(), "tok-laptop")
+	if err != nil {
+		t.Fatalf("get other token after expiry: %v", err)
+	}
+
+	if !other.RevokedAt.IsZero() {
+		t.Fatal("token of another name is revoked, want only the host-recovery tokens ended")
+	}
 }
 
 // auditLister reads the audit log of a store that keeps one.

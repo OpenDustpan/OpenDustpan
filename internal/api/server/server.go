@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -99,6 +100,8 @@ type Config struct {
 	// flag of the principal routes. Nil means no record is read: the flag
 	// stays false. Both SQL adapters keep them.
 	TempAdmins tempadmin.Reader
+	// Now returns the current time for the banner flag. Nil means time.Now.
+	Now func() time.Time
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -131,6 +134,7 @@ type Handler struct {
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
 	tempAdmins     tempadmin.Reader
+	now            func() time.Time
 	mux            *patternMux
 	routes         []Route
 }
@@ -178,8 +182,13 @@ func NewHandler(cfg Config) (*Handler, error) {
 		ipAllowlists:   cfg.IPAllowlists,
 		sessions:       cfg.SessionPolicy,
 		onAuditFailure: cfg.OnAuditFailure,
+		now:            cfg.Now,
 		mux:            newPatternMux(),
 		routes:         nil,
+	}
+
+	if h.now == nil {
+		h.now = time.Now
 	}
 
 	h.routes = h.buildRoutes()

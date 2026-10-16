@@ -317,7 +317,7 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 
 	// Disable the person testPrincipalID, so the enable route answers 200:
 	// it and its token were made more than one hour before the sweep.
-	sweep := accesstoken.Sweep{ExceptTempAdmins: false, Inactivity: time.Hour, Tokens: false, Accounts: true}
+	sweep := accesstoken.Sweep{Inactivity: time.Hour, Tokens: false, Accounts: true}
 	if _, sweepErr := st.SweepInactive(ctx, sweep, storetest.ServerChange); sweepErr != nil {
 		t.Fatalf("seed sweep: %v", sweepErr)
 	}

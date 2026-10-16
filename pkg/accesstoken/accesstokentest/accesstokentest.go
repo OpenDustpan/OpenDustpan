@@ -23,13 +23,16 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
-// Store is what the suite needs: the token port, and the principal records
-// that own the tokens.
+// Store is what the suite needs: the token port, the principal records
+// that own the tokens, and the temporary administrator records that the
+// sweep exempts while they work.
 type Store interface {
 	accesstoken.Store
 	principal.RecordStore
+	tempadmin.Store
 }
 
 // Factory returns a fresh, empty store for one subtest.
@@ -62,6 +65,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "the policy starts at the defaults and keeps a change", test: testPolicy},
 		{name: "the sweep disables inactive tokens", test: testSweepTokens},
 		{name: "the sweep disables inactive user accounts", test: testSweepAccounts},
+		{name: "the sweep keeps the temporary administrators that still work", test: testSweepExceptTempAdmins},
+		{name: "without the exemption the sweep ends them too", test: testSweepWithoutExemption},
 		{name: "a sweep with a refused entry changes nothing", test: testSweepRefused},
 		{name: "enable, then sweep: the principal stays enabled", test: testEnablePrincipal},
 		{name: "concurrent policy updates: each sees the one before", test: testConcurrentPolicyUpdates},
@@ -891,7 +896,7 @@ func mustPrincipalAt(t *testing.T, s Store, id string, kind principal.Kind, crea
 }
 
 func sweep(tokens, accounts bool) accesstoken.Sweep {
-	return accesstoken.Sweep{ExceptTempAdmins: false, Inactivity: sweepPeriod, Tokens: tokens, Accounts: accounts}
+	return accesstoken.Sweep{Inactivity: sweepPeriod, Tokens: tokens, Accounts: accounts}
 }
 
 // sweepEntry is the entry function of a sweep.
@@ -1053,6 +1058,107 @@ func testSweepAccounts(t *testing.T, s Store) {
 
 	if !m.Owner.DisabledAt.Equal(res.At) || !m.Token.DisabledAt.IsZero() {
 		t.Fatalf("lookup = %+v, want a disabled owner and a token that the account sweep did not disable", m)
+	}
+}
+
+// mustTempAdmin records the principal id as a temporary administrator
+// created at created.
+func mustTempAdmin(t *testing.T, s Store, id, subject string, created time.Time) {
+	t.Helper()
+
+	r := tempadmin.TempAdmin{
+		CreatedAt:   created,
+		ExpiresAt:   created.Add(tempadmin.Lifetime),
+		PrincipalID: id,
+		Subject:     subject,
+		CreatedBy:   tempadmin.HostSubject,
+	}
+
+	e := entryAt("tok-x", created)
+	e.Action = tempadmin.Action
+	e.Object = tempadmin.Ref(id)
+
+	if err := s.CreateTempAdmin(t.Context(), r, e); err != nil {
+		t.Fatalf("create temporary administrator for %q: %v", subject, err)
+	}
+}
+
+// sweepExceptTempAdmins is one run of the inactivity disable: with the
+// seeded policy the run keeps the temporary administrators that still work.
+func sweepExceptTempAdmins() accesstoken.Sweep {
+	return sweep(true, true)
+}
+
+// seedSweepPrincipals creates three idle persons with one idle token each:
+// prn-temp still works as a temporary administrator at the sweep, prn-past
+// is an expired tombstone, and prn-plain never was one.
+func seedSweepPrincipals(t *testing.T, s Store, ts sweepTimes) {
+	t.Helper()
+
+	for _, id := range []string{"prn-temp", "prn-past", "prn-plain"} {
+		mustPrincipalAt(t, s, id, principal.KindPerson, ts.old)
+	}
+
+	mustToken(t, s, relToken("tok-temp", "prn-temp", ts.old, ts), digest(1))
+	mustToken(t, s, relToken("tok-past", "prn-past", ts.old, ts), digest(2))
+	mustToken(t, s, relToken("tok-plain", "prn-plain", ts.old, ts), digest(3))
+
+	mustTempAdmin(t, s, "prn-temp", "prn-temp", ts.now.Add(-time.Hour))
+	mustTempAdmin(t, s, "prn-past", "prn-past", ts.old.Add(-2*tempadmin.Lifetime))
+}
+
+func testSweepExceptTempAdmins(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	ts := newSweepTimes()
+	seedSweepPrincipals(t, s, ts)
+
+	res := mustSweep(t, s, sweepExceptTempAdmins())
+
+	if !slices.Equal(sweptIDs(res), []string{"tok-past", "tok-plain"}) {
+		t.Fatalf("swept tokens = %+v, want tok-past and tok-plain", res.Tokens)
+	}
+
+	if !slices.Equal(res.Principals, []string{"prn-past", "prn-plain"}) {
+		t.Fatalf("swept principals = %+v, want prn-past and prn-plain", res.Principals)
+	}
+
+	if got := mustGet(t, s, "tok-temp"); !got.DisabledAt.IsZero() || !got.RevokedAt.IsZero() {
+		t.Fatalf("kept token = %+v, want it live", got)
+	}
+
+	p, err := s.GetPrincipal(ctx, "prn-temp")
+	if err != nil || !p.DisabledAt.IsZero() {
+		t.Fatalf("kept principal = %+v, %v; want it enabled", p, err)
+	}
+}
+
+func testSweepWithoutExemption(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	ts := newSweepTimes()
+	seedSweepPrincipals(t, s, ts)
+
+	// With the break-glass disable on, the stored policy ends the working
+	// temporary administrators with the same sweep.
+	if _, err := s.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+		old.DisableBreakGlass = true
+
+		return old, entry("tok-x"), nil
+	}); err != nil {
+		t.Fatalf("turn the break-glass disable on: %v", err)
+	}
+
+	res := mustSweep(t, s, sweep(true, true))
+
+	if !slices.Equal(sweptIDs(res), []string{"tok-past", "tok-plain", "tok-temp"}) {
+		t.Fatalf("swept tokens = %+v, want every token", res.Tokens)
+	}
+
+	if !slices.Equal(res.Principals, []string{"prn-past", "prn-plain", "prn-temp"}) {
+		t.Fatalf("swept principals = %+v, want every principal", res.Principals)
 	}
 }
 

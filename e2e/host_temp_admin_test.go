@@ -27,18 +27,19 @@ type e2eHostPrincipals struct {
 	Principals []e2eHostPrincipal `json:"principals"`
 }
 
-// e2eHostUser decodes GET /api/user with the banner flag.
+// e2eHostUser decodes GET /api/user with the banner flag and its expiry.
 type e2eHostUser struct {
-	GithubLogin            string `json:"githubLogin"`
-	TemporaryAdministrator bool   `json:"temporaryAdministrator"`
+	GithubLogin            string  `json:"githubLogin"`
+	TemporaryAdministrator bool    `json:"temporaryAdministrator"`
+	ExpiresAt              *string `json:"expiresAt"`
 }
 
 // TestHostTempAdmin runs the host command against the database of the
 // environment and signs in as the temporary administrator it makes. It
-// needs the binary server, which builds the CLI: without it the host
-// command has no binary to run. It proves the fixed expiry, the banner
-// flag on both APIs, the site-administrator grant, and the sign-in audit
-// entries, one for each use.
+// proves the fixed expiry, the banner flag on both APIs, the
+// site-administrator grant, and exactly one sign-in audit entry for each
+// use. In the in-process mode it builds the server binary first, so the
+// step runs under the default suite too.
 func TestHostTempAdmin(t *testing.T) {
 	t.Parallel()
 
@@ -76,12 +77,6 @@ func runHostTempAdminOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
 		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
-	}
-
-	if !e2e.UseBinaryServer() {
-		t.Log("skip the host step: it needs E2E_SERVER=binary")
-
-		return
 	}
 
 	ctx := t.Context()
@@ -126,13 +121,23 @@ func runHostBinary(ctx context.Context, t *testing.T, env *e2e.Env, person strin
 }
 
 // checkHostUser proves the token signs in: the user endpoint answers the
-// banner flag.
+// banner flag with its fixed expiry. The user endpoint reads the console
+// token scheme.
 func checkHostUser(ctx context.Context, t *testing.T, env *e2e.Env, session hostSession) {
 	t.Helper()
 
 	user := callHostUser(ctx, t, env, session.token)
 	if user.GithubLogin != session.person || !user.TemporaryAdministrator {
 		t.Fatalf("user = %+v, want %s with the banner flag", user, session.person)
+	}
+
+	if user.ExpiresAt == nil {
+		t.Fatal("user has no expiry, want the fixed expiry for the banner")
+	}
+
+	at, err := time.Parse(time.RFC3339Nano, *user.ExpiresAt)
+	if err != nil || !at.Equal(session.expires) {
+		t.Fatalf("user expiry = %v, %v, want the printed %s", user.ExpiresAt, err, session.expires)
 	}
 }
 
@@ -167,19 +172,20 @@ func checkHostPrincipal(ctx context.Context, t *testing.T, env *e2e.Env, session
 	t.Fatalf("no principal names %q", session.person)
 }
 
-// checkHostSignIns proves each sign-in wrote its audit entry, each tracing
-// to the named person.
+// checkHostSignIns proves each use wrote exactly one sign-in entry tracing
+// to the named person, with the client address and the request ID of its
+// request: the user call, the principal list, and this audit read.
 func checkHostSignIns(ctx context.Context, t *testing.T, env *e2e.Env, session hostSession) {
 	t.Helper()
 
-	if n := countHostSignIns(ctx, t, env, session.token, session.person); n < minHostSignIns {
-		t.Fatalf("sign-in entries = %d, want at least %d for the uses", n, minHostSignIns)
+	if n := countHostSignIns(ctx, t, env, session.token, session.person); n != hostUses {
+		t.Fatalf("sign-in entries = %d, want exactly %d, one for each use", n, hostUses)
 	}
 }
 
-// minHostSignIns is the count of uses before the audit read: the user call
-// and the principal list.
-const minHostSignIns = 2
+// hostUses is the count of uses before the audit read returns: the user
+// call, the principal list, and the audit read itself.
+const hostUses = 3
 
 // parseHostOutput reads the token and the expiry of host output.
 func parseHostOutput(t *testing.T, out string) (string, time.Time) {
@@ -218,15 +224,15 @@ func parseHostOutput(t *testing.T, out string) (string, time.Time) {
 func callHostUser(ctx context.Context, t *testing.T, env *e2e.Env, token string) e2eHostUser {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatusAs(ctx, token, http.MethodGet, "/api/user", "")
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("GET /api/user = %d, %v (%s); want 200", status, err, body)
+	got, err := env.StatusWithHeader(ctx, "token "+token, http.MethodGet, "/api/user", "")
+	if err != nil || got.Status != http.StatusOK {
+		t.Fatalf("GET /api/user = %d, %v (%s); want 200", got.Status, err, got.Body)
 	}
 
 	var user e2eHostUser
 
-	if err := json.Unmarshal([]byte(body), &user); err != nil {
-		t.Fatalf("decode user: %v (%s)", err, body)
+	if err := json.Unmarshal([]byte(got.Body), &user); err != nil {
+		t.Fatalf("decode user: %v (%s)", err, got.Body)
 	}
 
 	return user
@@ -250,11 +256,14 @@ func callHostPrincipals(ctx context.Context, t *testing.T, env *e2e.Env, token s
 	return list
 }
 
-// e2eHostEntry decodes one audit entry with its action and subject.
+// e2eHostEntry decodes one audit entry with its action, subject, client
+// address and request ID.
 type e2eHostEntry struct {
-	Subject string `json:"subject"`
-	Action  string `json:"action"`
-	Object  string `json:"object"`
+	Subject   string `json:"subject"`
+	Action    string `json:"action"`
+	Object    string `json:"object"`
+	SourceIP  string `json:"sourceIP"`
+	RequestID string `json:"requestID"`
 }
 
 // e2eHostEntries decodes one page of the audit list.
@@ -263,31 +272,31 @@ type e2eHostEntries struct {
 }
 
 // countHostSignIns counts the sign-in entries of the life cycle action for
-// person: the host create, each use, and no expiry yet.
+// person: the host create, each use, and no expiry yet. Each entry names
+// the client address and the request ID of its request. The audit API reads
+// the console token scheme.
 func countHostSignIns(ctx context.Context, t *testing.T, env *e2e.Env, token, person string) int {
 	t.Helper()
 
-	status, body, err := env.ServerAPIStatusAs(
-		ctx,
-		token,
-		http.MethodGet,
-		"/api/audit/entries?organization=@server",
-		"",
-	)
-	if err != nil || status != http.StatusOK {
-		t.Fatalf("GET audit = %d, %v (%s); want 200", status, err, body)
+	got, err := env.StatusWithHeader(ctx, "token "+token, http.MethodGet, "/api/audit/entries?organization=@server", "")
+	if err != nil || got.Status != http.StatusOK {
+		t.Fatalf("GET audit = %d, %v (%s); want 200", got.Status, err, got.Body)
 	}
 
 	var list e2eHostEntries
 
-	if err := json.Unmarshal([]byte(body), &list); err != nil {
-		t.Fatalf("decode audit entries: %v (%s)", err, body)
+	if err := json.Unmarshal([]byte(got.Body), &list); err != nil {
+		t.Fatalf("decode audit entries: %v (%s)", err, got.Body)
 	}
 
 	n := 0
 
 	for _, e := range list.Entries {
 		if e.Action == "server:manage-temporary-administrators" && e.Subject == person {
+			if e.SourceIP == "" || e.RequestID == "" {
+				t.Fatalf("sign-in entry = %+v, want the client address and the request ID", e)
+			}
+
 			n++
 		}
 	}

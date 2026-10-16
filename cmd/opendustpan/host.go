@@ -10,12 +10,12 @@ package main
 //
 //	opendustpan host create-temp-admin [--database sqlite:dustpan.db] <person>
 //
-// The command finds the person principal or makes it, grants it the
+// The command makes a new person principal, grants it the
 // site-administrator role on the installation, issues its token, and
-// records the fixed expiry. A second run for the same person keeps the
-// principal and the grant, and issues a new token with a new expiry. Each
-// step writes its audit entry. The exit code is 0 on success and 1 on any
-// refusal.
+// records the fixed expiry. The person must name no principal that exists:
+// the command never reuses one, so an expiry never ends a normal account.
+// Each step writes its audit entry. The exit code is 0 on success and 1 on
+// any refusal.
 
 import (
 	"context"
@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"os/user"
 	"strings"
 	"time"
 
@@ -45,13 +47,13 @@ var (
 	)
 )
 
-// hostTokenName is the name of the personal token the host command issues.
-// One name for every recovery token, so the token list shows their origin.
-const hostTokenName = "host-recovery"
-
 // hostSubject is the subject of the audit entries of the host command: the
 // host itself acted, through no sign-in.
-const hostSubject = "host"
+const hostSubject = tempadmin.HostSubject
+
+// hostTokenName is the name of the personal token the host command issues.
+// One name for every recovery token, so the token list shows their origin.
+const hostTokenName = tempadmin.HostTokenName
 
 // hostCaller is the caller the host command acts as: an administrator with
 // no stored token, like a bootstrap administrator.
@@ -161,12 +163,10 @@ type hostMade struct {
 }
 
 // createTempAdmin makes person a temporary administrator through the store
-// st: it sweeps the records that ended, finds or makes the person
-// principal, grants it the site-administrator role, issues its personal
-// token, and records the temporary administrator with its fixed expiry. A
-// second run for the same person keeps the principal, the grant and the
-// fixed expiry, and issues a new token for the time that is left. Each
-// step writes its audit entry.
+// st: it sweeps the records that ended, makes a new person principal,
+// grants it the site-administrator role, issues its personal token, and
+// records the temporary administrator with its fixed expiry. Each step
+// writes its audit entry.
 func createTempAdmin(ctx context.Context, st store, person string) (hostMade, error) {
 	var made hostMade
 
@@ -219,51 +219,52 @@ func createTempAdmin(ctx context.Context, st store, person string) (hostMade, er
 }
 
 // tempExpires records the principal p as a temporary administrator and
-// answers its fixed expiry: the new expiry on a first run, and the expiry
-// that is left on a second run while the record still works.
+// answers its fixed expiry, exactly Lifetime after the create.
 func tempExpires(
 	ctx context.Context, temps *tempadmin.Service, p principal.Principal, person string,
 ) (time.Time, error) {
 	rec, err := temps.Create(ctx, hostEntry(tempadmin.Action), tempadmin.Input{
 		Subject:     person,
 		PrincipalID: p.ID,
-		CreatedBy:   hostSubject,
+		CreatedBy:   hostOperator(),
 	})
-	if err == nil {
-		return rec.ExpiresAt, nil
-	}
-
-	if !errors.Is(err, tempadmin.ErrAlreadyExists) {
-		return time.Time{}, fmt.Errorf("record temporary administrator for %q: %w", person, err)
-	}
-
-	rec, err = temps.Get(ctx, p.ID)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("read temporary administrator for %q: %w", person, err)
-	}
-
-	if !rec.ActiveAt(temps.Now()) {
-		return time.Time{}, fmt.Errorf("temporary administrator for %q: %w", person, tempadmin.ErrExpired)
+		return time.Time{}, fmt.Errorf("record temporary administrator for %q: %w", person, err)
 	}
 
 	return rec.ExpiresAt, nil
 }
 
-// personOf returns the person principal with the subject person: the record
-// that exists, or a new one. A record that an expiry or the inactivity
-// disable ended is enabled again, with its own audit entry: the host
-// recovers the person. A bootstrap name never reaches the store:
+// hostOperator names the OS user that runs the host command, for the
+// CreatedBy of the temporary administrator record.
+func hostOperator() string {
+	if u, err := user.Current(); err == nil && u.Username != "" {
+		return u.Username
+	}
+
+	if name := os.Getenv("USER"); name != "" {
+		return name
+	}
+
+	return "unknown"
+}
+
+// personOf makes a new person principal with the subject person. A subject
+// that a principal already holds is refused: reusing it would end a normal
+// account at the expiry of the record, and a later enable would hand its
+// grants back. A bootstrap name never reaches the store:
 // principal.ValidateSubject refuses it first.
 func personOf(
 	ctx context.Context, st store, principals *principal.Service, person string,
 ) (principal.Principal, error) {
-	p, readErr := st.GetPrincipalBySubject(ctx, person)
-	if readErr == nil {
-		return enabledPerson(ctx, st, principals, p, person)
-	}
-
-	if !errors.Is(readErr, principal.ErrNotFound) {
-		return principal.Principal{}, fmt.Errorf("read principal %q: %w", person, readErr)
+	if _, err := st.GetPrincipalBySubject(ctx, person); err == nil {
+		return principal.Principal{}, fmt.Errorf(
+			"person %q already exists: pass a name that no principal holds: "+
+				"opendustpan host create-temp-admin <person>",
+			person,
+		)
+	} else if !errors.Is(err, principal.ErrNotFound) {
+		return principal.Principal{}, fmt.Errorf("read principal %q: %w", person, err)
 	}
 
 	made, createErr := principals.CreatePrincipal(
@@ -278,42 +279,8 @@ func personOf(
 	return made, nil
 }
 
-// enabledPerson returns p when it works, enables it again when an expiry or
-// the inactivity disable ended it, and refuses a record that is no person.
-func enabledPerson(
-	ctx context.Context, st store, principals *principal.Service, p principal.Principal, person string,
-) (principal.Principal, error) {
-	if p.Kind != principal.KindPerson {
-		return principal.Principal{}, fmt.Errorf(
-			"%w: %q is a %s, not a person",
-			principal.ErrInvalid,
-			person,
-			p.Kind,
-		)
-	}
-
-	if p.DisabledAt.IsZero() {
-		return p, nil
-	}
-
-	enableErr := principals.EnablePrincipal(
-		ctx, hostEntry(string(identity.ActionServerManagePrincipals)), hostCaller(), p.ID,
-	)
-	if enableErr != nil {
-		return principal.Principal{}, fmt.Errorf("enable principal %q: %w", person, enableErr)
-	}
-
-	enabled, readErr := st.GetPrincipalBySubject(ctx, person)
-	if readErr != nil {
-		return principal.Principal{}, fmt.Errorf("read principal %q: %w", person, readErr)
-	}
-
-	return enabled, nil
-}
-
 // ensureSiteAdmin grants the person p the site-administrator role on the
-// installation. A grant that exists already keeps working: a second run
-// treats it as success.
+// installation. A grant that exists already keeps working.
 func ensureSiteAdmin(ctx context.Context, st store, p principal.Principal) error {
 	authz, authzErr := access.NewAuthorizer(
 		access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: nil, Principals: nil},

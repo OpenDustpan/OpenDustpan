@@ -1584,6 +1584,23 @@ FROM temp_admins ORDER BY expires_at_ms;
 -- name: DeleteTempAdmin :execrows
 DELETE FROM temp_admins WHERE principal_id = ?;
 
+-- name: RevokeTempAdminSiteGrants :execrows
+-- Ends every live site-administrator grant of the principal on the
+-- installation at the expiry of its temporary administrator record. The
+-- rows stay for the access-review history. Revoked grants never come back:
+-- an enable after the expiry finds no grant to restore.
+UPDATE grants SET revoked_at_ms = ?, revoked_by = ?
+WHERE subject_kind = 'principal' AND subject_id = ? AND role = 'site-administrator'
+  AND target = ? AND revoked_at_ms IS NULL;
+
+-- name: RevokeTempAdminHostTokens :execrows
+-- Ends the live host-recovery tokens of the principal at the expiry of its
+-- temporary administrator record. Tokens that already ended stay as they
+-- are.
+UPDATE access_tokens SET revoked_at_ms = ?
+WHERE principal_id = ? AND name = ? AND revoked_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND expires_at_ms > CAST(sqlc.arg('expires_at_ms') AS INTEGER);
+
 -- name: DisablePrincipalForExpiry :execrows
 -- Disables the principal at the expiry of its temporary administrator
 -- record. A principal that is already disabled stays as it is.
@@ -1593,16 +1610,18 @@ WHERE id = sqlc.arg('id') AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL;
 -- name: DisableInactiveAccessTokensExceptTemp :many
 -- As DisableInactiveAccessTokens, but keeps the tokens of the principals
 -- that still work as temporary administrators: while break-glass is on,
--- the inactivity disable never ends them.
+-- the inactivity disable never ends them. An expired record is a tombstone,
+-- not an exemption: it never keeps a token.
 UPDATE access_tokens SET disabled_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
   AND COALESCE(last_used_at_ms, created_at_ms) <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
-  AND principal_id NOT IN (SELECT principal_id FROM temp_admins)
+  AND principal_id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER))
 RETURNING id, principal_id;
 
 -- name: DisableInactivePrincipalsExceptTemp :many
 -- As DisableInactivePrincipals, but keeps the principals that still work as
--- temporary administrators.
+-- temporary administrators. An expired record is a tombstone, not an
+-- exemption: it never keeps a principal.
 UPDATE principals SET disabled_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
   AND created_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
@@ -1613,5 +1632,5 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
     WHERE t.principal_id = principals.id
       AND (t.created_at_ms > CAST(sqlc.arg('cutoff_ms') AS INTEGER) OR t.last_used_at_ms > CAST(sqlc.arg('cutoff_ms') AS INTEGER))
   )
-  AND id NOT IN (SELECT principal_id FROM temp_admins)
+  AND id NOT IN (SELECT principal_id FROM temp_admins WHERE expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER))
 RETURNING id;

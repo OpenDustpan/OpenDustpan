@@ -570,10 +570,10 @@ func (c PolicyChange) applyTo(p Policy) Policy {
 // the entry e for each record that it disables. It reads the policy: with
 // an inactivity period of zero, or with tokens and accounts both off, it
 // changes nothing. The store takes the time of the run from the database
-// clock, and the entries carry that time. While break-glass is on, the run
-// keeps the temporary administrators that still work: only their fixed
-// expiry ends them. The bootstrap admin tokens have no stored record, so
-// they are never disabled here.
+// clock, and the entries carry that time. The run keeps the temporary
+// administrators that still work, unless the stored policy turns their
+// disable on: only their fixed expiry ends them. The bootstrap admin tokens
+// have no stored record, so they are never disabled here.
 func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult, error) {
 	p, err := s.Policy(ctx)
 	if err != nil {
@@ -584,12 +584,7 @@ func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult
 		return SweepResult{At: time.Time{}, Tokens: nil, Principals: nil}, nil
 	}
 
-	sweep := Sweep{
-		Inactivity:       p.Inactivity,
-		Tokens:           p.DisableTokens,
-		Accounts:         p.DisableAccounts,
-		ExceptTempAdmins: !p.DisableBreakGlass,
-	}
+	sweep := Sweep{Inactivity: p.Inactivity, Tokens: p.DisableTokens, Accounts: p.DisableAccounts}
 
 	res, err := s.store.SweepInactive(ctx, sweep, func(at time.Time, object string) audit.Entry {
 		return change(e, at, object)

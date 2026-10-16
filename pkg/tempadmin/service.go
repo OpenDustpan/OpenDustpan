@@ -2,6 +2,7 @@ package tempadmin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -126,8 +127,8 @@ func (s *Service) ExpiredAt(ctx context.Context, now time.Time) ([]TempAdmin, er
 
 // Sweep disables every record that ends at or before the time of the
 // Service clock, each with an entry from e, and returns the principal IDs
-// it disabled, ordered by expiry. A record that another run already
-// dropped is skipped: ExpireTempAdmin answers ErrNotFound for it.
+// it disabled, ordered by expiry. A record that already ended is skipped:
+// ExpireTempAdmin answers ErrExpired for it and writes no second entry.
 func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 	now := s.Now()
 
@@ -140,6 +141,10 @@ func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 
 	for _, r := range expired {
 		err := s.store.ExpireTempAdmin(ctx, r.PrincipalID, expireEntry(e, now, Ref(r.PrincipalID)))
+		if errors.Is(err, ErrExpired) || errors.Is(err, ErrNotFound) {
+			continue
+		}
+
 		if err != nil {
 			return done, fmt.Errorf("expire temporary administrator for %q: %w", r.Subject, err)
 		}

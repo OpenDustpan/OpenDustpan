@@ -200,6 +200,10 @@ type Env struct {
 	// dbProxy fronts PostgreSQL for the server, so closing it stops the
 	// database for this environment only. It is nil on SQLite.
 	dbProxy *DBProxy
+	// dbURL is the --database value that reaches the database of the
+	// environment: the SQLite file, or PostgreSQL through the proxy. A
+	// step runs the host command against it.
+	dbURL string
 }
 
 // serverStore is every persistence port the server needs.
@@ -226,6 +230,9 @@ type serverBuild struct {
 	workspaces *workspace.Service
 	blobs      blob.Store
 	dbProxy    *DBProxy
+	// dbURL is the --database value that reaches the database of the build:
+	// the SQLite file, or PostgreSQL through the proxy.
+	dbURL string
 	// backupDir is the directory of the dir: backup target the server writes.
 	backupDir string
 }
@@ -392,6 +399,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		backendLogs:   nil,
 		certBundle:    "",
 		dbProxy:       build.dbProxy,
+		dbURL:         build.dbURL,
 		backupDir:     build.backupDir,
 	}
 
@@ -453,23 +461,28 @@ type serverTokens struct {
 // database proxy. The proxy is nil on SQLite. The store and its schema are
 // closed and removed when the test ends.
 // the environment needs the interface.
-// openServerStore opens the store under test. PostgreSQL goes through a
-// DBProxy, so a step can stop the database for this environment only; the
-// proxy is nil on SQLite.
+// openServerStore opens the store under test with the --database value
+// that reaches it: the SQLite file, or PostgreSQL through a DBProxy, so a
+// step can stop the database for this environment only. The proxy is nil
+// on SQLite.
 //
 //nolint:ireturn // SQLite and PostgreSQL stores share no concrete type.
-func openServerStore(ctx context.Context, tb testing.TB, store Store, dbPath string) (serverStore, *DBProxy) {
+func openServerStore(
+	ctx context.Context, tb testing.TB, store Store, dbPath string,
+) (serverStore, *DBProxy, string) {
 	tb.Helper()
 
 	switch store {
 	case StoreSQLite:
-		return openSQLiteStore(ctx, tb, dbPath), nil
+		return openSQLiteStore(ctx, tb, dbPath), nil, "sqlite:" + dbPath
 	case StorePostgres:
-		return openProxiedPostgresStore(ctx, tb, PostgresURL())
+		st, proxy := openProxiedPostgresStore(ctx, tb, PostgresURL())
+
+		return st, proxy, proxy.URL()
 	default:
 		tb.Fatalf("unknown store: %s", store)
 
-		return nil, nil
+		return nil, nil, ""
 	}
 }
 
@@ -505,7 +518,7 @@ func ipAllowlistOptions(st serverStore, args serverArgs, opts []dustpan.Option) 
 func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild {
 	tb.Helper()
 
-	st, dbProxy := openServerStore(ctx, tb, args.store, args.dbPath)
+	st, dbProxy, dbURL := openServerStore(ctx, tb, args.store, args.dbPath)
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
 	if err != nil {
@@ -571,6 +584,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 		workspaces: workspaces,
 		blobs:      blobs,
 		dbProxy:    dbProxy,
+		dbURL:      dbURL,
 		backupDir:  strings.TrimPrefix(targetName, "dir:"),
 	}
 }

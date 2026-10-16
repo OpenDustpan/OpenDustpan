@@ -516,7 +516,7 @@ func mustSweep(t *testing.T, s Store) accesstoken.SweepResult {
 
 	res, err := s.SweepInactive(
 		t.Context(),
-		accesstoken.Sweep{ExceptTempAdmins: false, Inactivity: sweepPeriod, Tokens: false, Accounts: true},
+		accesstoken.Sweep{Inactivity: sweepPeriod, Tokens: false, Accounts: true},
 		entryFn,
 	)
 	if err != nil {

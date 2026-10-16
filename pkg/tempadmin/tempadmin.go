@@ -99,6 +99,16 @@ func Ref(id string) string {
 // command and the server write these entries on their own.
 const Action = "server:manage-temporary-administrators"
 
+// HostSubject is the subject of the audit entries of the host command: the
+// host itself acted, through no sign-in. It starts with '@', which no
+// subject of a principal holds, so it never names a principal.
+const HostSubject = "@host"
+
+// HostTokenName is the name of the personal token the host command issues.
+// One name for every recovery token, so the token list shows their origin
+// and the expiry ends them.
+const HostTokenName = "host-recovery"
+
 // Store is the persistence port for temporary administrators. The records
 // belong to the installation, so their writes carry no namespace fence.
 //
@@ -118,19 +128,28 @@ type Store interface {
 	// GetTempAdminBySubject returns the record of the person with the
 	// subject subject, or ErrNotFound.
 	GetTempAdminBySubject(ctx context.Context, subject string) (TempAdmin, error)
-	// ListTempAdmins returns every record, ordered by expiry.
+	// ListTempAdmins returns every record, ordered by expiry. Expired
+	// records stay listed: the expiry keeps them as tombstones, so a
+	// caller whose record is not active is still denied.
 	ListTempAdmins(ctx context.Context) ([]TempAdmin, error)
-	// ExpireTempAdmin disables the principal principalID and drops its
-	// record at e.At, with the entry e. It returns ErrNotFound when no
-	// record exists.
+	// ExpireTempAdmin ends the temporary administrator of the principal
+	// principalID at e.At, with the entry e: it disables the principal,
+	// ends every site-administrator grant of the principal on the
+	// installation, ends the host-recovery tokens of the principal, and
+	// keeps the record as a tombstone, so a later use is still denied. It
+	// returns ErrNotFound when no record exists, and ErrExpired when the
+	// record already ended: a repeated expiry writes no second entry.
 	ExpireTempAdmin(ctx context.Context, principalID string, e audit.Entry) error
 }
 
 // Reader reads temporary administrator records. Store implements it. The
-// authenticator decorator and the API adapters take it, so a reader needs
-// no write port.
+// authenticator decorator, the access token service and the API adapters
+// take it, so a reader needs no write port.
 type Reader interface {
 	// GetTempAdminBySubject returns the record of the person with the
 	// subject subject, or ErrNotFound.
 	GetTempAdminBySubject(ctx context.Context, subject string) (TempAdmin, error)
+	// ListTempAdmins returns every record, ordered by expiry, including
+	// the expired tombstones.
+	ListTempAdmins(ctx context.Context) ([]TempAdmin, error)
 }
