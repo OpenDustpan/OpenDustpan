@@ -131,6 +131,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
 		{"claim validates its request", testClaimValidates},
 		{"claim takes only the requested kinds", testClaimKinds},
+		{"a claim skips a version above its limit", testClaimMaxVersions},
 		{"concurrent claims of one operation give one claim", testClaimRace},
 		{"a live claim blocks another claim", testLiveClaimBlocks},
 		{"the expiry comes from the clock of the store", testExpiryFromStoreClock},
@@ -309,10 +310,11 @@ func testClaimValidates(t *testing.T, h Harness) {
 	mustStart(t, s, "k", kindA)
 
 	for _, req := range []durable.ClaimRequest{
-		{Owner: "", Kinds: []durable.Kind{kindA}, Lease: longLease},
-		{Owner: ownerA, Kinds: nil, Lease: longLease},
-		{Owner: ownerA, Kinds: []durable.Kind{""}, Lease: longLease},
-		{Owner: ownerA, Kinds: []durable.Kind{kindA}, Lease: 0},
+		{Owner: "", Kinds: []durable.Kind{kindA}, MaxVersions: nil, Lease: longLease},
+		{Owner: ownerA, Kinds: nil, MaxVersions: nil, Lease: longLease},
+		{Owner: ownerA, Kinds: []durable.Kind{""}, MaxVersions: nil, Lease: longLease},
+		{Owner: ownerA, Kinds: []durable.Kind{kindA}, MaxVersions: nil, Lease: 0},
+		{Owner: ownerA, Kinds: []durable.Kind{kindA}, MaxVersions: map[durable.Kind]int{kindA: -1}, Lease: longLease},
 	} {
 		if _, err := s.Claim(t.Context(), req); !errors.Is(err, durable.ErrInvalid) {
 			t.Errorf("Claim(%+v) error = %v, want ErrInvalid", req, err)
@@ -337,6 +339,47 @@ func testClaimKinds(t *testing.T, h Harness) {
 
 	if got.ID != op.ID {
 		t.Fatalf("Claim returned %q, want %q", got.ID, op.ID)
+	}
+}
+
+func testClaimMaxVersions(t *testing.T, h Harness) {
+	t.Helper()
+
+	old, current := h.Open(t, 0), h.Open(t, 0)
+
+	newer, _, err := current.Start(t.Context(), durable.StartRequest{Key: "k2", Kind: kindA, Version: 2, Input: nil})
+	if err != nil {
+		t.Fatalf("Start of version 2: %v", err)
+	}
+
+	pause(t, 2*clockSlack)
+
+	older, _, err := current.Start(t.Context(), durable.StartRequest{Key: "k1", Kind: kindA, Version: 1, Input: nil})
+	if err != nil {
+		t.Fatalf("Start of version 1: %v", err)
+	}
+
+	limited := claimReq(ownerA, longLease, kindA, kindB)
+	limited.MaxVersions = map[durable.Kind]int{kindA: 1}
+
+	got, err := old.Claim(t.Context(), limited)
+	if err != nil || got.ID != older.ID {
+		t.Fatalf("Claim with version limit 1 = %+v, %v; want the operation of version 1, not the older one of 2",
+			got, err)
+	}
+
+	_, err = old.Claim(t.Context(), limited)
+	if !errors.Is(err, durable.ErrNoWork) {
+		t.Fatalf("Claim with version limit 1 and only version 2 left: error = %v, want ErrNoWork", err)
+	}
+
+	// A kind with no entry in MaxVersions has no limit.
+	other := claimReq(ownerB, longLease, kindA)
+	other.MaxVersions = map[durable.Kind]int{kindB: 0}
+
+	got, err = current.Claim(t.Context(), other)
+	if err != nil || got.ID != newer.ID {
+		t.Fatalf("Claim with no limit for kind-a = %+v, %v; want the operation of version 2", got, err)
 	}
 }
 
@@ -1235,7 +1278,7 @@ func checkNew(t *testing.T, op durable.Operation, key string, kind durable.Kind,
 }
 
 func claimReq(owner string, lease time.Duration, kinds ...durable.Kind) durable.ClaimRequest {
-	return durable.ClaimRequest{Owner: owner, Kinds: kinds, Lease: lease}
+	return durable.ClaimRequest{Owner: owner, Kinds: kinds, MaxVersions: nil, Lease: lease}
 }
 
 func mustStart(t *testing.T, s durable.Store, key string, kind durable.Kind) durable.Operation {

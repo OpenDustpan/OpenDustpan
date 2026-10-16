@@ -44,8 +44,9 @@ type Store interface {
 	// operations with one creation time are ordered by ID.
 	List(ctx context.Context, f Filter) ([]Operation, error)
 
-	// Claim takes one operation of req.Kinds that can run now, and returns
-	// it with its new claim. An operation can run when it is pending and its
+	// Claim takes one operation that req.Allows and that can run now, and
+	// returns it with its new claim. An operation of a version above the
+	// limit of its kind in req.MaxVersions stays for another claimer. An operation can run when it is pending and its
 	// NotBefore has passed, or when it is running and its claim expired.
 	// The claim sets the state to running, increments the token and the
 	// attempt, records req.Owner, and sets the expiry to now plus req.Lease.

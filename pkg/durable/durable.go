@@ -169,7 +169,11 @@ type StartRequest struct {
 type ClaimRequest struct {
 	Owner string
 	Kinds []Kind
-	Lease time.Duration
+	// MaxVersions limits the version of each kind that the claimer runs. A
+	// claim never takes an operation whose version is above the limit of its
+	// kind. A kind with no entry has no limit, so a nil map limits nothing.
+	MaxVersions map[Kind]int
+	Lease       time.Duration
 }
 
 // Failure ends one attempt of an operation that failed. When Final is true,
@@ -199,12 +203,30 @@ func (req StartRequest) Validate() error {
 	return nil
 }
 
-// Validate returns ErrInvalid when req has no owner, no kind, an empty kind
-// or a lease that is not positive.
+// Validate returns ErrInvalid when req has no owner, no kind, an empty kind,
+// a negative version limit or a lease that is not positive.
 func (req ClaimRequest) Validate() error {
 	if req.Owner == "" || len(req.Kinds) == 0 || req.Lease <= 0 || slices.Contains(req.Kinds, "") {
 		return ErrInvalid
 	}
 
+	for _, v := range req.MaxVersions {
+		if v < 0 {
+			return ErrInvalid
+		}
+	}
+
 	return nil
+}
+
+// Allows reports whether req lets a claim take an operation of kind at
+// version: kind is in Kinds, and version is not above its limit.
+func (req ClaimRequest) Allows(kind Kind, version int) bool {
+	if !slices.Contains(req.Kinds, kind) {
+		return false
+	}
+
+	limit, ok := req.MaxVersions[kind]
+
+	return !ok || version <= limit
 }
