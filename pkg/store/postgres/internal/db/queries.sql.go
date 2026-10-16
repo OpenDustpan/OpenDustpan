@@ -2320,33 +2320,45 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
-  ), 0))::bigint AS principal_active_at_ms
+  ), 0))::bigint AS principal_active_at_ms,
+  ap.max_lifetime_ms AS policy_max_lifetime_ms, ap.inactivity_ms AS policy_inactivity_ms,
+  ap.disable_tokens AS policy_disable_tokens, ap.disable_accounts AS policy_disable_accounts,
+  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
-WHERE t.digest = $1 AND p.deleted_at_ms IS NULL
+CROSS JOIN access_token_policy ap
+WHERE t.digest = $1 AND p.deleted_at_ms IS NULL AND ap.id = 1
 `
 
 type GetAccessTokenByDigestRow struct {
-	ID                    string
-	PrincipalID           string
-	Name                  string
-	Kind                  string
-	Digest                string
-	CreatedAtMs           int64
-	ExpiresAtMs           int64
-	LastUsedAtMs          pgtype.Int8
-	RevokedAtMs           pgtype.Int8
-	ReplacedBy            pgtype.Text
-	CreatedBy             string
-	DisabledAtMs          pgtype.Int8
-	Subject               string
-	DisplayName           string
-	PrincipalKind         string
-	PrincipalDisabledAtMs pgtype.Int8
-	PrincipalBreakGlass   bool
-	PrincipalActiveAtMs   int64
+	ID                      string
+	PrincipalID             string
+	Name                    string
+	Kind                    string
+	Digest                  string
+	CreatedAtMs             int64
+	ExpiresAtMs             int64
+	LastUsedAtMs            pgtype.Int8
+	RevokedAtMs             pgtype.Int8
+	ReplacedBy              pgtype.Text
+	CreatedBy               string
+	DisabledAtMs            pgtype.Int8
+	Subject                 string
+	DisplayName             string
+	PrincipalKind           string
+	PrincipalDisabledAtMs   pgtype.Int8
+	PrincipalBreakGlass     bool
+	PrincipalActiveAtMs     int64
+	PolicyMaxLifetimeMs     int64
+	PolicyInactivityMs      int64
+	PolicyDisableTokens     bool
+	PolicyDisableAccounts   bool
+	PolicyDisableBreakGlass bool
+	PolicyUpdatedAtMs       int64
 }
 
+// The token, its owner and the token policy of the installation in one read,
+// so a policy change applies to the next lookup on every instance.
 func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (GetAccessTokenByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getAccessTokenByDigest, digest)
 	var i GetAccessTokenByDigestRow
@@ -2369,6 +2381,12 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 		&i.PrincipalDisabledAtMs,
 		&i.PrincipalBreakGlass,
 		&i.PrincipalActiveAtMs,
+		&i.PolicyMaxLifetimeMs,
+		&i.PolicyInactivityMs,
+		&i.PolicyDisableTokens,
+		&i.PolicyDisableAccounts,
+		&i.PolicyDisableBreakGlass,
+		&i.PolicyUpdatedAtMs,
 	)
 	return i, err
 }
