@@ -69,7 +69,7 @@ func reachStores(t *testing.T, s access.Store) reachStore {
 // reachConfig reads the reach dependencies from s.
 func reachConfig(s reachStore) access.ReachConfig {
 	return access.ReachConfig{
-		Grants: s, Roles: s, Callers: s, Principals: s, Services: s,
+		Grants: s, Roles: s, Callers: s, Principals: s,
 		Collections: testCollections(), Units: s,
 	}
 }

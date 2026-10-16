@@ -21,8 +21,8 @@ type ServicePrincipals interface {
 	ListServicePrincipals(ctx context.Context) ([]string, error)
 }
 
-// ReachConfig holds the dependencies of ReachOf. Grants, Roles, Callers,
-// Principals and Services are required. Collections answers the collection
+// ReachConfig holds the dependencies of ReachOf. Grants, Roles, Callers
+// and Principals are required. Collections answers the collection
 // of a unit: nil means no unit is in a collection, so no grant on a
 // collection gives anything. Units resolves the stable ID of a unit: nil
 // means no grant on a unit gives anything.
@@ -31,7 +31,6 @@ type ReachConfig struct {
 	Roles       RoleStore
 	Callers     Callers
 	Principals  PrincipalNamespaces
-	Services    ServicePrincipals
 	Collections UnitCollections
 	Units       Units
 }
@@ -40,11 +39,10 @@ type ReachConfig struct {
 // union of the actions of its grants, of the grants of its groups, and of
 // the grants of each service principal that it can act as. An act-as edge
 // is a hold of principal:manage-tokens on a service principal, held
-// directly, on the installation, or through
-// namespace:manage-principal-tokens on the namespace of the principal. The
-// reach follows the direct and namespace edges transitively and stops on a
-// cycle. An installation-wide edge reaches a service principal only when
-// the reach without it already covers the reach of that principal, so an
+// directly or through namespace:manage-principal-tokens on the namespace
+// of the principal. The reach follows the direct and namespace edges
+// transitively and stops on a cycle. A hold of principal:manage-tokens on
+// the installation reaches no service principal through that hold, so an
 // account administrator holds no operator action through it.
 type Reach struct {
 	entries     map[string]*reachEntry
@@ -195,18 +193,17 @@ func reachAdd(r *Reach, obj identity.Object, action identity.Action) {
 // reach. A grant whose role no longer exists gives nothing, as does a grant
 // on a deleted unit or on a collection with another stable ID.
 //
-// A direct act-as edge and a namespace edge reach every target. An
-// installation-wide edge reaches a service principal only when the reach
-// without it already covers the reach of that principal, and the check
-// repeats until nothing changes. A disabled principal is never an act-as
-// target: its tokens do not work.
+// A direct act-as edge and a namespace edge reach every target. A hold of
+// principal:manage-tokens on the installation reaches no service principal
+// through that hold: a principal with it reaches the actions of a service
+// principal only through its own grants and its own edges. A disabled
+// principal is never an act-as target: its tokens do not work.
 //
 // An act-as edge comes from a grant that holds principal:manage-tokens on
-// a service principal directly, from a grant that holds it on the
-// installation, which reaches each covered service principal, or from a
-// grant that holds namespace:manage-principal-tokens on a namespace, which
-// reaches the service principals of that namespace. Trust rules will add
-// another edge source at trustRuleTargets.
+// a service principal directly, or from a grant that holds
+// namespace:manage-principal-tokens on a namespace, which reaches the
+// service principals of that namespace. Trust rules will add another edge
+// source at trustRuleTargets.
 func ReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
 	switch {
 	case cfg.Grants == nil:
@@ -217,8 +214,6 @@ func ReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
 		return Reach{}, fmt.Errorf("%w: callers", ErrMissingDependency)
 	case cfg.Principals == nil:
 		return Reach{}, fmt.Errorf("%w: principals", ErrMissingDependency)
-	case cfg.Services == nil:
-		return Reach{}, fmt.Errorf("%w: services", ErrMissingDependency)
 	}
 
 	w := newReachWalker(cfg, id)
@@ -228,16 +223,7 @@ func ReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
 		return Reach{}, err
 	}
 
-	current, err := w.finish(ctx)
-	if err != nil {
-		return Reach{}, err
-	}
-
-	if !w.installation {
-		return current, nil
-	}
-
-	return w.absorbInstallation(ctx, current)
+	return w.finish(ctx)
 }
 
 // emptyReach returns the reach with no entries over cfg.
@@ -248,28 +234,6 @@ func emptyReach(cfg ReachConfig) Reach {
 		units:       cfg.Units,
 		principals:  cfg.Principals,
 	}
-}
-
-// baseReachOf returns the reach of id through direct, group, explicit and
-// namespace edges only: no installation-wide edge. An unknown, deleted or
-// disabled principal has an empty reach.
-func baseReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
-	w := newReachWalker(cfg, id)
-
-	rec, err := cfg.Principals.GetPrincipal(ctx, id)
-	if err != nil && !errors.Is(err, principal.ErrNotFound) {
-		return Reach{}, fmt.Errorf("read principal %q: %w", id, err)
-	}
-
-	if err == nil && rec.DisabledAt.IsZero() {
-		w.enqueue(id)
-	}
-
-	if err := w.close(ctx); err != nil {
-		return Reach{}, err
-	}
-
-	return w.finish(ctx)
 }
 
 // reachWalker collects the grants of a reach breadth first.
@@ -284,7 +248,6 @@ type reachWalker struct {
 	roles         map[string]Role
 	namespaceBots map[namespace.Name][]string
 	namespaces    map[namespace.Name]bool
-	installation  bool
 }
 
 // newReachWalker returns a walker over cfg for the principal root.
@@ -294,7 +257,6 @@ func newReachWalker(cfg ReachConfig, root string) *reachWalker {
 		visited: map[string]bool{}, queued: map[string]bool{}, disabled: map[string]bool{},
 		grants: map[string]Grant{}, roles: map[string]Role{},
 		namespaceBots: map[namespace.Name][]string{}, namespaces: map[namespace.Name]bool{},
-		installation: false,
 	}
 }
 
@@ -377,7 +339,7 @@ func (w *reachWalker) visit(ctx context.Context, id string) error {
 
 // follow records the act-as targets of grants: the service principals that
 // a hold of principal:manage-tokens reaches directly or through a
-// namespace, and whether a hold on the installation reaches further.
+// namespace.
 func (w *reachWalker) follow(ctx context.Context, grants []Grant) error {
 	roles, err := w.rolesOf(ctx, grants)
 	if err != nil {
@@ -393,9 +355,7 @@ func (w *reachWalker) follow(ctx context.Context, grants []Grant) error {
 		if role.Has(identity.ActionPrincipalManageTokens) {
 			obj := grants[i].Object
 
-			if obj.IsServer() {
-				w.installation = true
-			} else if obj.IsPrincipal() {
+			if obj.IsPrincipal() {
 				w.enqueue(obj.PrincipalID())
 			}
 		}
@@ -435,78 +395,6 @@ func (w *reachWalker) expand(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// absorbInstallation adds each service principal whose reach the current
-// reach already covers, and repeats until nothing changes. It returns the
-// reach with every covered target in it.
-func (w *reachWalker) absorbInstallation(ctx context.Context, current Reach) (Reach, error) {
-	for {
-		ids, err := w.cfg.Services.ListServicePrincipals(ctx)
-		if err != nil {
-			return Reach{}, fmt.Errorf("list service principals: %w", err)
-		}
-
-		progressed := false
-
-		for _, id := range ids {
-			covered, err := w.absorbOne(ctx, id, &current)
-			if err != nil {
-				return Reach{}, err
-			}
-
-			progressed = progressed || covered
-		}
-
-		if !progressed {
-			return current, nil
-		}
-	}
-}
-
-// absorbOne adds the service principal id with its own edges when the
-// current reach covers its reach. It reports whether it added the
-// principal. A principal that is already visited or disabled, or that has
-// an empty reach, is left out.
-func (w *reachWalker) absorbOne(ctx context.Context, id string, current *Reach) (bool, error) {
-	if w.visited[id] || w.disabled[id] {
-		return false, nil
-	}
-
-	target, err := baseReachOf(ctx, w.cfg, id)
-	if err != nil {
-		return false, err
-	}
-
-	if len(target.entries) == 0 {
-		w.visited[id] = true
-
-		return false, nil
-	}
-
-	covers, err := current.Covers(ctx, target)
-	if err != nil {
-		return false, err
-	}
-
-	if !covers {
-		return false, nil
-	}
-
-	w.enqueue(id)
-
-	if err := w.close(ctx); err != nil {
-		return false, err
-	}
-
-	next, finishErr := w.finish(ctx)
-	if finishErr != nil {
-		return false, finishErr
-	}
-
-	*current = next
-
-	return true, nil
 }
 
 // trustRuleTargets returns the principals that the trust rules of the
