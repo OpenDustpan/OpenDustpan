@@ -1738,28 +1738,36 @@ ORDER BY wrapper_id;
 -- name: CreateSignInProvider :execrows
 INSERT INTO sign_in_providers (
     provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 WHERE provider_id = ?;
 
 -- name: ListSignInProviders :many
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 ORDER BY provider_id;
 
 -- name: UpdateSignInProvider :execrows
--- The update applies only to the version that the change read.
+-- The update applies only to the version that the change read. The mode
+-- never changes.
 UPDATE sign_in_providers
 SET issuer = sqlc.arg('issuer'), display_name = sqlc.arg('display_name'), client_id = sqlc.arg('client_id'),
     client_secret = sqlc.arg('client_secret'), scopes = sqlc.arg('scopes'),
     auto_create = sqlc.arg('auto_create'), enabled = sqlc.arg('enabled'),
+    authorization_url = sqlc.arg('authorization_url'), token_url = sqlc.arg('token_url'),
+    userinfo_url = sqlc.arg('userinfo_url'), subject_claim = sqlc.arg('subject_claim'),
+    name_claim = sqlc.arg('name_claim'), username_claim = sqlc.arg('username_claim'),
+    email_claim = sqlc.arg('email_claim'),
     updated_at_ms = sqlc.arg('updated_at_ms'), version = sqlc.arg('version')
 WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version') - 1;
 
@@ -1788,3 +1796,44 @@ WHERE ended_at_ms IS NULL
 -- The prefix is "<provider ID>:". The compare is exact, with no pattern
 -- and no case folding. Deleted principals count too.
 SELECT COUNT(*) FROM principals WHERE substr(subject, 1, length(sqlc.arg('prefix'))) = sqlc.arg('prefix');
+
+-- Durable operations. Every time comes from DatabaseNowMs, the clock of the
+-- store. Each write runs in an IMMEDIATE transaction, so the read of a row
+-- and its write see no other writer between them.
+
+-- name: InsertDurableOperation :exec
+INSERT INTO durable_operations (
+    id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, '', NULL, 0, NULL, 0, ?, ?, ?);
+
+-- name: GetDurableOperation :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = ?;
+
+-- name: GetDurableOperationByKey :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE start_key = ?;
+
+-- name: UpdateDurableOperation :exec
+-- Writes every column that changes after the start of an operation.
+UPDATE durable_operations
+SET state = ?, attempt = ?, expiries = ?, failures = ?, last_error = ?, claim_owner = ?, claim_token = ?,
+    claim_expires_at_ms = ?, cancel_requested = ?, not_before_ms = ?, updated_at_ms = ?
+WHERE id = ?;
+
+-- name: ListDurableSteps :many
+SELECT name, result, done_at_ms FROM durable_steps WHERE operation_id = ? ORDER BY seq;
+
+-- name: CountDurableStep :one
+SELECT COUNT(*) FROM durable_steps WHERE operation_id = ? AND name = ?;
+
+-- name: InsertDurableStep :exec
+INSERT INTO durable_steps (operation_id, name, seq, result, done_at_ms)
+VALUES (
+    sqlc.arg('operation_id'), sqlc.arg('name'),
+    (SELECT COALESCE(MAX(seq), 0) + 1 FROM durable_steps WHERE operation_id = sqlc.arg('operation_id')),
+    sqlc.arg('result'), sqlc.arg('done_at_ms')
+);

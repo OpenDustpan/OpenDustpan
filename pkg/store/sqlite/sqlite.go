@@ -231,6 +231,10 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+
+	// stepTxBound is the longest time that a step transaction of a durable
+	// operation stays open before it rolls back.
+	stepTxBound time.Duration
 }
 
 var (
@@ -291,6 +295,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		busyWarned:          false,
 		keepAccessHook:      nil,
 		binaryVersion:       "",
+		stepTxBound:         DefaultStepTransactionBound,
 	}
 	for _, opt := range opts {
 		opt(s)

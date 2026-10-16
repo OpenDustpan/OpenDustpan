@@ -131,6 +131,34 @@ type CollectionMember struct {
 	AssignedAtMs  int64
 }
 
+type DurableOperation struct {
+	ID               string
+	StartKey         string
+	Kind             string
+	Input            []byte
+	Version          int64
+	State            string
+	Attempt          int64
+	Expiries         int64
+	Failures         int64
+	LastError        string
+	ClaimOwner       pgtype.Text
+	ClaimToken       int64
+	ClaimExpiresAtMs pgtype.Int8
+	CancelRequested  bool
+	NotBeforeMs      int64
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+type DurableStep struct {
+	OperationID string
+	Name        string
+	Seq         int64
+	Result      []byte
+	DoneAtMs    int64
+}
+
 type Grant struct {
 	ID          string
 	Subject     string
@@ -297,17 +325,25 @@ type SessionPolicy struct {
 }
 
 type SignInProvider struct {
-	ProviderID   string
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   bool
-	Enabled      bool
-	CreatedAtMs  int64
-	UpdatedAtMs  int64
-	Version      int64
+	ProviderID       string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       bool
+	Enabled          bool
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	Version          int64
+	Mode             string
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
 }
 
 type SignInRequest struct {
