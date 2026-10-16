@@ -24,25 +24,25 @@ Conventions used below:
 | --- | --- | --- | --- | --- |
 | Pulumi project name | none found | 100 bytes, in CLI code | 100 characters (`pkg/stack/stack.go:39`) | 100 characters |
 | Pulumi stack name | none found. The CLI applies the 100 limit to a qualified `org/project/stack` name in one reported case ([Pulumi community thread](https://archive.pulumi.com/t/2847494/any-reason-why-the-stack-names-are-arbitrarily-limited-to-10)) | 100 characters, in CLI code | 100 characters (`pkg/stack/stack.go:39`) | 100 characters |
-| Pulumi resource URN | 149 characters, a nested EKS role policy attachment ([Pulumi test fixture](https://github.com/pulumi/pulumi/search?q=cluster-instanceRole-e1b295bd)) | none found | none, bounded by body caps only | 2048 bytes |
-| Pulumi resource type | 62 characters, `admissionregistration.k8s.io/v1:ValidatingWebhookConfiguration` ([pulumi-kubernetes tests](https://github.com/pulumi/pulumi-kubernetes/tree/master/tests)). A nested type chain in a URN reaches 121 characters | none found | none, bounded by body caps only | 256 bytes |
+| Pulumi resource URN | 149 characters, a nested EKS role policy attachment ([Pulumi display test data](https://github.com/pulumi/pulumi/blob/7b4b596ff7b67387859c44f82d196c9365fc3088/pkg/backend/display/testdata/not-truncated/template-body.json)) | none found | none, bounded by body caps only | 2048 bytes |
+| Pulumi resource type | 90 characters, `kubernetes:admissionregistration.k8s.io/v1alpha1:ValidatingAdmissionPolicyBindingSpecPatch` ([provider schema](https://github.com/pulumi/pulumi-kubernetes/blob/b97e31330796/provider/cmd/pulumi-resource-kubernetes/schema.json)). A nested type chain in a URN reaches 121 characters | none found | none, bounded by body caps only | 256 bytes |
 | Pulumi config key | none found | none found | none, bounded by body caps only | 256 bytes |
 | Pulumi output name | none found | none found | none, bounded by body caps only | 256 bytes |
 | OpenTofu workspace name | none found. A HashiCorp support article reports that a name above 63 characters breaks Kubernetes label creation in TFE ([HashiCorp](https://support.hashicorp.com/hc/en-us/articles/27007645191699-Issue-with-large-workspace-names-on-a-Terraform-Enterprise-Flexible-Deployment-Options-Kubernetes-deployment)) | none in CLI. URL-safe only | 90 bytes (`pkg/workspace/workspace.go:53`) | 90 bytes, to review |
-| OpenTofu resource address | 75 characters, a three-level module path ([OpenTofu tests](https://github.com/opentofu/opentofu/tree/main/internal/addrs)) | none found | none, bounded by body caps only | 1024 bytes, for audit `Object` |
-| OpenTofu provider address | 60 characters, `s3-eu-west-1.amazonaws.com/examplecorp-terraform-modules/vpc` ([OpenTofu tests](https://github.com/opentofu/opentofu/tree/main/internal/getproviders)) | none found | none, bounded by body caps only | 1024 bytes, for audit `Object` |
+| OpenTofu resource address | 75 characters, a three-level module path ([OpenTofu `module_test.go`](https://github.com/opentofu/opentofu/blob/105b18bb846f80760ee983c8e49044b2bd30f0a4/internal/addrs/module_test.go)) | none found | none, bounded by body caps only | 1024 bytes, for audit `Object` |
+| OpenTofu provider address | 44 characters, `example.com/hashicorp/terraform-provider-bad` ([OpenTofu `provider_test.go`](https://github.com/opentofu/opentofu/blob/105b18bb846f80760ee983c8e49044b2bd30f0a4/internal/addrs/provider_test.go)) | none found | none, bounded by body caps only | 1024 bytes, for audit `Object` |
 | OpenTofu output name | none found | none found. HCL identifier rule | none, bounded by body caps only | 256 bytes |
 | OIDC `sub` | not measured in this run | 255 ASCII characters (OIDC Core 1.0, section 2) | 255 characters for API subjects (`pkg/principal/principal.go:116`). None for sign-in `IDPSubject` | 255 bytes, on sign-in too |
 | OIDC `iss` | not measured in this run | none in the spec | none | 512 bytes |
 | SCIM `userName` | not measured in this run | none in RFC 7643 | not checked in this run | 255 bytes |
 | SCIM `displayName` (user) | not measured in this run | none in RFC 7643 | 255 bytes (`pkg/principal/principal.go:117`) | 255 bytes (keep) |
 | Group name | none found | none in RFC 7643 | 100 bytes (`pkg/principal/principal.go:118`) | 100 bytes (keep) |
-| AWS ARN (role ARN field) | 163 characters, an autoscaling launch configuration ARN ([Pulumi examples](https://github.com/pulumi/examples)) | 2048 characters, IAM Role API | none for ARN fields | 2048 bytes |
-| Azure resource ID | 285 characters, a Site Recovery replicated item ([azurerm provider docs](https://github.com/hashicorp/terraform-provider-azurerm/tree/main/website/docs)) with placeholder names. Real names are longer | none found | none | 1024 bytes |
+| AWS ARN (role ARN field) | 163 characters, an autoscaling launch configuration ARN ([Pulumi display test data](https://github.com/pulumi/pulumi/blob/7b4b596ff7b67387859c44f82d196c9365fc3088/pkg/backend/display/testdata/not-truncated/template-body.json)) | 2048 characters, IAM Role API | none for ARN fields | 2048 bytes |
+| Azure resource ID | 285 characters, a Site Recovery replicated item ([azurerm provider docs](https://github.com/hashicorp/terraform-provider-azurerm/blob/bfbabe713676/website/docs/r/site_recovery_replicated_vm.html.markdown)) with placeholder names. Real names are longer | none found | none | 1024 bytes |
 | GCP resource name | none found | 1 to 63 characters, Compute Engine | none | 63 characters for DNS-style names |
 | Kubernetes object name | none found above 63 characters | 253 (DNS subdomain), 63 (DNS label) | none | 253 bytes |
 | Pulumi `User-Agent` | none observed. The fixed format is 21 characters plus version, command and agent | none in code | 512 bytes stored (`pkg/audit/audit.go:97`) | 512 bytes (keep) |
-| OpenTofu `User-Agent` | none observed. The client sends `OpenTofu/<version>` ([OpenTofu](https://github.com/opentofu/opentofu/blob/main/internal/httpclient/client_test.go)) | none in code | 512 bytes stored (`pkg/audit/audit.go:97`) | 512 bytes (keep) |
+| OpenTofu `User-Agent` | none observed. The client sends `OpenTofu/<version>` ([OpenTofu `client_test.go`](https://github.com/opentofu/opentofu/blob/105b18bb846f80760ee983c8e49044b2bd30f0a4/internal/httpclient/client_test.go)) | none in code | 512 bytes stored (`pkg/audit/audit.go:97`) | 512 bytes (keep) |
 | `Authorization` header | about 4 KB for a plain token. Over 18K characters for an Auth0 machine token. About 414 KB for an enriched Okta token ([Google Cloud thread](https://discuss.google.dev/t/apigee-x-request-header-size-limit-exceeds/105592), [Auth0 thread](https://community.auth0.com/t/m2m-applications-being-generated-with-unreasonably-large-access-tokens/141656)) | none in a standard | Go default, 1 MiB (`pkg/dustpan/dustpan.go:1323` sets no limit) | 64 KiB (`MaxHeaderBytes`), to review |
 
 Three rows need a decision from the owner:
@@ -194,7 +194,7 @@ or 200 groups (JWT). Above that limit, it sends an overage claim and the
 application queries Graph. This is the only documented token-size effect
 found in this run. Source: the same Microsoft Learn page above.
 
-Longest JWT size seen: unknown.
+Longest JWT size seen: see the `Authorization` header section.
 
 ### SCIM
 
@@ -288,25 +288,43 @@ Reason: it is the largest name Kubernetes accepts for a DNS subdomain name.
 
 ### `Authorization` header
 
-No source in this run sets a limit for a bearer token. Measured JWT sizes
-were not found.
+No standard sets a limit for a bearer token. Sizes seen in public sources:
+
+- A plain Okta access token is about 4 KB. An "enriched" token (extra
+  claims added) was about 414 KB and was refused with HTTP 413 before it
+  reached the API gateway. The gateway cites 60 KB for its own header limit
+  and 64 KB for the Google Cloud load balancer
+  ([Google Cloud community thread](https://discuss.google.dev/t/apigee-x-request-header-size-limit-exceeds/105592)).
+- An Auth0 machine-to-machine token was "over 18K characters" and caused
+  nginx `400 Request Header Or Cookie Too Large`
+  ([Auth0 community thread](https://community.auth0.com/t/m2m-applications-being-generated-with-unreasonably-large-access-tokens/141656)).
+- A Microsoft Q&A reply says that the maximum is 64 KB, with "I believe" and
+  no source
+  ([Microsoft Q&A](https://learn.microsoft.com/en-us/answers/questions/1356857/azure-ad-authentication-431-error)).
+- Calculation, not an observed value: Entra ID sends up to 200 group IDs in
+  a JWT. Each ID is a 36-character GUID, so 200 groups need about 7.8 KB of
+  JSON. Base64 adds one third. The token is about 10 KB before the other
+  claims. This is above the 8 KiB nginx default.
 
 Limits that do exist:
 
 - nginx sets 8 KiB for a request header buffer by default
   ([nginx](https://nginx.org/en/docs/http/ngx_http_core_module.html): `large_client_header_buffers 4 8k`).
-  A proxy in front of OpenDustpan rejects a larger header first.
+  A header line larger than one buffer gets `400`.
 - Go sets `DefaultMaxHeaderBytes` to 1 MiB
-  ([pkg.go.dev](https://pkg.go.dev/net/http#Server)). This is the default
-  when `Server.MaxHeaderBytes` is zero. OpenDustpan sets only
+  ([pkg.go.dev](https://pkg.go.dev/net/http#Server)). OpenDustpan sets only
   `ReadHeaderTimeout` (`pkg/dustpan/dustpan.go:1323`), so the 1 MiB default
   applies.
 
-Longest JWT seen: unknown.
+Correction: the earlier proposal of 8 KiB at the proxy is wrong. An Entra
+token with the full 200 groups is about 10 KB by calculation, and Auth0 and
+Okta tokens above 18 KB exist. An 8 KiB limit would refuse real sign-ins.
 
-Proposal: 8 KiB at the proxy, which matches nginx. Reason: a token larger
-than 8 KiB is outside the normal range of the identity providers checked
-here. Set this in the deployment guide, not in the server.
+Proposal: set `Server.MaxHeaderBytes` to 64 KiB. Reason: it is above every
+token that a gateway still accepts (60 KB at Apigee, 64 KB at the Google
+Cloud load balancer), and it is 16 times lower than the Go default. State in
+the deployment guide that a proxy in front must allow 64 KiB, and that
+nginx needs a raised `large_client_header_buffers`.
 
 ### Request bodies
 
@@ -350,10 +368,20 @@ The audit `TEXT` columns have no limit (for example
 - Azure resource ID: 1024 bytes.
 - Kubernetes object name: 253 bytes.
 - User agent: keep 512.
-- Header: 8 KiB at the proxy.
+- Header: 64 KiB (`MaxHeaderBytes`). The earlier 8 KiB proposal was wrong.
 
-Each proposal above has no measured real value behind it. The owner should
-check these against real use before any ADR.
+Measured maxima exist only for URN (149), resource type (90), ARN (163),
+Azure ID (285, placeholder names), module path (75), provider address (44)
+and the `Authorization` header (about 4 KB to 414 KB). Each of those
+proposals is at least 3 times the longest value seen. The header limit is
+set from the gateway limits. All other fields have no measured value. The
+test fixtures hold short, clean examples, so they set a floor, not a
+ceiling. The owner should check the rest against real state files.
+
+User agent: the 512-byte cap is correct on `main`. `MaxUserAgentLen` is
+defined at `pkg/audit/audit.go:97` and checked at `:213`. No real user
+agent above 100 bytes was found. The Pulumi `cmd` and `agent` parts have no
+cap in the CLI, so a cap of 512 stays useful.
 
 ## Open questions
 
@@ -363,8 +391,9 @@ check these against real use before any ADR.
    OpenDustpan rejects both (`internal/ident/ident.go:15`). Should the two
    match?
 3. Pulumi stack tag length is not checked here. Should OpenDustpan check it?
-4. No real URN, resource address, or config key was measured. A sample of
-   real state files would settle the URN and address proposals.
+4. Measured examples come from test fixtures and docs, not from production
+   state. A sample of real state files would settle the URN, address and
+   config key proposals.
 5. The Azure resource ID limit and the Kubernetes label value limit need a
    primary source before a value is set.
 6. Project IDs for GCP need a primary source.
@@ -394,4 +423,6 @@ Q&A on resource IDs, the Microsoft Q&A on `sub` length, the Ping Identity
 connector reference, the 1Password community thread, the Pulumi community
 thread on URN length, and a DrDroid note on Pulumi stack names.
 
-Web searches: 11.
+Web searches: 21 (11 earlier, 10 in this pass). Repositories cloned for
+fixture search: Pulumi, pulumi-kubernetes, Pulumi examples, OpenTofu and the
+azurerm provider.
