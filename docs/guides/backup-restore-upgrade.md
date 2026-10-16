@@ -78,8 +78,8 @@ backs up the live data, enters maintenance mode, and only then applies the
 backup. Use the same key-encryption key and the same schema version as the backup
 source. The database may differ: a backup of SQLite restores into PostgreSQL
 and a backup of PostgreSQL restores into SQLite (ADR 42, decision 9). A backup
-from before the seal change still restores.
-After the apply, the server seals the rows that the backup holds unsealed.
+from before the seal change still restores. The server does not seal the
+OpenTofu state versions that such a backup holds unsealed: they stay plain.
 
 Run the restore command. It calls the server and waits until the restore
 leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from

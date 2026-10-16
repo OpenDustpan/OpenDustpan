@@ -52,11 +52,7 @@ func TestForceUnlockFencesSealedState(t *testing.T) {
 	f := newSealFixture(t)
 	ctx := t.Context()
 
-	f.pushPlain(t, stateDoc, nil, 1)
-
-	if _, err := f.sealed.SealUnsealedStates(ctx); err != nil {
-		t.Fatalf("seal v1: %v", err)
-	}
+	f.pushSealed(t, stateDoc, nil, 1)
 
 	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
@@ -186,11 +182,7 @@ func TestForceUnlockSealedNeedsSealer(t *testing.T) {
 	f := newSealFixture(t)
 	ctx := t.Context()
 
-	f.pushPlain(t, stateDoc, nil, 1)
-
-	if _, err := f.sealed.SealUnsealedStates(ctx); err != nil {
-		t.Fatalf("seal v1: %v", err)
-	}
+	f.pushSealed(t, stateDoc, nil, 1)
 
 	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)

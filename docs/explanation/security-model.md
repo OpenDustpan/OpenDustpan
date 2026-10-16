@@ -191,7 +191,7 @@ disk encryption and with access rules on the S3 bucket.
 
 | Data | Where | Encrypted by the server |
 | --- | --- | --- |
-| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. The server seals the versions of an older server at start and after a restore |
+| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. Versions that a server older than the seal change wrote stay plain: the server does not seal them later |
 | Pulumi checkpoints | Blob store, compressed | No. The secret values in them are ciphertext from the Pulumi CLI |
 | Pulumi secret config values | Your stack configuration | Yes, as above |
 | Wrapped data keys | Database | Yes, by the key-encryption key |

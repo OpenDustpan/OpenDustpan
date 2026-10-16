@@ -1498,18 +1498,13 @@ func shutdownServer(ctx context.Context, srv *http.Server, serveErr <-chan error
 
 // runStartUp runs the start-up steps of Run in order: the key check and the
 // running backups of startUp (ADR 23, ADR 30 decision 9), then the running
-// restores of failStoppedRestores (ADR 38 decision 9), then the seal of
-// unsealed OpenTofu state (ADR 41 decision 11). A done context during
+// restores of failStoppedRestores (ADR 38 decision 9). A done context during
 // the steps is a stop, not a failure, so it answers nil: the caller asked
 // the server to stop.
 func (s *Server) runStartUp(ctx context.Context) error {
 	startErr := s.startUp(ctx)
 	if startErr == nil {
 		startErr = s.failStoppedRestores(ctx)
-	}
-
-	if startErr == nil {
-		startErr = s.sealUnsealedStates(ctx)
 	}
 
 	if startErr == nil {
@@ -1608,18 +1603,6 @@ func (s *Server) startUp(ctx context.Context) error {
 		s.now().UTC(),
 		backupStoppedText,
 	)
-}
-
-// sealUnsealedStates seals the OpenTofu state versions that still hold plain
-// content (ADR 41 decision 11). It runs after the fencing recovery of
-// failStoppedRestores, so its writes carry current fences. NewServer refuses
-// to build without a key-encryption key (#367), so the server always seals.
-func (s *Server) sealUnsealedStates(ctx context.Context) error {
-	if _, err := s.workspaces.SealUnsealedStates(ctx); err != nil {
-		return fmt.Errorf("seal unsealed state: %w", err)
-	}
-
-	return nil
 }
 
 // isLoopbackListenAddr reports whether addr binds only the loopback
@@ -2260,7 +2243,7 @@ func newRestoreService(
 
 	var admit func(ctx context.Context) error
 
-	steps := []restoreStep{sealAfterRestore(deps)}
+	var steps []restoreStep
 	if deps.chain != nil {
 		admit = deps.chain.admitRestore
 		steps = append(steps, deps.chain.afterRestore)
@@ -2298,7 +2281,7 @@ type restoreStep func(ctx context.Context) error
 
 // afterRestore returns the after-apply step of a restore that runs every
 // step in order, also after a step fails, and joins their errors. So a
-// failed seal never skips the comparison of the restored audit log with the
+// failed step never skips the comparison of the restored audit log with the
 // state of the chain.
 func afterRestore(steps ...restoreStep) restoreStep {
 	return func(ctx context.Context) error {
@@ -2311,21 +2294,6 @@ func afterRestore(steps ...restoreStep) restoreStep {
 		}
 
 		return errors.Join(errs...)
-	}
-}
-
-// sealAfterRestore returns the after-apply step of a restore: it seals the
-// OpenTofu state versions that the restored backup holds unsealed (ADR 41
-// decision 11), with the same job the server runs at start-up. NewServer
-// refuses to build without a key-encryption key (#367), so the step is
-// always set.
-func sealAfterRestore(deps installationDeps) restoreStep {
-	return func(ctx context.Context) error {
-		if _, err := deps.services.workspaces.SealUnsealedStates(ctx); err != nil {
-			return fmt.Errorf("seal unsealed state: %w", err)
-		}
-
-		return nil
 	}
 }
 
