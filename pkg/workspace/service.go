@@ -144,8 +144,12 @@ type StateStore interface {
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// FenceAndUnlock releases the lock of w and makes sv the workspace's current
 	// state, in one fenced transaction. sv is a finalized fence version of w:
-	// it names the content, the new lineage, its serial and FenceBy. The stored
-	// workspace must be locked and hold revision w.Revision-1, else
+	// it names the content, the new lineage, its serial and FenceBy. The
+	// caller stores sv as a pending version with CreateStateVersion before it
+	// writes the content, so a sweep finds the key; FenceAndUnlock finalizes
+	// that row. The stored version must still be pending and name sv.Content,
+	// else ErrUploadDenied. The stored workspace must be locked and hold
+	// revision w.Revision-1, else
 	// ErrNotLocked or ErrConcurrentModification. The current version must be
 	// expect (the empty ID when the workspace has no state), else
 	// ErrConcurrentModification, and sv.Serial must be one more than its serial,
