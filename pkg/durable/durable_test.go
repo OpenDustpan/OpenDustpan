@@ -37,12 +37,33 @@ func TestClaimRequestValidate(t *testing.T) {
 		req  durable.ClaimRequest
 		want error
 	}{
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, Lease: time.Second}, nil},
-		{durable.ClaimRequest{Owner: "", Kinds: kinds, Lease: time.Second}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: nil, Lease: time.Second}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: []durable.Kind{"backup", ""}, Lease: time.Second}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, Lease: 0}, durable.ErrInvalid},
-		{durable.ClaimRequest{Owner: "a", Kinds: kinds, Lease: -time.Second}, durable.ErrInvalid},
+		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: time.Second}, nil},
+		{durable.ClaimRequest{Owner: "", Kinds: kinds, MaxVersions: nil, Lease: time.Second}, durable.ErrInvalid},
+		{durable.ClaimRequest{Owner: "a", Kinds: nil, MaxVersions: nil, Lease: time.Second}, durable.ErrInvalid},
+		{
+			durable.ClaimRequest{Owner: "a", Kinds: []durable.Kind{"backup", ""}, MaxVersions: nil, Lease: time.Second},
+			durable.ErrInvalid,
+		},
+		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: 0}, durable.ErrInvalid},
+		{durable.ClaimRequest{Owner: "a", Kinds: kinds, MaxVersions: nil, Lease: -time.Second}, durable.ErrInvalid},
+		{
+			durable.ClaimRequest{
+				Owner:       "a",
+				Kinds:       kinds,
+				MaxVersions: map[durable.Kind]int{"backup": -1},
+				Lease:       time.Second,
+			},
+			durable.ErrInvalid,
+		},
+		{
+			durable.ClaimRequest{
+				Owner:       "a",
+				Kinds:       kinds,
+				MaxVersions: map[durable.Kind]int{"backup": 0},
+				Lease:       time.Second,
+			},
+			nil,
+		},
 	}
 
 	for _, tc := range cases {
@@ -91,5 +112,31 @@ func TestClaimStepAndOperationStep(t *testing.T) {
 
 	if _, ok := op.Step("upload"); ok {
 		t.Fatal("Operation.Step(upload) found a step that is not recorded")
+	}
+}
+
+func TestClaimRequestAllows(t *testing.T) {
+	t.Parallel()
+
+	req := durable.ClaimRequest{
+		Owner: "a", Kinds: []durable.Kind{"backup", "restore"},
+		MaxVersions: map[durable.Kind]int{"backup": 2}, Lease: time.Second,
+	}
+
+	cases := []struct {
+		kind    durable.Kind
+		version int
+		want    bool
+	}{
+		{"backup", 2, true},
+		{"backup", 3, false},
+		{"restore", 99, true},
+		{"sweep", 0, false},
+	}
+
+	for _, tc := range cases {
+		if got := req.Allows(tc.kind, tc.version); got != tc.want {
+			t.Errorf("Allows(%s, %d) = %v, want %v", tc.kind, tc.version, got, tc.want)
+		}
 	}
 }
