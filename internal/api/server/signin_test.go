@@ -1207,3 +1207,47 @@ func tokenEntrySession(entries []audit.Entry) string {
 
 	return ""
 }
+
+// TestSignInPolicyEntriesNameTheSession proves that the audit entries of a
+// change of the token policy and of the session policy from a console
+// session record the session ID next to the changed settings.
+func TestSignInPolicyEntriesNameTheSession(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+	sess := e.signIn(t)
+
+	for _, tc := range []struct {
+		target, body, key string
+	}{
+		{"/api/server/token-policy", `{"inactivitySeconds":0}`, "inactivitySeconds"},
+		{"/api/server/session-policy", `{"tokenFreshnessSeconds":600}`, "tokenFreshnessSeconds"},
+	} {
+		if rec := e.sendWithSession(t, http.MethodPatch, sess, tc.target, tc.body); rec.Code != http.StatusOK {
+			t.Fatalf("PATCH %s from a session = %d %s, want 200", tc.target, rec.Code, rec.Body.String())
+		}
+
+		if !sessionChangeHas(e.sessionChanges(t), tc.key) {
+			t.Errorf("no entry of the session records %s and the session ID", tc.key)
+		}
+	}
+}
+
+// sessionChangeHas reports whether one of entries records the key and a
+// session ID.
+func sessionChangeHas(entries []audit.Entry, key string) bool {
+	for i := range entries {
+		var hasKey, hasSession bool
+
+		for _, c := range entries[i].Changes {
+			hasKey = hasKey || c.Key == key
+			hasSession = hasSession || (c.Key == "sessionId" && c.New != "")
+		}
+
+		if hasKey && hasSession {
+			return true
+		}
+	}
+
+	return false
+}
