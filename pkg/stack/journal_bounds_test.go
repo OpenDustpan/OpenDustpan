@@ -44,6 +44,8 @@ func TestAppendJournalRefusesOversizedBatch(t *testing.T) {
 
 	if err := f.svc.AppendJournal(ctx, f.ref, s.Update.ID, s.Token, big); !errors.Is(err, stack.ErrTooLarge) {
 		t.Fatalf("oversized batch: err = %v, want ErrTooLarge", err)
+	} else if !strings.Contains(err.Error(), "pulumi up") {
+		t.Fatalf("oversized batch names no command that helps: %v", err)
 	}
 
 	if keys := f.journalKeys(t, s.Update.ID); len(keys) != 0 {

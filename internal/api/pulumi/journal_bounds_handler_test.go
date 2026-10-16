@@ -72,9 +72,7 @@ func TestJournalCompleteAnswers413OnReplayBound(t *testing.T) {
 			resp,
 		)
 	}
-	if !strings.Contains(resp, "payload too large") {
-		t.Fatalf("413 body lacks a clear message: %s", resp)
-	}
+	checkReplayBoundBody(t, resp, "journal entries", pulumijournal.MaxEntriesPerUpdate)
 }
 
 // TestJournalCompleteAnswers503OnBuildTimeout checks that completing a

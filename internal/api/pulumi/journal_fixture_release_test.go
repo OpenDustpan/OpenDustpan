@@ -5,11 +5,20 @@ package pulumi_test
 import (
 	"testing"
 
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
-// journalWriterFor returns no journal writer in the release build. The fixture
-// then refuses every journal batch before any write.
-func journalWriterFor(_ *testing.T, _ *memBlob, _ *memUpdateStore, _ int) *stack.JournalEntries {
-	return nil
+// journalWriterFor returns a real journal writer, as the recording build
+// does, so the replay bound tests run in both builds. The release server
+// still negotiates journal version zero, so no CLI journals in production.
+func journalWriterFor(t *testing.T, blobs *memBlob, rows *memUpdateStore, limit int) *stack.JournalEntries {
+	t.Helper()
+
+	journal, err := stack.NewJournalEntries(blobs, rows, pulumijournal.Verifier{}, limit)
+	if err != nil {
+		t.Fatalf("journal writer: %v", err)
+	}
+
+	return journal
 }

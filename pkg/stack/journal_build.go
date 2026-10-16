@@ -125,6 +125,19 @@ func (s *Updates) mapReplayBound(id UpdateID, err error) error {
 	return fmt.Errorf("build checkpoint of update %s: %w", id, err)
 }
 
+// ReplayBoundMessage returns the message the server answers for a replay
+// bound refusal: one sentence that names the bound, its count and limit,
+// and the one command that helps. It reports false when err holds no replay
+// bound, so the caller answers the error text itself.
+func ReplayBoundMessage(err error) (string, bool) {
+	var bound *pulumijournal.BoundError
+	if !errors.As(err, &bound) {
+		return "", false
+	}
+
+	return bound.Error() + ": split the update into smaller updates and run `pulumi up` again", true
+}
+
 // journalBase returns the deployment the replay starts from: the checkpoint
 // the server served at the start of the update, unwrapped like an export.
 // A version without a checkpoint falls back to the latest one, and a stack
