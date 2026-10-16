@@ -1596,6 +1596,132 @@ func TestALostLeaseEndsCleanlyWithoutFailureOrBackoff(t *testing.T) {
 	}
 }
 
+// timeoutSink fails every write at once with a wrapped deadline exceeded,
+// as a sink with its own short timeout does well before the round deadline.
+type timeoutSink struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *timeoutSink) Write(context.Context, []logsink.Record) error {
+	s.mu.Lock()
+	s.calls++
+	s.mu.Unlock()
+
+	return fmt.Errorf("sink write: %w", context.DeadlineExceeded)
+}
+
+func (s *timeoutSink) Close() error { return nil }
+
+// count answers how many writes the sink saw.
+func (s *timeoutSink) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.calls
+}
+
+// TestASinkTimeoutIsAFailure proves that a sink timeout while the round
+// deadline is still ahead ends the round as a failure: the failure hook
+// runs once, the log holds a delivery failure and no clean round end, and
+// the next round waits out the doubled backoff instead of the ship interval.
+func TestASinkTimeoutIsAFailure(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 1})
+	leases := newMemLeaser()
+	sink := &timeoutSink{mu: sync.Mutex{}, calls: 0}
+
+	var logs lockedBuffer
+
+	failures := &failureCounter{mu: sync.Mutex{}, n: 0}
+
+	s := newLeasedShipperFull(t, leasedShipperConfig{
+		feed:      feed,
+		leases:    leases,
+		holder:    "ins-holder-a",
+		sink:      sink,
+		ttl:       4 * time.Second,
+		renew:     2500 * time.Millisecond,
+		interval:  1500 * time.Millisecond,
+		logger:    debugLogger(&logs),
+		onFailure: failures.hook,
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		s.Run(ctx)
+	}()
+
+	// The first round fails fast in its first write, well before the round
+	// deadline of 1.5 seconds.
+	waitUntil(t, time.Now().Add(10*time.Second), "the sink timeout to fail the round",
+		func() bool { return failures.count() >= 1 })
+
+	start := time.Now()
+	writes := sink.count()
+
+	if got := failures.count(); got != 1 {
+		cancel()
+		<-done
+		t.Fatalf("failure hook calls: got %d, want 1", got)
+	}
+
+	if out := logs.String(); !strings.Contains(out, "audit sink delivery failed") {
+		cancel()
+		<-done
+		t.Fatalf("log lacks a delivery failure for a sink timeout: %s", out)
+	}
+
+	if out := logs.String(); strings.Contains(out, "audit sink round ended") {
+		cancel()
+		<-done
+		t.Fatalf("log holds a clean round end for a sink timeout: %s", out)
+	}
+
+	if got := feed.acmeCursor("siem"); got != 0 {
+		cancel()
+		<-done
+		t.Fatalf("cursor after a sink timeout: got %d, want 0", got)
+	}
+
+	// A failed round doubles its wait to 3 seconds, so the loop waits out
+	// the renew interval of 2.5 seconds. A clean round would keep the ship
+	// interval of 1.5 seconds and start the next round by now.
+	pause := time.NewTimer(2 * time.Second)
+	defer pause.Stop()
+
+	select {
+	case <-t.Context().Done():
+		cancel()
+		<-done
+		t.Fatal("test ended while it waited out the ship interval")
+	case <-pause.C:
+	}
+
+	if got := sink.count(); got != writes {
+		cancel()
+		<-done
+		t.Fatalf("writes after the ship interval: got %d, want %d", got, writes)
+	}
+
+	// The loop still retries with the doubled backoff.
+	waitUntil(t, start.Add(5*time.Second), "the next round to start after backoff",
+		func() bool { return sink.count() > writes })
+
+	cancel()
+	<-done
+
+	if got := failures.count(); got < 1 {
+		t.Fatalf("failure hook calls: got %d, want at least 1", got)
+	}
+}
+
 // TestNewShipperRejectsRenewIntervalNotShorterThanLeaseTTL proves that a
 // renew interval at or past the lease TTL is rejected, while a shorter one
 // is accepted.

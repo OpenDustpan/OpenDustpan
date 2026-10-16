@@ -577,19 +577,22 @@ func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
 
 	namespaces, err := s.cfg.Namespaces.ListNamespaces(ctx)
 	if err != nil {
-		return markRoundEnded(outer, &shipError{step: stepList, err: err})
+		return markRoundEnded(outer, ctx, &shipError{step: stepList, err: err})
 	}
 
 	namespaces = append(namespaces, serverScope())
 
-	return markRoundEnded(outer, s.shipScopes(ctx, sink, namespaces))
+	return markRoundEnded(outer, ctx, s.shipScopes(ctx, sink, namespaces))
 }
 
 // markRoundEnded reports a round that stopped at its round deadline or lost
-// its sink lease as a clean round end. When the outer context is done the
-// round stops for shutdown instead, and the error stays as it is. A round
-// with any other failure stays a failure, so the loop still counts it.
-func markRoundEnded(outer context.Context, err error) error {
+// its sink lease as a clean round end. A deadline ends a round cleanly only
+// while the round context is done and the outer context is not: a timeout
+// from a sink while the round context is still live stays a failure, so the
+// loop still counts it. When the outer context is done the round stops for
+// shutdown instead, and the error stays as it is. A round with any other
+// failure stays a failure, so the loop still counts it.
+func markRoundEnded(outer, roundCtx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -606,7 +609,7 @@ func markRoundEnded(outer context.Context, err error) error {
 		return fmt.Errorf("%w: %w", errRoundEnded, err)
 	}
 
-	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+	if roundCtx.Err() != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
 		return fmt.Errorf("%w: %w", errRoundEnded, err)
 	}
 
