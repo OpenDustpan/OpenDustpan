@@ -2,10 +2,11 @@ package durable
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand/v2"
 	"slices"
 	"sync"
 	"time"
@@ -175,7 +176,7 @@ func withDefaults(cfg RunnerConfig) RunnerConfig {
 	}
 
 	if cfg.Rand == nil {
-		cfg.Rand = rand.Float64
+		cfg.Rand = cryptoFloat64
 	}
 
 	return cfg
@@ -446,6 +447,26 @@ func ErrorClass(err error) string {
 	}
 
 	return "error"
+}
+
+const (
+	// float64Bits is the number of random bits in a float64 in [0, 1).
+	float64Bits = 53
+	// uint64Bits is the size of the random word.
+	uint64Bits = 64
+	// jitterMiddle is the middle of [0, 1).
+	jitterMiddle = 0.5
+)
+
+// cryptoFloat64 returns a number in [0, 1) from crypto/rand. A failed read
+// gives 0.5, the middle of the jitter.
+func cryptoFloat64() float64 {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return jitterMiddle
+	}
+
+	return float64(binary.BigEndian.Uint64(b[:])>>(uint64Bits-float64Bits)) / (1 << float64Bits)
 }
 
 // wait returns after d or when ctx ends.
