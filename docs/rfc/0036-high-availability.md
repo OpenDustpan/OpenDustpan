@@ -24,8 +24,9 @@ that the project owner asked for on 2026-10-16:
 The background is in the research note
 [durable execution](../research/durable-execution.md), cited below as
 "research, part N". An architecture review of 2026-10-16 is a second input.
-This RFC cites its findings by their ID (for example "review B1") as claims
-until a test confirms them. Code references are at commit 6909035.
+This RFC cites its findings by their ID (for example "review B1"). Findings
+that a test or a second reading verified have their own issue, and this RFC
+cites that issue as a fact. Code references are at commit 6909035.
 
 ## Problem
 
@@ -71,7 +72,26 @@ tests are on local branches and fail on `main`:
   workspace that no row names (`pkg/workspace/seal.go:331-362`). Test:
   instance B seals and stops before its sweep; an older instance writes a
   plain version; instance A writes its sealed blob; B's sweep deletes it; A
-  commits a row that names a missing blob.
+  commits a row that names a missing blob. A force-unlock fence blob, which
+  records nothing before its `Put`, has the same exposure.
+
+Other verified failures, with their issue where one exists:
+
+- A restore ends maintenance mode when its swap commits: the staged data
+  holds the backup's installation row, and the swap keeps only the audit chain
+  state (`pkg/store/postgres/restore.go:264-326`). Reproduced on both
+  dialects (#678).
+- A running backup races the retention sweep: a purge that commits after the
+  backup's snapshot deletes blobs that the backup still copies (#683).
+- Writes at installation scope (tokens, sessions, principals, grants) carry
+  no fence, so they can commit during a restore (#684).
+- Any instance can renew the audit chain migration claim
+  (`queries.sql:1492-1507`, #685).
+- Nothing stops two running backups or two running restores across
+  instances; partial unique indexes would (#690).
+- The maintenance watcher fails open: before its first successful read it
+  answers `normal`, and after a read error it keeps the last state
+  (`pkg/maintenance/maintenance.go:634-654`).
 
 The code also shows these gaps (read, not yet tested):
 
@@ -85,8 +105,6 @@ The code also shows these gaps (read, not yet tested):
   (`pkg/maintenance/maintenance.go:42-47`), and only the HTTP layer refuses
   tool calls in maintenance mode (`pkg/dustpan/maintenance.go:47-59`). Store
   writes do not check it.
-- Writes at installation scope (tokens, sessions, principals, grants) carry
-  no fence, so a restore does not fence them (review B4).
 - The PostgreSQL staging schema name lives in one `Store` value
   (`pkg/store/postgres/postgres.go:47-49`). Nothing removes an orphaned
   `restore_stage_*` schema.
@@ -94,10 +112,6 @@ The code also shows these gaps (read, not yet tested):
   checkpoint mismatch mark is per process (`pkg/audit/checkpoint.go:403-414`).
 - The auth failure budget is per process (`internal/authgate/authgate.go`),
   so N instances allow about N times the budget.
-- The review reads the code as ending maintenance mode when the restore swap
-  commits: the staged data holds the backup's installation row, and the swap
-  keeps only the audit chain state (`pkg/store/postgres/restore.go:264-326`).
-  A test must confirm this first.
 
 The appendix lists all 31 background jobs, caches and long operations with
 their mechanism today and their behavior with two instances.
@@ -241,6 +255,14 @@ inactivity disable takes the server audit lock and compares with the database
 clock (`pkg/store/postgres/accesstokens.go:281-300`), and the prune is one
 `DELETE`. They become schedules only to stop the duplicated work.
 
+### Where the SQL lives
+
+The proposal adds tables in both dialects: operations, steps, schedules and,
+with L2, registrations. Today each dialect has its own SQL and its own adapter
+code (ADR 3). The owner has not yet decided on a shared store core with a
+policy per dialect (review E1). That decision changes how much code these
+tables cost: with a shared core, the claim and fence logic is written once.
+
 ### The port
 
 A new tool-neutral package, `pkg/durable` (the name is open), with a sketch
@@ -375,10 +397,11 @@ suite cases, so the decision changes the adapter, not the port.
 
 ### Maintenance and restore
 
-This RFC proposes the write-path installation check (option 1 above):
+This RFC proposes the write-path installation check (option 1 above). It is
+the stronger option against ADR 48 decisions 5 to 8:
 
 - It needs no registry, no drain counter and no calls between instances.
-- The same statement fences installation-scope writes (review B4).
+- The same statement fences installation-scope writes (#684).
 - Reads during maintenance stay bounded by the 2 s cache, which is safe:
   they change nothing.
 
@@ -407,7 +430,8 @@ needs a superseding ADR.
 
 Today the installation, backups, restores and sink cursor and lease tables
 are part of the data that a restore replaces. The swap keeps only the audit
-chain state. This RFC proposes a declared list of bookkeeping tables, each
+chain state, so a restore ends maintenance mode when its swap commits
+(#678). This RFC proposes a declared list of bookkeeping tables, each
 with "keep" or "clear" across a swap (review B1):
 
 - On PostgreSQL the control tables (operations, steps, schedules,
@@ -426,13 +450,14 @@ the same way.
 Small first steps from the review, each with its own test:
 
 - Partial unique indexes allow one running backup and one running restore
-  (review B7).
+  (#690).
 - The staging area becomes a handle on the operation row, staged once
   (review B2).
 - `DROP SCHEMA` of the old live data becomes its own step with a
   `lock_timeout` (review B5).
-- The maintenance gate fails closed when it cannot read the state
-  (review B8).
+- The maintenance gate fails closed when it cannot read the state.
+- A purge does not delete blobs that a running backup still needs, and
+  background work pauses in maintenance mode (#683).
 
 ### Every job in the new model
 
@@ -472,8 +497,9 @@ data from before a change, instead of making it safe for several instances:
 - the refusal message for backup manifest format 1;
 - audit hash fields that are conditional on "from before this column".
 
-The owner may also collapse the 52 migrations of each dialect into one
-baseline before the first release. That resets the frozen hashes and the
+The owner already has the migration squash on their list (review A12): one
+baseline per dialect instead of 52 migrations each, before the first
+release. That resets the frozen hashes and the
 schema list of the binary. After the first release, a rolling deploy runs
 two server versions on one schema for minutes, so migrations would follow an
 expand-and-contract rule with a test of the previous release against the new
@@ -536,8 +562,8 @@ refuses a second instance on one SQLite file.
    installation check, through a superseding ADR?
 3. Control tables in their own schema, outside the restore swap and the
    backup scope: does that need a small new ADR?
-4. Delete the pre-release compatibility code? Collapse the migrations into
-   one baseline per dialect now?
+4. Delete the pre-release compatibility code together with the migration
+   squash that is already on the owner's list?
 5. The DBOS spike stays on a throwaway branch, and adopting DBOS needs the
    owner's approval of the dependency. Is DBOS still worth the spike, given
    what the source shows?
