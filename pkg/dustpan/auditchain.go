@@ -1028,7 +1028,8 @@ func (c *auditChain) checkScope(ctx context.Context, scope namespace.Name) (bool
 
 	if !result.Valid {
 		c.logger.ErrorContext(ctx, "audit checkpoint does not match",
-			slog.String("scope", scope.String()), slog.Int64("sequence", result.BadSequence))
+			slog.String("scope", scope.String()), slog.Int64("sequence", result.BadSequence),
+			slog.String("reason", result.Reason))
 
 		return false, nil
 	}

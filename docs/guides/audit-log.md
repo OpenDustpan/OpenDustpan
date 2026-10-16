@@ -299,9 +299,10 @@ At each check, the server does these steps for each scope whose chain matches:
    It always reads the newest checkpoint of the scope.
    When the log ends before that checkpoint, the check fails.
    The next check finds a cut at the end of the log.
-   For each checkpoint, it checks the key ID, the signature, and the hash of the entry at its sequence.
+   For each checkpoint, it checks the key ID, the signature, the epoch, and the hash of the entry at its sequence.
+   The epoch in the checkpoint must match the epoch of its directory.
 2. If all of them match, it signs the hash of the last entry of the scope.
-   The checkpoint holds the scope, the sequence, the hash, the time, the key ID and the signature.
+   The checkpoint holds the scope, the sequence, the epoch, the hash, the time, the key ID and the signature.
    The key ID is the first 16 hexadecimal characters of the SHA-256 hash of the public key.
 3. It writes the checkpoint to the blob store under `audit-checkpoints/<epoch>/<scope in hexadecimal>/<sequence>.json`.
    A key holds one checkpoint and the server never writes it again, so two instances write it once.
@@ -324,7 +325,16 @@ A person who can delete checkpoints can hide a rewrite of the entries that came 
 
 An epoch is one history of the log.
 The check reads only the checkpoints of the current epoch.
-The server keeps the number of the current epoch in the blob store under `audit-checkpoints/epochs/`.
+The server keeps the current epoch in the blob store under `audit-checkpoints/epochs/`.
+Each epoch object holds the epoch number, the time, the key ID and a signature.
+The server signs each epoch object with the same key as the checkpoints.
+The signed message holds a fixed context line, the epoch, the time in Unix milliseconds and the key ID.
+The check reads every epoch object and verifies each one.
+It checks the signature, the key ID, and the body number against the key number.
+An unsigned or badly signed epoch object makes the check fail and stops new signatures.
+A bad epoch object counts the scope in `dustpan_audit_chain_invalid`.
+After an investigation, the operator deletes the bad epoch object.
+The next check then reads the fixed store.
 
 A restore starts a new epoch, because a restore of an older backup deletes entries that older checkpoints sign.
 The restore writes a change entry in the scope `@server` with the value path `/audit/checkpoints/epoch/<number>`.
@@ -333,7 +343,7 @@ The server does not check them again.
 
 ### Change the signing key
 
-A checkpoint that a key signed passes the check only while the server knows that key.
+A checkpoint or an epoch object that a key signed passes the check only while the server knows that key.
 Before you change the signing key, put the old public key in a file and name the file with `--audit-verify-keys-file` (`DUSTPAN_AUDIT_VERIFY_KEYS_FILE`).
 The file holds one public key in base64 on each line.
 The server ignores empty lines and lines that start with `#`.

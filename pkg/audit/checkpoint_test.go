@@ -549,6 +549,7 @@ func TestSigner(t *testing.T) {
 		KeyID:     "",
 		Signature: nil,
 		Sequence:  1,
+		Epoch:     2,
 	})
 
 	raw, err := audit.MarshalCheckpoint(cp)
@@ -568,6 +569,285 @@ func TestSigner(t *testing.T) {
 	back.At = back.At.Add(time.Millisecond)
 	if err := signer.Verify(back); !errors.Is(err, audit.ErrCheckpointMismatch) {
 		t.Fatalf("verify a changed time: got %v, want ErrCheckpointMismatch", err)
+	}
+}
+
+// epochKey returns the epoch key of epoch.
+func epochKey(t *testing.T, epoch int64) blob.Key {
+	t.Helper()
+
+	k, err := audit.EpochKey(epoch)
+	if err != nil {
+		t.Fatalf("epoch key: %v", err)
+	}
+
+	return k
+}
+
+// checkpointObjects counts the stored checkpoint objects, without the epoch
+// objects.
+func checkpointObjects(t *testing.T, blobs blob.Store) int {
+	t.Helper()
+
+	objects, err := blobs.List(t.Context(), audit.CheckpointPrefix+"/")
+	if err != nil {
+		t.Fatalf("list checkpoints: %v", err)
+	}
+
+	var n int
+
+	for _, obj := range objects {
+		if !strings.Contains(obj.Key.String(), "/epochs/") {
+			n++
+		}
+	}
+
+	return n
+}
+
+func TestCheckpointsRefuseForgedEpochObjects(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, time.October, 15, 12, 0, 0, 123000000, time.UTC)
+
+	signedBy := func(t *testing.T, seed byte, epoch int64) []byte {
+		t.Helper()
+
+		rec := newSigner(t, seed).SignEpoch(audit.EpochRecord{
+			At:        at,
+			KeyID:     "",
+			Signature: nil,
+			Epoch:     epoch,
+		})
+
+		raw, err := audit.MarshalEpoch(rec)
+		if err != nil {
+			t.Fatalf("marshal epoch: %v", err)
+		}
+
+		return raw
+	}
+
+	cases := []struct {
+		raw  []byte
+		name string
+	}{
+		{name: "unsigned body", raw: []byte(`{"at":"2026-10-15T12:00:00.123Z"}`)},
+		{name: "another key", raw: signedBy(t, 9, 1)},
+		{name: "number differs from key", raw: signedBy(t, 7, 2)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			checkForgedEpoch(t, tc.raw)
+		})
+	}
+}
+
+// checkForgedEpoch stores raw as epoch 1 and proves that the checkpoints
+// refuse it: Epoch names the key in an error that wraps
+// ErrCheckpointMismatch, Verify answers invalid without an error, and
+// Write signs nothing.
+func checkForgedEpoch(t *testing.T, raw []byte) {
+	t.Helper()
+
+	f := newCheckpointFixture(t, 3)
+	want := epochKey(t, 1)
+
+	if err := f.blobs.Put(t.Context(), want, bytes.NewReader(raw)); err != nil {
+		t.Fatalf("put forged epoch: %v", err)
+	}
+
+	if _, err := f.cps.Epoch(t.Context()); !errors.Is(err, audit.ErrCheckpointMismatch) ||
+		!strings.Contains(err.Error(), want.String()) {
+		t.Fatalf("epoch: got %v, want ErrCheckpointMismatch naming %s", err, want)
+	}
+
+	got, err := f.cps.Verify(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("verify: got error %v, want invalid without an error", err)
+	}
+
+	if got.Valid || got.BadSequence != 0 {
+		t.Fatalf("verify: got %+v, want invalid at 0", got)
+	}
+
+	wrote, err := f.cps.Write(t.Context(), "acme", time.Unix(1_700_000_100, 0))
+	if !errors.Is(err, audit.ErrCheckpointMismatch) {
+		t.Fatalf("write: got %v, %v, want ErrCheckpointMismatch", wrote, err)
+	}
+
+	if wrote {
+		t.Fatal("write with a forged epoch: wrote a checkpoint")
+	}
+
+	if n := checkpointObjects(t, f.blobs); n != 0 {
+		t.Fatalf("checkpoints with a forged epoch: got %d objects, want none", n)
+	}
+}
+
+func TestCheckpointsFindACopiedCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	f := newCheckpointFixture(t, 3)
+	f.write(t)
+
+	epoch, err := f.cps.NewEpoch(t.Context(), time.Unix(1_700_000_100, 0))
+	if err != nil || epoch != 1 {
+		t.Fatalf("new epoch: got %d, %v, want 1", epoch, err)
+	}
+
+	body, err := f.blobs.Get(t.Context(), key(t, 0, 3))
+	if err != nil {
+		t.Fatalf("get checkpoint: %v", err)
+	}
+
+	raw, err := io.ReadAll(body)
+	if closeErr := body.Close(); closeErr != nil {
+		t.Fatalf("close checkpoint: %v", closeErr)
+	}
+
+	if err != nil {
+		t.Fatalf("read checkpoint: %v", err)
+	}
+
+	if err := f.blobs.Put(t.Context(), key(t, 1, 3), bytes.NewReader(raw)); err != nil {
+		t.Fatalf("copy checkpoint to epoch 1: %v", err)
+	}
+
+	if got := f.verify(t); got.Valid || got.BadSequence != 3 {
+		t.Fatalf("verify: got %+v, want invalid at 3", got)
+	}
+}
+
+func TestCheckpointsFindARehashedCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	f := newCheckpointFixture(t, 3)
+	f.write(t)
+
+	// An attacker changes entry 3, computes its hash again and writes the
+	// new hash into the stored checkpoint. The old signature does not
+	// cover it.
+	e := f.entries.entries[2]
+	e.Subject = "mallory"
+	e.Hash = audit.ComputeHash(e, e.PrevHash)
+	f.entries.entries[2] = e
+
+	k := key(t, 0, 3)
+	cp := readCheckpoint(t, f.blobs, k)
+	cp.Hash = e.Hash
+
+	raw, err := audit.MarshalCheckpoint(cp)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	f.replace(t, k, raw)
+
+	if got := f.verify(t); got.Valid || got.BadSequence != 3 {
+		t.Fatalf("verify: got %+v, want invalid at 3", got)
+	}
+}
+
+func TestCheckpointMessagePinsBytes(t *testing.T) {
+	t.Parallel()
+
+	cp := audit.Checkpoint{
+		At:        time.Date(2026, time.October, 15, 12, 0, 0, 123000000, time.UTC),
+		Scope:     "acme",
+		Hash:      "9f2c41ab",
+		KeyID:     "0123456789abcdef",
+		Signature: nil,
+		Sequence:  3,
+		Epoch:     2,
+	}
+
+	want := "opendustpan audit checkpoint v1\nacme\n3\n2\n9f2c41ab\n1792065600123\n0123456789abcdef"
+
+	if got := string(cp.Message()); got != want {
+		t.Fatalf("message: got %q, want %q", got, want)
+	}
+}
+
+func TestEpochMessagePinsBytes(t *testing.T) {
+	t.Parallel()
+
+	e := audit.EpochRecord{
+		At:        time.Date(2026, time.October, 15, 12, 0, 0, 123000000, time.UTC),
+		KeyID:     "0123456789abcdef",
+		Signature: nil,
+		Epoch:     4,
+	}
+
+	want := "opendustpan audit checkpoint epoch v1\n4\n1792065600123\n0123456789abcdef"
+
+	if got := string(e.Message()); got != want {
+		t.Fatalf("message: got %q, want %q", got, want)
+	}
+}
+
+func TestSignerVerifyFailsOnAnyFieldChange(t *testing.T) {
+	t.Parallel()
+
+	signer := newSigner(t, 7)
+
+	base := signer.Sign(audit.Checkpoint{
+		At:        time.Date(2026, time.October, 15, 12, 0, 0, 123000000, time.UTC),
+		Scope:     "acme",
+		Hash:      "9f2c41ab",
+		KeyID:     "",
+		Signature: nil,
+		Sequence:  3,
+		Epoch:     2,
+	})
+
+	cases := []struct {
+		change func(c audit.Checkpoint) audit.Checkpoint
+		name   string
+	}{
+		{name: "scope", change: func(c audit.Checkpoint) audit.Checkpoint {
+			c.Scope = "other"
+
+			return c
+		}},
+		{name: "sequence", change: func(c audit.Checkpoint) audit.Checkpoint {
+			c.Sequence = 4
+
+			return c
+		}},
+		{name: "epoch", change: func(c audit.Checkpoint) audit.Checkpoint {
+			c.Epoch = 3
+
+			return c
+		}},
+		{name: "hash", change: func(c audit.Checkpoint) audit.Checkpoint {
+			c.Hash = "00000000"
+
+			return c
+		}},
+		{name: "time", change: func(c audit.Checkpoint) audit.Checkpoint {
+			c.At = c.At.Add(time.Millisecond)
+
+			return c
+		}},
+		{name: "key", change: func(c audit.Checkpoint) audit.Checkpoint {
+			c.KeyID = strings.Repeat("f", 16)
+
+			return c
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := signer.Verify(tc.change(base)); !errors.Is(err, audit.ErrCheckpointMismatch) {
+				t.Fatalf("verify: got %v, want ErrCheckpointMismatch", err)
+			}
+		})
 	}
 }
 

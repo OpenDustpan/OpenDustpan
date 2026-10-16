@@ -83,7 +83,7 @@ func TestAddVerifyKeys(t *testing.T) {
 	}
 
 	cp := old.Sign(audit.Checkpoint{
-		At: time.Unix(1, 0), Scope: "acme", Hash: "abc", KeyID: "", Signature: nil, Sequence: 1,
+		At: time.Unix(1, 0), Scope: "acme", Hash: "abc", KeyID: "", Signature: nil, Sequence: 1, Epoch: 1,
 	})
 	if err := signer.Verify(cp); err != nil {
 		t.Fatalf("verify a checkpoint of the old key: %v", err)
