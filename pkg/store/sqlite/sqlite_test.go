@@ -253,7 +253,16 @@ func tamperAuditColumn(field string) (string, bool) {
 		"sequence",
 		"changes",
 		"fence_version",
-		"value_path":
+		"value_path",
+		"value_count",
+		"object_id",
+		"idp_subject",
+		"token_id",
+		"version",
+		"source_ip",
+		"user_agent",
+		"channel",
+		"request_id":
 		return field, true
 	default:
 		return "", false
