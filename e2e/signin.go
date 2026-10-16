@@ -121,19 +121,24 @@ func NewEnvWithSignIn(ctx context.Context, tb testing.TB, cli Install, store Sto
 }
 
 // IdentityProvider returns the test provider of an env from
-// NewEnvWithSignIn, or nil.
-func (e *Env) IdentityProvider() *oauthtest.Provider {
-	if e.signIn == nil {
-		return nil
+// NewEnvWithSignIn. It fails the test for any other env.
+func (e *Env) IdentityProvider(tb testing.TB) *oauthtest.Provider {
+	tb.Helper()
+
+	if e.signIn == nil || e.signIn.idp == nil {
+		tb.Fatal("the env has no test OpenID provider: use NewEnvWithSignIn")
 	}
 
 	return e.signIn.idp
 }
 
-// Clock returns the shared clock of an env from NewEnvWithSignIn, or nil.
-func (e *Env) Clock() *TestClock {
-	if e.signIn == nil {
-		return nil
+// Clock returns the shared clock of an env from NewEnvWithSignIn. It fails
+// the test for any other env.
+func (e *Env) Clock(tb testing.TB) *TestClock {
+	tb.Helper()
+
+	if e.signIn == nil || e.signIn.clock == nil {
+		tb.Fatal("the env has no shared test clock: use NewEnvWithSignIn")
 	}
 
 	return e.signIn.clock

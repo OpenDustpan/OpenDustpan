@@ -369,6 +369,10 @@ func TestSignInFlow(t *testing.T) {
 	}
 
 	sess := cookieOf(rec, apiserver.SessionCookie)
+	if sess == nil {
+		t.Fatal("the callback set no session cookie")
+	}
+
 	checkBrowserCookie(t, "session", sess)
 
 	if !strings.HasPrefix(sess.Value, session.SecretPrefix) {

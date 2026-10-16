@@ -71,7 +71,7 @@ type browser struct {
 func newBrowser(t *testing.T, env *e2e.Env) browser {
 	t.Helper()
 
-	idp := *env.IdentityProvider().Client()
+	idp := *env.IdentityProvider(t).Client()
 	idp.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 	return browser{env: env, server: env.BrowserClient(t), idp: &idp}
@@ -231,7 +231,7 @@ func checkCallbackOfAnotherState(t *testing.T, b browser) {
 func checkSessionLimits(t *testing.T, b browser) {
 	t.Helper()
 
-	clock := b.env.Clock()
+	clock := b.env.Clock(t)
 
 	clock.Advance(16 * time.Minute)
 
