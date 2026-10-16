@@ -525,7 +525,7 @@ func seedOpsGrants(t *testing.T, f accessFixture) {
 
 	for i := range grants {
 		fence, e := storetest.GrantWrite(t, f.store, grants[i].Object, at, "grant:"+grants[i].ID)
-		if err := f.store.CreateGrant(t.Context(), grants[i], fence, e); err != nil {
+		if err := f.store.CreateGrant(t.Context(), grants[i], fence, e, nil); err != nil {
 			t.Fatalf("seed grant: %v", err)
 		}
 	}
@@ -573,7 +573,7 @@ func TestCallerAccessPaging(t *testing.T) {
 			CreatedBy: "admin", Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-bob"},
 		}
 		fence, e := storetest.GrantWrite(t, f.store, o, at, "grant:"+g.ID)
-		if err := f.store.CreateGrant(t.Context(), g, fence, e); err != nil {
+		if err := f.store.CreateGrant(t.Context(), g, fence, e, nil); err != nil {
 			t.Fatalf("seed grant: %v", err)
 		}
 	}

@@ -76,6 +76,10 @@ type Authorizer struct {
 	collections UnitCollections
 	units       Units
 	principals  PrincipalNamespaces
+	// chains holds the chain of an object by its wire form, read before
+	// the transaction of a write: the copy of an Authorizer that checks in
+	// that transaction reads no other port. Nil reads each chain.
+	chains map[string][]identity.Object
 }
 
 var _ identity.Authorizer = (*Authorizer)(nil)
@@ -91,7 +95,7 @@ func NewAuthorizer(cfg AuthorizerConfig) (*Authorizer, error) {
 
 	return &Authorizer{
 		store: cfg.Store, callers: cfg.Callers, collections: cfg.Collections, units: cfg.Units,
-		principals: cfg.Principals,
+		principals: cfg.Principals, chains: nil,
 	}, nil
 }
 
@@ -198,18 +202,9 @@ func (h held) actions() []identity.Action {
 }
 
 // Scope is the set of objects of one kind where a principal can do one
-// action, as grants name them (ADR 52). All is true when a grant on the
-// installation covers every object. A unit is in the scope when it, its
-// collection or its namespace is in a set. A principal is in the scope when
-// it is in Principals. A consumer filters a list with
-// the scope in its own query, never with one check for each object.
-type Scope struct {
-	Namespaces  []identity.Object
-	Collections []identity.Object
-	Units       []identity.Object
-	Principals  []identity.Object
-	All         bool
-}
+// action, as grants name them. All is true when a grant on the installation
+// covers every object. It is the scope of the identity.Authorizer port.
+type Scope = identity.Scope
 
 // ListObjects returns the scope of the objects where p can do action: one
 // query for the subjects, one for the custom roles and one for the grants
@@ -274,7 +269,7 @@ func (a *Authorizer) scopeFor(ctx context.Context, subjects []Subject, action id
 		}
 
 		if add {
-			out.add(grants[i].Object)
+			addToScope(&out, grants[i].Object)
 		}
 	}
 
@@ -368,7 +363,7 @@ func (a *Authorizer) addNamespacePrincipals(ctx context.Context, ns namespace.Na
 				return out, parseErr
 			}
 
-			out.add(obj)
+			addToScope(&out, obj)
 		}
 
 		if len(rows) < principal.MaxLimit {
@@ -410,9 +405,9 @@ func (a *Authorizer) liveCollection(ctx context.Context, obj identity.Object) (b
 	return found && id == obj.CollectionID(), nil
 }
 
-// add puts obj in the set of its kind once. An object on the installation
-// covers every object.
-func (s *Scope) add(obj identity.Object) {
+// addToScope puts obj in the set of its kind in s once. An object on the
+// installation covers every object.
+func addToScope(s *Scope, obj identity.Object) {
 	kind, _ := KindOf(obj)
 
 	switch kind {
@@ -641,6 +636,10 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 // in no chain. An unknown principal keeps the principal and the
 // installation.
 func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity.Object, error) {
+	if chain, ok := a.chains[obj.String()]; ok {
+		return chain, nil
+	}
+
 	return chainObjects(ctx, obj, a.collections, a.withUnitID, a.principals)
 }
 

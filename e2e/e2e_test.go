@@ -3436,6 +3436,7 @@ func exportHidesSecrets(r e2e.Result) error {
 // auditListItem is one entry of GET /api/audit/entries, with the fields
 // the check below needs.
 type auditListItem struct {
+	Sequence   int64  `json:"sequence"`
 	Subject    string `json:"subject"`
 	Action     string `json:"action"`
 	Object     string `json:"object"`
@@ -3567,7 +3568,9 @@ func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string, 
 	entries := readAuditEntries(ctx, t, env, org)
 	t.Logf("audit entries of %q: %d", org, len(entries))
 
-	checkRevealFields(t, findRevealEntry(t, entries))
+	reveal := findRevealEntry(t, entries)
+	checkRevealFields(t, reveal)
+	checkAuditEntryRead(ctx, t, env, org, reveal)
 	checkUnitObjectIDs(t, entries)
 
 	// Each decrypt audit call writes exactly one reveal entry, and nothing
@@ -3587,6 +3590,30 @@ func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string, 
 	}
 
 	checkAuditChain(ctx, t, env, org)
+}
+
+// checkAuditEntryRead proves that GET /api/audit/entries/{sequence} reads
+// want, an entry of the list of org, by its sequence: the same action,
+// object and hash.
+func checkAuditEntryRead(ctx context.Context, t *testing.T, env *e2e.Env, org string, want *auditListItem) {
+	t.Helper()
+
+	path := "/api/audit/entries/" + strconv.FormatInt(want.Sequence, 10) + "?organization=" + url.QueryEscape(org)
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET %s answers %d, want %d (%v, %s)", path, status, http.StatusOK, err, body)
+	}
+
+	var got auditListItem
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("decode %s: %v (%s)", path, err, body)
+	}
+
+	if got.Sequence != want.Sequence || got.Action != want.Action || got.Object != want.Object ||
+		got.Hash != want.Hash {
+		t.Fatalf("entry %d of %q = %+v, want %+v", want.Sequence, org, got, *want)
+	}
 }
 
 // findRevealEntry returns the first entry of the kind reveal with the action

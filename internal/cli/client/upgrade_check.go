@@ -400,7 +400,7 @@ func writeUpgradeReport(report upgradeReport) error {
 
 	if n := len(report.inspection.Unknown); n > 0 {
 		lines = append(lines, fmt.Sprintf(
-			"The database records %d migrations that this binary does not know. "+
+			"Migrations in the database that this binary does not know: %d. "+
 				"A binary at or above the schema minimum starts on it and applies nothing.", n,
 		))
 	}

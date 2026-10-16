@@ -15,25 +15,48 @@ func TestCheckMinimum(t *testing.T) {
 		name    string
 		minimum string
 		binary  string
-		refuse  bool
+		want    error
 	}{
-		{name: "no minimum", minimum: "", binary: "v0.1.0", refuse: false},
-		{name: "equal", minimum: "v0.2.0", binary: "v0.2.0", refuse: false},
-		{name: "above", minimum: "v0.2.0", binary: "v0.10.0", refuse: false},
-		{name: "major above", minimum: "v0.9.9", binary: "v1.0.0", refuse: false},
-		{name: "below patch", minimum: "v0.2.1", binary: "v0.2.0", refuse: true},
-		{name: "below minor", minimum: "v0.10.0", binary: "v0.9.0", refuse: true},
-		{name: "below major", minimum: "v2.0.0", binary: "v1.9.9", refuse: true},
+		{name: "no minimum", minimum: "", binary: "v0.1.0", want: nil},
+		{name: "equal", minimum: "v0.2.0", binary: "v0.2.0", want: nil},
+		{name: "above", minimum: "v0.2.0", binary: "v0.10.0", want: nil},
+		{name: "major above", minimum: "v0.9.9", binary: "v1.0.0", want: nil},
+		{name: "below patch", minimum: "v0.2.1", binary: "v0.2.0", want: schema.ErrBinaryBelowMinimum},
+		{name: "below minor", minimum: "v0.10.0", binary: "v0.9.0", want: schema.ErrBinaryBelowMinimum},
+		{name: "below major", minimum: "v2.0.0", binary: "v1.9.9", want: schema.ErrBinaryBelowMinimum},
+		{name: "release stamp with no v", minimum: "v0.3.0", binary: "0.2.0", want: schema.ErrBinaryBelowMinimum},
+		{name: "release stamp with no v at the minimum", minimum: "v0.3.0", binary: "0.3.0", want: nil},
+		{name: "capital V", minimum: "v0.3.0", binary: "V0.2.0", want: schema.ErrBinaryBelowMinimum},
+		{name: "spaces around", minimum: "v0.3.0", binary: " v0.2.0 ", want: schema.ErrBinaryBelowMinimum},
+		{name: "describe build counts as its tag", minimum: "v0.2.0", binary: "v0.2.0-3-gabc1234-dirty", want: nil},
 		{
-			name:    "describe suffix counts as its tag",
-			minimum: "v0.2.0",
-			binary:  "v0.2.0-3-gabc1234-dirty",
-			refuse:  false,
+			name:    "describe build below",
+			minimum: "v0.3.0",
+			binary:  "v0.2.0-3-gabc1234",
+			want:    schema.ErrBinaryBelowMinimum,
 		},
-		{name: "describe suffix below", minimum: "v0.3.0", binary: "v0.2.0-3-gabc1234", refuse: true},
-		{name: "dev build", minimum: "v9.0.0", binary: "dev", refuse: false},
-		{name: "empty build", minimum: "v9.0.0", binary: "", refuse: false},
-		{name: "commit hash build", minimum: "v9.0.0", binary: "c69fb92-dirty", refuse: false},
+		{name: "dirty tag build", minimum: "v0.2.0", binary: "v0.2.0-dirty", want: nil},
+		{
+			name:    "pre-release below its release",
+			minimum: "v0.2.0",
+			binary:  "v0.2.0-rc.1",
+			want:    schema.ErrBinaryBelowMinimum,
+		},
+		{name: "pre-release above the release before", minimum: "v0.1.0", binary: "v0.2.0-rc.1", want: nil},
+		{name: "build metadata ignored", minimum: "v0.2.0", binary: "v0.2.0+linux", want: nil},
+		{name: "dev build", minimum: "v9.0.0", binary: "dev", want: nil},
+		{name: "empty build", minimum: "v9.0.0", binary: "", want: nil},
+		{name: "commit hash build", minimum: "v9.0.0", binary: "c69fb92", want: nil},
+		{name: "dirty commit hash build", minimum: "v9.0.0", binary: "c69fb92-dirty", want: nil},
+		{
+			name:    "overflow fails closed",
+			minimum: "v0.1.0",
+			binary:  "v99999999999999999999.0.0",
+			want:    schema.ErrBadBinaryVersion,
+		},
+		{name: "two parts fail closed", minimum: "v0.1.0", binary: "v1.2", want: schema.ErrBadBinaryVersion},
+		{name: "a word fails closed", minimum: "", binary: "release", want: schema.ErrBadBinaryVersion},
+		{name: "an empty pre-release fails closed", minimum: "", binary: "v1.2.3-", want: schema.ErrBadBinaryVersion},
 	}
 
 	for _, tc := range cases {
@@ -41,14 +64,40 @@ func TestCheckMinimum(t *testing.T) {
 			t.Parallel()
 
 			err := schema.CheckMinimum(tc.minimum, tc.binary)
-			if tc.refuse != errors.Is(err, schema.ErrBinaryBelowMinimum) {
-				t.Fatalf("CheckMinimum(%q, %q) = %v, want refusal %v", tc.minimum, tc.binary, err, tc.refuse)
-			}
 
-			if !tc.refuse && err != nil {
+			switch {
+			case tc.want == nil && err != nil:
 				t.Fatalf("CheckMinimum(%q, %q) = %v, want nil", tc.minimum, tc.binary, err)
+			case tc.want != nil && !errors.Is(err, tc.want):
+				t.Fatalf("CheckMinimum(%q, %q) = %v, want %v", tc.minimum, tc.binary, err, tc.want)
+			default:
 			}
 		})
+	}
+}
+
+// TestReleaseStampFormat pins the version stamps of a release build: the
+// tag with the v, and the version with no v that goreleaser stamps. Both
+// count as the same release, never as a dev build.
+func TestReleaseStampFormat(t *testing.T) {
+	t.Parallel()
+
+	for _, stamp := range []string{"v0.1.0", "0.1.0"} {
+		if schema.IsDevBuild(stamp) {
+			t.Errorf("IsDevBuild(%q) = true, want a release", stamp)
+		}
+
+		if err := schema.CheckBinaryVersion(stamp); err != nil {
+			t.Errorf("CheckBinaryVersion(%q) = %v, want nil", stamp, err)
+		}
+
+		if err := schema.CheckMinimum("v0.1.1", stamp); !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+			t.Errorf("CheckMinimum(v0.1.1, %q) = %v, want ErrBinaryBelowMinimum", stamp, err)
+		}
+
+		if err := schema.CheckMinimum("v0.1.0", stamp); err != nil {
+			t.Errorf("CheckMinimum(v0.1.0, %q) = %v, want nil", stamp, err)
+		}
 	}
 }
 
@@ -104,13 +153,13 @@ func TestHighestMinimum(t *testing.T) {
 func TestIsDevBuild(t *testing.T) {
 	t.Parallel()
 
-	for _, v := range []string{"", "dev", "c69fb92", "c69fb92-dirty", "v1", "1.2.3"} {
+	for _, v := range []string{"", "dev", " dev ", "c69fb92", "c69fb92-dirty", "0123456789abcdef0123456789abcdef01234567"} {
 		if !schema.IsDevBuild(v) {
 			t.Errorf("IsDevBuild(%q) = false, want true", v)
 		}
 	}
 
-	for _, v := range []string{"v0.1.0", "v1.2.3-rc.1", "v0.1.0-3-gabc1234-dirty"} {
+	for _, v := range []string{"v0.1.0", "0.1.0", "v1.2.3-rc.1", "v0.1.0-3-gabc1234-dirty", "v1", "release"} {
 		if schema.IsDevBuild(v) {
 			t.Errorf("IsDevBuild(%q) = true, want false", v)
 		}

@@ -286,7 +286,7 @@ func TestUpgradeCheckNewerAtMinimum(t *testing.T) {
 
 	for _, line := range []string{
 		"schema minimum binary version: v0.2.0",
-		"The database records 1 migrations that this binary does not know.",
+		"Migrations in the database that this binary does not know: 1.",
 	} {
 		if !strings.Contains(out, line) {
 			t.Fatalf("upgrade check output lacks %q:\n%s", line, out)
@@ -321,8 +321,10 @@ func TestUpgradeCheckBelowMinimum(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(out, devBinaryWarning) {
-		t.Fatalf("upgrade check output of a release binary holds the dev build warning:\n%s", out)
+	for _, warning := range []string{devBinaryWarning, devServerWarning} {
+		if strings.Contains(out, warning) {
+			t.Fatalf("upgrade check output of release builds holds %q:\n%s", warning, out)
+		}
 	}
 }
 
@@ -330,8 +332,15 @@ func TestUpgradeCheckBelowMinimum(t *testing.T) {
 func TestUpgradeCheckDevBuildIgnoresMinimum(t *testing.T) {
 	names, binVersion := embeddedNames(t)
 
-	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
-		http.StatusOK, upgradeCheckBodyWithMinimum(t, names, "v9.0.0"))
+	body, err := json.Marshal(upgradeCheckAnswer{
+		ServerVersion: "dev", SchemaVersion: binVersion, MinimumBinaryVersion: "v9.0.0", AppliedMigrations: names,
+		KeyEncryptionKey: nil, RunningJournaledUpdates: 0,
+	})
+	if err != nil {
+		t.Fatalf("encode upgrade check answer: %v", err)
+	}
+
+	fake := newCheckFakeServer(t, "/api/server/upgrade-check", http.StatusOK, string(body))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
 	if err != nil {
@@ -339,7 +348,7 @@ func TestUpgradeCheckDevBuildIgnoresMinimum(t *testing.T) {
 	}
 
 	checkUpgradeReport(t, out, wantUpgradeReport{
-		serverVersion: checkServerVersion,
+		serverVersion: "dev",
 		dbVersion:     binVersion,
 		binVersion:    binVersion,
 		pending:       false,

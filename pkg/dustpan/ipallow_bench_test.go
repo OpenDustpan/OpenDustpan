@@ -32,6 +32,11 @@ func (benchAllowAll) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (benchAllowAll) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // newIPAllowlistBenchServer opens a SQLite store holding a namespace acme
 // with the list 198.51.100.0/24 and returns a server over it with the store.
 // When on is false the server skips the gate: the baseline of the handler

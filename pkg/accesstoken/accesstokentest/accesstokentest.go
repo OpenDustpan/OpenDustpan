@@ -61,6 +61,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "concurrent rotations of one token: one wins", test: testConcurrentRotations},
 		{name: "the policy starts at the defaults and keeps a change", test: testPolicy},
 		{name: "the stored entry of a policy change keeps its changes", test: testPolicyKeepsChanges},
+		{name: "lookup by digest answers the current policy", test: testByDigestPolicy},
 		{name: "the sweep disables inactive tokens", test: testSweepTokens},
 		{name: "the sweep disables inactive user accounts", test: testSweepAccounts},
 		{name: "a sweep with a refused entry changes nothing", test: testSweepRefused},
@@ -744,6 +745,48 @@ func testConcurrentRotations(t *testing.T, s Store) {
 
 	if won != 1 {
 		t.Fatalf("%d rotations won, want 1", won)
+	}
+}
+
+// testByDigestPolicy proves that the lookup by digest answers the token
+// policy of the installation as it is at the lookup: the seeded policy
+// first, then a change.
+func testByDigestPolicy(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustPrincipal(t, s, "prn-1", "ci-deploy", principal.KindService)
+	mustToken(t, s, newToken("tok-1", "prn-1", 1), digest(1))
+
+	m, err := s.GetTokenByDigest(ctx, digest(1))
+	if err != nil {
+		t.Fatalf("get by digest: %v", err)
+	}
+
+	if m.Policy != accesstoken.DefaultPolicy() {
+		t.Fatalf("policy of the lookup = %+v, want the seeded policy %+v", m.Policy, accesstoken.DefaultPolicy())
+	}
+
+	want := accesstoken.Policy{
+		UpdatedAt: at(5), MaxLifetime: 30 * 24 * time.Hour, Inactivity: time.Hour,
+		DisableTokens: true, DisableAccounts: false, DisableBreakGlass: false,
+	}
+
+	_, err = s.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
+		return want, entry("tok-x"), nil
+	})
+	if err != nil {
+		t.Fatalf("update policy: %v", err)
+	}
+
+	m, err = s.GetTokenByDigest(ctx, digest(1))
+	if err != nil {
+		t.Fatalf("get by digest after the change: %v", err)
+	}
+
+	if m.Policy != want {
+		t.Fatalf("policy of the lookup after the change = %+v, want %+v", m.Policy, want)
 	}
 }
 

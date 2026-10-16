@@ -257,3 +257,30 @@ func TestServerObserveDeletedSweep(t *testing.T) {
 		}
 	}
 }
+
+func TestServerSignInCounterErrors(t *testing.T) {
+	t.Parallel()
+
+	m := metrics.NewServerMetrics("1.2.3", time.Now())
+
+	m.IncSignInCounterError(metrics.SignInCounterAdd)
+	m.IncSignInCounterError(metrics.SignInCounterAdd)
+	m.IncSignInCounterError(metrics.SignInCounterPrune)
+	m.IncSignInCounterError("unknown")
+
+	got := scrapeServer(t, m)
+
+	for _, want := range []string{
+		"# TYPE dustpan_signin_failure_counter_errors_total counter",
+		`dustpan_signin_failure_counter_errors_total{operation="add"} 2`,
+		`dustpan_signin_failure_counter_errors_total{operation="prune"} 1`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output misses %q:\n%s", want, got)
+		}
+	}
+
+	if strings.Contains(got, `operation="unknown"`) {
+		t.Errorf("output holds an unknown operation:\n%s", got)
+	}
+}

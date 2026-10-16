@@ -1,9 +1,11 @@
 package workspace_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -52,11 +54,7 @@ func TestForceUnlockFencesSealedState(t *testing.T) {
 	f := newSealFixture(t)
 	ctx := t.Context()
 
-	f.pushPlain(t, stateDoc, nil, 1)
-
-	if _, err := f.sealed.SealUnsealedStates(ctx); err != nil {
-		t.Fatalf("seal v1: %v", err)
-	}
+	f.pushSealed(t, stateDoc, nil, 1)
 
 	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
@@ -112,6 +110,61 @@ func assertBlobHidesState(t *testing.T, f sealFixture, cur workspace.StateVersio
 
 	if strings.Contains(string(stored), "null_resource") || strings.Contains(string(stored), cur.Lineage) {
 		t.Fatal("the fence blob holds plain state")
+	}
+}
+
+// A force-unlock on a sealing service of a state that a server without a
+// sealer wrote writes a sealed fence: the blob and the outputs column hold no
+// plain state, and both read back plain through the service.
+func TestForceUnlockSealsAPlainStateOnASealingService(t *testing.T) {
+	t.Parallel()
+
+	const secret = "s3cr3t-fence-output"
+
+	doc := `{"version":4,"lineage":"lin-old","serial":1,` +
+		`"outputs":{"token":{"value":"` + secret + `","type":"string","sensitive":true}},` +
+		`"resources":[{"type":"null_resource","name":"a"}]}`
+
+	f := newSealFixture(t)
+	ctx := t.Context()
+
+	f.pushPlain(t, doc, 1)
+
+	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	if _, _, err := f.sealed.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+		t.Fatalf("force unlock: %v", err)
+	}
+
+	cur, err := f.sealed.Current(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+
+	if !cur.Sealed || cur.FenceBy != "admin" || cur.Serial != 2 {
+		t.Fatalf("fence sealed=%t by %q serial %d, want a sealed admin fence at serial 2",
+			cur.Sealed, cur.FenceBy, cur.Serial)
+	}
+
+	assertBlobHidesState(t, f, cur)
+
+	stored, err := f.store.GetStateVersion(ctx, cur.ID)
+	if err != nil {
+		t.Fatalf("get fence row: %v", err)
+	}
+
+	if strings.Contains(string(stored.Outputs), secret) {
+		t.Fatal("the outputs column of the fence holds the plain output value")
+	}
+
+	if !strings.Contains(string(cur.Outputs), secret) {
+		t.Fatalf("outputs of the fence read %s, want the plain output value", cur.Outputs)
+	}
+
+	if got := readFenced(t, f.sealed, cur); string(got["lineage"]) != `"`+cur.Lineage+`"` {
+		t.Fatalf("fence lineage %s, want %s", got["lineage"], cur.Lineage)
 	}
 }
 
@@ -186,11 +239,7 @@ func TestForceUnlockSealedNeedsSealer(t *testing.T) {
 	f := newSealFixture(t)
 	ctx := t.Context()
 
-	f.pushPlain(t, stateDoc, nil, 1)
-
-	if _, err := f.sealed.SealUnsealedStates(ctx); err != nil {
-		t.Fatalf("seal v1: %v", err)
-	}
+	f.pushSealed(t, stateDoc, nil, 1)
 
 	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
@@ -232,8 +281,10 @@ func TestForceUnlockRefusedByAConcurrentFinalizeDeletesItsBlob(t *testing.T) {
 
 	var fenceKey blob.Key
 
+	var fenceID workspace.StateVersionID
+
 	f.store.beforeFence = func(sv workspace.StateVersion) {
-		fenceKey = sv.Content
+		fenceKey, fenceID = sv.Content, sv.ID
 
 		// A holder finalizes a newer version before the fence takes the store lock.
 		if err := f.push(t, newState("lin-old", 2, next), next); err != nil {
@@ -265,6 +316,10 @@ func TestForceUnlockRefusedByAConcurrentFinalizeDeletesItsBlob(t *testing.T) {
 		}
 
 		t.Fatal("the blob of the refused fence was kept")
+	}
+
+	if _, getErr := f.store.GetStateVersion(ctx, fenceID); !errors.Is(getErr, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("pending row of the refused fence: err = %v, want ErrStateVersionNotFound", getErr)
 	}
 }
 
@@ -302,5 +357,110 @@ func TestForceUnlockClientEncryptedNamesTheWayOut(t *testing.T) {
 
 	if !held.Lock.Locked() {
 		t.Fatal("the lock was released although the state cannot be fenced")
+	}
+}
+
+// A sweep between the blob write of a force-unlock and the commit that makes
+// the fence current keeps the fence blob: a version names the key before the
+// bytes land. The sweep runs right after the write and waits for no grace
+// period, so only the row protects the blob.
+func TestForceUnlockFenceBlobSurvivesASweepBeforeTheCommit(t *testing.T) {
+	t.Parallel()
+
+	inner := openFixtureBlobs(t)
+	blobs := &sweepAfterPutBlobs{Store: inner, sweep: nil}
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
+		t.Fatalf("push v1: %v", err)
+	}
+
+	swept := 0
+	blobs.sweep = func() {
+		swept++
+
+		sweepUnnamedBlobs(t, f, inner)
+	}
+
+	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+		t.Fatalf("force unlock: %v", err)
+	}
+
+	if swept != 1 {
+		t.Fatalf("sweeps after the fence write = %d, want 1", swept)
+	}
+
+	cur, err := f.svc.Current(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+
+	if cur.FenceBy != "admin" {
+		t.Fatalf("current version fenced by %q, want admin", cur.FenceBy)
+	}
+
+	doc := readFenced(t, f.svc, cur)
+
+	if string(doc["serial"]) != "2" {
+		t.Fatalf("fence serial %s, want 2", doc["serial"])
+	}
+}
+
+// sweepAfterPutBlobs runs sweep once after the next Put while sweep is set,
+// so a sweep lands between a blob write and the commit that follows it.
+type sweepAfterPutBlobs struct {
+	blob.Store
+
+	sweep func()
+}
+
+func (b *sweepAfterPutBlobs) Put(ctx context.Context, key blob.Key, r io.Reader) error {
+	if err := b.Store.Put(ctx, key, r); err != nil {
+		return err
+	}
+
+	if sweep := b.sweep; sweep != nil {
+		b.sweep = nil
+		sweep()
+	}
+
+	return nil
+}
+
+// sweepUnnamedBlobs deletes every blob in blobs under the fixture workspace
+// that no version names, at once: the listing comes before the reference
+// read, as in the sweeps of the service.
+func sweepUnnamedBlobs(t *testing.T, f fixture, blobs blob.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	listed, err := blobs.List(ctx, "tofu/"+f.ws.ID.String()+"/")
+	if err != nil {
+		t.Errorf("list blobs: %v", err)
+
+		return
+	}
+
+	refs, err := f.store.ReferencedContentKeys(ctx, f.ws.ID)
+	if err != nil {
+		t.Errorf("referenced keys: %v", err)
+
+		return
+	}
+
+	for i := range listed {
+		if slices.Contains(refs, listed[i].Key) {
+			continue
+		}
+
+		if err := blobs.Delete(ctx, listed[i].Key); err != nil {
+			t.Errorf("delete %s: %v", listed[i].Key, err)
+		}
 	}
 }

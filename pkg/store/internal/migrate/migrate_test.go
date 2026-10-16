@@ -253,19 +253,75 @@ func TestLoadReadsMinimumHeader(t *testing.T) {
 	}
 }
 
+func TestLoadReadsMinimumHeaderForms(t *testing.T) {
+	t.Parallel()
+
+	for name, sql := range map[string]string{
+		"blank line in the leading block": "-- Drop the old column.\n\n-- minimum-binary-version: v0.3.0\nSELECT 1;\n",
+		"no space after the dashes":       "--minimum-binary-version: v0.3.0\nSELECT 1;\n",
+		"another case":                    "-- MINIMUM-Binary-Version: v0.3.0\nSELECT 1;\n",
+		"space before the colon":          "-- minimum-binary-version : v0.3.0\nSELECT 1;\n",
+	} {
+		fsys := fstest.MapFS{"m/0001_contract.sql": mapFile(sql)}
+
+		all, err := migrate.Load(fsys, "m")
+		if err != nil || len(all) != 1 || all[0].MinBinaryVersion != "v0.3.0" {
+			t.Errorf("%s: load = %+v, %v; want minimum v0.3.0", name, all, err)
+		}
+	}
+}
+
 func TestLoadRefusesBadMinimumHeader(t *testing.T) {
 	t.Parallel()
 
-	fsys := fstest.MapFS{
-		"m/0001_init.sql": {
-			Data:    []byte("-- minimum-binary-version: 0.3\nCREATE TABLE a (x INTEGER);\n"),
-			Mode:    0,
-			ModTime: time.Time{},
-			Sys:     nil,
-		},
+	for name, sql := range map[string]string{
+		"not a version":         "-- minimum-binary-version: 0.3\nCREATE TABLE a (x INTEGER);\n",
+		"a pre-release":         "-- minimum-binary-version: v0.3.0-rc.1\nSELECT 1;\n",
+		"after SQL":             "SELECT 1;\n-- minimum-binary-version: v0.3.0\n",
+		"in a block comment":    "/* minimum-binary-version: v0.3.0 */\nSELECT 1;\n",
+		"twice":                 "-- minimum-binary-version: v0.3.0\n-- minimum-binary-version: v0.4.0\nSELECT 1;\n",
+		"inside a comment line": "-- The header minimum-binary-version: v0.3.0\nSELECT 1;\n",
+		"no colon":              "-- minimum-binary-version v0.3.0\nSELECT 1;\n",
+	} {
+		fsys := fstest.MapFS{"m/0001_init.sql": mapFile(sql)}
+
+		if _, err := migrate.Load(fsys, "m"); !errors.Is(err, schema.ErrBadMinimum) {
+			t.Errorf("%s: load err = %v, want ErrBadMinimum", name, err)
+		}
+	}
+}
+
+// mapFile returns a file of fstest.MapFS that holds sql.
+func mapFile(sql string) *fstest.MapFile {
+	return &fstest.MapFile{Data: []byte(sql), Mode: 0, ModTime: time.Time{}, Sys: nil}
+}
+
+func TestCheckRefusesPendingMinimumAboveBinary(t *testing.T) {
+	t.Parallel()
+
+	embedded := migrations(1, 2)
+	embedded[1].MinBinaryVersion = "v0.3.0"
+
+	_, err := migrate.Check(applied(nil, 1), embedded, "v0.2.0")
+	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		t.Fatalf("Check with a pending migration above the binary = %v, want ErrBinaryBelowMinimum", err)
 	}
 
-	if _, err := migrate.Load(fsys, "m"); !errors.Is(err, schema.ErrBadMinimum) {
-		t.Fatalf("load err = %v, want ErrBadMinimum", err)
+	plan, err := migrate.Check(applied(nil, 1), embedded, "v0.3.0")
+	if err != nil || len(plan.Pending) != 1 {
+		t.Fatalf("Check at the minimum = %+v, %v; want one pending migration", plan, err)
+	}
+
+	plan, err = migrate.Check(applied(nil, 1), embedded, "dev")
+	if err != nil || len(plan.Pending) != 1 {
+		t.Fatalf("Check of a dev build = %+v, %v; want one pending migration", plan, err)
+	}
+}
+
+func TestCheckRefusesBadBinaryVersion(t *testing.T) {
+	t.Parallel()
+
+	if _, err := migrate.Check(nil, migrations(1), "release"); !errors.Is(err, schema.ErrBadBinaryVersion) {
+		t.Fatalf("Check with a bad binary version = %v, want ErrBadBinaryVersion", err)
 	}
 }

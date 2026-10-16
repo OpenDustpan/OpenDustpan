@@ -726,6 +726,11 @@ func (r *unitRecorder) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*unitRecorder) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // TestRestoreAndPurgeAuthorizeTheUnitID proves that the routes authorize
 // their action on the deleted unit with its ID, and that a denied action
 // changes nothing.

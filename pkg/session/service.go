@@ -187,8 +187,8 @@ func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, erro
 		}
 	}
 
-	if err := s.store.TouchSession(ctx, m.Session.ID, now, TouchEvery, policy.Limits); err != nil {
-		return Match{}, fmt.Errorf("record session use: %w", err)
+	if err := s.touch(ctx, m.Session, now, policy.Limits); err != nil {
+		return Match{}, err
 	}
 
 	return m, nil
@@ -291,4 +291,20 @@ func (s *Sessions) create(ctx context.Context, in Start, sess Session, d Digest,
 	}
 
 	return s.providers.CreateProviderSession(ctx, sess, d, e)
+}
+
+// touch records a use of sess at now. A use inside TouchEvery of the last
+// one writes nothing, so a console request sends no write to the database
+// in the common case. The store applies the same bound, so a race between
+// two instances writes at most one use.
+func (s *Sessions) touch(ctx context.Context, sess Session, now time.Time, l Limits) error {
+	if !sess.LastSeenAt.IsZero() && now.Sub(sess.LastSeenAt) < TouchEvery {
+		return nil
+	}
+
+	if err := s.store.TouchSession(ctx, sess.ID, now, TouchEvery, l); err != nil {
+		return fmt.Errorf("record session use: %w", err)
+	}
+
+	return nil
 }
