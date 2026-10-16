@@ -1,6 +1,6 @@
 # 72. Scale out on one database with durable operations
 
-Status: proposed · 2026-10-16 · supersedes ADR 48 decisions 5 to 8 when accepted
+Status: proposed · 2026-10-16 · supersedes ADR 48 decisions 1 to 3 and 5 to 11 when accepted
 
 ## Context
 
@@ -47,6 +47,13 @@ The project owner decided on 2026-10-16:
    renewal and completion checks the token in its own transaction. Another
    instance can claim an operation only after its expiry. A start never
    claims an operation that has a live expiry. There is no instance registry.
+   This decision supersedes ADR 48 decisions 1 to 3 and 9 to 11. Those
+   decisions define a registry with a lease per instance, its renewal and the
+   deletion of its rows. The registry gave the list of live instances that
+   ADR 48 decisions 5 to 8 call. Decision 4 below replaces those calls, and
+   the lease per operation tells whether the owner of an operation is live.
+   So no part of the server needs a list of live instances. ADR 48 decision 4
+   (the version check at start) and decisions 12 and 13 stay.
    The audit sink lease and the audit chain migration claim move to the same
    claim rule.
 3. **A schedule is a row.** A periodic job that needs one runner per
@@ -112,7 +119,8 @@ The project owner decided on 2026-10-16:
   prune.
 - `CLAUDE.md` and the store adapter tests state the one-time exception of
   decision 7.
-- ADR 48 decisions 1 to 3 and 9 to 11 define an instance registry, and
-  decisions 5 to 8 were its only users. RFC 36 asks the owner whether this
-  ADR supersedes them too. Decision 4 of ADR 48 stays until RFC 36 question 9 is
-  decided.
+- The server gets no registry table, no `--advertise-address` and no routes
+  for calls between instances.
+- RFC 36 proposes that each instance writes its version in a row at start-up,
+  for upgrades. Such a row is not a registry: nothing renews it, and nothing
+  reads it to decide that an instance is live.
