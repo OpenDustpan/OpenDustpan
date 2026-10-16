@@ -227,6 +227,9 @@ type Store struct {
 	// period. A successful truncate clears it, so the next failing period
 	// warns once more. Only the guard goroutine reads and writes it.
 	busyWarned bool
+	// stepTxBound is the longest time that a step transaction of a durable
+	// operation stays open before it rolls back.
+	stepTxBound time.Duration
 }
 
 var (
@@ -278,6 +281,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		lastTruncateSuccess: time.Now(),
 		busyWarned:          false,
 		keepAccessHook:      nil,
+		stepTxBound:         DefaultStepTransactionBound,
 	}
 	for _, opt := range opts {
 		opt(s)

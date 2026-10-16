@@ -35,6 +35,8 @@ sql:
             go_type: bool
           - column: access_token_policy.disable_tokens
             go_type: bool
+          - column: durable_operations.cancel_requested
+            go_type: bool
           - column: access_token_policy.disable_accounts
             go_type: bool
           - column: access_token_policy.disable_break_glass
