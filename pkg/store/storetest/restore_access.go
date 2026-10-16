@@ -300,7 +300,7 @@ func updateKeepRole(t *testing.T, grants access.Store) {
 	role.Description = "changed after the backup"
 	role.UpdatedAt = now().Add(3 * time.Hour)
 
-	if err := grants.UpdateRole(ctx, role, ServerChange(role.UpdatedAt, "role:rol-deployer")); err != nil {
+	if err := grants.UpdateRole(ctx, role, ServerChange(role.UpdatedAt, "role:rol-deployer"), nil); err != nil {
 		t.Fatalf("update role: %v", err)
 	}
 }
@@ -846,7 +846,7 @@ func checkKeepMismatchNamespace(t *testing.T, s RestoreStore) {
 
 	fence, entry := GrantWrite(t, s, grant.Object, now(), "grant:grt-freshns")
 
-	if err := ports.grants.CreateGrant(ctx, grant, fence, entry); err != nil {
+	if err := ports.grants.CreateGrant(ctx, grant, fence, entry, nil); err != nil {
 		t.Fatalf("create live grant: %v", err)
 	}
 
@@ -902,7 +902,7 @@ func checkKeepMismatchUnit(t *testing.T, s RestoreStore) {
 
 	fence, entry := GrantWrite(t, s, grant.Object, now(), "grant:grt-freshunit")
 
-	if err := ports.grants.CreateGrant(ctx, grant, fence, entry); err != nil {
+	if err := ports.grants.CreateGrant(ctx, grant, fence, entry, nil); err != nil {
 		t.Fatalf("create live unit grant: %v", err)
 	}
 

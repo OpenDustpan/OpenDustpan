@@ -149,7 +149,7 @@ func benchGrant(b *testing.B, s BenchStore, id string, subject access.Subject, c
 		Subject: subject,
 	}
 
-	if err := s.CreateGrant(b.Context(), g, newNamespace("bench").Fence(), scoped(entry(), "bench")); err != nil {
+	if err := s.CreateGrant(b.Context(), g, newNamespace("bench").Fence(), scoped(entry(), "bench"), nil); err != nil {
 		b.Fatalf("seed grant %s: %v", id, err)
 	}
 }

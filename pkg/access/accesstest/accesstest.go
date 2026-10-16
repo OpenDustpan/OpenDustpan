@@ -72,7 +72,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
 	}
 
-	for _, tc := range slices.Concat(cases, reviewCases(), unitCases(), moveCases(), reachCases()) {
+	for _, tc := range slices.Concat(cases, checkCases(), reviewCases(), unitCases(), moveCases(), reachCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -305,7 +305,7 @@ func testMissingRole(t *testing.T, s access.Store) {
 		t.Fatalf("get missing role = %v, want ErrNotFound", err)
 	}
 
-	if err := s.UpdateRole(ctx, newRole("rol-missing", "Missing"), entry()); !errors.Is(err, access.ErrNotFound) {
+	if err := s.UpdateRole(ctx, newRole("rol-missing", "Missing"), entry(), nil); !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("update missing role = %v, want ErrNotFound", err)
 	}
 
@@ -346,7 +346,7 @@ func testUpdateRole(t *testing.T, s access.Store) {
 	want.Description = "Runs releases"
 	want.UpdatedAt = at(5)
 
-	if err := s.UpdateRole(t.Context(), want, entry()); err != nil {
+	if err := s.UpdateRole(t.Context(), want, entry(), nil); err != nil {
 		t.Fatalf("update role: %v", err)
 	}
 
@@ -364,7 +364,7 @@ func testRenameRoleTaken(t *testing.T, s access.Store) {
 	mustCreateRole(t, s, newRole("rol-one", "Deployer"))
 	mustCreateRole(t, s, newRole("rol-two", "Reader"))
 
-	err := s.UpdateRole(t.Context(), newRole("rol-two", "deployer"), entry())
+	err := s.UpdateRole(t.Context(), newRole("rol-two", "deployer"), entry(), nil)
 	if !errors.Is(err, access.ErrAlreadyExists) {
 		t.Fatalf("rename to taken name = %v, want ErrAlreadyExists", err)
 	}
@@ -375,7 +375,7 @@ func testRenameRoleCase(t *testing.T, s access.Store) {
 
 	mustCreateRole(t, s, newRole("rol-one", "Deployer"))
 
-	if err := s.UpdateRole(t.Context(), newRole("rol-one", "DEPLOYER"), entry()); err != nil {
+	if err := s.UpdateRole(t.Context(), newRole("rol-one", "DEPLOYER"), entry(), nil); err != nil {
 		t.Fatalf("rename to another case of own name: %v", err)
 	}
 }

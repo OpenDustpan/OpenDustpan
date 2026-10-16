@@ -195,6 +195,7 @@ func (s *Service) CreateRole(
 // that the change takes away, because each current grant of the role loses
 // it at once, as a revoke would. A role that a current grant gives on an
 // object other than the installation keeps data actions only (ErrInUse).
+// The store runs these checks in the transaction of the write.
 func (s *Service) UpdateRole(
 	ctx context.Context, e audit.Entry, caller identity.Principal, id string, in RoleInput,
 ) (Role, error) {
@@ -207,7 +208,6 @@ func (s *Service) UpdateRole(
 		return Role{}, fmt.Errorf("update role %q: %w", id, err)
 	}
 
-	before := r.Actions
 	r.Name = in.Name
 	r.Description = in.Description
 	r.Actions = normalizeActions(in.Actions)
@@ -217,24 +217,10 @@ func (s *Service) UpdateRole(
 		return Role{}, err
 	}
 
-	if err := s.checkEscalation(ctx, caller, identity.ServerObject(), r); err != nil {
-		return Role{}, err
-	}
-
-	removed := r
-	removed.Actions = slices.DeleteFunc(slices.Clone(before), func(a identity.Action) bool {
-		return slices.Contains(r.Actions, a)
-	})
-
-	if err := s.checkEscalation(ctx, caller, identity.ServerObject(), removed); err != nil {
-		return Role{}, err
-	}
-
-	if err := s.checkPlacement(ctx, r); err != nil {
-		return Role{}, err
-	}
-
-	if err := s.store.UpdateRole(ctx, r, change(e, r.UpdatedAt, RoleRef(id))); err != nil {
+	// The store runs the checks in the transaction of the write, so a
+	// revoke, a membership change, a grant or a role update that commits
+	// first is visible to them.
+	if err := s.store.UpdateRole(ctx, r, change(e, r.UpdatedAt, RoleRef(id)), s.roleCheck(caller, r)); err != nil {
 		return Role{}, fmt.Errorf("update role %q: %w", id, err)
 	}
 
@@ -317,7 +303,9 @@ type GrantInput struct {
 // granter holds every action of the role on the object, directly or through
 // an object that holds it. A role with a delegation action also needs
 // server:manage-access on the installation. The caller has already
-// authorized the manage-access action of the object.
+// authorized the manage-access action of the object. The store runs the
+// checks of the role and of the actions of granter in the transaction of
+// the write.
 //
 // The audit entry of a grant to a service principal names, in the change
 // "tokenManagers", every holder of principal:manage-tokens on that
@@ -337,7 +325,12 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 		return Grant{}, err
 	}
 
-	fence, err := s.checkGrant(ctx, granter, in, role)
+	fence, err := s.checkGrant(ctx, in, role)
+	if err != nil {
+		return Grant{}, err
+	}
+
+	chain, err := s.authz.chain(ctx, in.Object)
 	if err != nil {
 		return Grant{}, err
 	}
@@ -351,7 +344,12 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 		Role: role.ID, CreatedBy: granter.Subject, Subject: in.Subject,
 	}
 
-	if err := s.store.CreateGrant(ctx, g, fence, grantChange(e, g.CreatedAt, fence, GrantRef(g))); err != nil {
+	// The store checks the role and the actions of granter again in the
+	// transaction of the write, so a revoke, a membership change or a role
+	// update that commits first is visible to the check.
+	check := s.grantCheck(granter, in.Object, chain, role.ID)
+
+	if err := s.store.CreateGrant(ctx, g, fence, grantChange(e, g.CreatedAt, fence, GrantRef(g)), check); err != nil {
 		return Grant{}, fmt.Errorf("create grant: %w", err)
 	}
 
@@ -752,11 +750,10 @@ func (s *Service) revokeStored(
 	return g, nil
 }
 
-// checkGrant runs the checks of Grant. It returns the fence of the
-// namespace of the object, or the zero fence for the installation.
-func (s *Service) checkGrant(
-	ctx context.Context, granter identity.Principal, in GrantInput, role Role,
-) (namespace.Fence, error) {
+// checkGrant runs the checks of Grant that do not read the actions of the
+// granter. It returns the fence of the namespace of the object, or the zero
+// fence for the installation.
+func (s *Service) checkGrant(ctx context.Context, in GrantInput, role Role) (namespace.Fence, error) {
 	var none namespace.Fence
 
 	kind, ok := KindOf(in.Object)
@@ -777,22 +774,46 @@ func (s *Service) checkGrant(
 		return none, fmt.Errorf("grant on %q: %w", in.Object.String(), err)
 	}
 
+	if kind == ObjectPrincipal {
+		if err := s.checkPrincipalObject(ctx, in.Object); err != nil {
+			return none, err
+		}
+	}
+
+	if err := checkRoleOn(kind, role); err != nil {
+		return none, err
+	}
+
+	return fence, nil
+}
+
+// checkRoleOn refuses role on an object of kind: a role with an action
+// outside the data family on a namespace, a collection or a unit, and a
+// role with no action or an action outside the delegation family on a
+// principal.
+func checkRoleOn(kind ObjectKind, role Role) error {
 	switch kind {
 	case ObjectInstallation:
 	case ObjectPrincipal:
-		if err := s.checkPrincipalObject(ctx, in.Object, role); err != nil {
-			return none, err
+		if len(role.Actions) == 0 {
+			return fmt.Errorf("%w: role %q holds no principal action; a grant on a principal needs one, "+
+				"for example the role %s", ErrInvalid, role.ID, RoleTokenManager)
+		}
+
+		if a, ok := actionOutside(role, FamilyDelegation); ok {
+			return fmt.Errorf("%w: role %q holds %s; a grant on a principal can give principal actions only, "+
+				"for example the role %s", ErrInvalid, role.ID, a, RoleTokenManager)
 		}
 	case ObjectNamespace, ObjectCollection, ObjectUnit:
 		if a, ok := actionOutside(role, FamilyData); ok {
-			return none, fmt.Errorf("%w: role %q holds %s, which only a grant on the installation can give",
+			return fmt.Errorf("%w: role %q holds %s, which only a grant on the installation can give",
 				ErrInvalid, role.ID, a)
 		}
 	default:
-		return none, fmt.Errorf("%w: object %q takes no grant", ErrInvalid, in.Object.String())
+		return fmt.Errorf("%w: object kind %q takes no grant", ErrInvalid, kind)
 	}
 
-	return fence, s.checkEscalation(ctx, granter, in.Object, role)
+	return nil
 }
 
 // checkSubjectNamespace refuses a grant to a principal of a namespace on an
@@ -817,9 +838,9 @@ func (s *Service) checkSubjectNamespace(ctx context.Context, subject Subject, ob
 }
 
 // checkPrincipalObject refuses a grant on obj, a principal, unless the
-// principal is a service principal and role holds delegation actions only.
-// It returns principal.ErrNotFound when the principal does not exist.
-func (s *Service) checkPrincipalObject(ctx context.Context, obj identity.Object, role Role) error {
+// principal is a service principal of the installation. It returns
+// principal.ErrNotFound when the principal does not exist.
+func (s *Service) checkPrincipalObject(ctx context.Context, obj identity.Object) error {
 	p, err := s.directory.GetPrincipal(ctx, obj.PrincipalID())
 	if err != nil {
 		return fmt.Errorf("grant on %q: %w", obj.String(), err)
@@ -833,16 +854,6 @@ func (s *Service) checkPrincipalObject(ctx context.Context, obj identity.Object,
 	if p.Namespace != "" {
 		return fmt.Errorf("%w: principal %q belongs to the namespace %q; a grant on it is not available yet",
 			ErrInvalid, p.ID, p.Namespace.String())
-	}
-
-	if len(role.Actions) == 0 {
-		return fmt.Errorf("%w: role %q holds no principal action; a grant on a principal needs one, "+
-			"for example the role %s", ErrInvalid, role.ID, RoleTokenManager)
-	}
-
-	if a, ok := actionOutside(role, FamilyDelegation); ok {
-		return fmt.Errorf("%w: role %q holds %s; a grant on a principal can give principal actions only, "+
-			"for example the role %s", ErrInvalid, role.ID, a, RoleTokenManager)
 	}
 
 	return nil
@@ -1316,6 +1327,17 @@ func (s *Service) checkPlacement(ctx context.Context, r Role) error {
 	}
 
 	return nil
+}
+
+// removedActions returns r with each action of before that r does not
+// hold, and no other action.
+func removedActions(before, r Role) Role {
+	removed := r
+	removed.Actions = slices.DeleteFunc(slices.Clone(before.Actions), func(a identity.Action) bool {
+		return slices.Contains(r.Actions, a)
+	})
+
+	return removed
 }
 
 // actionOutside returns the first action of r that is not in the family f,
