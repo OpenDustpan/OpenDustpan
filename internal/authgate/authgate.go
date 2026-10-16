@@ -73,7 +73,8 @@ var ErrLimited = fmt.Errorf("%w: try again later", identity.ErrRateLimited)
 // every instance on one database shares one budget. The store takes the
 // time of each call from its own clock, never from the clock of the
 // instance: a window of length L holds the times from k*L to (k+1)*L on
-// that clock, in Unix milliseconds. The SQL stores implement it.
+// that clock, in Unix milliseconds. No SQL store implements it yet; the
+// conformance suite storetest.RunSignInFailures checks an implementation.
 type FailureCounter interface {
 	// AddFailure adds one miss of source to the current window of length
 	// length, in one atomic write, and answers the count of that window
@@ -425,6 +426,10 @@ func (g *Gate) waitTurn(ctx context.Context, source string, mode turn) (*hold, e
 		case got.held != nil || got.state == withinBudget:
 			return got.held, nil
 		case got.state == heldInFlight:
+			// No MaxWaiting cap bounds the requests that wait behind
+			// lookups in flight; each one is bounded by its context. Each
+			// end of a unit in flight wakes all of them, and they take
+			// the budget again in turn.
 			select {
 			case <-ctx.Done():
 				return nil, fmt.Errorf("%w: the client went away during the wait", identity.ErrRateLimited)
@@ -697,8 +702,9 @@ func (g *Gate) counterFailed(ctx context.Context, operation string, err error) {
 // touchLocked returns the bucket of source with the budget it earned since
 // its last change, and marks it as the source seen most recently. A new
 // source starts with a full budget. Over MaxSources, it forgets the source
-// seen least recently, in O(1). A source with waiting requests keeps its
-// bucket alive through their pointers.
+// seen least recently, in O(1). The requests that wait on a forgotten
+// bucket keep their pointer to it, so their waits and units still end
+// there, but the source itself gets a new bucket with a full budget.
 func (g *Gate) touchLocked(source string) *bucket {
 	now := g.now()
 

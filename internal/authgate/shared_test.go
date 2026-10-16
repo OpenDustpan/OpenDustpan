@@ -695,3 +695,78 @@ func TestRefillAfterMissesStaysAtTheBurst(t *testing.T) {
 		t.Fatal("fourth miss after a refill: within, want over budget")
 	}
 }
+
+// TestWaiterWakesWhenMissesInFlightResolve proves that a request waiting
+// behind misses in flight wakes when they resolve: it then meets the
+// penalty and returns within about the penalty, not at its own deadline.
+func TestWaiterWakesWhenMissesInFlightResolve(t *testing.T) {
+	t.Parallel()
+
+	const penalty = 50 * time.Millisecond
+
+	c := newClock()
+	next := &blockingAuthenticator{started: make(chan struct{}, 4), release: make(chan struct{})}
+
+	g, err := authgate.New(authgate.Config{
+		Next: next, Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, CounterErrors: nil,
+		Burst: 3, Refill: time.Hour, Penalty: penalty, MaxWaiting: 0, MaxSources: 0,
+	})
+	if err != nil {
+		t.Fatalf("new gate: %v", err)
+	}
+
+	var wg sync.WaitGroup
+
+	for range 3 {
+		wg.Go(func() {
+			missErr := attempt(t.Context(), g, "192.0.2.1", "bad")
+			if !errors.Is(missErr, identity.ErrUnauthenticated) {
+				t.Errorf("miss in flight: err = %v, want ErrUnauthenticated", missErr)
+			}
+		})
+	}
+
+	for range 3 {
+		<-next.started
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	done := make(chan error, 1)
+
+	go func() { done <- attempt(ctx, g, "192.0.2.1", "bad") }()
+
+	// Give the waiter time to reach the wait behind the lookups in flight.
+	waitUntil(t, time.Now().Add(100*time.Millisecond))
+
+	released := time.Now()
+
+	close(next.release)
+
+	err = <-done
+	if took := time.Since(released); took > 5*time.Second {
+		t.Fatalf("waiter returned %v after the misses resolved, want about the penalty of %v", took, penalty)
+	}
+
+	if !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("waiter after the penalty: err = %v, want ErrUnauthenticated from its lookup", err)
+	}
+
+	wg.Wait()
+}
+
+// waitUntil waits until the wall clock passes at, or fails the test when
+// the test ends first.
+func waitUntil(t *testing.T, at time.Time) {
+	t.Helper()
+
+	wait := time.NewTimer(time.Until(at))
+	defer wait.Stop()
+
+	select {
+	case <-t.Context().Done():
+		t.Fatalf("wait until %v: %v", at, t.Context().Err())
+	case <-wait.C:
+	}
+}
