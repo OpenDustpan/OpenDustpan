@@ -8,7 +8,6 @@ import (
 	"time"
 
 	inventoryapi "opendustpan.org/opendustpan/internal/api/inventory"
-	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -210,9 +209,7 @@ func lifecycleError(err, notFound, taken error) error {
 }
 
 // deletedReadScope implements inventoryapi.DeletedReadScope with the scope
-// of unit:read that an access.Authorizer lists (ADR 52). Another authorizer
-// lists no scope, so it fails closed: an administrator reads every deleted
-// unit, and any other caller reads none.
+// of unit:read that the authorizer lists.
 type deletedReadScope struct {
 	authz identity.Authorizer
 }
@@ -228,12 +225,7 @@ var _ inventoryapi.DeletedReadScope = deletedReadScope{authz: nil}
 func (s deletedReadScope) ReadableUnits(
 	ctx context.Context, p identity.Principal, ns namespace.Name,
 ) (bool, []string, error) {
-	authz, ok := s.authz.(*access.Authorizer)
-	if !ok {
-		return p.Admin, nil, nil
-	}
-
-	scope, err := authz.ListObjects(ctx, p, identity.ActionUnitRead)
+	scope, err := s.authz.ListObjects(ctx, p, identity.ActionUnitRead)
 	if err != nil {
 		return false, nil, fmt.Errorf("list readable units: %w", err)
 	}

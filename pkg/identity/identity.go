@@ -635,6 +635,36 @@ type Authenticator interface {
 type Authorizer interface {
 	// Authorize returns nil if allowed and an error wrapping ErrDenied otherwise.
 	Authorize(ctx context.Context, p Principal, action Action, obj Object) error
+	// ListObjects returns the scope of the objects where p may perform
+	// action. A list filters with the scope in its own query, never with one
+	// Authorize call for each object. A principal with no object gets the
+	// empty Scope and no error. It returns the store errors of the adapter.
+	ListObjects(ctx context.Context, p Principal, action Action) (Scope, error)
+}
+
+// Scope is the set of objects of one kind where a principal may perform one
+// action. All is true when the principal may perform it on every object. A
+// unit is in the scope when it, its collection or its namespace is in a
+// set. A principal object is in the scope when it is in Principals.
+type Scope struct {
+	Namespaces  []Object
+	Collections []Object
+	Units       []Object
+	Principals  []Object
+	All         bool
+}
+
+// IsEmpty reports whether the scope holds no object.
+func (s Scope) IsEmpty() bool {
+	return !s.All && len(s.Namespaces) == 0 && len(s.Collections) == 0 && len(s.Units) == 0 &&
+		len(s.Principals) == 0
+}
+
+// AdminScope returns the scope of an authorizer that allows administrators
+// only: every object for an administrator, and no object for any other
+// principal.
+func AdminScope(p Principal) Scope {
+	return Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: p.Admin}
 }
 
 // StaticToken authenticates exactly one token as one administrator. It exists
@@ -836,6 +866,19 @@ func (s SelfAllowed) Authorize(ctx context.Context, p Principal, action Action, 
 	return s.Next.Authorize(ctx, p, action, obj)
 }
 
+// ListObjects asks Next. A self action gives an object only on the caller
+// itself, which no list holds, so it adds nothing to the scope.
+func (s SelfAllowed) ListObjects(ctx context.Context, p Principal, action Action) (Scope, error) {
+	scope, err := s.Next.ListObjects(ctx, p, action)
+	if err != nil {
+		return Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, fmt.Errorf(
+			"list objects: %w", err,
+		)
+	}
+
+	return scope, nil
+}
+
 // AdminOnly allows administrators and denies everyone else. It is the safe
 // default until a real authorizer (roles, teams) is configured.
 type AdminOnly struct{}
@@ -849,6 +892,12 @@ func (AdminOnly) Authorize(_ context.Context, p Principal, action Action, obj Ob
 	}
 
 	return fmt.Errorf("%w: %s may not %s on %q", ErrDenied, p.Subject, action, obj.String())
+}
+
+// ListObjects gives an administrator every object and any other principal
+// none.
+func (AdminOnly) ListObjects(_ context.Context, p Principal, _ Action) (Scope, error) {
+	return AdminScope(p), nil
 }
 
 // WithUnitID returns o with the stable ID id of its unit (ADR 19). A grant

@@ -159,6 +159,13 @@ func (coverageAuthorizer) Authorize(
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+// ListObjects lists no object. Route tables never list, so it never runs.
+func (coverageAuthorizer) ListObjects(
+	_ context.Context, _ identity.Principal, _ identity.Action,
+) (identity.Scope, error) {
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+}
+
 // coveragePulumiRoutes returns the Pulumi CLI adapter's route table.
 func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()

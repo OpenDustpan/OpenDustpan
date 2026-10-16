@@ -169,9 +169,8 @@ func TestDeletedReadScope(t *testing.T) {
 	}
 }
 
-// TestDeletedReadScopeFailsClosed proves that an authorizer that lists no
-// scope gives every deleted unit to an administrator and none to anyone
-// else.
+// TestDeletedReadScopeFailsClosed proves that the scope of AdminOnly gives
+// every deleted unit to an administrator and none to anyone else.
 func TestDeletedReadScopeFailsClosed(t *testing.T) {
 	t.Parallel()
 

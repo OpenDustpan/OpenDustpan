@@ -48,6 +48,19 @@ func (g Gate) Authorize(ctx context.Context, p identity.Principal, action identi
 	return g.checkNamespace(ctx, obj.Namespace())
 }
 
+// ListObjects asks Next.
+func (g Gate) ListObjects(
+	ctx context.Context, p identity.Principal, action identity.Action,
+) (identity.Scope, error) {
+	scope, err := g.Next.ListObjects(ctx, p, action)
+	if err != nil {
+		return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false},
+			fmt.Errorf("list objects: %w", err)
+	}
+
+	return scope, nil
+}
+
 // CheckAddress refuses the request when the namespace ns holds a list that
 // does not contain the client address in ctx. It is the address-only check
 // for routes with no principal and no authorization object, such as the
