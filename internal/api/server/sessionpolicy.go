@@ -6,8 +6,8 @@ package server
 //   - server:read-tokens reads the policy, as it reads the token policy,
 //   - server:manage-sign-in changes the policy.
 //
-// Limits are whole seconds on the wire. A new limit applies at the next
-// check of a session.
+// Limits and the token freshness window are whole seconds on the wire. A
+// new setting applies at the next check of a session.
 
 import (
 	"errors"
@@ -22,27 +22,34 @@ import (
 // errSessionPolicyBody reports a session policy change body that the route
 // refuses.
 var errSessionPolicyBody = errors.New(
-	`invalid session policy body: provide one or both of {"idleSeconds":N,"maxLengthSeconds":N}`,
+	`invalid session policy body: provide one or more of {"idleSeconds":N,"maxLengthSeconds":N,` +
+		`"tokenFreshnessSeconds":N}`,
 )
 
 // sessionPolicyPath is the route path of the session policy.
 const sessionPolicyPath = "/api/server/session-policy"
 
 // sessionPolicyResponse is the policy on the wire. A null updatedAt means
-// that no administrator changed the defaults.
+// that no administrator changed the defaults. tokenFreshnessSeconds is how
+// old the sign-in of a console session can be when the session creates or
+// rotates an access token, 0 for no check; tokenFreshnessDefault is true
+// while no administrator set it, so the server default applies.
 //
 // Contract: never remove or rename these fields.
 type sessionPolicyResponse struct {
-	UpdatedAt        *string `json:"updatedAt"`
-	IdleSeconds      int64   `json:"idleSeconds"`
-	MaxLengthSeconds int64   `json:"maxLengthSeconds"`
+	UpdatedAt             *string `json:"updatedAt"`
+	IdleSeconds           int64   `json:"idleSeconds"`
+	MaxLengthSeconds      int64   `json:"maxLengthSeconds"`
+	TokenFreshnessSeconds int64   `json:"tokenFreshnessSeconds"`
+	TokenFreshnessDefault bool    `json:"tokenFreshnessDefault"`
 }
 
 // sessionPolicyRequest is the body of a policy change. A missing field
 // keeps its value.
 type sessionPolicyRequest struct {
-	IdleSeconds      *int64 `json:"idleSeconds"`
-	MaxLengthSeconds *int64 `json:"maxLengthSeconds"`
+	IdleSeconds           *int64 `json:"idleSeconds"`
+	MaxLengthSeconds      *int64 `json:"maxLengthSeconds"`
+	TokenFreshnessSeconds *int64 `json:"tokenFreshnessSeconds"`
 }
 
 func sessionPolicyOf(p session.Policy) sessionPolicyResponse {
@@ -50,6 +57,9 @@ func sessionPolicyOf(p session.Policy) sessionPolicyResponse {
 		UpdatedAt:        optionalWireTime(p.UpdatedAt),
 		IdleSeconds:      int64(p.Limits.Idle / time.Second),
 		MaxLengthSeconds: int64(p.Limits.MaxLength / time.Second),
+
+		TokenFreshnessSeconds: int64(p.TokenFreshness / time.Second),
+		TokenFreshnessDefault: p.TokenFreshnessDefault,
 	}
 }
 
@@ -118,7 +128,9 @@ func (h *Handler) setSessionPolicy(
 ) (session.Policy, error) {
 	var req sessionPolicyRequest
 
-	empty := func() bool { return req.IdleSeconds == nil && req.MaxLengthSeconds == nil }
+	empty := func() bool {
+		return req.IdleSeconds == nil && req.MaxLengthSeconds == nil && req.TokenFreshnessSeconds == nil
+	}
 
 	if err := decodeChange(w, r, &req, errSessionPolicyBody, empty); err != nil {
 		return session.Policy{}, err
@@ -134,8 +146,13 @@ func (h *Handler) setSessionPolicy(
 		return session.Policy{}, err
 	}
 
+	freshness, err := limitSeconds(req.TokenFreshnessSeconds)
+	if err != nil {
+		return session.Policy{}, err
+	}
+
 	return h.sessions.SetPolicy(r.Context(), callerEntry(r, p, identity.ActionServerManageSignIn),
-		session.PolicyChange{Idle: idle, MaxLength: maxLength, TokenFreshness: nil})
+		session.PolicyChange{Idle: idle, MaxLength: maxLength, TokenFreshness: freshness})
 }
 
 // limitSeconds converts a count of seconds of a body to a duration, or

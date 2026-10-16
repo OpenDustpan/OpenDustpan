@@ -72,6 +72,29 @@ type signInEnv struct {
 	idp     *oauthtest.Provider
 	store   *sqlite.Store
 	limiter *fakeLimiter
+	clock   *envClock
+}
+
+// envClock is the clock that the test provider, the OIDC client and the
+// sessions of a signInEnv share. A test moves it.
+type envClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *envClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.now
+}
+
+// Add moves the clock by d.
+func (c *envClock) Add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.now = c.now.Add(d)
 }
 
 func alice() oauthtest.User {
@@ -88,13 +111,15 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 
 	var noFaults oauthtest.Faults
 
+	clock := &envClock{mu: sync.Mutex{}, now: time.Now().UTC().Truncate(time.Second)}
+
 	idp := oauthtest.New(t, oauthtest.Config{
-		Now: nil, ClientID: "dustpan", ClientSecret: "client-secret-for-tests", RedirectURI: signInCallback,
+		Now: clock.Now, ClientID: "dustpan", ClientSecret: "client-secret-for-tests", RedirectURI: signInCallback,
 		Algorithm: oauthtest.RS256, User: alice(), Mode: oauthtest.ModeOIDC, Faults: noFaults, TLS: true,
 	})
 
 	client, err := oauth.NewLazy(oauth.Config{
-		HTTPClient: idp.Client(), Now: nil, Issuer: idp.Issuer(), ClientID: "dustpan",
+		HTTPClient: idp.Client(), Now: clock.Now, Issuer: idp.Issuer(), ClientID: "dustpan",
 		ClientSecret: "client-secret-for-tests", RedirectURL: signInCallback, Scopes: []string{"profile", "email"},
 	})
 	if err != nil {
@@ -112,13 +137,13 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 		t.Fatalf("seed namespace: %v", seedErr)
 	}
 
-	policies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: nil})
+	policies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: clock.Now})
 	if err != nil {
 		t.Fatalf("session policies: %v", err)
 	}
 
 	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Policies: policies, Inactivity: nil, Now: nil},
+		session.SessionsConfig{Store: st, Policies: policies, Inactivity: nil, Now: clock.Now},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
@@ -160,7 +185,7 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 		t.Fatalf("handler: %v", err)
 	}
 
-	return signInEnv{handler: handler, idp: idp, store: st, limiter: limiter}
+	return signInEnv{handler: handler, idp: idp, store: st, limiter: limiter, clock: clock}
 }
 
 // get sends a GET request with the cookies to the handler.
@@ -194,9 +219,21 @@ func cookieOf(rec *httptest.ResponseRecorder, name string) *http.Cookie {
 func (e signInEnv) start(t *testing.T, returnPath string) (*http.Cookie, string) {
 	t.Helper()
 
-	target := "/api/server/sign-in/corp"
+	q := url.Values{}
 	if returnPath != "" {
-		target += "?return=" + url.QueryEscape(returnPath)
+		q.Set("return", returnPath)
+	}
+
+	return e.startQuery(t, q)
+}
+
+// startQuery begins a sign-in with the query q, as start does.
+func (e signInEnv) startQuery(t *testing.T, q url.Values) (*http.Cookie, string) {
+	t.Helper()
+
+	target := "/api/server/sign-in/corp"
+	if len(q) > 0 {
+		target += "?" + q.Encode()
 	}
 
 	rec := e.get(t, target)
@@ -500,18 +537,11 @@ func TestSignInHeaderWinsOverCookie(t *testing.T) {
 	}
 }
 
-// TestSignInRefusesTokenFromSession proves that a console session mints no
-// token: each route that creates or rotates a token answers 403.
-func TestSignInRefusesTokenFromSession(t *testing.T) {
-	t.Parallel()
-
-	e := newSignInEnv(t, true)
-	sess := e.signIn(t)
-	_, body := e.readSession(t, sess)
-
+// tokenTargets are the eight routes that create or rotate a token.
+func tokenTargets() []string {
 	principalTokens := "/api/server/principals/" + testOtherPrincipalID + "/tokens"
 
-	for _, target := range []string{
+	return []string{
 		"/api/server/tokens",
 		"/api/server/tokens/" + testServiceTokenID + "/rotate",
 		"/api/server/service-tokens",
@@ -520,18 +550,180 @@ func TestSignInRefusesTokenFromSession(t *testing.T) {
 		"/api/server/caller/tokens/" + testServiceTokenID + "/rotate",
 		principalTokens,
 		principalTokens + "/" + testServiceTokenID + "/rotate",
-	} {
-		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target,
-			strings.NewReader(`{"name":"laptop","principalId":"`+testOtherPrincipalID+`"}`))
-		req.AddCookie(sess)
-		req.Header.Set(apiserver.CSRFHeader, body.CSRFToken)
+	}
+}
 
-		rec := httptest.NewRecorder()
-		e.handler.ServeHTTP(rec, req)
+// postWithSession sends a POST with the session cookie and its CSRF value.
+func (e signInEnv) postWithSession(t *testing.T, sess *http.Cookie, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
 
-		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "cannot create or rotate a token") {
-			t.Errorf("POST %s from a session = %d %s, want 403", target, rec.Code, rec.Body.String())
+	_, s := e.readSession(t, sess)
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target, strings.NewReader(body))
+	req.AddCookie(sess)
+	req.Header.Set(apiserver.CSRFHeader, s.CSRFToken)
+
+	rec := httptest.NewRecorder()
+	e.handler.ServeHTTP(rec, req)
+
+	return rec
+}
+
+// ownTokenBody is the body of an own token that expires in one day.
+func ownTokenBody() string {
+	return `{"name":"laptop","expiresAt":"` + time.Now().Add(24*time.Hour).UTC().Format(time.RFC3339) + `"}`
+}
+
+// staleSession signs in and moves the clock past the default token
+// freshness window, with one use of the session on the way, so the
+// session is still active.
+func (e signInEnv) staleSession(t *testing.T) *http.Cookie {
+	t.Helper()
+
+	sess := e.signIn(t)
+
+	e.clock.Add(10 * time.Minute)
+	e.readSession(t, sess)
+	e.clock.Add(session.DefaultTokenFreshness - 10*time.Minute + time.Minute)
+
+	if code, _ := e.readSession(t, sess); code != http.StatusOK {
+		t.Fatalf("stale session = %d, want an active session", code)
+	}
+
+	return sess
+}
+
+// TestSignInTokenFreshness proves that a console session creates a token
+// while its sign-in is fresh, and that each route that creates or rotates
+// a token answers 401 with the path of a new sign-in once the sign-in is
+// older than the token freshness window.
+func TestSignInTokenFreshness(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+
+	rec := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("own token from a fresh session = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+
+	stale := e.staleSession(t)
+
+	for _, target := range tokenTargets() {
+		rec := e.postWithSession(t, stale, target, `{"name":"laptop","principalId":"`+testOtherPrincipalID+`"}`)
+
+		var body struct {
+			Message        string `json:"message"`
+			Reauthenticate string `json:"reauthenticate"`
+			Code           int    `json:"code"`
 		}
+
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode the answer of %s: %v", target, err)
+		}
+
+		if rec.Code != http.StatusUnauthorized || body.Reauthenticate != "/api/server/sign-in/corp?fresh=1" ||
+			!strings.Contains(body.Message, "sign in again") {
+			t.Errorf("POST %s from a stale session = %d %s, want 401 with the path of a new sign-in", target,
+				rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestSignInFreshSignIn proves that a sign-in with fresh=1 asks the
+// identity provider for a new authentication (max_age=0), and that its new
+// session creates a token.
+func TestSignInFreshSignIn(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+	e.staleSession(t)
+
+	binding, authURL := e.startQuery(t, url.Values{"fresh": {"1"}, "return": {"/console/tokens"}})
+
+	u, err := url.Parse(authURL)
+	if err != nil || u.Query().Get("max_age") != "0" {
+		t.Fatalf("authorization URL = %q, %v; want max_age=0", authURL, err)
+	}
+
+	rec := e.callback(t, e.authorize(t, authURL), binding)
+	if rec.Code != http.StatusSeeOther || e.idp.SignIns() != 2 {
+		t.Fatalf("fresh callback = %d with %d authentications, want 303 after a second one: %s", rec.Code,
+			e.idp.SignIns(), rec.Body.String())
+	}
+
+	fresh := cookieOf(rec, apiserver.SessionCookie)
+	if fresh == nil {
+		t.Fatal("the fresh sign-in set no session cookie")
+	}
+
+	if rec := e.postWithSession(t, fresh, "/api/server/caller/tokens", ownTokenBody()); rec.Code != http.StatusCreated {
+		t.Fatalf("own token after a fresh sign-in = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+
+	if rec := e.get(t, "/api/server/sign-in/corp?fresh=yes"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("start with fresh=yes = %d, want 400", rec.Code)
+	}
+}
+
+// TestSignInFreshRefusesOldAuthentication proves that the callback of a
+// sign-in with fresh=1 refuses an authentication that is older than the
+// max_age of the request, when the identity provider does not honor it.
+func TestSignInFreshRefusesOldAuthentication(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+	e.staleSession(t)
+
+	var faults oauthtest.Faults
+
+	faults.IgnoreMaxAge = true
+	e.idp.SetFaults(faults)
+
+	binding, authURL := e.startQuery(t, url.Values{"fresh": {"1"}})
+
+	rec := e.callback(t, e.authorize(t, authURL), binding)
+	if rec.Code != http.StatusBadRequest || cookieOf(rec, apiserver.SessionCookie) != nil {
+		t.Fatalf("callback with an old authentication = %d, want 400 with no session: %s", rec.Code,
+			rec.Body.String())
+	}
+
+	if reason, _ := e.refusedReason(t); reason != "ID token was refused" {
+		t.Fatalf("audit reason = %q, want the refusal of the ID token", reason)
+	}
+}
+
+// policyChangeEntry is the audit entry of a change of the session policy
+// at the time at.
+func policyChangeEntry(at time.Time) audit.Entry {
+	return audit.Entry{
+		At: at, Namespace: audit.ServerScope, Subject: "admin", IDPSubject: "", TokenID: "",
+		Action: "server:manage-sign-in", Object: session.PolicyRef, Version: "", ValuePath: "", ValueCount: nil,
+		Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0,
+	}
+}
+
+// TestSignInFreshnessWindowOff proves that a window of 0 lets a session
+// with an old sign-in create a token.
+func TestSignInFreshnessWindowOff(t *testing.T) {
+	t.Parallel()
+
+	e := newSignInEnv(t, true)
+	stale := e.staleSession(t)
+
+	_, err := e.store.UpdateSessionPolicy(t.Context(), func(old session.Policy) (session.Policy, audit.Entry, error) {
+		old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = 0, false, e.clock.Now()
+
+		return old, policyChangeEntry(e.clock.Now()), nil
+	})
+	if err != nil {
+		t.Fatalf("turn the window off: %v", err)
+	}
+
+	if rec := e.postWithSession(t, stale, "/api/server/caller/tokens", ownTokenBody()); rec.Code != http.StatusCreated {
+		t.Fatalf("own token with the window off = %d %s, want 201", rec.Code, rec.Body.String())
 	}
 }
 

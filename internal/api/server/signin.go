@@ -35,10 +35,13 @@ const (
 
 // Paths of the sign-in routes.
 const (
-	signInPath   = "/api/server/sign-in/{provider}"
-	callbackPath = "/api/server/sign-in/{provider}/callback"
-	sessionPath  = "/api/server/session"
-	signOutPath  = "/api/server/sign-out"
+	signInPath = "/api/server/sign-in/{provider}"
+	// signInStartPrefix starts the path of the start of a sign-in, before
+	// the provider ID.
+	signInStartPrefix = "/api/server/sign-in/"
+	callbackPath      = "/api/server/sign-in/{provider}/callback"
+	sessionPath       = "/api/server/session"
+	signOutPath       = "/api/server/sign-out"
 )
 
 // defaultReturnPath is where the browser goes after a sign-in that names
@@ -68,8 +71,7 @@ var (
 	errNoSession       = errors.New("the request has no console session")
 	errCSRF            = sessionauth.ErrCSRF
 	errOtherSite       = sessionauth.ErrOtherSite
-	errSessionToken    = fmt.Errorf("%w: a console session cannot create or rotate a token yet: use an access token",
-		identity.ErrDenied)
+	errFreshParam      = errors.New(`the query parameter fresh must be "1" or absent`)
 )
 
 // OIDCClient is the client of one OpenID Connect provider. *oauth.Lazy
@@ -222,6 +224,13 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
+	fresh, err := freshParam(r)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
 	returnPath := r.URL.Query().Get("return")
 	if returnPath == "" {
 		returnPath = defaultReturnPath
@@ -242,7 +251,7 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 
 	authURL, pending, err := provider.Client.Begin(
 		ctx,
-		oauth.Options{State: state.Reveal(), MaxAge: 0, HasMaxAge: false},
+		oauth.Options{State: state.Reveal(), MaxAge: 0, HasMaxAge: fresh},
 	)
 	if err != nil {
 		h.logger.WarnContext(ctx, "identity provider not available", slog.String("provider", provider.ID),
@@ -346,7 +355,8 @@ func (h *Handler) callbackIdentity(r *http.Request, provider SignInProvider) (ca
 		return refused(reasonRequest)
 	}
 
-	pending.Nonce, pending.Verifier = req.Nonce, req.Verifier
+	pending.Nonce, pending.Verifier, pending.MaxAge, pending.HasMaxAge = req.Nonce, req.Verifier, req.MaxAge,
+		req.HasMaxAge
 
 	id, err := provider.Client.Finish(ctx, q.Get("code"), pending)
 	if err != nil {
@@ -654,9 +664,12 @@ func classifySignIn(err error) (int, string, bool) {
 		return http.StatusBadRequest, errSignInFailed.Error(), true
 	case errors.Is(err, errNoSession):
 		return http.StatusNotFound, errNoSession.Error(), true
-	case errors.Is(err, errSignInRefused), errors.Is(err, errCSRF), errors.Is(err, errOtherSite),
-		errors.Is(err, errSessionToken):
+	case errors.Is(err, errSignInRefused), errors.Is(err, errCSRF), errors.Is(err, errOtherSite):
 		return http.StatusForbidden, err.Error(), true
+	case errors.Is(err, errFreshParam):
+		return http.StatusBadRequest, err.Error(), true
+	case errors.Is(err, errReauthenticate):
+		return http.StatusUnauthorized, err.Error(), true
 	case errors.Is(err, session.ErrEnded):
 		return http.StatusNotFound, errNoSession.Error(), true
 	default:

@@ -39,6 +39,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -245,6 +246,7 @@ func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
 // carries Cache-Control: no-store.
 func (h *Handler) serveTokenChange(action identity.Action, op tokenOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+		r = r.WithContext(context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness))
 		res, ok := h.runTokenOp(w, r, op, p, callerEntry(r, p, action))
 
 		if !ok && res.object != "" && h.tokens != nil {
@@ -448,8 +450,8 @@ func createPrincipalToken(
 	id := r.PathValue("principal")
 	object := principal.Ref(id)
 
-	if _, ok := sessionFromRequest(r); ok {
-		return failed(object), errSessionToken
+	if err := requireFresh(r); err != nil {
+		return failed(object), err
 	}
 
 	var req principalTokenRequest
@@ -550,8 +552,8 @@ func createToken(scope accesstoken.Scope) tokenOp {
 	return func(
 		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
 	) (principalResult, error) {
-		if _, ok := sessionFromRequest(r); ok {
-			return failed("tokens"), errSessionToken
+		if err := requireFresh(r); err != nil {
+			return failed("tokens"), err
 		}
 
 		var req createTokenRequest
@@ -739,8 +741,8 @@ func rotateToken(scope accesstoken.Scope) tokenOp {
 	) (principalResult, error) {
 		object := tokenObject(r, svc)
 
-		if _, ok := sessionFromRequest(r); ok {
-			return failed(object), errSessionToken
+		if err := requireFresh(r); err != nil {
+			return failed(object), err
 		}
 
 		var req rotateTokenRequest

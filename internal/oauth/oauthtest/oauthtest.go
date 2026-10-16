@@ -84,6 +84,9 @@ type Faults struct {
 	// IssuedIn moves the iat claim of an ID token by this duration from
 	// now, and its exp claim with it, when it is not zero.
 	IssuedIn time.Duration
+	// IgnoreMaxAge answers an authorization request with max_age with the
+	// last authentication, as a provider that does not honor max_age does.
+	IgnoreMaxAge bool
 }
 
 // User is the person whom the provider signs in.
@@ -501,7 +504,7 @@ func (p *Provider) mustSignIn(q url.Values, now time.Time) bool {
 	}
 
 	raw := q.Get("max_age")
-	if raw == "" {
+	if raw == "" || p.cfg.Faults.IgnoreMaxAge {
 		return false
 	}
 
