@@ -1744,6 +1744,82 @@ func TestASinkTimeoutIsAFailure(t *testing.T) {
 	}
 }
 
+// mixedSink fails the acme scope at once with a plain error and blocks the
+// later scopes until the round deadline, so one round joins a real failure
+// with a later deadline.
+type mixedSink struct {
+	mu      sync.Mutex
+	failErr error
+}
+
+func (s *mixedSink) Write(ctx context.Context, records []logsink.Record) error {
+	if len(records) > 0 && fmt.Sprint(records[0].Attrs[0].Value) == "acme" {
+		return s.failErr
+	}
+
+	<-ctx.Done()
+
+	return fmt.Errorf("mixed sink wait: %w", ctx.Err())
+}
+
+func (s *mixedSink) Close() error { return nil }
+
+// TestAJoinedSinkFailureBeatsALaterRoundDeadline proves that a round that
+// joins a real sink failure with a later round deadline still fails: the
+// failure hook runs once, the log holds a delivery failure and no clean
+// round end.
+func TestAJoinedSinkFailureBeatsALaterRoundDeadline(t *testing.T) {
+	t.Parallel()
+
+	feed := newMemFeed(map[namespace.Name]int{"acme": 1, "globex": 1})
+	leases := newMemLeaser()
+	sink := &mixedSink{mu: sync.Mutex{}, failErr: errSinkDown}
+
+	var logs lockedBuffer
+
+	failures := &failureCounter{mu: sync.Mutex{}, n: 0}
+
+	s := newLeasedShipperFull(t, leasedShipperConfig{
+		feed:      feed,
+		leases:    leases,
+		holder:    "ins-holder-a",
+		sink:      sink,
+		ttl:       800 * time.Millisecond,
+		renew:     500 * time.Millisecond,
+		interval:  400 * time.Millisecond,
+		logger:    debugLogger(&logs),
+		onFailure: failures.hook,
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		s.Run(ctx)
+	}()
+
+	waitUntil(t, time.Now().Add(10*time.Second), "the joined failure to fail the round",
+		func() bool { return failures.count() >= 1 })
+
+	cancel()
+	<-done
+
+	if got := failures.count(); got != 1 {
+		t.Fatalf("failure hook calls: got %d, want 1", got)
+	}
+
+	if out := logs.String(); !strings.Contains(out, "audit sink delivery failed") {
+		t.Fatalf("log lacks a delivery failure for a joined sink failure: %s", out)
+	}
+
+	if out := logs.String(); strings.Contains(out, "audit sink round ended") {
+		t.Fatalf("log holds a clean round end for a joined sink failure: %s", out)
+	}
+}
+
 // TestNewShipperRejectsRenewIntervalNotShorterThanLeaseTTL proves that a
 // renew interval at or past the lease TTL is rejected, while a shorter one
 // is accepted.
