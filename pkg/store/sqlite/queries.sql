@@ -1795,3 +1795,44 @@ WHERE ended_at_ms IS NULL
 -- The prefix is "<provider ID>:". The compare is exact, with no pattern
 -- and no case folding. Deleted principals count too.
 SELECT COUNT(*) FROM principals WHERE substr(subject, 1, length(sqlc.arg('prefix'))) = sqlc.arg('prefix');
+
+-- Durable operations. Every time comes from DatabaseNowMs, the clock of the
+-- store. Each write runs in an IMMEDIATE transaction, so the read of a row
+-- and its write see no other writer between them.
+
+-- name: InsertDurableOperation :exec
+INSERT INTO durable_operations (
+    id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, '', NULL, 0, NULL, 0, ?, ?, ?);
+
+-- name: GetDurableOperation :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = ?;
+
+-- name: GetDurableOperationByKey :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE start_key = ?;
+
+-- name: UpdateDurableOperation :exec
+-- Writes every column that changes after the start of an operation.
+UPDATE durable_operations
+SET state = ?, attempt = ?, expiries = ?, failures = ?, last_error = ?, claim_owner = ?, claim_token = ?,
+    claim_expires_at_ms = ?, cancel_requested = ?, not_before_ms = ?, updated_at_ms = ?
+WHERE id = ?;
+
+-- name: ListDurableSteps :many
+SELECT name, result, done_at_ms FROM durable_steps WHERE operation_id = ? ORDER BY seq;
+
+-- name: CountDurableStep :one
+SELECT COUNT(*) FROM durable_steps WHERE operation_id = ? AND name = ?;
+
+-- name: InsertDurableStep :exec
+INSERT INTO durable_steps (operation_id, name, seq, result, done_at_ms)
+VALUES (
+    sqlc.arg('operation_id'), sqlc.arg('name'),
+    (SELECT COALESCE(MAX(seq), 0) + 1 FROM durable_steps WHERE operation_id = sqlc.arg('operation_id')),
+    sqlc.arg('result'), sqlc.arg('done_at_ms')
+);

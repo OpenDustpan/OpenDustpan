@@ -39,6 +39,13 @@ const (
 	DialectPostgres Dialect = "postgres"
 )
 
+// The tables of durable operations: one row for each operation, and one row
+// for each recorded step.
+const (
+	TableDurableOperations = "durable_operations"
+	TableDurableSteps      = "durable_steps"
+)
+
 // Tables lists every table that an export covers, in foreign-key order, so an
 // import can load parents before children. Both dialects share the table
 // names, so both adapters use this list as the single source: they must not
@@ -93,6 +100,8 @@ var Tables = []string{
 	TableSessionPolicy,
 	"backups",
 	"restores",
+	TableDurableOperations,
+	TableDurableSteps,
 	"installation",
 }
 

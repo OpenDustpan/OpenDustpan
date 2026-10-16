@@ -88,6 +88,7 @@ func pgCopyTables() []pgCopyTable {
 	tables = append(tables, pgCopyWorkspaceTables()...)
 	tables = append(tables, pgCopyIdentityTables()...)
 	tables = append(tables, pgCopySessionTables()...)
+	tables = append(tables, pgCopyDurableTables()...)
 
 	return tables
 }
@@ -272,6 +273,41 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 			table:   "installation",
 			columns: []string{"id", pgColState},
 			orderBy: []string{"id"},
+		},
+	}
+}
+
+// pgCopyDurableTables holds the COPY columns of the durable operation
+// tables, in foreign-key order.
+func pgCopyDurableTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table: backup.TableDurableOperations,
+			columns: []string{
+				"id",
+				"start_key",
+				"kind",
+				"input",
+				"version",
+				pgColState,
+				"attempt",
+				"expiries",
+				"failures",
+				"last_error",
+				"claim_owner",
+				"claim_token",
+				"claim_expires_at_ms",
+				"cancel_requested",
+				"not_before_ms",
+				pgColCreatedAtMs,
+				pgColUpdatedAtMs,
+			},
+			orderBy: []string{"id"},
+		},
+		{
+			table:   backup.TableDurableSteps,
+			columns: []string{"operation_id", "name", "seq", "result", "done_at_ms"},
+			orderBy: []string{"operation_id", "seq"},
 		},
 	}
 }
