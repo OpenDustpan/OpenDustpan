@@ -3397,6 +3397,20 @@ func (q *Queries) GetSignInProvider(ctx context.Context, providerID string) (Sig
 	return i, err
 }
 
+const getSignInProviderEnabled = `-- name: GetSignInProviderEnabled :one
+SELECT enabled FROM sign_in_providers WHERE provider_id = $1 FOR SHARE
+`
+
+// Reads whether a stored provider is enabled, with a shared lock, in the
+// transaction that inserts a session of it. A disable waits for that
+// transaction, and its session end then sees the new session.
+func (q *Queries) GetSignInProviderEnabled(ctx context.Context, providerID string) (bool, error) {
+	row := q.db.QueryRow(ctx, getSignInProviderEnabled, providerID)
+	var enabled bool
+	err := row.Scan(&enabled)
+	return enabled, err
+}
+
 const getStack = `-- name: GetStack :one
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks

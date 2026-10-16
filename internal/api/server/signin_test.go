@@ -160,7 +160,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 	}
 
 	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Policies: policies, Inactivity: nil, Now: clock.Now},
+		session.SessionsConfig{Store: st, Providers: st, Policies: policies, Inactivity: nil, Now: clock.Now},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
@@ -212,7 +212,7 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 			Admin:    admin,
 			Origins:  []string{signInBase, consoleOrigin},
 			Providers: []apiserver.SignInProvider{
-				{Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate},
+				{Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate, Stored: false},
 			},
 		},
 		CheckpointEpochs: nil,
@@ -991,7 +991,7 @@ func TestSignInProviderDown(t *testing.T) {
 	}
 
 	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Policies: policies, Inactivity: nil, Now: nil},
+		session.SessionsConfig{Store: st, Providers: nil, Policies: policies, Inactivity: nil, Now: nil},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
@@ -1033,7 +1033,7 @@ func TestSignInProviderDown(t *testing.T) {
 			Limiter: limiter,
 			Origins: nil,
 			Providers: []apiserver.SignInProvider{
-				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true},
+				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true, Stored: false},
 			},
 		},
 		CheckpointEpochs: nil,

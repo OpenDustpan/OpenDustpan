@@ -94,7 +94,8 @@ The rules:
 - Disable a provider with `"enabled": false`. A disabled provider answers
   404 at the start of a sign-in. The disable also ends every active
   session of a person with a subject of the provider, and its audit entry
-  holds the count as `sessionsEnded`. The server deletes a provider only
+  holds the count as `sessionsEnded`. A sign-in through the provider that
+  is in progress gets no session. The server deletes a provider only
   when no principal has a subject of its ID. Else the delete answers 409.
   So a provider that the server deletes has no session.
 - A change from a console session needs a sign-in inside the token

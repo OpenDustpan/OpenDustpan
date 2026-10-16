@@ -142,5 +142,7 @@ func (s *storedProviders) build(ctx context.Context, p *session.ProviderConfig) 
 		return none, fmt.Errorf("sign-in provider %s: %w", p.ID, err)
 	}
 
-	return serverapi.SignInProvider{Client: client, ID: p.ID, DisplayName: p.DisplayName, AutoCreate: p.AutoCreate}, nil
+	return serverapi.SignInProvider{
+		Client: client, ID: p.ID, DisplayName: p.DisplayName, AutoCreate: p.AutoCreate, Stored: true,
+	}, nil
 }

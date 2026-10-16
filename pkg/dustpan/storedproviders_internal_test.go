@@ -80,8 +80,8 @@ func TestStoredProvidersFollowTheStore(t *testing.T) {
 	}
 
 	first, ok, err := f.lookup.Provider(ctx, "beta")
-	if err != nil || !ok || first.DisplayName != "Beta" {
-		t.Fatalf("lookup = %+v, %t, %v; want beta", first, ok, err)
+	if err != nil || !ok || first.DisplayName != "Beta" || !first.Stored {
+		t.Fatalf("lookup = %+v, %t, %v; want the stored provider beta", first, ok, err)
 	}
 
 	again, _, againErr := f.lookup.Provider(ctx, "beta")

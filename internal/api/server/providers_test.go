@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,22 +35,25 @@ const (
 type providerEnv struct {
 	signInEnv
 
-	beta *oauthtest.Provider
+	beta  *oauthtest.Provider
+	stale *atomic.Bool
 }
 
 // testStored finds the enabled stored providers, as the server does, with
-// the HTTP client of the test provider beta.
+// the HTTP client of the test provider beta. While stale is set, it also
+// finds a disabled provider, as a lookup that ran before the disable.
 type testStored struct {
 	admin  *session.ProviderAdmin
 	client *http.Client
 	now    func() time.Time
+	stale  *atomic.Bool
 }
 
 func (s testStored) Provider(ctx context.Context, id string) (apiserver.SignInProvider, bool, error) {
 	var none apiserver.SignInProvider
 
 	p, err := s.admin.Get(ctx, id)
-	if errors.Is(err, session.ErrProviderNotFound) || (err == nil && !p.Enabled) {
+	if errors.Is(err, session.ErrProviderNotFound) || (err == nil && !p.Enabled && !s.stale.Load()) {
 		return none, false, nil
 	}
 
@@ -75,6 +79,7 @@ func (s testStored) Provider(ctx context.Context, id string) (apiserver.SignInPr
 		ID:          id,
 		DisplayName: p.DisplayName,
 		AutoCreate:  p.AutoCreate,
+		Stored:      true,
 	}, true, nil
 }
 
@@ -84,6 +89,8 @@ func newProviderEnv(t *testing.T) providerEnv {
 	var beta *oauthtest.Provider
 
 	var noFaults oauthtest.Faults
+
+	stale := &atomic.Bool{}
 
 	e := newSignInEnvWith(t, signInEnvOptions{
 		autoCreate: true, noPolicyRoutes: false,
@@ -112,11 +119,11 @@ func newProviderEnv(t *testing.T) providerEnv {
 				t.Fatalf("provider admin: %v", err)
 			}
 
-			return admin, testStored{admin: admin, client: beta.Client(), now: clock.Now}
+			return admin, testStored{admin: admin, client: beta.Client(), now: clock.Now, stale: stale}
 		},
 	})
 
-	return providerEnv{signInEnv: e, beta: beta}
+	return providerEnv{signInEnv: e, beta: beta, stale: stale}
 }
 
 // adminDo sends a request with the access token of an administrator.
@@ -291,6 +298,26 @@ func (e providerEnv) signInWith(t *testing.T, idp *oauthtest.Provider, id string
 func (e providerEnv) signInSession(t *testing.T, idp *oauthtest.Provider, id string) (string, *http.Cookie) {
 	t.Helper()
 
+	binding, back := e.authorizeWith(t, idp, id)
+
+	cb := e.get(t, "/api/server/sign-in/"+id+"/callback?"+back.Encode(), binding)
+
+	sess := cookieOf(cb, apiserver.SessionCookie)
+	if cb.Code != http.StatusSeeOther || sess == nil {
+		t.Fatalf("callback of %s = %d %s, want 303 with a session", id, cb.Code, cb.Body.String())
+	}
+
+	_, body := e.readSession(t, sess)
+
+	return body.Subject, sess
+}
+
+// authorizeWith starts a sign-in through the provider id and passes the
+// authorization at idp. It returns the binding cookie and the query of
+// the callback.
+func (e providerEnv) authorizeWith(t *testing.T, idp *oauthtest.Provider, id string) (*http.Cookie, url.Values) {
+	t.Helper()
+
 	rec := e.get(t, "/api/server/sign-in/"+id)
 	if rec.Code != http.StatusFound || !strings.HasPrefix(rec.Header().Get("Location"), idp.Issuer()) {
 		t.Fatalf("start of %s = %d to %q, want 302 to %s", id, rec.Code, rec.Header().Get("Location"), idp.Issuer())
@@ -320,16 +347,7 @@ func (e providerEnv) signInSession(t *testing.T, idp *oauthtest.Provider, id str
 		t.Fatalf("redirect: %v", err)
 	}
 
-	cb := e.get(t, "/api/server/sign-in/"+id+"/callback?"+back.Query().Encode(), binding)
-
-	sess := cookieOf(cb, apiserver.SessionCookie)
-	if cb.Code != http.StatusSeeOther || sess == nil {
-		t.Fatalf("callback of %s = %d %s, want 303 with a session", id, cb.Code, cb.Body.String())
-	}
-
-	_, body := e.readSession(t, sess)
-
-	return body.Subject, sess
+	return binding, back.Query()
 }
 
 // TestSignInTwoProvidersSideBySide proves that a static provider and a
@@ -518,5 +536,32 @@ func TestSignInProviderRefusalNamesNoInvalidID(t *testing.T) {
 
 	if len(objects) != 1 || objects[0] != "sign-in-provider:?" {
 		t.Fatalf("failure entries of the change = %q, want one of sign-in-provider:?", objects)
+	}
+}
+
+// TestSignInDisableBeforeTheCallback proves that a sign-in whose provider
+// is disabled between the start and the callback gets no session: when the
+// callback finds the provider disabled, and when its lookup ran before the
+// disable, so that the write of the session refuses it.
+func TestSignInDisableBeforeTheCallback(t *testing.T) {
+	t.Parallel()
+
+	for _, stale := range []bool{false, true} {
+		e := newProviderEnv(t)
+		e.createBeta(t)
+		e.stale.Store(stale)
+
+		binding, back := e.authorizeWith(t, e.beta, "beta")
+
+		rec := e.adminDo(t, http.MethodPatch, "/api/server/sign-in-providers/beta", `{"version":1,"enabled":false}`)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("disable = %d %s, want 200", rec.Code, rec.Body.String())
+		}
+
+		cb := e.get(t, "/api/server/sign-in/beta/callback?"+back.Encode(), binding)
+		if cb.Code != http.StatusNotFound || cookieOf(cb, apiserver.SessionCookie) != nil {
+			t.Fatalf("callback after a disable (stale lookup %t) = %d %s, want 404 with no session",
+				stale, cb.Code, cb.Body.String())
+		}
 	}
 }

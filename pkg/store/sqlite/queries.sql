@@ -1797,6 +1797,11 @@ WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version') - 
 -- name: CountSignInProvider :one
 SELECT COUNT(*) FROM sign_in_providers WHERE provider_id = ?;
 
+-- name: GetSignInProviderEnabled :one
+-- Reads whether a stored provider is enabled, in the transaction that
+-- inserts a session of it. SQLite has one writer, so no lock is needed.
+SELECT enabled FROM sign_in_providers WHERE provider_id = ?;
+
 -- name: DeleteSignInProvider :execrows
 DELETE FROM sign_in_providers WHERE provider_id = ?;
 

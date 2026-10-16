@@ -29,6 +29,8 @@ var (
 	ErrProviderInUse = errors.New("sign-in provider has principals")
 	// ErrInvalidProvider reports a provider that fails validation.
 	ErrInvalidProvider = errors.New("invalid sign-in provider")
+	// ErrProviderDisabled reports a stored provider that is disabled.
+	ErrProviderDisabled = errors.New("sign-in provider is disabled")
 )
 
 // Limits of a stored provider.
@@ -188,6 +190,18 @@ type ProviderConfigStore interface {
 	// principal, also a deleted one, has a subject that starts with
 	// SubjectPrefix(id).
 	DeleteProviderConfig(ctx context.Context, id string, e audit.Entry) error
+}
+
+// ProviderSessionStore creates the sessions of the stored providers.
+type ProviderSessionStore interface {
+	// CreateProviderSession is Store.CreateSession for a session of the
+	// stored provider s.Provider. In the same transaction, before the
+	// insert, it reads the provider with a shared lock, so a disable that
+	// commits first refuses the session, and a disable that commits later
+	// ends it. It returns ErrProviderNotFound when the provider is gone and
+	// ErrProviderDisabled when it is disabled, and then changes nothing.
+	// Else it returns the errors of Store.CreateSession.
+	CreateProviderSession(ctx context.Context, s Session, d Digest, e audit.Entry) error
 }
 
 // ChangeSessionsEnded is the key of the audit change that counts the

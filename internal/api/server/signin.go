@@ -106,6 +106,9 @@ type SignInProvider struct {
 	ID          string
 	DisplayName string
 	AutoCreate  bool
+	// Stored reports a provider that the API keeps. Its session is created
+	// in the same write as a check that the provider is still enabled.
+	Stored bool
 }
 
 // SignIn configures the console sign-in. Sessions is required. A nil
@@ -153,7 +156,7 @@ func (s *signInState) provider(ctx context.Context, id string) (SignInProvider, 
 	}
 
 	if s.stored == nil {
-		return SignInProvider{Client: nil, ID: "", DisplayName: "", AutoCreate: false}, false, nil
+		return SignInProvider{Client: nil, ID: "", DisplayName: "", AutoCreate: false, Stored: false}, false, nil
 	}
 
 	p, ok, err := s.stored.Provider(ctx, id)
@@ -441,9 +444,17 @@ func (h *Handler) startSession(
 
 	sess, secret, err := h.signIn.sessions.Start(ctx, e, session.Start{
 		AuthTime: id.AuthTime, PrincipalID: p.ID, Provider: provider.ID, SourceIP: e.SourceIP, UserAgent: e.UserAgent,
+		Stored: provider.Stored,
 	})
 
 	switch {
+	case errors.Is(err, session.ErrProviderDisabled) || errors.Is(err, session.ErrProviderNotFound):
+		// The provider was disabled or deleted after the lookup of this
+		// callback: refuse as a start of a disabled provider.
+		h.failSignIn(ctx)
+		h.writeError(ctx, w, errUnknownProvider)
+
+		return
 	case errors.Is(err, session.ErrPrincipalDisabled):
 		h.refuseSignIn(
 			w,

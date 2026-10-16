@@ -1,6 +1,7 @@
 package sessiontest
 
 import (
+	"errors"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -117,5 +118,55 @@ func checkSessionsEndedEntry(t *testing.T, s Store) {
 
 	if want := at(7).String() + " 2"; len(counts) != 1 || counts[0] != want {
 		t.Fatalf("sessionsEnded changes = %q, want one: %q", counts, want)
+	}
+}
+
+// testProviderSessionNeedsEnabled proves that CreateProviderSession
+// creates the session of an enabled stored provider, and refuses, with no
+// session, the session of a provider that a disable reached first, as
+// between the start and the callback of a sign-in, and of a provider that
+// is gone.
+func testProviderSessionNeedsEnabled(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	corp := newProviderConfig("corp")
+	mustCreateProvider(t, s, corp)
+	mustSubjectPrincipal(t, s, "prn-alice", "corp:alice")
+
+	first := newSession("ses-first", "prn-alice", at(6))
+	first.Provider = "corp"
+
+	if err := s.CreateProviderSession(ctx, first, digest(1), entry(first.ID, at(6))); err != nil {
+		t.Fatalf("session of an enabled provider: %v", err)
+	}
+
+	checkSessionActive(t, s, "ses-first")
+
+	corp.Version, corp.UpdatedAt, corp.Enabled = 2, at(7), false
+	if err := s.UpdateProviderConfig(ctx, corp, providerEntry("corp", at(7))); err != nil {
+		t.Fatalf("disable: %v", err)
+	}
+
+	late := newSession("ses-late", "prn-alice", at(8))
+	late.Provider = "corp"
+
+	err := s.CreateProviderSession(ctx, late, digest(2), entry(late.ID, at(8)))
+	if !errors.Is(err, session.ErrProviderDisabled) {
+		t.Fatalf("session of a disabled provider = %v, want ErrProviderDisabled", err)
+	}
+
+	gone := newSession("ses-gone", "prn-alice", at(8))
+	gone.Provider = "gone"
+
+	err = s.CreateProviderSession(ctx, gone, digest(3), entry(gone.ID, at(8)))
+	if !errors.Is(err, session.ErrProviderNotFound) {
+		t.Fatalf("session of an unknown provider = %v, want ErrProviderNotFound", err)
+	}
+
+	for _, id := range []string{"ses-late", "ses-gone"} {
+		if _, getErr := s.GetSession(ctx, id); !errors.Is(getErr, session.ErrNotFound) {
+			t.Fatalf("get refused session %s = %v, want ErrNotFound", id, getErr)
+		}
 	}
 }

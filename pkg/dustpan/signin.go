@@ -126,8 +126,13 @@ func newSignInSessions(
 		inactivity = tokenInactivity{tokens: tokens}
 	}
 
+	var providers session.ProviderSessionStore
+	if ps, isProviderStore := store.(session.ProviderSessionStore); isProviderStore {
+		providers = ps
+	}
+
 	sessions, err := session.NewSessions(session.SessionsConfig{
-		Store: store, Policies: policies, Inactivity: inactivity, Now: cfg.now,
+		Store: store, Providers: providers, Policies: policies, Inactivity: inactivity, Now: cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session service: %w", err)
@@ -365,5 +370,7 @@ func signInProvider(
 		displayName = p.ID
 	}
 
-	return serverapi.SignInProvider{Client: client, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate}, nil
+	return serverapi.SignInProvider{
+		Client: client, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
+	}, nil
 }

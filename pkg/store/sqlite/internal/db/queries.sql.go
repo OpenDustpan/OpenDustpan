@@ -3212,6 +3212,19 @@ func (q *Queries) GetSignInProvider(ctx context.Context, providerID string) (Sig
 	return i, err
 }
 
+const getSignInProviderEnabled = `-- name: GetSignInProviderEnabled :one
+SELECT enabled FROM sign_in_providers WHERE provider_id = ?
+`
+
+// Reads whether a stored provider is enabled, in the transaction that
+// inserts a session of it. SQLite has one writer, so no lock is needed.
+func (q *Queries) GetSignInProviderEnabled(ctx context.Context, providerID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getSignInProviderEnabled, providerID)
+	var enabled int64
+	err := row.Scan(&enabled)
+	return enabled, err
+}
+
 const getStack = `-- name: GetStack :one
 SELECT namespace, project, name, id, version, created_at_ms, updated_at_ms
 FROM stacks
