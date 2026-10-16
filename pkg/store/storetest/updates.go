@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // Test digests of stored bytes, for integrity, not security.
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -19,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 )
 
 // UpdatesStore is every port of the update cycle, plus the namespace and
@@ -30,6 +32,14 @@ type UpdatesStore interface {
 	stack.EventStore
 	stack.JournalStore
 	stack.BuiltCheckpointStore
+}
+
+// KeyEraser is an optional UpdatesStore capability for the keyless row case:
+// it sets the blob key of every checkpoint row to NULL with a direct SQL
+// update. The port refuses such a write, so only SQL plants such a row.
+type KeyEraser interface {
+	// EraseCheckpointKeys sets the blob key of every checkpoint row to NULL.
+	EraseCheckpointKeys(ctx context.Context) error
 }
 
 // UpdatesFactory returns a fresh, empty store for one subtest.
@@ -84,13 +94,15 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "checkpoint blob metadata round trip", test: testCheckpointBlobMetadata},
 		{name: "checkpoint by update returns only that update", test: testCheckpointByUpdate},
 		{name: "history reports the stored size for blob rows", test: testHistoryBlobSize},
-		{name: "referenced checkpoint keys list only blob rows", test: testReferencedCheckpointKeys},
+		{name: "referenced checkpoint keys list every key of the stack", test: testReferencedCheckpointKeys},
 		{name: "checkpoint needs the running update's lease", test: testCheckpointLease},
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
 		{name: "latest checkpoint is the highest version", test: testCheckpointLatestIsHighest},
 		{name: "checkpoint by version returns only that version", test: testCheckpointByVersion},
 		{name: "checkpoint of a preview is rejected", test: testCheckpointPreviewRejected},
+		{name: "checkpoint without a blob key is refused", test: testCheckpointWithoutKeyRefused},
+		{name: "checkpoint row without a blob key reads as corrupt", test: testKeylessRowCorrupt},
 		{name: "canceled or failed update keeps its checkpoint", test: testCheckpointKeepsAfterEnd},
 		{name: "children of a deleted stack are not reachable by name", test: testDeletedStackChildrenUnreachable},
 		{name: "delete during a running update is ErrUpdateConflict", test: testDeleteDuringRunningUpdate},
@@ -1252,8 +1264,12 @@ func (f fixture) blobKey(t *testing.T, u stack.Update, seq int64) blob.Key {
 	return key
 }
 
-// newCheckpoint returns a checkpoint of u written under its current lease.
+// newCheckpoint returns a checkpoint of u written under its current lease,
+// under a placeholder blob key. The store never reads the blob store, so the
+// key needs no object.
 func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoint {
+	size, sum := gzipAttrs(deployment)
+
 	return stack.Checkpoint{
 		SavedAt:       now().Add(2 * time.Second),
 		Features:      []string{"deltaCheckpointUploadsV2", "verbatim"},
@@ -1265,10 +1281,23 @@ func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoin
 		Sequence:      seq,
 		Digest:        sha256.Sum256([]byte(deployment)),
 		Invalid:       false,
-		BlobKey:       "",
-		BlobSize:      0,
-		BlobMD5:       [md5.Size]byte{},
+		BlobKey:       placeholderKey(u, seq),
+		BlobSize:      size,
+		BlobMD5:       sum,
 	}
+}
+
+// placeholderKey returns a blob key of a save of u with seq that no object
+// holds.
+func placeholderKey(u stack.Update, seq int64) blob.Key {
+	key, err := blob.ParseKey(
+		"pulumi/placeholder/" + hex.EncodeToString([]byte(u.ID)) + "/" + strconv.FormatInt(seq, 10),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	return key
 }
 
 func testCheckpointRoundTrip(t *testing.T, f fixture) {
@@ -1597,9 +1626,8 @@ func testHistoryBlobSize(t *testing.T, f fixture) {
 }
 
 // testReferencedCheckpointKeys checks that the referenced keys hold every
-// blob key the stack's checkpoints name, ordered, without the rows that keep
-// content. A stack without checkpoints, or one that does not exist, yields an
-// empty list.
+// blob key the stack's checkpoints name, ordered. A stack without
+// checkpoints, or one that does not exist, yields an empty list.
 func testReferencedCheckpointKeys(t *testing.T, f fixture) {
 	t.Helper()
 
@@ -1608,7 +1636,9 @@ func testReferencedCheckpointKeys(t *testing.T, f fixture) {
 	}
 
 	first := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(first, 0, `{"v":1}`), f.fence); err != nil {
+	firstKey := f.blobKey(t, first, 0)
+
+	if err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(first, firstKey, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
 	}
 
@@ -1628,8 +1658,8 @@ func testReferencedCheckpointKeys(t *testing.T, f fixture) {
 		t.Fatalf("referenced keys: %v", err)
 	}
 
-	if !slices.Equal(keys, []blob.Key{secondKey}) {
-		t.Fatalf("referenced keys = %v, want [%s]", keys, secondKey)
+	if !slices.Equal(keys, []blob.Key{firstKey, secondKey}) {
+		t.Fatalf("referenced keys = %v, want [%s %s]", keys, firstKey, secondKey)
 	}
 
 	if keys, err := f.s.ReferencedCheckpointKeys(t.Context(), f.other(t)); err != nil || len(keys) != 0 {
@@ -1639,6 +1669,65 @@ func testReferencedCheckpointKeys(t *testing.T, f fixture) {
 	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
 	if keys, err := f.s.ReferencedCheckpointKeys(t.Context(), ghost); err != nil || len(keys) != 0 {
 		t.Fatalf("referenced keys of a missing stack = %v, %v; want empty", keys, err)
+	}
+}
+
+// testCheckpointWithoutKeyRefused checks that a checkpoint write without a
+// blob key fails with ErrCheckpointNoKey and stores nothing, through both the
+// checkpoint save and the built checkpoint write. The store keeps no content,
+// so such a row could never be read.
+func testCheckpointWithoutKeyRefused(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	cp := newCheckpoint(u, 0, `{"v":1}`)
+	cp.BlobKey = ""
+
+	if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointNoKey) {
+		t.Fatalf("put checkpoint without a key: err = %v, want ErrCheckpointNoKey", err)
+	}
+
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointNoKey) {
+		t.Fatalf("put built checkpoint without a key: err = %v, want ErrCheckpointNoKey", err)
+	}
+
+	if _, err := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID); !errors.Is(err, stack.ErrNoState) {
+		t.Fatalf("checkpoint after refused writes: err = %v, want ErrNoState", err)
+	}
+}
+
+// testKeylessRowCorrupt checks that every checkpoint read answers a row
+// without a blob key with ErrCorruptRow: the store keeps no content, so it
+// never answers such a row as a checkpoint.
+func testKeylessRowCorrupt(t *testing.T, f fixture) {
+	t.Helper()
+
+	eraser, ok := f.s.(KeyEraser)
+	if !ok {
+		t.Skip("store cannot plant a checkpoint row without a blob key")
+	}
+
+	u := f.run(t, f.ref, "u1", mutating())
+	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, `{"v":1}`), f.fence); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	ended := f.end(t, u, stack.StatusSucceeded)
+
+	if err := eraser.EraseCheckpointKeys(t.Context()); err != nil {
+		t.Fatalf("erase the checkpoint keys: %v", err)
+	}
+
+	if _, err := f.s.LatestCheckpoint(t.Context(), f.ref); !errors.Is(err, codec.ErrCorruptRow) {
+		t.Fatalf("latest checkpoint of a keyless row: err = %v, want ErrCorruptRow", err)
+	}
+
+	if _, err := f.s.CheckpointByVersion(t.Context(), f.ref, ended.Version); !errors.Is(err, codec.ErrCorruptRow) {
+		t.Fatalf("checkpoint by version of a keyless row: err = %v, want ErrCorruptRow", err)
+	}
+
+	if _, err := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID); !errors.Is(err, codec.ErrCorruptRow) {
+		t.Fatalf("checkpoint by update of a keyless row: err = %v, want ErrCorruptRow", err)
 	}
 }
 
@@ -1920,9 +2009,8 @@ func testDeleteFollowsLatestCheckpoint(t *testing.T, f fixture) {
 	}
 }
 
-// testDeleteWithBlobCheckpoint covers the production shape every save
-// writes since blobs: a NULL stored count with an empty deployment column and
-// a blob key. The store cannot count it, so the caller counts outside the
+// testDeleteWithBlobCheckpoint covers the row every save writes: a blob key
+// and no content. The store cannot count it, so the caller counts outside the
 // transaction and passes the guard. An empty deployment deletes without
 // force; a resourced one is refused with ErrHasResources; a stale guard
 // answers ErrConcurrentModification so the caller recounts; force always
@@ -2077,8 +2165,7 @@ func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 }
 
 // finishWithBlobDeployment runs one mutating update of f.ref with deployment
-// as its blob checkpoint and ends it succeeded: the production shape with a
-// NULL stored count, an empty deployment column and a blob key.
+// as its blob checkpoint under the key of the stack and ends it succeeded.
 func finishWithBlobDeployment(t *testing.T, f fixture, id, deployment string) {
 	t.Helper()
 
@@ -2786,10 +2873,10 @@ func assertCheckpointVersion(t *testing.T, f fixture, ref stack.Ref, version int
 func assertSameCheckpoint(t *testing.T, got, want stack.Checkpoint, what string) {
 	t.Helper()
 
+	// The store keeps no content: a read returns the metadata only.
 	if !sameCheckpointRow(got, want) || !sameCheckpointBlob(got, want) ||
-		!bytes.Equal(got.Deployment, want.Deployment) || !slices.Equal(got.Features, want.Features) {
-		t.Fatalf("%s = %+v (deployment %q), want %+v (deployment %q)",
-			what, got, got.Deployment, want, want.Deployment)
+		len(got.Deployment) != 0 || !slices.Equal(got.Features, want.Features) {
+		t.Fatalf("%s = %+v (deployment %q), want %+v without a deployment", what, got, got.Deployment, want)
 	}
 }
 

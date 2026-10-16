@@ -447,6 +447,15 @@ func (r *recordingAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordingAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // denyObjectAuthorizer denies the one object wire form in deny and allows
 // everything else, so tests prove a route authorizes the resolved object:
 // denying it answers 403.
@@ -462,6 +471,15 @@ func (d denyObjectAuthorizer) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (denyObjectAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // TestRoutesAuthorizeDeclaredObject proves every authorized route asks for

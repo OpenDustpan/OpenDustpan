@@ -950,6 +950,15 @@ func (a *recordAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // newCheckedService returns a token service over the store of f with the
 // grant check grants and the authorizer authz.
 func newCheckedService(
@@ -1464,7 +1473,11 @@ func TestInactiveTokenIsRefusedBeforeTheSweep(t *testing.T) {
 	}
 }
 
-func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
+// TestPolicyChangeOfAnotherInstanceAppliesAtOnce proves that a policy change
+// that another instance writes applies to the next token lookup of this
+// instance: the lookup reads the policy with the token, so no instance keeps
+// an old policy for a while.
+func TestPolicyChangeOfAnotherInstanceAppliesAtOnce(t *testing.T) {
 	t.Parallel()
 
 	f := newFixtureAt(t, nil, sweepStart())
@@ -1472,7 +1485,6 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 
 	_, first := f.createLong(t, f.service, "first")
 	_, second := f.createLong(t, f.service, "second")
-	_, third := f.createLong(t, f.service, "third")
 
 	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
@@ -1483,13 +1495,11 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 
 	f.clock.Advance(accesstoken.DefaultInactivity + time.Minute)
 
-	// The first token reads the policy, and the cache keeps it.
 	if _, authErr := f.svc.AuthenticateToken(ctx, first.Reveal()); authErr != nil {
 		t.Fatalf("token with the disable off: %v", authErr)
 	}
 
-	// Another instance turns the disable on: this one sees it after the
-	// cache time at most.
+	// Another instance turns the disable on.
 	_, err = f.store.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
 		old.DisableTokens = true
 		e := caller()
@@ -1502,14 +1512,8 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 		t.Fatalf("update policy in the store: %v", err)
 	}
 
-	if _, err := f.svc.AuthenticateToken(ctx, second.Reveal()); err != nil {
-		t.Fatalf("inactive token inside the cache time: %v, want the cached policy", err)
-	}
-
-	f.clock.Advance(10 * time.Second)
-
-	if _, err := f.svc.AuthenticateToken(ctx, third.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
-		t.Fatalf("inactive token after the cache time: err = %v, want ErrUnauthenticated", err)
+	if _, err := f.svc.AuthenticateToken(ctx, second.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("inactive token right after the change of another instance: err = %v, want ErrUnauthenticated", err)
 	}
 }
 
@@ -1524,11 +1528,13 @@ func (failingPolicy) GetPolicy(context.Context) (accesstoken.Policy, error) {
 	return accesstoken.Policy{}, errPolicyRead
 }
 
+// TestPolicyReadErrorFailsClosed proves that the account inactivity check
+// of another sign-in, which reads the policy on its own, answers a failed
+// read with its error.
 func TestPolicyReadErrorFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, nil)
-	_, secret := f.createLong(t, f.service, "deploy")
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		Store: failingPolicy{f.store}, Principals: f.store, Freshness: nil, Grants: nil, Authorizer: nil,
@@ -1539,8 +1545,13 @@ func TestPolicyReadErrorFailsClosed(t *testing.T) {
 		t.Fatalf("token service: %v", err)
 	}
 
-	if _, err := svc.AuthenticateToken(t.Context(), secret.Reveal()); !errors.Is(err, errPolicyRead) {
-		t.Fatalf("authenticate with a failed policy read: err = %v, want the read error", err)
+	owner := accesstoken.Owner{
+		ActiveAt: f.clock.Now(), DisabledAt: time.Time{}, ID: "pri-reader", Subject: "alice", DisplayName: "Alice",
+		Kind: principal.KindPerson, BreakGlass: false,
+	}
+
+	if _, err := svc.AccountInactive(t.Context(), owner); !errors.Is(err, errPolicyRead) {
+		t.Fatalf("account inactivity with a failed policy read: err = %v, want the read error", err)
 	}
 }
 
