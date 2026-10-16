@@ -675,8 +675,10 @@ func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
 // while the round context is done and the outer context is not: a timeout
 // from a sink while the round context is still live stays a failure, so the
 // loop still counts it. When the outer context is done the round stops for
-// shutdown instead, and the error stays as it is. A round with any other
-// failure stays a failure, so the loop still counts it.
+// shutdown instead, and the error stays as it is. A joined error ends a
+// round cleanly only when every part ends it cleanly: when any scope failed,
+// the whole round stays a failure, so the loop still counts it. A round
+// with any other failure stays a failure, so the loop still counts it.
 func markRoundEnded(outer, roundCtx context.Context, err error) error {
 	if err == nil {
 		return nil
@@ -686,19 +688,45 @@ func markRoundEnded(outer, roundCtx context.Context, err error) error {
 		return err
 	}
 
+	if !roundEndOnly(roundCtx, err) {
+		return err
+	}
+
 	if errors.Is(err, errRoundEnded) {
 		return err
 	}
 
+	return fmt.Errorf("%w: %w", errRoundEnded, err)
+}
+
+// roundEndOnly reports whether err ends a round cleanly: it matches
+// errRoundEnded or errLeaseLost, or the round context is done and it matches
+// context.DeadlineExceeded or context.Canceled. A joined error ends a round
+// cleanly only when every part does.
+func roundEndOnly(roundCtx context.Context, err error) bool {
+	if err == nil {
+		return true
+	}
+
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, part := range joined.Unwrap() {
+			if !roundEndOnly(roundCtx, part) {
+				return false
+			}
+		}
+
+		return true
+	}
+
+	if errors.Is(err, errRoundEnded) {
+		return true
+	}
+
 	if errors.Is(err, errLeaseLost) {
-		return fmt.Errorf("%w: %w", errRoundEnded, err)
+		return true
 	}
 
-	if roundCtx.Err() != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
-		return fmt.Errorf("%w: %w", errRoundEnded, err)
-	}
-
-	return err
+	return roundCtx.Err() != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled))
 }
 
 // shipScopes ships every namespace of one round in order. Before every
