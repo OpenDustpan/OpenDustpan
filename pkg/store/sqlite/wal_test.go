@@ -42,12 +42,15 @@ import (
 // restarts the log: every writer commit meets an active reader, because the
 // readers resume first after each pause. The shared pause models the request
 // boundaries of real CLI traffic and gives the guard an instant with no
-// readers to force its truncate checkpoint, which its retries always reach.
-// Without the guard the log grows past the bound.
+// readers to force its truncate checkpoint. The pause lasts until the log is
+// below the guard threshold, up to a cap, so a busy machine that delays the
+// guard tick does not let the log grow over several bursts. The bound then
+// holds the log of one burst, which depends on the work and not on the time.
+// Without the guard the log never shrinks and grows past the bound.
 func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 	t.Parallel()
 
-	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, 1<<18, 30*time.Second, 5*time.Second)
+	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, walLoadThreshold, 30*time.Second, 5*time.Second)
 	defer restore()
 
 	ctx := t.Context()
@@ -117,7 +120,7 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 			}
 		}
 
-		pauseLoad(ctx, t, 8*time.Millisecond)
+		waitForGuard(ctx, t, path)
 	}
 
 	close(stopSampler)
@@ -130,6 +133,33 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 
 	if maxWAL >= bound {
 		t.Fatalf("maximum write-ahead log size = %d bytes, want below %d bytes", maxWAL, bound)
+	}
+}
+
+// walLoadThreshold is the guard threshold of the load test: 256 KiB.
+const walLoadThreshold = 1 << 18
+
+// walGuardWaitCap bounds one pause of waitForGuard. A guard that works
+// reaches the instant with no readers within some ticks of 20 ms, also on a
+// busy machine. Without the guard, each pause waits the whole cap.
+const walGuardWaitCap = 2 * time.Second
+
+// waitForGuard pauses every load worker until the write-ahead log at path
+// is below walLoadThreshold, or until walGuardWaitCap passed. The log
+// shrinks only when the guard truncates it, because no worker writes during
+// the pause. The pause ends early when ctx ends.
+func waitForGuard(ctx context.Context, t *testing.T, path string) {
+	t.Helper()
+
+	deadline := time.Now().Add(walGuardWaitCap)
+
+	for {
+		info, err := os.Stat(path + "-wal")
+		if err != nil || info.Size() < walLoadThreshold || time.Now().After(deadline) {
+			return
+		}
+
+		pauseLoad(ctx, t, 2*time.Millisecond)
 	}
 }
 

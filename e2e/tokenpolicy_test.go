@@ -90,7 +90,7 @@ func runTokenPolicyOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -122,7 +122,9 @@ func runTokenPolicyOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		http.MethodPost, "/api/server/principals", `{"subject":"ci-deploy","kind":"service"}`, http.StatusCreated,
 	}, &service)
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"alice@example.com","kind":"person"}`,
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("alice@example.com") + `","kind":"person"}`,
 		http.StatusCreated,
 	}, &person)
 
@@ -197,15 +199,13 @@ func checkMaxLifetime(ctx context.Context, t *testing.T, env *e2e.Env, service e
 func checkInactivityPolicy(ctx context.Context, t *testing.T, env *e2e.Env, service, person e2ePrincipal) {
 	t.Helper()
 
-	var serviceTok, personTok e2eToken
+	var serviceTok e2eToken
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + service.ID + `","name":"idle"}`,
 		http.StatusCreated,
 	}, &serviceTok)
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + person.ID + `","name":"laptop"}`,
-		http.StatusCreated,
-	}, &personTok)
+
+	personTok := env.PersonalToken(ctx, t, person.ID, "laptop")
 
 	var policy e2eTokenPolicy
 	principalCall(ctx, t, env, principalStep{

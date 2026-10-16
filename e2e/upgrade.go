@@ -164,6 +164,7 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
+		signInRealTime:    false,
 		journalRefuser:    nil,
 	}
 
@@ -247,9 +248,8 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		Recorder:   in.rec,
 		cli:        in.cli,
 		store:      in.store,
-		server:     nil,
 		client:     client,
-		workspaces: nil,
+		inprocess:  nil,
 		blobs:      openBlobStoreAt(tb, blobDir),
 		blobName:   blobFS,
 		s3Endpoint: "",
