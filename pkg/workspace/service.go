@@ -347,7 +347,10 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 
 // Delete soft-deletes the workspace called ref (ADR 47): the workspace leaves
 // every lookup by name or ID and every list, and its name is free at once,
-// but its state versions and data key stay until the final delete. It
+// but its state versions and data key stay until the final delete. It first
+// sweeps the expired pending versions of the workspace with their attempted
+// content, as a declare does, so only a pending version that has not expired
+// blocks the delete. It
 // returns ErrLocked while the workspace is locked, ErrPendingState while it
 // has a pending state version, and ErrNotFound if no live
 // workspace has ref. The write is fenced on the namespace's failover version
@@ -358,6 +361,17 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 	fence, err := s.fence(ctx, ref.Namespace)
 	if err != nil {
 		return err
+	}
+
+	if w, getErr := s.Get(ctx, ref); getErr == nil {
+		if sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
+			s.logger.WarnContext(
+				ctx,
+				"sweep expired state",
+				slog.String("workspace", w.ID.String()),
+				slog.String("error", sweepErr.Error()),
+			)
+		}
 	}
 
 	e.At = s.clock()
@@ -1813,7 +1827,7 @@ func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion
 
 // sweepExpired deletes the expired pending versions of w with their
 // attempted content, then deletes the blobs under the workspace prefix
-// that no version references, and returns the swept version IDs. A version
+// that no version references. A version
 // expires with its upload capability; the sweep keeps it for
 // SweepGracePeriod past expiry, so an upload that started before expiry
 // still finishes. A version that never recorded an attempt sweeps its row
@@ -1824,24 +1838,20 @@ func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion
 // orphan for ever. A cleanup failure fails the sweep, so the caller
 // decides: BeginState treats the sweep as best effort and declares anyway,
 // leaving the rows for the next sweep.
-func (s *Service) sweepExpired(ctx context.Context, w Workspace) ([]StateVersionID, error) {
+func (s *Service) sweepExpired(ctx context.Context, w Workspace) error {
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	expired, err := s.states.DeleteExpiredPendingStateVersions(ctx, w.ID, s.clock().Add(-SweepGracePeriod), fence)
 	if err != nil {
-		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, err)
+		return fmt.Errorf("sweep expired state of %s: %w", w.Ref, err)
 	}
-
-	ids := make([]StateVersionID, 0, len(expired))
 
 	var cleanupErr error
 
 	for i := range expired {
-		ids = append(ids, expired[i].ID)
-
 		if expired[i].Content == "" {
 			continue
 		}
@@ -1859,10 +1869,10 @@ func (s *Service) sweepExpired(ctx context.Context, w Workspace) ([]StateVersion
 	}
 
 	if cleanupErr != nil {
-		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
+		return fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
 	}
 
-	return ids, nil
+	return nil
 }
 
 // sweepUnreferenced deletes the blobs under the workspace prefix that no

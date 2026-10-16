@@ -1073,6 +1073,46 @@ func TestDeleteRecordsRetention(t *testing.T) {
 	}
 }
 
+// TestDeleteSweepsExpiredPending proves a stuck pending version blocks a
+// workspace delete before its expiry with ErrPendingState, and past the
+// upload window plus the sweep grace period the delete sweeps it and succeeds.
+func TestDeleteSweepsExpiredPending(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
+
+	if _, err := f.svc.Unlock(ctx, f.ws.ID, "alice"); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+
+	if err := f.svc.Delete(ctx, f.ws.Ref, retentionEntry()); !errors.Is(err, workspace.ErrPendingState) {
+		t.Fatalf("delete before expiry: err = %v, want ErrPendingState", err)
+	}
+
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	if err := f.svc.Delete(ctx, f.ws.Ref, retentionEntry()); err != nil {
+		t.Fatalf("delete after expiry: %v", err)
+	}
+
+	if _, err := f.svc.Get(ctx, f.ws.Ref); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get after delete: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := f.store.GetStateVersion(ctx, pending.Version.ID); !errors.Is(
+		err, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("get swept version: %v, want ErrStateVersionNotFound", err)
+	}
+}
+
 // retentionEntry returns a valid audit entry for a delete of acme's workspace.
 // The service sets its time.
 func retentionEntry() audit.Entry {

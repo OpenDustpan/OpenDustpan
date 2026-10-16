@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 )
@@ -64,6 +65,7 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "a soft delete keeps every child row of the stack", test: testPortableDeleteKeepsChildren},
 		{name: "a purge removes every row of the stack", test: testPortablePurgeRemovesChildren},
 		{name: "a purge removes every row of the workspace", test: testPortablePurgeRemovesWorkspaceRows},
+		{name: "a pending version that names content stays out of the backup", test: testPortablePendingNamesNoBlob},
 	}
 
 	for _, tc := range cases {
@@ -776,4 +778,47 @@ func testPortableStageRefusesBlobs(t *testing.T, newStore PortableFactory) {
 	if left := mustListNamespaces(t, dst); len(left) != 0 {
 		t.Fatalf("namespaces after a refused stage = %+v, want none", left)
 	}
+}
+
+// testPortablePendingNamesNoBlob stages a pending state version that names a
+// content key and never finalizes it. The export succeeds and names the
+// committed content, but not the pending key: a pending row has no committed
+// content.
+func testPortablePendingNamesNoBlob(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	first := createPendingVersion(t, s, ns, newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v1", 1)))
+	finalized := finalizedVersion(first, now().Add(2*time.Hour), "v1")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
+		t.Fatalf("finalize state version: %v", err)
+	}
+
+	stuck := createPendingVersion(t, s, ns, newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v2", 2)))
+	stuckKey := attemptKeyOf(stuck, "a1")
+
+	if _, err := s.RecordUploadAttempt(t.Context(), stuck.ID, stuckKey, ns.Fence()); err != nil {
+		t.Fatalf("record upload attempt: %v", err)
+	}
+
+	_, sum, _ := exportPortable(t, s)
+
+	for _, ref := range sum.Blobs {
+		if ref.Key == string(stuckKey) {
+			t.Fatalf("export names pending key %q, want only finalized content", stuckKey)
+		}
+	}
+
+	for _, ref := range sum.Blobs {
+		if ref.Key == string(finalized.Content) {
+			return
+		}
+	}
+
+	t.Fatalf("export names %+v, want the finalized key %q", sum.Blobs, finalized.Content)
 }

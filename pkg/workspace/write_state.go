@@ -323,7 +323,7 @@ func (s *Service) declarePlaceholder(
 func (s *Service) admitDeclare(ctx context.Context, w Workspace) (func(), error) {
 	unlock := s.lockKey("begin/" + w.ID.String())
 
-	if _, sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
+	if sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
 		s.logger.WarnContext(
 			ctx,
 			"sweep expired state",
