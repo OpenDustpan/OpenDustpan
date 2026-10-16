@@ -16,8 +16,7 @@ import (
 // decision 4). A later format takes a new name.
 const PortableFormat = "portable"
 
-// PortableManifestFormat is the manifest format number of the portable format
-// (ADR 42, decision 4). The native format keeps its number, 1.
+// PortableManifestFormat is the manifest format number of the portable format.
 const PortableManifestFormat = 2
 
 // Kind is the portable form of one column value (ADR 42, decision 3). Each

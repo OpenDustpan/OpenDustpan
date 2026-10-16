@@ -1146,6 +1146,62 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 	}
 }
 
+// TestMissingStateRowIsUnavailable deletes the seeded installation row and
+// proves that GetState and SetState answer ErrUnavailable, and that
+// SetState does not create the row again: the migration seeds the row, so a
+// missing row is a server fault.
+func TestMissingStateRowIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	schemaURL := isolatedURL(t, base)
+
+	s, openErr := postgres.Open(t.Context(), schemaURL)
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+
+	t.Cleanup(s.Close)
+
+	ctx := t.Context()
+
+	conn, connErr := pgx.Connect(ctx, schemaURL)
+	if connErr != nil {
+		t.Fatalf("connect: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(ctx); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	if _, execErr := conn.Exec(ctx, `DELETE FROM installation`); execErr != nil {
+		t.Fatalf("delete installation row: %v", execErr)
+	}
+
+	if _, err := s.GetState(ctx); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("get installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	if err := s.SetState(ctx, maintenance.StateMaintenance); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("set installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	var rows int64
+	if scanErr := conn.QueryRow(ctx, `SELECT COUNT(*) FROM installation`).Scan(&rows); scanErr != nil {
+		t.Fatalf("count installation rows: %v", scanErr)
+	}
+
+	if rows != 0 {
+		t.Fatalf("installation rows after the writes = %d, want 0", rows)
+	}
+}
+
 // the renamed stack keeps its tags and ID, and the old name is gone.
 // TestRenameKeepsTags checks that tags follow the stack ID through a rename:
 // the renamed stack keeps its tags and ID, and the old name is gone.

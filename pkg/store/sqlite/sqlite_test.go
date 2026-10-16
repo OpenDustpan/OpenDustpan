@@ -423,6 +423,63 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 	}
 }
 
+// TestMissingStateRowIsUnavailable deletes the seeded installation row and
+// proves that GetState and SetState answer ErrUnavailable, and that
+// SetState does not create the row again: the migration seeds the row, so a
+// missing row is a server fault.
+func TestMissingStateRowIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s, openErr := sqlite.Open(t.Context(), path)
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	conn, connErr := openRawDB(path)
+	if connErr != nil {
+		t.Fatalf("open raw database: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	ctx := t.Context()
+
+	if _, execErr := conn.ExecContext(ctx, `DELETE FROM installation`); execErr != nil {
+		t.Fatalf("delete installation row: %v", execErr)
+	}
+
+	if _, err := s.GetState(ctx); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("get installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	if err := s.SetState(ctx, maintenance.StateMaintenance); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("set installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	var rows int64
+	if scanErr := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM installation`).Scan(&rows); scanErr != nil {
+		t.Fatalf("count installation rows: %v", scanErr)
+	}
+
+	if rows != 0 {
+		t.Fatalf("installation rows after the writes = %d, want 0", rows)
+	}
+}
+
 func TestSecretsConformance(t *testing.T) {
 	t.Parallel()
 
