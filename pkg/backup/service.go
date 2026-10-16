@@ -20,7 +20,7 @@ import (
 
 // FormatVersion is the manifest format number of the portable format. Check
 // and restore refuse a manifest with another number. It changes only with a
-// new ADR.
+// new format version.
 const FormatVersion = PortableManifestFormat
 
 // S3ObjectLimit is the largest object an S3-compatible target holds (ADR 31):
