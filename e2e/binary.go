@@ -1073,6 +1073,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		cli:           in.cli,
 		store:         in.store,
 		client:        client,
+		inprocess:     nil,
 		blobs:         setup.blobs,
 		blobName:      setup.blobName,
 		s3Endpoint:    setup.s3Endpoint,

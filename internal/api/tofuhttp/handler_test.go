@@ -43,6 +43,8 @@ type fakeUnits struct {
 	createErr error
 	// writeErr, when set, is what WriteState answers.
 	writeErr error
+	// lockErr, when set, is what LockWithID answers.
+	lockErr error
 }
 
 // newFakeUnits returns a service whose unit exists, unlocked, with both switches on.
@@ -65,6 +67,7 @@ func newFakeUnits(exists bool) *fakeUnits {
 		hideOnce:  false,
 		createErr: nil,
 		writeErr:  nil,
+		lockErr:   nil,
 	}
 }
 
@@ -113,6 +116,10 @@ func (f *fakeUnits) LockWithID(
 ) (workspace.Workspace, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.lockErr != nil {
+		return workspace.Workspace{}, f.lockErr
+	}
 
 	if f.ws.Lock.Locked() {
 		return workspace.Workspace{}, workspace.ErrLocked
@@ -614,5 +621,39 @@ func TestWriteRefusalStatuses(t *testing.T) {
 				t.Fatalf("status %d, want %d; body %q", rec.Code, tc.want, rec.Body.String())
 			}
 		})
+	}
+}
+
+// TestFencedWriteStatuses proves a fenced LOCK answers 503 with a Retry-After
+// time, and a fenced state write answers 409. OpenTofu reads a 409 on LOCK as
+// a lock that another client holds, and it retries a 503, which reads the
+// namespace again.
+func TestFencedWriteStatuses(t *testing.T) {
+	t.Parallel()
+
+	fenced := fmt.Errorf("lock workspace ws-1: %w", namespace.ErrFenced)
+
+	locking := newFakeUnits(true)
+	locking.lockErr = fenced
+
+	rec := do(newTestHandler(t, locking), "LOCK", unitPath, lockBody(lockOne, "alice"), bearer(adminToken))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("fenced LOCK: status %d, want %d; body %q", rec.Code, http.StatusServiceUnavailable, rec.Body.String())
+	}
+
+	if rec.Header().Get("Retry-After") == "" {
+		t.Fatal("fenced LOCK answers no Retry-After time")
+	}
+
+	if !strings.Contains(rec.Body.String(), namespace.ErrFenced.Error()) {
+		t.Fatalf("fenced LOCK body %q, want it to hold %q", rec.Body.String(), namespace.ErrFenced.Error())
+	}
+
+	writing := newFakeUnits(true)
+	writing.writeErr = fenced
+
+	rec = do(newTestHandler(t, writing), http.MethodPost, unitPath, `{"serial":1,"lineage":"l"}`, bearer(adminToken))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("fenced POST: status %d, want %d; body %q", rec.Code, http.StatusConflict, rec.Body.String())
 	}
 }

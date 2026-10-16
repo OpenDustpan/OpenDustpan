@@ -154,6 +154,9 @@ type Env struct {
 	cli      Install
 	store    Store
 	client   *http.Client
+	// inprocess is the store of the in-process server, or nil for the binary
+	// server, whose database the test process never holds open while it runs.
+	inprocess serverStore
 	// blobs holds checkpoint and state content, so the seed helpers save
 	// through the same store as the server.
 	blobs blob.Store
@@ -222,6 +225,7 @@ type serverStore interface {
 // opens, so the constructor stays within the result limit.
 type serverBuild struct {
 	handler http.Handler
+	store   serverStore
 	blobs   blob.Store
 	dbProxy *DBProxy
 	// backupDir is the directory of the dir: backup target the server writes.
@@ -431,6 +435,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		cli:           in.cli,
 		store:         in.store,
 		client:        client,
+		inprocess:     build.store,
 		blobs:         build.blobs,
 		blobName:      blobNameOf(tb),
 		s3Endpoint:    s3EndpointOf(tb),
@@ -622,6 +627,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 
 	return serverBuild{
 		handler:   srv.Handler(),
+		store:     st,
 		blobs:     blobs,
 		dbProxy:   dbProxy,
 		backupDir: strings.TrimPrefix(targetName, "dir:"),
@@ -855,6 +861,37 @@ func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) {
 func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {
 	tb.Helper()
 	e.createNamespaceThroughAPI(ctx, tb, name)
+}
+
+// CreateForeignNamespace stores a namespace homed in region, so a step can
+// prove what the server answers for a namespace that another region owns.
+// The installation API creates namespaces in the server's own region only,
+// so this is a direct store write. The binary server owns its database, so
+// the write runs while the binary is stopped, on a handle that is closed
+// before the binary starts again. The in-process server writes through its
+// own store.
+func (e *Env) CreateForeignNamespace(ctx context.Context, tb testing.TB, name, region string) {
+	tb.Helper()
+
+	ns := namespace.Namespace{
+		CreatedAt:       time.Now(),
+		Name:            namespace.Name(name),
+		HomeRegion:      namespace.Region(region),
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
+	}
+
+	if e.binPath == "" {
+		if err := e.inprocess.CreateNamespace(ctx, ns); err != nil {
+			tb.Fatalf("create namespace %q homed in %q: %v", name, region, err)
+		}
+
+		return
+	}
+
+	e.StopServer(ctx, tb)
+	e.writeStopped(ctx, tb, func(st namespace.Store) error { return st.CreateNamespace(ctx, ns) })
+	e.StartServer(ctx, tb)
 }
 
 // InventoryUnit is one unit of the inventory API list: the tool label

@@ -248,6 +248,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		cli:        in.cli,
 		store:      in.store,
 		client:     client,
+		inprocess:  nil,
 		blobs:      openBlobStoreAt(tb, blobDir),
 		blobName:   blobFS,
 		s3Endpoint: "",
