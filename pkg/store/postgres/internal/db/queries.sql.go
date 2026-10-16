@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const acquireAuditSinkLease = `-- name: AcquireAuditSinkLease :execrows
+INSERT INTO audit_sink_leases (sink, holder, expires_at_ms)
+VALUES ($1, $2, FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + $3::bigint)
+ON CONFLICT (sink) DO UPDATE
+SET holder = EXCLUDED.holder, expires_at_ms = EXCLUDED.expires_at_ms
+WHERE audit_sink_leases.holder = EXCLUDED.holder OR audit_sink_leases.expires_at_ms <= FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+`
+
+type AcquireAuditSinkLeaseParams struct {
+	Sink   string
+	Holder string
+	TtlMs  int64
+}
+
+// Takes or renews the lease of one sink in one conditional write. It writes
+// when no row exists, when the stored lease ended, or when the caller holds
+// it, and changes nothing while another instance holds a live lease. The
+// caller reads the changed row count: one means it holds the lease. The
+// expiry is the database clock plus the TTL, so a wrong clock on one
+// instance cannot hold every lease.
+func (q *Queries) AcquireAuditSinkLease(ctx context.Context, arg AcquireAuditSinkLeaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, acquireAuditSinkLease, arg.Sink, arg.Holder, arg.TtlMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -68,19 +96,33 @@ func (q *Queries) ActiveUpdate(ctx context.Context, stackID string) (ActiveUpdat
 }
 
 const addGroupMember = `-- name: AddGroupMember :execrows
-INSERT INTO group_members (group_id, principal_id, added_at_ms)
-VALUES ($1, $2, $3)
+INSERT INTO group_members (group_id, principal_id, added_at_ms, source, source_id, state, suspended_at_ms, pinned)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT DO NOTHING
 `
 
 type AddGroupMemberParams struct {
-	GroupID     string
-	PrincipalID string
-	AddedAtMs   int64
+	GroupID       string
+	PrincipalID   string
+	AddedAtMs     int64
+	Source        string
+	SourceID      string
+	State         string
+	SuspendedAtMs int64
+	Pinned        bool
 }
 
 func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) (int64, error) {
-	result, err := q.db.Exec(ctx, addGroupMember, arg.GroupID, arg.PrincipalID, arg.AddedAtMs)
+	result, err := q.db.Exec(ctx, addGroupMember,
+		arg.GroupID,
+		arg.PrincipalID,
+		arg.AddedAtMs,
+		arg.Source,
+		arg.SourceID,
+		arg.State,
+		arg.SuspendedAtMs,
+		arg.Pinned,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -272,13 +314,15 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
      AND c.added_at_ms <= $1::bigint
-     AND COALESCE(c.removed_at_ms, 9223372036854775807) > $1::bigint) AS member_count
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > $1::bigint
+     AND c.state = 'active') AS member_count
 FROM holders h
 JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
 LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
 LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND m.principal_id = $2::text
+  AND m.state = 'active'
   AND m.added_at_ms <= $1::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > $1::bigint
 LEFT JOIN principals mp ON mp.id = m.principal_id
 WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
@@ -495,6 +539,7 @@ FROM holders h
 JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND m.principal_id = $1::text
+  AND m.state = 'active'
   AND m.added_at_ms <= $2::bigint AND COALESCE(m.removed_at_ms, 9223372036854775807) > $2::bigint
 WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
   AND g.created_at_ms <= $2::bigint
@@ -733,6 +778,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND (($1::text <> '' AND m.principal_id = $1::text)
     OR ($1::text = '' AND $2::boolean))
+  AND m.state = 'active'
   AND CASE WHEN $3::boolean THEN
     m.added_at_ms < $4::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > $5::bigint
@@ -2643,7 +2689,7 @@ func (q *Queries) GetGrant(ctx context.Context, id string) (GetGrantRow, error) 
 
 const getGroup = `-- name: GetGroup :one
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = $1 AND g.deleted_at_ms IS NULL
 `
 
@@ -2837,7 +2883,7 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 const getPrincipal = `-- name: GetPrincipal :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p WHERE p.id = $1 AND p.deleted_at_ms IS NULL
 `
 
@@ -2877,7 +2923,7 @@ func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow,
 const getPrincipalBySubject = `-- name: GetPrincipalBySubject :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p WHERE p.subject COLLATE "C" = $1::text AND p.deleted_at_ms IS NULL
 `
 
@@ -4789,8 +4835,9 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 const listGroupMembers = `-- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
-  (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
-  m.added_at_ms
+  (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS group_count,
+  m.added_at_ms, m.source AS member_source, m.source_id AS member_source_id, m.state AS member_state,
+  m.suspended_at_ms AS member_suspended_at_ms, m.pinned AS member_pinned
 FROM group_members m JOIN principals p ON p.id = m.principal_id
 WHERE m.group_id = $1 AND m.removed_at_ms IS NULL
   AND p.subject COLLATE "C" > $2::text
@@ -4809,18 +4856,23 @@ type ListGroupMembersParams struct {
 }
 
 type ListGroupMembersRow struct {
-	ID           string
-	Subject      string
-	DisplayName  string
-	Kind         string
-	Source       string
-	CreatedAtMs  int64
-	UpdatedAtMs  int64
-	DisabledAtMs pgtype.Int8
-	Namespace    string
-	BreakGlass   bool
-	GroupCount   int64
-	AddedAtMs    int64
+	ID                  string
+	Subject             string
+	DisplayName         string
+	Kind                string
+	Source              string
+	CreatedAtMs         int64
+	UpdatedAtMs         int64
+	DisabledAtMs        pgtype.Int8
+	Namespace           string
+	BreakGlass          bool
+	GroupCount          int64
+	AddedAtMs           int64
+	MemberSource        string
+	MemberSourceID      string
+	MemberState         string
+	MemberSuspendedAtMs int64
+	MemberPinned        bool
 }
 
 func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersParams) ([]ListGroupMembersRow, error) {
@@ -4851,6 +4903,11 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 			&i.BreakGlass,
 			&i.GroupCount,
 			&i.AddedAtMs,
+			&i.MemberSource,
+			&i.MemberSourceID,
+			&i.MemberState,
+			&i.MemberSuspendedAtMs,
+			&i.MemberPinned,
 		); err != nil {
 			return nil, err
 		}
@@ -4864,7 +4921,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 
 const listGroups = `-- name: ListGroups :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
   AND g.name_key COLLATE "C" > $1::text
@@ -4926,7 +4983,7 @@ func (q *Queries) ListGroups(ctx context.Context, arg ListGroupsParams) ([]ListG
 
 const listGroupsOfPrincipal = `-- name: ListGroupsOfPrincipal :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = $1 AND m.removed_at_ms IS NULL
   AND g.name_key COLLATE "C" > $2::text
@@ -5123,7 +5180,7 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 const listPrincipals = `-- name: ListPrincipals :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
   p.break_glass,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
   AND p.subject COLLATE "C" > $1::text
@@ -6099,6 +6156,26 @@ func (q *Queries) ReleaseAuditChainMigration(ctx context.Context) error {
 	return err
 }
 
+const releaseAuditSinkLease = `-- name: ReleaseAuditSinkLease :execrows
+DELETE FROM audit_sink_leases
+WHERE sink = $1 AND holder = $2
+`
+
+type ReleaseAuditSinkLeaseParams struct {
+	Sink   string
+	Holder string
+}
+
+// Releases the lease of one sink only when holder holds it. It changes
+// nothing when no row exists or another instance holds the lease.
+func (q *Queries) ReleaseAuditSinkLease(ctx context.Context, arg ReleaseAuditSinkLeaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseAuditSinkLease, arg.Sink, arg.Holder)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
 UPDATE group_members SET removed_at_ms = $1
 WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL
@@ -6224,13 +6301,15 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
      AND c.added_at_ms <= $1::bigint
-     AND COALESCE(c.removed_at_ms, 9223372036854775807) > $1::bigint) AS member_count
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > $1::bigint
+     AND c.state = 'active') AS member_count
 FROM grants g
 LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
 LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND (($2::text <> '' AND m.principal_id = $2::text)
     OR ($2::text = '' AND $3::boolean))
+  AND m.state = 'active'
   AND CASE WHEN $4::boolean THEN
     m.added_at_ms < $5::bigint
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > $6::bigint
@@ -7019,7 +7098,7 @@ func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspa
 const subjectsOfCaller = `-- name: SubjectsOfCaller :many
 SELECT p.id AS principal_id, COALESCE(m.group_id, '')::text AS group_id
 FROM principals p
-LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
 WHERE p.subject COLLATE "C" = $1::text AND p.deleted_at_ms IS NULL
 `
 

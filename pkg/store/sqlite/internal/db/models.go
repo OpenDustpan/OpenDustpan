@@ -76,6 +76,12 @@ type AuditSinkCursor struct {
 	UpdatedAtMs int64
 }
 
+type AuditSinkLease struct {
+	Sink        string
+	Holder      string
+	ExpiresAtMs int64
+}
+
 type Backup struct {
 	ID          string
 	State       string
@@ -143,10 +149,15 @@ type Grant struct {
 }
 
 type GroupMember struct {
-	GroupID     string
-	PrincipalID string
-	AddedAtMs   int64
-	RemovedAtMs sql.NullInt64
+	GroupID       string
+	PrincipalID   string
+	AddedAtMs     int64
+	RemovedAtMs   sql.NullInt64
+	Source        string
+	SourceID      string
+	State         string
+	SuspendedAtMs int64
+	Pinned        bool
 }
 
 type Installation struct {
