@@ -8,6 +8,8 @@
 //	opendustpan backup check [flags]
 //	opendustpan backup [flags]
 //	opendustpan restore [flags]
+//	opendustpan audit-chain status [flags]
+//	opendustpan audit-chain approve [flags]
 //
 // Every flag can also be set through the environment variable shown in its
 // help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN or
@@ -48,6 +50,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -79,6 +82,12 @@ var (
 	// errSizeLimit reports a negative size limit.
 	errSizeLimit = errors.New(
 		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
+	)
+	// errRetention reports a soft-delete retention that is not a duration of
+	// at least one hour.
+	errRetention = errors.New(
+		"soft-delete retention must be a duration of at least 1h, for example 720h: " +
+			"set --soft-delete-retention (DUSTPAN_SOFT_DELETE_RETENTION)",
 	)
 	// errDeltaCutoff reports a negative checkpoint delta cutoff. Zero turns
 	// the delta capability off, so only negative values fail.
@@ -252,33 +261,38 @@ type serveFlags struct {
 	// on its own (ADR 63 decision 10).
 	instanceID string
 
-	config                  string
-	listen                  string
-	consoleDir              string
-	origins                 string
-	tlsCert                 string
-	tlsKey                  string
-	publicURL               string
-	trustedProxies          string
-	trustedProxyHeader      string
-	blobDir                 string
-	blobStore               string
-	s3Endpoint              string
-	s3Region                string
-	backupTarget            string
-	logLevel                string
-	logFormat               string
-	keyFile                 string
-	generateKey             bool
-	maxCheckpointBytes      int64
-	maxSecretBatchBytes     int64
-	maxStateBytes           int64
-	maxBodyBytesInFlight    int64
-	checkpointDeltaCutoff   int64
-	disablePulumiJournaling bool
-	auditChain              string
-	auditSinks              []string
-	logSinks                []string
+	config                       string
+	listen                       string
+	consoleDir                   string
+	origins                      string
+	tlsCert                      string
+	tlsKey                       string
+	publicURL                    string
+	trustedProxies               string
+	trustedProxyHeader           string
+	ipAllowlists                 bool
+	ipAllowlistsIncludeBootstrap bool
+	blobDir                      string
+	blobStore                    string
+	s3Endpoint                   string
+	s3Region                     string
+	backupTarget                 string
+	logLevel                     string
+	logFormat                    string
+	keyFile                      string
+	generateKey                  bool
+	maxCheckpointBytes           int64
+	maxSecretBatchBytes          int64
+	maxStateBytes                int64
+	maxBodyBytesInFlight         int64
+	checkpointDeltaCutoff        int64
+	disablePulumiJournaling      bool
+	auditChain                   string
+	softDeleteRetention          string
+	// retention is softDeleteRetention after the check.
+	retention  time.Duration
+	auditSinks []string
+	logSinks   []string
 	// app is the application logger and its sinks, set by run.
 	app                 appLog
 	auditSigningKeyFile string
@@ -287,8 +301,9 @@ type serveFlags struct {
 }
 
 // check refuses settings that are wrong together or out of range: the TLS
-// pair, the log level and format, the size limits, the delta cutoff and the
-// trusted proxies.
+// pair, the log level and format, the size limits, the delta cutoff, the
+// soft-delete retention and the trusted proxies. It keeps the parsed
+// retention in f.retention.
 // Serve runs it at start and on each reload of the configuration file.
 func (f *serveFlags) check() error {
 	if err := checkTLSFlags(f.tlsCert, f.tlsKey); err != nil {
@@ -317,6 +332,13 @@ func (f *serveFlags) check() error {
 	if _, err := audit.ParseChainSetting(f.auditChain); err != nil {
 		return fmt.Errorf("--audit-chain: %w", err)
 	}
+
+	retention, err := parseRetention(f.softDeleteRetention)
+	if err != nil {
+		return err
+	}
+
+	f.retention = retention
 
 	if err := f.checkCheckpointFlags(); err != nil {
 		return err
@@ -381,7 +403,7 @@ func (f *serveFlags) resolveLayers(fs *flag.FlagSet, lookup cli.LookupFunc) erro
 
 	f.resolved = resolved
 
-	return nil
+	return cli.RefuseFlagPassword(fs, resolved)
 }
 
 // registerKey registers the key-encryption key file flags. The key itself
@@ -417,6 +439,8 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("public-url").String(fs, &f.publicURL)
 	cli.ByFlag("trusted-proxies").String(fs, &f.trustedProxies)
 	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
+	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
+	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -431,6 +455,7 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 	cli.ByFlag("max-body-bytes-in-flight").Int64(fs, &f.maxBodyBytesInFlight)
 	cli.ByFlag("checkpoint-delta-cutoff").Int64(fs, &f.checkpointDeltaCutoff)
 	cli.ByFlag("disable-pulumi-journaling").Bool(fs, &f.disablePulumiJournaling)
+	cli.ByFlag("soft-delete-retention").String(fs, &f.softDeleteRetention)
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
@@ -1117,6 +1142,10 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
 		dustpan.WithAuditChain(chain),
+		dustpan.WithSoftDeleteRetention(f.retention),
+		dustpan.WithIPAllowlists(f.ipAllowlists),
+		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
+		dustpan.WithIPAllowlistStore(st),
 	}, checkpoints...), nil
 }
 
@@ -1464,6 +1493,7 @@ type store interface {
 	workspace.Store
 	workspace.StateStore
 	inventory.Reader
+	ipallow.Store
 	audit.ServerStore
 	close()
 }
@@ -1518,6 +1548,20 @@ func withBinaryVersion(err error) error {
 	}
 
 	return fmt.Errorf("binary version is %s. %w", version, newer)
+}
+
+// minRetention is the shortest soft-delete retention the server accepts.
+const minRetention = dustpan.MinSoftDeleteRetention
+
+// parseRetention parses the soft-delete retention: a Go duration of at least
+// one hour (ADR 47, decision 2). There is no maximum.
+func parseRetention(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	if err != nil || d < minRetention {
+		return 0, errRetention
+	}
+
+	return d, nil
 }
 
 // checkSizeFlags rejects a negative large-body limit. Zero means the default,

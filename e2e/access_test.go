@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 
@@ -27,10 +29,12 @@ type e2eRoleList struct {
 }
 
 type e2eGrant struct {
-	ID      string `json:"id"`
-	Subject string `json:"subject"`
-	Role    string `json:"role"`
-	Object  string `json:"object"`
+	ID         string `json:"id"`
+	Subject    string `json:"subject"`
+	Role       string `json:"role"`
+	Object     string `json:"object"`
+	HolderName string `json:"holderName"`
+	HolderKind string `json:"holderKind"`
 }
 
 type e2eGrantList struct {
@@ -128,6 +132,140 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkMemberSignsIn(ctx, t, env)
 }
 
+// TestRevokeGrantByID revokes a namespace grant and a unit grant through
+// DELETE /api/server/grants/{id} with the bootstrap admin token, and checks
+// that each grant is gone from the grants of its object. It also checks
+// that a person with only a viewer grant on another namespace gets 404 for
+// a grant ID on this namespace.
+func TestRevokeGrantByID(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runRevokeByIDOnStore(t, cli, db)
+		})
+	}
+}
+
+// runRevokeByIDOnStore runs the revoke-by-ID steps on one store.
+func runRevokeByIDOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnv(ctx, t, cli, store)
+
+	checkReady(ctx, t, env)
+
+	for _, ns := range []string{"byid", "other"} {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, "/api/server/namespaces", `{"name":"` + ns + `"}`, http.StatusCreated,
+		}, nil)
+	}
+
+	var bob, carol e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals", `{"subject":"byid-bob","kind":"person"}`, http.StatusCreated,
+	}, &bob)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals", `{"subject":"byid-carol","kind":"person"}`, http.StatusCreated,
+	}, &carol)
+
+	// A grant names a unit that exists.
+	createStack(ctx, t, env, "byid/web/prod")
+
+	var nsGrant, unitGrant e2eGrant
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/byid/grants",
+		`{"subject":"principal:` + bob.ID + `","role":"viewer"}`, http.StatusCreated,
+	}, &nsGrant)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/byid/unit-grants?tool=pulumi&unit=web%2Fprod",
+		`{"subject":"principal:` + bob.ID + `","role":"viewer"}`, http.StatusCreated,
+	}, &unitGrant)
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodDelete, "/api/server/grants/" + nsGrant.ID, "", http.StatusNoContent,
+	}, nil)
+
+	var nsList e2eGrantList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/namespaces/byid/grants", "", http.StatusOK,
+	}, &nsList)
+
+	for i := range nsList.Grants {
+		if nsList.Grants[i].ID == nsGrant.ID {
+			t.Fatalf("grants on byid still hold %s after the revoke by ID", nsGrant.ID)
+		}
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodDelete, "/api/server/grants/" + unitGrant.ID, "", http.StatusNoContent,
+	}, nil)
+
+	var unitList e2eGrantList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/namespaces/byid/unit-grants?tool=pulumi&unit=web%2Fprod", "",
+		http.StatusOK,
+	}, &unitList)
+
+	for i := range unitList.Grants {
+		if unitList.Grants[i].ID == unitGrant.ID {
+			t.Fatalf("grants on the unit still hold %s after the revoke by ID", unitGrant.ID)
+		}
+	}
+
+	// Carol sees only the other namespace, so a grant on byid is unknown
+	// to her.
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/other/grants",
+		`{"subject":"principal:` + carol.ID + `","role":"viewer"}`, http.StatusCreated,
+	}, nil)
+
+	var carolToken e2eToken
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/tokens", `{"principalID":"` + carol.ID + `","name":"revoke-check"}`,
+		http.StatusCreated,
+	}, &carolToken)
+
+	var target e2eGrant
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/byid/grants",
+		`{"subject":"principal:` + bob.ID + `","role":"viewer"}`, http.StatusCreated,
+	}, &target)
+
+	status, body, err := env.ServerAPIStatusAs(
+		ctx, carolToken.Secret, http.MethodDelete, "/api/server/grants/"+target.ID, "",
+	)
+	if err != nil || status != http.StatusNotFound {
+		t.Fatalf("viewer DELETE grant by ID = %d, %v (%s), want %d", status, err, body, http.StatusNotFound)
+	}
+}
+
 // checkMemberSignsIn gives a principal that is not an administrator a writer
 // grant on one namespace. It logs in with the Pulumi CLI and sees that
 // namespace only: the routes whose object is the caller need only
@@ -174,6 +312,164 @@ func checkMemberSignsIn(ctx context.Context, t *testing.T, env *e2e.Env) {
 		spec.Env, spec.Redact = as, true
 		env.Step(ctx, t, spec)
 	}
+
+	checkNamespaceList(ctx, t, env)
+}
+
+// e2eNamespaceItem decodes one namespace of the list.
+type e2eNamespaceItem struct {
+	Name string `json:"name"`
+}
+
+// e2eNamespaceList decodes one page of GET /api/server/namespaces.
+type e2eNamespaceList struct {
+	Namespaces []e2eNamespaceItem `json:"namespaces"`
+	NextCursor string             `json:"nextCursor"`
+	Total      *int64             `json:"total"`
+}
+
+// fetchNamespaceList reads one page of the namespace list with the admin
+// token and decodes it.
+func fetchNamespaceList(ctx context.Context, t *testing.T, env *e2e.Env, route string) e2eNamespaceList {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, route, "")
+	if err != nil {
+		t.Fatalf("GET %s: %v", route, err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("GET %s answers %d, want %d (%s)", route, status, http.StatusOK, body)
+	}
+
+	var list e2eNamespaceList
+	if err := json.Unmarshal([]byte(body), &list); err != nil {
+		t.Fatalf("decode GET %s %q: %v", route, body, err)
+	}
+
+	return list
+}
+
+// namespaceNames returns the names of a decoded page.
+func namespaceNames(list e2eNamespaceList) []string {
+	names := make([]string, 0, len(list.Namespaces))
+	for _, ns := range list.Namespaces {
+		names = append(names, ns.Name)
+	}
+
+	return names
+}
+
+// checkAdminSeesBoth proves the admin list holds team and hidden.
+func checkAdminSeesBoth(ctx context.Context, t *testing.T, env *e2e.Env) []string {
+	t.Helper()
+
+	names := namespaceNames(fetchNamespaceList(ctx, t, env, "/api/server/namespaces"))
+
+	for _, want := range []string{"team", "hidden"} {
+		if !slices.Contains(names, want) {
+			t.Fatalf("admin namespaces = %v, want %q among them", names, want)
+		}
+	}
+
+	return names
+}
+
+// walkNamespacePages follows limit 1 from the first page to the end and
+// returns every name once. It fails unless the first page has a cursor and
+// a total, and the walk reaches the total.
+func walkNamespacePages(ctx context.Context, t *testing.T, env *e2e.Env, names []string) map[string]bool {
+	t.Helper()
+
+	first := fetchNamespaceList(ctx, t, env, "/api/server/namespaces?limit=1")
+	if first.NextCursor == "" {
+		t.Fatalf("first page has no next cursor, want one for limit 1 over %v", names)
+	}
+
+	if first.Total == nil {
+		t.Fatal("first page has no total, want one")
+	}
+
+	seen := map[string]bool{}
+	route := "/api/server/namespaces?limit=1"
+
+	for route != "" {
+		page := fetchNamespaceList(ctx, t, env, route)
+		for _, ns := range page.Namespaces {
+			if seen[ns.Name] {
+				t.Fatalf("paged namespaces list %q twice", ns.Name)
+			}
+			seen[ns.Name] = true
+		}
+		route = ""
+		if page.NextCursor != "" {
+			route = "/api/server/namespaces?limit=1&cursor=" + page.NextCursor
+		}
+		if len(seen) > 100 {
+			t.Fatalf("paged more than 100 namespaces, want the end: %v", seen)
+		}
+	}
+
+	if int64(len(seen)) != *first.Total {
+		t.Fatalf("paged %d namespaces, want total %d", len(seen), *first.Total)
+	}
+
+	return seen
+}
+
+// checkMemberSeesTeamOnly proves the member list holds team and not hidden.
+// Without an in-process member token it skips, as the binary server knows
+// only the bootstrap admin tokens.
+func checkMemberSeesTeamOnly(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	token, ok := env.MemberToken()
+	if !ok {
+		t.Log("skip the member list: the binary server knows only the bootstrap admin tokens")
+
+		return
+	}
+
+	status, body, err := env.ServerAPIStatusAs(ctx, token, http.MethodGet, "/api/server/namespaces", "")
+	if err != nil {
+		t.Fatalf("member GET namespaces: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("member GET namespaces answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var member e2eNamespaceList
+	if err := json.Unmarshal([]byte(body), &member); err != nil {
+		t.Fatalf("decode member list %q: %v", body, err)
+	}
+
+	holds := map[string]bool{}
+	for _, ns := range member.Namespaces {
+		holds[ns.Name] = true
+	}
+
+	if !holds["team"] || holds["hidden"] {
+		t.Fatalf("member namespaces hold team=%t hidden=%t, want team only", holds["team"], holds["hidden"])
+	}
+}
+
+// checkNamespaceList proves the namespace list: the admin sees every
+// namespace, paging by name reaches each name once, and the member sees
+// only the namespace it may read.
+func checkNamespaceList(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	names := checkAdminSeesBoth(ctx, t, env)
+	seen := walkNamespacePages(ctx, t, env, names)
+
+	for _, want := range []string{"team", "hidden"} {
+		if !seen[want] {
+			t.Fatalf("paged namespaces miss %q", want)
+		}
+	}
+
+	checkMemberSeesTeamOnly(ctx, t, env)
 }
 
 // onlyOrganization checks that whoami --verbose names ns as the only
@@ -220,9 +516,9 @@ func stacksOnlyIn(ns string) func(e2e.Result) error {
 	}
 }
 
-// checkCollectionGrantsWait drives the grant routes of a collection. No
-// collection exists until the collections are wired (#478), so a grant on
-// one answers 404, its list is empty, and a revoke finds nothing.
+// checkCollectionGrantsWait drives the grant routes of a collection that does
+// not exist. Each route answers 404, as it does for a missing unit, so no
+// grant is made or listed on a collection with no units.
 func checkCollectionGrantsWait(ctx context.Context, t *testing.T, env *e2e.Env, subject string) {
 	t.Helper()
 
@@ -232,12 +528,7 @@ func checkCollectionGrantsWait(ctx context.Context, t *testing.T, env *e2e.Env, 
 		http.MethodPost, grants, `{"subject":"` + subject + `","role":"writer"}`, http.StatusNotFound,
 	}, nil)
 
-	var list e2eGrantList
-	principalCall(ctx, t, env, principalStep{http.MethodGet, grants, "", http.StatusOK}, &list)
-
-	if list.Total != 0 || len(list.Grants) != 0 {
-		t.Fatalf("grants on a collection = %+v, want none", list)
-	}
+	principalCall(ctx, t, env, principalStep{http.MethodGet, grants, "", http.StatusNotFound}, nil)
 
 	principalCall(ctx, t, env, principalStep{http.MethodDelete, grants + "/grt-missing", "", http.StatusNotFound}, nil)
 }
@@ -326,6 +617,8 @@ func checkGrantRoutes(ctx context.Context, t *testing.T, env *e2e.Env, k grantKi
 		t.Fatalf("grants on %s = %+v, want %s alone", k.object, list, g.ID)
 	}
 
+	checkGrantFilters(ctx, t, env, k, query)
+
 	if strings.HasPrefix(k.role, "rol-") {
 		// A custom role that a grant holds cannot be deleted.
 		principalCall(ctx, t, env, principalStep{
@@ -339,6 +632,47 @@ func checkGrantRoutes(ctx context.Context, t *testing.T, env *e2e.Env, k grantKi
 	principalCall(ctx, t, env, principalStep{
 		http.MethodDelete, k.path + "/" + g.ID + query, "", http.StatusNotFound,
 	}, nil)
+}
+
+// checkGrantFilters lists the grants on one object kind with the holder and
+// role filters: the grant of k has its holder name and kind, a filter
+// on another role keeps nothing, and a bad holder or role answers 400.
+func checkGrantFilters(ctx context.Context, t *testing.T, env *e2e.Env, k grantKind, query string) {
+	t.Helper()
+
+	sep := "?"
+	if query != "" {
+		sep = "&"
+	}
+
+	wantKind := map[bool]string{true: "group", false: "person"}[strings.HasPrefix(k.subject, "group:")]
+
+	var held e2eGrantList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, k.path + query + sep + url.Values{"holder": {k.subject}, "role": {k.role}}.Encode(), "",
+		http.StatusOK,
+	}, &held)
+
+	if len(held.Grants) != 1 || held.Total != 1 || held.Grants[0].HolderName == "" ||
+		held.Grants[0].HolderKind != wantKind {
+		t.Fatalf("grants of %s on %s = %+v, want one with its holder name and the kind %s",
+			k.subject, k.object, held, wantKind)
+	}
+
+	var none e2eGrantList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, k.path + query + sep + url.Values{"role": {"secret-viewer"}}.Encode(), "", http.StatusOK,
+	}, &none)
+
+	if len(none.Grants) != 0 || none.Total != 0 {
+		t.Fatalf("secret-viewer grants on %s = %+v, want none", k.object, none)
+	}
+
+	for _, bad := range []string{"holder=bob", "role=bad%20role"} {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodGet, k.path + query + sep + bad, "", http.StatusBadRequest,
+		}, nil)
+	}
 }
 
 // checkSubjectDeleteRevokes deletes a principal that holds a grant, and

@@ -203,6 +203,16 @@ func RunWorkspace(t *testing.T, newStore WorkspaceFactory) {
 			name: "a workspace with a pending state version refuses the delete",
 			test: testDeleteWorkspaceRefusesPendingState,
 		},
+		{name: "a restore brings a deleted workspace back", test: testRestoreWorkspace},
+		{name: "a purge removes a deleted workspace for good", test: testPurgeWorkspace},
+		{name: "a sweep purge checks the retention of a workspace", test: testSweepPurgeChecksTheRetentionWorkspace},
+		{name: "a purge ends the grants on the workspace", test: testPurgeWorkspaceRevokesItsGrants},
+		{name: "an audit entry on a workspace gets its stable ID", test: testAppendFillsWorkspaceID},
+		{name: "a workspace restore and purge race: one wins", test: testRestoreRacesPurgeWorkspace},
+		{
+			name: "a workspace restore or purge with the fence of another namespace changes nothing",
+			test: testRestoreOrPurgeWorkspaceInAnotherNamespace,
+		},
 		{
 			name: "fence and unlock releases the lock and makes the fence current",
 			test: testFenceAndUnlock,
@@ -3145,7 +3155,7 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 		t.Context(),
 		w.Ref,
 		ns.Fence(),
-		deleteEntry(ns.Name),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(
 		err,
@@ -3156,7 +3166,13 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 
 	unlockTestWorkspace(t, s, ns, w.Ref)
 
-	if err = s.DeleteWorkspace(t.Context(), w.Ref, ns.Fence(), deleteEntry(ns.Name)); err != nil {
+	err = s.DeleteWorkspace(
+		t.Context(),
+		w.Ref,
+		ns.Fence(),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
@@ -3180,7 +3196,7 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 		t.Context(),
 		w.Ref,
 		ns.Fence(),
-		deleteEntry(ns.Name),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(
 		err,
@@ -3194,7 +3210,7 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 		t.Context(),
 		ghost,
 		ns.Fence(),
-		deleteEntry(ns.Name),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(
 		err,
@@ -3210,7 +3226,7 @@ func testDeleteWorkspace(t *testing.T, s WorkspaceStore) {
 		t.Context(),
 		other.Ref,
 		stale,
-		deleteEntry(stale.Namespace),
+		inventory.Deletion{Entry: deleteEntry(stale.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(
 		err,
@@ -3234,7 +3250,13 @@ func testDeletedWorkspaceNameIsFree(t *testing.T, s WorkspaceStore) {
 	ns := newWorkspaceNamespace(t, s, "acme")
 	gone := createTestWorkspace(t, s, ns, "network")
 
-	if err := s.DeleteWorkspace(t.Context(), gone.Ref, ns.Fence(), deleteEntry(ns.Name)); err != nil {
+	err := s.DeleteWorkspace(
+		t.Context(),
+		gone.Ref,
+		ns.Fence(),
+		inventory.Deletion{Entry: deleteEntry(ns.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete workspace: %v", err)
 	}
 
@@ -3243,7 +3265,7 @@ func testDeletedWorkspaceNameIsFree(t *testing.T, s WorkspaceStore) {
 		t.Fatalf("new workspace ID = %q, want a new ID", again.ID)
 	}
 
-	if _, err := s.CurrentStateVersion(t.Context(), again.ID); !errors.Is(err, workspace.ErrNoState) {
+	if _, err = s.CurrentStateVersion(t.Context(), again.ID); !errors.Is(err, workspace.ErrNoState) {
 		t.Fatalf("current state of the new workspace: err = %v, want ErrNoState", err)
 	}
 
@@ -3935,6 +3957,7 @@ func serviceOver(t *testing.T, s WorkspaceStore) *workspace.Service {
 		Now:                now,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)

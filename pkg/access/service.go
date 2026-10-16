@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -39,7 +40,8 @@ const (
 )
 
 // Directory is what the service reads of the principals and groups, to check
-// the subject of a grant. principal.Store meets it.
+// the subject of a grant and to list the service principals in a group for
+// the audit entry of a grant to the group. principal.Store meets it.
 type Directory interface {
 	// GetPrincipal returns the principal with the ID id, or
 	// principal.ErrNotFound.
@@ -49,6 +51,9 @@ type Directory interface {
 	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
 	// GetGroup returns the group with the ID id, or principal.ErrNotFound.
 	GetGroup(ctx context.Context, id string) (principal.Group, error)
+	// ListMembers returns the members of the group groupID, ordered by
+	// subject, or principal.ErrNotFound when the group does not exist.
+	ListMembers(ctx context.Context, groupID string, q principal.Query) ([]principal.Member, int64, error)
 }
 
 // Namespaces is what the service reads of the namespaces: one namespace, so
@@ -307,21 +312,37 @@ type GrantInput struct {
 // Grant gives the role in to the subject in on the object in, for granter,
 // with the entry e. It checks that the subject exists, that the namespace
 // of the object exists, that a role with an operator or administration
-// action goes on the installation only, and that granter holds every action
-// of the role on the object, directly or through an object that holds it.
-// The caller has already authorized the manage-access action of the object.
+// action goes on the installation only, that a grant on a principal names a
+// service principal and a role with delegation actions only, and that
+// granter holds every action of the role on the object, directly or through
+// an object that holds it. A role with a delegation action also needs
+// server:manage-access on the installation. The caller has already
+// authorized the manage-access action of the object.
+//
+// The audit entry of a grant to a service principal names, in the change
+// "tokenManagers", every holder of principal:manage-tokens on that
+// principal: each of them can act as the principal, with the new grant
+// too. The audit entry of a grant to a group names, in one change
+// "tokenManagers", the same list for each service principal that is a
+// member of the group, as one line per principal in the form
+// "<principal ID>: <holder>, <holder>", with the lines sorted by principal
+// ID.
 func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Principal, in GrantInput) (Grant, error) {
 	role, err := s.GetRole(ctx, in.Role)
 	if err != nil {
 		return Grant{}, err
 	}
 
-	if in.Object, err = s.existingUnit(ctx, in.Object); err != nil {
+	if in.Object, err = s.existingObject(ctx, in.Object); err != nil {
 		return Grant{}, err
 	}
 
 	fence, err := s.checkGrant(ctx, granter, in, role)
 	if err != nil {
+		return Grant{}, err
+	}
+
+	if e, err = s.withTokenManagers(ctx, e, in.Subject); err != nil {
 		return Grant{}, err
 	}
 
@@ -332,6 +353,16 @@ func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Pri
 
 	if err := s.store.CreateGrant(ctx, g, fence, grantChange(e, g.CreatedAt, fence, GrantRef(g))); err != nil {
 		return Grant{}, fmt.Errorf("create grant: %w", err)
+	}
+
+	return g, nil
+}
+
+// GetGrant returns the current grant with the ID id, or ErrNotFound.
+func (s *Service) GetGrant(ctx context.Context, id string) (Grant, error) {
+	g, err := s.store.GetGrant(ctx, id)
+	if err != nil {
+		return Grant{}, fmt.Errorf("get grant %q: %w", id, err)
 	}
 
 	return g, nil
@@ -351,7 +382,7 @@ func (s *Service) Revoke(
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
 	}
 
-	if obj, err = s.existingUnit(ctx, obj); err != nil {
+	if obj, err = s.existingObject(ctx, obj); err != nil {
 		return Grant{}, err
 	}
 
@@ -359,36 +390,43 @@ func (s *Service) Revoke(
 		return Grant{}, fmt.Errorf("revoke grant %q on %q: %w", id, obj.String(), ErrNotFound)
 	}
 
-	if heldErr := s.checkGrantHeld(ctx, caller, g); heldErr != nil {
-		return Grant{}, heldErr
-	}
+	return s.revokeStored(ctx, e, caller, g, id)
+}
 
-	fence, err := s.fenceOf(ctx, g.Object)
+// RevokeByID ends the grant with the ID id, whatever its object, for
+// caller, with the entry e. It reads the grant and revokes it on its own
+// object, with every check of Revoke. An unknown ID answers ErrNotFound,
+// and a grant that gives an action the caller does not hold answers
+// ErrEscalation. The caller authorizes the manage-access action of the
+// grant's object before this call.
+func (s *Service) RevokeByID(ctx context.Context, e audit.Entry, caller identity.Principal, id string) (Grant, error) {
+	g, err := s.store.GetGrant(ctx, id)
 	if err != nil {
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
 	}
 
-	if err := s.store.RevokeGrant(ctx, id, fence, grantChange(e, s.Now(), fence, GrantRef(g))); err != nil {
-		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
-	}
-
-	return g, nil
+	return s.revokeStored(ctx, e, caller, g, id)
 }
 
 // PageRequest asks for one page of the grants on an object. Cursor is the
 // opaque NextCursor of the page before, or empty for the first page, at most
 // principal.MaxCursorLength bytes. Limit is 1 to MaxLimit. 0 means that the
 // request names no limit, and reads DefaultLimit rows: the HTTP adapter
-// refuses a limit of 0 that a request names.
+// refuses a limit of 0 that a request names. Holder, when it is not empty,
+// keeps the grants of one subject (the text form, ErrInvalid otherwise).
+// Role, when it is not empty, keeps the grants of one role.
 type PageRequest struct {
 	Cursor string
+	Holder string
+	Role   string
 	Limit  int
 }
 
-// Page is one page of grants. Total is the count of every current grant on
-// the object. NextCursor is empty on the last page.
+// Page is one page of grants with their holders. Total is the count of
+// every current grant on the object that matches the filters. NextCursor is
+// empty on the last page.
 type Page struct {
-	Grants     []Grant
+	Grants     []ListedGrant
 	NextCursor string
 	Total      int64
 }
@@ -404,33 +442,62 @@ func (s *Service) ListGrants(ctx context.Context, obj identity.Object, req PageR
 	limit := q.Limit
 	q.Limit++
 
-	if obj, err = s.existingUnit(ctx, obj); err != nil {
+	if obj, err = s.existingObject(ctx, obj); err != nil {
 		return Page{}, err
 	}
 
-	grants, total, err := s.store.ListGrantsOn(ctx, obj, q)
+	listed, total, err := s.store.ListGrantsOn(ctx, obj, q)
 	if err != nil {
 		return Page{}, fmt.Errorf("list grants on %q: %w", obj.String(), err)
 	}
 
-	if _, err := s.authz.currentUnits(ctx, grants); err != nil {
+	if err := s.currentListedUnits(ctx, listed); err != nil {
 		return Page{}, err
 	}
 
-	out := Page{Grants: grants, NextCursor: "", Total: total}
+	out := Page{Grants: listed, NextCursor: "", Total: total}
 
-	if len(grants) > limit {
-		out.Grants = grants[:limit]
-		last := out.Grants[limit-1]
+	if len(listed) > limit {
+		out.Grants = listed[:limit]
+		last := out.Grants[limit-1].Grant
 		out.NextCursor = base64.RawURLEncoding.EncodeToString([]byte(last.Subject.String() + "\x00" + last.Role))
 	}
 
 	return out, nil
 }
 
+// grantFilters checks the holder and role filters of req and sets them on
+// q.
+func grantFilters(q *GrantQuery, req PageRequest) error {
+	if req.Holder != "" {
+		holder, err := ParseSubject(req.Holder)
+		if err != nil {
+			return err
+		}
+
+		q.Subject = holder.String()
+	}
+
+	if req.Role != "" && !ident.Valid(req.Role, maxRoleFilterLength) {
+		return fmt.Errorf("%w: role filter %q is not a role ID", ErrInvalid, req.Role)
+	}
+
+	q.Role = req.Role
+
+	return nil
+}
+
+// maxRoleFilterLength bounds the role filter of a grant list, in bytes. A
+// role ID is far shorter.
+const maxRoleFilterLength = 128
+
 // grantQuery validates req and returns the store query of its page.
 func grantQuery(req PageRequest) (GrantQuery, error) {
-	q := GrantQuery{AfterSubject: "", AfterRole: "", Limit: req.Limit}
+	q := GrantQuery{AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: req.Limit}
+
+	if err := grantFilters(&q, req); err != nil {
+		return GrantQuery{}, err
+	}
 
 	switch {
 	case q.Limit == 0:
@@ -557,8 +624,9 @@ func (s *Service) CheckGroupGrants(ctx context.Context, caller identity.Principa
 
 // CheckPrincipalGrants implements principal.Guard: caller must hold every
 // action that the current grants of the principal give, on each of their
-// objects. The delete of a principal also ends its memberships, so the
-// grants of each of its current groups count too.
+// objects. The delete of a principal also ends its memberships, and the
+// enable restores them, so the grants of each of its current groups count
+// too.
 func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Principal, principalID string) error {
 	if caller.Admin {
 		return nil
@@ -566,7 +634,7 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 
 	p, err := s.directory.GetPrincipal(ctx, principalID)
 	if errors.Is(err, principal.ErrNotFound) {
-		// Nothing to take away: the store answers the delete.
+		// Nothing to take away or restore: the store answers the delete or the enable.
 		return nil
 	}
 
@@ -591,6 +659,99 @@ func (s *Service) CheckPrincipalGrants(ctx context.Context, caller identity.Prin
 	return nil
 }
 
+// CheckMove runs the escalation check of a move. A grant on the target that is
+// added after the check and before the move is written is not checked here.
+// Only a caller with manage-access on the collection can add a grant to it, and
+// that caller's own escalation check covers the grant, so the result is a
+// normal grant on the collection and not a silent escalation.
+//
+// CheckMove refuses a move of the unit into the collection target unless the
+// caller holds, on the unit, every action of every role that the target
+// grants. A move gives the unit each grant of the target, so the check is the
+// same one that a direct grant on the unit runs. It returns ErrNotFound when
+// the unit or the target does not exist, and an error that wraps
+// identity.ErrDenied and ErrEscalation when a grant of the target gives an
+// action that the caller does not hold on the unit. A grant whose role no
+// longer exists gives nothing, so it is skipped. On success it returns the
+// stable ID of the target that it checked. The move is written with that ID,
+// so a collection deleted and created again after the check is refused.
+func (s *Service) CheckMove(
+	ctx context.Context, caller identity.Principal, unit, target identity.Object,
+) (string, error) {
+	withID, err := s.existingObject(ctx, unit)
+	if err != nil {
+		return "", fmt.Errorf("move %s: %w", unit.String(), err)
+	}
+
+	targetWithID, err := s.existingObject(ctx, target)
+	if err != nil {
+		return "", fmt.Errorf("move %s into %s: %w", unit.String(), target.String(), err)
+	}
+
+	cursor := ""
+
+	for {
+		page, err := s.ListGrants(ctx, targetWithID, PageRequest{Cursor: cursor, Limit: MaxLimit, Holder: "", Role: ""})
+		if err != nil {
+			return "", fmt.Errorf("grants of %s: %w", target.String(), err)
+		}
+
+		for i := range page.Grants {
+			if err := s.checkMoveGrant(ctx, caller, withID, page.Grants[i].Grant); err != nil {
+				return "", err
+			}
+		}
+
+		if page.NextCursor == "" {
+			return targetWithID.CollectionID(), nil
+		}
+
+		cursor = page.NextCursor
+	}
+}
+
+// checkMoveGrant checks one grant of a move target against the unit it would
+// reach. A role that no longer exists gives nothing, so it passes.
+func (s *Service) checkMoveGrant(ctx context.Context, caller identity.Principal, unit identity.Object, g Grant) error {
+	role, err := s.GetRole(ctx, g.Role)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("role of grant %s: %w", g.ID, err)
+	}
+
+	if err := s.checkEscalation(ctx, caller, unit, role); err != nil {
+		return fmt.Errorf("move %s: %w: %w", unit.String(), identity.ErrDenied, err)
+	}
+
+	return nil
+}
+
+// revokeStored ends the stored grant g with the ID id for caller, with the
+// entry e. It holds the checks that Revoke and RevokeByID share: the caller
+// holds every action the grant gives, and the entry goes in the scope of
+// the grant.
+func (s *Service) revokeStored(
+	ctx context.Context, e audit.Entry, caller identity.Principal, g Grant, id string,
+) (Grant, error) {
+	if heldErr := s.checkGrantHeld(ctx, caller, g); heldErr != nil {
+		return Grant{}, heldErr
+	}
+
+	fence, err := s.fenceOf(ctx, g.Object)
+	if err != nil {
+		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+	}
+
+	if err := s.store.RevokeGrant(ctx, id, fence, grantChange(e, s.Now(), fence, GrantRef(g))); err != nil {
+		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
+	}
+
+	return g, nil
+}
+
 // checkGrant runs the checks of Grant. It returns the fence of the
 // namespace of the object, or the zero fence for the installation.
 func (s *Service) checkGrant(
@@ -607,27 +768,364 @@ func (s *Service) checkGrant(
 		return none, err
 	}
 
+	if err := s.checkSubjectNamespace(ctx, in.Subject, in.Object); err != nil {
+		return none, err
+	}
+
 	fence, err := s.fenceOf(ctx, in.Object)
 	if err != nil {
 		return none, fmt.Errorf("grant on %q: %w", in.Object.String(), err)
 	}
 
-	if kind == ObjectCollection {
-		// The core has no collection port yet (#478), so no collection
-		// exists, and a grant cannot name one before it exists.
-		return none, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, in.Object.String())
-	}
-
-	if kind != ObjectInstallation {
-		for _, a := range role.Actions {
-			if family, _ := FamilyOf(a); family != FamilyData {
-				return none, fmt.Errorf("%w: role %q holds %s, which only a grant on the installation can give",
-					ErrInvalid, role.ID, a)
-			}
+	switch kind {
+	case ObjectInstallation:
+	case ObjectPrincipal:
+		if err := s.checkPrincipalObject(ctx, in.Object, role); err != nil {
+			return none, err
 		}
+	case ObjectNamespace, ObjectCollection, ObjectUnit:
+		if a, ok := actionOutside(role, FamilyData); ok {
+			return none, fmt.Errorf("%w: role %q holds %s, which only a grant on the installation can give",
+				ErrInvalid, role.ID, a)
+		}
+	default:
+		return none, fmt.Errorf("%w: object %q takes no grant", ErrInvalid, in.Object.String())
 	}
 
 	return fence, s.checkEscalation(ctx, granter, in.Object, role)
+}
+
+// checkSubjectNamespace refuses a grant to a principal of a namespace on an
+// object that is not that namespace or inside it (ErrInvalid). The store
+// checks it again in the transaction of the grant.
+func (s *Service) checkSubjectNamespace(ctx context.Context, subject Subject, obj identity.Object) error {
+	if subject.Kind != SubjectPrincipal {
+		return nil
+	}
+
+	p, err := s.directory.GetPrincipal(ctx, subject.ID)
+	if err != nil {
+		return fmt.Errorf("grant subject %s: %w", subject.String(), err)
+	}
+
+	if p.Namespace != "" && p.Namespace != obj.Namespace() {
+		return fmt.Errorf("%w: %s is a principal of the namespace %q, and can only hold grants inside it",
+			ErrInvalid, subject.String(), p.Namespace.String())
+	}
+
+	return nil
+}
+
+// checkPrincipalObject refuses a grant on obj, a principal, unless the
+// principal is a service principal and role holds delegation actions only.
+// It returns principal.ErrNotFound when the principal does not exist.
+func (s *Service) checkPrincipalObject(ctx context.Context, obj identity.Object, role Role) error {
+	p, err := s.directory.GetPrincipal(ctx, obj.PrincipalID())
+	if err != nil {
+		return fmt.Errorf("grant on %q: %w", obj.String(), err)
+	}
+
+	if p.Kind != principal.KindService {
+		return fmt.Errorf("%w: principal %q is a %s principal; only a service principal takes a grant",
+			ErrInvalid, p.ID, p.Kind)
+	}
+
+	if p.Namespace != "" {
+		return fmt.Errorf("%w: principal %q belongs to the namespace %q; a grant on it is not available yet",
+			ErrInvalid, p.ID, p.Namespace.String())
+	}
+
+	if len(role.Actions) == 0 {
+		return fmt.Errorf("%w: role %q holds no principal action; a grant on a principal needs one, "+
+			"for example the role %s", ErrInvalid, role.ID, RoleTokenManager)
+	}
+
+	if a, ok := actionOutside(role, FamilyDelegation); ok {
+		return fmt.Errorf("%w: role %q holds %s; a grant on a principal can give principal actions only, "+
+			"for example the role %s", ErrInvalid, role.ID, a, RoleTokenManager)
+	}
+
+	return nil
+}
+
+// checkDelegationGranter refuses a role with a delegation action unless
+// granter holds server:manage-access on the installation. A delegation
+// action lets its holder act as a service principal, with every grant that
+// the principal has, so only a principal that manages every grant can give
+// it.
+func (s *Service) checkDelegationGranter(ctx context.Context, granter identity.Principal, role Role) error {
+	if !slices.ContainsFunc(role.Actions, func(a identity.Action) bool { return families[a] == FamilyDelegation }) {
+		return nil
+	}
+
+	err := s.authz.Authorize(ctx, granter, identity.ActionServerManageAccess, identity.ServerObject())
+	if errors.Is(err, identity.ErrDenied) {
+		return fmt.Errorf("%w: role %q holds a principal action, which needs %s on the installation",
+			ErrEscalation, role.ID, identity.ActionServerManageAccess)
+	}
+
+	return err
+}
+
+// servicePrincipalsOfGroup returns the sorted IDs of the service
+// principals that are members of the group groupID. It returns
+// principal.ErrNotFound when the group does not exist.
+func (s *Service) servicePrincipalsOfGroup(ctx context.Context, groupID string) ([]string, error) {
+	var out []string
+
+	after := ""
+
+	for {
+		members, _, err := s.directory.ListMembers(
+			ctx,
+			groupID,
+			principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("list members of group %q: %w", groupID, err)
+		}
+
+		for i := range members {
+			if members[i].Principal.Kind == principal.KindService {
+				out = append(out, members[i].Principal.ID)
+			}
+		}
+
+		if len(members) < principal.MaxLimit {
+			break
+		}
+
+		after = members[len(members)-1].Principal.Subject
+	}
+
+	slices.Sort(out)
+
+	return out, nil
+}
+
+// installationTokenHolders returns the sorted holders of
+// principal:manage-tokens on the installation: the subjects of the bootstrap
+// admin tokens and of the current grants on the installation with a role
+// that holds the action.
+func (s *Service) installationTokenHolders(ctx context.Context) ([]string, error) {
+	roles, err := s.authz.rolesWith(ctx, identity.ActionPrincipalManageTokens)
+	if err != nil {
+		return nil, err
+	}
+
+	want := make(map[string]bool, len(roles))
+	for _, r := range roles {
+		want[r] = true
+	}
+
+	seen := make(map[string]bool, len(s.bootstrap))
+	for _, b := range s.bootstrap {
+		seen[b] = true
+	}
+
+	afterSubject, afterRole := "", ""
+
+	for {
+		listed, _, err := s.store.ListGrantsOn(ctx, identity.ServerObject(), GrantQuery{
+			AfterSubject: afterSubject, AfterRole: afterRole, Subject: "", Role: "", Limit: MaxLimit,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list grants on %q: %w", identity.ServerObject().String(), err)
+		}
+
+		for i := range listed {
+			if want[listed[i].Grant.Role] {
+				seen[listed[i].Grant.Subject.String()] = true
+			}
+		}
+
+		if len(listed) < MaxLimit {
+			break
+		}
+
+		last := listed[len(listed)-1].Grant
+		afterSubject, afterRole = last.Subject.String(), last.Role
+	}
+
+	return slices.Sorted(maps.Keys(seen)), nil
+}
+
+// directTokenHolders returns the subjects of the current grants on the
+// service principal with the ID id. Every grant on a service principal holds
+// principal:manage-tokens, so every subject is a holder.
+func (s *Service) directTokenHolders(ctx context.Context, id string) ([]string, error) {
+	obj := identity.PrincipalObject(id)
+	var out []string
+
+	afterSubject, afterRole := "", ""
+
+	for {
+		listed, _, err := s.store.ListGrantsOn(ctx, obj, GrantQuery{
+			AfterSubject: afterSubject, AfterRole: afterRole, Subject: "", Role: "", Limit: MaxLimit,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list grants on %q: %w", obj.String(), err)
+		}
+
+		for i := range listed {
+			out = append(out, listed[i].Grant.Subject.String())
+		}
+
+		if len(listed) < MaxLimit {
+			break
+		}
+
+		last := listed[len(listed)-1].Grant
+		afterSubject, afterRole = last.Subject.String(), last.Role
+	}
+
+	return out, nil
+}
+
+// checkNamespaceTokenGranter refuses a role with
+// namespace:manage-principal-tokens unless granter holds every data action
+// on the namespace of obj, or server:manage-access on the installation. A
+// grant on the installation needs server:manage-access. The action reaches
+// the tokens of the principals of one namespace, so only a principal with
+// the whole data access of that namespace can give it.
+func (s *Service) checkNamespaceTokenGranter(
+	ctx context.Context, granter identity.Principal, obj identity.Object, role Role,
+) error {
+	if !role.Has(identity.ActionNamespaceManagePrincipalTokens) {
+		return nil
+	}
+
+	if obj.IsServer() || obj.Namespace() == "" {
+		err := s.authz.Authorize(ctx, granter, identity.ActionServerManageAccess, identity.ServerObject())
+		if errors.Is(err, identity.ErrDenied) {
+			return fmt.Errorf("%w: role %q holds %s, which needs %s on the installation",
+				ErrEscalation, role.ID, identity.ActionNamespaceManagePrincipalTokens,
+				identity.ActionServerManageAccess)
+		}
+
+		return err
+	}
+
+	if err := s.authz.Authorize(ctx, granter, identity.ActionServerManageAccess, identity.ServerObject()); err == nil {
+		return nil
+	} else if !errors.Is(err, identity.ErrDenied) {
+		return err
+	}
+
+	held, err := s.authz.heldActions(ctx, granter, identity.NamespaceObject(obj.Namespace()))
+	if err != nil {
+		return err
+	}
+
+	for _, a := range Actions(FamilyData) {
+		if !held.has(a) {
+			return fmt.Errorf("%w: role %q holds %s, which needs every data action on namespace %q or %s "+
+				"on the installation",
+				ErrEscalation, role.ID, identity.ActionNamespaceManagePrincipalTokens, obj.Namespace().String(),
+				identity.ActionServerManageAccess)
+		}
+	}
+
+	return nil
+}
+
+// withTokenManagers returns e with the change "tokenManagers" when subject
+// is a service principal: the sorted holders of principal:manage-tokens on
+// it. When subject is a group, it returns e with one change "tokenManagers"
+// that lists each service principal member and its holders, as lines sorted
+// by principal ID, one line per principal in the form
+// "<principal ID>: <holder>, <holder>". It returns e as it is for any other
+// subject.
+func (s *Service) withTokenManagers(ctx context.Context, e audit.Entry, subject Subject) (audit.Entry, error) {
+	switch subject.Kind {
+	case SubjectPrincipal:
+		p, err := s.directory.GetPrincipal(ctx, subject.ID)
+		if err != nil {
+			return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
+		}
+
+		if p.Kind != principal.KindService {
+			return e, nil
+		}
+
+		holders, err := s.TokenManagers(ctx, p.ID)
+		if err != nil {
+			return e, err
+		}
+
+		e.Changes = append(slices.Clone(e.Changes), audit.Change{
+			Key: "tokenManagers", Old: nil, New: strings.Join(holders, ", "), Layer: "", TakesEffect: "",
+		})
+
+		return e, nil
+	case SubjectGroup:
+		return s.groupTokenManagers(ctx, e, subject)
+	default:
+		return e, nil
+	}
+}
+
+// groupTokenManagers returns e with one change "tokenManagers" that lists
+// each service principal member of subject and its holders, as lines sorted
+// by principal ID, one line per principal in the form
+// "<principal ID>: <holder>, <holder>". It returns e as it is when the
+// group has no service principal members.
+func (s *Service) groupTokenManagers(
+	ctx context.Context, e audit.Entry, subject Subject,
+) (audit.Entry, error) {
+	ids, err := s.servicePrincipalsOfGroup(ctx, subject.ID)
+	if err != nil {
+		return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
+	}
+
+	if len(ids) == 0 {
+		return e, nil
+	}
+
+	installation, err := s.installationTokenHolders(ctx)
+	if err != nil {
+		return e, err
+	}
+
+	base := slices.Clone(e.Changes)
+	lines := make([]string, 0, len(ids))
+
+	for _, id := range ids {
+		holders, err := s.tokenHoldersOf(ctx, installation, id)
+		if err != nil {
+			return e, err
+		}
+
+		lines = append(lines, id+": "+strings.Join(holders, ", "))
+	}
+
+	base = append(base, audit.Change{
+		Key: "tokenManagers", Old: nil, New: strings.Join(lines, "\n"), Layer: "", TakesEffect: "",
+	})
+	e.Changes = base
+
+	return e, nil
+}
+
+// tokenHoldersOf returns the sorted union of installation and the direct
+// holders of principal:manage-tokens on the service principal with the ID
+// id.
+func (s *Service) tokenHoldersOf(ctx context.Context, installation []string, id string) ([]string, error) {
+	direct, err := s.directTokenHolders(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool, len(installation)+len(direct))
+	for _, h := range installation {
+		seen[h] = true
+	}
+
+	for _, h := range direct {
+		seen[h] = true
+	}
+
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 // fenceOf returns the fence of the namespace of obj, or the zero fence for
@@ -647,7 +1145,11 @@ func (s *Service) fenceOf(ctx context.Context, obj identity.Object) (namespace.F
 }
 
 // checkEscalation refuses a role with an action that granter does not hold
-// on obj.
+// on obj, a role with a delegation action when granter does not hold
+// server:manage-access on the installation, and a role with
+// namespace:manage-principal-tokens when granter holds neither every data
+// action on the namespace of obj nor server:manage-access. A grant, a
+// revoke, a change of who holds a grant and a change of a role all run it.
 func (s *Service) checkEscalation(
 	ctx context.Context,
 	granter identity.Principal,
@@ -656,6 +1158,14 @@ func (s *Service) checkEscalation(
 ) error {
 	if granter.Admin {
 		return nil
+	}
+
+	if err := s.checkDelegationGranter(ctx, granter, role); err != nil {
+		return err
+	}
+
+	if err := s.checkNamespaceTokenGranter(ctx, granter, obj, role); err != nil {
+		return err
 	}
 
 	held, err := s.authz.heldActions(ctx, granter, obj)
@@ -693,6 +1203,37 @@ func (s *Service) checkSubject(ctx context.Context, subject Subject) error {
 	return nil
 }
 
+// existingObject resolves the stable ID of a unit or a collection, and returns
+// ErrNotFound when it does not exist: a grant can only name an object that
+// exists. Any other object is returned as it is.
+func (s *Service) existingObject(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if obj.IsCollection() {
+		return s.existingCollection(ctx, obj)
+	}
+
+	return s.existingUnit(ctx, obj)
+}
+
+// existingCollection resolves the stable ID of a collection. Without a
+// collection port no collection is found, so every grant on one answers
+// ErrNotFound.
+func (s *Service) existingCollection(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if s.authz.collections == nil {
+		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	id, found, err := s.authz.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read collection %q: %w", obj.String(), err)
+	}
+
+	if !found {
+		return obj, fmt.Errorf("%w: collection %q does not exist", ErrNotFound, obj.String())
+	}
+
+	return obj.WithCollectionID(id), nil
+}
+
 // existingUnit returns obj with its stable ID when obj is a unit, and
 // ErrNotFound when no such unit exists: a grant names a unit that exists, so
 // that it follows the unit and not the name. Any other object returns as
@@ -717,6 +1258,10 @@ func (s *Service) existingUnit(ctx context.Context, obj identity.Object) (identi
 // sameTarget reports whether a and b are the same object for a grant: the
 // same stable ID for units, the same wire form for any other object.
 func sameTarget(a, b identity.Object) bool {
+	if a.IsCollection() || b.IsCollection() {
+		return a.IsCollection() && b.IsCollection() && a.CollectionID() != "" && a.CollectionID() == b.CollectionID()
+	}
+
 	if a.IsUnit() || b.IsUnit() {
 		return a.IsUnit() && b.IsUnit() && a.UnitID() != "" && a.UnitID() == b.UnitID()
 	}
@@ -740,37 +1285,49 @@ func (s *Service) checkGrantHeld(ctx context.Context, caller identity.Principal,
 	return s.checkEscalation(ctx, caller, g.Object, role)
 }
 
-// checkPlacement refuses a role with an operator or administration action
-// while a current grant gives it on an object other than the installation:
-// such a grant would then give those actions inside a namespace.
+// checkPlacement refuses a role with an action outside the data family
+// while a current grant gives it on a namespace, a collection or a unit,
+// and a role with an action outside the delegation family while a current
+// grant gives it on a principal: such a grant would then give those actions
+// on an object that must not take them.
 func (s *Service) checkPlacement(ctx context.Context, r Role) error {
-	if !givesBeyondData(r) {
-		return nil
+	if _, ok := actionOutside(r, FamilyData); ok {
+		below, err := s.store.RoleGrantedBelowInstallation(ctx, r.ID)
+		if err != nil {
+			return fmt.Errorf("read grants of role %q: %w", r.ID, err)
+		}
+
+		if below {
+			return fmt.Errorf("%w: role %q is granted below the installation, so it can hold data actions only",
+				ErrInUse, r.ID)
+		}
 	}
 
-	below, err := s.store.RoleGrantedBelowInstallation(ctx, r.ID)
-	if err != nil {
-		return fmt.Errorf("read grants of role %q: %w", r.ID, err)
-	}
+	if _, ok := actionOutside(r, FamilyDelegation); ok || len(r.Actions) == 0 {
+		onPrincipal, err := s.store.RoleGrantedOnPrincipal(ctx, r.ID)
+		if err != nil {
+			return fmt.Errorf("read grants of role %q: %w", r.ID, err)
+		}
 
-	if below {
-		return fmt.Errorf("%w: role %q is granted below the installation, so it can hold data actions only",
-			ErrInUse, r.ID)
+		if onPrincipal {
+			return fmt.Errorf("%w: role %q is granted on a principal, so it can hold principal actions only",
+				ErrInUse, r.ID)
+		}
 	}
 
 	return nil
 }
 
-// givesBeyondData reports whether r holds an operator or administration
-// action.
-func givesBeyondData(r Role) bool {
+// actionOutside returns the first action of r that is not in the family f,
+// and false when every action of r is in f.
+func actionOutside(r Role, f Family) (identity.Action, bool) {
 	for _, a := range r.Actions {
-		if family, _ := FamilyOf(a); family != FamilyData {
-			return true
+		if family, _ := FamilyOf(a); family != f {
+			return a, true
 		}
 	}
 
-	return false
+	return "", false
 }
 
 // checkSubjectGrants checks each current grant of subject with
@@ -789,6 +1346,25 @@ func (s *Service) checkSubjectGrants(ctx context.Context, caller identity.Princi
 		if err := s.checkGrantHeld(ctx, caller, grants[i]); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// currentListedUnits puts the current name of each unit in the grants of
+// listed.
+func (s *Service) currentListedUnits(ctx context.Context, listed []ListedGrant) error {
+	grants := make([]Grant, 0, len(listed))
+	for i := range listed {
+		grants = append(grants, listed[i].Grant)
+	}
+
+	if _, err := s.authz.currentUnits(ctx, grants); err != nil {
+		return err
+	}
+
+	for i := range listed {
+		listed[i].Grant.Object = grants[i].Object
 	}
 
 	return nil

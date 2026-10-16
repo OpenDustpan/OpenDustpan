@@ -1,9 +1,11 @@
 // Package principal keeps the principals and the groups of an installation
 // (ADR 52, decisions 1, 2 and 4).
 //
-// A principal is a person, a service or a workload. It belongs to the whole
-// installation, not to one namespace. A grant on each object decides what a
-// principal can do there (RFC 19). A group is a named set of principals. It
+// A principal is a person, a service or a workload. Most principals belong
+// to the whole installation. A service principal can instead belong to one
+// namespace: it can only hold grants inside that namespace, and it cannot be
+// a member of a group. A grant on each object decides what a principal can
+// do there. A group is a named set of principals. It
 // also belongs to the whole installation. Any principal can be a member of
 // more than one group.
 //
@@ -28,6 +30,7 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Sentinel errors returned by this package and by Store implementations.
@@ -51,6 +54,9 @@ var (
 	ErrManagedByDirectory = errors.New("group is managed by a directory")
 	// ErrNotDisabled reports an enable of a principal that is not disabled.
 	ErrNotDisabled = errors.New("principal is not disabled")
+	// ErrBreakGlassKind reports a break-glass account that is not a person.
+	// Only a person can be a break-glass account.
+	ErrBreakGlassKind = errors.New("break-glass account must be a person")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -117,6 +123,12 @@ const (
 // DisabledAt is zero for a principal that the inactivity disable of access
 // tokens did not end (ADR 53, decision 4). A disabled principal does not
 // authenticate until an administrator enables it again. A write ignores it.
+// Namespace is empty for a principal of the installation, and names the
+// namespace of a principal of a namespace: a service principal that can only
+// hold grants inside that namespace. It does not change after the create.
+// BreakGlass marks a break-glass account: a person that signs in without
+// the identity provider. A break-glass account is always exempt from the
+// inactivity disable. Only a person can have it.
 type Principal struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -126,7 +138,9 @@ type Principal struct {
 	DisplayName string
 	Kind        Kind
 	Source      Source
+	Namespace   namespace.Name
 	GroupCount  int64
+	BreakGlass  bool
 }
 
 // Group is the stored record of one group. ID is stable and opaque, with the
@@ -177,6 +191,13 @@ func ValidateSubject(s string) error {
 
 // subjectPattern is the form of a subject made through the API.
 var subjectPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@+:/-]{0,254}$`)
+
+// IsBootstrapSubject reports whether s is a subject that a bootstrap admin
+// token uses: the subjects of the bootstrap admin tokens are admin and
+// admin-N, and the API refuses to make a principal with such a subject.
+func IsBootstrapSubject(s string) bool {
+	return reservedSubject(s)
+}
 
 // reservedSubject reports whether s, without regard to case, is "admin" or
 // "admin" and a character that is not a letter: the subjects of the
@@ -238,7 +259,8 @@ func validateText(field, s string, maxLen int, required bool) error {
 }
 
 // Validate reports whether p holds usable values. It does not check ID or
-// the times: the Service sets them.
+// the times: the Service sets them. It returns ErrBreakGlassKind when a
+// principal that is not a person is marked as a break-glass account.
 func (p Principal) Validate() error {
 	if err := ValidateSubject(p.Subject); err != nil {
 		return err
@@ -252,7 +274,33 @@ func (p Principal) Validate() error {
 		return err
 	}
 
+	if p.BreakGlass && p.Kind != KindPerson {
+		return fmt.Errorf("%w: kind %q", ErrBreakGlassKind, p.Kind)
+	}
+
+	if err := p.validateNamespace(); err != nil {
+		return err
+	}
+
 	return validateSource(p.Source)
+}
+
+// validateNamespace returns ErrInvalid for a principal of a namespace with
+// a namespace name that is not valid, or that is not a service principal.
+func (p Principal) validateNamespace() error {
+	if p.Namespace == "" {
+		return nil
+	}
+
+	if _, err := namespace.ParseName(p.Namespace.String()); err != nil {
+		return fmt.Errorf("%w: namespace %q", ErrInvalid, p.Namespace.String())
+	}
+
+	if p.Kind != KindService {
+		return fmt.Errorf("%w: a principal of a namespace must be a service principal, not a %s", ErrInvalid, p.Kind)
+	}
+
+	return nil
 }
 
 // validateSource returns ErrInvalid for a source that is not local, ldap or

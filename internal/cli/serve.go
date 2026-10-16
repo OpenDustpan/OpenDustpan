@@ -11,13 +11,14 @@ func ServeFlags() []*Setting {
 		"config",
 		"database", "region",
 		"listen", "console-dir", "allowed-origins", "tls-cert", "tls-key", "public-url", "trusted-proxies",
-		"trusted-proxy-header",
+		"trusted-proxy-header", "ip-allowlists", "ip-allowlists-include-bootstrap",
 		"log-level", "log-format", "log-sink",
 		"blob-dir", "blob-store", "s3-endpoint", "s3-region", "backup-target",
 		"key-encryption-key-file", "generate-key-encryption-key",
 		"max-checkpoint-bytes", "checkpoint-delta-cutoff", "disable-pulumi-journaling",
 		"max-secret-batch-bytes", "max-state-bytes", "max-body-bytes-in-flight",
 		"audit-chain", "audit-checkpoints", "audit-signing-key-file", "audit-verify-keys-file",
+		"soft-delete-retention",
 		"audit-sink",
 	)
 }

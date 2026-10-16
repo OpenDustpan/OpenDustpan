@@ -82,6 +82,7 @@ Serve metrics on a private port through a proxy rule for now.
 | `dustpan_config_reloads_total` | `result` |
 | `dustpan_config_last_reload_success` | (none) |
 | `dustpan_inactivity_sweeps_total` | `result` |
+| `dustpan_deleted_unit_sweep_total` | `result` |
 
 The route label holds the registered pattern, never the path.
 A request that matches no pattern uses `unmatched`.
@@ -103,6 +104,13 @@ names the key and the rule.
 `dustpan_inactivity_sweeps_total` counts the runs of the inactivity disable.
 The `result` label is `success` or `failure`.
 Alert when the `failure` series grows: a failed run disables nothing.
+`dustpan_deleted_unit_sweep_total` counts the outcomes of the retention
+sweep. The `result` label is `purged`, `skipped`, `finished` or
+`failed`. `finished` counts the blob purge records that the sweep finished.
+`failed` counts the failed purges, blob deletes and record finishes, and the
+sweeps that could not read the store.
+Alert when the `failed` series grows: a failed purge keeps the unit until the
+next sweep. The log line of each failure names the unit and the error kind.
 
 ## Request log
 
@@ -141,7 +149,9 @@ opendustpan serve --log-sink stderr --log-sink 'syslog+tls://logs.example:6514'
 Name `stderr` too when you want to keep the stderr lines.
 A syslog target uses the facility `local0` (16) unless you set `?facility=<0 to 23>`.
 `?max-size=<bytes>` caps a message, from 480 to 65507 bytes, default 8192.
-The server drops a line above the cap and counts it.
+A line above the cap arrives trimmed to fit, with the long fields shortened and `"truncated": true` in the record.
+A truncated audit record keeps its `hash`, but the receiver cannot recompute it from the shipped fields. The audit log guide states the full guarantee.
+Only a line that cannot fit even with every trimmable field empty is skipped and counted.
 A webhook target signs each request with the key in `DUSTPAN_LOG_WEBHOOK_SECRET`, or in a file that `DUSTPAN_LOG_WEBHOOK_SECRET_FILE` names.
 The audit log guide describes the record format, the syslog format and the webhook signature.
 Object storage is a target of the audit log only.

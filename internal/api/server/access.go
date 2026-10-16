@@ -20,7 +20,10 @@ package server
 // A grant can give only actions that the granter holds on the object
 // (access.ErrEscalation, 403). A revoke ends a grant and keeps its row for
 // the history, and a revoke through one object never ends a grant on
-// another. The grant lists take limit and cursor, and answer total and
+// another. DELETE /api/server/grants/{id} revokes any grant by its ID,
+// whatever its object: it checks the manage-access action of the grant's
+// own object, and a grant the caller may not see answers 404 like an
+// unknown ID. The grant lists take limit and cursor, and answer total and
 // nextCursor.
 //
 // Each change writes its audit entry in the transaction of the change (fail
@@ -30,6 +33,7 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -93,12 +97,27 @@ type grantResponse struct {
 	CreatedBy string `json:"createdBy"`
 }
 
+// listedGrantResponse is one grant of a list on the wire, with its holder:
+// HolderName is the display name of a principal (its subject when it has no
+// display name) or the name of a group, and HolderKind is "person",
+// "service", "workload" or "group". So a list shows who holds each grant
+// with no read for each holder.
+//
+// Contract: never remove or rename these fields.
+type listedGrantResponse struct {
+	grantResponse
+
+	HolderName string `json:"holderName"`
+	HolderKind string `json:"holderKind"`
+}
+
 // grantListResponse is one page of grants. Total is the count of every
-// current grant on the object. NextCursor is empty on the last page.
+// current grant on the object that matches the filters. NextCursor is empty
+// on the last page.
 type grantListResponse struct {
-	Grants     []grantResponse `json:"grants"`
-	NextCursor string          `json:"nextCursor"`
-	Total      int64           `json:"total"`
+	Grants     []listedGrantResponse `json:"grants"`
+	NextCursor string                `json:"nextCursor"`
+	Total      int64                 `json:"total"`
 }
 
 // roleRequest is the body of a role create, and of a role change, where a
@@ -147,14 +166,14 @@ func grantOf(g access.Grant) grantResponse {
 // error with the result so far: a change names its record in both.
 // The call holds the audit entry of the caller, which a change hands to the
 // Service.
-type accessOp func(w http.ResponseWriter, r *http.Request, svc *access.Service, c call) (principalResult, error)
+type accessOp func(w http.ResponseWriter, r *http.Request, svc *access.Service, c *call) (principalResult, error)
 
 // serveAccessRead adapts a read to a route handler.
 func (h *Handler) serveAccessRead(op accessOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
 		var none audit.Entry
 
-		if res, ok := h.runAccessOp(w, r, call{p: p, obj: obj, e: none}, op); ok {
+		if res, ok := h.runAccessOp(w, r, &call{p: p, obj: obj, e: none}, op); ok {
 			h.writePrincipalResult(w, r, res)
 		}
 	}
@@ -165,7 +184,7 @@ func (h *Handler) serveAccessRead(op accessOp) RouteHandler {
 // writes one failure entry here, as well as possible.
 func (h *Handler) serveAccessChange(action identity.Action, op accessOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object) {
-		res, ok := h.runAccessOp(w, r, call{p: p, obj: obj, e: callerEntry(r, p, action)}, op)
+		res, ok := h.runAccessOp(w, r, &call{p: p, obj: obj, e: callerEntry(r, p, action)}, op)
 
 		if !ok && res.object != "" && h.access != nil {
 			h.appendObjectChange(r, p, obj, serverChange{
@@ -188,7 +207,7 @@ type call struct {
 
 // runAccessOp runs op and writes its error. It reports whether op
 // succeeded, with the result in both cases.
-func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c call, op accessOp) (principalResult, bool) {
+func (h *Handler) runAccessOp(w http.ResponseWriter, r *http.Request, c *call, op accessOp) (principalResult, bool) {
 	ctx := r.Context()
 
 	if h.access == nil {
@@ -215,7 +234,12 @@ const (
 	namespaceGrantsPath  = "/api/server/namespaces/{namespace}/grants"
 	collectionGrantsPath = "/api/server/namespaces/{namespace}/collections/{collection}/grants"
 	unitGrantsPath       = "/api/server/namespaces/{namespace}/unit-grants"
-	grantIDSuffix        = "/{id}"
+	// principalGrantsPath holds the grants on one service principal. Their
+	// action is server:manage-access, which only a grant on the
+	// installation gives: a grant on a principal lets its holder act as
+	// the principal.
+	principalGrantsPath = "/api/server/principals/{principal}/grants"
+	grantIDSuffix       = "/{id}"
 )
 
 // roleRoutes returns the role rows of the route table.
@@ -226,29 +250,47 @@ func (h *Handler) roleRoutes() []Route {
 	return []Route{
 		{
 			Method: http.MethodGet, Path: rolesPath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.serveAccessRead(listRoles),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveAccessRead(listRoles),
 		},
 		{
 			Method: http.MethodGet, Path: rolePath, Scope: ScopeAuthorized,
-			Actions: read, Resolve: resolveServer, Serve: h.serveAccessRead(getRole),
+			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveAccessRead(getRole),
 		},
 		{
-			Method: http.MethodPost, Path: rolesPath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, Serve: h.serveAccessChange(identity.ActionServerManageRoles, createRole),
+			Method:     http.MethodPost,
+			Path:       rolesPath,
+			Scope:      ScopeAuthorized,
+			Actions:    manage,
+			Resolve:    resolveServer,
+			ActionsFor: nil,
+			Serve:      h.serveAccessChange(identity.ActionServerManageRoles, createRole),
 		},
 		{
-			Method: http.MethodPatch, Path: rolePath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, Serve: h.serveAccessChange(identity.ActionServerManageRoles, changeRole),
+			Method:     http.MethodPatch,
+			Path:       rolePath,
+			Scope:      ScopeAuthorized,
+			Actions:    manage,
+			Resolve:    resolveServer,
+			ActionsFor: nil,
+			Serve:      h.serveAccessChange(identity.ActionServerManageRoles, changeRole),
 		},
 		{
-			Method: http.MethodDelete, Path: rolePath, Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, Serve: h.serveAccessChange(identity.ActionServerManageRoles, deleteRole),
+			Method:     http.MethodDelete,
+			Path:       rolePath,
+			Scope:      ScopeAuthorized,
+			Actions:    manage,
+			Resolve:    resolveServer,
+			ActionsFor: nil,
+			Serve:      h.serveAccessChange(identity.ActionServerManageRoles, deleteRole),
 		},
 	}
 }
 
 // grantRoutes returns the grant rows of the route table: a list, a grant
-// and a revoke on each object kind.
+// and a revoke on each object kind. DELETE /api/server/grants/{id} is the
+// exception: it revokes any grant by its ID, whatever its object, so its
+// resolver returns the grant's own object and its route check authorizes
+// the manage-access action of that object.
 func (h *Handler) grantRoutes() []Route {
 	kinds := []struct {
 		resolve ObjectResolver
@@ -259,6 +301,7 @@ func (h *Handler) grantRoutes() []Route {
 		{resolveNamespacePath, namespaceGrantsPath, identity.ActionNamespaceManageAccess},
 		{resolveCollectionPath, collectionGrantsPath, identity.ActionCollectionManageAccess},
 		{resolveUnitQuery, unitGrantsPath, identity.ActionUnitManageAccess},
+		{resolvePrincipalPath, principalGrantsPath, identity.ActionServerManageAccess},
 	}
 
 	const routesPerKind = 3 // a list, a grant and a revoke
@@ -271,19 +314,43 @@ func (h *Handler) grantRoutes() []Route {
 		out = append(out,
 			Route{
 				Method: http.MethodGet, Path: k.path, Scope: ScopeAuthorized,
-				Actions: actions, Resolve: k.resolve, Serve: h.serveAccessRead(listGrants),
+				Actions: actions, Resolve: k.resolve, ActionsFor: nil, Serve: h.serveAccessRead(listGrants),
 			},
 			Route{
-				Method: http.MethodPost, Path: k.path, Scope: ScopeAuthorized,
-				Actions: actions, Resolve: k.resolve, Serve: h.serveAccessChange(k.action, createGrant),
-			},
-			Route{
-				Method: http.MethodDelete, Path: k.path + grantIDSuffix, Scope: ScopeAuthorized,
-				Actions: append([]identity.Action(nil), actions...), Resolve: k.resolve,
-				Serve: h.serveAccessChange(k.action, revokeGrant),
+				Method:     http.MethodPost,
+				Path:       k.path,
+				Scope:      ScopeAuthorized,
+				Actions:    actions,
+				Resolve:    k.resolve,
+				ActionsFor: nil,
+				Serve:      h.serveAccessChange(k.action, createGrant),
 			},
 		)
+
+		if k.path == serverGrantsPath {
+			// DELETE on the installation path revokes any grant by ID.
+			continue
+		}
+
+		out = append(out, Route{
+			Method: http.MethodDelete, Path: k.path + grantIDSuffix, Scope: ScopeAuthorized,
+			Actions: append([]identity.Action(nil), actions...), Resolve: k.resolve, ActionsFor: nil,
+			Serve: h.serveAccessChange(k.action, revokeGrant),
+		})
 	}
+
+	out = append(out, Route{
+		Method: http.MethodDelete, Path: serverGrantsPath + grantIDSuffix, Scope: ScopeAuthorized,
+		Actions: []identity.Action{
+			identity.ActionServerManageAccess,
+			identity.ActionNamespaceManageAccess,
+			identity.ActionCollectionManageAccess,
+			identity.ActionUnitManageAccess,
+		},
+		Resolve:    h.resolveGrantObject,
+		ActionsFor: grantManageActionsFor,
+		Serve:      h.serveRevokeGrantByID,
+	})
 
 	return out
 }
@@ -328,7 +395,7 @@ func resolveUnitQuery(_ http.ResponseWriter, r *http.Request) (identity.Object, 
 // listRoles serves GET /api/server/roles: the built-in roles in catalog
 // order, then the custom roles by name.
 func listRoles(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, _ call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, _ *call,
 ) (principalResult, error) {
 	roles, err := svc.ListRoles(r.Context())
 	if err != nil {
@@ -345,7 +412,7 @@ func listRoles(
 
 // getRole serves GET /api/server/roles/{id}. An unknown ID answers 404.
 func getRole(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, _ call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, _ *call,
 ) (principalResult, error) {
 	role, err := svc.GetRole(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -369,7 +436,7 @@ func actionsOf(names []string) []identity.Action {
 // custom role. A name that another role holds without regard to case
 // answers 409. A bad name, an unknown action or a bad body answers 400.
 func createRole(
-	w http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	w http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	var req roleRequest
 	if err := decodeStrict(w, r, &req, errRoleBody); err != nil {
@@ -397,7 +464,7 @@ func createRole(
 // description or the actions of a custom role, and answers 200 with the
 // stored role. A built-in role answers 409.
 func changeRole(
-	w http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	w http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	id := r.PathValue("id")
 	object := access.RoleRef(id)
@@ -441,7 +508,7 @@ func changeRole(
 // deleteRole serves DELETE /api/server/roles/{id}: it answers 204. A
 // built-in role, or a custom role that a grant holds, answers 409.
 func deleteRole(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	object := access.RoleRef(r.PathValue("id"))
 
@@ -453,25 +520,35 @@ func deleteRole(
 }
 
 // listGrants serves GET on a grants path: one page of the current grants on
-// the object, ordered by subject, then role.
+// the object, ordered by subject, then role, each with its holder. The
+// query value holder keeps the grants of one subject
+// ("principal:<id>" or "group:<id>#member"), and role keeps the grants of
+// one role.
 func listGrants(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	req, err := pageRequest(r)
 	if err != nil {
 		return failed(""), err
 	}
 
-	page, err := svc.ListGrants(r.Context(), c.obj, access.PageRequest{Cursor: req.Cursor, Limit: req.Limit})
+	q := r.URL.Query()
+
+	page, err := svc.ListGrants(r.Context(), c.obj, access.PageRequest{
+		Cursor: req.Cursor, Holder: q.Get("holder"), Role: q.Get("role"), Limit: req.Limit,
+	})
 	if err != nil {
 		return failed(""), err
 	}
 
 	out := grantListResponse{
-		Grants: make([]grantResponse, 0, len(page.Grants)), NextCursor: page.NextCursor, Total: page.Total,
+		Grants: make([]listedGrantResponse, 0, len(page.Grants)), NextCursor: page.NextCursor, Total: page.Total,
 	}
 	for i := range page.Grants {
-		out.Grants = append(out.Grants, grantOf(page.Grants[i]))
+		l := &page.Grants[i]
+		out.Grants = append(out.Grants, listedGrantResponse{
+			grantResponse: grantOf(l.Grant), HolderName: l.Holder.Name, HolderKind: l.Holder.Kind,
+		})
 	}
 
 	return ok(http.StatusOK, out, ""), nil
@@ -483,7 +560,7 @@ func listGrants(
 // answers 403. An unknown subject, role or namespace answers 404, and a
 // grant that exists 409.
 func createGrant(
-	w http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	w http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	object := "grants " + c.obj.String()
 
@@ -526,7 +603,7 @@ const maxRoleIDLength = 64
 // 204. The row stays for the history. A grant on another object answers
 // 404.
 func revokeGrant(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	g, err := svc.Revoke(r.Context(), c.e, c.p, c.obj, r.PathValue("id"))
 	if err != nil {
@@ -534,6 +611,146 @@ func revokeGrant(
 	}
 
 	return ok(http.StatusNoContent, nil, access.GrantRef(g)), nil
+}
+
+// grantActions holds the manage-access action and the read action of a
+// grant's object.
+type grantActions struct {
+	manage identity.Action
+	read   identity.Action
+}
+
+// grantAccessActions returns the manage-access action and the read action
+// of the object of a grant. The read action is what lets a caller see the
+// grant: server:read-access on the installation, else the read action of
+// the namespace, the collection or the unit.
+func grantAccessActions(obj identity.Object) (grantActions, bool) {
+	kind, isGrant := access.KindOf(obj)
+	if !isGrant {
+		return grantActions{manage: "", read: ""}, false
+	}
+
+	switch kind {
+	case access.ObjectInstallation, access.ObjectPrincipal:
+		return grantActions{
+			manage: identity.ActionServerManageAccess,
+			read:   identity.ActionServerReadAccess,
+		}, true
+	case access.ObjectNamespace:
+		return grantActions{
+			manage: identity.ActionNamespaceManageAccess,
+			read:   identity.ActionNamespaceRead,
+		}, true
+	case access.ObjectCollection:
+		return grantActions{
+			manage: identity.ActionCollectionManageAccess,
+			read:   identity.ActionCollectionRead,
+		}, true
+	case access.ObjectUnit:
+		return grantActions{
+			manage: identity.ActionUnitManageAccess,
+			read:   identity.ActionUnitRead,
+		}, true
+	default:
+		return grantActions{manage: "", read: ""}, false
+	}
+}
+
+// grantManageActionsFor returns the manage-access action of the resolved
+// object of DELETE /api/server/grants/{id}: server:manage-access on the
+// installation and on a service principal, else the manage-access action of
+// the namespace, the collection or the unit.
+func grantManageActionsFor(obj identity.Object) []identity.Action {
+	if actions, known := grantAccessActions(obj); known {
+		return []identity.Action{actions.manage}
+	}
+
+	return []identity.Action{identity.ActionServerManageAccess}
+}
+
+// resolveGrantObject returns the object of the grant in the path, for the
+// route check of DELETE /api/server/grants/{id}. An unknown grant answers
+// 404. A grant the caller may not see answers 404 with the same body,
+// never 403: the caller must hold the read action of the grant's object.
+// A request without the caller that enforce stores answers 401, so the
+// visibility check never runs without a caller. The route check authorizes
+// the manage-access action of the returned object.
+func (h *Handler) resolveGrantObject(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+	if h.access == nil {
+		return identity.ServerObject(), nil
+	}
+
+	id := r.PathValue("id")
+
+	g, err := h.access.GetGrant(r.Context(), id)
+	if errors.Is(err, access.ErrNotFound) {
+		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+	}
+
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, err)
+	}
+
+	actions, known := grantAccessActions(g.Object)
+	if !known {
+		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+	}
+
+	p, ok := principalFromRequest(r)
+	if !ok {
+		return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, identity.ErrUnauthenticated)
+	}
+
+	if authErr := h.authz.Authorize(r.Context(), p, actions.read, g.Object); authErr != nil {
+		if errors.Is(authErr, identity.ErrDenied) {
+			return identity.Object{}, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound)
+		}
+
+		return identity.Object{}, fmt.Errorf("authorize %s: %w", actions.read, authErr)
+	}
+
+	return g.Object, nil
+}
+
+// serveRevokeGrantByID serves DELETE /api/server/grants/{id}: it ends any
+// grant by its ID, whatever its object, and answers 204. The row stays for
+// the history. The wrapper already checked visibility and authorized the
+// manage-access action of the grant's object, which the resolver returned.
+// The Service refuses a grant that gives more than the caller holds. A
+// refused revoke writes one failure entry in the scope of the grant, as the
+// other grant changes do.
+func (h *Handler) serveRevokeGrantByID(
+	w http.ResponseWriter, r *http.Request, p identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+
+	if h.access == nil {
+		h.writeError(ctx, w, errNoAccessStore)
+
+		return
+	}
+
+	id := r.PathValue("id")
+
+	actions, known := grantAccessActions(obj)
+	if !known {
+		h.writeError(ctx, w, fmt.Errorf("revoke grant %q: %w", id, access.ErrNotFound))
+
+		return
+	}
+
+	revoked, err := h.access.RevokeByID(ctx, callerEntry(r, p, actions.manage), p, id)
+	if err != nil {
+		h.writeError(ctx, w, err)
+		h.appendObjectChange(r, p, obj, serverChange{
+			at: h.access.Now(), action: actions.manage, object: access.GrantIDRef(id),
+			outcome: audit.OutcomeFailure,
+		})
+
+		return
+	}
+
+	h.writePrincipalResult(w, r, ok(http.StatusNoContent, nil, access.GrantRef(revoked)))
 }
 
 // classifyAccess maps the role and grant errors to their status and

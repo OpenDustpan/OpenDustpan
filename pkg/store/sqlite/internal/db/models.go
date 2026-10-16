@@ -34,32 +34,39 @@ type AccessTokenPolicy struct {
 }
 
 type AuditChainState struct {
-	ID          int64
-	State       string
-	EverChained int64
+	ID                 int64
+	State              string
+	ChangedAtMs        int64
+	ChangedBy          string
+	Pending            int64
+	EnteredMaintenance int64
+	LogReplaced        int64
+	MigratingAtMs      int64
 }
 
 type AuditEntry struct {
-	Namespace  string
-	Sequence   int64
-	Subject    string
-	IdpSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	AtMs       int64
-	SourceIp   string
-	UserAgent  string
-	Channel    string
-	Kind       string
-	Outcome    string
-	RequestID  string
-	PrevHash   string
-	Hash       string
-	ValueCount sql.NullInt64
-	Changes    sql.NullString
+	Namespace    string
+	Sequence     int64
+	Subject      string
+	IdpSubject   string
+	TokenID      string
+	Action       string
+	Object       string
+	Version      string
+	ValuePath    string
+	AtMs         int64
+	SourceIp     string
+	UserAgent    string
+	Channel      string
+	Kind         string
+	Outcome      string
+	RequestID    string
+	PrevHash     string
+	Hash         string
+	ValueCount   sql.NullInt64
+	Changes      sql.NullString
+	ObjectID     string
+	FenceVersion int64
 }
 
 type AuditSinkCursor struct {
@@ -78,6 +85,13 @@ type Backup struct {
 	Error       string
 }
 
+type BlobPurge struct {
+	Tool       string
+	UnitID     string
+	Namespace  string
+	PurgedAtMs int64
+}
+
 type Checkpoint struct {
 	StackID       string
 	UpdateID      string
@@ -94,6 +108,21 @@ type Checkpoint struct {
 	Size          sql.NullInt64
 	BlobSize      sql.NullInt64
 	BlobMd5       []byte
+}
+
+type Collection struct {
+	ID          string
+	Namespace   string
+	NameKey     string
+	Name        string
+	CreatedAtMs int64
+}
+
+type CollectionMember struct {
+	UnitID        string
+	Namespace     string
+	CollectionKey string
+	AssignedAtMs  int64
 }
 
 type Grant struct {
@@ -155,6 +184,7 @@ type Namespace struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	IpAllowlist         string
 }
 
 type Principal struct {
@@ -168,6 +198,9 @@ type Principal struct {
 	DeletedAtMs    sql.NullInt64
 	DisabledAtMs   sql.NullInt64
 	LastActiveAtMs int64
+	LastSignInAtMs sql.NullInt64
+	Namespace      string
+	BreakGlass     bool
 }
 
 type PrincipalGroup struct {
@@ -209,6 +242,37 @@ type SecretKey struct {
 	WrapperID   string
 	Ciphertext  []byte
 	CreatedAtMs int64
+}
+
+type Session struct {
+	ID           string
+	PrincipalID  string
+	Digest       string
+	Provider     string
+	CreatedAtMs  int64
+	LastSeenAtMs int64
+	AuthTimeMs   int64
+	EndedAtMs    sql.NullInt64
+	EndReason    string
+	SourceIp     string
+	UserAgent    string
+}
+
+type SessionPolicy struct {
+	ID          int64
+	IdleMs      int64
+	MaxLengthMs int64
+	UpdatedAtMs int64
+}
+
+type SignInRequest struct {
+	Digest      string
+	Provider    string
+	Nonce       string
+	Verifier    string
+	ReturnPath  string
+	CreatedAtMs int64
+	ExpiresAtMs int64
 }
 
 type Stack struct {
@@ -254,23 +318,24 @@ type StateVersion struct {
 }
 
 type Update struct {
-	StackID          string
-	ID               string
-	Kind             string
-	DryRun           bool
-	Status           string
-	Version          int64
-	Revision         int64
-	LeaseDigest      []byte
-	LeaseExpiresAtMs int64
-	CreatedAtMs      int64
-	StartedAtMs      int64
-	EndedAtMs        int64
-	CreatedBy        string
-	RestoredFrom     int64
-	JournalVersion   int64
-	JournalClosed    int64
-	TokenID          string
+	StackID               string
+	ID                    string
+	Kind                  string
+	DryRun                bool
+	Status                string
+	Version               int64
+	Revision              int64
+	LeaseDigest           []byte
+	LeaseExpiresAtMs      int64
+	CreatedAtMs           int64
+	StartedAtMs           int64
+	EndedAtMs             int64
+	CreatedBy             string
+	RestoredFrom          int64
+	JournalVersion        int64
+	JournalClosed         int64
+	TokenID               string
+	JournalRecordsChanged int64
 }
 
 type UpdateEvent struct {

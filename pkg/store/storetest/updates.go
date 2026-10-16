@@ -71,8 +71,25 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "a delete with a refused audit entry changes nothing", test: testDeleteRefusedEntryChangesNothing},
 		{name: "a delete whose audit append fails changes nothing", test: testDeleteFailedAppendChangesNothing},
 		{name: "the stored name of a deleted stack finds nothing", test: testTombstoneNameFindsNothing},
+		{name: "a restore brings a deleted stack back under its name", test: testRestoreStackUnderItsName},
+		{name: "a restore under a taken name fails and under a new name works", test: testRestoreStackUnderANewName},
+		{name: "a restore or purge of an unknown or live stack is not found", test: testRestoreOrPurgeUnknownStack},
+		{name: "a purge removes a deleted stack for good", test: testPurgeStack},
+		{name: "a sweep purge checks the retention in its transaction", test: testSweepPurgeChecksTheRetention},
+		{name: "a purge ends the grants on the stack", test: testPurgeStackRevokesItsGrants},
+		{name: "an audit entry on a stack gets its stable ID", test: testAppendFillsStackID},
+		{
+			name: "a restore or a purge with the fence of another namespace changes nothing",
+			test: testRestoreOrPurgeStackInAnotherNamespace,
+		},
+		{name: "a restore and a purge at the same time: one wins", test: testRestoreRacesPurge},
+		{
+			name: "a restore or purge whose audit append fails changes nothing",
+			test: testRestoreFailedAppendChangesNothing,
+		},
 		{name: "journal version round trip", test: testJournalVersionRoundTrip},
 		{name: "journal version of a new update is zero", test: testJournalVersionDefaultsToZero},
+		{name: "count of running journaled updates", test: testCountRunningJournaledUpdates},
 		{name: "missing update is ErrUpdateNotFound", test: testMissingUpdate},
 		{name: "update of missing stack is ErrNotFound", test: testUpdateMissingStack},
 		{name: "stale fence is ErrFenced on every write", test: testUpdateWritesFenced},
@@ -109,10 +126,17 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "events need the running update's lease", test: testEventsLease},
 		{name: "journal rows get arrivals and retries write nothing", test: testJournalPut},
 		{name: "journal refuses leases, previews, stacks, fences and foreign keys", test: testJournalRefusals},
+		{name: "journal refuses a batch for an update with version 0", test: testJournalRefusesVersionZero},
 		{name: "journal refuses batches after a cancel", test: testJournalAfterCancel},
 		{name: "journal stores two batches of one update that arrive at once", test: testJournalConcurrentRows},
 		{name: "journal stores one copy of a batch sent twice at once", test: testJournalConcurrentRetry},
 		{name: "journal check sees the stored operations and refusals store nothing", test: testJournalVerify},
+		{name: "journal refuses a write after a stored change", test: testJournalRefusesWriteAfterStoredChange},
+		{name: "journal refuses a reference to a begun-only operation", test: testJournalBegunRefusal},
+		{
+			name: "journal refuses a reference before a stored rebuild",
+			test: testJournalRefusesReferenceAfterStoredRebuild,
+		},
 		{name: "build removes the journal and returns its blob keys", test: testJournalBuild},
 		{name: "build races a batch without losing its key", test: testJournalBuildRace},
 		{name: "build leaves other updates and stacks journaled", test: testJournalBuildIsolation},
@@ -546,6 +570,78 @@ func testJournalVersionDefaultsToZero(t *testing.T, f fixture) {
 	got := f.start(t, want)
 	if got.JournalVersion != 0 {
 		t.Fatalf("started update journal version = %d, want 0", got.JournalVersion)
+	}
+}
+
+// testCountRunningJournaledUpdates checks the count of running updates with
+// journal version above 0: an empty store counts 0, each running journaled
+// update counts once, a running update without journaling changes nothing,
+// and an ended journaled update leaves the count.
+func testCountRunningJournaledUpdates(t *testing.T, f fixture) {
+	t.Helper()
+
+	counter, ok := f.s.(interface {
+		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
+	})
+	if !ok {
+		t.Fatal("store does not count running journaled updates")
+	}
+
+	count := func() int64 {
+		t.Helper()
+
+		got, err := counter.CountRunningJournaledUpdates(t.Context())
+		if err != nil {
+			t.Fatalf("count running journaled updates: %v", err)
+		}
+
+		return got
+	}
+
+	startJournaled := func(ref stack.Ref, id string, version int64) stack.Update {
+		t.Helper()
+
+		u := started(t, f.create(t, ref, id, mutating()))
+		u.JournalVersion = version
+
+		got, err := f.s.StartUpdate(t.Context(), u, f.fence)
+		if err != nil {
+			t.Fatalf("start journaled update %s: %v", id, err)
+		}
+
+		return got
+	}
+
+	if got := count(); got != 0 {
+		t.Fatalf("empty count = %d, want 0", got)
+	}
+
+	first := startJournaled(f.ref, "u1", 1)
+	if got := count(); got != 1 {
+		t.Fatalf("count with one running journaled update = %d, want 1", got)
+	}
+
+	other := f.other(t)
+	second := startJournaled(other, "u2", 2)
+	if got := count(); got != 2 {
+		t.Fatalf("count with two running journaled updates = %d, want 2", got)
+	}
+
+	f.end(t, first, stack.StatusSucceeded)
+	if got := count(); got != 1 {
+		t.Fatalf("count after one journaled update ended = %d, want 1", got)
+	}
+
+	plain := f.run(t, f.ref, "u3", mutating())
+	if got := count(); got != 1 {
+		t.Fatalf("count with a running update without journaling = %d, want 1", got)
+	}
+
+	f.end(t, second, stack.StatusSucceeded)
+	f.end(t, plain, stack.StatusSucceeded)
+
+	if got := count(); got != 0 {
+		t.Fatalf("count after every update ended = %d, want 0", got)
 	}
 }
 
@@ -1575,7 +1671,7 @@ func testDeletedStackChildrenUnreachable(t *testing.T, f fixture) {
 		f.ref,
 		f.fence,
 		stack.EmptyGuard(),
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if err != nil {
 		t.Fatalf("delete stack: %v", err)
@@ -1615,7 +1711,13 @@ func testDeleteDuringRunningUpdate(t *testing.T, f fixture) {
 
 	running := f.run(t, f.ref, "u1", mutating())
 
-	deleteErr := f.s.DeleteStack(t.Context(), f.ref, f.fence, stack.EmptyGuard(), deleteEntry(f.fence.Namespace))
+	deleteErr := f.s.DeleteStack(
+		t.Context(),
+		f.ref,
+		f.fence,
+		stack.EmptyGuard(),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
+	)
 	if !errors.Is(deleteErr, stack.ErrUpdateConflict) {
 		t.Fatalf("delete during a running update: err = %v, want ErrUpdateConflict", deleteErr)
 	}
@@ -1635,7 +1737,7 @@ func testDeleteDuringRunningUpdate(t *testing.T, f fixture) {
 		f.ref,
 		f.fence,
 		stack.EmptyGuard(),
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if err != nil {
 		t.Errorf("delete after the update ended: %v", err)
@@ -1679,7 +1781,7 @@ func testDeleteRefusesResources(t *testing.T, f fixture) {
 		f.ref,
 		f.fence,
 		stack.EmptyGuard(),
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete a stack with resources: err = %v, want ErrHasResources", err)
@@ -1702,7 +1804,13 @@ func testDeleteWithForceRemovesResources(t *testing.T, f fixture) {
 
 	u := finishWithDeployment(t, f, "u1", resourcedDeployment)
 
-	if err := f.s.ForceDeleteStack(t.Context(), f.ref, f.fence, deleteEntry(f.fence.Namespace)); err != nil {
+	err := f.s.ForceDeleteStack(
+		t.Context(),
+		f.ref,
+		f.fence,
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete a stack with resources and force: %v", err)
 	}
 
@@ -1733,7 +1841,7 @@ func testDeleteFollowsLatestCheckpoint(t *testing.T, f fixture) {
 		f.ref,
 		f.fence,
 		stack.EmptyGuard(),
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if err != nil {
 		t.Fatalf("delete after the latest checkpoint dropped resources: %v", err)
@@ -1749,7 +1857,7 @@ func testDeleteFollowsLatestCheckpoint(t *testing.T, f fixture) {
 		other,
 		f.fence,
 		stack.EmptyGuard(),
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete while the latest checkpoint manages resources: err = %v, want ErrHasResources", err)
@@ -1784,11 +1892,18 @@ func testDeleteWithStoredCount(t *testing.T, f fixture) {
 		HasCheckpoint: true, HasResources: true,
 	}
 
-	if err := f.s.DeleteStack(t.Context(), f.ref, f.fence, stale, deleteEntry(f.fence.Namespace)); err != nil {
+	err := f.s.DeleteStack(
+		t.Context(),
+		f.ref,
+		f.fence,
+		stale,
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete a stack with a stored count of 0: %v", err)
 	}
 
-	if _, err := f.s.GetStack(t.Context(), f.ref); !errors.Is(err, stack.ErrNotFound) {
+	if _, err = f.s.GetStack(t.Context(), f.ref); !errors.Is(err, stack.ErrNotFound) {
 		t.Fatalf("get deleted stack: err = %v, want ErrNotFound", err)
 	}
 
@@ -1798,7 +1913,7 @@ func testDeleteWithStoredCount(t *testing.T, f fixture) {
 	g := fixture{s: f.s, ref: other, fence: f.fence}
 	finishWithDeployment(t, g, "u1", emptyDeployment)
 
-	if err := setter.SetResourceCount(t.Context(), 1); err != nil {
+	if err = setter.SetResourceCount(t.Context(), 1); err != nil {
 		t.Fatalf("plant a stored count of 1: %v", err)
 	}
 
@@ -1807,12 +1922,12 @@ func testDeleteWithStoredCount(t *testing.T, f fixture) {
 		HasCheckpoint: true, HasResources: false,
 	}
 
-	err := f.s.DeleteStack(
+	err = f.s.DeleteStack(
 		t.Context(),
 		other,
 		f.fence,
 		emptyGuard,
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete a stack with a stored count of 1: err = %v, want ErrHasResources", err)
@@ -1823,7 +1938,7 @@ func testDeleteWithStoredCount(t *testing.T, f fixture) {
 		other,
 		f.fence,
 		stack.EmptyGuard(),
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(
 		err,
@@ -1832,11 +1947,17 @@ func testDeleteWithStoredCount(t *testing.T, f fixture) {
 		t.Fatalf("delete a stack with a stored count of 1 and no guard: err = %v, want ErrHasResources", err)
 	}
 
-	if _, err := f.s.GetStack(t.Context(), other); err != nil {
+	if _, err = f.s.GetStack(t.Context(), other); err != nil {
 		t.Fatalf("get stack after a refused delete: %v", err)
 	}
 
-	if err := f.s.ForceDeleteStack(t.Context(), other, f.fence, deleteEntry(f.fence.Namespace)); err != nil {
+	err = f.s.ForceDeleteStack(
+		t.Context(),
+		other,
+		f.fence,
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("force delete a stack with a stored count of 1: %v", err)
 	}
 
@@ -1872,7 +1993,7 @@ func testDeleteWithUncountedCheckpoint(t *testing.T, f fixture) {
 		f.ref,
 		f.fence,
 		stack.EmptyGuard(),
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if err != nil {
 		t.Fatalf("delete a stack whose uncounted checkpoint holds no resources: %v", err)
@@ -1887,7 +2008,7 @@ func testDeleteWithUncountedCheckpoint(t *testing.T, f fixture) {
 		other,
 		f.fence,
 		stack.EmptyGuard(),
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf(
@@ -1924,7 +2045,7 @@ func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 		f.ref,
 		f.fence,
 		stack.EmptyGuard(),
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(
 		err,
@@ -1941,7 +2062,7 @@ func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 		other,
 		f.fence,
 		stack.EmptyGuard(),
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(
 		err,
@@ -1958,7 +2079,14 @@ func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 		HasCheckpoint: true, HasResources: false,
 	}
 
-	if err = f.s.DeleteStack(t.Context(), f.ref, f.fence, emptyGuard, deleteEntry(f.fence.Namespace)); err != nil {
+	err = f.s.DeleteStack(
+		t.Context(),
+		f.ref,
+		f.fence,
+		emptyGuard,
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete a blob stack whose counted checkpoint holds no resources: %v", err)
 	}
 
@@ -1971,8 +2099,16 @@ func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 		HasCheckpoint: true, HasResources: true,
 	}
 
-	if err = f.s.DeleteStack(t.Context(), other, f.fence, resourcedGuard, deleteEntry(f.fence.Namespace)); !errors.Is(
-		err, stack.ErrHasResources,
+	err = f.s.DeleteStack(
+		t.Context(),
+		other,
+		f.fence,
+		resourcedGuard,
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
+	)
+	if !errors.Is(
+		err,
+		stack.ErrHasResources,
 	) {
 		t.Fatalf(
 			"delete a blob stack whose counted checkpoint manages resources: err = %v, want ErrHasResources",
@@ -2002,8 +2138,16 @@ func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 	}
 	finishWithBlobDeployment(t, h, "u2", resourcedDeployment)
 
-	if err = f.s.DeleteStack(t.Context(), thirdRef, f.fence, stale, deleteEntry(f.fence.Namespace)); !errors.Is(
-		err, stack.ErrConcurrentModification,
+	err = f.s.DeleteStack(
+		t.Context(),
+		thirdRef,
+		f.fence,
+		stale,
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
+	)
+	if !errors.Is(
+		err,
+		stack.ErrConcurrentModification,
 	) {
 		t.Fatalf("delete with a stale blob guard: err = %v, want ErrConcurrentModification", err)
 	}
@@ -2018,13 +2162,19 @@ func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 		thirdRef,
 		f.fence,
 		fresh,
-		deleteEntry(f.fence.Namespace),
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(err, stack.ErrHasResources) {
 		t.Fatalf("delete after the race with a fresh guard: err = %v, want ErrHasResources", err)
 	}
 
-	if err := f.s.ForceDeleteStack(t.Context(), thirdRef, f.fence, deleteEntry(f.fence.Namespace)); err != nil {
+	err = f.s.ForceDeleteStack(
+		t.Context(),
+		thirdRef,
+		f.fence,
+		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("force delete a resourced blob stack: %v", err)
 	}
 }
@@ -2073,7 +2223,13 @@ func testDeleteRaceWithFinishingUpdate(t *testing.T, f fixture) {
 		completeErr = f.s.SaveUpdate(t.Context(), ended(u, stack.StatusSucceeded), f.fence)
 	})
 	wg.Go(func() {
-		deleteErr = f.s.DeleteStack(t.Context(), f.ref, f.fence, stack.EmptyGuard(), deleteEntry(f.fence.Namespace))
+		deleteErr = f.s.DeleteStack(
+			t.Context(),
+			f.ref,
+			f.fence,
+			stack.EmptyGuard(),
+			inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
+		)
 	})
 
 	wg.Wait()
@@ -2114,7 +2270,13 @@ func testDeleteRaceWithNewUpdate(t *testing.T, f fixture) {
 		updateErr = runResourcedUpdate(t, f)
 	})
 	wg.Go(func() {
-		deleteErr = f.s.DeleteStack(t.Context(), f.ref, f.fence, stack.EmptyGuard(), deleteEntry(f.fence.Namespace))
+		deleteErr = f.s.DeleteStack(
+			t.Context(),
+			f.ref,
+			f.fence,
+			stack.EmptyGuard(),
+			inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
+		)
 	})
 
 	wg.Wait()

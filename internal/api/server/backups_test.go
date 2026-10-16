@@ -71,20 +71,12 @@ type backupStores struct {
 
 // openBackupDeps opens the stores for one backup test. The registry store
 // doubles as the service exporter, so the service exports the database it
-// tracks.
+// tracks. The registry is copied from the migrated template, so only the
+// first test of the binary runs every migration.
 func openBackupDeps(t *testing.T) backupStores {
 	t.Helper()
 
-	registry, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := registry.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	registry := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	live, err := blobfs.Open(t.TempDir())
 	if err != nil {
@@ -150,12 +142,18 @@ func newBackupFixture(
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		Schema:           stores.registry,
+		Journal:          nil,
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -543,16 +541,7 @@ func TestBackupListNewestFirst(t *testing.T) {
 func TestBackupWithoutTarget(t *testing.T) {
 	t.Parallel()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
 	if err != nil {
@@ -570,12 +559,18 @@ func TestBackupWithoutTarget(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		Schema:           nil,
+		Journal:          nil,
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

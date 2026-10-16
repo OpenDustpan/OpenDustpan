@@ -68,6 +68,10 @@ _Avoid_: Cluster, instance (one server process), deployment
 One server process of an installation. Each start makes a new instance ID, `ins-` and 20 characters, which the start log shows. The instance ID is the subject of the audit entries that the process writes on its own (ADR 63).
 _Avoid_: Node, replica, host
 
+**IP allowlist**:
+A list of CIDRs on a namespace. A request that acts on the namespace from outside the list gets 403. The feature is off unless the operator turns it on.
+_Avoid_: Whitelist
+
 **Setting**:
 One named value that changes how the server works, for example `log-level`. One declaration in `internal/cli/settings.go` gives its flag, its environment variable, its file key and its default (ADR 63).
 _Avoid_: Option, parameter, config value
@@ -93,8 +97,32 @@ The dialect-neutral format of the SQL part of a backup: one compressed file of J
 _Avoid_: Export format, dump format
 
 **Restore**:
-The installation API operation that replaces the SQL data of an installation with a backup (ADR 38). The server checks the backup before it changes live data, applies it in maintenance mode, and takes a backup of the live data first. It is not the restore of one older version of a unit (ADR 28).
+The installation API operation that replaces the SQL data of an installation with a backup (ADR 38). The server checks the backup before it changes live data, applies it in maintenance mode, and takes a backup of the live data first. It is not the restore of one older version of a unit (ADR 28). It is also not the restore of a deleted unit (ADR 47).
 _Avoid_: Recovery, load, import
+
+**Deleted unit**:
+A unit after a delete through its tool (ADR 47). It leaves every list and its name is free at once. OpenDustpan keeps its state, history, secrets and grants until a purge. The inventory API lists the deleted units of a namespace, and a restore of a deleted unit brings one back with its stable ID.
+_Avoid_: Tombstone (except for the stored row), trashed unit, archived unit
+
+**Retention period**:
+The time that a deleted unit stays restorable, from the delete to its purge time (`purgeAfter`). `--soft-delete-retention` sets it. The default is 720 hours, and the minimum is one hour.
+_Avoid_: Grace period, TTL
+
+**Purge**:
+The final delete of a deleted unit (ADR 47). It deletes the rows of the unit, its data key, its deleted inventory entry and its blobs, and ends the grants on it. It cannot be undone. An admin can purge a unit before its retention period ends.
+_Avoid_: Hard delete, wipe
+
+**Final delete**:
+The same as a purge. Use "purge" in code and in the API, and "final delete" where a reader needs the plain meaning.
+_Avoid_: Permanent delete
+
+**Retention sweep**:
+The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records.
+_Avoid_: Garbage collection, reaper
+
+**Blob purge record**:
+A row that a purge writes for a unit whose blobs may still exist. A save that started before the purge can write a blob after the purge deletes the blobs. The retention sweep deletes the blobs again when the record is older than 24 hours, and then finishes the record. In code this time is `BlobPurgeGrace`. It is not the retention period.
+_Avoid_: Tombstone
 
 **Maintenance mode**:
 The installation state in which the tool APIs answer 503 with `Retry-After`: the Pulumi, TFE-compatible and inventory APIs. The installation API and the probes stay available. The server enters it for a restore after the checks pass. An administrator can also enter it with `POST /api/server/maintenance/enter`. The other state is `normal`.
@@ -125,12 +153,27 @@ _Avoid_: Token, guard
 ### Identity
 
 **Principal**:
-A caller whose identity OpenDustpan checked: a person, a service or a workload. A principal belongs to the whole installation, not to one namespace (ADR 52).
+A caller whose identity OpenDustpan checked: a person, a service or a workload. Most principals belong to the whole installation. A principal of a namespace is the exception.
 _Avoid_: User (when the caller can be a machine), actor
+
+**Principal of a namespace**:
+A service principal that belongs to one namespace. A holder of `namespace:manage-principals` on the namespace makes it. It can only hold grants on its namespace or on an object inside it, and it cannot be a member of a group. Its subject is unique on the whole installation. A holder of `namespace:manage-principal-tokens` on the namespace makes the tokens of its principals.
+_Avoid_: Namespace service account, local principal
 
 **Access token**:
 The secret that a tool or the console sends to prove which principal it acts for.
 _Avoid_: API key, password
+
+**Sign-in**:
+The step in which a sign-in method, such as an identity provider, proves who a person is. The method only proves the identity. The server then issues its own session.
+_Avoid_: Login, log-in (as a noun). The verb is "sign in".
+
+**Session**:
+The proof of a sign-in that the console sends back in a cookie. A session belongs to one person. It ends at a sign-out, when an administrator ends it, after a period with no use, and at a maximum length. By default, the period is 15 minutes and the maximum length is 12 hours.
+_Avoid_: Login, cookie (the cookie only carries the session)
+
+**Session policy**:
+The administrator settings of the console sessions for the installation: the period with no use after which a session ends, and its maximum length. Only a site administrator can change them.
 
 **Personal token**:
 An access token that belongs to a person. A person creates it after a sign-in, and it has an expiry (ADR 53).
@@ -162,12 +205,16 @@ A named set of actions (ADR 52). A built-in role has a fixed name. An administra
 _Avoid_: Permission set, policy
 
 **Action family**:
-One of three sets of actions that do not overlap: operator, administration and data. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only (RFC 19).
+One of four sets of actions that do not overlap: operator, administration, data and delegation. A role on the installation can hold actions of each family. A role on a namespace, a collection or a unit holds data actions only. A role on a service principal holds delegation actions only.
 _Avoid_: Permission category, scope
 
 **Grant**:
-A record that gives one role to a principal or a group on the installation, a namespace, a collection or a unit (ADR 52). A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
+A record that gives one role to a principal or a group on one object. The object is the installation, a namespace, a collection, a unit or a service principal. A grant on a unit follows the stable ID of the unit, not its name. A revoke ends a grant and keeps its record for the access-review history.
 _Avoid_: Binding, assignment, permission
+
+**Token manager**:
+A holder of `principal:manage-tokens` on a service principal. It can make, rotate and revoke the tokens of that principal. So it can act as the principal, with every grant that the principal has now or gets later. The built-in role `token-manager` gives this action on one service principal.
+_Avoid_: Token owner, delegate
 
 **Access review**:
 An export of the grants that give access to one object. It holds the grants on the object and inside it. It also holds the grants with a role that gives a data action or manages access on each object that contains it. A bootstrap admin token has a row too. It is a snapshot at one time, or a history between two times (ADR 52, decision 10). Each export request writes an audit entry.
@@ -180,6 +227,38 @@ _Avoid_: Locked (that is a unit lock), forbidden, disabled
 **Action**:
 A tool-neutral operation that a principal asks to do, such as read state or write state. Grants allow actions on the installation, namespaces, collections and units. A policy check can deny an action (ADR 17).
 _Avoid_: Permission, verb, scope
+
+**Reach**:
+The set of actions on objects that a principal can do. It comes from the grants of the principal and the grants of its groups. It also holds the grants of each principal it can act as through an act-as edge. One reach covers another when it holds each of its actions on each of its objects.
+_Avoid_: Effective access, permission set
+
+**Act-as edge**:
+A right that lets one principal use the authority of another. It has two forms: `principal:manage-tokens` on a principal, and the right to write a trust rule that names a principal.
+_Avoid_: Impersonation, delegation
+
+**Protected group**:
+A group whose reach holds a sensitive action that is not confined to one namespace. The sensitive actions are access management on the installation, delegation, sign-in settings, the operator family, and identity provider and SCIM configuration. The identity provider cannot add members to it unless the group trusts the identity provider.
+_Avoid_: Privileged group, admin group
+
+**Full sync**:
+An installation setting in which the installation trusts the identity provider for every group. A membership that the identity provider ends stays ended. It never changes a break-glass account.
+_Avoid_: Full import, auto-sync
+
+**Suspended membership**:
+A membership of a protected group that the identity provider ended. It gives no rights. The server keeps the record for 30 days so that a site administrator or a break-glass account can restore it.
+_Avoid_: Ended membership, disabled membership
+
+**Pinned membership**:
+A restored membership that the identity provider does not manage until a person unpins it.
+_Avoid_: Frozen membership, locked membership
+
+**Break-glass account**:
+An account of one named person that does not depend on the identity provider. The person signs in with a passkey or a hardware key. Each installation has at least two, unless a self-hosted operator disables break-glass.
+_Avoid_: Emergency account, break-glass login
+
+**Admin access report**:
+A periodic report of who holds each sensitive installation action and through which path. It lists the protected and trusted groups, the break-glass accounts, the suspended memberships, the refused adds, and the changes. A reviewer acknowledges it.
+_Avoid_: Access review, audit report
 
 ### Pulumi
 
@@ -312,7 +391,7 @@ The port in `pkg/audit` that keeps the audit entries of each namespace and of th
 _Avoid_: Audit trail, activity log
 
 **Audit checkpoint**:
-An Ed25519 signature over the hash at one sequence of one audit scope (ADR 60, decision 18). It holds the scope, the sequence, the time and the key ID. The server keeps it in the blob store under `audit-checkpoints/`. It is opt-in and needs the chain on. It is not a **Checkpoint** of the Pulumi CLI: in code and docs outside the audit log, always write "audit checkpoint".
+An Ed25519 signature over the hash at one sequence of one audit scope. It holds the scope, the sequence, the time and the key ID. The server keeps it in the blob store under `audit-checkpoints/`. It is opt-in and needs the chain on. It is not a **Checkpoint** of the Pulumi CLI: in code and docs outside the audit log, always write "audit checkpoint".
 _Avoid_: Signed head, anchor, checkpoint (alone, outside the audit log)
 
 **Log sink**:
@@ -342,7 +421,8 @@ _Avoid_: Fork, enterprise edition, cloud edition
 - **Organization** is the word each tool uses for a namespace. Use it only to name a field or command of a tool's protocol.
 - **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.
 - **Migration** means a SQL schema migration only. For the move of a unit into OpenDustpan, write "import".
-- **Restore** has two meanings. A restore of a backup replaces the data of a whole installation (ADR 38). A restore of a version makes one older version of a unit its new current state (ADR 28). Name which one.
+- **Restore** has three meanings. A restore of a backup replaces the data of a whole installation (ADR 38). A restore of a version makes one older version of a unit its new current state (ADR 28). A restore of a deleted unit brings the unit back before its purge (ADR 47). Name which one.
 - **Lock** names the workspace lock of OpenTofu and the unit lock of the inventory. Code also says "stack lock" for the hold that a mutating Pulumi update has on its stack. Do not call a lease a lock.
 - **Delta** and **diff** are different. A delta upload saves a checkpoint. A state diff compares two versions.
 - **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.
+- **Break-glass** has two meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor. Name which one.

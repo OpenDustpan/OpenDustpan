@@ -43,7 +43,7 @@ func newUpdateFixtureWithGate(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -63,6 +63,7 @@ func newUpdateFixtureWithGate(
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -76,6 +77,7 @@ func newUpdateFixtureWithGate(
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    inFlight,
@@ -109,7 +111,7 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: newMapStackStore(), Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -150,6 +152,7 @@ func newSecretFixtureWithGate(t *testing.T, authz identity.Authorizer, maxBatch 
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    inFlight,

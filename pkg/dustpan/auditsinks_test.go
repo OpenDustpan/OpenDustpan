@@ -44,7 +44,9 @@ func TestRunShipsAuditEntriesToAFileSink(t *testing.T) {
 		}
 	})
 
-	srv := newAuditSinkServer(t, st, audit.ShipSink{Sink: sink, Name: "file", Interval: 10 * time.Millisecond})
+	srv := newAuditSinkServer(t, st, audit.ShipSink{
+		Sink: sink, Name: "file", Kind: "file", Interval: 10 * time.Millisecond,
+	})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := runServer(ctx, srv)
@@ -56,16 +58,12 @@ func TestRunShipsAuditEntriesToAFileSink(t *testing.T) {
 	lines := waitForLines(t, path, 2)
 
 	for i, want := range []audit.Entry{first, second} {
-		parts := []string{`"msg":"audit entry"`, `"scope":"acme"`, `"requestID":"` + want.RequestID + `"`}
-
-		// The chain of a new installation is off once Run resolves it
-		// (ADR 64), so an entry carries a hash only when the store chained
-		// it, and the record holds the hash only then.
-		if want.Hash != "" {
-			parts = append(parts, `"hash":"`+want.Hash+`"`)
-		}
-
-		for _, part := range parts {
+		for _, part := range []string{
+			`"msg":"audit entry"`,
+			`"scope":"acme"`,
+			`"requestID":"` + want.RequestID + `"`,
+			`"hash":"` + want.Hash + `"`,
+		} {
 			if !strings.Contains(lines[i], part) {
 				t.Fatalf("line %d %s lacks %s", i, lines[i], part)
 			}
@@ -74,8 +72,7 @@ func TestRunShipsAuditEntriesToAFileSink(t *testing.T) {
 
 	// The shipper counts a batch just after it moves the cursor, so wait for
 	// the count before the server stops.
-	// The count holds the start switch entry of @server too.
-	waitForMetric(t, srv, `dustpan_audit_sink_entries_total{sink="file"} 3`)
+	waitForMetric(t, srv, `dustpan_audit_sink_entries_total{sink="file"} 2`)
 
 	cancel()
 
@@ -102,7 +99,7 @@ func TestNewServerRefusesTwoSinksWithOneName(t *testing.T) {
 		}
 	})
 
-	one := audit.ShipSink{Sink: sink, Name: "file", Interval: 0}
+	one := audit.ShipSink{Sink: sink, Name: "file", Kind: "file", Interval: 0}
 
 	_, err = dustpan.NewServer(append(auditSinkServerOptions(t, st), dustpan.WithAuditSinks(one, one))...)
 	if !errors.Is(err, audit.ErrInvalidShipper) {
@@ -152,26 +149,28 @@ func appendAuditEntry(t *testing.T, st *sqlite.Store, ns namespace.Namespace, re
 	t.Helper()
 
 	stored, err := st.Append(t.Context(), ns.Fence(), audit.Entry{
-		At:         time.Now(),
-		Namespace:  ns.Name,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:read-secrets",
-		Object:     "opentofu:acme/prod",
-		Version:    "sv-1",
-		ValuePath:  "/outputs/db",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "test",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindReveal,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  requestID,
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           time.Now(),
+		Namespace:    ns.Name,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:read-secrets",
+		Object:       "opentofu:acme/prod",
+		Version:      "sv-1",
+		ValuePath:    "/outputs/db",
+		ValueCount:   nil,
+		ObjectID:     "",
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "test",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindReveal,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    requestID,
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	})
 	if err != nil {
 		t.Fatalf("append audit entry: %v", err)
@@ -231,9 +230,8 @@ func newAuditSinkServer(t *testing.T, st *sqlite.Store, sinks ...audit.ShipSink)
 	return srv
 }
 
-// waitForLines waits until the file at path holds exactly n lines of the
-// scope acme, and answers them. It fails when more such lines arrive or the
-// wait ends first.
+// waitForLines waits until the file at path holds exactly n lines, and
+// answers them. It fails when more lines arrive or the wait ends first.
 func waitForLines(t *testing.T, path string, n int) []string {
 	t.Helper()
 
@@ -245,14 +243,9 @@ func waitForLines(t *testing.T, path string, n int) []string {
 			t.Fatalf("read sink file: %v", err)
 		}
 
-		// The file also receives the start switch entry of the audit chain
-		// in @server (ADR 64), so only the entries of acme count.
-		var lines []string
-
-		for line := range strings.SplitSeq(string(bytes.TrimSuffix(data, []byte("\n"))), "\n") {
-			if strings.Contains(line, `"scope":"acme"`) {
-				lines = append(lines, line)
-			}
+		lines := strings.Split(string(bytes.TrimSuffix(data, []byte("\n"))), "\n")
+		if len(data) == 0 {
+			lines = nil
 		}
 
 		switch {

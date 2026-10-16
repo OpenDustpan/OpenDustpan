@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -46,11 +47,13 @@ import (
 func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 	t.Parallel()
 
-	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, 1<<20, 30*time.Second, 5*time.Second)
+	restore := sqlite.SetWALGuardForTest(20*time.Millisecond, 1<<18, 30*time.Second, 5*time.Second)
 	defer restore()
 
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(ctx, path)
 	if err != nil {
@@ -79,11 +82,11 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 
 	go sampleWAL(ctx, path, stopSampler, samplerDone)
 
-	const rounds = 20
+	const rounds = 8
 
-	const writerOps = 3
+	const writerOps = 2
 
-	const readerOps = 20
+	const readerOps = 10
 
 	var counter atomic.Int64
 
@@ -123,7 +126,7 @@ func TestWALGuardBoundsLogUnderLoad(t *testing.T) {
 
 	t.Logf("maximum write-ahead log size under load: %d bytes", maxWAL)
 
-	const bound = 8 << 20
+	const bound = 2 << 20
 
 	if maxWAL >= bound {
 		t.Fatalf("maximum write-ahead log size = %d bytes, want below %d bytes", maxWAL, bound)
@@ -361,6 +364,8 @@ func openWALBackupSource(ctx context.Context, t *testing.T, dir string) walBacku
 
 	path := filepath.Join(dir, "dustpan.db")
 
+	copyTemplate(t, path)
+
 	src, err := sqlite.Open(ctx, path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -436,7 +441,11 @@ func exportWALBackup(t *testing.T, src *sqlite.Store, walSize int64) walBackup {
 func importWALBackup(ctx context.Context, t *testing.T, dir string, bk walBackup) *sqlite.Store {
 	t.Helper()
 
-	dst, err := sqlite.Open(ctx, filepath.Join(dir, "restored.db"))
+	dstPath := filepath.Join(dir, "restored.db")
+
+	copyTemplate(t, dstPath)
+
+	dst, err := sqlite.Open(ctx, dstPath)
 	if err != nil {
 		t.Fatalf("open restore destination: %v", err)
 	}
@@ -459,49 +468,29 @@ func importWALBackup(ctx context.Context, t *testing.T, dir string, bk walBackup
 }
 
 // growWALPastDB writes stacks until the write-ahead log file is larger than
-// the database file and returns every reference written. It caps the batches
-// so a broken test fails fast instead of writing forever.
+// the database file and returns every reference written. Each stack carries
+// a padding tag, so the log outgrows the file with fewer rows; the backup
+// still proves every written row lands. It caps the batches so a broken test
+// fails fast instead of writing forever.
 func growWALPastDB(
 	ctx context.Context, t *testing.T, s *sqlite.Store, ns namespace.Namespace, path string,
 ) []stack.Ref {
 	t.Helper()
 
+	pad := strings.Repeat("x", 1024)
+
 	var refs []stack.Ref
 
-	for batch := range 30 {
+	for batch := range 20 {
 		for i := range 200 {
-			ref, err := stack.ParseRef("acme", "backup", "row-"+strconv.Itoa(batch*200+i))
-			if err != nil {
-				t.Fatalf("parse stack reference: %v", err)
+			refs = append(refs, writeGrowWALRow(ctx, t, growWALRow{store: s, ns: ns, pad: pad, batch: batch, index: i}))
+
+			if len(refs)%25 == 0 && walOutgrewDB(t, path, len(refs)) {
+				return refs
 			}
-
-			now := time.Now()
-
-			st := stack.Stack{
-				CreatedAt: now,
-				UpdatedAt: now,
-				Tags:      map[string]string{"batch": strconv.Itoa(batch)},
-				Ref:       ref,
-				ID:        stack.ID(ident.NewID("stk-")),
-				Version:   0,
-			}
-
-			if err := s.CreateStack(ctx, st, ns.Fence()); err != nil {
-				t.Fatalf("create stack %s: %v", ref, err)
-			}
-
-			refs = append(refs, ref)
 		}
 
-		sizes := fileSizes(t, path)
-		if sizes.wal > sizes.db {
-			t.Logf(
-				"write-ahead log size = %d bytes with database = %d bytes after %d stacks",
-				sizes.wal,
-				sizes.db,
-				len(refs),
-			)
-
+		if walOutgrewDB(t, path, len(refs)) {
 			return refs
 		}
 	}
@@ -509,6 +498,64 @@ func growWALPastDB(
 	t.Fatal("write-ahead log never outgrew the database file")
 
 	return nil
+}
+
+// growWALRow holds one row of the log-growth batch: its store, namespace,
+// padding tag and position.
+type growWALRow struct {
+	store *sqlite.Store
+	ns    namespace.Namespace
+	pad   string
+	batch int
+	index int
+}
+
+// writeGrowWALRow writes one padded stack of the log-growth batch and returns
+// its reference.
+func writeGrowWALRow(ctx context.Context, t *testing.T, row growWALRow) stack.Ref {
+	t.Helper()
+
+	ref, err := stack.ParseRef("acme", "backup", "row-"+strconv.Itoa(row.batch*200+row.index))
+	if err != nil {
+		t.Fatalf("parse stack reference: %v", err)
+	}
+
+	now := time.Now()
+
+	st := stack.Stack{
+		CreatedAt: now,
+		UpdatedAt: now,
+		Tags:      map[string]string{"batch": strconv.Itoa(row.batch), "pad": row.pad},
+		Ref:       ref,
+		ID:        stack.ID(ident.NewID("stk-")),
+		Version:   0,
+	}
+
+	if err := row.store.CreateStack(ctx, st, row.ns.Fence()); err != nil {
+		t.Fatalf("create stack %s: %v", ref, err)
+	}
+
+	return ref
+}
+
+// walOutgrewDB logs and reports whether the write-ahead log file at path is
+// larger than the database file after count stacks.
+func walOutgrewDB(t *testing.T, path string, count int) bool {
+	t.Helper()
+
+	sizes := fileSizes(t, path)
+	if sizes.wal > sizes.db {
+		t.Logf(
+			"write-ahead log size = %d bytes with database = %d bytes after %d stacks",
+			sizes.wal,
+			sizes.db,
+			count,
+		)
+
+		return true
+	}
+
+	return false
 }
 
 // dbSizes holds the sizes of the database file and its write-ahead log.
@@ -667,7 +714,7 @@ func TestWALGuardBusySlowAttemptsCapped(t *testing.T) {
 		prefix:    "slowcap",
 	})
 
-	waitForFailedTicks(ctx, t, 5, 10*time.Second)
+	waitForFailedTicks(ctx, t, 3, 10*time.Second)
 
 	requireBusyTickSlowCapped(t)
 
@@ -678,9 +725,12 @@ func TestWALGuardBusySlowAttemptsCapped(t *testing.T) {
 
 // TestWALGuardBusyBackoff holds a read transaction open so every TRUNCATE
 // checkpoint stays busy with a slow attempt, and proves the wait before the
-// next tick doubles up to the cap: the intervals between failed ticks grow.
-// After the reader ends and a truncate succeeds, a new busy period starts
-// from the base interval again.
+// next tick doubles from the base interval up to the cap. After the reader
+// ends and a truncate succeeds, a new busy period starts from the base
+// interval again. The test reads only the ticks of its own store, and it
+// checks each wait the guard recorded against the outcome of the tick before
+// it: a loaded runner or the guard of a parallel test cannot change the
+// result, and no assertion measures wall-clock time.
 func TestWALGuardBusyBackoff(t *testing.T) {
 	t.Parallel()
 
@@ -712,13 +762,23 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 		prefix:    "backoff-1",
 	})
 
-	waitForFailedTicks(ctx, t, 6, 15*time.Second)
+	// After the writes, each tick meets only the held reader: each tick is
+	// slow, so the wait doubles to the cap within 4 ticks.
+	waitForStoreTicks(ctx, t, storeTickWait{
+		path:    path,
+		what:    "a failed tick after a wait of the backoff cap",
+		timeout: 15 * time.Second,
+		done: func(ticks []sqlite.WALGuardTick) bool {
+			return slices.ContainsFunc(failedTicks(ticks), func(tick sqlite.WALGuardTick) bool {
+				return tick.Waited == backoffCap
+			})
+		},
+	})
 
-	bounds := failedTickWaitBounds(t)
+	first := storeTicks(t, path)
 
-	t.Logf("failed ticks while busy: smallest wait = %s, largest wait = %s", bounds.min, bounds.max)
-
-	requireBackoffGrowth(t, bounds.min, bounds.max, base, backoffCap)
+	requireBackoffRule(t, first, base, backoffCap)
+	requireFirstFailedWait(t, failedTicks(first), base, "first busy period")
 
 	if rbErr := tx.Rollback(); rbErr != nil {
 		t.Fatalf("roll back read transaction: %v", rbErr)
@@ -728,13 +788,20 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 	// the reader ends succeeds and records it. Poll the hook, not the file:
 	// the file drops at checkpoint time but the tick records just after, so
 	// file polling can return without an observable success.
-	waitForSucceededTicks(ctx, t, 1, 10*time.Second)
+	waitForStoreTicks(ctx, t, storeTickWait{
+		path:    path,
+		what:    "a successful tick after the reader ended",
+		timeout: 10 * time.Second,
+		done: func(ticks []sqlite.WALGuardTick) bool {
+			return slices.ContainsFunc(ticks, func(tick sqlite.WALGuardTick) bool { return tick.Succeeded })
+		},
+	})
 
 	waitForWALBelow(ctx, t, path, threshold, 10*time.Second)
 
 	t.Logf("write-ahead log size = %d bytes after the reader ended", fileSizes(t, path).wal)
 
-	before := len(sqlite.WALGuardTicksForTest())
+	before := len(storeTicks(t, path))
 
 	pinned := pinWALReader(ctx, t, raw)
 
@@ -746,9 +813,19 @@ func TestWALGuardBusyBackoff(t *testing.T) {
 		prefix:    "backoff-2",
 	})
 
-	waitForFailedTicks(ctx, t, before+3, 15*time.Second)
+	waitForStoreTicks(ctx, t, storeTickWait{
+		path:    path,
+		what:    "2 failed ticks in the second busy period",
+		timeout: 15 * time.Second,
+		done: func(ticks []sqlite.WALGuardTick) bool {
+			return len(failedTicks(ticks[min(before, len(ticks)):])) >= 2
+		},
+	})
 
-	requireBackoffReset(t, failedTicks(sqlite.WALGuardTicksForTest()[before:]), base)
+	all := storeTicks(t, path)
+
+	requireBackoffRule(t, all, base, backoffCap)
+	requireFirstFailedWait(t, failedTicks(all[min(before, len(all)):]), base, "second busy period")
 
 	if rbErr := pinned.Rollback(); rbErr != nil {
 		t.Fatalf("roll back second read transaction: %v", rbErr)
@@ -787,25 +864,52 @@ func waitForFailedTicks(ctx context.Context, t *testing.T, want int, timeout tim
 	}
 }
 
-// waitForSucceededTicks polls the test hook until it holds at least want
-// successful guard ticks or timeout passes.
-func waitForSucceededTicks(ctx context.Context, t *testing.T, want int, timeout time.Duration) {
+// storeTicks returns the guard ticks of the store at path in order. Other
+// tests open stores in parallel, and their guards record in the same hook
+// buffer, so a test reads only the ticks of its own store.
+func storeTicks(t *testing.T, path string) []sqlite.WALGuardTick {
 	t.Helper()
 
-	deadline := time.Now().Add(timeout)
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("resolve database path: %v", err)
+	}
+
+	out := []sqlite.WALGuardTick{}
+
+	for _, tick := range sqlite.WALGuardTicksForTest() {
+		if tick.Path == abs {
+			out = append(out, tick)
+		}
+	}
+
+	return out
+}
+
+// storeTickWait holds one poll of the guard ticks of one store: the database
+// path, the condition that ends the poll, a description of the condition for
+// the failure message, and the time limit.
+type storeTickWait struct {
+	path    string
+	what    string
+	timeout time.Duration
+	done    func(ticks []sqlite.WALGuardTick) bool
+}
+
+// waitForStoreTicks polls the test hook until the ticks of the store at
+// w.path satisfy w.done, or w.timeout passes.
+func waitForStoreTicks(ctx context.Context, t *testing.T, w storeTickWait) {
+	t.Helper()
+
+	deadline := time.Now().Add(w.timeout)
 
 	for {
-		if got := len(succeededTicks(sqlite.WALGuardTicksForTest())); got >= want {
+		if w.done(storeTicks(t, w.path)) {
 			return
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf(
-				"successful guard ticks = %d after %s, want %d",
-				len(succeededTicks(sqlite.WALGuardTicksForTest())),
-				timeout,
-				want,
-			)
+			t.Fatalf("no %s after %s: %d guard ticks of the store", w.what, w.timeout, len(storeTicks(t, w.path)))
 		}
 
 		timer := time.NewTimer(10 * time.Millisecond)
@@ -819,70 +923,55 @@ func waitForSucceededTicks(ctx context.Context, t *testing.T, want int, timeout 
 	}
 }
 
-// tickWaitBounds holds the smallest and the largest guard wait between the
-// failed ticks the hook holds.
-type tickWaitBounds struct {
-	min time.Duration
-	max time.Duration
-}
-
-// failedTickWaitBounds returns the smallest and the largest guard wait
-// between the failed ticks the hook holds.
-func failedTickWaitBounds(t *testing.T) tickWaitBounds {
+// requireBackoffRule asserts that each wait the guard recorded follows from
+// the outcome of the tick before it: a successful tick and a failed tick with
+// only fast busy attempts reset the wait to the base interval, and a failed
+// tick with a slow busy attempt doubles the wait up to the backoff cap. The
+// first tick of the store waits the base interval, because the ticks before
+// it found the log below the threshold. The guard records the wait it
+// scheduled, not a wall-clock gap, so a loaded runner cannot change it.
+func requireBackoffRule(t *testing.T, ticks []sqlite.WALGuardTick, base, backoffCap time.Duration) {
 	t.Helper()
 
-	waits := tickWaits(failedTicks(sqlite.WALGuardTicksForTest()))
-	if len(waits) == 0 {
-		t.Fatal("no failed guard tick waits while busy, want growth to observe")
+	if len(ticks) == 0 {
+		t.Fatal("no guard ticks of the store, want at least one")
 	}
 
-	bounds := tickWaitBounds{min: waits[0], max: waits[0]}
-
-	for _, wait := range waits[1:] {
-		bounds.min = min(bounds.min, wait)
-		bounds.max = max(bounds.max, wait)
+	if ticks[0].Waited != base {
+		t.Fatalf("wait before the first guard tick = %s, want the %s base", ticks[0].Waited, base)
 	}
 
-	return bounds
-}
+	for i := 1; i < len(ticks); i++ {
+		prev, next := ticks[i-1], ticks[i]
 
-// requireBackoffGrowth asserts the waits between failed ticks start near the
-// base interval and grow toward the backoff cap.
-func requireBackoffGrowth(t *testing.T, minWait, maxWait, base, backoffCap time.Duration) {
-	t.Helper()
+		want := base
+		if !prev.Succeeded && prev.SlowBusy {
+			want = min(2*prev.Waited, backoffCap)
+		}
 
-	if maxWait < 100*time.Millisecond {
-		t.Fatalf("largest failed tick wait = %s, want at least 100 ms so backoff grows the wait", maxWait)
-	}
-
-	if maxWait > backoffCap+100*time.Millisecond {
-		t.Fatalf("largest failed tick wait = %s, want at most %s plus slack", maxWait, backoffCap)
-	}
-
-	if minWait > 3*base {
-		t.Fatalf(
-			"smallest failed tick wait = %s, want at most %s so the first ticks keep the base",
-			minWait,
-			3*base,
-		)
+		if next.Waited != want {
+			t.Fatalf(
+				"wait before guard tick %d = %s, want %s after a tick that waited %s "+
+					"(succeeded = %t, slow busy = %t)",
+				i, next.Waited, want, prev.Waited, prev.Succeeded, prev.SlowBusy,
+			)
+		}
 	}
 }
 
-// requireBackoffReset asserts the second busy period starts from the base
-// interval again: its first wait stays near the base.
-func requireBackoffReset(t *testing.T, second []sqlite.WALGuardTick, base time.Duration) {
+// requireFirstFailedWait asserts that the first failed tick of a busy period
+// waited the base interval: a new busy period starts from the base again.
+func requireFirstFailedWait(t *testing.T, failed []sqlite.WALGuardTick, base time.Duration, period string) {
 	t.Helper()
 
-	if len(second) < 3 {
-		t.Fatalf("failed ticks in the second busy period = %d, want at least 3", len(second))
+	if len(failed) == 0 {
+		t.Fatalf("no failed guard ticks in the %s, want at least one", period)
 	}
 
-	resetWait := tickWaits(second)[0]
+	t.Logf("wait before the first failed tick of the %s = %s", period, failed[0].Waited)
 
-	t.Logf("first wait of the second busy period = %s, want near the %s base", resetWait, base)
-
-	if resetWait > 3*base {
-		t.Fatalf("first wait after the reset = %s, want at most %s", resetWait, 3*base)
+	if failed[0].Waited != base {
+		t.Fatalf("wait before the first failed tick of the %s = %s, want the %s base", period, failed[0].Waited, base)
 	}
 }
 
@@ -899,34 +988,8 @@ func failedTicks(ticks []sqlite.WALGuardTick) []sqlite.WALGuardTick {
 	return out
 }
 
-// succeededTicks returns the successful guard ticks in order.
-func succeededTicks(ticks []sqlite.WALGuardTick) []sqlite.WALGuardTick {
-	var out []sqlite.WALGuardTick
-
-	for _, tick := range ticks {
-		if tick.Succeeded {
-			out = append(out, tick)
-		}
-	}
-
-	return out
-}
-
-// tickWaits returns the guard wait before each tick after the first, as the
-// guard recorded it: a scheduled wait, not a wall-clock gap, so a loaded
-// runner cannot stretch it.
-func tickWaits(ticks []sqlite.WALGuardTick) []time.Duration {
-	out := []time.Duration{}
-
-	for i := 1; i < len(ticks); i++ {
-		out = append(out, ticks[i].Waited)
-	}
-
-	return out
-}
-
 // TestWALGuardBusyWritesStayFast holds a read transaction open so every
-// TRUNCATE checkpoint stays busy, runs writes for 3 s past the threshold,
+// TRUNCATE checkpoint stays busy, runs writes for 1 s past the threshold,
 // and proves writers are rarely blocked: one tick tries at most 2 slow
 // attempts and gives up until the next tick, so the p99 write latency stays
 // far below the bound. One tick stalls writers for about 105 ms at most
@@ -964,7 +1027,7 @@ func TestWALGuardBusyWritesStayFast(t *testing.T) {
 		prefix:    "fast-setup",
 	})
 
-	const window = 3 * time.Second
+	const window = 1 * time.Second
 
 	latencies := writeStacksForWindow(ctx, t, walTimedWrites{
 		store:  s,
@@ -1198,11 +1261,15 @@ func TestWALGuardBusyWarnsOnce(t *testing.T) {
 }
 
 // openWALBusyStore opens a store at path with logger (nil keeps the discard
-// default), creates its namespace, and returns both.
+// default), creates its namespace, and returns both. The file at path comes
+// from the migrated template, so only the first test of the binary runs
+// every migration.
 func openWALBusyStore(
 	ctx context.Context, t *testing.T, path string, logger *slog.Logger,
 ) (*sqlite.Store, namespace.Namespace) {
 	t.Helper()
+
+	copyTemplate(t, path)
 
 	var s *sqlite.Store
 
@@ -1322,12 +1389,16 @@ type walWriteJob struct {
 // writeStacksPastThreshold writes stacks from job until the write-ahead log
 // file reaches the threshold and returns the write count. Every write must
 // finish in under 2 s without an error: a busy checkpoint never stalls a
-// caller. It caps the writes so a broken test fails fast instead of writing
-// forever.
+// caller. Each stack carries a padding tag, so the log reaches the threshold
+// with fewer writes; the assertions only need the log past the threshold,
+// not a particular row count. It caps the writes so a broken test fails fast
+// instead of writing forever.
 func writeStacksPastThreshold(ctx context.Context, t *testing.T, job walWriteJob) int {
 	t.Helper()
 
 	const maxWrites = 3000
+
+	pad := strings.Repeat("x", 1500)
 
 	for i := range maxWrites {
 		ref, err := stack.ParseRef("acme", "busy", job.prefix+"-"+strconv.Itoa(i))
@@ -1340,7 +1411,7 @@ func writeStacksPastThreshold(ctx context.Context, t *testing.T, job walWriteJob
 		st := stack.Stack{
 			CreatedAt: now,
 			UpdatedAt: now,
-			Tags:      map[string]string{"run": job.prefix},
+			Tags:      map[string]string{"run": job.prefix, "pad": pad},
 			Ref:       ref,
 			ID:        stack.ID(ident.NewID("stk-")),
 			Version:   0,

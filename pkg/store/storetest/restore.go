@@ -61,8 +61,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "a restore row survives close and reopen", test: testRestoreRowSurvivesReopen},
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
-		{name: "a restore of another chain state checks valid after the recheck", test: testRestoreChainChecksValid},
-		{name: "the recheck finds a restored log without switch entries", test: testRestoreChainFindsStrippedBackup},
+		{
+			name: "a restored log of another chain state checks valid after the migration",
+			test: testRestoreChainAgreesAfterMigration,
+		},
 		{name: "apply drops the pre-backup row, which is re-recorded after", test: testRestoreApplyReRecordsBackup},
 		{name: "apply without staged data is corrupt", test: testRestoreApplyWithoutStaging},
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
@@ -505,162 +507,114 @@ func testRestoreApplySwapsStaged(t *testing.T, newStore RestoreFactory) {
 	}
 }
 
+// chainRestoreStore is a store with the audit chain and its check.
+type chainRestoreStore interface {
+	audit.Store
+	audit.ChainStore
+	audit.ScopesChecker
+}
+
+// chainAt answers the time of the chain records of the restore cases.
+func chainAt() time.Time {
+	return time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC)
+}
+
 // testRestoreKeepsChainRecord proves that a restore keeps the audit chain
-// record of the target installation (RFC 22): the backup does not carry it,
-// so the source record never reaches the target. A store without a chain
-// switch skips the case.
+// record of the target installation: the backup does not carry it, so the
+// source record never reaches the target. The swap notes that it replaced
+// the log. A store without a chain store skips the case.
 func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
-	ctx := t.Context()
-	src := newStore(t)
-	newNamespace(t, src, "acme")
-
-	ps := portableRestoreStores(t, src, newStore(t))
-
-	srcChain, okSrc := ps.src.(audit.ChainSwitch)
-	dstChain, okDst := ps.dst.(audit.ChainSwitch)
-
-	if !okSrc || !okDst {
-		t.Skip("the store has no audit chain switch")
+	want := audit.ChainRecord{
+		ChangedAt:          chainAt(),
+		ChangedBy:          "dst",
+		State:              audit.ChainStateOn,
+		Pending:            false,
+		EnteredMaintenance: false,
+		MigratingAt:        time.Time{},
+		LogReplaced:        false,
 	}
 
-	saveChainRecord(t, srcChain, audit.ChainRecord{State: audit.ChainStateOn, EverChained: true})
+	to, _ := restoreChain(t, newStore, func(from chainRestoreStore, _ namespace.Namespace) {
+		saveChainRecord(t, from, audit.ChainRecord{
+			ChangedAt: chainAt(), ChangedBy: "src", State: audit.ChainStateOff, Pending: true,
+			EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
+		})
+	}, func(to chainRestoreStore) { saveChainRecord(t, to, want) })
 
-	want := audit.ChainRecord{State: audit.ChainStateOff, EverChained: false}
-	saveChainRecord(t, dstChain, want)
-
-	sink, sum, files := exportPortable(t, ps.src)
-
-	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
-		t.Fatalf("stage restore: %v", err)
-	}
-
-	if err := ps.dst.ApplyStaging(ctx); err != nil {
-		t.Fatalf("apply staging area: %v", err)
-	}
-
-	got, err := dstChain.ChainRecord(ctx)
+	got, err := to.ChainRecord(t.Context())
 	if err != nil {
 		t.Fatalf("chain record after the restore: %v", err)
 	}
 
-	if got != want {
+	want.LogReplaced = true
+	if !got.ChangedAt.Equal(want.ChangedAt) || got.ChangedBy != want.ChangedBy || got.State != want.State ||
+		got.Pending != want.Pending || got.EnteredMaintenance != want.EnteredMaintenance ||
+		!got.MigratingAt.Equal(want.MigratingAt) || got.LogReplaced != want.LogReplaced {
 		t.Fatalf("chain record after the restore = %+v, want the target record %+v", got, want)
 	}
 }
 
-// saveChainRecord saves rec as the chain record of a new store, with no
-// switch entry.
-func saveChainRecord(t *testing.T, s audit.ChainSwitch, rec audit.ChainRecord) {
+// testRestoreChainAgreesAfterMigration proves that a restored log from an
+// installation with the chain off disagrees with a target that keeps the
+// chain on, and that the migration of the target makes every scope check
+// valid. A store without a chain store skips the case.
+func testRestoreChainAgreesAfterMigration(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
-	w := audit.ChainWrite{Now: nil, Entries: nil, Read: noChainRecord(), Record: rec}
-	if err := s.RecordChain(t.Context(), w); err != nil {
-		t.Fatalf("save chain record %+v: %v", rec, err)
+	to, acme := restoreChain(t, newStore, func(from chainRestoreStore, acme namespace.Namespace) {
+		appendDecrypts(t, from, acme, chainAt(), 1)
+
+		change := audit.ChainChange{At: chainAt().Add(time.Minute), By: "src", To: audit.ChainStateOff}
+		migrateChain(t, from, []namespace.Fence{acme.Fence()}, change)
+
+		appendDecrypts(t, from, acme, chainAt().Add(2*time.Minute), 1)
+	}, func(chainRestoreStore) {})
+
+	scopes := []namespace.Name{acme.Name}
+
+	agrees, err := audit.LogAgrees(t.Context(), to, scopes, audit.ChainStateOn)
+	if err != nil || agrees {
+		t.Fatalf("restored log against the chain on: agrees %v, err %v, want a disagreement", agrees, err)
 	}
+
+	// acme was fenced by the swap: read its fence again.
+	fenced := restoredFence(t, to, acme.Name)
+
+	change := audit.ChainChange{At: chainAt().Add(time.Hour), By: "alice", To: audit.ChainStateOn}
+	migrateChain(t, to, []namespace.Fence{fenced}, change)
+
+	wantScopesValid(t, to, acme.Name)
 }
 
-// noChainRecord is the chain record of a new store.
-func noChainRecord() audit.ChainRecord {
-	return audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}
-}
-
-// chainSwitchEntry returns a switch entry of the audit chain for state at
-// at, as the server writes it (ADR 64).
-func chainSwitchEntry(state audit.ChainState, at time.Time) audit.Entry {
-	e := ServerChange(at, audit.ServerScope.String())
-	e.Subject, e.Action, e.ValuePath = "opendustpan serve", audit.ActionSetChain, "/audit/chain/"+string(state)
-
-	return e
-}
-
-// chainRestoreStore is a store with the audit chain and its checks.
-type chainRestoreStore interface {
-	audit.Store
-	audit.ChainSwitch
-	audit.ScopesChecker
-	audit.RestoreChecker
-}
-
-// testRestoreChainChecksValid proves ADR 64 decision 6: the backup comes
-// from an installation with the chain on, the target has the chain off.
-// The check of the restored log passes, and audit.RecheckChain writes one
-// hashed switch entry for the state of the target, in the name of the
-// person who requested the restore, with the backup ID. Every scope then
-// checks valid. A store without a chain switch skips the case.
-func testRestoreChainChecksValid(t *testing.T, newStore RestoreFactory) {
+// restoredFence answers the fence of the namespace name in s after a
+// restore, which incremented its failover version.
+func restoredFence(t *testing.T, s audit.Store, name namespace.Name) namespace.Fence {
 	t.Helper()
 
-	at := time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC)
+	reader, ok := s.(namespace.Store)
+	if !ok {
+		t.Fatal("the store cannot read a namespace")
+	}
 
-	restored := restoreChain(t, newStore, func(from chainRestoreStore, acme namespace.Namespace) {
-		recordChain(t, from, audit.ChainStateOn, at)
-		appendDecrypts(t, from, acme, at, 2)
-	}, func(to chainRestoreStore) { recordChain(t, to, audit.ChainStateOff, at) })
-
-	to, acme := restored.store, restored.acme
-
-	invalid, err := audit.RecheckChain(t.Context(), audit.ChainPorts{Switch: to, Logger: nil},
-		restoreOf(to, at.Add(time.Minute), audit.ServerScope, acme.Name))
+	ns, err := reader.GetNamespace(t.Context(), name)
 	if err != nil {
-		t.Fatalf("recheck the chain after the restore: %v", err)
+		t.Fatalf("get namespace %s: %v", name, err)
 	}
 
-	if invalid != 0 {
-		t.Fatalf("check of the restored log: %d scopes failed, want 0", invalid)
-	}
-
-	wantScopesValid(t, to, audit.ServerScope, acme.Name)
-	wantRestoreSwitch(t, to, "alice", audit.ChainStateOff)
-}
-
-// testRestoreChainFindsStrippedBackup proves that the check of the restored
-// log finds a backup without switch entries and hashes, when the target
-// recorded a chained log: audit.RecheckChain answers the failed scopes and
-// still writes its switch entry, so the server can serve. A store without a
-// chain switch skips the case.
-func testRestoreChainFindsStrippedBackup(t *testing.T, newStore RestoreFactory) {
-	t.Helper()
-
-	at := time.Date(2026, time.October, 14, 12, 0, 0, 0, time.UTC)
-
-	// The source holds no switch entry and no hash: the backup of a chained
-	// installation after someone removed them.
-	restored := restoreChain(t, newStore, func(from chainRestoreStore, acme namespace.Namespace) {
-		saveChainRecord(t, from, audit.ChainRecord{State: audit.ChainStateOff, EverChained: false})
-		appendDecrypts(t, from, acme, at, 2)
-	}, func(to chainRestoreStore) { recordChain(t, to, audit.ChainStateOn, at) })
-
-	to, acme := restored.store, restored.acme
-
-	invalid, err := audit.RecheckChain(t.Context(), audit.ChainPorts{Switch: to, Logger: nil},
-		restoreOf(to, at.Add(time.Minute), audit.ServerScope, acme.Name))
-	if err != nil {
-		t.Fatalf("recheck the chain after the restore: %v", err)
-	}
-
-	if invalid == 0 {
-		t.Fatal("check of a stripped restored log: no scope failed, want a failure")
-	}
-
-	wantRestoreSwitch(t, to, "alice", audit.ChainStateOn)
-}
-
-// restoredChain is the target of a restore of the chain cases and the
-// namespace acme.
-type restoredChain struct {
-	store chainRestoreStore
-	acme  namespace.Namespace
+	return ns.Fence()
 }
 
 // restoreChain restores a backup of a new store, which fill prepares, into
 // a new store, which target prepares. It answers the target and the
-// namespace acme. A store without a chain switch skips the case.
+// namespace acme. A store without a chain store skips the case.
+//
+//nolint:ireturn // The cases use the ports of both SQL adapters, which share no concrete type.
 func restoreChain(
 	t *testing.T, newStore RestoreFactory,
 	fill func(from chainRestoreStore, acme namespace.Namespace), target func(to chainRestoreStore),
-) restoredChain {
+) (chainRestoreStore, namespace.Namespace) {
 	t.Helper()
 
 	ctx := t.Context()
@@ -673,7 +627,7 @@ func restoreChain(
 	to, okDst := ps.dst.(chainRestoreStore)
 
 	if !okSrc || !okDst {
-		t.Skip("the store has no audit chain switch")
+		t.Skip("the store has no audit chain store")
 	}
 
 	fill(from, acme)
@@ -689,39 +643,38 @@ func restoreChain(
 		t.Fatalf("apply staging area: %v", err)
 	}
 
-	return restoredChain{store: to, acme: acme}
+	return to, acme
 }
 
-// restoreBackupID is the backup ID of the restore cases of the chain.
-const restoreBackupID = "bkp-chain"
-
-// restoreOf answers the restore of restoreBackupID by alice at at, which
-// checks scopes in s.
-func restoreOf(s audit.RestoreChecker, at time.Time, scopes ...namespace.Name) audit.ChainRestore {
-	return audit.ChainRestore{
-		Checker:   s,
-		Now:       func() time.Time { return at },
-		BackupID:  restoreBackupID,
-		Requester: "alice",
-		Scopes:    scopes,
-	}
-}
-
-// recordChain records state for s with the start entry of a new
-// installation: with a hash when on, without a hash when off.
-func recordChain(t *testing.T, s audit.ChainSwitch, state audit.ChainState, at time.Time) {
+// saveChainRecord saves rec as the chain record of s.
+func saveChainRecord(t *testing.T, s audit.ChainStore, rec audit.ChainRecord) {
 	t.Helper()
 
-	on := state == audit.ChainStateOn
-	w := audit.ChainWrite{
-		Now:     nil,
-		Entries: []audit.ChainEntry{{Entry: chainSwitchEntry(state, at), Chained: on}},
-		Read:    noChainRecord(),
-		Record:  audit.ChainRecord{State: state, EverChained: on},
+	if err := s.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record %+v: %v", rec, err)
+	}
+}
+
+// migrateChain runs the migration of change in s with a held claim, so each
+// renewal after a scope succeeds.
+func migrateChain(t *testing.T, s chainRestoreStore, fences []namespace.Fence, change audit.ChainChange) {
+	t.Helper()
+
+	rec, err := s.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
 	}
 
-	if err := s.RecordChain(t.Context(), w); err != nil {
-		t.Fatalf("record the chain %s: %v", state, err)
+	rec.MigratingAt = change.At
+
+	if err := s.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	clock := func() time.Time { return change.At.Add(time.Minute) }
+
+	if err := audit.MigrateChain(t.Context(), s, fences, change, clock); err != nil {
+		t.Fatalf("migrate the chain: %v", err)
 	}
 }
 
@@ -749,33 +702,10 @@ func wantScopesValid(t *testing.T, s audit.ScopesChecker, scopes ...namespace.Na
 		t.Fatalf("check scopes: %v", err)
 	}
 
-	for i := range results {
-		if !results[i].Valid {
-			t.Fatalf("check %s = %+v, want valid", scopes[i], results[i])
+	for i, scope := range scopes {
+		if i >= len(results) || !results[i].Valid {
+			t.Fatalf("check %s: results %+v, want valid", scope, results)
 		}
-	}
-}
-
-// wantRestoreSwitch fails the test unless the last entry of @server is a
-// hashed switch entry to state by actor that marks the restore of
-// restoreBackupID.
-func wantRestoreSwitch(t *testing.T, s audit.Store, actor string, state audit.ChainState) {
-	t.Helper()
-
-	last, err := s.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: 1})
-	if err != nil || len(last.Entries) != 1 {
-		t.Fatalf("read the last entry of @server: %v", err)
-	}
-
-	got := last.Entries[0]
-	if got.Subject != actor || got.ValuePath != "/audit/chain/"+string(state) || got.Hash == "" {
-		t.Fatalf("restore switch entry = %+v, want a hashed switch to %s by %s", got, state, actor)
-	}
-
-	marked := len(got.Changes) == 1 && got.Changes[0].Key == audit.ChangeRestore &&
-		got.Changes[0].New == restoreBackupID
-	if !marked {
-		t.Fatalf("restore switch entry changes = %+v, want %s = %s", got.Changes, audit.ChangeRestore, restoreBackupID)
 	}
 }
 

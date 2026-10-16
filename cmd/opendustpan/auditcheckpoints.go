@@ -11,8 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/dustpan"
 )
 
-// Variables of the files of the audit signing key and of the verify keys
-// (ADR 60 decision 18).
+// Variables of the files of the audit signing key and of the verify keys.
 const (
 	signingKeyEnvVar = "DUSTPAN_AUDIT_SIGNING_KEY_FILE"
 	verifyKeysEnvVar = "DUSTPAN_AUDIT_VERIFY_KEYS_FILE"
@@ -101,8 +100,8 @@ func addVerifyKeys(signer *audit.Signer, path string) error {
 }
 
 // readSigningKeyFile reads the base64 Ed25519 seed from the file at path,
-// with the rules of the key-encryption key file (ADR 23 decision 1): the
-// file must not be readable by group or others.
+// with the rules of the key-encryption key file: the file must not be
+// readable by group or others.
 func readSigningKeyFile(path string) (*audit.Signer, error) {
 	info, err := os.Stat(path)
 	if err != nil {

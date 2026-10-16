@@ -38,7 +38,7 @@ func (s *Store) Append(ctx context.Context, fence namespace.Fence, e audit.Entry
 	txErr := s.inFencedUpdateTx(ctx, fence, func(q *db.Queries) error {
 		var err error
 
-		stored, err = s.appendAuditEntry(ctx, q, e)
+		stored, err = appendAuditEntry(ctx, q, e)
 
 		return err
 	})
@@ -68,7 +68,7 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 
 		var err error
 
-		stored, err = s.appendAuditEntry(ctx, q, e)
+		stored, err = appendAuditEntry(ctx, q, e)
 
 		return err
 	})
@@ -98,7 +98,7 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 			return err
 		}
 
-		if _, err := s.appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -109,10 +109,12 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 // inFencedAuditedTx runs fn and appends e to the chain of the namespace of
 // fence in one fenced transaction: the change and its audit entry commit
 // together, or neither does (ADR 60, fail closed). An entry that fails
-// validation or names another namespace changes nothing. The transaction holds the
+// validation or names another namespace changes nothing. fn may set fields
+// of e that only the transaction knows, such as the object ID, before the
+// append. The transaction holds the
 // namespace row FOR UPDATE, as Append does, so the appends form one sequence.
 func (s *Store) inFencedAuditedTx(
-	ctx context.Context, fence namespace.Fence, e audit.Entry, fn func(q *db.Queries) error,
+	ctx context.Context, fence namespace.Fence, e *audit.Entry, fn func(q *db.Queries) error,
 ) error {
 	if err := e.Validate(); err != nil {
 		return fmt.Errorf("audit entry: %w", err)
@@ -128,7 +130,7 @@ func (s *Store) inFencedAuditedTx(
 			return err
 		}
 
-		if _, err := s.appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -167,7 +169,7 @@ func (s *Store) inLockedFencedAuditedTx(
 			return err
 		}
 
-		if _, err := s.appendAuditEntry(ctx, q, e); err != nil {
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 
@@ -190,77 +192,168 @@ func validServerEntry(e audit.Entry) error {
 	return nil
 }
 
-// appendAuditEntry reads the last entry of the scope of e and inserts e as
-// the next one, with its sequence, previous hash and hash. The caller runs
-// it in a transaction that orders the appends of the scope. The entry holds
-// a hash when the chain is on (ADR 64): the state this handle read at most
-// audit.ChainSwitchLag ago, or else the state the transaction reads.
-func (s *Store) appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
-	chained, err := s.chain.On(func() (audit.ChainState, bool, error) {
-		return readChainState(ctx, q)
-	})
+// appendAuditEntry reads the stored chain state and the last entry of the
+// scope of e in the same transaction, then inserts e as the next one, with
+// its sequence, previous hash and hash. An entry with no ObjectID gets the
+// stable ID of the live unit that its Object names. The caller runs it in a
+// transaction that orders the appends of the scope. An append computes the
+// hash (hashLink) only when the chain of its scope is open. The chain is
+// open when the stored state is on. No row also counts as on. The scope
+// has no entries, or its last entry holds a hash and is not an end entry
+// (Action == audit.ActionEndChain). Otherwise the append writes no hash
+// (hashNone). An append in a scope whose chain is closed stays unhashed
+// until a start entry. The digest of the start entry covers it.
+func appendAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (audit.Entry, error) {
+	rec, err := readChainRecord(ctx, q)
 	if err != nil {
-		return audit.Entry{}, fmt.Errorf("read audit chain state: %w", err)
+		return audit.Entry{}, err
 	}
 
-	state := audit.ChainStateOff
-	if chained {
-		state = audit.ChainStateOn
+	placed, err := placeAuditEntry(ctx, q, e)
+	if err != nil {
+		return audit.Entry{}, err
 	}
 
-	return s.insertAuditEntry(ctx, q, e, state)
+	mode := hashNone
+	if rec.State == audit.ChainStateOn && audit.LastAgrees(placed.last, audit.ChainStateOn) {
+		mode = hashLink
+	}
+
+	return insertPlacedEntry(ctx, q, placed.entry, placed.prevHash, mode)
 }
 
-// insertAuditEntry inserts e as the next entry of its scope, with a hash
-// only when chain is audit.ChainStateOn.
-func (s *Store) insertAuditEntry(
-	ctx context.Context, q *db.Queries, e audit.Entry, chain audit.ChainState,
-) (audit.Entry, error) {
+// hashMode is how insertAuditEntry hashes an entry: not at all, linked to
+// the hash of the entry before it, or as the start of a chain with an empty
+// previous hash.
+type hashMode int
+
+// Hash modes.
+const (
+	hashNone hashMode = iota
+	hashLink
+	hashStart
+)
+
+// placedEntry is an entry with the fields that the transaction knows,
+// plus the last entry of its scope, or nil when the scope holds none.
+type placedEntry struct {
+	entry    audit.Entry
+	prevHash string
+	last     *audit.Entry
+}
+
+// placeAuditEntry fills the fields of e that the transaction knows: the
+// object ID, the failover version of the namespace, the sequence and a time
+// that never goes back along the scope. It answers the entry with those
+// fields, the hash of the entry before it, or "" for the first entry of the
+// scope, and the last entry of the scope, or nil when the scope holds none.
+func placeAuditEntry(ctx context.Context, q *db.Queries, e audit.Entry) (placedEntry, error) {
+	if e.ObjectID == "" {
+		id, err := auditObjectID(ctx, q, e.Object)
+		if err != nil {
+			return placedEntry{}, err
+		}
+
+		e.ObjectID = id
+	}
+
+	fenceVersion, err := auditFenceVersion(ctx, q, e.Namespace)
+	if err != nil {
+		return placedEntry{}, err
+	}
+
+	e.FenceVersion = fenceVersion
+
 	var prevHash string
+
+	var last *audit.Entry
 
 	var seq int64 = 1
 
-	last, err := q.LastAuditEntry(ctx, e.Namespace.String())
+	row, err := q.LastAuditEntry(ctx, e.Namespace.String())
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 	case err != nil:
-		return audit.Entry{}, fmt.Errorf("read last audit entry: %w", err)
+		return placedEntry{}, fmt.Errorf("read last audit entry: %w", err)
 	default:
-		prevHash = last.Hash
-		seq = last.Sequence + 1
+		prevHash = row.Hash
+		seq = row.Sequence + 1
+
+		// Callers take the time before the transaction, and the sequence
+		// comes inside it, so two appends to one scope can commit out of
+		// time order. The time never goes back along the sequence of a
+		// scope: an entry earlier than the last one takes its time.
+		if codec.Millis(e.At) < row.AtMs {
+			e.At = codec.FromMillis(row.AtMs)
+		}
+
+		stored := fromAuditRow(row)
+		last = &stored
 	}
 
 	e.Sequence = seq
+
+	return placedEntry{entry: e, prevHash: prevHash, last: last}, nil
+}
+
+// insertAuditEntry inserts e as the next entry of its scope, hashed as mode
+// says.
+func insertAuditEntry(
+	ctx context.Context, q *db.Queries, e audit.Entry, mode hashMode,
+) error {
+	placed, err := placeAuditEntry(ctx, q, e)
+	if err != nil {
+		return err
+	}
+
+	_, err = insertPlacedEntry(ctx, q, placed.entry, placed.prevHash, mode)
+
+	return err
+}
+
+// insertPlacedEntry hashes placed as mode says and inserts it as the next
+// entry of its scope. placed already holds the sequence and the other fields
+// that the transaction knows, and prevHash is the hash of the entry before
+// it.
+func insertPlacedEntry(
+	ctx context.Context, q *db.Queries, e audit.Entry, prevHash string, mode hashMode,
+) (audit.Entry, error) {
 	e.PrevHash, e.Hash = "", ""
 
-	// With the chain off, the entry holds no hash (ADR 60 decision 17). A
-	// chained entry after an unchained one links to an empty previous hash.
-	if chain == audit.ChainStateOn {
+	// With the chain off, the entry holds no hash. A start entry begins a
+	// chain with an empty previous hash.
+	if mode == hashLink {
 		e.PrevHash = prevHash
 		e.Hash = audit.ComputeHash(e, prevHash)
 	}
 
+	if mode == hashStart {
+		e.Hash = audit.ComputeHash(e, "")
+	}
+
 	insertErr := q.InsertAuditEntry(ctx, db.InsertAuditEntryParams{
-		Namespace:  e.Namespace.String(),
-		Sequence:   e.Sequence,
-		Subject:    e.Subject,
-		IdpSubject: e.IDPSubject,
-		TokenID:    e.TokenID,
-		Action:     e.Action,
-		Object:     e.Object,
-		Version:    e.Version,
-		ValuePath:  e.ValuePath,
-		AtMs:       e.AtMs(),
-		SourceIp:   e.SourceIP,
-		UserAgent:  e.UserAgent,
-		Channel:    string(e.Channel),
-		Kind:       string(e.Kind),
-		Outcome:    string(e.Outcome),
-		RequestID:  e.RequestID,
-		PrevHash:   e.PrevHash,
-		Hash:       e.Hash,
-		ValueCount: toInt8(e.ValueCount),
-		Changes:    toChangesText(e.Changes),
+		Namespace:    e.Namespace.String(),
+		Sequence:     e.Sequence,
+		Subject:      e.Subject,
+		IdpSubject:   e.IDPSubject,
+		TokenID:      e.TokenID,
+		Action:       e.Action,
+		Object:       e.Object,
+		Version:      e.Version,
+		ValuePath:    e.ValuePath,
+		AtMs:         e.AtMs(),
+		SourceIp:     e.SourceIP,
+		UserAgent:    e.UserAgent,
+		Channel:      string(e.Channel),
+		Kind:         string(e.Kind),
+		Outcome:      string(e.Outcome),
+		RequestID:    e.RequestID,
+		PrevHash:     e.PrevHash,
+		Hash:         e.Hash,
+		ValueCount:   toInt8(e.ValueCount),
+		Changes:      toChangesText(e.Changes),
+		ObjectID:     e.ObjectID,
+		FenceVersion: e.FenceVersion,
 	})
 	if insertErr != nil {
 		return audit.Entry{}, fmt.Errorf("insert audit entry: %w", insertErr)
@@ -306,6 +399,27 @@ func checkFenceForUpdate(ctx context.Context, q *db.Queries, fence namespace.Fen
 	}
 
 	return nil
+}
+
+// auditFenceVersion answers the failover version of the namespace scope in
+// q, read in the transaction of the append, so the hash of the entry covers
+// the fence it was written under. ServerScope, and a scope without a
+// namespace row, answer 0.
+func auditFenceVersion(ctx context.Context, q *db.Queries, scope namespace.Name) (int64, error) {
+	if scope == audit.ServerScope {
+		return 0, nil
+	}
+
+	row, err := q.GetNamespace(ctx, scope.String())
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+
+	if err != nil {
+		return 0, fmt.Errorf("read the failover version of %s: %w", scope, err)
+	}
+
+	return row.FailoverVersion, nil
 }
 
 // List implements audit.Store: one page of the entries of ns, newest first,
@@ -355,35 +469,20 @@ func (s *Store) Check(ctx context.Context, ns namespace.Name) (audit.CheckResult
 	return results[0], nil
 }
 
-// CheckEach implements audit.ScopesChecker: it builds the timeline of the
-// chain once and checks each scope against it, in a REPEATABLE READ,
-// read-only transaction that sees one snapshot of the log. So a switch of
-// the chain during the check gives no false failure.
+// CheckEach implements audit.ScopesChecker: it reads the record of the
+// chain once and checks each scope, in one snapshot transaction, so a
+// change of the log during the check gives no false failure.
 func (s *Store) CheckEach(ctx context.Context, scopes []namespace.Name) ([]audit.CheckResult, error) {
-	return s.checkScopesWith(ctx, scopes, (*audit.TimelineBuilder).Timeline)
-}
-
-// CheckRestored implements audit.RestoreChecker as CheckEach, with the rule
-// of audit.TimelineBuilder.RestoredTimeline.
-func (s *Store) CheckRestored(ctx context.Context, scopes []namespace.Name) ([]audit.CheckResult, error) {
-	return s.checkScopesWith(ctx, scopes, (*audit.TimelineBuilder).RestoredTimeline)
-}
-
-// checkScopesWith checks each scope against the timeline that build answers, in
-// one snapshot transaction.
-func (s *Store) checkScopesWith(
-	ctx context.Context, scopes []namespace.Name, build timelineRule,
-) ([]audit.CheckResult, error) {
 	out := make([]audit.CheckResult, 0, len(scopes))
 
 	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
-		timeline, err := chainTimeline(ctx, q, build)
+		rec, err := readChainRecord(ctx, q)
 		if err != nil {
 			return err
 		}
 
 		for _, ns := range scopes {
-			result, err := checkScope(ctx, q, ns, timeline)
+			result, err := checkScope(ctx, q, ns, rec)
 			if err != nil {
 				return err
 			}
@@ -404,9 +503,13 @@ func (s *Store) checkScopesWith(
 // than of scopes. CheckEach answers one result for each scope.
 var errCheckCount = errors.New("the check answered no result")
 
-// checkScope walks the chain of ns in q against timeline (see Check).
+// checkScope walks the chain of ns in q against the record rec (see
+// audit.ChainWalk), from sequence 1, in pages of audit.CheckPageSize.
 func checkScope(
-	ctx context.Context, q *db.Queries, ns namespace.Name, timeline audit.ChainTimeline,
+	ctx context.Context,
+	q *db.Queries,
+	ns namespace.Name,
+	rec audit.ChainRecord,
 ) (audit.CheckResult, error) {
 	lowest, err := q.MinAuditSequence(ctx, ns.String())
 	if err != nil {
@@ -419,42 +522,38 @@ func checkScope(
 		return audit.CheckResult{Checked: 0, BadSequence: lowest, Unchained: 0, Valid: false}, nil
 	}
 
-	walk := audit.NewChainWalk(timeline)
-
-	var wantSeq int64 = 1
-
-	var checked int64
-
-	for {
-		rows, err := q.ListAuditChainPage(ctx, db.ListAuditChainPageParams{
-			Namespace: ns.String(),
-			Sequence:  wantSeq - 1,
-			Limit:     clampInt32(audit.CheckPageSize),
-		})
-		if err != nil {
-			return audit.CheckResult{}, fmt.Errorf("select audit chain: %w", err)
-		}
-
-		read := checked + int64(len(rows))
-
-		for i := range rows {
-			e := fromAuditRow(rows[i])
-
-			if !walk.StepStored(e, rows[i].Changes.String) {
-				return audit.CheckResult{
-					Checked: read, BadSequence: e.Sequence, Unchained: walk.Unchained(), Valid: false,
-				}, nil
-			}
-
-			wantSeq++
-		}
-
-		checked += int64(len(rows))
-
-		if len(rows) < audit.CheckPageSize {
-			return audit.CheckResult{Checked: checked, BadSequence: 0, Unchained: walk.Unchained(), Valid: true}, nil
-		}
+	start, err := q.LastAuditChainStartSequence(ctx, ns.String())
+	if err != nil {
+		return audit.CheckResult{}, fmt.Errorf("select audit chain start: %w", err)
 	}
+
+	walk := audit.NewChainWalk(audit.ChainScope{Record: rec, Start: start})
+
+	var (
+		checked int64
+		bad     int64
+	)
+
+	err = walkScope(ctx, q, ns, func(row db.AuditEntry) {
+		if bad != 0 {
+			return
+		}
+
+		checked++
+
+		if !walk.StepStored(fromAuditRow(row), row.Changes.String) {
+			bad = row.Sequence
+		}
+	})
+	if err != nil {
+		return audit.CheckResult{}, err
+	}
+
+	if bad == 0 && !walk.Finish() {
+		bad = checked
+	}
+
+	return audit.CheckResult{Checked: checked, BadSequence: bad, Unchained: walk.Unchained(), Valid: bad == 0}, nil
 }
 
 // fromAuditRow converts a row into a domain entry. The namespace reads back
@@ -472,26 +571,28 @@ func fromAuditRow(row db.AuditEntry) audit.Entry {
 	}
 
 	return audit.Entry{
-		At:         codec.FromMillis(row.AtMs),
-		Namespace:  ns,
-		Subject:    row.Subject,
-		IDPSubject: row.IdpSubject,
-		TokenID:    row.TokenID,
-		Action:     row.Action,
-		Object:     row.Object,
-		Version:    row.Version,
-		ValuePath:  row.ValuePath,
-		Changes:    changes,
-		ValueCount: fromInt8(row.ValueCount),
-		SourceIP:   row.SourceIp,
-		UserAgent:  row.UserAgent,
-		Channel:    audit.Channel(row.Channel),
-		Kind:       audit.Kind(row.Kind),
-		Outcome:    audit.Outcome(row.Outcome),
-		RequestID:  row.RequestID,
-		PrevHash:   row.PrevHash,
-		Hash:       row.Hash,
-		Sequence:   row.Sequence,
+		At:           codec.FromMillis(row.AtMs),
+		Namespace:    ns,
+		Subject:      row.Subject,
+		IDPSubject:   row.IdpSubject,
+		TokenID:      row.TokenID,
+		Action:       row.Action,
+		Object:       row.Object,
+		Version:      row.Version,
+		ValuePath:    row.ValuePath,
+		Changes:      changes,
+		ValueCount:   fromInt8(row.ValueCount),
+		ObjectID:     row.ObjectID,
+		SourceIP:     row.SourceIp,
+		UserAgent:    row.UserAgent,
+		Channel:      audit.Channel(row.Channel),
+		Kind:         audit.Kind(row.Kind),
+		Outcome:      audit.Outcome(row.Outcome),
+		RequestID:    row.RequestID,
+		PrevHash:     row.PrevHash,
+		Hash:         row.Hash,
+		Sequence:     row.Sequence,
+		FenceVersion: row.FenceVersion,
 	}
 }
 
@@ -521,4 +622,59 @@ func toChangesText(changes []audit.Change) pgtype.Text {
 	text := audit.EncodeChanges(changes)
 
 	return pgtype.Text{String: text, Valid: text != ""}
+}
+
+// updateServerSetting reads the one row of an installation setting with
+// read, calls update with it, and writes the new value with write and the
+// audit entry of @server that update returns, in one transaction: both
+// commit, or neither. An error of update ends the transaction with no
+// change, and updateServerSetting returns it as it is. The transaction
+// takes the advisory lock of @server first, as every audited change does.
+func updateServerSetting[T any](
+	ctx context.Context,
+	s *Store,
+	read func(*db.Queries) (T, error),
+	update func(T) (T, audit.Entry, error),
+	write func(*db.Queries, T) error,
+) (T, error) {
+	var stored T
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock server audit scope: %w", err)
+		}
+
+		old, err := read(q)
+		if err != nil {
+			return err
+		}
+
+		value, e, err := update(old)
+		if err != nil {
+			return err
+		}
+
+		if err := validServerEntry(e); err != nil {
+			return err
+		}
+
+		if err := write(q, value); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		stored = value
+
+		return nil
+	})
+	if err != nil {
+		var zero T
+
+		return zero, err
+	}
+
+	return stored, nil
 }

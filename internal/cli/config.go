@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -48,6 +49,10 @@ var (
 	// ErrConfigPassword is a URL with a password for a setting that refuses
 	// one in the file (ADR 63 decision 4).
 	ErrConfigPassword = errors.New("config file value holds a password")
+	// ErrFlagPassword is a flag that holds a URL with a password for a
+	// setting that refuses one. The error names the flag, never the value,
+	// because the value can hold a secret.
+	ErrFlagPassword = errors.New("flag value holds a password")
 
 	errWantBool   = errors.New("want true or false")
 	errWantInt    = errors.New("want a decimal integer of 0 or more")
@@ -232,6 +237,30 @@ func decodeMapping(root *yaml.Node) (ConfigFile, error) {
 	}
 
 	return out, nil
+}
+
+// RefuseFlagPassword answers an error for the first setting whose flag holds
+// a URL with a password, for a setting that refuses a password in the file.
+// The flag value is read from fs, because the resolved value of a sensitive
+// setting is redacted. A flag shows in a process list, so a secret comes
+// from the variable instead. The error names the flag and the variable,
+// never the value.
+func RefuseFlagPassword(fs *flag.FlagSet, resolved []Resolved) error {
+	for _, r := range resolved {
+		if r.Source != SourceFlag || !r.Setting.NoPasswordInFile || r.Setting.Flag == "" {
+			continue
+		}
+
+		f := fs.Lookup(r.Setting.Flag)
+		if f != nil && hasPassword(f.Value.String()) {
+			return fmt.Errorf(
+				"%w: --%s: set the URL in %s instead",
+				ErrFlagPassword, r.Setting.Flag, r.Setting.Env,
+			)
+		}
+	}
+
+	return nil
 }
 
 // hasPassword reports whether value is a URL with a password. A value that

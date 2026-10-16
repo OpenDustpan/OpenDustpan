@@ -21,6 +21,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/identity/identitytest"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -112,12 +113,29 @@ func (stubStackStore) DeleteStack(
 	_ stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ audit.Entry,
+	_ inventory.Deletion,
 ) error {
 	return stack.ErrNotFound
 }
 
-func (stubStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
+func (stubStackStore) ForceDeleteStack(
+	_ context.Context,
+	_ stack.Ref,
+	_ namespace.Fence,
+	_ inventory.Deletion,
+) error {
+	return stack.ErrNotFound
+}
+
+// RestoreStack implements stack.Store; this fake holds no deleted stack.
+func (stubStackStore) RestoreStack(
+	_ context.Context, _ stack.ID, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) (stack.Ref, error) {
+	return stack.Ref{}, stack.ErrNotFound
+}
+
+// PurgeStack implements stack.Store; this fake holds no deleted stack.
+func (stubStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ time.Time, _ audit.Entry) error {
 	return stack.ErrNotFound
 }
 
@@ -195,8 +213,10 @@ func (s *recordingStackStore) GetStack(_ context.Context, ref stack.Ref) (stack.
 }
 
 func (s *recordingStackStore) DeleteStack(
-	_ context.Context, ref stack.Ref, _ namespace.Fence, _ stack.DeleteGuard, e audit.Entry,
+	_ context.Context, ref stack.Ref, _ namespace.Fence, _ stack.DeleteGuard, d inventory.Deletion,
 ) error {
+	e := d.Entry
+
 	s.deleted = append(s.deleted, ref)
 	s.entries = append(s.entries, e)
 
@@ -204,12 +224,32 @@ func (s *recordingStackStore) DeleteStack(
 }
 
 func (s *recordingStackStore) ForceDeleteStack(
-	_ context.Context, ref stack.Ref, _ namespace.Fence, e audit.Entry,
+	_ context.Context, ref stack.Ref, _ namespace.Fence, d inventory.Deletion,
 ) error {
+	e := d.Entry
+
 	s.forced = append(s.forced, ref)
 	s.entries = append(s.entries, e)
 
 	return s.deleteErr
+}
+
+// RestoreStack implements stack.Store; this fake holds no deleted stack.
+func (*recordingStackStore) RestoreStack(
+	_ context.Context, _ stack.ID, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) (stack.Ref, error) {
+	return stack.Ref{}, stack.ErrNotFound
+}
+
+// PurgeStack implements stack.Store; this fake holds no deleted stack.
+func (*recordingStackStore) PurgeStack(
+	_ context.Context,
+	_ stack.ID,
+	_ namespace.Fence,
+	_ time.Time,
+	_ audit.Entry,
+) error {
+	return stack.ErrNotFound
 }
 
 func (s *recordingStackStore) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stack, error) {
@@ -326,7 +366,7 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stubStackStore{}, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: stubStackStore{}, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -340,6 +380,7 @@ func newTestHandlerWithBaseURL(t *testing.T, base baseurl.Resolver) *pulumi.Hand
 		Namespaces:              namespaces,
 		Authenticator:           stubAuthenticator{},
 		Authorizer:              stubAuthorizer{},
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 base,
 		MaxBodyBytesInFlight:    0,
@@ -379,7 +420,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -393,6 +434,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) (*pulumi.Handl
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
@@ -1468,7 +1510,7 @@ func newDeleteHandlerWithAudit(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -1488,6 +1530,7 @@ func newDeleteHandlerWithAudit(
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -1501,6 +1544,7 @@ func newDeleteHandlerWithAudit(
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
@@ -1850,6 +1894,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -1921,6 +1966,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)

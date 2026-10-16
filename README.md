@@ -124,6 +124,12 @@ token instead of a credentials file. The [TFE-compatible API
 notes](docs/tfe-api.md) list the endpoints, the `remote` backend with a
 workspace prefix, and the differences from TFE.
 
+A refused `tofu state push -force` of another lineage keeps the workspace
+lock. The error names the command that clears it. Run
+`tofu force-unlock <namespace>/<workspace>` to clear the lock. Do not push
+the same file again, because its lineage is still different. Run `tofu apply`,
+or push a state file that has the lineage of the workspace.
+
 ### Web console
 
 The web console is a separate repository,
@@ -283,6 +289,8 @@ How-to guides:
   logs.
 - [Read the audit log](docs/guides/audit-log.md): the entries of a
   namespace and the check of their chain.
+- [Deleted units](docs/guides/deleted-units.md): list, restore and purge
+  the units that a delete keeps until its retention period ends.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
 

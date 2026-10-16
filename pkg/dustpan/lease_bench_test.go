@@ -116,7 +116,9 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 		b.Fatalf("create namespace: %v", createErr)
 	}
 
-	stacks, err := stack.NewService(stack.Config{Store: s.stacks, Namespaces: nsSvc, Now: now, State: nil})
+	stacks, err := stack.NewService(
+		stack.Config{Store: s.stacks, Namespaces: nsSvc, Now: now, State: nil, Retention: 0},
+	)
 	if err != nil {
 		b.Fatalf("stack service: %v", err)
 	}
@@ -126,6 +128,7 @@ func benchLeaseCheck(b *testing.B, s leaseStores) {
 	updates, err := stack.NewUpdates(stack.UpdatesConfig{
 		Updates: s.updates, Checkpoints: s.checkpoints, Events: s.events, Namespaces: nsSvc,
 		Stacks: stacks, Blobs: blobs, Tokens: nil, Now: now, Logger: nil, MaxCheckpointBytes: 0, Journal: nil,
+		Replayer: nil,
 	})
 	if err != nil {
 		b.Fatalf("updates service: %v", err)
@@ -200,13 +203,16 @@ func benchTokenID(b *testing.B, s leaseStores, now func() time.Time) string {
 
 	ctx := b.Context()
 
-	principals, err := principal.NewService(principal.Config{Store: s.principals, Guard: nil, Now: now, NewID: nil})
+	principals, err := principal.NewService(
+		principal.Config{Store: s.principals, Guard: nil, Namespaces: nil, Tokens: nil, Now: now, NewID: nil},
+	)
 	if err != nil {
 		b.Fatalf("principal service: %v", err)
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: s.tokens, Principals: s.principals, Freshness: nil, Grants: nil, Logger: nil, Now: now, NewID: nil,
+		Store: s.tokens, Principals: s.principals, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: now,
+		NewID: nil,
 	})
 	if err != nil {
 		b.Fatalf("token service: %v", err)
@@ -320,7 +326,8 @@ func benchCaller() audit.Entry {
 		At: time.Time{}, Namespace: "", Subject: "admin", IDPSubject: "", TokenID: "",
 		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
 		ValueCount: nil, SourceIP: "192.0.2.1", UserAgent: "bench", Channel: audit.ChannelAPI, Kind: "",
-		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil,
+		Outcome: "", RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil, ObjectID: "",
+		FenceVersion: 0,
 	}
 }
 

@@ -7,11 +7,14 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/internal/token"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // capabilityCheck is one of the two read-only capability checks.
-type capabilityCheck func(svc *workspace.Service, id workspace.StateVersionID, tok token.Token) error
+type capabilityCheck func(
+	svc *workspace.Service, id workspace.StateVersionID, tok token.Token,
+) (namespace.Name, error)
 
 // checker binds a check to its test and fixture.
 type checker struct {
@@ -20,33 +23,52 @@ type checker struct {
 	check capabilityCheck
 }
 
-// expect runs check and proves two things: it returns want (nil, or a
-// sentinel that errors.Is matches), and the version row reads back identical
-// before and after, so the check wrote nothing.
+// readVersion returns the stored version row, or the zero version when the
+// row does not exist.
+func (c checker) readVersion(label string, id workspace.StateVersionID) workspace.StateVersion {
+	c.t.Helper()
+
+	v, err := c.f.store.GetStateVersion(c.t.Context(), id)
+	if err != nil && !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		c.t.Fatalf("%s: read version: %v", label, err)
+	}
+
+	return v
+}
+
+// checkOutcome proves got matches want, and a success also returns the
+// namespace of the workspace.
+func (c checker) checkOutcome(
+	label string, ns namespace.Name, got, want error,
+) {
+	c.t.Helper()
+
+	mismatch := want == nil && got != nil || want != nil && !errors.Is(got, want)
+	if mismatch {
+		c.t.Errorf("%s: err = %v, want %v", label, got, want)
+	}
+
+	if want == nil && got == nil && ns != "acme" {
+		c.t.Errorf("%s: namespace = %q, want acme", label, ns)
+	}
+}
+
+// expect runs check and proves three things: it returns want (nil, or a
+// sentinel that errors.Is matches), a success also returns the namespace of
+// the workspace, and the version row reads back identical before and after,
+// so the check wrote nothing.
 func (c checker) expect(label string, id workspace.StateVersionID, tok token.Token, want error) {
-	t, f, check := c.t, c.f, c.check
+	c.t.Helper()
 
-	t.Helper()
-
-	before, err := f.store.GetStateVersion(t.Context(), id)
-	if err != nil && !errors.Is(err, workspace.ErrStateVersionNotFound) {
-		t.Fatalf("%s: read version before the check: %v", label, err)
-	}
-
-	got := check(f.svc, id, tok)
-
-	after, err := f.store.GetStateVersion(t.Context(), id)
-	if err != nil && !errors.Is(err, workspace.ErrStateVersionNotFound) {
-		t.Fatalf("%s: read version after the check: %v", label, err)
-	}
+	before := c.readVersion(label, id)
+	ns, got := c.check(c.f.svc, id, tok)
+	after := c.readVersion(label, id)
 
 	if !reflect.DeepEqual(before, after) {
-		t.Fatalf("%s: version row changed by the check: before %+v, after %+v", label, before, after)
+		c.t.Fatalf("%s: version row changed by the check: before %+v, after %+v", label, before, after)
 	}
 
-	if want == nil && got != nil || want != nil && !errors.Is(got, want) {
-		t.Errorf("%s: err = %v, want %v", label, got, want)
-	}
+	c.checkOutcome(label, ns, got, want)
 }
 
 // beginVersion locks nothing new: it begins a pending state version.
@@ -121,7 +143,9 @@ func runCapabilityChecks(t *testing.T, check capabilityCheck, finalizedExpired e
 func TestCheckUpload(t *testing.T) {
 	t.Parallel()
 
-	runCapabilityChecks(t, func(svc *workspace.Service, id workspace.StateVersionID, tok token.Token) error {
+	runCapabilityChecks(t, func(
+		svc *workspace.Service, id workspace.StateVersionID, tok token.Token,
+	) (namespace.Name, error) {
 		return svc.CheckUpload(t.Context(), id, tok)
 	}, nil)
 }
@@ -131,7 +155,9 @@ func TestCheckUpload(t *testing.T) {
 func TestCheckJSONRenderingUpload(t *testing.T) {
 	t.Parallel()
 
-	runCapabilityChecks(t, func(svc *workspace.Service, id workspace.StateVersionID, tok token.Token) error {
+	runCapabilityChecks(t, func(
+		svc *workspace.Service, id workspace.StateVersionID, tok token.Token,
+	) (namespace.Name, error) {
 		return svc.CheckJSONRenderingUpload(t.Context(), id, tok)
 	}, workspace.ErrUploadDenied)
 }

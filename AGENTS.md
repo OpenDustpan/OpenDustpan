@@ -164,6 +164,13 @@ skill (ADR 14):
 - Do not use words that claim quality without proof. Give the measurement or
   the fact. Do not use emoji. `scripts/docs-banned-words.py` holds the list of
   banned words, and `make docs-lint` runs it on the same files.
+- Do not put internal project references in code or in user documentation
+  (ADR 66). An internal reference cites an ADR, an RFC, an issue or pull
+  request number, a milestone or a research note. Code includes comments,
+  tests, and error and log text. User documentation is `README.md`,
+  `docs/guides/`, `docs/reference/` and `docs/explanation/`. Write the reason
+  or the behavior instead. When you edit a line that has such a reference,
+  remove the reference. Do not rewrite other lines only to remove references.
 
 ## Working in this repo
 

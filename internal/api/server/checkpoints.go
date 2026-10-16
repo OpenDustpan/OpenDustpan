@@ -11,8 +11,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 )
 
-// CheckpointEpochs starts a new epoch of the signed audit checkpoints (ADR
-// 60 decision 18). audit.Checkpoints implements it.
+// CheckpointEpochs starts a new epoch of the signed audit checkpoints.
+// audit.Checkpoints implements it.
 type CheckpointEpochs interface {
 	// NewEpoch starts the epoch after the current one at now and answers it.
 	NewEpoch(ctx context.Context, now time.Time) (int64, error)
@@ -31,12 +31,13 @@ type checkpointEpochResponse struct {
 func (h *Handler) checkpointRoutes() []Route {
 	return []Route{
 		{
-			Method:  http.MethodPost,
-			Path:    "/api/server/audit/checkpoint-epochs",
-			Scope:   ScopeAuthorized,
-			Actions: []identity.Action{identity.ActionServerManageAudit},
-			Resolve: resolveServer,
-			Serve:   h.newCheckpointEpoch,
+			Method:     http.MethodPost,
+			Path:       "/api/server/audit/checkpoint-epochs",
+			Scope:      ScopeAuthorized,
+			Actions:    []identity.Action{identity.ActionServerManageAudit},
+			Resolve:    resolveServer,
+			ActionsFor: nil,
+			Serve:      h.newCheckpointEpoch,
 		},
 	}
 }

@@ -335,7 +335,7 @@ func (s *fakeBackupStore) DeleteStack(
 	_ context.Context,
 	ref stack.Ref,
 	fence namespace.Fence,
-	_ stack.DeleteGuard, _ audit.Entry,
+	_ stack.DeleteGuard, _ inventory.Deletion,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -374,7 +374,7 @@ func (s *fakeBackupStore) ForceDeleteStack(
 	_ context.Context,
 	ref stack.Ref,
 	fence namespace.Fence,
-	_ audit.Entry,
+	_ inventory.Deletion,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -401,6 +401,18 @@ func (s *fakeBackupStore) ForceDeleteStack(
 	s.removeStack(ref, st)
 
 	return nil
+}
+
+// RestoreStack implements stack.Store; this fake holds no deleted stack.
+func (*fakeBackupStore) RestoreStack(
+	_ context.Context, _ stack.ID, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) (stack.Ref, error) {
+	return stack.Ref{}, stack.ErrNotFound
+}
+
+// PurgeStack implements stack.Store; this fake holds no deleted stack.
+func (*fakeBackupStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ time.Time, _ audit.Entry) error {
+	return stack.ErrNotFound
 }
 
 // UpdateStackTags implements stack.Store.
@@ -1170,6 +1182,23 @@ func (s *fakeBackupStore) ListDeletedUnits(_ context.Context, _ namespace.Name) 
 	return []inventory.DeletedEntry{}, nil
 }
 
+// QueryDeletedUnits implements inventory.DeletedReader. The fake removes a
+// deleted stack with its entry, so every page is empty.
+func (s *fakeBackupStore) QueryDeletedUnits(
+	_ context.Context,
+	q inventory.DeletedQuery,
+) (inventory.DeletedPage, error) {
+	return inventory.PageDeleted(nil, q), nil
+}
+
+// GetDeletedUnit implements inventory.DeletedReader. The fake holds no
+// deleted unit.
+func (s *fakeBackupStore) GetDeletedUnit(
+	_ context.Context, _ namespace.Name, _, _ string,
+) (inventory.DeletedEntry, error) {
+	return inventory.DeletedEntry{}, inventory.ErrNotFound
+}
+
 // ListUnits implements inventory.Reader, ordered by tool then name.
 func (s *fakeBackupStore) ListUnits(_ context.Context, ns namespace.Name) ([]inventory.Entry, error) {
 	s.mu.RLock()
@@ -1335,7 +1364,7 @@ func (s *fakeBackupStore) SaveWorkspace(
 // DeleteWorkspace implements workspace.Store: it removes the workspace with
 // its state versions, its wrapped data key and its inventory entry.
 func (s *fakeBackupStore) DeleteWorkspace(
-	_ context.Context, ref workspace.Ref, fence namespace.Fence, _ audit.Entry,
+	_ context.Context, ref workspace.Ref, fence namespace.Fence, _ inventory.Deletion,
 ) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1367,6 +1396,26 @@ func (s *fakeBackupStore) DeleteWorkspace(
 	delete(s.data.entries, inventoryKey(ref.Namespace, "opentofu", ref.Name.String()))
 
 	return nil
+}
+
+// RestoreWorkspace implements workspace.Store; this fake holds no deleted
+// workspace.
+func (*fakeBackupStore) RestoreWorkspace(
+	_ context.Context, _ workspace.ID, _ workspace.Name, _ namespace.Fence, _ audit.Entry,
+) (workspace.Ref, error) {
+	return workspace.Ref{}, workspace.ErrNotFound
+}
+
+// PurgeWorkspace implements workspace.Store; this fake holds no deleted
+// workspace.
+func (*fakeBackupStore) PurgeWorkspace(
+	_ context.Context,
+	_ workspace.ID,
+	_ namespace.Fence,
+	_ time.Time,
+	_ audit.Entry,
+) error {
+	return workspace.ErrNotFound
 }
 
 // CreateStateVersion implements workspace.StateStore.
@@ -2673,6 +2722,7 @@ func (s *fakeBackupStore) stackIDOf(ref stack.Ref) (string, error) {
 func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed time.Time) {
 	name := ref.Project.String() + "/" + ref.Stack.String()
 	s.data.entries[inventoryKey(ref.Namespace, "pulumi", name)] = inventory.Entry{
+		Collection:    "",
 		LastChanged:   changed,
 		Namespace:     ref.Namespace,
 		Tool:          "pulumi",
@@ -2690,6 +2740,7 @@ func (s *fakeBackupStore) publishStack(ref stack.Ref, unitID string, changed tim
 func (s *fakeBackupStore) publishWorkspace(ref workspace.Ref, unitID string, changed time.Time) {
 	name := ref.Name.String()
 	s.data.entries[inventoryKey(ref.Namespace, "opentofu", name)] = inventory.Entry{
+		Collection:    "",
 		LastChanged:   changed,
 		Namespace:     ref.Namespace,
 		Tool:          "opentofu",

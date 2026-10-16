@@ -1,0 +1,173 @@
+# Deleted units
+
+This guide shows how to list, restore and purge deleted units through the
+inventory API. It follows ADR 47.
+
+A delete is a soft delete. `pulumi stack rm` and `tofu workspace delete`
+take the unit out of every list and free its name at once. OpenDustpan keeps
+the state, the history and the secrets of the unit until its retention
+period ends.
+
+When the retention period of a unit ends, the retention sweep purges the
+unit. An admin can also purge a unit through the API before that time.
+
+## Set the retention period
+
+`--soft-delete-retention` (`DUSTPAN_SOFT_DELETE_RETENTION`) sets the
+retention period. The default is `720h` (30 days). The minimum is `1h`. A
+new period applies to units that you delete after the change. A unit that is
+already deleted keeps its purge time.
+
+## List the deleted units
+
+`GET /api/inventory/deleted-units?organization=<namespace>` lists one page of
+the deleted units of the namespace, ordered by tool, then name, then unit ID.
+It needs the action `namespace:read` on the namespace. The list holds only
+the units that you can read: a grant of `unit:read` on the installation or
+on the namespace shows every deleted unit of the namespace. A grant on one
+unit shows nothing after the unit is deleted, because a grant on a unit
+follows a unit that exists.
+
+These query values filter and page the list:
+
+- `tool`: `pulumi` or `opentofu` (the labels `Pulumi` and `OpenTofu` also
+  work).
+- `namePrefix`: the start of the unit name, case-sensitive. For a Pulumi
+  stack the name is `<project>/<stack>`.
+- `purgeWithinDays`: only units whose retention period ends in this number
+  of days or less, from 0 to 3650. A unit whose retention period has ended
+  also matches.
+- `limit`: the page size, from 1 to 500. The default (missing or 0) is 50.
+- `cursor`: the `nextCursor` value of the previous page.
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/inventory/deleted-units?organization=acme&tool=pulumi&limit=20"
+```
+
+The answer has `units`, `total` and `nextCursor`. Each unit has `tool`,
+`reference`, `namespace`, `name`, `unitID`, `deletedAt` and `purgeAfter`
+(RFC 3339 times in UTC). `total` counts the deleted units that match the
+filters and that you can read. `nextCursor` is empty on the last page.
+
+## Restore a deleted unit
+
+`POST /api/inventory/deleted-units/<tool>/<unitID>/restore?organization=<namespace>`
+restores the unit with its state, its history and its secrets. It needs the
+action `unit:restore`. The maintainer and admin roles have it.
+
+Send `{}` to restore the unit under its name before the delete. If a live
+unit holds that name, the server answers 409. Then send a new name:
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  -d '{"name": "prod-restored"}' \
+  "https://dustpan.example/api/inventory/deleted-units/pulumi/<unitID>/restore?organization=acme"
+```
+
+For a Pulumi stack the new name is the stack name. The stack stays in its
+project. The server checks the new name with the name rules of the tool and
+answers 400 for a name that is not valid. The answer is the live unit with
+the same `unitID`.
+
+## Purge a deleted unit
+
+`DELETE /api/inventory/deleted-units/<tool>/<unitID>?organization=<namespace>`
+deletes the unit for good before its retention period ends. It needs the
+action `unit:purge`. Only the admin role has it. The server answers 204.
+A purge cannot be undone.
+
+## Errors
+
+- 404: the namespace has no deleted unit with this tool and ID. A live unit
+  or a purged unit also answers 404.
+- 409: a live unit holds the name, or a failover fenced the write.
+- 421: the namespace is not homed in this region.
+
+A restore and a purge of the same unit can run at the same time. Each runs
+in its own fenced transaction. The second one answers 404 or 409 and changes
+nothing.
+
+Each restore and each purge writes one audit entry with the kind `change`.
+See [Audit log](audit-log.md).
+
+## The retention sweep
+
+The server runs the retention sweep one time each hour. The first sweep runs
+one hour after the server starts. The sweep does two things:
+
+1. It purges each deleted unit whose retention period ended, in every
+   namespace that has its home in this region. Each purge runs in its own
+   fenced transaction and writes one audit entry with the subject `@server`
+   and the action `unit:purge`.
+2. It finishes the blob purge records. A purge deletes the blobs of the unit
+   after its rows, and keeps a blob purge record. A checkpoint save or a
+   state upload that started before the purge can still write a blob after
+   that delete. So the sweep deletes the blobs of a record again when the
+   record is older than 24 hours, and finishes the record only when no blob
+   remains.
+
+A sweep purges a unit only when its retention period ended at the start of
+the sweep. The purge checks this again in its transaction. So a unit that you
+restore and delete again during a sweep gets its new retention period. A
+restore and a sweep purge of the same unit can run at the same time. One of
+them wins, and the sweep counts the other unit as skipped. A failed purge
+does not stop the sweep. The server logs a warning with the unit reference
+and the error kind, and the next sweep tries again.
+
+When a sweep purges units, the server logs one line with the count and the
+oldest purge time among them.
+
+`POST /api/server/deleted-units/sweep` runs one sweep now. It needs the action
+`server:maintenance` on the installation. Each purge writes its audit entry
+with you as the subject. While another sweep of the server runs, the route
+answers 409 at once. Try again later. The answer names each purged unit and
+counts the other outcomes:
+
+```json
+{
+  "purged": [{"tool": "pulumi", "namespace": "acme", "unitID": "stk-1", "reference": "pulumi:acme/web/prod"}],
+  "failed": 0,
+  "skipped": 0,
+  "finishedBlobPurges": 1,
+  "pendingBlobPurges": 2
+}
+```
+
+The metric `dustpan_deleted_unit_sweep_total` counts the outcomes of each
+sweep. See [Observe](observe.md).
+
+## After an upgrade or an installation restore
+
+At the start, the server logs one line with the count of deleted units whose
+retention period has already ended. The first sweep, one hour later, purges
+them. After an upgrade, these are units that you deleted before the server
+had a sweep. After an installation restore, these are units whose retention
+period ended after the backup.
+
+To keep such a unit, restore it before the first sweep. First list the
+deleted units whose retention period ends within one day. The units that the
+first sweep purges are in this list. The list holds the units of one
+namespace, so list each namespace. The list comes in pages: when the answer has a
+`nextCursor`, send it as `cursor` to get the next page.
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/inventory/deleted-units?organization=acme&purgeWithinDays=1"
+```
+
+Then restore each unit that you keep, with the `tool` and the `unitID` of the
+list:
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" -d '{}' \
+  "https://dustpan.example/api/inventory/deleted-units/<tool>/<unitID>/restore?organization=acme"
+```
+
+If a live unit holds its name, the server answers 409. Then send a new name,
+as [Restore a deleted unit](#restore-a-deleted-unit) shows.
+
+The retention setting
+does not help here: a delete records the end of the retention period of the
+unit, and a new setting applies only to later deletes. The retention setting
+has no value that turns the purge off.

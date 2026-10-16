@@ -190,11 +190,17 @@ func newBehaviorHandler(
 	}
 
 	handler, err := apiinventory.NewHandler(apiinventory.Config{
+		Moves:         nil,
+		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
+		Deleted:       seededDeleted(),
+		Lifecycles:    testLifecycles(),
+		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
 		Logger:        slog.New(slog.DiscardHandler),
+		Now:           nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -286,6 +292,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 
 	reader.entries[ns] = []coreinventory.Entry{
 		{
+			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
 			Tool:          "pulumi",
@@ -297,6 +304,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Lock:          nil,
 		},
 		{
+			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
 			Tool:          "opentofu",
@@ -308,6 +316,7 @@ func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 			Lock:          nil,
 		},
 		{
+			Collection:    "",
 			LastChanged:   changeTime(),
 			Namespace:     ns,
 			Tool:          "pulumi",
@@ -535,6 +544,7 @@ func TestListUnitsLockField(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
 					Tool:          "pulumi",
@@ -588,6 +598,7 @@ func TestListUnitsOmitsLock(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
 					Tool:          "opentofu",
@@ -640,6 +651,7 @@ func TestListUnitsLockHoldsNoToken(t *testing.T) {
 		entries: map[namespace.Name][]coreinventory.Entry{
 			ns: {
 				{
+					Collection:    "",
 					LastChanged:   changeTime(),
 					Namespace:     ns,
 					Tool:          "opentofu",
@@ -845,11 +857,17 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}
 
 	full := apiinventory.Config{
+		Moves:         nil,
+		Collections:   testCollectionService(t, nsStore),
 		Namespaces:    namespaces,
 		Units:         reader,
+		Deleted:       seededDeleted(),
+		Lifecycles:    testLifecycles(),
+		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
+		Now:           nil,
 	}
 
 	cases := []struct {
@@ -858,6 +876,8 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 	}{
 		{name: "namespace service", drop: func(c *apiinventory.Config) { c.Namespaces = nil }},
 		{name: "inventory reader", drop: func(c *apiinventory.Config) { c.Units = nil }},
+		{name: "deleted unit reader", drop: func(c *apiinventory.Config) { c.Deleted = nil }},
+		{name: "unit lifecycles", drop: func(c *apiinventory.Config) { c.Lifecycles = nil }},
 		{name: "authenticator", drop: func(c *apiinventory.Config) { c.Authenticator = nil }},
 		{name: "authorizer", drop: func(c *apiinventory.Config) { c.Authorizer = nil }},
 		{name: "logger", drop: func(c *apiinventory.Config) { c.Logger = nil }},

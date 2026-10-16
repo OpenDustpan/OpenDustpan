@@ -178,7 +178,13 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	// A deleted stack keeps its row and moves its inventory entry to the
 	// deleted units (ADR 47), so the round trip carries both.
 	gone := mustCreateStack(t, s, acme, "gone")
-	if err := s.ForceDeleteStack(ctx, gone.Ref, acme.Fence(), deleteEntry(acme.Name)); err != nil {
+	err = s.ForceDeleteStack(
+		ctx,
+		gone.Ref,
+		acme.Fence(),
+		inventory.Deletion{Entry: deleteEntry(acme.Name), PurgeAfter: purgeAt()},
+	)
+	if err != nil {
 		t.Fatalf("delete stack %s: %v", gone.Ref, err)
 	}
 
@@ -238,6 +244,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupPrincipals(t, s)
 	seedBackupTokens(t, s)
 	seedBackupAccess(t, s)
+	seedBackupPurge(t, s, acme)
 
 	return backupSeed{
 		acme:       acme,
@@ -278,17 +285,17 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 		{
 			CreatedAt: now(), UpdatedAt: now().Add(time.Minute), DisabledAt: time.Time{}, ID: "prn-alice",
 			Subject: "alice@example.com", DisplayName: "Alice", Kind: principal.KindPerson,
-			Source: principal.SourceLocal, GroupCount: 0,
+			Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 		{
 			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-deploy",
 			Subject: "ci-deploy", DisplayName: "", Kind: principal.KindService,
-			Source: principal.SourceLocal, GroupCount: 0,
+			Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 		{
 			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-gone",
 			Subject: "gone", DisplayName: "", Kind: principal.KindWorkload,
-			Source: principal.SourceSCIM, GroupCount: 0,
+			Source: principal.SourceSCIM, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 	}
 	for i := range principals {
@@ -385,7 +392,7 @@ func seedBackupSweep(t *testing.T, ts accesstoken.Store) {
 
 	policy := accesstoken.Policy{
 		UpdatedAt: now(), MaxLifetime: 30 * 24 * time.Hour, Inactivity: time.Hour,
-		DisableTokens: true, DisableAccounts: true, DisableBreakGlass: true,
+		DisableTokens: true, DisableAccounts: true, DisableBreakGlass: false,
 	}
 
 	_, err := ts.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
@@ -432,26 +439,28 @@ func backupToken(id, principalID string, kind accesstoken.Kind) accesstoken.Toke
 // an installation store takes.
 func ServerChange(at time.Time, object string) audit.Entry {
 	return audit.Entry{
-		At:         at,
-		Namespace:  audit.ServerScope,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "server:manage-principals",
-		Object:     object,
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "storetest",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           at,
+		Namespace:    audit.ServerScope,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "server:manage-principals",
+		Object:       object,
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "storetest",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 
@@ -589,26 +598,28 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 		}
 
 		stored, err := s.Append(t.Context(), acme.Fence(), audit.Entry{
-			At:         now(),
-			Namespace:  acme.Name,
-			Subject:    "admin",
-			IDPSubject: "",
-			TokenID:    "",
-			Action:     "unit:decrypt",
-			Object:     "pulumi:" + acme.Name.String() + "/web/prod",
-			Version:    "",
-			ValuePath:  "",
-			ValueCount: count,
-			Changes:    changes,
-			SourceIP:   "192.0.2.1",
-			UserAgent:  "test",
-			Channel:    audit.ChannelAPI,
-			Kind:       kind,
-			Outcome:    audit.OutcomeSuccess,
-			RequestID:  fmt.Sprintf("req-%d", i),
-			PrevHash:   "",
-			Hash:       "",
-			Sequence:   0,
+			At:           now(),
+			Namespace:    acme.Name,
+			Subject:      "admin",
+			IDPSubject:   "",
+			TokenID:      "",
+			Action:       "unit:decrypt",
+			Object:       "pulumi:" + acme.Name.String() + "/web/prod",
+			Version:      "",
+			ValuePath:    "",
+			ValueCount:   count,
+			Changes:      changes,
+			SourceIP:     "192.0.2.1",
+			UserAgent:    "test",
+			Channel:      audit.ChannelAPI,
+			Kind:         kind,
+			Outcome:      audit.OutcomeSuccess,
+			RequestID:    fmt.Sprintf("req-%d", i),
+			ObjectID:     "",
+			PrevHash:     "",
+			Hash:         "",
+			Sequence:     0,
+			FenceVersion: 0,
 		})
 		if err != nil {
 			t.Fatalf("append audit entry %d: %v", i, err)
@@ -666,6 +677,31 @@ func seedBackupKey(
 	_ = stored
 
 	return scope
+}
+
+// seedBackupPurge makes, deletes and purges the stack web/purged of acme, so
+// the seed holds one blob purge record (ADR 47) and the round trip carries
+// the blob_purges table.
+func seedBackupPurge(t *testing.T, s BackupStore, acme namespace.Namespace) {
+	t.Helper()
+
+	ctx := t.Context()
+	st := newStack(acme.Name, "web", "purged")
+
+	if err := s.CreateStack(ctx, st, acme.Fence()); err != nil {
+		t.Fatalf("create stack to purge: %v", err)
+	}
+
+	d := inventory.Deletion{Entry: deleteEntry(acme.Name), PurgeAfter: purgeAt()}
+	d.Entry.Object = "pulumi:" + acme.Name.String() + "/web/purged"
+
+	if err := s.DeleteStack(ctx, st.Ref, acme.Fence(), stack.EmptyGuard(), d); err != nil {
+		t.Fatalf("delete stack to purge: %v", err)
+	}
+
+	if err := s.PurgeStack(ctx, st.ID, acme.Fence(), time.Time{}, lifecycleEntry(acme.Name, "unit:purge")); err != nil {
+		t.Fatalf("purge stack: %v", err)
+	}
 }
 
 // seedBackupRecord stores one finished backup row, so the round trip compares

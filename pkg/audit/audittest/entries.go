@@ -91,9 +91,13 @@ func testLastEntry(t *testing.T, s EntryStore) {
 
 	stored := appendThree(t, s)
 
-	got, err := s.LastEntry(t.Context(), "acme")
+	got, found, err := s.LastEntry(t.Context(), "acme")
 	if err != nil {
 		t.Fatalf("last entry: %v", err)
+	}
+
+	if !found {
+		t.Fatal("last entry: no entry, want the newest entry")
 	}
 
 	if got.Sequence != 3 || got.Hash != stored[2].Hash {
@@ -106,8 +110,13 @@ func testLastEntryEmpty(t *testing.T, s EntryStore) {
 
 	newNamespace(t, s)
 
-	if _, err := s.LastEntry(t.Context(), "acme"); !errors.Is(err, audit.ErrEntryNotFound) {
-		t.Fatalf("last entry of an empty scope: got %v, want ErrEntryNotFound", err)
+	_, found, err := s.LastEntry(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("last entry of an empty scope: %v", err)
+	}
+
+	if found {
+		t.Fatal("last entry of an empty scope: found an entry, want none")
 	}
 }
 
@@ -128,8 +137,8 @@ func testEntryReaderServerScope(t *testing.T, s EntryStore) {
 		t.Fatalf("server entry at 1: got %+v, %v, want %+v", got, err, stored)
 	}
 
-	last, err := s.LastEntry(t.Context(), audit.ServerScope)
-	if err != nil || last.Sequence != 1 {
+	last, found, err := s.LastEntry(t.Context(), audit.ServerScope)
+	if err != nil || !found || last.Sequence != 1 {
 		t.Fatalf("last server entry: got %+v, %v, want sequence 1", last, err)
 	}
 }

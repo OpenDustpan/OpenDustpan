@@ -465,7 +465,7 @@ func newUpdateFixtureWithAuthenticator(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -485,6 +485,7 @@ func newUpdateFixtureWithAuthenticator(
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
 		Journal:            journalWriterFor(t, blobs, mem),
+		Replayer:           nil,
 		Tokens:             checker,
 	})
 	if err != nil {
@@ -499,6 +500,7 @@ func newUpdateFixtureWithAuthenticator(
 		Namespaces:              namespaces,
 		Authenticator:           authn,
 		Authorizer:              authz,
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,
@@ -2674,6 +2676,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 
 	stacks, err := stack.NewService(stack.Config{
 		Store: stores, Namespaces: namespaces, Now: nil, State: nil,
+		Retention: 0,
 	})
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -2692,6 +2695,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 		Tokens:             nil,
 	})
 	if err != nil {
@@ -2706,6 +2710,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              allowAll(),
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,

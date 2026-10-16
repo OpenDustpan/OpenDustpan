@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -14,8 +15,10 @@ import (
 
 // ObjectsRequest asks for one page of the objects of one kind where a
 // principal can do one action (ADR 52, decision 14). Kind is
-// ObjectNamespace, ObjectCollection or ObjectUnit. Action empty means the
-// read action of the kind. Cursor and Limit page as in ReviewRequest.
+// ObjectNamespace, ObjectCollection, ObjectUnit or ObjectPrincipal. Action
+// empty means the default action of the kind: the read action, or
+// principal:manage-tokens for ObjectPrincipal. Cursor and Limit page as in
+// ReviewRequest.
 type ObjectsRequest struct {
 	Kind   ObjectKind
 	Action identity.Action
@@ -35,7 +38,7 @@ type ObjectsPage struct {
 	All        bool
 }
 
-// readActions is the read action of each object kind of an objects
+// readActions is the default action of each object kind of an objects
 // request.
 //
 //nolint:gochecknoglobals // A constant table; Go has no constant maps.
@@ -43,6 +46,7 @@ var readActions = map[ObjectKind]identity.Action{
 	ObjectNamespace:  identity.ActionNamespaceRead,
 	ObjectCollection: identity.ActionCollectionRead,
 	ObjectUnit:       identity.ActionUnitRead,
+	ObjectPrincipal:  identity.ActionPrincipalManageTokens,
 }
 
 // Access answers what p can do on obj and which grants give it: the "my
@@ -62,15 +66,24 @@ func (s *Service) Objects(ctx context.Context, p identity.Principal, req Objects
 
 	read, ok := readActions[req.Kind]
 	if !ok {
-		return page, fmt.Errorf("%w: type %q: write namespace, collection or unit", ErrInvalid, req.Kind)
+		return page, fmt.Errorf("%w: type %q: write namespace, collection, unit or principal", ErrInvalid, req.Kind)
 	}
 
 	if page.Action == "" {
 		page.Action = read
 	}
 
-	if _, classified := FamilyOf(page.Action); !classified {
+	family, classified := FamilyOf(page.Action)
+	if !classified {
 		return page, fmt.Errorf("%w: unknown action %q", ErrInvalid, page.Action)
+	}
+
+	// A grant on the installation gives every action, so all=true for a
+	// principal would also follow from an action that gives nothing on a
+	// principal. Only a delegation action has a meaning on a principal.
+	if req.Kind == ObjectPrincipal && family != FamilyDelegation {
+		return page, fmt.Errorf("%w: action %q: type principal takes a principal action, such as %s",
+			ErrInvalid, page.Action, identity.ActionPrincipalManageTokens)
 	}
 
 	limit, after, err := objectsPaging(req)
@@ -142,8 +155,13 @@ func objectsPaging(req ObjectsRequest) (int, string, error) {
 }
 
 // scopeObjects returns the objects of scope that cover objects of kind,
-// sorted by their text form.
+// sorted by their text form. A principal is covered only by a grant on it:
+// the grants on namespaces, collections and units do not reach principals.
 func scopeObjects(scope Scope, kind ObjectKind) []identity.Object {
+	if kind == ObjectPrincipal {
+		return sortedObjects(slices.Clone(scope.Principals))
+	}
+
 	out := slices.Clone(scope.Namespaces)
 
 	if kind == ObjectCollection || kind == ObjectUnit {
@@ -154,9 +172,106 @@ func scopeObjects(scope Scope, kind ObjectKind) []identity.Object {
 		out = append(out, scope.Units...)
 	}
 
-	slices.SortFunc(out, func(a, b identity.Object) int {
+	return sortedObjects(out)
+}
+
+// sortedObjects sorts objs by their text form and returns them.
+func sortedObjects(objs []identity.Object) []identity.Object {
+	slices.SortFunc(objs, func(a, b identity.Object) int {
 		return strings.Compare(a.String(), b.String())
 	})
 
-	return out
+	return objs
+}
+
+// CallerGrantsRequest asks for one page of the current grants of a caller.
+// Cursor and Limit page as in ReviewRequest.
+type CallerGrantsRequest struct {
+	Cursor string
+	Limit  int
+}
+
+// CallerGrants answers one page of the current grants of p: the "my access"
+// list of the console. The page holds the grants of the principal of p and
+// the grants of each group that it is a member of, one row for each
+// membership, with the membership in Row.Via and the name of the group in
+// Row.SubjectName. It is a snapshot at the time of the first page, in the
+// order of an access-review export, with the total on the first page only.
+//
+// Each page reads the groups of p at the time of its request, and keeps a
+// grant of a group only while the membership of p is current at the time
+// of the snapshot. So a page after the first can leave out the grants of a
+// group that p joined or left since the first page, and a grant revoked
+// since. The store reads only the grants of p and its groups (ADR 52).
+//
+// A caller with no principal record, for example a bootstrap admin token
+// (ADR 6), holds no grant: its page is empty. Access answers what such a
+// caller can do. A bad request returns ErrInvalid, and a store that reads
+// no review ErrNoReview.
+func (s *Service) CallerGrants(ctx context.Context, p identity.Principal, req CallerGrantsRequest) (ReviewPage, error) {
+	rs, ok := s.store.(ReviewStore)
+	if !ok {
+		return ReviewPage{}, ErrNoReview
+	}
+
+	subjects, err := s.authz.subjectsOf(ctx, p)
+	if err != nil {
+		return ReviewPage{}, err
+	}
+
+	own, principalID, groups := "", "", []string{}
+
+	for _, subject := range subjects {
+		switch subject.Kind {
+		case SubjectPrincipal:
+			own, principalID = subject.String(), subject.ID
+		case SubjectGroup:
+			groups = append(groups, subject.ID)
+		default:
+		}
+	}
+
+	obj := identity.CallerObject()
+
+	review := ReviewRequest{From: nil, To: nil, Subject: own, Cursor: req.Cursor, Limit: req.Limit, Expand: false}
+
+	q, _, err := reviewQuery(review, obj, s.Now())
+	if err != nil {
+		return ReviewPage{}, err
+	}
+
+	if own == "" {
+		// With no subject, the query would read every grant.
+		return noGrants(q), nil
+	}
+
+	_, grantAccess, err := s.authz.reviewRoles(ctx)
+	if err != nil {
+		return ReviewPage{}, err
+	}
+
+	// The rows read only the grants of the caller: none is on a container
+	// of another object, so the scope names no object.
+	read := func(ctx context.Context, q ReviewQuery) ([]ReviewRow, int64, error) {
+		return rs.CallerGrants(ctx, CallerGrantsQuery{
+			Groups: groups, Principal: principalID, After: q.After, AsOfMs: q.AsOfMs, Limit: q.Limit, Count: q.Count,
+		})
+	}
+
+	return s.reviewEntries(ctx, rs, &reviewRead{read: read, grantAccess: grantAccess, obj: obj, q: q, boot: 0})
+}
+
+// noGrants returns the page of a caller with no grant at the time of the
+// snapshot of q: no rows and no next page, and a total of 0 on the first
+// page.
+func noGrants(q ReviewQuery) ReviewPage {
+	asOf := time.UnixMilli(q.AsOfMs).UTC()
+	page := ReviewPage{AsOf: &asOf, Total: nil, NextCursor: "", Entries: []ReviewEntry{}}
+
+	if q.After == (ReviewKey{ID: "", MemberID: "", AtMs: 0, MemberAtMs: 0}) {
+		var zero int64
+		page.Total = &zero
+	}
+
+	return page
 }

@@ -1,6 +1,7 @@
 package access
 
 import (
+	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -19,26 +20,36 @@ const (
 	// RoleWriter reads, and runs updates and applies: it writes state and
 	// encrypts and decrypts secrets.
 	RoleWriter = "writer"
-	// RoleMaintainer writes, and makes, renames, deletes, unlocks and moves
-	// units, and manages collections.
+	// RoleMaintainer writes, and makes, renames, deletes, restores, unlocks
+	// and moves units, and manages collections. It cannot purge a deleted
+	// unit: a purge cannot be undone, so only the admin role holds it.
 	RoleMaintainer = "maintainer"
 	// RoleAdmin holds every data action on its object: it also manages
-	// access, the override switches, forced and unlocked writes and the
-	// namespace. The creator of a namespace holds it on the namespace.
+	// access, the override switches, forced and unlocked writes, the purge of
+	// deleted units and the namespace. The creator of a namespace holds it on the namespace.
 	RoleAdmin = "admin"
 	// RoleNamespaceAdmin is the role that the creator of a namespace gets on
 	// it.
 	RoleNamespaceAdmin = RoleAdmin
 	// RoleInstallationOperator holds the operator actions only: backups,
-	// restores, maintenance and metrics. It reads no data and manages no
-	// principal.
+	// restores, maintenance, metrics and the installation audit log. It reads
+	// no namespace data and manages no principal.
 	RoleInstallationOperator = "installation-operator"
-	// RoleAccountAdministrator holds the administration and data actions:
-	// the tenant side of a hosted installation. It holds no operator action.
+	// RoleAccountAdministrator holds the administration, data and
+	// delegation actions: the tenant side of a hosted installation. It holds
+	// no operator action, and no action of siteOnlyActions. On the installation, the delegation actions let it
+	// make a token for any service principal and so act as that principal,
+	// with every grant that the principal has now or gets later.
 	RoleAccountAdministrator = "account-administrator"
-	// RoleSiteAdministrator holds the actions of all three families. A
-	// self-hosted installation can use it.
+	// RoleSiteAdministrator holds the actions of every family. A
+	// self-hosted installation can use it. Like RoleAccountAdministrator,
+	// it can act as any service principal.
 	RoleSiteAdministrator = "site-administrator"
+	// RoleTokenManager makes, rotates and revokes the tokens of a service
+	// principal. Granted on one service principal, it lets its holder act
+	// as that principal, with every grant that the principal has now or
+	// gets later.
+	RoleTokenManager = "token-manager"
 )
 
 // builtInDescriptions describes each built-in role, in catalog order.
@@ -52,14 +63,24 @@ var builtInDescriptions = []struct {
 	{RoleAuditor, "Reads like a viewer, and reads the audit log and the access review."},
 	{RoleSecretViewer, "Reads like a viewer, and reveals secret values."},
 	{RoleWriter, "Reads, and runs updates, plans and applies."},
-	{RoleMaintainer, "Writes, and makes, renames, deletes, unlocks and moves units, and manages collections."},
+	{
+		RoleMaintainer,
+		"Writes, and makes, renames, deletes, restores, unlocks and moves units, and manages collections.",
+	},
 	{RoleAdmin, "Holds every action inside its object, access management included."},
-	{RoleInstallationOperator, "Operates the installation: backups, restores, maintenance and metrics. Reads no data."},
+	{
+		RoleInstallationOperator,
+		"Operates the installation: backups, restores, maintenance, metrics and the installation audit log. Reads no namespace data.",
+	},
 	{
 		RoleAccountAdministrator,
-		"Manages principals, groups, roles, grants and namespaces, and holds every data action.",
+		"Manages principals, groups, roles, grants and namespaces, makes the tokens of every service principal, and holds every data action.",
 	},
 	{RoleSiteAdministrator, "Holds every action of the installation."},
+	{
+		RoleTokenManager,
+		"Makes, rotates and revokes the tokens of a service principal, and so acts as that principal.",
+	},
 }
 
 // viewerActions are the actions of RoleViewer.
@@ -85,11 +106,32 @@ func maintainerActions() []identity.Action {
 	return append(writerActions(),
 		identity.ActionUnitManage,
 		identity.ActionUnitMove,
+		identity.ActionUnitRestore,
 		identity.ActionCollectionCreate,
 		identity.ActionCollectionUpdate,
 		identity.ActionCollectionDelete,
 		identity.ActionCollectionCreateUnit,
 	)
+}
+
+// siteOnlyActions are the administration actions that, of the built-in
+// roles, only RoleSiteAdministrator holds. The sign-in settings decide who
+// can sign in to the whole installation, and a restore with the access
+// tables replaces who has access, so the tenant side of a hosted
+// installation holds neither of them.
+func siteOnlyActions() []identity.Action {
+	return []identity.Action{identity.ActionServerManageSignIn, identity.ActionServerRestoreAccess}
+}
+
+// accountAdministratorActions are the actions of RoleAccountAdministrator.
+func accountAdministratorActions() []identity.Action {
+	site := siteOnlyActions()
+	out := slices.DeleteFunc(Actions(FamilyAdministration), func(a identity.Action) bool {
+		return slices.Contains(site, a)
+	})
+	out = append(out, Actions(FamilyData)...)
+
+	return append(out, Actions(FamilyDelegation)...)
 }
 
 // builtInActions returns the actions of the built-in role id.
@@ -115,11 +157,14 @@ func builtInActions(id string) []identity.Action {
 	case RoleInstallationOperator:
 		return Actions(FamilyOperator)
 	case RoleAccountAdministrator:
-		return append(Actions(FamilyAdministration), Actions(FamilyData)...)
+		return accountAdministratorActions()
 	case RoleSiteAdministrator:
 		out := append(Actions(FamilyOperator), Actions(FamilyAdministration)...)
+		out = append(out, Actions(FamilyData)...)
 
-		return append(out, Actions(FamilyData)...)
+		return append(out, Actions(FamilyDelegation)...)
+	case RoleTokenManager:
+		return Actions(FamilyDelegation)
 	default:
 		return nil
 	}

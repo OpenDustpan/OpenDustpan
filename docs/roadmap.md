@@ -141,9 +141,9 @@ install, each with only the access they need, and every change is on record.
 |---------|------------------------------------------------------------------------------|------------------------------------------|-------|
 | server  | [RFC 4](rfc/0004-what-sits-under-a-namespace.md) What sits under a namespace | collections                              | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
 | server  | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | all                                      | discussing; groups, grants and export accepted (ADR 52) |
-| server  | [RFC 20](rfc/0020-access-tokens.md) Access tokens and machine identity       | all                                      | discussing; token life cycle and workload identity accepted (ADR 53, ADR 54) |
+| server  | [RFC 20](rfc/0020-access-tokens.md) Access tokens and machine identity       | all                                      | discussing; token life cycle, workload identity, service principals and lifetimes accepted (ADR 53, ADR 54, ADR 67, ADR 69) |
 | server  | [RFC 21](rfc/0021-directory-sync-and-sign-in.md) Directory sync and sign-in  | all                                      | discussing; accepted in part (ADR 46, ADR 55, ADR 56, ADR 57) |
-| server  | [RFC 22](rfc/0022-audit-log.md) Audit log                                    | all                                      | discussing; port, entries, export, sinks and opt-in tamper evidence accepted (ADR 60); retention open |
+| server  | [RFC 22](rfc/0022-audit-log.md) Audit log                                    | all                                      | discussing; port, entries, export, sinks and opt-in tamper evidence accepted (ADR 60); retention accepted (ADR 68) |
 | console | [RFC 19](rfc/0019-users-teams-roles.md) Users, teams and roles               | members, groups, grants, access-review export | discussing; groups, grants and export accepted (ADR 52) |
 | console | [RFC 52](rfc/0052-console-core.md) Console core views                        | sections with the reason they are locked | draft |
 

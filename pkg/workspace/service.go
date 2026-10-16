@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
@@ -72,7 +73,35 @@ type Store interface {
 	// pending state version, ErrNotFound if no live workspace has ref, namespace.ErrNotFound if the namespace does not
 	// exist, namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry
 	// if e fails validation or names another namespace.
-	DeleteWorkspace(ctx context.Context, ref Ref, fence namespace.Fence, e audit.Entry) error
+	DeleteWorkspace(ctx context.Context, ref Ref, fence namespace.Fence, d inventory.Deletion) error
+	DeletedStore
+}
+
+// DeletedStore is the part of Store that acts on a soft-deleted workspace by
+// its ID (ADR 47): the restore and the final delete.
+type DeletedStore interface {
+	// RestoreWorkspace brings back the deleted workspace id of the
+	// namespace of fence before its retention period ends (ADR 47), under
+	// newName, or under its name before the delete when newName is empty. It
+	// moves the inventory entry back and appends the audit entry e in the
+	// same fenced transaction (ADR 60, fail closed). It returns the reference
+	// of the restored workspace, ErrNotFound if the namespace has no deleted
+	// workspace id, ErrAlreadyExists if a live workspace holds the name,
+	// namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry if e
+	// fails validation.
+	RestoreWorkspace(ctx context.Context, id ID, newName Name, fence namespace.Fence, e audit.Entry) (Ref, error)
+	// PurgeWorkspace removes the deleted workspace id of the namespace of
+	// fence for good (ADR 47): its state versions, data key and deleted
+	// inventory entry, in one fenced transaction with the audit entry e. It
+	// ends the grants on the workspace and records the blob purge
+	// (inventory.BlobPurge) in that transaction. The caller removes its
+	// blobs after the commit; the sweep finishes the record. It returns
+	// ErrNotFound if the namespace has no deleted workspace id. With a
+	// non-zero dueBy, it also returns ErrNotFound and changes nothing when
+	// the retention period of the workspace ends after dueBy, a check in the
+	// same transaction. The retention sweep sets dueBy, and a purge by an
+	// admin leaves it zero.
+	PurgeWorkspace(ctx context.Context, id ID, fence namespace.Fence, dueBy time.Time, e audit.Entry) error
 }
 
 // StateStore persists state version metadata.
@@ -225,6 +254,9 @@ type Config struct {
 	// MaxPendingVersions bounds the pending state versions of one
 	// workspace; zero means DefaultMaxPendingVersions.
 	MaxPendingVersions int
+	// Retention is how long a deleted workspace stays before its final
+	// delete (ADR 47, decision 2). Zero means inventory.DeletedRetention.
+	Retention time.Duration
 }
 
 // lockStripes is the number of striped mutexes serializing declares and
@@ -245,6 +277,7 @@ type Service struct {
 	now        func() time.Time
 	maxState   int64
 	maxPending int
+	retention  time.Duration
 	stripes    [lockStripes]sync.Mutex
 }
 
@@ -271,6 +304,7 @@ func NewService(cfg Config) (*Service, error) {
 		now:        cfg.Now,
 		maxState:   cfg.MaxStateBytes,
 		maxPending: cfg.MaxPendingVersions,
+		retention:  cfg.Retention,
 		stripes:    [lockStripes]sync.Mutex{},
 	}
 
@@ -288,6 +322,10 @@ func NewService(cfg Config) (*Service, error) {
 
 	if s.maxPending <= 0 {
 		s.maxPending = DefaultMaxPendingVersions
+	}
+
+	if s.retention <= 0 {
+		s.retention = inventory.DeletedRetention
 	}
 
 	return s, nil
@@ -334,8 +372,83 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 	}
 
 	e.At = s.clock()
-	if err := s.workspaces.DeleteWorkspace(ctx, ref, fence, e); err != nil {
+	err = s.workspaces.DeleteWorkspace(
+		ctx,
+		ref,
+		fence,
+		inventory.Deletion{Entry: e, PurgeAfter: e.At.Add(s.retention)},
+	)
+	if err != nil {
 		return fmt.Errorf("delete workspace %s: %w", ref, err)
+	}
+
+	return nil
+}
+
+// RestoreDeleted brings back the deleted workspace id of ns under newName, or under
+// its name before the delete when newName is empty (ADR 47). The store
+// appends the audit entry e, stamped with the time of the restore, in the
+// same fenced transaction (ADR 60, fail closed). It returns the reference of
+// the restored workspace, ErrNotFound if ns has no deleted workspace id, and
+// ErrAlreadyExists if a live workspace holds the name.
+func (s *Service) RestoreDeleted(
+	ctx context.Context, ns namespace.Name, id ID, newName Name, e audit.Entry,
+) (Ref, error) {
+	fence, err := s.fence(ctx, ns)
+	if err != nil {
+		return Ref{}, err
+	}
+
+	e.At = s.clock()
+
+	ref, err := s.workspaces.RestoreWorkspace(ctx, id, newName, fence, e)
+	if err != nil {
+		return Ref{}, fmt.Errorf("restore workspace %s: %w", id, err)
+	}
+
+	return ref, nil
+}
+
+// PurgeDeleted removes the deleted workspace id of ns for good, before its
+// retention period ends (ADR 47). The store removes its rows, records the
+// blob purge and appends the audit entry e in one fenced transaction. The
+// caller then removes the state blobs with DeletePurgedBlobs. It returns
+// ErrNotFound if ns has no deleted workspace id.
+func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e audit.Entry) error {
+	return s.purge(ctx, ns, id, time.Time{}, e)
+}
+
+// PurgeExpired removes the deleted workspace id of ns for good, as
+// PurgeDeleted does, only when its retention period ended at or before
+// dueBy. The store checks the end of the retention in the purge
+// transaction. It returns ErrNotFound if ns has no deleted workspace id
+// whose retention period ended by then: a restore and a new delete after
+// the caller read the unit gave it a new retention period.
+func (s *Service) PurgeExpired(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+	return s.purge(ctx, ns, id, dueBy, e)
+}
+
+// DeletePurgedBlobs removes every state blob of the purged workspace id,
+// with a retry for each blob (ADR 47). The purge runs it after the rows are
+// gone, so no upload can still commit a row that names these blobs. It
+// returns an error when a blob may remain, so the caller keeps the blob
+// purge record for the sweep. No log line and no error names a blob key.
+func (s *Service) DeletePurgedBlobs(ctx context.Context, id ID) error {
+	listed, err := s.blobs.List(ctx, "tofu/"+id.String()+"/")
+	if err != nil {
+		return fmt.Errorf("list state blobs of workspace %s: %w", id, err)
+	}
+
+	failed := 0
+
+	for _, obj := range listed {
+		if deleteErr := s.deleteBlobRetried(ctx, obj.Key); deleteErr != nil {
+			failed++
+		}
+	}
+
+	if failed > 0 {
+		return fmt.Errorf("%w: %d state blobs of workspace %s", ErrBlobsRemain, failed, id)
 	}
 
 	return nil
@@ -800,26 +913,52 @@ func (s *Service) Upload(
 // a bad capability: ErrStateVersionNotFound for an unknown version,
 // ErrUploadDenied for a wrong or expired capability or a version that is not
 // pending. A retry with the capability that finalized the version passes, as
-// in Upload.
-func (s *Service) CheckUpload(ctx context.Context, id StateVersionID, tok token.Token) error {
+// in Upload. On success it also returns the namespace of the workspace of
+// the version, after the capability check passed, so a caller with a bad
+// token learns nothing about an allowlist.
+func (s *Service) CheckUpload(
+	ctx context.Context, id StateVersionID, tok token.Token,
+) (namespace.Name, error) {
 	sv, err := s.states.GetStateVersion(ctx, id)
 	if err != nil {
-		return fmt.Errorf("upload state %s: %w", id, err)
+		return "", fmt.Errorf("upload state %s: %w", id, err)
 	}
 
-	return sv.checkUploadCapability(tok, s.clock())
+	if capErr := sv.checkUploadCapability(tok, s.clock()); capErr != nil {
+		return "", capErr
+	}
+
+	w, err := s.workspaces.GetWorkspaceByID(ctx, sv.Workspace)
+	if err != nil {
+		return "", fmt.Errorf("upload state %s: %w", id, err)
+	}
+
+	return w.Ref.Namespace, nil
 }
 
 // CheckJSONRenderingUpload does the same for the JSON rendering upload (the
 // rules of DiscardJSONRendering: wrong capability or expired capability fail;
-// a finalized version with the same capability still passes).
-func (s *Service) CheckJSONRenderingUpload(ctx context.Context, id StateVersionID, tok token.Token) error {
+// a finalized version with the same capability still passes). On success it
+// also returns the namespace of the workspace of the version, after the
+// capability check passed.
+func (s *Service) CheckJSONRenderingUpload(
+	ctx context.Context, id StateVersionID, tok token.Token,
+) (namespace.Name, error) {
 	sv, err := s.states.GetStateVersion(ctx, id)
 	if err != nil {
-		return fmt.Errorf("upload JSON rendering of %s: %w", id, err)
+		return "", fmt.Errorf("upload JSON rendering of %s: %w", id, err)
 	}
 
-	return sv.checkRenderingCapability(tok, s.clock())
+	if capErr := sv.checkRenderingCapability(tok, s.clock()); capErr != nil {
+		return "", capErr
+	}
+
+	w, err := s.workspaces.GetWorkspaceByID(ctx, sv.Workspace)
+	if err != nil {
+		return "", fmt.Errorf("upload JSON rendering of %s: %w", id, err)
+	}
+
+	return w.Ref.Namespace, nil
 }
 
 // uploadedBody is what a state upload stores: the size of its bytes, and the
@@ -1784,22 +1923,15 @@ func (s *Service) noteAttempt(ctx context.Context, id StateVersionID, key blob.K
 	return nil
 }
 
-// sweepBlobRetries bounds the blob deletes of one cleanup: a transient
-// object store failure retries instead of orphaning the blob.
-const sweepBlobRetries = 3
-
 // deleteBlobRetried removes the object under key, retrying a transient
-// failure. Deleting a missing key is not an error.
+// failure after a short backoff (blob.DeleteRetried). Deleting a missing key
+// is not an error.
 func (s *Service) deleteBlobRetried(ctx context.Context, key blob.Key) error {
-	var err error
-
-	for range sweepBlobRetries {
-		if err = s.blobs.Delete(ctx, key); err == nil {
-			return nil
-		}
+	if err := blob.DeleteRetried(ctx, s.blobs, key); err != nil {
+		return fmt.Errorf("delete blob: %w", err)
 	}
 
-	return err
+	return nil
 }
 
 // stripeSpread widens adjacent keys across the lock stripes.
@@ -2205,4 +2337,21 @@ func deleteOnCleanup(ctx context.Context, blobs blob.Store, key blob.Key) error 
 	defer cancel()
 
 	return blobs.Delete(cleanCtx, key)
+}
+
+// purge removes the deleted workspace id of ns with the retention check of
+// dueBy, which zero turns off.
+func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+	fence, err := s.fence(ctx, ns)
+	if err != nil {
+		return err
+	}
+
+	e.At = s.clock()
+
+	if err := s.workspaces.PurgeWorkspace(ctx, id, fence, dueBy, e); err != nil {
+		return fmt.Errorf("purge workspace %s: %w", id, err)
+	}
+
+	return nil
 }

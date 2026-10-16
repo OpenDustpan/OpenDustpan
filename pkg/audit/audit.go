@@ -135,30 +135,39 @@ var (
 // client address (internal/clientip): the TCP peer, or the address that a
 // trusted proxy forwarded. UserAgent is the client user agent, capped at
 // MaxUserAgentLen bytes. Channel is where the request came from.
-// RequestID is the X-Request-Id of the request (ADR 32). PrevHash holds the
+// RequestID is the X-Request-Id of the request (ADR 32). ObjectID is the
+// stable ID of the unit that Object names (ADR 19, ADR 47), so the history of
+// one unit can be found across a rename or a reuse of its name; it is empty
+// when the object is not a unit or the ID is not known. PrevHash holds the
 // hash of the previous entry of the namespace and is empty for the first
 // entry. Hash holds the SHA-256 of this entry (see ComputeHash).
+// FenceVersion is the failover version of the namespace when the store
+// appended the entry, and 0 in ServerScope. The store sets it in the
+// transaction of the append, and the hash covers it, so a verifier can see
+// where a forced failover forked the chain of a namespace.
 type Entry struct {
-	At         time.Time
-	Namespace  namespace.Name
-	Subject    string
-	IDPSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	ValueCount *int64
-	Changes    []Change
-	SourceIP   string
-	UserAgent  string
-	Channel    Channel
-	Kind       Kind
-	Outcome    Outcome
-	RequestID  string
-	PrevHash   string
-	Hash       string
-	Sequence   int64
+	At           time.Time
+	Namespace    namespace.Name
+	Subject      string
+	IDPSubject   string
+	TokenID      string
+	Action       string
+	Object       string
+	Version      string
+	ValuePath    string
+	ValueCount   *int64
+	Changes      []Change
+	SourceIP     string
+	UserAgent    string
+	Channel      Channel
+	Kind         Kind
+	Outcome      Outcome
+	RequestID    string
+	ObjectID     string
+	PrevHash     string
+	Hash         string
+	Sequence     int64
+	FenceVersion int64
 }
 
 // AtMs returns the time of the entry in Unix milliseconds, as stored.
@@ -262,8 +271,10 @@ const hashFieldSeparator = 0x1F
 // fields that e sets, each as "<name>=<value>" with the same separator, in
 // this fixed order: value_count (the decimal count), then object_id (ADR 47,
 // which its own change adds), then changes (the canonical JSON of
-// EncodeChanges). An optional field that e does not set adds nothing, so an
-// entry written before the field keeps its hash. The separator never
+// EncodeChanges), then fence_version (the decimal failover version, when
+// it is above 0). An optional field that e does not set adds nothing, so an
+// entry written before the field keeps its hash. The hash takes no key:
+// any installation can compute it again from the stored fields. The separator never
 // appears in a validated field except the user agent and free-form names,
 // where it is kept as is: the encoding is fixed and documented, not
 // ambiguous-free, and its only use is the chain check of the same code.
@@ -312,8 +323,16 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 		write("value_count=" + strconv.FormatInt(*e.ValueCount, 10))
 	}
 
+	if e.ObjectID != "" {
+		write("object_id=" + e.ObjectID)
+	}
+
 	if changesText != "" {
 		write("changes=" + changesText)
+	}
+
+	if e.FenceVersion > 0 {
+		write("fence_version=" + strconv.FormatInt(e.FenceVersion, 10))
 	}
 
 	sum := sha256.Sum256([]byte(sb.String()))
@@ -366,7 +385,7 @@ type Listing struct {
 // first entry that does not match: a changed field, a broken link or a gap
 // after a deleted entry. Checked counts the entries the check read.
 // Unchained counts the entries without a hash: the chain was off when they
-// were appended (ADR 60 decision 17). The check cannot prove such an entry
+// were appended. The check cannot prove such an entry
 // unchanged.
 type CheckResult struct {
 	Checked     int64
@@ -399,16 +418,16 @@ type Store interface {
 }
 
 // EntryReader reads one entry of a scope without a count and an offset, for
-// the check of signed checkpoints (ADR 60 decision 18). The SQL stores
-// implement it next to Store.
+// the check of signed checkpoints. The SQL stores implement it next to
+// Store.
 type EntryReader interface {
 	// EntryAt answers the entry of scope ns at sequence seq. It returns
 	// ErrEntryNotFound when ns holds no entry at seq. ns can be ServerScope.
 	EntryAt(ctx context.Context, ns namespace.Name, seq int64) (Entry, error)
-	// LastEntry answers the entry of ns with the highest sequence. It
-	// returns ErrEntryNotFound when ns holds no entry. ns can be
-	// ServerScope.
-	LastEntry(ctx context.Context, ns namespace.Name) (Entry, error)
+	// LastEntry answers the entry with the highest sequence of scope, and
+	// false when the scope holds none. It is the same method as
+	// ChainStore.LastEntry.
+	LastEntry(ctx context.Context, scope namespace.Name) (Entry, bool, error)
 }
 
 // ServerStore appends the entries of ServerScope. It is a port of its own,

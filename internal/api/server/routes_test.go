@@ -18,12 +18,16 @@ import (
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -191,6 +195,16 @@ func newServiceBackedHandler(
 		t.Fatalf("seed namespace: %v", seedErr)
 	}
 
+	allow, err := ipallow.NewService(ipallow.Config{Store: st, Namespaces: namespaces, Now: nil, Enabled: true})
+	if err != nil {
+		t.Fatalf("ip allowlist service: %v", err)
+	}
+
+	sessionPolicies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: nil})
+	if err != nil {
+		t.Fatalf("session policy service: %v", err)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:    authn,
 		Authorizer:       authz,
@@ -202,12 +216,18 @@ func newServiceBackedHandler(
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		Schema:           st,
+		Journal:          st,
 		Principals:       seedRoutePrincipals(t, st),
 		Tokens:           seedRouteTokens(t, st),
 		Access:           seedRouteAccess(t, st),
 		Audit:            st,
-		CheckpointEpochs: fakeEpochs{},
 		OnAuditFailure:   nil,
+		DeletedUnits:     stubSweeper{},
+		AuditChain:       stubAuditChain{},
+		AuditSinks:       nil,
+		IPAllowlists:     allow,
+		SessionPolicy:    sessionPolicies,
+		CheckpointEpochs: fakeEpochs{},
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -228,11 +248,13 @@ const (
 	testPrincipalID      = "prn-routes0000000000001"
 	testOtherPrincipalID = "prn-routes0000000000002"
 	testCallerID         = "prn-routes0000000000003"
-	testGroupID          = "grp-routes0000000000001"
-	testTokenID          = "tok-routes0000000000001"
-	testServiceTokenID   = "tok-routes0000000000002"
-	testOwnTokenID       = "tok-routes0000000000003"
-	testRoleID           = "rol-routes0000000000001"
+	// testNamespacePrincipalID is a service principal of testNamespace.
+	testNamespacePrincipalID = "prn-routes0000000000004"
+	testGroupID              = "grp-routes0000000000001"
+	testTokenID              = "tok-routes0000000000001"
+	testServiceTokenID       = "tok-routes0000000000002"
+	testOwnTokenID           = "tok-routes0000000000003"
+	testRoleID               = "rol-routes0000000000001"
 )
 
 // allowGrants passes every escalation check, so the routes that create or
@@ -240,6 +262,14 @@ const (
 type allowGrants struct{}
 
 func (allowGrants) RequireHeld(context.Context, identity.Principal, string) error { return nil }
+
+// allowAll allows every action, so the token service passes its own check
+// of principal:manage-tokens and the route alone decides.
+type allowAll struct{}
+
+func (allowAll) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
+	return nil
+}
 
 // seedRouteTokens writes the person record of the test caller and one
 // token of each kind, so the token routes with an ID answer their success
@@ -251,8 +281,17 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	at := time.Now().UTC().Truncate(time.Millisecond)
 
 	caller := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testCallerID, Subject: "tester",
-		DisplayName: "Tester", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          testCallerID,
+		Subject:     "tester",
+		DisplayName: "Tester",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
 	}
 	if err := st.CreatePrincipal(ctx, caller, storetest.ServerChange(at, principal.Ref(testCallerID))); err != nil {
 		t.Fatalf("seed caller: %v", err)
@@ -295,13 +334,30 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Logger: nil, Now: nil, NewID: nil,
+		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Authorizer: allowAll{}, Logger: nil, Now: nil,
+		NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
 	}
 
 	return svc
+}
+
+// stubCollections names the collection testCollection with its stable ID,
+// so that a grant on it is accepted (ADR 51). No unit is in a collection here.
+type stubCollections struct{}
+
+func (stubCollections) CollectionOf(context.Context, identity.Object) (string, bool, error) {
+	return "", false, nil
+}
+
+func (stubCollections) CollectionID(_ context.Context, obj identity.Object) (string, bool, error) {
+	if obj.CollectionName() == testCollection {
+		return "col-" + testCollection, true, nil
+	}
+
+	return "", false, nil
 }
 
 // Grant IDs that seedRouteAccess writes, one on each object kind, so each
@@ -311,6 +367,7 @@ const (
 	testNamespaceGrantID  = "grt-routes-namespace"
 	testCollectionGrantID = "grt-routes-collection"
 	testUnitGrantID       = "grt-routes-unit"
+	testPrincipalGrantID  = "grt-routes-principal"
 )
 
 // testCollection and testUnitName name the collection and the unit of the
@@ -357,12 +414,23 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 			Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
 		},
 		{
-			CreatedAt: at, Condition: nil, Object: identity.CollectionObject(testNamespace, testCollection),
-			ID: testCollectionGrantID, Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
+			CreatedAt: at,
+			Condition: nil,
+			Object: identity.CollectionObject(testNamespace, testCollection).
+				WithCollectionID("col-" + testCollection),
+			ID:        testCollectionGrantID,
+			Role:      access.RoleViewer,
+			CreatedBy: "admin",
+			Subject:   other,
 		},
 		{
 			CreatedAt: at, Condition: nil, Object: unit, ID: testUnitGrantID,
 			Role: access.RoleViewer, CreatedBy: "admin", Subject: other,
+		},
+		{
+			CreatedAt: at, Condition: nil, Object: identity.PrincipalObject(testOtherPrincipalID),
+			ID: testPrincipalGrantID, Role: access.RoleTokenManager, CreatedBy: "admin",
+			Subject: access.Subject{Kind: access.SubjectPrincipal, ID: testPrincipalID},
 		},
 	}
 	for i := range grants {
@@ -374,7 +442,9 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 		}
 	}
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
+	authz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st, Principals: st},
+	)
 	if err != nil {
 		t.Fatalf("access authorizer: %v", err)
 	}
@@ -392,6 +462,23 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 
 // seedRoutePrincipals writes the principals, the group and the membership
 // that the principal and group routes name, and returns the service over st.
+// seedNamespacePrincipal stores testNamespacePrincipalID, a service
+// principal of testNamespace.
+func seedNamespacePrincipal(t *testing.T, st *sqlite.Store, at time.Time) {
+	t.Helper()
+
+	p := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testNamespacePrincipalID, Subject: "ci-routes",
+		DisplayName: "CI routes", Kind: principal.KindService, Source: principal.SourceLocal,
+		Namespace: testNamespace, GroupCount: 0, BreakGlass: false,
+	}
+
+	fence, e := storetest.GrantWrite(t, st, identity.NamespaceObject(testNamespace), at, principal.Ref(p.ID))
+	if err := st.CreateNamespacePrincipal(t.Context(), p, fence, e); err != nil {
+		t.Fatalf("seed namespace principal: %v", err)
+	}
+}
+
 func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 	t.Helper()
 
@@ -400,12 +487,28 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	seeds := []principal.Principal{
 		{
-			CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testPrincipalID, Subject: "alice",
-			DisplayName: "Alice", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+			CreatedAt:   at,
+			UpdatedAt:   at,
+			DisabledAt:  time.Time{},
+			ID:          testPrincipalID,
+			Subject:     "alice",
+			DisplayName: "Alice",
+			Kind:        principal.KindPerson,
+			Source:      principal.SourceLocal,
+			Namespace:   "",
+			GroupCount:  0, BreakGlass: false,
 		},
 		{
-			CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testOtherPrincipalID, Subject: "ci-deploy",
-			DisplayName: "CI deploy", Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
+			CreatedAt:   at,
+			UpdatedAt:   at,
+			DisabledAt:  time.Time{},
+			ID:          testOtherPrincipalID,
+			Subject:     "ci-deploy",
+			DisplayName: "CI deploy",
+			Kind:        principal.KindService,
+			Source:      principal.SourceLocal,
+			Namespace:   "",
+			GroupCount:  0, BreakGlass: false,
 		},
 	}
 	for i := range seeds {
@@ -428,7 +531,11 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 		t.Fatalf("seed member: %v", err)
 	}
 
-	svc, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: nil, NewID: nil})
+	seedNamespacePrincipal(t, st, at)
+
+	svc, err := principal.NewService(principal.Config{
+		Store: st, Guard: nil, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
+	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -442,6 +549,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 //nolint:gochecknoglobals,gosec // A constant table of request bodies; G101 reads "token" in the paths.
 var routeBodies = map[string]string{
 	"PUT /api/server/namespaces/{namespace}/override-switches": `{"allowForcedWrites":false,"allowUnlockedWrites":false}`,
+	"PUT /api/server/namespaces/{namespace}/ip-allowlist":      `{"cidrs":["10.0.0.0/8"]}`,
 	"POST /api/server/namespaces":                              `{"name":"acme"}`,
 	"POST /api/server/restores": `{"backupID":"` + string(
 		testBackupID,
@@ -462,30 +570,32 @@ var routeBodies = map[string]string{
 	"POST /api/server/service-tokens":                                         `{"principalID":"` + testOtherPrincipalID + `","name":"ci"}`,
 	"POST /api/server/service-tokens/{id}/rotate":                             `{}`,
 	"POST /api/server/caller/tokens":                                          `{"name":"laptop"}`,
+	"POST /api/server/namespaces/{namespace}/principals":                      `{"subject":"ci-new"}`,
+	"PATCH /api/server/namespaces/{namespace}/principals/{id}":                `{"displayName":"Routes bot"}`,
+	"POST /api/server/principals/{principal}/tokens":                          `{"name":"ci"}`,
+	"POST /api/server/principals/{principal}/tokens/{id}/rotate":              `{}`,
+	"POST /api/server/principals/{principal}/grants":                          routePrincipalGrantBody,
 	"POST /api/server/caller/tokens/{id}/rotate":                              `{}`,
 	"PATCH /api/server/token-policy":                                          `{"inactivitySeconds":0}`,
+	"PATCH /api/server/session-policy":                                        `{"idleSeconds":900}`,
 }
 
 // routeGrantBody is the body of each grant route: a role that no seeded
 // grant gives to the group.
 const routeGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"writer"}`
 
-// openRouteTestStore opens a fresh SQLite store for one route test.
+// routePrincipalGrantBody is the body of the grant route of a principal: a
+// role with principal actions only, which no seeded grant gives to the
+// group.
+const routePrincipalGrantBody = `{"subject":"group:` + testGroupID + `#member","role":"token-manager"}`
+
+// openRouteTestStore opens a fresh SQLite store for one route test, copied
+// from the migrated template so only the first test of the binary runs every
+// migration.
 func openRouteTestStore(t *testing.T) *sqlite.Store {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	return st
+	return openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 }
 
 // openRouteTestBlobs opens a fresh file blob store for one route test.
@@ -546,6 +656,7 @@ func newRouteTestRestores(
 		Key:         nil,
 		Region:      "test",
 		AfterApply:  nil,
+		Admit:       nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -733,8 +844,11 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	t.Helper()
 
 	id := string(testBackupID)
+	owner := routePrincipalIDs(route.Path)
 
 	switch {
+	case owner.ofOne:
+		id = owner.id
 	case strings.HasPrefix(route.Path, "/api/server/restores"):
 		id = string(testRestoreID)
 	case strings.HasPrefix(route.Path, "/api/server/principals"):
@@ -755,7 +869,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 
 	path := strings.ReplaceAll(route.Path, "{id}", id)
 	path = strings.ReplaceAll(path, "{namespace}", testNamespace)
-	path = strings.ReplaceAll(path, "{principal}", testPrincipalID)
+	path = strings.ReplaceAll(path, "{principal}", owner.principal)
 	path = strings.ReplaceAll(path, "{collection}", testCollection)
 
 	path += routeQuery(route.Path)
@@ -771,7 +885,7 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	// sets in production.
 	req.SetPathValue("namespace", testNamespace)
 	req.SetPathValue("id", id)
-	req.SetPathValue("principal", testPrincipalID)
+	req.SetPathValue("principal", owner.principal)
 	req.SetPathValue("collection", testCollection)
 
 	if token != "" {
@@ -779,6 +893,34 @@ func routeRequest(t *testing.T, route apiserver.Route, token string) *http.Reque
 	}
 
 	return req
+}
+
+// routeOwner is the {principal} of a route, and for a route of one
+// principal the {id} of its seeded grant or token.
+type routeOwner struct {
+	principal string
+	id        string
+	ofOne     bool
+}
+
+// routePrincipalIDs returns the owner of a route of one principal: the
+// service principal testOtherPrincipalID, with its seeded grant or token,
+// or, on the routes of the principals of a namespace, the seeded principal
+// of testNamespace. Any other path answers testPrincipalID.
+func routePrincipalIDs(path string) routeOwner {
+	if strings.HasPrefix(path, "/api/server/namespaces/{namespace}/principals") {
+		return routeOwner{principal: testPrincipalID, id: testNamespacePrincipalID, ofOne: true}
+	}
+
+	if !strings.HasPrefix(path, "/api/server/principals/{principal}/") {
+		return routeOwner{principal: testPrincipalID, id: "", ofOne: false}
+	}
+
+	if strings.Contains(path, "/grants") {
+		return routeOwner{principal: testOtherPrincipalID, id: testPrincipalGrantID, ofOne: true}
+	}
+
+	return routeOwner{principal: testOtherPrincipalID, id: testServiceTokenID, ofOne: true}
 }
 
 // routeQuery returns the query that a route with the path pattern path
@@ -817,7 +959,7 @@ func routeGrantID(path, id string) string {
 func createsRecord(path string) bool {
 	created := []string{
 		"/api/server/namespaces", "/api/server/principals", "/api/server/groups",
-		"/api/server/groups/{id}/members", "/api/server/roles",
+		"/api/server/groups/{id}/members", "/api/server/roles", "/api/server/namespaces/{namespace}/principals",
 		"/api/server/audit/checkpoint-epochs",
 	}
 
@@ -837,21 +979,15 @@ func (fakeEpochs) NewEpoch(context.Context, time.Time) (int64, error) { return 1
 // and answers 201, every other route answers 200.
 func wantSuccessStatus(route apiserver.Route) int {
 	if route.Method == http.MethodPost &&
-		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores") {
+		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores" ||
+			route.Path == "/api/server/audit/chain") {
 		return http.StatusAccepted
 	}
 
 	if route.Method == http.MethodGet &&
 		route.Path == "/api/server/namespaces/{namespace}/collections/{collection}/access-review" {
-		// The export of a collection waits for the collections (#478).
+		// The export of a collection waits for the units inside it (ADR 52).
 		return http.StatusNotImplemented
-	}
-
-	if route.Method == http.MethodPost &&
-		route.Path == "/api/server/namespaces/{namespace}/collections/{collection}/grants" {
-		// No collection exists until the collections are wired (#478), so
-		// a grant on one answers 404 after the authorization.
-		return http.StatusNotFound
 	}
 
 	if route.Method == http.MethodPost && createsRecord(route.Path) {
@@ -944,17 +1080,20 @@ func (r *recordingAuthorizer) Authorize(
 	return nil
 }
 
-// denyObjectAuthorizer denies the one object wire form in deny and allows
-// everything else, so tests prove a route authorizes the resolved object:
-// denying it answers 403.
-type denyObjectAuthorizer struct {
-	deny string
+// denyRouteAuthorizer denies exactly the actions in deny on the object wire
+// form in object and allows everything else, so tests prove a route
+// authorizes the resolved object: denying its declared actions answers 403.
+// A resolver may check a read action first and answer 404, so denying every
+// action on the object would hide the manage check behind that 404.
+type denyRouteAuthorizer struct {
+	object string
+	deny   map[identity.Action]bool
 }
 
-func (d denyObjectAuthorizer) Authorize(
+func (d denyRouteAuthorizer) Authorize(
 	_ context.Context, p identity.Principal, action identity.Action, obj identity.Object,
 ) error {
-	if obj.String() == d.deny {
+	if obj.String() == d.object && d.deny[action] {
 		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 	}
 
@@ -1020,7 +1159,18 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 
 	rec := httptest.NewRecorder()
 
-	expected, err := route.Resolve(rec, routeRequest(t, route, "test-token"))
+	// enforce stores the caller before it resolves, and a resolver may read it.
+	caller, err := tokenAuthenticator{}.AuthenticateToken(t.Context(), "test-token")
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	// A resolver may authorize a read before it answers the object, so the
+	// route resolves on a handler that allows every action.
+	resolving := sameRoute(t, newEnforcingHandler(t, &recordingAuthorizer{calls: nil}), route)
+	req := routeRequest(t, route, "test-token")
+
+	expected, err := resolving.Resolve(rec, req.WithContext(apiserver.WithPrincipalForTest(req.Context(), caller)))
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -1035,13 +1185,18 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 		t.Fatalf("allowed request answers %d, want %d (%s)", rec.Code, want, rec.Body.String())
 	}
 
-	for _, action := range route.Actions {
+	for _, action := range route.ActionsOn(expected) {
 		if !containsCall(recorder.calls, recordedCall{action: action, object: expected.String()}) {
 			t.Fatalf("route never asks %s on %q (calls %v)", action, expected.String(), recorder.calls)
 		}
 	}
 
-	denied := newEnforcingHandler(t, denyObjectAuthorizer{deny: expected.String()})
+	deny := map[identity.Action]bool{}
+	for _, action := range route.ActionsOn(expected) {
+		deny[action] = true
+	}
+
+	denied := newEnforcingHandler(t, denyRouteAuthorizer{object: expected.String(), deny: deny})
 
 	rec = httptest.NewRecorder()
 	denied.ServeHTTP(rec, routeRequest(t, route, "test-token"))
@@ -1049,6 +1204,21 @@ func checkAuthorizedRouteObject(t *testing.T, route apiserver.Route) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("request denied on %q answers %d, want %d", expected.String(), rec.Code, http.StatusForbidden)
 	}
+}
+
+// sameRoute returns the row of h with the method and the path of route.
+func sameRoute(t *testing.T, h *apiserver.Handler, route apiserver.Route) apiserver.Route {
+	t.Helper()
+
+	for _, r := range h.Routes() {
+		if r.Method == route.Method && r.Path == route.Path {
+			return r
+		}
+	}
+
+	t.Fatalf("no route %s %s", route.Method, route.Path)
+
+	return route
 }
 
 // containsCall reports whether calls holds want.
@@ -1103,12 +1273,18 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		Schema:           nil,
+		Journal:          nil,
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
 	}
 
 	cases := []struct {
@@ -1235,12 +1411,18 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		Schema:           nil,
+		Journal:          nil,
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -1261,12 +1443,18 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		Schema:           nil,
+		Journal:          nil,
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler without a target: %v", err)
@@ -1275,4 +1463,29 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 	if without.Backups() != nil {
 		t.Fatal("handler without a backup target builds a backup service, want nil")
 	}
+}
+
+// stubSweeper is an apiserver.DeletedUnitSweeper that purges nothing.
+type stubSweeper struct{}
+
+// stubAuditChain answers an instance with the setting on and approves every
+// change.
+type stubAuditChain struct{}
+
+func (stubAuditChain) Setting() audit.ChainSetting { return audit.ChainOn }
+
+func (stubAuditChain) Status(context.Context) (apiserver.AuditChainStatus, error) {
+	return apiserver.AuditChainStatus{
+		ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOn,
+		Setting: audit.ChainOn, Pending: false, Migrating: false,
+	}, nil
+}
+
+func (stubAuditChain) Approve(context.Context, audit.Entry) error { return nil }
+
+func (stubSweeper) Sweep(context.Context, audit.Entry) (inventory.SweepResult, error) {
+	return inventory.SweepResult{
+		Purged: []inventory.DeletedEntry{}, Failed: 0, Skipped: 0,
+		FinishedBlobPurges: 0, PendingBlobPurges: 0,
+	}, nil
 }

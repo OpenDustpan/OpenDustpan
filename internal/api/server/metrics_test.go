@@ -72,12 +72,18 @@ func newMetricsHandler(
 		Metrics:          metrics,
 		Version:          "test",
 		Schema:           nil,
+		Journal:          nil,
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

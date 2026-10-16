@@ -22,7 +22,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// Signed checkpoints are opt-in (ADR 60 decision 18). A checkpoint signs the
+// Signed checkpoints are opt-in. A checkpoint signs the
 // hash at one sequence of a scope with an Ed25519 key. It goes to the blob
 // store under a key that names the epoch, the scope and the sequence, so two
 // instances that write the checkpoint of one sequence write it once. A copy
@@ -371,13 +371,13 @@ func (c *Checkpoints) NewEpoch(ctx context.Context, now time.Time) (int64, error
 // holds no entry, when the last entry holds no hash, or when a checkpoint
 // of that sequence already exists.
 func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.Time) (bool, error) {
-	last, err := c.entries.LastEntry(ctx, scope)
-	if errors.Is(err, ErrEntryNotFound) {
-		return false, nil
-	}
-
+	last, found, err := c.entries.LastEntry(ctx, scope)
 	if err != nil {
 		return false, fmt.Errorf("read last audit entry of %s: %w", scope, err)
+	}
+
+	if !found {
+		return false, nil
 	}
 
 	if last.Hash == "" {

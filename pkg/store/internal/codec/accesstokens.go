@@ -50,6 +50,7 @@ type AccessTokenOwnerRow struct {
 	Kind         string
 	DisabledAtMs int64
 	ActiveAtMs   int64
+	BreakGlass   bool
 }
 
 // FromAccessTokenOwnerRow converts a row into the owner of a token.
@@ -61,6 +62,7 @@ func FromAccessTokenOwnerRow(row AccessTokenOwnerRow) accesstoken.Owner {
 		Subject:     row.Subject,
 		DisplayName: row.DisplayName,
 		Kind:        principal.Kind(row.Kind),
+		BreakGlass:  row.BreakGlass,
 	}
 }
 
@@ -107,6 +109,9 @@ func ToAccessTokenListQuery(q accesstoken.Query) AccessTokenListQuery {
 }
 
 // AccessTokenPolicyRow is the column representation of the token policy.
+// DisableBreakGlass stays for the database column, which this change does
+// not drop. The server always reads and writes it as false: the setting is
+// no longer supported.
 type AccessTokenPolicyRow struct {
 	MaxLifetimeMs     int64
 	InactivityMs      int64
@@ -117,7 +122,8 @@ type AccessTokenPolicyRow struct {
 }
 
 // FromAccessTokenPolicyRow converts a row into the policy. An update time
-// of 0 is the zero time: the seeded defaults.
+// of 0 is the zero time: the seeded defaults. The break-glass disable is
+// always false.
 func FromAccessTokenPolicyRow(row AccessTokenPolicyRow) accesstoken.Policy {
 	return accesstoken.Policy{
 		UpdatedAt:         FromOptionalMillis(row.UpdatedAtMs),
@@ -125,11 +131,12 @@ func FromAccessTokenPolicyRow(row AccessTokenPolicyRow) accesstoken.Policy {
 		Inactivity:        time.Duration(row.InactivityMs) * time.Millisecond,
 		DisableTokens:     row.DisableTokens,
 		DisableAccounts:   row.DisableAccounts,
-		DisableBreakGlass: row.DisableBreakGlass,
+		DisableBreakGlass: false,
 	}
 }
 
-// ToAccessTokenPolicyRow converts the policy into its columns.
+// ToAccessTokenPolicyRow converts the policy into its columns. It always
+// writes the break-glass disable as false.
 func ToAccessTokenPolicyRow(p accesstoken.Policy) AccessTokenPolicyRow {
 	return AccessTokenPolicyRow{
 		MaxLifetimeMs:     p.MaxLifetime.Milliseconds(),
@@ -137,6 +144,6 @@ func ToAccessTokenPolicyRow(p accesstoken.Policy) AccessTokenPolicyRow {
 		UpdatedAtMs:       OptionalMillis(p.UpdatedAt),
 		DisableTokens:     p.DisableTokens,
 		DisableAccounts:   p.DisableAccounts,
-		DisableBreakGlass: p.DisableBreakGlass,
+		DisableBreakGlass: false,
 	}
 }

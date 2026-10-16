@@ -3,7 +3,8 @@
 //
 // A grant is a tuple: one subject, one role and one object. The subject is a
 // principal, or a group, which stands for each of its members. The object is
-// the installation, a namespace, a collection or a unit. A grant applies to
+// the installation, a namespace, a collection, a unit or a service principal.
+// A grant applies to
 // its object and to every object that its object holds, along the fixed
 // chain installation > namespace > collection > unit (ADR 52, decision 5).
 // Nothing else inherits: groups do not nest, and roles do not hold roles.
@@ -11,10 +12,14 @@
 // A role is a named set of actions. Each action is in exactly one family:
 //
 //   - operator: the operation of the installation (backups, restores,
-//     maintenance, metrics),
+//     maintenance, metrics, the installation audit log),
 //   - administration: the principals, groups, roles and grants of the
 //     installation, and namespace create,
-//   - data: every action inside a namespace, its access included.
+//   - data: every action inside a namespace, its access included,
+//   - delegation: the issue of the access tokens of a service principal.
+//
+// The installation holds every principal. A grant on a service principal
+// gives the delegation actions of its role on that principal only.
 //
 // No family holds an action of another, so a grant of an operator role on
 // the installation gives no data action in any namespace. The inputs of a
@@ -66,13 +71,16 @@ type Family string
 
 // Families of actions. No action is in two families.
 const (
-	// FamilyOperator holds the operation of the installation.
+	// FamilyOperator holds the operation of the installation, and its audit log.
 	FamilyOperator Family = "operator"
 	// FamilyAdministration holds the principals, groups, roles and grants
 	// of the installation, and namespace create.
 	FamilyAdministration Family = "administration"
 	// FamilyData holds every action inside a namespace.
 	FamilyData Family = "data"
+	// FamilyDelegation holds the actions that let a principal act as a
+	// service principal: the issue of its access tokens.
+	FamilyDelegation Family = "delegation"
 	// FamilySelf holds the actions that every signed-in principal can do:
 	// read its own record and read the role catalog. No grant gives them.
 	FamilySelf Family = "self"
@@ -88,47 +96,63 @@ var families = map[identity.Action]Family{
 	identity.ActionServerRestore:     FamilyOperator,
 	identity.ActionServerMaintenance: FamilyOperator,
 	identity.ActionServerObserve:     FamilyOperator,
+	identity.ActionServerReadAudit:   FamilyOperator,
 	// The installation settings (ADR 63); RFC 68 decides their API.
 	identity.ActionServerManageSettings: FamilyOperator,
+	// A change of the audit chain. Off also needs the administration
+	// action below.
+	identity.ActionServerSetAuditChain: FamilyOperator,
 
-	identity.ActionServerReadPrincipals:   FamilyAdministration,
-	identity.ActionServerManagePrincipals: FamilyAdministration,
-	identity.ActionServerManageGroups:     FamilyAdministration,
-	identity.ActionServerManageRoles:      FamilyAdministration,
-	identity.ActionServerManageAccess:     FamilyAdministration,
-	identity.ActionServerCreateNamespace:  FamilyAdministration,
-	identity.ActionServerReadAccess:       FamilyAdministration,
+	identity.ActionServerReadPrincipals:    FamilyAdministration,
+	identity.ActionServerManagePrincipals:  FamilyAdministration,
+	identity.ActionServerManageGroups:      FamilyAdministration,
+	identity.ActionServerManageRoles:       FamilyAdministration,
+	identity.ActionServerManageAccess:      FamilyAdministration,
+	identity.ActionServerCreateNamespace:   FamilyAdministration,
+	identity.ActionServerReadAccess:        FamilyAdministration,
+	identity.ActionServerDisableAuditChain: FamilyAdministration,
 	// The access tokens of other principals (ADR 53, decision 3).
-	identity.ActionServerReadTokens:          FamilyAdministration,
-	identity.ActionServerManageTokens:        FamilyAdministration,
-	identity.ActionServerManageServiceTokens: FamilyAdministration,
-	identity.ActionServerManageTokenPolicy:   FamilyAdministration,
+	identity.ActionServerReadTokens:   FamilyAdministration,
+	identity.ActionServerManageTokens: FamilyAdministration,
+	// A custom role may still hold this deprecated action, so it keeps its
+	// family. No route declares it.
+	identity.ActionServerManageServiceTokens:  FamilyAdministration, //nolint:staticcheck // Kept classified for stored roles.
+	identity.ActionServerManageTokenPolicy:    FamilyAdministration,
+	identity.ActionServerManageSignIn:         FamilyAdministration,
+	identity.ActionServerRestoreAccess:        FamilyAdministration,
+	identity.ActionNamespaceManageIPAllowlist: FamilyAdministration,
 
-	identity.ActionNamespaceRead:          FamilyData,
-	identity.ActionNamespaceAdmin:         FamilyData,
-	identity.ActionNamespaceReadAudit:     FamilyData,
-	identity.ActionNamespaceSetOverrides:  FamilyData,
-	identity.ActionNamespaceManageAccess:  FamilyData,
-	identity.ActionNamespaceReadAccess:    FamilyData,
-	identity.ActionCollectionRead:         FamilyData,
-	identity.ActionCollectionCreate:       FamilyData,
-	identity.ActionCollectionUpdate:       FamilyData,
-	identity.ActionCollectionDelete:       FamilyData,
-	identity.ActionCollectionCreateUnit:   FamilyData,
-	identity.ActionCollectionManageAccess: FamilyData,
-	identity.ActionCollectionReadAccess:   FamilyData,
-	identity.ActionUnitRead:               FamilyData,
-	identity.ActionUnitWrite:              FamilyData,
-	identity.ActionUnitManage:             FamilyData,
-	identity.ActionUnitEncrypt:            FamilyData,
-	identity.ActionUnitDecrypt:            FamilyData,
-	identity.ActionUnitWriteForced:        FamilyData,
-	identity.ActionUnitWriteUnlocked:      FamilyData,
-	identity.ActionUnitSetOverrides:       FamilyData,
-	identity.ActionUnitReadSecrets:        FamilyData,
-	identity.ActionUnitMove:               FamilyData,
-	identity.ActionUnitManageAccess:       FamilyData,
-	identity.ActionUnitReadAccess:         FamilyData,
+	identity.ActionPrincipalManageTokens: FamilyDelegation,
+
+	identity.ActionNamespaceRead:                  FamilyData,
+	identity.ActionNamespaceAdmin:                 FamilyData,
+	identity.ActionNamespaceReadAudit:             FamilyData,
+	identity.ActionNamespaceSetOverrides:          FamilyData,
+	identity.ActionNamespaceManageAccess:          FamilyData,
+	identity.ActionNamespaceReadAccess:            FamilyData,
+	identity.ActionNamespaceManagePrincipals:      FamilyData,
+	identity.ActionNamespaceManagePrincipalTokens: FamilyData,
+	identity.ActionCollectionRead:                 FamilyData,
+	identity.ActionCollectionCreate:               FamilyData,
+	identity.ActionCollectionUpdate:               FamilyData,
+	identity.ActionCollectionDelete:               FamilyData,
+	identity.ActionCollectionCreateUnit:           FamilyData,
+	identity.ActionCollectionManageAccess:         FamilyData,
+	identity.ActionCollectionReadAccess:           FamilyData,
+	identity.ActionUnitRead:                       FamilyData,
+	identity.ActionUnitWrite:                      FamilyData,
+	identity.ActionUnitManage:                     FamilyData,
+	identity.ActionUnitEncrypt:                    FamilyData,
+	identity.ActionUnitDecrypt:                    FamilyData,
+	identity.ActionUnitWriteForced:                FamilyData,
+	identity.ActionUnitWriteUnlocked:              FamilyData,
+	identity.ActionUnitSetOverrides:               FamilyData,
+	identity.ActionUnitReadSecrets:                FamilyData,
+	identity.ActionUnitMove:                       FamilyData,
+	identity.ActionUnitManageAccess:               FamilyData,
+	identity.ActionUnitRestore:                    FamilyData,
+	identity.ActionUnitPurge:                      FamilyData,
+	identity.ActionUnitReadAccess:                 FamilyData,
 
 	identity.ActionCallerRead:     FamilySelf,
 	identity.ActionRoleRead:       FamilySelf,
@@ -214,12 +238,15 @@ const maxSubjectIDLength = 64
 // ObjectKind names the type of a grant object.
 type ObjectKind string
 
-// Object kinds, outermost first: each holds the next.
+// Object kinds. The installation holds every namespace and every
+// principal. Each of namespace, collection and unit holds the next.
 const (
 	ObjectInstallation ObjectKind = "installation"
 	ObjectNamespace    ObjectKind = "namespace"
 	ObjectCollection   ObjectKind = "collection"
 	ObjectUnit         ObjectKind = "unit"
+	// ObjectPrincipal is one service principal.
+	ObjectPrincipal ObjectKind = "principal"
 )
 
 // KindOf returns the object kind of obj, and false for the caller object.
@@ -229,6 +256,8 @@ func KindOf(obj identity.Object) (ObjectKind, bool) {
 		return ObjectInstallation, true
 	case obj.IsCaller():
 		return "", false
+	case obj.IsPrincipal():
+		return ObjectPrincipal, true
 	case obj.IsUnit():
 		return ObjectUnit, true
 	case obj.IsCollection():
@@ -278,11 +307,36 @@ func (r Role) Has(action identity.Action) bool {
 
 // GrantQuery is a page of the grants on one object as a store reads it:
 // the grants after the subject AfterSubject and the role AfterRole, in the
-// order of subject then role, at most Limit of them.
+// order of subject then role, at most Limit of them. Subject, when it is not
+// empty, keeps the grants of that subject (the text form). Role, when it is
+// not empty, keeps the grants of that role.
 type GrantQuery struct {
 	AfterSubject string
 	AfterRole    string
+	Subject      string
+	Role         string
 	Limit        int
+}
+
+// Holder kinds of a listed grant, next to the principal kinds.
+const (
+	// HolderGroup is the holder kind of a grant to a group.
+	HolderGroup = "group"
+)
+
+// Holder names the holder of a grant for a list: the display name of a
+// principal (its subject when it has no display name) and its kind (person
+// or service), or the name of a group and the kind HolderGroup. Both are
+// empty when the record does not exist.
+type Holder struct {
+	Name string
+	Kind string
+}
+
+// ListedGrant is one grant of a list, with its holder.
+type ListedGrant struct {
+	Holder Holder
+	Grant  Grant
 }
 
 // GrantStore keeps the grants.
@@ -302,8 +356,10 @@ type GrantQuery struct {
 type GrantStore interface {
 	// CreateGrant persists g. It returns ErrAlreadyExists when a current
 	// grant of the same subject, role and object exists, or when the ID is
-	// taken, and ErrInvalid for an object that takes no grant or a unit with
-	// no stable ID. It returns ErrNotFound when the record of the subject,
+	// taken, and ErrInvalid for an object that takes no grant, a unit with
+	// no stable ID, or a subject that is a principal of a namespace and an
+	// object outside that namespace. It reads the namespace of the subject
+	// in its own transaction. It returns ErrNotFound when the record of the subject,
 	// or the custom role, has ended: the write reads them in its own
 	// transaction, so a delete that commits first wins. A subject or a role
 	// with no record at all is the Service's to check.
@@ -315,10 +371,12 @@ type GrantStore interface {
 	// installation). It returns ErrNotFound when no such grant exists in
 	// that namespace.
 	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
-	// ListGrantsOn returns one page of the current grants on obj, ordered
-	// by subject then role, and the count of every current grant on obj. A
-	// unit obj matches by its stable ID, and returns ErrInvalid with none.
-	ListGrantsOn(ctx context.Context, obj identity.Object, q GrantQuery) ([]Grant, int64, error)
+	// ListGrantsOn returns one page of the current grants on obj that
+	// match the filters of q, ordered by subject then role, each with its
+	// holder, and the count of every current grant on obj that matches the
+	// filters. It reads the holders in the query of the page. A unit obj
+	// matches by its stable ID, and returns ErrInvalid with none.
+	ListGrantsOn(ctx context.Context, obj identity.Object, q GrantQuery) ([]ListedGrant, int64, error)
 	// GrantsOn returns every current grant that one of subjects holds on
 	// one of objects, in one query. An empty list of subjects or objects
 	// returns none. A unit matches by its stable ID: a unit object with none
@@ -331,21 +389,27 @@ type GrantStore interface {
 	// CreateNamespaceWithGrant persists ns, g and e in one transaction: the
 	// creator of a namespace holds the namespace-admin role on it from the
 	// start. A grant with no ID stores the namespace and the entry alone. It
-	// returns namespace.ErrAlreadyExists when the name is taken.
+	// returns namespace.ErrAlreadyExists when the name is taken. With a grant
+	// it keeps the entry e in the scope audit.ServerScope and appends the same
+	// grant entry in the chain of the new namespace, so the chain starts with
+	// the grant of its creator.
 	CreateNamespaceWithGrant(ctx context.Context, ns namespace.Namespace, g Grant, e audit.Entry) error
 }
 
 // GrantLookups reads the current grants that a change of who holds them
-// must check (ADR 52): the grants of one subject, and whether a role is
-// granted below the installation.
+// must check: the grants of one subject, and where a role is
+// granted.
 type GrantLookups interface {
 	// GrantsOf returns every current grant of subject, on any object, in
 	// one query. It serves the checks of a membership change and of a
 	// delete.
 	GrantsOf(ctx context.Context, subject Subject) ([]Grant, error)
 	// RoleGrantedBelowInstallation reports whether a current grant gives
-	// the role with the ID role on an object that is not the installation.
+	// the role with the ID role on a namespace, a collection or a unit.
 	RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error)
+	// RoleGrantedOnPrincipal reports whether a current grant gives the
+	// role with the ID role on a principal.
+	RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error)
 }
 
 // RoleStore keeps the custom roles. The built-in roles live in code. The

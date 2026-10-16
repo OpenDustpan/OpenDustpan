@@ -31,6 +31,7 @@ type principalDoc struct {
 	Source      string `json:"source"`
 	CreatedAt   string `json:"createdAt"`
 	UpdatedAt   string `json:"updatedAt"`
+	Namespace   string `json:"namespace"`
 	GroupCount  int64  `json:"groupCount"`
 }
 
@@ -62,18 +63,11 @@ func newTestPrincipals(t *testing.T) *principal.Service {
 func newTestPrincipalStore(t *testing.T) (*principal.Service, *sqlite.Store) {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
+	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	principals, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: nil, NewID: nil})
+	principals, err := principal.NewService(
+		principal.Config{Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
@@ -107,10 +101,16 @@ func newAuditedPrincipalHandler(
 		Metrics:          stubMetrics{},
 		Version:          "",
 		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
 		Principals:       principals,
 		Access:           nil,
 		Tokens:           nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
 		Audit:            entries,
 		CheckpointEpochs: nil,
 	})
@@ -687,7 +687,9 @@ func TestPrincipalChangeFailsClosed(t *testing.T) {
 
 	_, st := newTestPrincipalStore(t)
 
-	svc, err := principal.NewService(principal.Config{Store: failingStore{st}, Guard: nil, Now: nil, NewID: nil})
+	svc, err := principal.NewService(
+		principal.Config{Store: failingStore{st}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}

@@ -34,12 +34,14 @@ func (m *memEntries) EntryAt(_ context.Context, _ namespace.Name, seq int64) (au
 	return m.entries[seq-1], nil
 }
 
-func (m *memEntries) LastEntry(context.Context, namespace.Name) (audit.Entry, error) {
+func (m *memEntries) LastEntry(context.Context, namespace.Name) (audit.Entry, bool, error) {
 	if len(m.entries) == 0 {
-		return audit.Entry{}, audit.ErrEntryNotFound
+		var none audit.Entry
+
+		return none, false, nil
 	}
 
-	return m.entries[len(m.entries)-1], nil
+	return m.entries[len(m.entries)-1], true, nil
 }
 
 // add appends one chained entry.

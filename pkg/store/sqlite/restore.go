@@ -214,7 +214,7 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 	staged := s.stagingPath
 
 	// The chain state is bookkeeping of this installation: the staged file
-	// takes the record of the live database (RFC 22).
+	// takes the record of the live database.
 	chain, err := s.ChainRecord(ctx)
 	if err != nil {
 		return err
@@ -278,15 +278,25 @@ func fenceStagedFile(ctx context.Context, path string, chain audit.ChainRecord) 
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
 
-	if _, err := tx.ExecContext(ctx, `UPDATE namespaces SET failover_version = failover_version + 1`); err != nil {
+	const fence = `UPDATE namespaces SET failover_version = failover_version + 1`
+
+	_, err = tx.ExecContext(ctx, fence)
+	if err != nil {
 		return errors.Join(fmt.Errorf("fence staged namespaces: %w", err), tx.Rollback())
 	}
 
-	if chain.State != audit.ChainUnknown {
-		const keepChain = `INSERT INTO audit_chain_state (id, state, ever_chained) VALUES (1, ?, ?)`
-		if _, err := tx.ExecContext(ctx, keepChain, string(chain.State), chain.EverChained); err != nil {
-			return errors.Join(fmt.Errorf("keep audit chain state: %w", err), tx.Rollback())
-		}
+	// The swap replaces the log, so the copy of the record sets
+	// log_replaced: the server compares the restored log with the state,
+	// also after a crash. The copy keeps no migration: a new approval
+	// starts it again. The copy keeps entered_maintenance false: the chain
+	// enters maintenance mode again when it still waits.
+	const keepChain = `INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+    VALUES (1, ?, ?, ?, ?, 0, 1, 0)`
+
+	_, err = tx.ExecContext(ctx, keepChain, string(chain.State), codec.Millis(chain.ChangedAt), chain.ChangedBy,
+		chain.Pending)
+	if err != nil {
+		return errors.Join(fmt.Errorf("keep audit chain state: %w", err), tx.Rollback())
 	}
 
 	// The restored log can reuse sequences that a sink already holds, and

@@ -7,6 +7,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
@@ -81,7 +82,8 @@ func deleteStack(t *testing.T, f *fixture, project, name string) {
 	gone.At, gone.Namespace, gone.Action = time.Unix(1, 0), "acme", "unit:manage"
 	gone.Object, gone.Kind, gone.Outcome = "pulumi:acme/"+project+"/"+name, audit.KindChange, audit.OutcomeSuccess
 
-	if err := f.store.DeleteStack(ctx, ref, ns.Fence(), stack.EmptyGuard(), gone); err != nil {
+	d := inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(inventory.DeletedRetention)}
+	if err := f.store.DeleteStack(ctx, ref, ns.Fence(), stack.EmptyGuard(), d); err != nil {
 		t.Fatalf("delete stack: %v", err)
 	}
 }
@@ -207,8 +209,9 @@ func pageOf(t *testing.T, f *fixture, obj identity.Object, cursor string) access
 
 // TestReviewMarksWhoCanGrantAccess checks canGrantAccess: a role that can
 // change who has access (here, the members of groups) is marked, and a
-// role that manages service tokens is not, because a service token gets no
-// access without a grant.
+// role that makes the tokens of service principals is not: such a token
+// acts with the grants of its principal, and the export of the principal
+// lists who can make it.
 func TestReviewMarksWhoCanGrantAccess(t *testing.T) {
 	t.Parallel()
 
@@ -221,7 +224,7 @@ func TestReviewMarksWhoCanGrantAccess(t *testing.T) {
 		action identity.Action
 	}{
 		{"groups", identity.ActionServerManageGroups},
-		{"service-tokens", identity.ActionServerManageServiceTokens},
+		{"service-tokens", identity.ActionPrincipalManageTokens},
 	} {
 		role, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
 			Name: r.name, Description: "", Actions: []identity.Action{r.action},

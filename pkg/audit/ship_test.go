@@ -164,26 +164,28 @@ func (s *memSink) batchSizes() []int {
 // entryAt returns a stored entry of ns with sequence seq and a hash.
 func entryAt(ns namespace.Name, seq int64) audit.Entry {
 	return audit.Entry{
-		At:         time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC).Add(time.Duration(seq) * time.Second),
-		Namespace:  ns,
-		Subject:    "alice",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:read-secrets",
-		Object:     "opentofu:" + ns.String() + "/prod",
-		Version:    "sv-1",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "OpenTofu/1.11",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindToolOperation,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "req-" + strconv.FormatInt(seq, 10),
-		PrevHash:   "prev",
-		Hash:       "hash-" + strconv.FormatInt(seq, 10),
-		Sequence:   seq,
+		At:           time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC).Add(time.Duration(seq) * time.Second),
+		Namespace:    ns,
+		Subject:      "alice",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:read-secrets",
+		Object:       "opentofu:" + ns.String() + "/prod",
+		Version:      "sv-1",
+		ValuePath:    "",
+		ValueCount:   nil,
+		ObjectID:     "",
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "OpenTofu/1.11",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindToolOperation,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "req-" + strconv.FormatInt(seq, 10),
+		PrevHash:     "prev",
+		Hash:         "hash-" + strconv.FormatInt(seq, 10),
+		Sequence:     seq,
+		FenceVersion: 0,
 	}
 }
 
@@ -197,6 +199,8 @@ func newShipper(t *testing.T, feed *memFeed, sinks ...audit.ShipSink) *audit.Shi
 		OnShipped:  nil,
 		OnFailure:  nil,
 		OnSkipped:  nil,
+		OnLag:      nil,
+		Now:        nil,
 		Sinks:      sinks,
 	})
 	if err != nil {
@@ -207,7 +211,7 @@ func newShipper(t *testing.T, feed *memFeed, sinks ...audit.ShipSink) *audit.Shi
 }
 
 func shipSink(name string, s logsink.Sink) audit.ShipSink {
-	return audit.ShipSink{Sink: s, Name: name, Interval: 0}
+	return audit.ShipSink{Sink: s, Name: name, Kind: "test", Interval: 0}
 }
 
 func TestShipOnceCopiesEveryEntryInOrderAndMovesTheCursors(t *testing.T) {
@@ -313,6 +317,8 @@ func TestASkippedEntryIsCountedAndTheCursorMoves(t *testing.T) {
 		OnShipped:  func(_ string, n int) { shipped += n },
 		OnFailure:  nil,
 		OnSkipped:  func(_ string, n int) { skipped += n },
+		OnLag:      nil,
+		Now:        nil,
 		Sinks:      []audit.ShipSink{shipSink("siem", sink)},
 	})
 	if err != nil {
@@ -370,10 +376,13 @@ func TestAFailedRoundLogsAClassNotTheDriverText(t *testing.T) {
 			}
 		},
 		OnSkipped: nil,
+		OnLag:     nil,
+		Now:       nil,
 		Sinks: []audit.ShipSink{
 			{
 				Sink:     &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false},
 				Name:     "siem",
+				Kind:     "test",
 				Interval: time.Millisecond,
 			},
 		},
@@ -473,7 +482,7 @@ func TestRunShipsOnItsIntervalAndStopsWithTheContext(t *testing.T) {
 
 	feed := newMemFeed(map[namespace.Name]int{"acme": 1})
 	sink := &memSink{refuse: "", batches: nil, mu: sync.Mutex{}, down: false}
-	shipper := newShipper(t, feed, audit.ShipSink{Sink: sink, Name: "siem", Interval: time.Millisecond})
+	shipper := newShipper(t, feed, audit.ShipSink{Sink: sink, Name: "siem", Kind: "test", Interval: time.Millisecond})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
@@ -528,6 +537,8 @@ func TestNewShipperRejectsBadSinks(t *testing.T) {
 				OnShipped:  nil,
 				OnFailure:  nil,
 				OnSkipped:  nil,
+				OnLag:      nil,
+				Now:        nil,
 				Sinks:      tc.sinks,
 			})
 			if !errors.Is(err, audit.ErrInvalidShipper) {
@@ -610,6 +621,23 @@ func TestToRecordCarriesChanges(t *testing.T) {
 
 	if rec := audit.ToRecord(entryAt("acme", 9)); hasKey(rec, "changes") {
 		t.Fatalf("entry without changes: record holds them: %+v", rec.Attrs)
+	}
+}
+
+// TestToRecordCarriesTheObjectID proves that a record carries the stable ID
+// of the unit of an entry (ADR 47) only when the entry has one.
+func TestToRecordCarriesTheObjectID(t *testing.T) {
+	t.Parallel()
+
+	e := entryAt("acme", 10)
+	e.ObjectID = "ws-1"
+
+	if rec := audit.ToRecord(e); !hasAttr(rec, "objectID", "ws-1") {
+		t.Fatalf("entry with an object ID: record lacks it: %+v", rec.Attrs)
+	}
+
+	if rec := audit.ToRecord(entryAt("acme", 11)); hasKey(rec, "objectID") {
+		t.Fatalf("entry without an object ID: record holds one: %+v", rec.Attrs)
 	}
 }
 

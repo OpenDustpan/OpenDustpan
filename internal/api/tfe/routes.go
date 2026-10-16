@@ -29,7 +29,8 @@ const (
 	// the credential, like the update-lease scope of the other tool adapter.
 	// The capability stands in for the declared action: creating the state
 	// version already authorized it, and it scopes to one upload alone. The
-	// Authorizer does not run. Only the state upload routes may use it.
+	// Authorizer does not run, but the address gate runs when one is
+	// configured. Only the state upload routes may use it.
 	ScopeUpload
 )
 

@@ -2,10 +2,13 @@ package access
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 )
 
 // Callers answers the subjects of a caller: what the authorizer reads of
@@ -23,6 +26,23 @@ type Callers interface {
 // does not exist.
 type UnitCollections interface {
 	CollectionOf(ctx context.Context, unit identity.Object) (string, bool, error)
+	// CollectionID returns the stable ID of the collection obj, and false when no
+	// such collection exists. A grant on a collection is keyed by this ID.
+	CollectionID(ctx context.Context, collection identity.Object) (string, bool, error)
+}
+
+// PrincipalNamespaces reads the principals of namespaces, for the tokens
+// of a namespace. Both SQL stores implement it.
+type PrincipalNamespaces interface {
+	// GetPrincipal returns the principal with the ID id, or
+	// principal.ErrNotFound.
+	GetPrincipal(ctx context.Context, id string) (principal.Principal, error)
+	// ListNamespacePrincipals returns the principals of the namespace ns
+	// that exist, ordered by subject: the rows of q, with the subject as
+	// the key.
+	ListNamespacePrincipals(
+		ctx context.Context, ns namespace.Name, q principal.Query,
+	) ([]principal.Principal, int64, error)
 }
 
 // AuthorizerConfig holds the dependencies of an Authorizer.
@@ -36,6 +56,9 @@ type AuthorizerConfig struct {
 	// one: a grant on a unit then matches nothing, and only the grants on
 	// the objects that hold the unit apply.
 	Units Units
+	// Principals reads the principals of namespaces. Nil means no principal
+	// belongs to a namespace for the Authorizer.
+	Principals PrincipalNamespaces
 }
 
 // Authorizer decides with grants (ADR 52). It implements identity.Authorizer
@@ -52,6 +75,7 @@ type Authorizer struct {
 	callers     Callers
 	collections UnitCollections
 	units       Units
+	principals  PrincipalNamespaces
 }
 
 var _ identity.Authorizer = (*Authorizer)(nil)
@@ -65,7 +89,10 @@ func NewAuthorizer(cfg AuthorizerConfig) (*Authorizer, error) {
 		return nil, fmt.Errorf("%w: callers", ErrMissingDependency)
 	}
 
-	return &Authorizer{store: cfg.Store, callers: cfg.Callers, collections: cfg.Collections, units: cfg.Units}, nil
+	return &Authorizer{
+		store: cfg.Store, callers: cfg.Callers, collections: cfg.Collections, units: cfg.Units,
+		principals: cfg.Principals,
+	}, nil
 }
 
 // Authorize allows action on obj when a grant of one of the subjects of p,
@@ -118,7 +145,9 @@ type Access struct {
 }
 
 // Explain answers the actions that p holds on obj and the grants that give
-// them. An administrator holds every classified action through no grant.
+// them. Only a grant that gives at least one of the actions is in the
+// answer: a grant whose role no longer exists gives none. An administrator
+// holds every classified action through no grant.
 func (a *Authorizer) Explain(ctx context.Context, p identity.Principal, obj identity.Object) (Access, error) {
 	out := Access{Object: obj, Actions: nil, Grants: nil}
 
@@ -171,12 +200,14 @@ func (h held) actions() []identity.Action {
 // Scope is the set of objects of one kind where a principal can do one
 // action, as grants name them (ADR 52). All is true when a grant on the
 // installation covers every object. A unit is in the scope when it, its
-// collection or its namespace is in a set. A consumer filters a list with
+// collection or its namespace is in a set. A principal is in the scope when
+// it is in Principals. A consumer filters a list with
 // the scope in its own query, never with one check for each object.
 type Scope struct {
 	Namespaces  []identity.Object
 	Collections []identity.Object
 	Units       []identity.Object
+	Principals  []identity.Object
 	All         bool
 }
 
@@ -185,7 +216,7 @@ type Scope struct {
 // of the subjects with a role that holds action. An administrator has every
 // object.
 func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, action identity.Action) (Scope, error) {
-	none := Scope{Namespaces: nil, Collections: nil, Units: nil, All: false}
+	none := Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}
 
 	if p.Admin {
 		none.All = true
@@ -197,6 +228,27 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 	if err != nil || len(subjects) == 0 {
 		return none, err
 	}
+
+	out, err := a.scopeFor(ctx, subjects, action)
+	if err != nil {
+		return none, err
+	}
+
+	if action != identity.ActionPrincipalManageTokens || out.All {
+		return out, nil
+	}
+
+	out, err = a.namespaceTokenPrincipals(ctx, subjects, out)
+	if err != nil {
+		return none, err
+	}
+
+	return out, nil
+}
+
+// scopeFor returns the scope of the grants with a role that holds action.
+func (a *Authorizer) scopeFor(ctx context.Context, subjects []Subject, action identity.Action) (Scope, error) {
+	none := Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}
 
 	roles, err := a.rolesWith(ctx, action)
 	if err != nil || len(roles) == 0 {
@@ -216,20 +268,146 @@ func (a *Authorizer) ListObjects(ctx context.Context, p identity.Principal, acti
 	out := none
 
 	for i := range grants {
-		// The name of a unit that no longer exists may name a new unit now:
-		// its grants give nothing.
-		if grants[i].Object.IsUnit() && !live[grants[i].Object.UnitID()] {
-			continue
+		add, addErr := a.grantInScope(ctx, grants[i].Object, action, live)
+		if addErr != nil {
+			return none, addErr
 		}
 
-		if !givenOn(action, grants[i].Object) {
-			continue
+		if add {
+			out.add(grants[i].Object)
 		}
-
-		out.add(grants[i].Object)
 	}
 
 	return out, nil
+}
+
+// grantInScope reports whether a grant on obj with action belongs in a
+// scope, and checks that a grant on a unit or a collection still lives.
+func (a *Authorizer) grantInScope(
+	ctx context.Context, obj identity.Object, action identity.Action, live map[string]bool,
+) (bool, error) {
+	if !givenOn(action, obj) {
+		return false, nil
+	}
+
+	ok, err := a.grantLive(ctx, obj, live)
+	if err != nil {
+		return false, err
+	}
+
+	return ok, nil
+}
+
+// namespaceTokenPrincipals adds the principals of each namespace where the
+// caller holds namespace:manage-principal-tokens through a grant on that
+// namespace. It lists all pages. With no principal port it adds none.
+func (a *Authorizer) namespaceTokenPrincipals(ctx context.Context, subjects []Subject, out Scope) (Scope, error) {
+	if a.principals == nil {
+		return out, nil
+	}
+
+	roles, err := a.rolesWith(ctx, identity.ActionNamespaceManagePrincipalTokens)
+	if err != nil || len(roles) == 0 {
+		return out, err
+	}
+
+	grants, err := a.store.GrantsWithRoles(ctx, subjects, roles)
+	if err != nil {
+		return out, fmt.Errorf("read grants: %w", err)
+	}
+
+	seen := map[namespace.Name]bool{}
+
+	for i := range grants {
+		kind, _ := KindOf(grants[i].Object)
+		if kind != ObjectNamespace {
+			continue
+		}
+
+		if !givenOn(identity.ActionNamespaceManagePrincipalTokens, grants[i].Object) {
+			continue
+		}
+
+		ns := grants[i].Object.Namespace()
+		if seen[ns] {
+			continue
+		}
+
+		seen[ns] = true
+
+		var listErr error
+
+		out, listErr = a.addNamespacePrincipals(ctx, ns, out)
+		if listErr != nil {
+			return out, listErr
+		}
+	}
+
+	return out, nil
+}
+
+// addNamespacePrincipals adds every principal of the namespace ns to out.
+func (a *Authorizer) addNamespacePrincipals(ctx context.Context, ns namespace.Name, out Scope) (Scope, error) {
+	after := ""
+
+	for {
+		rows, _, err := a.principals.ListNamespacePrincipals(
+			ctx, ns, principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit},
+		)
+		if err != nil {
+			return out, fmt.Errorf("list principals of namespace %q: %w", ns.String(), err)
+		}
+
+		if len(rows) == 0 {
+			return out, nil
+		}
+
+		for i := range rows {
+			obj, parseErr := identity.ParsePrincipalObject(rows[i].ID)
+			if parseErr != nil {
+				return out, parseErr
+			}
+
+			out.add(obj)
+		}
+
+		if len(rows) < principal.MaxLimit {
+			return out, nil
+		}
+
+		after = rows[len(rows)-1].Subject
+	}
+}
+
+// grantLive reports whether a grant on obj still gives something. The name
+// of a unit that no longer exists may name a new unit now, and a collection
+// that was deleted and created again under its name is a new collection, so
+// the grants of the old one give nothing.
+func (a *Authorizer) grantLive(ctx context.Context, obj identity.Object, live map[string]bool) (bool, error) {
+	switch {
+	case obj.IsUnit():
+		return live[obj.UnitID()], nil
+	case obj.IsCollection():
+		return a.liveCollection(ctx, obj)
+	default:
+		return true, nil
+	}
+}
+
+// liveCollection reports whether obj names the collection that holds its
+// stable ID now. It is false when no collection port is configured, and when
+// the name is gone or has another ID.
+func (a *Authorizer) liveCollection(ctx context.Context, obj identity.Object) (bool, error) {
+	if a.collections == nil {
+		return false, nil
+	}
+
+	id, found, err := a.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return false, fmt.Errorf("read collection %q: %w", obj.String(), err)
+	}
+
+	return found && id == obj.CollectionID(), nil
 }
 
 // add puts obj in the set of its kind once. An object on the installation
@@ -246,13 +424,16 @@ func (s *Scope) add(obj identity.Object) {
 		s.Collections = appendObject(s.Collections, obj)
 	case ObjectUnit:
 		s.Units = appendObject(s.Units, obj)
+	case ObjectPrincipal:
+		s.Principals = appendObject(s.Principals, obj)
 	default:
 	}
 }
 
 // appendObject appends obj to objs once.
 func appendObject(objs []identity.Object, obj identity.Object) []identity.Object {
-	for _, o := range objs {
+	for i := range objs {
+		o := objs[i]
 		if o.String() == obj.String() {
 			return objs
 		}
@@ -292,7 +473,18 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 		return none, err
 	}
 
-	out := held{set: map[identity.Action]bool{}, grants: grants}
+	targetNS := namespaceOfChain(chain, obj)
+
+	return heldFromGrants(grants, roles, targetNS), nil
+}
+
+// heldFromGrants returns the actions that grants give on their target: the
+// union of the actions of each grant. A grant whose role no longer exists,
+// or gives no action on its object, gives nothing and is not listed.
+// targetNS is the namespace of the principal of a namespace, and empty for
+// any other target.
+func heldFromGrants(grants []Grant, roles map[string]Role, targetNS namespace.Name) held {
+	out := held{set: map[identity.Action]bool{}, grants: nil}
 
 	for i := range grants {
 		role, ok := roles[grants[i].Role]
@@ -300,29 +492,121 @@ func (a *Authorizer) heldActions(ctx context.Context, p identity.Principal, obj 
 			continue
 		}
 
+		if addHeldGrant(role, grants[i], targetNS, &out) {
+			out.grants = append(out.grants, grants[i])
+		}
+	}
+
+	return out
+}
+
+// addHeldGrant adds the actions that one grant gives to out, and reports
+// whether it gives any. A grant on the namespace of a principal of a
+// namespace gives no data action on the principal: it gives only
+// principal:manage-tokens when its role holds
+// namespace:manage-principal-tokens. targetNS is empty for any other
+// target.
+func addHeldGrant(role Role, g Grant, targetNS namespace.Name, out *held) bool {
+	gives := false
+	namespaced := targetNS != ""
+
+	if targetNS == "" || !isNamespaceGrant(g.Object) {
 		for _, action := range role.Actions {
-			if givenOn(action, grants[i].Object) {
+			if givenOn(action, g.Object) {
 				out.set[action] = true
+				gives = true
 			}
 		}
 	}
 
-	return out, nil
+	if namespaced && givesNamespaceToken(role, g.Object, targetNS) {
+		out.set[identity.ActionPrincipalManageTokens] = true
+		gives = true
+	}
+
+	return gives
+}
+
+// namespaceOfChain returns the namespace of the principal that obj names,
+// or empty when obj is not a principal of a namespace: the chain of such
+// a principal is the principal, its namespace and the installation.
+func namespaceOfChain(chain []identity.Object, obj identity.Object) namespace.Name {
+	if !obj.IsPrincipal() {
+		return ""
+	}
+
+	for i := range chain {
+		kind, _ := KindOf(chain[i])
+		if kind == ObjectNamespace {
+			return chain[i].Namespace()
+		}
+	}
+
+	return ""
+}
+
+// isNamespaceGrant reports whether obj is a grant on a namespace.
+func isNamespaceGrant(obj identity.Object) bool {
+	kind, _ := KindOf(obj)
+
+	return kind == ObjectNamespace
+}
+
+// givesNamespaceToken reports whether a grant on grantObj with role gives
+// principal:manage-tokens on a principal of the namespace targetNS: the
+// role holds namespace:manage-principal-tokens, and the grant is on that
+// namespace. A grant on the namespace gives no other action on the
+// principal. On the installation, only principal:manage-tokens reaches the
+// tokens of a principal.
+func givesNamespaceToken(role Role, grantObj identity.Object, targetNS namespace.Name) bool {
+	return role.Has(identity.ActionNamespaceManagePrincipalTokens) && isNamespaceGrant(grantObj) &&
+		grantObj.Namespace() == targetNS
 }
 
 // givenOn reports whether a grant on obj gives action. A grant on the
-// installation gives every action of its role. A grant on any other object
+// installation gives every action of its role. A grant on a principal gives
+// the delegation actions of its role only. A grant on any other object
 // gives the data actions of its role only. The Service refuses a role with
-// another action below the installation, and this rule holds also when a
-// role change races a grant.
+// another action on such an object, and this rule holds also when a role
+// change races a grant.
 func givenOn(action identity.Action, obj identity.Object) bool {
-	if kind, _ := KindOf(obj); kind == ObjectInstallation {
-		return true
-	}
-
 	family, _ := FamilyOf(action)
 
-	return family == FamilyData
+	switch kind, _ := KindOf(obj); kind {
+	case ObjectInstallation:
+		return true
+	case ObjectPrincipal:
+		return family == FamilyDelegation
+	case ObjectNamespace, ObjectCollection, ObjectUnit:
+		return family == FamilyData
+	default:
+		return false
+	}
+}
+
+// principalNamespace returns the namespace of the principal with the ID
+// id, and true when it belongs to a namespace. An unknown principal has
+// none, with no error. With no principal port, no principal belongs to a
+// namespace.
+func (a *Authorizer) principalNamespace(ctx context.Context, id string) (namespace.Name, bool, error) {
+	if a.principals == nil {
+		return "", false, nil
+	}
+
+	p, err := a.principals.GetPrincipal(ctx, id)
+	if errors.Is(err, principal.ErrNotFound) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("read principal %q: %w", id, err)
+	}
+
+	if p.Namespace == "" {
+		return "", false, nil
+	}
+
+	return p.Namespace, true, nil
 }
 
 // subjectsOf returns the subjects of p: its principal and each of its
@@ -349,35 +633,47 @@ func (a *Authorizer) subjectsOf(ctx context.Context, p identity.Principal) ([]Su
 }
 
 // chain returns obj and every object that holds it, innermost first: a unit,
-// its collection, its namespace and the installation. The caller object
-// holds nothing and is in no chain.
+// its collection, its namespace and the installation, a principal of a
+// namespace with its namespace and the installation, or any other
+// principal and the installation. The caller object holds nothing and is
+// in no chain. An unknown principal keeps the principal and the
+// installation.
 func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity.Object, error) {
 	kind, ok := KindOf(obj)
 	if !ok {
 		return nil, nil
 	}
 
-	if kind == ObjectUnit {
-		var err error
-		if obj, err = a.withUnitID(ctx, obj); err != nil {
-			return nil, err
+	obj, err := a.withStableID(ctx, kind, obj)
+	if err != nil {
+		return nil, err
+	}
+
+	if kind == ObjectPrincipal {
+		ns, found, nsErr := a.principalNamespace(ctx, obj.PrincipalID())
+		if nsErr != nil {
+			return nil, nsErr
 		}
+
+		if found {
+			return []identity.Object{obj, identity.NamespaceObject(ns), identity.ServerObject()}, nil
+		}
+
+		return []identity.Object{obj, identity.ServerObject()}, nil
 	}
 
 	out := []identity.Object{obj}
 
-	if kind == ObjectUnit && a.collections != nil {
-		name, inCollection, err := a.collections.CollectionOf(ctx, obj)
-		if err != nil {
-			return nil, fmt.Errorf("read collection of unit: %w", err)
-		}
-
-		if inCollection {
-			out = append(out, identity.CollectionObject(obj.Namespace(), name))
-		}
+	col, inCollection, err := a.collectionOfUnit(ctx, kind, obj)
+	if err != nil {
+		return nil, err
 	}
 
-	if kind != ObjectInstallation && kind != ObjectNamespace {
+	if inCollection {
+		out = append(out, col)
+	}
+
+	if kind == ObjectCollection || kind == ObjectUnit {
 		out = append(out, identity.NamespaceObject(obj.Namespace()))
 	}
 
@@ -386,6 +682,47 @@ func (a *Authorizer) chain(ctx context.Context, obj identity.Object) ([]identity
 	}
 
 	return out, nil
+}
+
+// withStableID returns obj with the stable ID of its unit or its collection,
+// when kind is one of them. Any other object is returned as it is.
+func (a *Authorizer) withStableID(ctx context.Context, kind ObjectKind, obj identity.Object) (identity.Object, error) {
+	if kind == ObjectUnit {
+		return a.withUnitID(ctx, obj)
+	}
+
+	if kind == ObjectCollection {
+		return a.withCollectionID(ctx, obj)
+	}
+
+	return obj, nil
+}
+
+// collectionOfUnit returns the collection of the unit obj, with its stable ID,
+// and true when the unit is in one. It returns false for any other object, and
+// when no collection port is configured.
+func (a *Authorizer) collectionOfUnit(
+	ctx context.Context, kind ObjectKind, obj identity.Object,
+) (identity.Object, bool, error) {
+	if kind != ObjectUnit || a.collections == nil {
+		return obj, false, nil
+	}
+
+	name, inCollection, err := a.collections.CollectionOf(ctx, obj)
+	if err != nil {
+		return obj, false, fmt.Errorf("read collection of unit: %w", err)
+	}
+
+	if !inCollection {
+		return obj, false, nil
+	}
+
+	col, err := a.withCollectionID(ctx, identity.CollectionObject(obj.Namespace(), name))
+	if err != nil {
+		return obj, false, err
+	}
+
+	return col, true, nil
 }
 
 // rolesOf returns the roles that grants name, by ID: the built-in roles
@@ -507,9 +844,10 @@ func (a *Authorizer) reviewRoles(ctx context.Context) ([]string, map[string]bool
 
 // managesAccess reports whether r holds an action that changes who has
 // access to an object: a grant, a custom role, a membership of a group
-// that has access, or a grant on a namespace, a collection or a unit. A
-// service token gets no access without a grant, so
-// server:manage-service-tokens does not count.
+// that has access, or a grant on a namespace, a collection or a unit. The
+// issue of the tokens of a service principal gives no grant, so it does
+// not count: the export lists its holders apart, for each service
+// principal.
 func managesAccess(r Role) bool {
 	return slices.ContainsFunc(r.Actions, func(a identity.Action) bool {
 		return slices.Contains(accessManagementActions(), a)
@@ -598,4 +936,23 @@ func (a *Authorizer) currentUnits(ctx context.Context, grants []Grant) (map[stri
 	}
 
 	return live, nil
+}
+
+// withCollectionID returns the collection object with its stable ID. A
+// collection that does not exist keeps an empty ID, so no grant matches it.
+func (a *Authorizer) withCollectionID(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if a.collections == nil {
+		return obj, nil
+	}
+
+	id, found, err := a.collections.CollectionID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read collection ID: %w", err)
+	}
+
+	if !found {
+		return obj, nil
+	}
+
+	return obj.WithCollectionID(id), nil
 }

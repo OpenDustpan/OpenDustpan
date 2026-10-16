@@ -6,6 +6,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -126,7 +127,7 @@ func seedTeam(t *testing.T, ps principal.Store) {
 	for _, p := range [][2]string{{"prn-x", "xavier"}, {"prn-y", "yvonne"}} {
 		prn := principal.Principal{
 			CreatedAt: at(0), UpdatedAt: at(0), DisabledAt: time.Time{}, ID: p[0], Subject: p[1], DisplayName: "",
-			Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+			Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		}
 		if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
 			t.Fatalf("create principal: %v", err)
@@ -174,7 +175,7 @@ func testReviewCustomRoles(t *testing.T, s access.Store) {
 
 	scope := access.ReviewScope{
 		Namespace: "acme", Object: identity.Object{}, Containers: []string{"@server"},
-		ContainerRoles: []string{access.RoleViewer}, All: false,
+		ContainerRoles: []string{access.RoleViewer}, TokenNamespace: "", TokenNamespaceRoles: nil, All: false,
 	}
 
 	q := everyRow(scope)
@@ -227,9 +228,14 @@ func testReviewUnits(t *testing.T, s access.Store) {
 	gone.Action, gone.Object = "unit:manage", "opentofu:acme/network"
 
 	ref := workspace.Ref{Namespace: "acme", Name: name}
-	if delErr := us.DeleteWorkspace(ctx, ref, ns.Fence(), gone); delErr != nil {
+	deletion := inventory.Deletion{Entry: gone, PurgeAfter: gone.At.Add(time.Hour)}
+	if delErr := us.DeleteWorkspace(ctx, ref, ns.Fence(), deletion); delErr != nil {
 		t.Fatalf("delete workspace: %v", delErr)
 	}
+
+	// A lookup that returns nothing fails this case here, as the review reads
+	// the same units.
+	assertLiveStack(t, us)
 
 	got, err := rs.ReviewUnits(ctx, []string{"stk-web", "ws-network", "stk-purged"})
 	if err != nil {

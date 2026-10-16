@@ -36,12 +36,24 @@ package server
 // GET /api/server/caller/access answers the access of the caller: on one
 // object (?object=), or the objects of one kind where it can do an action
 // (?type=&action=), paged. It needs caller:read only, so every signed-in
-// principal reads its own access.
+// principal reads its own access. With type=principal, the default action
+// is principal:manage-tokens: the answer lists the service principals whose
+// tokens the caller can make. There, all=true means every service principal
+// of the installation, because principal:manage-tokens gives no right on a
+// person; the answer never lists a person.
+//
+// GET /api/server/caller/grants answers the current grants of the caller,
+// paged: its own grants and the grants of its groups, with the group
+// named. It needs caller:read only, and writes no audit entry. Each page
+// reads the groups of the caller at its request, and the memberships and
+// the grants as of the snapshot time of the first page (asOfMs).
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -58,7 +70,8 @@ var (
 	)
 	errExpandQuery       = errors.New(`invalid access review query: "expand" takes the value "members" only`)
 	errCallerAccessQuery = errors.New(
-		`invalid access query: provide "object=<object>", or "type=namespace|collection|unit" and an optional "action"`,
+		`invalid access query: provide "object=<object>", or "type=namespace|collection|unit|principal" ` +
+			`and an optional "action"`,
 	)
 )
 
@@ -68,7 +81,11 @@ const (
 	namespaceReviewPath  = "/api/server/namespaces/{namespace}/access-review"
 	collectionReviewPath = "/api/server/namespaces/{namespace}/collections/{collection}/access-review"
 	unitReviewPath       = "/api/server/namespaces/{namespace}/unit-access-review"
-	callerAccessPath     = "/api/server/caller/access"
+	// principalReviewPath answers who holds principal:manage-tokens on one
+	// service principal, and so can act as it.
+	principalReviewPath = "/api/server/principals/{principal}/access-review"
+	callerAccessPath    = "/api/server/caller/access"
+	callerGrantsPath    = "/api/server/caller/grants"
 )
 
 // reviewRowResponse is one row of an access-review export on the wire.
@@ -86,9 +103,12 @@ const (
 // expand=members reads through a group. EffectiveFromMs and
 // EffectiveUntilMs are the time that the row gave access (null while it
 // lasts). MemberCount is set for a group row of a snapshot only.
-// LastAccessTracked is set on a row of a principal: it is false while the
-// server records no sign-in and no token use, and LastAccessAtMs is then
-// left out, so an export never shows a "Never" that it cannot prove.
+// LastAccessTracked is true on a row of a principal: on a grant whose
+// subject is a principal, or on a row read through a group, for the member.
+// LastAccessAtMs is the latest use of an access token of that principal,
+// and is left out when no token was ever used. The server records no
+// sign-in, so a sign-in does not count. A group row with no Via and a
+// bootstrap token row carry neither field.
 //
 // Contract: never remove or rename these fields.
 type reviewRowResponse struct {
@@ -135,11 +155,31 @@ type reviewResponse struct {
 }
 
 // accessResponse is the access of the caller on one object: its actions,
-// sorted, and the grants that give them.
+// sorted, and the grants that give them. MissingActions names, sorted, each
+// other grantable action that the caller does not hold on the object, with
+// the roles that give it.
+//
+// Contract: never remove or rename these fields.
 type accessResponse struct {
-	Object  string          `json:"object"`
-	Actions []string        `json:"actions"`
-	Grants  []grantResponse `json:"grants"`
+	Object         string                  `json:"object"`
+	Actions        []string                `json:"actions"`
+	Grants         []grantResponse         `json:"grants"`
+	MissingActions []missingActionResponse `json:"missingActions"`
+}
+
+// missingActionResponse is one action that the caller does not hold on the
+// object, with the roles that give it.
+type missingActionResponse struct {
+	Action    string            `json:"action"`
+	GrantedBy grantedByResponse `json:"grantedBy"`
+}
+
+// grantedByResponse names the roles that give one action, by role ID: every
+// built-in role that holds it, and every custom role that holds it. Every
+// signed-in principal holds role:read, so the answer always lists both.
+type grantedByResponse struct {
+	BuiltInRoles []string `json:"builtInRoles"`
+	CustomRoles  []string `json:"customRoles"`
 }
 
 // accessObjectsResponse is one page of the objects where the caller can do
@@ -172,9 +212,20 @@ func (h *Handler) reviewRoutes() []Route {
 		{resolveNamespacePath, namespaceReviewPath, identity.ActionNamespaceReadAccess},
 		{resolveCollectionPath, collectionReviewPath, identity.ActionCollectionReadAccess},
 		{resolveUnitQuery, unitReviewPath, identity.ActionUnitReadAccess},
+		{resolvePrincipalPath, principalReviewPath, identity.ActionServerReadAccess},
 	}
 
-	out := make([]Route, 0, len(kinds)+1)
+	callers := []Route{{
+		Method: http.MethodGet, Path: callerAccessPath, Scope: ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
+		Serve: h.serveAccessRead(callerAccess),
+	}, {
+		Method: http.MethodGet, Path: callerGrantsPath, Scope: ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller, ActionsFor: nil,
+		Serve: h.serveAccessRead(callerGrants),
+	}}
+
+	out := make([]Route, 0, len(kinds)+len(callers))
 
 	for _, k := range kinds {
 		out = append(out, Route{
@@ -184,23 +235,19 @@ func (h *Handler) reviewRoutes() []Route {
 			Actions: []identity.Action{
 				k.action,
 			},
-			Resolve: k.resolve,
-			Serve:   h.serveAccessRead(h.reviewAccess(k.action)),
+			Resolve: k.resolve, ActionsFor: nil,
+			Serve: h.serveAccessRead(h.reviewAccess(k.action)),
 		})
 	}
 
-	return append(out, Route{
-		Method: http.MethodGet, Path: callerAccessPath, Scope: ScopeAuthorized,
-		Actions: []identity.Action{identity.ActionCallerRead}, Resolve: resolveCaller,
-		Serve: h.serveAccessRead(callerAccess),
-	})
+	return append(out, callers...)
 }
 
 // reviewAccess returns the operation of GET on an access-review path with
 // the read-access action action: one page of the export of the object, and
 // its audit entry.
 func (h *Handler) reviewAccess(action identity.Action) accessOp {
-	return func(_ http.ResponseWriter, r *http.Request, svc *access.Service, c call) (principalResult, error) {
+	return func(_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call) (principalResult, error) {
 		req, err := reviewRequest(r)
 		if err != nil {
 			return failed(""), err
@@ -215,29 +262,40 @@ func (h *Handler) reviewAccess(action identity.Action) accessOp {
 			return failed(""), err
 		}
 
-		out := reviewResponse{
-			Total: page.Total, AsOfMs: nil, Grants: make([]reviewRowResponse, 0, len(page.Entries)),
-			NextCursor: page.NextCursor,
-		}
-
-		if page.AsOf != nil {
-			ms := page.AsOf.UnixMilli()
-			out.AsOfMs = &ms
-		}
-
-		for i := range page.Entries {
-			out.Grants = append(out.Grants, reviewRowOf(page.Entries[i]))
-		}
-
-		return ok(http.StatusOK, out, ""), nil
+		return ok(http.StatusOK, reviewPageOf(page), ""), nil
 	}
+}
+
+// reviewPageOf maps one page of an export to the wire.
+func reviewPageOf(page access.ReviewPage) reviewResponse {
+	out := reviewResponse{
+		Total: page.Total, AsOfMs: nil, Grants: make([]reviewRowResponse, 0, len(page.Entries)),
+		NextCursor: page.NextCursor,
+	}
+
+	if page.AsOf != nil {
+		ms := page.AsOf.UnixMilli()
+		out.AsOfMs = &ms
+	}
+
+	for i := range page.Entries {
+		out.Grants = append(out.Grants, reviewRowOf(page.Entries[i]))
+	}
+
+	return out
 }
 
 // appendReviewRead writes the audit entry of one export request: kind
 // read-access, in the namespace of the object or in @server. It fails
 // closed: the caller answers the error and no rows. NewHandler refuses a
 // config that serves the export with no audit store.
-func (h *Handler) appendReviewRead(r *http.Request, c call, action identity.Action, object string, at time.Time) error {
+func (h *Handler) appendReviewRead(
+	r *http.Request,
+	c *call,
+	action identity.Action,
+	object string,
+	at time.Time,
+) error {
 	entry := callerEntry(r, c.p, action)
 	entry.At, entry.Kind, entry.Outcome = at, audit.KindReadAccess, audit.OutcomeSuccess
 	entry.Object = object
@@ -376,11 +434,15 @@ func reviewRowOf(e access.ReviewEntry) reviewRowResponse {
 		out.InheritedFrom = e.InheritedFrom.String()
 	}
 
-	// No sign-in and no token use is recorded yet (ADR 53): a principal row
-	// says so, and a group row carries neither field.
-	untracked := false
-	if row.Grant.Subject.Kind == access.SubjectPrincipal || row.Via != nil {
-		out.LastAccessTracked = &untracked
+	// A row of a principal is tracked: a grant to a principal, or a row
+	// read through a group, for the member. LastAccessAtMs is the latest
+	// use of an access token of the principal, left out when no token was
+	// ever used. A group row with no Via and a bootstrap token row carry
+	// neither field.
+	if row.LastAccessTracked {
+		tracked := true
+		out.LastAccessTracked = &tracked
+		out.LastAccessAtMs = millisOf(row.LastAccessAt)
 	}
 
 	if v := row.Via; v != nil {
@@ -408,7 +470,7 @@ func millisOf(t *time.Time) *int64 {
 // callerAccess serves GET /api/server/caller/access: the access of the
 // caller on one object, or by object kind.
 func callerAccess(
-	_ http.ResponseWriter, r *http.Request, svc *access.Service, c call,
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
 ) (principalResult, error) {
 	q := r.URL.Query()
 	object, kind := q.Get("object"), q.Get("type")
@@ -438,21 +500,136 @@ func callerAccessOn(
 		return failed(""), err
 	}
 
-	out := accessResponse{
-		Object:  got.Object.String(),
-		Actions: make([]string, 0, len(got.Actions)),
-		Grants:  make([]grantResponse, 0, len(got.Grants)),
-	}
-
+	actions := make([]string, 0, len(got.Actions))
 	for _, a := range got.Actions {
-		out.Actions = append(out.Actions, string(a))
+		actions = append(actions, string(a))
 	}
 
+	grants := make([]grantResponse, 0, len(got.Grants))
 	for i := range got.Grants {
-		out.Grants = append(out.Grants, grantOf(got.Grants[i]))
+		grants = append(grants, grantOf(got.Grants[i]))
 	}
 
-	return ok(http.StatusOK, out, ""), nil
+	missing, err := missingActionsOf(r.Context(), svc, got)
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, accessResponse{
+		Object: got.Object.String(), Actions: actions, Grants: grants, MissingActions: missing,
+	}, ""), nil
+}
+
+// missingActionsOf returns each grantable action that held does not name,
+// sorted, with the roles that give it. The self actions are not grantable:
+// every signed-in principal holds them with no grant, so they are never
+// missing. A grant on the installation gives every action of its role on
+// every object, so each role that holds a missing action can give it,
+// whatever the object is.
+func missingActionsOf(
+	ctx context.Context, svc *access.Service, held access.Access,
+) ([]missingActionResponse, error) {
+	missing := missingActionList(held)
+	if len(missing) == 0 {
+		return []missingActionResponse{}, nil
+	}
+
+	sets, err := roleSetsFor(ctx, svc)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]missingActionResponse, 0, len(missing))
+	for _, a := range missing {
+		out = append(out, missingActionOf(a, sets))
+	}
+
+	return out, nil
+}
+
+// missingActionList returns each grantable action that held does not name,
+// sorted.
+func missingActionList(held access.Access) []identity.Action {
+	have := make(map[identity.Action]bool, len(held.Actions))
+	for _, a := range held.Actions {
+		have[a] = true
+	}
+
+	var out []identity.Action
+
+	for _, a := range grantableActions() {
+		if !have[a] {
+			out = append(out, a)
+		}
+	}
+
+	return out
+}
+
+// roleSets holds the roles for missing actions: every built-in role, and
+// every custom role.
+type roleSets struct {
+	builtIn []access.Role
+	custom  []access.Role
+}
+
+// roleSetsFor returns the roles for the missing actions: every built-in
+// role, and every custom role in the catalog. A grant on the installation
+// reaches every object through its chain, so each role that holds a missing
+// action can give it, whatever the object is. Every signed-in principal
+// holds role:read, so the answer always lists the custom roles.
+func roleSetsFor(ctx context.Context, svc *access.Service) (roleSets, error) {
+	var sets roleSets
+
+	sets.builtIn = access.BuiltInRoles()
+
+	roles, err := svc.ListRoles(ctx)
+	if err != nil {
+		return sets, fmt.Errorf("list roles: %w", err)
+	}
+
+	for i := range roles {
+		if !roles[i].BuiltIn {
+			sets.custom = append(sets.custom, roles[i])
+		}
+	}
+
+	return sets, nil
+}
+
+// missingActionOf returns action with the roles of sets that give it.
+func missingActionOf(action identity.Action, sets roleSets) missingActionResponse {
+	entry := missingActionResponse{
+		Action: string(action),
+		GrantedBy: grantedByResponse{
+			BuiltInRoles: []string{}, CustomRoles: []string{},
+		},
+	}
+
+	for i := range sets.builtIn {
+		if sets.builtIn[i].Has(action) {
+			entry.GrantedBy.BuiltInRoles = append(entry.GrantedBy.BuiltInRoles, sets.builtIn[i].ID)
+		}
+	}
+
+	for i := range sets.custom {
+		if sets.custom[i].Has(action) {
+			entry.GrantedBy.CustomRoles = append(entry.GrantedBy.CustomRoles, sets.custom[i].ID)
+		}
+	}
+
+	return entry
+}
+
+// grantableActions returns every classified action that a grant can give,
+// sorted: every family but the self family.
+func grantableActions() []identity.Action {
+	out := append(access.Actions(access.FamilyOperator), access.Actions(access.FamilyAdministration)...)
+	out = append(out, access.Actions(access.FamilyData)...)
+	out = append(out, access.Actions(access.FamilyDelegation)...)
+	slices.Sort(out)
+
+	return out
 }
 
 // callerAccessByType answers one page of the objects of kind where p can
@@ -481,10 +658,29 @@ func callerAccessByType(
 		All:        got.All,
 	}
 
-	for _, obj := range got.Objects {
+	for i := range got.Objects {
+		obj := got.Objects[i]
 		k, _ := access.KindOf(obj)
 		out.Objects = append(out.Objects, accessObjectResponse{Object: obj.String(), Kind: string(k)})
 	}
 
 	return ok(http.StatusOK, out, ""), nil
+}
+
+// callerGrants serves GET /api/server/caller/grants: one page of the
+// current grants of the caller, in the shape of an access-review snapshot.
+func callerGrants(
+	_ http.ResponseWriter, r *http.Request, svc *access.Service, c *call,
+) (principalResult, error) {
+	page, err := pageRequest(r)
+	if err != nil {
+		return failed(""), err
+	}
+
+	got, err := svc.CallerGrants(r.Context(), c.p, access.CallerGrantsRequest{Cursor: page.Cursor, Limit: page.Limit})
+	if err != nil {
+		return failed(""), err
+	}
+
+	return ok(http.StatusOK, reviewPageOf(got), ""), nil
 }

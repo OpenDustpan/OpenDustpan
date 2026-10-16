@@ -22,11 +22,14 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -161,7 +164,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 	tb.Helper()
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: coverageStackStore{}, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: coverageStackStore{}, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		tb.Fatalf("stack service: %v", err)
@@ -181,6 +184,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		tb.Fatalf("updates service: %v", err)
@@ -201,6 +205,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Namespaces:              namespaces,
 		Authenticator:           coverageAuthenticator{},
 		Authorizer:              coverageAuthorizer{},
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		CheckpointDeltaCutoff:   0,
@@ -236,12 +241,35 @@ func (coverageStackStore) DeleteStack(
 	_ stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ audit.Entry,
+	_ coreinventory.Deletion,
 ) error {
 	return stack.ErrNotFound
 }
 
-func (coverageStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
+func (coverageStackStore) ForceDeleteStack(
+	_ context.Context,
+	_ stack.Ref,
+	_ namespace.Fence,
+	_ coreinventory.Deletion,
+) error {
+	return stack.ErrNotFound
+}
+
+// RestoreStack implements stack.Store; this fake holds no deleted stack.
+func (coverageStackStore) RestoreStack(
+	_ context.Context, _ stack.ID, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) (stack.Ref, error) {
+	return stack.Ref{}, stack.ErrNotFound
+}
+
+// PurgeStack implements stack.Store; this fake holds no deleted stack.
+func (coverageStackStore) PurgeStack(
+	_ context.Context,
+	_ stack.ID,
+	_ namespace.Fence,
+	_ time.Time,
+	_ audit.Entry,
+) error {
 	return stack.ErrNotFound
 }
 
@@ -326,6 +354,7 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	handler, err := tfeapi.NewHandler(tfeapi.Config{
 		Authenticator:  coverageAuthenticator{},
 		Authorizer:     coverageAuthorizer{},
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     namespaces,
 		Workspaces:     coverageWorkspaces{},
@@ -473,26 +502,41 @@ func (coverageWorkspaces) DiscardJSONRendering(
 
 func (coverageWorkspaces) CheckUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return workspace.ErrStateVersionNotFound
+) (namespace.Name, error) {
+	return "", workspace.ErrStateVersionNotFound
 }
 
 func (coverageWorkspaces) CheckJSONRenderingUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return workspace.ErrStateVersionNotFound
+) (namespace.Name, error) {
+	return "", workspace.ErrStateVersionNotFound
 }
 
 // coverageInventoryRoutes returns the inventory adapter's route table.
 func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
 
+	collections, err := collection.NewService(collection.Config{
+		Store:      coverageCollectionStore{},
+		Namespaces: coverageNamespaceStore{},
+		Now:        nil,
+	})
+	if err != nil {
+		tb.Fatalf("collection service: %v", err)
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
+		Moves:         nil,
 		Namespaces:    namespaces,
 		Units:         coverageReader{},
+		Collections:   collections,
+		Deleted:       coverageReader{},
+		Lifecycles:    map[string]coreinventory.Lifecycle{"pulumi": coverageLifecycle{}},
+		ReadScope:     coverageScope{},
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
 		Logger:        slog.New(slog.DiscardHandler),
+		Now:           nil,
 	})
 	if err != nil {
 		tb.Fatalf("inventory handler: %v", err)
@@ -501,12 +545,87 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 	return inventoryRefs(handler.Routes())
 }
 
+// coverageCollectionStore holds no collection. It exists only so that the
+// inventory handler serves its collection routes in the route table; no
+// request is ever served.
+type coverageCollectionStore struct{}
+
+func (coverageCollectionStore) CreateCollection(
+	_ context.Context, _ collection.Collection, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coverageCollectionStore) GetCollection(_ context.Context, _ collection.Ref) (collection.Collection, error) {
+	return collection.Collection{CreatedAt: time.Time{}, ID: "", Ref: collection.Ref{Namespace: "", Name: ""}}, nil
+}
+
+func (coverageCollectionStore) ListCollections(_ context.Context, _ namespace.Name) ([]collection.Collection, error) {
+	return nil, nil
+}
+
+func (coverageCollectionStore) DeleteCollection(
+	_ context.Context, _ collection.Ref, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coverageCollectionStore) SetUnitCollection(
+	_ context.Context, _ collection.Move, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+func (coverageCollectionStore) UnitCollection(_ context.Context, _ collection.UnitRef) (collection.Ref, error) {
+	return collection.Ref{Namespace: "", Name: ""}, nil
+}
+
 // coverageReader answers no unit. It exists only to build a Handler for its
 // route table; no request is ever served.
 type coverageReader struct{}
 
 func (coverageReader) ListUnits(_ context.Context, _ namespace.Name) ([]coreinventory.Entry, error) {
 	return nil, nil
+}
+
+func (coverageReader) ListDeletedUnits(_ context.Context, _ namespace.Name) ([]coreinventory.DeletedEntry, error) {
+	return nil, nil
+}
+
+func (coverageReader) QueryDeletedUnits(
+	_ context.Context, _ coreinventory.DeletedQuery,
+) (coreinventory.DeletedPage, error) {
+	return coreinventory.DeletedPage{Next: nil, Entries: nil, Total: 0}, nil
+}
+
+func (coverageReader) GetDeletedUnit(
+	_ context.Context, _ namespace.Name, _, _ string,
+) (coreinventory.DeletedEntry, error) {
+	return coreinventory.DeletedEntry{}, coreinventory.ErrNotFound
+}
+
+// coverageScope lets no caller read a deleted unit. It exists only to build a
+// Handler for its route table; no request is ever served.
+type coverageScope struct{}
+
+func (coverageScope) ReadableUnits(
+	_ context.Context, _ identity.Principal, _ namespace.Name,
+) (bool, []string, error) {
+	return false, nil, nil
+}
+
+// coverageLifecycle restores and purges nothing. It exists only to build a
+// Handler for its route table; no request is ever served.
+type coverageLifecycle struct{}
+
+func (coverageLifecycle) Restore(
+	_ context.Context, _ namespace.Name, _, _ string, _ audit.Entry,
+) (string, error) {
+	return "", coreinventory.ErrNotFound
+}
+
+func (coverageLifecycle) Purge(_ context.Context, _ namespace.Name, _ string, _ audit.Entry) error {
+	return coreinventory.ErrNotFound
 }
 
 // coverageAuditRoutes returns the audit adapter's route table.
@@ -582,6 +701,62 @@ func (coverageSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigr
 	return nil, nil
 }
 
+// coverageIPAllowlistStore holds no rule: the route table needs an IP
+// allowlist service, and the coverage gate never serves a request.
+type coverageIPAllowlistStore struct{}
+
+func (coverageIPAllowlistStore) NamespaceList(_ context.Context, _ namespace.Name) (ipallow.List, error) {
+	return ipallow.List{}, nil
+}
+
+func (coverageIPAllowlistStore) SetNamespaceList(
+	_ context.Context, _ namespace.Name, _ ipallow.List, _ namespace.Fence, _ audit.Entry,
+) error {
+	return nil
+}
+
+// coverageIPAllowlists returns the IP allowlist service of the route table.
+func coverageIPAllowlists(tb testing.TB) *ipallow.Service {
+	tb.Helper()
+
+	svc, err := ipallow.NewService(ipallow.Config{
+		Store: coverageIPAllowlistStore{}, Namespaces: coverageNamespaces(tb), Now: nil, Enabled: true,
+	})
+	if err != nil {
+		tb.Fatalf("ip allowlist service: %v", err)
+	}
+
+	return svc
+}
+
+// coverageSessionPolicyStore holds the default session policy: the route
+// table needs a session policy service, and the coverage gate never serves
+// a request.
+type coverageSessionPolicyStore struct{}
+
+func (coverageSessionPolicyStore) GetSessionPolicy(_ context.Context) (session.Policy, error) {
+	return session.DefaultPolicy(), nil
+}
+
+func (coverageSessionPolicyStore) UpdateSessionPolicy(
+	_ context.Context, _ session.PolicyUpdate,
+) (session.Policy, error) {
+	return session.DefaultPolicy(), nil
+}
+
+// coverageSessionPolicies returns the session policy service of the route
+// table.
+func coverageSessionPolicies(tb testing.TB) *session.Policies {
+	tb.Helper()
+
+	svc, err := session.NewPolicies(session.PolicyConfig{Store: coverageSessionPolicyStore{}, Now: nil})
+	if err != nil {
+		tb.Fatalf("session policy service: %v", err)
+	}
+
+	return svc
+}
+
 // coverageServerRoutes returns the installation adapter's route table: the
 // namespace route (ADR 39), the backup routes (ADR 30), the restore routes
 // (ADR 38), the metrics route (ADR 32), the maintenance routes (ADR 38) and
@@ -600,12 +775,18 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		Metrics:          coverageMetrics{},
 		Version:          "test",
 		Schema:           coverageSchema{},
+		Journal:          nil,
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     coverageIPAllowlists(tb),
+		SessionPolicy:    coverageSessionPolicies(tb),
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
@@ -695,9 +876,11 @@ type AllowEntry struct {
 func CoverageAllowlist() []AllowEntry {
 	return slices.Concat(
 		consoleAllowEntries(),
+		deletedUnitAllowEntries(),
 		backupAllowEntries(),
 		namespaceAllowEntries(),
 		maintenanceAllowEntries(),
+		auditChainAllowEntries(),
 		operatorAllowEntries(),
 		stateAllowEntries(),
 		restoreAllowEntries(),
@@ -707,7 +890,106 @@ func CoverageAllowlist() []AllowEntry {
 		reviewAllowEntries(),
 		tokenAllowEntries(),
 		tokenPolicyAllowEntries(),
+		sessionPolicyAllowEntries(),
+		ipAllowlistAllowEntries(),
+		delegationAllowEntries(),
+		namespacePrincipalAllowEntries(),
+		auditSinkAllowEntries(),
 	)
+}
+
+// auditSinkCoveringTest names the test that proves the audit sink list
+// instead of a CLI: no CLI reads the delivery state of the audit sinks.
+const auditSinkCoveringTest = "TestAuditSinks"
+
+// auditSinkAllowEntries returns the operator route of the audit sinks. The
+// harness steps of auditSinkCoveringTest drive it through a server with a
+// file sink on each store.
+func auditSinkAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/server/audit/sinks",
+			CoveringTest: auditSinkCoveringTest,
+			Reason: "Operator route: no CLI lists the audit sinks. The harness " +
+				"step starts a server with a file sink, writes one audited change " +
+				"and reads the list.",
+		},
+	}
+}
+
+// namespacePrincipalCoveringTest names the test that proves the routes of
+// the principals of a namespace instead of a CLI: no CLI calls them.
+const namespacePrincipalCoveringTest = "TestNamespacePrincipals"
+
+// namespacePrincipalAllowEntries returns the operator and console routes of
+// the principals of a namespace. The harness steps of
+// namespacePrincipalCoveringTest drive each one through the real binary on
+// each store.
+func namespacePrincipalAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages the principals of a namespace. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	const (
+		list = "/api/server/namespaces/{namespace}/principals"
+		one  = list + "/{id}"
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodPost, list},
+		{http.MethodGet, list},
+		{http.MethodGet, one},
+		{http.MethodPatch, one},
+		{http.MethodDelete, one},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: namespacePrincipalCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// delegationCoveringTest names the test that proves the routes of the
+// tokens, the grants and the export of one service principal instead of a
+// CLI: no CLI calls them.
+const delegationCoveringTest = "TestServicePrincipalTokens"
+
+// delegationAllowEntries returns the operator and console routes of one
+// service principal: its tokens, the grants on it and its export. The
+// harness steps of delegationCoveringTest drive each one through the real
+// binary on each store.
+func delegationAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages the tokens of a service principal or the grants on it. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	const (
+		root   = "/api/server/principals/{principal}"
+		tokens = root + "/tokens"
+		grants = root + "/grants"
+	)
+
+	routes := []struct{ method, path string }{
+		{http.MethodPost, tokens},
+		{http.MethodGet, tokens},
+		{http.MethodPost, tokens + "/{id}/rotate"},
+		{http.MethodDelete, tokens + "/{id}"},
+		{http.MethodGet, grants},
+		{http.MethodPost, grants},
+		{http.MethodDelete, grants + "/{id}"},
+		{http.MethodGet, root + "/access-review"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: delegationCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
 }
 
 // principalCoveringTest names the test that proves the principal and group
@@ -874,6 +1156,57 @@ func tokenPolicyAllowEntries() []AllowEntry {
 	return out
 }
 
+// sessionPolicyAllowEntries returns the operator and console routes of the
+// session policy. The harness steps of TestSessionPolicy drive each one
+// through the real binary on each store.
+func sessionPolicyAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI reads or changes the session policy. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, "/api/server/session-policy"},
+		{http.MethodPatch, "/api/server/session-policy"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestSessionPolicy", Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// ipAllowlistCoveringTest names the test that proves the IP allowlist routes
+// instead of a CLI: no CLI manages IP allowlists.
+const ipAllowlistCoveringTest = "TestIPAllowlists"
+
+// ipAllowlistAllowEntries returns the operator and console routes of the IP
+// allowlists of the namespaces. The harness steps of
+// ipAllowlistCoveringTest drive each one through the real binary on each store.
+func ipAllowlistAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages IP allowlists. " +
+		"The harness step calls it through the real binary and checks the answer."
+
+	const list = "/api/server/namespaces/{namespace}/ip-allowlist"
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, list},
+		{http.MethodPut, list},
+		{http.MethodDelete, list},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: ipAllowlistCoveringTest, Reason: reason,
+		})
+	}
+
+	return out
+}
+
 // journalAllowEntries returns the allowlist row for the journal entry route.
 // The release build answers journal version 0, so no CLI reaches the route
 // there. The recording build (journalrecording tag) reaches it through
@@ -885,6 +1218,42 @@ func journalAllowEntries() []AllowEntry {
 			CoveringTest: "TestPulumiJournalingOn (make e2e-journal, journalrecording build)",
 			Reason: "The release build answers journal version 0, so no CLI sends journal batches. " +
 				"The recording build answers version 1, and its test proves the route.",
+		},
+	}
+}
+
+// deletedUnitCoveringTest names the harness steps that reach the deleted-unit
+// routes.
+const deletedUnitCoveringTest = "TestCLIs (pulumiRestoreSteps, tofuRestoreSteps)"
+
+// deletedUnitAllowEntries returns the allowlist rows for the deleted-unit
+// routes of the inventory API (ADR 47). No CLI calls them; the harness steps
+// call them between CLI commands that delete and read the units.
+func deletedUnitAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/inventory/deleted-units",
+			CoveringTest: deletedUnitCoveringTest,
+			Reason: "Console-only: no CLI lists deleted units. The harness " +
+				"steps list them after the CLI deletes a stack and a workspace.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/inventory/deleted-units/{tool}/{unitID}/restore",
+			CoveringTest: deletedUnitCoveringTest,
+			Reason: "Console-only: no CLI restores a deleted unit. The harness " +
+				"steps restore one, and the CLI then reads the restored unit.",
+		},
+		{
+			Method: http.MethodDelete, Path: "/api/inventory/deleted-units/{tool}/{unitID}",
+			CoveringTest: deletedUnitCoveringTest,
+			Reason: "Console-only: no CLI purges a deleted unit. The harness " +
+				"steps purge one after the CLI deletes it.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/deleted-units/sweep",
+			CoveringTest: deletedUnitCoveringTest,
+			Reason: "Operator route: no CLI runs the retention sweep. The harness " +
+				"steps run it while a unit is in retention and after a purge.",
 		},
 	}
 }
@@ -970,7 +1339,7 @@ func operatorAllowEntries() []AllowEntry {
 		{
 			Method: http.MethodPost, Path: "/api/server/audit/checkpoint-epochs",
 			CoveringTest: "TestNewCheckpointEpochIsAChange",
-			Reason: "Operator route (ADR 60): no CLI calls it. An administrator starts a new " +
+			Reason: "Operator route: no CLI calls it. An administrator starts a new " +
 				"checkpoint epoch after a restore or a failed check of the signed checkpoints.",
 		},
 		{
@@ -1061,10 +1430,11 @@ func stateAllowEntries() []AllowEntry {
 // instead of a CLI: no CLI version in the matrix calls it.
 const namespaceCoveringTest = "TestCLIs (checkNamespaceCreateThroughAPI)"
 
-// namespaceAllowEntries returns the operator namespace route that no CLI
-// calls. The harness creates the first namespace through it on an empty
-// installation, and the scenario steps prove the duplicate, invalid and
-// unauthenticated cases.
+// namespaceAllowEntries returns the operator namespace routes that no CLI
+// calls. The harness creates the first namespace through the create on an
+// empty installation, and the scenario steps prove the duplicate, invalid
+// and unauthenticated cases. The harness lists the namespaces through the
+// list, which no CLI calls either.
 func namespaceAllowEntries() []AllowEntry {
 	return []AllowEntry{
 		{
@@ -1073,6 +1443,12 @@ func namespaceAllowEntries() []AllowEntry {
 			Reason: "Operator route: no CLI creates a namespace. The harness " +
 				"creates the first one on an empty installation and the scenario " +
 				"checks the duplicate, invalid and unauthenticated cases.",
+		},
+		{
+			Method: http.MethodGet, Path: "/api/server/namespaces",
+			CoveringTest: "TestRolesAndGrants",
+			Reason: "Operator and console route: no CLI lists namespaces. The harness " +
+				"step lists them as the admin and as the member and pages through them.",
 		},
 	}
 }
@@ -1148,6 +1524,30 @@ func maintenanceAllowEntries() []AllowEntry {
 			CoveringTest: maintenanceCoveringTest,
 			Reason: "Operator route: no CLI leaves maintenance mode. The " +
 				"harness step leaves after the 503 checks.",
+		},
+	}
+}
+
+// auditChainCoveringTest names the test that proves the audit chain routes
+// instead of a CLI: no tool CLI calls them.
+const auditChainCoveringTest = "TestAuditChain"
+
+// auditChainAllowEntries returns the operator audit chain routes that no
+// tool CLI calls. The steps of auditChainCoveringTest restart the server
+// binary with each setting, read the waiting change and approve it.
+func auditChainAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/server/audit/chain",
+			CoveringTest: auditChainCoveringTest,
+			Reason: "Operator route: no tool CLI reads the audit chain. " +
+				"The harness step reads the waiting change after each restart.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/audit/chain",
+			CoveringTest: auditChainCoveringTest,
+			Reason: "Operator route: no tool CLI approves an audit chain change. " +
+				"The harness step approves the change to off, then to on.",
 		},
 	}
 }
@@ -1301,6 +1701,7 @@ func reviewAllowEntries() []AllowEntry {
 		"/api/server/namespaces/{namespace}/collections/{collection}/access-review",
 		"/api/server/namespaces/{namespace}/unit-access-review",
 		"/api/server/caller/access",
+		"/api/server/caller/grants",
 	}
 
 	out := make([]AllowEntry, 0, len(paths))

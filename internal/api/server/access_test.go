@@ -13,7 +13,9 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
@@ -92,16 +94,7 @@ type auditStore interface {
 func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStore) accessFixture {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
 	if err != nil {
@@ -114,7 +107,9 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 
 	seedStack(t, st, "acme", "web", "prod")
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: st})
+	authz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: st, Callers: st, Collections: stubCollections{}, Units: st, Principals: st},
+	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
 	}
@@ -127,9 +122,19 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		t.Fatalf("access service: %v", err)
 	}
 
-	principals, err := principal.NewService(principal.Config{Store: st, Guard: grants, Now: nil, NewID: nil})
+	principals, err := principal.NewService(
+		principal.Config{Store: st, Guard: grants, Namespaces: st, Tokens: grants, Now: nil, NewID: nil},
+	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
+	}
+
+	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Store: st, Principals: st, Freshness: nil, Grants: tokengrants.Check{Grants: grants, Principals: st},
+		Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("token service: %v", err)
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
@@ -143,12 +148,18 @@ func newAccessFixtureWith(t *testing.T, entries func(st *sqlite.Store) auditStor
 		Metrics:          stubMetrics{},
 		Version:          "",
 		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
 		Principals:       principals,
-		Tokens:           nil,
+		Tokens:           tokens,
 		Access:           grants,
 		Audit:            entries(st),
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -172,9 +183,17 @@ func (f accessFixture) seed(t *testing.T, subject, role string, obj identity.Obj
 	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 
 	prn := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
-		DisabledAt: time.Time{},
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		ID:          "prn-" + subject,
+		Subject:     subject,
+		DisplayName: "",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
+		DisabledAt:  time.Time{},
 	}
 	if err := f.store.CreatePrincipal(t.Context(), prn, storetest.ServerChange(at, "principal:"+prn.ID)); err != nil {
 		t.Fatalf("seed principal: %v", err)
@@ -314,6 +333,176 @@ func TestGrantRoutes(t *testing.T) {
 		http.MethodPost, "/api/server/grants", `{"subject":"principal:prn-bob","role":"installation-operator"}`,
 		http.StatusForbidden,
 	}, nil)
+}
+
+// TestRevokeGrantByID proves that DELETE /api/server/grants/{id} ends any
+// grant by its ID: a namespace grant answers 204 and is gone, an unknown ID
+// answers 404, a caller without read on the object gets 404 with the same
+// body as the unknown ID, a caller with read but without manage-access gets
+// 403, and an installation grant still answers 204.
+func TestRevokeGrantByID(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	send := func(subject, method, path, body string) (int, string) {
+		req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+subject)
+
+		rec := httptest.NewRecorder()
+		f.handler.ServeHTTP(rec, req)
+
+		return rec.Code, rec.Body.String()
+	}
+
+	var g grantDoc
+	f.as(t, "alice", apiCall{
+		http.MethodPost, "/api/server/namespaces/acme/grants",
+		`{"subject":"principal:prn-bob","role":"viewer"}`, http.StatusCreated,
+	}, &g)
+
+	status, body := send("alice", http.MethodDelete, "/api/server/grants/"+g.ID, "")
+	if status != http.StatusNoContent {
+		t.Fatalf("revoke namespace grant by ID answers %d, want %d (%s)", status, http.StatusNoContent, body)
+	}
+
+	var list grantListDoc
+	f.as(t, "alice", apiCall{http.MethodGet, "/api/server/namespaces/acme/grants", "", http.StatusOK}, &list)
+
+	for i := range list.Grants {
+		if list.Grants[i].ID == g.ID {
+			t.Fatalf("grants on acme still hold %s after the revoke by ID", g.ID)
+		}
+	}
+
+	unknownStatus, unknownBody := send("alice", http.MethodDelete, "/api/server/grants/grt-unknown-id", "")
+	if unknownStatus != http.StatusNotFound {
+		t.Fatalf("revoke unknown grant by ID answers %d, want %d (%s)", unknownStatus, http.StatusNotFound, unknownBody)
+	}
+
+	var hidden grantDoc
+	f.as(t, "alice", apiCall{
+		http.MethodPost, "/api/server/namespaces/acme/grants",
+		`{"subject":"principal:prn-olga","role":"viewer"}`, http.StatusCreated,
+	}, &hidden)
+
+	status, body = send("bob", http.MethodDelete, "/api/server/grants/"+hidden.ID, "")
+	if status != http.StatusNotFound {
+		t.Fatalf("revoke without read answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+
+	want := strings.ReplaceAll(unknownBody, "grt-unknown-id", hidden.ID)
+	if body != want {
+		t.Fatalf("revoke without read body = %s, want %s", body, want)
+	}
+
+	f.seed(t, "carol", access.RoleViewer, identity.NamespaceObject("acme"))
+
+	status, body = send("carol", http.MethodDelete, "/api/server/grants/"+hidden.ID, "")
+	if status != http.StatusForbidden {
+		t.Fatalf("revoke with read but without manage-access answers %d, want %d (%s)",
+			status, http.StatusForbidden, body)
+	}
+
+	var inst grantDoc
+	f.as(t, "ann", apiCall{
+		http.MethodPost, "/api/server/grants", `{"subject":"principal:prn-bob","role":"viewer"}`,
+		http.StatusCreated,
+	}, &inst)
+
+	status, body = send("ann", http.MethodDelete, "/api/server/grants/"+inst.ID, "")
+	if status != http.StatusNoContent {
+		t.Fatalf("revoke installation grant by ID answers %d, want %d (%s)", status, http.StatusNoContent, body)
+	}
+}
+
+// deleteGrantByID sends DELETE /api/server/grants/{id} with the test token
+// on a fresh handler that denies deny, and answers its status and body.
+// Each call builds a fresh handler, so a revoked grant stays present.
+func deleteGrantByID(t *testing.T, deny map[identity.Action]bool, id string) (int, string) {
+	t.Helper()
+
+	h := newEnforcingHandler(t, selectiveAuthorizer{deny: deny})
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/server/grants/"+id, http.NoBody)
+	req.Header.Set("Authorization", "Bearer test-token")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	return rec.Code, rec.Body.String()
+}
+
+// TestRevokeGrantByIDKindActions proves that DELETE /api/server/grants/{id}
+// checks the manage-access action of the grant's own object, for each object
+// kind: denying manage answers 403 while read is allowed, and denying read
+// answers 404 with the same body as an unknown ID. An unknown ID answers
+// 404.
+func TestRevokeGrantByIDKindActions(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		grantID string
+		manage  identity.Action
+		read    identity.Action
+	}{
+		{
+			name: "installation", grantID: testServerGrantID,
+			manage: identity.ActionServerManageAccess, read: identity.ActionServerReadAccess,
+		},
+		{
+			name: "namespace", grantID: testNamespaceGrantID,
+			manage: identity.ActionNamespaceManageAccess, read: identity.ActionNamespaceRead,
+		},
+		{
+			name: "collection", grantID: testCollectionGrantID,
+			manage: identity.ActionCollectionManageAccess, read: identity.ActionCollectionRead,
+		},
+		{
+			name: "unit", grantID: testUnitGrantID,
+			manage: identity.ActionUnitManageAccess, read: identity.ActionUnitRead,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkGrantKindActions(t, tc.grantID, tc.manage, tc.read)
+		})
+	}
+
+	if status, body := deleteGrantByID(t, map[identity.Action]bool{}, "grt-unknown-id"); status != http.StatusNotFound {
+		t.Fatalf("revoke unknown grant by ID answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
+}
+
+// checkGrantKindActions revokes one grant by ID under each authorizer: 204
+// when allowed, 403 when its manage action is denied but read is allowed,
+// and 404 with the unknown-ID body when its read action is denied.
+func checkGrantKindActions(t *testing.T, grantID string, manage, read identity.Action) {
+	t.Helper()
+
+	if status, body := deleteGrantByID(t, map[identity.Action]bool{}, grantID); status != http.StatusNoContent {
+		t.Fatalf("revoke %s by ID answers %d, want %d (%s)", grantID, status, http.StatusNoContent, body)
+	}
+
+	denyManage := map[identity.Action]bool{manage: true}
+	if status, body := deleteGrantByID(t, denyManage, grantID); status != http.StatusForbidden {
+		t.Fatalf("revoke %s without manage answers %d, want %d (%s)", grantID, status, http.StatusForbidden, body)
+	}
+
+	_, unknownBody := deleteGrantByID(t, map[identity.Action]bool{}, "grt-unknown-id")
+
+	denyRead := map[identity.Action]bool{read: true}
+
+	status, body := deleteGrantByID(t, denyRead, grantID)
+	if status != http.StatusNotFound {
+		t.Fatalf("revoke %s without read answers %d, want %d (%s)", grantID, status, http.StatusNotFound, body)
+	}
+
+	if want := strings.ReplaceAll(unknownBody, "grt-unknown-id", grantID); body != want {
+		t.Fatalf("revoke %s without read body = %s, want %s", grantID, body, want)
+	}
 }
 
 // TestOperatorRefusals checks the families over HTTP: an installation
@@ -563,4 +752,112 @@ func TestAccountAdministratorCannotReachOperatorActions(t *testing.T) {
 	}
 
 	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/metrics", "", http.StatusForbidden}, nil)
+}
+
+// TestEnableNeedsGrantActions proves that the enable route needs every
+// action that the grants of the principal give: an account administrator
+// cannot enable a disabled site administrator, but a site administrator
+// that is not a bootstrap admin can.
+func TestEnableNeedsGrantActions(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+	f.seed(t, "boss", access.RoleSiteAdministrator, identity.ServerObject())
+	f.seed(t, "sam", access.RoleSiteAdministrator, identity.ServerObject())
+
+	_, err := f.store.SweepInactive(t.Context(), accesstoken.Sweep{
+		Inactivity: time.Hour,
+		Tokens:     false,
+		Accounts:   true,
+	}, storetest.ServerChange)
+	if err != nil {
+		t.Fatalf("sweep inactive: %v", err)
+	}
+
+	f.as(t, "ann", apiCall{
+		method: http.MethodPost, path: "/api/server/principals/prn-boss/enable", body: "",
+		want: http.StatusForbidden,
+	}, nil)
+
+	boss, err := f.store.GetPrincipal(t.Context(), "prn-boss")
+	if err != nil {
+		t.Fatalf("get boss: %v", err)
+	}
+
+	if boss.DisabledAt.IsZero() {
+		t.Fatal("boss is enabled after a refused enable, want disabled")
+	}
+
+	f.as(t, "sam", apiCall{
+		method: http.MethodPost, path: "/api/server/principals/prn-boss/enable", body: "",
+		want: http.StatusOK,
+	}, nil)
+
+	boss, err = f.store.GetPrincipal(t.Context(), "prn-boss")
+	if err != nil {
+		t.Fatalf("get boss: %v", err)
+	}
+
+	if !boss.DisabledAt.IsZero() {
+		t.Fatal("boss is disabled after an allowed enable, want enabled")
+	}
+}
+
+// TestGrantListNamesHoldersAndFilters lists the grants on acme with the
+// holder of each, and with the holder and role filters.
+func TestGrantListNamesHoldersAndFilters(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	var all listedGrantListDoc
+	f.as(t, "ann", apiCall{http.MethodGet, "/api/server/namespaces/acme/grants", "", http.StatusOK}, &all)
+
+	if len(all.Grants) != 1 || all.Grants[0].HolderName != "alice" || all.Grants[0].HolderKind != "person" {
+		t.Fatalf("grants on acme = %+v, want the grant of alice, a person", all)
+	}
+
+	for _, c := range []struct {
+		query string
+		want  int
+	}{
+		{"holder=principal:prn-alice", 1},
+		{"holder=principal:prn-bob", 0},
+		{"role=admin", 1},
+		{"role=viewer", 0},
+		{"holder=principal:prn-alice&role=admin", 1},
+	} {
+		var page listedGrantListDoc
+		f.as(
+			t,
+			"ann",
+			apiCall{http.MethodGet, "/api/server/namespaces/acme/grants?" + c.query, "", http.StatusOK},
+			&page,
+		)
+
+		if len(page.Grants) != c.want || page.Total != int64(c.want) {
+			t.Errorf("grants with %s = %+v, want %d", c.query, page, c.want)
+		}
+	}
+
+	for _, query := range []string{
+		"holder=alice", "holder=group:x", "role=" + strings.Repeat("r", 129), "role=bad%20role", "role=.viewer",
+	} {
+		f.as(t, "ann", apiCall{
+			http.MethodGet, "/api/server/namespaces/acme/grants?" + query, "", http.StatusBadRequest,
+		}, nil)
+	}
+}
+
+// listedGrantDoc and listedGrantListDoc decode a grant list with the
+// holders.
+type listedGrantDoc struct {
+	ID         string `json:"id"`
+	HolderName string `json:"holderName"`
+	HolderKind string `json:"holderKind"`
+}
+
+type listedGrantListDoc struct {
+	Grants []listedGrantDoc `json:"grants"`
+	Total  int64            `json:"total"`
 }

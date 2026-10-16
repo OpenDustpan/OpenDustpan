@@ -36,6 +36,9 @@ const (
 	// maxSweepResults holds one series for each result of the inactivity
 	// disable.
 	maxSweepResults = 2
+	// maxDeletedSweepResults holds one series for each outcome of the
+	// retention sweep.
+	maxDeletedSweepResults = 4
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -65,15 +68,16 @@ const MaxSinkSeries = 16
 // ServerMetrics holds the request count, the request duration histogram,
 // the requests in flight gauge, the build info, the process start time, the
 // runtime gauges, the readiness failure counter (ADR 32 decision 5) and the
-// audit append failure counter (ADR 41 decision 5), the audit chain gauge
-// (ADR 60 decision 17), and the audit sink counters and the log sink drop
-// counter (ADR 60 decisions 13 and 14). All
+// audit append failure counter (ADR 41 decision 5), and the audit sink
+// counters and the log sink drop counter (ADR 60 decisions 13 and 14). All
 // names start with dustpan_. The middleware in dustpan.go records each
 // request through ObserveRequest with the registered route pattern, never
 // the path. Domain packages never import this package. Only dustpan.go and
 // the HTTP middleware do (ADR 32 decision 9). It also holds the two
 // families of the reload of the configuration file (ADR 63 decision 5),
 // and counts the runs of the inactivity disable by result (ADR 53).
+// It also holds the audit chain families: the scopes whose check failed,
+// and the restores whose restored log failed the check.
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -83,14 +87,12 @@ type ServerMetrics struct {
 	inFlight *Gauge
 	ready    *Counter
 	audit    *Counter
-	chainBad *Gauge
-	// restoreBad counts restores whose audit log failed the chain check
-	// before the switch entry of the restore.
-	restoreBad *Counter
-	sinks      sinkFamilies
-	reloads    *Counter
-	reloadOK   *Gauge
-	sweeps     *Counter
+	chain    chainFamilies
+	sinks    sinkFamilies
+	reloads  *Counter
+	reloadOK *Gauge
+	sweeps   *Counter
+	deleted  *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -138,9 +140,8 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		chainBad:   reg.NewGauge("dustpan_audit_chain_invalid", chainInvalidHelp, nil, 1),
-		restoreBad: newRestoreCheckCounter(reg),
-		sinks:      newSinkFamilies(reg),
+		chain: newChainFamilies(reg),
+		sinks: newSinkFamilies(reg),
 		reloads: reg.NewCounter(
 			"dustpan_config_reloads_total",
 			"Reloads of the configuration file by result.",
@@ -153,7 +154,8 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
-		sweeps: newSweepCounter(reg),
+		sweeps:  newSweepCounter(reg),
+		deleted: newDeletedSweepCounter(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -237,26 +239,47 @@ func (m *ServerMetrics) IncAuditAppendFailure() {
 const chainInvalidHelp = "Audit scopes whose chain check failed in the last scheduled check."
 
 // SetAuditChainInvalid sets the count of audit scopes whose chain check
-// failed in the last scheduled check (ADR 60 decision 17). No label names a
-// scope. Operators alert when it is above zero.
+// failed in the last scheduled check. No label names a scope. Operators
+// alert when it is above zero.
 func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
-	m.chainBad.Set(float64(scopes))
+	m.chain.invalid.Set(float64(scopes))
+}
+
+// chainFamilies holds the audit chain families: the count of scopes whose
+// check failed, and the count of restores whose restored log failed the
+// check.
+type chainFamilies struct {
+	invalid    *Gauge
+	restoreBad *Counter
+}
+
+// newChainFamilies registers the audit chain families in reg.
+func newChainFamilies(reg *Registry) chainFamilies {
+	return chainFamilies{
+		invalid:    reg.NewGauge("dustpan_audit_chain_invalid", chainInvalidHelp, nil, 1),
+		restoreBad: newRestoreCheckCounter(reg),
+	}
 }
 
 // newRestoreCheckCounter registers dustpan_audit_restore_check_failures_total
 // in reg.
 func newRestoreCheckCounter(reg *Registry) *Counter {
-	return reg.NewCounter("dustpan_audit_restore_check_failures_total",
+	c := reg.NewCounter("dustpan_audit_restore_check_failures_total",
 		"Restores whose restored audit log failed the chain check.", nil, 1)
+
+	// The series starts at 0, so an alert on increase() sees the first
+	// failure.
+	c.Add(0, []string{}...)
+
+	return c
 }
 
 // IncAuditRestoreCheckFailure adds one to the count of restores whose
-// restored audit log failed the chain check before the switch entry of the
-// restore (ADR 64 decision 6). The server still serves after such a
-// restore, so the counter and the error log are its record. Operators
-// alert when it is above zero.
+// restored audit log failed the chain check. The server still serves after
+// such a restore, so the counter and the error log are its record.
+// Operators alert when it is above zero.
 func (m *ServerMetrics) IncAuditRestoreCheckFailure() {
-	m.restoreBad.Inc()
+	m.chain.restoreBad.Inc()
 }
 
 // sinkFamilies holds the audit and log sink families: counters labeled by sink,
@@ -266,6 +289,7 @@ type sinkFamilies struct {
 	sinkFail *Counter
 	sinkSkip *Counter
 	logDrop  *Counter
+	sinkLag  *Gauge
 }
 
 // newSinkFamilies registers the audit sink families in reg.
@@ -282,6 +306,12 @@ func newSinkFamilies(reg *Registry) sinkFamilies {
 			"Audit entries that a sink skipped because it cannot hold them, by sink.",
 		),
 		logDrop: family("dustpan_log_sink_dropped_total", "Application log records a log sink dropped, by sink."),
+		sinkLag: reg.NewGauge(
+			"dustpan_audit_sink_lag_seconds",
+			"Delivery lag of an audit sink in seconds, by sink.",
+			[]string{labelSink},
+			maxSinkSeries,
+		),
 	}
 }
 
@@ -310,6 +340,17 @@ func (m *ServerMetrics) AddAuditSkipped(sink string, entries int) {
 	}
 }
 
+// SetAuditSinkLag sets the delivery lag of the sink named sink in seconds:
+// the age of the oldest entry the sink has not delivered yet, or 0 when it
+// is up to date. Operators alert when it keeps growing.
+func (m *ServerMetrics) SetAuditSinkLag(sink string, seconds float64) {
+	if seconds < 0 {
+		seconds = 0
+	}
+
+	m.sinks.sinkLag.Set(seconds, sink)
+}
+
 // newSweepCounter creates dustpan_inactivity_sweeps_total in reg.
 func newSweepCounter(reg *Registry) *Counter {
 	return reg.NewCounter(
@@ -336,6 +377,47 @@ func (m *ServerMetrics) ObserveSweep(result string) {
 	}
 
 	m.sweeps.Inc(result)
+}
+
+// newDeletedSweepCounter creates dustpan_deleted_unit_sweep_total in reg.
+func newDeletedSweepCounter(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_deleted_unit_sweep_total",
+		"Outcomes of the retention sweep of deleted units by result.",
+		[]string{labelResult},
+		maxDeletedSweepResults,
+	)
+}
+
+// Outcomes of the retention sweep.
+const (
+	// DeletedSweepPurged counts the deleted units that the sweep purged.
+	DeletedSweepPurged = "purged"
+	// DeletedSweepSkipped counts the expired units that the sweep left to
+	// another installation or that a restore took first.
+	DeletedSweepSkipped = "skipped"
+	// DeletedSweepFailed counts the failed purges, blob deletes and record
+	// finishes, and the runs that could not read the store.
+	DeletedSweepFailed = "failed"
+	// DeletedSweepFinished counts the blob purge records that the sweep
+	// finished.
+	DeletedSweepFinished = "finished"
+)
+
+// ObserveDeletedSweep adds n to the retention sweep counter for result: one
+// of the DeletedSweep outcomes. Any other value counts as
+// DeletedSweepFailed, so the label set stays fixed. Operators alert when the
+// failed series grows: a failed purge keeps the unit until the next run.
+func (m *ServerMetrics) ObserveDeletedSweep(result string, n int) {
+	switch result {
+	case DeletedSweepPurged, DeletedSweepSkipped, DeletedSweepFinished:
+	default:
+		result = DeletedSweepFailed
+	}
+
+	if n > 0 {
+		m.deleted.Add(uint64(n), result)
+	}
 }
 
 // ObserveConfigReload records one reload of the configuration file (ADR 63

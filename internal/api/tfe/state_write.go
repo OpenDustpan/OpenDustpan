@@ -201,12 +201,32 @@ func (h *Handler) createStateVersion(
 
 	pending, err := h.workspaces.BeginState(ctx, id, p.Subject, in, auth)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeError(ctx, w, h.lineageLockedDetail(ctx, id, p.Subject, err))
 
 		return
 	}
 
 	h.writeStateVersionCreate(ctx, w, r, pending)
+}
+
+// lineageLockedDetail names the force-unlock command in a refused state
+// upload while the caller holds the lock of the workspace: the CLI took the
+// lock for the upload and does not release it after the refusal. The lock
+// ID is the namespace and workspace name the CLI accepts. A lock of another
+// holder is a lock of another job, so the error never tells the caller to
+// clear it. An unlocked workspace, an unreadable workspace and any other
+// error keep the error as is.
+func (h *Handler) lineageLockedDetail(ctx context.Context, id workspace.ID, subject string, err error) error {
+	if !errors.Is(err, workspace.ErrLineageMismatch) {
+		return err
+	}
+
+	ws, readErr := h.workspaces.GetByID(ctx, id)
+	if readErr != nil || !ws.Lock.Locked() || ws.Lock.Holder != subject {
+		return err
+	}
+
+	return fmt.Errorf("%w: workspace stays locked, run tofu force-unlock %s to clear the lock", err, ws.Ref)
 }
 
 // writeStateVersionCreate writes the 201 create response: the state version
@@ -260,10 +280,19 @@ func (h *Handler) uploadState(
 
 	id := workspace.StateVersionID(r.PathValue("id"))
 
-	if checkErr := h.workspaces.CheckUpload(ctx, id, tok); checkErr != nil {
+	ns, checkErr := h.workspaces.CheckUpload(ctx, id, tok)
+	if checkErr != nil {
 		h.writeError(ctx, w, checkErr)
 
 		return
+	}
+
+	if h.addressGate != nil {
+		if gateErr := h.addressGate.CheckAddress(ctx, ns); gateErr != nil {
+			h.writeError(ctx, w, gateErr)
+
+			return
+		}
 	}
 
 	release, ok := h.holdLease(w, r, bodygate.StreamReservation(r))
@@ -303,10 +332,19 @@ func (h *Handler) uploadJSONState(
 
 	id := workspace.StateVersionID(r.PathValue("id"))
 
-	if checkErr := h.workspaces.CheckJSONRenderingUpload(ctx, id, tok); checkErr != nil {
+	ns, checkErr := h.workspaces.CheckJSONRenderingUpload(ctx, id, tok)
+	if checkErr != nil {
 		h.writeError(ctx, w, checkErr)
 
 		return
+	}
+
+	if h.addressGate != nil {
+		if gateErr := h.addressGate.CheckAddress(ctx, ns); gateErr != nil {
+			h.writeError(ctx, w, gateErr)
+
+			return
+		}
 	}
 
 	release, ok := h.hold(w, r, bodygate.Reservation(r, h.maxState))

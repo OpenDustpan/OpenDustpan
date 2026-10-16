@@ -78,7 +78,7 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: stores, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -98,6 +98,7 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -127,6 +128,7 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		AddressGate:             nil,
 		Logger:                  cfg.logger,
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,

@@ -8,9 +8,9 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint test test-postgres test-s3 bench load e2e upgrade-test crash-test soak generate build image-smoke demo
+.PHONY: check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo
 
-check: lint nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
+check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
 fmt: ## Format Go code (gofumpt, gci, golines).
 	golangci-lint fmt ./...
@@ -20,6 +20,9 @@ lint: ## Strict lint, tidy and generated-code checks for Go.
 	sqlc diff
 	go test ./internal/pulumijournal/internal/gen/ -run TestGenerateMatchesCommittedFile -count=1
 	golangci-lint run ./...
+
+lint-journal-build: ## Lint the journal recording build: some files are left out of it, so it needs its own run.
+	golangci-lint run --build-tags e2e,journalrecording ./...
 
 # The same build tags as .golangci.yml, so the e2e and upgrade packages are checked too.
 ANALYSIS_TAGS := e2e,upgrade,soak
@@ -79,8 +82,12 @@ trivy-canary: ## Trivy license canary: the gate must flag the GPL fixture in tes
 # candidate is sent to its provider for verification. "unknown" is a candidate
 # that could not be verified (for example, the provider did not answer), so a
 # network failure can fail this target. Exit code 183 means a secret was found.
+# .trufflehog-exclude-paths.txt lists files that are known false positives,
+# one regular expression per line. Each entry needs the owner's approval.
+# Today it holds one vendored agent skill, where a Markdown link that names a
+# file looks like a credential to a detector.
 trufflehog: ## TruffleHog: verified secrets in the Git history.
-	trufflehog git file://. --results=verified,unknown --fail --no-update
+	trufflehog git file://. --results=verified,unknown --fail --no-update --exclude-paths=.trufflehog-exclude-paths.txt
 
 # The same platform pairs as scripts/release-build.sh. The release archives
 # and the container image ship these files (third_party_licenses/).
@@ -104,7 +111,10 @@ docs-lint: ## ASD-STE100 structural rules and banned words for README, CLAUDE.md
 	$(BANNED) --selftest
 	$(BANNED) $(DOCS) $(DOCS_ADRS)
 
-test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set.
+test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_URL is set. A package whose code, files and environment did not change gives its cached result.
+	go test -race ./...
+
+test-nocache: ## Go tests as in test, but every package runs again. CI runs this on main every 2 hours to find flaky tests.
 	go test -race -count=1 ./...
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
@@ -123,6 +133,12 @@ test-s3: ## Go tests in pkg/blob/s3 against a live S3-compatible server (needs D
 
 e2e: ## Drive real Pulumi CLI and OpenTofu versions against the server (downloads CLIs; see e2e/doc.go). Not part of check; CI runs it as its own job.
 	go test -tags e2e -race -count=1 -parallel 16 -timeout 60m ./e2e/...
+
+# With TOXIPROXY_URL set, the target uses that Toxiproxy server (CI runs it
+# as a service container) and downloads no binary.
+faults: ## Run Toxiproxy network fault tests against a self-started server (downloads toxiproxy-server unless TOXIPROXY_URL is set; test-only, never ships). Not part of check.
+	if [ -z "$$TOXIPROXY_URL" ]; then TOXIPROXY_BIN="$$(./scripts/toxiproxy.sh)" && export TOXIPROXY_BIN; fi && \
+	go test -tags faults -race -count=1 -timeout 20m ./e2e/faults/...
 
 e2e-journal: ## Drive the real Pulumi CLI through the journal route on the recording build (ADR 43, work item 9). Not part of check.
 	go test -tags "e2e journalrecording" -race -count=1 -run TestPulumiJournalingOn -timeout 60m ./e2e/...

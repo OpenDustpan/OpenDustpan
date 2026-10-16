@@ -42,12 +42,18 @@ func newEpochHandler(t *testing.T, epochs apiserver.CheckpointEpochs, st *sqlite
 		Metrics:          stubMetrics{},
 		Version:          "",
 		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
 		Principals:       nil,
 		Tokens:           nil,
 		Access:           nil,
 		Audit:            st,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
 		CheckpointEpochs: epochs,
 		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     nil,
+		AuditSinks:       nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

@@ -13,6 +13,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -20,6 +21,9 @@ import (
 var (
 	// ErrNotFound reports that a stack does not exist.
 	ErrNotFound = errors.New("stack not found")
+	// ErrBlobsRemain reports that a blob of a purged unit may remain after a
+	// delete (ADR 47). The blob purge record stays for the sweep.
+	ErrBlobsRemain = errors.New("blobs of the purged unit remain")
 	// ErrAlreadyExists reports that a stack with the same reference exists.
 	ErrAlreadyExists = errors.New("stack already exists")
 	// ErrInvalidName reports a project or stack name that fails validation.
@@ -181,7 +185,13 @@ type Store interface {
 	// while a mutating update of the stack runs, namespace.ErrNotFound if the
 	// namespace does not exist, namespace.ErrFenced if fence is stale, or
 	// audit.ErrInvalidEntry if e fails validation or names another namespace.
-	DeleteStack(ctx context.Context, ref Ref, fence namespace.Fence, guard DeleteGuard, e audit.Entry) error
+	DeleteStack(
+		ctx context.Context,
+		ref Ref,
+		fence namespace.Fence,
+		guard DeleteGuard,
+		d inventory.Deletion,
+	) error
 	// ForceDeleteStack soft-deletes the stack identified by ref at the time
 	// e.At and appends e, as DeleteStack does, even when the latest checkpoint
 	// manages resources. It returns ErrNotFound if no live stack has ref,
@@ -189,7 +199,8 @@ type Store interface {
 	// namespace.ErrNotFound if the namespace does not exist,
 	// namespace.ErrFenced if fence is stale, or audit.ErrInvalidEntry if e
 	// fails validation or names another namespace.
-	ForceDeleteStack(ctx context.Context, ref Ref, fence namespace.Fence, e audit.Entry) error
+	ForceDeleteStack(ctx context.Context, ref Ref, fence namespace.Fence, d inventory.Deletion) error
+	DeletedStore
 	// UpdateStackTags replaces the tags of the stack identified by ref with
 	// tags, keyed by its stable ID, and stamps updatedAt. It returns
 	// ErrNotFound, namespace.ErrNotFound or namespace.ErrFenced.
@@ -222,6 +233,34 @@ type LatestState interface {
 	Export(ctx context.Context, ref Ref) (Checkpoint, error)
 }
 
+// DeletedStore is the part of Store that acts on a soft-deleted stack by its
+// stable ID (ADR 47): the restore and the final delete.
+type DeletedStore interface {
+	// RestoreStack brings back the deleted stack id of the namespace of
+	// fence before its retention period ends (ADR 47), under newName in its
+	// project, or under its name before the delete when newName is empty. It
+	// moves the inventory entry back to the live projection and appends the
+	// audit entry e in the same fenced transaction (ADR 60, fail closed). It
+	// returns the reference of the restored stack, ErrNotFound if the
+	// namespace has no deleted stack id, ErrAlreadyExists if a live stack
+	// holds the name, namespace.ErrFenced if fence is stale, or
+	// audit.ErrInvalidEntry if e fails validation.
+	RestoreStack(ctx context.Context, id ID, newName Name, fence namespace.Fence, e audit.Entry) (Ref, error)
+	// PurgeStack removes the deleted stack id of the namespace of fence for
+	// good (ADR 47): its updates, checkpoints, events, journal, tags, data
+	// key and deleted inventory entry, in one fenced transaction with the
+	// audit entry e. It ends the grants on the stack and records the blob
+	// purge (inventory.BlobPurge) in that transaction. The caller removes
+	// its blobs after the commit; the sweep finishes the record. It
+	// returns ErrNotFound if the namespace has no deleted stack id, which
+	// also covers a live stack: a purge acts on deleted stacks only. With a
+	// non-zero dueBy, it also returns ErrNotFound and changes nothing when
+	// the retention period of the stack ends after dueBy, a check in the same
+	// transaction. The retention sweep sets dueBy, and a purge by an admin
+	// leaves it zero.
+	PurgeStack(ctx context.Context, id ID, fence namespace.Fence, dueBy time.Time, e audit.Entry) error
+}
+
 // Config holds the dependencies of a Service.
 type Config struct {
 	Store      Store
@@ -233,6 +272,9 @@ type Config struct {
 	// means the service passes an empty guard and the store uses only its
 	// SQL fallback, as in tests with inline checkpoints.
 	State LatestState
+	// Retention is how long a deleted stack stays before its final delete
+	// (ADR 47, decision 2). Zero means inventory.DeletedRetention.
+	Retention time.Duration
 }
 
 // Service implements the stack use cases.
@@ -241,6 +283,7 @@ type Service struct {
 	namespaces *namespace.Service
 	now        func() time.Time
 	state      LatestState
+	retention  time.Duration
 }
 
 // NewService returns a Service. Store and Namespaces are required; Now defaults to time.Now.
@@ -258,9 +301,14 @@ func NewService(cfg Config) (*Service, error) {
 		now = time.Now
 	}
 
+	retention := cfg.Retention
+	if retention <= 0 {
+		retention = inventory.DeletedRetention
+	}
+
 	return &Service{
 		store: cfg.Store, namespaces: cfg.Namespaces, now: now,
-		state: cfg.State,
+		state: cfg.State, retention: retention,
 	}, nil
 }
 
@@ -345,7 +393,14 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 
 	if s.state == nil {
 		e.At = s.now().UTC()
-		if delErr := s.store.DeleteStack(ctx, ref, fence, EmptyGuard(), e); delErr != nil {
+		delErr := s.store.DeleteStack(
+			ctx,
+			ref,
+			fence,
+			EmptyGuard(),
+			inventory.Deletion{Entry: e, PurgeAfter: e.At.Add(s.retention)},
+		)
+		if delErr != nil {
 			return fmt.Errorf("delete stack %s: %w", ref, delErr)
 		}
 
@@ -359,7 +414,13 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 		}
 
 		e.At = s.now().UTC()
-		err = s.store.DeleteStack(ctx, ref, fence, guard, e)
+		err = s.store.DeleteStack(
+			ctx,
+			ref,
+			fence,
+			guard,
+			inventory.Deletion{Entry: e, PurgeAfter: e.At.Add(s.retention)},
+		)
 		if !errors.Is(err, ErrConcurrentModification) || attempt == 1 {
 			break
 		}
@@ -385,11 +446,59 @@ func (s *Service) ForceDelete(ctx context.Context, ref Ref, e audit.Entry) error
 	}
 
 	e.At = s.now().UTC()
-	if err := s.store.ForceDeleteStack(ctx, ref, ns.Fence(), e); err != nil {
+	err = s.store.ForceDeleteStack(
+		ctx,
+		ref,
+		ns.Fence(),
+		inventory.Deletion{Entry: e, PurgeAfter: e.At.Add(s.retention)},
+	)
+	if err != nil {
 		return fmt.Errorf("delete stack %s: %w", ref, err)
 	}
 
 	return nil
+}
+
+// RestoreDeleted brings back the deleted stack id of ns under newName in its
+// project, or under its name before the delete when newName is empty (ADR
+// 47). The store appends the audit entry e, stamped with the time of the
+// restore, in the same fenced transaction (ADR 60, fail closed). It returns
+// the reference of the restored stack, ErrNotFound if ns has no deleted
+// stack id, and ErrAlreadyExists if a live stack holds the name.
+func (s *Service) RestoreDeleted(
+	ctx context.Context, ns namespace.Name, id ID, newName Name, e audit.Entry,
+) (Ref, error) {
+	n, err := s.namespaces.WritableHere(ctx, ns)
+	if err != nil {
+		return Ref{}, fmt.Errorf("restore stack %s: %w", id, err)
+	}
+
+	e.At = s.now().UTC()
+
+	ref, err := s.store.RestoreStack(ctx, id, newName, n.Fence(), e)
+	if err != nil {
+		return Ref{}, fmt.Errorf("restore stack %s: %w", id, err)
+	}
+
+	return ref, nil
+}
+
+// PurgeDeleted removes the deleted stack id of ns for good, before its retention
+// period ends (ADR 47). The store appends the audit entry e in the same
+// fenced transaction. The caller removes the checkpoint blobs after it. It
+// returns ErrNotFound if ns has no deleted stack id.
+func (s *Service) PurgeDeleted(ctx context.Context, ns namespace.Name, id ID, e audit.Entry) error {
+	return s.purge(ctx, ns, id, time.Time{}, e)
+}
+
+// PurgeExpired removes the deleted stack id of ns for good, as PurgeDeleted
+// does, only when its retention period ended at or before dueBy. The store
+// checks the end of the retention in the purge transaction. It returns
+// ErrNotFound if ns has no deleted stack id whose retention period ended by
+// then: a restore and a new delete after the caller read the unit gave it a
+// new retention period.
+func (s *Service) PurgeExpired(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+	return s.purge(ctx, ns, id, dueBy, e)
 }
 
 // UpdateTags replaces the tags of the stack identified by ref with tags, as
@@ -473,4 +582,21 @@ func (s *Service) deleteGuard(ctx context.Context, ref Ref) (DeleteGuard, error)
 		UpdateID: cp.Update, Digest: cp.Digest,
 		HasCheckpoint: true, HasResources: CountManagedResources(cp.Deployment) > 0,
 	}, nil
+}
+
+// purge removes the deleted stack id of ns with the retention check of
+// dueBy, which zero turns off.
+func (s *Service) purge(ctx context.Context, ns namespace.Name, id ID, dueBy time.Time, e audit.Entry) error {
+	n, err := s.namespaces.WritableHere(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("purge stack %s: %w", id, err)
+	}
+
+	e.At = s.now().UTC()
+
+	if err := s.store.PurgeStack(ctx, id, n.Fence(), dueBy, e); err != nil {
+		return fmt.Errorf("purge stack %s: %w", id, err)
+	}
+
+	return nil
 }

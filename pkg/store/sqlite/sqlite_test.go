@@ -26,6 +26,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
+	"opendustpan.org/opendustpan/pkg/session/sessiontest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
@@ -54,11 +55,45 @@ func TestAccessConformance(t *testing.T) {
 	})
 }
 
+// TestDelegation runs the suite of the tokens of service principals.
+func TestDelegation(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunDelegation(t, func(t *testing.T) storetest.DelegationStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 // TestAccessTokenConformance runs the access token store suite.
 func TestAccessTokenConformance(t *testing.T) {
 	t.Parallel()
 
 	accesstokentest.Run(t, func(t *testing.T) accesstokentest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestSessionConformance runs the session store suite.
+func TestSessionConformance(t *testing.T) {
+	t.Parallel()
+
+	sessiontest.Run(t, func(t *testing.T) sessiontest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestNamespacePrincipalConformance runs the suite of the principals of a
+// namespace.
+func TestNamespacePrincipalConformance(t *testing.T) {
+	t.Parallel()
+
+	principaltest.RunNamespace(t, func(t *testing.T) principaltest.NamespaceStore {
 		t.Helper()
 
 		return open(t)
@@ -84,18 +119,7 @@ func TestAuditFeedConformance(t *testing.T) {
 	audittest.RunFeed(t, func(t *testing.T) audittest.FeedStore {
 		t.Helper()
 
-		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		t.Cleanup(func() {
-			if err := s.Close(); err != nil {
-				t.Errorf("close store: %v", err)
-			}
-		})
-
-		return s
+		return open(t)
 	})
 }
 
@@ -110,6 +134,8 @@ func TestAuditConformance(t *testing.T) {
 		t.Helper()
 
 		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
 
 		s, err := sqlite.Open(t.Context(), path)
 		if err != nil {
@@ -188,6 +214,22 @@ func TestAuditChainConformance(t *testing.T) {
 					t.Fatalf("change entry %d: %v", seq, err)
 				}
 			},
+			Reopen: func(t *testing.T) audittest.ChainStore {
+				t.Helper()
+
+				second, err := sqlite.Open(t.Context(), path)
+				if err != nil {
+					t.Fatalf("reopen store: %v", err)
+				}
+
+				t.Cleanup(func() {
+					if err := second.Close(); err != nil {
+						t.Errorf("close store: %v", err)
+					}
+				})
+
+				return second
+			},
 		}
 	})
 }
@@ -210,6 +252,7 @@ func tamperAuditColumn(field string) (string, bool) {
 		"at_ms",
 		"sequence",
 		"changes",
+		"fence_version",
 		"value_path":
 		return field, true
 	default:
@@ -293,7 +336,11 @@ func TestSchemaConformance(t *testing.T) {
 func TestPingClosed(t *testing.T) {
 	t.Parallel()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -327,6 +374,8 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, openErr := sqlite.Open(t.Context(), path)
 	if openErr != nil {
@@ -412,6 +461,28 @@ func TestWorkspaceConformance(t *testing.T) {
 	})
 }
 
+func TestIPAllowlistConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunIPAllowlist(t, func(t *testing.T) storetest.IPAllowlistStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+// TestNamespacePagingConformance runs the namespace paging suite: paged,
+// filtered reads of namespaces in name order with their counts.
+func TestNamespacePagingConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunNamespacePaging(t, func(t *testing.T) storetest.PagingStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 func TestBackupConformance(t *testing.T) {
 	t.Parallel()
 
@@ -469,11 +540,14 @@ var (
 	_ storetest.StagingWitness = (*backupStore)(nil)
 )
 
-// openBackup returns a fresh backup-capable store in a temporary directory.
+// openBackup returns a fresh backup-capable store in a temporary directory,
+// copied from the migrated template.
 func openBackup(t *testing.T) storetest.BackupStore { //nolint:ireturn // Factory signature returns the interface.
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -672,22 +746,13 @@ func checkUsableWorkspace(t *testing.T, s *sqlite.Store, ns namespace.Namespace,
 	}
 }
 
-// open returns a fresh store in a temporary directory.
+// open returns a fresh store in a temporary directory, copied from the
+// migrated template so only the first test of the binary runs every
+// migration.
 func open(t *testing.T) *sqlite.Store {
 	t.Helper()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("close store: %v", err)
-		}
-	})
-
-	return s
+	return openTemplated(t)
 }
 
 // uncountedStore wraps a Store with its path so the uncounted-checkpoint
@@ -705,12 +770,18 @@ var (
 	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
 )
 
+// errNoJournalCount reports a wrapped store without the journaled count.
+var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
+
 // openUncounted returns a fresh store in a temporary directory that the
-// uncounted-checkpoint case can NULL through SQL.
+// uncounted-checkpoint case can NULL through SQL, copied from the migrated
+// template.
 func openUncounted(t *testing.T) *uncountedStore {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -724,6 +795,24 @@ func openUncounted(t *testing.T) *uncountedStore {
 	})
 
 	return &uncountedStore{UpdatesStore: s, path: path}
+}
+
+// CountRunningJournaledUpdates forwards to the wrapped store, whose method
+// the embedded UpdatesStore interface hides.
+func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	counter, ok := s.UpdatesStore.(interface {
+		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("count running journaled updates: %w", errNoJournalCount)
+	}
+
+	count, err := counter.CountRunningJournaledUpdates(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count running journaled updates: %w", err)
+	}
+
+	return count, nil
 }
 
 // NullifyResourceCount implements storetest.CountNullifier.
@@ -769,6 +858,11 @@ func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) (err
 
 // List forwards to the audit list of the wrapped store, which the embedded
 // interface hides, so the delete case can read the entry of a delete.
+// Inner implements storetest.Wrapper.
+func (s *uncountedStore) Inner() any {
+	return s.UpdatesStore
+}
+
 func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
@@ -808,11 +902,13 @@ func (s *auditedWorkspaces) BreakAuditAppends(ctx context.Context) error {
 }
 
 // openAuditedWorkspaces returns a fresh store in a temporary directory whose
-// audit appends the suite can break.
+// audit appends the suite can break, copied from the migrated template.
 func openAuditedWorkspaces(t *testing.T) *auditedWorkspaces {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -1712,6 +1808,8 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
+	copyTemplate(t, path)
+
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -2310,6 +2408,23 @@ func BenchmarkPrincipalLists(b *testing.B) {
 	})
 
 	principaltest.Bench(b, s)
+}
+
+// BenchmarkCallerGrants measures the first page of the grants of a caller
+// at the scale of accesstest.BenchCallerGrants.
+func BenchmarkCallerGrants(b *testing.B) {
+	s, err := sqlite.Open(b.Context(), filepath.Join(b.TempDir(), "dustpan.db"))
+	if err != nil {
+		b.Fatalf("open store: %v", err)
+	}
+
+	b.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			b.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	accesstest.BenchCallerGrants(b, s)
 }
 
 // BenchmarkAuthorizer measures one decision and one list-objects at the

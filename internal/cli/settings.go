@@ -156,6 +156,21 @@ var Settings = []*Setting{
 			"(DUSTPAN_TRUSTED_PROXY_HEADER)",
 		"`x-forwarded-for` (or `forwarded`)",
 	).WithFile("trusted-proxy-header"),
+	boolSetting(
+		"ip-allowlists", "DUSTPAN_IP_ALLOWLISTS",
+		"turn on IP allowlists: a namespace that has a list refuses requests from addresses outside it "+
+			"(DUSTPAN_IP_ALLOWLISTS)",
+		"(none: off). Set `true` to turn the feature on. A namespace opts in with its own list (ADR 55). "+
+			"The server needs `--trusted-proxies` and `--trusted-proxy-header` when a proxy sits in front of it, "+
+			"or every client reads as the address of the proxy. "+
+			"See Recovery in docs/explanation/security-model.md for the recovery path.",
+	).WithFile("ip-allowlists"),
+	boolSetting(
+		"ip-allowlists-include-bootstrap", "DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP",
+		"apply IP allowlists to the bootstrap admin token too (DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP)",
+		"(none: the bootstrap admin token is exempt, so an administrator cannot lock themselves out). "+
+			"Set `true` to apply the lists to it as well. See Recovery in docs/explanation/security-model.md for the recovery path.",
+	).WithFile("ip-allowlists-include-bootstrap"),
 	stringSetting(
 		"log-level", "DUSTPAN_LOG_LEVEL", "info",
 		"log level: debug, info, warn or error (DUSTPAN_LOG_LEVEL)",
@@ -231,6 +246,13 @@ var Settings = []*Setting{
 			"about 72 MiB of the budget. Installations with large outputs should raise this value. An upload "+
 			"that can never fit answers 413.",
 	).WithFile("max-body-bytes-in-flight"),
+	stringSetting(
+		"soft-delete-retention", "DUSTPAN_SOFT_DELETE_RETENTION", "720h",
+		"how long a deleted stack or workspace stays before its final delete, at least 1h "+
+			"(DUSTPAN_SOFT_DELETE_RETENTION)",
+		"`720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records "+
+			"the end of its retention, so a change applies to later deletes",
+	).WithFile("soft-delete-retention"),
 	intSetting(
 		"checkpoint-delta-cutoff", "DUSTPAN_CHECKPOINT_DELTA_CUTOFF", "1048576",
 		"checkpoint size in bytes from which the CLI sends delta uploads, "+
@@ -244,10 +266,11 @@ var Settings = []*Setting{
 		"(none: journaling on). Set `true` to make the Pulumi CLI save checkpoints",
 	).WithFile("disable-pulumi-journaling"),
 	stringSetting(
-		"audit-chain", "DUSTPAN_AUDIT_CHAIN", "auto",
-		"hash chain of the audit log: auto keeps it on when the log holds chained entries, "+
-			"on or off decide alone (DUSTPAN_AUDIT_CHAIN)",
-		"`auto`: on when the audit log holds chained entries, else off. `on` or `off` decide alone",
+		"audit-chain", "DUSTPAN_AUDIT_CHAIN", "on",
+		"hash chain of the audit log: on or off. A change starts the server in maintenance mode "+
+			"until a person approves it (DUSTPAN_AUDIT_CHAIN)",
+		"`on`. `off` turns the chain off. A change starts the server in maintenance mode until a person "+
+			"runs `opendustpan audit-chain approve`",
 	).WithFile("audit-chain"),
 	boolSetting(
 		"audit-checkpoints", "DUSTPAN_AUDIT_CHECKPOINTS",

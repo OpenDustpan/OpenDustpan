@@ -30,6 +30,18 @@ func (c collections) CollectionOf(_ context.Context, unit identity.Object) (stri
 	return name, ok, nil
 }
 
+// CollectionID gives a collection that some unit is in the stable ID col-<name>.
+// A collection that no unit is in does not exist here.
+func (c collections) CollectionID(_ context.Context, col identity.Object) (string, bool, error) {
+	for _, name := range c {
+		if name == col.CollectionName() {
+			return "col-" + name, true, nil
+		}
+	}
+
+	return "", false, nil
+}
+
 // fixture is one store with an authorizer and a service over it.
 type fixture struct {
 	store *sqlite.Store
@@ -55,7 +67,7 @@ func newFixture(tb testing.TB) *fixture {
 	units := collections{}
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: st, Callers: st, Collections: units, Units: st,
+		Store: st, Callers: st, Collections: units, Units: st, Principals: st,
 	})
 	if err != nil {
 		tb.Fatalf("new authorizer: %v", err)
@@ -96,9 +108,17 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 	tb.Helper()
 
 	err := f.store.CreatePrincipal(tb.Context(), principal.Principal{
-		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
-		DisabledAt: time.Time{},
+		CreatedAt:   time.Unix(0, 0),
+		UpdatedAt:   time.Unix(0, 0),
+		ID:          "prn-" + subject,
+		Subject:     subject,
+		DisplayName: "",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
+		DisabledAt:  time.Time{},
 	}, storetest.ServerChange(time.Unix(0, 0), "principal:prn-"+subject))
 	if err != nil {
 		tb.Fatalf("create principal %q: %v", subject, err)
@@ -181,6 +201,15 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 		obj = f.unit(tb, obj)
 	}
 
+	if obj.IsCollection() {
+		id, found, err := f.units.CollectionID(tb.Context(), obj)
+		if err != nil || !found {
+			tb.Fatalf("collection %q has no unit: found %t, err %v", obj.String(), found, err)
+		}
+
+		obj = obj.WithCollectionID(id)
+	}
+
 	fence, e := storetest.GrantWrite(tb, f.store, obj, time.Unix(0, 0), "grant:test")
 
 	err := f.store.CreateGrant(tb.Context(), access.Grant{
@@ -191,6 +220,12 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 	if err != nil {
 		tb.Fatalf("create grant: %v", err)
 	}
+}
+
+// collection makes the collection of obj exist: a unit that the fake
+// reports in it. A grant on a collection that does not exist is refused.
+func (f *fixture) collection(obj identity.Object) {
+	f.units[obj.Namespace().String()+"/member-of-"+obj.CollectionName()] = obj.CollectionName()
 }
 
 // admin returns the bootstrap admin caller, which holds every action.
@@ -418,13 +453,19 @@ func TestBuiltInRoleFamilies(t *testing.T) {
 		want []access.Family
 	}{
 		{access.RoleInstallationOperator, []access.Family{access.FamilyOperator}},
-		{access.RoleAccountAdministrator, []access.Family{access.FamilyAdministration, access.FamilyData}},
+		{
+			access.RoleAccountAdministrator,
+			[]access.Family{access.FamilyAdministration, access.FamilyData, access.FamilyDelegation},
+		},
 		{
 			access.RoleSiteAdministrator,
-			[]access.Family{access.FamilyAdministration, access.FamilyData, access.FamilyOperator},
+			[]access.Family{
+				access.FamilyAdministration, access.FamilyData, access.FamilyDelegation, access.FamilyOperator,
+			},
 		},
 		{access.RoleAdmin, []access.Family{access.FamilyData}},
 		{access.RoleViewer, []access.Family{access.FamilyData}},
+		{access.RoleTokenManager, []access.Family{access.FamilyDelegation}},
 	}
 
 	for _, tc := range cases {
@@ -439,11 +480,47 @@ func TestBuiltInRoleFamilies(t *testing.T) {
 	}
 
 	site, _ := access.BuiltInRole(access.RoleSiteAdministrator)
-	for _, f := range []access.Family{access.FamilyOperator, access.FamilyAdministration, access.FamilyData} {
+	families := []access.Family{
+		access.FamilyOperator, access.FamilyAdministration, access.FamilyData, access.FamilyDelegation,
+	}
+	for _, f := range families {
 		for _, a := range access.Actions(f) {
 			if !site.Has(a) {
 				t.Errorf("site administrator lacks %s", a)
 			}
+		}
+	}
+}
+
+// TestRestoreAndPurgeGrants proves the grants of the ADR 47 actions: a
+// maintainer may restore a deleted unit but not purge it, because a purge
+// cannot be undone, and an admin may do both.
+func TestRestoreAndPurgeGrants(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		role        string
+		wantRestore bool
+		wantPurge   bool
+	}{
+		{role: access.RoleViewer, wantRestore: false, wantPurge: false},
+		{role: access.RoleWriter, wantRestore: false, wantPurge: false},
+		{role: access.RoleMaintainer, wantRestore: true, wantPurge: false},
+		{role: access.RoleAdmin, wantRestore: true, wantPurge: true},
+	}
+
+	for _, tc := range cases {
+		r, ok := access.BuiltInRole(tc.role)
+		if !ok {
+			t.Fatalf("no built-in role %q", tc.role)
+		}
+
+		if got := r.Has(identity.ActionUnitRestore); got != tc.wantRestore {
+			t.Errorf("%s has unit:restore = %v, want %v", tc.role, got, tc.wantRestore)
+		}
+
+		if got := r.Has(identity.ActionUnitPurge); got != tc.wantPurge {
+			t.Errorf("%s has unit:purge = %v, want %v", tc.role, got, tc.wantPurge)
 		}
 	}
 }
@@ -458,6 +535,7 @@ func TestEscalation(t *testing.T) {
 	f.person(t, "target")
 
 	payments := identity.CollectionObject("acme", "payments")
+	f.collection(payments)
 	f.grant(t, prn("nsadmin"), access.RoleAdmin, identity.NamespaceObject("acme"))
 	f.grant(t, prn("colladmin"), access.RoleAdmin, payments)
 	f.grant(t, prn("account"), access.RoleAccountAdministrator, identity.ServerObject())
@@ -490,9 +568,12 @@ func TestEscalation(t *testing.T) {
 			obj: identity.NamespaceObject("acme"), want: access.ErrEscalation,
 		},
 		{
-			// No collection exists until the collections are wired (#478).
 			name: "collection admin gives writer on its collection", granter: collAdmin, role: access.RoleWriter,
-			obj: payments, want: access.ErrNotFound,
+			obj: payments, want: nil,
+		},
+		{
+			name: "a grant on a collection that does not exist is refused", granter: collAdmin, role: access.RoleWriter,
+			obj: identity.CollectionObject("acme", "missing"), want: access.ErrNotFound,
 		},
 		{
 			name: "account administrator gives operator", granter: account, role: access.RoleInstallationOperator,
@@ -586,10 +667,12 @@ func TestPlacementRuleDoesNotAuthorize(t *testing.T) {
 
 	f := newFixture(t)
 	dev := f.person(t, "dev")
+	f.collection(identity.CollectionObject("acme", "sandbox"))
 	f.grant(t, prn("dev"), access.RoleMaintainer, identity.CollectionObject("acme", "sandbox"))
 
 	// A placement rule routes "payments-*" units to the collection payments.
 	target := identity.CollectionObject("acme", "payments")
+	f.collection(target)
 
 	assertChecks(t, f.authz, dev, []check{
 		{identity.CollectionObject("acme", "sandbox"), identity.ActionCollectionCreateUnit, true},
@@ -624,6 +707,79 @@ func TestExplain(t *testing.T) {
 	}
 }
 
+// TestExplainListsOnlyGrantsThatGive proves that an answer lists only the
+// grants that give an action: not a grant whose custom role no longer
+// exists, and not a grant below the installation whose role gives no data
+// action. The store refuses to delete a role that a grant holds, and the
+// Service refuses an operator role below the installation, so the test
+// reads the role through a store that has lost it and stores the operator
+// role directly, as a role change that races a grant could leave them.
+func TestExplainListsOnlyGrantsThatGive(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	p := f.person(t, "alice")
+	acme := identity.NamespaceObject("acme")
+
+	gone, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
+		Name: "gone", Description: "", Actions: []identity.Action{identity.ActionUnitRead},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	at := time.Unix(0, 0)
+	backup := access.Role{
+		CreatedAt: at, UpdatedAt: at, ID: "rol-backup", Name: "backup", Description: "", BuiltIn: false,
+		Actions: []identity.Action{identity.ActionServerBackup},
+	}
+	err = f.store.CreateRole(ctx, backup, storetest.ServerChange(at, "role:rol-backup"))
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	f.grant(t, prn("alice"), access.RoleViewer, acme)
+	f.grant(t, prn("alice"), gone.ID, acme)
+	f.grant(t, prn("alice"), backup.ID, acme)
+
+	lost := &lostRoleStore{Store: f.store, role: gone.ID}
+
+	authz, err := access.NewAuthorizer(
+		access.AuthorizerConfig{Store: lost, Callers: lost, Collections: nil, Units: lost, Principals: lost},
+	)
+	if err != nil {
+		t.Fatalf("authorizer: %v", err)
+	}
+
+	got, err := authz.Explain(ctx, p, acme)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+
+	viewer, _ := access.BuiltInRole(access.RoleViewer)
+	if !slices.Equal(got.Actions, viewer.Actions) {
+		t.Errorf("actions = %v, want %v", got.Actions, viewer.Actions)
+	}
+
+	if len(got.Grants) != 1 || got.Grants[0].Role != access.RoleViewer {
+		t.Errorf("grants = %+v, want the viewer grant only", got.Grants)
+	}
+}
+
+// lostRoleStore reads the custom role with the ID role as deleted.
+type lostRoleStore struct {
+	*sqlite.Store
+
+	role string
+}
+
+func (l *lostRoleStore) GetRoles(ctx context.Context, ids []string) ([]access.Role, error) {
+	roles, err := l.Store.GetRoles(ctx, ids)
+
+	return slices.DeleteFunc(roles, func(r access.Role) bool { return r.ID == l.role }), err
+}
+
 func TestListObjects(t *testing.T) {
 	t.Parallel()
 
@@ -634,6 +790,7 @@ func TestListObjects(t *testing.T) {
 
 	f.grant(t, prn("alice"), access.RoleViewer, identity.NamespaceObject("acme"))
 	f.grant(t, ops, access.RoleWriter, web)
+	f.collection(identity.CollectionObject("beta", "payments"))
 	f.grant(t, ops, access.RoleViewer, identity.CollectionObject("beta", "payments"))
 
 	scope, err := f.authz.ListObjects(t.Context(), p, identity.ActionUnitRead)
@@ -777,6 +934,90 @@ func TestRevokeChecksTheObject(t *testing.T) {
 	}
 }
 
+func TestRevokeByID(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	f.person(t, "target")
+
+	payments := identity.CollectionObject("acme", "payments")
+	f.collection(payments)
+
+	web := f.unit(t, unitObject(t, "acme", "web/prod"))
+
+	const svcID = "prn-svc-byid"
+
+	svcErr := f.store.CreatePrincipal(ctx, principal.Principal{
+		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: svcID, Subject: "svc-byid",
+		DisplayName: "", Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
+		DisabledAt: time.Time{}, Namespace: "", BreakGlass: false,
+	}, storetest.ServerChange(time.Unix(0, 0), "principal:"+svcID))
+	if svcErr != nil {
+		t.Fatalf("create service principal: %v", svcErr)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		object identity.Object
+		role   string
+	}{
+		{name: "installation", object: identity.ServerObject(), role: access.RoleViewer},
+		{name: "namespace", object: identity.NamespaceObject("acme"), role: access.RoleViewer},
+		{name: "collection", object: payments, role: access.RoleViewer},
+		{name: "unit", object: web, role: access.RoleViewer},
+		{name: "principal", object: identity.PrincipalObject(svcID), role: access.RoleTokenManager},
+	} {
+		checkRevokeByID(t, f, tc.object, tc.role, tc.name)
+	}
+
+	if _, err := f.svc.RevokeByID(ctx, testEntry(), admin(), "grt-missing"); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("revoke unknown grant by ID = %v, want ErrNotFound", err)
+	}
+
+	nsadmin := f.person(t, "nsadmin")
+	f.grant(t, prn("nsadmin"), access.RoleAdmin, identity.NamespaceObject("acme"))
+
+	held, err := f.svc.Grant(ctx, testEntry(), admin(), access.GrantInput{
+		Object: identity.ServerObject(), Role: access.RoleViewer, Subject: prn("target"),
+	})
+	if err != nil {
+		t.Fatalf("grant on the installation: %v", err)
+	}
+
+	if _, err := f.svc.RevokeByID(ctx, testEntry(), nsadmin, held.ID); !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("revoke beyond held actions = %v, want ErrEscalation", err)
+	}
+}
+
+// checkRevokeByID grants role on obj to the target, revokes it by ID and
+// checks that the grant is gone.
+func checkRevokeByID(t *testing.T, f *fixture, obj identity.Object, role, name string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	g, err := f.svc.Grant(ctx, testEntry(), admin(), access.GrantInput{
+		Object: obj, Role: role, Subject: prn("target"),
+	})
+	if err != nil {
+		t.Fatalf("grant on %s: %v", name, err)
+	}
+
+	revoked, err := f.svc.RevokeByID(ctx, testEntry(), admin(), g.ID)
+	if err != nil {
+		t.Fatalf("revoke %s grant by ID: %v", name, err)
+	}
+
+	if revoked.ID != g.ID || revoked.Object.String() != g.Object.String() {
+		t.Fatalf("revoked = %+v, want %+v", revoked, g)
+	}
+
+	if _, err := f.store.GetGrant(ctx, g.ID); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("grant after revoke = %v, want ErrNotFound", err)
+	}
+}
+
 // testEntry is the entry of a caller, as the HTTP adapter builds it.
 func testEntry() audit.Entry {
 	return audit.Entry{
@@ -785,6 +1026,8 @@ func testEntry() audit.Entry {
 		Changes:  nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
+		ObjectID:     "",
+		FenceVersion: 0,
 	}
 }
 
@@ -834,7 +1077,13 @@ func TestRequestCache(t *testing.T) {
 	counted := &countingStore{Store: f.store, subjects: atomic.Int64{}, roles: atomic.Int64{}}
 
 	authz, err := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: counted, Callers: counted, Collections: nil, Units: counted},
+		access.AuthorizerConfig{
+			Store:       counted,
+			Callers:     counted,
+			Collections: nil,
+			Units:       counted,
+			Principals:  counted,
+		},
 	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
@@ -873,5 +1122,258 @@ func TestRequestCache(t *testing.T) {
 
 	if got := counted.subjects.Load(); got != 2 {
 		t.Errorf("subject reads after a new request = %d, want 2", got)
+	}
+}
+
+// namespaceBot stores a service principal of ns with the ID id.
+func (f *fixture) namespaceBot(tb testing.TB, id, subject string, ns namespace.Name) {
+	tb.Helper()
+
+	at := time.Unix(0, 0)
+	p := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: id, Subject: subject,
+		DisplayName: subject, Kind: principal.KindService, Source: principal.SourceLocal,
+		Namespace: ns, GroupCount: 0, BreakGlass: false,
+	}
+
+	fence, e := storetest.GrantWrite(tb, f.store, identity.NamespaceObject(ns), at, principal.Ref(id))
+	if err := f.store.CreateNamespacePrincipal(tb.Context(), p, fence, e); err != nil {
+		tb.Fatalf("create principal %q in %q: %v", subject, ns, err)
+	}
+}
+
+// installationService stores a service principal of the installation.
+func (f *fixture) installationService(tb testing.TB, id, subject string) {
+	tb.Helper()
+
+	at := time.Unix(0, 0)
+	p := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: id, Subject: subject,
+		DisplayName: subject, Kind: principal.KindService, Source: principal.SourceLocal,
+		Namespace: "", GroupCount: 0, BreakGlass: false,
+	}
+
+	if err := f.store.CreatePrincipal(tb.Context(), p, storetest.ServerChange(at, principal.Ref(id))); err != nil {
+		tb.Fatalf("create principal %q: %v", subject, err)
+	}
+}
+
+// tokenRole creates a custom role with only namespace:manage-principal-tokens.
+func (f *fixture) tokenRole(tb testing.TB, name string) access.Role {
+	tb.Helper()
+
+	r, err := f.svc.CreateRole(tb.Context(), testEntry(), admin(), access.RoleInput{
+		Name: name, Description: "",
+		Actions: []identity.Action{identity.ActionNamespaceManagePrincipalTokens},
+	})
+	if err != nil {
+		tb.Fatalf("create role %q: %v", name, err)
+	}
+
+	return r
+}
+
+// namespaceTokenFixture holds the callers and the principals of the
+// namespace token test.
+type namespaceTokenFixture struct {
+	alice   identity.Principal
+	bob     identity.Principal
+	carol   identity.Principal
+	acmeBot identity.Object
+	betaBot identity.Object
+	deploy  identity.Object
+}
+
+// seedNamespaceTokens stores two namespace bots, one installation service,
+// and the grants of the test, and returns the callers.
+func seedNamespaceTokens(t *testing.T, f *fixture) namespaceTokenFixture {
+	t.Helper()
+
+	alice := f.person(t, "alice")
+	bob := f.person(t, "bob")
+	carol := f.person(t, "carol")
+
+	f.namespaceBot(t, "prn-bot-acme", "ci-acme", "acme")
+	f.namespaceBot(t, "prn-bot-beta", "ci-beta", "beta")
+	f.installationService(t, "prn-deploy", "ci-deploy")
+
+	tokenRole := f.tokenRole(t, "ns-token")
+
+	f.grant(t, prn("alice"), access.RoleAdmin, identity.NamespaceObject("acme"))
+	f.grant(t, prn("bob"), access.RoleViewer, identity.NamespaceObject("acme"))
+	f.grant(t, prn("carol"), tokenRole.ID, identity.ServerObject())
+
+	return namespaceTokenFixture{
+		alice: alice, bob: bob, carol: carol, acmeBot: identity.PrincipalObject("prn-bot-acme"),
+		betaBot: identity.PrincipalObject("prn-bot-beta"), deploy: identity.PrincipalObject("prn-deploy"),
+	}
+}
+
+// checkNamespaceTokenDecisions proves who holds principal:manage-tokens on
+// each principal, and that a namespace grant gives no data action on it.
+func checkNamespaceTokenDecisions(t *testing.T, f *fixture, fx *namespaceTokenFixture) {
+	t.Helper()
+
+	manage := identity.ActionPrincipalManageTokens
+
+	assertChecks(t, f.authz, fx.alice, []check{
+		{fx.acmeBot, manage, true},
+		{fx.betaBot, manage, false},
+		{fx.deploy, manage, false},
+		{fx.acmeBot, identity.ActionNamespaceRead, false},
+		{fx.acmeBot, identity.ActionUnitRead, false},
+	})
+	assertChecks(t, f.authz, fx.bob, []check{
+		{fx.acmeBot, manage, false},
+		{fx.betaBot, manage, false},
+	})
+	assertChecks(t, f.authz, fx.carol, []check{
+		{fx.acmeBot, manage, false},
+		{fx.betaBot, manage, false},
+		{fx.deploy, manage, false},
+	})
+}
+
+// checkNamespaceTokenExplain proves that Explain lists only the namespace
+// grant that gives principal:manage-tokens.
+func checkNamespaceTokenExplain(t *testing.T, f *fixture, fx *namespaceTokenFixture) {
+	t.Helper()
+
+	ctx := t.Context()
+	manage := identity.ActionPrincipalManageTokens
+
+	got, err := f.authz.Explain(ctx, fx.alice, fx.acmeBot)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+
+	if len(got.Actions) != 1 || got.Actions[0] != manage {
+		t.Fatalf("actions on acme bot = %v, want only %s", got.Actions, manage)
+	}
+
+	if len(got.Grants) != 1 || got.Grants[0].Object.String() != "acme" {
+		t.Fatalf("grants on acme bot = %+v, want the namespace grant only", got.Grants)
+	}
+
+	none, explainErr := f.authz.Explain(ctx, fx.bob, fx.acmeBot)
+	if explainErr != nil {
+		t.Fatalf("explain: %v", explainErr)
+	}
+
+	if len(none.Actions) != 0 || len(none.Grants) != 0 {
+		t.Fatalf("actions of bob on acme bot = %+v, want none", none)
+	}
+}
+
+// TestNamespacePrincipalTokens proves the namespace token rule: a grant on
+// the namespace with namespace:manage-principal-tokens gives
+// principal:manage-tokens on a principal of that namespace only, never a
+// data action on the principal, and never on another namespace or on the
+// installation. A grant on the installation with the action gives it on no
+// principal: on the installation, only principal:manage-tokens does.
+func TestNamespacePrincipalTokens(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	fx := seedNamespaceTokens(t, f)
+
+	checkNamespaceTokenDecisions(t, f, &fx)
+	checkNamespaceTokenExplain(t, f, &fx)
+	checkNamespaceTokenLists(t, f, &fx)
+}
+
+// checkNamespaceTokenLists proves that ListObjects names the principals of
+// the namespaces where the caller holds the action.
+func checkNamespaceTokenLists(t *testing.T, f *fixture, fx *namespaceTokenFixture) {
+	t.Helper()
+
+	ctx := t.Context()
+	manage := identity.ActionPrincipalManageTokens
+
+	scope, err := f.authz.ListObjects(ctx, fx.alice, manage)
+	if err != nil {
+		t.Fatalf("list objects: %v", err)
+	}
+
+	if scope.All || len(scope.Principals) != 1 || scope.Principals[0].String() != fx.acmeBot.String() {
+		t.Fatalf("principals of alice = %+v, want only %q", scope, fx.acmeBot.String())
+	}
+
+	empty, listErr := f.authz.ListObjects(ctx, fx.bob, manage)
+	if listErr != nil {
+		t.Fatalf("list objects: %v", listErr)
+	}
+
+	if empty.All || len(empty.Principals) != 0 {
+		t.Fatalf("principals of bob = %+v, want none", empty)
+	}
+}
+
+// TestNamespaceTokenGrantRule proves who can give
+// namespace:manage-principal-tokens: a holder of every data action on the
+// namespace, or of server:manage-access on the installation. A holder of
+// namespace:manage-access and the action, without the other data actions,
+// cannot.
+func TestNamespaceTokenGrantRule(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	f.person(t, "target")
+	f.person(t, "target2")
+
+	tokenRole := f.tokenRole(t, "ns-token-give")
+	limited, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
+		Name: "ns-limited", Description: "",
+		Actions: []identity.Action{identity.ActionNamespaceManageAccess, identity.ActionNamespaceManagePrincipalTokens},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	accessOnly, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
+		Name: "access-only", Description: "", Actions: []identity.Action{identity.ActionServerManageAccess},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	partial := f.person(t, "partial")
+	full := f.person(t, "full")
+	root := f.person(t, "root")
+
+	f.grant(t, prn("partial"), limited.ID, identity.NamespaceObject("acme"))
+	f.grant(t, prn("full"), access.RoleAdmin, identity.NamespaceObject("acme"))
+	f.grant(t, prn("root"), tokenRole.ID, identity.NamespaceObject("acme"))
+	f.grant(t, prn("root"), accessOnly.ID, identity.ServerObject())
+
+	acme := identity.NamespaceObject("acme")
+
+	_, partialErr := f.svc.Grant(ctx, testEntry(), partial, access.GrantInput{
+		Object: acme, Role: tokenRole.ID, Subject: prn("target"),
+	})
+	if !errors.Is(partialErr, access.ErrEscalation) {
+		t.Fatalf("grant by a holder without every data action = %v, want ErrEscalation", partialErr)
+	}
+
+	_, fullErr := f.svc.Grant(ctx, testEntry(), full, access.GrantInput{
+		Object: acme, Role: tokenRole.ID, Subject: prn("target"),
+	})
+	if fullErr != nil {
+		t.Fatalf("grant by a holder of every data action: %v", fullErr)
+	}
+
+	_, rootErr := f.svc.Grant(ctx, testEntry(), root, access.GrantInput{
+		Object: acme, Role: tokenRole.ID, Subject: prn("target2"),
+	})
+	if rootErr != nil {
+		t.Fatalf("grant by a holder of server:manage-access: %v", rootErr)
+	}
+
+	_, installErr := f.svc.Grant(ctx, testEntry(), partial, access.GrantInput{
+		Object: identity.ServerObject(), Role: tokenRole.ID, Subject: prn("target"),
+	})
+	if !errors.Is(installErr, access.ErrEscalation) {
+		t.Fatalf("grant on the installation without server:manage-access = %v, want ErrEscalation", installErr)
 	}
 }

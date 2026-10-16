@@ -54,6 +54,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "grant on the caller object is ErrInvalid", test: testGrantOnCaller},
 		{name: "missing grant is ErrNotFound", test: testMissingGrant},
 		{name: "list grants on an object pages by subject and role", test: testListGrants},
+		{name: "list grants names each holder and filters by holder and role", test: testListGrantHolders},
 		{name: "grants on objects match subjects and objects", test: testGrantsOn},
 		{name: "grants with roles match subjects and roles", test: testGrantsWithRoles},
 		{name: "namespace and grant commit together", test: testNamespaceWithGrant},
@@ -65,12 +66,12 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "subjects of a caller are its principal and current groups", test: testSubjectsOf},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntry},
 		{name: "grants of a subject are its current grants on every object", test: testGrantsOf},
-		{name: "a role granted below the installation is reported", test: testRoleGrantedBelow},
+		{name: "a role granted below the installation or on a principal is reported", test: testRoleGrantedBelow},
 		{name: "a unit grant matches its stable ID, not its name", test: testUnitTarget},
 		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
 	}
 
-	for _, tc := range slices.Concat(cases, reviewCases(), unitCases()) {
+	for _, tc := range slices.Concat(cases, reviewCases(), unitCases(), moveCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -118,26 +119,28 @@ func opsGroup() access.Subject {
 // @server, as a Service builds it.
 func entry() audit.Entry {
 	return audit.Entry{
-		At:         at(9),
-		Namespace:  audit.ServerScope,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "server:manage-access",
-		Object:     "grant:test",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "accesstest",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           at(9),
+		Namespace:    audit.ServerScope,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "server:manage-access",
+		Object:       "grant:test",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "accesstest",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 
@@ -151,7 +154,17 @@ func refused() audit.Entry {
 
 // everyGrant asks for every grant on an object.
 func everyGrant() access.GrantQuery {
-	return access.GrantQuery{AfterSubject: "", AfterRole: "", Limit: access.MaxLimit + 1}
+	return access.GrantQuery{AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: access.MaxLimit + 1}
+}
+
+// grantsOf returns the grants of a list, without their holders.
+func grantsOf(listed []access.ListedGrant) []access.Grant {
+	out := make([]access.Grant, 0, len(listed))
+	for i := range listed {
+		out = append(out, listed[i].Grant)
+	}
+
+	return out
 }
 
 func newGrant(id string, subject access.Subject, role string, obj identity.Object) access.Grant {
@@ -397,11 +410,12 @@ func testGrantRoundTrip(t *testing.T, s access.Store) {
 	objects := []identity.Object{
 		identity.ServerObject(),
 		identity.NamespaceObject("acme"),
-		identity.CollectionObject("acme", "payments"),
+		identity.CollectionObject("acme", "payments").WithCollectionID("col-payments"),
 		unit(t, "acme", "web/prod"),
 	}
 
-	for i, obj := range objects {
+	for i := range objects {
+		obj := objects[i]
 		want := newGrant("grt-"+string(rune('a'+i)), opsGroup(), access.RoleViewer, obj)
 		mustCreateGrant(t, s, want)
 
@@ -518,36 +532,44 @@ func testListGrants(t *testing.T, s access.Store) {
 	ctx := t.Context()
 	acme := identity.NamespaceObject("acme")
 
-	all, total, err := s.ListGrantsOn(ctx, acme, access.GrantQuery{AfterSubject: "", AfterRole: "", Limit: 10})
+	all, total, err := s.ListGrantsOn(
+		ctx,
+		acme,
+		access.GrantQuery{AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: 10},
+	)
 	if err != nil {
 		t.Fatalf("list grants on acme: %v", err)
 	}
 
-	assertIDs(t, "grants on acme", all, "grt-2", "grt-1", "grt-3")
+	assertIDs(t, "grants on acme", grantsOf(all), "grt-2", "grt-1", "grt-3")
 
 	if total != 3 {
 		t.Fatalf("total on acme = %d, want 3", total)
 	}
 
 	page, total, err := s.ListGrantsOn(ctx, acme, access.GrantQuery{
-		AfterSubject: "principal:prn-a", AfterRole: access.RoleViewer, Limit: 10,
+		AfterSubject: "principal:prn-a", AfterRole: access.RoleViewer, Subject: "", Role: "", Limit: 10,
 	})
 	if err != nil {
 		t.Fatalf("list grants after a key: %v", err)
 	}
 
-	assertIDs(t, "grants after prn-a viewer", page, "grt-3")
+	assertIDs(t, "grants after prn-a viewer", grantsOf(page), "grt-3")
 
 	if total != 3 {
 		t.Fatalf("total after a key = %d, want 3 with no regard to the key", total)
 	}
 
-	first, _, err := s.ListGrantsOn(ctx, acme, access.GrantQuery{AfterSubject: "", AfterRole: "", Limit: 1})
+	first, _, err := s.ListGrantsOn(
+		ctx,
+		acme,
+		access.GrantQuery{AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: 1},
+	)
 	if err != nil {
 		t.Fatalf("list one grant: %v", err)
 	}
 
-	assertIDs(t, "first grant on acme", first, "grt-2")
+	assertIDs(t, "first grant on acme", grantsOf(first), "grt-2")
 }
 
 func testGrantsOn(t *testing.T, s access.Store) {
@@ -612,8 +634,10 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 	ctx := t.Context()
 	ns := newNamespace("acme")
 	g := newGrant("grt-one", principalSubject("prn-a"), access.RoleNamespaceAdmin, identity.NamespaceObject("acme"))
+	e := entry()
+	e.Object = access.GrantRef(g)
 
-	if err := s.CreateNamespaceWithGrant(ctx, ns, g, entry()); err != nil {
+	if err := s.CreateNamespaceWithGrant(ctx, ns, g, e); err != nil {
 		t.Fatalf("create namespace with grant: %v", err)
 	}
 
@@ -630,6 +654,8 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 		}
 	}
 
+	checkCreatorGrantEntry(t, s, g, e)
+
 	var noGrant access.Grant // A grant with no ID stores the namespace alone.
 	if err = s.CreateNamespaceWithGrant(ctx, newNamespace("beta"), noGrant, entry()); err != nil {
 		t.Fatalf("create namespace without grant: %v", err)
@@ -640,7 +666,47 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 		t.Fatalf("list grants: %v", err)
 	}
 
-	assertIDs(t, "grants on beta", list)
+	assertIDs(t, "grants on beta", grantsOf(list))
+}
+
+// checkCreatorGrantEntry proves that the create wrote the grant of the
+// creator as the first entry of the chain of the new namespace, with the
+// same action and object as the entry of @server, and that the chain of the
+// new namespace checks as valid. A store without the audit log skips it.
+func checkCreatorGrantEntry(t *testing.T, s access.Store, g access.Grant, e audit.Entry) {
+	t.Helper()
+
+	log, ok := s.(audit.Store)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+	ns := g.Object.Namespace()
+
+	listing, err := log.List(ctx, ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit of %q: %v", ns, err)
+	}
+
+	if listing.Total != 1 {
+		t.Fatalf("entries of %q = %d, want the grant of its creator", ns, listing.Total)
+	}
+
+	first := listing.Entries[len(listing.Entries)-1]
+	if first.Sequence != 1 || first.Namespace != ns || first.Action != e.Action ||
+		first.Object != e.Object || first.Kind != audit.KindChange {
+		t.Fatalf("first entry of %q = %+v, want the admin grant %q", ns, first, e.Object)
+	}
+
+	check, err := log.Check(ctx, ns)
+	if err != nil {
+		t.Fatalf("check audit of %q: %v", ns, err)
+	}
+
+	if !check.Valid {
+		t.Fatalf("check of %q = %+v, want a valid chain", ns, check)
+	}
 }
 
 func testNamespaceWithGrantTaken(t *testing.T, s access.Store) {
@@ -683,7 +749,7 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 
 	prn := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		DisabledAt: time.Time{},
 	}
 	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
@@ -716,7 +782,7 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 		t.Fatalf("list grants: %v", err)
 	}
 
-	assertIDs(t, "grants after the deletes", list, "grt-3")
+	assertIDs(t, "grants after the deletes", grantsOf(list), "grt-3")
 
 	// A grant to a deleted subject is refused in the transaction of the
 	// grant, so a delete that commits first wins.
@@ -872,7 +938,7 @@ func seedCaller(t *testing.T, ps principal.Store) {
 
 	alice := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		DisabledAt: time.Time{},
 	}
 	if err := ps.CreatePrincipal(ctx, alice, entry()); err != nil {
@@ -1014,15 +1080,30 @@ func testRoleGrantedBelow(t *testing.T, s access.Store) {
 	mustCreateGrant(t, s, newGrant("grt-1", opsGroup(), "rol-a", identity.ServerObject()))
 	mustCreateGrant(t, s, newGrant("grt-2", opsGroup(), "rol-b", identity.NamespaceObject("acme")))
 	mustCreateGrant(t, s, newGrant("grt-3", opsGroup(), "rol-c", identity.NamespaceObject("acme")))
+	mustCreateGrant(t, s, newGrant("grt-4", opsGroup(), "rol-d", identity.PrincipalObject("prn-deploy")))
+	mustCreateGrant(t, s, newGrant("grt-5", opsGroup(), "rol-e", identity.PrincipalObject("prn-deploy")))
 
 	if err := revokeGrant(t, s, "grt-3", "acme", entry()); err != nil {
 		t.Fatalf("revoke: %v", err)
 	}
 
-	for role, want := range map[string]bool{"rol-a": false, "rol-b": true, "rol-c": false, "rol-none": false} {
+	if err := revokeGrant(t, s, "grt-5", "", entry()); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+
+	below := map[string]bool{"rol-a": false, "rol-b": true, "rol-c": false, "rol-d": false, "rol-none": false}
+	for role, want := range below {
 		got, err := s.RoleGrantedBelowInstallation(ctx, role)
 		if err != nil || got != want {
 			t.Errorf("role %s granted below the installation = %t, %v; want %t", role, got, err, want)
+		}
+	}
+
+	onPrincipal := map[string]bool{"rol-a": false, "rol-b": false, "rol-d": true, "rol-e": false, "rol-none": false}
+	for role, want := range onPrincipal {
+		got, err := s.RoleGrantedOnPrincipal(ctx, role)
+		if err != nil || got != want {
+			t.Errorf("role %s granted on a principal = %t, %v; want %t", role, got, err, want)
 		}
 	}
 }

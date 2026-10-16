@@ -114,8 +114,8 @@ func TestServeCheckpointFlags(t *testing.T) {
 			args: []string{"--audit-signing-key-file", key},
 		},
 		{
-			name: "the chain on auto", want: errCheckpointsNeedChain,
-			args: []string{"--audit-checkpoints", "--audit-signing-key-file", key},
+			name: "the chain off", want: errCheckpointsNeedChain,
+			args: []string{"--audit-chain", "off", "--audit-checkpoints", "--audit-signing-key-file", key},
 		},
 		{
 			name: "verify keys without checkpoints", want: errVerifyKeysWithoutCheckpoints,
@@ -144,7 +144,6 @@ func TestServeWithAuditCheckpoints(t *testing.T) {
 	err := startServer(t,
 		"--database", "sqlite:"+filepath.Join(dir, "dustpan.db"),
 		"--listen", "127.0.0.1:0",
-		"--audit-chain", "on",
 		"--audit-checkpoints",
 		"--audit-signing-key-file", writeSigningKey(t, 32, 0o600),
 	)

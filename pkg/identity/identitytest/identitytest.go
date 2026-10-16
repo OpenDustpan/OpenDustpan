@@ -215,6 +215,7 @@ func testActions() []identity.Action {
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
 		identity.ActionServerRestore,
+		identity.ActionServerRestoreAccess,
 	}
 }
 
@@ -230,7 +231,9 @@ func testAdminPasses(t *testing.T, authz identity.Authorizer) {
 		TokenExpiresAt: time.Time{},
 	}
 
-	for _, obj := range testObjects(t) {
+	objs := testObjects(t)
+	for i := range objs {
+		obj := objs[i]
 		for _, action := range testActions() {
 			if err := authz.Authorize(t.Context(), admin, action, obj); err != nil {
 				t.Fatalf("admin %s on %q: %v", action, obj.String(), err)
@@ -252,7 +255,9 @@ func testDenied(t *testing.T, authz identity.Authorizer) {
 		TokenExpiresAt: time.Time{},
 	}
 
-	for _, obj := range testObjects(t) {
+	objs := testObjects(t)
+	for i := range objs {
+		obj := objs[i]
 		for _, action := range testActions() {
 			if err := authz.Authorize(t.Context(), viewer, action, obj); !errors.Is(err, identity.ErrDenied) {
 				t.Fatalf("viewer %s on %q = %v, want ErrDenied", action, obj.String(), err)
@@ -274,7 +279,9 @@ func testDenialNamesObject(t *testing.T, authz identity.Authorizer) {
 		TokenExpiresAt: time.Time{},
 	}
 
-	for _, obj := range testObjects(t) {
+	objs := testObjects(t)
+	for i := range objs {
+		obj := objs[i]
 		err := authz.Authorize(t.Context(), viewer, identity.ActionUnitRead, obj)
 		if err == nil || !errors.Is(err, identity.ErrDenied) {
 			t.Fatalf("viewer unit:read on %q = %v, want ErrDenied", obj.String(), err)
@@ -444,7 +451,9 @@ func testNamespaceGrant(t *testing.T) {
 		TokenExpiresAt: time.Time{},
 	}
 
-	for _, obj := range []identity.Object{insideA, insideB} {
+	objs := []identity.Object{insideA, insideB}
+	for i := range objs {
+		obj := objs[i]
 		if err := authz.Authorize(t.Context(), alice, identity.ActionUnitRead, obj); err != nil {
 			t.Fatalf("alice unit:read on %q in acme: %v", obj.String(), err)
 		}

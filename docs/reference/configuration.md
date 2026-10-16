@@ -21,6 +21,8 @@ the same list.
 | `--public-url` | `DUSTPAN_PUBLIC_URL` | `public-url` | (none) |
 | `--trusted-proxies` | `DUSTPAN_TRUSTED_PROXIES` | `trusted-proxies` | (none: the server uses the address of the TCP peer only) |
 | `--trusted-proxy-header` | `DUSTPAN_TRUSTED_PROXY_HEADER` | `trusted-proxy-header` | `x-forwarded-for` (or `forwarded`) |
+| `--ip-allowlists` | `DUSTPAN_IP_ALLOWLISTS` | `ip-allowlists` | (none: off). Set `true` to turn the feature on. A namespace opts in with its own list (ADR 55). The server needs `--trusted-proxies` and `--trusted-proxy-header` when a proxy sits in front of it, or every client reads as the address of the proxy. See Recovery in docs/explanation/security-model.md for the recovery path. |
+| `--ip-allowlists-include-bootstrap` | `DUSTPAN_IP_ALLOWLISTS_INCLUDE_BOOTSTRAP` | `ip-allowlists-include-bootstrap` | (none: the bootstrap admin token is exempt, so an administrator cannot lock themselves out). Set `true` to apply the lists to it as well. See Recovery in docs/explanation/security-model.md for the recovery path. |
 | `--log-level` | `DUSTPAN_LOG_LEVEL` | `log-level` | `info` (or `debug`, `warn`, `error`) |
 | `--log-format` | `DUSTPAN_LOG_FORMAT` | `log-format` | `json` (or `text`) |
 | `--log-sink` | `DUSTPAN_LOG_SINK` | `log-sink` | (none: stderr). For example `stderr syslog+tls://logs.example:6514` |
@@ -37,10 +39,11 @@ the same list.
 | `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `max-secret-batch-bytes` | `0`: 32 MiB, the largest batch of Pulumi secrets |
 | `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `max-state-bytes` | `0`: 32 MiB, the largest OpenTofu state |
 | `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `max-body-bytes-in-flight` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One sealed state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
-| `--audit-chain` | `DUSTPAN_AUDIT_CHAIN` | `audit-chain` | `auto`: on when the audit log holds chained entries, else off. `on` or `off` decide alone |
+| `--audit-chain` | `DUSTPAN_AUDIT_CHAIN` | `audit-chain` | `on`. `off` turns the chain off. A change starts the server in maintenance mode until a person runs `opendustpan audit-chain approve` |
 | `--audit-checkpoints` | `DUSTPAN_AUDIT_CHECKPOINTS` | `audit-checkpoints` | (none: off). Set `true` to sign checkpoints. Needs `--audit-chain=on` and a signing key file |
 | `--audit-signing-key-file` | `DUSTPAN_AUDIT_SIGNING_KEY_FILE` | `audit-signing-key-file` | (none) |
 | `--audit-verify-keys-file` | `DUSTPAN_AUDIT_VERIFY_KEYS_FILE` | `audit-verify-keys-file` | (none) |
+| `--soft-delete-retention` | `DUSTPAN_SOFT_DELETE_RETENTION` | `soft-delete-retention` | `720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records the end of its retention, so a change applies to later deletes |
 | `--audit-sink` | `DUSTPAN_AUDIT_SINK` | `audit-sink` | (none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit` |
 
 ## Configuration file
@@ -69,8 +72,9 @@ the example below quotes each string.
 
 The file refuses a `database` URL with a password. Set such a URL in
 `DUSTPAN_DATABASE`, because a secret comes only from a variable or from a
-file that a `*_FILE` key names (ADR 63 decision 4). The `--database` flag
-still takes a URL with a password, as before. Issue #511 deprecates that.
+file that a `*_FILE` key names. The `--database` flag refuses a URL with a
+password too: `serve` stops with an error before it opens the database.
+Use `DUSTPAN_DATABASE` instead.
 
 At start, the server writes one INFO line for each setting, with its key,
 its value and its layer: `flag`, `env`, `file` or `default`. When more than
@@ -166,8 +170,9 @@ next to the data does not protect a backup of that data.
 ## Client commands
 
 `opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
-check`, `opendustpan upgrade check` and `opendustpan restore` call a running
-server. They read the server URL from `--server` or
+check`, `opendustpan upgrade check`, `opendustpan restore` and the
+`opendustpan audit-chain` commands call a running server. They read the
+server URL from `--server` or
 `DUSTPAN_SERVER`, and the token from `DUSTPAN_ADMIN_TOKEN` or
 `DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a PEM bundle of CA certificates
 to the system store.
@@ -181,9 +186,12 @@ Each client command takes only the flags in its row:
 | `opendustpan backup check --backup <id>` | `--server`, `--ca-file`, `--backup` |
 | `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
 | `opendustpan upgrade check` | `--server`, `--ca-file` |
+| `opendustpan audit-chain status` | `--server`, `--ca-file` |
+| `opendustpan audit-chain approve` | `--server`, `--ca-file` |
 | `opendustpan health` | `--listen`, `--tls-cert` |
 
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as
 `serve` does. The [observe guide](../guides/observe.md) shows the probes.
 The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of
-the backup commands.
+the backup commands. The [audit log guide](../guides/audit-log.md) shows
+the audit chain commands.

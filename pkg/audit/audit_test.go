@@ -15,26 +15,28 @@ func testEntry() audit.Entry {
 	}
 
 	return audit.Entry{
-		At:         time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC),
-		Namespace:  ns,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:decrypt",
-		Object:     "pulumi:acme/web/prod",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "pulumi-cli/3.200.0",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindReveal,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "req-1",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   1,
+		At:           time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC),
+		Namespace:    ns,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:decrypt",
+		Object:       "pulumi:acme/web/prod",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "pulumi-cli/3.200.0",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindReveal,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "req-1",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     1,
+		FenceVersion: 0,
 	}
 }
 
@@ -144,6 +146,60 @@ func TestComputeHashCoversTheValueCount(t *testing.T) {
 	}
 }
 
+// TestComputeHashCoversTheObjectID proves that the hash covers a set object
+// ID, and that an entry with an empty object ID keeps the hash of the code
+// before the field: TestComputeHashKeepsEntriesWithoutACountValid pins it.
+func TestComputeHashCoversTheObjectID(t *testing.T) {
+	t.Parallel()
+
+	before := audit.ComputeHash(testEntry(), "")
+
+	with := testEntry()
+	with.ObjectID = "stk-1"
+
+	got := audit.ComputeHash(with, "")
+	if got == before {
+		t.Fatal("hash did not change after the object ID was set")
+	}
+
+	other := testEntry()
+	other.ObjectID = "stk-2"
+
+	if same := audit.ComputeHash(other, ""); same == got {
+		t.Fatal("hash did not change after the object ID changed")
+	}
+}
+
+// TestComputeHashFixesTheOrderOfTheOptionalFields pins the encoding of the
+// optional fields after prevHash: value_count, then object_id, each only
+// when it is set. The audit, settings and soft-delete PRs agreed this order
+// (value_count, object_id, then changes), so an entry keeps its hash whatever
+// order the PRs merge in.
+func TestComputeHashFixesTheOrderOfTheOptionalFields(t *testing.T) {
+	t.Parallel()
+
+	const (
+		wantObjectID = "27bf6e010faa24ec19ce291310ab009791de303c31f867f003548d541533c298"
+		wantBoth     = "7a5ab76b68f08bbde3ebccda9e91110df4f2be9b852e060c4aae00e341d51e36"
+	)
+
+	withID := testEntry()
+	withID.ObjectID = "stk-1"
+
+	if got := audit.ComputeHash(withID, ""); got != wantObjectID {
+		t.Fatalf("hash with an object ID = %q, want %q", got, wantObjectID)
+	}
+
+	both := testEntry()
+	count := int64(2)
+	both.ValueCount = &count
+	both.ObjectID = "stk-1"
+
+	if got := audit.ComputeHash(both, ""); got != wantBoth {
+		t.Fatalf("hash with a value count and an object ID = %q, want %q", got, wantBoth)
+	}
+}
+
 func TestPageNormalizedAppliesDefaultsAndCaps(t *testing.T) {
 	t.Parallel()
 
@@ -153,5 +209,39 @@ func TestPageNormalizedAppliesDefaultsAndCaps(t *testing.T) {
 
 	if got := (audit.Page{Number: 2, Size: audit.MaxPageSize + 1}).Normalized(); got.Size != audit.MaxPageSize {
 		t.Fatalf("oversize page = %+v, want capped at %d", got, audit.MaxPageSize)
+	}
+}
+
+// TestComputeHashCoversTheFenceVersion proves that the hash covers the
+// failover version of a namespace entry after the other optional fields,
+// that an entry with version 0 keeps the hash of the code before the field,
+// and pins the encoding, so another installation computes the same hash.
+func TestComputeHashCoversTheFenceVersion(t *testing.T) {
+	t.Parallel()
+
+	const wantFenced = "9037567e190eaf00bc4c1f3bdc6d00cd289ef98e7f0d6837070bbaec69d74aea"
+
+	before := audit.ComputeHash(testEntry(), "")
+
+	zero := testEntry()
+	zero.FenceVersion = 0
+
+	if got := audit.ComputeHash(zero, ""); got != before {
+		t.Fatalf("hash with fence version 0 = %q, want the hash without the field %q", got, before)
+	}
+
+	fenced := testEntry()
+	fenced.ObjectID = "stk-1"
+	fenced.FenceVersion = 2
+
+	got := audit.ComputeHash(fenced, "")
+	if got != wantFenced {
+		t.Fatalf("hash with an object ID and fence version 2 = %q, want %q", got, wantFenced)
+	}
+
+	fenced.FenceVersion = 3
+
+	if other := audit.ComputeHash(fenced, ""); other == got {
+		t.Fatal("hash did not change after the fence version changed")
 	}
 }

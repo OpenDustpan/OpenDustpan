@@ -30,6 +30,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/principal/principaltest"
 	"opendustpan.org/opendustpan/pkg/secret/secrettest"
+	"opendustpan.org/opendustpan/pkg/session/sessiontest"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -72,6 +73,22 @@ func TestAccessConformance(t *testing.T) {
 	})
 }
 
+// TestDelegation runs the suite of the tokens of service principals.
+func TestDelegation(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL delegation suite", envURL)
+	}
+
+	storetest.RunDelegation(t, func(t *testing.T) storetest.DelegationStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
 // TestAccessTokenConformance runs the access token store suite.
 func TestAccessTokenConformance(t *testing.T) {
 	t.Parallel()
@@ -82,6 +99,39 @@ func TestAccessTokenConformance(t *testing.T) {
 	}
 
 	accesstokentest.Run(t, func(t *testing.T) accesstokentest.Store {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+// TestSessionConformance runs the session store suite.
+func TestSessionConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	sessiontest.Run(t, func(t *testing.T) sessiontest.Store {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+// TestNamespacePrincipalConformance runs the suite of the principals of a
+// namespace.
+func TestNamespacePrincipalConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	principaltest.RunNamespace(t, func(t *testing.T) principaltest.NamespaceStore {
 		t.Helper()
 
 		return open(t, base)
@@ -293,6 +343,18 @@ func TestAuditChainConformance(t *testing.T) {
 					t.Fatalf("change entry %d: %v", seq, err)
 				}
 			},
+			Reopen: func(t *testing.T) audittest.ChainStore {
+				t.Helper()
+
+				second, err := postgres.Open(t.Context(), schemaURL)
+				if err != nil {
+					t.Fatalf("reopen store: %v", err)
+				}
+
+				t.Cleanup(second.Close)
+
+				return second
+			},
 		}
 	})
 }
@@ -315,6 +377,7 @@ func tamperAuditColumn(field string) (string, bool) {
 		"at_ms",
 		"sequence",
 		"changes",
+		"fence_version",
 		"value_path":
 		return field, true
 	default:
@@ -322,10 +385,10 @@ func tamperAuditColumn(field string) (string, bool) {
 	}
 }
 
-// tamperValue answers the parameter of the tamper hook for column: at_ms
-// and sequence are numbers, every other column is text.
+// tamperValue answers the parameter of the tamper hook for column: at_ms,
+// sequence and fence_version are numbers, every other column is text.
 func tamperValue(column string) string {
-	if column == "at_ms" || column == "sequence" {
+	if column == "at_ms" || column == "sequence" || column == "fence_version" {
 		return "$1::text::bigint"
 	}
 
@@ -423,6 +486,36 @@ func TestWorkspaceConformance(t *testing.T) {
 		t.Helper()
 
 		return openAuditedWorkspaces(t, base)
+	})
+}
+
+func TestIPAllowlistConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunIPAllowlist(t, func(t *testing.T) storetest.IPAllowlistStore {
+		t.Helper()
+
+		return open(t, base)
+	})
+}
+
+func TestNamespacePagingConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunNamespacePaging(t, func(t *testing.T) storetest.PagingStore {
+		t.Helper()
+
+		return open(t, base)
 	})
 }
 
@@ -589,6 +682,9 @@ var (
 	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
 )
 
+// errNoJournalCount reports a wrapped store without the journaled count.
+var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
+
 // openUncounted returns a store in a fresh schema of the database at base
 // that the uncounted-checkpoint case can NULL through SQL.
 func openUncounted(t *testing.T, base string) *uncountedStore {
@@ -604,6 +700,24 @@ func openUncounted(t *testing.T, base string) *uncountedStore {
 	t.Cleanup(s.Close)
 
 	return &uncountedStore{UpdatesStore: s, url: schemaURL, t: t}
+}
+
+// CountRunningJournaledUpdates forwards to the wrapped store, whose method
+// the embedded UpdatesStore interface hides.
+func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	counter, ok := s.UpdatesStore.(interface {
+		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("count running journaled updates: %w", errNoJournalCount)
+	}
+
+	count, err := counter.CountRunningJournaledUpdates(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count running journaled updates: %w", err)
+	}
+
+	return count, nil
 }
 
 // NullifyResourceCount implements storetest.CountNullifier.
@@ -649,6 +763,11 @@ func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) erro
 
 // List forwards to the audit list of the wrapped store, which the embedded
 // interface hides, so the delete case can read the entry of a delete.
+// Inner implements storetest.Wrapper.
+func (s *uncountedStore) Inner() any {
+	return s.UpdatesStore
+}
+
 func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
@@ -2326,6 +2445,17 @@ func BenchmarkPrincipalLists(b *testing.B) {
 	}
 
 	principaltest.Bench(b, open(b, base))
+}
+
+// BenchmarkCallerGrants measures the first page of the grants of a caller
+// at the scale of accesstest.BenchCallerGrants.
+func BenchmarkCallerGrants(b *testing.B) {
+	base := os.Getenv(envURL)
+	if base == "" {
+		b.Skipf("set %s to run the PostgreSQL benchmarks", envURL)
+	}
+
+	accesstest.BenchCallerGrants(b, open(b, base))
 }
 
 // BenchmarkAuthorizer measures one decision and one list-objects at the

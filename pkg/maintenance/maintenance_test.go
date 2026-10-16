@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -130,11 +131,29 @@ func (f *fakeStacks) ListStacks(_ context.Context, _ stack.Filter) ([]stack.Stac
 	return append([]stack.Stack(nil), f.stacks...), nil
 }
 
-func (*fakeStacks) DeleteStack(context.Context, stack.Ref, namespace.Fence, stack.DeleteGuard, audit.Entry) error {
+func (*fakeStacks) DeleteStack(
+	context.Context,
+	stack.Ref,
+	namespace.Fence,
+	stack.DeleteGuard,
+	inventory.Deletion,
+) error {
 	return stack.ErrNotFound
 }
 
-func (*fakeStacks) ForceDeleteStack(context.Context, stack.Ref, namespace.Fence, audit.Entry) error {
+func (*fakeStacks) ForceDeleteStack(context.Context, stack.Ref, namespace.Fence, inventory.Deletion) error {
+	return stack.ErrNotFound
+}
+
+// RestoreStack implements stack.Store; this fake holds no deleted stack.
+func (*fakeStacks) RestoreStack(
+	_ context.Context, _ stack.ID, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) (stack.Ref, error) {
+	return stack.Ref{}, stack.ErrNotFound
+}
+
+// PurgeStack implements stack.Store; this fake holds no deleted stack.
+func (*fakeStacks) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ time.Time, _ audit.Entry) error {
 	return stack.ErrNotFound
 }
 
@@ -300,7 +319,27 @@ func (f *fakeWorkspaces) SaveWorkspace(
 }
 
 // DeleteWorkspace implements workspace.Store.
-func (*fakeWorkspaces) DeleteWorkspace(context.Context, workspace.Ref, namespace.Fence, audit.Entry) error {
+func (*fakeWorkspaces) DeleteWorkspace(context.Context, workspace.Ref, namespace.Fence, inventory.Deletion) error {
+	return workspace.ErrNotFound
+}
+
+// RestoreWorkspace implements workspace.Store; this fake holds no deleted
+// workspace.
+func (*fakeWorkspaces) RestoreWorkspace(
+	_ context.Context, _ workspace.ID, _ workspace.Name, _ namespace.Fence, _ audit.Entry,
+) (workspace.Ref, error) {
+	return workspace.Ref{}, workspace.ErrNotFound
+}
+
+// PurgeWorkspace implements workspace.Store; this fake holds no deleted
+// workspace.
+func (*fakeWorkspaces) PurgeWorkspace(
+	_ context.Context,
+	_ workspace.ID,
+	_ namespace.Fence,
+	_ time.Time,
+	_ audit.Entry,
+) error {
 	return workspace.ErrNotFound
 }
 
@@ -453,7 +492,7 @@ func newFixtureWith(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -471,6 +510,7 @@ func newFixtureWith(
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -486,6 +526,7 @@ func newFixtureWith(
 		Now:                nil,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)
@@ -501,6 +542,7 @@ func newFixtureWith(
 		Stacks:     stacks,
 		Updates:    updates,
 		Workspaces: workspaces,
+		Hold:       nil,
 	})
 	if err != nil {
 		t.Fatalf("maintenance service: %v", err)
@@ -598,7 +640,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: f.stacks, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -616,6 +658,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -631,6 +674,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Now:                nil,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
+		Retention:          0,
 	})
 	if err != nil {
 		t.Fatalf("workspace service: %v", err)
@@ -642,6 +686,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Stacks:     stacks,
 		Updates:    updates,
 		Workspaces: workspaces,
+		Hold:       nil,
 	}
 
 	cases := []struct {
@@ -703,6 +748,71 @@ func TestEnterAndLeave(t *testing.T) {
 		t.Fatalf("leave again: %v", err)
 	}
 }
+
+func TestLeaveRefusedWhileHeld(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	var (
+		mu      sync.Mutex
+		held    = true
+		holdErr error
+	)
+
+	svc, err := maintenance.NewService(maintenance.Config{
+		Store:      f.state,
+		Namespaces: f.namespaces,
+		Stacks:     f.stackSvc,
+		Updates:    f.updateSvc,
+		Workspaces: f.workspaceSvc,
+		Hold: func(context.Context) (bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			return held, holdErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("maintenance service: %v", err)
+	}
+
+	if err := svc.Leave(ctx); err != nil {
+		t.Fatalf("leave in normal operation: %v, want nil: a hold keeps only maintenance mode", err)
+	}
+
+	if _, err := svc.Enter(ctx, false); err != nil {
+		t.Fatalf("enter: %v", err)
+	}
+
+	if err := svc.Leave(ctx); !errors.Is(err, maintenance.ErrHeld) {
+		t.Fatalf("leave while held: %v, want ErrHeld", err)
+	}
+
+	mu.Lock()
+	held, holdErr = false, errTestHold
+	mu.Unlock()
+
+	if err := svc.Leave(ctx); !errors.Is(err, errTestHold) {
+		t.Fatalf("leave with a failed hold: %v, want the hold error", err)
+	}
+
+	if got, err := svc.Get(ctx); err != nil || got != maintenance.StateMaintenance {
+		t.Fatalf("state after refused leaves = %q, %v, want maintenance", got, err)
+	}
+
+	mu.Lock()
+	holdErr = nil
+	mu.Unlock()
+
+	if err := svc.Leave(ctx); err != nil {
+		t.Fatalf("leave after the hold ends: %v", err)
+	}
+}
+
+// errTestHold is the failure of the hold in TestLeaveRefusedWhileHeld.
+var errTestHold = errors.New("hold unavailable")
 
 func TestEnterRefusesRunningUpdate(t *testing.T) {
 	t.Parallel()
@@ -1227,6 +1337,7 @@ func TestTwoInstancesKeepForceEnter(t *testing.T) {
 		Stacks:     f.stackSvc,
 		Updates:    f.updateSvc,
 		Workspaces: f.workspaceSvc,
+		Hold:       nil,
 	})
 	if err != nil {
 		t.Fatalf("second maintenance service: %v", err)

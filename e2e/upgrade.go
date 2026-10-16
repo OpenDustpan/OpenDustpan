@@ -162,9 +162,30 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 		rec:               rec,
 		deltaCutoff:       0,
 		disableJournaling: false,
+		ipAllowlists:      false,
 	}
 
 	return newBinaryEnvWithBin(ctx, in, binPath)
+}
+
+// plainBackendConfig returns the backend settings of a binary environment
+// with no blob store, no backup target and every feature switch off.
+func plainBackendConfig(binPath, dbURL, blobDir, tokens string, cert backendCert) backendConfig {
+	return backendConfig{
+		disableJournaling: false,
+		ipAllowlists:      false,
+		bin:               binPath,
+		dbURL:             dbURL,
+		blobDir:           blobDir,
+		blobStore:         "",
+		s3Endpoint:        "",
+		backupTarget:      "",
+		certFile:          cert.cert,
+		keyFile:           cert.key,
+		tokens:            tokens,
+		deltaCutoff:       0,
+		auditChain:        "",
+	}
 }
 
 // reserveDatabase returns a fresh database URL without opening it: a
@@ -212,19 +233,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		Namespace,
 	}, os.Environ())
 
-	cfg := backendConfig{
-		disableJournaling: false,
-		bin:               binPath,
-		dbURL:             dbURL,
-		blobDir:           blobDir,
-		blobStore:         "",
-		s3Endpoint:        "",
-		backupTarget:      "",
-		certFile:          cert.cert,
-		keyFile:           cert.key,
-		tokens:            in.token + "," + in.tokenB,
-		deltaCutoff:       0,
-	}
+	cfg := plainBackendConfig(binPath, dbURL, blobDir, in.token+","+in.tokenB, cert)
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 	proxy := startRecordingProxy(tb, in.rec, backendURL)
 
@@ -278,6 +287,12 @@ func (e *Env) SetServerBinary(path string) {
 	e.backendCfg.bin = path
 }
 
+// SetAuditChain sets the --audit-chain value that the next StartServer
+// uses: on or off.
+func (e *Env) SetAuditChain(setting string) {
+	e.backendCfg.auditChain = setting
+}
+
 // TryServe runs binPath `serve` once on the database, blob directory,
 // certificate and port of the environment and returns what it printed. The
 // environment server must be stopped first. A refusal exits at once with a
@@ -295,7 +310,7 @@ func (e *Env) TryServe(ctx context.Context, tb testing.TB, binPath string) Binar
 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, binPath, serveArgs(cfg, e.backendPort)...)
-	cmd.Env = backendEnv(cfg.tokens)
+	cmd.Env = backendServeEnv(cfg.tokens, cfg.dbURL)
 
 	var stdout, stderr bytes.Buffer
 

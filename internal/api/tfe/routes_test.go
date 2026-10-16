@@ -205,6 +205,7 @@ func newObjectHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
@@ -407,16 +408,16 @@ func (stubWorkspaces) Upload(
 // wrong one unless they override it.
 func (stubWorkspaces) CheckUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return nil
+) (namespace.Name, error) {
+	return "acme", nil
 }
 
 // CheckJSONRenderingUpload allows every capability: route tests never reach
 // it with a wrong one unless they override it.
 func (stubWorkspaces) CheckJSONRenderingUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return nil
+) (namespace.Name, error) {
+	return "acme", nil
 }
 
 // DiscardJSONRendering denies every rendering upload: route tests never
@@ -767,6 +768,7 @@ func newTestHandler(t *testing.T) *tfe.Handler {
 	handler, err := tfe.NewHandlerWithRoutes(tfe.Config{
 		Authenticator:  stubAuthenticator{},
 		Authorizer:     stubAuthorizer{},
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
@@ -789,6 +791,7 @@ func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *tfe.Handler {
 	handler, err := tfe.NewHandlerWithRoutes(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
@@ -813,6 +816,7 @@ func newProductionHandler(t *testing.T) *tfe.Handler {
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  stubAuthenticator{},
 		Authorizer:     stubAuthorizer{},
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     stubWorkspaces{},
@@ -1605,14 +1609,14 @@ func (errorWorkspaces) Upload(
 
 func (errorWorkspaces) CheckUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return nil
+) (namespace.Name, error) {
+	return "acme", nil
 }
 
 func (errorWorkspaces) CheckJSONRenderingUpload(
 	_ context.Context, _ workspace.StateVersionID, _ token.Token,
-) error {
-	return nil
+) (namespace.Name, error) {
+	return "acme", nil
 }
 
 func (errorWorkspaces) DiscardJSONRendering(
@@ -1676,6 +1680,7 @@ func TestErrorHidesInternalDetail(t *testing.T) {
 	handler, err := tfe.NewHandlerWithRoutes(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		AddressGate:    nil,
 		Logger:         slog.New(slog.DiscardHandler),
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     errorWorkspaces{},

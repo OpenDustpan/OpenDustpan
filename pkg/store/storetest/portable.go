@@ -58,6 +58,8 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "peek refuses an unknown wrapper", test: testPortablePeekUnknownWrapper},
 		{name: "peek refuses a corrupt key file", test: testPortablePeekCorrupt},
 		{name: "a soft delete keeps every child row of the stack", test: testPortableDeleteKeepsChildren},
+		{name: "a purge removes every row of the stack", test: testPortablePurgeRemovesChildren},
+		{name: "a purge removes every row of the workspace", test: testPortablePurgeRemovesWorkspaceRows},
 	}
 
 	for _, tc := range cases {
@@ -395,7 +397,7 @@ func testPortableJournalBlob(t *testing.T, newStore PortableFactory) {
 
 	src := newStore(t)
 	f := newFixture(t, src)
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 
 	row := journalRow(t, src, u, 7, 1)
 	row.Size = 33

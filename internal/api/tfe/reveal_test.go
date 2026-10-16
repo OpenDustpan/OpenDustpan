@@ -201,6 +201,7 @@ func newRevealHandler(
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     authz,
+		AddressGate:    nil,
 		Logger:         logger,
 		Namespaces:     newTestNamespaces(t),
 		Workspaces:     revealWorkspaces{stubWorkspaces: stubWorkspaces{}},

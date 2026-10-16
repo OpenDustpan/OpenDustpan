@@ -53,7 +53,9 @@ const (
 	backendCertLifetime = 24 * time.Hour
 	// certSerialBits sets the size of the generated certificate serial.
 	certSerialBits = 128
-	// databaseFlag names the database flag serve takes.
+	// databaseFlag names the database flag. Serve reads the database
+	// from DUSTPAN_DATABASE instead, because it refuses a password in
+	// the flag. Other subcommands still take the flag.
 	databaseFlag = "--database"
 	// regionFlag names the region flag serve takes.
 	regionFlag = "--region"
@@ -90,6 +92,9 @@ type envInput struct {
 	// disableJournaling turns Pulumi journaling off on the server, so each
 	// update answers journalVersion 0.
 	disableJournaling bool
+	// ipAllowlists turns IP allowlists on for the server and applies them to
+	// the bootstrap admin token too.
+	ipAllowlists bool
 }
 
 // backendConfig groups the settings of one backend process.
@@ -110,6 +115,13 @@ type backendConfig struct {
 	// disableJournaling passes --disable-pulumi-journaling when set, so an
 	// inherited DUSTPAN_DISABLE_PULUMI_JOURNALING never changes a test backend.
 	disableJournaling bool
+	// ipAllowlists passes --ip-allowlists with
+	// --ip-allowlists-include-bootstrap when set, so the binary server checks
+	// the lists of every namespace, including for the bootstrap admin token.
+	ipAllowlists bool
+	// auditChain passes --audit-chain with this value when set, so a test
+	// restarts the server with another setting of the audit chain.
+	auditChain string
 }
 
 // backendCert holds the certificate and key paths of one backend.
@@ -305,6 +317,7 @@ func backendEnv(tokens string) []string {
 
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "DUSTPAN_ADMIN_TOKEN=") ||
+			strings.HasPrefix(kv, "DUSTPAN_DATABASE=") ||
 			strings.HasPrefix(kv, "DUSTPAN_KEY_ENCRYPTION_KEY=") ||
 			strings.HasPrefix(kv, "DUSTPAN_KEY_ENCRYPTION_KEY_FILE=") ||
 			strings.HasPrefix(kv, "AWS_ACCESS_KEY_ID=") ||
@@ -318,6 +331,13 @@ func backendEnv(tokens string) []string {
 	out = append(out, "DUSTPAN_ADMIN_TOKEN="+tokens, "DUSTPAN_KEY_ENCRYPTION_KEY="+key)
 
 	return append(out, s3CredentialEnv()...)
+}
+
+// backendServeEnv returns the environment for a `serve` child process: the
+// backend environment with DUSTPAN_DATABASE set to dbURL. Serve always reads
+// the database from the variable, because it refuses a password in the flag.
+func backendServeEnv(tokens, dbURL string) []string {
+	return append(backendEnv(tokens), "DUSTPAN_DATABASE="+dbURL)
 }
 
 // s3CredentialEnv maps the S3 test credentials into the child environment.
@@ -380,13 +400,14 @@ type binaryHandle struct {
 // With an S3 blob store the arguments name --blob-store with --s3-endpoint
 // instead of --blob-dir, so the server keeps its live blobs on the
 // S3-compatible server. Credentials never join them: they travel in the
-// environment only.
+// environment only. The database URL never joins them either: serve reads it
+// from DUSTPAN_DATABASE in the backend environment, because serve refuses a
+// password in the flag.
 // The delta cutoff always joins them explicitly, so the flag default never
 // changes a test backend.
 func serveArgs(cfg backendConfig, port string) []string {
 	args := []string{
 		"serve",
-		databaseFlag, cfg.dbURL,
 		"--listen", "127.0.0.1:" + port,
 		"--tls-cert", cfg.certFile,
 		"--tls-key", cfg.keyFile,
@@ -398,6 +419,13 @@ func serveArgs(cfg backendConfig, port string) []string {
 		args = append(args, disableJournalingFlag)
 	}
 
+	if cfg.ipAllowlists {
+		// The recording proxy on loopback fronts the binary, so the binary
+		// trusts it to name the client address in X-Forwarded-For.
+		args = append(args, "--ip-allowlists", "--ip-allowlists-include-bootstrap",
+			"--trusted-proxies", "127.0.0.1/32")
+	}
+
 	if cfg.blobStore != "" {
 		args = append(args, "--blob-store", cfg.blobStore, "--s3-endpoint", cfg.s3Endpoint)
 	} else {
@@ -406,6 +434,10 @@ func serveArgs(cfg backendConfig, port string) []string {
 
 	if cfg.backupTarget != "" {
 		args = append(args, "--backup-target", cfg.backupTarget)
+	}
+
+	if cfg.auditChain != "" {
+		args = append(args, "--audit-chain", cfg.auditChain)
 	}
 
 	return args
@@ -423,7 +455,7 @@ func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, 
 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, cfg.bin, serveArgs(cfg, port)...)
-	cmd.Env = backendEnv(cfg.tokens)
+	cmd.Env = backendServeEnv(cfg.tokens, cfg.dbURL)
 
 	var out lockedBuffer
 
@@ -544,6 +576,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 
 	cfg := backendConfig{
 		disableJournaling: false,
+		ipAllowlists:      false,
 		bin:               e.binPath,
 		dbURL:             dbURL,
 		blobDir:           blobDir,
@@ -554,6 +587,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 		keyFile:           cert.key,
 		tokens:            e.backendCfg.tokens,
 		deltaCutoff:       0,
+		auditChain:        "",
 	}
 
 	handle := launchBinaryBackend(ctx, tb, cfg, "0")
@@ -798,6 +832,9 @@ func startRecordingProxy(tb testing.TB, rec *Recorder, backendURL string) *httpt
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
 			r.Out.Host = r.In.Host
+			// The backend reads the client address of a request from this
+			// header, when it trusts the proxy (--trusted-proxies).
+			r.SetXForwarded()
 		},
 		Transport: transport,
 	}
@@ -918,6 +955,8 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		tokens:            in.token + "," + in.tokenB,
 		deltaCutoff:       in.deltaCutoff,
 		disableJournaling: in.disableJournaling,
+		ipAllowlists:      in.ipAllowlists,
+		auditChain:        "",
 	}
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 

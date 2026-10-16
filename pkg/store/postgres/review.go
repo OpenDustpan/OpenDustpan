@@ -20,23 +20,25 @@ var _ access.ReviewStore = (*Store)(nil)
 // agree.
 func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]access.ReviewRow, int64, error) {
 	p := db.ReviewGrantsParams{
-		Principal:       rq.Principal,
-		History:         rq.History,
-		ToMs:            rq.ToMs,
-		FromMs:          rq.FromMs,
-		AllGrants:       rq.Scope.All,
-		Namespace:       rq.Scope.Namespace,
-		Target:          scopeTarget(rq.Scope.Object),
-		Containers:      nonNil(rq.Scope.Containers),
-		ContainerRoles:  nonNil(rq.Scope.ContainerRoles),
-		Subject:         rq.Subject,
-		AfterAtMs:       rq.After.AtMs,
-		AfterID:         rq.After.ID,
-		AfterMemberAtMs: rq.After.MemberAtMs,
-		AfterMemberID:   rq.After.MemberID,
-		AsOfMs:          rq.AsOfMs,
-		Expand:          rq.Expand,
-		RowLimit:        int64(rq.Limit),
+		Principal:           rq.Principal,
+		History:             rq.History,
+		ToMs:                rq.ToMs,
+		FromMs:              rq.FromMs,
+		AllGrants:           rq.Scope.All,
+		Namespace:           rq.Scope.Namespace,
+		Target:              scopeTarget(rq.Scope.Object),
+		Containers:          nonNil(rq.Scope.Containers),
+		ContainerRoles:      nonNil(rq.Scope.ContainerRoles),
+		TokenNamespace:      rq.Scope.TokenNamespace,
+		TokenNamespaceRoles: nonNil(rq.Scope.TokenNamespaceRoles),
+		Subject:             rq.Subject,
+		AfterAtMs:           rq.After.AtMs,
+		AfterID:             rq.After.ID,
+		AfterMemberAtMs:     rq.After.MemberAtMs,
+		AfterMemberID:       rq.After.MemberID,
+		AsOfMs:              rq.AsOfMs,
+		Expand:              rq.Expand,
+		RowLimit:            int64(rq.Limit),
 	}
 
 	var (
@@ -61,10 +63,61 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 		total, err = q.CountReviewGrants(ctx, db.CountReviewGrantsParams{
 			Principal: p.Principal, Expand: p.Expand, History: p.History, ToMs: p.ToMs, FromMs: p.FromMs,
 			AsOfMs: p.AsOfMs, AllGrants: p.AllGrants, Namespace: p.Namespace, Target: p.Target,
-			Containers: p.Containers, ContainerRoles: p.ContainerRoles, Subject: p.Subject,
+			Containers: p.Containers, ContainerRoles: p.ContainerRoles, TokenNamespace: p.TokenNamespace,
+			TokenNamespaceRoles: p.TokenNamespaceRoles, Subject: p.Subject,
 		})
 		if err != nil {
 			return fmt.Errorf("count review rows: %w", err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return out, total, nil
+}
+
+// CallerGrants implements access.ReviewStore. It reads the page and, when
+// asked, the count in one REPEATABLE READ read-only transaction, so they
+// agree.
+func (s *Store) CallerGrants(ctx context.Context, cq access.CallerGrantsQuery) ([]access.ReviewRow, int64, error) {
+	p := db.CallerGrantsParams{
+		AsOfMs: cq.AsOfMs, Principal: cq.Principal, Groups: nonNil(cq.Groups), AfterAtMs: cq.After.AtMs,
+		AfterID: cq.After.ID, AfterMemberAtMs: cq.After.MemberAtMs, AfterMemberID: cq.After.MemberID,
+		RowLimit: int64(cq.Limit),
+	}
+
+	var (
+		out   []access.ReviewRow
+		total int64
+	)
+
+	err := s.inSnapshotTx(ctx, func(q *db.Queries) error {
+		rows, listErr := q.CallerGrants(ctx, p)
+		if listErr != nil {
+			return fmt.Errorf("select caller grants: %w", listErr)
+		}
+
+		review := make([]db.ReviewGrantsRow, 0, len(rows))
+		for i := range rows {
+			review = append(review, db.ReviewGrantsRow(rows[i]))
+		}
+
+		if out, listErr = reviewRows(review); listErr != nil {
+			return listErr
+		}
+
+		if !cq.Count {
+			return nil
+		}
+
+		total, listErr = q.CountCallerGrants(ctx, db.CountCallerGrantsParams{
+			Principal: p.Principal, AsOfMs: p.AsOfMs, Groups: p.Groups,
+		})
+		if listErr != nil {
+			return fmt.Errorf("count caller grants: %w", listErr)
 		}
 
 		return nil
@@ -93,12 +146,16 @@ func reviewRows(rows []db.ReviewGrantsRow) ([]access.ReviewRow, error) {
 		}
 
 		row := access.ReviewRow{
-			RevokedAt:   optionalTime(r.RevokedAtMs),
-			MemberCount: nil,
-			Via:         nil,
-			SubjectName: r.SubjectName,
-			RevokedBy:   r.RevokedBy,
-			Grant:       g,
+			RevokedAt:    optionalTime(r.RevokedAtMs),
+			LastAccessAt: nil,
+			MemberCount:  nil,
+			Via:          nil,
+			SubjectName:  r.SubjectName,
+			RevokedBy:    r.RevokedBy,
+			Grant:        g,
+			// The service fills the last access with one lookup for the
+			// page.
+			LastAccessTracked: false,
 		}
 
 		if g.Subject.Kind == access.SubjectGroup {
@@ -217,4 +274,25 @@ func (s *Store) reviewWorkspaces(ctx context.Context, ids []string, out map[stri
 	}
 
 	return nil
+}
+
+// LastAccess implements access.ReviewStore: the latest last-use time of
+// the access tokens of each given principal. A principal with no used
+// token is not in the map.
+func (s *Store) LastAccess(ctx context.Context, principalIDs []string) (map[string]time.Time, error) {
+	out := make(map[string]time.Time, len(principalIDs))
+	if len(principalIDs) == 0 {
+		return out, nil
+	}
+
+	rows, err := s.queries.LastAccessByPrincipals(ctx, principalIDs)
+	if err != nil {
+		return nil, fmt.Errorf("read last access: %w", err)
+	}
+
+	for i := range rows {
+		out[rows[i].PrincipalID] = codec.FromMillis(rows[i].LastUsedAtMs)
+	}
+
+	return out, nil
 }

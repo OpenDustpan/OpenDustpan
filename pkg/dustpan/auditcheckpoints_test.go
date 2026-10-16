@@ -2,6 +2,7 @@ package dustpan_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"regexp"
 	"strings"
@@ -10,18 +11,21 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-// TestAuditCheckpointsAreWrittenAndChecked proves ADR 60 decision 18: with
-// the chain and checkpoints on, the check at start signs the last hash of
-// each scope into the blob store. A start with another key finds that the
-// checkpoint does not match.
+// TestAuditCheckpointsAreWrittenAndChecked proves that with the chain and
+// checkpoints on, the check at start signs the last hash of each scope into
+// the blob store. A start with another key finds that the checkpoint does
+// not match.
 func TestAuditCheckpointsAreWrittenAndChecked(t *testing.T) {
 	t.Parallel()
 
 	st := openChainStore(t)
-	blobs := newChainBlobs(t)
+	blobs := openCheckpointBlobs(t)
 	acme := createChainNamespace(t, st)
 	appendChainEntry(t, st, acme, "req-1")
 
@@ -30,17 +34,16 @@ func TestAuditCheckpointsAreWrittenAndChecked(t *testing.T) {
 		t.Fatalf("checkpoint key: %v", err)
 	}
 
-	_, stop := runAuditServer(t, st, blobs,
+	first := runCheckpointServer(t, st, blobs,
 		dustpan.WithAuditChain(audit.ChainOn), dustpan.WithAuditCheckpoints(newTestSigner(t, 1)))
 	waitForBlob(t, blobs, key)
-	stop()
+	first.stop()
 
-	srv, stopOther := runAuditServer(t, st, blobs,
+	other := runCheckpointServer(t, st, blobs,
 		dustpan.WithAuditChain(audit.ChainOn), dustpan.WithAuditCheckpoints(newTestSigner(t, 2)))
-	// Every scope that the first key signed fails: acme, and @server when
-	// the first server signed it before it stopped.
-	waitForInvalidScopes(t, srv)
-	stopOther()
+	// The scope that the first key signed fails: acme.
+	waitForInvalidScopes(t, other)
+	other.stop()
 
 	// With the first key as a verify key, the checkpoint matches again.
 	rotated := newTestSigner(t, 2)
@@ -48,10 +51,10 @@ func TestAuditCheckpointsAreWrittenAndChecked(t *testing.T) {
 		t.Fatalf("add verify key: %v", err)
 	}
 
-	srv, stopRotated := runAuditServer(t, st, blobs,
+	rotatedSrv := runCheckpointServer(t, st, blobs,
 		dustpan.WithAuditChain(audit.ChainOn), dustpan.WithAuditCheckpoints(rotated))
-	waitForMetricLine(t, srv, "dustpan_audit_chain_invalid 0")
-	stopRotated()
+	waitForMetricLine(t, rotatedSrv.srv, "dustpan_audit_chain_invalid 0")
+	rotatedSrv.stop()
 }
 
 // TestAuditCheckpointsNeedTheChain proves that checkpoints with the chain
@@ -60,8 +63,8 @@ func TestAuditCheckpointsNeedTheChain(t *testing.T) {
 	t.Parallel()
 
 	st := openChainStore(t)
-	srv := newAuditServer(t, st, newChainBlobs(t),
-		dustpan.WithAuditChain(audit.ChainAuto), dustpan.WithAuditCheckpoints(newTestSigner(t, 1)))
+	srv, _ := newCheckpointServer(t, st, openCheckpointBlobs(t),
+		dustpan.WithAuditChain(audit.ChainOff), dustpan.WithAuditCheckpoints(newTestSigner(t, 1)))
 
 	if err := srv.Run(t.Context()); !errors.Is(err, dustpan.ErrCheckpointsNeedChain) {
 		t.Fatalf("run: got %v, want ErrCheckpointsNeedChain", err)
@@ -78,6 +81,100 @@ func newTestSigner(t *testing.T, b byte) *audit.Signer {
 	}
 
 	return signer
+}
+
+// openCheckpointBlobs opens a blob store in a temporary directory that the
+// test closes.
+func openCheckpointBlobs(t *testing.T) *fs.Store {
+	t.Helper()
+
+	blobs, err := fs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	return blobs
+}
+
+// newCheckpointServer configures a server on st and blobs with extra
+// options and answers it with its address. The caller runs it.
+func newCheckpointServer(
+	t *testing.T, st *sqlite.Store, blobs blob.Store, extra ...dustpan.Option,
+) (*dustpan.Server, string) {
+	t.Helper()
+
+	authn, err := identity.NewStaticToken("admin", adminToken)
+	if err != nil {
+		t.Fatalf("authenticator: %v", err)
+	}
+
+	ln := openTestListener(t)
+
+	opts := []dustpan.Option{
+		dustpan.WithRegion(region),
+		dustpan.WithNamespaceStore(st),
+		dustpan.WithStackStore(st),
+		dustpan.WithUpdateStore(st),
+		dustpan.WithCheckpointStore(st),
+		dustpan.WithEventStore(st),
+		dustpan.WithSecretKeyStore(st),
+		dustpan.WithSecretWrapper(testWrapper(t)),
+		dustpan.WithWorkspaceStore(st),
+		dustpan.WithStateStore(st),
+		dustpan.WithBlobStore(blobs),
+		dustpan.WithInventoryReader(st),
+		dustpan.WithAuthenticator(authn),
+		dustpan.WithListener(ln),
+	}
+
+	srv, err := dustpan.NewServer(append(opts, extra...)...)
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	return srv, "http://" + ln.Addr().String()
+}
+
+// runCheckpointServer starts a server on st and blobs with extra options,
+// waits until it serves, and answers it. The test stops it at its end.
+func runCheckpointServer(
+	t *testing.T, st *sqlite.Store, blobs blob.Store, extra ...dustpan.Option,
+) chainServer {
+	t.Helper()
+
+	srv, base := newCheckpointServer(t, st, blobs, extra...)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := runServer(ctx, srv)
+
+	stopped := false
+
+	stop := func() {
+		if stopped {
+			return
+		}
+
+		stopped = true
+
+		cancel()
+
+		if runErr := <-done; runErr != nil {
+			t.Errorf("run: %v", runErr)
+		}
+	}
+
+	t.Cleanup(stop)
+
+	c := chainServer{srv: srv, stop: stop, base: base}
+	waitForLive(t, c)
+
+	return c
 }
 
 // waitForBlob waits until blobs holds an object under key.
@@ -110,7 +207,7 @@ func waitForBlob(t *testing.T, blobs blob.Store, key blob.Key) {
 
 // waitForInvalidScopes waits until the chain check of srv counts at least
 // one invalid scope, or fails the test.
-func waitForInvalidScopes(t *testing.T, srv *dustpan.Server) {
+func waitForInvalidScopes(t *testing.T, srv chainServer) {
 	t.Helper()
 
 	line := regexp.MustCompile(`(?m)^dustpan_audit_chain_invalid [1-9]\d*$`)
@@ -118,7 +215,7 @@ func waitForInvalidScopes(t *testing.T, srv *dustpan.Server) {
 
 	for {
 		var out strings.Builder
-		if err := srv.Metrics().Write(&out); err != nil {
+		if err := srv.srv.Metrics().Write(&out); err != nil {
 			t.Fatalf("write metrics: %v", err)
 		}
 

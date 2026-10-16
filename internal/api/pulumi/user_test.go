@@ -16,6 +16,7 @@ import (
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -95,13 +96,30 @@ func (m *memStackStore) DeleteStack(
 	_ stack.Ref,
 	_ namespace.Fence,
 	_ stack.DeleteGuard,
-	_ audit.Entry,
+	_ inventory.Deletion,
 ) error {
 	return errNotUsed
 }
 
-func (m *memStackStore) ForceDeleteStack(_ context.Context, _ stack.Ref, _ namespace.Fence, _ audit.Entry) error {
+func (m *memStackStore) ForceDeleteStack(
+	_ context.Context,
+	_ stack.Ref,
+	_ namespace.Fence,
+	_ inventory.Deletion,
+) error {
 	return errNotUsed
+}
+
+// RestoreStack implements stack.Store; this fake holds no deleted stack.
+func (*memStackStore) RestoreStack(
+	_ context.Context, _ stack.ID, _ stack.Name, _ namespace.Fence, _ audit.Entry,
+) (stack.Ref, error) {
+	return stack.Ref{}, stack.ErrNotFound
+}
+
+// PurgeStack implements stack.Store; this fake holds no deleted stack.
+func (*memStackStore) PurgeStack(_ context.Context, _ stack.ID, _ namespace.Fence, _ time.Time, _ audit.Entry) error {
+	return stack.ErrNotFound
 }
 
 func (m *memStackStore) UpdateStackTags(
@@ -164,7 +182,7 @@ func newUserHandler(
 	}
 
 	stacks, err := stack.NewService(
-		stack.Config{Store: stStore, Namespaces: namespaces, Now: nil, State: nil},
+		stack.Config{Store: stStore, Namespaces: namespaces, Now: nil, State: nil, Retention: 0},
 	)
 	if err != nil {
 		t.Fatalf("stack service: %v", err)
@@ -178,6 +196,7 @@ func newUserHandler(
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
 		MaxBodyBytesInFlight:    0,

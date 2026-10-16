@@ -54,24 +54,36 @@ import (
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/metrics"
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // ErrMissingOption reports that a required option was not provided.
 var ErrMissingOption = errors.New("missing required option")
+
+// ErrInvalidOption reports an option with a value that the server refuses.
+var ErrInvalidOption = errors.New("invalid option")
+
+// MinSoftDeleteRetention is the shortest soft-delete retention that
+// WithSoftDeleteRetention accepts (ADR 47, decision 2). There is no maximum.
+const MinSoftDeleteRetention = time.Hour
 
 // The secret service seals OpenTofu state blobs and outputs documents behind
 // the workspace Sealer port.
@@ -143,24 +155,37 @@ type settings struct {
 	maxCheckpointBytes   int
 	maxSecretBatchBytes  int
 	maxStateBytes        int64
+	softDeleteRetention  time.Duration
 	maxBodyBytesInFlight int64
 	// checkpointDeltaCutoff is the checkpoint size in bytes from which the
 	// CLI sends delta uploads. Zero hides the delta capability.
 	checkpointDeltaCutoff int
+	backupTarget          blob.Store
+	backupTargetName      string
+	ipAllowlists          *ipAllowlistSettings
 	// disablePulumiJournaling turns Pulumi journaling off. See
 	// WithDisablePulumiJournaling.
 	disablePulumiJournaling bool
 	// auditChain is the hash chain setting. See WithAuditChain.
-	auditChain       audit.ChainSetting
-	backupTarget     blob.Store
-	backupTargetName string
+	auditChain audit.ChainSetting
 	// auditSinks receive a copy of each audit entry. See WithAuditSinks.
 	auditSinks []audit.ShipSink
+	// auditShipper ships to auditSinks. assemble sets it before it mounts
+	// the adapters, so the installation API lists it.
+	auditShipper *audit.Shipper
 	// beforeServe runs after the start-up checks and the listen, before
 	// the server serves. See WithBeforeServe.
 	beforeServe func(ctx context.Context) error
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
+}
+
+// ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
+// exemption switch and the list store (ADR 55, decision 8).
+type ipAllowlistSettings struct {
+	store            ipallow.Store
+	enabled          bool
+	includeBootstrap bool
 }
 
 // Option configures a Server.
@@ -350,6 +375,14 @@ func WithMaxSecretBatchBytes(n int) Option {
 	return func(o *settings) { o.maxSecretBatchBytes = n }
 }
 
+// WithSoftDeleteRetention sets how long a deleted stack or workspace stays
+// before its final delete (ADR 47, decision 2). Zero means the domain
+// default, inventory.DeletedRetention. Any other value below
+// MinSoftDeleteRetention makes NewServer fail with ErrInvalidOption.
+func WithSoftDeleteRetention(d time.Duration) Option {
+	return func(o *settings) { o.softDeleteRetention = d }
+}
+
 // WithMaxStateBytes bounds one OpenTofu state version. Zero means the domain default.
 func WithMaxStateBytes(n int64) Option {
 	return func(o *settings) { o.maxStateBytes = n }
@@ -374,6 +407,37 @@ func WithDisablePulumiJournaling(disabled bool) Option {
 // option the server advertises the default cutoff.
 func WithCheckpointDeltaCutoff(n int) Option {
 	return func(o *settings) { o.checkpointDeltaCutoff = n }
+}
+
+// WithIPAllowlists turns IP allowlists on when on is true. A namespace
+// that has a list then refuses requests from addresses outside it
+// (ADR 55, decision 8). Off by default.
+func WithIPAllowlists(on bool) Option {
+	return func(o *settings) { ipAllowlistConfig(o).enabled = on }
+}
+
+// WithIPAllowlistsIncludeBootstrap applies IP allowlists to the bootstrap
+// admin token too when on is true. Off by default: the bootstrap admin token
+// is exempt, so an administrator cannot lock themselves out.
+func WithIPAllowlistsIncludeBootstrap(on bool) Option {
+	return func(o *settings) { ipAllowlistConfig(o).includeBootstrap = on }
+}
+
+// WithIPAllowlistStore sets the IP allowlist persistence port. Required when
+// IP allowlists are on: every SQL adapter serves it from the same database
+// connection as the other ports.
+func WithIPAllowlistStore(s ipallow.Store) Option {
+	return func(o *settings) { ipAllowlistConfig(o).store = s }
+}
+
+// ipAllowlistConfig returns the mutable allowlist settings of o, creating
+// them when an Option runs on zero settings.
+func ipAllowlistConfig(o *settings) *ipAllowlistSettings {
+	if o.ipAllowlists == nil {
+		o.ipAllowlists = &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false}
+	}
+
+	return o.ipAllowlists
 }
 
 // WithBackupTarget sets the backup target that holds blobs/<key>,
@@ -407,13 +471,16 @@ type Server struct {
 	tlsCertFile     string
 	tlsKeyFile      string
 	observed        *metrics.ServerMetrics
-	chain           *chainDeps
-	chainOn         bool
+	// chain is the audit chain of the store, or nil when the store keeps
+	// its own chain.
+	chain *auditChain
 	// tokens runs the inactivity disable of access tokens and accounts on a
 	// schedule (ADR 53), or is nil when the store keeps no tokens.
 	tokens      *accesstoken.Service
 	shipper     *audit.Shipper
 	beforeServe func(ctx context.Context) error
+	// deleted runs the retention sweep of the deleted units on a schedule.
+	deleted *deletedSweeper
 }
 
 // services holds the domain services that NewServer wires together.
@@ -426,6 +493,16 @@ type services struct {
 	// tokens keeps the access tokens of the principals (ADR 53), or is nil
 	// when the store keeps none. NewServer sets it after newServices.
 	tokens *accesstoken.Service
+	// collections is the collection service (ADR 51), or nil when the store
+	// holds no collections. NewServer sets it after newServices.
+	collections *collection.Service
+	// deleted runs the retention sweep. assemble sets it, because
+	// it counts on the server metrics.
+	deleted *deletedSweeper
+	// access keeps the roles and grants (ADR 52), or is nil when the store
+	// keeps none. NewServer sets it after newServices. The installation API
+	// and the escalation check of the token service share it.
+	access *access.Service
 }
 
 // defaultSettings answers the settings of a server before its options.
@@ -460,13 +537,16 @@ func defaultSettings() *settings {
 		maxCheckpointBytes:      0,
 		maxSecretBatchBytes:     0,
 		maxStateBytes:           0,
+		softDeleteRetention:     0,
 		maxBodyBytesInFlight:    0,
 		backupTarget:            nil,
 		backupTargetName:        "",
 		beforeServe:             nil,
 		checkpointDeltaCutoff:   pulumi.DefaultCheckpointDeltaCutoff,
-		auditChain:              audit.ChainAuto,
+		auditChain:              audit.ChainOn,
+		ipAllowlists:            &ipAllowlistSettings{store: nil, enabled: false, includeBootstrap: false},
 		auditSinks:              nil,
+		auditShipper:            nil,
 		auditSigner:             nil,
 	}
 }
@@ -488,7 +568,7 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, authzErr
 	}
 
-	tokens, err := newTokenService(cfg)
+	grants, tokens, err := newIdentityServices(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +578,12 @@ func NewServer(opts ...Option) (*Server, error) {
 		return nil, err
 	}
 
-	svc.tokens = tokens
+	svc.tokens, svc.access = tokens, grants
+
+	svc.collections, err = newCollectionService(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	backups, err := newBackupService(cfg, svc)
 	if err != nil {
@@ -522,11 +607,48 @@ func wireTokens(cfg *settings, tokens *accesstoken.Service) error {
 	}
 
 	cfg.authenticator = authn
-	cfg.authorizer = identity.SelfAllowed{
+	cfg.authorizer = allowlistGate(identity.SelfAllowed{
 		Next: cfg.authorizer, Actions: []identity.Action{identity.ActionTokenManageOwn},
-	}
+	}, cfg.ipAllowlists)
 
 	return nil
+}
+
+// allowlistGate wraps next in the IP allowlist gate when the feature is on.
+// The gate is the outermost authorizer, so it runs in the authorization step
+// of every adapter. When the feature is off it returns next with no
+// decorator, so the default path has zero cost and zero risk.
+//
+//nolint:ireturn // The adapters take the port.
+func allowlistGate(next identity.Authorizer, allow *ipAllowlistSettings) identity.Authorizer {
+	if allow == nil || !allow.enabled {
+		return next
+	}
+
+	return ipallow.Gate{
+		Next: next, Rules: allow.store,
+		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
+	}
+}
+
+// allowlistAddressGate returns the address-only gate for the capability
+// routes of the tool adapters when the feature is on, else nil. It holds
+// only the list rules: capability routes have no principal, so there is no
+// bootstrap exemption to carry. A nil interface (not a typed nil) reports
+// off, so the adapters skip the check.
+//
+//nolint:ireturn // The adapters take the port.
+func allowlistAddressGate(allow *ipAllowlistSettings) interface {
+	CheckAddress(ctx context.Context, ns namespace.Name) error
+} {
+	if allow == nil || !allow.enabled {
+		return nil
+	}
+
+	return ipallow.Gate{
+		Next: nil, Rules: allow.store,
+		Enabled: allow.enabled, IncludeBootstrap: allow.includeBootstrap,
+	}
 }
 
 // assemble mounts the adapters and routes around the services. backups is
@@ -537,6 +659,20 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 	// families, and the readiness failure counter of the probe.
 	observed := metrics.NewServerMetrics(cfg.version, cfg.now())
 	registry := observed.Registry()
+
+	deleted, err := newDeletedSweeper(svc, cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	svc.deleted = deleted
+
+	shipper, err := newAuditShipper(cfg, observed)
+	if err != nil {
+		return nil, err
+	}
+
+	cfg.auditShipper = shipper
 
 	adapters, err := newAdapters(svc, cfg, base, backups, observed)
 	if err != nil {
@@ -558,16 +694,6 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		restoreRegistry = reg
 	}
 
-	chain, err := newChainDeps(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	shipper, err := newAuditShipper(cfg, observed)
-	if err != nil {
-		return nil, err
-	}
-
 	return &Server{
 		handler:         handler,
 		logger:          cfg.logger,
@@ -586,11 +712,11 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		tlsCertFile:     cfg.tlsCertFile,
 		tlsKeyFile:      cfg.tlsKeyFile,
 		observed:        observed,
-		chain:           chain,
-		chainOn:         false,
+		chain:           adapters.chain,
 		tokens:          svc.tokens,
 		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
+		deleted:         deleted,
 	}, nil
 }
 
@@ -605,6 +731,7 @@ type adapters struct {
 	ready       http.Handler
 	maintenance *maintenance.Watcher
 	restores    *backup.RestoreService
+	chain       *auditChain
 }
 
 // newAdapters builds every HTTP adapter from the services and settings.
@@ -617,7 +744,12 @@ func newAdapters(
 	backups *backup.Service,
 	observed *metrics.ServerMetrics,
 ) (adapters, error) {
-	maint, watcher, err := newMaintenance(svc, cfg)
+	chain, err := newAuditChain(cfg, observed)
+	if err != nil {
+		return adapters{}, err
+	}
+
+	maint, watcher, err := newMaintenance(svc, cfg, chain)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -654,18 +786,11 @@ func newAdapters(
 		backups:  backups,
 		maint:    maint,
 		observed: observed,
+		chain:    chain,
 	})
 	if err != nil {
 		return adapters{}, err
 	}
-
-	ready := newReadinessHandler(
-		cfg.namespaceStore,
-		cfg.blobStore,
-		readinessTimeout,
-		observed.ReadinessFailures(),
-		cfg.logger,
-	)
 
 	return adapters{
 		pulumi:      api,
@@ -674,10 +799,23 @@ func newAdapters(
 		tfe:         tfeAPI,
 		tofuHTTP:    tofuHTTPAPI,
 		server:      serverAPI,
-		ready:       ready,
+		ready:       newReadiness(cfg, observed),
 		maintenance: watcher,
 		restores:    restores,
+		chain:       chain,
 	}, nil
+}
+
+// newReadiness builds the readiness probe: it pings the store and the blob
+// store, and counts its failures on observed.
+func newReadiness(cfg *settings, observed *metrics.ServerMetrics) http.Handler {
+	return newReadinessHandler(
+		cfg.namespaceStore,
+		cfg.blobStore,
+		readinessTimeout,
+		observed.ReadinessFailures(),
+		cfg.logger,
+	)
 }
 
 // newTofuHTTPHandler builds the OpenTofu http backend adapter (ADR 49). It
@@ -706,11 +844,19 @@ func newTofuHTTPHandler(cfg *settings, svc services, gate *bodygate.Gate) (*tofu
 }
 
 // newMaintenance builds the maintenance service and the watcher that reads
-// the maintenance state for every request.
-func newMaintenance(svc services, cfg *settings) (*maintenance.Service, *maintenance.Watcher, error) {
+// the maintenance state for every request. A waiting change of the audit
+// chain holds maintenance mode.
+func newMaintenance(
+	svc services, cfg *settings, chain *auditChain,
+) (*maintenance.Service, *maintenance.Watcher, error) {
 	maintenanceStore, ok := cfg.namespaceStore.(maintenance.Store)
 	if !ok {
 		return nil, nil, errMaintenanceNeedsStore
+	}
+
+	var hold func(ctx context.Context) (bool, error)
+	if chain != nil {
+		hold = chain.held
 	}
 
 	maint, err := maintenance.NewService(maintenance.Config{
@@ -719,6 +865,7 @@ func newMaintenance(svc services, cfg *settings) (*maintenance.Service, *mainten
 		Stacks:     svc.stacks,
 		Updates:    svc.updates,
 		Workspaces: svc.workspaces,
+		Hold:       hold,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("maintenance service: %w", err)
@@ -748,6 +895,7 @@ func newTFEHandler(
 	handler, err := tfe.NewHandler(tfe.Config{
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
+		AddressGate:   allowlistAddressGate(cfg.ipAllowlists),
 		Logger:        cfg.logger,
 		Namespaces:    svc.namespaces,
 		Workspaces:    svc.workspaces,
@@ -805,13 +953,8 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		)
 	}
 
-	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
-		missing := "WithTLS certificate file"
-		if cfg.tlsCertFile != "" {
-			missing = "WithTLS key file"
-		}
-
-		return baseurl.Resolver{}, fmt.Errorf("%w: %s", ErrMissingOption, missing)
+	if err := checkTLSAndAllowlist(cfg); err != nil {
+		return baseurl.Resolver{}, err
 	}
 
 	base, err := baseurl.Parse(cfg.publicURL)
@@ -819,7 +962,42 @@ func checkSettings(cfg *settings) (baseurl.Resolver, error) {
 		return baseurl.Resolver{}, fmt.Errorf("public URL: %w", err)
 	}
 
-	return base, nil
+	return base, checkRetention(cfg.softDeleteRetention)
+}
+
+// newWorkspaceService builds the OpenTofu workspace service, which seals
+// state with secrets.
+func newWorkspaceService(
+	cfg *settings, namespaces *namespace.Service, secrets *secret.Service,
+) (*workspace.Service, error) {
+	workspaces, err := workspace.NewService(workspace.Config{
+		Workspaces:         cfg.workspaceStore,
+		States:             cfg.stateStore,
+		Blobs:              cfg.blobStore,
+		Namespaces:         namespaces,
+		Sealer:             secrets,
+		Logger:             cfg.logger,
+		Now:                cfg.now,
+		MaxStateBytes:      cfg.maxStateBytes,
+		MaxPendingVersions: 0,
+		Retention:          cfg.softDeleteRetention,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("workspace service: %w", err)
+	}
+
+	return workspaces, nil
+}
+
+// clockOf returns the clock of the server settings, defaulting to time.Now
+// like the update service does. The journal replayer stamps the manifest of
+// each checkpoint it builds with it.
+func clockOf(cfg *settings) func() time.Time {
+	if cfg.now != nil {
+		return cfg.now
+	}
+
+	return time.Now
 }
 
 // newUpdateService builds the update service. A nil token service leaves the
@@ -845,12 +1023,36 @@ func newUpdateService(
 		Logger:             cfg.logger,
 		MaxCheckpointBytes: cfg.maxCheckpointBytes,
 		Journal:            journal,
+		Replayer:           pulumijournal.NewReplayer(clockOf(cfg), ""),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
 
 	return updates, nil
+}
+
+// checkTLSAndAllowlist validates the TLS pair and the IP allowlist switch
+// of cfg. It keeps checkSettings under the complexity limit.
+func checkTLSAndAllowlist(cfg *settings) error {
+	if (cfg.tlsCertFile == "") != (cfg.tlsKeyFile == "") {
+		missing := "WithTLS certificate file"
+		if cfg.tlsCertFile != "" {
+			missing = "WithTLS key file"
+		}
+
+		return fmt.Errorf("%w: %s", ErrMissingOption, missing)
+	}
+
+	allow := cfg.ipAllowlists
+	if allow != nil && allow.enabled && allow.store == nil {
+		return fmt.Errorf(
+			"%w: --ip-allowlists needs a store: pass WithIPAllowlistStore",
+			ErrMissingOption,
+		)
+	}
+
+	return nil
 }
 
 // newServices builds the domain services from validated settings. It reads
@@ -875,8 +1077,7 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 	}
 
 	stacks, err := stack.NewService(stack.Config{
-		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now,
-		State: updates,
+		Store: cfg.stackStore, Namespaces: namespaces, Now: cfg.now, State: updates, Retention: cfg.softDeleteRetention,
 	})
 	if err != nil {
 		return services{}, fmt.Errorf("stack service: %w", err)
@@ -893,29 +1094,58 @@ func newServices(cfg *settings, tokens *accesstoken.Service) (services, error) {
 		return services{}, fmt.Errorf("secret service: %w", err)
 	}
 
-	workspaces, err := workspace.NewService(workspace.Config{
-		Workspaces:         cfg.workspaceStore,
-		States:             cfg.stateStore,
-		Blobs:              cfg.blobStore,
-		Namespaces:         namespaces,
-		Sealer:             secrets,
-		Logger:             cfg.logger,
-		Now:                cfg.now,
-		MaxStateBytes:      cfg.maxStateBytes,
-		MaxPendingVersions: 0,
-	})
+	workspaces, err := newWorkspaceService(cfg, namespaces, secrets)
 	if err != nil {
-		return services{}, fmt.Errorf("workspace service: %w", err)
+		return services{}, err
 	}
 
 	return services{
-		namespaces: namespaces,
-		stacks:     stacks,
-		updates:    updates,
-		secrets:    secrets,
-		workspaces: workspaces,
-		tokens:     nil,
+		namespaces:  namespaces,
+		stacks:      stacks,
+		updates:     updates,
+		secrets:     secrets,
+		workspaces:  workspaces,
+		tokens:      nil,
+		deleted:     nil,
+		access:      nil,
+		collections: nil,
 	}, nil
+}
+
+// newIPAllowlistService builds the IP allowlist service from validated
+// settings, or nil when no allowlist store is configured: an SDK user who
+// did not pass WithIPAllowlistStore gets no allowlist routes.
+func newIPAllowlistService(cfg *settings, namespaces *namespace.Service) (*ipallow.Service, error) {
+	allow := cfg.ipAllowlists
+	if allow == nil || allow.store == nil {
+		return nil, nil //nolint:nilnil // No allowlist store is a valid setup: the routes stay unmounted.
+	}
+
+	svc, err := ipallow.NewService(ipallow.Config{
+		Store: allow.store, Namespaces: namespaces, Now: cfg.now, Enabled: allow.enabled,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("ip allowlist service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// newSessionPolicyService returns the session policy service over the
+// namespace store, or nil when the store keeps no session policy. Both SQL
+// adapters keep it.
+func newSessionPolicyService(cfg *settings) (*session.Policies, error) {
+	store, ok := cfg.namespaceStore.(session.PolicyStore)
+	if !ok {
+		return nil, nil //nolint:nilnil // A store without a session policy is a valid setup: the routes stay unmounted.
+	}
+
+	svc, err := session.NewPolicies(session.PolicyConfig{Store: store, Now: cfg.now})
+	if err != nil {
+		return nil, fmt.Errorf("session policy service: %w", err)
+	}
+
+	return svc, nil
 }
 
 // Handler returns the server's root HTTP handler, for embedding in your own server.
@@ -998,16 +1228,17 @@ func (s *Server) Run(ctx context.Context) error {
 
 	warnPlainHTTP(ctx, s.logger, srv.Addr, tlsCfg)
 
-	// The chain check stops when Run returns, also after a serve error, and
-	// Run returns only after it stopped.
+	// The chain check and the migration loop stop when Run returns, also
+	// after a serve error, and Run returns only after they stopped.
 	checkCtx, stopCheck := context.WithCancel(ctx)
-	waitCheck := s.startAuditChainCheck(checkCtx)
+	waitCheck := s.startAuditChain(checkCtx)
 
 	sweepCtx, stopSweeps := context.WithCancel(ctx)
 
 	var sweeps sync.WaitGroup
 
 	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
+	sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
 
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
@@ -1057,9 +1288,14 @@ func (s *Server) sweepInactive(ctx context.Context) {
 // sweepOnce runs the inactivity disable once and counts the result. A failed
 // run logs no error text, which may hold driver detail (ADR 32 decision 7),
 // and the next run tries again. A run that the server stops (ctx canceled)
-// is not a failure. A run past its time limit is.
+// is not a failure. A run past its time limit is. While a change of the
+// chain waits, it skips one run.
 func (s *Server) sweepOnce(ctx context.Context) {
 	if s.tokens == nil {
+		return
+	}
+
+	if s.chainChangeWaits(ctx) {
 		return
 	}
 
@@ -1207,7 +1443,7 @@ func (s *Server) runStartUp(ctx context.Context) error {
 	}
 
 	if startErr == nil {
-		startErr = s.resolveAuditChain(ctx)
+		startErr = s.startUpAuditChain(ctx)
 	}
 
 	if startErr != nil && ctx.Err() == nil {
@@ -1244,18 +1480,24 @@ func (s *Server) failStoppedRestores(ctx context.Context) error {
 		}
 	}
 
+	// The fence comes before the rows fail: when it fails, the next start
+	// still sees the stopped restore and fences again.
+	if crashed {
+		if err := s.fenceStoppedRestore(ctx); err != nil {
+			return err
+		}
+	}
+
 	if err := s.restoreRegistry.FailRunningRestores(ctx, s.now().UTC(), restoreStoppedText); err != nil {
 		return fmt.Errorf("fail running restores: %w", err)
 	}
 
-	if !crashed {
-		return nil
-	}
+	return nil
+}
 
-	if err := s.recheckStoppedRestores(ctx, running); err != nil {
-		return err
-	}
-
+// fenceStoppedRestore increments the failover version of every namespace
+// after a restore that stopped while it ran.
+func (s *Server) fenceStoppedRestore(ctx context.Context) error {
 	fencer, ok := s.restoreRegistry.(backup.Fencer)
 	if !ok {
 		return nil
@@ -1340,6 +1582,7 @@ func newPulumiHandler(
 		Namespaces:           svc.namespaces,
 		Authenticator:        cfg.authenticator,
 		Authorizer:           cfg.authorizer,
+		AddressGate:          allowlistAddressGate(cfg.ipAllowlists),
 		Logger:               cfg.logger,
 		BaseURL:              base,
 		MaxBodyBytesInFlight: cfg.maxBodyBytesInFlight,
@@ -1382,15 +1625,57 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// checkRetention refuses a soft-delete retention below
+// MinSoftDeleteRetention. Zero means the domain default.
+func checkRetention(d time.Duration) error {
+	if d != 0 && d < MinSoftDeleteRetention {
+		return fmt.Errorf("%w: WithSoftDeleteRetention needs at least %s, got %s",
+			ErrInvalidOption, MinSoftDeleteRetention, d)
+	}
+
+	return nil
+}
+
 // newInventoryHandler builds the tool-neutral inventory API from the
-// namespace service and the inventory reader.
+// namespace service, the inventory reader and the restore and purge of each
+// tool (ADR 47). Every SQL adapter also reads the deleted units through the
+// inventory reader. A custom reader that keeps no deleted units fails here
+// with a clear error.
 func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
+	deleted, ok := cfg.inventoryReader.(inventory.DeletedReader)
+	if !ok {
+		return nil, fmt.Errorf("inventory reader reads no deleted units: %w", ErrMissingOption)
+	}
+
+	stacks, workspaces := unitLifecycles(svc, cfg)
+
+	// The move check is the escalation check of the access service. A store
+	// with no roles and grants gives no checker, so a move is refused there.
+	grants, err := newAccessService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var moves inventoryapi.MoveChecker
+	if grants != nil {
+		moves = grants
+	}
+
 	handler, err := inventoryapi.NewHandler(inventoryapi.Config{
-		Namespaces:    svc.namespaces,
-		Units:         cfg.inventoryReader,
+		Namespaces: svc.namespaces,
+		Units:      cfg.inventoryReader,
+		Deleted:    deleted,
+		Lifecycles: map[string]inventory.Lifecycle{
+			pulumiTool:   stacks,
+			opentofuTool: workspaces,
+		},
+		ReadScope:     deletedReadScope{authz: cfg.authorizer},
+		Collections:   svc.collections,
+		Moves:         moves,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
 		Logger:        cfg.logger,
+		Now:           cfg.now,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("inventory api: %w", err)
@@ -1399,12 +1684,22 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 	return handler, nil
 }
 
+// unitLifecycles returns the restore and purge of each tool. The
+// inventory API and the retention sweep share them.
+func unitLifecycles(svc services, cfg *settings) (pulumiLifecycle, opentofuLifecycle) {
+	blobs := blobPurger{logger: cfg.logger}
+
+	return pulumiLifecycle{stacks: svc.stacks, updates: svc.updates, blobs: blobs},
+		opentofuLifecycle{workspaces: svc.workspaces, blobs: blobs}
+}
+
 // installationDeps carries the services of the installation API.
 type installationDeps struct {
 	services services
 	backups  *backup.Service
 	maint    *maintenance.Service
 	observed *metrics.ServerMetrics
+	chain    *auditChain
 }
 
 // newInstallationAPI builds the restore service and the tool-neutral
@@ -1416,6 +1711,8 @@ func newInstallationAPI(
 	if err != nil {
 		return nil, nil, err
 	}
+
+	bindAuditChain(deps.chain, deps.maint, restores, cfg)
 
 	serverAPI, err := newServerHandler(cfg, deps, restores)
 	if err != nil {
@@ -1435,14 +1732,26 @@ func newInstallationAPI(
 func newServerHandler(
 	cfg *settings, deps installationDeps, restores *backup.RestoreService,
 ) (http.Handler, error) {
-	grants, err := newAccessService(cfg)
-	if err != nil {
-		return nil, err
-	}
+	grants := deps.services.access
 
 	principals, err := newPrincipalService(cfg, grants)
 	if err != nil {
 		return nil, err
+	}
+
+	allow, err := newIPAllowlistService(cfg, deps.services.namespaces)
+	if err != nil {
+		return nil, err
+	}
+
+	sessionPolicies, err := newSessionPolicyService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	var sinks serverapi.AuditSinkSource
+	if cfg.auditShipper != nil {
+		sinks = cfg.auditShipper
 	}
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
@@ -1456,14 +1765,20 @@ func newServerHandler(
 		Metrics:          deps.observed,
 		Version:          cfg.version,
 		Schema:           schemaReporterOf(cfg.namespaceStore),
+		Journal:          journalReporterOf(cfg.namespaceStore),
 		Principals:       principals,
 		Access:           grants,
 		Tokens:           deps.services.tokens,
+		IPAllowlists:     allow,
+		SessionPolicy:    sessionPolicies,
 		Audit:            serverAuditOf(cfg.namespaceStore),
-		CheckpointEpochs: checkpointEpochsOf(cfg),
+		CheckpointEpochs: checkpointEpochsOf(deps.chain),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
 		},
+		DeletedUnits: deps.services.deleted,
+		AuditChain:   auditChainPort(deps.chain),
+		AuditSinks:   sinks,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)
@@ -1514,11 +1829,17 @@ func newPrincipalService(cfg *settings, grants *access.Service) (*principal.Serv
 	}
 
 	var guard principal.Guard
+
+	var tokens principal.Tokens
+
 	if grants != nil {
 		guard = grants
+		tokens = grants
 	}
 
-	svc, err := principal.NewService(principal.Config{Store: store, Guard: guard, Now: nil, NewID: nil})
+	svc, err := principal.NewService(principal.Config{
+		Store: store, Guard: guard, Namespaces: cfg.namespaceStore, Tokens: tokens, Now: nil, NewID: nil,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("principal service: %w", err)
 	}
@@ -1553,7 +1874,7 @@ func setDefaultAuthorizer(cfg *settings) error {
 		return nil
 	}
 
-	authz, err := defaultAuthorizer(cfg.namespaceStore)
+	authz, err := defaultAuthorizer(cfg)
 	if err != nil {
 		return err
 	}
@@ -1569,20 +1890,66 @@ func setDefaultAuthorizer(cfg *settings) error {
 // under both.
 //
 //nolint:ireturn // Two policies with no shared concrete type: the caller keeps the port.
-func defaultAuthorizer(store namespace.Store) (identity.Authorizer, error) {
-	stores, ok := store.(accessStores)
+func defaultAuthorizer(cfg *settings) (identity.Authorizer, error) {
+	stores, ok := cfg.namespaceStore.(accessStores)
 	if !ok {
 		return identity.AdminOnly{}, nil
 	}
 
+	collections, err := unitCollections(cfg)
+	if err != nil {
+		return nil, err
+	}
+
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: stores, Callers: stores, Collections: nil, Units: stores,
+		Store: stores, Callers: stores, Collections: collections, Units: stores, Principals: stores,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("authorizer: %w", err)
 	}
 
 	return authz, nil
+}
+
+// newCollectionService builds the collection service on the namespace store
+// when that store also holds collections (ADR 51). A custom store without
+// collections gets no collection service, so its collection routes are not
+// served and the rest of the API works as before.
+func newCollectionService(cfg *settings) (*collection.Service, error) {
+	store, ok := cfg.namespaceStore.(collection.Store)
+	if !ok {
+		return nil, nil //nolint:nilnil // No collection service: the store holds no collections.
+	}
+
+	svc, err := collection.NewService(collection.Config{
+		Store:      store,
+		Namespaces: cfg.namespaceStore,
+		Now:        cfg.now,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("collection service: %w", err)
+	}
+
+	return svc, nil
+}
+
+// unitCollections returns the collection port of the authorizer: the
+// collection service when the store holds collections, else nil. The
+// service is returned as an interface only when it is not nil, so that a
+// nil service does not become a non-nil port.
+//
+//nolint:ireturn // The port of the authorizer: the caller keeps it as the interface.
+func unitCollections(cfg *settings) (access.UnitCollections, error) {
+	svc, err := newCollectionService(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	if svc == nil {
+		return nil, nil //nolint:nilnil // No collections: a grant on a collection is refused as not found.
+	}
+
+	return svc, nil
 }
 
 // newAccessService builds the role and grant service (ADR 52) from the
@@ -1598,10 +1965,15 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 
 	authz, isAccess := cfg.authorizer.(*access.Authorizer)
 	if !isAccess {
+		collections, collErr := unitCollections(cfg)
+		if collErr != nil {
+			return nil, collErr
+		}
+
 		var err error
 
 		authz, err = access.NewAuthorizer(access.AuthorizerConfig{
-			Store: stores, Callers: stores, Collections: nil, Units: stores,
+			Store: stores, Callers: stores, Collections: collections, Units: stores, Principals: stores,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("access authorizer: %w", err)
@@ -1619,10 +1991,32 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 	return svc, nil
 }
 
+// newIdentityServices builds the role and grant service (ADR 52) and the
+// access token service (ADR 53). The token service takes the role and
+// grant service as its escalation check. Either is nil when the store
+// keeps none.
+func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, error) {
+	grants, err := newAccessService(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	tokens, err := newTokenService(cfg, grants)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return grants, tokens, nil
+}
+
 // newTokenService builds the access token service (ADR 53) from the
 // namespace store, or returns nil when the store keeps no access tokens or
-// no principals. Every SQL adapter keeps both.
-func newTokenService(cfg *settings) (*accesstoken.Service, error) {
+// no principals. Every SQL adapter keeps both. The escalation check of a
+// personal token for another person is the grants of grants, and the
+// authorizer of grants decides principal:manage-tokens for a service
+// token. With nil grants, a store that keeps none, only an administrator
+// passes either.
+func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Service, error) {
 	store, ok := cfg.namespaceStore.(accesstoken.Store)
 	if !ok {
 		return nil, nil //nolint:nilnil // No token store is a valid setup: the routes answer 501.
@@ -1633,8 +2027,19 @@ func newTokenService(cfg *settings) (*accesstoken.Service, error) {
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
+	var (
+		check accesstoken.GrantCheck
+		authz identity.Authorizer
+	)
+
+	if grants != nil {
+		check = tokengrants.Check{Grants: grants, Principals: principals}
+		authz = grants.Authorizer()
+	}
+
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: nil, Logger: cfg.logger, Now: cfg.now, NewID: nil,
+		Store: store, Principals: principals, Freshness: nil, Grants: check, Authorizer: authz,
+		Logger: cfg.logger, Now: cfg.now, NewID: nil,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("access token service: %w", err)
@@ -1676,6 +2081,20 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 //nolint:ireturn // The two SQL adapters share no concrete store type, so the
 func schemaReporterOf(store namespace.Store) serverapi.SchemaReporter {
 	reporter, ok := store.(serverapi.SchemaReporter)
+	if !ok {
+		return nil
+	}
+
+	return reporter
+}
+
+// journalReporterOf returns the journal reporter of the namespace store, or
+// nil when the store does not count running journaled updates. Both SQL
+// adapters count them.
+//
+//nolint:ireturn // The two SQL adapters share no concrete store type, so the
+func journalReporterOf(store namespace.Store) serverapi.JournalReporter {
+	reporter, ok := store.(serverapi.JournalReporter)
 	if !ok {
 		return nil
 	}
@@ -1754,9 +2173,18 @@ func newRestoreService(
 		return nil, errRestoreNeedsRegistry
 	}
 
-	chain, err := newChainDeps(cfg)
-	if err != nil {
-		return nil, err
+	var admit func(ctx context.Context) error
+
+	steps := []restoreStep{sealAfterRestore(deps)}
+	if deps.chain != nil {
+		admit = deps.chain.admitRestore
+		steps = append(steps, deps.chain.afterRestore)
+
+		if deps.chain.checkpoints != nil {
+			steps = append(steps, newEpochAfterRestore(
+				deps.chain.checkpoints, serverAuditOf(cfg.namespaceStore), cfg.now,
+			))
+		}
 	}
 
 	service, err := backup.NewRestoreService(backup.RestoreConfig{
@@ -1768,13 +2196,10 @@ func newRestoreService(
 		Target:      cfg.backupTarget,
 		Key:         cfg.secretWrapper,
 		Region:      cfg.region.String(),
-		AfterApply: afterRestore(
-			sealAfterRestore(deps),
-			recheckChainAfterRestore(chain, restoreChain{logger: cfg.logger, now: cfg.now, observed: deps.observed}),
-			newEpochAfterRestore(checkpointsOf(chain), serverAuditOf(cfg.namespaceStore), cfg.now),
-		),
-		Now:    cfg.now,
-		Logger: cfg.logger,
+		AfterApply:  afterRestore(steps...),
+		Admit:       admit,
+		Now:         cfg.now,
+		Logger:      cfg.logger,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("restore service: %w", err)
@@ -1783,45 +2208,19 @@ func newRestoreService(
 	return service, nil
 }
 
-// restoreStep is one after-apply step of a restore. It receives the
-// restore that it follows.
-type restoreStep func(ctx context.Context, restore backup.AppliedRestore) error
-
-// recheckStoppedRestores runs the after-apply step of the audit chain for
-// each restore of running that stopped while it applied: the swap may have
-// replaced the log, and the step never ran (ADR 64 decision 6).
-func (s *Server) recheckStoppedRestores(ctx context.Context, running []backup.RestoreRecord) error {
-	recheck := recheckChainAfterRestore(s.chain, restoreChain{logger: s.logger, now: s.now, observed: s.observed})
-
-	for i := range running {
-		if running[i].State != backup.RestoreApplying {
-			continue
-		}
-
-		restore := backup.AppliedRestore{
-			ID:          running[i].ID,
-			BackupID:    running[i].BackupID,
-			RequestedBy: running[i].RequestedBy,
-		}
-
-		if err := recheck(ctx, restore); err != nil {
-			return fmt.Errorf("stopped restore %s: %w", running[i].ID, err)
-		}
-	}
-
-	return nil
-}
+// restoreStep is one after-apply step of a restore.
+type restoreStep func(ctx context.Context) error
 
 // afterRestore returns the after-apply step of a restore that runs every
 // step in order, also after a step fails, and joins their errors. So a
-// failed seal never skips the switch entry of the audit chain, which the
-// check needs after a restore.
+// failed seal never skips the comparison of the restored audit log with the
+// state of the chain.
 func afterRestore(steps ...restoreStep) restoreStep {
-	return func(ctx context.Context, restore backup.AppliedRestore) error {
+	return func(ctx context.Context) error {
 		var errs []error
 
 		for _, step := range steps {
-			if err := step(ctx, restore); err != nil {
+			if err := step(ctx); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -1836,7 +2235,7 @@ func afterRestore(steps ...restoreStep) restoreStep {
 // refuses to build without a key-encryption key (#367), so the step is
 // always set.
 func sealAfterRestore(deps installationDeps) restoreStep {
-	return func(ctx context.Context, _ backup.AppliedRestore) error {
+	return func(ctx context.Context) error {
 		if _, err := deps.services.workspaces.SealUnsealedStates(ctx); err != nil {
 			return fmt.Errorf("seal unsealed state: %w", err)
 		}
@@ -2171,7 +2570,9 @@ func routes(a adapters, cfg *settings, observed *metrics.ServerMetrics) (http.Ha
 
 	addr := requestAddr{resolver: resolver, warns: newWarnLimiter(cfg.now)}
 
-	return withRequestCache(withRequestLog(mux, addr, cfg.logger, cfg.authenticator, observed)), nil
+	gated := withAuditChainGate(mux, a.chain, cfg.logger)
+
+	return withRequestCache(withRequestLog(gated, addr, cfg.logger, cfg.authenticator, observed)), nil
 }
 
 // newClientIPResolver builds the client address resolver of the server from

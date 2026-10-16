@@ -27,17 +27,3 @@ func (s *Store) EntryAt(ctx context.Context, ns namespace.Name, seq int64) (audi
 
 	return fromAuditRow(row), nil
 }
-
-// LastEntry implements audit.EntryReader.
-func (s *Store) LastEntry(ctx context.Context, ns namespace.Name) (audit.Entry, error) {
-	row, err := s.queries.LastAuditEntry(ctx, ns.String())
-	if errors.Is(err, pgx.ErrNoRows) {
-		return audit.Entry{}, fmt.Errorf("%w: %s holds no entry", audit.ErrEntryNotFound, ns)
-	}
-
-	if err != nil {
-		return audit.Entry{}, fmt.Errorf("read last audit entry: %w", err)
-	}
-
-	return fromAuditRow(row), nil
-}

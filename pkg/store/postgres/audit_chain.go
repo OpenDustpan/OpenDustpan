@@ -9,209 +9,254 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
-var (
-	_ audit.ChainSwitch    = (*Store)(nil)
-	_ audit.RestoreChecker = (*Store)(nil)
-)
+var _ audit.ChainStore = (*Store)(nil)
 
-// SetChain implements audit.ChainSwitch for later appends of this handle.
-func (s *Store) SetChain(on bool) {
-	s.chain.Set(on)
-}
-
-// HasChainedEntries implements audit.ChainSwitch.
-func (s *Store) HasChainedEntries(ctx context.Context) (bool, error) {
-	found, err := s.queries.HasChainedAuditEntries(ctx)
-	if err != nil {
-		return false, fmt.Errorf("read chained audit entries: %w", err)
-	}
-
-	return found, nil
-}
-
-// ChainRecord implements audit.ChainSwitch. A missing row reads as no
-// record.
+// ChainRecord implements audit.ChainStore. A missing row reads as the chain
+// on.
 func (s *Store) ChainRecord(ctx context.Context) (audit.ChainRecord, error) {
-	row, err := s.queries.GetAuditChainState(ctx)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}, nil
-	}
-
-	if err != nil {
-		return audit.ChainRecord{}, fmt.Errorf("read audit chain state: %w", err)
-	}
-
-	return audit.ChainRecord{State: audit.ChainState(row.State), EverChained: row.EverChained}, nil
+	return readChainRecord(ctx, s.queries)
 }
 
-// RecordChain implements audit.ChainSwitch. The advisory lock of the
-// server scope orders its appends, as in AppendServer.
-func (s *Store) RecordChain(ctx context.Context, w audit.ChainWrite) error {
-	err := s.inTx(ctx, func(q *db.Queries) error {
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
-		// Two instances that start at the same time read the same record.
-		// The one that commits first changes it, so the other one must
-		// read it again and decide again.
-		current, err := readChainRecord(ctx, q)
-		if err != nil {
-			return err
-		}
-
-		if current != w.Read {
-			return fmt.Errorf("record audit chain: %w", audit.ErrChainRecordChanged)
-		}
-
-		if err := s.insertChainEntries(ctx, q, w); err != nil {
-			return err
-		}
-
-		params := db.SetAuditChainStateParams{State: string(w.Record.State), EverChained: w.Record.EverChained}
-		if err := q.SetAuditChainState(ctx, params); err != nil {
-			return fmt.Errorf("save audit chain state: %w", err)
-		}
-
-		return nil
+// SaveChainRecord implements audit.ChainStore.
+func (s *Store) SaveChainRecord(ctx context.Context, rec audit.ChainRecord) error {
+	return s.inTx(ctx, func(q *db.Queries) error {
+		return saveChainRecord(ctx, q, rec)
 	})
+}
+
+// ClaimChainMigration implements audit.ChainStore: it stamps now in one
+// conditional write, so exactly one approval wins.
+func (s *Store) ClaimChainMigration(ctx context.Context, now time.Time, lease time.Duration) error {
+	nowMs := codec.Millis(now)
+	expireMs := codec.Millis(now.Add(-lease))
+
+	n, err := s.queries.ClaimAuditChainMigration(ctx, db.ClaimAuditChainMigrationParams{
+		MigratingAtMs: nowMs, MigratingAtMs_2: expireMs,
+	})
+	if err != nil {
+		return fmt.Errorf("claim audit chain migration: %w", err)
+	}
+
+	if n > 0 {
+		return nil
+	}
+
+	rec, err := readChainRecord(ctx, s.queries)
 	if err != nil {
 		return err
 	}
 
-	s.chain.Set(w.Record.State == audit.ChainStateOn)
+	if !rec.Pending {
+		return audit.ErrNoChainChange
+	}
+
+	return audit.ErrChainMigrating
+}
+
+// ReleaseChainMigration implements audit.ChainStore.
+func (s *Store) ReleaseChainMigration(ctx context.Context) error {
+	if err := s.queries.ReleaseAuditChainMigration(ctx); err != nil {
+		return fmt.Errorf("release audit chain migration: %w", err)
+	}
 
 	return nil
 }
 
-// insertChainEntries appends the switch entries of w in q, each with a hash
-// only when it is Chained, at the time that w.Now gives in the transaction.
-func (s *Store) insertChainEntries(ctx context.Context, q *db.Queries, w audit.ChainWrite) error {
-	var at time.Time
-	if w.Now != nil {
-		at = w.Now()
+// RenewChainMigration implements audit.ChainStore: it moves the start of
+// the held claim to now, so a long migration keeps its claim.
+func (s *Store) RenewChainMigration(ctx context.Context, now time.Time) error {
+	n, err := s.queries.RenewAuditChainMigration(ctx, codec.Millis(now))
+	if err != nil {
+		return fmt.Errorf("renew audit chain migration: %w", err)
 	}
 
-	for i := range w.Entries {
-		e := w.Entries[i].Entry
-		if w.Now != nil {
-			e.At = at
-		}
+	if n == 0 {
+		return audit.ErrChainClaimLost
+	}
 
-		if err := validServerEntry(e); err != nil {
+	return nil
+}
+
+// StartChain implements audit.ChainStore: it reads the earlier entries of
+// the scope for the digest and appends the start entry in the same
+// transaction, so no append lands in between.
+func (s *Store) StartChain(ctx context.Context, fence namespace.Fence, e audit.Entry) (bool, error) {
+	return s.appendChainMarker(ctx, fence, e, audit.ChainStateOn, func(q *db.Queries, e audit.Entry) error {
+		var digest audit.Digest
+
+		add := func(row db.AuditEntry) { digest.Add(fromAuditRow(row), row.Changes.String) }
+		if err := walkScope(ctx, q, e.Namespace, add); err != nil {
 			return err
 		}
 
-		chain := audit.ChainStateOff
-		if w.Entries[i].Chained {
-			chain = audit.ChainStateOn
+		e.Changes = audit.StartChanges(&digest)
+
+		return insertAuditEntry(ctx, q, e, hashStart)
+	})
+}
+
+// EndChain implements audit.ChainStore.
+func (s *Store) EndChain(ctx context.Context, fence namespace.Fence, e audit.Entry) (bool, error) {
+	return s.appendChainMarker(ctx, fence, e, audit.ChainStateOff, func(q *db.Queries, e audit.Entry) error {
+		return insertAuditEntry(ctx, q, e, hashLink)
+	})
+}
+
+// LastEntry implements audit.ChainStore.
+func (s *Store) LastEntry(ctx context.Context, scope namespace.Name) (audit.Entry, bool, error) {
+	var none audit.Entry
+
+	last, err := lastEntry(ctx, s.queries, scope)
+	if err != nil || last == nil {
+		return none, false, err
+	}
+
+	return *last, true, nil
+}
+
+// appendChainMarker validates e and runs insert in one transaction with the
+// check of fence, unless the scope holds no entry or its last entry already
+// agrees with state. It reports whether it ran insert. A namespace fence
+// locks the namespace row, as Append does, so a concurrent marker reads the
+// new last entry. A fence of the server scope checks nothing, and takes the
+// advisory lock of the server scope instead, as AppendServer does.
+func (s *Store) appendChainMarker(
+	ctx context.Context, fence namespace.Fence, e audit.Entry, state audit.ChainState,
+	insert func(q *db.Queries, e audit.Entry) error,
+) (bool, error) {
+	if err := e.Validate(); err != nil {
+		return false, fmt.Errorf("audit entry: %w", err)
+	}
+
+	if e.Namespace != fence.Namespace {
+		return false, fmt.Errorf("%w: entry names %q, fence names %q",
+			audit.ErrInvalidEntry, e.Namespace, fence.Namespace)
+	}
+
+	var wrote bool
+
+	run := func(q *db.Queries) error {
+		last, err := lastEntry(ctx, q, e.Namespace)
+		if err != nil {
+			return err
 		}
 
-		if _, err := s.insertAuditEntry(ctx, q, e, chain); err != nil {
-			return fmt.Errorf("append audit chain entry: %w", err)
+		if audit.MarkerDone(last, state) {
+			return nil
 		}
+
+		wrote = true
+
+		return insert(q, e)
 	}
 
-	return nil
+	var err error
+	if fence.Namespace == audit.ServerScope {
+		err = s.inTx(ctx, func(q *db.Queries) error {
+			if lockErr := q.LockServerAuditScope(ctx); lockErr != nil {
+				return fmt.Errorf("lock server audit scope: %w", lockErr)
+			}
+
+			return run(q)
+		})
+	} else {
+		err = s.inFencedUpdateTx(ctx, fence, run)
+	}
+
+	if err != nil {
+		return false, err
+	}
+
+	return wrote, nil
 }
 
-// readChainRecord reads the record of the chain in q. A missing row reads
-// as no record.
-func readChainRecord(ctx context.Context, q *db.Queries) (audit.ChainRecord, error) {
-	row, err := q.GetAuditChainState(ctx)
+// lastEntry answers the entry with the highest sequence of scope in q, or
+// nil when the scope holds none.
+func lastEntry(ctx context.Context, q *db.Queries, scope namespace.Name) (*audit.Entry, error) {
+	row, err := q.LastAuditEntry(ctx, scope.String())
 	if errors.Is(err, pgx.ErrNoRows) {
-		return audit.ChainRecord{State: audit.ChainUnknown, EverChained: false}, nil
+		return nil, nil //nolint:nilnil // A scope without entries has no last entry.
 	}
 
 	if err != nil {
-		return audit.ChainRecord{}, fmt.Errorf("read audit chain state: %w", err)
+		return nil, fmt.Errorf("read last audit entry: %w", err)
 	}
 
-	return audit.ChainRecord{State: audit.ChainState(row.State), EverChained: row.EverChained}, nil
+	e := fromAuditRow(row)
+
+	return &e, nil
 }
 
-// readChainState reads the recorded chain state in q, and false when no
-// row exists.
-func readChainState(ctx context.Context, q *db.Queries) (audit.ChainState, bool, error) {
-	row, err := q.GetAuditChainState(ctx)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return audit.ChainUnknown, false, nil
-	}
-
-	if err != nil {
-		return audit.ChainUnknown, false, fmt.Errorf("read audit chain state: %w", err)
-	}
-
-	return audit.ChainState(row.State), true, nil
-}
-
-// timelineRule answers the timeline of a builder against the record: the
-// rule of the check, or the rule of the check of a restored log.
-type timelineRule func(b *audit.TimelineBuilder, rec audit.ChainRecord) audit.ChainTimeline
-
-// chainTimeline answers the timeline of the chain for the chain check. It
-// walks the server scope from sequence 1 up to its last switch entry in
-// bounded pages, so only switch entries that the walk accepts in the chain
-// count (see audit.TimelineBuilder). A row of the server scope below
-// sequence 1 breaks the timeline.
-func chainTimeline(ctx context.Context, q *db.Queries, build timelineRule) (audit.ChainTimeline, error) {
-	rec, err := readChainRecord(ctx, q)
-	if err != nil {
-		return audit.ChainTimeline{}, err
-	}
-
-	last, err := q.LastAuditChainSwitchSequence(ctx)
-	if err != nil {
-		return audit.ChainTimeline{}, fmt.Errorf("select last audit chain switch: %w", err)
-	}
-
-	lowest, err := q.MinAuditSequence(ctx, audit.ServerScope.String())
-	if err != nil {
-		return audit.ChainTimeline{}, fmt.Errorf("select lowest server audit sequence: %w", err)
-	}
-
-	b := audit.NewTimelineBuilder()
-	if lowest < 1 {
-		return audit.ChainTimeline{Points: nil, Recorded: rec.State != audit.ChainUnknown, Broken: true}, nil
-	}
-
-	if err := walkServerScope(ctx, q, b, last); err != nil {
-		return audit.ChainTimeline{}, err
-	}
-
-	return build(b, rec), nil
-}
-
-// walkServerScope adds the entries of the server scope from sequence 1 up
-// to last to b, in pages of audit.CheckPageSize, and stops early when b
-// breaks.
-func walkServerScope(ctx context.Context, q *db.Queries, b *audit.TimelineBuilder, last int64) error {
+// walkScope calls fn for each entry of scope in q in order of sequence, in
+// pages of audit.CheckPageSize.
+func walkScope(ctx context.Context, q *db.Queries, scope namespace.Name, fn func(row db.AuditEntry)) error {
 	var after int64
 
-	for after < last {
+	for {
 		rows, err := q.ListAuditChainPage(ctx, db.ListAuditChainPageParams{
-			Namespace: audit.ServerScope.String(),
+			Namespace: scope.String(),
 			Sequence:  after,
 			Limit:     audit.CheckPageSize,
 		})
 		if err != nil {
-			return fmt.Errorf("select server audit chain: %w", err)
+			return fmt.Errorf("select audit chain: %w", err)
 		}
 
 		for i := range rows {
-			if rows[i].Sequence > last || !b.AddStored(fromAuditRow(rows[i]), rows[i].Changes.String) {
-				return nil
-			}
-
+			fn(rows[i])
 			after = rows[i].Sequence
 		}
 
 		if len(rows) < audit.CheckPageSize {
 			return nil
 		}
+	}
+}
+
+// readChainRecord reads the record of the chain in q. A missing row reads
+// as the chain on.
+func readChainRecord(ctx context.Context, q *db.Queries) (audit.ChainRecord, error) {
+	row, err := q.GetAuditChainState(ctx)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return audit.ChainRecord{
+			ChangedAt: codec.FromMillis(0), ChangedBy: "", State: audit.ChainStateOn,
+			Pending: false, EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
+		}, nil
+	}
+
+	if err != nil {
+		return audit.ChainRecord{}, fmt.Errorf("read audit chain state: %w", err)
+	}
+
+	return audit.ChainRecord{
+		ChangedAt:          codec.FromMillis(row.ChangedAtMs),
+		ChangedBy:          row.ChangedBy,
+		State:              audit.ChainState(row.State),
+		Pending:            row.Pending,
+		EnteredMaintenance: row.EnteredMaintenance,
+		MigratingAt:        codec.FromOptionalMillis(row.MigratingAtMs),
+		LogReplaced:        row.LogReplaced,
+	}, nil
+}
+
+// saveChainRecord stores rec in q.
+func saveChainRecord(ctx context.Context, q *db.Queries, rec audit.ChainRecord) error {
+	err := q.SetAuditChainState(ctx, db.SetAuditChainStateParams{
+		State:              string(rec.State),
+		ChangedAtMs:        codec.Millis(rec.ChangedAt),
+		ChangedBy:          rec.ChangedBy,
+		Pending:            rec.Pending,
+		EnteredMaintenance: rec.EnteredMaintenance,
+		MigratingAtMs:      codec.OptionalMillis(rec.MigratingAt),
+		LogReplaced:        rec.LogReplaced,
+	})
+	if err != nil {
+		return fmt.Errorf("save audit chain state: %w", err)
 	}
 
 	return nil

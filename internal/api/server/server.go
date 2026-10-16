@@ -20,9 +20,11 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/ipallow"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
@@ -60,6 +62,10 @@ type Config struct {
 	// means the upgrade check answers 500: every production server wires its
 	// store.
 	Schema SchemaReporter
+	// Journal counts the running journaled updates the upgrade check
+	// answers. Nil means the upgrade check answers 0: a store that predates
+	// the count still serves.
+	Journal JournalReporter
 	// Principals keeps the principals and the groups of the installation
 	// (ADR 52). Nil means the store keeps none: the principal and group
 	// routes answer 501. Both SQL adapters keep them.
@@ -78,12 +84,30 @@ type Config struct {
 	// (audit.Store), because each access-review export writes an entry (ADR
 	// 52, decision 13). Without Access, nil writes no entry.
 	Audit audit.ServerStore
+	// IPAllowlists keeps the IP allowlist of each namespace. Nil means no
+	// allowlist store is configured: the IP allowlist routes are not mounted.
+	IPAllowlists *ipallow.Service
+	// SessionPolicy keeps the session policy of the installation. Nil
+	// means the store keeps none: the session policy routes are not
+	// mounted. Both SQL adapters keep it.
+	SessionPolicy *session.Policies
 	// CheckpointEpochs starts a new epoch of the signed audit checkpoints.
 	// Nil means signed checkpoints are off: the epoch route answers 409.
 	CheckpointEpochs CheckpointEpochs
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
+	// AuditChain reads the state of the audit chain and approves a waiting
+	// change. Nil means the store keeps no audit chain: the audit chain
+	// routes answer 501.
+	AuditChain AuditChain
+	// DeletedUnits runs the retention sweep of the deleted units.
+	// Nil means the store keeps no deleted units: the sweep route answers
+	// 501. Both SQL adapters keep them.
+	DeletedUnits DeletedUnitSweeper
+	// AuditSinks lists the configured audit sinks with their delivery
+	// state. Nil means no sink is configured: the sink list is empty.
+	AuditSinks AuditSinkSource
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -93,6 +117,15 @@ type SchemaReporter interface {
 	// AppliedMigrations returns the rows of schema_migrations ordered by
 	// version, or nothing when the database records none.
 	AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error)
+}
+
+// JournalReporter counts the updates that run now with journal version 1
+// or higher. Both store adapters implement it. It is defined here, in the
+// package that consumes it, so the domain stays free of transport code.
+type JournalReporter interface {
+	// CountRunningJournaledUpdates returns the count of running updates
+	// with journal version above 0.
+	CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 }
 
 // Handler serves the installation API under /api/server/.
@@ -107,12 +140,18 @@ type Handler struct {
 	metrics        MetricsWriter
 	version        string
 	schema         SchemaReporter
+	journal        JournalReporter
 	principals     *principal.Service
 	access         *access.Service
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
+	ipAllowlists   *ipallow.Service
+	sessions       *session.Policies
 	epochs         CheckpointEpochs
 	onAuditFailure func()
+	deletedUnits   DeletedUnitSweeper
+	auditChain     AuditChain
+	auditSinks     AuditSinkSource
 	mux            *patternMux
 	routes         []Route
 }
@@ -151,12 +190,18 @@ func NewHandler(cfg Config) (*Handler, error) {
 		metrics:        cfg.Metrics,
 		version:        cfg.Version,
 		schema:         cfg.Schema,
+		journal:        cfg.Journal,
 		principals:     cfg.Principals,
 		access:         cfg.Access,
 		tokens:         cfg.Tokens,
+		deletedUnits:   cfg.DeletedUnits,
+		auditChain:     cfg.AuditChain,
 		audit:          cfg.Audit,
+		ipAllowlists:   cfg.IPAllowlists,
+		sessions:       cfg.SessionPolicy,
 		epochs:         cfg.CheckpointEpochs,
 		onAuditFailure: cfg.OnAuditFailure,
+		auditSinks:     cfg.AuditSinks,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
@@ -298,21 +343,40 @@ func classify(err error) (int, string) {
 		}
 	}
 
+	if status, message, ok := classifyIPAllowlist(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifySessionPolicy(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyRequest(err); ok {
+		return status, message
+	}
+
+	return classifyRegistry(err)
+}
+
+// classifyRequest maps the caller errors to their status and message: a
+// missing credential answers 401, a denied action 403, and a bad object
+// reference or body 400.
+func classifyRequest(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, identity.ErrUnauthenticated):
-		return http.StatusUnauthorized, "unauthenticated"
+		return http.StatusUnauthorized, "unauthenticated", true
 	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden"
+		return http.StatusForbidden, "forbidden", true
 	case errors.Is(err, identity.ErrInvalidObject):
-		return http.StatusBadRequest, err.Error()
+		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, errInvalidBody):
-		return http.StatusBadRequest, errInvalidBody.Error()
+		return http.StatusBadRequest, errInvalidBody.Error(), true
 	case errors.Is(err, errOverrideSwitchesBody):
-		return http.StatusBadRequest, errOverrideSwitchesBody.Error()
+		return http.StatusBadRequest, errOverrideSwitchesBody.Error(), true
 	case errors.Is(err, errCheckpointsOff):
-		return http.StatusConflict, errCheckpointsOff.Error()
+		return http.StatusConflict, errCheckpointsOff.Error(), true
 	default:
-		return classifyRegistry(err)
+		return 0, "", false
 	}
 }
 
@@ -363,16 +427,20 @@ func classifyBackup(err error) (int, string, bool) {
 }
 
 // classifyNamespace maps the namespace errors to their status and message: a
-// bad namespace name or body answers 400, a duplicate namespace 409 and an
-// unknown namespace 404.
+// bad namespace name, body, page or cursor answers 400, a duplicate
+// namespace 409, an unknown namespace 404, and a store without the paging
+// port 501.
 func classifyNamespace(err error) (int, string, bool) {
 	switch {
-	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody):
+	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, errInvalidNamespaceBody),
+		errors.Is(err, namespace.ErrInvalidPage), errors.Is(err, errNamespaceCursor):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, namespace.ErrAlreadyExists):
 		return http.StatusConflict, err.Error(), true
 	case errors.Is(err, namespace.ErrNotFound):
 		return http.StatusNotFound, err.Error(), true
+	case errors.Is(err, namespace.ErrNoPaging):
+		return http.StatusNotImplemented, err.Error(), true
 	default:
 		return 0, "", false
 	}
@@ -380,14 +448,29 @@ func classifyNamespace(err error) (int, string, bool) {
 
 // classifyMaintenance maps the maintenance errors to their status and
 // message: an invalid state value answers 400, active work answers 409
-// naming each update and run, and an unreadable or unknown stored state
-// answers 500 without driver text.
+// naming each update and run, a leave while a change of the audit chain
+// holds maintenance mode answers 409, a refused approval of an audit chain
+// change answers 409 or, without a fresh MFA step or when a service
+// principal approves turning the chain off, 403, an approval while the
+// server runs no migration loop answers 503, and an unreadable or
+// unknown stored state answers 500 without driver text.
 func classifyMaintenance(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, maintenance.ErrInvalidState):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, maintenance.ErrActiveWork):
 		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, maintenance.ErrHeld):
+		return http.StatusConflict, maintenance.ErrHeld.Error(), true
+	case errors.Is(err, audit.ErrNoChainChange), errors.Is(err, audit.ErrChainMigrating),
+		errors.Is(err, audit.ErrChainChangeWaits):
+		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, audit.ErrChainMigrationsStopped):
+		return http.StatusServiceUnavailable, audit.ErrChainMigrationsStopped.Error(), true
+	case errors.Is(err, audit.ErrChainStepRequired):
+		return http.StatusForbidden, audit.ErrChainStepRequired.Error(), true
+	case errors.Is(err, audit.ErrChainNeedsPerson):
+		return http.StatusForbidden, audit.ErrChainNeedsPerson.Error(), true
 	case errors.Is(err, maintenance.ErrUnavailable):
 		return http.StatusInternalServerError, maintenance.ErrUnavailable.Error(), true
 	default:

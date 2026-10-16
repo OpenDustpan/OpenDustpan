@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -58,10 +59,15 @@ type Config struct {
 	// Freshness checks the MFA step before a create or a rotation. Nil
 	// adds no step: MFA does not exist yet (ADR 56, decision 5).
 	Freshness Freshness
-	// Grants runs the escalation check of a token for another principal.
-	// Nil lets only an administrator act for another principal (fail
-	// closed) until the grants of ADR 52 can answer the check.
+	// Grants runs the escalation check of a personal token for another
+	// person. The server wires the grants of the access model. Nil lets only an
+	// administrator act for another person (fail closed): a store that
+	// keeps no grants.
 	Grants GrantCheck
+	// Authorizer decides principal:manage-tokens on the service principal
+	// of a service token. Nil lets only an administrator act on service
+	// tokens (fail closed).
+	Authorizer identity.Authorizer
 	// Logger logs a failed write of a last-used time. Nil discards it.
 	Logger *slog.Logger
 	// Now returns the current time. Nil means time.Now.
@@ -83,6 +89,7 @@ type Service struct {
 	principals PrincipalReader
 	freshness  Freshness
 	grants     GrantCheck
+	authz      identity.Authorizer
 	logger     *slog.Logger
 	now        func() time.Time
 	newID      func(prefix string) string
@@ -117,7 +124,7 @@ func NewService(cfg Config) (*Service, error) {
 
 	return &Service{
 		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness, grants: cfg.Grants,
-		logger: logger, now: now, newID: newID,
+		authz: cfg.Authorizer, logger: logger, now: now, newID: newID,
 		policies: &policyCache{readAt: time.Time{}, policy: DefaultPolicy(), mu: sync.Mutex{}, valid: false},
 	}, nil
 }
@@ -139,7 +146,7 @@ type Input struct {
 // Create issues a new token for a principal in scope, with the entry e
 // of caller. For ScopeOwn the principal is the person of caller, and
 // in.PrincipalID is ignored. For the other scopes it is in.PrincipalID, its
-// kind must fit the scope, and the escalation check runs. It returns the
+// kind must fit the scope, and the check of mayActFor runs. It returns the
 // token and its secret: the only time the server shows the secret.
 func (s *Service) Create(
 	ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, in Input,
@@ -167,8 +174,8 @@ func (s *Service) Create(
 	}
 
 	if scope != ScopeOwn {
-		if heldErr := s.requireHeld(ctx, caller, p.ID); heldErr != nil {
-			return Token{}, Secret{}, heldErr
+		if mayErr := s.mayActFor(ctx, caller, kind, p.ID); mayErr != nil {
+			return Token{}, Secret{}, mayErr
 		}
 	}
 
@@ -282,9 +289,9 @@ func (s *Service) List(ctx context.Context, req PageRequest) (Page, error) {
 }
 
 // Revoke ends the token id at once, with the entry e of caller. For
-// ScopeOwn the token must belong to the person of caller. An administrator
-// can revoke any token: a revoke never raises access, so it needs no
-// escalation check.
+// ScopeOwn the token must belong to the person of caller. A service token
+// needs principal:manage-tokens on its principal. A revoke never raises
+// access, so it needs no escalation check.
 func (s *Service) Revoke(ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, id string) error {
 	t, err := s.store.GetToken(ctx, id)
 	if err != nil {
@@ -313,6 +320,52 @@ func (s *Service) ListOwn(ctx context.Context, caller identity.Principal, req Pa
 	req.PrincipalID = own.ID
 
 	return s.List(ctx, req)
+}
+
+// ListOfPrincipal returns one page of the tokens of the service principal
+// principalID, newest first, for caller. caller must hold
+// principal:manage-tokens on the principal: the route checks it, and this
+// check holds for every caller of the Service. req.PrincipalID is ignored.
+// The check runs first, so a caller without the action gets
+// identity.ErrDenied for every principal and learns nothing about which
+// principals exist. Then an unknown principal answers ErrPrincipalNotFound,
+// and a principal that is not a service principal ErrWrongKind:
+// principal:manage-tokens gives no right on the tokens of a person.
+func (s *Service) ListOfPrincipal(
+	ctx context.Context, caller identity.Principal, principalID string, req PageRequest,
+) (Page, error) {
+	if err := s.requireManageTokens(ctx, caller, principalID, useList); err != nil {
+		return Page{}, err
+	}
+
+	p, err := s.principals.GetPrincipal(ctx, principalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		return Page{}, fmt.Errorf("%w: %q", ErrPrincipalNotFound, principalID)
+	}
+
+	if err != nil {
+		return Page{}, fmt.Errorf("read principal: %w", err)
+	}
+
+	if p.Kind != principal.KindService {
+		return Page{}, fmt.Errorf("%w: the tokens of a %s go through /api/server/tokens", ErrWrongKind, p.Kind)
+	}
+
+	req.PrincipalID = p.ID
+
+	return s.List(ctx, req)
+}
+
+// MaxLifetime returns the longest lifetime that a create or a rotation can
+// ask for: the maximum lifetime of the installation policy, which applies
+// to every principal today.
+func (s *Service) MaxLifetime(ctx context.Context) (time.Duration, error) {
+	p, err := s.Policy(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	return p.MaxLifetime, nil
 }
 
 // RotateInput names a rotation: the token ID, the scope of the caller, and
@@ -356,6 +409,10 @@ func (s *Service) Rotate(
 
 	if authErr := s.authorizeRotate(ctx, caller, in.Scope, old); authErr != nil {
 		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, authErr)
+	}
+
+	if ownerErr := s.checkRotateOwner(ctx, old); ownerErr != nil {
+		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, ownerErr)
 	}
 
 	at := s.Now()
@@ -439,7 +496,8 @@ func (s *Service) Policy(ctx context.Context) (Policy, error) {
 }
 
 // PolicyChange names the fields of the policy that a change sets. A nil
-// field keeps its value.
+// field keeps its value. DisableBreakGlass is deprecated: the server
+// refuses true, and always keeps false.
 type PolicyChange struct {
 	MaxLifetime       *time.Duration
 	Inactivity        *time.Duration
@@ -462,7 +520,7 @@ func (s *Service) SetPolicy(ctx context.Context, e audit.Entry, c PolicyChange) 
 			return Policy{}, audit.Entry{}, err
 		}
 
-		return p, change(e, p.UpdatedAt, PolicyRef), nil
+		return p, policyEntry(e, p.UpdatedAt, old, p), nil
 	})
 
 	s.policies.forget()
@@ -507,9 +565,9 @@ func (c PolicyChange) applyTo(p Policy) Policy {
 // the entry e for each record that it disables. It reads the policy: with
 // an inactivity period of zero, or with tokens and accounts both off, it
 // changes nothing. The store takes the time of the run from the database
-// clock, and the entries carry that time. The break-glass credential of
-// ADR 57 has no stored record yet, so the bootstrap admin tokens are never
-// disabled here.
+// clock, and the entries carry that time. A break-glass account is always
+// exempt, with no setting. The bootstrap admin tokens have no stored
+// record, so a sweep never disables them here.
 func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult, error) {
 	p, err := s.Policy(ctx)
 	if err != nil {
@@ -588,9 +646,14 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 // checkPolicyActive refuses the token t of the owner o when the policy disables
 // t, or the user account o, as inactive at now, before the sweep writes the
 // disable: the sweep runs once an hour, and a use would else move the last
-// use forward and keep t, or o, alive. A failed read of the policy answers
-// its error, so the caller fails closed.
+// use forward and keep t, or o, alive. A break-glass account is always
+// exempt. A failed read of the policy answers its error, so the caller
+// fails closed.
 func (s *Service) checkPolicyActive(ctx context.Context, t Token, o Owner, now time.Time) error {
+	if o.BreakGlass {
+		return nil
+	}
+
 	p, err := s.policies.get(ctx, now, s.Policy)
 	if err != nil {
 		return fmt.Errorf("authenticate access token: %w", err)
@@ -657,6 +720,59 @@ func change(e audit.Entry, at time.Time, object string) audit.Entry {
 	return e
 }
 
+// policyEntry returns e as the audit entry of a change of the policy from
+// old to updated at the time at.
+func policyEntry(e audit.Entry, at time.Time, old, updated Policy) audit.Entry {
+	e.At = at
+	e.Namespace = audit.ServerScope
+	e.Kind = audit.KindChange
+	e.Outcome = audit.OutcomeSuccess
+	e.Object = PolicyRef
+	e.Changes = nil
+
+	for _, c := range []struct {
+		key        string
+		old, value time.Duration
+	}{
+		{key: "maxLifetimeSeconds", old: old.MaxLifetime, value: updated.MaxLifetime},
+		{key: "inactivitySeconds", old: old.Inactivity, value: updated.Inactivity},
+	} {
+		if c.old == c.value {
+			continue
+		}
+
+		before := seconds(c.old)
+		e.Changes = append(e.Changes, audit.Change{
+			Key: c.key, Old: &before, New: seconds(c.value), Layer: "", TakesEffect: "",
+		})
+	}
+
+	for _, c := range []struct {
+		key        string
+		old, value bool
+	}{
+		{key: "disableTokens", old: old.DisableTokens, value: updated.DisableTokens},
+		{key: "disableAccounts", old: old.DisableAccounts, value: updated.DisableAccounts},
+		{key: "disableBreakGlass", old: old.DisableBreakGlass, value: updated.DisableBreakGlass},
+	} {
+		if c.old == c.value {
+			continue
+		}
+
+		before := strconv.FormatBool(c.old)
+		e.Changes = append(e.Changes, audit.Change{
+			Key: c.key, Old: &before, New: strconv.FormatBool(c.value), Layer: "", TakesEffect: "",
+		})
+	}
+
+	return e
+}
+
+// seconds returns d as a decimal count of whole seconds.
+func seconds(d time.Duration) string {
+	return strconv.FormatInt(int64(d/time.Second), 10)
+}
+
 // issued is a new token with its secret and the digest of the secret.
 type issued struct {
 	token  Token
@@ -696,4 +812,19 @@ func (s *Service) newToken(spec tokenSpec) (issued, error) {
 	}
 
 	return issued{token: t, secret: secret, digest: DigestOf(secret)}, nil
+}
+
+// checkRotateOwner returns ErrPrincipalNotFound when the principal of t
+// was deleted.
+func (s *Service) checkRotateOwner(ctx context.Context, t Token) error {
+	_, err := s.principals.GetPrincipal(ctx, t.PrincipalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		return fmt.Errorf("%w: %q", ErrPrincipalNotFound, t.PrincipalID)
+	}
+
+	if err != nil {
+		return fmt.Errorf("read principal: %w", err)
+	}
+
+	return nil
 }

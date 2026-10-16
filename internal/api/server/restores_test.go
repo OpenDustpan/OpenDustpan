@@ -72,6 +72,7 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Key:         nil,
 		Region:      "test",
 		AfterApply:  nil,
+		Admit:       nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -95,12 +96,18 @@ func newRestoreFixtureOver(t *testing.T, stores backupStores, target blob.Store)
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -543,12 +550,18 @@ func TestRestoreUnknownIDAuthBeforeExistence(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -737,12 +750,18 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 		Metrics:          stubMetrics{},
 		Version:          "test",
 		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
 		Principals:       nil,
 		Access:           nil,
 		Tokens:           nil,
 		Audit:            nil,
-		CheckpointEpochs: nil,
 		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

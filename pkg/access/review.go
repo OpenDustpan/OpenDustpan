@@ -22,13 +22,18 @@ import (
 // The service fills Containers with the objects that hold the object of
 // the export, and ContainerRoles with the roles that give a data action or
 // an access-management action, so that an export answers who can access
-// its object, and who can give access to it.
+// its object, and who can give access to it. TokenNamespace is the
+// namespace whose grants count with TokenNamespaceRoles: the export of a
+// principal of a namespace lists the holders of the token action on its
+// namespace there. Empty means none.
 type ReviewScope struct {
-	Object         identity.Object
-	Namespace      string
-	Containers     []string
-	ContainerRoles []string
-	All            bool
+	Object              identity.Object
+	Namespace           string
+	Containers          []string
+	ContainerRoles      []string
+	TokenNamespace      string
+	TokenNamespaceRoles []string
+	All                 bool
 }
 
 // ReviewKey is the position of a row in the order of an export: the time of
@@ -72,10 +77,36 @@ type ReviewQuery struct {
 	Count     bool
 }
 
+// CallerGrantsQuery is one page of the current grants of a caller as a
+// store reads them: the grants of the principal Principal, and the grants
+// of each group in Groups through the membership of the principal.
+//
+// The page is a snapshot at AsOfMs of the grants that are not revoked: a
+// grant made after AsOfMs is not in it, and neither is a grant revoked
+// since. A grant of a group is in it only while the membership of the
+// principal is current at AsOfMs. The page holds at most Limit rows after
+// the key After, in the order of ReviewKey. Count asks for the count of
+// every row of the query as well.
+type CallerGrantsQuery struct {
+	Groups    []string
+	Principal string
+	After     ReviewKey
+	AsOfMs    int64
+	Limit     int
+	Count     bool
+}
+
 // ReviewRow is one row of an access-review export: a grant, how it ended,
 // the name of its subject and, for a row through a group, the membership.
+// LastAccessTracked is true on a row of a principal: on a grant whose
+// subject is a principal, or on a row read through a group, for the member
+// in Via. LastAccessAt is the latest last-use time over every access token
+// of that principal, and nil when no token of the principal was ever used.
 type ReviewRow struct {
 	RevokedAt *time.Time
+	// LastAccessAt is the latest last-use time of the access tokens of the
+	// principal of the row, and nil when no token was ever used.
+	LastAccessAt *time.Time
 	// MemberCount is the count of the members of a group subject at the
 	// time of a snapshot. It is nil for a principal subject.
 	MemberCount *int64
@@ -87,6 +118,9 @@ type ReviewRow struct {
 	SubjectName string
 	RevokedBy   string
 	Grant       Grant
+	// LastAccessTracked is true on a row of a principal, and false on a
+	// group row with no Via.
+	LastAccessTracked bool
 }
 
 // Membership is the time that a principal was a member of a group.
@@ -122,8 +156,20 @@ type ReviewStore interface {
 	// true, the count of every row of q without its page. It reads the
 	// page and the count from one snapshot of the store.
 	ReviewGrants(ctx context.Context, q ReviewQuery) ([]ReviewRow, int64, error)
+	// CallerGrants returns one page of the rows of q and, when q.Count is
+	// true, the count of every row of q, from one snapshot of the store,
+	// as ReviewGrants does. It reads the grants of each holder of q from
+	// the index of the holders of current grants, so its cost follows the
+	// grants of the caller, not the grants of the installation. A row of a
+	// group grant holds the membership in Via, and the member count of the
+	// group at q.AsOfMs.
+	CallerGrants(ctx context.Context, q CallerGrantsQuery) ([]ReviewRow, int64, error)
 	// ReviewUnits returns the unit of each stable ID in ids that the store
 	// keeps, a deleted one included. An ID with no unit (a purged one, or an
 	// ID of no unit) is not in the map.
 	ReviewUnits(ctx context.Context, ids []string) (map[string]UnitState, error)
+	// LastAccess returns, for each principal ID in principalIDs, the latest
+	// last-use time of its access tokens. A principal with no used token is
+	// not in the map. It reads only the given IDs.
+	LastAccess(ctx context.Context, principalIDs []string) (map[string]time.Time, error)
 }
