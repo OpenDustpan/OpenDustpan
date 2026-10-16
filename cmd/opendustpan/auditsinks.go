@@ -184,8 +184,11 @@ func openBlobSink(spec string, cfg sinkConfig) (logsink.Sink, time.Duration, err
 
 	prefix := strings.TrimPrefix(spec, sinkKindBlob+":")
 
-	// The state sweepers delete unknown objects under these prefixes.
-	if first, _, _ := strings.Cut(prefix, "/"); first == "tofu" || first == "pulumi" {
+	// The state sweepers delete unknown objects under tofu and pulumi, and
+	// the checkpoint check reads every object under audit-checkpoints, so an
+	// object there can fail the check.
+	first, _, _ := strings.Cut(prefix, "/")
+	if first == "tofu" || first == "pulumi" || first == audit.CheckpointPrefix {
 		return nil, 0, fmt.Errorf("%w %s: %w", cfg.setting, spec, errReservedPrefix)
 	}
 
@@ -289,8 +292,10 @@ var (
 	errNoCertificates = errors.New("holds no PEM certificate")
 	// errNoBlobSink reports a blob: sink for a setting that has no blob store.
 	errNoBlobSink = errors.New("this setting has no blob store: pick file, syslog or webhook")
-	// errReservedPrefix reports a blob sink prefix that state blobs own.
-	errReservedPrefix = errors.New("the prefixes tofu and pulumi hold state: pick another prefix")
+	// errReservedPrefix reports a blob sink prefix that the server owns.
+	errReservedPrefix = errors.New(
+		"the prefixes tofu, pulumi and audit-checkpoints belong to the server: pick another prefix",
+	)
 	// errSecretFilePermissions reports a secret file that group or others can read.
 	errSecretFilePermissions = errors.New("secret file allows group or other access")
 )
