@@ -480,11 +480,18 @@ const durableOperationColumns = `id, start_key, kind, input, version, state, att
 var keepControlStatements = []string{
 	`DELETE FROM main.durable_steps`,
 	`DELETE FROM main.durable_operations`,
+	`DELETE FROM main.durable_schedules`,
 	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
 		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
 	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
 		`SELECT operation_id, name, seq, result, done_at_ms FROM live.durable_steps`,
+	`INSERT INTO main.durable_schedules (` + durableScheduleColumns + `) ` +
+		`SELECT ` + durableScheduleColumns + ` FROM live.durable_schedules`,
 }
+
+// durableScheduleColumns lists every column of durable_schedules, for the
+// copy of the control tables.
+const durableScheduleColumns = `name, interval_ms, next_run_at_ms, last_claimed_at_ms`
 
 // copyControlTables runs keepControlStatements in tx.
 func copyControlTables(ctx context.Context, tx *sql.Tx) error {

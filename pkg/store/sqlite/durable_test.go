@@ -25,6 +25,27 @@ func TestDurableConformance(t *testing.T) {
 	})
 }
 
+// TestDurableScheduleConformance runs the schedule suite. Each handle of a
+// case opens the one database file of the case.
+func TestDurableScheduleConformance(t *testing.T) {
+	t.Parallel()
+
+	durabletest.RunSchedules(t, func(t *testing.T) durabletest.ScheduleHarness {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+		copyTemplate(t, path)
+
+		return durabletest.ScheduleHarness{
+			Open: func(t *testing.T, _ time.Duration) durabletest.ScheduledStore {
+				t.Helper()
+
+				return openWith(t, path).DurableOperations()
+			},
+		}
+	})
+}
+
 // durableHarness returns a harness on a fresh database file.
 func durableHarness(t *testing.T, opts ...sqlite.Option) durabletest.Harness {
 	t.Helper()
