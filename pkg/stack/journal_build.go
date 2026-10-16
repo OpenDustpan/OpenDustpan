@@ -329,7 +329,7 @@ func (s *Updates) adoptBuiltBlob(ctx context.Context, stored builtBlob) error {
 		}
 
 		digest := sha256.Sum256(deployment)
-		if digest != stored.save.built.Digest && !sameBuild(deployment, stored.save.built.Deployment) {
+		if !sameBuild(deployment, stored.save.built.Deployment) {
 			return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, ErrConcurrentModification)
 		}
 
