@@ -306,11 +306,12 @@ func TestRestoreOfOldBackupSealsRows(t *testing.T) {
 	restoreID := backup.RestoreID("rst-seal00000000000001")
 
 	err = srv.Restores().Start(ctx, restoreID, backup.RestoreRequest{
-		BackupID:    backupID,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         backupID,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if err != nil {
 		t.Fatalf("start restore %s: %v", restoreID, err)

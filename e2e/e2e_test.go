@@ -12796,6 +12796,15 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	schemaUnchanged := captureExitState(ctx, t, env, tools, "after schema-mismatch restore")
 	checkExitStateMatches(t, undone, schemaUnchanged)
 	writeTargetManifest(t, target, id, saved)
+
+	// An installation-operator restore keeps the access tables: it cannot
+	// bring back a revoked token.
+	checkOperatorRestoreKeepsRevokedToken(ctx, t, env)
+	env.NoteStep(
+		t,
+		"operator restore keeps a revoked token revoked",
+		"installation-operator restore kept the access tables",
+	)
 }
 
 // writeExitTestState writes the checked state with both CLIs: a Pulumi stack

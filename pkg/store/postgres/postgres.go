@@ -47,6 +47,11 @@ type Store struct {
 	// stagingMu guards stagingSchema: one staged restore at a time.
 	stagingMu     sync.Mutex
 	stagingSchema string
+	// keepAccessHook, when set, runs between the live access read and the
+	// schema swap of a keep-access restore, inside the swap transaction.
+	// Tests set it to prove the live access tables stay locked across that
+	// window. Nil in production.
+	keepAccessHook func(ctx context.Context, tx pgx.Tx, live string)
 }
 
 var (
@@ -68,7 +73,7 @@ func Open(ctx context.Context, url string) (*Store, error) {
 	}
 
 	s := &Store{
-		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "",
+		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
 	}
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()

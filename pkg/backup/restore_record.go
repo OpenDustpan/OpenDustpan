@@ -111,6 +111,19 @@ type Applier interface {
 	ApplyStaging(ctx context.Context) error
 }
 
+// AccessKeepingApplier swaps staged data while it keeps the current access
+// tables. A restore by a caller without server:restore-access uses it, so
+// the access tables stay as they are and the other tables come from the
+// backup, in the same step. It reports ErrRestoreAccessMismatch when the
+// backup names access data that the kept tables do not hold, with no change.
+type AccessKeepingApplier interface {
+	// ApplyStagingKeepingAccess swaps the staged restore data into the live
+	// data, keeps the current rows of the access tables, fences every
+	// namespace, and removes the staging area. It reports ErrCorrupt when
+	// no staged data exists.
+	ApplyStagingKeepingAccess(ctx context.Context) error
+}
+
 // Fencer increments the failover version of every namespace (ADR 38
 // decision 7), so leases, update tokens, locks and upload capabilities from
 // before the restore stop working.
