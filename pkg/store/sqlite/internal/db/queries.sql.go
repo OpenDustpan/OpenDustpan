@@ -3722,11 +3722,18 @@ func (q *Queries) JournalState(ctx context.Context, arg JournalStateParams) (Jou
 }
 
 const lastAccessByPrincipals = `-- name: LastAccessByPrincipals :many
-SELECT principal_id, CAST(MAX(last_used_at_ms) AS INTEGER) AS last_used_at_ms
-FROM access_tokens
-WHERE principal_id IN (SELECT value FROM json_each(CAST(?1 AS TEXT)))
-  AND last_used_at_ms IS NOT NULL
-GROUP BY principal_id
+SELECT u.principal_id, CAST(MAX(u.used_at_ms) AS INTEGER) AS last_used_at_ms
+FROM (
+  SELECT t.principal_id, t.last_used_at_ms AS used_at_ms
+  FROM access_tokens t
+  WHERE t.principal_id IN (SELECT value FROM json_each(CAST(?1 AS TEXT)))
+    AND t.last_used_at_ms IS NOT NULL
+  UNION ALL
+  SELECT s.principal_id, s.last_seen_at_ms AS used_at_ms
+  FROM sessions s
+  WHERE s.principal_id IN (SELECT value FROM json_each(CAST(?1 AS TEXT)))
+) AS u
+GROUP BY u.principal_id
 `
 
 type LastAccessByPrincipalsRow struct {
@@ -3734,9 +3741,10 @@ type LastAccessByPrincipalsRow struct {
 	LastUsedAtMs int64
 }
 
-// The latest last-use time of the access tokens of each given principal:
-// one row for each principal with a used token. A JSON array carries the
-// IDs, so the query stays fixed. Revoked, replaced and expired tokens
+// The latest use of each given principal: the last use of its access
+// tokens and of its console sessions. One row for each principal with a
+// used token or a session. A JSON array carries the IDs, so the query
+// stays fixed. Revoked, replaced and expired tokens and ended sessions
 // count: a use is a use.
 func (q *Queries) LastAccessByPrincipals(ctx context.Context, principals string) ([]LastAccessByPrincipalsRow, error) {
 	rows, err := q.db.QueryContext(ctx, lastAccessByPrincipals, principals)

@@ -1402,14 +1402,21 @@ ON CONFLICT (unit_id) DO UPDATE SET
 
 
 -- name: LastAccessByPrincipals :many
--- The latest last-use time of the access tokens of each given principal:
--- one row for each principal with a used token. Revoked, replaced and
--- expired tokens count: a use is a use.
-SELECT principal_id, MAX(last_used_at_ms)::bigint AS last_used_at_ms
-FROM access_tokens
-WHERE principal_id = ANY(sqlc.arg('principal_ids')::text[])
-  AND last_used_at_ms IS NOT NULL
-GROUP BY principal_id;
+-- The latest use of each given principal: the last use of its access
+-- tokens and of its console sessions. One row for each principal with a
+-- used token or a session. Revoked, replaced and expired tokens and ended
+-- sessions count: a use is a use.
+SELECT u.principal_id, MAX(u.used_at_ms)::bigint AS last_used_at_ms
+FROM (
+  SELECT t.principal_id, t.last_used_at_ms AS used_at_ms
+  FROM access_tokens t
+  WHERE t.principal_id = ANY(sqlc.arg('principal_ids')::text[]) AND t.last_used_at_ms IS NOT NULL
+  UNION ALL
+  SELECT s.principal_id, s.last_seen_at_ms AS used_at_ms
+  FROM sessions s
+  WHERE s.principal_id = ANY(sqlc.arg('principal_ids')::text[])
+) u
+GROUP BY u.principal_id;
 
 -- name: GetDeletedStack :one
 -- A deleted stack of one namespace by its stable ID (ADR 47), for a restore

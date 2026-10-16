@@ -105,9 +105,9 @@ const (
 // lasts). MemberCount is set for a group row of a snapshot only.
 // LastAccessTracked is true on a row of a principal: on a grant whose
 // subject is a principal, or on a row read through a group, for the member.
-// LastAccessAtMs is the latest use of an access token of that principal,
-// and is left out when no token was ever used. The server records no
-// sign-in, so a sign-in does not count. A group row with no Via and a
+// LastAccessAtMs is the latest use of an access token or a console session
+// of that principal, and is left out when no token and no session was ever
+// used. A group row with no Via and a
 // bootstrap token row carry neither field.
 //
 // Contract: never remove or rename these fields.
@@ -436,8 +436,8 @@ func reviewRowOf(e access.ReviewEntry) reviewRowResponse {
 
 	// A row of a principal is tracked: a grant to a principal, or a row
 	// read through a group, for the member. LastAccessAtMs is the latest
-	// use of an access token of the principal, left out when no token was
-	// ever used. A group row with no Via and a bootstrap token row carry
+	// use of an access token or a console session of the principal, left
+	// out when no token and no session was ever used. A group row with no Via and a bootstrap token row carry
 	// neither field.
 	if row.LastAccessTracked {
 		tracked := true
