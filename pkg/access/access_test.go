@@ -1346,7 +1346,9 @@ func TestNamespaceTokenGrantRule(t *testing.T) {
 
 	f.grant(t, prn("partial"), limited.ID, identity.NamespaceObject("acme"))
 	f.grant(t, prn("full"), access.RoleAdmin, identity.NamespaceObject("acme"))
-	f.grant(t, prn("root"), tokenRole.ID, identity.NamespaceObject("acme"))
+	// The route of a grant on acme authorizes namespace:manage-access on
+	// acme first, so root holds it with the token action.
+	f.grant(t, prn("root"), limited.ID, identity.NamespaceObject("acme"))
 	f.grant(t, prn("root"), accessOnly.ID, identity.ServerObject())
 
 	acme := identity.NamespaceObject("acme")

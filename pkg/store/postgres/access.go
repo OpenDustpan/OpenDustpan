@@ -418,17 +418,25 @@ func appendCreatorGrantEntries(
 // SubjectsOf implements access.Callers: the principal with the subject and
 // its current groups, in one query.
 func (s *Store) SubjectsOf(ctx context.Context, subject string) ([]access.Subject, error) {
-	return grantReads{q: s.queries}.SubjectsOf(ctx, subject)
-}
-
-// SubjectsOf implements access.GrantReads.
-func (r grantReads) SubjectsOf(ctx context.Context, subject string) ([]access.Subject, error) {
-	rows, err := r.q.SubjectsOfCaller(ctx, subject)
+	rows, err := s.queries.SubjectsOfCaller(ctx, subject)
 	if err != nil {
 		return nil, fmt.Errorf("select subjects of caller: %w", err)
 	}
 
 	return callerSubjects(rows), nil
+}
+
+// SubjectsOf implements access.GrantReads. A disabled principal has no
+// subjects, so a disable that commits before the check refuses the write.
+func (r grantReads) SubjectsOf(ctx context.Context, subject string) ([]access.Subject, error) {
+	rows, err := r.q.SubjectsOfEnabledCaller(ctx, subject)
+	if err != nil {
+		return nil, fmt.Errorf("select subjects of caller: %w", err)
+	}
+
+	return callerSubjects(mapRows(rows, func(r db.SubjectsOfEnabledCallerRow) db.SubjectsOfCallerRow {
+		return db.SubjectsOfCallerRow(r)
+	})), nil
 }
 
 // callerSubjects maps the rows of SubjectsOfCaller to subjects: the

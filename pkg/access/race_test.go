@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -281,4 +282,105 @@ func TestRoleUpdateRefusedAfterARacingRevoke(t *testing.T) {
 	if !errors.Is(err, access.ErrEscalation) {
 		t.Fatalf("role update after a racing revoke of the caller's grant: err = %v, want ErrEscalation", err)
 	}
+}
+
+// TestGrantRefusedAfterARacingRevokeOfManageAccess checks that a grant
+// reads the manage-access right of its granter in its own write: a revoke
+// of the grant that gave the granter manage-access, committed after the
+// route authorized the request, refuses the grant, even when another grant
+// still gives every action of the role.
+func TestGrantRefusedAfterARacingRevokeOfManageAccess(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	acme := identity.NamespaceObject("acme")
+	bob := f.person(t, "bob")
+	f.person(t, "carol")
+	f.grant(t, prn("bob"), access.RoleAdmin, acme)
+	f.grant(t, prn("bob"), access.RoleViewer, acme)
+
+	svc, authz := racingService(t, f, revokeRace(t, f, prn("bob"), access.RoleAdmin, acme))
+
+	ctx := access.WithRequestCache(t.Context())
+	if err := authz.Authorize(ctx, bob, identity.ActionNamespaceManageAccess, acme); err != nil {
+		t.Fatalf("authorize the route: %v", err)
+	}
+
+	_, err := svc.Grant(ctx, testEntry(), bob, access.GrantInput{
+		Object: acme, Role: access.RoleViewer, Subject: prn("carol"),
+	})
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("grant after a racing revoke of the granter's manage-access: err = %v, want ErrDenied", err)
+	}
+
+	assertNoGrants(t, f, prn("carol"), acme)
+}
+
+// TestRoleUpdateRefusedAfterARacingRevokeOfManageRoles checks that a role
+// update reads the server:manage-roles right of its caller in its own
+// write.
+func TestRoleUpdateRefusedAfterARacingRevokeOfManageRoles(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	server := identity.ServerObject()
+	bob := f.person(t, "bob")
+	f.grant(t, prn("bob"), access.RoleAccountAdministrator, server)
+
+	reader, err := f.svc.CreateRole(t.Context(), testEntry(), admin(), access.RoleInput{
+		Name: "lister", Description: "", Actions: []identity.Action{identity.ActionServerReadPrincipals},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	f.grant(t, prn("bob"), reader.ID, server)
+
+	role, err := f.svc.CreateRole(t.Context(), testEntry(), admin(), access.RoleInput{
+		Name: "reader", Description: "", Actions: []identity.Action{identity.ActionServerReadPrincipals},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	svc, _ := racingService(t, f, revokeRace(t, f, prn("bob"), access.RoleAccountAdministrator, server))
+
+	_, err = svc.UpdateRole(t.Context(), testEntry(), bob, role.ID, access.RoleInput{
+		Name: "reader", Description: "updated", Actions: []identity.Action{identity.ActionServerReadPrincipals},
+	})
+	if !errors.Is(err, identity.ErrDenied) {
+		t.Fatalf("role update after a racing revoke of the caller's manage-roles: err = %v, want ErrDenied", err)
+	}
+}
+
+// TestGrantRefusedAfterARacingDisable checks that a grant reads the
+// subjects of its granter in its own write: an inactivity disable of the
+// granter that commits after the route authorized the request refuses the
+// grant.
+func TestGrantRefusedAfterARacingDisable(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	acme := identity.NamespaceObject("acme")
+	bob := f.person(t, "bob")
+	f.grant(t, prn("bob"), access.RoleAdmin, acme)
+
+	svc, _ := racingService(t, f, once(func() {
+		sw := accesstoken.Sweep{Inactivity: time.Millisecond, Tokens: false, Accounts: true}
+		res, err := f.store.SweepInactive(t.Context(), sw, storetest.ServerChange)
+		if err != nil || len(res.Principals) == 0 {
+			t.Errorf("racing disable: %d principals disabled, err %v", len(res.Principals), err)
+		}
+	}))
+
+	f.person(t, "carol")
+
+	_, err := svc.Grant(t.Context(), testEntry(), bob, access.GrantInput{
+		Object: acme, Role: access.RoleViewer, Subject: prn("carol"),
+	})
+	if !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("grant after a racing disable of the granter: err = %v, want ErrEscalation", err)
+	}
+
+	assertNoGrants(t, f, prn("carol"), acme)
 }
