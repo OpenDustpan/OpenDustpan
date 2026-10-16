@@ -161,7 +161,10 @@ func (c *PlainClient) Begin(_ context.Context, opts Options) (string, Pending, e
 		state = randomText()
 	}
 
-	p := Pending{State: state, Nonce: "", Verifier: oauth2.GenerateVerifier(), MaxAge: 0, HasMaxAge: false}
+	// The nonce is never sent: with no ID token, nothing carries it back.
+	// The pending request still holds a random one, so that a store of
+	// pending requests checks one form for each mode.
+	p := Pending{State: state, Nonce: randomText(), Verifier: oauth2.GenerateVerifier(), MaxAge: 0, HasMaxAge: false}
 
 	return c.oauth2.AuthCodeURL(p.State, oauth2.S256ChallengeOption(p.Verifier)), p, nil
 }

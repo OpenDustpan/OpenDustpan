@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -138,5 +139,38 @@ func (f storedFixture) checkNoProvider(t *testing.T, ids ...string) {
 		if _, ok, err := f.lookup.Provider(t.Context(), id); ok || err != nil {
 			t.Errorf("lookup of %q = %t, %v; want no provider", id, ok, err)
 		}
+	}
+}
+
+// TestStoredProvidersPlainOAuth proves that the lookup of the sign-in
+// routes makes a plain OAuth 2.0 client for a stored provider in the
+// oauth mode.
+func TestStoredProvidersPlainOAuth(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	f := newStoredFixture(t)
+
+	_, err := f.admin.Create(ctx, adminEntry(), session.ProviderInput{
+		ID: "hub", Mode: session.ModeOAuth, Issuer: "", DisplayName: "Hub", ClientID: "dustpan",
+		ClientSecret: "secret", Scopes: []string{"read:user"}, AutoCreate: true, Enabled: true,
+		OAuth: session.OAuthSettings{ //nolint:gosec // Test fixture: the URLs of a provider, no credential.
+			AuthorizationURL: "https://hub.example/login/oauth/authorize",
+			TokenURL:         "https://hub.example/login/oauth/access_token",
+			UserinfoURL:      "https://api.hub.example/user", SubjectClaim: "id", NameClaim: "",
+			UsernameClaim: "login", EmailClaim: "",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, ok, err := f.lookup.Provider(ctx, "hub")
+	if err != nil || !ok || !got.Stored {
+		t.Fatalf("lookup = %+v, %t, %v; want the stored provider hub", got, ok, err)
+	}
+
+	if _, plain := got.Client.(*oauth.PlainClient); !plain {
+		t.Fatalf("client of hub = %T, want *oauth.PlainClient", got.Client)
 	}
 }

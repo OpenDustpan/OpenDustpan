@@ -62,12 +62,12 @@ func newProviderAdmin(cfg *settings, s providerStores) (*session.ProviderAdmin, 
 // applies at once, and keeps the client of each provider until its version
 // changes, so the client keeps its discovery document.
 type storedProviders struct {
-	admin  *session.ProviderAdmin
-	client *http.Client
-	now    func() time.Time
-	cache  map[string]cachedProvider
-	base   string
-	mu     sync.Mutex
+	admin *session.ProviderAdmin
+	http  *http.Client
+	now   func() time.Time
+	cache map[string]cachedProvider
+	base  string
+	mu    sync.Mutex
 }
 
 // cachedProvider is the client of one version of a stored provider.
@@ -80,7 +80,7 @@ func newStoredProviders(
 	admin *session.ProviderAdmin, base string, client *http.Client, now func() time.Time,
 ) *storedProviders {
 	return &storedProviders{
-		admin: admin, client: client, now: now, cache: map[string]cachedProvider{}, base: base, mu: sync.Mutex{},
+		admin: admin, http: client, now: now, cache: map[string]cachedProvider{}, base: base, mu: sync.Mutex{},
 	}
 }
 
@@ -125,6 +125,47 @@ func (s *storedProviders) Provider(ctx context.Context, id string) (serverapi.Si
 	return provider, true, nil
 }
 
+// plainClient makes the plain OAuth 2.0 client of the stored provider p,
+// which is in the oauth mode. The time of the authentication of its
+// sessions is the time of the sign-in: the provider gives none (see
+// oauth.PlainClient.Finish). The token freshness check reads only that
+// time, so this is the one place where the freshness of such a session
+// comes from.
+func (s *storedProviders) plainClient(p *session.ProviderConfig, clientSecret string) (*oauth.PlainClient, error) {
+	client, err := oauth.NewPlain(oauth.PlainConfig{
+		HTTPClient: s.http, Now: s.now, AuthorizationURL: p.OAuth.AuthorizationURL, TokenURL: p.OAuth.TokenURL,
+		UserinfoURL: p.OAuth.UserinfoURL, ClientID: p.ClientID, ClientSecret: clientSecret,
+		RedirectURL: s.redirect(p.ID), Scopes: p.Scopes, Claims: oauth.Claims{
+			Subject: p.OAuth.SubjectClaim, Name: p.OAuth.NameClaim, Username: p.OAuth.UsernameClaim,
+			Email: p.OAuth.EmailClaim,
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("plain OAuth client: %w", err)
+	}
+
+	return client, nil
+}
+
+// openIDClient makes the client of the stored provider p, which is in the
+// oidc mode. It reads the discovery document at its first use.
+func (s *storedProviders) openIDClient(p *session.ProviderConfig, clientSecret string) (*oauth.Lazy, error) {
+	client, err := oauth.NewLazy(oauth.Config{
+		HTTPClient: s.http, Now: s.now, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: clientSecret,
+		RedirectURL: s.redirect(p.ID), Scopes: p.Scopes,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("OpenID client: %w", err)
+	}
+
+	return client, nil
+}
+
+// redirect returns the callback URL of the provider id.
+func (s *storedProviders) redirect(id string) string {
+	return s.base + "/api/server/sign-in/" + id + "/callback"
+}
+
 // build makes the client of the stored provider p.
 func (s *storedProviders) build(ctx context.Context, p *session.ProviderConfig) (serverapi.SignInProvider, error) {
 	var none serverapi.SignInProvider
@@ -134,10 +175,14 @@ func (s *storedProviders) build(ctx context.Context, p *session.ProviderConfig) 
 		return none, fmt.Errorf("sign-in provider %s: %w", p.ID, err)
 	}
 
-	client, err := oauth.NewLazy(oauth.Config{
-		HTTPClient: s.client, Now: s.now, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: clientSecret,
-		RedirectURL: s.base + "/api/server/sign-in/" + p.ID + "/callback", Scopes: p.Scopes,
-	})
+	var client serverapi.OIDCClient
+
+	if p.Mode == session.ModeOAuth {
+		client, err = s.plainClient(p, clientSecret)
+	} else {
+		client, err = s.openIDClient(p, clientSecret)
+	}
+
 	if err != nil {
 		return none, fmt.Errorf("sign-in provider %s: %w", p.ID, err)
 	}

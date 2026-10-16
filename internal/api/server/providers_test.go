@@ -25,6 +25,8 @@ import (
 const (
 	betaSecret   = "client-secret-of-beta"
 	betaCallback = signInBase + "/api/server/sign-in/beta/callback"
+	hubSecret    = "client-secret-of-hub"
+	hubCallback  = signInBase + "/api/server/sign-in/hub/callback"
 	// installationKey is the key-encryption key of the tests: 32 bytes.
 	installationKey = "0123456789abcdef0123456789abcdef"
 )
@@ -36,6 +38,7 @@ type providerEnv struct {
 	signInEnv
 
 	beta  *oauthtest.Provider
+	hub   *oauthtest.Provider
 	stale *atomic.Bool
 }
 
@@ -66,10 +69,14 @@ func (s testStored) Provider(ctx context.Context, id string) (apiserver.SignInPr
 		return none, false, err
 	}
 
-	client, err := oauth.NewLazy(oauth.Config{
-		HTTPClient: s.client, Now: s.now, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: clientSecret,
-		RedirectURL: signInBase + "/api/server/sign-in/" + id + "/callback", Scopes: p.Scopes,
-	})
+	var client apiserver.OIDCClient
+
+	if p.Mode == session.ModeOAuth {
+		client, err = s.plainClient(&p, clientSecret)
+	} else {
+		client, err = s.openIDClient(&p, clientSecret)
+	}
+
 	if err != nil {
 		return none, false, err
 	}
@@ -83,10 +90,33 @@ func (s testStored) Provider(ctx context.Context, id string) (apiserver.SignInPr
 	}, true, nil
 }
 
+// plainClient makes the plain OAuth 2.0 client of p, as the server does
+// for the oauth mode.
+func (s testStored) plainClient(p *session.ProviderConfig, clientSecret string) (*oauth.PlainClient, error) {
+	return oauth.NewPlain(oauth.PlainConfig{
+		HTTPClient: s.client, Now: s.now, AuthorizationURL: p.OAuth.AuthorizationURL, TokenURL: p.OAuth.TokenURL,
+		UserinfoURL: p.OAuth.UserinfoURL, ClientID: p.ClientID, ClientSecret: clientSecret,
+		RedirectURL: signInBase + "/api/server/sign-in/" + p.ID + "/callback", Scopes: p.Scopes,
+		Claims: oauth.Claims{
+			Subject: p.OAuth.SubjectClaim, Name: p.OAuth.NameClaim, Username: p.OAuth.UsernameClaim,
+			Email: p.OAuth.EmailClaim,
+		},
+	})
+}
+
+// openIDClient makes the OpenID client of p, as the server does for the
+// oidc mode.
+func (s testStored) openIDClient(p *session.ProviderConfig, clientSecret string) (*oauth.Lazy, error) {
+	return oauth.NewLazy(oauth.Config{
+		HTTPClient: s.client, Now: s.now, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: clientSecret,
+		RedirectURL: signInBase + "/api/server/sign-in/" + p.ID + "/callback", Scopes: p.Scopes,
+	})
+}
+
 func newProviderEnv(t *testing.T) providerEnv {
 	t.Helper()
 
-	var beta *oauthtest.Provider
+	var beta, hub *oauthtest.Provider
 
 	var noFaults oauthtest.Faults
 
@@ -98,6 +128,12 @@ func newProviderEnv(t *testing.T) providerEnv {
 			beta = oauthtest.New(t, oauthtest.Config{
 				Now: clock.Now, ClientID: "dustpan-beta", ClientSecret: betaSecret, RedirectURI: betaCallback,
 				Algorithm: oauthtest.RS256, User: alice(), Mode: oauthtest.ModeOIDC, Faults: noFaults, TLS: true,
+			})
+			// A plain OAuth 2.0 provider, on HTTP on a loopback host, so the
+			// HTTP client of beta reaches it too.
+			hub = oauthtest.New(t, oauthtest.Config{
+				Now: clock.Now, ClientID: "dustpan-hub", ClientSecret: hubSecret, RedirectURI: hubCallback,
+				Algorithm: oauthtest.RS256, User: alice(), Mode: oauthtest.ModeOAuth, Faults: noFaults, TLS: false,
 			})
 
 			wrapper, err := secret.NewBuiltinWrapper([]byte(installationKey))
@@ -123,7 +159,7 @@ func newProviderEnv(t *testing.T) providerEnv {
 		},
 	})
 
-	return providerEnv{signInEnv: e, beta: beta, stale: stale}
+	return providerEnv{signInEnv: e, beta: beta, hub: hub, stale: stale}
 }
 
 // adminDo sends a request with the access token of an administrator.
@@ -147,14 +183,25 @@ func (e providerEnv) betaBody() string {
 
 // providerDoc is a provider on the wire, in tests.
 type providerDoc struct {
-	ID              string   `json:"id"`
-	Source          string   `json:"source"`
-	Issuer          string   `json:"issuer"`
-	DisplayName     string   `json:"displayName"`
-	Scopes          []string `json:"scopes"`
-	Version         int64    `json:"version"`
-	Enabled         bool     `json:"enabled"`
-	ClientSecretSet bool     `json:"clientSecretSet"`
+	ID              string     `json:"id"`
+	Source          string     `json:"source"`
+	Issuer          string     `json:"issuer"`
+	DisplayName     string     `json:"displayName"`
+	Scopes          []string   `json:"scopes"`
+	Version         int64      `json:"version"`
+	Enabled         bool       `json:"enabled"`
+	ClientSecretSet bool       `json:"clientSecretSet"`
+	Mode            string     `json:"mode"`
+	UserinfoURL     string     `json:"userinfoURL"`
+	Claims          *claimsDoc `json:"claims"`
+}
+
+// claimsDoc is the claim mapping of a provider answer.
+type claimsDoc struct {
+	Subject  string `json:"subject"`
+	Name     string `json:"name"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
 }
 
 func decodeProvider(t *testing.T, rec *httptest.ResponseRecorder) providerDoc {
@@ -562,6 +609,98 @@ func TestSignInDisableBeforeTheCallback(t *testing.T) {
 		if cb.Code != http.StatusNotFound || cookieOf(cb, apiserver.SessionCookie) != nil {
 			t.Fatalf("callback after a disable (stale lookup %t) = %d %s, want 404 with no session",
 				stale, cb.Code, cb.Body.String())
+		}
+	}
+}
+
+// hubBody is the body of the plain OAuth 2.0 provider hub, with only its
+// subject claim mapped.
+func (e providerEnv) hubBody() string {
+	return `{"id":"hub","mode":"oauth","displayName":"Hub","clientID":"dustpan-hub","clientSecret":"` + hubSecret +
+		`","authorizationURL":"` + e.hub.AuthorizationEndpoint() + `","tokenURL":"` + e.hub.TokenEndpoint() +
+		`","userinfoURL":"` + e.hub.UserinfoEndpoint() + `","claims":{"subject":"sub"}}`
+}
+
+// TestSignInPlainOAuthProvider proves a stored provider in the oauth mode:
+// the API creates it with the default claims and answers its settings,
+// a person signs in through it with a subject of its own, and a change of
+// its mode or of its user-info URL is refused.
+func TestSignInPlainOAuthProvider(t *testing.T) {
+	t.Parallel()
+
+	e := newProviderEnv(t)
+
+	rec := e.adminDo(t, http.MethodPost, "/api/server/sign-in-providers", e.hubBody())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s, want 201", rec.Code, rec.Body.String())
+	}
+
+	got := decodeProvider(t, rec)
+	if got.Mode != "oauth" || got.Issuer != "" || got.UserinfoURL != e.hub.UserinfoEndpoint() || got.Claims == nil ||
+		got.Claims.Subject != "sub" || got.Claims.Name != "name" || got.Claims.Email != "email" {
+		t.Fatalf("provider = %+v, want the oauth mode with the default claims", got)
+	}
+
+	if strings.Contains(rec.Body.String(), hubSecret) {
+		t.Fatal("the answer holds the client secret")
+	}
+
+	if subject := e.signInWith(t, e.hub, "hub"); subject != "hub:248289761001" {
+		t.Fatalf("subject = %q, want hub:248289761001", subject)
+	}
+
+	e.checkHubChanges(t)
+}
+
+// checkHubChanges proves that a change of the mode, the user-info URL or
+// the subject claim of hub is refused, and that a change of its name claim
+// works.
+func (e providerEnv) checkHubChanges(t *testing.T) {
+	t.Helper()
+
+	for body, want := range map[string]int{
+		`{"version":1,"mode":"oidc"}`:                                       http.StatusBadRequest,
+		`{"version":1,"userinfoURL":"` + e.hub.UserinfoEndpoint() + `/me"}`: http.StatusConflict,
+		`{"version":1,"claims":{"subject":"email"}}`:                        http.StatusConflict,
+	} {
+		refused := e.adminDo(t, http.MethodPatch, "/api/server/sign-in-providers/hub", body)
+		if refused.Code != want {
+			t.Errorf("change %s = %d %s, want %d", body, refused.Code, refused.Body.String(), want)
+		}
+	}
+
+	rec := e.adminDo(
+		t,
+		http.MethodPatch,
+		"/api/server/sign-in-providers/hub",
+		`{"version":1,"claims":{"name":"login"}}`,
+	)
+	if rec.Code != http.StatusOK || decodeProvider(t, rec).Claims.Name != "login" {
+		t.Fatalf("change of the name claim = %d %s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// TestSignInPlainOAuthProviderRefusals proves that a create in the oauth
+// mode needs its endpoints and no issuer, and that a create in the oidc
+// mode needs an issuer.
+func TestSignInPlainOAuthProviderRefusals(t *testing.T) {
+	t.Parallel()
+
+	e := newProviderEnv(t)
+
+	for _, body := range []string{
+		`{"id":"hub","mode":"oauth","clientID":"c","clientSecret":"s","tokenURL":"https://h.example/t",` +
+			`"authorizationURL":"https://h.example/a"}`,
+		`{"id":"hub","mode":"oauth","clientID":"c","clientSecret":"s","issuer":"https://h.example",` +
+			`"authorizationURL":"https://h.example/a","tokenURL":"https://h.example/t","userinfoURL":"https://h.example/u"}`,
+		`{"id":"hub","mode":"oauth","clientID":"c","clientSecret":"s","authorizationURL":"http://h.example/a",` +
+			`"tokenURL":"https://h.example/t","userinfoURL":"https://h.example/u"}`,
+		`{"id":"hub","mode":"saml","clientID":"c","clientSecret":"s","issuer":"https://h.example"}`,
+		`{"id":"hub","clientID":"c","clientSecret":"s"}`,
+	} {
+		rec := e.adminDo(t, http.MethodPost, "/api/server/sign-in-providers", body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("create %s = %d %s, want 400", body, rec.Code, rec.Body.String())
 		}
 	}
 }
