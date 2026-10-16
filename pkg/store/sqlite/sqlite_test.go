@@ -44,6 +44,22 @@ func TestConformance(t *testing.T) {
 	})
 }
 
+// TestSharedConformance runs the two-handle suite: both handles open one
+// file, as two processes open one database.
+func TestSharedConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunShared(t, func(t *testing.T) (storetest.Store, storetest.Store) {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
+
+		return openPath(t, path), openPath(t, path)
+	})
+}
+
 // TestAccessConformance runs the role and grant store suite.
 func TestAccessConformance(t *testing.T) {
 	t.Parallel()

@@ -59,6 +59,25 @@ func TestConformance(t *testing.T) {
 	})
 }
 
+// TestSharedConformance runs the two-handle suite: both handles open one
+// schema, as two servers open one database.
+func TestSharedConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunShared(t, func(t *testing.T) (storetest.Store, storetest.Store) {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return openURL(t, schemaURL), openURL(t, schemaURL)
+	})
+}
+
 // TestAccessConformance runs the role and grant store suite.
 func TestAccessConformance(t *testing.T) {
 	t.Parallel()
@@ -896,7 +915,15 @@ func (s *backupStore) StagingAlive(id string) bool {
 func open(tb testing.TB, base string) *postgres.Store {
 	tb.Helper()
 
-	s, err := postgres.Open(tb.Context(), isolatedURL(tb, base))
+	return openURL(tb, isolatedURL(tb, base))
+}
+
+// openURL returns a store on the schema that schemaURL names. Each call
+// opens its own handle, so two calls give two handles on one schema.
+func openURL(tb testing.TB, schemaURL string) *postgres.Store {
+	tb.Helper()
+
+	s, err := postgres.Open(tb.Context(), schemaURL)
 	if err != nil {
 		tb.Fatalf("open store: %v", err)
 	}

@@ -12,6 +12,7 @@ It writes the result as one JSON report for the nightly budget job.
 
 With SQLite (the default) the harness runs one instance.
 With `DUSTPAN_TEST_POSTGRES_URL` set it runs two instances on one database.
+The two instances share one blob directory and one key-encryption key.
 Each run uses a fresh namespace, so runs never share data.
 
 ## Run it
