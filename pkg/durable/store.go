@@ -17,13 +17,14 @@ import (
 // A store method of another port can also take a StepFence or a
 // StartRequest. Such a method checks the fence, or starts the operation, in
 // the transaction of its own write, with the rules of RecordStep or Start.
-// It takes the time of the expiry check when it checks, not when its
-// transaction starts, so a claim that expires during a long transaction
-// cannot write.
-//
-// A method that returns an error changes nothing.
 // Then a domain write and its step record, or a domain write and the start of
-// an operation, commit together or not at all.
+// an operation, commit together or not at all. Such a method takes the time
+// of the expiry check when it checks, not when its transaction starts, so a
+// claim that expires during a long transaction cannot write.
+//
+// A method that returns an error changes nothing, with one exception: Claim
+// can end expired operations with a requested cancel before it returns
+// ErrNoWork.
 //
 //nolint:interfacebloat // One contract for one row per operation: every method reads or changes that row.
 type Store interface {
