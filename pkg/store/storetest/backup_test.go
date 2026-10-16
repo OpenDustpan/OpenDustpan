@@ -2328,7 +2328,7 @@ func (s *fakeBackupStore) SchemaTables(_ context.Context) ([]string, error) {
 		return nil, errFakeClosed
 	}
 
-	out := backup.TablesCopy()
+	out := append(backup.TablesCopy(), backup.ControlTables...)
 
 	if s.extraSchemaTable != "" {
 		out = append(out, s.extraSchemaTable)
