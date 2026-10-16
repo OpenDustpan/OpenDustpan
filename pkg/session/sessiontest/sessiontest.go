@@ -87,27 +87,28 @@ func at(minute int) time.Time {
 // @server for the session id of prn-1, as a service builds it.
 func entry(id string, when time.Time) audit.Entry {
 	return audit.Entry{
-		At:         when,
-		Namespace:  audit.ServerScope,
-		Subject:    "alice",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "server:sign-in",
-		Object:     session.FullRef("prn-1", id),
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "sessiontest",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           when,
+		Namespace:    audit.ServerScope,
+		Subject:      "alice",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "server:sign-in",
+		Object:       session.FullRef("prn-1", id),
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "sessiontest",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 
@@ -146,8 +147,17 @@ func mustPrincipalAt(t *testing.T, s Store, id string, kind principal.Kind, crea
 	t.Helper()
 
 	p := principal.Principal{
-		CreatedAt: created, UpdatedAt: created, DisabledAt: time.Time{}, ID: id, Subject: "subject of " + id,
-		DisplayName: "Name of " + id, Kind: kind, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		CreatedAt:   created,
+		UpdatedAt:   created,
+		DisabledAt:  time.Time{},
+		ID:          id,
+		Subject:     "subject of " + id,
+		DisplayName: "Name of " + id,
+		Kind:        kind,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
 	}
 
 	e := entry("ses-x", created)

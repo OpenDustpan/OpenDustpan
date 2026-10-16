@@ -33,28 +33,40 @@ type AccessTokenPolicy struct {
 	UpdatedAtMs       int64
 }
 
+type AuditChainState struct {
+	ID                 int64
+	State              string
+	ChangedAtMs        int64
+	ChangedBy          string
+	Pending            int64
+	EnteredMaintenance int64
+	LogReplaced        int64
+	MigratingAtMs      int64
+}
+
 type AuditEntry struct {
-	Namespace  string
-	Sequence   int64
-	Subject    string
-	IdpSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	AtMs       int64
-	SourceIp   string
-	UserAgent  string
-	Channel    string
-	Kind       string
-	Outcome    string
-	RequestID  string
-	PrevHash   string
-	Hash       string
-	ValueCount sql.NullInt64
-	Changes    sql.NullString
-	ObjectID   string
+	Namespace    string
+	Sequence     int64
+	Subject      string
+	IdpSubject   string
+	TokenID      string
+	Action       string
+	Object       string
+	Version      string
+	ValuePath    string
+	AtMs         int64
+	SourceIp     string
+	UserAgent    string
+	Channel      string
+	Kind         string
+	Outcome      string
+	RequestID    string
+	PrevHash     string
+	Hash         string
+	ValueCount   sql.NullInt64
+	Changes      sql.NullString
+	ObjectID     string
+	FenceVersion int64
 }
 
 type AuditSinkCursor struct {
@@ -188,6 +200,7 @@ type Principal struct {
 	LastActiveAtMs int64
 	LastSignInAtMs sql.NullInt64
 	Namespace      string
+	BreakGlass     bool
 }
 
 type PrincipalGroup struct {

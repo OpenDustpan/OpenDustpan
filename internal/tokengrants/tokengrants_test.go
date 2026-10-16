@@ -44,7 +44,7 @@ func (f fakePrincipals) GetPrincipal(_ context.Context, id string) (principal.Pr
 		DisplayName: "",
 		Kind:        principal.KindService,
 		Source:      principal.SourceLocal,
-		Namespace:   "", GroupCount: 0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}, nil
 }
 

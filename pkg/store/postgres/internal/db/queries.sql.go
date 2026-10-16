@@ -379,6 +379,45 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 	return items, nil
 }
 
+const claimAuditChainMigration = `-- name: ClaimAuditChainMigration :execrows
+UPDATE audit_chain_state
+SET migrating_at_ms = $1
+WHERE id = 1 AND pending AND (migrating_at_ms = 0 OR migrating_at_ms < $2)
+`
+
+type ClaimAuditChainMigrationParams struct {
+	MigratingAtMs   int64
+	MigratingAtMs_2 int64
+}
+
+// Starts the migration of a waiting change in one write: it stamps the start
+// time only when a change waits and no claim within the lease holds.
+func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditChainMigrationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimAuditChainMigration, arg.MigratingAtMs, arg.MigratingAtMs_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearJournalOperations = `-- name: ClearJournalOperations :exec
+UPDATE update_journal SET operation_ids = '[]'
+WHERE stack_id = $1 AND update_id = $2
+`
+
+type ClearJournalOperationsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+// A batch that holds a rebuilt base state entry starts the known set again:
+// earlier batches keep their rows for the replay, but their operation IDs no
+// longer count.
+func (q *Queries) ClearJournalOperations(ctx context.Context, arg ClearJournalOperationsParams) error {
+	_, err := q.db.Exec(ctx, clearJournalOperations, arg.StackID, arg.UpdateID)
+	return err
+}
+
 const closeJournal = `-- name: CloseJournal :exec
 UPDATE updates SET journal_closed = TRUE
 WHERE stack_id = $1 AND id = $2
@@ -705,8 +744,11 @@ WHERE ($7::boolean
     OR g.target = $9::text
     OR (g.target = ANY($10::text[])
       AND (g.role = ANY($11::text[])
+        OR ($3::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR ($12::text <> '' AND g.target = $12::text
+      AND (g.role = ANY($13::text[])
         OR ($3::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND ($12::text = '' OR g.subject = $12::text
+  AND ($14::text = '' OR g.subject = $14::text
     OR ($1::text <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN $3::boolean THEN
     g.created_at_ms < $4::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > $5::bigint
@@ -714,18 +756,20 @@ WHERE ($7::boolean
 `
 
 type CountReviewGrantsParams struct {
-	Principal      string
-	Expand         bool
-	History        bool
-	ToMs           int64
-	FromMs         int64
-	AsOfMs         int64
-	AllGrants      bool
-	Namespace      string
-	Target         string
-	Containers     []string
-	ContainerRoles []string
-	Subject        string
+	Principal           string
+	Expand              bool
+	History             bool
+	ToMs                int64
+	FromMs              int64
+	AsOfMs              int64
+	AllGrants           bool
+	Namespace           string
+	Target              string
+	Containers          []string
+	ContainerRoles      []string
+	TokenNamespace      string
+	TokenNamespaceRoles []string
+	Subject             string
 }
 
 func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsParams) (int64, error) {
@@ -741,6 +785,8 @@ func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsPa
 		arg.Target,
 		arg.Containers,
 		arg.ContainerRoles,
+		arg.TokenNamespace,
+		arg.TokenNamespaceRoles,
 		arg.Subject,
 	)
 	var count int64
@@ -1011,8 +1057,8 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 }
 
 const createPrincipal = `-- name: CreatePrincipal :execrows
-INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace, break_glass)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT DO NOTHING
 `
 
@@ -1025,6 +1071,7 @@ type CreatePrincipalParams struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	Namespace   string
+	BreakGlass  bool
 }
 
 func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams) (int64, error) {
@@ -1037,6 +1084,7 @@ func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 		arg.Namespace,
+		arg.BreakGlass,
 	)
 	if err != nil {
 		return 0, err
@@ -1720,6 +1768,10 @@ const disableInactiveAccessTokens = `-- name: DisableInactiveAccessTokens :many
 UPDATE access_tokens SET disabled_at_ms = $1::bigint
 WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > $1::bigint
   AND COALESCE(last_used_at_ms, created_at_ms) <= $2::bigint
+  AND NOT EXISTS (
+    SELECT 1 FROM principals p
+    WHERE p.id = access_tokens.principal_id AND p.break_glass = TRUE
+  )
 RETURNING id, principal_id
 `
 
@@ -1733,6 +1785,8 @@ type DisableInactiveAccessTokensRow struct {
 	PrincipalID string
 }
 
+// A token of a break-glass account is always exempt from the inactivity
+// disable.
 func (q *Queries) DisableInactiveAccessTokens(ctx context.Context, arg DisableInactiveAccessTokensParams) ([]DisableInactiveAccessTokensRow, error) {
 	rows, err := q.db.Query(ctx, disableInactiveAccessTokens, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -1756,6 +1810,7 @@ func (q *Queries) DisableInactiveAccessTokens(ctx context.Context, arg DisableIn
 const disableInactivePrincipals = `-- name: DisableInactivePrincipals :many
 UPDATE principals SET disabled_at_ms = $1::bigint
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND break_glass = FALSE
   AND created_at_ms <= $2::bigint
   AND last_active_at_ms <= $2::bigint
   AND COALESCE(last_sign_in_at_ms, 0) <= $2::bigint
@@ -1774,7 +1829,8 @@ type DisableInactivePrincipalsParams struct {
 
 // A person is inactive when its creation, its activity baseline, its last
 // sign-in, and the creation and the last use of each of its tokens are all
-// at or before the cutoff.
+// at or before the cutoff. A break-glass account is always exempt from the
+// inactivity disable.
 func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
 	rows, err := q.db.Query(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -2058,7 +2114,7 @@ func (q *Queries) GetAccessToken(ctx context.Context, id string) (GetAccessToken
 const getAccessTokenByDigest = `-- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms,
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0))::bigint AS principal_active_at_ms
@@ -2084,6 +2140,7 @@ type GetAccessTokenByDigestRow struct {
 	DisplayName           string
 	PrincipalKind         string
 	PrincipalDisabledAtMs pgtype.Int8
+	PrincipalBreakGlass   bool
 	PrincipalActiveAtMs   int64
 }
 
@@ -2107,6 +2164,7 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 		&i.DisplayName,
 		&i.PrincipalKind,
 		&i.PrincipalDisabledAtMs,
+		&i.PrincipalBreakGlass,
 		&i.PrincipalActiveAtMs,
 	)
 	return i, err
@@ -2138,6 +2196,40 @@ func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolic
 		&i.DisableAccounts,
 		&i.DisableBreakGlass,
 		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getAuditChainState = `-- name: GetAuditChainState :one
+SELECT state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1
+`
+
+type GetAuditChainStateRow struct {
+	State              string
+	ChangedAtMs        int64
+	ChangedBy          string
+	Pending            bool
+	EnteredMaintenance bool
+	LogReplaced        bool
+	MigratingAtMs      int64
+}
+
+// The audit chain state that this installation keeps: the state, when it
+// last changed, who changed it, whether a change waits for an approval,
+// whether the chain entered maintenance mode itself, whether a restore
+// replaced the log, and when the running migration started, 0 when none
+// runs. No row means the chain is on.
+func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow, error) {
+	row := q.db.QueryRow(ctx, getAuditChainState)
+	var i GetAuditChainStateRow
+	err := row.Scan(
+		&i.State,
+		&i.ChangedAtMs,
+		&i.ChangedBy,
+		&i.Pending,
+		&i.EnteredMaintenance,
+		&i.LogReplaced,
+		&i.MigratingAtMs,
 	)
 	return i, err
 }
@@ -2699,6 +2791,7 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 
 const getPrincipal = `-- name: GetPrincipal :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.id = $1 AND p.deleted_at_ms IS NULL
 `
@@ -2713,6 +2806,7 @@ type GetPrincipalRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs pgtype.Int8
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 }
 
@@ -2729,6 +2823,7 @@ func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow,
 		&i.UpdatedAtMs,
 		&i.DisabledAtMs,
 		&i.Namespace,
+		&i.BreakGlass,
 		&i.GroupCount,
 	)
 	return i, err
@@ -2736,6 +2831,7 @@ func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow,
 
 const getPrincipalBySubject = `-- name: GetPrincipalBySubject :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.subject COLLATE "C" = $1::text AND p.deleted_at_ms IS NULL
 `
@@ -2750,6 +2846,7 @@ type GetPrincipalBySubjectRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs pgtype.Int8
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 }
 
@@ -2766,6 +2863,7 @@ func (q *Queries) GetPrincipalBySubject(ctx context.Context, subject string) (Ge
 		&i.UpdatedAtMs,
 		&i.DisabledAtMs,
 		&i.Namespace,
+		&i.BreakGlass,
 		&i.GroupCount,
 	)
 	return i, err
@@ -3543,32 +3641,34 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    fence_version
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 `
 
 type InsertAuditEntryParams struct {
-	Namespace  string
-	Sequence   int64
-	Subject    string
-	IdpSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	AtMs       int64
-	SourceIp   string
-	UserAgent  string
-	Channel    string
-	Kind       string
-	Outcome    string
-	RequestID  string
-	PrevHash   string
-	Hash       string
-	ValueCount pgtype.Int8
-	Changes    pgtype.Text
-	ObjectID   string
+	Namespace    string
+	Sequence     int64
+	Subject      string
+	IdpSubject   string
+	TokenID      string
+	Action       string
+	Object       string
+	Version      string
+	ValuePath    string
+	AtMs         int64
+	SourceIp     string
+	UserAgent    string
+	Channel      string
+	Kind         string
+	Outcome      string
+	RequestID    string
+	PrevHash     string
+	Hash         string
+	ValueCount   pgtype.Int8
+	Changes      pgtype.Text
+	ObjectID     string
+	FenceVersion int64
 }
 
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
@@ -3594,6 +3694,7 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.ValueCount,
 		arg.Changes,
 		arg.ObjectID,
+		arg.FenceVersion,
 	)
 	return err
 }
@@ -3825,9 +3926,24 @@ func (q *Queries) LastAccessByPrincipals(ctx context.Context, principalIds []str
 	return items, nil
 }
 
+const lastAuditChainStartSequence = `-- name: LastAuditChainStartSequence :one
+SELECT CAST(COALESCE(MAX(sequence), 0) AS BIGINT) FROM audit_entries
+WHERE namespace = $1 AND action = 'server:start-audit-chain' AND sequence >= 1
+`
+
+// The sequence of the last start entry of the audit chain of a namespace,
+// or 0 when there is none. The chain check starts there.
+func (q *Queries) LastAuditChainStartSequence(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, lastAuditChainStartSequence, namespace)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -3861,6 +3977,7 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.ValueCount,
 		&i.Changes,
 		&i.ObjectID,
+		&i.FenceVersion,
 	)
 	return i, err
 }
@@ -3988,7 +4105,8 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC
@@ -4036,6 +4154,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.ValueCount,
 			&i.Changes,
 			&i.ObjectID,
+			&i.FenceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -4049,7 +4168,8 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -4095,6 +4215,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.ValueCount,
 			&i.Changes,
 			&i.ObjectID,
+			&i.FenceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -4622,6 +4743,7 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 
 const listGroupMembers = `-- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
   m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
@@ -4651,6 +4773,7 @@ type ListGroupMembersRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs pgtype.Int8
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 	AddedAtMs    int64
 }
@@ -4680,6 +4803,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 			&i.UpdatedAtMs,
 			&i.DisabledAtMs,
 			&i.Namespace,
+			&i.BreakGlass,
 			&i.GroupCount,
 			&i.AddedAtMs,
 		); err != nil {
@@ -4953,6 +5077,7 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 
 const listPrincipals = `-- name: ListPrincipals :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
@@ -4984,6 +5109,7 @@ type ListPrincipalsRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs pgtype.Int8
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 }
 
@@ -5013,6 +5139,7 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 			&i.UpdatedAtMs,
 			&i.DisabledAtMs,
 			&i.Namespace,
+			&i.BreakGlass,
 			&i.GroupCount,
 		); err != nil {
 			return nil, err
@@ -5662,6 +5789,19 @@ func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyi
 	return result.RowsAffected(), nil
 }
 
+const minAuditSequence = `-- name: MinAuditSequence :one
+SELECT CAST(COALESCE(MIN(sequence), 1) AS BIGINT) FROM audit_entries WHERE namespace = $1
+`
+
+// The lowest sequence of a namespace, or 1 when it has no entry. The chain
+// check fails a namespace with a row below 1, because the walk starts at 1.
+func (q *Queries) MinAuditSequence(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, minAuditSequence, namespace)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const nextJournalArrival = `-- name: NextJournalArrival :one
 SELECT (COALESCE(MAX(arrival), 0) + 1)::BIGINT AS arrival
 FROM update_journal
@@ -5903,6 +6043,17 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 	return err
 }
 
+const releaseAuditChainMigration = `-- name: ReleaseAuditChainMigration :exec
+UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1
+`
+
+// Releases the claim of a migration that stops without storing the new
+// state.
+func (q *Queries) ReleaseAuditChainMigration(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, releaseAuditChainMigration)
+	return err
+}
+
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
 UPDATE group_members SET removed_at_ms = $1
 WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL
@@ -5940,6 +6091,20 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		arg.Project,
 		arg.Name_2,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const renewAuditChainMigration = `-- name: RenewAuditChainMigration :execrows
+UPDATE audit_chain_state SET migrating_at_ms = $1 WHERE id = 1 AND migrating_at_ms <> 0
+`
+
+// Moves the start of the held claim to the given time. It writes only
+// when a claim holds, so a renewal without a claim changes no row.
+func (q *Queries) RenewAuditChainMigration(ctx context.Context, migratingAtMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, renewAuditChainMigration, migratingAtMs)
 	if err != nil {
 		return 0, err
 	}
@@ -6033,41 +6198,46 @@ WHERE ($7::boolean
     OR g.target = $9::text
     OR (g.target = ANY($10::text[])
       AND (g.role = ANY($11::text[])
+        OR ($4::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR ($12::text <> '' AND g.target = $12::text
+      AND (g.role = ANY($13::text[])
         OR ($4::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND ($12::text = '' OR g.subject = $12::text
+  AND ($14::text = '' OR g.subject = $14::text
     OR ($2::text <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN $4::boolean THEN
     g.created_at_ms < $5::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > $6::bigint
   ELSE g.created_at_ms <= $1::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > $1::bigint END
-  AND (g.created_at_ms > $13::bigint
-    OR (g.created_at_ms = $13::bigint
-      AND (g.id COLLATE "C" > $14::text
-        OR (g.id = $14::text
-          AND (COALESCE(m.added_at_ms, 0) > $15::bigint
-            OR (COALESCE(m.added_at_ms, 0) = $15::bigint
-              AND COALESCE(m.principal_id, '') COLLATE "C" > $16::text))))))
+  AND (g.created_at_ms > $15::bigint
+    OR (g.created_at_ms = $15::bigint
+      AND (g.id COLLATE "C" > $16::text
+        OR (g.id = $16::text
+          AND (COALESCE(m.added_at_ms, 0) > $17::bigint
+            OR (COALESCE(m.added_at_ms, 0) = $17::bigint
+              AND COALESCE(m.principal_id, '') COLLATE "C" > $18::text))))))
 ORDER BY g.created_at_ms, g.id COLLATE "C", member_added_at_ms, COALESCE(m.principal_id, '') COLLATE "C"
-LIMIT $17::bigint
+LIMIT $19::bigint
 `
 
 type ReviewGrantsParams struct {
-	AsOfMs          int64
-	Principal       string
-	Expand          bool
-	History         bool
-	ToMs            int64
-	FromMs          int64
-	AllGrants       bool
-	Namespace       string
-	Target          string
-	Containers      []string
-	ContainerRoles  []string
-	Subject         string
-	AfterAtMs       int64
-	AfterID         string
-	AfterMemberAtMs int64
-	AfterMemberID   string
-	RowLimit        int64
+	AsOfMs              int64
+	Principal           string
+	Expand              bool
+	History             bool
+	ToMs                int64
+	FromMs              int64
+	AllGrants           bool
+	Namespace           string
+	Target              string
+	Containers          []string
+	ContainerRoles      []string
+	TokenNamespace      string
+	TokenNamespaceRoles []string
+	Subject             string
+	AfterAtMs           int64
+	AfterID             string
+	AfterMemberAtMs     int64
+	AfterMemberID       string
+	RowLimit            int64
 }
 
 type ReviewGrantsRow struct {
@@ -6111,6 +6281,8 @@ func (q *Queries) ReviewGrants(ctx context.Context, arg ReviewGrantsParams) ([]R
 		arg.Target,
 		arg.Containers,
 		arg.ContainerRoles,
+		arg.TokenNamespace,
+		arg.TokenNamespaceRoles,
 		arg.Subject,
 		arg.AfterAtMs,
 		arg.AfterID,
@@ -6544,6 +6716,39 @@ func (q *Queries) SetAccessTokenPolicy(ctx context.Context, arg SetAccessTokenPo
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setAuditChainState = `-- name: SetAuditChainState :exec
+INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+VALUES (1, $1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, changed_at_ms = EXCLUDED.changed_at_ms,
+    changed_by = EXCLUDED.changed_by, pending = EXCLUDED.pending,
+    entered_maintenance = EXCLUDED.entered_maintenance, log_replaced = EXCLUDED.log_replaced,
+    migrating_at_ms = EXCLUDED.migrating_at_ms
+`
+
+type SetAuditChainStateParams struct {
+	State              string
+	ChangedAtMs        int64
+	ChangedBy          string
+	Pending            bool
+	EnteredMaintenance bool
+	LogReplaced        bool
+	MigratingAtMs      int64
+}
+
+// Stores the audit chain state of this installation.
+func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainStateParams) error {
+	_, err := q.db.Exec(ctx, setAuditChainState,
+		arg.State,
+		arg.ChangedAtMs,
+		arg.ChangedBy,
+		arg.Pending,
+		arg.EnteredMaintenance,
+		arg.LogReplaced,
+		arg.MigratingAtMs,
+	)
+	return err
 }
 
 const setInstallationStateIf = `-- name: SetInstallationStateIf :execrows

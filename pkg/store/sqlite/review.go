@@ -21,34 +21,9 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	containers, err := jsonList(rq.Scope.Containers)
+	p, err := reviewParams(rq)
 	if err != nil {
 		return nil, 0, err
-	}
-
-	roles, err := jsonList(rq.Scope.ContainerRoles)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	p := db.ReviewGrantsParams{
-		Principal:       rq.Principal,
-		History:         rq.History,
-		ToMs:            rq.ToMs,
-		FromMs:          rq.FromMs,
-		AllGrants:       rq.Scope.All,
-		Namespace:       rq.Scope.Namespace,
-		Target:          scopeTarget(rq.Scope.Object),
-		Containers:      containers,
-		ContainerRoles:  roles,
-		Subject:         rq.Subject,
-		AfterAtMs:       rq.After.AtMs,
-		AfterID:         rq.After.ID,
-		AfterMemberAtMs: rq.After.MemberAtMs,
-		AfterMemberID:   rq.After.MemberID,
-		AsOfMs:          rq.AsOfMs,
-		Expand:          rq.Expand,
-		RowLimit:        int64(rq.Limit),
 	}
 
 	var (
@@ -73,7 +48,8 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 		total, listErr = q.CountReviewGrants(ctx, db.CountReviewGrantsParams{
 			Principal: p.Principal, Expand: p.Expand, History: p.History, ToMs: p.ToMs, FromMs: p.FromMs,
 			AsOfMs: p.AsOfMs, AllGrants: p.AllGrants, Namespace: p.Namespace, Target: p.Target,
-			Containers: p.Containers, ContainerRoles: p.ContainerRoles, Subject: p.Subject,
+			Containers: p.Containers, ContainerRoles: p.ContainerRoles, TokenNamespace: p.TokenNamespace,
+			TokenNamespaceRoles: p.TokenNamespaceRoles, Subject: p.Subject,
 		})
 		if listErr != nil {
 			return fmt.Errorf("count review rows: %w", listErr)
@@ -86,6 +62,48 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 	}
 
 	return out, total, nil
+}
+
+// reviewParams returns the query parameters of one export page.
+func reviewParams(rq access.ReviewQuery) (db.ReviewGrantsParams, error) {
+	var none db.ReviewGrantsParams
+
+	containers, err := jsonList(rq.Scope.Containers)
+	if err != nil {
+		return none, err
+	}
+
+	roles, err := jsonList(rq.Scope.ContainerRoles)
+	if err != nil {
+		return none, err
+	}
+
+	tokenRoles, err := jsonList(rq.Scope.TokenNamespaceRoles)
+	if err != nil {
+		return none, err
+	}
+
+	return db.ReviewGrantsParams{
+		Principal:           rq.Principal,
+		History:             rq.History,
+		ToMs:                rq.ToMs,
+		FromMs:              rq.FromMs,
+		AllGrants:           rq.Scope.All,
+		Namespace:           rq.Scope.Namespace,
+		Target:              scopeTarget(rq.Scope.Object),
+		Containers:          containers,
+		ContainerRoles:      roles,
+		TokenNamespace:      rq.Scope.TokenNamespace,
+		TokenNamespaceRoles: tokenRoles,
+		Subject:             rq.Subject,
+		AfterAtMs:           rq.After.AtMs,
+		AfterID:             rq.After.ID,
+		AfterMemberAtMs:     rq.After.MemberAtMs,
+		AfterMemberID:       rq.After.MemberID,
+		AsOfMs:              rq.AsOfMs,
+		Expand:              rq.Expand,
+		RowLimit:            int64(rq.Limit),
+	}, nil
 }
 
 // CallerGrants implements access.ReviewStore. It reads the page and, when

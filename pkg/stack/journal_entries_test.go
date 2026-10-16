@@ -195,6 +195,37 @@ func fence() namespace.Fence {
 	return namespace.Fence{Namespace: "acme", FailoverVersion: 1}
 }
 
+// TestJournalAppendDropsOperationsBeforeRebuild checks that a batch that holds
+// a rebuilt base state entry keeps only the completed operations after the
+// last such entry, and reports the rebuild, so the store starts the known
+// set again from this batch.
+func TestJournalAppendDropsOperationsBeforeRebuild(t *testing.T) {
+	t.Parallel()
+
+	state := `{"urn":"urn:a","custom":true,"type":"t:mod:T","id":"x"}`
+	body := []byte(`{"entries":[` +
+		`{"sequenceID":1,"operationID":5,"kind":1,"state":` + state + `},` +
+		`{"sequenceID":2,"operationID":6,"kind":7},` +
+		`{"sequenceID":3,"operationID":8,"kind":1,"state":` + state + `}]}`)
+
+	blobs := newFakeBlobs()
+	rows := &fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil}
+	entries := newEntries(t, blobs, rows, allowAll{})
+
+	if err := entries.Append(t.Context(), journalBatchFor(body), fence()); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	row := rows.rows[0]
+	if !row.HasRebuild {
+		t.Fatal("HasRebuild = false, want true for a batch with a rebuild entry")
+	}
+
+	if fmt.Sprint(row.OperationIDs) != "[8]" {
+		t.Fatalf("operation IDs = %v, want [8]", row.OperationIDs)
+	}
+}
+
 // TestJournalAppendWritesBlobBeforeRow checks the order of the write: the blob
 // first, then the row, and the blob key holds the lowest sequence ID.
 func TestJournalAppendWritesBlobBeforeRow(t *testing.T) {

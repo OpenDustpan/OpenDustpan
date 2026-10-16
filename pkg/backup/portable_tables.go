@@ -305,6 +305,7 @@ func portableSpec() []PortableTable {
 				{Name: "value_count", Kind: KindInteger},
 				{Name: "changes", Kind: KindText},
 				{Name: "object_id", Kind: KindText},
+				{Name: "fence_version", Kind: KindInteger},
 			},
 		},
 		{
@@ -323,6 +324,7 @@ func portableSpec() []PortableTable {
 				{Name: "last_active_at_ms", Kind: KindTime},
 				{Name: "last_sign_in_at_ms", Kind: KindTime},
 				{Name: "namespace", Kind: KindText},
+				{Name: "break_glass", Kind: KindBool},
 			},
 		},
 		{

@@ -77,6 +77,10 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 		{name: "a principal of a namespace holds grants inside it only", test: testNamespacePrincipalGrants},
 		{name: "the store checks the namespace of a subject in its write", test: testStoreChecksSubjectNamespace},
 		{name: "a principal of a namespace gets no token and no group yet", test: testNamespacePrincipalLimits},
+		{
+			name: "the export of a principal of a namespace lists the namespace admins",
+			test: testNamespacePrincipalTokenManagers,
+		},
 		{name: "a delete of a principal of a namespace ends its grants", test: testNamespacePrincipalDelete},
 	}
 

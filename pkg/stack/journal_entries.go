@@ -83,8 +83,15 @@ type JournalRow struct {
 	SequenceIDs []int64
 	// OperationIDs holds the completed operation IDs of the batch: the
 	// operations of success entries with a state. Only those can be named by
-	// later references, so only those are stored for the known set.
+	// later references, so only those are stored for the known set. When the
+	// batch holds a rebuilt base state entry, only the operations after the
+	// last such entry are kept, as the replay drops earlier records.
 	OperationIDs []int64
+	// HasRebuild reports whether the batch holds a rebuilt base state entry
+	// (kind 7). The store clears the operation IDs of earlier batches in the
+	// same transaction as the write, so the known set starts again from this
+	// batch.
+	HasRebuild bool
 	// Verify checks the batch against the completed operation IDs that the update
 	// holds and the flag that reports whether a stored batch holds an entry that
 	// changes the replay records. The store calls it in the fenced transaction,
@@ -107,7 +114,10 @@ type JournalStore interface {
 	// ErrJournalConflict. The blob must already be in the blob store. A row with a
 	// Verify function that returns an error is refused with ErrJournalBatch. When
 	// Verify reports that the batch holds an entry that changes the replay records,
-	// the flag of the update is set in the same transaction as the write.
+	// the flag of the update is set in the same transaction as the write. When
+	// the row reports a rebuilt base state entry, the operation IDs of earlier
+	// batches are cleared in the same transaction, so the known set starts
+	// again from this batch.
 	PutJournalRow(ctx context.Context, row JournalRow, fence namespace.Fence) (retried bool, err error)
 	// JournalKeys returns the blob keys of the batches of the update, in arrival
 	// order. It is keyed by the stack ID, as the blob keys are. A missing update
@@ -318,6 +328,7 @@ func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence n
 		Size:         int64(len(batch.Content)),
 		SequenceIDs:  ids.sequences,
 		OperationIDs: ids.operations,
+		HasRebuild:   ids.hasRebuild,
 		Verify: func(known []int64, recordsChanged bool) (bool, error) {
 			return j.verifier.VerifyBatch(batch.Content, batch.Version, known, recordsChanged)
 		},
@@ -404,7 +415,8 @@ func (j *JournalEntries) digestOf(ctx context.Context, key blob.Key) ([sha256.Si
 // body. Each sequence ID must be positive and appear once. A body with no
 // entries returns no IDs and no error. Only success entries with a state
 // contribute operation IDs, as only those create resources that later
-// references can name.
+// references can name. A rebuilt base state entry drops the operations before
+// it, as the replay drops its records.
 func batchIDs(content []byte) (journalIDs, error) {
 	var body journalBody
 	if err := json.Unmarshal(content, &body); err != nil {
@@ -414,6 +426,7 @@ func batchIDs(content []byte) (journalIDs, error) {
 	seen := make(map[int64]bool, len(body.Entries))
 	seqs := make([]int64, 0, len(body.Entries))
 	ops := make([]int64, 0, len(body.Entries))
+	rebuilt := false
 
 	for _, e := range body.Entries {
 		if e.SequenceID <= 0 {
@@ -427,23 +440,35 @@ func batchIDs(content []byte) (journalIDs, error) {
 		seen[e.SequenceID] = true
 		seqs = append(seqs, e.SequenceID)
 
+		if e.Kind == journalRebuildKind {
+			ops = nil
+			rebuilt = true
+
+			continue
+		}
+
 		if e.Kind == journalSuccessKind && len(e.State) > 0 && string(e.State) != "null" {
 			ops = append(ops, e.OperationID)
 		}
 	}
 
-	return journalIDs{sequences: seqs, operations: ops}, nil
+	return journalIDs{sequences: seqs, operations: ops, hasRebuild: rebuilt}, nil
 }
 
 // journalSuccessKind is the kind of a success entry. Only such an entry with a
 // state creates a resource that later references can name.
 const journalSuccessKind = 1
 
-// journalIDs holds the sequence IDs of one batch in the order of the body, and
-// its completed operation IDs.
+// journalRebuildKind is the kind of a rebuilt base state entry. It drops the
+// replay records, so earlier completed operations are no longer referenceable.
+const journalRebuildKind = 7
+
+// journalIDs holds the sequence IDs of one batch in the order of the body, its
+// completed operation IDs, and whether it holds a rebuilt base state entry.
 type journalIDs struct {
 	sequences  []int64
 	operations []int64
+	hasRebuild bool
 }
 
 // lowest returns the smallest sequence ID of a non-empty batch.

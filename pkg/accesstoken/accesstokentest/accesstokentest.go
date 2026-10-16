@@ -65,6 +65,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "the sweep disables inactive user accounts", test: testSweepAccounts},
 		{name: "a sweep with a refused entry changes nothing", test: testSweepRefused},
 		{name: "enable, then sweep: the principal stays enabled", test: testEnablePrincipal},
+		{name: "the sweep never disables a break-glass account", test: testSweepSkipsBreakGlass},
 		{name: "concurrent policy updates: each sees the one before", test: testConcurrentPolicyUpdates},
 	}
 
@@ -85,27 +86,28 @@ func at(minute int) time.Time {
 // @server for the token id, as a Service builds it.
 func entry(id string) audit.Entry {
 	return audit.Entry{
-		At:         at(9),
-		Namespace:  audit.ServerScope,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "server:manage-tokens",
-		Object:     accesstoken.Ref(id),
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "accesstokentest",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           at(9),
+		Namespace:    audit.ServerScope,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "server:manage-tokens",
+		Object:       accesstoken.Ref(id),
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "accesstokentest",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 
@@ -163,7 +165,7 @@ func mustPrincipal(t *testing.T, s Store, id, subject string, kind principal.Kin
 		DisplayName: "Name of " + subject,
 		Kind:        kind,
 		Source:      principal.SourceLocal,
-		Namespace:   "", GroupCount: 0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 
 	e := entry("tok-x")
@@ -330,6 +332,7 @@ func testByDigest(t *testing.T, s Store) {
 		Subject:     "ci-deploy",
 		DisplayName: "Name of ci-deploy",
 		Kind:        principal.KindService,
+		BreakGlass:  false,
 	}
 	if m.Owner != want {
 		t.Fatalf("owner = %+v, want %+v", m.Owner, want)
@@ -760,7 +763,7 @@ func testPolicy(t *testing.T, s Store) {
 
 	want := accesstoken.Policy{
 		UpdatedAt: at(5), MaxLifetime: 30 * 24 * time.Hour, Inactivity: 0,
-		DisableTokens: false, DisableAccounts: true, DisableBreakGlass: true,
+		DisableTokens: false, DisableAccounts: true, DisableBreakGlass: false,
 	}
 
 	stored, err := s.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
@@ -972,8 +975,17 @@ func mustPrincipalAt(t *testing.T, s Store, id string, kind principal.Kind, crea
 	t.Helper()
 
 	p := principal.Principal{
-		CreatedAt: created, UpdatedAt: created, DisabledAt: time.Time{}, ID: id, Subject: id,
-		DisplayName: "Name of " + id, Kind: kind, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		CreatedAt:   created,
+		UpdatedAt:   created,
+		DisabledAt:  time.Time{},
+		ID:          id,
+		Subject:     id,
+		DisplayName: "Name of " + id,
+		Kind:        kind,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
 	}
 
 	e := entryAt("tok-x", created)
@@ -1214,5 +1226,64 @@ func testEnablePrincipal(t *testing.T, s Store) {
 	p, err = s.GetPrincipal(ctx, "prn-1")
 	if err != nil || !p.DisabledAt.IsZero() {
 		t.Fatalf("principal after the enable and a sweep = %+v, %v; want it enabled", p, err)
+	}
+}
+
+func mustBreakGlassAt(t *testing.T, s Store, id string, created time.Time) {
+	t.Helper()
+
+	p := principal.Principal{
+		CreatedAt: created, UpdatedAt: created, DisabledAt: time.Time{}, ID: id, Subject: id,
+		DisplayName: "Name of " + id, Kind: principal.KindPerson, Source: principal.SourceLocal,
+		Namespace: "", GroupCount: 0, BreakGlass: true,
+	}
+
+	if err := p.Validate(); err != nil {
+		t.Fatalf("validate break-glass principal %q: %v", id, err)
+	}
+
+	e := entryAt("tok-x", created)
+	e.Object = principal.Ref(id)
+
+	if err := s.CreatePrincipal(t.Context(), p, e); err != nil {
+		t.Fatalf("create break-glass principal %q: %v", id, err)
+	}
+}
+
+func testSweepSkipsBreakGlass(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	ts := newSweepTimes()
+
+	mustPrincipalAt(t, s, "prn-idle", principal.KindPerson, ts.old)
+	mustBreakGlassAt(t, s, "prn-glass", ts.old)
+	mustPrincipalAt(t, s, "prn-svc", principal.KindService, ts.old)
+
+	mustToken(t, s, relToken("tok-idle", "prn-idle", ts.old, ts), digest(1))
+	mustToken(t, s, relToken("tok-glass", "prn-glass", ts.old, ts), digest(2))
+	mustToken(t, s, relToken("tok-svc", "prn-svc", ts.old, ts), digest(3))
+
+	res := mustSweep(t, s, sweep(true, true))
+
+	if slices.Contains(sweptIDs(res), "tok-glass") {
+		t.Fatalf("sweep = %+v, disabled the token of a break-glass account", res)
+	}
+
+	if slices.Contains(res.Principals, "prn-glass") {
+		t.Fatalf("sweep = %+v, disabled a break-glass account", res)
+	}
+
+	if !slices.Contains(sweptIDs(res), "tok-idle") || !slices.Contains(res.Principals, "prn-idle") {
+		t.Fatalf("sweep = %+v, want the idle token and person", res)
+	}
+
+	got, err := s.GetPrincipal(ctx, "prn-glass")
+	if err != nil || !got.DisabledAt.IsZero() || !got.BreakGlass {
+		t.Fatalf("break-glass principal = %+v, %v; want it enabled with the flag", got, err)
+	}
+
+	if got := mustGet(t, s, "tok-glass"); !got.DisabledAt.IsZero() {
+		t.Fatalf("token of a break-glass account disabled at %s, want it enabled", got.DisabledAt)
 	}
 }

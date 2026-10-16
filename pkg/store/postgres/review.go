@@ -20,23 +20,25 @@ var _ access.ReviewStore = (*Store)(nil)
 // agree.
 func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]access.ReviewRow, int64, error) {
 	p := db.ReviewGrantsParams{
-		Principal:       rq.Principal,
-		History:         rq.History,
-		ToMs:            rq.ToMs,
-		FromMs:          rq.FromMs,
-		AllGrants:       rq.Scope.All,
-		Namespace:       rq.Scope.Namespace,
-		Target:          scopeTarget(rq.Scope.Object),
-		Containers:      nonNil(rq.Scope.Containers),
-		ContainerRoles:  nonNil(rq.Scope.ContainerRoles),
-		Subject:         rq.Subject,
-		AfterAtMs:       rq.After.AtMs,
-		AfterID:         rq.After.ID,
-		AfterMemberAtMs: rq.After.MemberAtMs,
-		AfterMemberID:   rq.After.MemberID,
-		AsOfMs:          rq.AsOfMs,
-		Expand:          rq.Expand,
-		RowLimit:        int64(rq.Limit),
+		Principal:           rq.Principal,
+		History:             rq.History,
+		ToMs:                rq.ToMs,
+		FromMs:              rq.FromMs,
+		AllGrants:           rq.Scope.All,
+		Namespace:           rq.Scope.Namespace,
+		Target:              scopeTarget(rq.Scope.Object),
+		Containers:          nonNil(rq.Scope.Containers),
+		ContainerRoles:      nonNil(rq.Scope.ContainerRoles),
+		TokenNamespace:      rq.Scope.TokenNamespace,
+		TokenNamespaceRoles: nonNil(rq.Scope.TokenNamespaceRoles),
+		Subject:             rq.Subject,
+		AfterAtMs:           rq.After.AtMs,
+		AfterID:             rq.After.ID,
+		AfterMemberAtMs:     rq.After.MemberAtMs,
+		AfterMemberID:       rq.After.MemberID,
+		AsOfMs:              rq.AsOfMs,
+		Expand:              rq.Expand,
+		RowLimit:            int64(rq.Limit),
 	}
 
 	var (
@@ -61,7 +63,8 @@ func (s *Store) ReviewGrants(ctx context.Context, rq access.ReviewQuery) ([]acce
 		total, err = q.CountReviewGrants(ctx, db.CountReviewGrantsParams{
 			Principal: p.Principal, Expand: p.Expand, History: p.History, ToMs: p.ToMs, FromMs: p.FromMs,
 			AsOfMs: p.AsOfMs, AllGrants: p.AllGrants, Namespace: p.Namespace, Target: p.Target,
-			Containers: p.Containers, ContainerRoles: p.ContainerRoles, Subject: p.Subject,
+			Containers: p.Containers, ContainerRoles: p.ContainerRoles, TokenNamespace: p.TokenNamespace,
+			TokenNamespaceRoles: p.TokenNamespaceRoles, Subject: p.Subject,
 		})
 		if err != nil {
 			return fmt.Errorf("count review rows: %w", err)

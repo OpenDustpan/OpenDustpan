@@ -182,6 +182,12 @@ func (m *journalMemStore) storeJournalRow(row stack.JournalRow) (bool, error) {
 		return false, err
 	}
 
+	if row.HasRebuild {
+		for i := range m.journal[row.Update] {
+			m.journal[row.Update][i].OperationIDs = nil
+		}
+	}
+
 	m.journal[row.Update] = append(m.journal[row.Update], row)
 
 	for i := range row.SequenceIDs {

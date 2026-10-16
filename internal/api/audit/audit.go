@@ -121,31 +121,36 @@ type auditEntry struct {
 	ObjectID  string        `json:"objectID,omitempty"`
 	PrevHash  string        `json:"prevHash"`
 	Hash      string        `json:"hash"`
+	// FenceVersion is the failover version of the namespace when the entry
+	// was appended, which the hash covers. It is omitted when it is 0: in
+	// @server and in entries from before the field.
+	FenceVersion int64 `json:"fenceVersion,omitempty"`
 }
 
 // toAuditEntry maps one domain entry to its wire shape.
 func toAuditEntry(e audit.Entry) auditEntry {
 	return auditEntry{
-		AtMs:       e.AtMs(),
-		Sequence:   e.Sequence,
-		Subject:    e.Subject,
-		IDPSubject: e.IDPSubject,
-		TokenID:    e.TokenID,
-		Action:     e.Action,
-		Object:     e.Object,
-		Version:    e.Version,
-		ValuePath:  e.ValuePath,
-		ValueCount: e.ValueCount,
-		Changes:    toAuditChanges(e.Changes),
-		SourceIP:   e.SourceIP,
-		UserAgent:  e.UserAgent,
-		Channel:    string(e.Channel),
-		Kind:       string(e.Kind),
-		Outcome:    string(e.Outcome),
-		RequestID:  e.RequestID,
-		ObjectID:   e.ObjectID,
-		PrevHash:   e.PrevHash,
-		Hash:       e.Hash,
+		AtMs:         e.AtMs(),
+		Sequence:     e.Sequence,
+		Subject:      e.Subject,
+		IDPSubject:   e.IDPSubject,
+		TokenID:      e.TokenID,
+		Action:       e.Action,
+		Object:       e.Object,
+		Version:      e.Version,
+		ValuePath:    e.ValuePath,
+		ValueCount:   e.ValueCount,
+		Changes:      toAuditChanges(e.Changes),
+		SourceIP:     e.SourceIP,
+		UserAgent:    e.UserAgent,
+		Channel:      string(e.Channel),
+		Kind:         string(e.Kind),
+		Outcome:      string(e.Outcome),
+		RequestID:    e.RequestID,
+		ObjectID:     e.ObjectID,
+		PrevHash:     e.PrevHash,
+		Hash:         e.Hash,
+		FenceVersion: e.FenceVersion,
 	}
 }
 
@@ -187,11 +192,13 @@ type listEntriesResponse struct {
 // checkResponse is the answered document of the chain check.
 //
 // Contract: never remove or rename these fields. BadSequence is omitted
-// when the chain is valid.
+// when the chain is valid. EntriesUnchained counts the entries without a
+// hash: the chain was off when they were appended.
 type checkResponse struct {
-	EntriesChecked int64 `json:"entriesChecked"`
-	BadSequence    int64 `json:"badSequence,omitempty"`
-	Valid          bool  `json:"valid"`
+	EntriesChecked   int64 `json:"entriesChecked"`
+	EntriesUnchained int64 `json:"entriesUnchained"`
+	BadSequence      int64 `json:"badSequence,omitempty"`
+	Valid            bool  `json:"valid"`
 }
 
 // auditScope returns the scope of the audit entries of obj: @server for the
@@ -271,9 +278,10 @@ func (h *Handler) checkChain(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, checkResponse{
-		EntriesChecked: result.Checked,
-		BadSequence:    result.BadSequence,
-		Valid:          result.Valid,
+		EntriesChecked:   result.Checked,
+		EntriesUnchained: result.Unchained,
+		BadSequence:      result.BadSequence,
+		Valid:            result.Valid,
 	})
 }
 
