@@ -33,7 +33,7 @@ func NewMem() *Mem {
 //
 //nolint:ireturn // A test of code that uses the port takes the port, as the store adapters give it.
 func (m *Mem) Store() durable.Store {
-	return memStore{db: m.db}
+	return memStore{db: m.db, skew: 0}
 }
 
 // Harness returns a suite harness on m.
@@ -44,13 +44,26 @@ func (m *Mem) Harness() Harness {
 // errUnknownState reports an operation state that memDB does not know.
 var errUnknownState = errors.New("unknown operation state")
 
-// The rules that a broken memDB breaks.
+// The rules that a broken memDB breaks, for the sensitivity tests of the
+// suite. Each one is a mutation that the suite must kill.
 const (
-	// breakToken accepts a write from any claim of a running operation
-	// whose live claim has not expired, whatever its token.
+	// breakToken accepts a write with a stale token.
 	breakToken = "token"
+	// breakExpiry accepts a write of a claim that expired.
+	breakExpiry = "expiry"
+	// breakEndExpiry accepts Fail and Release of a claim that expired.
+	breakEndExpiry = "end-expiry"
+	// breakTakeoverSteps drops the recorded steps at a takeover.
+	breakTakeoverSteps = "takeover-steps"
+	// breakClock takes every time from the clock of the instance.
+	breakClock = "clock"
+	// breakTokenStays gives every claim the token 1.
+	breakTokenStays = "token-stays"
 	// breakLive lets a claim take a running operation with a live claim.
 	breakLive = "live"
+	// breakTxStart takes the time of a step write at the start of its
+	// transaction, as now() does on PostgreSQL.
+	breakTxStart = "tx-start"
 )
 
 // memDB is a reference store in memory. Its lock makes each method one
@@ -82,7 +95,7 @@ func newMemDB(broken string) *memDB {
 
 func (m *memDB) harness() Harness {
 	return Harness{
-		Open:   func(*testing.T) durable.Store { return memStore{db: m} },
+		Open:   func(_ *testing.T, skew time.Duration) durable.Store { return memStore{db: m, skew: skew} },
 		Domain: memDomain{db: m},
 	}
 }
@@ -113,10 +126,44 @@ func copyOp(op *durable.Operation) durable.Operation {
 	return c
 }
 
+// clock is the clock that a handle with skew uses. A correct store ignores
+// skew: every time comes from the clock of the store.
+func (m *memDB) clock(skew time.Duration) time.Time {
+	now := m.now()
+	if m.broken == breakClock {
+		return now.Add(skew)
+	}
+
+	return now
+}
+
+// expiryRule says whether a write checks the expiry of its claim. Only a
+// broken store skips it.
+type expiryRule int
+
+const (
+	checkExpiry expiryRule = iota
+	skipExpiry
+)
+
+// cancelRule says what an end write does when a cancel is requested.
+type cancelRule int
+
+const (
+	// refuseOnCancel returns ErrCanceled and changes nothing.
+	refuseOnCancel cancelRule = iota
+	// endOnCancel ends the operation canceled.
+	endOnCancel
+)
+
 // live checks that c is the live claim of its operation, at now.
-func (m *memDB) live(c durable.Claim, now time.Time) (*durable.Operation, error) {
+func (m *memDB) live(c durable.Claim, now time.Time, rule expiryRule) (*durable.Operation, error) {
 	op := m.ops[c.Operation]
-	if op == nil || op.State != durable.StateRunning || !now.Before(op.Claim.ExpiresAt) {
+	if op == nil || op.State != durable.StateRunning {
+		return nil, durable.ErrClaimLost
+	}
+
+	if !now.Before(op.Claim.ExpiresAt) && rule == checkExpiry && m.broken != breakExpiry {
 		return nil, durable.ErrClaimLost
 	}
 
@@ -137,17 +184,18 @@ func zeroClaim() durable.Claim {
 	return durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}}
 }
 
-// checkStep applies the rules of RecordStep up to the record. It returns the
+// checkStep applies the rules of RecordStep up to the record, in their
+// order: the claim, the cancel, the step. It changes nothing. It returns the
 // operation when the step can be recorded.
 func (m *memDB) checkStep(f durable.StepFence, now time.Time) (*durable.Operation, error) {
-	op, err := m.live(durable.Claim{Operation: f.Operation, Owner: "", Token: f.Token, ExpiresAt: time.Time{}}, now)
+	c := durable.Claim{Operation: f.Operation, Owner: "", Token: f.Token, ExpiresAt: time.Time{}}
+
+	op, err := m.live(c, now, checkExpiry)
 	if err != nil {
 		return nil, err
 	}
 
 	if op.CancelRequested {
-		m.endCanceled(op, now)
-
 		return nil, durable.ErrCanceled
 	}
 
@@ -194,16 +242,18 @@ func (m *memDB) start(req durable.StartRequest, now time.Time) (durable.Operatio
 	return copyOp(op), true, nil
 }
 
-// memStore is one handle on a memDB.
+// memStore is one handle on a memDB. skew is the offset of the clock of the
+// instance that holds the handle.
 type memStore struct {
-	db *memDB
+	db   *memDB
+	skew time.Duration
 }
 
 func (s memStore) Start(_ context.Context, req durable.StartRequest) (durable.Operation, bool, error) {
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
 
-	return s.db.start(req, s.db.now())
+	return s.db.start(req, s.db.clock(s.skew))
 }
 
 func (s memStore) Get(_ context.Context, id durable.ID) (durable.Operation, error) {
@@ -267,40 +317,68 @@ func (s memStore) Claim(_ context.Context, req durable.ClaimRequest) (durable.Op
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
 
-	now := s.db.now()
+	now := s.db.clock(s.skew)
 
 	for _, op := range s.db.sorted() {
 		if !slices.Contains(req.Kinds, op.Kind) {
 			continue
 		}
 
-		pendingDue := op.State == durable.StatePending && !now.Before(op.NotBefore)
-		expired := op.State == durable.StateRunning && (!now.Before(op.Claim.ExpiresAt) || s.db.broken == breakLive)
+		due := s.db.due(op, now)
 
-		if !pendingDue && !expired {
-			continue
-		}
-
-		if expired && op.CancelRequested {
+		switch {
+		case due == notDue:
+		case due == dueTakeover && op.CancelRequested:
 			s.db.endCanceled(op, now)
+		default:
+			if due == dueTakeover && s.db.broken == breakTakeoverSteps {
+				op.Steps = nil
+			}
 
-			continue
+			s.db.take(op, req, now)
+
+			return copyOp(op), nil
 		}
-
-		op.State = durable.StateRunning
-		op.Attempt++
-		op.Claim = durable.Claim{
-			Operation: op.ID,
-			Owner:     req.Owner,
-			Token:     int64(op.Attempt), // The attempt grows on each claim, so it serves as the token.
-			ExpiresAt: now.Add(req.Lease),
-		}
-		op.UpdatedAt = now
-
-		return copyOp(op), nil
 	}
 
 	return durable.Operation{}, durable.ErrNoWork
+}
+
+// dueKind says whether a claim can take an operation, and how.
+type dueKind int
+
+const (
+	notDue dueKind = iota
+	// dueFirst is a pending operation whose retry delay passed.
+	dueFirst
+	// dueTakeover is a running operation whose claim expired.
+	dueTakeover
+)
+
+// due reports whether a claim can take op at now.
+func (m *memDB) due(op *durable.Operation, now time.Time) dueKind {
+	switch {
+	case op.State == durable.StatePending && !now.Before(op.NotBefore):
+		return dueFirst
+	case op.State == durable.StateRunning && (!now.Before(op.Claim.ExpiresAt) || m.broken == breakLive):
+		return dueTakeover
+	default:
+		return notDue
+	}
+}
+
+// take gives op a new claim for req at now.
+func (m *memDB) take(op *durable.Operation, req durable.ClaimRequest, now time.Time) {
+	// The attempt grows on each claim, so it serves as the token.
+	token := int64(op.Attempt + 1)
+	if m.broken == breakTokenStays {
+		token = 1
+	}
+
+	op.State = durable.StateRunning
+	op.Attempt++
+	op.Claim = durable.Claim{Operation: op.ID, Owner: req.Owner, Token: token, ExpiresAt: now.Add(req.Lease)}
+	op.UpdatedAt = now
 }
 
 func (s memStore) Extend(_ context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
@@ -311,9 +389,9 @@ func (s memStore) Extend(_ context.Context, c durable.Claim, lease time.Duration
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
 
-	now := s.db.now()
+	now := s.db.clock(s.skew)
 
-	op, err := s.db.live(c, now)
+	op, err := s.db.live(c, now, checkExpiry)
 	if err != nil {
 		return durable.Claim{}, err
 	}
@@ -332,7 +410,7 @@ func (s memStore) RecordStep(_ context.Context, f durable.StepFence, result []by
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
 
-	now := s.db.now()
+	now := s.db.clock(s.skew)
 
 	op, err := s.db.checkStep(f, now)
 	if err != nil {
@@ -346,11 +424,11 @@ func (s memStore) RecordStep(_ context.Context, f durable.StepFence, result []by
 }
 
 func (s memStore) Complete(_ context.Context, c durable.Claim) error {
-	return s.end(c, func(op *durable.Operation, _ time.Time) { op.State = durable.StateSucceeded })
+	return s.end(c, refuseOnCancel, func(op *durable.Operation, _ time.Time) { op.State = durable.StateSucceeded })
 }
 
 func (s memStore) Fail(_ context.Context, c durable.Claim, f durable.Failure) error {
-	return s.end(c, func(op *durable.Operation, now time.Time) {
+	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
 		op.LastError = f.Message
 		if f.Final {
 			op.State = durable.StateFailed
@@ -364,7 +442,7 @@ func (s memStore) Fail(_ context.Context, c durable.Claim, f durable.Failure) er
 }
 
 func (s memStore) Release(_ context.Context, c durable.Claim) error {
-	return s.end(c, func(op *durable.Operation, now time.Time) {
+	return s.end(c, endOnCancel, func(op *durable.Operation, now time.Time) {
 		op.State = durable.StatePending
 		op.NotBefore = now
 	})
@@ -379,7 +457,7 @@ func (s memStore) Cancel(_ context.Context, id durable.ID) error {
 		return durable.ErrNotFound
 	}
 
-	now := s.db.now()
+	now := s.db.clock(s.skew)
 
 	switch op.State {
 	case durable.StatePending:
@@ -399,22 +477,32 @@ func (s memStore) Cancel(_ context.Context, id durable.ID) error {
 }
 
 // end ends the attempt of c with fn, after the checks that Complete, Fail and
-// Release share.
-func (s memStore) end(c durable.Claim, fn func(op *durable.Operation, now time.Time)) error {
+// Release share. A requested cancel makes Complete fail with no change, and
+// makes Fail and Release end the operation canceled.
+func (s memStore) end(c durable.Claim, onCancel cancelRule, fn func(op *durable.Operation, now time.Time)) error {
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
 
-	now := s.db.now()
+	now := s.db.clock(s.skew)
 
-	op, err := s.db.live(c, now)
+	rule := checkExpiry
+	if onCancel == endOnCancel && s.db.broken == breakEndExpiry {
+		rule = skipExpiry
+	}
+
+	op, err := s.db.live(c, now, rule)
 	if err != nil {
 		return err
 	}
 
 	if op.CancelRequested {
+		if onCancel == refuseOnCancel {
+			return durable.ErrCanceled
+		}
+
 		s.db.endCanceled(op, now)
 
-		return durable.ErrCanceled
+		return nil
 	}
 
 	fn(op, now)
@@ -450,23 +538,37 @@ func (d memDomain) BumpFences(context.Context) error {
 }
 
 func (d memDomain) WriteStep(
-	_ context.Context, f durable.StepFence, ns namespace.Fence, value string, after func() error,
+	_ context.Context,
+	f durable.StepFence,
+	ns namespace.Fence,
+	value string,
+	hooks Hooks,
 ) error {
 	d.db.mu.Lock()
 	defer d.db.mu.Unlock()
+
+	// The lock is the transaction, so before runs inside it.
+	txStart := d.db.now()
+
+	if err := hooks.Run(hooks.Before); err != nil {
+		return err
+	}
 
 	if d.db.fences[ns.Namespace] != ns.FailoverVersion {
 		return namespace.ErrFenced
 	}
 
 	now := d.db.now()
+	if d.db.broken == breakTxStart {
+		now = txStart
+	}
 
 	op, err := d.db.checkStep(f, now)
 	if err != nil {
 		return err
 	}
 
-	if err := after(); err != nil {
+	if err := hooks.Run(hooks.After); err != nil {
 		return err
 	}
 
@@ -478,7 +580,7 @@ func (d memDomain) WriteStep(
 }
 
 func (d memDomain) StartWith(
-	_ context.Context, req durable.StartRequest, value string, after func() error,
+	_ context.Context, req durable.StartRequest, value string, hooks Hooks,
 ) (durable.Operation, error) {
 	d.db.mu.Lock()
 	defer d.db.mu.Unlock()
@@ -489,7 +591,7 @@ func (d memDomain) StartWith(
 
 	op, _, err := d.db.start(req, d.db.now())
 	if err == nil {
-		err = after()
+		err = hooks.Run(hooks.After)
 	}
 
 	if err != nil {

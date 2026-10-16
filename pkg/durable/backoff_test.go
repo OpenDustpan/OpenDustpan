@@ -1,6 +1,7 @@
 package durable_test
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -72,5 +73,22 @@ func TestBackoffDelayZeroPolicy(t *testing.T) {
 		if d := b.Delay(3, one); d != 0 {
 			t.Errorf("Backoff%+v.Delay = %v, want 0", b, d)
 		}
+	}
+}
+
+func TestBackoffDelayDoesNotOverflow(t *testing.T) {
+	t.Parallel()
+
+	b := durable.Backoff{Base: time.Hour, Max: time.Duration(math.MaxInt64)}
+	low := func() float64 { return 0 }
+
+	for attempt := 1; attempt <= 200; attempt++ {
+		if d := b.Delay(attempt, low); d < 0 {
+			t.Fatalf("attempt %d: delay %v is negative", attempt, d)
+		}
+	}
+
+	if d := b.Delay(200, low); d < b.Max/2-time.Second {
+		t.Fatalf("attempt 200: delay %v, want about half of the cap %v", d, b.Max)
 	}
 }

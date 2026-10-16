@@ -2,8 +2,14 @@ package durabletest
 
 // The rules that a broken store breaks, for the sensitivity tests.
 const (
-	BreakToken = breakToken
-	BreakLive  = breakLive
+	BreakToken         = breakToken
+	BreakExpiry        = breakExpiry
+	BreakEndExpiry     = breakEndExpiry
+	BreakTakeoverSteps = breakTakeoverSteps
+	BreakClock         = breakClock
+	BreakTokenStays    = breakTokenStays
+	BreakLive          = breakLive
+	BreakTxStart       = breakTxStart
 )
 
 // BrokenHarness returns a harness on a store in memory that breaks rule.

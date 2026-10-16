@@ -29,56 +29,60 @@ func TestMemStore(t *testing.T) {
 	})
 }
 
-func TestSuiteDetectsTokenIgnored(t *testing.T) {
+// TestSuiteSensitivity runs, for each broken store, the case that must
+// catch it, and checks that this case fails.
+func TestSuiteSensitivity(t *testing.T) {
 	t.Parallel()
 
-	if os.Getenv(durabletestFake) == durabletest.BreakToken {
+	if rule := os.Getenv(durabletestFake); rule != "" {
 		durabletest.Run(t, func(t *testing.T) durabletest.Harness {
 			t.Helper()
 
-			return durabletest.BrokenHarness(durabletest.BreakToken)
+			return durabletest.BrokenHarness(rule)
 		})
 
 		return
 	}
 
-	out := runSingleCaseAgainstFake(t, durabletest.BreakToken, "a_replaced_claim_cannot_write")
-
-	if !strings.Contains(out, "--- FAIL: "+t.Name()+"/") {
-		t.Fatalf("child output does not show the replaced-claim case failing:\n%s", out)
+	cases := []struct {
+		rule, catcher string
+	}{
+		{durabletest.BreakToken, "a_replaced_claim_cannot_write"},
+		{durabletest.BreakExpiry, "an_expired_claim_cannot_write"},
+		{durabletest.BreakEndExpiry, "an_expired_claim_cannot_write"},
+		{durabletest.BreakTakeoverSteps, "a_recorded_step_stays_done_after_a_takeover"},
+		{durabletest.BreakClock, "an_instance_clock_ahead_or_behind_cannot_move_a_claim"},
+		{durabletest.BreakTokenStays, "another_instance_claims_an_expired_operation_with_a_new_token"},
+		{durabletest.BreakLive, "a_live_claim_blocks_another_claim"},
+		{durabletest.BreakTxStart, "a_claim_that_expires_inside_a_step_transaction_cannot_write"},
 	}
-}
 
-func TestSuiteDetectsLiveClaimTaken(t *testing.T) {
-	t.Parallel()
+	for _, tc := range cases {
+		t.Run(tc.rule, func(t *testing.T) {
+			t.Parallel()
 
-	if os.Getenv(durabletestFake) == durabletest.BreakLive {
-		durabletest.Run(t, func(t *testing.T) durabletest.Harness {
-			t.Helper()
+			out := runCaseAgainstFake(t, tc.rule, tc.catcher)
 
-			return durabletest.BrokenHarness(durabletest.BreakLive)
+			if !strings.Contains(out, "--- FAIL: TestSuiteSensitivity/"+tc.catcher+" ") {
+				t.Fatalf("the case %s did not fail against the store that breaks %q:\n%s", tc.catcher, tc.rule, out)
+			}
 		})
-
-		return
-	}
-
-	out := runSingleCaseAgainstFake(t, durabletest.BreakLive, "a_live_claim_blocks_another_claim")
-
-	if !strings.Contains(out, "--- FAIL: "+t.Name()+"/") {
-		t.Fatalf("child output does not show the live-claim case failing:\n%s", out)
 	}
 }
 
-func runSingleCaseAgainstFake(t *testing.T, fake, subtest string) string {
+// runCaseAgainstFake runs the suite case catcher in a child process against
+// the store that breaks rule, and returns the output of the child.
+func runCaseAgainstFake(t *testing.T, rule, catcher string) string {
 	t.Helper()
 
 	//nolint:gosec // The child is this test binary with a fixed filter; both come from the test itself.
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+t.Name()+"$/"+subtest, "-test.v", "-test.count=1")
-	cmd.Env = append(os.Environ(), durabletestFake+"="+fake)
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSuiteSensitivity$/^"+catcher+"$",
+		"-test.v", "-test.count=1")
+	cmd.Env = append(os.Environ(), durabletestFake+"="+rule)
 
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("case matching %q passed against the %s store, want failure", subtest, fake)
+		t.Fatalf("the case %s passed against the store that breaks %q, want failure:\n%s", catcher, rule, out)
 	}
 
 	return string(out)
