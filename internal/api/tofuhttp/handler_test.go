@@ -276,6 +276,11 @@ func (userAuthz) Authorize(_ context.Context, p identity.Principal, action ident
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (userAuthz) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // newTestHandler returns a handler over units.
 func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 	t.Helper()

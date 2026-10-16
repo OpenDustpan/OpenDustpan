@@ -4,10 +4,10 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [ main ]
   pull_request:
     # Draft pull requests run no jobs: mark a PR ready to run CI on it.
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [ opened, synchronize, reopened, ready_for_review ]
   # Every 2 hours, the go job on main runs each test package again without
   # the test cache (make test-nocache), to find flaky tests. The e2e and scan
   # jobs do not run on the schedule. Each run uses about 9 runner-minutes.
@@ -53,7 +53,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
         # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
         # so go test can use cached results. Each machine runs one job at a time.
-        ports: ["5432:5432"]
+        ports: [ "5432:5432" ]
         # The image declares a volume at /var/lib/postgresql, and the runner does
         # not remove that volume after the job. A tmpfs at the same path replaces
         # the volume. The size limits the memory that the database can use.
@@ -174,7 +174,7 @@ jobs:
           POSTGRES_PASSWORD: postgres
         # A fixed port keeps DUSTPAN_TEST_POSTGRES_URL the same from job to job,
         # so go test can use cached results. Each machine runs one job at a time.
-        ports: ["5432:5432"]
+        ports: [ "5432:5432" ]
         # The image declares a volume at /var/lib/postgresql, and the runner does
         # not remove that volume after the job. A tmpfs at the same path replaces
         # the volume. The size limits the memory that the database can use.
@@ -191,7 +191,7 @@ jobs:
         # 8474 is the API. The tests give each proxy a fixed port from
         # TOXIPROXY_PORT_BASE (8475) to TOXIPROXY_PORT_BASE + 3, and the
         # client dials each proxy on the same port of the runner.
-        ports: ["8474:8474", "8475-8478:8475-8478"]
+        ports: [ "8474:8474", "8475-8478:8475-8478" ]
         # The proxies dial the test server and PostgreSQL on the runner
         # through this name.
         options: >-
@@ -217,6 +217,10 @@ jobs:
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
         run: make e2e
+      - name: Journal end-to-end tests
+        env:
+          DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
+        run: make e2e-journal
       # ADR 33, decision 7. Without a v* tag, only the empty-database case runs.
       - name: Upgrade test
         env:

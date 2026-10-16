@@ -91,14 +91,14 @@ func testStoreChecksSubjectNamespace(t *testing.T, d *delegation) {
 	}
 
 	fence, e := GrantWrite(t, d.st, g.Object, at, access.GrantRef(g))
-	if err := d.st.CreateGrant(t.Context(), g, fence, e); !errors.Is(err, access.ErrInvalid) {
+	if err := d.st.CreateGrant(t.Context(), g, fence, e, nil); !errors.Is(err, access.ErrInvalid) {
 		t.Fatalf("store grant to a principal of acme on the installation: err = %v, want ErrInvalid", err)
 	}
 
 	g.Object, g.ID = identity.NamespaceObject("acme"), "grt-fits"
 
 	fence, e = GrantWrite(t, d.st, g.Object, at, access.GrantRef(g))
-	if err := d.st.CreateGrant(t.Context(), g, fence, e); err != nil {
+	if err := d.st.CreateGrant(t.Context(), g, fence, e, nil); err != nil {
 		t.Fatalf("store grant to a principal of acme on acme: %v", err)
 	}
 }

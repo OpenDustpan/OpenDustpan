@@ -127,14 +127,12 @@ INSERT INTO updates (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetUpdate :one
--- The checkpoint size is the stored uncompressed size, or the byte length of
--- the saved deployment for rows from before blobs, read without loading the
--- document: the checkpoints table holds one row for each update, so the join
--- finds at most one row.
+-- The checkpoint size is the stored uncompressed size: the checkpoints table
+-- holds one row for each update, so the join finds at most one row.
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ? AND u.id = ?;
@@ -184,7 +182,7 @@ WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ?
@@ -194,7 +192,7 @@ WHERE u.stack_id = ?
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ?
@@ -214,7 +212,7 @@ WHERE stack_id = ? AND id = ?;
 
 -- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms,
+       c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -224,14 +222,14 @@ LIMIT 1;
 
 -- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features_json, deployment, saved_at_ms,
+       digest, invalid, features_json, saved_at_ms,
        blob_key, size, blob_size, blob_md5
 FROM checkpoints
 WHERE stack_id = ? AND update_id = ?;
 
 -- name: GetCheckpointByVersion :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms,
+       c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -242,7 +240,7 @@ INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features_json, deployment, saved_at_ms,
     blob_key, size, blob_size, blob_md5
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, X'', ?, ?, ?, ?, ?)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -489,25 +487,6 @@ WHERE id = ? AND status = 'pending';
 UPDATE state_versions
 SET content_key = ?
 WHERE id = ? AND status = 'pending';
-
--- name: ListUnsealedStateVersions :many
--- Finalized versions that still hold plain content, ordered by ID, so the
--- seal job seals them in a stable order. A version without content stays
--- out: a pending row names no content yet.
-SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
-       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
-FROM state_versions
-WHERE sealed = 0 AND status = 'finalized' AND content_key <> ''
-ORDER BY id ASC;
-
--- name: SealStateVersion :execrows
--- Moves one unsealed version to its sealed blob with its sealed outputs and
--- marks it sealed. The write matches only an unsealed row, so a retry after
--- a crash succeeds and changes nothing.
-UPDATE state_versions
-SET content_key = @content_key, outputs = @outputs, sealed = 1
-WHERE id = @id AND sealed = 0;
 
 -- name: SaveSensitiveMarks :execrows
 -- Stores the secret paths of the json-state rendering of one version. It
@@ -1038,6 +1017,14 @@ FROM principals p
 LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
 WHERE p.subject = ? AND p.deleted_at_ms IS NULL;
 
+-- name: SubjectsOfEnabledCaller :many
+-- The subjects of a caller as the check of a grant write reads them: a
+-- principal that is disabled has none.
+SELECT p.id AS principal_id, CAST(COALESCE(m.group_id, '') AS TEXT) AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
+WHERE p.subject = ? AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL;
+
 -- name: ReviewGrants :many
 -- One page of an access-review export (ADR 52, decision 10). The join on
 -- group_members reads the memberships of the groups of the grants: of one
@@ -1238,6 +1225,8 @@ SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_
 FROM access_tokens WHERE id = ?;
 
 -- name: GetAccessTokenByDigest :one
+-- The token, its owner and the token policy of the installation in one read,
+-- so a policy change applies to the next lookup on every instance.
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
@@ -1245,10 +1234,14 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
-  ), 0)) AS INTEGER) AS principal_active_at_ms
+  ), 0)) AS INTEGER) AS principal_active_at_ms,
+  ap.max_lifetime_ms AS policy_max_lifetime_ms, ap.inactivity_ms AS policy_inactivity_ms,
+  ap.disable_tokens AS policy_disable_tokens, ap.disable_accounts AS policy_disable_accounts,
+  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
-WHERE t.digest = ? AND p.deleted_at_ms IS NULL;
+CROSS JOIN access_token_policy ap
+WHERE t.digest = ? AND p.deleted_at_ms IS NULL AND ap.id = 1;
 
 -- name: ListAccessTokens :many
 SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
