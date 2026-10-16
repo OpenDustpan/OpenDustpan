@@ -306,7 +306,7 @@ func pgCopySessionTables() []pgCopyTable {
 // pgCopyPrincipalsTable holds the COPY columns of the principals table.
 func pgCopyPrincipalsTable() pgCopyTable {
 	return pgCopyTable{
-		table: "principals",
+		table: backup.TablePrincipals,
 		columns: []string{
 			"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
 			pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
@@ -328,7 +328,7 @@ func pgCopyPrincipalTables() []pgCopyTable {
 	return []pgCopyTable{
 		pgCopyPrincipalsTable(),
 		{
-			table: "principal_groups",
+			table: backup.TablePrincipalGroups,
 			columns: []string{
 				"id", pgColName, "name_key", "description", pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs,
@@ -336,7 +336,7 @@ func pgCopyPrincipalTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table: "group_members",
+			table: backup.TableGroupMembers,
 			columns: []string{
 				"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms", pgColSource, "source_id",
 				pgColState, "suspended_at_ms", "pinned",
@@ -344,7 +344,7 @@ func pgCopyPrincipalTables() []pgCopyTable {
 			orderBy: []string{"group_id", pgColPrincipalID, "added_at_ms"},
 		},
 		{
-			table: "access_tokens",
+			table: backup.TableAccessTokens,
 			columns: []string{
 				"id",
 				pgColPrincipalID,
@@ -369,7 +369,7 @@ func pgCopyPrincipalTables() []pgCopyTable {
 func pgCopyGrantTables() []pgCopyTable {
 	return []pgCopyTable{
 		{
-			table: "roles",
+			table: backup.TableRoles,
 			columns: []string{
 				"id", pgColName, "name_key", "description", "actions", pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs,
@@ -377,7 +377,7 @@ func pgCopyGrantTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table: "grants",
+			table: backup.TableGrants,
 			columns: []string{
 				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "target", "object_kind",
 				pgColNamespace, "condition", pgColCreatedAtMs, pgColCreatedBy, "revoked_at_ms", "revoked_by",

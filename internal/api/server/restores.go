@@ -20,11 +20,14 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -85,7 +88,12 @@ type getRestoreResponse struct {
 }
 
 // startRestore starts a restore in the background and answers 202 with its
-// ID. A second start while one runs answers 409.
+// ID. A second start while one runs answers 409. The caller needs
+// server:restore; whether the restore replaces the access tables depends on
+// server:restore-access, which only the site administrator holds. Without it
+// the restore keeps the current access tables. The entry below records the
+// request; the restore service writes the surviving entry after the swap,
+// because the swap replaces audit_entries from the backup.
 func (h *Handler) startRestore(
 	w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object,
 ) {
@@ -105,13 +113,15 @@ func (h *Handler) startRestore(
 	}
 
 	id := backup.MintRestoreID()
+	keepAccess := !canReplaceAccess(ctx, h, p)
 
 	startErr := h.restores.Start(ctx, id, backup.RestoreRequest{
-		BackupID:    backup.ID(req.BackupID),
-		PreBackupID: "",
-		CheckOnly:   req.CheckOnly,
-		Force:       req.Force,
-		RequestedBy: p.Subject,
+		BackupID:         backup.ID(req.BackupID),
+		PreBackupID:      "",
+		CheckOnly:        req.CheckOnly,
+		Force:            req.Force,
+		RequestedBy:      p.Subject,
+		KeepAccessTables: keepAccess,
 	})
 	if startErr != nil {
 		h.writeError(ctx, w, startErr)
@@ -119,7 +129,43 @@ func (h *Handler) startRestore(
 		return
 	}
 
+	accessMode := "replaced"
+	if keepAccess {
+		accessMode = "kept"
+	}
+
+	h.appendServerChange(r, p, serverChange{
+		at:      time.Now().UTC(),
+		action:  identity.ActionServerRestore,
+		object:  restoreAuditObject(id.String(), req.BackupID, accessMode),
+		outcome: audit.OutcomeSuccess,
+	})
+
 	h.writeJSON(ctx, w, http.StatusAccepted, startRestoreResponse{ID: id.String()})
+}
+
+// canReplaceAccess reports whether p may replace the access tables in a
+// restore: the authorizer allows server:restore-access on the installation.
+// A denied action means the restore keeps the access tables; any other
+// authorizer failure denies the replace, so the restore keeps them too.
+func canReplaceAccess(
+	ctx context.Context, h *Handler, p identity.Principal,
+) bool {
+	if h.authz == nil {
+		return false
+	}
+
+	if err := h.authz.Authorize(ctx, p, identity.ActionServerRestoreAccess, identity.ServerObject()); err != nil {
+		return false
+	}
+
+	return true
+}
+
+// restoreAuditObject names one restore for its audit entry, with whether the
+// access tables were replaced or kept.
+func restoreAuditObject(restoreID, backupID, accessMode string) string {
+	return "restore " + restoreID + " of backup " + backupID + " (access tables " + accessMode + ")"
 }
 
 // parseStartRestoreRequest decodes the start body: the whole body must be one

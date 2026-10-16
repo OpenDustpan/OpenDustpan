@@ -16,9 +16,10 @@ import (
 )
 
 var (
-	_ backup.RestoreRegistry = (*Store)(nil)
-	_ backup.Applier         = (*Store)(nil)
-	_ backup.Fencer          = (*Store)(nil)
+	_ backup.RestoreRegistry      = (*Store)(nil)
+	_ backup.Applier              = (*Store)(nil)
+	_ backup.AccessKeepingApplier = (*Store)(nil)
+	_ backup.Fencer               = (*Store)(nil)
 )
 
 // CreateRestore implements backup.RestoreRegistry: it stores r as a running

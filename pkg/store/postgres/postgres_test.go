@@ -24,6 +24,8 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
 	"opendustpan.org/opendustpan/pkg/backup"
+	blobfs "opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -562,6 +564,229 @@ func TestRestoreConformance(t *testing.T) {
 
 		return openBackup(t, base)
 	})
+}
+
+// restoreAuditMaintenance enters and leaves maintenance mode around a
+// restore at once: the audit-entry test runs no concurrent work.
+type restoreAuditMaintenance struct{}
+
+// Enter implements backup.RestoreMaintenance.
+func (restoreAuditMaintenance) Enter(
+	_ context.Context, _ bool,
+) (maintenance.EnterResult, error) {
+	return maintenance.EnterResult{Canceled: nil}, nil
+}
+
+// Leave implements backup.RestoreMaintenance.
+func (restoreAuditMaintenance) Leave(_ context.Context) error {
+	return nil
+}
+
+// TestRestoreLeavesAuditEntryAfterSwap proves a restore that runs through the
+// swap leaves the restore audit entry, with the access mode, in the restored
+// audit log: an entry written before the swap would go away with the old
+// live data. It runs the same restore service the server wires, over a real
+// store, with a backup taken just before, once replacing the access tables
+// and once keeping the current rows.
+func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		keep bool
+		want string
+	}{
+		{name: "replaces access tables", keep: false, want: "access tables replaced"},
+		{name: "keeps access tables", keep: true, want: "access tables kept"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkRestoreAuditEntryAfterSwap(t, tc.keep, tc.want)
+		})
+	}
+}
+
+// checkRestoreAuditEntryAfterSwap restores a backup taken just before, keeping
+// the access tables when keep is true, and proves the restored audit log
+// holds the restore audit entry naming want.
+func checkRestoreAuditEntryAfterSwap(t *testing.T, keep bool, want string) {
+	t.Helper()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL restore suite", envURL)
+	}
+
+	ctx := t.Context()
+	st := openBackup(t, base)
+	live, target := openRestoreAuditBlobs(t)
+	backups, restores := newRestoreAuditServices(t, st, live, target)
+
+	backupID := backup.ID(ident.NewID("bkp-"))
+
+	if _, runErr := backups.Run(ctx, backupID); runErr != nil {
+		t.Fatalf("run backup %s: %v", backupID, runErr)
+	}
+
+	restoreID := backup.RestoreID(ident.NewID("rst-"))
+	req := backup.RestoreRequest{
+		BackupID:         backupID,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: keep,
+	}
+
+	if startErr := restores.Start(ctx, restoreID, req); startErr != nil {
+		t.Fatalf("start restore: %v", startErr)
+	}
+
+	waitRestoreSucceeded(t, restores, restoreID)
+	assertRestoreAuditEntry(t, st, restoreID, backupID, want)
+}
+
+// openRestoreAuditBlobs opens the live and target blob stores of the
+// audit-entry test, each in its own temporary directory. The two stores
+// stay unnamed, as nonamedreturns requires; the first is the live store, the
+// second is the target.
+//
+//nolint:revive // Unnamed two-store result per nonamedreturns; order is documented.
+func openRestoreAuditBlobs(t *testing.T) (*blobfs.Store, *blobfs.Store) {
+	t.Helper()
+
+	live, openErr := blobfs.Open(t.TempDir())
+	if openErr != nil {
+		t.Fatalf("open live blob store: %v", openErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := live.Close(); closeErr != nil {
+			t.Errorf("close live blob store: %v", closeErr)
+		}
+	})
+
+	target, openErr := blobfs.Open(t.TempDir())
+	if openErr != nil {
+		t.Fatalf("open backup target: %v", openErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := target.Close(); closeErr != nil {
+			t.Errorf("close backup target: %v", closeErr)
+		}
+	})
+
+	return live, target
+}
+
+// newRestoreAuditServices wires the backup and restore services of the
+// audit-entry test over st, the same services the server wires.
+func newRestoreAuditServices(
+	t *testing.T, st *backupStore, live, target *blobfs.Store,
+) (*backup.Service, *backup.RestoreService) {
+	t.Helper()
+
+	backups, err := backup.NewService(backup.Config{
+		Exporter:    st,
+		Registry:    st,
+		Blobs:       live,
+		StateOpener: nil,
+		Target:      target,
+		TargetName:  "dir:test",
+		Now:         nil,
+		Version:     "test",
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("new backup service: %v", err)
+	}
+
+	restores, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        st,
+		Registry:    st,
+		Backups:     backups,
+		Maintenance: restoreAuditMaintenance{},
+		Blobs:       live,
+		Target:      target,
+		Key:         nil,
+		Region:      "test",
+		AfterApply:  nil,
+		Admit:       nil,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service: %v", err)
+	}
+
+	return backups, restores
+}
+
+// waitRestoreSucceeded polls the restore id until it succeeds, failing on
+// any other end state or when the wait times out.
+func waitRestoreSucceeded(t *testing.T, restores *backup.RestoreService, id backup.RestoreID) {
+	t.Helper()
+
+	ctx := t.Context()
+	deadline := time.Now().Add(time.Minute)
+
+	for {
+		row, getErr := restores.Get(ctx, id)
+		if getErr != nil {
+			t.Fatalf("get restore: %v", getErr)
+		}
+
+		if row.State == backup.RestoreSucceeded {
+			return
+		}
+
+		if row.State != backup.RestoreChecking && row.State != backup.RestoreApplying {
+			t.Fatalf("restore state = %q, want succeeded (error %q)", row.State, row.Error)
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("restore %s never succeeded", id)
+		}
+
+		select {
+		case <-ctx.Done():
+			t.Fatalf("restore %s: %v", id, ctx.Err())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// assertRestoreAuditEntry proves the restored audit log holds the restore
+// audit entry of id over backupID, naming the want access mode.
+func assertRestoreAuditEntry(
+	t *testing.T, st *backupStore, id backup.RestoreID, backupID backup.ID, wantMode string,
+) {
+	t.Helper()
+
+	listing, err := st.List(
+		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+	)
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	want := "restore " + id.String() + " of backup " + backupID.String() + " (" + wantMode + ")"
+
+	for i := range listing.Entries {
+		entry := listing.Entries[i]
+		if entry.Action != string(identity.ActionServerRestore) {
+			continue
+		}
+
+		if entry.Object != want {
+			t.Fatalf("restore audit object = %q, want %q", entry.Object, want)
+		}
+
+		return
+	}
+
+	t.Fatalf("no audit entry holds %q", want)
 }
 
 // backupStore wraps a PostgreSQL store with the URL of its schema, so the
