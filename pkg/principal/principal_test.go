@@ -136,7 +136,7 @@ func TestDisplayNameRefusesFormatCharacters(t *testing.T) {
 		Kind:        principal.KindPerson,
 		Source:      principal.SourceLocal,
 		Namespace:   "",
-		GroupCount:  0,
+		GroupCount:  0, BreakGlass: false,
 	}
 	if err := p.Validate(); !errors.Is(err, principal.ErrInvalid) {
 		t.Fatalf("display name with a zero-width space = %v, want ErrInvalid", err)

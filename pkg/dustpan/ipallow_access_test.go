@@ -54,7 +54,7 @@ func storePrincipal(t *testing.T, st *sqlite.Store, subject string) {
 		DisplayName: subject,
 		Kind:        principal.KindPerson,
 		Source:      principal.SourceLocal,
-		Namespace:   "", GroupCount: 0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 		DisabledAt: time.Time{},
 	}
 

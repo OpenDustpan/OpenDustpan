@@ -181,9 +181,17 @@ func (f accessFixture) seed(t *testing.T, subject, role string, obj identity.Obj
 	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 
 	prn := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
-		DisabledAt: time.Time{},
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		ID:          "prn-" + subject,
+		Subject:     subject,
+		DisplayName: "",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
+		DisabledAt:  time.Time{},
 	}
 	if err := f.store.CreatePrincipal(t.Context(), prn, storetest.ServerChange(at, "principal:"+prn.ID)); err != nil {
 		t.Fatalf("seed principal: %v", err)

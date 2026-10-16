@@ -24,7 +24,7 @@ func (memberStore) GetPrincipal(_ context.Context, id string) (principal.Princip
 	return principal.Principal{
 		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), DisabledAt: time.Time{}, ID: id,
 		Subject: "ci-acme", DisplayName: "", Kind: principal.KindService, Source: principal.SourceLocal,
-		Namespace: "acme", GroupCount: 0,
+		Namespace: "acme", GroupCount: 0, BreakGlass: false,
 	}, nil
 }
 
