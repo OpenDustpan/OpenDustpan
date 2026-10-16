@@ -1313,8 +1313,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		env.Step(ctx, t, s)
 	}
 
-	// The server cannot record resources through routes that later issues
-	// own, so the test seeds a checkpoint with one managed resource.
+	// The scenario has no provider that makes real resources, so the test
+	// seeds a checkpoint with one managed resource through the update routes.
 	env.SeedResources(ctx, t, "resourced")
 
 	for _, s := range pulumiResourcedRemoveSteps(env, resourced, resourcedPath) {
@@ -5819,7 +5819,7 @@ func checkPlanLockedByAnother(_ context.Context, env *e2e.Env) func(e2e.Result) 
 
 // checkTofuInit proves that init got past service discovery and created the
 // workspace: the CLI called discovery, ping and the entitlement set in order,
-// and a direct store call sees one inventory entry for the workspace.
+// and the inventory API lists one unit for the workspace.
 func checkTofuInit(ctx context.Context, env *e2e.Env) func(e2e.Result) error {
 	return func(r e2e.Result) error {
 		if err := checkTofuDiscovery(env)(r); err != nil {
@@ -5838,12 +5838,8 @@ func checkTofuInit(ctx context.Context, env *e2e.Env) func(e2e.Result) error {
 		entry := entries[0]
 		want := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace
 
-		if entry.Reference() != want || entry.Tool != "opentofu" || entry.Name != e2e.Workspace {
+		if entry.Reference != want || entry.Tool != "OpenTofu" || entry.Name != e2e.Workspace {
 			return fmt.Errorf("%w: inventory entry %+v, want reference %q", errUnexpected, entry, want)
-		}
-
-		if entry.UnitID == "" || !strings.HasPrefix(entry.UnitID, "ws-") {
-			return fmt.Errorf("%w: inventory unit id %q, want the ws- workspace id", errUnexpected, entry.UnitID)
 		}
 
 		return nil
@@ -6449,7 +6445,7 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		t.Fatalf("inventory holds %d entries, want one for the workspace", len(entries))
 	}
 
-	if want := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace; entries[0].Reference() != want {
+	if want := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace; entries[0].Reference != want {
 		t.Fatalf("inventory entry %+v, want reference %q", entries[0], want)
 	}
 

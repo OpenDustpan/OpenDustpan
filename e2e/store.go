@@ -16,8 +16,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-
-	"opendustpan.org/opendustpan/pkg/store/postgres"
 )
 
 const (
@@ -92,10 +90,10 @@ func PostgresURL() string {
 	return os.Getenv(postgresURLEnv)
 }
 
-// openPostgresStoreWithURL opens the PostgreSQL server at base in a fresh
-// schema and returns the store with the schema URL, so a server binary can
-// serve the same schema. The schema is dropped when the test ends.
-func openPostgresStoreWithURL(ctx context.Context, tb testing.TB, base string) (*postgres.Store, string) {
+// newPostgresSchema creates a fresh schema on the PostgreSQL server at base
+// and returns its URL. It opens no store: a server binary migrates the
+// schema when it opens it. The schema is dropped when the test ends.
+func newPostgresSchema(ctx context.Context, tb testing.TB, base string) string {
 	tb.Helper()
 
 	if base == "" {
@@ -106,20 +104,11 @@ func openPostgresStoreWithURL(ctx context.Context, tb testing.TB, base string) (
 
 	createSchema(ctx, tb, base, schema)
 
-	schemaURI := schemaURL(tb, base, schema)
-
-	st, err := postgres.Open(ctx, schemaURI)
-	if err != nil {
-		dropSchema(ctx, tb, base, schema)
-		tb.Fatalf("open postgres store: %v", err)
-	}
-
 	tb.Cleanup(func() {
-		st.CloseContext(ctx)
 		dropSchema(context.WithoutCancel(ctx), tb, base, schema)
 	})
 
-	return st, schemaURI
+	return schemaURL(tb, base, schema)
 }
 
 func randomSchema(tb testing.TB) string {
