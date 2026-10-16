@@ -155,6 +155,7 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 				{Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: autoCreate},
 			},
 		},
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -798,6 +799,7 @@ func TestSignInProviderDown(t *testing.T) {
 				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true},
 			},
 		},
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
