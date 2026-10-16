@@ -435,6 +435,7 @@ var embeddedMigrationNames = []string{
 	"0078_one_running_backup_and_restore.sql",
 	"0079_schema_minimum.sql",
 	"0080_durable_operations.sql",
+	"0081_durable_schedules.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary
