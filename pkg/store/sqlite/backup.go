@@ -46,7 +46,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 	}
 
 	if n == 0 {
-		return backup.ErrAlreadyExists
+		return s.createBackupConflict(ctx, r.ID)
 	}
 
 	return nil
@@ -255,14 +255,15 @@ func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error)
 
 // SchemaTables implements backup.Inspector: the data tables the schema holds,
 // read from the catalog, never from backup.Tables, so the conformance suite
-// fails while the two differ. It excludes bookkeeping (schema_migrations)
+// fails while the two differ. It excludes bookkeeping (schema_migrations
+// and audit_chain_state, the chain state of this installation)
 // and SQLite internals.
 func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	const query = `SELECT name FROM sqlite_master
-		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations'
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations', 'audit_chain_state')
 		ORDER BY name`
 
 	rows, err := s.conn.QueryContext(ctx, query)
@@ -345,6 +346,15 @@ func (s *Store) PeekPortableKey(
 	return codec.PeekPortableSecretKey(ctx, open, file, wrapperID)
 }
 
+// PeekPortableInstallationKey implements backup.InstallationKeyPeeker: it
+// reads one installation key of wrapperID from the installation_secret_keys
+// file of a portable backup.
+func (s *Store) PeekPortableInstallationKey(
+	ctx context.Context, open backup.PortableOpener, file backup.PortableFile, wrapperID string,
+) (secret.WrappedKey, error) {
+	return codec.PeekPortableInstallationKey(ctx, open, file, wrapperID)
+}
+
 // capture copies the database into a new file with VACUUM INTO and returns
 // its path. The target must not exist, so it reserves a new name first. The
 // caller removes the file.
@@ -375,6 +385,13 @@ func (s *Store) swapDatabase(ctx context.Context, temp string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	return s.swapDatabaseLocked(ctx, temp)
+}
+
+// swapDatabaseLocked is swapDatabase with the store lock already held: the
+// keep-access apply holds the write lock from the live snapshot through the
+// swap, so it swaps without taking the lock again.
+func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close database for restore: %w", err)
 	}
@@ -673,7 +690,7 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 	wrappers, err := stringColumn(
 		ctx,
 		conn,
-		`SELECT DISTINCT wrapper_id FROM secret_keys ORDER BY wrapper_id`,
+		`SELECT wrapper_id FROM secret_keys UNION SELECT wrapper_id FROM installation_secret_keys ORDER BY wrapper_id`,
 	)
 	if err != nil {
 		return backup.Summary{}, err
@@ -880,4 +897,36 @@ func quoteLiteral(s string) string {
 // corrupt wraps a staged-backup failure as ErrCorrupt, keeping the cause.
 func corrupt(err error) error {
 	return errors.Join(err, backup.ErrCorrupt)
+}
+
+// createBackupConflict answers why CreateBackup inserted no row: the ID is
+// taken (ErrAlreadyExists), or the unique index on running backups refused a
+// second running backup (ErrAlreadyRunning).
+func (s *Store) createBackupConflict(ctx context.Context, id backup.ID) error {
+	_, err := s.fetchBackup(ctx, id)
+	if err == nil {
+		return backup.ErrAlreadyExists
+	}
+
+	if errors.Is(err, backup.ErrNotFound) {
+		return backup.ErrAlreadyRunning
+	}
+
+	return err
+}
+
+// createRestoreConflict answers why CreateRestore inserted no row: the ID is
+// taken (ErrRestoreExists), or the unique index on running restores refused a
+// second running restore (ErrRestoreRunning).
+func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) error {
+	_, err := s.fetchRestore(ctx, id)
+	if err == nil {
+		return backup.ErrRestoreExists
+	}
+
+	if errors.Is(err, backup.ErrRestoreNotFound) {
+		return backup.ErrRestoreRunning
+	}
+
+	return err
 }

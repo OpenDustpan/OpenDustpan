@@ -3,7 +3,10 @@ package sqlite
 // Column names that more than one table of the list holds. goconst keeps
 // each one a constant.
 const (
+	backupColArrival     = "arrival"
 	backupColCreatedAtMs = "created_at_ms"
+	backupColDisplayName = "display_name"
+	backupColProviderID  = "provider_id"
 	backupColCreatedBy   = "created_by"
 	backupColDigest      = "digest"
 	backupColPrincipalID = "principal_id"
@@ -139,7 +142,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			columns: []string{
 				backupColStackID,
 				backupColUpdateID,
-				"arrival",
+				backupColArrival,
 				"blob_key",
 				"sha256",
 				"md5",
@@ -155,8 +158,19 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColStackID,
 				backupColUpdateID,
 				backupColSequence,
-				"arrival",
+				backupColArrival,
 				"sha256",
+			},
+		},
+		{
+			table: "update_journal_refusals",
+			columns: []string{
+				backupColStackID,
+				backupColUpdateID,
+				backupColArrival,
+				"sequence_ids",
+				"status",
+				"reason",
 			},
 		},
 		{
@@ -176,7 +190,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				backupColTool,
 				backupColName,
 				backupColUnitID,
-				"display_name",
+				backupColDisplayName,
 				"last_changed_ms",
 				backupColStatus,
 				"resource_count",
@@ -287,6 +301,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"value_count",
 				"changes",
 				"object_id",
+				"fence_version",
 			},
 		},
 	}
@@ -359,6 +374,31 @@ func sqliteSessionBackupTables() []sqliteBackupTable {
 				"return_path",
 				backupColCreatedAtMs,
 				backupColExpiresAtMs,
+				"max_age_ms",
+			},
+		},
+		{
+			table:   "oidc_providers",
+			columns: []string{backupColProviderID, "issuer", backupColCreatedAtMs},
+		},
+		{
+			table:   "installation_secret_keys",
+			columns: []string{"scope_id", "wrapper_id", "ciphertext", backupColCreatedAtMs},
+		},
+		{
+			table: "sign_in_providers",
+			columns: []string{
+				backupColProviderID,
+				"issuer",
+				backupColDisplayName,
+				"client_id",
+				"client_secret",
+				"scopes",
+				"auto_create",
+				"enabled",
+				backupColCreatedAtMs,
+				"updated_at_ms",
+				"version",
 			},
 		},
 	}
@@ -377,7 +417,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			columns: []string{
 				"id",
 				backupColSubject,
-				"display_name",
+				backupColDisplayName,
 				backupColKind,
 				backupColSource,
 				backupColCreatedAtMs,
@@ -387,6 +427,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 				"last_active_at_ms",
 				"last_sign_in_at_ms",
 				"namespace",
+				"break_glass",
 			},
 		},
 		{
@@ -403,8 +444,18 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table:   "group_members",
-			columns: []string{"group_id", backupColPrincipalID, "added_at_ms", "removed_at_ms"},
+			table: "group_members",
+			columns: []string{
+				"group_id",
+				backupColPrincipalID,
+				"added_at_ms",
+				"removed_at_ms",
+				backupColSource,
+				"source_id",
+				backupColState,
+				"suspended_at_ms",
+				"pinned",
+			},
 		},
 		{
 			table: "temp_admins",
@@ -475,6 +526,14 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
+			table: "audit_sink_leases",
+			columns: []string{
+				"sink",
+				"holder",
+				backupColExpiresAtMs,
+			},
+		},
+		{
 			table: "access_token_policy",
 			columns: []string{
 				"id",
@@ -488,7 +547,7 @@ func sqliteIdentityBackupTables() []sqliteBackupTable {
 		},
 		{
 			table:   "session_policy",
-			columns: []string{"id", "idle_ms", "max_length_ms", backupColUpdatedAtMs},
+			columns: []string{"id", "idle_ms", "max_length_ms", backupColUpdatedAtMs, "token_freshness_ms"},
 		},
 	}
 }

@@ -4,7 +4,7 @@ This guide shows how to back up a whole installation, check the backup, restore 
 
 A backup covers the whole installation. It holds the SQL data with the blob content that the data names. A backup holds no key-encryption key.
 
-The commands are the same for both databases. The server chooses the database: SQLite is the default, and `serve --database postgres://...` selects PostgreSQL. A backup of one database restores into the other. Section "Restore a backup" gives the rule.
+The commands are the same for both databases. The server chooses the database: SQLite is the default, and `serve --database postgres://...` selects PostgreSQL. A URL with a password goes in `DUSTPAN_DATABASE` instead, because serve refuses a password in the flag. A backup of one database restores into the other. Section "Restore a backup" gives the rule.
 
 ## Back up the installation
 
@@ -77,9 +77,7 @@ installation. Restore is an API operation: the server checks the backup,
 backs up the live data, enters maintenance mode, and only then applies the
 backup. Use the same key-encryption key and the same schema version as the backup
 source. The database may differ: a backup of SQLite restores into PostgreSQL
-and a backup of PostgreSQL restores into SQLite (ADR 42, decision 9). A backup
-from before the seal change still restores.
-After the apply, the server seals the rows that the backup holds unsealed.
+and a backup of PostgreSQL restores into SQLite (ADR 42, decision 9).
 
 Run the restore command. It calls the server and waits until the restore
 leaves the running state. The token comes from `DUSTPAN_ADMIN_TOKEN` or from
@@ -151,50 +149,16 @@ stage checks the staged data against the row counts, the blob references and
 the foreign keys of the manifest. A failed check leaves the live data unchanged.
 
 The command refuses a backup with no manifest or with an unknown format
-number. This server also refuses a backup in the native format of the older
-server (manifest format 1), and the message says to take a new backup.
-This server does not restore that format. To keep such a backup, follow the
-steps in "Move a format 1 backup". The refusal does not change the live data.
+number. The refusal does not change the live data.
 
 Disaster recovery on a new machine: start the server on an empty database
 with the same key-encryption key, then restore through the API. The
 bootstrap admin token can restore into the empty installation. The new
 database may be the other kind.
 
-A restore loads the access tokens of the backup as they were at that time
-(ADR 53). A token that you revoked after the backup is active again after
-the restore. After a restore to an older point, revoke those tokens again
-with `DELETE /api/server/tokens/{id}`.
+A restore replaces the access tables only when the caller holds server:restore-access, which only the site administrator holds. Any other restore keeps the current principals, roles, grants, tokens and sign-in providers. A revoked token stays revoked, and a disabled sign-in provider stays disabled. The sign-in providers include their client secrets and the issuer of each provider ID.
 
-## Move a format 1 backup
-
-A format 1 backup holds the native format of the older server. An older server
-writes format 1 again, so a new backup from the older server does not help.
-The data moves through a restore into the older server, then an upgrade, then
-a new backup. Use these steps:
-
-1. Keep the format 1 backup in its target. Do not delete it.
-2. Start the older server version that wrote the backup. Use an empty
-   database and the same key-encryption key. Set `--backup-target` to the
-   target that holds the format 1 backup.
-3. Restore the format 1 backup into that server:
-
-   ```sh
-   opendustpan restore --server https://old.example --ca-file ca.pem --backup bkp-aaa
-   ```
-
-4. Check that the restore succeeded and that the data is present.
-5. Stop the older server. Run the upgrade check for this server version, then
-   start this server version on the same database. The start applies the
-   pending migrations.
-6. Take a new backup with this server version. The new backup is format 2:
-
-   ```sh
-   opendustpan backup --server https://dustpan.example --ca-file ca.pem
-   ```
-
-7. Check the new backup. Keep the format 1 backup until the format 2 backup
-   checks as complete.
+A restore needs the key-encryption key that sealed every key in the backup, also when it keeps the access tables. The check opens a key of the backup with it: a key of a namespace, or else a key of the sign-in providers. A restore with another key stops before it changes anything.
 
 ## Upgrade the server
 

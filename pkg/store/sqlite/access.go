@@ -21,15 +21,42 @@ var (
 	_ access.Callers = (*Store)(nil)
 )
 
-// CreateGrant implements access.GrantStore.
-func (s *Store) CreateGrant(ctx context.Context, g access.Grant, fence namespace.Fence, e audit.Entry) error {
+// CreateGrant implements access.GrantStore. It runs check in the
+// transaction of the write, after the fence check.
+func (s *Store) CreateGrant(
+	ctx context.Context, g access.Grant, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
+) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.inGrantTx(ctx, g.Object.Namespace(), fence, e, func(q *db.Queries) error {
+		if err := runCheck(ctx, q, check); err != nil {
+			return err
+		}
+
 		return insertGrant(ctx, q, g)
 	})
 }
+
+// runCheck runs check, when it is not nil, with reads in the transaction of
+// q. The transaction is IMMEDIATE, so it holds the write lock of the
+// database.
+func runCheck(ctx context.Context, q *db.Queries, check access.GrantCheck) error {
+	if check == nil {
+		return nil
+	}
+
+	return check(ctx, grantReads{q: q})
+}
+
+// grantReads implements access.GrantReads with the queries of one
+// transaction, or of the database. It takes no lock of the Store: the
+// caller holds it.
+type grantReads struct {
+	q *db.Queries
+}
+
+var _ access.GrantReads = grantReads{q: nil}
 
 // insertGrant inserts g with q.
 func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
@@ -132,14 +159,20 @@ func (s *Store) GetGrant(ctx context.Context, id string) (access.Grant, error) {
 	return fromGrantRow(grantRow(row))
 }
 
-// RevokeGrant implements access.GrantStore. It ends the grant in the
+// RevokeGrant implements access.GrantStore. It runs check, then ends the grant in the
 // transaction of the entry, after it checks that the grant is in the
 // namespace of fence.
-func (s *Store) RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error {
+func (s *Store) RevokeGrant(
+	ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
+) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.inGrantTx(ctx, fence.Namespace, fence, e, func(q *db.Queries) error {
+		if err := runCheck(ctx, q, check); err != nil {
+			return err
+		}
+
 		if err := grantInNamespace(ctx, q, id, fence.Namespace); err != nil {
 			return err
 		}
@@ -215,7 +248,18 @@ func (s *Store) GrantsOn(
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.queries.GrantsOn(ctx, db.GrantsOnParams{
+	return grantReads{q: s.queries}.GrantsOn(ctx, subjects, objects)
+}
+
+// GrantsOn implements access.GrantReads.
+func (r grantReads) GrantsOn(
+	ctx context.Context, subjects []access.Subject, objects []identity.Object,
+) ([]access.Grant, error) {
+	if len(subjects) == 0 || len(objects) == 0 {
+		return nil, nil
+	}
+
+	rows, err := r.q.GrantsOn(ctx, db.GrantsOnParams{
 		Subjects: subjectStrings(subjects),
 		Targets:  targetStrings(objects),
 	})
@@ -246,7 +290,12 @@ func (s *Store) RoleGrantedBelowInstallation(ctx context.Context, role string) (
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	n, err := s.queries.CountRoleGrantsBelowInstallation(ctx, role)
+	return grantReads{q: s.queries}.RoleGrantedBelowInstallation(ctx, role)
+}
+
+// RoleGrantedBelowInstallation implements access.GrantReads.
+func (r grantReads) RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error) {
+	n, err := r.q.CountRoleGrantsBelowInstallation(ctx, role)
 	if err != nil {
 		return false, fmt.Errorf("count grants of role: %w", err)
 	}
@@ -259,7 +308,12 @@ func (s *Store) RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	n, err := s.queries.CountRoleGrantsOnPrincipal(ctx, role)
+	return grantReads{q: s.queries}.RoleGrantedOnPrincipal(ctx, role)
+}
+
+// RoleGrantedOnPrincipal implements access.GrantReads.
+func (r grantReads) RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error) {
+	n, err := r.q.CountRoleGrantsOnPrincipal(ctx, role)
 	if err != nil {
 		return false, fmt.Errorf("count grants of role: %w", err)
 	}
@@ -292,8 +346,11 @@ func (s *Store) GrantsWithRoles(
 }
 
 // CreateNamespaceWithGrant implements access.GrantStore: the namespace, the
-// grant of its creator and the entry commit together. A grant with no ID
-// stores the namespace and the entry alone.
+// grant of its creator and the entries commit together. A grant with no ID
+// stores the namespace and the entry alone. With a grant it stores the entry
+// in the scope @server and the same grant entry in the chain of the new
+// namespace, so the chain starts with the grant of its creator. The namespace
+// did not exist before, so no fence check runs.
 func (s *Store) CreateNamespaceWithGrant(
 	ctx context.Context, ns namespace.Namespace, g access.Grant, e audit.Entry,
 ) error {
@@ -302,27 +359,96 @@ func (s *Store) CreateNamespaceWithGrant(
 
 	row := codec.ToNamespaceRow(ns)
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		n, err := q.CreateNamespace(ctx, db.CreateNamespaceParams{
-			Name:            row.Name,
-			HomeRegion:      row.HomeRegion,
-			FailoverVersion: row.FailoverVersion,
-			CreatedAtMs:     row.CreatedAtMs,
-		})
-		if err != nil {
-			return fmt.Errorf("insert namespace: %w", err)
+	grantEntry, err := validateCreatorGrantEntries(ns, g, e)
+	if err != nil {
+		return err
+	}
+
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if err := insertNamespaceRow(ctx, q, row); err != nil {
+			return err
 		}
 
-		if n == 0 {
-			return namespace.ErrAlreadyExists
-		}
-
-		if g.ID == "" {
-			return nil
-		}
-
-		return insertGrant(ctx, q, g)
+		return appendCreatorGrantEntries(ctx, q, g, e, grantEntry)
 	})
+}
+
+// validateCreatorGrantEntries checks the entries of CreateNamespaceWithGrant:
+// e lives in the scope @server, and the copy of e in the chain of the new
+// namespace is valid when the grant has an ID.
+func validateCreatorGrantEntries(
+	ns namespace.Namespace, g access.Grant, e audit.Entry,
+) (audit.Entry, error) {
+	if err := validServerEntry(e); err != nil {
+		return audit.Entry{}, err
+	}
+
+	grantEntry := e
+	grantEntry.Namespace = ns.Name
+
+	if g.ID == "" {
+		return grantEntry, nil
+	}
+
+	if err := grantEntry.Validate(); err != nil {
+		return audit.Entry{}, fmt.Errorf("audit entry: %w", err)
+	}
+
+	return grantEntry, nil
+}
+
+// insertNamespaceRow inserts the namespace row. The namespace did not exist
+// before, so no fence check runs.
+func insertNamespaceRow(ctx context.Context, q *db.Queries, row codec.NamespaceRow) error {
+	n, err := q.CreateNamespace(ctx, db.CreateNamespaceParams{
+		Name:            row.Name,
+		HomeRegion:      row.HomeRegion,
+		FailoverVersion: row.FailoverVersion,
+		CreatedAtMs:     row.CreatedAtMs,
+	})
+	if err != nil {
+		return fmt.Errorf("insert namespace: %w", err)
+	}
+
+	if n == 0 {
+		return namespace.ErrAlreadyExists
+	}
+
+	return nil
+}
+
+// appendCreatorGrantEntries stores the entries of CreateNamespaceWithGrant.
+// With no grant (g.ID empty) it appends only the create entry e. With a
+// grant it inserts the grant, appends e in @server, and appends the grant
+// entry in the new namespace chain.
+func appendCreatorGrantEntries(
+	ctx context.Context,
+	q *db.Queries,
+	g access.Grant,
+	e audit.Entry,
+	grantEntry audit.Entry,
+) error {
+	if g.ID == "" {
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
+		}
+
+		return nil
+	}
+
+	if err := insertGrant(ctx, q, g); err != nil {
+		return err
+	}
+
+	if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	if _, err := appendAuditEntry(ctx, q, grantEntry); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // SubjectsOf implements access.Callers: the principal with the subject and
@@ -337,6 +463,19 @@ func (s *Store) SubjectsOf(ctx context.Context, subject string) ([]access.Subjec
 	}
 
 	return callerSubjects(rows), nil
+}
+
+// SubjectsOf implements access.GrantReads. A disabled principal has no
+// subjects, so a disable that commits before the check refuses the write.
+func (r grantReads) SubjectsOf(ctx context.Context, subject string) ([]access.Subject, error) {
+	rows, err := r.q.SubjectsOfEnabledCaller(ctx, subject)
+	if err != nil {
+		return nil, fmt.Errorf("select subjects of caller: %w", err)
+	}
+
+	return callerSubjects(mapRows(rows, func(r db.SubjectsOfEnabledCallerRow) db.SubjectsOfCallerRow {
+		return db.SubjectsOfCallerRow(r)
+	})), nil
 }
 
 // callerSubjects maps the rows of SubjectsOfCaller to subjects: the
@@ -411,7 +550,16 @@ func (s *Store) GetRoles(ctx context.Context, ids []string) ([]access.Role, erro
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.queries.RolesByIDs(ctx, ids)
+	return grantReads{q: s.queries}.GetRoles(ctx, ids)
+}
+
+// GetRoles implements access.GrantReads.
+func (r grantReads) GetRoles(ctx context.Context, ids []string) ([]access.Role, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	rows, err := r.q.RolesByIDs(ctx, ids)
 	if err != nil {
 		return nil, fmt.Errorf("select roles by ID: %w", err)
 	}
@@ -432,15 +580,20 @@ func (s *Store) ListRoles(ctx context.Context) ([]access.Role, error) {
 	return mapRows(rows, func(r db.ListRolesRow) access.Role { return fromRoleRow(roleRow(r)) }), nil
 }
 
-// UpdateRole implements access.RoleStore. It refuses a name that another
-// role holds without regard to case, in the same transaction as the write.
-func (s *Store) UpdateRole(ctx context.Context, r access.Role, e audit.Entry) error {
+// UpdateRole implements access.RoleStore. It runs check, then refuses a
+// name that another role holds without regard to case, in the transaction
+// of the write.
+func (s *Store) UpdateRole(ctx context.Context, r access.Role, e audit.Entry, check access.GrantCheck) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	key := strings.ToLower(r.Name)
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		if err := runCheck(ctx, q, check); err != nil {
+			return err
+		}
+
 		holder, err := q.RoleIDByNameKey(ctx, key)
 
 		switch {
@@ -683,16 +836,17 @@ func subjectRevokeEntry(e audit.Entry, g access.Grant, endedBy string) audit.Ent
 			{Key: revokeRoleKey, Old: nil, New: g.Role, Layer: "", TakesEffect: ""},
 			{Key: revokeSubjectKey, Old: nil, New: g.Subject.String(), Layer: "", TakesEffect: ""},
 		},
-		SourceIP:  e.SourceIP,
-		UserAgent: e.UserAgent,
-		Channel:   e.Channel,
-		Kind:      audit.KindChange,
-		Outcome:   audit.OutcomeSuccess,
-		RequestID: e.RequestID,
-		ObjectID:  g.ID,
-		PrevHash:  "",
-		Hash:      "",
-		Sequence:  0,
+		SourceIP:     e.SourceIP,
+		UserAgent:    e.UserAgent,
+		Channel:      e.Channel,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    e.RequestID,
+		ObjectID:     g.ID,
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 

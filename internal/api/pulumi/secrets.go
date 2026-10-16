@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/secret"
@@ -427,27 +428,28 @@ func (h *Handler) newAuditEntry(
 	ctx := r.Context()
 
 	return audit.Entry{
-		At:         time.Now().UTC(),
-		Namespace:  obj.Namespace(),
-		Subject:    p.Subject,
-		IDPSubject: "",
-		TokenID:    p.TokenID,
-		Action:     detail.action,
-		Object:     obj.String(),
-		Version:    detail.version,
-		ValuePath:  detail.valuePath,
-		ValueCount: detail.valueCount,
-		Changes:    nil,
-		SourceIP:   clientip.String(r),
-		UserAgent:  truncateUserAgent(r.UserAgent()),
-		Channel:    audit.NormalizeChannel(r.Header.Get(channelHeader)),
-		Kind:       detail.kind,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  requestid.FromContext(ctx),
-		ObjectID:   obj.UnitID(),
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           time.Now().UTC(),
+		Namespace:    obj.Namespace(),
+		Subject:      p.Subject,
+		IDPSubject:   "",
+		TokenID:      p.TokenID,
+		Action:       detail.action,
+		Object:       obj.String(),
+		Version:      detail.version,
+		ValuePath:    detail.valuePath,
+		ValueCount:   detail.valueCount,
+		Changes:      nil,
+		SourceIP:     clientip.String(r),
+		UserAgent:    truncateUserAgent(r.UserAgent()),
+		Channel:      sessionauth.AuditChannel(r, channelHeader),
+		Kind:         detail.kind,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    requestid.FromContext(ctx),
+		ObjectID:     obj.UnitID(),
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 

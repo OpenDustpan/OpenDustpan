@@ -163,6 +163,9 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 		deltaCutoff:       0,
 		disableJournaling: false,
 		ipAllowlists:      false,
+		signIn:            false,
+		signInRealTime:    false,
+		journalRefuser:    nil,
 	}
 
 	return newBinaryEnvWithBin(ctx, in, binPath)
@@ -172,6 +175,7 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 // with no blob store, no backup target and every feature switch off.
 func plainBackendConfig(binPath, dbURL, blobDir, tokens string, cert backendCert) backendConfig {
 	return backendConfig{
+		signIn:            nil,
 		disableJournaling: false,
 		ipAllowlists:      false,
 		bin:               binPath,
@@ -184,6 +188,7 @@ func plainBackendConfig(binPath, dbURL, blobDir, tokens string, cert backendCert
 		keyFile:           cert.key,
 		tokens:            tokens,
 		deltaCutoff:       0,
+		auditChain:        "",
 	}
 }
 
@@ -234,7 +239,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 
 	cfg := plainBackendConfig(binPath, dbURL, blobDir, in.token+","+in.tokenB, cert)
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
-	proxy := startRecordingProxy(tb, in.rec, backendURL)
+	proxy := startRecordingProxy(tb, in.rec, backendURL, nil)
 
 	client := proxy.Client()
 	client.Timeout = commandTimeout
@@ -244,9 +249,8 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		Recorder:   in.rec,
 		cli:        in.cli,
 		store:      in.store,
-		server:     nil,
 		client:     client,
-		workspaces: nil,
+		inprocess:  nil,
 		blobs:      openBlobStoreAt(tb, blobDir),
 		blobName:   blobFS,
 		s3Endpoint: "",
@@ -265,6 +269,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		backendLogs:   handle.logs,
 		certBundle:    "",
 		dbProxy:       nil,
+		signIn:        nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {
@@ -287,6 +292,12 @@ func (e *Env) SetServerBinary(path string) {
 	e.backendCfg.bin = path
 }
 
+// SetAuditChain sets the --audit-chain value that the next StartServer
+// uses: on or off.
+func (e *Env) SetAuditChain(setting string) {
+	e.backendCfg.auditChain = setting
+}
+
 // TryServe runs binPath `serve` once on the database, blob directory,
 // certificate and port of the environment and returns what it printed. The
 // environment server must be stopped first. A refusal exits at once with a
@@ -304,7 +315,7 @@ func (e *Env) TryServe(ctx context.Context, tb testing.TB, binPath string) Binar
 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, binPath, serveArgs(cfg, e.backendPort)...)
-	cmd.Env = backendEnv(cfg.tokens)
+	cmd.Env = backendServeEnv(cfg.tokens, cfg.dbURL)
 
 	var stdout, stderr bytes.Buffer
 

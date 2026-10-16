@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apitaudit "opendustpan.org/opendustpan/internal/api/audit"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -67,7 +68,33 @@ type memAuditStore struct {
 	err     error
 }
 
-var _ audit.Store = (*memAuditStore)(nil)
+var (
+	_ audit.Store       = (*memAuditStore)(nil)
+	_ audit.EntryReader = (*memAuditStore)(nil)
+)
+
+func (m *memAuditStore) EntryAt(_ context.Context, ns namespace.Name, seq int64) (audit.Entry, error) {
+	if m.err != nil {
+		return audit.Entry{}, m.err
+	}
+
+	for i := range m.entries[ns] {
+		if m.entries[ns][i].Sequence == seq {
+			return m.entries[ns][i], nil
+		}
+	}
+
+	return audit.Entry{}, audit.ErrEntryNotFound
+}
+
+func (m *memAuditStore) LastEntry(_ context.Context, ns namespace.Name) (audit.Entry, bool, error) {
+	chain := m.entries[ns]
+	if len(chain) == 0 {
+		return audit.Entry{}, false, m.err
+	}
+
+	return chain[len(chain)-1], true, m.err
+}
 
 func (m *memAuditStore) Append(_ context.Context, fence namespace.Fence, e audit.Entry) (audit.Entry, error) {
 	if m.err != nil {
@@ -132,14 +159,19 @@ func (m *memAuditStore) Check(_ context.Context, ns namespace.Name) (audit.Check
 	for i := range chain {
 		e := &chain[i]
 		if e.Sequence != wantSeq || e.PrevHash != prevHash || audit.ComputeHash(*e, e.PrevHash) != e.Hash {
-			return audit.CheckResult{Checked: int64(len(chain)), BadSequence: e.Sequence, Valid: false}, nil
+			return audit.CheckResult{
+				Checked:     int64(len(chain)),
+				BadSequence: e.Sequence,
+				Unchained:   0,
+				Valid:       false,
+			}, nil
 		}
 
 		prevHash = e.Hash
 		wantSeq++
 	}
 
-	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Valid: true}, nil
+	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
 // changeEntrySubject rewrites the subject of one stored entry behind the
@@ -186,6 +218,11 @@ func (stubAuthorizer) Authorize(
 	return identity.ErrDenied
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (stubAuthorizer) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // selectiveAuthorizer denies exactly the actions in deny and allows the rest.
 type selectiveAuthorizer struct {
 	deny map[identity.Action]bool
@@ -201,6 +238,15 @@ func (s selectiveAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (selectiveAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // changeTime is a fixed instant for seeded entries.
 func changeTime() time.Time {
 	return time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
@@ -211,27 +257,28 @@ func seedEntry(t *testing.T, store *memAuditStore, ns namespace.Name, subject st
 	t.Helper()
 
 	stored, err := store.Append(t.Context(), namespace.Fence{Namespace: ns, FailoverVersion: 1}, audit.Entry{
-		At:         changeTime(),
-		Namespace:  ns,
-		Subject:    subject,
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:decrypt",
-		Object:     "pulumi:" + ns.String() + "/web/prod",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "pulumi-cli/3.200.0",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindReveal,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "req-" + subject,
-		ObjectID:   "id-" + subject,
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           changeTime(),
+		Namespace:    ns,
+		Subject:      subject,
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:decrypt",
+		Object:       "pulumi:" + ns.String() + "/web/prod",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "pulumi-cli/3.200.0",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindReveal,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "req-" + subject,
+		ObjectID:     "id-" + subject,
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	})
 	if err != nil {
 		t.Fatalf("seed audit entry: %v", err)
@@ -258,8 +305,10 @@ func newTestHandler(t *testing.T) *apitaudit.Handler {
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
 		Namespaces:    namespaces,
 		Entries:       entries,
+		EntryReader:   entries,
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
@@ -276,6 +325,16 @@ func newEnforcingHandler(
 ) (*apitaudit.Handler, *memAuditStore) {
 	t.Helper()
 
+	return newEnforcingHandlerWithSessions(t, authz, nil)
+}
+
+// newEnforcingHandlerWithSessions is newEnforcingHandler with the session
+// cookie check sessions; nil takes access tokens only.
+func newEnforcingHandlerWithSessions(
+	t *testing.T, authz identity.Authorizer, sessions *sessionauth.Checker,
+) (*apitaudit.Handler, *memAuditStore) {
+	t.Helper()
+
 	entries := &memAuditStore{entries: map[namespace.Name][]audit.Entry{}, err: nil}
 
 	namespaces, err := namespace.NewService(
@@ -288,8 +347,10 @@ func newEnforcingHandler(
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
 		Namespaces:    namespaces,
 		Entries:       entries,
+		EntryReader:   entries,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      sessions,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
@@ -500,7 +561,9 @@ func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
 		Namespaces:    namespaces,
 		Entries:       entries,
+		EntryReader:   entries,
 		Authenticator: tokenAuthenticator{},
+		Sessions:      nil,
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
 	})

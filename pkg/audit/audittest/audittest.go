@@ -35,7 +35,9 @@ type Store interface {
 type TestStore struct {
 	Store Store
 	// TamperEntry changes one stored field of the entry with seq in ns.
-	// Field names one of: subject, action, object, outcome, kind, changes.
+	// Field names a column of the entry: subject, idp_subject, token_id,
+	// action, object, version, value_path, value_count, source_ip,
+	// user_agent, channel, kind, outcome, request_id, object_id or changes.
 	TamperEntry func(ctx context.Context, ns namespace.Name, seq int64, field, value string) error
 	// DeleteEntry removes the entry with seq in ns.
 	DeleteEntry func(ctx context.Context, ns namespace.Name, seq int64) error
@@ -80,6 +82,18 @@ func Run(t *testing.T, newStore Factory) {
 				`{"key":"log-level","old":"info","new":"debug","layer":"file","takesEffect":"next start"}]`,
 		)},
 		{name: "check finds changes that are not JSON", test: testCheckChangedChanges(`{`)},
+		{name: "check finds a count set where none was", test: testCheckChangedColumn("value_count", "0")},
+		{name: "check finds a changed object ID", test: testCheckChangedColumn("object_id", "stk-x")},
+		{name: "check finds a changed idp subject", test: testCheckChangedColumn("idp_subject", "idp-x")},
+		{name: "check finds a changed token ID", test: testCheckChangedColumn("token_id", "tok-x")},
+		{name: "check finds a changed version", test: testCheckChangedColumn("version", "v9")},
+		{name: "check finds a changed value path", test: testCheckChangedColumn("value_path", "secret.x")},
+		{name: "check finds a changed source IP", test: testCheckChangedColumn("source_ip", "198.51.100.9")},
+		{name: "check finds a changed user agent", test: testCheckChangedColumn("user_agent", "other/1.0")},
+		{name: "check finds a changed channel", test: testCheckChangedColumn("channel", "startup")},
+		{name: "check finds a changed kind", test: testCheckChangedColumn("kind", "change")},
+		{name: "check finds a changed outcome", test: testCheckChangedColumn("outcome", "failure")},
+		{name: "check finds a changed request ID", test: testCheckChangedColumn("request_id", "req-x")},
 	}
 
 	for _, tc := range cases {
@@ -119,27 +133,28 @@ func newNamespace(t *testing.T, s Store) namespace.Namespace {
 // request ID.
 func newEntry(ns namespace.Name, subject, requestID string, at time.Time) audit.Entry {
 	return audit.Entry{
-		At:         at,
-		Namespace:  ns,
-		Subject:    subject,
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:decrypt",
-		Object:     "pulumi:" + ns.String() + "/web/prod",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "pulumi-cli/3.200.0",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindReveal,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  requestID,
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           at,
+		Namespace:    ns,
+		Subject:      subject,
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:decrypt",
+		Object:       "pulumi:" + ns.String() + "/web/prod",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "pulumi-cli/3.200.0",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindReveal,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    requestID,
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 
@@ -617,6 +632,39 @@ func testCheckChangedField(t *testing.T, ts TestStore) {
 
 	if check.BadSequence != 2 {
 		t.Fatalf("bad sequence = %d, want 2", check.BadSequence)
+	}
+}
+
+// testCheckChangedColumn answers a test that proves Check reports the
+// sequence of an entry whose column field changed to value behind the back
+// of the store.
+func testCheckChangedColumn(field, value string) func(t *testing.T, ts TestStore) {
+	return func(t *testing.T, ts TestStore) {
+		t.Helper()
+
+		if ts.TamperEntry == nil {
+			t.Fatal("suite needs TamperEntry to prove the chain check")
+		}
+
+		s := ts.Store
+		ns := newNamespace(t, s)
+
+		for i := 1; i <= 3; i++ {
+			appendEntry(t, s, ns.Fence(), newEntry(ns.Name, "admin", fmt.Sprintf("req-%d", i), now()))
+		}
+
+		if err := ts.TamperEntry(t.Context(), ns.Name, 2, field, value); err != nil {
+			t.Fatalf("change %s of entry 2: %v", field, err)
+		}
+
+		check, err := s.Check(t.Context(), ns.Name)
+		if err != nil {
+			t.Fatalf("check audit chain: %v", err)
+		}
+
+		if check.Valid || check.BadSequence != 2 {
+			t.Fatalf("check after a change of %s = %+v, want bad sequence 2", field, check)
+		}
 	}
 }
 

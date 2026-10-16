@@ -2,10 +2,12 @@ package dustpan_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -54,7 +56,7 @@ func storePrincipal(t *testing.T, st *sqlite.Store, subject string) {
 		DisplayName: subject,
 		Kind:        principal.KindPerson,
 		Source:      principal.SourceLocal,
-		Namespace:   "", GroupCount: 0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 		DisabledAt: time.Time{},
 	}
 
@@ -83,7 +85,7 @@ func storeGrant(t *testing.T, st *sqlite.Store, subject, role string, obj identi
 		Subject:   access.Subject{Kind: access.SubjectPrincipal, ID: "prn-" + subject},
 	}
 
-	if err := st.CreateGrant(t.Context(), g, fence, e); err != nil {
+	if err := st.CreateGrant(t.Context(), g, fence, e, nil); err != nil {
 		t.Fatalf("create grant of %q on %q: %v", role, obj.String(), err)
 	}
 }
@@ -236,5 +238,65 @@ func TestIPAllowlistNeedsInstallationGrant(t *testing.T) {
 
 	if code, body := serveIPAllowlistAccess(t, srv, http.MethodDelete, instAdminToken); code != http.StatusNoContent {
 		t.Fatalf("installation admin DELETE answers %d, want %d: %s", code, http.StatusNoContent, body)
+	}
+}
+
+// listNamespacesFrom answers the names that GET /api/server/namespaces
+// lists for token from the client address remote.
+func listNamespacesFrom(t *testing.T, srv *dustpan.Server, token, remote string) []string {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/namespaces", nil)
+	req.RemoteAddr = remote
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list namespaces from %s answers %d: %s", remote, rec.Code, rec.Body.String())
+	}
+
+	var page namespacePageWire
+	if err := json.Unmarshal(rec.Body.Bytes(), &page); err != nil {
+		t.Fatalf("decode %s: %v", rec.Body.String(), err)
+	}
+
+	names := make([]string, 0, len(page.Namespaces))
+	for i := range page.Namespaces {
+		names = append(names, page.Namespaces[i].Name)
+	}
+
+	return names
+}
+
+// namespaceWire is the part of a listed namespace that the test reads.
+type namespaceWire struct {
+	Name string `json:"name"`
+}
+
+// namespacePageWire is the part of a namespace page that the test reads.
+type namespacePageWire struct {
+	Namespaces []namespaceWire `json:"namespaces"`
+}
+
+// TestNamespaceListFollowsIPAllowlist proves that the installation namespace
+// list leaves out a namespace whose IP allowlist does not contain the client
+// address, for a principal with namespace:read on it through a grant.
+func TestNamespaceListFollowsIPAllowlist(t *testing.T) {
+	t.Parallel()
+
+	srv := newIPAllowlistAccessServer(t)
+
+	if code, body := serveIPAllowlistAccess(t, srv, http.MethodPut, instAdminToken); code != http.StatusOK {
+		t.Fatalf("set the list of acme answers %d: %s", code, body)
+	}
+
+	if got := listNamespacesFrom(t, srv, nsAdminToken, "198.51.100.7:1234"); !slices.Equal(got, []string{"acme"}) {
+		t.Fatalf("namespaces inside the list = %v, want [acme]", got)
+	}
+
+	if got := listNamespacesFrom(t, srv, nsAdminToken, "192.0.2.10:1234"); len(got) != 0 {
+		t.Fatalf("namespaces outside the list = %v, want none", got)
 	}
 }

@@ -31,6 +31,12 @@ func (testAuthorizer) Authorize(
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+func (testAuthorizer) ListObjects(
+	_ context.Context, p identity.Principal, _ identity.Action,
+) (identity.Scope, error) {
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: p.Admin}, nil
+}
+
 func mustName(t *testing.T, s string) namespace.Name {
 	t.Helper()
 
@@ -60,6 +66,7 @@ func TestActionsAreToolNeutral(t *testing.T) {
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
 		identity.ActionServerRestore,
+		identity.ActionServerRestoreAccess,
 		identity.ActionServerReadPrincipals,
 		identity.ActionServerManagePrincipals,
 		identity.ActionServerManageGroups,
@@ -352,6 +359,14 @@ func TestServerActionsProveWireForms(t *testing.T) {
 		t.Fatalf("restore action = %q, want %q", identity.ActionServerRestore, "server:restore")
 	}
 
+	if identity.ActionServerRestoreAccess != "server:restore-access" {
+		t.Fatalf(
+			"restore-access action = %q, want %q",
+			identity.ActionServerRestoreAccess,
+			"server:restore-access",
+		)
+	}
+
 	for action, want := range map[identity.Action]string{
 		identity.ActionServerReadPrincipals:   "server:read-principals",
 		identity.ActionServerManagePrincipals: "server:manage-principals",
@@ -381,6 +396,7 @@ func checkAuthorizer(t *testing.T, authorizer identity.Authorizer) {
 		identity.ActionServerObserve,
 		identity.ActionServerMaintenance,
 		identity.ActionServerRestore,
+		identity.ActionServerRestoreAccess,
 	}
 
 	nsObj := identity.NamespaceObject(mustName(t, "acme"))
@@ -735,4 +751,49 @@ func TestAdminSubjects(t *testing.T) {
 	if want := []string{"admin", "admin-2", "root"}; !slices.Equal(got, want) {
 		t.Fatalf("admin subjects = %v, want %v", got, want)
 	}
+}
+
+// TestSelfAllowedListObjectsForwards proves SelfAllowed gives the scope of
+// Next unchanged: a self action adds no object to a list.
+func TestSelfAllowedListObjectsForwards(t *testing.T) {
+	t.Parallel()
+
+	acme := namespace.Name("acme")
+	next := identitytest.NewPolicyAuthorizer("alice", map[identity.Action][]string{
+		identity.ActionUnitRead: {identity.NamespaceObject(acme).String()},
+	})
+	authz := identity.SelfAllowed{Next: next, Actions: []identity.Action{identity.ActionTokenManageOwn}}
+	alice := identity.Principal{
+		Subject: "alice", DisplayName: "alice", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+	}
+
+	scope, err := authz.ListObjects(t.Context(), alice, identity.ActionUnitRead)
+	if err != nil {
+		t.Fatalf("list unit:read: %v", err)
+	}
+
+	if scope.All || len(scope.Namespaces) != 1 || scope.Namespaces[0].Namespace() != acme {
+		t.Fatalf("list unit:read = %+v, want namespace acme only", scope)
+	}
+
+	scope, err = authz.ListObjects(t.Context(), alice, identity.ActionTokenManageOwn)
+	if err != nil {
+		t.Fatalf("list token:manage-own: %v", err)
+	}
+
+	if !scope.IsEmpty() {
+		t.Fatalf("list token:manage-own = %+v, want no object", scope)
+	}
+}
+
+// TestSelfAllowedSuite runs the shared Authorizer suite against SelfAllowed
+// with no self action around the default.
+func TestSelfAllowedSuite(t *testing.T) {
+	t.Parallel()
+
+	identitytest.Run(t, func(t *testing.T) identity.Authorizer {
+		t.Helper()
+
+		return identity.SelfAllowed{Next: identity.AdminOnly{}, Actions: nil}
+	})
 }

@@ -18,6 +18,7 @@ import (
 	pulumiapi "opendustpan.org/opendustpan/internal/api/pulumi"
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	tfeapi "opendustpan.org/opendustpan/internal/api/tfe"
+	tofuhttpapi "opendustpan.org/opendustpan/internal/api/tofuhttp"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -66,13 +67,18 @@ func ServedRoutes(tb testing.TB) []RouteRef {
 
 	pulumi := coveragePulumiRoutes(tb, namespaces)
 	tfe := coverageTFERoutes(tb, namespaces)
+	tofuHTTP := coverageTofuHTTPRoutes(tb, namespaces)
 	inventory := coverageInventoryRoutes(tb, namespaces)
 	auditRoutes := coverageAuditRoutes(tb, namespaces)
 	server := coverageServerRoutes(tb)
 
-	out := make([]RouteRef, 0, len(pulumi)+len(tfe)+len(inventory)+len(auditRoutes)+len(server)+probeRouteCount)
+	out := make(
+		[]RouteRef, 0,
+		len(pulumi)+len(tfe)+len(tofuHTTP)+len(inventory)+len(auditRoutes)+len(server)+probeRouteCount,
+	)
 	out = append(out, pulumi...)
 	out = append(out, tfe...)
+	out = append(out, tofuHTTP...)
 	out = append(out, inventory...)
 	out = append(out, auditRoutes...)
 	out = append(out, server...)
@@ -159,6 +165,13 @@ func (coverageAuthorizer) Authorize(
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+// ListObjects lists no object. Route tables never list, so it never runs.
+func (coverageAuthorizer) ListObjects(
+	_ context.Context, _ identity.Principal, _ identity.Action,
+) (identity.Scope, error) {
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+}
+
 // coveragePulumiRoutes returns the Pulumi CLI adapter's route table.
 func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
 	tb.Helper()
@@ -184,6 +197,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		tb.Fatalf("updates service: %v", err)
@@ -204,6 +218,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Namespaces:              namespaces,
 		Authenticator:           coverageAuthenticator{},
 		Authorizer:              coverageAuthorizer{},
+		Sessions:                nil,
 		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -370,6 +385,86 @@ func coverageTFERoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef 
 	return tfeRefs(handler.Routes())
 }
 
+// coverageTofuHTTPRoutes builds the OpenTofu http backend handler with stub
+// dependencies and returns its route table.
+func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRef {
+	tb.Helper()
+
+	handler, err := tofuhttpapi.NewHandler(tofuhttpapi.Config{
+		Authenticator: coverageAuthenticator{},
+		Authorizer:    coverageAuthorizer{},
+		Logger:        slog.New(slog.DiscardHandler),
+		Workspaces:    coverageTofuHTTPWorkspaces{},
+		Namespaces:    namespaces,
+		Audit:         nil,
+		Gate:          nil,
+	})
+	if err != nil {
+		tb.Fatalf("tofu http backend handler: %v", err)
+	}
+
+	routes := handler.Routes()
+	out := make([]RouteRef, 0, len(routes))
+
+	for _, route := range routes {
+		out = append(out, RouteRef{Method: route.Method, Path: route.Path})
+	}
+
+	return out
+}
+
+// coverageTofuHTTPWorkspaces answers no workspace and no state. It exists
+// only to build the http backend handler for its route table; no request is
+// ever served.
+type coverageTofuHTTPWorkspaces struct{}
+
+func (coverageTofuHTTPWorkspaces) Get(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) GetByID(_ context.Context, _ workspace.ID) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) Create(_ context.Context, _ workspace.Ref) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) LockWithID(
+	_ context.Context, _ workspace.ID, _, _, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) UnlockLock(
+	_ context.Context, _ workspace.ID, _, _ string,
+) (workspace.Workspace, error) {
+	return workspace.Workspace{}, workspace.ErrNotFound
+}
+
+//nolint:revive // The port takes the lock ID beside the caller, the allowance and the audit record.
+func (coverageTofuHTTPWorkspaces) ForceUnlockLock(
+	_ context.Context, _ workspace.ID, _ workspace.Lock, _ string,
+	_ namespace.Overrides, _ func() error,
+) (workspace.Workspace, bool, error) {
+	return workspace.Workspace{}, false, workspace.ErrNotFound
+}
+
+func (coverageTofuHTTPWorkspaces) Current(_ context.Context, _ workspace.ID) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrNoState
+}
+
+func (coverageTofuHTTPWorkspaces) Open(_ context.Context, _ workspace.StateVersion) (io.ReadCloser, error) {
+	return nil, workspace.ErrNoState
+}
+
+func (coverageTofuHTTPWorkspaces) WriteState(
+	_ context.Context, _ workspace.ID, _ workspace.StreamInput,
+	_ workspace.StreamAuthority, _ io.Reader,
+) (workspace.StateVersion, error) {
+	return workspace.StateVersion{}, workspace.ErrNotFound
+}
+
 // coverageWorkspaces answers no workspace and no state. It exists only to
 // build a Handler for its route table; no request is ever served.
 type coverageWorkspaces struct{}
@@ -534,6 +629,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		ReadScope:     coverageScope{},
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})
@@ -634,8 +730,10 @@ func coverageAuditRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 	handler, err := auditapi.NewHandler(auditapi.Config{
 		Namespaces:    namespaces,
 		Entries:       coverageAuditStore{},
+		EntryReader:   nil,
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
@@ -666,7 +764,7 @@ func (coverageAuditStore) List(
 }
 
 func (coverageAuditStore) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {
-	return audit.CheckResult{Checked: 0, BadSequence: 0, Valid: true}, nil
+	return audit.CheckResult{Checked: 0, BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
 // coverageMetrics writes nothing: the route table needs a metrics writer,
@@ -764,32 +862,37 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 	tb.Helper()
 
 	handler, err := serverapi.NewHandler(serverapi.Config{
-		Now:            nil,
-		Authenticator:  coverageAuthenticator{},
-		Authorizer:     coverageAuthorizer{},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     coverageNamespaces(tb),
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    coverageMaintenance{},
-		Metrics:        coverageMetrics{},
-		TempAdmins:     nil,
-		Version:        "test",
-		Schema:         coverageSchema{},
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
-		DeletedUnits:   nil,
-		IPAllowlists:   coverageIPAllowlists(tb),
-		SessionPolicy:  coverageSessionPolicies(tb),
+		Now:              nil,
+		Authenticator:    coverageAuthenticator{},
+		Authorizer:       coverageAuthorizer{},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       coverageNamespaces(tb),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      coverageMaintenance{},
+		Metrics:          coverageMetrics{},
+		TempAdmins:       nil,
+		Version:          "test",
+		Schema:           coverageSchema{},
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     coverageIPAllowlists(tb),
+		SessionPolicy:    coverageSessionPolicies(tb),
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
 	}
 
-	return serverRefs(handler.Routes())
+	return append(serverRefs(handler.Routes()), coverageSignInRoutes(tb)...)
 }
 
 // routeRefs formats one adapter's table as method and path pairs. Each
@@ -873,24 +976,49 @@ type AllowEntry struct {
 func CoverageAllowlist() []AllowEntry {
 	return slices.Concat(
 		consoleAllowEntries(),
+		auditReadAllowEntries(),
 		deletedUnitAllowEntries(),
 		backupAllowEntries(),
 		namespaceAllowEntries(),
 		maintenanceAllowEntries(),
+		auditChainAllowEntries(),
 		operatorAllowEntries(),
 		stateAllowEntries(),
 		restoreAllowEntries(),
 		journalAllowEntries(),
+		tofuHTTPAllowEntries(),
 		principalAllowEntries(),
 		accessAllowEntries(),
 		reviewAllowEntries(),
 		tokenAllowEntries(),
 		tokenPolicyAllowEntries(),
 		sessionPolicyAllowEntries(),
+		signInAllowEntries(),
+		signInProviderAllowEntries(),
 		ipAllowlistAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
+		auditSinkAllowEntries(),
 	)
+}
+
+// auditSinkCoveringTest names the test that proves the audit sink list
+// instead of a CLI: no CLI reads the delivery state of the audit sinks.
+const auditSinkCoveringTest = "TestAuditSinks"
+
+// auditSinkAllowEntries returns the operator route of the audit sinks. The
+// harness steps of auditSinkCoveringTest drive it through a server with a
+// file sink on each store.
+func auditSinkAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/server/audit/sinks",
+			CoveringTest: auditSinkCoveringTest,
+			Reason: "Operator route: no CLI lists the audit sinks. The harness " +
+				"step starts a server with a file sink, writes one audited change " +
+				"and reads the list.",
+		},
+	}
 }
 
 // namespacePrincipalCoveringTest names the test that proves the routes of
@@ -1132,6 +1260,58 @@ func tokenPolicyAllowEntries() []AllowEntry {
 	return out
 }
 
+// signInAllowEntries returns the console sign-in routes. The steps of
+// TestSignIn drive each one in the browser flow against a test OpenID
+// provider, on each store.
+func signInAllowEntries() []AllowEntry {
+	reason := "Console route: no CLI signs in through a browser. " +
+		"The harness plays the browser with a cookie jar against a test OpenID provider and checks each answer."
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, "/api/server/sign-in/{provider}"},
+		{http.MethodGet, "/api/server/sign-in/{provider}/callback"},
+		{http.MethodGet, "/api/server/session"},
+		{http.MethodPost, "/api/server/sign-out"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestSignIn", Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// signInProviderAllowEntries returns the operator and console routes of
+// the sign-in providers. The steps of TestSignIn drive each one through the
+// real binary on each store: a create, the list, a read, a change, a
+// refused delete and a delete.
+func signInProviderAllowEntries() []AllowEntry {
+	reason := "Operator and console route: no CLI manages sign-in providers. " +
+		"The harness calls each route through the real binary and checks the answer."
+
+	const list, one = "/api/server/sign-in-providers", "/api/server/sign-in-providers/{id}"
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, list},
+		{http.MethodPost, list},
+		{http.MethodGet, one},
+		{http.MethodPatch, one},
+		{http.MethodDelete, one},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestSignIn", Reason: reason,
+		})
+	}
+
+	return out
+}
+
 // sessionPolicyAllowEntries returns the operator and console routes of the
 // session policy. The harness steps of TestSessionPolicy drive each one
 // through the real binary on each store.
@@ -1181,6 +1361,26 @@ func ipAllowlistAllowEntries() []AllowEntry {
 	}
 
 	return out
+}
+
+// tofuHTTPAllowEntries returns the allowlist rows of the OpenTofu http
+// backend. The real CLI reaches all four routes in TestTofuHTTPBackend, on
+// every store and every OpenTofu version. That test writes no matrix report,
+// so the coverage check cannot see its traffic.
+func tofuHTTPAllowEntries() []AllowEntry {
+	const (
+		path         = "/tofu/state/{namespace}/{workspace}"
+		coveringTest = "TestTofuHTTPBackend"
+		reason       = "The real OpenTofu CLI reaches the route through the http backend in its own test, " +
+			"which writes no matrix report."
+	)
+
+	return []AllowEntry{
+		{Method: http.MethodGet, Path: path, CoveringTest: coveringTest, Reason: reason},
+		{Method: http.MethodPost, Path: path, CoveringTest: coveringTest, Reason: reason},
+		{Method: "LOCK", Path: path, CoveringTest: coveringTest, Reason: reason},
+		{Method: "UNLOCK", Path: path, CoveringTest: coveringTest, Reason: reason},
+	}
 }
 
 // journalAllowEntries returns the allowlist row for the journal entry route.
@@ -1234,15 +1434,10 @@ func deletedUnitAllowEntries() []AllowEntry {
 	}
 }
 
-// consoleAllowEntries returns the allowlist rows for console-only routes and
-// routes the CLI never calls.
-func consoleAllowEntries() []AllowEntry {
+// auditReadAllowEntries returns the allowlist rows for the audit read
+// routes, which only the console and audit sink receivers call.
+func auditReadAllowEntries() []AllowEntry {
 	return []AllowEntry{
-		{
-			Method: http.MethodGet, Path: "/api/inventory/units",
-			CoveringTest: "TestListUnitsBothTools",
-			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
-		},
 		{
 			Method: http.MethodGet, Path: "/api/audit/entries",
 			CoveringTest: "TestCLIs (checkAuditLog)",
@@ -1251,11 +1446,30 @@ func consoleAllowEntries() []AllowEntry {
 				"decrypt audit route and checks the chain.",
 		},
 		{
+			Method: http.MethodGet, Path: "/api/audit/entries/{sequence}",
+			CoveringTest: "TestCLIs (checkAuditLog), TestServerAuditScope",
+			Reason: "Console-only and for audit sink receivers: no CLI reads " +
+				"one audit entry. The harness steps read an entry of the " +
+				"namespace and of @server by its sequence.",
+		},
+		{
 			Method: http.MethodGet, Path: "/api/audit/check",
 			CoveringTest: "TestCLIs (checkAuditLog)",
 			Reason: "Console-only: no CLI checks the audit chain. The " +
 				"harness step checks it after a CLI command that calls the " +
 				"decrypt audit route.",
+		},
+	}
+}
+
+// consoleAllowEntries returns the allowlist rows for console-only routes and
+// routes the CLI never calls.
+func consoleAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/inventory/units",
+			CoveringTest: "TestListUnitsBothTools",
+			Reason:       "Console-only: no CLI reads the cross-tool unit list.",
 		},
 		{
 			Method: http.MethodGet, Path: "/api/v2/workspaces/{id}",
@@ -1311,6 +1525,12 @@ func operatorAllowEntries() []AllowEntry {
 			Method: http.MethodGet, Path: "/api/server/metrics",
 			CoveringTest: "TestBothToolsSameServer (checkServerMetrics)",
 			Reason:       "Operator route (ADR 32): no CLI calls it.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/audit/checkpoint-epochs",
+			CoveringTest: "TestNewCheckpointEpochIsAChange",
+			Reason: "Operator route: no CLI calls it. An administrator starts a new " +
+				"checkpoint epoch after a restore or a failed check of the signed checkpoints.",
 		},
 		{
 			Method: http.MethodGet, Path: "/health/live",
@@ -1494,6 +1714,30 @@ func maintenanceAllowEntries() []AllowEntry {
 			CoveringTest: maintenanceCoveringTest,
 			Reason: "Operator route: no CLI leaves maintenance mode. The " +
 				"harness step leaves after the 503 checks.",
+		},
+	}
+}
+
+// auditChainCoveringTest names the test that proves the audit chain routes
+// instead of a CLI: no tool CLI calls them.
+const auditChainCoveringTest = "TestAuditChain"
+
+// auditChainAllowEntries returns the operator audit chain routes that no
+// tool CLI calls. The steps of auditChainCoveringTest restart the server
+// binary with each setting, read the waiting change and approve it.
+func auditChainAllowEntries() []AllowEntry {
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/server/audit/chain",
+			CoveringTest: auditChainCoveringTest,
+			Reason: "Operator route: no tool CLI reads the audit chain. " +
+				"The harness step reads the waiting change after each restart.",
+		},
+		{
+			Method: http.MethodPost, Path: "/api/server/audit/chain",
+			CoveringTest: auditChainCoveringTest,
+			Reason: "Operator route: no tool CLI approves an audit chain change. " +
+				"The harness step approves the change to off, then to on.",
 		},
 	}
 }

@@ -68,8 +68,16 @@ func TestFrozenMigrations(t *testing.T) {
 		"0064_blob_purges_age_byte_order.sql":      "ff017b110980e1ad8137fb3e64529f58da9c70f0f710b7838a40dd50cc5abfc1",
 		"0065_session_policy.sql":                  "986714a6ed3011fc4415677bf49fd2a4fe9895a5c7c09fd8447033e51698aa3e",
 		"0066_namespace_principals.sql":            "ff394d989079d26d381c1ed5f8ffa0cb15e98f5dbe6c5875d6ac0618e09c36cb",
+		"0067_audit_chain_state.sql":               "c2ead140aa1bf3d8daacf8d156b74683059ffacbfc08162630554d868ac3c6d5",
 		"0068_update_journal_records_changed.sql":  "0823fe408cc9019ebd0c787427f7d10235fcd5f6ce7a2fefa030000bb1776ab7",
+		"0069_audit_sink_leases.sql":               "a2aefc0ac301d8bb20e902230b2ef5dd1706e496ea66f27a86285f6736bae449",
+		"0070_membership_source_state.sql":         "49c5e92cb8b5a13413b4dd1b0bf9f08ff2bb8df96e74d31e75b76ccbc4357b8b",
+		"0071_break_glass_accounts.sql":            "c5fdb52c35faa3b9ca4ee45b388a3e3a5eb95f8bf20aa25d984a90e99513507a",
 		"0072_temp_admins.sql":                     "f4cf80c4a4cdf2f388119c14db0d0643c705be4948d7eacada8f699e28e8fe0b",
+		"0074_update_journal_refusals.sql":         "0076fd4b3ae489c70d510daa0799732e278f76e41a4cead25657ca4c3a485440",
+		"0075_sign_in_freshness.sql":               "c6c257043962cf6560209a0624d95e5953324c3d3e1e837961490ffdab71c2e3",
+		"0076_sign_in_providers.sql":               "cd8231c0fc536a4e5b66871abbb94dc72d0ad5ef813dfaa44772e6f73d5e2230",
+		"0078_one_running_backup_and_restore.sql":  "2db237e90e87ec44dae80f9f868a9095f0258dfaaa8a91ae060f15d2df943734",
 	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")

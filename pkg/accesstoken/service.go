@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
+	"slices"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -99,7 +100,6 @@ type Service struct {
 	logger     *slog.Logger
 	now        func() time.Time
 	newID      func(prefix string) string
-	policies   *policyCache
 }
 
 var _ identity.Authenticator = (*Service)(nil)
@@ -131,7 +131,6 @@ func NewService(cfg Config) (*Service, error) {
 	return &Service{
 		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness, grants: cfg.Grants,
 		authz: cfg.Authorizer, tempAdmins: cfg.TempAdmins, logger: logger, now: now, newID: newID,
-		policies: &policyCache{readAt: time.Time{}, policy: DefaultPolicy(), mu: sync.Mutex{}, valid: false},
 	}, nil
 }
 
@@ -502,7 +501,8 @@ func (s *Service) Policy(ctx context.Context) (Policy, error) {
 }
 
 // PolicyChange names the fields of the policy that a change sets. A nil
-// field keeps its value.
+// field keeps its value. DisableBreakGlass is deprecated: the server
+// refuses true, and always keeps false.
 type PolicyChange struct {
 	MaxLifetime       *time.Duration
 	Inactivity        *time.Duration
@@ -525,10 +525,8 @@ func (s *Service) SetPolicy(ctx context.Context, e audit.Entry, c PolicyChange) 
 			return Policy{}, audit.Entry{}, err
 		}
 
-		return p, change(e, p.UpdatedAt, PolicyRef), nil
+		return p, policyEntry(e, p.UpdatedAt, old, p), nil
 	})
-
-	s.policies.forget()
 
 	if errors.Is(err, ErrInvalid) {
 		return Policy{}, err
@@ -572,8 +570,9 @@ func (c PolicyChange) applyTo(p Policy) Policy {
 // changes nothing. The store takes the time of the run from the database
 // clock, and the entries carry that time. The run keeps the temporary
 // administrators that still work, unless the stored policy turns their
-// disable on: only their fixed expiry ends them. The bootstrap admin tokens
-// have no stored record, so they are never disabled here.
+// disable on: only their fixed expiry ends them. A break-glass account is
+// always exempt, with no setting. The bootstrap admin tokens have no stored
+// record, so a sweep never disables them here.
 func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult, error) {
 	p, err := s.Policy(ctx)
 	if err != nil {
@@ -634,7 +633,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 			identity.ErrUnauthenticated)
 	}
 
-	if err := s.checkPolicyActive(ctx, m.Token, m.Owner, now); err != nil {
+	if err := s.checkPolicyActive(ctx, m, now); err != nil {
 		return identity.Principal{}, err
 	}
 
@@ -650,16 +649,20 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	}, nil
 }
 
-// checkPolicyActive refuses the token t of the owner o when the policy disables
-// t, or the user account o, as inactive at now, before the sweep writes the
-// disable: the sweep runs once an hour, and a use would else move the last
-// use forward and keep t, or o, alive. While break-glass is on, a working
-// temporary administrator is exempt: only its fixed expiry ends it. A failed
-// read of the policy answers its error, so the caller fails closed.
-func (s *Service) checkPolicyActive(ctx context.Context, t Token, o Owner, now time.Time) error {
-	p, err := s.policies.get(ctx, now, s.Policy)
-	if err != nil {
-		return fmt.Errorf("authenticate access token: %w", err)
+// checkPolicyActive refuses the token of m when the policy of m disables
+// the token, or the user account of its owner, as inactive at now, before
+// the sweep writes the disable: the sweep runs once an hour, and a use would
+// else move the last use forward and keep the token, or the account, alive.
+// A break-glass account is always exempt. A working temporary administrator
+// is exempt too: only its fixed expiry ends it. The policy comes from the
+// same lookup as the token, so a change applies to the next lookup on every
+// instance. A failed record read answers its error, so the caller fails
+// closed.
+func (s *Service) checkPolicyActive(ctx context.Context, m Match, now time.Time) error {
+	t, o, p := m.Token, m.Owner, m.Policy
+
+	if o.BreakGlass {
+		return nil
 	}
 
 	if p.inactiveAt(t, now) {
@@ -701,6 +704,29 @@ func (s *Service) breakGlassExempt(ctx context.Context, subject string, now time
 	}
 
 	return rec.ActiveAt(now), nil
+}
+
+// AccountInactive reports whether the user account o is past the
+// inactivity period of the policy at the time of the service, as the token
+// lookup decides for the owner of a token: the account disable is on, the
+// period is not zero, o is a person that is not a break-glass account, and
+// o.ActiveAt is at or before now minus the period. Another sign-in, such as
+// a console session, applies it, so that its use does not keep an account
+// alive that the sweep would disable. A failed read of the policy answers
+// its error, so the caller fails closed.
+func (s *Service) AccountInactive(ctx context.Context, o Owner) (bool, error) {
+	if o.BreakGlass {
+		return false, nil
+	}
+
+	now := s.Now()
+
+	p, err := s.Policy(ctx)
+	if err != nil {
+		return false, fmt.Errorf("account inactivity: %w", err)
+	}
+
+	return p.accountInactiveAt(o, now), nil
 }
 
 // touch records the use of t at now, at most once for each touchEvery. A
@@ -750,6 +776,61 @@ func change(e audit.Entry, at time.Time, object string) audit.Entry {
 	e.Object = object
 
 	return e
+}
+
+// policyEntry returns e as the audit entry of a change of the policy from
+// old to updated at the time at. It keeps the changes of the caller, for
+// example the session ID of a console session, and adds the changed
+// settings.
+func policyEntry(e audit.Entry, at time.Time, old, updated Policy) audit.Entry {
+	e.At = at
+	e.Namespace = audit.ServerScope
+	e.Kind = audit.KindChange
+	e.Outcome = audit.OutcomeSuccess
+	e.Object = PolicyRef
+	e.Changes = slices.Clone(e.Changes)
+
+	for _, c := range []struct {
+		key        string
+		old, value time.Duration
+	}{
+		{key: "maxLifetimeSeconds", old: old.MaxLifetime, value: updated.MaxLifetime},
+		{key: "inactivitySeconds", old: old.Inactivity, value: updated.Inactivity},
+	} {
+		if c.old == c.value {
+			continue
+		}
+
+		before := seconds(c.old)
+		e.Changes = append(e.Changes, audit.Change{
+			Key: c.key, Old: &before, New: seconds(c.value), Layer: "", TakesEffect: "",
+		})
+	}
+
+	for _, c := range []struct {
+		key        string
+		old, value bool
+	}{
+		{key: "disableTokens", old: old.DisableTokens, value: updated.DisableTokens},
+		{key: "disableAccounts", old: old.DisableAccounts, value: updated.DisableAccounts},
+		{key: "disableBreakGlass", old: old.DisableBreakGlass, value: updated.DisableBreakGlass},
+	} {
+		if c.old == c.value {
+			continue
+		}
+
+		before := strconv.FormatBool(c.old)
+		e.Changes = append(e.Changes, audit.Change{
+			Key: c.key, Old: &before, New: strconv.FormatBool(c.value), Layer: "", TakesEffect: "",
+		})
+	}
+
+	return e
+}
+
+// seconds returns d as a decimal count of whole seconds.
+func seconds(d time.Duration) string {
+	return strconv.FormatInt(int64(d/time.Second), 10)
 }
 
 // issued is a new token with its secret and the digest of the secret.

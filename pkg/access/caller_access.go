@@ -258,7 +258,7 @@ func (s *Service) CallerGrants(ctx context.Context, p identity.Principal, req Ca
 		})
 	}
 
-	return s.reviewEntries(ctx, rs, reviewRead{read: read, grantAccess: grantAccess, obj: obj, q: q, boot: 0})
+	return s.reviewEntries(ctx, rs, &reviewRead{read: read, grantAccess: grantAccess, obj: obj, q: q, boot: 0})
 }
 
 // noGrants returns the page of a caller with no grant at the time of the

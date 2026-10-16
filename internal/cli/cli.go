@@ -23,6 +23,9 @@ import (
 // Command path elements: one constant for each, so the table and the help
 // never spell a command two ways.
 const (
+	commandApprove         = "approve"
+	commandAuditChain      = "audit-chain"
+	commandStatus          = "status"
 	commandBackup          = "backup"
 	commandCheck           = "check"
 	commandCreate          = "create"

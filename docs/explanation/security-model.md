@@ -82,6 +82,11 @@ persons and services.
   `GET /api/server/principals/{id}/access-review` lists the holders of
   `principal:manage-tokens` on the principal. The audit entry of each grant
   to a service principal names the same holders in the change
+  `tokenManagers`. The audit entry of each grant to a group names the same
+  holders for each service principal in the group in one change
+  `tokenManagers`, with one line per service principal in the form
+  `<principal ID>: <holder>, <holder>`. The audit entry of each membership
+  add of a service principal names the same holders in the change
   `tokenManagers`.
 - **A revoke of `principal:manage-tokens` does not end the tokens that
   its holder already made.** Those tokens act as the service principal
@@ -97,7 +102,9 @@ persons and services.
   lists and revokes the tokens of the principals of that namespace, through
   `principal:manage-tokens` on each of them. It reaches no other principal.
   A grant of a role with it needs every data action on that namespace, or
-  `server:manage-access` on the installation.
+  `server:manage-access` on the installation. The access-review export of
+  such a principal lists the holders of `namespace:manage-principal-tokens`
+  on its namespace.
 - **Only a site administrator can change the sign-in settings.** The
   action `server:manage-sign-in` changes the session policy with
   `PATCH /api/server/session-policy`: the idle limit (15 minutes by
@@ -141,13 +148,6 @@ The server seals each new OpenTofu state version before it stores it:
 - **A download answers the same bytes that the CLI sent.** The MD5 and the
   size of a state version stay those of the plain bytes.
 
-The server also seals the state versions that an older server wrote
-(ADR 41, decision 11). At each start, and after each restore, it seals
-each version that still holds plain content. It writes the sealed content
-to a new blob key, moves the version to that key in a fenced transaction,
-and then deletes the plain blob. It seals only the versions of namespaces
-whose home region is this region.
-
 ## The key-encryption key
 
 `serve` needs a key-encryption key before it opens the database. It takes
@@ -184,7 +184,7 @@ disk encryption and with access rules on the S3 bucket.
 
 | Data | Where | Encrypted by the server |
 | --- | --- | --- |
-| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. The server seals the versions of an older server at start and after a restore |
+| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. Versions that a server older than the seal change wrote stay plain: the server does not seal them later |
 | Pulumi checkpoints | Blob store, compressed | No. The secret values in them are ciphertext from the Pulumi CLI |
 | Pulumi secret config values | Your stack configuration | Yes, as above |
 | Wrapped data keys | Database | Yes, by the key-encryption key |
@@ -337,10 +337,11 @@ entry and how to read them.
   `tofu state pull` makes a `tool-operation` entry. The server records a
   reveal from the Pulumi CLI only when the CLI calls a `log-decryption`
   route.
-- **Who can read the log.** `GET /api/audit/entries` lists the entries and
-  `GET /api/audit/check` checks the chain. Both need the action
+- **Who can read the log.** `GET /api/audit/entries` lists the entries,
+  `GET /api/audit/entries/{sequence}` reads one entry and
+  `GET /api/audit/check` checks the chain. Each needs the action
   `namespace:read-audit` on the namespace. For the installation scope
-  `@server`, both need `server:read-audit` on the installation instead.
+  `@server`, each needs `server:read-audit` on the installation instead.
 - **A hash chain for each namespace.** Each entry holds the SHA-256 of its
   own fields and of the previous entry. The check finds a changed or a
   deleted entry. It does not stop a person who can write to the database:

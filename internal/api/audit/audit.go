@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -32,25 +33,34 @@ const tokenScheme = "token "
 
 // Config holds the dependencies of a Handler.
 type Config struct {
-	Namespaces    *namespace.Service
-	Entries       audit.Store
+	Namespaces *namespace.Service
+	Entries    audit.Store
+	// EntryReader reads one entry by its scope and sequence. Nil answers
+	// 501 on the route that reads one entry.
+	EntryReader   audit.EntryReader
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
-	Logger        *slog.Logger
+	// Sessions checks the console session cookie of a request with no
+	// Authorization header. Nil accepts access tokens only.
+	Sessions *sessionauth.Checker
+	Logger   *slog.Logger
 }
 
 // Handler serves the audit API under /api/audit/.
 type Handler struct {
 	namespaces *namespace.Service
 	entries    audit.Store
+	reader     audit.EntryReader
 	authn      identity.Authenticator
+	sessions   *sessionauth.Checker
 	authz      identity.Authorizer
 	logger     *slog.Logger
 	mux        *patternMux
 	routes     []Route
 }
 
-// NewHandler returns a Handler. Every Config field is required.
+// NewHandler returns a Handler. Every Config field but EntryReader and
+// Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Namespaces == nil:
@@ -68,7 +78,9 @@ func NewHandler(cfg Config) (*Handler, error) {
 	h := &Handler{
 		namespaces: cfg.Namespaces,
 		entries:    cfg.Entries,
+		reader:     cfg.EntryReader,
 		authn:      cfg.Authenticator,
+		sessions:   cfg.Sessions,
 		authz:      cfg.Authorizer,
 		logger:     cfg.Logger,
 		mux:        newPatternMux(),
@@ -121,31 +133,36 @@ type auditEntry struct {
 	ObjectID  string        `json:"objectID,omitempty"`
 	PrevHash  string        `json:"prevHash"`
 	Hash      string        `json:"hash"`
+	// FenceVersion is the failover version of the namespace when the entry
+	// was appended, which the hash covers. It is omitted when it is 0, as in
+	// @server.
+	FenceVersion int64 `json:"fenceVersion,omitempty"`
 }
 
 // toAuditEntry maps one domain entry to its wire shape.
 func toAuditEntry(e audit.Entry) auditEntry {
 	return auditEntry{
-		AtMs:       e.AtMs(),
-		Sequence:   e.Sequence,
-		Subject:    e.Subject,
-		IDPSubject: e.IDPSubject,
-		TokenID:    e.TokenID,
-		Action:     e.Action,
-		Object:     e.Object,
-		Version:    e.Version,
-		ValuePath:  e.ValuePath,
-		ValueCount: e.ValueCount,
-		Changes:    toAuditChanges(e.Changes),
-		SourceIP:   e.SourceIP,
-		UserAgent:  e.UserAgent,
-		Channel:    string(e.Channel),
-		Kind:       string(e.Kind),
-		Outcome:    string(e.Outcome),
-		RequestID:  e.RequestID,
-		ObjectID:   e.ObjectID,
-		PrevHash:   e.PrevHash,
-		Hash:       e.Hash,
+		AtMs:         e.AtMs(),
+		Sequence:     e.Sequence,
+		Subject:      e.Subject,
+		IDPSubject:   e.IDPSubject,
+		TokenID:      e.TokenID,
+		Action:       e.Action,
+		Object:       e.Object,
+		Version:      e.Version,
+		ValuePath:    e.ValuePath,
+		ValueCount:   e.ValueCount,
+		Changes:      toAuditChanges(e.Changes),
+		SourceIP:     e.SourceIP,
+		UserAgent:    e.UserAgent,
+		Channel:      string(e.Channel),
+		Kind:         string(e.Kind),
+		Outcome:      string(e.Outcome),
+		RequestID:    e.RequestID,
+		ObjectID:     e.ObjectID,
+		PrevHash:     e.PrevHash,
+		Hash:         e.Hash,
+		FenceVersion: e.FenceVersion,
 	}
 }
 
@@ -187,11 +204,13 @@ type listEntriesResponse struct {
 // checkResponse is the answered document of the chain check.
 //
 // Contract: never remove or rename these fields. BadSequence is omitted
-// when the chain is valid.
+// when the chain is valid. EntriesUnchained counts the entries without a
+// hash: the chain was off when they were appended.
 type checkResponse struct {
-	EntriesChecked int64 `json:"entriesChecked"`
-	BadSequence    int64 `json:"badSequence,omitempty"`
-	Valid          bool  `json:"valid"`
+	EntriesChecked   int64 `json:"entriesChecked"`
+	EntriesUnchained int64 `json:"entriesUnchained"`
+	BadSequence      int64 `json:"badSequence,omitempty"`
+	Valid            bool  `json:"valid"`
 }
 
 // auditScope returns the scope of the audit entries of obj: @server for the
@@ -248,6 +267,52 @@ func (h *Handler) listEntries(
 	h.writeJSON(ctx, w, http.StatusOK, listEntriesResponse{Entries: entries, Total: listing.Total})
 }
 
+// getEntry answers GET /api/audit/entries/{sequence} with the one entry of
+// the scope at that sequence, in the shape of an entry of the list. The
+// route wrapper already allowed the action on the object. An unknown
+// namespace or sequence answers 404, and a store that cannot read one entry
+// answers 501.
+func (h *Handler) getEntry(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, obj identity.Object,
+) {
+	ctx := r.Context()
+
+	seq, err := parseSequence(r.PathValue("sequence"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	if h.reader == nil {
+		h.writeError(ctx, w, errNoEntryReader)
+
+		return
+	}
+
+	ns, err := h.auditScope(ctx, obj)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	e, err := h.reader.EntryAt(ctx, ns, seq)
+	if err == nil && e.Namespace != ns {
+		// The answer holds only an entry of the scope that the request
+		// names, whatever the store answers.
+		err = audit.ErrEntryNotFound
+	}
+
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, toAuditEntry(e))
+}
+
 // checkChain answers GET /api/audit/check with the chain check of the scope.
 // The route wrapper already allowed the action on the object. An unknown
 // namespace answers 404.
@@ -271,15 +336,46 @@ func (h *Handler) checkChain(
 	}
 
 	h.writeJSON(ctx, w, http.StatusOK, checkResponse{
-		EntriesChecked: result.Checked,
-		BadSequence:    result.BadSequence,
-		Valid:          result.Valid,
+		EntriesChecked:   result.Checked,
+		EntriesUnchained: result.Unchained,
+		BadSequence:      result.BadSequence,
+		Valid:            result.Valid,
 	})
 }
 
 // errInvalidPage reports a page[number] or page[size] value that is not a
 // positive number. classify maps it to the 400 the console expects.
 var errInvalidPage = errors.New("invalid page[number] or page[size]: send positive numbers")
+
+// errInvalidSequence reports a sequence in the path that is not a positive
+// number in its one decimal form. classify maps it to 400.
+var errInvalidSequence = errors.New("invalid sequence: send a positive number with no sign and no leading zero")
+
+// parseSequence reads a sequence from the path. It accepts only the decimal
+// form of a positive number, with no sign and no leading zero, so each entry
+// has one URL.
+func parseSequence(raw string) (int64, error) {
+	if raw == "" || raw[0] < '1' || raw[0] > '9' {
+		return 0, errInvalidSequence
+	}
+
+	for i := 1; i < len(raw); i++ {
+		if raw[i] < '0' || raw[i] > '9' {
+			return 0, errInvalidSequence
+		}
+	}
+
+	seq, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, errInvalidSequence
+	}
+
+	return seq, nil
+}
+
+// errNoEntryReader reports a store that cannot read one entry. classify maps
+// it to 501.
+var errNoEntryReader = errors.New("this server cannot read one audit entry: list the entries instead")
 
 // parsePage reads page[number] and page[size] from the request. Missing
 // values read the defaults of the audit port; values above the maximum read
@@ -311,13 +407,25 @@ func parsePage(r *http.Request) (audit.Page, error) {
 }
 
 // authenticate resolves the "Authorization: token <t>" header to a principal.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
-	if !ok || raw == "" {
-		return identity.Principal{}, identity.ErrUnauthenticated
+// A request with no Authorization header uses the console session cookie,
+// and the bool reports that the cookie signed it in. A request with an
+// Authorization header never uses the cookie.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
+	header := r.Header.Get("Authorization")
+	if header == "" {
+		p, _, err := h.sessions.Authenticate(r)
+
+		return p, err == nil, err
 	}
 
-	return h.authn.AuthenticateToken(r.Context(), raw)
+	raw, ok := strings.CutPrefix(header, tokenScheme)
+	if !ok || raw == "" {
+		return identity.Principal{}, false, identity.ErrUnauthenticated
+	}
+
+	p, err := h.authn.AuthenticateToken(r.Context(), raw)
+
+	return p, false, err
 }
 
 // errorResponse is the error body the console expects, as in the API the
@@ -345,14 +453,18 @@ func classify(err error) (int, string) {
 		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated"
+	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
+		return http.StatusForbidden, err.Error()
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden"
-	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage):
+	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage), errors.Is(err, errInvalidSequence):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, identity.ErrInvalidObject):
 		return http.StatusBadRequest, err.Error()
-	case errors.Is(err, namespace.ErrNotFound):
+	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, audit.ErrEntryNotFound):
 		return http.StatusNotFound, err.Error()
+	case errors.Is(err, errNoEntryReader):
+		return http.StatusNotImplemented, err.Error()
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}

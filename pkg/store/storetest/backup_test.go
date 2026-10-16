@@ -919,6 +919,30 @@ func (s *fakeBackupStore) PutJournalRow(context.Context, stack.JournalRow, names
 	return false, errors.ErrUnsupported
 }
 
+// RecordJournalRefusal implements stack.JournalStore. The backup fake keeps no
+// journal rows, so a write through it is an error, not a silent drop.
+func (s *fakeBackupStore) RecordJournalRefusal(
+	context.Context, stack.JournalRefusal, namespace.Fence,
+) error {
+	return errors.ErrUnsupported
+}
+
+// JournalRefusals implements stack.JournalStore. The backup fake keeps no
+// journal rows, so it holds no refusals.
+func (s *fakeBackupStore) JournalRefusals(
+	context.Context, stack.ID, stack.UpdateID,
+) ([]stack.JournalRefusal, error) {
+	return nil, nil
+}
+
+// JournalSequences implements stack.JournalStore. The backup fake keeps no
+// journal rows, so it holds no sequences.
+func (s *fakeBackupStore) JournalSequences(
+	context.Context, stack.ID, stack.UpdateID,
+) ([]int64, error) {
+	return nil, nil
+}
+
 // AppendEvents implements stack.EventStore, skipping stored sequences.
 func (s *fakeBackupStore) AppendEvents(_ context.Context, batch stack.EventBatch, fence namespace.Fence) error {
 	s.mu.Lock()
@@ -1154,14 +1178,19 @@ func (s *fakeBackupStore) Check(_ context.Context, ns namespace.Name) (audit.Che
 	for i := range chain {
 		e := &chain[i]
 		if e.Sequence != wantSeq || e.PrevHash != prevHash || audit.ComputeHash(*e, e.PrevHash) != e.Hash {
-			return audit.CheckResult{Checked: int64(len(chain)), BadSequence: e.Sequence, Valid: false}, nil
+			return audit.CheckResult{
+				Checked:     int64(len(chain)),
+				BadSequence: e.Sequence,
+				Unchained:   0,
+				Valid:       false,
+			}, nil
 		}
 
 		prevHash = e.Hash
 		wantSeq++
 	}
 
-	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Valid: true}, nil
+	return audit.CheckResult{Checked: int64(len(chain)), BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
 // ListDeletedUnits implements inventory.DeletedReader. The fake removes a
@@ -1507,6 +1536,11 @@ func (s *fakeBackupStore) FenceAndUnlock(
 		return workspace.ErrConcurrentModification
 	}
 
+	if staged, found := s.data.states[sv.ID.String()]; !found ||
+		staged.Status != workspace.StatusPending || staged.Content != sv.Content {
+		return workspace.ErrUploadDenied
+	}
+
 	s.data.states[sv.ID.String()] = sv
 	s.data.current[w.ID.String()] = sv.ID.String()
 	s.data.workspaces[w.ID.String()] = w
@@ -1791,68 +1825,6 @@ func (s *fakeBackupStore) DeleteExpiredPendingStateVersions(
 	return out, nil
 }
 
-// ListUnsealedStateVersions implements workspace.StateStore.
-func (s *fakeBackupStore) ListUnsealedStateVersions(
-	_ context.Context,
-) ([]workspace.StateVersion, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if s.closed {
-		return nil, errFakeClosed
-	}
-
-	var out []workspace.StateVersion
-
-	for key := range s.data.states {
-		if sv := s.data.states[key]; !sv.Sealed && sv.Status == workspace.StatusFinalized && sv.Content != "" {
-			out = append(out, sv)
-		}
-	}
-
-	slices.SortFunc(out, func(a, b workspace.StateVersion) int {
-		return strings.Compare(a.ID.String(), b.ID.String())
-	})
-
-	return out, nil
-}
-
-// SealStateVersion implements workspace.StateStore.
-func (s *fakeBackupStore) SealStateVersion(
-	_ context.Context,
-	id workspace.StateVersionID,
-	content blob.Key,
-	outputs []byte,
-	fence namespace.Fence,
-) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return errFakeClosed
-	}
-
-	if err := s.checkFence(fence); err != nil {
-		return err
-	}
-
-	sv, ok := s.data.states[id.String()]
-	if !ok {
-		return workspace.ErrStateVersionNotFound
-	}
-
-	if sv.Sealed {
-		return nil
-	}
-
-	sv.Content = content
-	sv.Outputs = outputs
-	sv.Sealed = true
-	s.data.states[id.String()] = sv
-
-	return nil
-}
-
 // Ping implements namespace.Store: it returns namespace.ErrUnavailable once
 // the fake is closed.
 func (s *fakeBackupStore) Ping(_ context.Context) error {
@@ -1935,6 +1907,14 @@ func (s *fakeBackupStore) CreateBackup(_ context.Context, r backup.Record) error
 
 	if _, ok := s.data.backups[r.ID.String()]; ok && !s.allowDuplicate {
 		return backup.ErrAlreadyExists
+	}
+
+	if r.State == backup.StateRunning && !s.allowDuplicate {
+		for id := range s.data.backups {
+			if s.data.backups[id].State == backup.StateRunning {
+				return backup.ErrAlreadyRunning
+			}
+		}
 	}
 
 	s.data.backups[r.ID.String()] = r
@@ -2072,6 +2052,14 @@ func (s *fakeBackupStore) CreateRestore(_ context.Context, r backup.RestoreRecor
 
 	if _, ok := s.data.restores[r.ID.String()]; ok {
 		return backup.ErrRestoreExists
+	}
+
+	if r.State == backup.RestoreChecking || r.State == backup.RestoreApplying {
+		for id := range s.data.restores {
+			if st := s.data.restores[id].State; st == backup.RestoreChecking || st == backup.RestoreApplying {
+				return backup.ErrRestoreRunning
+			}
+		}
 	}
 
 	s.data.restores[r.ID.String()] = r
@@ -2245,6 +2233,12 @@ func (s *fakeBackupStore) ApplyStaging(_ context.Context) error {
 	s.rebuildIndexes()
 
 	return nil
+}
+
+// ApplyStagingKeepingAccess implements backup.AccessKeepingApplier: the fake
+// keeps no access tables, so it swaps like ApplyStaging.
+func (s *fakeBackupStore) ApplyStagingKeepingAccess(ctx context.Context) error {
+	return s.ApplyStaging(ctx)
 }
 
 // BumpFailoverVersions implements backup.Fencer: it increments the failover
@@ -2566,6 +2560,11 @@ func TestBackupDetectsOldestFirst(t *testing.T) {
 
 		if err := s.CreateBackup(t.Context(), r); err != nil {
 			t.Fatalf("create backup: %v", err)
+		}
+
+		// One backup runs at a time: each ends before the next starts.
+		if _, err := s.FinishBackup(t.Context(), r.ID, backup.StateSucceeded, "", fakeTime()); err != nil {
+			t.Fatalf("finish backup: %v", err)
 		}
 
 		ids = append(ids, r.ID)

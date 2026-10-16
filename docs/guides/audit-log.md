@@ -83,13 +83,17 @@ An entry holds these fields:
   restore and purge of a unit. The list omits it when the entry has none.
 - `prevHash` and `hash`: SHA-256 over a fixed, documented encoding of the
   fields above and `prevHash` (see `ComputeHash` in `pkg/audit`).
-  After `prevHash`, the encoding appends each optional field that the entry
-  sets, in this fixed order: `value_count=` with the decimal count, then
-  `object_id=` with the stable ID of the unit (ADR 47), then `changes=` with
-  the canonical JSON of the changes (sorted by key), as the store holds
-  it. An
-  optional field that the entry does not set adds nothing, so an entry
-  written before the field keeps its hash.
+  The encoding writes each field as its length in bytes (decimal), a
+  colon and the bytes of the field, with nothing between the fields. For
+  example, the subject `admin` is `5:admin` and an empty field is `0:`.
+  After `prevHash`, the encoding always writes four more fields, in this
+  fixed order: the decimal value count, the stable ID of the unit, the
+  canonical JSON of the changes (sorted by key) as the store holds it, and
+  the decimal failover version of the namespace (0 in `@server`). No field
+  is optional. An entry with no value count writes one `-` in place of the
+  count, so an entry with no count (`-`) and an entry with the count 0
+  (`1:0`) have different hashes. Because each field carries its length,
+  two different entries never give the same encoding.
   The first entry of a namespace has an empty `prevHash`.
 
 Reads of the audit log itself are not logged yet (RFC 22), because ADR 41
@@ -135,13 +139,23 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=acme&page[size]=50"
 ```
 
+`GET /api/audit/entries/<sequence>?organization=<namespace>` reads one
+entry of the namespace by its sequence, in the same shape as an entry of the
+list. It needs the same action. A sequence that the namespace does not hold
+answers 404.
+
+```sh
+curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  "https://dustpan.example/api/audit/entries/7?organization=acme"
+```
+
 `GET /api/audit/check?organization=<namespace>` walks the chain of the
 namespace oldest first and answers whether it is valid.
 It needs the same action.
 The check reads the chain in pages of 100 entries, so a large log never
 grows the check without a bound.
-A valid chain answers `{"valid":true,"entriesChecked":N}`.
-A broken chain answers `{"valid":false,"badSequence":S,"entriesChecked":N}`,
+A valid chain answers `{"valid":true,"entriesChecked":N,"entriesUnchained":U}`.
+A broken chain answers `{"valid":false,"badSequence":S,"entriesChecked":N,"entriesUnchained":U}`,
 where `S` is the first entry that does not match.
 
 ```sh
@@ -152,12 +166,233 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 The installation writes the entries of an action that is not in a namespace,
 such as a namespace create, to the scope `@server`. Read that scope with
 `organization=@server`. It needs the action `server:read-audit` on the
-installation instead, and the same paging. The check works the same way:
+installation instead, and the same paging. The read of one entry and the
+check work the same way:
 
 ```sh
 curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
   "https://dustpan.example/api/audit/entries?organization=@server"
 ```
+
+A new namespace audit log starts with the grant of its creator.
+
+## Turn the chain on or off
+
+The hash chain is on by default.
+`--audit-chain` (`DUSTPAN_AUDIT_CHAIN`, or `audit-chain` in the settings file) takes `on` or `off`.
+The server reads the setting once at start.
+No API call and no reload of the settings file changes it while the server runs.
+
+The database keeps the state of the chain: `on` or `off`, when it last changed, and who changed it.
+An installation without that state counts as `on`.
+At start, the server compares its setting with the stored state.
+When they agree, the server starts normally.
+
+When they differ, the server enters maintenance mode and changes nothing yet.
+A person approves the change:
+
+```sh
+opendustpan audit-chain status --server https://dustpan.example
+opendustpan audit-chain approve --server https://dustpan.example
+```
+
+The commands call `GET` and `POST` `/api/server/audit/chain`, the same routes as the console.
+The approval sets the chain to the setting of the server that receives it.
+
+- Turning the chain on needs the action `server:set-audit-chain` (operator family).
+- Turning the chain off needs `server:set-audit-chain` (operator family) and `server:disable-audit-chain` (administration family).
+  A service principal cannot approve it: a person must approve turning the chain off.
+  It also needs a fresh MFA step when the server asks for MFA.
+
+The approval writes an entry in `@server` with the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
+Then the server migrates the log in the background.
+It waits 4 seconds, so every instance refuses requests.
+It writes one entry in each scope that holds entries:
+
+- **On:** a start entry with the action `server:start-audit-chain`.
+  Its hash has an empty `prevHash`.
+  Its changes hold `digest`, a running SHA-256 of every earlier entry of the scope, and `entries`, their count.
+  The earlier entries keep their rows.
+- **Off:** an end entry with the action `server:end-audit-chain`, which names the person who approved the change.
+  Its hash links to the entry before it, so the chain ends with a chained entry.
+  Later entries hold an empty `prevHash` and an empty `hash`.
+
+Then the server stores the new state, waits 4 seconds so every instance can see it, and leaves maintenance mode.
+`opendustpan audit-chain status --server https://dustpan.example` shows `the migration runs` until then.
+A migration that stops before it ends keeps the old state, so the change waits for an approval again.
+A restart with the stored setting cancels a waiting change.
+The installation then leaves maintenance mode.
+Run `opendustpan audit-chain approve --server <url>` to approve a waiting change.
+
+While a change waits or migrates, every instance answers 503 on most routes.
+The probes, GET of the metrics route, GET and POST of the audit chain route, the maintenance routes and the console files stay available.
+The server refuses a restore while a change waits, and refuses an approval while a restore runs.
+An instance whose setting differs from the stored state also answers 503 on most routes, also after another instance approved the change.
+The maintenance routes stay available, so an operator can clear stale active work on an instance whose setting differs.
+Restart each instance with the stored setting.
+
+The server computes the digest of a start entry over each earlier entry in order of sequence.
+For each entry, the next digest is the hex SHA-256 of four parts joined with the unit separator (0x1F).
+The parts are the previous digest, the entry hash, the stored `prevHash` and the stored `hash`.
+The previous digest of the first entry is the empty string.
+The entry hash is the hash of the stored fields of the entry with an empty `prevHash`.
+
+The hash takes no key: any installation can compute it again from the stored fields.
+Each entry of a namespace holds `fenceVersion`, the failover version of the namespace when the server appended it.
+The hash covers it, so a verifier can see where a forced failover forked the chain of a namespace.
+Entries in `@server` hold 0. The hash covers the 0, and the audit API omits the field for them.
+A verifier who kept a digest outside the database can compute it again from the old rows.
+So the verifier can prove that the old rows did not change after the chain started.
+
+The check of a scope starts at its last start entry, or at sequence 1 when the scope holds none.
+From there, each entry holds a hash that matches its fields and links to the entry before it, with no gap.
+The chain goes up to now, or up to an end entry.
+After an end entry, entries hold no hash.
+A start entry also checks its digest against the earlier entries.
+With the chain on, a scope must not end after an end entry.
+With the chain off, a scope without a chain is valid only when its first entry comes after the time the chain went off.
+A row below sequence 1 fails the check.
+The store keeps the times of a scope in order.
+An entry whose time is earlier than the last entry of its scope takes the time of that entry.
+The check answers `entriesUnchained`: the count of entries without a hash.
+The check cannot prove that an entry before a start entry, or after an end entry, is unchanged.
+Signed checkpoints (see below) and the digest cover that case.
+
+A backup does not carry the state of the chain.
+A restore keeps the state of the target installation.
+After the swap, the server compares the restored log with that state.
+With the chain on, each scope must end with a chained entry that is not an end entry.
+With the chain off, each scope must end with an entry without a hash, or with an end entry.
+When the log agrees, the server checks the chain of every scope.
+When that check fails, the restore still succeeds.
+The server then logs an error and adds one to `dustpan_audit_restore_check_failures_total`.
+When the log does not agree, the installation stays in maintenance mode until a person approves the change.
+The approval runs the same migration on the restored log.
+A restore that stops after the swap gets the comparison at the next start.
+A restore trusts the audit log in the backup: signed checkpoints (see below) protect a backup.
+
+The server checks the chain of every namespace and of `@server` at start and every hour.
+`dustpan_audit_chain_invalid` holds the count of scopes whose chain or checkpoints do not match.
+When a database read, a blob read or a checkpoint write fails, the server does not check that scope.
+It logs a warning and adds one to `dustpan_audit_chain_check_errors_total`.
+Such a check does not lower `dustpan_audit_chain_invalid`.
+A failed read during the check of a restored log also adds one to `dustpan_audit_chain_check_errors_total`.
+
+```yaml
+      - alert: DustpanAuditChainInvalid
+        expr: dustpan_audit_chain_invalid > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: An OpenDustpan audit chain does not match
+      - alert: DustpanAuditChainCheckErrors
+        expr: increase(dustpan_audit_chain_check_errors_total[3h]) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: The OpenDustpan audit chain check cannot read the log
+      - alert: DustpanAuditRestoreCheckFailed
+        expr: increase(dustpan_audit_restore_check_failures_total[1h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A restored OpenDustpan audit log does not match its chain
+```
+
+## Sign checkpoints
+
+Signed checkpoints are opt-in.
+They show a rewrite of the log by a person who can write to the database and compute the chain again.
+`--audit-checkpoints` (`DUSTPAN_AUDIT_CHECKPOINTS=true`) turns them on.
+They need `--audit-chain=on` and the signing key file that `--audit-signing-key-file` (`DUSTPAN_AUDIT_SIGNING_KEY_FILE`) names.
+The server does not start when one of the two is missing.
+
+The key file holds a 32-byte Ed25519 seed in base64.
+The file must not be readable by group or others.
+The server never makes the key and never derives it from the key-encryption key.
+Make a key with this command:
+
+```sh
+(umask 077 && openssl rand -base64 32 > audit-signing.key)
+```
+
+At each check, the server does these steps for each scope whose chain matches:
+
+1. It checks the checkpoints of the scope in the current epoch.
+   It reads every checkpoint that is newer than the last checkpoint that matched, up to 256.
+   It also reads a random sample of 8 older checkpoints.
+   It always reads the newest checkpoint of the scope.
+   When the log ends before that checkpoint, the check fails.
+   The next check finds a cut at the end of the log.
+   For each checkpoint, it checks the key ID, the signature, the epoch, and the hash of the entry at its sequence.
+   The epoch in the checkpoint must match the epoch of its directory.
+2. If all of them match, it signs the hash of the last entry of the scope.
+   The checkpoint holds the scope, the sequence, the epoch, the hash, the time, the key ID and the signature.
+   The key ID is the first 16 hexadecimal characters of the SHA-256 hash of the public key.
+3. It writes the checkpoint to the blob store under `audit-checkpoints/<epoch>/<scope in hexadecimal>/<sequence>.json`.
+   A key holds one checkpoint and the server never writes it again, so two instances write it once.
+
+A scope with a checkpoint that does not match counts in `dustpan_audit_chain_invalid`, and the server logs the scope and the sequence.
+The server never signs a scope whose chain or checkpoints do not match.
+Once a checkpoint does not match, later checks fail until a new epoch starts.
+When a stored checkpoint holds another hash, the write fails and the scope stays invalid.
+While a change of the chain waits or migrates, the server checks the checkpoints but signs none.
+
+The server logs the key ID and the public key in base64 at start.
+Keep a copy of the public key outside the server.
+
+Keep the blob store apart from the database: give the two stores different credentials.
+If the blob store has object lock, turn it on for the prefix `audit-checkpoints/`.
+An entry is safe from a rewrite only after a checkpoint signs it, so the window is at most one hour.
+A person who can delete checkpoints can hide a rewrite of the entries that came before the next checkpoint.
+The server remembers the newest checkpoint that matched, so a later check finds deleted checkpoints.
+The server forgets this at a restart, so without object lock only later checks find a deletion from before a restart.
+
+### Epochs
+
+An epoch is one history of the log.
+The check reads only the checkpoints of the current epoch.
+The server keeps the current epoch in the blob store under `audit-checkpoints/epochs/`.
+Each epoch object holds the epoch number, the time, the key ID and a signature.
+The server signs each epoch object with the same key as the checkpoints.
+The signed message holds a fixed context line, the epoch, the time in Unix milliseconds and the key ID.
+The check reads every epoch object and verifies each one.
+It checks the signature, the key ID, and the body number against the key number.
+An unsigned or badly signed epoch object makes the check fail and stops new signatures.
+A bad epoch object counts the scope in `dustpan_audit_chain_invalid`.
+After an investigation, the operator deletes the bad epoch object.
+The next check then reads the fixed store.
+
+A restore starts a new epoch, because a restore of an older backup deletes entries that older checkpoints sign.
+The restore writes a change entry in the scope `@server` with the value path `/audit/checkpoints/epoch/<number>`.
+The checkpoints of older epochs stay in the blob store.
+The server does not check them again.
+
+### Change the signing key
+
+A checkpoint or an epoch object that a key signed passes the check only while the server knows that key.
+Before you change the signing key, put the old public key in a file and name the file with `--audit-verify-keys-file` (`DUSTPAN_AUDIT_VERIFY_KEYS_FILE`).
+The file holds one public key in base64 on each line.
+The server ignores empty lines and lines that start with `#`.
+The server uses these keys only to check checkpoints and never signs with them.
+The server does not start when the file holds a line that is not a 32-byte Ed25519 public key in base64.
+
+### Clear the alarm
+
+A checkpoint that does not match keeps `dustpan_audit_chain_invalid` above zero.
+First find the cause: compare the entries of the scope with your audit log sinks and with the backups.
+When you know the cause, start a new epoch.
+The server then checks only the checkpoints that it signs after this time.
+
+```sh
+curl -X POST -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
+  https://dustpan.example/api/server/audit/checkpoint-epochs
+```
+
+The request needs the action `server:manage-audit`.
+It answers 201 with the number of the new epoch, and it writes a change entry in the scope `@server`.
+It answers 409 when signed checkpoints are off.
+Each instance reads the new epoch at its next check.
 
 ## What the chain protects against
 
@@ -175,7 +410,7 @@ The chain does not stop a person who can write to the database and compute
 the chain again.
 Such a person can rewrite the entries and their hashes, and the check still
 answers valid.
-An anchor outside the database is RFC 22.
+Signed checkpoints in the blob store are the anchor outside the database (see above).
 Protect the database and its backups as the guide for backups says.
 
 ## Alert on failed logging
@@ -250,8 +485,7 @@ The full entry stays in the server audit log, and the chain check on the server 
 The server reads the new entries of each scope in order and writes them to the sink in one batch.
 It moves the cursor of the sink only after the sink accepted the batch.
 A failed batch stays, and the server sends it again with a longer wait each time, up to 5 minutes.
-So a sink can receive an entry twice.
-Each instance of the server sends the entries, so with more than one instance a sink receives each entry about once for each instance.
+While its lease holds, one instance ships a sink. After a lease is lost or a round fails, a sink can receive an entry twice. Delivery is at least once.
 Drop duplicates by `scope` and `sequence`.
 A batch in one scope that fails does not stop the other scopes.
 The server sends a batch every 5 seconds to a file, syslog or a webhook, and every minute to object storage.
@@ -273,8 +507,7 @@ Trim never shortens `truncated`, `scope`, `sequence`, `time`, `action`, `kind`, 
 `scope`, `sequence`, `prevHash` and `hash` stay whole. A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
 A record with `"truncated": true` has a `hash` that the receiver cannot recompute from the shipped fields.
 The full entry stays in the server audit log, and the chain check on the server covers it.
-Read the full entry through the entry list, for example `GET /api/audit/entries?organization=acme&page[size]=50`, and find the entry with the same `sequence`.
-There is no route that reads one entry by scope and sequence.
+Read the full entry by its `scope` and `sequence`, for example `GET /api/audit/entries/7?organization=acme`.
 Only an entry that cannot fit even with every trimmable field empty is skipped.
 The server counts it in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
 
@@ -301,6 +534,7 @@ The server does not follow a redirect: a 3xx answer is a failed batch, and the s
 
 `blob:<prefix>` writes to the blob store of the server: the directory of `--blob-dir` or the bucket of `--blob-store`.
 The prefixes `tofu` and `pulumi` hold state, so the server refuses them.
+The prefix `audit-checkpoints` holds signed audit checkpoints, so the server refuses it.
 Each object is `<prefix>/<scope>/<yyyy-mm-dd>/<first>-<last>-<random>.jsonl.gz`.
 The two times are the first and the last entry of the file in Unix milliseconds.
 A key holds the characters `a-z`, `0-9`, `.` and `-` only.

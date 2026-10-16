@@ -17,10 +17,11 @@ import (
 
 // upgradeCheckDoc decodes an upgrade check answer in tests.
 type upgradeCheckDoc struct {
-	Version           string   `json:"version"`
-	SchemaVersion     int64    `json:"schemaVersion"`
-	AppliedMigrations []string `json:"appliedMigrations"`
-	KeyEncryptionKey  bool     `json:"keyEncryptionKey"`
+	Version                 string   `json:"version"`
+	SchemaVersion           int64    `json:"schemaVersion"`
+	AppliedMigrations       []string `json:"appliedMigrations"`
+	KeyEncryptionKey        bool     `json:"keyEncryptionKey"`
+	RunningJournaledUpdates int64    `json:"runningJournaledUpdates"`
 }
 
 // readUpgradeCheck reads the upgrade check and returns its status and
@@ -164,14 +165,19 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql"},
 		}},
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
-		DeletedUnits:   nil,
-		IPAllowlists:   nil,
-		SessionPolicy:  nil,
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -197,26 +203,31 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Now:            nil,
-		TempAdmins:     nil,
-		Authenticator:  tokenAuthenticator{},
-		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     newTestNamespaces(t),
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "test",
-		Schema:         nil,
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
-		DeletedUnits:   nil,
-		IPAllowlists:   nil,
-		SessionPolicy:  nil,
+		Now:              nil,
+		TempAdmins:       nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           nil,
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -281,14 +292,19 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		Schema: stubSchema{migrations: []schemaMigration{
 			{Version: 1, Name: "0001_init.sql"},
 		}},
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
-		DeletedUnits:   nil,
-		IPAllowlists:   nil,
-		SessionPolicy:  nil,
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -301,5 +317,90 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 
 	if !doc.KeyEncryptionKey {
 		t.Fatal("keyEncryptionKey = false, want true")
+	}
+}
+
+// stubJournal answers a fixed count of running journaled updates.
+type stubJournal struct {
+	count int64
+}
+
+func (s stubJournal) CountRunningJournaledUpdates(_ context.Context) (int64, error) {
+	return s.count, nil
+}
+
+// newJournalHandler builds an upgrade check handler with the stub schema of
+// one migration and the given journaled count. A negative count wires no
+// journal reporter, so the check answers 0 as a store without the count does.
+func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
+	t.Helper()
+
+	cfg := apiserver.Config{
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Backups:       nil,
+		Restores:      nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema: stubSchema{migrations: []schemaMigration{
+			{Version: 1, Name: "0001_init.sql"},
+		}},
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
+	}
+
+	if journaled >= 0 {
+		cfg.Journal = stubJournal{count: journaled}
+	}
+
+	handler, err := apiserver.NewHandler(cfg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+// TestUpgradeCheckAnswersNoJournaledUpdates proves the upgrade check without
+// a journal reporter answers a zero journaled count.
+func TestUpgradeCheckAnswersNoJournaledUpdates(t *testing.T) {
+	t.Parallel()
+
+	status, doc := readUpgradeCheck(t, newJournalHandler(t, -1))
+	if status != http.StatusOK {
+		t.Fatalf("GET upgrade check answers %d, want %d", status, http.StatusOK)
+	}
+
+	if doc.RunningJournaledUpdates != 0 {
+		t.Fatalf("runningJournaledUpdates = %d, want 0", doc.RunningJournaledUpdates)
+	}
+}
+
+// TestUpgradeCheckAnswersTwoJournaledUpdates proves the upgrade check answers
+// the count of running journaled updates from its journal reporter.
+func TestUpgradeCheckAnswersTwoJournaledUpdates(t *testing.T) {
+	t.Parallel()
+
+	status, doc := readUpgradeCheck(t, newJournalHandler(t, 2))
+	if status != http.StatusOK {
+		t.Fatalf("GET upgrade check answers %d, want %d", status, http.StatusOK)
+	}
+
+	if doc.RunningJournaledUpdates != 2 {
+		t.Fatalf("runningJournaledUpdates = %d, want 2", doc.RunningJournaledUpdates)
 	}
 }

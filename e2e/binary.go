@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
-	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 const (
@@ -53,7 +52,9 @@ const (
 	backendCertLifetime = 24 * time.Hour
 	// certSerialBits sets the size of the generated certificate serial.
 	certSerialBits = 128
-	// databaseFlag names the database flag serve takes.
+	// databaseFlag names the database flag. Serve reads the database
+	// from DUSTPAN_DATABASE instead, because it refuses a password in
+	// the flag. Other subcommands still take the flag.
 	databaseFlag = "--database"
 	// regionFlag names the region flag serve takes.
 	regionFlag = "--region"
@@ -93,6 +94,17 @@ type envInput struct {
 	// ipAllowlists turns IP allowlists on for the server and applies them to
 	// the bootstrap admin token too.
 	ipAllowlists bool
+	// signIn turns on the console sign-in through a test OpenID provider,
+	// in process and with the server binary.
+	signIn bool
+	// signInRealTime runs the in-process server of a sign-in env on the
+	// real time instead of a TestClock, for tests that need time to pass.
+	// The server binary always keeps the real time.
+	signInRealTime bool
+	// journalRefuser corrupts one outputs-only journal batch on the way to
+	// the server, so the server refuses it and records the refusal. Nil
+	// passes every batch through untouched.
+	journalRefuser *JournalRefuser
 }
 
 // backendConfig groups the settings of one backend process.
@@ -117,6 +129,50 @@ type backendConfig struct {
 	// --ip-allowlists-include-bootstrap when set, so the binary server checks
 	// the lists of every namespace, including for the bootstrap admin token.
 	ipAllowlists bool
+	// auditChain passes --audit-chain with this value when set, so a test
+	// restarts the server with another setting of the audit chain.
+	auditChain string
+	// signIn turns on the console sign-in through a test OpenID provider
+	// when it is not nil.
+	signIn *binarySignIn
+}
+
+// pemCertificate is the PEM block type of a certificate.
+const pemCertificate = "CERTIFICATE"
+
+// binarySignIn is the console sign-in of a binary backend. The server reads
+// the client secret from secretFile (DUSTPAN_OIDC_CLIENT_SECRET_FILE) and
+// trusts the provider through caFile (SSL_CERT_FILE), so a run proves the
+// flags and the environment variables of the sign-in.
+type binarySignIn struct {
+	publicURL  string
+	issuer     string
+	caFile     string
+	secretFile string
+}
+
+// args returns the serve arguments of the sign-in, or none for nil.
+func (s *binarySignIn) args() []string {
+	if s == nil {
+		return nil
+	}
+
+	return []string{
+		"--public-url", s.publicURL,
+		"--oidc-issuer", s.issuer,
+		"--oidc-provider", SignInProvider,
+		"--oidc-display-name", "Corp",
+		"--oidc-client-id", signInClientID,
+	}
+}
+
+// env returns the environment of the sign-in, or none for nil.
+func (s *binarySignIn) env() []string {
+	if s == nil {
+		return nil
+	}
+
+	return []string{"SSL_CERT_FILE=" + s.caFile, "DUSTPAN_OIDC_CLIENT_SECRET_FILE=" + s.secretFile}
 }
 
 // backendCert holds the certificate and key paths of one backend.
@@ -140,6 +196,7 @@ func serverBinary(ctx context.Context, tb testing.TB, dir string) string {
 		buildCtx,
 		"go",
 		"build",
+		"-tags="+serverBuildTags,
 		"-o",
 		out,
 		"opendustpan.org/opendustpan/cmd/opendustpan",
@@ -192,7 +249,7 @@ func writeBackendCert(tb testing.TB, dir string) backendCert {
 	}
 
 	//nolint:exhaustruct_v5 // A test PEM block carries no headers.
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Bytes: der})
 
 	keyDER, err := x509.MarshalECPrivateKey(key)
 	if err != nil {
@@ -312,6 +369,7 @@ func backendEnv(tokens string) []string {
 
 	for _, kv := range os.Environ() {
 		if strings.HasPrefix(kv, "DUSTPAN_ADMIN_TOKEN=") ||
+			strings.HasPrefix(kv, "DUSTPAN_DATABASE=") ||
 			strings.HasPrefix(kv, "DUSTPAN_KEY_ENCRYPTION_KEY=") ||
 			strings.HasPrefix(kv, "DUSTPAN_KEY_ENCRYPTION_KEY_FILE=") ||
 			strings.HasPrefix(kv, "AWS_ACCESS_KEY_ID=") ||
@@ -325,6 +383,13 @@ func backendEnv(tokens string) []string {
 	out = append(out, "DUSTPAN_ADMIN_TOKEN="+tokens, "DUSTPAN_KEY_ENCRYPTION_KEY="+key)
 
 	return append(out, s3CredentialEnv()...)
+}
+
+// backendServeEnv returns the environment for a `serve` child process: the
+// backend environment with DUSTPAN_DATABASE set to dbURL. Serve always reads
+// the database from the variable, because it refuses a password in the flag.
+func backendServeEnv(tokens, dbURL string) []string {
+	return append(backendEnv(tokens), "DUSTPAN_DATABASE="+dbURL)
 }
 
 // s3CredentialEnv maps the S3 test credentials into the child environment.
@@ -387,13 +452,14 @@ type binaryHandle struct {
 // With an S3 blob store the arguments name --blob-store with --s3-endpoint
 // instead of --blob-dir, so the server keeps its live blobs on the
 // S3-compatible server. Credentials never join them: they travel in the
-// environment only.
+// environment only. The database URL never joins them either: serve reads it
+// from DUSTPAN_DATABASE in the backend environment, because serve refuses a
+// password in the flag.
 // The delta cutoff always joins them explicitly, so the flag default never
 // changes a test backend.
 func serveArgs(cfg backendConfig, port string) []string {
 	args := []string{
 		"serve",
-		databaseFlag, cfg.dbURL,
 		"--listen", "127.0.0.1:" + port,
 		"--tls-cert", cfg.certFile,
 		"--tls-key", cfg.keyFile,
@@ -422,7 +488,11 @@ func serveArgs(cfg backendConfig, port string) []string {
 		args = append(args, "--backup-target", cfg.backupTarget)
 	}
 
-	return args
+	if cfg.auditChain != "" {
+		args = append(args, "--audit-chain", cfg.auditChain)
+	}
+
+	return append(args, cfg.signIn.args()...)
 }
 
 // launchBinaryBackend starts `opendustpan serve` for cfg on port and waits
@@ -437,7 +507,7 @@ func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, 
 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, cfg.bin, serveArgs(cfg, port)...)
-	cmd.Env = backendEnv(cfg.tokens)
+	cmd.Env = append(backendServeEnv(cfg.tokens, cfg.dbURL), cfg.signIn.env()...)
 
 	var out lockedBuffer
 
@@ -559,6 +629,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 
 	cfg := backendConfig{
 		disableJournaling: false,
+		signIn:            nil,
 		ipAllowlists:      false,
 		bin:               e.binPath,
 		dbURL:             dbURL,
@@ -570,6 +641,7 @@ func (e *Env) MigrateDatabase(ctx context.Context, tb testing.TB, dbURL string) 
 		keyFile:           cert.key,
 		tokens:            e.backendCfg.tokens,
 		deltaCutoff:       0,
+		auditChain:        "",
 	}
 
 	handle := launchBinaryBackend(ctx, tb, cfg, "0")
@@ -796,17 +868,71 @@ func waitForBackend(ctx context.Context, tb testing.TB, backendURL string, logs 
 	tb.Fatalf("server binary did not start in time\n%s", logs.String())
 }
 
+// binarySignInSetup starts the test provider of a binary env with the
+// console sign-in, and sets the sign-in of cfg. It returns nil, and leaves
+// cfg as it is, for an env with no sign-in.
+func binarySignInSetup(tb testing.TB, in envInput, proxy *recordingProxy, cfg *backendConfig) *signInSetup {
+	tb.Helper()
+
+	if !in.signIn {
+		return nil
+	}
+
+	s := newSignInSetup(tb, proxy.publicURL(), nil)
+	cfg.signIn = writeBinarySignIn(tb, in.dir, s)
+
+	return s
+}
+
 // startRecordingProxy fronts the backend with a TLS server that records
 // every request, so binary runs keep the same request log as in-process
 // runs. It keeps the client-facing host, so absolute URLs the backend
 // reports point back through the proxy.
-func startRecordingProxy(tb testing.TB, rec *Recorder, backendURL string) *httptest.Server {
+func startRecordingProxy(
+	tb testing.TB, rec *Recorder, backendURL string, refuser *JournalRefuser,
+) *httptest.Server {
+	tb.Helper()
+
+	p := reserveRecordingProxy(tb, rec, refuser)
+
+	return p.start(tb, backendURL)
+}
+
+// recordingProxy is a recording proxy whose address is known before its
+// backend: the sign-in needs the public URL of the proxy at the start of
+// the backend.
+type recordingProxy struct {
+	server *httptest.Server
+	target *url.URL
+}
+
+// publicURL returns the URL that the proxy serves once it starts.
+func (p *recordingProxy) publicURL() string {
+	return "https://" + p.server.Listener.Addr().String()
+}
+
+// start points the proxy at backendURL and starts it.
+func (p *recordingProxy) start(tb testing.TB, backendURL string) *httptest.Server {
 	tb.Helper()
 
 	target, err := url.Parse(backendURL)
 	if err != nil {
 		tb.Fatalf("parse backend URL: %v", err)
 	}
+
+	*p.target = *target
+
+	p.server.StartTLS()
+
+	return p.server
+}
+
+// reserveRecordingProxy binds the listener of a recording proxy and
+// returns it, not started.
+func reserveRecordingProxy(tb testing.TB, rec *Recorder, refuser *JournalRefuser) *recordingProxy {
+	tb.Helper()
+
+	target := &url.URL{}
 
 	//nolint:gosec // The proxy dials the test backend on loopback; there is no other party to impersonate.
 	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}}
@@ -823,43 +949,31 @@ func startRecordingProxy(tb testing.TB, rec *Recorder, backendURL string) *httpt
 		Transport: transport,
 	}
 
-	ts := httptest.NewUnstartedServer(rec.Middleware(proxy))
-	ts.StartTLS()
+	ts := httptest.NewUnstartedServer(rec.Middleware(faultedHandler(proxy, refuser)))
 	tb.Cleanup(ts.Close)
 
-	return ts
+	return &recordingProxy{server: ts, target: target}
 }
 
-// openBinaryStore opens a direct store handle on the database the backend
-// serves, so seed helpers keep working. It returns the --database value for
-// the backend, which reaches PostgreSQL through a TCP proxy, with the handle
-// and the proxy. On SQLite the proxy is nil.
-//
-//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type;
-func openBinaryStore(
-	ctx context.Context, tb testing.TB, store Store, dir string,
-) (string, serverStore, *DBProxy) {
+// binaryDatabase returns the --database value of the database the backend
+// serves, with the PostgreSQL proxy. The test process opens no store on it:
+// the binary owns the database and migrates it, and the seed helpers write
+// through the API. On SQLite the proxy is nil and the binary creates the
+// file. On PostgreSQL the backend reaches a fresh schema through a TCP proxy.
+func binaryDatabase(ctx context.Context, tb testing.TB, store Store, dir string) (string, *DBProxy) {
 	tb.Helper()
 
 	switch store {
 	case StoreSQLite:
-		dbPath := filepath.Join(dir, "dustpan.db")
-
-		return "sqlite:" + dbPath, openSQLiteStore(ctx, tb, dbPath), nil
+		return "sqlite:" + filepath.Join(dir, "dustpan.db"), nil
 	case StorePostgres:
-		base := PostgresURL()
-		if base == "" {
-			tb.Fatalf("set %s to run the PostgreSQL suite", postgresURLEnv)
-		}
+		proxy, proxiedURL := startDBProxy(ctx, tb, newPostgresSchema(ctx, tb, PostgresURL()))
 
-		st, schemaURL := openPostgresStoreWithURL(ctx, tb, base)
-		proxy, proxiedURL := startDBProxy(ctx, tb, schemaURL)
-
-		return proxiedURL, st, proxy
+		return proxiedURL, proxy
 	default:
 		tb.Fatalf("unknown store: %s", store)
 
-		return "", nil, nil
+		return "", nil
 	}
 }
 
@@ -912,22 +1026,10 @@ func newBlobSetup(ctx context.Context, tb testing.TB, dir string) blobSetup {
 	}
 }
 
-// newBinaryEnv starts the real server binary with TLS behind a recording
-// proxy and returns the environment. The CLI trusts the proxy through
-// SSL_CERT_FILE, as with the in-process TLS server. A new installation holds
-// no namespace: the first one is created with `opendustpan namespace create
-// --server` through the installation API, so the command as a client is
-// proven before any CLI logs in.
-func newBinaryEnv(ctx context.Context, in envInput) *Env {
-	tb := in.tb
-	tb.Helper()
-
-	bin := serverBinary(ctx, tb, in.dir)
-	cert := writeBackendCert(tb, in.dir)
-	dbURL, st, dbProxy := openBinaryStore(ctx, tb, in.store, in.dir)
-	setup := newBlobSetup(ctx, tb, in.dir)
-
-	cfg := backendConfig{
+// binaryBackendConfig returns the backend settings of the binary env of
+// in, with no sign-in.
+func binaryBackendConfig(in envInput, bin, dbURL string, setup blobSetup, cert backendCert) backendConfig {
+	return backendConfig{
 		bin:               bin,
 		dbURL:             dbURL,
 		blobDir:           setup.blobDir,
@@ -940,29 +1042,45 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		deltaCutoff:       in.deltaCutoff,
 		disableJournaling: in.disableJournaling,
 		ipAllowlists:      in.ipAllowlists,
+		auditChain:        "",
+		signIn:            nil,
 	}
+}
+
+// newBinaryEnv starts the real server binary with TLS behind a recording
+// proxy and returns the environment. The CLI trusts the proxy through
+// SSL_CERT_FILE, as with the in-process TLS server. A new installation holds
+// no namespace: the first one is created with `opendustpan namespace create
+// --server` through the installation API, so the command as a client is
+// proven before any CLI logs in.
+func newBinaryEnv(ctx context.Context, in envInput) *Env {
+	tb := in.tb
+	tb.Helper()
+
+	bin := serverBinary(ctx, tb, in.dir)
+	dbURL, dbProxy := binaryDatabase(ctx, tb, in.store, in.dir)
+	setup := newBlobSetup(ctx, tb, in.dir)
+	cfg := binaryBackendConfig(in, bin, dbURL, setup, writeBackendCert(tb, in.dir))
+
+	reserved := reserveRecordingProxy(tb, in.rec, in.journalRefuser)
+	signIn := binarySignInSetup(tb, in, reserved, &cfg)
+
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
 
 	createFirstNamespaceViaBinary(ctx, tb, cfg, backendURL)
 
-	proxy := startRecordingProxy(tb, in.rec, backendURL)
+	proxy := reserved.start(tb, backendURL)
 
 	client := proxy.Client()
 	client.Timeout = commandTimeout
-
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
-	if err != nil {
-		tb.Fatalf("namespace service: %v", err)
-	}
 
 	env := &Env{
 		URL:           proxy.URL,
 		Recorder:      in.rec,
 		cli:           in.cli,
 		store:         in.store,
-		server:        st,
 		client:        client,
-		workspaces:    newWorkspaceService(tb, st, setup.blobs, namespaces),
+		inprocess:     nil,
 		blobs:         setup.blobs,
 		blobName:      setup.blobName,
 		s3Endpoint:    setup.s3Endpoint,
@@ -983,9 +1101,18 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		certBundle:    "",
 		dbProxy:       dbProxy,
 		dbURL:         cfg.dbURL,
+		signIn:        signIn,
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)
+
+	if in.store == StoreSQLite {
+		dbPath := strings.TrimPrefix(dbURL, "sqlite:")
+		checkNoOwnSQLiteHandle(tb, dbPath)
+		// Cleanups run last in, first out, so this one runs while the
+		// binary still serves: it catches a handle that a step opened.
+		tb.Cleanup(func() { checkNoOwnSQLiteHandle(tb, dbPath) })
+	}
 
 	return env
 }

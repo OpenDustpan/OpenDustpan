@@ -39,6 +39,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -245,6 +246,7 @@ func (h *Handler) serveTokenRead(op tokenOp) RouteHandler {
 // carries Cache-Control: no-store.
 func (h *Handler) serveTokenChange(action identity.Action, op tokenOp) RouteHandler {
 	return func(w http.ResponseWriter, r *http.Request, p identity.Principal, _ identity.Object) {
+		r = r.WithContext(context.WithValue(r.Context(), freshnessKey{}, h.checkTokenFreshness))
 		res, ok := h.runTokenOp(w, r, op, p, callerEntry(r, p, action))
 
 		if !ok && res.object != "" && h.tokens != nil {
@@ -448,6 +450,10 @@ func createPrincipalToken(
 	id := r.PathValue("principal")
 	object := principal.Ref(id)
 
+	if err := requireFresh(r); err != nil {
+		return failed(object), err
+	}
+
 	var req principalTokenRequest
 	if err := decodeStrict(w, r, &req, errPrincipalTokenBody); err != nil {
 		return failed(object), err
@@ -546,6 +552,10 @@ func createToken(scope accesstoken.Scope) tokenOp {
 	return func(
 		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,
 	) (principalResult, error) {
+		if err := requireFresh(r); err != nil {
+			return failed("tokens"), err
+		}
+
 		var req createTokenRequest
 		if err := decodeStrict(w, r, &req, errTokenBody); err != nil {
 			return failed("tokens"), err
@@ -731,6 +741,10 @@ func rotateToken(scope accesstoken.Scope) tokenOp {
 	) (principalResult, error) {
 		object := tokenObject(r, svc)
 
+		if err := requireFresh(r); err != nil {
+			return failed(object), err
+		}
+
 		var req rotateTokenRequest
 		if err := decodeStrict(w, r, &req, errRotateBody); err != nil {
 			return failed(object), err
@@ -783,7 +797,7 @@ func classifyToken(err error) (int, string, bool) {
 	case errors.Is(err, identity.ErrRateLimited):
 		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
 	case errors.Is(err, errTokenBody), errors.Is(err, errRotateBody), errors.Is(err, errTokenQuery),
-		errors.Is(err, errPolicyBody), errors.Is(err, errPrincipalTokenBody),
+		errors.Is(err, errPolicyBody), errors.Is(err, errBreakGlassGone), errors.Is(err, errPrincipalTokenBody),
 		errors.Is(err, accesstoken.ErrInvalid), errors.Is(err, accesstoken.ErrNoTokenForKind):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, accesstoken.ErrNotFound), errors.Is(err, accesstoken.ErrPrincipalNotFound):

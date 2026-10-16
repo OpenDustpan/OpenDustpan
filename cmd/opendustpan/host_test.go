@@ -299,8 +299,8 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 	}
 
 	_, setErr := tokens.SetPolicy(ctx, hostPolicyEntry(), change)
-	if !errors.Is(setErr, accesstoken.ErrBreakGlassUnavailable) {
-		t.Fatalf("set break-glass disable = %v, want ErrBreakGlassUnavailable", setErr)
+	if !errors.Is(setErr, accesstoken.ErrInvalid) {
+		t.Fatalf("set break-glass disable = %v, want ErrInvalid", setErr)
 	}
 
 	creds := parseHostOutput(t, runHost(ctx, t, "host", "create-temp-admin", "--database", db, "bob"))

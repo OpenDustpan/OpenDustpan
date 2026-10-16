@@ -39,6 +39,9 @@ const (
 	// maxDeletedSweepResults holds one series for each outcome of the
 	// retention sweep.
 	maxDeletedSweepResults = 4
+	// maxSignInCounterOperations holds one series for each operation of
+	// the shared sign-in failure counter.
+	maxSignInCounterOperations = 2
 )
 
 // Label names of the request families. No label holds a namespace, a
@@ -51,8 +54,16 @@ const (
 	labelVersion = "version"
 	// labelSink names a configured audit sink, for example "siem". The
 	// operator sets the name; it never holds an address or a secret.
-	labelSink   = "sink"
-	labelResult = "result"
+	labelSink      = "sink"
+	labelResult    = "result"
+	labelOperation = "operation"
+)
+
+// Operations of the shared sign-in failure counter: the add of a miss and
+// the prune of old windows.
+const (
+	SignInCounterAdd   = "add"
+	SignInCounterPrune = "prune"
 )
 
 // Results of a reload of the configuration file (ADR 63 decision 5).
@@ -76,6 +87,8 @@ const MaxSinkSeries = 16
 // the HTTP middleware do (ADR 32 decision 9). It also holds the two
 // families of the reload of the configuration file (ADR 63 decision 5),
 // and counts the runs of the inactivity disable by result (ADR 53).
+// It also holds the audit chain families: the scopes whose check failed,
+// and the restores whose restored log failed the check.
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -85,11 +98,13 @@ type ServerMetrics struct {
 	inFlight *Gauge
 	ready    *Counter
 	audit    *Counter
+	chain    chainFamilies
 	sinks    sinkFamilies
 	reloads  *Counter
 	reloadOK *Gauge
 	sweeps   *Counter
 	deleted  *Counter
+	signin   *Counter
 }
 
 // NewServerMetrics creates the request, build, process, runtime and
@@ -125,18 +140,14 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			[]string{labelAdapter},
 			maxInFlightCount,
 		),
-		ready: reg.NewCounter(
-			"dustpan_readiness_failures_total",
-			"Readiness check failures.",
-			nil,
-			1,
-		),
+		ready: newReadinessCounter(reg),
 		audit: reg.NewCounter(
 			"dustpan_audit_append_failures_total",
 			"Audit entries lost because the append failed.",
 			nil,
 			1,
 		),
+		chain: newChainFamilies(reg),
 		sinks: newSinkFamilies(reg),
 		reloads: reg.NewCounter(
 			"dustpan_config_reloads_total",
@@ -152,6 +163,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 		),
 		sweeps:  newSweepCounter(reg),
 		deleted: newDeletedSweepCounter(reg),
+		signin:  newSignInCounterErrors(reg),
 	}
 
 	// The configuration that the server started with is valid, so the gauge
@@ -231,6 +243,76 @@ func (m *ServerMetrics) IncAuditAppendFailure() {
 	m.audit.Inc()
 }
 
+// chainInvalidHelp is the help text of dustpan_audit_chain_invalid.
+const chainInvalidHelp = "Audit scopes whose chain check failed in the last scheduled check."
+
+// SetAuditChainInvalid sets the count of audit scopes whose chain check
+// failed in the last scheduled check. No label names a scope. Operators
+// alert when it is above zero.
+func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
+	m.chain.invalid.Set(float64(scopes))
+}
+
+// IncAuditChainCheckError adds one to the count of audit chain checks
+// that could not check every scope, because a read or a checkpoint write
+// failed. Such a scope does not count in dustpan_audit_chain_invalid.
+// Operators alert when it increases on each check.
+func (m *ServerMetrics) IncAuditChainCheckError() {
+	m.chain.checkErr.Inc()
+}
+
+// chainFamilies holds the audit chain families: the count of scopes whose
+// check failed, the count of checks that could not check every scope, and
+// the count of restores whose restored log failed the check.
+type chainFamilies struct {
+	invalid    *Gauge
+	checkErr   *Counter
+	restoreBad *Counter
+}
+
+// newChainFamilies registers the audit chain families in reg.
+func newChainFamilies(reg *Registry) chainFamilies {
+	return chainFamilies{
+		invalid:    reg.NewGauge("dustpan_audit_chain_invalid", chainInvalidHelp, nil, 1),
+		checkErr:   newChainCheckErrorCounter(reg),
+		restoreBad: newRestoreCheckCounter(reg),
+	}
+}
+
+// newChainCheckErrorCounter registers
+// dustpan_audit_chain_check_errors_total in reg.
+func newChainCheckErrorCounter(reg *Registry) *Counter {
+	c := reg.NewCounter("dustpan_audit_chain_check_errors_total",
+		"Audit chain checks that could not check every scope because a call failed.", nil, 1)
+
+	// The series starts at 0, so an alert on increase() sees the first
+	// error.
+	c.Add(0, []string{}...)
+
+	return c
+}
+
+// newRestoreCheckCounter registers dustpan_audit_restore_check_failures_total
+// in reg.
+func newRestoreCheckCounter(reg *Registry) *Counter {
+	c := reg.NewCounter("dustpan_audit_restore_check_failures_total",
+		"Restores whose restored audit log failed the chain check.", nil, 1)
+
+	// The series starts at 0, so an alert on increase() sees the first
+	// failure.
+	c.Add(0, []string{}...)
+
+	return c
+}
+
+// IncAuditRestoreCheckFailure adds one to the count of restores whose
+// restored audit log failed the chain check. The server still serves after
+// such a restore, so the counter and the error log are its record.
+// Operators alert when it is above zero.
+func (m *ServerMetrics) IncAuditRestoreCheckFailure() {
+	m.chain.restoreBad.Inc()
+}
+
 // sinkFamilies holds the audit and log sink families: counters labeled by sink,
 // with one series for each configured sink.
 type sinkFamilies struct {
@@ -238,6 +320,7 @@ type sinkFamilies struct {
 	sinkFail *Counter
 	sinkSkip *Counter
 	logDrop  *Counter
+	sinkLag  *Gauge
 }
 
 // newSinkFamilies registers the audit sink families in reg.
@@ -254,6 +337,12 @@ func newSinkFamilies(reg *Registry) sinkFamilies {
 			"Audit entries that a sink skipped because it cannot hold them, by sink.",
 		),
 		logDrop: family("dustpan_log_sink_dropped_total", "Application log records a log sink dropped, by sink."),
+		sinkLag: reg.NewGauge(
+			"dustpan_audit_sink_lag_seconds",
+			"Delivery lag of an audit sink in seconds, by sink.",
+			[]string{labelSink},
+			maxSinkSeries,
+		),
 	}
 }
 
@@ -280,6 +369,17 @@ func (m *ServerMetrics) AddAuditSkipped(sink string, entries int) {
 	if entries > 0 {
 		m.sinks.sinkSkip.Add(uint64(entries), sink)
 	}
+}
+
+// SetAuditSinkLag sets the delivery lag of the sink named sink in seconds:
+// the age of the oldest entry the sink has not delivered yet, or 0 when it
+// is up to date. Operators alert when it keeps growing.
+func (m *ServerMetrics) SetAuditSinkLag(sink string, seconds float64) {
+	if seconds < 0 {
+		seconds = 0
+	}
+
+	m.sinks.sinkLag.Set(seconds, sink)
 }
 
 // newSweepCounter creates dustpan_inactivity_sweeps_total in reg.
@@ -407,4 +507,32 @@ func NormalizeRoute(route string) string {
 	}
 
 	return route
+}
+
+// newReadinessCounter creates dustpan_readiness_failures_total in reg.
+func newReadinessCounter(reg *Registry) *Counter {
+	return reg.NewCounter("dustpan_readiness_failures_total", "Readiness check failures.", nil, 1)
+}
+
+// newSignInCounterErrors creates
+// dustpan_signin_failure_counter_errors_total in reg.
+func newSignInCounterErrors(reg *Registry) *Counter {
+	return reg.NewCounter(
+		"dustpan_signin_failure_counter_errors_total",
+		"Failed calls of the shared sign-in failure counter by operation.",
+		[]string{labelOperation},
+		maxSignInCounterOperations,
+	)
+}
+
+// IncSignInCounterError adds one to the failed calls of the shared sign-in
+// failure counter for operation: SignInCounterAdd or SignInCounterPrune.
+// Any other operation counts nothing. While calls fail, each instance keeps
+// only its own budget of failed sign-ins. Operators alert when it grows.
+func (m *ServerMetrics) IncSignInCounterError(operation string) {
+	if operation != SignInCounterAdd && operation != SignInCounterPrune {
+		return
+	}
+
+	m.signin.Inc(operation)
 }

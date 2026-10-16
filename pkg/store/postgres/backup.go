@@ -58,6 +58,8 @@ const (
 	pgColTool        = "tool"
 	pgColPrincipalID = "principal_id"
 	pgColDisplayName = "display_name"
+	pgColProviderID  = "provider_id"
+	pgColSink        = "sink"
 	pgColExpiresAtMs = "expires_at_ms"
 )
 
@@ -152,6 +154,13 @@ func pgCopyStackTables() []pgCopyTable {
 			columns: []string{pgColStackID, pgColUpdateID, pgColSequence, pgColArrival, "sha256"},
 			orderBy: []string{pgColStackID, pgColUpdateID, pgColSequence},
 		},
+		{
+			table: "update_journal_refusals",
+			columns: []string{
+				pgColStackID, pgColUpdateID, pgColArrival, "sequence_ids", "status", "reason",
+			},
+			orderBy: []string{pgColStackID, pgColUpdateID, pgColArrival},
+		},
 	}
 }
 
@@ -232,14 +241,19 @@ func pgCopyWorkspaceTables() []pgCopyTable {
 				pgColNamespace, pgColSequence, pgColSubject, "idp_subject", "token_id", "action",
 				"object", pgColVersion, "value_path", "at_ms", "source_ip", "user_agent",
 				"channel", pgColKind, "outcome", "request_id", "prev_hash", "hash", "value_count",
-				"changes", "object_id",
+				"changes", "object_id", "fence_version",
 			},
 			orderBy: []string{pgColNamespace, pgColSequence},
 		},
 		{
 			table:   "audit_sink_cursors",
-			columns: []string{"sink", pgColNamespace, pgColSequence, pgColUpdatedAtMs},
-			orderBy: []string{"sink", pgColNamespace},
+			columns: []string{pgColSink, pgColNamespace, pgColSequence, pgColUpdatedAtMs},
+			orderBy: []string{pgColSink, pgColNamespace},
+		},
+		{
+			table:   "audit_sink_leases",
+			columns: []string{pgColSink, "holder", pgColExpiresAtMs},
+			orderBy: []string{pgColSink},
 		},
 		{
 			table:   "backups",
@@ -278,9 +292,41 @@ func pgCopySessionTables() []pgCopyTable {
 			table: "sign_in_requests",
 			columns: []string{
 				pgColDigest, "provider", "nonce", "verifier", "return_path", pgColCreatedAtMs, pgColExpiresAtMs,
+				"max_age_ms",
 			},
 			orderBy: []string{pgColDigest},
 		},
+		{
+			table:   "oidc_providers",
+			columns: []string{pgColProviderID, "issuer", pgColCreatedAtMs},
+			orderBy: []string{pgColProviderID},
+		},
+		{
+			table:   "installation_secret_keys",
+			columns: []string{"scope_id", "wrapper_id", "ciphertext", pgColCreatedAtMs},
+			orderBy: []string{"scope_id"},
+		},
+		{
+			table: "sign_in_providers",
+			columns: []string{
+				pgColProviderID, "issuer", pgColDisplayName, "client_id", "client_secret", "scopes", "auto_create",
+				"enabled", pgColCreatedAtMs, pgColUpdatedAtMs, "version",
+			},
+			orderBy: []string{pgColProviderID},
+		},
+	}
+}
+
+// pgCopyPrincipalsTable holds the COPY columns of the principals table.
+func pgCopyPrincipalsTable() pgCopyTable {
+	return pgCopyTable{
+		table: backup.TablePrincipals,
+		columns: []string{
+			"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
+			pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
+			"break_glass",
+		},
+		orderBy: []string{"id"},
 	}
 }
 
@@ -289,17 +335,16 @@ func pgCopySessionTables() []pgCopyTable {
 //
 //nolint:funlen // A constant table of column names; its length is the schema.
 func pgCopyIdentityTables() []pgCopyTable {
+	return append(pgCopyPrincipalTables(), pgCopyGrantTables()...)
+}
+
+// pgCopyPrincipalTables holds the COPY columns of the principal, group,
+// member and token tables.
+func pgCopyPrincipalTables() []pgCopyTable {
 	return []pgCopyTable{
+		pgCopyPrincipalsTable(),
 		{
-			table: "principals",
-			columns: []string{
-				"id", pgColSubject, "display_name", pgColKind, pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
-				pgColDeletedAtMs, "disabled_at_ms", "last_active_at_ms", "last_sign_in_at_ms", "namespace",
-			},
-			orderBy: []string{"id"},
-		},
-		{
-			table: "principal_groups",
+			table: backup.TablePrincipalGroups,
 			columns: []string{
 				"id", pgColName, "name_key", "description", pgColSource, pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs,
@@ -307,19 +352,22 @@ func pgCopyIdentityTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table:   "group_members",
-			columns: []string{"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms"},
+			table: backup.TableGroupMembers,
+			columns: []string{
+				"group_id", pgColPrincipalID, "added_at_ms", "removed_at_ms", pgColSource, "source_id",
+				pgColState, "suspended_at_ms", "pinned",
+			},
 			orderBy: []string{"group_id", pgColPrincipalID, "added_at_ms"},
 		},
 		{
-			table: "temp_admins",
+			table: backup.TableTempAdmins,
 			columns: []string{
 				pgColPrincipalID, pgColSubject, pgColExpiresAtMs, pgColCreatedAtMs, pgColCreatedBy,
 			},
 			orderBy: []string{pgColPrincipalID},
 		},
 		{
-			table: "access_tokens",
+			table: backup.TableAccessTokens,
 			columns: []string{
 				"id",
 				pgColPrincipalID,
@@ -336,8 +384,15 @@ func pgCopyIdentityTables() []pgCopyTable {
 			},
 			orderBy: []string{"id"},
 		},
+	}
+}
+
+// pgCopyGrantTables holds the COPY columns of the role, grant and policy
+// tables.
+func pgCopyGrantTables() []pgCopyTable {
+	return []pgCopyTable{
 		{
-			table: "roles",
+			table: backup.TableRoles,
 			columns: []string{
 				"id", pgColName, "name_key", "description", "actions", pgColCreatedAtMs, pgColUpdatedAtMs,
 				pgColDeletedAtMs,
@@ -345,7 +400,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 			orderBy: []string{"id"},
 		},
 		{
-			table: "grants",
+			table: backup.TableGrants,
 			columns: []string{
 				"id", pgColSubject, "subject_kind", "subject_id", "role", "object", "target", "object_kind",
 				pgColNamespace, "condition", pgColCreatedAtMs, pgColCreatedBy, "revoked_at_ms", "revoked_by",
@@ -362,7 +417,7 @@ func pgCopyIdentityTables() []pgCopyTable {
 		},
 		{
 			table:   "session_policy",
-			columns: []string{"id", "idle_ms", "max_length_ms", pgColUpdatedAtMs},
+			columns: []string{"id", "idle_ms", "max_length_ms", pgColUpdatedAtMs, "token_freshness_ms"},
 			orderBy: []string{"id"},
 		},
 	}
@@ -646,7 +701,7 @@ func (s *Store) summarizeStaging(
 		return backup.Summary{}, err
 	}
 
-	wrappers, err := stagingStrings(ctx, s.pool, staging, "secret_keys", "wrapper_id")
+	wrappers, err := stagingWrapperIDs(ctx, s.pool, staging)
 	if err != nil {
 		return backup.Summary{}, err
 	}
@@ -803,6 +858,25 @@ func stagingSchemaVersion(ctx context.Context, pool *pgxpool.Pool, staging strin
 // queries. Both names come from constants, never from the network.
 func stagingTable(staging, table string) string {
 	return pgIdent(staging) + "." + pgIdent(table)
+}
+
+// stagingWrapperIDs returns the distinct wrapper IDs of the namespace keys and
+// of the installation keys in the staging schema, ordered, never nil.
+func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]string, error) {
+	keys, err := stagingStrings(ctx, pool, staging, "secret_keys", "wrapper_id")
+	if err != nil {
+		return nil, err
+	}
+
+	installation, err := stagingStrings(ctx, pool, staging, "installation_secret_keys", "wrapper_id")
+	if err != nil {
+		return nil, err
+	}
+
+	out := slices.Concat(keys, installation)
+	slices.Sort(out)
+
+	return slices.Compact(out), nil
 }
 
 // stagingStrings returns the distinct values of column in the staging table,
@@ -967,6 +1041,15 @@ func (s *Store) PeekPortableKey(
 	return codec.PeekPortableSecretKey(ctx, open, file, wrapperID)
 }
 
+// PeekPortableInstallationKey implements backup.InstallationKeyPeeker: it
+// reads one installation key of wrapperID from the installation_secret_keys
+// file of a portable backup.
+func (s *Store) PeekPortableInstallationKey(
+	ctx context.Context, open backup.PortableOpener, file backup.PortableFile, wrapperID string,
+) (secret.WrappedKey, error) {
+	return codec.PeekPortableInstallationKey(ctx, open, file, wrapperID)
+}
+
 // schemaVersion returns the highest applied migration version.
 func (s *Store) schemaVersion(ctx context.Context) (int, error) {
 	var version int64
@@ -996,7 +1079,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 	}
 
 	if n == 0 {
-		return backup.ErrAlreadyExists
+		return s.createBackupConflict(ctx, r.ID)
 	}
 
 	return nil
@@ -1117,11 +1200,12 @@ func backupEndedAt(endedAt time.Time) pgtype.Int8 {
 
 // SchemaTables implements backup.Inspector: it reads the table catalog, so a
 // table missing from backup.Tables fails the conformance suite. Bookkeeping
-// (schema_migrations) is not data and stays out.
+// (schema_migrations, and audit_chain_state, the chain state of this
+// installation) is not data and stays out.
 func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	rows, err := s.pool.Query(ctx, `SELECT table_name FROM information_schema.tables`+
 		` WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'`+
-		` AND table_name <> 'schema_migrations' ORDER BY table_name`)
+		` AND table_name NOT IN ('schema_migrations', 'audit_chain_state') ORDER BY table_name`)
 	if err != nil {
 		return nil, fmt.Errorf("select schema tables: %w", err)
 	}
@@ -1145,4 +1229,36 @@ func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	}
 
 	return out, nil
+}
+
+// createBackupConflict answers why CreateBackup inserted no row: the ID is
+// taken (ErrAlreadyExists), or the unique index on running backups refused a
+// second running backup (ErrAlreadyRunning).
+func (s *Store) createBackupConflict(ctx context.Context, id backup.ID) error {
+	_, err := s.GetBackup(ctx, id)
+	if err == nil {
+		return backup.ErrAlreadyExists
+	}
+
+	if errors.Is(err, backup.ErrNotFound) {
+		return backup.ErrAlreadyRunning
+	}
+
+	return err
+}
+
+// createRestoreConflict answers why CreateRestore inserted no row: the ID is
+// taken (ErrRestoreExists), or the unique index on running restores refused a
+// second running restore (ErrRestoreRunning).
+func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) error {
+	_, err := s.GetRestore(ctx, id)
+	if err == nil {
+		return backup.ErrRestoreExists
+	}
+
+	if errors.Is(err, backup.ErrRestoreNotFound) {
+		return backup.ErrRestoreRunning
+	}
+
+	return err
 }

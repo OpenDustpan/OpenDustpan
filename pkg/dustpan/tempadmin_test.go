@@ -298,7 +298,7 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 		string(identity.ActionServerManageAccess),
 		access.GrantRef(g),
 	)
-	if err := st.CreateGrant(ctx, g, namespace.Fence{Namespace: "", FailoverVersion: 0}, grantEntry); err != nil {
+	if err := st.CreateGrant(ctx, g, namespace.Fence{Namespace: "", FailoverVersion: 0}, grantEntry, nil); err != nil {
 		t.Fatalf("grant site-administrator: %v", err)
 	}
 

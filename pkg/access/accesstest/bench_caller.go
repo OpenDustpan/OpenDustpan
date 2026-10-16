@@ -84,8 +84,8 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 		Kind:        principal.KindPerson,
 		Source:      principal.SourceLocal,
 		Namespace:   "",
-		GroupCount:  0,
-		DisabledAt:  time.Time{},
+		GroupCount:  0, BreakGlass: false,
+		DisabledAt: time.Time{},
 	}
 	if err := s.CreatePrincipal(ctx, me, entry()); err != nil {
 		b.Fatalf("seed principal: %v", err)
@@ -102,7 +102,11 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 			b.Fatalf("seed group: %v", err)
 		}
 
-		m := principal.Membership{AddedAt: at(1), GroupID: id, PrincipalID: "prn-me"}
+		m := principal.Membership{
+			AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: id, PrincipalID: "prn-me",
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		}
 		if err := s.AddMember(ctx, m, entry()); err != nil {
 			b.Fatalf("seed member: %v", err)
 		}
@@ -146,7 +150,7 @@ func benchGrant(b *testing.B, s BenchStore, id string, subject access.Subject, c
 		Subject: subject,
 	}
 
-	if err := s.CreateGrant(b.Context(), g, newNamespace("bench").Fence(), scoped(entry(), "bench")); err != nil {
+	if err := s.CreateGrant(b.Context(), g, newNamespace("bench").Fence(), scoped(entry(), "bench"), nil); err != nil {
 		b.Fatalf("seed grant %s: %v", id, err)
 	}
 }

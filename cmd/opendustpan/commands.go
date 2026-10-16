@@ -31,6 +31,8 @@ func commandTable() cli.Table {
 		cli.BackupCommand(client.BackupCommand),
 		cli.RestoreCommand(client.RestoreCommand),
 		cli.HostCreateTempAdminCommand(hostCreateTempAdmin),
+		cli.AuditChainStatusCommand(client.AuditChainStatus),
+		cli.AuditChainApproveCommand(client.AuditChainApprove),
 	}
 }
 

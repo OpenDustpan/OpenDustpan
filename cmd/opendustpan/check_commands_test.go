@@ -89,10 +89,11 @@ func upgradeCheckBody(t *testing.T, applied []string) string {
 	}
 
 	body, err := json.Marshal(upgradeCheckAnswer{
-		ServerVersion:     checkServerVersion,
-		SchemaVersion:     schema.DatabaseVersion(versions),
-		AppliedMigrations: applied,
-		KeyEncryptionKey:  nil,
+		ServerVersion:           checkServerVersion,
+		SchemaVersion:           schema.DatabaseVersion(versions),
+		AppliedMigrations:       applied,
+		KeyEncryptionKey:        nil,
+		RunningJournaledUpdates: 0,
 	})
 	if err != nil {
 		t.Fatalf("encode upgrade check answer: %v", err)
@@ -287,10 +288,11 @@ func TestUpgradeCheckNewer(t *testing.T) {
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
 func TestUpgradeCheckVersionMismatch(t *testing.T) {
 	body, err := json.Marshal(upgradeCheckAnswer{
-		ServerVersion:     checkServerVersion,
-		SchemaVersion:     99,
-		AppliedMigrations: nil,
-		KeyEncryptionKey:  nil,
+		ServerVersion:           checkServerVersion,
+		SchemaVersion:           99,
+		AppliedMigrations:       nil,
+		KeyEncryptionKey:        nil,
+		RunningJournaledUpdates: 0,
 	})
 	if err != nil {
 		t.Fatalf("encode mismatched answer: %v", err)
@@ -619,10 +621,11 @@ func TestUpgradeCheckKeyWarning(t *testing.T) {
 		{name: "server with a key", key: &keyed, want: false},
 	} {
 		body, err := json.Marshal(upgradeCheckAnswer{
-			ServerVersion:     checkServerVersion,
-			SchemaVersion:     binVersion,
-			AppliedMigrations: names,
-			KeyEncryptionKey:  tc.key,
+			ServerVersion:           checkServerVersion,
+			SchemaVersion:           binVersion,
+			AppliedMigrations:       names,
+			KeyEncryptionKey:        tc.key,
+			RunningJournaledUpdates: 0,
 		})
 		if err != nil {
 			t.Fatalf("%s: encode upgrade check answer: %v", tc.name, err)

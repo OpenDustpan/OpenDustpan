@@ -346,7 +346,7 @@ func mustGrant(t *testing.T, s Store, id, principalID string) {
 
 	e := entry(access.GrantRef(g))
 
-	if err := s.CreateGrant(t.Context(), g, namespace.Fence{Namespace: "", FailoverVersion: 0}, e); err != nil {
+	if err := s.CreateGrant(t.Context(), g, namespace.Fence{Namespace: "", FailoverVersion: 0}, e, nil); err != nil {
 		t.Fatalf("grant site-administrator to %q: %v", principalID, err)
 	}
 }

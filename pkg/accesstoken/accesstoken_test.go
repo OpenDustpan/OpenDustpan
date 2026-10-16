@@ -55,6 +55,7 @@ func caller() audit.Entry {
 		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
 		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0,
 	}
 }
 
@@ -89,7 +90,7 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 	c := &clock{now: start, mu: sync.Mutex{}}
 
 	principals, err := principal.NewService(
-		principal.Config{Store: st, Guard: nil, Namespaces: nil, Now: c.Now, NewID: nil},
+		principal.Config{Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: c.Now, NewID: nil},
 	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
@@ -975,6 +976,15 @@ func (a *recordAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // newCheckedService returns a token service over the store of f with the
 // grant check grants and the authorizer authz.
 func newCheckedService(
@@ -1258,6 +1268,70 @@ func TestSweepDisablesInactiveTokensAndAccounts(t *testing.T) {
 	}
 }
 
+func TestSweepNeverDisablesBreakGlass(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	at := f.clock.Now()
+	glass := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-glass",
+		Subject: "glass@example.com", DisplayName: "Break Glass", Kind: principal.KindPerson,
+		Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: true,
+	}
+
+	e := caller()
+	e.At, e.Namespace, e.Kind, e.Outcome, e.Object = at, audit.ServerScope, audit.KindChange,
+		audit.OutcomeSuccess, principal.Ref(glass.ID)
+
+	if err := f.store.CreatePrincipal(ctx, glass, e); err != nil {
+		t.Fatalf("create break-glass principal: %v", err)
+	}
+
+	_, glassSecret := func() (accesstoken.Token, accesstoken.Secret) {
+		t.Helper()
+
+		tok, secret, err := f.svc.Create(ctx, admin(), caller(), accesstoken.ScopePersonal,
+			accesstoken.Input{
+				ExpiresAt: f.clock.Now().Add(200 * 24 * time.Hour), PrincipalID: glass.ID, Name: "emergency",
+			})
+		if err != nil {
+			t.Fatalf("create token of a break-glass account: %v", err)
+		}
+
+		return tok, secret
+	}()
+
+	f.createLong(t, f.person, "laptop")
+
+	f.clock.Advance(accesstoken.DefaultInactivity + time.Hour)
+
+	res, err := f.svc.SweepInactive(ctx, caller())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	for _, id := range res.Principals {
+		if id == glass.ID {
+			t.Fatalf("sweep = %+v, disabled a break-glass account", res)
+		}
+	}
+
+	if len(res.Principals) != 1 || res.Principals[0] != f.person.ID {
+		t.Fatalf("sweep = %+v, want only the idle person", res)
+	}
+
+	got, err := f.store.GetPrincipal(ctx, glass.ID)
+	if err != nil || !got.DisabledAt.IsZero() || !got.BreakGlass {
+		t.Fatalf("break-glass principal = %+v, %v; want it enabled with the flag", got, err)
+	}
+
+	if _, err := f.svc.AuthenticateToken(ctx, glassSecret.Reveal()); err != nil {
+		t.Fatalf("token of a break-glass account after the sweep: %v", err)
+	}
+}
+
 func TestSweepFollowsThePolicy(t *testing.T) {
 	t.Parallel()
 
@@ -1374,8 +1448,20 @@ func TestBreakGlassDisableIsRefused(t *testing.T) {
 	_, err := f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(true),
 	})
-	if !errors.Is(err, accesstoken.ErrBreakGlassUnavailable) || !strings.Contains(err.Error(), "ADR 57") {
-		t.Fatalf("err = %v, want ErrBreakGlassUnavailable that names ADR 57", err)
+	if !errors.Is(err, accesstoken.ErrInvalid) || !strings.Contains(err.Error(), "no longer supported") {
+		t.Fatalf("err = %v, want ErrInvalid that says the setting is no longer supported", err)
+	}
+
+	_, err = f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(false),
+	})
+	if err != nil {
+		t.Fatalf("set policy with the deprecated field false: %v", err)
+	}
+
+	p, err := f.svc.Policy(t.Context())
+	if err != nil || p.DisableBreakGlass {
+		t.Fatalf("policy = %+v, %v; want the deprecated field always false", p, err)
 	}
 }
 
@@ -1414,7 +1500,11 @@ func TestInactiveTokenIsRefusedBeforeTheSweep(t *testing.T) {
 	}
 }
 
-func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
+// TestPolicyChangeOfAnotherInstanceAppliesAtOnce proves that a policy change
+// that another instance writes applies to the next token lookup of this
+// instance: the lookup reads the policy with the token, so no instance keeps
+// an old policy for a while.
+func TestPolicyChangeOfAnotherInstanceAppliesAtOnce(t *testing.T) {
 	t.Parallel()
 
 	f := newFixtureAt(t, nil, sweepStart())
@@ -1422,7 +1512,6 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 
 	_, first := f.createLong(t, f.service, "first")
 	_, second := f.createLong(t, f.service, "second")
-	_, third := f.createLong(t, f.service, "third")
 
 	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
@@ -1433,13 +1522,11 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 
 	f.clock.Advance(accesstoken.DefaultInactivity + time.Minute)
 
-	// The first token reads the policy, and the cache keeps it.
 	if _, authErr := f.svc.AuthenticateToken(ctx, first.Reveal()); authErr != nil {
 		t.Fatalf("token with the disable off: %v", authErr)
 	}
 
-	// Another instance turns the disable on: this one sees it after the
-	// cache time at most.
+	// Another instance turns the disable on.
 	_, err = f.store.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
 		old.DisableTokens = true
 		e := caller()
@@ -1452,14 +1539,8 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 		t.Fatalf("update policy in the store: %v", err)
 	}
 
-	if _, err := f.svc.AuthenticateToken(ctx, second.Reveal()); err != nil {
-		t.Fatalf("inactive token inside the cache time: %v, want the cached policy", err)
-	}
-
-	f.clock.Advance(10 * time.Second)
-
-	if _, err := f.svc.AuthenticateToken(ctx, third.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
-		t.Fatalf("inactive token after the cache time: err = %v, want ErrUnauthenticated", err)
+	if _, err := f.svc.AuthenticateToken(ctx, second.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("inactive token right after the change of another instance: err = %v, want ErrUnauthenticated", err)
 	}
 }
 
@@ -1474,11 +1555,13 @@ func (failingPolicy) GetPolicy(context.Context) (accesstoken.Policy, error) {
 	return accesstoken.Policy{}, errPolicyRead
 }
 
+// TestPolicyReadErrorFailsClosed proves that the account inactivity check
+// of another sign-in, which reads the policy on its own, answers a failed
+// read with its error.
 func TestPolicyReadErrorFailsClosed(t *testing.T) {
 	t.Parallel()
 
 	f := newFixture(t, nil)
-	_, secret := f.createLong(t, f.service, "deploy")
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
@@ -1490,8 +1573,13 @@ func TestPolicyReadErrorFailsClosed(t *testing.T) {
 		t.Fatalf("token service: %v", err)
 	}
 
-	if _, err := svc.AuthenticateToken(t.Context(), secret.Reveal()); !errors.Is(err, errPolicyRead) {
-		t.Fatalf("authenticate with a failed policy read: err = %v, want the read error", err)
+	owner := accesstoken.Owner{
+		ActiveAt: f.clock.Now(), DisabledAt: time.Time{}, ID: "pri-reader", Subject: "alice", DisplayName: "Alice",
+		Kind: principal.KindPerson, BreakGlass: false,
+	}
+
+	if _, err := svc.AccountInactive(t.Context(), owner); !errors.Is(err, errPolicyRead) {
+		t.Fatalf("account inactivity with a failed policy read: err = %v, want the read error", err)
 	}
 }
 
@@ -1529,6 +1617,54 @@ func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
 	// The account rule covers persons only.
 	if _, err := f.svc.AuthenticateToken(ctx, serviceSecret.Reveal()); err != nil {
 		t.Fatalf("token of a service: %v", err)
+	}
+}
+
+// TestAccountInactive proves that AccountInactive applies the account rule
+// of the token lookup: the period, the account switch, persons only, and
+// the break-glass exemption.
+func TestAccountInactive(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+	now := f.svc.Now()
+
+	owner := func(kind principal.Kind, breakGlass bool, activeAt time.Time) accesstoken.Owner {
+		return accesstoken.Owner{
+			ActiveAt: activeAt, DisabledAt: time.Time{}, ID: "prn-x", Subject: "x", DisplayName: "X", Kind: kind,
+			BreakGlass: breakGlass,
+		}
+	}
+
+	old := now.Add(-accesstoken.DefaultInactivity)
+	recent := now.Add(-accesstoken.DefaultInactivity + time.Minute)
+
+	for _, tc := range []struct {
+		name string
+		o    accesstoken.Owner
+		want bool
+	}{
+		{name: "a person active within the period", o: owner(principal.KindPerson, false, recent), want: false},
+		{name: "a person past the period", o: owner(principal.KindPerson, false, old), want: true},
+		{name: "a break-glass person past the period", o: owner(principal.KindPerson, true, old), want: false},
+		{name: "a service past the period", o: owner(principal.KindService, false, old), want: false},
+	} {
+		got, err := f.svc.AccountInactive(ctx, tc.o)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: AccountInactive = %t, %v; want %t", tc.name, got, err, tc.want)
+		}
+	}
+
+	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: new(false), DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	if got, err := f.svc.AccountInactive(ctx, owner(principal.KindPerson, false, old)); err != nil || got {
+		t.Fatalf("AccountInactive with the account disable off = %t, %v; want false", got, err)
 	}
 }
 
@@ -1722,5 +1858,94 @@ func TestNamespacePrincipalTokens(t *testing.T) {
 	got, authErr := holder.AuthenticateToken(ctx, secret.Reveal())
 	if authErr != nil || got.Subject != f.service.Subject {
 		t.Fatalf("authenticate = %+v, %v; want the service subject", got, authErr)
+	}
+}
+
+// TestSetPolicyRecordsChanges proves the audit entry of a policy change
+// names each field that changed with its old and new text, and names no
+// field that kept its value.
+func TestSetPolicyRecordsChanges(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	lifetime := 30 * 24 * time.Hour
+	disabled := false
+
+	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: new(lifetime), Inactivity: nil, DisableTokens: new(disabled), DisableAccounts: nil,
+		DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	want := map[string][2]string{
+		"maxLifetimeSeconds": {"31536000", "2592000"},
+		"disableTokens":      {"true", "false"},
+	}
+	got := policyEntryChanges(t, &f)
+	checkChanges(t, got, want)
+
+	// The maximum is already 30 days, so only the inactivity period changed.
+	hour := time.Hour
+
+	_, err = f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: new(lifetime), Inactivity: new(hour), DisableTokens: nil, DisableAccounts: nil,
+		DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	want = map[string][2]string{"inactivitySeconds": {"7776000", "3600"}}
+	got = policyEntryChanges(t, &f)
+	checkChanges(t, got, want)
+}
+
+// policyEntryChanges returns the changes of the latest token policy audit
+// entry in the scope @server.
+func policyEntryChanges(t *testing.T, f *fixture) []audit.Change {
+	t.Helper()
+
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list @server entries: %v", err)
+	}
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Object == accesstoken.PolicyRef {
+			return listing.Entries[i].Changes
+		}
+	}
+
+	t.Fatalf("no %q entry in @server", accesstoken.PolicyRef)
+
+	return nil
+}
+
+// checkChanges proves changes hold exactly the keys of want with its old
+// and new text.
+func checkChanges(t *testing.T, changes []audit.Change, want map[string][2]string) {
+	t.Helper()
+
+	if len(changes) != len(want) {
+		t.Fatalf("changes = %+v, want %d items", changes, len(want))
+	}
+
+	for _, c := range changes {
+		pair, ok := want[c.Key]
+		if !ok {
+			t.Fatalf("change %q = %+v, want one of %v", c.Key, c, want)
+		}
+
+		if c.Old == nil || *c.Old != pair[0] || c.New != pair[1] {
+			t.Fatalf("change %q = %v to %q, want %q to %q", c.Key, c.Old, c.New, pair[0], pair[1])
+		}
+
+		if c.Layer != "" || c.TakesEffect != "" {
+			t.Fatalf("change %q holds layer %q and takes effect %q, want both empty", c.Key, c.Layer, c.TakesEffect)
+		}
 	}
 }

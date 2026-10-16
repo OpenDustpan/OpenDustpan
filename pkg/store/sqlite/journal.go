@@ -51,7 +51,10 @@ func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence n
 // writeJournalRow answers a retry without a write (true). Otherwise it runs the
 // row's check against the stored operations and the stored records flag and inserts
 // the row (false). When the batch holds an entry that changes the replay records,
-// the flag of the update is set in the same transaction as the write.
+// the flag of the update is set in the same transaction as the write. When the
+// batch holds a rebuilt base state entry, the operation IDs of earlier batches
+// are cleared in the same transaction, so the known set starts again from this
+// batch.
 func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row stack.JournalRow) (bool, error) {
 	done, err := journalRetry(ctx, q, stackID, row)
 	if err != nil {
@@ -65,6 +68,13 @@ func writeJournalRow(ctx context.Context, q *db.Queries, stackID string, row sta
 	changed, verifyErr := verifyJournalRow(ctx, q, stackID, row)
 	if verifyErr != nil {
 		return false, verifyErr
+	}
+
+	if row.HasRebuild {
+		params := db.ClearJournalOperationsParams{StackID: stackID, UpdateID: row.Update.String()}
+		if clearErr := q.ClearJournalOperations(ctx, params); clearErr != nil {
+			return false, fmt.Errorf("clear journal operations: %w", clearErr)
+		}
 	}
 
 	if insertErr := insertJournalRow(ctx, q, stackID, row); insertErr != nil {
@@ -284,6 +294,246 @@ func (s *Store) JournalKeys(ctx context.Context, stackID stack.ID, update stack.
 	return journalBlobKeys(rows), nil
 }
 
+// RecordJournalRefusal implements stack.JournalStore. It stores one refused or
+// unstored batch of a running update with the next arrival number of its
+// refusals, in the same fenced transaction. A missing stack or update, or an
+// update that no longer runs, records nothing and returns nil, so a refusal
+// that races the end of its update is dropped instead of failing the error path.
+func (s *Store) RecordJournalRefusal(
+	ctx context.Context, refusal stack.JournalRefusal, fence namespace.Fence,
+) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
+		stackID, err := stackIDFor(ctx, q, refusal.Ref)
+		if errors.Is(err, stack.ErrNotFound) {
+			return nil
+		}
+
+		if err != nil {
+			return err
+		}
+
+		state, stateErr := q.JournalState(
+			ctx, db.JournalStateParams{StackID: stackID, ID: refusal.Update.String()},
+		)
+		if errors.Is(stateErr, sql.ErrNoRows) {
+			return nil
+		}
+
+		if stateErr != nil {
+			return fmt.Errorf("read journal state: %w", stateErr)
+		}
+
+		if state.Status != string(stack.StatusRunning) {
+			return nil
+		}
+
+		return insertJournalRefusal(ctx, q, stackID, refusal)
+	})
+}
+
+// insertJournalRefusal stores one refusal with the next arrival number of the
+// refusals of the update, in the caller's transaction.
+func insertJournalRefusal(
+	ctx context.Context, q *db.Queries, stackID string, refusal stack.JournalRefusal,
+) error {
+	arrival, err := q.NextRefusalArrival(ctx, db.NextRefusalArrivalParams{
+		StackID:  stackID,
+		UpdateID: refusal.Update.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("next refusal arrival: %w", err)
+	}
+
+	seqs, err := marshalRefusalSequences(refusal.SequenceIDs)
+	if err != nil {
+		return err
+	}
+
+	return q.InsertJournalRefusal(ctx, db.InsertJournalRefusalParams{
+		StackID:     stackID,
+		UpdateID:    refusal.Update.String(),
+		Arrival:     arrival,
+		SequenceIds: seqs,
+		Status:      int64(refusal.Status),
+		Reason:      refusal.Reason,
+	})
+}
+
+// marshalRefusalSequences encodes the sequence IDs of a refusal. An empty
+// list encodes as an empty array, never null, so reads need no second shape.
+func marshalRefusalSequences(seqs []int64) (string, error) {
+	if len(seqs) == 0 {
+		return "[]", nil
+	}
+
+	raw, err := json.Marshal(seqs)
+	if err != nil {
+		return "", fmt.Errorf("encode refusal sequence IDs: %w", err)
+	}
+
+	return string(raw), nil
+}
+
+// finishJournalEnd ends the journal bookkeeping of an update in the same
+// transaction as its end transition. A journaled update that ends with
+// succeeded rechecks its refusals: the complete check ran before the build,
+// so a refusal recorded after it still stops the end. Cancel and failure end
+// the update despite refusals and drop their rows; the build already dropped
+// the rows of an update with stored batches.
+func finishJournalEnd(ctx context.Context, q *db.Queries, stackID string, u stack.Update) error {
+	if !u.Mutates() || !u.Status.Terminal() {
+		return nil
+	}
+
+	if u.Status == stack.StatusSucceeded {
+		if u.JournalVersion == 0 {
+			return nil
+		}
+
+		return checkNoUnstoredRefusal(ctx, q, stackID, u.ID)
+	}
+
+	if u.Status != stack.StatusCanceled && u.Status != stack.StatusFailed {
+		return nil
+	}
+
+	refusalsErr := q.DeleteJournalRefusals(ctx, db.DeleteJournalRefusalsParams{
+		StackID:  stackID,
+		UpdateID: u.ID.String(),
+	})
+	if refusalsErr != nil {
+		return fmt.Errorf("delete journal refusals: %w", refusalsErr)
+	}
+
+	return nil
+}
+
+// checkNoUnstoredRefusal reports ErrJournalIncomplete when the update holds a
+// refusal for a batch that is still unstored: a refusal with no sequence IDs,
+// or with a sequence ID missing from the stored sequences. It runs in the end
+// transition, so a refusal recorded after the complete check still stops the
+// end. A refusal whose sequence IDs are all stored is a batch that a retry
+// stored after the refusal, so it does not stop it.
+func checkNoUnstoredRefusal(ctx context.Context, q *db.Queries, stackID string, id stack.UpdateID) error {
+	rows, err := q.ListJournalRefusals(ctx, db.ListJournalRefusalsParams{
+		StackID:  stackID,
+		UpdateID: id.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("select journal refusals: %w", err)
+	}
+
+	if len(rows) == 0 {
+		return nil
+	}
+
+	seqs, err := q.ListJournalSequences(ctx, db.ListJournalSequencesParams{
+		StackID:  stackID,
+		UpdateID: id.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("select journal sequences: %w", err)
+	}
+
+	stored := make(map[int64]bool, len(seqs))
+	for _, seq := range seqs {
+		stored[seq] = true
+	}
+
+	for _, row := range rows {
+		var named []int64
+
+		if err := json.Unmarshal([]byte(row.SequenceIds), &named); err != nil {
+			return fmt.Errorf("decode refusal sequence IDs: %w", err)
+		}
+
+		if len(named) == 0 {
+			return stack.ErrJournalIncomplete
+		}
+
+		for _, seq := range named {
+			if !stored[seq] {
+				return stack.ErrJournalIncomplete
+			}
+		}
+	}
+
+	return nil
+}
+
+// JournalRefusals implements stack.JournalStore. It is keyed by the stack ID,
+// as the blob keys are. A missing update yields no refusals.
+func (s *Store) JournalRefusals(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]stack.JournalRefusal, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	rows, err := s.queries.ListJournalRefusals(ctx, db.ListJournalRefusalsParams{
+		StackID:  stackID.String(),
+		UpdateID: update.String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("select journal refusals: %w", err)
+	}
+
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	names, err := s.queries.StackRefByID(ctx, stackID.String())
+	if err != nil {
+		return nil, fmt.Errorf("resolve stack: %w", err)
+	}
+
+	ref, err := stack.ParseRef(names.Namespace, names.Project, names.Name)
+	if err != nil {
+		return nil, fmt.Errorf("parse stack reference: %w", err)
+	}
+
+	out := make([]stack.JournalRefusal, 0, len(rows))
+
+	for _, row := range rows {
+		var seqs []int64
+
+		if err := json.Unmarshal([]byte(row.SequenceIds), &seqs); err != nil {
+			return nil, fmt.Errorf("decode refusal sequence IDs: %w", err)
+		}
+
+		out = append(out, stack.JournalRefusal{
+			Ref:         ref,
+			Update:      update,
+			SequenceIDs: seqs,
+			Status:      int(row.Status),
+			Reason:      row.Reason,
+		})
+	}
+
+	return out, nil
+}
+
+// JournalSequences implements stack.JournalStore. It returns the stored
+// sequence IDs of the update, in order. A missing update yields none.
+func (s *Store) JournalSequences(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]int64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	seqs, err := s.queries.ListJournalSequences(ctx, db.ListJournalSequencesParams{
+		StackID:  stackID.String(),
+		UpdateID: update.String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("select journal sequences: %w", err)
+	}
+
+	return seqs, nil
+}
+
 // JournalSweepable implements stack.JournalStore. It reports whether the journal is
 // closed or the update no longer runs. A missing update is ErrUpdateNotFound.
 func (s *Store) JournalSweepable(ctx context.Context, stackID stack.ID, update stack.UpdateID) (bool, error) {
@@ -371,8 +621,9 @@ func closeAndRemove(ctx context.Context, q *db.Queries, stackID string, update s
 	return keys, nil
 }
 
-// removeJournal deletes the sequence rows and the batch rows of an update, and returns
-// the blob keys of the batches it deleted. It runs in the caller's transaction.
+// removeJournal deletes the sequence rows, the batch rows and the refusal rows
+// of an update, and returns the blob keys of the batches it deleted. It runs
+// in the caller's transaction.
 func removeJournal(ctx context.Context, q *db.Queries, stackID string, update stack.UpdateID) ([]blob.Key, error) {
 	found, err := q.JournalBlobKeys(ctx, db.JournalBlobKeysParams{StackID: stackID, UpdateID: update.String()})
 	if err != nil {
@@ -390,6 +641,14 @@ func removeJournal(ctx context.Context, q *db.Queries, stackID string, update st
 	rowsErr := q.DeleteJournal(ctx, db.DeleteJournalParams{StackID: stackID, UpdateID: update.String()})
 	if rowsErr != nil {
 		return nil, fmt.Errorf("delete journal rows: %w", rowsErr)
+	}
+
+	refusalsErr := q.DeleteJournalRefusals(
+		ctx,
+		db.DeleteJournalRefusalsParams{StackID: stackID, UpdateID: update.String()},
+	)
+	if refusalsErr != nil {
+		return nil, fmt.Errorf("delete journal refusals: %w", refusalsErr)
 	}
 
 	return journalBlobKeys(found), nil

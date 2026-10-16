@@ -2,12 +2,15 @@ package storetest
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -57,8 +60,18 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 	}{
 		{name: "restores table creates, finishes, gets and lists", test: testRestoreRegistry},
 		{name: "restart marks every running restore failed", test: testRestoreRestartFailsRunning},
+		{name: "one restore runs at a time", test: testRestoreOneRunning},
+		{name: "a backup starts after a restore of a running snapshot", test: testRestoreThenBackup},
+		{name: "a restore starts after a restore of a running snapshot", test: testRestoreThenRestore},
+		{name: "the running restore records its end after the swap", test: testRestoreRecordsEndAfterSwap},
 		{name: "a restore row survives close and reopen", test: testRestoreRowSurvivesReopen},
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
+		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
+		{name: "apply keeps the installation state of the target", test: testRestoreKeepsInstallationState},
+		{
+			name: "a restored log of another chain state checks valid after the migration",
+			test: testRestoreChainAgreesAfterMigration,
+		},
 		{name: "apply drops the pre-backup row, which is re-recorded after", test: testRestoreApplyReRecordsBackup},
 		{name: "apply without staged data is corrupt", test: testRestoreApplyWithoutStaging},
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
@@ -68,6 +81,12 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "staging keeps a checkpoint held in blobs", test: testRestoreStagingKeepsCheckpointBlobs},
 		{name: "a restore keeps the journal rows of a running update", test: testRestoreJournalBlob},
 		{name: "round trip over every table keeps every row", test: testRestoreRoundTrip},
+		{name: "a restore without restore-access keeps the access tables", test: testRestoreKeepsAccessTables},
+		{
+			name: "a restore keeps a principal created after the backup with its child rows",
+			test: testRestoreKeepsLiveOnlyPrincipal,
+		},
+		{name: "a restore that keeps access refuses unknown namespaces and units", test: testRestoreKeepAccessMismatch},
 	}
 
 	for _, tc := range cases {
@@ -310,6 +329,179 @@ func restoreIDs(rows []backup.RestoreRecord) []backup.RestoreID {
 	return ids
 }
 
+// testRestoreOneRunning refuses a second running restore with
+// ErrRestoreRunning while the first one checks and while it applies, keeps
+// ErrRestoreExists for a taken ID, and allows the next restore once the
+// running one finished.
+func testRestoreOneRunning(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	first := mustCreateRestore(
+		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+	second := newRestoreRecord(
+		backup.RestoreID(ident.NewID("rst-")),
+		backup.ID(ident.NewID("bkp-")),
+		now().Add(time.Minute),
+	)
+
+	if err := s.CreateRestore(t.Context(), second); !errors.Is(err, backup.ErrRestoreRunning) {
+		t.Fatalf("second restore while one checks: err = %v, want ErrRestoreRunning", err)
+	}
+
+	if err := s.MarkRestoreApplying(t.Context(), first.ID, backup.ID(ident.NewID("bkp-"))); err != nil {
+		t.Fatalf("mark restore applying: %v", err)
+	}
+
+	if err := s.CreateRestore(t.Context(), second); !errors.Is(err, backup.ErrRestoreRunning) {
+		t.Fatalf("second restore while one applies: err = %v, want ErrRestoreRunning", err)
+	}
+
+	if err := s.CreateRestore(t.Context(), first); !errors.Is(err, backup.ErrRestoreExists) {
+		t.Fatalf("taken restore ID: err = %v, want ErrRestoreExists", err)
+	}
+
+	mustFinishRestore(t, s, restoreFinish{ID: first.ID, State: backup.RestoreSucceeded, Error: "", EndedAt: now()})
+	mustCreateRestore(t, s, second)
+}
+
+// testRestoreThenBackup restores a snapshot that holds a running backup row
+// and a checking restore row, as the backup that a restore takes before it
+// applies does: the backup sees its own row as running, and the restore that
+// takes it is checking. The staged load accepts both rows, and a new backup
+// starts after the apply: the swap leaves no running backup row behind.
+func testRestoreThenBackup(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ctx := t.Context()
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+	running := mustCreateBackup(t, ps.src, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	mustCreateRestore(
+		t, ps.src, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+		t.Fatalf("stage a snapshot with a running backup and a checking restore: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staging area: %v", err)
+	}
+
+	if got := mustGetBackup(t, ps.dst, running.ID); got.State == backup.StateRunning {
+		t.Fatalf("backup row of the snapshot after the swap = %+v, want it not running", got)
+	}
+
+	next := newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour))
+	if err := ps.dst.CreateBackup(ctx, next); err != nil {
+		t.Fatalf("start a backup after the restore: %v, want nil", err)
+	}
+}
+
+// testRestoreThenRestore applies a snapshot that holds a restore in checking
+// or in applying, then starts a new restore. The restored row is not
+// running after the swap, so it does not block the new one.
+func testRestoreThenRestore(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	for _, applying := range []bool{false, true} {
+		t.Run(fmt.Sprintf("applying=%t", applying), func(t *testing.T) {
+			ctx := t.Context()
+			ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+			held := mustCreateRestore(
+				t,
+				ps.src,
+				newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+			)
+
+			if applying {
+				if err := ps.src.MarkRestoreApplying(ctx, held.ID, backup.ID(ident.NewID("bkp-"))); err != nil {
+					t.Fatalf("mark restore applying: %v", err)
+				}
+			}
+
+			applySnapshot(t, ps)
+
+			got := mustGetRestore(t, ps.dst, held.ID)
+			if got.State != backup.RestoreFailed || got.Error != backup.RestoredRunningRestoreText ||
+				got.EndedAt.IsZero() {
+				t.Fatalf("restore row of the snapshot after the swap = %+v, want failed with %q and an end time",
+					got, backup.RestoredRunningRestoreText)
+			}
+
+			next := newRestoreRecord(
+				backup.RestoreID(ident.NewID("rst-")),
+				backup.ID(ident.NewID("bkp-")),
+				now().Add(time.Hour),
+			)
+			if err := ps.dst.CreateRestore(ctx, next); err != nil {
+				t.Fatalf("start a restore after the restore: %v, want nil", err)
+			}
+		})
+	}
+}
+
+// testRestoreRecordsEndAfterSwap runs a restore on the target while it
+// applies a snapshot that holds another running restore. The swap replaces
+// the row of the running restore, so the restore stores it again in
+// applying, as the restore service does, and then records its end.
+func testRestoreRecordsEndAfterSwap(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ctx := t.Context()
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+	mustCreateRestore(
+		t, ps.src, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+
+	current := mustCreateRestore(
+		t, ps.dst, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+
+	preBackupID := backup.ID(ident.NewID("bkp-"))
+	if err := ps.dst.MarkRestoreApplying(ctx, current.ID, preBackupID); err != nil {
+		t.Fatalf("mark restore applying: %v", err)
+	}
+
+	applySnapshot(t, ps)
+
+	recreated := current
+	recreated.State = backup.RestoreApplying
+	recreated.PreBackupID = preBackupID
+
+	if err := ps.dst.CreateRestore(ctx, recreated); err != nil {
+		t.Fatalf("store the running restore again after the swap: %v, want nil", err)
+	}
+
+	end := now().Add(time.Hour)
+	mustFinishRestore(t, ps.dst, restoreFinish{ID: current.ID, State: backup.RestoreSucceeded, Error: "", EndedAt: end})
+
+	if got := mustGetRestore(t, ps.dst, current.ID); got.State != backup.RestoreSucceeded || !got.EndedAt.Equal(end) {
+		t.Fatalf("running restore after its end = %+v, want succeeded at %v", got, end)
+	}
+}
+
+// applySnapshot exports ps.src, stages the export on ps.dst and applies it.
+func applySnapshot(t *testing.T, ps portableStores) {
+	t.Helper()
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(t.Context(), sink.read, sum, files); err != nil {
+		t.Fatalf("stage the snapshot: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(t.Context()); err != nil {
+		t.Fatalf("apply staging area: %v", err)
+	}
+}
+
 // testRestoreRestartFailsRunning marks a running row failed at the next start,
 // with the error text, and leaves finished rows alone.
 func testRestoreRestartFailsRunning(t *testing.T, newStore RestoreFactory) {
@@ -321,9 +513,21 @@ func testRestoreRestartFailsRunning(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("fail running restores: %v", err)
 	}
 
-	running := mustCreateRestore(
-		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	// One restore runs at a time: the finished row runs and ends first, then
+	// an applying row fails at one restart, then a checking row at the next.
+	done := mustCreateRestore(
+		t,
+		s,
+		newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)),
 	)
+	endedAt := now().Add(2 * time.Hour)
+	finished := mustFinishRestore(t, s, restoreFinish{
+		ID:      done.ID,
+		State:   backup.RestoreSucceeded,
+		Error:   "",
+		EndedAt: endedAt,
+	})
+
 	applying := mustCreateRestore(
 		t,
 		s,
@@ -338,18 +542,18 @@ func testRestoreRestartFailsRunning(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("mark restore applying: %v", err)
 	}
 
-	done := mustCreateRestore(
-		t,
-		s,
-		newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)),
+	err := s.FailRunningRestores(t.Context(), now().Add(150*time.Minute), "server stopped during restore")
+	if err != nil {
+		t.Fatalf("fail running restores: %v", err)
+	}
+
+	if stalled := mustGetRestore(t, s, applying.ID); stalled.State != backup.RestoreFailed {
+		t.Fatalf("applying restore after restart = %+v, want failed", stalled)
+	}
+
+	running := mustCreateRestore(
+		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
 	)
-	endedAt := now().Add(2 * time.Hour)
-	finished := mustFinishRestore(t, s, restoreFinish{
-		ID:      done.ID,
-		State:   backup.RestoreSucceeded,
-		Error:   "",
-		EndedAt: endedAt,
-	})
 
 	restartedAt := now().Add(3 * time.Hour)
 
@@ -363,10 +567,6 @@ func testRestoreRestartFailsRunning(t *testing.T, newStore RestoreFactory) {
 		!got.EndedAt.Equal(restartedAt) || !got.StartedAt.Equal(running.StartedAt) ||
 		got.BackupID != running.BackupID {
 		t.Fatalf("restarted restore = %+v, want failed with the error text and end time", got)
-	}
-
-	if stalled := mustGetRestore(t, s, applying.ID); stalled.State != backup.RestoreFailed {
-		t.Fatalf("applying restore after restart = %+v, want failed", stalled)
 	}
 
 	if untouched := mustGetRestore(t, s, done.ID); untouched != finished {
@@ -387,9 +587,7 @@ func testRestoreRowSurvivesReopen(t *testing.T, newStore RestoreFactory) {
 		t.Skip("store does not support close and reopen")
 	}
 
-	running := mustCreateRestore(
-		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
-	)
+	// One restore runs at a time: the finished row runs and ends first.
 	done := mustCreateRestore(
 		t,
 		s,
@@ -401,6 +599,9 @@ func testRestoreRowSurvivesReopen(t *testing.T, newStore RestoreFactory) {
 		Error:   "",
 		EndedAt: now().Add(2 * time.Hour),
 	})
+	running := mustCreateRestore(
+		t, s, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
 
 	if err := reopenable.Close(); err != nil {
 		t.Fatalf("close store: %v", err)
@@ -498,6 +699,272 @@ func testRestoreApplySwapsStaged(t *testing.T, newStore RestoreFactory) {
 
 	if err := pdst.ApplyStaging(ctx); !errors.Is(err, backup.ErrCorrupt) {
 		t.Fatalf("apply after the swap: err = %v, want ErrCorrupt", err)
+	}
+}
+
+// chainRestoreStore is a store with the audit chain and its check.
+type chainRestoreStore interface {
+	audit.Store
+	audit.ChainStore
+	audit.ScopesChecker
+}
+
+// chainAt answers the time of the chain records of the restore cases.
+func chainAt() time.Time {
+	return time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC)
+}
+
+// testRestoreKeepsChainRecord proves that a restore keeps the audit chain
+// record of the target installation: the backup does not carry it, so the
+// source record never reaches the target. The swap notes that it replaced
+// the log. A store without a chain store skips the case.
+func testRestoreKeepsChainRecord(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	want := audit.ChainRecord{
+		ChangedAt:          chainAt(),
+		ChangedBy:          "dst",
+		State:              audit.ChainStateOn,
+		Pending:            false,
+		EnteredMaintenance: false,
+		MigratingAt:        time.Time{},
+		LogReplaced:        false,
+	}
+
+	to, _ := restoreChain(t, newStore, func(from chainRestoreStore, _ namespace.Namespace) {
+		saveChainRecord(t, from, audit.ChainRecord{
+			ChangedAt: chainAt(), ChangedBy: "src", State: audit.ChainStateOff, Pending: true,
+			EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
+		})
+	}, func(to chainRestoreStore) { saveChainRecord(t, to, want) })
+
+	got, err := to.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record after the restore: %v", err)
+	}
+
+	want.LogReplaced = true
+	if !got.ChangedAt.Equal(want.ChangedAt) || got.ChangedBy != want.ChangedBy || got.State != want.State ||
+		got.Pending != want.Pending || got.EnteredMaintenance != want.EnteredMaintenance ||
+		!got.MigratingAt.Equal(want.MigratingAt) || got.LogReplaced != want.LogReplaced {
+		t.Fatalf("chain record after the restore = %+v, want the target record %+v", got, want)
+	}
+}
+
+// testRestoreKeepsInstallationState proves that the swap keeps the
+// installation state of the target in both directions: a target in
+// maintenance mode stays in maintenance mode after the swap of a backup taken
+// in normal operation, so writes stay refused until the restore leaves
+// maintenance mode itself; and a target in normal operation stays normal
+// after the swap of a backup taken in maintenance mode, such as the backup
+// that a restore takes before it applies. A store without the installation
+// state skips the case.
+func testRestoreKeepsInstallationState(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	cases := []struct {
+		source maintenance.State
+		target maintenance.State
+	}{
+		{source: maintenance.StateNormal, target: maintenance.StateMaintenance},
+		{source: maintenance.StateMaintenance, target: maintenance.StateNormal},
+	}
+
+	for _, tc := range cases {
+		ctx := t.Context()
+		ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+		from, okSrc := ps.src.(maintenance.Store)
+		to, okDst := ps.dst.(maintenance.Store)
+
+		if !okSrc || !okDst {
+			t.Skip("the store has no installation state")
+		}
+
+		setInstallationState(t, from, tc.source)
+		setInstallationState(t, to, tc.target)
+
+		sink, sum, files := exportPortable(t, ps.src)
+
+		if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+			t.Fatalf("stage restore: %v", err)
+		}
+
+		if err := ps.dst.ApplyStaging(ctx); err != nil {
+			t.Fatalf("apply staging area: %v", err)
+		}
+
+		got, err := to.GetState(ctx)
+		if err != nil {
+			t.Fatalf("installation state after the swap: %v", err)
+		}
+
+		if got != tc.target {
+			t.Fatalf("installation state after the swap of a %s backup = %q, want the target state %q",
+				tc.source, got, tc.target)
+		}
+	}
+}
+
+// setInstallationState stores state as the installation state of s.
+func setInstallationState(t *testing.T, s maintenance.Store, state maintenance.State) {
+	t.Helper()
+
+	if err := s.SetState(t.Context(), state); err != nil {
+		t.Fatalf("set installation state %q: %v", state, err)
+	}
+}
+
+// testRestoreChainAgreesAfterMigration proves that a restored log from an
+// installation with the chain off disagrees with a target that keeps the
+// chain on, and that the migration of the target makes every scope check
+// valid. A store without a chain store skips the case.
+func testRestoreChainAgreesAfterMigration(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	to, acme := restoreChain(t, newStore, func(from chainRestoreStore, acme namespace.Namespace) {
+		appendDecrypts(t, from, acme, chainAt(), 1)
+
+		change := audit.ChainChange{At: chainAt().Add(time.Minute), By: "src", To: audit.ChainStateOff}
+		migrateChain(t, from, []namespace.Fence{acme.Fence()}, change)
+
+		appendDecrypts(t, from, acme, chainAt().Add(2*time.Minute), 1)
+	}, func(chainRestoreStore) {})
+
+	scopes := []namespace.Name{acme.Name}
+
+	agrees, err := audit.LogAgrees(t.Context(), to, scopes, audit.ChainStateOn)
+	if err != nil || agrees {
+		t.Fatalf("restored log against the chain on: agrees %v, err %v, want a disagreement", agrees, err)
+	}
+
+	// acme was fenced by the swap: read its fence again.
+	fenced := restoredFence(t, to, acme.Name)
+
+	change := audit.ChainChange{At: chainAt().Add(time.Hour), By: "alice", To: audit.ChainStateOn}
+	migrateChain(t, to, []namespace.Fence{fenced}, change)
+
+	wantScopesValid(t, to, acme.Name)
+}
+
+// restoredFence answers the fence of the namespace name in s after a
+// restore, which incremented its failover version.
+func restoredFence(t *testing.T, s audit.Store, name namespace.Name) namespace.Fence {
+	t.Helper()
+
+	reader, ok := s.(namespace.Store)
+	if !ok {
+		t.Fatal("the store cannot read a namespace")
+	}
+
+	ns, err := reader.GetNamespace(t.Context(), name)
+	if err != nil {
+		t.Fatalf("get namespace %s: %v", name, err)
+	}
+
+	return ns.Fence()
+}
+
+// restoreChain restores a backup of a new store, which fill prepares, into
+// a new store, which target prepares. It answers the target and the
+// namespace acme. A store without a chain store skips the case.
+//
+//nolint:ireturn // The cases use the ports of both SQL adapters, which share no concrete type.
+func restoreChain(
+	t *testing.T, newStore RestoreFactory,
+	fill func(from chainRestoreStore, acme namespace.Namespace), target func(to chainRestoreStore),
+) (chainRestoreStore, namespace.Namespace) {
+	t.Helper()
+
+	ctx := t.Context()
+	src := newStore(t)
+	acme := newNamespace(t, src, "acme")
+
+	ps := portableRestoreStores(t, src, newStore(t))
+
+	from, okSrc := ps.src.(chainRestoreStore)
+	to, okDst := ps.dst.(chainRestoreStore)
+
+	if !okSrc || !okDst {
+		t.Skip("the store has no audit chain store")
+	}
+
+	fill(from, acme)
+	target(to)
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+		t.Fatalf("stage restore: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staging area: %v", err)
+	}
+
+	return to, acme
+}
+
+// saveChainRecord saves rec as the chain record of s.
+func saveChainRecord(t *testing.T, s audit.ChainStore, rec audit.ChainRecord) {
+	t.Helper()
+
+	if err := s.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record %+v: %v", rec, err)
+	}
+}
+
+// migrateChain runs the migration of change in s with a held claim, so each
+// renewal after a scope succeeds.
+func migrateChain(t *testing.T, s chainRestoreStore, fences []namespace.Fence, change audit.ChainChange) {
+	t.Helper()
+
+	rec, err := s.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	rec.MigratingAt = change.At
+
+	if err := s.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	clock := func() time.Time { return change.At.Add(time.Minute) }
+
+	if err := audit.MigrateChain(t.Context(), s, fences, change, clock); err != nil {
+		t.Fatalf("migrate the chain: %v", err)
+	}
+}
+
+// appendDecrypts appends n decrypt entries to ns in s, one second apart
+// after at.
+func appendDecrypts(t *testing.T, s audit.Store, ns namespace.Namespace, at time.Time, n int) {
+	t.Helper()
+
+	for i := range n {
+		e := ServerChange(at.Add(time.Duration(i+1)*time.Second), "pulumi:acme/web/prod")
+		e.Namespace, e.Action = ns.Name, "unit:decrypt"
+
+		if _, err := s.Append(t.Context(), ns.Fence(), e); err != nil {
+			t.Fatalf("append entry %d: %v", i, err)
+		}
+	}
+}
+
+// wantScopesValid fails the test unless every scope of scopes checks valid.
+func wantScopesValid(t *testing.T, s audit.ScopesChecker, scopes ...namespace.Name) {
+	t.Helper()
+
+	results, err := s.CheckEach(t.Context(), scopes)
+	if err != nil {
+		t.Fatalf("check scopes: %v", err)
+	}
+
+	for i, scope := range scopes {
+		if i >= len(results) || !results[i].Valid {
+			t.Fatalf("check %s: results %+v, want valid", scope, results)
+		}
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -94,6 +95,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "column lists cover every column of the schema", test: testBackupColumnsCoverSchema},
 		{name: "backups table creates, finishes, gets and lists", test: testBackupRegistry},
 		{name: "restart marks every running backup failed", test: testBackupRestartFailsRunning},
+		{name: "one backup runs at a time", test: testBackupOneRunning},
 		{name: "a backup row survives close and reopen", test: testBackupRowSurvivesReopen},
 	}
 
@@ -245,6 +247,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupTokens(t, s)
 	seedBackupAccess(t, s)
 	seedBackupPurge(t, s, acme)
+	seedBackupSignIn(t, s)
 
 	return backupSeed{
 		acme:       acme,
@@ -285,17 +288,22 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 		{
 			CreatedAt: now(), UpdatedAt: now().Add(time.Minute), DisabledAt: time.Time{}, ID: "prn-alice",
 			Subject: "alice@example.com", DisplayName: "Alice", Kind: principal.KindPerson,
-			Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+			Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 		{
 			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-deploy",
 			Subject: "ci-deploy", DisplayName: "", Kind: principal.KindService,
-			Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+			Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 		{
 			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-gone",
 			Subject: "gone", DisplayName: "", Kind: principal.KindWorkload,
-			Source: principal.SourceSCIM, Namespace: "", GroupCount: 0,
+			Source: principal.SourceSCIM, Namespace: "", GroupCount: 0, BreakGlass: false,
+		},
+		{
+			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-suspended",
+			Subject: "suspended@example.com", DisplayName: "Suspended", Kind: principal.KindPerson,
+			Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 	}
 	for i := range principals {
@@ -319,10 +327,24 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 	}
 
 	for _, id := range []string{"prn-alice", "prn-deploy"} {
-		m := principal.Membership{AddedAt: now().Add(time.Hour), GroupID: g.ID, PrincipalID: id}
+		m := principal.Membership{
+			AddedAt: now().Add(time.Hour), SuspendedAt: time.Time{}, GroupID: g.ID, PrincipalID: id,
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		}
 		if err := ps.AddMember(ctx, m, ServerChange(m.AddedAt, "group:grp-ops#member:"+id)); err != nil {
 			t.Fatalf("add member %q: %v", id, err)
 		}
+	}
+
+	suspended := principal.Membership{
+		AddedAt: now().Add(time.Hour), SuspendedAt: now().Add(90 * time.Minute), GroupID: g.ID,
+		PrincipalID: "prn-suspended", Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
+		State: principal.MembershipStateSuspended, Pinned: true,
+	}
+	addErr := ps.AddMember(ctx, suspended, ServerChange(suspended.AddedAt, "group:grp-ops#member:prn-suspended"))
+	if addErr != nil {
+		t.Fatalf("add suspended member: %v", addErr)
 	}
 
 	later := now().Add(2 * time.Hour)
@@ -382,6 +404,77 @@ func seedBackupTokens(t *testing.T, s BackupStore) {
 	seedBackupSweep(t, ts)
 }
 
+// seedBackupSignIn writes a provider binding, a sign-in request with a
+// max_age and a token freshness window when s keeps the console sign-in,
+// so the round trip compares the new columns and the provider table row by
+// row.
+func seedBackupSignIn(t *testing.T, s BackupStore) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if ps, ok := s.(session.ProviderStore); ok {
+		if _, err := ps.BindProvider(ctx, "corp", "https://idp.example", now()); err != nil {
+			t.Fatalf("bind provider: %v", err)
+		}
+	}
+
+	if ss, ok := s.(session.Store); ok {
+		r := session.Request{
+			CreatedAt: now(), ExpiresAt: now().Add(session.RequestLifetime), Provider: "corp",
+			Nonce: "n-0S6_WzA2Mj-rG7k3QpL", Verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", ReturnPath: "/",
+			MaxAge: 0, HasMaxAge: true,
+		}
+		if err := ss.CreateRequest(ctx, r, session.Digest{7}); err != nil {
+			t.Fatalf("create sign-in request: %v", err)
+		}
+	}
+
+	if pol, ok := s.(session.PolicyStore); ok {
+		_, err := pol.UpdateSessionPolicy(ctx, func(old session.Policy) (session.Policy, audit.Entry, error) {
+			old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = 30*time.Minute, false, now()
+
+			return old, ServerChange(now(), session.PolicyRef), nil
+		})
+		if err != nil {
+			t.Fatalf("set the token freshness window: %v", err)
+		}
+	}
+
+	seedBackupProviders(t, s)
+}
+
+// seedBackupProviders writes an installation key and a sign-in provider
+// that the API manages, so the round trip carries both tables.
+func seedBackupProviders(t *testing.T, s BackupStore) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if ks, ok := s.(secret.InstallationKeyStore); ok {
+		scope, err := secret.InstallationScope("sign-in-corp")
+		if err != nil {
+			t.Fatalf("installation scope: %v", err)
+		}
+
+		k := secret.WrappedKey{CreatedAt: now(), Scope: scope, WrapperID: "kek-test", Ciphertext: []byte("wrapped key")}
+		if _, err := ks.CreateInstallationKey(ctx, k); err != nil {
+			t.Fatalf("create installation key: %v", err)
+		}
+	}
+
+	if pc, ok := s.(session.ProviderConfigStore); ok {
+		p := session.ProviderConfig{
+			CreatedAt: now(), UpdatedAt: now(), ID: "corp", Issuer: "https://idp.example", DisplayName: "Corp",
+			ClientID: "dustpan", SealedSecret: []byte("sealed secret"), Scopes: []string{"profile"}, Version: 1,
+			AutoCreate: true, Enabled: false,
+		}
+		if err := pc.CreateProviderConfig(ctx, p, ServerChange(now(), "sign-in-provider:corp")); err != nil {
+			t.Fatalf("create sign-in provider: %v", err)
+		}
+	}
+}
+
 // seedBackupSweep changes the token policy and runs one sweep, so the round
 // trip carries the policy row and the disable times of a token and of a
 // principal (ADR 53).
@@ -392,7 +485,7 @@ func seedBackupSweep(t *testing.T, ts accesstoken.Store) {
 
 	policy := accesstoken.Policy{
 		UpdatedAt: now(), MaxLifetime: 30 * 24 * time.Hour, Inactivity: time.Hour,
-		DisableTokens: true, DisableAccounts: true, DisableBreakGlass: true,
+		DisableTokens: true, DisableAccounts: true, DisableBreakGlass: false,
 	}
 
 	_, err := ts.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
@@ -439,27 +532,28 @@ func backupToken(id, principalID string, kind accesstoken.Kind) accesstoken.Toke
 // an installation store takes.
 func ServerChange(at time.Time, object string) audit.Entry {
 	return audit.Entry{
-		At:         at,
-		Namespace:  audit.ServerScope,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "server:manage-principals",
-		Object:     object,
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "storetest",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           at,
+		Namespace:    audit.ServerScope,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "server:manage-principals",
+		Object:       object,
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "storetest",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 
@@ -549,14 +643,14 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 	}
 	for i := range grants {
 		fence, e := GrantWrite(t, s, grants[i].Object, now(), "grant:"+grants[i].ID)
-		if err := as.CreateGrant(ctx, grants[i], fence, e); err != nil {
+		if err := as.CreateGrant(ctx, grants[i], fence, e, nil); err != nil {
 			t.Fatalf("create grant %q: %v", grants[i].ID, err)
 		}
 	}
 
 	fence, revoked := GrantWrite(t, s, identity.NamespaceObject("acme"), now().Add(2*time.Hour), "grant:grt-revoked")
 
-	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked)
+	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked, nil)
 	if err != nil {
 		t.Fatalf("revoke grant: %v", err)
 	}
@@ -597,27 +691,28 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 		}
 
 		stored, err := s.Append(t.Context(), acme.Fence(), audit.Entry{
-			At:         now(),
-			Namespace:  acme.Name,
-			Subject:    "admin",
-			IDPSubject: "",
-			TokenID:    "",
-			Action:     "unit:decrypt",
-			Object:     "pulumi:" + acme.Name.String() + "/web/prod",
-			Version:    "",
-			ValuePath:  "",
-			ValueCount: count,
-			Changes:    changes,
-			SourceIP:   "192.0.2.1",
-			UserAgent:  "test",
-			Channel:    audit.ChannelAPI,
-			Kind:       kind,
-			Outcome:    audit.OutcomeSuccess,
-			RequestID:  fmt.Sprintf("req-%d", i),
-			ObjectID:   "",
-			PrevHash:   "",
-			Hash:       "",
-			Sequence:   0,
+			At:           now(),
+			Namespace:    acme.Name,
+			Subject:      "admin",
+			IDPSubject:   "",
+			TokenID:      "",
+			Action:       "unit:decrypt",
+			Object:       "pulumi:" + acme.Name.String() + "/web/prod",
+			Version:      "",
+			ValuePath:    "",
+			ValueCount:   count,
+			Changes:      changes,
+			SourceIP:     "192.0.2.1",
+			UserAgent:    "test",
+			Channel:      audit.ChannelAPI,
+			Kind:         kind,
+			Outcome:      audit.OutcomeSuccess,
+			RequestID:    fmt.Sprintf("req-%d", i),
+			ObjectID:     "",
+			PrevHash:     "",
+			Hash:         "",
+			Sequence:     0,
+			FenceVersion: 0,
 		})
 		if err != nil {
 			t.Fatalf("append audit entry %d: %v", i, err)
@@ -1062,6 +1157,32 @@ func backupIDs(rows []backup.Record) []backup.ID {
 	return ids
 }
 
+// testBackupOneRunning refuses a second running backup with
+// ErrAlreadyRunning, keeps ErrAlreadyExists for a taken ID, and allows the
+// next backup once the running one finished.
+func testBackupOneRunning(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	first := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+
+	second := newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Minute))
+	if err := s.CreateBackup(t.Context(), second); !errors.Is(err, backup.ErrAlreadyRunning) {
+		t.Fatalf("second running backup: err = %v, want ErrAlreadyRunning", err)
+	}
+
+	if _, err := s.GetBackup(t.Context(), second.ID); !errors.Is(err, backup.ErrNotFound) {
+		t.Fatalf("refused backup row: err = %v, want ErrNotFound", err)
+	}
+
+	if err := s.CreateBackup(t.Context(), first); !errors.Is(err, backup.ErrAlreadyExists) {
+		t.Fatalf("taken backup ID: err = %v, want ErrAlreadyExists", err)
+	}
+
+	mustFinishBackup(t, s, backupFinish{ID: first.ID, State: backup.StateSucceeded, Error: "", EndedAt: now()})
+	mustCreateBackup(t, s, second)
+}
+
 // testBackupRestartFailsRunning marks a running row failed at the next start,
 // with the error text, and leaves finished rows alone.
 func testBackupRestartFailsRunning(t *testing.T, newStore BackupFactory) {
@@ -1071,7 +1192,7 @@ func testBackupRestartFailsRunning(t *testing.T, newStore BackupFactory) {
 
 	mustFailRunningBackups(t, s, now(), "no backup is running")
 
-	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	// One backup runs at a time: the finished row runs and ends first.
 	done := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)))
 	endedAt := now().Add(2 * time.Hour)
 	finished := mustFinishBackup(t, s, backupFinish{
@@ -1080,6 +1201,7 @@ func testBackupRestartFailsRunning(t *testing.T, newStore BackupFactory) {
 		Error:   "",
 		EndedAt: endedAt,
 	})
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
 
 	restartedAt := now().Add(3 * time.Hour)
 	mustFailRunningBackups(t, s, restartedAt, "server stopped during backup")
@@ -1117,7 +1239,7 @@ func testBackupRowSurvivesReopen(t *testing.T, newStore BackupFactory) {
 		t.Skip("store does not support close and reopen")
 	}
 
-	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	// One backup runs at a time: the finished row runs and ends first.
 	done := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)))
 	finished := mustFinishBackup(t, s, backupFinish{
 		ID:      done.ID,
@@ -1125,6 +1247,7 @@ func testBackupRowSurvivesReopen(t *testing.T, newStore BackupFactory) {
 		Error:   "",
 		EndedAt: now().Add(2 * time.Hour),
 	})
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
 
 	if err := reopenable.Close(); err != nil {
 		t.Fatalf("close store: %v", err)

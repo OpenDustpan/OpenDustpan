@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -152,10 +153,10 @@ type Env struct {
 	Recorder *Recorder
 	cli      Install
 	store    Store
-	server   serverStore
 	client   *http.Client
-	// workspaces runs the workspace use cases the seed helpers need.
-	workspaces *workspace.Service
+	// inprocess is the store of the in-process server, or nil for the binary
+	// server, whose database the test process never holds open while it runs.
+	inprocess serverStore
 	// blobs holds checkpoint and state content, so the seed helpers save
 	// through the same store as the server.
 	blobs blob.Store
@@ -184,6 +185,8 @@ type Env struct {
 	binPath string
 	// backupDir is the backup target directory of the in-process server.
 	backupDir string
+	// signIn is the console sign-in of an env from NewEnvWithSignIn, or nil.
+	signIn *signInSetup
 	// backendCfg holds the database URL, blob directory, certificate and
 	// key files and tokens of the binary backend.
 	backendCfg backendConfig
@@ -222,14 +225,13 @@ type serverStore interface {
 	ipallow.Store
 }
 
-// serverBuild groups the handler, stores and database proxy newServer opens,
-// so the constructor stays within the result limit.
+// serverBuild groups the handler, blob store and database proxy newServer
+// opens, so the constructor stays within the result limit.
 type serverBuild struct {
-	handler    http.Handler
-	store      serverStore
-	workspaces *workspace.Service
-	blobs      blob.Store
-	dbProxy    *DBProxy
+	handler http.Handler
+	store   serverStore
+	blobs   blob.Store
+	dbProxy *DBProxy
 	// dbURL is the --database value that reaches the database of the build:
 	// the SQLite file, or PostgreSQL through the proxy.
 	dbURL string
@@ -255,28 +257,31 @@ func NewEnv(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	return NewEnvWithDeltaCutoff(ctx, tb, cli, store, 0)
 }
 
-// NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
-// journaling turned off, so each update answers journalVersion 0.
-func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+// defaultEnvInput returns the input of an env for cli and store with new
+// tokens, a new directory and every feature switch off.
+func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 	tb.Helper()
 
-	dir := tb.TempDir()
-	token := newToken(tb)
-	tokenB := newToken(tb)
-	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
-	in := envInput{
+	return envInput{
 		deltaCutoff:       0,
-		disableJournaling: true,
+		disableJournaling: false,
 		ipAllowlists:      false,
+		signIn:            false,
+		signInRealTime:    false,
+		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
-		dir:               dir,
-		token:             token,
-		tokenB:            tokenB,
-		rec:               rec,
+		dir:               tb.TempDir(),
+		token:             newToken(tb),
+		tokenB:            newToken(tb),
+		rec:               &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
 	}
+}
 
+// startEnv starts the env of in: the server binary with E2E_SERVER=binary,
+// else an in-process server.
+func startEnv(ctx context.Context, in envInput) *Env {
 	if UseBinaryServer() {
 		return newBinaryEnv(ctx, in)
 	}
@@ -284,10 +289,36 @@ func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, st
 	return newInprocessEnv(ctx, in)
 }
 
+// NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
+// journaling turned off, so each update answers journalVersion 0.
+func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	in := defaultEnvInput(tb, cli, store)
+	in.disableJournaling = true
+
+	return startEnv(ctx, in)
+}
+
 // NewEnvWithIPAllowlists starts a server as NewEnv does, with IP allowlists
 // turned on and applied to the bootstrap admin token too, so a step can lock
 // one namespace to one source address and prove the 403 answers.
 func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
+	tb.Helper()
+
+	in := defaultEnvInput(tb, cli, store)
+	in.ipAllowlists = true
+
+	return startEnv(ctx, in)
+}
+
+// NewEnvWithJournalRefuser starts a server as NewEnv does, with the refuser
+// corrupting the first outputs-only journal batch on the way to the server,
+// so the server refuses it and records the refusal. The test reads how many
+// batches the refuser corrupted.
+func NewEnvWithJournalRefuser(
+	ctx context.Context, tb testing.TB, cli Install, store Store, refuser *JournalRefuser,
+) *Env {
 	tb.Helper()
 
 	dir := tb.TempDir()
@@ -297,7 +328,10 @@ func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, sto
 	in := envInput{
 		deltaCutoff:       0,
 		disableJournaling: false,
-		ipAllowlists:      true,
+		ipAllowlists:      false,
+		signIn:            false,
+		signInRealTime:    false,
+		journalRefuser:    refuser,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -328,6 +362,9 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		deltaCutoff:       cutoff,
 		disableJournaling: false,
 		ipAllowlists:      false,
+		signIn:            false,
+		signInRealTime:    false,
+		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -344,13 +381,32 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 	return newInprocessEnv(ctx, in)
 }
 
-// newInprocessEnv starts an in-process server for cli and returns the
-// environment.
-func newInprocessEnv(ctx context.Context, in envInput) *Env {
+// startInprocessServer builds the in-process server of in and starts it.
+// The handler is set before the server starts. The listener exists
+// already, so the sign-in knows its public URL before the build.
+func startInprocessServer(
+	ctx context.Context,
+	in envInput,
+	member string,
+) (*httptest.Server, serverBuild, *signInSetup) {
 	tb := in.tb
 	tb.Helper()
 
-	member := newToken(tb)
+	var handler http.Handler
+
+	ts := httptest.NewUnstartedServer(in.rec.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+	})))
+
+	var signIn *signInSetup
+	if in.signIn {
+		var shared *TestClock
+		if !in.signInRealTime {
+			shared = newTestClock()
+		}
+
+		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), shared)
+	}
 
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
@@ -359,14 +415,29 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		deltaCutoff:       in.deltaCutoff,
 		disableJournaling: in.disableJournaling,
 		ipAllowlists:      in.ipAllowlists,
+		signIn:            signIn,
 	})
 
-	ts := httptest.NewUnstartedServer(in.rec.Middleware(build.handler))
-	if in.cli.Tool == ToolTofu {
+	handler = faultedHandler(build.handler, in.journalRefuser)
+
+	if in.cli.Tool == ToolTofu || in.signIn {
 		ts.StartTLS()
 	} else {
 		ts.Start()
 	}
+
+	return ts, build, signIn
+}
+
+// newInprocessEnv starts an in-process server for cli and returns the
+// environment.
+func newInprocessEnv(ctx context.Context, in envInput) *Env {
+	tb := in.tb
+	tb.Helper()
+
+	member := newToken(tb)
+
+	ts, build, signIn := startInprocessServer(ctx, in, member)
 
 	tb.Cleanup(ts.Close)
 
@@ -378,9 +449,8 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		Recorder:      in.rec,
 		cli:           in.cli,
 		store:         in.store,
-		server:        build.store,
 		client:        client,
-		workspaces:    build.workspaces,
+		inprocess:     build.store,
 		blobs:         build.blobs,
 		blobName:      blobNameOf(tb),
 		s3Endpoint:    s3EndpointOf(tb),
@@ -391,7 +461,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
 		steps:         nil,
-		tls:           in.cli.Tool == ToolTofu,
+		tls:           in.cli.Tool == ToolTofu || in.signIn,
 		binPath:       "",
 		backendCfg:    backendConfig{}, //nolint:exhaustruct_v5 // The in-process mode has no binary backend.
 		backendPort:   "",
@@ -400,6 +470,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		certBundle:    "",
 		dbProxy:       build.dbProxy,
 		dbURL:         build.dbURL,
+		signIn:        signIn,
 		backupDir:     build.backupDir,
 	}
 
@@ -499,6 +570,9 @@ type serverArgs struct {
 	// ipAllowlists turns IP allowlists on for the in-process server and
 	// applies them to the bootstrap admin token too.
 	ipAllowlists bool
+	// signIn turns on the console sign-in of the in-process server, or is
+	// nil.
+	signIn *signInSetup
 }
 
 // ipAllowlistOptions adds the IP allowlist options to opts when args turns
@@ -520,11 +594,6 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	tb.Helper()
 
 	st, dbProxy, dbURL := openServerStore(ctx, tb, args.store, args.dbPath)
-
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
-	if err != nil {
-		tb.Fatalf("namespace service: %v", err)
-	}
 
 	// The first namespace is created through POST /api/server/namespaces
 	// after the server starts (see newInprocessEnv and newBinaryEnv), so a
@@ -550,10 +619,9 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	}
 
 	blobs := openTestBlobStore(ctx, tb, args.dbPath)
-	workspaces := newWorkspaceService(tb, st, blobs, namespaces)
 	target, targetName := openBackupTarget(tb, args.dbPath)
 
-	srv, err := dustpan.NewServer(ipAllowlistOptions(
+	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
 		st,
 		args,
 		[]dustpan.Option{
@@ -574,19 +642,18 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 			dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 			dustpan.WithDisablePulumiJournaling(args.disableJournaling),
 		},
-	)...)
+	), args.signIn.options()...)...)
 	if err != nil {
 		tb.Fatalf("new server: %v", err)
 	}
 
 	return serverBuild{
-		handler:    srv.Handler(),
-		store:      st,
-		workspaces: workspaces,
-		blobs:      blobs,
-		dbProxy:    dbProxy,
-		dbURL:      dbURL,
-		backupDir:  strings.TrimPrefix(targetName, "dir:"),
+		handler:   srv.Handler(),
+		store:     st,
+		blobs:     blobs,
+		dbProxy:   dbProxy,
+		dbURL:     dbURL,
+		backupDir: strings.TrimPrefix(targetName, "dir:"),
 	}
 }
 
@@ -611,32 +678,6 @@ func openBackupTarget(tb testing.TB, dbPath string) (*fs.Store, string) {
 	})
 
 	return target, "dir:" + path
-}
-
-// newWorkspaceService returns the workspace use cases over st and blobs,
-// for the seed helpers.
-func newWorkspaceService(
-	tb testing.TB, st serverStore, blobs blob.Store, namespaces *namespace.Service,
-) *workspace.Service {
-	tb.Helper()
-
-	workspaces, err := workspace.NewService(workspace.Config{
-		Workspaces:         st,
-		States:             st,
-		Blobs:              blobs,
-		Namespaces:         namespaces,
-		Sealer:             nil,
-		Logger:             nil,
-		Now:                nil,
-		MaxStateBytes:      0,
-		MaxPendingVersions: 0,
-		Retention:          0,
-	})
-	if err != nil {
-		tb.Fatalf("workspace service: %v", err)
-	}
-
-	return workspaces
 }
 
 // openSQLiteStore opens the SQLite file at dbPath for one test.
@@ -708,76 +749,36 @@ const seedDeployment = `{"manifest":{},"resources":[` +
 	`"type":"custom:resource:Type","custom":true,"id":"res1-id"}]}`
 
 // SeedResources records a finished update with one managed resource as the
-// latest checkpoint of the stack named stackName in Project. It exists so
-// delete tests can set up a stack with resources without driving a full
-// update through routes that later issues own.
+// latest checkpoint of the stack named stackName in Project. It drives the
+// update routes as principal A: it creates and starts an update, saves the
+// checkpoint with the lease token and completes the update. Delete tests use
+// it to set up a stack with resources without a provider that makes real
+// resources.
 func (e *Env) SeedResources(ctx context.Context, tb testing.TB, stackName string) {
 	tb.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: e.server, Now: nil, Region: region})
-	if err != nil {
-		tb.Fatalf("namespace service: %v", err)
-	}
+	held := e.StartHeldUpdate(ctx, tb, Namespace, Project, stackName)
 
-	ref, err := stack.ParseRef(Namespace, Project, stackName)
-	if err != nil {
-		tb.Fatalf("parse ref: %v", err)
-	}
-
-	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Updates:            e.server,
-		Tokens:             nil,
-		Checkpoints:        e.server,
-		Events:             e.server,
-		Namespaces:         namespaces,
-		Stacks:             e.server,
-		Blobs:              e.blobs,
-		Now:                nil,
-		Logger:             nil,
-		MaxCheckpointBytes: 0,
-		Journal:            nil,
+	e.apiCall(ctx, tb, apiRequest{
+		Method: http.MethodPatch,
+		Path:   "/api/stacks/" + Namespace + "/" + Project + "/" + stackName + "/update/" + held.ID + "/checkpoint",
+		Auth:   "update-token " + held.Lease,
+		Body:   `{"version":` + strconv.Itoa(seedSchemaVersion) + `,"deployment":` + seedDeployment + `}`,
+		Out:    nil,
 	})
-	if err != nil {
-		tb.Fatalf("updates service: %v", err)
-	}
 
-	u, err := updates.Create(ctx, ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
-	})
-	if err != nil {
-		tb.Fatalf("create update: %v", err)
-	}
-
-	started, err := updates.Start(ctx, ref, u.ID)
-	if err != nil {
-		tb.Fatalf("start update: %v", err)
-	}
-
-	err = updates.SaveCheckpoint(ctx, ref, u.ID, started.Token, stack.CheckpointInput{
-		Features:      nil,
-		Deployment:    []byte(seedDeployment),
-		SchemaVersion: seedSchemaVersion,
-		Sequence:      0,
-		Invalid:       false,
-	})
-	if err != nil {
-		tb.Fatalf("save checkpoint: %v", err)
-	}
-
-	if _, err := updates.Complete(ctx, ref, u.ID, started.Token, stack.StatusSucceeded); err != nil {
-		tb.Fatalf("complete update: %v", err)
-	}
+	e.EndHeldUpdate(ctx, tb, held, "succeeded")
 }
 
 const (
-	// seedHolder locks the workspace while SeedTofuState writes.
-	seedHolder = "seed"
+	// seedLockReason is the lock reason SeedTofuState sends.
+	seedLockReason = "seed"
 	// seedStateLineage is the lineage SeedTofuState writes when the workspace
 	// has no state yet.
 	seedStateLineage = "seed-lineage"
 	// seedStateOutputs is the outputs document of the seeded state. The stored
-	// outputs come from the uploaded body, so SeedTofuState writes it there
-	// too: the greeting output with its cty value and type, plus a sensitive
+	// outputs come from the uploaded body, so SeedTofuState writes it there:
+	// the greeting output with its cty value and type, plus a sensitive
 	// output so the run also proves the single-output route the CLI uses for
 	// it.
 	seedStateOutputs = `{"greeting":{"sensitive":false,"value":"hello","type":"string"},` +
@@ -795,69 +796,85 @@ func seedStateDocument(lineage string, serial int64) []byte {
 	return []byte(doc)
 }
 
-// SeedTofuState writes a finalized state version with a greeting output
-// straight to the store for the scenario workspace, as SeedResources does
-// for Pulumi. It chains the lineage and serial after the current state when
-// one exists. It locks as seed and releases the lock, so later steps see an
+// seedStateAttributes holds the attributes of a state version document that
+// SeedTofuState reads: the lineage and serial of the current state, and the
+// upload URL of a new state version.
+type seedStateAttributes struct {
+	Lineage   string `json:"lineage"`
+	Serial    int64  `json:"serial"`
+	UploadURL string `json:"hosted-state-upload-url"` //nolint:tagliatelle // The TFE wire name.
+}
+
+// seedStateData is the data member of a state version document.
+type seedStateData struct {
+	Attributes seedStateAttributes `json:"attributes"`
+}
+
+// seedStateDoc is a state version document of the TFE-compatible API.
+type seedStateDoc struct {
+	Data seedStateData `json:"data"`
+}
+
+// SeedTofuState writes a finalized state version with a greeting output for
+// the scenario workspace, as SeedResources does for Pulumi. It drives the
+// TFE-compatible routes as principal A: it locks the workspace, declares the
+// state version, uploads its content and unlocks. It chains the lineage and
+// serial after the current state when one exists, so later steps see an
 // unlocked workspace with state.
-func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) workspace.StateVersion {
+func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) {
 	tb.Helper()
 
-	ns, err := namespace.ParseName(Namespace)
-	if err != nil {
-		tb.Fatalf("parse namespace %q: %v", Namespace, err)
-	}
+	byID := "/api/v2/workspaces/" + e.WorkspaceID(ctx, tb)
 
-	name, err := workspace.ParseName(Workspace)
-	if err != nil {
-		tb.Fatalf("parse workspace %q: %v", Workspace, err)
-	}
-
-	ws, err := e.server.GetWorkspace(ctx, workspace.Ref{Namespace: ns, Name: name})
-	if err != nil {
-		tb.Fatalf("get workspace %s/%s: %v", Namespace, Workspace, err)
-	}
-
-	if _, lockErr := e.workspaces.Lock(ctx, ws.ID, seedHolder, "seed"); lockErr != nil {
-		tb.Fatalf("lock workspace for seed: %v", lockErr)
-	}
+	e.seedCall(ctx, tb, seedRequest{
+		method: http.MethodPost, path: byID + "/actions/lock",
+		body: `{"data":{"attributes":{"reason":"` + seedLockReason + `"}}}`, want: http.StatusOK, out: nil,
+	})
 
 	lineage, serial := seedStateLineage, int64(1)
 
-	current, currentErr := e.workspaces.Current(ctx, ws.ID)
+	current, err := e.TFEStatusHeaders(ctx, e.token, http.MethodGet, byID+"/current-state-version", "")
+	if err != nil {
+		tb.Fatalf("read current state version: %v", err)
+	}
 
-	switch {
-	case currentErr == nil:
-		lineage, serial = current.Lineage, current.Serial+1
-	case errors.Is(currentErr, workspace.ErrNoState):
+	switch current.Status {
+	case http.StatusOK:
+		var doc seedStateDoc
+		if decodeErr := json.Unmarshal([]byte(current.Body), &doc); decodeErr != nil {
+			tb.Fatalf("decode current state version: %v (%s)", decodeErr, current.Body)
+		}
+
+		lineage, serial = doc.Data.Attributes.Lineage, doc.Data.Attributes.Serial+1
+	case http.StatusNotFound:
 	default:
-		tb.Fatalf("current state: %v", currentErr)
+		tb.Fatalf("read current state version answers %d: %s", current.Status, current.Body)
 	}
 
 	content := seedStateDocument(lineage, serial)
 	sum := md5.Sum(content) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
 
-	pending, beginErr := e.workspaces.BeginState(ctx, ws.ID, seedHolder, workspace.NewState{
-		Lineage: lineage,
-		MD5:     hex.EncodeToString(sum[:]),
-		Outputs: []byte(seedStateOutputs),
-		Serial:  serial,
-		Force:   false,
-	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
-	if beginErr != nil {
-		tb.Fatalf("begin seed state: %v", beginErr)
+	var created seedStateDoc
+
+	e.seedCall(ctx, tb, seedRequest{
+		method: http.MethodPost, path: byID + "/state-versions",
+		body: `{"data":{"type":"state-versions","attributes":{"serial":` + strconv.FormatInt(serial, 10) +
+			`,"lineage":` + strconv.Quote(lineage) + `,"md5":"` + hex.EncodeToString(sum[:]) + `"}}}`,
+		want: http.StatusCreated, out: &created,
+	})
+
+	uploadPath, ok := strings.CutPrefix(created.Data.Attributes.UploadURL, e.URL)
+	if !ok {
+		tb.Fatalf("upload URL %q is not on the server %s", created.Data.Attributes.UploadURL, e.URL)
 	}
 
-	sv, uploadErr := e.workspaces.Upload(ctx, pending.Version.ID, pending.Upload, bytes.NewReader(content))
-	if uploadErr != nil {
-		tb.Fatalf("upload seed state: %v", uploadErr)
-	}
+	e.seedCall(ctx, tb, seedRequest{
+		method: http.MethodPut, path: uploadPath, body: string(content), want: http.StatusOK, out: nil,
+	})
 
-	if _, unlockErr := e.workspaces.Unlock(ctx, ws.ID, seedHolder); unlockErr != nil {
-		tb.Fatalf("unlock workspace after seed: %v", unlockErr)
-	}
-
-	return sv
+	e.seedCall(ctx, tb, seedRequest{
+		method: http.MethodPost, path: byID + "/actions/unlock", body: "", want: http.StatusOK, out: nil,
+	})
 }
 
 // CreateNamespace creates a namespace homed in the test region through the
@@ -869,21 +886,76 @@ func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {
 	e.createNamespaceThroughAPI(ctx, tb, name)
 }
 
-// ListInventory returns the inventory entries of ns, so scenarios can prove
-// a CLI step published its unit through a direct store call.
-func (e *Env) ListInventory(ctx context.Context, ns string) ([]inventory.Entry, error) {
-	name, err := namespace.ParseName(ns)
-	if err != nil {
-		return nil, fmt.Errorf("parse namespace %q: %w", ns, err)
+// CreateForeignNamespace stores a namespace homed in region, so a step can
+// prove what the server answers for a namespace that another region owns.
+// The installation API creates namespaces in the server's own region only,
+// so this is a direct store write. The binary server owns its database, so
+// the write runs while the binary is stopped, on a handle that is closed
+// before the binary starts again. The in-process server writes through its
+// own store.
+func (e *Env) CreateForeignNamespace(ctx context.Context, tb testing.TB, name, region string) {
+	tb.Helper()
+
+	ns := namespace.Namespace{
+		CreatedAt:       time.Now(),
+		Name:            namespace.Name(name),
+		HomeRegion:      namespace.Region(region),
+		FailoverVersion: 1,
+		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
-	entries, err := e.server.ListUnits(ctx, name)
+	if e.binPath == "" {
+		if err := e.inprocess.CreateNamespace(ctx, ns); err != nil {
+			tb.Fatalf("create namespace %q homed in %q: %v", name, region, err)
+		}
+
+		return
+	}
+
+	e.StopServer(ctx, tb)
+	e.writeStopped(ctx, tb, func(st namespace.Store) error { return st.CreateNamespace(ctx, ns) })
+	e.StartServer(ctx, tb)
+}
+
+// InventoryUnit is one unit of the inventory API list: the tool label
+// ("Pulumi" or "OpenTofu"), the unit reference with the lowercase tool code,
+// the namespace and the tool's own name of the unit.
+type InventoryUnit struct {
+	Tool      string `json:"tool"`
+	Reference string `json:"reference"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
+
+// inventoryUnitList is the document of GET /api/inventory/units.
+type inventoryUnitList struct {
+	Units []InventoryUnit `json:"units"`
+}
+
+// ListInventory returns the inventory units of ns through the inventory API
+// as principal A, so scenarios can prove a CLI step published its unit.
+func (e *Env) ListInventory(ctx context.Context, ns string) ([]InventoryUnit, error) {
+	path := "/api/inventory/units?organization=" + url.QueryEscape(ns)
+
+	status, body, err := e.APIStatus(ctx, http.MethodGet, path, "")
 	if err != nil {
 		return nil, fmt.Errorf("list inventory of %q: %w", ns, err)
 	}
 
-	return entries, nil
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("%w: GET %s answers %d: %s", errInventoryList, path, status, body)
+	}
+
+	var doc inventoryUnitList
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return nil, fmt.Errorf("decode inventory of %q: %w", ns, err)
+	}
+
+	return doc.Units, nil
 }
+
+// errInventoryList reports an inventory list that did not answer 200.
+var errInventoryList = errors.New("inventory list failed")
 
 // Steps returns the scenario steps run so far.
 func (e *Env) Steps() []StepResult {
@@ -2119,12 +2191,46 @@ func (e *Env) apiCall(ctx context.Context, tb testing.TB, req apiRequest) {
 	}
 }
 
+// seedRequest is one TFE API request of SeedTofuState as principal A: the
+// method, the path, the body ("" sends none), the status it must answer and
+// the document to decode the answer into (nil decodes nothing).
+type seedRequest struct {
+	method string
+	path   string
+	body   string
+	want   int
+	out    any
+}
+
+// seedCall sends one seed request and fails the test when the status differs
+// from req.want.
+func (e *Env) seedCall(ctx context.Context, tb testing.TB, req seedRequest) {
+	tb.Helper()
+
+	resp, err := e.TFEStatusHeaders(ctx, e.token, req.method, req.path, req.body)
+	if err != nil {
+		tb.Fatalf("seed %s %s: %v", req.method, req.path, err)
+	}
+
+	if resp.Status != req.want {
+		tb.Fatalf("seed %s %s answers %d, want %d: %s", req.method, req.path, resp.Status, req.want, resp.Body)
+	}
+
+	if req.out == nil {
+		return
+	}
+
+	if err := json.Unmarshal([]byte(resp.Body), req.out); err != nil {
+		tb.Fatalf("decode seed %s %s: %v (%s)", req.method, req.path, err, resp.Body)
+	}
+}
+
 // writeTofuFiles writes main.tf, a CLI configuration holding the token of
 // principal A, another holding the token of B, and the server certificate.
 func (e *Env) writeTofuFiles(tb testing.TB, ts *httptest.Server) {
 	tb.Helper()
 
-	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Headers: nil, Bytes: ts.Certificate().Raw})
+	cert := pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Headers: nil, Bytes: ts.Certificate().Raw})
 	e.write(tb, filepath.Join(e.home, "server.pem"), string(cert))
 	e.write(tb, filepath.Join(e.home, "tofurc"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.token))
 	e.write(tb, filepath.Join(e.home, "tofurc-b"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.tokenB))

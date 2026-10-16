@@ -40,9 +40,17 @@ func seedRealPrincipal(t *testing.T, st *sqlite.Store, subject, role string, obj
 	at := time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC)
 
 	prn := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
-		DisabledAt: time.Time{},
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		ID:          "prn-" + subject,
+		Subject:     subject,
+		DisplayName: "",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
+		DisabledAt:  time.Time{},
 	}
 	if err := st.CreatePrincipal(t.Context(), prn, storetest.ServerChange(at, "principal:"+prn.ID)); err != nil {
 		t.Fatalf("seed principal %s: %v", subject, err)
@@ -58,7 +66,7 @@ func seedRealPrincipal(t *testing.T, st *sqlite.Store, subject, role string, obj
 	}
 
 	fence, e := storetest.GrantWrite(t, st, obj, at, "grant:"+grt.ID)
-	if err := st.CreateGrant(t.Context(), grt, fence, e); err != nil {
+	if err := st.CreateGrant(t.Context(), grt, fence, e, nil); err != nil {
 		t.Fatalf("seed grant %s: %v", subject, err)
 	}
 }
@@ -106,8 +114,10 @@ func TestServerScopeWithBuiltInRoles(t *testing.T) {
 	handler, err := apitaudit.NewHandler(apitaudit.Config{
 		Namespaces:    namespaces,
 		Entries:       st,
+		EntryReader:   st,
 		Authenticator: realTokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {

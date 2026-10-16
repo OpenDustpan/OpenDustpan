@@ -6,6 +6,8 @@ const (
 	portColName         = "name"
 	portColNameKey      = "name_key"
 	portColCreatedAtMs  = "created_at_ms"
+	portColDisplayName  = "display_name"
+	portColProviderID   = "provider_id"
 	portColCreatedBy    = "created_by"
 	portColNamespace    = "namespace"
 	portColVersion      = "version"
@@ -29,6 +31,7 @@ const (
 	portColUnitID       = "unit_id"
 	portColPrincipalID  = "principal_id"
 	portColDigest       = "digest"
+	portColSink         = "sink"
 	portColExpiresAtMs  = "expires_at_ms"
 )
 
@@ -163,6 +166,18 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
+			Table:   "update_journal_refusals",
+			OrderBy: []string{portColStackID, portColUpdateID, portColArrival},
+			Columns: []Column{
+				{Name: portColStackID, Kind: KindText},
+				{Name: portColUpdateID, Kind: KindText},
+				{Name: portColArrival, Kind: KindInteger},
+				{Name: "sequence_ids", Kind: KindText},
+				{Name: "status", Kind: KindInteger},
+				{Name: "reason", Kind: KindText},
+			},
+		},
+		{
 			Table:   "secret_keys",
 			OrderBy: []string{portColNamespace, portColStackID},
 			Columns: []Column{
@@ -181,7 +196,7 @@ func portableSpec() []PortableTable {
 				{Name: portColTool, Kind: KindText},
 				{Name: portColName, Kind: KindText},
 				{Name: portColUnitID, Kind: KindText},
-				{Name: "display_name", Kind: KindText},
+				{Name: portColDisplayName, Kind: KindText},
 				{Name: "last_changed_ms", Kind: KindTime},
 				{Name: portColStatus, Kind: KindText},
 				{Name: "resource_count", Kind: KindInteger},
@@ -306,15 +321,16 @@ func portableSpec() []PortableTable {
 				{Name: "value_count", Kind: KindInteger},
 				{Name: "changes", Kind: KindText},
 				{Name: "object_id", Kind: KindText},
+				{Name: "fence_version", Kind: KindInteger},
 			},
 		},
 		{
-			Table:   "principals",
+			Table:   TablePrincipals,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
 				{Name: portColSubject, Kind: KindText},
-				{Name: "display_name", Kind: KindText},
+				{Name: portColDisplayName, Kind: KindText},
 				{Name: portColKind, Kind: KindText},
 				{Name: portColSource, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
@@ -324,10 +340,11 @@ func portableSpec() []PortableTable {
 				{Name: "last_active_at_ms", Kind: KindTime},
 				{Name: "last_sign_in_at_ms", Kind: KindTime},
 				{Name: "namespace", Kind: KindText},
+				{Name: "break_glass", Kind: KindBool},
 			},
 		},
 		{
-			Table:   "principal_groups",
+			Table:   TablePrincipalGroups,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -341,17 +358,22 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "group_members",
+			Table:   TableGroupMembers,
 			OrderBy: []string{"group_id", portColPrincipalID, "added_at_ms"},
 			Columns: []Column{
 				{Name: "group_id", Kind: KindText},
 				{Name: portColPrincipalID, Kind: KindText},
 				{Name: "added_at_ms", Kind: KindTime},
 				{Name: "removed_at_ms", Kind: KindTime},
+				{Name: portColSource, Kind: KindText},
+				{Name: "source_id", Kind: KindText},
+				{Name: portColState, Kind: KindText},
+				{Name: "suspended_at_ms", Kind: KindTime},
+				{Name: "pinned", Kind: KindBool},
 			},
 		},
 		{
-			Table:   "temp_admins",
+			Table:   TableTempAdmins,
 			OrderBy: []string{portColPrincipalID},
 			Columns: []Column{
 				{Name: portColPrincipalID, Kind: KindText},
@@ -362,7 +384,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "access_tokens",
+			Table:   TableAccessTokens,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -380,7 +402,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "sessions",
+			Table:   TableSessions,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -397,7 +419,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "sign_in_requests",
+			Table:   TableSignInRequests,
 			OrderBy: []string{portColDigest},
 			Columns: []Column{
 				{Name: portColDigest, Kind: KindText},
@@ -407,10 +429,47 @@ func portableSpec() []PortableTable {
 				{Name: "return_path", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
 				{Name: portColExpiresAtMs, Kind: KindTime},
+				{Name: "max_age_ms", Kind: KindInteger},
 			},
 		},
 		{
-			Table:   "roles",
+			Table:   TableOIDCProviders,
+			OrderBy: []string{portColProviderID},
+			Columns: []Column{
+				{Name: portColProviderID, Kind: KindText},
+				{Name: "issuer", Kind: KindText},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   TableInstallationSecretKeys,
+			OrderBy: []string{"scope_id"},
+			Columns: []Column{
+				{Name: "scope_id", Kind: KindText},
+				{Name: "wrapper_id", Kind: KindText},
+				{Name: "ciphertext", Kind: KindBytes},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   TableSignInProviders,
+			OrderBy: []string{portColProviderID},
+			Columns: []Column{
+				{Name: portColProviderID, Kind: KindText},
+				{Name: "issuer", Kind: KindText},
+				{Name: portColDisplayName, Kind: KindText},
+				{Name: "client_id", Kind: KindText},
+				{Name: "client_secret", Kind: KindBytes},
+				{Name: "scopes", Kind: KindText},
+				{Name: "auto_create", Kind: KindBool},
+				{Name: "enabled", Kind: KindBool},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: "updated_at_ms", Kind: KindTime},
+				{Name: "version", Kind: KindInteger},
+			},
+		},
+		{
+			Table:   TableRoles,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -424,7 +483,7 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "grants",
+			Table:   TableGrants,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
@@ -445,16 +504,25 @@ func portableSpec() []PortableTable {
 		},
 		{
 			Table:   "audit_sink_cursors",
-			OrderBy: []string{"sink", portColNamespace},
+			OrderBy: []string{portColSink, portColNamespace},
 			Columns: []Column{
-				{Name: "sink", Kind: KindText},
+				{Name: portColSink, Kind: KindText},
 				{Name: portColNamespace, Kind: KindText},
 				{Name: portColSequence, Kind: KindInteger},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
 			},
 		},
 		{
-			Table:   "access_token_policy",
+			Table:   "audit_sink_leases",
+			OrderBy: []string{portColSink},
+			Columns: []Column{
+				{Name: portColSink, Kind: KindText},
+				{Name: "holder", Kind: KindText},
+				{Name: portColExpiresAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   TableAccessTokenPolicy,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindInteger},
@@ -467,13 +535,14 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "session_policy",
+			Table:   TableSessionPolicy,
 			OrderBy: []string{"id"},
 			Columns: []Column{
 				{Name: "id", Kind: KindInteger},
 				{Name: "idle_ms", Kind: KindInteger},
 				{Name: "max_length_ms", Kind: KindInteger},
 				{Name: portColUpdatedAtMs, Kind: KindTime},
+				{Name: "token_freshness_ms", Kind: KindInteger},
 			},
 		},
 		{

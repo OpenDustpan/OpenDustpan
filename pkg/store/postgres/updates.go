@@ -169,6 +169,10 @@ func (s *Store) SaveUpdate(ctx context.Context, u stack.Update, fence namespace.
 			return saveErr
 		}
 
+		if journalErr := finishJournalEnd(ctx, q, locked.ID, u); journalErr != nil {
+			return journalErr
+		}
+
 		if !u.Mutates() || !u.Status.Terminal() || u.Version == 0 {
 			return nil
 		}
@@ -231,6 +235,18 @@ func (s *Store) ActiveUpdate(ctx context.Context, ref stack.Ref) (stack.Update, 
 	}, ref)
 }
 
+// CountRunningJournaledUpdates returns the count of updates that run now
+// with journal version 1 or higher. The upgrade check answers it, so the
+// report can warn before a downgrade to a binary without the journal route.
+func (s *Store) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	count, err := s.queries.CountRunningJournaledUpdates(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("count running journaled updates: %w", err)
+	}
+
+	return count, nil
+}
+
 // ListUpdates implements stack.UpdateStore.
 func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page) ([]stack.Update, error) {
 	stackID, err := s.stackID(ctx, ref)
@@ -277,12 +293,11 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 	return codec.FromUpdateRows(converted, ref)
 }
 
-// PutCheckpoint implements stack.CheckpointStore. A row with a blob key keeps
-// the key with the size, the digest and the sequence, and no content; a row
-// without a key keeps the content as given. Each write of the running update
-// overwrites the row of that update. The row stores a NULL resource count, so
-// the save path never scans the deployment; the delete guard counts the
-// latest deployment when it needs the count.
+// PutCheckpoint implements stack.CheckpointStore. The row keeps the blob key
+// with the size, the digest and the sequence, and no content. A checkpoint
+// without a blob key returns stack.ErrCheckpointNoKey. Each write of the
+// running update overwrites the row of that update. The row stores no
+// resource count, so the save path never scans the deployment.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
 		stackID, err := stackIDFor(ctx, q, cp.Ref)
@@ -332,20 +347,11 @@ func writeCheckpoint(
 		Digest:        row.Digest,
 		Invalid:       row.Invalid,
 		Features:      row.Features,
-		Deployment:    row.Deployment,
 		SavedAtMs:     row.SavedAtMs,
-		// The row stores no resource count, so the save path never scans
-		// the deployment; the delete guard counts the latest deployment
-		// when it needs the count.
-		ResourceCount: pgtype.Int8{Int64: 0, Valid: false},
-		BlobKey:       pgtype.Text{String: row.BlobKey, Valid: row.BlobKey != ""},
-		// Size is always stored: rows from before blobs hold the content
-		// length, so history needs no fallback for new rows, while reads
-		// still fall back to the content length for old NULL rows. Only the
-		// blob columns stay NULL without a key.
-		Size:     pgtype.Int8{Int64: row.Size, Valid: true},
-		BlobSize: pgtype.Int8{Int64: row.BlobSize, Valid: row.BlobKey != ""},
-		BlobMd5:  row.BlobMD5,
+		BlobKey:       pgtype.Text{String: row.BlobKey, Valid: true},
+		Size:          pgtype.Int8{Int64: row.Size, Valid: true},
+		BlobSize:      pgtype.Int8{Int64: row.BlobSize, Valid: true},
+		BlobMd5:       row.BlobMD5,
 	})
 	if putErr != nil {
 		return fmt.Errorf("upsert checkpoint: %w", putErr)
@@ -381,21 +387,14 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		LeaseDigest:   row.LeaseDigest,
 		Digest:        row.Digest,
 		Features:      row.Features,
-		Deployment:    row.Deployment,
 		SchemaVersion: row.SchemaVersion,
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
-		// The domain checkpoint holds no count; the delete guard reads the
-		// stored count itself and counts the latest deployment when it is
-		// NULL.
-		// A NULL key predates blobs; the row keeps content instead. A NULL
-		// size reads as 0 here; history falls back to the content length in
-		// SQL itself.
-		BlobKey:  row.BlobKey.String,
-		Size:     row.Size.Int64,
-		BlobSize: row.BlobSize.Int64,
-		BlobMD5:  row.BlobMd5,
+		BlobKey:       row.BlobKey.String,
+		Size:          row.Size.Int64,
+		BlobSize:      row.BlobSize.Int64,
+		BlobMD5:       row.BlobMd5,
 	}, ref)
 }
 
@@ -430,21 +429,14 @@ func (s *Store) CheckpointByVersion(
 		LeaseDigest:   row.LeaseDigest,
 		Digest:        row.Digest,
 		Features:      row.Features,
-		Deployment:    row.Deployment,
 		SchemaVersion: row.SchemaVersion,
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
-		// The domain checkpoint holds no count; the delete guard reads the
-		// stored count itself and counts the latest deployment when it is
-		// NULL.
-		// A NULL key predates blobs; the row keeps content instead. A NULL
-		// size reads as 0 here; history falls back to the content length in
-		// SQL itself.
-		BlobKey:  row.BlobKey.String,
-		Size:     row.Size.Int64,
-		BlobSize: row.BlobSize.Int64,
-		BlobMD5:  row.BlobMd5,
+		BlobKey:       row.BlobKey.String,
+		Size:          row.Size.Int64,
+		BlobSize:      row.BlobSize.Int64,
+		BlobMD5:       row.BlobMd5,
 	}, ref)
 }
 
@@ -479,7 +471,6 @@ func (s *Store) CheckpointByUpdate(
 		LeaseDigest:   row.LeaseDigest,
 		Digest:        row.Digest,
 		Features:      row.Features,
-		Deployment:    row.Deployment,
 		SchemaVersion: row.SchemaVersion,
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,

@@ -24,7 +24,7 @@ func (memberStore) GetPrincipal(_ context.Context, id string) (principal.Princip
 	return principal.Principal{
 		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), DisabledAt: time.Time{}, ID: id,
 		Subject: "ci-acme", DisplayName: "", Kind: principal.KindService, Source: principal.SourceLocal,
-		Namespace: "acme", GroupCount: 0,
+		Namespace: "acme", GroupCount: 0, BreakGlass: false,
 	}, nil
 }
 
@@ -32,6 +32,62 @@ func (s memberStore) AddMember(context.Context, principal.Membership, audit.Entr
 	*s.added++
 
 	return nil
+}
+
+// captureMemberStore is a fake store that knows one person of the
+// installation and records the entry of its membership add.
+type captureMemberStore struct {
+	principal.Store
+
+	captured *audit.Entry
+}
+
+func (captureMemberStore) GetPrincipal(_ context.Context, id string) (principal.Principal, error) {
+	return principal.Principal{
+		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), DisabledAt: time.Time{}, ID: id,
+		Subject: "alice", DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal,
+		Namespace: "", GroupCount: 0, BreakGlass: false,
+	}, nil
+}
+
+func (s captureMemberStore) AddMember(_ context.Context, _ principal.Membership, e audit.Entry) error {
+	*s.captured = e
+
+	return nil
+}
+
+// TestAddMemberRecordsMembershipFields proves that the entry of a membership
+// add names the source, source ID, state and pinned values.
+func TestAddMemberRecordsMembershipFields(t *testing.T) {
+	t.Parallel()
+
+	var captured audit.Entry
+
+	svc, err := principal.NewService(principal.Config{
+		Store: captureMemberStore{Store: nil, captured: &captured}, Guard: nil, Namespaces: nil, Tokens: nil,
+		Now: nil, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	caller := identity.Principal{
+		Subject: "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+	}
+
+	if _, err := svc.AddMember(t.Context(), testEntry(), caller, "grp-1", "prn-1"); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+
+	changes := make(map[string]string, len(captured.Changes))
+	for _, c := range captured.Changes {
+		changes[c.Key] = c.New
+	}
+
+	if changes["source"] != "local" || changes["sourceID"] != "" ||
+		changes["state"] != "active" || changes["pinned"] != "false" {
+		t.Fatalf("changes = %+v, want source local, empty source ID, state active and pinned false", captured.Changes)
+	}
 }
 
 // TestAddMemberRefusesNamespacePrincipal proves that the Service refuses a
@@ -43,7 +99,7 @@ func TestAddMemberRefusesNamespacePrincipal(t *testing.T) {
 	added := 0
 
 	svc, err := principal.NewService(principal.Config{
-		Store: memberStore{Store: nil, added: &added}, Guard: nil, Namespaces: nil, Now: nil, NewID: nil,
+		Store: memberStore{Store: nil, added: &added}, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

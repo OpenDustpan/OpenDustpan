@@ -66,6 +66,7 @@ var Tables = []string{
 	"update_events",
 	"update_journal",
 	"update_journal_sequences",
+	"update_journal_refusals",
 	"secret_keys",
 	"inventory",
 	"inventory_deleted",
@@ -75,18 +76,22 @@ var Tables = []string{
 	"workspaces",
 	"state_versions",
 	"audit_entries",
-	"principals",
-	"principal_groups",
-	"group_members",
-	"temp_admins",
-	"access_tokens",
-	"sessions",
-	"sign_in_requests",
-	"roles",
-	"grants",
+	TablePrincipals,
+	TablePrincipalGroups,
+	TableGroupMembers,
+	TableTempAdmins,
+	TableAccessTokens,
+	TableSessions,
+	TableSignInRequests,
+	TableOIDCProviders,
+	TableInstallationSecretKeys,
+	TableSignInProviders,
+	TableRoles,
+	TableGrants,
 	"audit_sink_cursors",
-	"access_token_policy",
-	"session_policy",
+	"audit_sink_leases",
+	TableAccessTokenPolicy,
+	TableSessionPolicy,
 	"backups",
 	"restores",
 	"installation",
@@ -180,6 +185,17 @@ type Summary struct {
 	SchemaVersion int
 }
 
+// RestoredRunningText is the error text of a backup row that a restore
+// brought back as running: the backup was running when it took the
+// snapshot that the restore applied, so no process runs it here.
+const RestoredRunningText = "the backup was running in the restored data"
+
+// RestoredRunningRestoreText is the error text of a restore row that a
+// restore brought back as checking or applying: a restore takes a backup of
+// the live data before it applies, and that backup holds the restore row as
+// running, so no process runs it here.
+const RestoredRunningRestoreText = "the restore was running in the restored data"
+
 // Sentinel errors returned by this package and by its ports.
 var (
 	// ErrNotFound reports that a backup row does not exist.
@@ -206,7 +222,9 @@ var (
 // not one namespace. A server that starts marks every running row failed.
 type Registry interface {
 	// CreateBackup stores r as a running backup. It returns ErrAlreadyExists
-	// if the ID is taken.
+	// if the ID is taken, and ErrAlreadyRunning when another backup of the
+	// installation is running: one backup runs at a time, across every
+	// instance on the database.
 	CreateBackup(ctx context.Context, r Record) error
 	// FinishBackup moves the running backup id to state, which is
 	// StateSucceeded or StateFailed, with the error text and the end time.

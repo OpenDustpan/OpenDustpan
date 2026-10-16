@@ -45,6 +45,22 @@ func TestConformance(t *testing.T) {
 	})
 }
 
+// TestSharedConformance runs the two-handle suite: both handles open one
+// file, as two processes open one database.
+func TestSharedConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunShared(t, func(t *testing.T) (storetest.Store, storetest.Store) {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
+
+		return openPath(t, path), openPath(t, path)
+	})
+}
+
 // TestAccessConformance runs the role and grant store suite.
 func TestAccessConformance(t *testing.T) {
 	t.Parallel()
@@ -53,6 +69,21 @@ func TestAccessConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t)
+	})
+}
+
+// TestAccessConcurrency runs the cases of a grant or role check that races
+// a write on a second handle of the same database file.
+func TestAccessConcurrency(t *testing.T) {
+	t.Parallel()
+
+	accesstest.RunConcurrent(t, func(t *testing.T) (access.Store, access.Store) {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+		copyTemplate(t, path)
+
+		return openPath(t, path), openPath(t, path)
 	})
 }
 
@@ -131,18 +162,7 @@ func TestAuditFeedConformance(t *testing.T) {
 	audittest.RunFeed(t, func(t *testing.T) audittest.FeedStore {
 		t.Helper()
 
-		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		t.Cleanup(func() {
-			if err := s.Close(); err != nil {
-				t.Errorf("close store: %v", err)
-			}
-		})
-
-		return s
+		return open(t)
 	})
 }
 
@@ -157,6 +177,8 @@ func TestAuditConformance(t *testing.T) {
 		t.Helper()
 
 		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
 
 		s, err := sqlite.Open(t.Context(), path)
 		if err != nil {
@@ -181,15 +203,109 @@ func TestAuditConformance(t *testing.T) {
 	})
 }
 
+// TestAuditEntryReaderConformance runs the audit.EntryReader cases: one
+// entry at a sequence and the last entry of a scope.
+func TestAuditEntryReaderConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.RunEntryReader(t, func(t *testing.T) audittest.EntryStore {
+		t.Helper()
+
+		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return s
+	})
+}
+
+// TestAuditChainConformance runs the chain switch cases: entries without a
+// hash, runs of chained entries, and the recorded chain state.
+func TestAuditChainConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.RunChain(t, func(t *testing.T) audittest.ChainTestStore {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return audittest.ChainTestStore{
+			Store: s,
+			TamperEntry: func(t *testing.T, ns namespace.Name, seq int64, field, value string) {
+				t.Helper()
+
+				change := auditFieldChange{field: field, value: value}
+				if err := tamperAuditEntry(t.Context(), path, ns, seq, change); err != nil {
+					t.Fatalf("change entry %d: %v", seq, err)
+				}
+			},
+			Reopen: func(t *testing.T) audittest.ChainStore {
+				t.Helper()
+
+				second, err := sqlite.Open(t.Context(), path)
+				if err != nil {
+					t.Fatalf("reopen store: %v", err)
+				}
+
+				t.Cleanup(func() {
+					if err := second.Close(); err != nil {
+						t.Errorf("close store: %v", err)
+					}
+				})
+
+				return second
+			},
+		}
+	})
+}
+
 // errUnknownAuditField reports a tamper hook field outside the whitelist.
 var errUnknownAuditField = errors.New("unknown audit field")
 
 // tamperAuditColumn maps a tamper hook field to its column. The column
 // equals the field; the switch keeps the field name out of SQL unless it
-// names one of the six whitelisted columns.
+// names one of the whitelisted columns.
 func tamperAuditColumn(field string) (string, bool) {
 	switch field {
-	case "subject", "action", "object", "outcome", "kind", "changes":
+	case "subject",
+		"action",
+		"object",
+		"outcome",
+		"kind",
+		"hash",
+		"prev_hash",
+		"at_ms",
+		"sequence",
+		"changes",
+		"fence_version",
+		"value_path",
+		"value_count",
+		"object_id",
+		"idp_subject",
+		"token_id",
+		"version",
+		"source_ip",
+		"user_agent",
+		"channel",
+		"request_id":
 		return field, true
 	default:
 		return "", false
@@ -272,7 +388,11 @@ func TestSchemaConformance(t *testing.T) {
 func TestPingClosed(t *testing.T) {
 	t.Parallel()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -306,6 +426,8 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, openErr := sqlite.Open(t.Context(), path)
 	if openErr != nil {
@@ -353,10 +475,77 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 	}
 }
 
+// TestMissingStateRowIsUnavailable deletes the seeded installation row and
+// proves that GetState and SetState answer ErrUnavailable, and that
+// SetState does not create the row again: the migration seeds the row, so a
+// missing row is a server fault.
+func TestMissingStateRowIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s, openErr := sqlite.Open(t.Context(), path)
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	conn, connErr := openRawDB(path)
+	if connErr != nil {
+		t.Fatalf("open raw database: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	ctx := t.Context()
+
+	if _, execErr := conn.ExecContext(ctx, `DELETE FROM installation`); execErr != nil {
+		t.Fatalf("delete installation row: %v", execErr)
+	}
+
+	if _, err := s.GetState(ctx); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("get installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	if err := s.SetState(ctx, maintenance.StateMaintenance); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("set installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	var rows int64
+	if scanErr := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM installation`).Scan(&rows); scanErr != nil {
+		t.Fatalf("count installation rows: %v", scanErr)
+	}
+
+	if rows != 0 {
+		t.Fatalf("installation rows after the writes = %d, want 0", rows)
+	}
+}
+
 func TestSecretsConformance(t *testing.T) {
 	t.Parallel()
 
 	secrettest.Run(t, func(t *testing.T) secrettest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+func TestInstallationSecretsConformance(t *testing.T) {
+	t.Parallel()
+
+	secrettest.RunInstallation(t, func(t *testing.T) secrettest.InstallationStore {
 		t.Helper()
 
 		return open(t)
@@ -369,7 +558,7 @@ func TestUpdatesConformance(t *testing.T) {
 	storetest.RunUpdates(t, func(t *testing.T) storetest.UpdatesStore {
 		t.Helper()
 
-		return openUncounted(t)
+		return openSQLUpdates(t)
 	})
 
 	// History fields of ADR 28 decision 4: creator, restore source and
@@ -470,11 +659,14 @@ var (
 	_ storetest.StagingWitness = (*backupStore)(nil)
 )
 
-// openBackup returns a fresh backup-capable store in a temporary directory.
+// openBackup returns a fresh backup-capable store in a temporary directory,
+// copied from the migrated template.
 func openBackup(t *testing.T) storetest.BackupStore { //nolint:ireturn // Factory signature returns the interface.
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -673,45 +865,39 @@ func checkUsableWorkspace(t *testing.T, s *sqlite.Store, ns namespace.Namespace,
 	}
 }
 
-// open returns a fresh store in a temporary directory.
+// open returns a fresh store in a temporary directory, copied from the
+// migrated template so only the first test of the binary runs every
+// migration.
 func open(t *testing.T) *sqlite.Store {
 	t.Helper()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("close store: %v", err)
-		}
-	})
-
-	return s
+	return openTemplated(t)
 }
 
-// uncountedStore wraps a Store with its path so the uncounted-checkpoint
-// case sets the stored count to NULL with a direct SQL update: the port
-// always writes the count, so only SQL seeds rows from before the column.
-type uncountedStore struct {
+// sqlUpdatesStore wraps a Store with its path, so a case can change its rows
+// with direct SQL, as the audit case does to break audit appends.
+type sqlUpdatesStore struct {
 	storetest.UpdatesStore
 
 	path string
 }
 
 var (
-	_ storetest.CountNullifier = (*uncountedStore)(nil)
-	_ storetest.CountSetter    = (*uncountedStore)(nil)
-	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
+	_ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
+	_ storetest.KeyEraser    = (*sqlUpdatesStore)(nil)
 )
 
-// openUncounted returns a fresh store in a temporary directory that the
-// uncounted-checkpoint case can NULL through SQL.
-func openUncounted(t *testing.T) *uncountedStore {
+// errNoJournalCount reports a wrapped store without the journaled count.
+var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
+
+// openSQLUpdates returns a fresh store in a temporary directory that a case
+// can change through SQL, copied from the migrated template.
+func openSQLUpdates(t *testing.T) *sqlUpdatesStore {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -724,58 +910,35 @@ func openUncounted(t *testing.T) *uncountedStore {
 		}
 	})
 
-	return &uncountedStore{UpdatesStore: s, path: path}
+	return &sqlUpdatesStore{UpdatesStore: s, path: path}
 }
 
-// NullifyResourceCount implements storetest.CountNullifier.
-func (s *uncountedStore) NullifyResourceCount(ctx context.Context) (err error) {
-	conn, err := openRawDB(s.path)
+// CountRunningJournaledUpdates forwards to the wrapped store, whose method
+// the embedded UpdatesStore interface hides.
+func (s *sqlUpdatesStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	counter, ok := s.UpdatesStore.(interface {
+		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("count running journaled updates: %w", errNoJournalCount)
+	}
+
+	count, err := counter.CountRunningJournaledUpdates(ctx)
 	if err != nil {
-		return fmt.Errorf("open raw database: %w", err)
+		return 0, fmt.Errorf("count running journaled updates: %w", err)
 	}
 
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
-		}
-	}()
-
-	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = NULL`); err != nil {
-		return fmt.Errorf("nullify the checkpoint count: %w", err)
-	}
-
-	return nil
-}
-
-// SetResourceCount implements storetest.CountSetter: it plants a stored
-// count from before saves stopped counting.
-func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) (err error) {
-	conn, err := openRawDB(s.path)
-	if err != nil {
-		return fmt.Errorf("open raw database: %w", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
-		}
-	}()
-
-	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = ?`, count); err != nil {
-		return fmt.Errorf("set the checkpoint count: %w", err)
-	}
-
-	return nil
+	return count, nil
 }
 
 // List forwards to the audit list of the wrapped store, which the embedded
 // interface hides, so the delete case can read the entry of a delete.
 // Inner implements storetest.Wrapper.
-func (s *uncountedStore) Inner() any {
+func (s *sqlUpdatesStore) Inner() any {
 	return s.UpdatesStore
 }
 
-func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
+func (s *sqlUpdatesStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
 		return audit.Listing{}, errNoAuditList
@@ -793,8 +956,28 @@ func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit
 var errNoAuditList = errors.New("wrapped store lists no audit entries")
 
 // BreakAuditAppends implements storetest.AuditBreaker.
-func (s *uncountedStore) BreakAuditAppends(ctx context.Context) error {
+func (s *sqlUpdatesStore) BreakAuditAppends(ctx context.Context) error {
 	return breakAuditAppends(ctx, s.path)
+}
+
+// EraseCheckpointKeys implements storetest.KeyEraser.
+func (s *sqlUpdatesStore) EraseCheckpointKeys(ctx context.Context) (err error) {
+	conn, err := openRawDB(s.path)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
+		}
+	}()
+
+	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET blob_key = NULL`); err != nil {
+		return fmt.Errorf("erase the checkpoint keys: %w", err)
+	}
+
+	return nil
 }
 
 // auditedWorkspaces is a store for the workspace suite that can break its
@@ -814,11 +997,13 @@ func (s *auditedWorkspaces) BreakAuditAppends(ctx context.Context) error {
 }
 
 // openAuditedWorkspaces returns a fresh store in a temporary directory whose
-// audit appends the suite can break.
+// audit appends the suite can break, copied from the migrated template.
 func openAuditedWorkspaces(t *testing.T) *auditedWorkspaces {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -995,7 +1180,6 @@ func TestMigration0005KeepsHistory(t *testing.T) {
 	checkMigratedStack(t, s, ref)
 	checkMigratedUpdate(t, s, ref)
 	checkMigratedHistory(t, s, ref)
-	checkMigratedCheckpoint(t, s, ref)
 	checkMigratedEvents(t, s, ref)
 }
 
@@ -1035,19 +1219,6 @@ func checkMigratedHistory(t *testing.T, s *sqlite.Store, ref stack.Ref) {
 
 	if len(history) != 1 || history[0].ID != "u1" {
 		t.Fatalf("migrated history = %+v, want one update u1", history)
-	}
-}
-
-func checkMigratedCheckpoint(t *testing.T, s *sqlite.Store, ref stack.Ref) {
-	t.Helper()
-
-	cp, err := s.LatestCheckpoint(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("latest checkpoint: %v", err)
-	}
-
-	if string(cp.Deployment) != "{}" || cp.Update != "u1" {
-		t.Fatalf("migrated checkpoint = deployment %q update %q, want {} u1", cp.Deployment, cp.Update)
 	}
 }
 
@@ -1330,173 +1501,6 @@ func seedAt0006WithTags(t *testing.T, path string) {
 	}
 }
 
-func TestMigration0006KeepsOneRowData(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-
-	seedAt0005WithOneRow(t, path)
-
-	s, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	ref, err := stack.ParseRef("acme", "web", "prod")
-	if err != nil {
-		t.Fatalf("parse ref: %v", err)
-	}
-
-	cp, err := s.LatestCheckpoint(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("latest checkpoint: %v", err)
-	}
-
-	if string(cp.Deployment) != `{"v":1}` || cp.Update != "u1" {
-		t.Fatalf("migrated checkpoint = deployment %q update %q, want {\"v\":1} u1", cp.Deployment, cp.Update)
-	}
-
-	byVersion, err := s.CheckpointByVersion(t.Context(), ref, 1)
-	if err != nil {
-		t.Fatalf("checkpoint of version 1: %v", err)
-	}
-
-	if string(byVersion.Deployment) != `{"v":1}` || byVersion.Update != "u1" {
-		t.Fatalf(
-			"migrated checkpoint of version 1 = deployment %q update %q, want {\"v\":1} u1",
-			byVersion.Deployment,
-			byVersion.Update,
-		)
-	}
-
-	if _, err := s.CheckpointByVersion(t.Context(), ref, 2); !errors.Is(err, stack.ErrNoState) {
-		t.Fatalf("checkpoint of missing version 2: err = %v, want ErrNoState", err)
-	}
-}
-
-// seedAt0005WithOneRow creates a database at migration 0005 with a stack, one
-// finished update and its checkpoint: the one-row-per-stack layout.
-func seedAt0005WithOneRow(t *testing.T, path string) {
-	t.Helper()
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	applyMigrations0005(t, conn)
-	recordMigrations0005(t, conn)
-	seedOneRowNamespace(t, conn)
-	seedOneRowStack(t, conn)
-	seedOneRowUpdate(t, conn)
-	seedOneRowCheckpoint(t, conn)
-}
-
-func applyMigrations0005(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	for _, name := range []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql",
-	} {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		if _, execErr := conn.ExecContext(t.Context(), string(data)); execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-}
-
-func recordMigrations0005(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
-	) STRICT`
-
-	if _, err := conn.ExecContext(t.Context(), createMigrations); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql",
-	}
-
-	for i, name := range names {
-		if _, err := conn.ExecContext(t.Context(), record, i+1, name); err != nil {
-			t.Fatalf("record migration: %v", err)
-		}
-	}
-}
-
-func seedOneRowNamespace(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'eu-west', 1, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-}
-
-func seedOneRowStack(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO stacks (namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms)
-		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', '{}', 1, 0, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed stack: %v", err)
-	}
-}
-
-func seedOneRowUpdate(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO updates (stack_id, id, kind, dry_run, status, version, revision,
-		lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms)
-		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', 'update', 0, 'succeeded', 1, 3, X'', 0, 1000, 2000, 3000)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed update: %v", err)
-	}
-}
-
-func seedOneRowCheckpoint(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO checkpoints (stack_id, update_id, lease_digest, schema_version, sequence,
-		digest, invalid, features_json, deployment, saved_at_ms)
-		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', X'', 3, 0,
-		X'0000000000000000000000000000000000000000000000000000000000000000', 0, '[]', X'7b2276223a317d', 4000)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed checkpoint: %v", err)
-	}
-}
-
 // seedAt0003WithHistory creates a database at migration 0003 with a stack,
 // one update, its checkpoint and two events, all keyed by name.
 func seedAt0003WithHistory(t *testing.T, path string) {
@@ -1717,6 +1721,8 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -2100,40 +2106,24 @@ func TestMigration0012UpdateHistoryFields(t *testing.T) {
 }
 
 // checkMigratedUpdateDefaults checks every migrated update reads the column
-// defaults: no creator and no restore source. The checkpoint join still
-// reports the size of the saved deployment.
+// defaults: no creator and no restore source.
 func checkMigratedUpdateDefaults(t *testing.T, s *sqlite.Store, ref stack.Ref) {
 	t.Helper()
 
-	for _, want := range []struct {
-		id   stack.UpdateID
-		size int64
-	}{
-		{id: "u1", size: int64(len(`{"v":1}`))},
-		{id: "u2", size: 0},
-	} {
-		got, err := s.GetUpdate(t.Context(), ref, want.id)
+	for _, id := range []stack.UpdateID{"u1", "u2"} {
+		got, err := s.GetUpdate(t.Context(), ref, id)
 		if err != nil {
-			t.Fatalf("get update %s: %v", want.id, err)
+			t.Fatalf("get update %s: %v", id, err)
 		}
 
-		checkMigratedHistoryRow(t, got, want.size)
-	}
-}
-
-// checkMigratedHistoryRow checks one migrated update against its checkpoint size.
-func checkMigratedHistoryRow(t *testing.T, got stack.Update, size int64) {
-	t.Helper()
-
-	if got.CreatedBy != "" || got.RestoredFrom != 0 || got.CheckpointBytes != size {
-		t.Fatalf(
-			"migrated update %s = creator %q restore source %d size %d, want empty, 0 and %d",
-			got.ID,
-			got.CreatedBy,
-			got.RestoredFrom,
-			got.CheckpointBytes,
-			size,
-		)
+		if got.CreatedBy != "" || got.RestoredFrom != 0 {
+			t.Fatalf(
+				"migrated update %s = creator %q restore source %d, want empty and 0",
+				got.ID,
+				got.CreatedBy,
+				got.RestoredFrom,
+			)
+		}
 	}
 }
 

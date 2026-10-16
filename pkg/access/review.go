@@ -22,13 +22,18 @@ import (
 // The service fills Containers with the objects that hold the object of
 // the export, and ContainerRoles with the roles that give a data action or
 // an access-management action, so that an export answers who can access
-// its object, and who can give access to it.
+// its object, and who can give access to it. TokenNamespace is the
+// namespace whose grants count with TokenNamespaceRoles: the export of a
+// principal of a namespace lists the holders of the token action on its
+// namespace there. Empty means none.
 type ReviewScope struct {
-	Object         identity.Object
-	Namespace      string
-	Containers     []string
-	ContainerRoles []string
-	All            bool
+	Object              identity.Object
+	Namespace           string
+	Containers          []string
+	ContainerRoles      []string
+	TokenNamespace      string
+	TokenNamespaceRoles []string
+	All                 bool
 }
 
 // ReviewKey is the position of a row in the order of an export: the time of
@@ -96,11 +101,13 @@ type CallerGrantsQuery struct {
 // LastAccessTracked is true on a row of a principal: on a grant whose
 // subject is a principal, or on a row read through a group, for the member
 // in Via. LastAccessAt is the latest last-use time over every access token
-// of that principal, and nil when no token of the principal was ever used.
+// and every console session of that principal, and nil when the principal
+// never used a token or a session.
 type ReviewRow struct {
 	RevokedAt *time.Time
-	// LastAccessAt is the latest last-use time of the access tokens of the
-	// principal of the row, and nil when no token was ever used.
+	// LastAccessAt is the latest last-use time of the access tokens and the
+	// console sessions of the principal of the row, and nil when no token
+	// and no session was ever used.
 	LastAccessAt *time.Time
 	// MemberCount is the count of the members of a group subject at the
 	// time of a snapshot. It is nil for a principal subject.
@@ -164,7 +171,8 @@ type ReviewStore interface {
 	// ID of no unit) is not in the map.
 	ReviewUnits(ctx context.Context, ids []string) (map[string]UnitState, error)
 	// LastAccess returns, for each principal ID in principalIDs, the latest
-	// last-use time of its access tokens. A principal with no used token is
-	// not in the map. It reads only the given IDs.
+	// last-use time of its access tokens and its console sessions. A
+	// principal with no used token and no session is not in the map. It
+	// reads only the given IDs.
 	LastAccess(ctx context.Context, principalIDs []string) (map[string]time.Time, error)
 }

@@ -128,6 +128,15 @@ const (
 	// settings name it: the start entry and the entry of a reload of the
 	// configuration file. RFC 68 decides the settings API that checks it.
 	ActionServerManageSettings Action = "server:manage-settings"
+	// ActionServerSetAuditChain allows approving a change of the audit
+	// chain to the setting of the server, on or off. A change to off also
+	// needs ActionServerDisableAuditChain. Its object is ServerObject.
+	ActionServerSetAuditChain Action = "server:set-audit-chain"
+	// ActionServerDisableAuditChain is the second action that a change of
+	// the audit chain to off needs. It is in another family than
+	// ActionServerSetAuditChain, so one family alone cannot turn the chain
+	// off. Its object is ServerObject.
+	ActionServerDisableAuditChain Action = "server:disable-audit-chain"
 	// ActionServerReadPrincipals allows reading the principals and the
 	// groups of the installation, and the members of each group (ADR 52).
 	// Its object is ServerObject.
@@ -239,15 +248,24 @@ const (
 	// on the target, and collection:manage-access on the collection the unit is
 	// in now, when it has one (ADR 61, decision 4; RFC 4).
 	ActionUnitMove Action = "unit:move"
+	// ActionServerManageAudit allows changing how the audit log protects
+	// itself, for example starting a new epoch of the signed audit
+	// checkpoints. Its object is ServerObject.
+	ActionServerManageAudit Action = "server:manage-audit"
 	// ActionServerManageTokenPolicy allows changing the token life cycle
 	// policy and running the inactivity disable (ADR 53, decisions 2, 4 and
 	// 6). Its object is ServerObject.
 	ActionServerManageTokenPolicy Action = "server:manage-token-policy"
 	// ActionServerManageSignIn allows changing the sign-in settings of the
-	// installation: the session policy, and later the sign-in methods, SCIM
-	// and MFA. Its object is ServerObject. Of the built-in roles, only the
-	// site administrator holds it.
+	// installation: the session policy, the MFA freshness settings, and later
+	// the sign-in methods, SCIM and MFA. Its object is ServerObject. Of the
+	// built-in roles, only the site administrator holds it.
 	ActionServerManageSignIn Action = "server:manage-sign-in"
+	// ActionServerRestoreAccess allows a restore to replace the access
+	// tables: principals, groups, memberships, roles, grants, access tokens
+	// and trust rules. Its object is ServerObject. Of the built-in roles,
+	// only the site administrator holds it.
+	ActionServerRestoreAccess Action = "server:restore-access"
 )
 
 // Object limits for the tool and unit parts of a unit reference.
@@ -625,6 +643,39 @@ type Authenticator interface {
 type Authorizer interface {
 	// Authorize returns nil if allowed and an error wrapping ErrDenied otherwise.
 	Authorize(ctx context.Context, p Principal, action Action, obj Object) error
+	// ListObjects returns the scope of the objects where p may perform
+	// action. Authorize allows p action on each object in the scope. A
+	// list filters with the scope in its own query, never with one
+	// Authorize call for each object. A principal with no object gets the
+	// empty Scope and no error. It returns the store errors of the adapter.
+	// A decorator that does not filter the scope says so; its callers then
+	// Authorize the namespace of the list first.
+	ListObjects(ctx context.Context, p Principal, action Action) (Scope, error)
+}
+
+// Scope is the set of objects of one kind where a principal may perform one
+// action. All is true when the principal may perform it on every object. A
+// unit is in the scope when it, its collection or its namespace is in a
+// set. A principal object is in the scope when it is in Principals.
+type Scope struct {
+	Namespaces  []Object
+	Collections []Object
+	Units       []Object
+	Principals  []Object
+	All         bool
+}
+
+// IsEmpty reports whether the scope holds no object.
+func (s Scope) IsEmpty() bool {
+	return !s.All && len(s.Namespaces) == 0 && len(s.Collections) == 0 && len(s.Units) == 0 &&
+		len(s.Principals) == 0
+}
+
+// AdminScope returns the scope of an authorizer that allows administrators
+// only: every object for an administrator, and no object for any other
+// principal.
+func AdminScope(p Principal) Scope {
+	return Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: p.Admin}
 }
 
 // StaticToken authenticates exactly one token as one administrator. It exists
@@ -835,6 +886,19 @@ func (s SelfAllowed) Authorize(ctx context.Context, p Principal, action Action, 
 	return s.Next.Authorize(ctx, p, action, obj)
 }
 
+// ListObjects asks Next. A self action gives an object only on the caller
+// itself, which no list holds, so it adds nothing to the scope.
+func (s SelfAllowed) ListObjects(ctx context.Context, p Principal, action Action) (Scope, error) {
+	scope, err := s.Next.ListObjects(ctx, p, action)
+	if err != nil {
+		return Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, fmt.Errorf(
+			"list objects: %w", err,
+		)
+	}
+
+	return scope, nil
+}
+
 // AdminOnly allows administrators and denies everyone else. It is the safe
 // default until a real authorizer (roles, teams) is configured.
 type AdminOnly struct{}
@@ -848,6 +912,12 @@ func (AdminOnly) Authorize(_ context.Context, p Principal, action Action, obj Ob
 	}
 
 	return fmt.Errorf("%w: %s may not %s on %q", ErrDenied, p.Subject, action, obj.String())
+}
+
+// ListObjects gives an administrator every object and any other principal
+// none.
+func (AdminOnly) ListObjects(_ context.Context, p Principal, _ Action) (Scope, error) {
+	return AdminScope(p), nil
 }
 
 // WithUnitID returns o with the stable ID id of its unit (ADR 19). A grant

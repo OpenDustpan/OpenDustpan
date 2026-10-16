@@ -124,6 +124,12 @@ token instead of a credentials file. The [TFE-compatible API
 notes](docs/tfe-api.md) list the endpoints, the `remote` backend with a
 workspace prefix, and the differences from TFE.
 
+A refused `tofu state push -force` of another lineage keeps the workspace
+lock. The error names the command that clears it. Run
+`tofu force-unlock <namespace>/<workspace>` to clear the lock. Do not push
+the same file again, because its lineage is still different. Run `tofu apply`,
+or push a state file that has the lineage of the workspace.
+
 ### Web console
 
 The web console is a separate repository,
@@ -287,11 +293,17 @@ How-to guides:
   the units that a delete keeps until its retention period ends.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
+- [Run several instances](docs/guides/several-instances.md): the settings
+  that each instance shares, for the target design.
+- [Console sign-in](docs/guides/console-sign-in.md) with an OpenID Connect
+  provider.
 
 Reference:
 
 - [Configuration](docs/reference/configuration.md): every flag and
   environment variable.
+- [Journal limits](docs/reference/journal-limits.md): the size and time limits
+  of a journaled update.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
 - [Glossary](GLOSSARY.md): the words this project uses.
 

@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
 
@@ -295,6 +296,8 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("apply staged backup: %v", err)
 	}
 
+	checkRestoredSuspendedMember(t, ps.dst)
+
 	again, sum2, _ := exportPortable(t, ps.dst)
 
 	wantRows := maps.Clone(sum.RowCounts)
@@ -321,6 +324,44 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 				table, len(got), len(want))
 		}
 	}
+}
+
+// checkRestoredSuspendedMember proves that the suspended member of the seed
+// keeps its source, source ID, state, suspend time and pin after the restore.
+// A store with no principal port skips it.
+func checkRestoredSuspendedMember(t *testing.T, dst RestoreStore) {
+	t.Helper()
+
+	ps, ok := dst.(principal.Store)
+	if !ok {
+		return
+	}
+
+	members, _, err := ps.ListMembers(
+		t.Context(), "grp-ops", principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1},
+	)
+	if err != nil {
+		t.Fatalf("list restored members: %v", err)
+	}
+
+	for i := range members {
+		m := members[i]
+		if m.PrincipalID != "prn-suspended" {
+			continue
+		}
+
+		if m.Source != principal.MembershipSourceSCIM || m.SourceID != "scim-token-1" ||
+			m.State != principal.MembershipStateSuspended || m.SuspendedAt.IsZero() || !m.Pinned {
+			t.Fatalf(
+				"restored suspended member = %+v, want scim with its source ID, suspended, pinned",
+				m,
+			)
+		}
+
+		return
+	}
+
+	t.Fatal("restored members hold no suspended member, want prn-suspended")
 }
 
 // sinkCursorTable is the table of the audit sink cursors, which the apply

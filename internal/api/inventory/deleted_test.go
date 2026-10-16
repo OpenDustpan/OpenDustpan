@@ -191,6 +191,7 @@ func buildDeletedFixture(
 		Collections:   nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           func() time.Time { return time.Unix(deletedNowUnix, 0) },
 	})
@@ -723,6 +724,11 @@ func (r *unitRecorder) Authorize(
 	r.calls = append(r.calls, unitCall{action: action, object: obj.String(), unitID: obj.UnitID()})
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (*unitRecorder) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // TestRestoreAndPurgeAuthorizeTheUnitID proves that the routes authorize

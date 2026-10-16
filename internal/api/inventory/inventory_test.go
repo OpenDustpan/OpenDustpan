@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -141,6 +142,11 @@ func (stubAuthorizer) Authorize(
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (stubAuthorizer) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // selectiveAuthorizer denies exactly the actions in deny and allows the rest.
 type selectiveAuthorizer struct {
 	deny map[identity.Action]bool
@@ -157,6 +163,15 @@ func (s selectiveAuthorizer) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (selectiveAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // denyUnits denies unit:read on the references in deny and allows the rest.
@@ -178,8 +193,43 @@ func (d denyUnits) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (denyUnits) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 func newBehaviorHandler(
 	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer,
+) *apiinventory.Handler {
+	t.Helper()
+
+	return newBehaviorHandlerWithSessions(t, nsStore, reader, authz, nil)
+}
+
+// newBehaviorHandlerWithSessions is newBehaviorHandler with the session
+// cookie check sessions; nil takes access tokens only.
+func newBehaviorHandlerWithSessions(
+	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer,
+	sessions *sessionauth.Checker,
+) *apiinventory.Handler {
+	t.Helper()
+
+	return newBehaviorHandlerWith(t, nsStore, reader, authz, behaviorWiring{
+		sessions: sessions, lifecycles: testLifecycles(),
+	})
+}
+
+// behaviorWiring is the session cookie check and the lifecycle of each tool
+// of a behavior handler.
+type behaviorWiring struct {
+	sessions   *sessionauth.Checker
+	lifecycles map[string]coreinventory.Lifecycle
+}
+
+// newBehaviorHandlerWith is newBehaviorHandlerWithSessions with the
+// session check and the lifecycles of wiring.
+func newBehaviorHandlerWith(
+	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer, wiring behaviorWiring,
 ) *apiinventory.Handler {
 	t.Helper()
 
@@ -196,10 +246,11 @@ func newBehaviorHandler(
 		Namespaces:    namespaces,
 		Units:         reader,
 		Deleted:       seededDeleted(),
-		Lifecycles:    testLifecycles(),
+		Lifecycles:    wiring.lifecycles,
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      wiring.sessions,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})
@@ -866,6 +917,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
+		Sessions:      nil,
 		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,

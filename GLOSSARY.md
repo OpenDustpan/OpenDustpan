@@ -160,6 +160,17 @@ _Avoid_: User (when the caller can be a machine), actor
 A service principal that belongs to one namespace. A holder of `namespace:manage-principals` on the namespace makes it. It can only hold grants on its namespace or on an object inside it, and it cannot be a member of a group. Its subject is unique on the whole installation. A holder of `namespace:manage-principal-tokens` on the namespace makes the tokens of its principals.
 _Avoid_: Namespace service account, local principal
 
+**Principal source**:
+Where a principal comes from. The API makes a `local` principal. The first sign-in of a person through an OpenID Connect provider makes an `oidc` principal. A directory sync keeps an `ldap` or `scim` principal. The subject of an `oidc` principal is the provider ID and the subject of the identity provider, separated by a colon. So a provider ID must never change after its first sign-in.
+
+**Sign-in provider**:
+An OpenID Connect provider through which persons sign in to the console. A provider of the flags or the configuration file has the source `static`, and the API cannot change it. A provider that the API creates has the source `api`. Each provider has an ID that is part of the subject of each person who signs in through it.
+_Avoid_: Identity source, IdP connection
+
+**Installation scope**:
+The scope of a secret value that belongs to the installation and to no namespace, for example the client secret of a sign-in provider. The server binds its data key to `@server`, a name that no namespace can have.
+_Avoid_: Global scope, server namespace
+
 **Access token**:
 The secret that a tool or the console sends to prove which principal it acts for.
 _Avoid_: API key, password
@@ -235,6 +246,38 @@ _Avoid_: Locked (that is a unit lock), forbidden, disabled
 **Action**:
 A tool-neutral operation that a principal asks to do, such as read state or write state. Grants allow actions on the installation, namespaces, collections and units. A policy check can deny an action (ADR 17).
 _Avoid_: Permission, verb, scope
+
+**Reach**:
+The set of actions on objects that a principal can do. It comes from the grants of the principal and the grants of its groups. It also holds the grants of each principal it can act as through an act-as edge. One reach covers another when it holds each of its actions on each of its objects.
+_Avoid_: Effective access, permission set
+
+**Act-as edge**:
+A right that lets one principal use the authority of another. It has two forms: `principal:manage-tokens` on a principal, and the right to write a trust rule that names a principal.
+_Avoid_: Impersonation, delegation
+
+**Protected group**:
+A group whose reach holds a sensitive action that is not confined to one namespace. The sensitive actions are access management on the installation, delegation, sign-in settings, the operator family, and identity provider and SCIM configuration. The identity provider cannot add members to it unless the group trusts the identity provider.
+_Avoid_: Privileged group, admin group
+
+**Full sync**:
+An installation setting in which the installation trusts the identity provider for every group. A membership that the identity provider ends stays ended. It never changes a break-glass account.
+_Avoid_: Full import, auto-sync
+
+**Suspended membership**:
+A membership of a protected group that the identity provider ended. It gives no rights. The server keeps the record for 30 days so that a site administrator or a break-glass account can restore it.
+_Avoid_: Ended membership, disabled membership
+
+**Pinned membership**:
+A restored membership that the identity provider does not manage until a person unpins it.
+_Avoid_: Frozen membership, locked membership
+
+**Break-glass account**:
+An account of one named person that does not depend on the identity provider. The person signs in with a passkey or a hardware key. Each installation has at least two, unless a self-hosted operator disables break-glass.
+_Avoid_: Emergency account, break-glass login
+
+**Admin access report**:
+A periodic report of who holds each sensitive installation action and through which path. It lists the protected and trusted groups, the break-glass accounts, the suspended memberships, the refused adds, and the changes. A reviewer acknowledges it.
+_Avoid_: Access review, audit report
 
 ### Pulumi
 
@@ -331,7 +374,7 @@ The key, kept outside the OpenDustpan database, that encrypts data keys.
 _Avoid_: Master key, root key, KEK
 
 **Sealed**:
-Encrypted at rest with the data key of a scope. The server seals OpenTofu state and outputs (ADR 41). The server seals a state version that an older server wrote at start or after a restore (ADR 41, decision 11). The part of the server that seals and opens state is the sealer.
+Encrypted at rest with the data key of a scope. The server seals OpenTofu state and outputs (ADR 41). The part of the server that seals and opens state is the sealer.
 _Avoid_: Encrypted (when it can mean the client-side encryption of OpenTofu)
 
 **Secret value**:
@@ -366,6 +409,10 @@ _Avoid_: Audit log line, event, audit event
 The port in `pkg/audit` that keeps the audit entries of each namespace and of the installation (scope `@server`). The SQL table is its record. It is fully on or fully off for an installation (ADR 60).
 _Avoid_: Audit trail, activity log
 
+**Audit checkpoint**:
+An Ed25519 signature over the hash at one sequence of one audit scope. It holds the scope, the sequence, the time and the key ID. The server keeps it in the blob store under `audit-checkpoints/`. It is opt-in and needs the chain on. It is not a **Checkpoint** of the Pulumi CLI: in code and docs outside the audit log, always write "audit checkpoint".
+_Avoid_: Signed head, anchor, checkpoint (alone, outside the audit log)
+
 **Log sink**:
 An output adapter of the port `pkg/logsink` that delivers structured records to one target: stdout, a file, syslog, a webhook, OTLP logs or object storage. The audit log and the application log use the same port (ADR 60).
 _Avoid_: Log target, log destination, exporter
@@ -397,3 +444,4 @@ _Avoid_: Fork, enterprise edition, cloud edition
 - **Lock** names the workspace lock of OpenTofu and the unit lock of the inventory. Code also says "stack lock" for the hold that a mutating Pulumi update has on its stack. Do not call a lease a lock.
 - **Delta** and **diff** are different. A delta upload saves a checkpoint. A state diff compares two versions.
 - **Version** is ambiguous between a stack's update number, a state version and a software release. Name which one.
+- **Break-glass** has two meanings. A break-glass account is a standing account of one named person. A break-glass recovery mode is one of the three ways to recover when the last administrator loses every factor. Name which one.

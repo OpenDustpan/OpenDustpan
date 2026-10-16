@@ -75,6 +75,7 @@ func newUpdateFixtureWithAddressGate(
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -88,6 +89,7 @@ func newUpdateFixtureWithAddressGate(
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		Sessions:                nil,
 		AddressGate:             gate,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -253,6 +255,7 @@ func newSharedLeaseServices(t *testing.T) sharedLeaseSetup {
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -279,6 +282,7 @@ func newSharedLeaseFixture(t *testing.T, setup sharedLeaseSetup, gate pulumi.Add
 		Namespaces:              setup.namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              allowAll(),
+		Sessions:                nil,
 		AddressGate:             gate,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},

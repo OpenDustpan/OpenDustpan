@@ -33,28 +33,40 @@ type AccessTokenPolicy struct {
 	UpdatedAtMs       int64
 }
 
+type AuditChainState struct {
+	ID                 int16
+	State              string
+	ChangedAtMs        int64
+	ChangedBy          string
+	Pending            bool
+	EnteredMaintenance bool
+	LogReplaced        bool
+	MigratingAtMs      int64
+}
+
 type AuditEntry struct {
-	Namespace  string
-	Sequence   int64
-	Subject    string
-	IdpSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	AtMs       int64
-	SourceIp   string
-	UserAgent  string
-	Channel    string
-	Kind       string
-	Outcome    string
-	RequestID  string
-	PrevHash   string
-	Hash       string
-	ValueCount pgtype.Int8
-	Changes    pgtype.Text
-	ObjectID   string
+	Namespace    string
+	Sequence     int64
+	Subject      string
+	IdpSubject   string
+	TokenID      string
+	Action       string
+	Object       string
+	Version      string
+	ValuePath    string
+	AtMs         int64
+	SourceIp     string
+	UserAgent    string
+	Channel      string
+	Kind         string
+	Outcome      string
+	RequestID    string
+	PrevHash     string
+	Hash         string
+	ValueCount   pgtype.Int8
+	Changes      pgtype.Text
+	ObjectID     string
+	FenceVersion int64
 }
 
 type AuditSinkCursor struct {
@@ -62,6 +74,12 @@ type AuditSinkCursor struct {
 	Namespace   string
 	Sequence    int64
 	UpdatedAtMs int64
+}
+
+type AuditSinkLease struct {
+	Sink        string
+	Holder      string
+	ExpiresAtMs int64
 }
 
 type Backup struct {
@@ -131,15 +149,27 @@ type Grant struct {
 }
 
 type GroupMember struct {
-	GroupID     string
-	PrincipalID string
-	AddedAtMs   int64
-	RemovedAtMs pgtype.Int8
+	GroupID       string
+	PrincipalID   string
+	AddedAtMs     int64
+	RemovedAtMs   pgtype.Int8
+	Source        string
+	SourceID      string
+	State         string
+	SuspendedAtMs int64
+	Pinned        bool
 }
 
 type Installation struct {
 	ID    int64
 	State string
+}
+
+type InstallationSecretKey struct {
+	ScopeID     string
+	WrapperID   string
+	Ciphertext  []byte
+	CreatedAtMs int64
 }
 
 type Inventory struct {
@@ -175,6 +205,12 @@ type Namespace struct {
 	IpAllowlist         string
 }
 
+type OidcProvider struct {
+	ProviderID  string
+	Issuer      string
+	CreatedAtMs int64
+}
+
 type Principal struct {
 	ID             string
 	Subject        string
@@ -188,6 +224,7 @@ type Principal struct {
 	LastActiveAtMs int64
 	LastSignInAtMs pgtype.Int8
 	Namespace      string
+	BreakGlass     bool
 }
 
 type PrincipalGroup struct {
@@ -246,10 +283,25 @@ type Session struct {
 }
 
 type SessionPolicy struct {
-	ID          int64
-	IdleMs      int64
-	MaxLengthMs int64
-	UpdatedAtMs int64
+	ID               int64
+	IdleMs           int64
+	MaxLengthMs      int64
+	UpdatedAtMs      int64
+	TokenFreshnessMs pgtype.Int8
+}
+
+type SignInProvider struct {
+	ProviderID   string
+	Issuer       string
+	DisplayName  string
+	ClientID     string
+	ClientSecret []byte
+	Scopes       string
+	AutoCreate   bool
+	Enabled      bool
+	CreatedAtMs  int64
+	UpdatedAtMs  int64
+	Version      int64
 }
 
 type SignInRequest struct {
@@ -260,6 +312,7 @@ type SignInRequest struct {
 	ReturnPath  string
 	CreatedAtMs int64
 	ExpiresAtMs int64
+	MaxAgeMs    pgtype.Int8
 }
 
 type Stack struct {
@@ -352,6 +405,15 @@ type UpdateJournal struct {
 	SequenceIds    string
 	OperationIds   string
 	Md5            []byte
+}
+
+type UpdateJournalRefusal struct {
+	StackID     string
+	UpdateID    string
+	Arrival     int64
+	SequenceIds string
+	Status      int64
+	Reason      string
 }
 
 type UpdateJournalSequence struct {
