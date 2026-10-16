@@ -22,28 +22,28 @@ Conventions used below:
 
 | Field | Real maximum seen | Documented limit | OpenDustpan today | Proposed limit |
 | --- | --- | --- | --- | --- |
-| Pulumi project name | unknown | 100 bytes, in CLI code | 100 characters (`pkg/stack/stack.go:39`) | 100 characters |
-| Pulumi stack name | unknown | 100 characters, in CLI code | 100 characters (`pkg/stack/stack.go:39`) | 100 characters |
-| Pulumi resource URN | unknown | none found | none, bounded by body caps only | 2048 bytes |
-| Pulumi resource type | unknown | none found | none, bounded by body caps only | 256 bytes |
-| Pulumi config key | unknown | none found | none, bounded by body caps only | 256 bytes |
-| Pulumi output name | unknown | none found | none, bounded by body caps only | 256 bytes |
-| OpenTofu workspace name | unknown | none in CLI. URL-safe only | 90 bytes (`pkg/workspace/workspace.go:53`) | 90 bytes, to review |
-| OpenTofu resource address | unknown | none found | none, bounded by body caps only | 1024 bytes, for audit `Object` |
-| OpenTofu provider address | unknown | none found | none, bounded by body caps only | 1024 bytes, for audit `Object` |
-| OpenTofu output name | unknown | none found. HCL identifier rule | none, bounded by body caps only | 256 bytes |
-| OIDC `sub` | unknown | 255 ASCII characters (OIDC Core 1.0, section 2) | 255 characters for API subjects (`pkg/principal/principal.go:116`). None for sign-in `IDPSubject` | 255 bytes, on sign-in too |
-| OIDC `iss` | unknown | none in the spec | none | 512 bytes |
-| SCIM `userName` | unknown | none in RFC 7643 | not checked in this run | 255 bytes |
-| SCIM `displayName` (user) | unknown | none in RFC 7643 | 255 bytes (`pkg/principal/principal.go:117`) | 255 bytes (keep) |
-| Group name | unknown | none in RFC 7643 | 100 bytes (`pkg/principal/principal.go:118`) | 100 bytes (keep) |
-| AWS ARN (role ARN field) | unknown | 2048 characters, IAM Role API | none for ARN fields | 2048 bytes |
-| Azure resource ID | unknown | none found | none | 1024 bytes |
-| GCP resource name | unknown | 1 to 63 characters, Compute Engine | none | 63 characters for DNS-style names |
-| Kubernetes object name | unknown | 253 (DNS subdomain), 63 (DNS label) | none | 253 bytes |
-| Pulumi `User-Agent` | unknown | none in code | 512 bytes stored (`pkg/audit/audit.go:97`) | 512 bytes (keep) |
-| OpenTofu `User-Agent` | unknown | none in code | 512 bytes stored (`pkg/audit/audit.go:97`) | 512 bytes (keep) |
-| `Authorization` header | unknown | none in a standard | Go default, 1 MiB (`pkg/dustpan/dustpan.go:1323` sets no limit) | 8 KiB at the proxy, to review |
+| Pulumi project name | none found | 100 bytes, in CLI code | 100 characters (`pkg/stack/stack.go:39`) | 100 characters |
+| Pulumi stack name | none found. The CLI applies the 100 limit to a qualified `org/project/stack` name in one reported case ([Pulumi community thread](https://archive.pulumi.com/t/2847494/any-reason-why-the-stack-names-are-arbitrarily-limited-to-10)) | 100 characters, in CLI code | 100 characters (`pkg/stack/stack.go:39`) | 100 characters |
+| Pulumi resource URN | 149 characters, a nested EKS role policy attachment ([Pulumi test fixture](https://github.com/pulumi/pulumi/search?q=cluster-instanceRole-e1b295bd)) | none found | none, bounded by body caps only | 2048 bytes |
+| Pulumi resource type | 62 characters, `admissionregistration.k8s.io/v1:ValidatingWebhookConfiguration` ([pulumi-kubernetes tests](https://github.com/pulumi/pulumi-kubernetes/tree/master/tests)). A nested type chain in a URN reaches 121 characters | none found | none, bounded by body caps only | 256 bytes |
+| Pulumi config key | none found | none found | none, bounded by body caps only | 256 bytes |
+| Pulumi output name | none found | none found | none, bounded by body caps only | 256 bytes |
+| OpenTofu workspace name | none found. A HashiCorp support article reports that a name above 63 characters breaks Kubernetes label creation in TFE ([HashiCorp](https://support.hashicorp.com/hc/en-us/articles/27007645191699-Issue-with-large-workspace-names-on-a-Terraform-Enterprise-Flexible-Deployment-Options-Kubernetes-deployment)) | none in CLI. URL-safe only | 90 bytes (`pkg/workspace/workspace.go:53`) | 90 bytes, to review |
+| OpenTofu resource address | 75 characters, a three-level module path ([OpenTofu tests](https://github.com/opentofu/opentofu/tree/main/internal/addrs)) | none found | none, bounded by body caps only | 1024 bytes, for audit `Object` |
+| OpenTofu provider address | 60 characters, `s3-eu-west-1.amazonaws.com/examplecorp-terraform-modules/vpc` ([OpenTofu tests](https://github.com/opentofu/opentofu/tree/main/internal/getproviders)) | none found | none, bounded by body caps only | 1024 bytes, for audit `Object` |
+| OpenTofu output name | none found | none found. HCL identifier rule | none, bounded by body caps only | 256 bytes |
+| OIDC `sub` | not measured in this run | 255 ASCII characters (OIDC Core 1.0, section 2) | 255 characters for API subjects (`pkg/principal/principal.go:116`). None for sign-in `IDPSubject` | 255 bytes, on sign-in too |
+| OIDC `iss` | not measured in this run | none in the spec | none | 512 bytes |
+| SCIM `userName` | not measured in this run | none in RFC 7643 | not checked in this run | 255 bytes |
+| SCIM `displayName` (user) | not measured in this run | none in RFC 7643 | 255 bytes (`pkg/principal/principal.go:117`) | 255 bytes (keep) |
+| Group name | none found | none in RFC 7643 | 100 bytes (`pkg/principal/principal.go:118`) | 100 bytes (keep) |
+| AWS ARN (role ARN field) | 163 characters, an autoscaling launch configuration ARN ([Pulumi examples](https://github.com/pulumi/examples)) | 2048 characters, IAM Role API | none for ARN fields | 2048 bytes |
+| Azure resource ID | 285 characters, a Site Recovery replicated item ([azurerm provider docs](https://github.com/hashicorp/terraform-provider-azurerm/tree/main/website/docs)) with placeholder names. Real names are longer | none found | none | 1024 bytes |
+| GCP resource name | none found | 1 to 63 characters, Compute Engine | none | 63 characters for DNS-style names |
+| Kubernetes object name | none found above 63 characters | 253 (DNS subdomain), 63 (DNS label) | none | 253 bytes |
+| Pulumi `User-Agent` | none observed. The fixed format is 21 characters plus version, command and agent | none in code | 512 bytes stored (`pkg/audit/audit.go:97`) | 512 bytes (keep) |
+| OpenTofu `User-Agent` | none observed. The client sends `OpenTofu/<version>` ([OpenTofu](https://github.com/opentofu/opentofu/blob/main/internal/httpclient/client_test.go)) | none in code | 512 bytes stored (`pkg/audit/audit.go:97`) | 512 bytes (keep) |
+| `Authorization` header | about 4 KB for a plain token. Over 18K characters for an Auth0 machine token. About 414 KB for an enriched Okta token ([Google Cloud thread](https://discuss.google.dev/t/apigee-x-request-header-size-limit-exceeds/105592), [Auth0 thread](https://community.auth0.com/t/m2m-applications-being-generated-with-unreasonably-large-access-tokens/141656)) | none in a standard | Go default, 1 MiB (`pkg/dustpan/dustpan.go:1323` sets no limit) | 64 KiB (`MaxHeaderBytes`), to review |
 
 Three rows need a decision from the owner:
 
