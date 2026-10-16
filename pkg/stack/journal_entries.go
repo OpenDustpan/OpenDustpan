@@ -276,8 +276,13 @@ func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update Upd
 // It returns ErrJournalConflict when the batch differs from what is stored, and
 // ErrWrongUpdateState or namespace.ErrFenced when the write is refused. A refusal
 // deletes the blob that this call wrote, as a previous save does. Any other
-// failure keeps the blob for the sweep.
+// failure keeps the blob for the sweep. A batch over MaxJournalBatchBytes is
+// refused with ErrTooLarge before anything is stored.
 func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence namespace.Fence) error {
+	if len(batch.Content) > MaxJournalBatchBytes {
+		return fmt.Errorf("%w: journal batch of %d bytes, limit %d", ErrTooLarge, len(batch.Content), MaxJournalBatchBytes)
+	}
+
 	ids, err := batchIDs(batch.Content)
 	if err != nil {
 		return err

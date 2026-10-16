@@ -103,6 +103,12 @@ func NewReplayer(now func() time.Time, cliVersion string) *Replayer {
 func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, entries io.Reader, out io.Writer) error {
 	state := newReplayState(openBase, r)
 	decode := func(entry JournalEntry) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := state.countEntry(entry); err != nil {
+			return err
+		}
 		return state.apply(ctx, entry)
 	}
 
@@ -112,6 +118,10 @@ func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, entries io.Rea
 
 	scan, err := state.scanBase(ctx, state.base)
 	if err != nil {
+		return err
+	}
+
+	if err := state.checkIndex(scan); err != nil {
 		return err
 	}
 
@@ -168,6 +178,10 @@ type replayState struct {
 	newRecords []stateRecord
 	hasRefresh bool
 	byteString bool
+	// entryCount holds the entries applied so far. newStateBytes holds the
+	// bytes of the resource states they carry.
+	entryCount    int64
+	newStateBytes int64
 	// secrets, snippets and extensions replace the base values when set.
 	secrets     jsontext.Value
 	snippets    []jsontext.Value
@@ -221,9 +235,103 @@ func (s *replayState) lookup(op int64, name, field string) (int64, error) {
 	return idx, nil
 }
 
+// countEntry counts one entry toward the per-update bounds before it is
+// applied. It refuses an update with more entries or more new state bytes
+// than the bounds allow.
+func (s *replayState) countEntry(entry JournalEntry) error {
+	s.entryCount++
+	if s.entryCount > MaxEntriesPerUpdate {
+		return fmt.Errorf(
+			"pulumijournal: %d entries, limit %d: %w",
+			s.entryCount,
+			MaxEntriesPerUpdate,
+			ErrTooManyEntries,
+		)
+	}
+	s.newStateBytes += int64(entryStateBytes(entry))
+	if s.newStateBytes > MaxNewStateBytesPerUpdate {
+		return fmt.Errorf(
+			"pulumijournal: %d new state bytes, limit %d: %w",
+			s.newStateBytes,
+			MaxNewStateBytesPerUpdate,
+			ErrNewStateTooLarge,
+		)
+	}
+	return nil
+}
+
+// entryStateBytes returns the bytes of the resource states one entry carries:
+// its own state and every state of a migration entry.
+func entryStateBytes(entry JournalEntry) int {
+	n := len(entry.State)
+	for _, state := range entry.States {
+		n += len(state)
+	}
+	for _, patch := range entry.BaseStatePatches {
+		n += len(patch.State)
+	}
+	for _, patch := range entry.NewStatePatches {
+		n += len(patch.State)
+	}
+	return n
+}
+
+// checkIndex checks the link index of the first pass against the bounds. It
+// refuses an index with more resources than the bound allows, and a build
+// with more estimated memory than the bound allows. The estimate adds the new
+// state bytes to the link bytes, so it never grows with the base resources,
+// which the build streams one at a time.
+func (s *replayState) checkIndex(scan *baseScan) error {
+	if int64(len(scan.index)) > MaxLinkIndexEntriesPerUpdate {
+		return fmt.Errorf(
+			"pulumijournal: %d indexed resources, limit %d: %w",
+			len(scan.index),
+			MaxLinkIndexEntriesPerUpdate,
+			ErrLinkIndexTooLarge,
+		)
+	}
+	estimated := s.newStateBytes + linkBytes(scan.index)
+	if estimated > MaxBuildMemoryBytes {
+		return fmt.Errorf(
+			"pulumijournal: estimated build memory %d bytes, limit %d: %w",
+			estimated,
+			MaxBuildMemoryBytes,
+			ErrBuildMemoryExceeded,
+		)
+	}
+	return nil
+}
+
+// linkBytes returns the bytes of the link fields of the indexed resources.
+func linkBytes(index []linkFields) int64 {
+	var n int64
+	for i := range index {
+		n += int64(len(index[i].URN) + len(index[i].Parent) + len(index[i].Provider) +
+			len(index[i].ViewOf) + len(index[i].DeletedWith))
+		for _, urn := range index[i].Dependencies {
+			n += int64(len(urn))
+		}
+		for _, urn := range index[i].Aliases {
+			n += int64(len(urn))
+		}
+		for _, urn := range index[i].ReplaceWith {
+			n += int64(len(urn))
+		}
+		for _, urns := range index[i].PropertyDependencies {
+			for _, urn := range urns {
+				n += int64(len(urn))
+			}
+		}
+	}
+	return n
+}
+
 // apply applies one entry. It is the callback of DecodeEntries, so it runs for
 // each entry before the later entries of the batch are checked.
 func (s *replayState) apply(ctx context.Context, entry JournalEntry) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	name := entryLabel(entry)
 	if entry.RequiresByteString {
 		s.byteString = true
@@ -627,8 +735,14 @@ func (s *replayState) scanBase(ctx context.Context, openBase OpenBase) (*baseSca
 		return nil, err
 	}
 	err := walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		return s.scanBaseResource(scan, i, raw)
 	}, func(key string, raw jsontext.Value) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		if key == "pending_operations" {
 			return s.addBasePending(scan, raw)
 		}
@@ -869,6 +983,9 @@ func newManifest(now time.Time, version string) manifestJSON {
 // the normalization runs over the link index of the first pass. A failure
 // therefore writes nothing.
 func (s *replayState) write(ctx context.Context, openBase OpenBase, out io.Writer, scan *baseScan, r *Replayer) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.hasRefresh {
 		rebuildIndex(scan.index, scan.final)
 	}
@@ -1116,6 +1233,9 @@ func (s *replayState) writeNewRecords(w *resourceWriter) error {
 // writeBaseRecords writes the base resources that the update keeps, in the order of the base.
 func (s *replayState) writeBaseRecords(ctx context.Context, openBase OpenBase, w *resourceWriter) error {
 	return walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
+		}
 		idx := int64(i)
 		if _, gone := s.toDeleteInSnapshot[idx]; gone {
 			return nil

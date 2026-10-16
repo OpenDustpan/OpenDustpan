@@ -60,7 +60,8 @@ type builtBlob struct {
 // base checkpoint and returns the checkpoint that results, without storing
 // it. It holds the batches and the built deployment in memory; a later
 // streaming build replaces this function without changing its callers. It
-// returns ErrMissingDependency without a replayer or a journal writer.
+// returns ErrMissingDependency without a replayer or a journal writer. A build
+// past MaxJournalBuildDuration is refused with ErrJournalBuildTimeout.
 func (s *Updates) buildJournalCheckpoint(
 	ctx context.Context, ref Ref, u Update, batches [][]byte,
 ) (Checkpoint, error) {
@@ -70,8 +71,14 @@ func (s *Updates) buildJournalCheckpoint(
 		return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, ErrMissingDependency)
 	}
 
-	base, err := s.journalBase(ctx, ref, u)
+	buildCtx, cancel := context.WithTimeout(ctx, MaxJournalBuildDuration)
+	defer cancel()
+
+	base, err := s.journalBase(buildCtx, ref, u)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && buildCtx.Err() != nil && ctx.Err() == nil {
+			return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, ErrJournalBuildTimeout)
+		}
 		return zero, err
 	}
 
@@ -86,7 +93,10 @@ func (s *Updates) buildJournalCheckpoint(
 
 	var out bytes.Buffer
 
-	if err := s.replayer.Replay(ctx, open, bytes.NewReader(combined), &out); err != nil {
+	if err := s.replayer.Replay(buildCtx, open, bytes.NewReader(combined), &out); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && buildCtx.Err() != nil && ctx.Err() == nil {
+			return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, ErrJournalBuildTimeout)
+		}
 		return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, err)
 	}
 
