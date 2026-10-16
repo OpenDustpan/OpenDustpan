@@ -730,20 +730,27 @@ func (s *Service) checkMoveGrant(ctx context.Context, caller identity.Principal,
 // revokeStored ends the stored grant g with the ID id for caller, with the
 // entry e. It holds the checks that Revoke and RevokeByID share: the caller
 // holds every action the grant gives, and the entry goes in the scope of
-// the grant.
+// the grant. The store runs the check of the caller's actions in the
+// transaction of the revoke.
 func (s *Service) revokeStored(
 	ctx context.Context, e audit.Entry, caller identity.Principal, g Grant, id string,
 ) (Grant, error) {
-	if heldErr := s.checkGrantHeld(ctx, caller, g); heldErr != nil {
-		return Grant{}, heldErr
-	}
-
 	fence, err := s.fenceOf(ctx, g.Object)
 	if err != nil {
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
 	}
 
-	if err := s.store.RevokeGrant(ctx, id, fence, grantChange(e, s.Now(), fence, GrantRef(g))); err != nil {
+	chain, err := s.authz.chain(ctx, g.Object)
+	if err != nil {
+		return Grant{}, err
+	}
+
+	// The store checks that caller holds every action of g in the
+	// transaction of the revoke, so a revoke, a membership change or a role
+	// update that commits first is visible to the check.
+	check := s.revokeCheck(caller, g, chain)
+
+	if err := s.store.RevokeGrant(ctx, id, fence, grantChange(e, s.Now(), fence, GrantRef(g)), check); err != nil {
 		return Grant{}, fmt.Errorf("revoke grant %q: %w", id, err)
 	}
 

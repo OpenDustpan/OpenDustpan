@@ -2187,10 +2187,170 @@ func isolatedURL(tb testing.TB, base string) string {
 	return u.String()
 }
 
-// TestOpenRefusesNewerSchema proves that a database with a version the binary
-// does not embed stops open and leaves the database unchanged.
-func TestOpenRefusesNewerSchema(t *testing.T) {
+// TestOpenRefusesBinaryBelowMinimum proves that a schema whose minimum
+// binary version is above the version of the binary stops open, names both
+// versions and leaves the database unchanged.
+func TestOpenRefusesBinaryBelowMinimum(t *testing.T) {
 	t.Parallel()
+
+	migrated, wantVersions, wantTables := newerSchemaDatabase(t, "v0.3.0")
+
+	_, err := postgres.Open(t.Context(), migrated, postgres.WithBinaryVersion("v0.2.0"))
+	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		t.Fatalf("open below the minimum: err = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	if !strings.Contains(err.Error(), "v0.2.0") || !strings.Contains(err.Error(), "v0.3.0") {
+		t.Fatalf("open below the minimum: err = %v, want it to name v0.2.0 and v0.3.0", err)
+	}
+
+	afterVersions, afterTables := newerSchemaSnapshot(t, migrated)
+
+	if !slices.Equal(afterVersions, wantVersions) {
+		t.Fatalf("versions after refusal = %v, want %v", afterVersions, wantVersions)
+	}
+
+	if !slices.Equal(afterTables, wantTables) {
+		t.Fatalf("tables after refusal = %v, want %v", afterTables, wantTables)
+	}
+}
+
+// TestOpenUsesTheHighestMinimum records two future migrations whose
+// minimums sort in the other order as text: v0.10.0 is the higher one. A
+// binary between them refuses to open.
+func TestOpenUsesTheHighestMinimum(t *testing.T) {
+	t.Parallel()
+
+	migrated, versions, _ := newerSchemaDatabase(t, "v0.10.0")
+	insertFutureVersion(t, migrated, versions[len(versions)-1]+1, "v0.3.0")
+
+	if _, err := postgres.Open(t.Context(), migrated, postgres.WithBinaryVersion("v0.5.0")); !errors.Is(
+		err, schema.ErrBinaryBelowMinimum,
+	) {
+		t.Fatalf("open between two minimums: err = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	s, err := postgres.Open(t.Context(), migrated, postgres.WithBinaryVersion("v0.10.0"))
+	if err != nil {
+		t.Fatalf("open at the highest minimum: %v", err)
+	}
+
+	s.Close()
+}
+
+// TestOpenRefusesBelowMinimumWithPendingMigrations sets a minimum on a
+// recorded migration and removes the record of the newest one, so that it
+// is pending. A binary below the minimum refuses to open and applies
+// nothing.
+func TestOpenRefusesBelowMinimumWithPendingMigrations(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	migrated := isolatedURL(t, base)
+
+	s, err := postgres.Open(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	s.Close()
+
+	conn, err := pgx.Connect(t.Context(), migrated)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	for _, stmt := range []string{
+		`UPDATE schema_migrations SET min_binary_version = 'v0.3.0' WHERE version = 1`,
+		`DELETE FROM schema_migrations WHERE version = (SELECT MAX(version) FROM schema_migrations)`,
+	} {
+		if _, execErr := conn.Exec(t.Context(), stmt); execErr != nil {
+			t.Fatalf("%s: %v", stmt, execErr)
+		}
+	}
+
+	if closeErr := conn.Close(t.Context()); closeErr != nil {
+		t.Fatalf("close: %v", closeErr)
+	}
+
+	wantVersions, wantTables := newerSchemaSnapshot(t, migrated)
+
+	if _, err := postgres.Open(t.Context(), migrated, postgres.WithBinaryVersion("v0.2.0")); !errors.Is(
+		err, schema.ErrBinaryBelowMinimum,
+	) {
+		t.Fatalf("open below the minimum with a pending migration: err = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	gotVersions, gotTables := newerSchemaSnapshot(t, migrated)
+
+	if !slices.Equal(gotVersions, wantVersions) || !slices.Equal(gotTables, wantTables) {
+		t.Fatalf("schema after the refusal = %v, %v; want %v, %v", gotVersions, gotTables, wantVersions, wantTables)
+	}
+}
+
+// TestOpenStartsOnNewerSchemaAtMinimum proves that a binary at or above the
+// minimum opens a schema that records a migration it does not embed, and
+// applies nothing.
+func TestOpenStartsOnNewerSchemaAtMinimum(t *testing.T) {
+	t.Parallel()
+
+	for _, binary := range []string{"v0.3.0", "dev"} {
+		t.Run(binary, func(t *testing.T) {
+			t.Parallel()
+			openNewerSchemaAt(t, binary)
+		})
+	}
+}
+
+// openNewerSchemaAt opens a schema with a future migration that sets minimum
+// v0.3.0 as a binary of version binary. The open succeeds, applies nothing
+// and reads the minimum back.
+func openNewerSchemaAt(t *testing.T, binary string) {
+	t.Helper()
+
+	migrated, wantVersions, wantTables := newerSchemaDatabase(t, "v0.3.0")
+
+	s, err := postgres.Open(t.Context(), migrated, postgres.WithBinaryVersion(binary))
+	if err != nil {
+		t.Fatalf("open at the minimum: %v", err)
+	}
+
+	applied, err := s.AppliedMigrations(t.Context())
+
+	s.Close()
+
+	if err != nil {
+		t.Fatalf("applied migrations: %v", err)
+	}
+
+	if len(applied) == 0 {
+		t.Fatal("applied migrations are empty, want the recorded migrations")
+	}
+
+	if last := applied[len(applied)-1]; last.MinBinaryVersion != "v0.3.0" {
+		t.Fatalf("newest applied migration %+v, want minimum v0.3.0", last)
+	}
+
+	afterVersions, afterTables := newerSchemaSnapshot(t, migrated)
+
+	if !slices.Equal(afterVersions, wantVersions) {
+		t.Fatalf("versions after open = %v, want %v", afterVersions, wantVersions)
+	}
+
+	if !slices.Equal(afterTables, wantTables) {
+		t.Fatalf("tables after open = %v, want %v", afterTables, wantTables)
+	}
+}
+
+// newerSchemaDatabase migrates an isolated schema, then records one future
+// migration that sets minimum. It returns the URL with the recorded versions
+// and the tables.
+func newerSchemaDatabase(t *testing.T, minimum string) (string, []int64, []string) {
+	t.Helper()
 
 	base := os.Getenv(envURL)
 	if base == "" {
@@ -2213,7 +2373,7 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 
 	extra := beforeVersions[len(beforeVersions)-1] + 1
 
-	insertFutureVersion(t, migrated, extra)
+	insertFutureVersion(t, migrated, extra, minimum)
 
 	wantVersions := append(slices.Clone(beforeVersions), extra)
 	gotVersions, gotTables := newerSchemaSnapshot(t, migrated)
@@ -2222,19 +2382,7 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 		t.Fatalf("seeded versions = %v, want %v", gotVersions, wantVersions)
 	}
 
-	if _, err := postgres.Open(t.Context(), migrated); !errors.Is(err, schema.ErrSchemaNewer) {
-		t.Fatalf("open newer database: err = %v, want ErrSchemaNewer", err)
-	}
-
-	afterVersions, afterTables := newerSchemaSnapshot(t, migrated)
-
-	if !slices.Equal(afterVersions, wantVersions) {
-		t.Fatalf("versions after refusal = %v, want %v", afterVersions, wantVersions)
-	}
-
-	if !slices.Equal(afterTables, gotTables) {
-		t.Fatalf("tables after refusal = %v, want %v", afterTables, gotTables)
-	}
+	return migrated, wantVersions, gotTables
 }
 
 // newerSchemaSnapshot reads the recorded versions and the table names of the
@@ -2324,7 +2472,7 @@ func readSchemaTables(t *testing.T, conn *pgx.Conn) []string {
 }
 
 // insertFutureVersion records one version newer than the binary embeds.
-func insertFutureVersion(t *testing.T, migrated string, version int64) {
+func insertFutureVersion(t *testing.T, migrated string, version int64, minimum string) {
 	t.Helper()
 
 	conn, err := pgx.Connect(t.Context(), migrated)
@@ -2340,9 +2488,9 @@ func insertFutureVersion(t *testing.T, migrated string, version int64) {
 
 	name := fmt.Sprintf("%04d_future.sql", version)
 
-	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+	const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES ($1, $2, $3)`
 
-	if _, execErr := conn.Exec(t.Context(), record, version, name); execErr != nil {
+	if _, execErr := conn.Exec(t.Context(), record, version, name, minimum); execErr != nil {
 		t.Fatalf("record future version: %v", execErr)
 	}
 }

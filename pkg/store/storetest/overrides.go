@@ -375,6 +375,7 @@ func testFenceAndUnlockKeepsSwitches(t *testing.T, s WorkspaceStore) {
 
 	released := releasedWorkspace(locked, now().Add(time.Hour))
 	fence := newFenceVersion(t, locked, 1, now().Add(time.Hour))
+	stageFence(t, s, ns, fence)
 
 	err := s.FenceAndUnlock(
 		t.Context(),

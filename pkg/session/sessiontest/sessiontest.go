@@ -61,6 +61,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "touch records the last use at most once for each period", test: testTouch},
 		{name: "touch keeps the authentication time", test: testTouchKeepsAuthTime},
 		{name: "a stored sign-in provider round trips", test: testProviderRoundTrip},
+		{name: "a stored provider in the OAuth mode round trips", test: testProviderOAuthRoundTrip},
 		{name: "an invalid sign-in provider is refused", test: testProviderRefusesInvalid},
 		{name: "an update of a provider checks its version", test: testProviderUpdate},
 		{name: "a provider with principals is not deleted", test: testProviderDelete},
