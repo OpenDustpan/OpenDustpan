@@ -90,7 +90,8 @@ func TestPolicyChangeThroughOneHandleAppliesToTheOther(t *testing.T) {
 
 	setDisable(true)
 
-	if _, authErr := reader.AuthenticateToken(ctx, secrets[1].Reveal()); !errors.Is(authErr, identity.ErrUnauthenticated) {
+	_, authErr := reader.AuthenticateToken(ctx, secrets[1].Reveal())
+	if !errors.Is(authErr, identity.ErrUnauthenticated) {
 		t.Fatalf("inactive token right after the change through the first handle: err = %v, want ErrUnauthenticated",
 			authErr)
 	}
