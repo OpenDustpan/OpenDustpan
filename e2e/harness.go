@@ -260,6 +260,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
+		signInRealTime:    false,
 		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
@@ -322,6 +323,7 @@ func NewEnvWithJournalRefuser(
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
+		signInRealTime:    false,
 		journalRefuser:    refuser,
 		tb:                tb,
 		cli:               cli,
@@ -354,6 +356,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		disableJournaling: false,
 		ipAllowlists:      false,
 		signIn:            false,
+		signInRealTime:    false,
 		journalRefuser:    nil,
 		tb:                tb,
 		cli:               cli,
@@ -390,7 +393,12 @@ func startInprocessServer(
 
 	var signIn *signInSetup
 	if in.signIn {
-		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), newTestClock())
+		var shared *TestClock
+		if !in.signInRealTime {
+			shared = newTestClock()
+		}
+
+		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), shared)
 	}
 
 	build := newServer(ctx, tb, serverArgs{
