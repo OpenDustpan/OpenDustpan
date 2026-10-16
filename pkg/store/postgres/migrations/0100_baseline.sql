@@ -1,6 +1,6 @@
 -- minimum-binary-version: v0.1.0
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the postgres migrations of origin/main (9e9c08978d02).
+-- from the postgres migrations of origin/main (6be2f2a0661a).
 -- This baseline replaced every migration before it, as a one-time exception
 -- to the rule that an applied migration never changes. No binary opens a
 -- database or restores a backup from before it.
@@ -570,6 +570,8 @@ CREATE INDEX access_tokens_principal ON access_tokens USING btree (principal_id,
 
 CREATE INDEX audit_entries_ns_time ON audit_entries USING btree (namespace, at_ms DESC, sequence DESC);
 
+CREATE UNIQUE INDEX backups_one_running ON backups USING btree (((state = 'running'::text))) WHERE (state = 'running'::text);
+
 CREATE INDEX backups_started_at_ms ON backups USING btree (started_at_ms DESC);
 
 CREATE INDEX blob_purges_age ON blob_purges USING btree (purged_at_ms, tool COLLATE "C", unit_id COLLATE "C");
@@ -599,6 +601,8 @@ CREATE UNIQUE INDEX principal_groups_name_key ON principal_groups USING btree (n
 CREATE INDEX principals_namespace ON principals USING btree (namespace, subject COLLATE "C") WHERE (deleted_at_ms IS NULL);
 
 CREATE UNIQUE INDEX principals_subject ON principals USING btree (subject COLLATE "C") WHERE (deleted_at_ms IS NULL);
+
+CREATE UNIQUE INDEX restores_one_running ON restores USING btree (((state = ANY (ARRAY['checking'::text, 'applying'::text])))) WHERE (state = ANY (ARRAY['checking'::text, 'applying'::text]));
 
 CREATE INDEX restores_started_at_ms ON restores USING btree (started_at_ms DESC);
 

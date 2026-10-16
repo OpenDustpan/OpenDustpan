@@ -1,6 +1,6 @@
 -- minimum-binary-version: v0.1.0
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the sqlite migrations of origin/main (9e9c08978d02).
+-- from the sqlite migrations of origin/main (6be2f2a0661a).
 -- This baseline replaced every migration before it, as a one-time exception
 -- to the rule that an applied migration never changes. No binary opens a
 -- database or restores a backup from before it.
@@ -467,6 +467,12 @@ CREATE INDEX sign_in_requests_expiry ON sign_in_requests (expires_at_ms);
 CREATE INDEX blob_purges_age ON blob_purges (purged_at_ms, tool, unit_id);
 
 CREATE INDEX principals_namespace ON principals (namespace, subject) WHERE deleted_at_ms IS NULL;
+
+CREATE UNIQUE INDEX backups_one_running ON backups ((state = 'running'))
+    WHERE state = 'running';
+
+CREATE UNIQUE INDEX restores_one_running ON restores ((state IN ('checking', 'applying')))
+    WHERE state IN ('checking', 'applying');
 
 INSERT INTO installation (id, state) VALUES (1, 'normal');
 

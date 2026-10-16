@@ -42,7 +42,7 @@ func (s *Store) CreateRestore(ctx context.Context, r backup.RestoreRecord) error
 	}
 
 	if n == 0 {
-		return backup.ErrRestoreExists
+		return s.createRestoreConflict(ctx, r.ID)
 	}
 
 	return nil
@@ -280,7 +280,8 @@ func finishSwap(ctx context.Context, tx pgx.Tx, live, previous string) error {
 }
 
 // fenceRestored increments the failover version of every namespace of the
-// restored schema live and resets the audit sink cursors and leases, in tx.
+// restored schema live, resets the audit sink cursors and leases, and fails
+// the running backup and restore rows of the restored data, in tx.
 func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 	fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
 
@@ -299,6 +300,29 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 
 	if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(live)+".audit_sink_leases"); err != nil {
 		return fmt.Errorf("reset audit sink leases after restore: %w", err)
+	}
+
+	// A backup sees its own row as running when it takes its snapshot, so
+	// the restored data holds that row as running. No process runs it in
+	// this installation, and the one running backup it would hold blocks
+	// every later backup.
+	failRunning := "UPDATE " + pgIdent(live) + ".backups SET state = 'failed', error = $1," +
+		" ended_at_ms = (extract(epoch from clock_timestamp()) * 1000)::bigint WHERE state = 'running'"
+
+	if _, err := tx.Exec(ctx, failRunning, backup.RestoredRunningText); err != nil {
+		return fmt.Errorf("fail restored running backups: %w", err)
+	}
+
+	// The same holds for a restore row: the backup that a restore takes
+	// before it applies holds that restore as running. The restore that
+	// runs now stores its row again after the swap, and the one running
+	// restore the data would hold blocks that row.
+	failRestores := "UPDATE " + pgIdent(live) + ".restores SET state = 'failed', error = $1," +
+		" ended_at_ms = (extract(epoch from clock_timestamp()) * 1000)::bigint" +
+		" WHERE state IN ('checking', 'applying')"
+
+	if _, err := tx.Exec(ctx, failRestores, backup.RestoredRunningRestoreText); err != nil {
+		return fmt.Errorf("fail restored running restores: %w", err)
 	}
 
 	return nil

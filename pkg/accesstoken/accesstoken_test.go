@@ -950,6 +950,15 @@ func (a *recordAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // newCheckedService returns a token service over the store of f with the
 // grant check grants and the authorizer authz.
 func newCheckedService(
