@@ -19,6 +19,7 @@ import (
 type upgradeCheckDoc struct {
 	Version                 string   `json:"version"`
 	SchemaVersion           int64    `json:"schemaVersion"`
+	MinimumBinaryVersion    string   `json:"minimumBinaryVersion"`
 	AppliedMigrations       []string `json:"appliedMigrations"`
 	KeyEncryptionKey        bool     `json:"keyEncryptionKey"`
 	RunningJournaledUpdates int64    `json:"runningJournaledUpdates"`
@@ -132,14 +133,17 @@ type stubSchema struct {
 // schemaMigration is one applied migration in tests. The field names match
 // the store package so the test converts without importing it.
 type schemaMigration struct {
-	Version int64
-	Name    string
+	Version          int64
+	Name             string
+	MinBinaryVersion string
 }
 
 func (s stubSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigration, error) {
 	out := make([]schema.AppliedMigration, 0, len(s.migrations))
 	for _, migration := range s.migrations {
-		out = append(out, schema.AppliedMigration{Version: migration.Version, Name: migration.Name})
+		out = append(out, schema.AppliedMigration{
+			Version: migration.Version, Name: migration.Name, MinBinaryVersion: migration.MinBinaryVersion,
+		})
 	}
 
 	return out, nil
@@ -163,7 +167,7 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Metrics:       stubMetrics{},
 		Version:       "",
 		Schema: stubSchema{migrations: []schemaMigration{
-			{Version: 1, Name: "0001_init.sql"},
+			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
 		Journal:          nil,
 		Principals:       nil,
@@ -194,6 +198,58 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 
 	if doc.SchemaVersion != 1 || len(doc.AppliedMigrations) != 1 || doc.AppliedMigrations[0] != "0001_init.sql" {
 		t.Fatalf("upgrade check = %+v, want schema version 1 with one migration", doc)
+	}
+
+	if doc.MinimumBinaryVersion != "" {
+		t.Fatalf("minimum binary version = %q, want none", doc.MinimumBinaryVersion)
+	}
+}
+
+// TestUpgradeCheckAnswersSchemaMinimum proves the upgrade check answers the
+// highest minimum binary version of the applied migrations.
+func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
+	t.Parallel()
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Backups:       nil,
+		Restores:      nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "v0.3.0",
+		Schema: stubSchema{migrations: []schemaMigration{
+			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: "v0.1.0"},
+			{Version: 2, Name: "0002_contract.sql", MinBinaryVersion: "v0.10.0"},
+			{Version: 3, Name: "0003_expand.sql", MinBinaryVersion: ""},
+		}},
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	status, doc := readUpgradeCheck(t, handler)
+	if status != http.StatusOK {
+		t.Fatalf("GET upgrade check answers %d, want %d", status, http.StatusOK)
+	}
+
+	if doc.MinimumBinaryVersion != "v0.10.0" {
+		t.Fatalf("minimum binary version = %q, want v0.10.0", doc.MinimumBinaryVersion)
 	}
 }
 
@@ -290,7 +346,7 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		Metrics:       stubMetrics{},
 		Version:       "test",
 		Schema: stubSchema{migrations: []schemaMigration{
-			{Version: 1, Name: "0001_init.sql"},
+			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
 		Journal:          nil,
 		Principals:       nil,
@@ -348,7 +404,7 @@ func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
 		Metrics:       stubMetrics{},
 		Version:       "test",
 		Schema: stubSchema{migrations: []schemaMigration{
-			{Version: 1, Name: "0001_init.sql"},
+			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
 		Journal:          nil,
 		Principals:       nil,

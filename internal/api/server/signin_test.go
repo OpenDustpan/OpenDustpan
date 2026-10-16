@@ -214,7 +214,10 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 			Admin:    admin,
 			Origins:  []string{signInBase, consoleOrigin},
 			Providers: []apiserver.SignInProvider{
-				{Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate, Stored: false},
+				{
+					Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate, Stored: false,
+					Source: principal.SourceOIDC,
+				},
 			},
 		},
 		CheckpointEpochs: nil,
@@ -1037,7 +1040,7 @@ func TestSignInProviderDown(t *testing.T) {
 			Limiter: limiter,
 			Origins: nil,
 			Providers: []apiserver.SignInProvider{
-				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true, Stored: false},
+				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true, Stored: false, Source: ""},
 			},
 		},
 		CheckpointEpochs: nil,

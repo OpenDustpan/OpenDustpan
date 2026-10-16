@@ -119,10 +119,25 @@ func (s *Store) CreateProviderConfig(ctx context.Context, p session.ProviderConf
 		}
 
 		n, err := q.CreateSignInProvider(ctx, db.CreateSignInProviderParams{
-			ProviderID: row.ProviderID, Issuer: row.Issuer, DisplayName: row.DisplayName, ClientID: row.ClientID,
-			ClientSecret: row.ClientSecret, Scopes: row.Scopes, AutoCreate: sqliteBool(row.AutoCreate).column(),
-			Enabled: sqliteBool(row.Enabled).column(), CreatedAtMs: row.CreatedAtMs, UpdatedAtMs: row.UpdatedAtMs,
-			Version: row.Version,
+			ProviderID:       row.ProviderID,
+			Issuer:           row.Issuer,
+			DisplayName:      row.DisplayName,
+			ClientID:         row.ClientID,
+			ClientSecret:     row.ClientSecret,
+			Scopes:           row.Scopes,
+			AutoCreate:       sqliteBool(row.AutoCreate).column(),
+			Enabled:          sqliteBool(row.Enabled).column(),
+			CreatedAtMs:      row.CreatedAtMs,
+			UpdatedAtMs:      row.UpdatedAtMs,
+			Version:          row.Version,
+			Mode:             row.Mode,
+			AuthorizationUrl: row.OAuth.AuthorizationURL,
+			TokenUrl:         row.OAuth.TokenURL,
+			UserinfoUrl:      row.OAuth.UserinfoURL,
+			SubjectClaim:     row.OAuth.SubjectClaim,
+			NameClaim:        row.OAuth.NameClaim,
+			UsernameClaim:    row.OAuth.UsernameClaim,
+			EmailClaim:       row.OAuth.EmailClaim,
 		})
 		if err != nil {
 			return fmt.Errorf("insert sign-in provider: %w", err)
@@ -193,16 +208,23 @@ func (s *Store) UpdateProviderConfig(ctx context.Context, p session.ProviderConf
 		}
 
 		n, err := q.UpdateSignInProvider(ctx, db.UpdateSignInProviderParams{
-			Issuer:       row.Issuer,
-			DisplayName:  row.DisplayName,
-			ClientID:     row.ClientID,
-			ClientSecret: row.ClientSecret,
-			Scopes:       row.Scopes,
-			AutoCreate:   sqliteBool(row.AutoCreate).column(),
-			Enabled:      sqliteBool(row.Enabled).column(),
-			UpdatedAtMs:  row.UpdatedAtMs,
-			Version:      row.Version,
-			ProviderID:   row.ProviderID,
+			Issuer:           row.Issuer,
+			DisplayName:      row.DisplayName,
+			ClientID:         row.ClientID,
+			ClientSecret:     row.ClientSecret,
+			Scopes:           row.Scopes,
+			AutoCreate:       sqliteBool(row.AutoCreate).column(),
+			Enabled:          sqliteBool(row.Enabled).column(),
+			UpdatedAtMs:      row.UpdatedAtMs,
+			Version:          row.Version,
+			ProviderID:       row.ProviderID,
+			AuthorizationUrl: row.OAuth.AuthorizationURL,
+			TokenUrl:         row.OAuth.TokenURL,
+			UserinfoUrl:      row.OAuth.UserinfoURL,
+			SubjectClaim:     row.OAuth.SubjectClaim,
+			NameClaim:        row.OAuth.NameClaim,
+			UsernameClaim:    row.OAuth.UsernameClaim,
+			EmailClaim:       row.OAuth.EmailClaim,
 		})
 		if err != nil {
 			return fmt.Errorf("update sign-in provider: %w", err)
@@ -307,6 +329,11 @@ func providerOf(row *db.SignInProvider) (session.ProviderConfig, error) {
 		ProviderID: row.ProviderID, Issuer: row.Issuer, DisplayName: row.DisplayName, ClientID: row.ClientID,
 		Scopes: row.Scopes, ClientSecret: row.ClientSecret, CreatedAtMs: row.CreatedAtMs,
 		UpdatedAtMs: row.UpdatedAtMs, Version: row.Version, AutoCreate: row.AutoCreate != 0, Enabled: row.Enabled != 0,
+		Mode: row.Mode, OAuth: session.OAuthSettings{
+			AuthorizationURL: row.AuthorizationUrl, TokenURL: row.TokenUrl, UserinfoURL: row.UserinfoUrl,
+			SubjectClaim: row.SubjectClaim, NameClaim: row.NameClaim, UsernameClaim: row.UsernameClaim,
+			EmailClaim: row.EmailClaim,
+		},
 	})
 	if err != nil {
 		return session.ProviderConfig{}, fmt.Errorf("decode sign-in provider: %w", err)

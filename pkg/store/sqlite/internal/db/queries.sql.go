@@ -347,6 +347,30 @@ func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditCh
 	return result.RowsAffected()
 }
 
+const claimDurableScheduleTick = `-- name: ClaimDurableScheduleTick :execrows
+UPDATE durable_schedules
+SET next_run_at_ms = CAST(?1 AS INTEGER) + interval_ms,
+    last_claimed_at_ms = CAST(?1 AS INTEGER)
+WHERE name = ?2 AND next_run_at_ms = ?3
+    AND next_run_at_ms <= CAST(?1 AS INTEGER)
+`
+
+type ClaimDurableScheduleTickParams struct {
+	NowMs   int64
+	Name    string
+	DueAtMs int64
+}
+
+// The conditional update that claims a due tick: it changes the row only
+// when next_run_at_ms is the value that the claim read and is due at now.
+func (q *Queries) ClaimDurableScheduleTick(ctx context.Context, arg ClaimDurableScheduleTickParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, claimDurableScheduleTick, arg.NowMs, arg.Name, arg.DueAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
 UPDATE update_journal SET operation_ids = '[]'
 WHERE stack_id = ? AND update_id = ?
@@ -457,6 +481,22 @@ type CountCallerGrantsParams struct {
 
 func (q *Queries) CountCallerGrants(ctx context.Context, arg CountCallerGrantsParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countCallerGrants, arg.Principal, arg.AsOfMs, arg.Groups)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countDurableStep = `-- name: CountDurableStep :one
+SELECT COUNT(*) FROM durable_steps WHERE operation_id = ? AND name = ?
+`
+
+type CountDurableStepParams struct {
+	OperationID string
+	Name        string
+}
+
+func (q *Queries) CountDurableStep(ctx context.Context, arg CountDurableStepParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countDurableStep, arg.OperationID, arg.Name)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -1232,23 +1272,32 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 const createSignInProvider = `-- name: CreateSignInProvider :execrows
 INSERT INTO sign_in_providers (
     provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING
 `
 
 type CreateSignInProviderParams struct {
-	ProviderID   string
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   int64
-	Enabled      int64
-	CreatedAtMs  int64
-	UpdatedAtMs  int64
-	Version      int64
+	ProviderID       string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       int64
+	Enabled          int64
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	Version          int64
+	Mode             string
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
 }
 
 func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProviderParams) (int64, error) {
@@ -1264,6 +1313,14 @@ func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProv
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 		arg.Version,
+		arg.Mode,
+		arg.AuthorizationUrl,
+		arg.TokenUrl,
+		arg.UserinfoUrl,
+		arg.SubjectClaim,
+		arg.NameClaim,
+		arg.UsernameClaim,
+		arg.EmailClaim,
 	)
 	if err != nil {
 		return 0, err
@@ -2865,6 +2922,87 @@ func (q *Queries) GetDeletedWorkspace(ctx context.Context, arg GetDeletedWorkspa
 	return deleted_name, err
 }
 
+const getDurableOperation = `-- name: GetDurableOperation :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = ?
+`
+
+func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOperation, error) {
+	row := q.db.QueryRowContext(ctx, getDurableOperation, id)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getDurableOperationByKey = `-- name: GetDurableOperationByKey :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE start_key = ?
+`
+
+func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string) (DurableOperation, error) {
+	row := q.db.QueryRowContext(ctx, getDurableOperationByKey, startKey)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getDurableSchedule = `-- name: GetDurableSchedule :one
+
+SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = ?
+`
+
+// Durable schedules. Every time comes from DatabaseNowMs, the clock of the
+// store, and each write runs in an IMMEDIATE transaction.
+func (q *Queries) GetDurableSchedule(ctx context.Context, name string) (DurableSchedule, error) {
+	row := q.db.QueryRowContext(ctx, getDurableSchedule, name)
+	var i DurableSchedule
+	err := row.Scan(
+		&i.Name,
+		&i.IntervalMs,
+		&i.NextRunAtMs,
+		&i.LastClaimedAtMs,
+	)
+	return i, err
+}
+
 const getFailoverVersion = `-- name: GetFailoverVersion :one
 SELECT failover_version
 FROM namespaces
@@ -3411,7 +3549,8 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 
 const getSignInProvider = `-- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 WHERE provider_id = ?
 `
@@ -3431,6 +3570,14 @@ func (q *Queries) GetSignInProvider(ctx context.Context, providerID string) (Sig
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
 		&i.Version,
+		&i.Mode,
+		&i.AuthorizationUrl,
+		&i.TokenUrl,
+		&i.UserinfoUrl,
+		&i.SubjectClaim,
+		&i.NameClaim,
+		&i.UsernameClaim,
+		&i.EmailClaim,
 	)
 	return i, err
 }
@@ -4228,6 +4375,83 @@ func (q *Queries) InsertDeletedInventory(ctx context.Context, arg InsertDeletedI
 	return err
 }
 
+const insertDurableOperation = `-- name: InsertDurableOperation :exec
+
+INSERT INTO durable_operations (
+    id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, '', NULL, 0, NULL, 0, ?, ?, ?)
+`
+
+type InsertDurableOperationParams struct {
+	ID          string
+	StartKey    string
+	Kind        string
+	Input       []byte
+	Version     int64
+	NotBeforeMs int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// Durable operations. Every time comes from DatabaseNowMs, the clock of the
+// store. Each write runs in an IMMEDIATE transaction, so the read of a row
+// and its write see no other writer between them.
+func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableOperationParams) error {
+	_, err := q.db.ExecContext(ctx, insertDurableOperation,
+		arg.ID,
+		arg.StartKey,
+		arg.Kind,
+		arg.Input,
+		arg.Version,
+		arg.NotBeforeMs,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
+const insertDurableSchedule = `-- name: InsertDurableSchedule :exec
+INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms) VALUES (?, ?, ?, NULL)
+`
+
+type InsertDurableScheduleParams struct {
+	Name        string
+	IntervalMs  int64
+	NextRunAtMs int64
+}
+
+func (q *Queries) InsertDurableSchedule(ctx context.Context, arg InsertDurableScheduleParams) error {
+	_, err := q.db.ExecContext(ctx, insertDurableSchedule, arg.Name, arg.IntervalMs, arg.NextRunAtMs)
+	return err
+}
+
+const insertDurableStep = `-- name: InsertDurableStep :exec
+INSERT INTO durable_steps (operation_id, name, seq, result, done_at_ms)
+VALUES (
+    ?1, ?2,
+    (SELECT COALESCE(MAX(seq), 0) + 1 FROM durable_steps WHERE operation_id = ?1),
+    ?3, ?4
+)
+`
+
+type InsertDurableStepParams struct {
+	OperationID string
+	Name        string
+	Result      []byte
+	DoneAtMs    int64
+}
+
+func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepParams) error {
+	_, err := q.db.ExecContext(ctx, insertDurableStep,
+		arg.OperationID,
+		arg.Name,
+		arg.Result,
+		arg.DoneAtMs,
+	)
+	return err
+}
+
 const insertJournal = `-- name: InsertJournal :exec
 INSERT INTO update_journal (
     stack_id, update_id, arrival, blob_key, sha256, md5, size,
@@ -4960,6 +5184,39 @@ func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([
 			&i.DeletedAtMs,
 			&i.PurgeAfterMs,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDurableSteps = `-- name: ListDurableSteps :many
+SELECT name, result, done_at_ms FROM durable_steps WHERE operation_id = ? ORDER BY seq
+`
+
+type ListDurableStepsRow struct {
+	Name     string
+	Result   []byte
+	DoneAtMs int64
+}
+
+func (q *Queries) ListDurableSteps(ctx context.Context, operationID string) ([]ListDurableStepsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDurableSteps, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDurableStepsRow
+	for rows.Next() {
+		var i ListDurableStepsRow
+		if err := rows.Scan(&i.Name, &i.Result, &i.DoneAtMs); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -5938,7 +6195,8 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 
 const listSignInProviders = `-- name: ListSignInProviders :many
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 ORDER BY provider_id
 `
@@ -5964,6 +6222,14 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 			&i.Version,
+			&i.Mode,
+			&i.AuthorizationUrl,
+			&i.TokenUrl,
+			&i.UserinfoUrl,
+			&i.SubjectClaim,
+			&i.NameClaim,
+			&i.UsernameClaim,
+			&i.EmailClaim,
 		); err != nil {
 			return nil, err
 		}
@@ -7469,6 +7735,26 @@ func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainState
 	return err
 }
 
+const setDurableScheduleInterval = `-- name: SetDurableScheduleInterval :exec
+UPDATE durable_schedules
+SET interval_ms = ?1,
+    next_run_at_ms = MIN(next_run_at_ms, CAST(?2 AS INTEGER) + ?1)
+WHERE name = ?3
+`
+
+type SetDurableScheduleIntervalParams struct {
+	IntervalMs int64
+	NowMs      int64
+	Name       string
+}
+
+// Sets the interval, and moves the next run to now plus the interval when
+// that is earlier.
+func (q *Queries) SetDurableScheduleInterval(ctx context.Context, arg SetDurableScheduleIntervalParams) error {
+	_, err := q.db.ExecContext(ctx, setDurableScheduleInterval, arg.IntervalMs, arg.NowMs, arg.Name)
+	return err
+}
+
 const setInstallationState = `-- name: SetInstallationState :execrows
 UPDATE installation
 SET state = ?
@@ -8026,6 +8312,47 @@ func (q *Queries) UnitWorkspacesByIDs(ctx context.Context, ids []string) ([]Unit
 	return items, nil
 }
 
+const updateDurableOperation = `-- name: UpdateDurableOperation :exec
+UPDATE durable_operations
+SET state = ?, attempt = ?, expiries = ?, failures = ?, last_error = ?, claim_owner = ?, claim_token = ?,
+    claim_expires_at_ms = ?, cancel_requested = ?, not_before_ms = ?, updated_at_ms = ?
+WHERE id = ?
+`
+
+type UpdateDurableOperationParams struct {
+	State            string
+	Attempt          int64
+	Expiries         int64
+	Failures         int64
+	LastError        string
+	ClaimOwner       sql.NullString
+	ClaimToken       int64
+	ClaimExpiresAtMs sql.NullInt64
+	CancelRequested  bool
+	NotBeforeMs      int64
+	UpdatedAtMs      int64
+	ID               string
+}
+
+// Writes every column that changes after the start of an operation.
+func (q *Queries) UpdateDurableOperation(ctx context.Context, arg UpdateDurableOperationParams) error {
+	_, err := q.db.ExecContext(ctx, updateDurableOperation,
+		arg.State,
+		arg.Attempt,
+		arg.Expiries,
+		arg.Failures,
+		arg.LastError,
+		arg.ClaimOwner,
+		arg.ClaimToken,
+		arg.ClaimExpiresAtMs,
+		arg.CancelRequested,
+		arg.NotBeforeMs,
+		arg.UpdatedAtMs,
+		arg.ID,
+	)
+	return err
+}
+
 const updateGroup = `-- name: UpdateGroup :execrows
 UPDATE principal_groups SET name = ?, name_key = ?, description = ?, updated_at_ms = ?
 WHERE id = ? AND deleted_at_ms IS NULL
@@ -8142,24 +8469,36 @@ UPDATE sign_in_providers
 SET issuer = ?1, display_name = ?2, client_id = ?3,
     client_secret = ?4, scopes = ?5,
     auto_create = ?6, enabled = ?7,
-    updated_at_ms = ?8, version = ?9
-WHERE provider_id = ?10 AND version = ?9 - 1
+    authorization_url = ?8, token_url = ?9,
+    userinfo_url = ?10, subject_claim = ?11,
+    name_claim = ?12, username_claim = ?13,
+    email_claim = ?14,
+    updated_at_ms = ?15, version = ?16
+WHERE provider_id = ?17 AND version = ?16 - 1
 `
 
 type UpdateSignInProviderParams struct {
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   int64
-	Enabled      int64
-	UpdatedAtMs  int64
-	Version      int64
-	ProviderID   string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       int64
+	Enabled          int64
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
+	UpdatedAtMs      int64
+	Version          int64
+	ProviderID       string
 }
 
-// The update applies only to the version that the change read.
+// The update applies only to the version that the change read. The mode
+// never changes.
 func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProviderParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, updateSignInProvider,
 		arg.Issuer,
@@ -8169,6 +8508,13 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		arg.Scopes,
 		arg.AutoCreate,
 		arg.Enabled,
+		arg.AuthorizationUrl,
+		arg.TokenUrl,
+		arg.UserinfoUrl,
+		arg.SubjectClaim,
+		arg.NameClaim,
+		arg.UsernameClaim,
+		arg.EmailClaim,
 		arg.UpdatedAtMs,
 		arg.Version,
 		arg.ProviderID,

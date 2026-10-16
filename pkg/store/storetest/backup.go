@@ -465,12 +465,29 @@ func seedBackupProviders(t *testing.T, s BackupStore) {
 
 	if pc, ok := s.(session.ProviderConfigStore); ok {
 		p := session.ProviderConfig{
-			CreatedAt: now(), UpdatedAt: now(), ID: "corp", Issuer: "https://idp.example", DisplayName: "Corp",
-			ClientID: "dustpan", SealedSecret: []byte("sealed secret"), Scopes: []string{"profile"}, Version: 1,
-			AutoCreate: true, Enabled: false,
+			CreatedAt: now(), UpdatedAt: now(), ID: "corp", Mode: session.ModeOIDC, Issuer: "https://idp.example",
+			DisplayName: "Corp", ClientID: "dustpan", SealedSecret: []byte("sealed secret"),
+			Scopes: []string{"profile"}, OAuth: session.OAuthSettings{
+				AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+				EmailClaim: "",
+			}, Version: 1, AutoCreate: true, Enabled: false,
 		}
 		if err := pc.CreateProviderConfig(ctx, p, ServerChange(now(), "sign-in-provider:corp")); err != nil {
 			t.Fatalf("create sign-in provider: %v", err)
+		}
+
+		plain := session.ProviderConfig{
+			CreatedAt: now(), UpdatedAt: now(), ID: "hub", Mode: session.ModeOAuth, Issuer: "", DisplayName: "Hub",
+			ClientID: "dustpan", SealedSecret: []byte("sealed secret of hub"), Scopes: []string{"read:user"},
+			OAuth: session.OAuthSettings{ //nolint:gosec // Test fixture: the URLs of a provider, no credential.
+				AuthorizationURL: "https://hub.example/login/oauth/authorize",
+				TokenURL:         "https://hub.example/login/oauth/access_token",
+				UserinfoURL:      "https://api.hub.example/user", SubjectClaim: "id", NameClaim: "name",
+				UsernameClaim: "login", EmailClaim: "email",
+			}, Version: 1, AutoCreate: false, Enabled: true,
+		}
+		if err := pc.CreateProviderConfig(ctx, plain, ServerChange(now(), "sign-in-provider:hub")); err != nil {
+			t.Fatalf("create plain OAuth sign-in provider: %v", err)
 		}
 	}
 }
@@ -993,9 +1010,10 @@ func sameBlobRef(a, b backup.BlobRef) bool {
 }
 
 // testBackupTablesCoverSchema checks that the data tables of the migrated
-// schema are exactly the tables of backup.Tables. It reads the schema tables
-// through the Inspector, never through Tables itself, so a migration that
-// adds a table fails here until its author adds the table to Tables.
+// schema are exactly the tables of backup.Tables and backup.ControlTables.
+// It reads the schema tables through the Inspector, never through the lists
+// themselves, so a migration that adds a table fails here until its author
+// adds the table to one of the lists.
 func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
 	t.Helper()
 
@@ -1006,14 +1024,14 @@ func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
 		t.Fatalf("schema tables: %v", err)
 	}
 
-	want := backup.TablesCopy()
+	want := append(backup.TablesCopy(), backup.ControlTables...)
 	slices.Sort(want)
 
 	got := slices.Clone(schema)
 	slices.Sort(got)
 
 	if !slices.Equal(got, want) {
-		t.Fatalf("schema tables = %q, want backup.Tables %q", got, want)
+		t.Fatalf("schema tables = %q, want backup.Tables and backup.ControlTables %q", got, want)
 	}
 }
 
