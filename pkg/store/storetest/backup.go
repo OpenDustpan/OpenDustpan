@@ -285,17 +285,17 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 		{
 			CreatedAt: now(), UpdatedAt: now().Add(time.Minute), DisabledAt: time.Time{}, ID: "prn-alice",
 			Subject: "alice@example.com", DisplayName: "Alice", Kind: principal.KindPerson,
-			Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+			Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 		{
 			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-deploy",
 			Subject: "ci-deploy", DisplayName: "", Kind: principal.KindService,
-			Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+			Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 		{
 			CreatedAt: now(), UpdatedAt: now(), DisabledAt: time.Time{}, ID: "prn-gone",
 			Subject: "gone", DisplayName: "", Kind: principal.KindWorkload,
-			Source: principal.SourceSCIM, Namespace: "", GroupCount: 0,
+			Source: principal.SourceSCIM, Namespace: "", GroupCount: 0, BreakGlass: false,
 		},
 	}
 	for i := range principals {
@@ -392,7 +392,7 @@ func seedBackupSweep(t *testing.T, ts accesstoken.Store) {
 
 	policy := accesstoken.Policy{
 		UpdatedAt: now(), MaxLifetime: 30 * 24 * time.Hour, Inactivity: time.Hour,
-		DisableTokens: true, DisableAccounts: true, DisableBreakGlass: true,
+		DisableTokens: true, DisableAccounts: true, DisableBreakGlass: false,
 	}
 
 	_, err := ts.UpdatePolicy(ctx, func(accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {

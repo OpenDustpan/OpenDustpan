@@ -73,6 +73,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "concurrent creates of one subject or group name: one wins", test: testConcurrentCreates},
 		{name: "lists answer totals and records answer their counts", test: testTotalsAndCounts},
 		{name: "a group of a directory refuses membership changes", test: testDirectoryGroup},
+		{name: "a break-glass person round trips", test: testBreakGlassRoundTrip},
+		{name: "a break-glass account must be a person", test: testBreakGlassKind},
 	}
 
 	for _, tc := range cases {
@@ -140,7 +142,7 @@ func newPrincipal(id, subject string, kind principal.Kind) principal.Principal {
 		DisplayName: "Name of " + subject,
 		Kind:        kind,
 		Source:      principal.SourceLocal,
-		Namespace:   "", GroupCount: 0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 }
 
@@ -1186,5 +1188,62 @@ func testDirectoryGroup(t *testing.T, s principal.Store) {
 	groups, _, err := s.ListGroups(ctx, all())
 	if err != nil || len(groups) != 1 || groups[0].Source != principal.SourceLDAP {
 		t.Fatalf("groups = %+v, %v; want engineering from ldap", groups, err)
+	}
+}
+
+func testBreakGlassRoundTrip(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	want := newPrincipal("prn-1", "alice@example.com", principal.KindPerson)
+	want.BreakGlass = true
+	mustCreatePrincipal(t, s, want)
+
+	got, err := s.GetPrincipal(ctx, want.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	equalPrincipal(t, got, want)
+
+	bySubject, err := s.GetPrincipalBySubject(ctx, want.Subject)
+	if err != nil {
+		t.Fatalf("get by subject: %v", err)
+	}
+
+	equalPrincipal(t, bySubject, want)
+
+	rows, _, err := s.ListPrincipals(ctx, all(), "")
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	if len(rows) != 1 {
+		t.Fatalf("list holds %d principals, want 1", len(rows))
+	}
+
+	equalPrincipal(t, rows[0], want)
+
+	if err := want.Validate(); err != nil {
+		t.Fatalf("validate a break-glass person: %v", err)
+	}
+}
+
+func testBreakGlassKind(t *testing.T, s principal.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	for _, kind := range []principal.Kind{principal.KindService, principal.KindWorkload} {
+		p := newPrincipal("prn-"+string(kind), "owner-"+string(kind), kind)
+		p.BreakGlass = true
+
+		if err := p.Validate(); !errors.Is(err, principal.ErrBreakGlassKind) {
+			t.Fatalf("validate a break-glass %s: err = %v, want ErrBreakGlassKind", kind, err)
+		}
+
+		err := s.CreatePrincipal(ctx, p, entry())
+		wantErr(t, "create a break-glass "+string(kind), err, principal.ErrBreakGlassKind)
 	}
 }

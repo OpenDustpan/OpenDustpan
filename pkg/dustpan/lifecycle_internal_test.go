@@ -91,8 +91,17 @@ func (f scopeFixture) seed(t *testing.T, subject string, obj identity.Object) {
 	t.Helper()
 
 	prn := principal.Principal{
-		CreatedAt: scopeAt(), UpdatedAt: scopeAt(), DisabledAt: time.Time{}, ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		CreatedAt:   scopeAt(),
+		UpdatedAt:   scopeAt(),
+		DisabledAt:  time.Time{},
+		ID:          "prn-" + subject,
+		Subject:     subject,
+		DisplayName: "",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
 	}
 	change := storetest.ServerChange(scopeAt(), "principal:"+prn.ID)
 	if err := f.store.CreatePrincipal(t.Context(), prn, change); err != nil {

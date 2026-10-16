@@ -200,6 +200,7 @@ type Principal struct {
 	LastActiveAtMs int64
 	LastSignInAtMs pgtype.Int8
 	Namespace      string
+	BreakGlass     bool
 }
 
 type PrincipalGroup struct {

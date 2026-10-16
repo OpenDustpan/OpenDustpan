@@ -95,6 +95,7 @@ func createServicePrincipal(t *testing.T, chain *auditChain, subject string) {
 		Source:      principal.SourceLocal,
 		Namespace:   "",
 		GroupCount:  0,
+		BreakGlass:  false,
 	}
 
 	e := audit.Entry{
