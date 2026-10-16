@@ -364,7 +364,7 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 	}
 
 	if w, getErr := s.Get(ctx, ref); getErr == nil {
-		if sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
+		if sweepErr := s.sweepExpiredRows(ctx, w); sweepErr != nil {
 			s.logger.WarnContext(
 				ctx,
 				"sweep expired state",
@@ -1839,27 +1839,12 @@ func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion
 // decides: BeginState treats the sweep as best effort and declares anyway,
 // leaving the rows for the next sweep.
 func (s *Service) sweepExpired(ctx context.Context, w Workspace) error {
-	fence, err := s.fence(ctx, w.Ref.Namespace)
+	expired, err := s.expirePending(ctx, w)
 	if err != nil {
 		return err
 	}
 
-	expired, err := s.states.DeleteExpiredPendingStateVersions(ctx, w.ID, s.clock().Add(-SweepGracePeriod), fence)
-	if err != nil {
-		return fmt.Errorf("sweep expired state of %s: %w", w.Ref, err)
-	}
-
-	var cleanupErr error
-
-	for i := range expired {
-		if expired[i].Content == "" {
-			continue
-		}
-
-		if blobErr := s.deleteBlobRetried(ctx, expired[i].Content); blobErr != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete content of %s: %w", expired[i].ID, blobErr))
-		}
-	}
+	cleanupErr := s.deleteExpiredBlobs(ctx, expired)
 
 	// A blob delete above may have failed, or the process may have crashed
 	// between an earlier row delete and its blob delete: the unreferenced
@@ -1873,6 +1858,57 @@ func (s *Service) sweepExpired(ctx context.Context, w Workspace) error {
 	}
 
 	return nil
+}
+
+// sweepExpiredRows deletes the expired pending versions of w with their
+// attempted content, without the unreferenced-blob pass. The workspace
+// delete uses it, so the delete never removes a blob that no version
+// references: those blobs stay for the retention sweep, which runs under
+// the audit chain gate.
+func (s *Service) sweepExpiredRows(ctx context.Context, w Workspace) error {
+	expired, err := s.expirePending(ctx, w)
+	if err != nil {
+		return err
+	}
+
+	if cleanupErr := s.deleteExpiredBlobs(ctx, expired); cleanupErr != nil {
+		return fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
+	}
+
+	return nil
+}
+
+// expirePending deletes the expired pending versions of w and returns them
+// with their attempted content keys, so the caller deletes the blobs.
+func (s *Service) expirePending(ctx context.Context, w Workspace) ([]StateVersion, error) {
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	expired, err := s.states.DeleteExpiredPendingStateVersions(ctx, w.ID, s.clock().Add(-SweepGracePeriod), fence)
+	if err != nil {
+		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, err)
+	}
+
+	return expired, nil
+}
+
+// deleteExpiredBlobs deletes the attempted content of the expired versions.
+func (s *Service) deleteExpiredBlobs(ctx context.Context, expired []StateVersion) error {
+	var cleanupErr error
+
+	for i := range expired {
+		if expired[i].Content == "" {
+			continue
+		}
+
+		if blobErr := s.deleteBlobRetried(ctx, expired[i].Content); blobErr != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete content of %s: %w", expired[i].ID, blobErr))
+		}
+	}
+
+	return cleanupErr
 }
 
 // sweepUnreferenced deletes the blobs under the workspace prefix that no
