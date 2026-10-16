@@ -281,7 +281,7 @@ func revokeAccessForKeepTest(t *testing.T, s RestoreStore, tokens accesstoken.St
 
 	fence, entry := GrantWrite(t, s, identity.NamespaceObject("acme"), now(), "grant:grt-ops")
 
-	if err := grants.RevokeGrant(ctx, "grt-ops", fence, entry); err != nil {
+	if err := grants.RevokeGrant(ctx, "grt-ops", fence, entry, nil); err != nil {
 		t.Fatalf("revoke grant: %v", err)
 	}
 }
