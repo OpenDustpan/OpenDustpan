@@ -101,7 +101,7 @@ The installation API operation that replaces the SQL data of an installation wit
 _Avoid_: Recovery, load, import
 
 **Control table**:
-A table that a backup leaves out and a restore keeps (ADR 72, decision 5). The live rows stay across the swap. The tables of durable operations are control tables. Their claim tokens only grow, and an older token from a backup would let a stale holder write.
+A table that a restore does not replace (ADR 72, decision 5). The live rows stay across the swap. The installation, backups, restores and durable operation tables are control tables. The claim tokens of durable operations only grow, and an older token from a backup would let a stale holder write.
 
 **Deleted unit**:
 A unit after a delete through its tool (ADR 47). It leaves every list and its name is free at once. OpenDustpan keeps its state, history, secrets and grants until a purge. The inventory API lists the deleted units of a namespace, and a restore of a deleted unit brings one back with its stable ID.
