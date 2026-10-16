@@ -26,7 +26,7 @@ import (
 
 // durabletestFake selects the broken rule of the store that the child
 // process serves to the suite.
-const durabletestFake = "OPENDUSTPAN_DURABLETEST_FAKE"
+const durabletestFake = "OPENDUSTPAN_TEST_DURABLETEST_FAKE"
 
 func TestMemStore(t *testing.T) {
 	t.Parallel()
