@@ -1716,6 +1716,31 @@ func TestOpenRefusesBinaryBelowMinimum(t *testing.T) {
 	}
 }
 
+// TestOpenUsesTheHighestMinimum records two future migrations whose
+// minimums sort in the other order as text: v0.10.0 is the higher one. A
+// binary between them refuses to open.
+func TestOpenUsesTheHighestMinimum(t *testing.T) {
+	t.Parallel()
+
+	path, versions, _ := newerSchemaDatabase(t, "v0.10.0")
+	insertFutureVersion(t, path, versions[len(versions)-1]+1, "v0.3.0")
+
+	if _, err := sqlite.Open(t.Context(), path, sqlite.WithBinaryVersion("v0.5.0")); !errors.Is(
+		err, schema.ErrBinaryBelowMinimum,
+	) {
+		t.Fatalf("open between two minimums: err = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	s, err := sqlite.Open(t.Context(), path, sqlite.WithBinaryVersion("v0.10.0"))
+	if err != nil {
+		t.Fatalf("open at the highest minimum: %v", err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+}
+
 // TestOpenStartsOnNewerSchemaAtMinimum proves that a binary at or above the
 // minimum opens a database that records a migration it does not embed, and
 // applies nothing.

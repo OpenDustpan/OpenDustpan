@@ -14,6 +14,7 @@ package schema
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -57,20 +58,155 @@ func (e *MinimumError) Unwrap() error {
 	return ErrBinaryBelowMinimum
 }
 
-// release is the MAJOR.MINOR.PATCH part of a binary version.
-type release struct {
+// ErrBadBinaryVersion reports a binary version that is not a release
+// version, "dev", an empty version or a commit hash. A store refuses to open
+// with it, so that a stamp that does not parse cannot skip the minimum.
+var ErrBadBinaryVersion = errors.New(
+	"binary version must be MAJOR.MINOR.PATCH with an optional v, dev or a commit hash",
+)
+
+// version is a parsed release version: MAJOR.MINOR.PATCH with the
+// pre-release identifiers, if any.
+type version struct {
 	major, minor, patch int
+	pre                 []string
 }
 
-// compare returns -1, 0 or 1 when r is below, equal to or above other.
-func (r release) compare(other release) int {
+// commitHash matches the version of a build from a commit with no tag, as
+// `git describe --always --dirty` writes it.
+var commitHash = regexp.MustCompile(`^[0-9a-f]{7,40}(-dirty)?$`)
+
+// describeSuffix matches the suffix that `git describe` adds to a tag:
+// the commit count and the hash, and -dirty for local changes.
+var describeSuffix = regexp.MustCompile(`^(\d+-g[0-9a-f]+)?(-?dirty)?$`)
+
+// preIdentifier matches one pre-release identifier of semver.
+var preIdentifier = regexp.MustCompile(`^[0-9A-Za-z-]+$`)
+
+// isDev reports whether raw names a build with no release version: "dev",
+// an empty version or a commit hash.
+func isDev(raw string) bool {
+	s := strings.TrimSpace(raw)
+
+	return s == "" || s == "dev" || commitHash.MatchString(s)
+}
+
+// parseVersion reads a release version: MAJOR.MINOR.PATCH with an optional
+// "v" or "V", an optional pre-release after "-" and optional build metadata
+// after "+", which it ignores. A `git describe` suffix such as -3-gabc1234
+// or -dirty is not a pre-release: the build counts as its tag.
+func parseVersion(raw string) (version, bool) {
+	var none version
+
+	s := strings.TrimSpace(raw)
+	s = strings.TrimPrefix(strings.TrimPrefix(s, "v"), "V")
+
+	if i := strings.IndexByte(s, '+'); i >= 0 {
+		s = s[:i]
+	}
+
+	core, suffix, hasSuffix := strings.Cut(s, "-")
+
+	parts := strings.Split(core, ".")
+	if len(parts) != 3 { //nolint:mnd // MAJOR, MINOR and PATCH.
+		return none, false
+	}
+
+	numbers := make([]int, 0, len(parts))
+
+	for _, part := range parts {
+		n, ok := parseNumber(part)
+		if !ok {
+			return none, false
+		}
+
+		numbers = append(numbers, n)
+	}
+
+	v := version{major: numbers[0], minor: numbers[1], patch: numbers[2], pre: nil}
+
+	if !hasSuffix {
+		return v, true
+	}
+
+	pre, ok := parsePreRelease(suffix)
+	if !ok {
+		return none, false
+	}
+
+	v.pre = pre
+
+	return v, true
+}
+
+// parsePreRelease reads the suffix after the first "-" of a version. A
+// `git describe` suffix is no pre-release and answers nil. An empty suffix,
+// an empty identifier or a numeric identifier with a leading zero fails.
+func parsePreRelease(suffix string) ([]string, bool) {
+	if suffix == "" {
+		return nil, false
+	}
+
+	if describeSuffix.MatchString(suffix) {
+		return nil, true
+	}
+
+	var pre []string
+
+	for id := range strings.SplitSeq(suffix, ".") {
+		if !preIdentifier.MatchString(id) || (isNumeric(id) && len(id) > 1 && id[0] == '0') {
+			return nil, false
+		}
+
+		pre = append(pre, id)
+	}
+
+	return pre, true
+}
+
+// parseNumber reads one decimal component with no sign and no leading zero.
+func parseNumber(part string) (int, bool) {
+	if part == "" || !isNumeric(part) || (len(part) > 1 && part[0] == '0') {
+		return 0, false
+	}
+
+	n, err := strconv.Atoi(part)
+	if err != nil {
+		return 0, false
+	}
+
+	return n, true
+}
+
+// isNumeric reports whether s holds only the digits 0 to 9.
+func isNumeric(s string) bool {
+	for _, c := range []byte(s) {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+
+	return s != ""
+}
+
+// compare returns -1, 0 or 1 when v is below, equal to or above other, by
+// the precedence of semver for the cases that occur: a minimum is always a
+// release, so a pre-release is below its release, and two pre-releases of
+// one release compare as equal.
+func (v version) compare(other version) int {
+	for _, c := range [][2]int{{v.major, other.major}, {v.minor, other.minor}, {v.patch, other.patch}} {
+		if c[0] != c[1] {
+			return cmpInt(c[0], c[1])
+		}
+	}
+
 	switch {
-	case r.major != other.major:
-		return cmpInt(r.major, other.major)
-	case r.minor != other.minor:
-		return cmpInt(r.minor, other.minor)
+	case len(v.pre) == len(other.pre), len(v.pre) > 0 && len(other.pre) > 0:
+		return 0
+	case len(v.pre) > 0:
+		return -1
 	default:
-		return cmpInt(r.patch, other.patch)
+		return 1
 	}
 }
 
@@ -85,54 +221,33 @@ func cmpInt(a, b int) int {
 	}
 }
 
-// parseRelease reads vMAJOR.MINOR.PATCH at the start of v. A suffix after
-// "-" or "+" is ignored, so a `git describe` version such as
-// v0.1.0-3-gabc1234-dirty counts as its tag v0.1.0.
-func parseRelease(v string) (release, bool) {
-	var none release
-
-	rest, ok := strings.CutPrefix(v, "v")
-	if !ok {
-		return none, false
-	}
-
-	if i := strings.IndexAny(rest, "-+"); i >= 0 {
-		rest = rest[:i]
-	}
-
-	parts := strings.Split(rest, ".")
-	if len(parts) != 3 { //nolint:mnd // MAJOR, MINOR and PATCH.
-		return none, false
-	}
-
-	numbers := make([]int, 0, len(parts))
-
-	for _, part := range parts {
-		n, err := strconv.Atoi(part)
-		if err != nil || n < 0 || part == "" || (len(part) > 1 && part[0] == '0') {
-			return none, false
-		}
-
-		numbers = append(numbers, n)
-	}
-
-	return release{major: numbers[0], minor: numbers[1], patch: numbers[2]}, true
+// IsDevBuild reports whether version names a build with no release
+// version: "dev", an empty version or a commit hash. A dev build counts as
+// newer than every release, so no minimum refuses it.
+func IsDevBuild(version string) bool {
+	return isDev(version)
 }
 
-// IsDevBuild reports whether version is not a release version: "dev", an
-// empty version, a commit hash or any other value that does not start with
-// vMAJOR.MINOR.PATCH. A dev build counts as newer than every release, so no
-// minimum refuses it.
-func IsDevBuild(version string) bool {
-	_, ok := parseRelease(version)
+// CheckBinaryVersion returns ErrBadBinaryVersion when version is neither a
+// dev build nor a release version.
+func CheckBinaryVersion(version string) error {
+	if isDev(version) {
+		return nil
+	}
 
-	return !ok
+	if _, ok := parseVersion(version); !ok {
+		return fmt.Errorf("%w: got %q", ErrBadBinaryVersion, version)
+	}
+
+	return nil
 }
 
 // ValidMinimum returns ErrBadMinimum when v is not exactly vMAJOR.MINOR.PATCH.
+// Older binaries read every recorded minimum with this rule, so the format
+// of a minimum must not change.
 func ValidMinimum(v string) error {
-	r, ok := parseRelease(v)
-	if !ok || fmt.Sprintf("v%d.%d.%d", r.major, r.minor, r.patch) != v {
+	parsed, ok := parseVersion(v)
+	if !ok || len(parsed.pre) > 0 || fmt.Sprintf("v%d.%d.%d", parsed.major, parsed.minor, parsed.patch) != v {
 		return fmt.Errorf("%w: %q", ErrBadMinimum, v)
 	}
 
@@ -144,7 +259,7 @@ func ValidMinimum(v string) error {
 func HighestMinimum(values []string) (string, error) {
 	highest := ""
 
-	var top release
+	var top version
 
 	for _, v := range values {
 		if v == "" {
@@ -155,9 +270,9 @@ func HighestMinimum(values []string) (string, error) {
 			return "", err
 		}
 
-		r, _ := parseRelease(v)
-		if highest == "" || r.compare(top) > 0 {
-			highest, top = v, r
+		parsed, _ := parseVersion(v)
+		if highest == "" || parsed.compare(top) > 0 {
+			highest, top = v, parsed
 		}
 	}
 
@@ -165,10 +280,16 @@ func HighestMinimum(values []string) (string, error) {
 }
 
 // CheckMinimum returns a *MinimumError when binaryVersion is below minimum.
-// An empty minimum and a dev build pass. A minimum that is not of the form
-// vMAJOR.MINOR.PATCH fails with ErrBadMinimum.
+// A dev build passes, and so does an empty minimum. A binary version that is
+// neither a dev build nor a release version fails with ErrBadBinaryVersion,
+// also with no minimum. A minimum that is not vMAJOR.MINOR.PATCH fails with
+// ErrBadMinimum.
 func CheckMinimum(minimum, binaryVersion string) error {
-	if minimum == "" {
+	if err := CheckBinaryVersion(binaryVersion); err != nil {
+		return err
+	}
+
+	if minimum == "" || isDev(binaryVersion) {
 		return nil
 	}
 
@@ -176,12 +297,9 @@ func CheckMinimum(minimum, binaryVersion string) error {
 		return err
 	}
 
-	binary, ok := parseRelease(binaryVersion)
-	if !ok {
-		return nil
-	}
+	binary, _ := parseVersion(binaryVersion)
+	floor, _ := parseVersion(minimum)
 
-	floor, _ := parseRelease(minimum)
 	if binary.compare(floor) < 0 {
 		return &MinimumError{SchemaMinimum: minimum, BinaryVersion: binaryVersion}
 	}

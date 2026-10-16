@@ -83,9 +83,10 @@ type Migration struct {
 	Version          int64
 }
 
-// minimumHeader starts the header line that declares the minimum binary
-// version a migration sets.
-const minimumHeader = "-- minimum-binary-version:"
+// minimumToken names the header that declares the minimum binary version a
+// migration sets: one line "-- minimum-binary-version: vMAJOR.MINOR.PATCH"
+// in the leading comment block of the file.
+const minimumToken = "minimum-binary-version"
 
 // Plan is what a store applies at open: the pending migrations in order and
 // the minimum binary version the database schema records.
@@ -130,6 +131,10 @@ func Check(recorded []schema.AppliedMigration, embedded []Migration, binaryVersi
 		if !done[m.Version] {
 			pending = append(pending, m)
 		}
+	}
+
+	if err := checkPendingMinimums(pending, binaryVersion); err != nil {
+		return Plan{Pending: nil, Minimum: minimum}, err
 	}
 
 	unknown := UnknownRecorded(versions, embedded)
@@ -201,27 +206,81 @@ func loadFile(fsys fs.FS, dir, name string) (Migration, error) {
 	return Migration{Name: name, SQL: string(data), MinBinaryVersion: minimum, Version: version}, nil
 }
 
-// readMinimum returns the minimum binary version that the leading comment
-// lines of sql declare, or "" when they declare none.
-func readMinimum(sql string) (string, error) {
-	for line := range strings.Lines(sql) {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "--") {
-			return "", nil
-		}
-
-		value, ok := strings.CutPrefix(line, minimumHeader)
-		if !ok {
+// checkPendingMinimums refuses to apply a migration whose declared minimum
+// is above binaryVersion: the binary would then refuse its own database at
+// the next start. A dev build may apply it.
+func checkPendingMinimums(pending []Migration, binaryVersion string) error {
+	for _, m := range pending {
+		if m.MinBinaryVersion == "" {
 			continue
 		}
 
-		value = strings.TrimSpace(value)
-		if err := schema.ValidMinimum(value); err != nil {
-			return "", err
+		if err := schema.CheckMinimum(m.MinBinaryVersion, binaryVersion); err != nil {
+			return fmt.Errorf("migration %s sets a minimum above this binary, so it applies nothing: %w", m.Name, err)
 		}
-
-		return value, nil
 	}
 
-	return "", nil
+	return nil
+}
+
+// readMinimum returns the minimum binary version that the header of sql
+// declares, or "" when sql has none. The whole file is searched for the
+// header name in any case: it must appear at most once, on a comment line
+// "-- minimum-binary-version: vMAJOR.MINOR.PATCH" in the leading comment
+// block, which can hold blank lines. Any other place, a second header or a
+// malformed line fails with schema.ErrBadMinimum, so a header cannot be
+// skipped by mistake.
+func readMinimum(sql string) (string, error) {
+	switch n := strings.Count(strings.ToLower(sql), minimumToken); {
+	case n == 0:
+		return "", nil
+	case n > 1:
+		return "", fmt.Errorf("%w: the header %s appears %d times, want once", schema.ErrBadMinimum, minimumToken, n)
+	}
+
+	for line := range strings.Lines(sql) {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		comment, isComment := strings.CutPrefix(trimmed, "--")
+		if !isComment {
+			break
+		}
+
+		comment = strings.TrimSpace(comment)
+		if !strings.Contains(strings.ToLower(comment), minimumToken) {
+			continue
+		}
+
+		return parseMinimumLine(comment)
+	}
+
+	return "", fmt.Errorf("%w: the header %s is not in the leading comment block", schema.ErrBadMinimum, minimumToken)
+}
+
+// parseMinimumLine reads the value of one header comment, the text after
+// "--": the header name in any case, a colon and the version.
+func parseMinimumLine(comment string) (string, error) {
+	if len(comment) < len(minimumToken) || !strings.EqualFold(comment[:len(minimumToken)], minimumToken) {
+		return "", fmt.Errorf(
+			"%w: the line %q must start with the header %s",
+			schema.ErrBadMinimum,
+			comment,
+			minimumToken,
+		)
+	}
+
+	value, ok := strings.CutPrefix(strings.TrimSpace(comment[len(minimumToken):]), ":")
+	if !ok {
+		return "", fmt.Errorf("%w: the line %q has no colon after %s", schema.ErrBadMinimum, comment, minimumToken)
+	}
+
+	value = strings.TrimSpace(value)
+	if err := schema.ValidMinimum(value); err != nil {
+		return "", err
+	}
+
+	return value, nil
 }
