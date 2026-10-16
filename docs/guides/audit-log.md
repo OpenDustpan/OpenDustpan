@@ -257,7 +257,11 @@ A restore that stops after the swap gets the comparison at the next start.
 A restore trusts the audit log in the backup: signed checkpoints (see below) protect a backup.
 
 The server checks the chain of every namespace and of `@server` at start and every hour.
-`dustpan_audit_chain_invalid` holds the count of scopes whose check failed.
+`dustpan_audit_chain_invalid` holds the count of scopes whose chain or checkpoints do not match.
+When a database read, a blob read or a checkpoint write fails, the server does not check that scope.
+It logs a warning and adds one to `dustpan_audit_chain_check_errors_total`.
+Such a check does not lower `dustpan_audit_chain_invalid`.
+A failed read during the check of a restored log also adds one to `dustpan_audit_chain_check_errors_total`.
 
 ```yaml
       - alert: DustpanAuditChainInvalid
@@ -266,6 +270,12 @@ The server checks the chain of every namespace and of `@server` at start and eve
           severity: critical
         annotations:
           summary: An OpenDustpan audit chain does not match
+      - alert: DustpanAuditChainCheckErrors
+        expr: increase(dustpan_audit_chain_check_errors_total[3h]) >= 3
+        labels:
+          severity: warning
+        annotations:
+          summary: The OpenDustpan audit chain check cannot read the log
       - alert: DustpanAuditRestoreCheckFailed
         expr: increase(dustpan_audit_restore_check_failures_total[1h]) > 0
         labels:

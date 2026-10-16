@@ -779,6 +779,10 @@ func checkFinalizeGuards(
 		}
 	}
 
+	if restoreErr := checkFinalizeRestore(ctx, q, row); restoreErr != nil {
+		return db.Workspace{}, restoreErr
+	}
+
 	return wrow, nil
 }
 
@@ -989,6 +993,31 @@ func checkFinalizeOrder(ctx context.Context, q *db.Queries, row codec.StateVersi
 	default:
 		return nil
 	}
+}
+
+// checkFinalizeRestore refuses a restored version when the current state
+// already restores the same version for the same holder. The read runs in the
+// finalize transaction, so of two concurrent restores of one version only the
+// first becomes current.
+func checkFinalizeRestore(ctx context.Context, q *db.Queries, row codec.StateVersionRow) error {
+	if row.RestoredFrom == "" {
+		return nil
+	}
+
+	current, err := q.GetCurrentStateVersion(ctx, row.WorkspaceID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read current state: %w", err)
+	}
+
+	if current.RestoredFrom == row.RestoredFrom && current.Holder == row.Holder {
+		return workspace.ErrAlreadyRestored
+	}
+
+	return nil
 }
 
 // workspaceFromRow converts a workspace row into a domain workspace. The
