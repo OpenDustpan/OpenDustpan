@@ -24,7 +24,10 @@ func (s *Store) GetState(ctx context.Context) (maintenance.State, error) {
 
 	raw, err := s.queries.GetInstallationState(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", fmt.Errorf("select installation state sqlite database: row is missing: %w", maintenance.ErrUnavailable)
+		return "", fmt.Errorf(
+			"select installation state sqlite database: row is missing: %w",
+			maintenance.ErrUnavailable,
+		)
 	}
 
 	if err != nil {

@@ -22,7 +22,10 @@ var _ maintenance.Store = (*Store)(nil)
 func (s *Store) GetState(ctx context.Context) (maintenance.State, error) {
 	raw, err := s.queries.GetInstallationState(ctx)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", fmt.Errorf("select installation state postgres database: row is missing: %w", maintenance.ErrUnavailable)
+		return "", fmt.Errorf(
+			"select installation state postgres database: row is missing: %w",
+			maintenance.ErrUnavailable,
+		)
 	}
 
 	if err != nil {
