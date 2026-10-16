@@ -2102,3 +2102,59 @@ func TestRestoreKeepAccessMismatchFailsTheRestore(t *testing.T) {
 		t.Fatalf("restore error = %q, want %q", row.Error, backup.ErrRestoreAccessMismatch.Error())
 	}
 }
+
+// TestRestoreKeepAccessChecksTheKey proves that a restore that keeps the
+// access tables still runs the key-encryption key check on the backup: a
+// key that does not open the backup, and a backup whose installation keys
+// the store cannot read, fail the restore before any apply.
+func TestRestoreKeepAccessChecksTheKey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		edit func(live *checkLiveStore)
+		name string
+		id   backup.RestoreID
+	}{
+		{
+			name: "a key that does not open the backup",
+			id:   "rst-keepaccess000004",
+			edit: func(live *checkLiveStore) { live.key.Ciphertext = []byte("wrapped-by-another-key") },
+		},
+		{
+			name: "installation keys that the store cannot read",
+			id:   "rst-keepaccess000005",
+			edit: func(live *checkLiveStore) {
+				live.keyErr = fmt.Errorf("secret_keys of the backup holds no data key: %w", backup.ErrNoDataKey)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			setup := newRestoreServiceSetup(t)
+			tc.edit(setup.live.checks)
+
+			keepReq := backup.RestoreRequest{
+				BackupID:         setup.id,
+				PreBackupID:      "",
+				CheckOnly:        false,
+				Force:            false,
+				RequestedBy:      "tester",
+				KeepAccessTables: true,
+			}
+			if err := setup.service.Start(t.Context(), tc.id, keepReq); err != nil {
+				t.Fatalf("start restore that keeps the access tables: %v", err)
+			}
+
+			if row := waitRestoreEnd(t, setup.regs, tc.id); row.State != backup.RestoreFailed {
+				t.Fatalf("restore state = %q, want failed", row.State)
+			}
+
+			if got := setup.live.counts(); got.kept != 0 || got.applied != 0 {
+				t.Fatalf("kept = %d, applied = %d, want no apply", got.kept, got.applied)
+			}
+		})
+	}
+}

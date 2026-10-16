@@ -43,8 +43,12 @@ type InactivityRule interface {
 // Policies are required. A nil Inactivity applies no inactivity rule. A
 // nil Now uses time.Now.
 type SessionsConfig struct {
-	Store      Store
-	Policies   *Policies
+	Store    Store
+	Policies *Policies
+	// Providers creates the sessions of the stored sign-in providers. It
+	// may be nil when no provider is stored; a Start with Stored then
+	// fails with ErrMissingDependency.
+	Providers  ProviderSessionStore
 	Inactivity InactivityRule
 	Now        func() time.Time
 }
@@ -53,6 +57,7 @@ type SessionsConfig struct {
 // requests between the start and the callback of a sign-in.
 type Sessions struct {
 	store      Store
+	providers  ProviderSessionStore
 	policies   *Policies
 	inactivity InactivityRule
 	now        func() time.Time
@@ -73,7 +78,9 @@ func NewSessions(cfg SessionsConfig) (*Sessions, error) {
 		now = time.Now
 	}
 
-	return &Sessions{store: cfg.Store, policies: cfg.Policies, inactivity: cfg.Inactivity, now: now}, nil
+	return &Sessions{
+		store: cfg.Store, providers: cfg.Providers, policies: cfg.Policies, inactivity: cfg.Inactivity, now: now,
+	}, nil
 }
 
 // Now returns the time of the clock of the service, in UTC, to the
@@ -84,18 +91,22 @@ func (s *Sessions) Now() time.Time {
 
 // Start names a new session. AuthTime is the time of the authentication at
 // the identity provider; a time after the start of the session takes the
-// start.
+// start. Stored reports that Provider is a stored provider: the session is
+// then created through ProviderSessionStore, which checks the provider in
+// the same write.
 type Start struct {
 	AuthTime    time.Time
 	PrincipalID string
 	Provider    string
 	SourceIP    string
 	UserAgent   string
+	Stored      bool
 }
 
 // Start begins a session for in and returns it with its secret. e is the
 // entry of the caller; Start sets its time, scope, kind, outcome and
-// object. It returns the errors of Store.CreateSession.
+// object. It returns the errors of Store.CreateSession, or of
+// ProviderSessionStore.CreateProviderSession when in.Stored.
 func (s *Sessions) Start(ctx context.Context, e audit.Entry, in Start) (Session, Secret, error) {
 	secret, err := NewSecret()
 	if err != nil {
@@ -127,7 +138,7 @@ func (s *Sessions) Start(ctx context.Context, e audit.Entry, in Start) (Session,
 	}
 
 	change := entry(e, at, FullRef(in.PrincipalID, sess.ID))
-	if err := s.store.CreateSession(ctx, sess, DigestOf(secret), change); err != nil {
+	if err := s.create(ctx, in, sess, DigestOf(secret), change); err != nil {
 		return Session{}, Secret{}, fmt.Errorf("start session: %w", err)
 	}
 
@@ -267,4 +278,17 @@ func entry(e audit.Entry, at time.Time, object string) audit.Entry {
 	e.Object = object
 
 	return e
+}
+
+// create stores sess, through the provider session store when in.Stored.
+func (s *Sessions) create(ctx context.Context, in Start, sess Session, d Digest, e audit.Entry) error {
+	if !in.Stored {
+		return s.store.CreateSession(ctx, sess, d, e)
+	}
+
+	if s.providers == nil {
+		return fmt.Errorf("%w: provider session store", ErrMissingDependency)
+	}
+
+	return s.providers.CreateProviderSession(ctx, sess, d, e)
 }

@@ -433,6 +433,16 @@ func TestSecretsConformance(t *testing.T) {
 	})
 }
 
+func TestInstallationSecretsConformance(t *testing.T) {
+	t.Parallel()
+
+	secrettest.RunInstallation(t, func(t *testing.T) secrettest.InstallationStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 func TestUpdatesConformance(t *testing.T) {
 	t.Parallel()
 
