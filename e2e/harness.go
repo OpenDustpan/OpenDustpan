@@ -361,7 +361,7 @@ func startInprocessServer(
 
 	var signIn *signInSetup
 	if in.signIn {
-		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String())
+		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), newTestClock())
 	}
 
 	build := newServer(ctx, tb, serverArgs{
@@ -2148,7 +2148,7 @@ func (e *Env) apiCall(ctx context.Context, tb testing.TB, req apiRequest) {
 func (e *Env) writeTofuFiles(tb testing.TB, ts *httptest.Server) {
 	tb.Helper()
 
-	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Headers: nil, Bytes: ts.Certificate().Raw})
+	cert := pem.EncodeToMemory(&pem.Block{Type: pemCertificate, Headers: nil, Bytes: ts.Certificate().Raw})
 	e.write(tb, filepath.Join(e.home, "server.pem"), string(cert))
 	e.write(tb, filepath.Join(e.home, "tofurc"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.token))
 	e.write(tb, filepath.Join(e.home, "tofurc-b"), fmt.Sprintf(tofuCLIConfig, e.Host(), e.tokenB))

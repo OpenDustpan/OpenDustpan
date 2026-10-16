@@ -189,7 +189,16 @@ func runSignInOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkOtherAPIsIgnoreTheCookie(t, b)
 	checkCallbackOfAnotherState(t, b)
-	checkSessionLimits(t, b)
+
+	// The idle limit and the maximum length need hours of server time, so
+	// they run on the clock that the in-process server shares. The binary
+	// server keeps the real time.
+	if env.SharesClock() {
+		checkSessionLimits(t, b)
+	} else {
+		t.Log("binary server: the idle limit and the maximum length run with the in-process server only")
+	}
+
 	checkSignOut(t, b)
 }
 

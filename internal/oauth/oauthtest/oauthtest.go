@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -263,6 +264,12 @@ func newKey(alg string) (crypto.Signer, error) {
 // Issuer returns the issuer URL: the base URL of the provider.
 func (p *Provider) Issuer() string {
 	return p.server.URL
+}
+
+// Certificate returns the certificate of the provider, so another process
+// can trust it, or nil when the provider serves HTTP.
+func (p *Provider) Certificate() *x509.Certificate {
+	return p.server.Certificate()
 }
 
 // Client returns an HTTP client that trusts the provider.
