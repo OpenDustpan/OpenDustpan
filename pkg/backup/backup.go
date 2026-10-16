@@ -100,8 +100,6 @@ var Tables = []string{
 	TableSessionPolicy,
 	"backups",
 	"restores",
-	TableDurableOperations,
-	TableDurableSteps,
 	"installation",
 }
 

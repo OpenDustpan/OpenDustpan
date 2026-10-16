@@ -1,6 +1,7 @@
 package postgres_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -130,10 +131,10 @@ func TestDurableClaimSkipsALockedRow(t *testing.T) {
 	}
 }
 
-// TestDurableRowsRoundTripThroughAPortableBackup proves that the rows of
-// durable operations and their steps go through a portable export and stage
-// back with the same counts: a claimed operation with a step, and a pending
-// one with no input, whose claim columns are NULL.
+// TestDurableRowsRoundTripThroughAPortableBackup proves that a portable backup
+// holds no rows of the durable control tables and that a restore keeps the
+// live rows unchanged: a claimed operation with a step, and a pending one
+// with no input, whose claim columns are NULL.
 func TestDurableRowsRoundTripThroughAPortableBackup(t *testing.T) {
 	t.Parallel()
 
@@ -152,18 +153,22 @@ func TestDurableRowsRoundTripThroughAPortableBackup(t *testing.T) {
 	seedDurableRows(t, s.DurableOperations())
 
 	ctx := t.Context()
-	files, sum, descs := storetest.PortableFiles(t, s)
 
-	want := map[string]int64{backup.TableDurableOperations: 2, backup.TableDurableSteps: 1}
-	for table, n := range want {
-		if sum.RowCounts[table] != n {
-			t.Fatalf("exported rows of %s = %d, want %d", table, sum.RowCounts[table], n)
-		}
+	before, listErr := s.DurableOperations().List(ctx, durable.Filter{Kind: "", States: nil, Limit: 0})
+	if listErr != nil {
+		t.Fatalf("list durable operations before the backup: %v", listErr)
 	}
 
-	staged, err := s.StagePortable(ctx, storetest.PortableOpener(files), sum, descs)
-	if err != nil {
-		t.Fatalf("stage the portable backup: %v", err)
+	if len(before) != 2 {
+		t.Fatalf("durable operations before the backup = %d, want 2", len(before))
+	}
+
+	files, sum, descs := storetest.PortableFiles(t, s)
+	checkBackupHoldsNoDurable(t, sum, descs, files)
+
+	staged, stageErr := s.StagePortable(ctx, storetest.PortableOpener(files), sum, descs)
+	if stageErr != nil {
+		t.Fatalf("stage the portable backup: %v", stageErr)
 	}
 
 	t.Cleanup(func() {
@@ -172,9 +177,96 @@ func TestDurableRowsRoundTripThroughAPortableBackup(t *testing.T) {
 		}
 	})
 
-	for table, n := range want {
-		if staged.RowCounts[table] != n {
-			t.Fatalf("staged rows of %s = %d, want %d", table, staged.RowCounts[table], n)
+	checkStagedHoldsNoDurable(t, staged)
+
+	if applyErr := s.ApplyStaging(ctx); applyErr != nil {
+		t.Fatalf("apply the staged backup: %v", applyErr)
+	}
+
+	after, afterErr := s.DurableOperations().List(ctx, durable.Filter{Kind: "", States: nil, Limit: 0})
+	if afterErr != nil {
+		t.Fatalf("list durable operations after the restore: %v", afterErr)
+	}
+
+	checkDurableUnchanged(t, before, after)
+}
+
+// checkBackupHoldsNoDurable proves that the portable export holds no file of
+// either durable control table.
+func checkBackupHoldsNoDurable(
+	t *testing.T, sum backup.Summary, descs []backup.PortableFile, files map[string][]byte,
+) {
+	t.Helper()
+
+	for _, table := range []string{backup.TableDurableOperations, backup.TableDurableSteps} {
+		if n, ok := sum.RowCounts[table]; ok {
+			t.Fatalf("exported rows of control table %s = %d, want no rows in the backup", table, n)
+		}
+
+		for _, d := range descs {
+			if d.Table == table {
+				t.Fatalf("backup holds a file for control table %s, want none", table)
+			}
+		}
+
+		if _, ok := files[backup.PortablePath(table)]; ok {
+			t.Fatalf("backup holds bytes for control table %s, want none", table)
+		}
+	}
+}
+
+// checkStagedHoldsNoDurable proves that the staged summary holds no rows of
+// either durable control table.
+func checkStagedHoldsNoDurable(t *testing.T, staged backup.Summary) {
+	t.Helper()
+
+	for _, table := range []string{backup.TableDurableOperations, backup.TableDurableSteps} {
+		if n, ok := staged.RowCounts[table]; ok {
+			t.Fatalf("staged rows of control table %s = %d, want no rows in the backup", table, n)
+		}
+	}
+}
+
+// checkDurableUnchanged proves that the durable operations after the restore
+// match those before it, with the same claims and steps.
+func checkDurableUnchanged(t *testing.T, before, after []durable.Operation) {
+	t.Helper()
+
+	if len(after) != len(before) {
+		t.Fatalf("durable operations after the restore = %d, want %d", len(after), len(before))
+	}
+
+	byID := make(map[durable.ID]durable.Operation, len(after))
+	for i := range after {
+		byID[after[i].ID] = after[i]
+	}
+
+	for i := range before {
+		want := before[i]
+		got, ok := byID[want.ID]
+		if !ok {
+			t.Fatalf("durable operation %s missing after the restore", want.ID)
+		}
+
+		checkOneDurableUnchanged(t, want, got)
+	}
+}
+
+// checkOneDurableUnchanged proves that one restored operation keeps its
+// identity, claim and steps.
+func checkOneDurableUnchanged(t *testing.T, want, got durable.Operation) {
+	t.Helper()
+
+	if got.Key != want.Key || got.Kind != want.Kind || got.State != want.State ||
+		got.Claim.Token != want.Claim.Token || got.Claim.Owner != want.Claim.Owner ||
+		len(got.Steps) != len(want.Steps) {
+		t.Fatalf("durable operation %s after the restore = %+v, want %+v", want.ID, got, want)
+	}
+
+	for i, step := range want.Steps {
+		if got.Steps[i].Name != step.Name || !bytes.Equal(got.Steps[i].Result, step.Result) {
+			t.Fatalf("durable operation %s step %d after the restore = %+v, want %+v",
+				want.ID, i, got.Steps[i], step)
 		}
 	}
 }
