@@ -160,7 +160,11 @@ func mustCreateMemberGroup(t *testing.T, s reachStore, id, name, principalID str
 		t.Fatalf("create group %q: %v", name, err)
 	}
 
-	m := principal.Membership{AddedAt: at(1), GroupID: id, PrincipalID: principalID}
+	m := principal.Membership{
+		AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: id, PrincipalID: principalID,
+		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+		Pinned: false,
+	}
 	if err := s.AddMember(ctx, m, entry()); err != nil {
 		t.Fatalf("add member to %q: %v", name, err)
 	}
