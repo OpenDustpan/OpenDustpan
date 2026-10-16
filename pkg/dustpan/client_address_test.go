@@ -39,6 +39,16 @@ func newClientAddrServer(t *testing.T, buf *bytes.Buffer, extra ...dustpan.Optio
 		}
 	})
 
+	return newClientAddrServerOn(t, buf, st, extra...)
+}
+
+// newClientAddrServerOn is newClientAddrServer on the store st, so the test
+// can read what the server wrote.
+func newClientAddrServerOn(
+	t *testing.T, buf *bytes.Buffer, st *sqlite.Store, extra ...dustpan.Option,
+) *dustpan.Server {
+	t.Helper()
+
 	blobs, err := fs.Open(filepath.Join(t.TempDir(), "blobs"))
 	if err != nil {
 		t.Fatalf("open blob store: %v", err)
@@ -382,5 +392,51 @@ func TestNewServerRefusesBadProxySettings(t *testing.T) {
 				t.Fatalf("NewServer with %s: err = %v, want %q", tc.name, err, tc.want)
 			}
 		})
+	}
+}
+
+// TestCollectionAuditSourceIPBehindProxy proves a collection change records
+// the client address that a trusted proxy forwards, not the proxy address.
+func TestCollectionAuditSourceIPBehindProxy(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	ns := createChainNamespace(t, st)
+
+	var buf bytes.Buffer
+
+	srv := newClientAddrServerOn(t, &buf, st,
+		dustpan.WithTrustedProxies(netip.MustParsePrefix("10.0.0.0/8")))
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
+		"/api/inventory/namespaces/"+ns.Name.String()+"/collections", strings.NewReader(`{"name":"payments"}`))
+	req.RemoteAddr = "10.1.2.3:4444"
+	req.Header.Set("X-Forwarded-For", "203.0.113.9")
+	req.Header.Set("Authorization", "token "+adminToken)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create collection status %d, want %d: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+
+	entries := listScope(t, st, ns.Name)
+	if len(entries) != 1 {
+		t.Fatalf("audit entries = %d, want 1", len(entries))
+	}
+
+	if got := entries[0].SourceIP; got != "203.0.113.9" {
+		t.Fatalf("audit source IP = %q, want the forwarded client 203.0.113.9", got)
 	}
 }
