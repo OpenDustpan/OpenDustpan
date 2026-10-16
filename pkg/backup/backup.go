@@ -184,6 +184,11 @@ type Summary struct {
 	SchemaVersion int
 }
 
+// RestoredRunningText is the error text of a backup row that a restore
+// brought back as running: the backup was running when it took the
+// snapshot that the restore applied, so no process runs it here.
+const RestoredRunningText = "the backup was running in the restored data"
+
 // Sentinel errors returned by this package and by its ports.
 var (
 	// ErrNotFound reports that a backup row does not exist.

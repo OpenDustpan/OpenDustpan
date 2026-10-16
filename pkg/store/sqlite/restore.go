@@ -300,21 +300,42 @@ func fenceStagedFile(ctx context.Context, path string, chain audit.ChainRecord) 
 		return errors.Join(fmt.Errorf("keep audit chain state: %w", err), tx.Rollback())
 	}
 
+	if err := resetStagedRuntimeRows(ctx, tx); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	return nil
+}
+
+// resetStagedRuntimeRows clears the rows of the staged file that describe
+// work of the installation the backup came from, in tx: the audit sink
+// cursors and leases, and the running backup rows.
+func resetStagedRuntimeRows(ctx context.Context, tx *sql.Tx) error {
 	// The restored log can reuse sequences that a sink already holds, and
 	// a restored cursor can point past the restored entries. A reset makes
 	// every sink receive the restored log again from its first entry. A
 	// restored lease could block that reship, so the reset releases every
 	// lease too.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM audit_sink_cursors`); err != nil {
-		return errors.Join(fmt.Errorf("reset staged audit sink cursors: %w", err), tx.Rollback())
+		return fmt.Errorf("reset staged audit sink cursors: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM audit_sink_leases`); err != nil {
-		return errors.Join(fmt.Errorf("reset staged audit sink leases: %w", err), tx.Rollback())
+		return fmt.Errorf("reset staged audit sink leases: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("fence staged namespaces: %w", err)
+	// A backup sees its own row as running when it takes its snapshot, so
+	// the staged data holds that row as running. No process runs it in
+	// this installation, and the one running backup it would hold blocks
+	// every later backup.
+	const failRunning = `UPDATE backups SET state = 'failed', error = ?, ended_at_ms = ? WHERE state = 'running'`
+
+	if _, err := tx.ExecContext(ctx, failRunning, backup.RestoredRunningText, codec.Millis(time.Now())); err != nil {
+		return fmt.Errorf("fail staged running backups: %w", err)
 	}
 
 	return nil

@@ -59,6 +59,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "restores table creates, finishes, gets and lists", test: testRestoreRegistry},
 		{name: "restart marks every running restore failed", test: testRestoreRestartFailsRunning},
 		{name: "one restore runs at a time", test: testRestoreOneRunning},
+		{name: "a backup starts after a restore of a running snapshot", test: testRestoreThenBackup},
 		{name: "a restore row survives close and reopen", test: testRestoreRowSurvivesReopen},
 		{name: "apply swaps the staged data in one step", test: testRestoreApplySwapsStaged},
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
@@ -358,6 +359,42 @@ func testRestoreOneRunning(t *testing.T, newStore RestoreFactory) {
 
 	mustFinishRestore(t, s, restoreFinish{ID: first.ID, State: backup.RestoreSucceeded, Error: "", EndedAt: now()})
 	mustCreateRestore(t, s, second)
+}
+
+// testRestoreThenBackup restores a snapshot that holds a running backup row
+// and a checking restore row, as the backup that a restore takes before it
+// applies does: the backup sees its own row as running, and the restore that
+// takes it is checking. The staged load accepts both rows, and a new backup
+// starts after the apply: the swap leaves no running backup row behind.
+func testRestoreThenBackup(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ctx := t.Context()
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+	running := mustCreateBackup(t, ps.src, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	mustCreateRestore(
+		t, ps.src, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	if _, err := ps.dst.StagePortable(ctx, sink.read, sum, files); err != nil {
+		t.Fatalf("stage a snapshot with a running backup and a checking restore: %v", err)
+	}
+
+	if err := ps.dst.ApplyStaging(ctx); err != nil {
+		t.Fatalf("apply staging area: %v", err)
+	}
+
+	if got := mustGetBackup(t, ps.dst, running.ID); got.State == backup.StateRunning {
+		t.Fatalf("backup row of the snapshot after the swap = %+v, want it not running", got)
+	}
+
+	next := newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour))
+	if err := ps.dst.CreateBackup(ctx, next); err != nil {
+		t.Fatalf("start a backup after the restore: %v, want nil", err)
+	}
 }
 
 // testRestoreRestartFailsRunning marks a running row failed at the next start,
