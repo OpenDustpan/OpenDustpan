@@ -687,10 +687,19 @@ func checkMemFinalize(m *memStore, w workspace.Workspace, sv workspace.StateVers
 		}
 	}
 
-	if cur, ok := m.current[sv.Workspace]; ok && sv.RestoredFrom != "" {
-		if current := m.versions[cur]; current.RestoredFrom == sv.RestoredFrom && current.Holder == sv.Holder {
-			return workspace.ErrAlreadyRestored
-		}
+	return checkMemRestore(m, sv)
+}
+
+// checkMemRestore refuses a restored version when the current state already
+// restores the same version for the same holder. The caller holds mu.
+func checkMemRestore(m *memStore, sv workspace.StateVersion) error {
+	cur, ok := m.current[sv.Workspace]
+	if !ok || sv.RestoredFrom == "" {
+		return nil
+	}
+
+	if current := m.versions[cur]; current.RestoredFrom == sv.RestoredFrom && current.Holder == sv.Holder {
+		return workspace.ErrAlreadyRestored
 	}
 
 	return nil

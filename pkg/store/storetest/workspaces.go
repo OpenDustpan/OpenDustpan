@@ -3,6 +3,7 @@ package storetest
 import (
 	"bytes"
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -4117,7 +4118,7 @@ func pushThrough(
 
 	sum := md5.Sum([]byte(content)) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
 	in := workspace.NewState{
-		Lineage: "l1", MD5: fmt.Sprintf("%x", sum), Outputs: nil, Serial: serial, Force: false,
+		Lineage: "l1", MD5: hex.EncodeToString(sum[:]), Outputs: nil, Serial: serial, Force: false,
 	}
 
 	pending, err := svc.BeginState(t.Context(), id, "alice", in, workspace.Authority{

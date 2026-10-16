@@ -1697,23 +1697,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	sv.Content = key
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
-		err = fmt.Errorf("finalize restored state %s: %w", sv.ID, err)
-		if errors.Is(err, ErrAlreadyRestored) {
-			// A concurrent restore of src won. Nothing was written, so this
-			// attempt's blob and its pending row go, and the pending row
-			// does not fill the cap.
-			return StateVersion{}, errors.Join(
-				err, s.blobs.Delete(ctx, key), s.states.DiscardStateVersion(ctx, sv.ID, fence),
-			)
-		}
-
-		if rejected(err) {
-			// Nothing was written, so this attempt's blob is an orphan.
-			return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
-		}
-
-		// The outcome is unknown; the version may point at this blob. Keep it.
-		return StateVersion{}, err
+		return StateVersion{}, s.refusedRestore(ctx, sv, fence, err)
 	}
 
 	// The caller renders the new version: carry the plain outputs, while the
@@ -1721,6 +1705,26 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	sv.Outputs = outputs
 
 	return sv, nil
+}
+
+// refusedRestore cleans up after the failed finalize of the restored version
+// sv and returns the error. A rejection wrote nothing, so the blob of the
+// attempt is an orphan and goes. A duplicate restore also discards its pending
+// row, so the row does not fill the pending cap. Any other error leaves the
+// outcome unknown: the version may name the blob, so it stays.
+func (s *Service) refusedRestore(
+	ctx context.Context, sv StateVersion, fence namespace.Fence, finalizeErr error,
+) error {
+	err := fmt.Errorf("finalize restored state %s: %w", sv.ID, finalizeErr)
+
+	switch {
+	case errors.Is(err, ErrAlreadyRestored):
+		return errors.Join(err, s.blobs.Delete(ctx, sv.Content), s.states.DiscardStateVersion(ctx, sv.ID, fence))
+	case rejected(err):
+		return errors.Join(err, s.blobs.Delete(ctx, sv.Content))
+	default:
+		return err
+	}
 }
 
 // openRestoreOutputs opens the stored outputs of src, so the new version
