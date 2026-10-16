@@ -32,7 +32,9 @@ type TokenStore interface {
 	// GetToken returns the token with the ID id, or ErrNotFound.
 	GetToken(ctx context.Context, id string) (Token, error)
 	// GetTokenByDigest returns the token whose secret has the digest d, with
-	// its owner and the stored digest. It returns ErrNotFound when no token
+	// its owner, the stored digest and the token policy of the
+	// installation, read in one lookup, so a policy change applies to the
+	// next lookup on every instance. It returns ErrNotFound when no token
 	// has the digest, or when the owner was deleted. A disabled owner comes
 	// back with its disable time.
 	GetTokenByDigest(ctx context.Context, d Digest) (Match, error)
@@ -90,12 +92,14 @@ type PolicyUpdate func(old Policy) (Policy, audit.Entry, error)
 // disables, from the time of the run and the audit object of the record.
 type SweepEntryFunc func(at time.Time, object string) audit.Entry
 
-// Match is the answer of a lookup by digest: the token, its owner and the
-// digest that the store keeps.
+// Match is the answer of a lookup by digest: the token, its owner, the
+// digest that the store keeps, and the token policy of the installation,
+// read in the same lookup.
 type Match struct {
 	Token  Token
 	Owner  Owner
 	Digest Digest
+	Policy Policy
 }
 
 // Replacement is one rotation as a store writes it: the old token, its new

@@ -625,66 +625,6 @@ func fenceAndUnlockInTx(
 	}, workspaceLock(w.Lock))
 }
 
-// ListUnsealedStateVersions implements workspace.StateStore: the finalized
-// versions that still hold plain content, ordered by version ID.
-func (s *Store) ListUnsealedStateVersions(ctx context.Context) ([]workspace.StateVersion, error) {
-	rows, err := s.queries.ListUnsealedStateVersions(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("select unsealed state versions: %w", err)
-	}
-
-	out := make([]workspace.StateVersion, 0, len(rows))
-
-	for i := range rows {
-		sv, err := stateFromRow(rows[i])
-		if err != nil {
-			return nil, err
-		}
-
-		out = append(out, sv)
-	}
-
-	return out, nil
-}
-
-// SealStateVersion implements workspace.StateStore: it moves one unsealed
-// version to its sealed blob with its sealed outputs and marks it sealed in
-// one fenced transaction. A version that is already sealed succeeds and
-// changes nothing.
-func (s *Store) SealStateVersion(
-	ctx context.Context,
-	id workspace.StateVersionID,
-	content blob.Key,
-	outputs []byte,
-	fence namespace.Fence,
-) error {
-	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		n, err := q.SealStateVersion(ctx, db.SealStateVersionParams{
-			ContentKey: content.String(),
-			Outputs:    outputs,
-			ID:         id.String(),
-		})
-		if err != nil {
-			return fmt.Errorf("seal state version: %w", err)
-		}
-
-		if n > 0 {
-			return nil
-		}
-
-		_, getErr := q.GetStateVersion(ctx, id.String())
-		if errors.Is(getErr, pgx.ErrNoRows) {
-			return workspace.ErrStateVersionNotFound
-		}
-
-		if getErr != nil {
-			return fmt.Errorf("read sealed state version: %w", getErr)
-		}
-
-		return nil
-	})
-}
-
 // finalizeInTx runs the finalize checks and writes in one transaction, holding
 // the workspace row FOR UPDATE throughout.
 func finalizeInTx(
@@ -724,6 +664,10 @@ func checkFinalizeGuards(
 		if orderErr := checkFinalizeOrder(ctx, q, row); orderErr != nil {
 			return db.Workspace{}, orderErr
 		}
+	}
+
+	if restoreErr := checkFinalizeRestore(ctx, q, row); restoreErr != nil {
+		return db.Workspace{}, restoreErr
 	}
 
 	return wrow, nil
@@ -934,6 +878,31 @@ func checkFinalizeOrder(ctx context.Context, q *db.Queries, row codec.StateVersi
 	default:
 		return nil
 	}
+}
+
+// checkFinalizeRestore refuses a restored version when the current state
+// already restores the same version for the same holder. The read runs in the
+// finalize transaction, so of two concurrent restores of one version only the
+// first becomes current.
+func checkFinalizeRestore(ctx context.Context, q *db.Queries, row codec.StateVersionRow) error {
+	if row.RestoredFrom == "" {
+		return nil
+	}
+
+	current, err := q.GetCurrentStateVersion(ctx, row.WorkspaceID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("read current state: %w", err)
+	}
+
+	if current.RestoredFrom == row.RestoredFrom && current.Holder == row.Holder {
+		return workspace.ErrAlreadyRestored
+	}
+
+	return nil
 }
 
 // workspaceFromRow converts a workspace row into a domain workspace. The

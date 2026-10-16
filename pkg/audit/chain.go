@@ -635,10 +635,15 @@ type ScopesChecker interface {
 	CheckEach(ctx context.Context, scopes []namespace.Name) ([]CheckResult, error)
 }
 
+// ErrCheckIncomplete reports a ScopesChecker that answered fewer results
+// than scopes.
+var ErrCheckIncomplete = errors.New("audit chain check answered fewer results than scopes")
+
 // CheckScopes runs the chain check of each scope in scopes and answers the
-// count of scopes whose check fails. A store that implements ScopesChecker
-// checks them all in one call. A scope whose check answers an error counts
-// as failed too, and the error joins the answer.
+// count of scopes whose chain does not match. A store that implements
+// ScopesChecker checks them all in one call. A scope whose check answers
+// an error is not checked: it does not count as invalid, and the error
+// joins the answer.
 func CheckScopes(ctx context.Context, store Store, scopes []namespace.Name) (int, error) {
 	if checker, ok := store.(ScopesChecker); ok {
 		return checkEach(ctx, checker, scopes)
@@ -652,8 +657,6 @@ func CheckScopes(ctx context.Context, store Store, scopes []namespace.Name) (int
 	for _, scope := range scopes {
 		result, err := store.Check(ctx, scope)
 		if err != nil {
-			invalid++
-
 			errs = append(errs, fmt.Errorf("check %s: %w", scope, err))
 
 			continue
@@ -667,20 +670,25 @@ func CheckScopes(ctx context.Context, store Store, scopes []namespace.Name) (int
 	return invalid, errors.Join(errs...)
 }
 
-// checkEach runs CheckScopes with one call of checker. A failed call
-// counts every scope as failed.
+// checkEach runs CheckScopes with one call of checker. A failed call checks
+// no scope, so it counts none as invalid.
 func checkEach(ctx context.Context, checker ScopesChecker, scopes []namespace.Name) (int, error) {
 	results, err := checker.CheckEach(ctx, scopes)
 	if err != nil {
-		return len(scopes), fmt.Errorf("check scopes: %w", err)
+		return 0, fmt.Errorf("check scopes: %w", err)
 	}
 
-	invalid := len(scopes) - len(results)
+	var invalid int
 
 	for i := range results {
 		if !results[i].Valid {
 			invalid++
 		}
+	}
+
+	if len(results) < len(scopes) {
+		return invalid, fmt.Errorf("check scopes: got %d results for %d scopes: %w",
+			len(results), len(scopes), ErrCheckIncomplete)
 	}
 
 	return invalid, nil
