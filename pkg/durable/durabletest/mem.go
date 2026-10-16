@@ -74,6 +74,9 @@ const (
 	// breakTickBacklog moves the next run of a schedule by one interval
 	// from the tick it claims, so missed ticks run one by one.
 	breakTickBacklog = "tick-backlog"
+	// breakNoScheduleOnNoWork answers a tick that is not due with no
+	// schedule, so a caller sees a wait of 0.
+	breakNoScheduleOnNoWork = "noschedule-on-nowork"
 )
 
 // memDB is a reference store in memory. Its lock makes each method one
@@ -688,9 +691,12 @@ func (s memStore) ClaimTick(_ context.Context, spec durable.ScheduleSpec) (durab
 	}
 
 	if now.Before(sc.next) {
-		var none durable.Operation
+		var none durable.Tick
+		if s.db.broken != breakNoScheduleOnNoWork {
+			none.Schedule = s.db.schedule(spec.Name, sc, now)
+		}
 
-		return durable.Tick{Operation: none, Schedule: s.db.schedule(spec.Name, sc, now)}, durable.ErrNoWork
+		return none, durable.ErrNoWork
 	}
 
 	dueAt := sc.next

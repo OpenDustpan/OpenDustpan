@@ -13,6 +13,7 @@ const (
 	BreakExpiryCount   = breakExpiryCount
 	BreakMaxVersions   = breakMaxVersions
 	BreakTickBacklog   = breakTickBacklog
+	BreakNoSchedule    = breakNoScheduleOnNoWork
 )
 
 // BrokenHarness returns a harness on a store in memory that breaks rule.

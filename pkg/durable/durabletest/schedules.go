@@ -40,7 +40,8 @@ func RunSchedules(t *testing.T, newHarness ScheduleFactory) {
 		run  func(t *testing.T, h ScheduleHarness)
 	}{
 		{"schedule requests are validated", testScheduleValidates},
-		{"a new schedule is due at once, and ensure keeps its next run", testScheduleEnsure},
+		{"a new schedule is due at once and ensure keeps its next run", testScheduleEnsure},
+		{"a tick uses the stored interval", testTickStoredInterval},
 		{"concurrent claims of one tick give one operation", testTickRace},
 		{"missed ticks collapse into one run", testMissedTicks},
 		{"an instance clock ahead cannot claim a tick early", testTickClockSkew},
@@ -91,6 +92,7 @@ func testScheduleValidates(t *testing.T, h ScheduleHarness) {
 		{Name: "s", Kind: "", Version: 0, Interval: time.Second, Input: nil},
 		{Name: "s", Kind: kindA, Version: -1, Interval: time.Second, Input: nil},
 		{Name: "s", Kind: kindA, Version: 0, Interval: 0, Input: nil},
+		{Name: "s", Kind: kindA, Version: 0, Interval: time.Millisecond - 1, Input: nil},
 	} {
 		if _, err := s.EnsureSchedule(t.Context(), spec); !errors.Is(err, durable.ErrInvalid) {
 			t.Errorf("EnsureSchedule(%+v) error = %v, want ErrInvalid", spec, err)
@@ -134,8 +136,39 @@ func testScheduleEnsure(t *testing.T, h ScheduleHarness) {
 		t.Fatalf("GetSchedule = %+v, %v; want the state after the claim", got, err)
 	}
 
-	if _, err := s.ClaimTick(t.Context(), spec); !errors.Is(err, durable.ErrNoWork) {
+	notDue, err := s.ClaimTick(t.Context(), spec)
+	if !errors.Is(err, durable.ErrNoWork) {
 		t.Fatalf("ClaimTick before the next run: error = %v, want ErrNoWork", err)
+	}
+
+	checkNotDue(t, notDue, "sweep", time.Hour)
+}
+
+// checkNotDue fails the test unless tick, from a ClaimTick that answered
+// ErrNoWork, holds the schedule called name with its next run about wait
+// away, so that a caller can wait for it.
+func checkNotDue(t *testing.T, tick durable.Tick, name string, wait time.Duration) {
+	t.Helper()
+
+	if tick.Schedule.Name != name || tick.Schedule.Wait() < wait-time.Minute || tick.Schedule.Wait() > wait {
+		t.Fatalf("schedule with ErrNoWork = %+v (wait %v), want %s with its next run about %v away", tick.Schedule,
+			tick.Schedule.Wait(), name, wait)
+	}
+}
+
+func testTickStoredInterval(t *testing.T, h ScheduleHarness) {
+	t.Helper()
+
+	s := h.Open(t, 0)
+	mustEnsure(t, s, scheduleSpec("sweep", time.Hour))
+
+	// The spec of the claim has another interval. The claim uses the
+	// stored one.
+	tick := mustTick(t, s, scheduleSpec("sweep", tickInterval))
+
+	sc := tick.Schedule
+	if gap := sc.NextRunAt.Sub(sc.LastClaimedAt); gap < time.Hour-clockSlack || gap > time.Hour+clockSlack {
+		t.Fatalf("next run minus claim time = %v, want the stored interval 1h", gap)
 	}
 }
 
@@ -232,9 +265,14 @@ func testTickClockSkew(t *testing.T, h ScheduleHarness) {
 	mustEnsure(t, plain, spec)
 	mustTick(t, plain, spec)
 
-	if _, err := ahead.ClaimTick(t.Context(), spec); !errors.Is(err, durable.ErrNoWork) {
+	notDue, err := ahead.ClaimTick(t.Context(), spec)
+	if !errors.Is(err, durable.ErrNoWork) {
 		t.Fatalf("ClaimTick from an instance one hour ahead, before the next run: error = %v, want ErrNoWork", err)
 	}
+
+	// The wait comes from the clock of the store, so it is about one hour,
+	// not 0.
+	checkNotDue(t, notDue, "sweep", time.Hour)
 
 	sc, err := ahead.GetSchedule(t.Context(), "sweep")
 	if err != nil || sc.Wait() < time.Hour-time.Minute {

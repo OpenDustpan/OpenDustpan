@@ -29,8 +29,6 @@ func TestMemStore(t *testing.T) {
 	})
 }
 
-// TestSuiteSensitivity runs, for each broken store, the case that must
-// catch it, and checks that this case fails.
 func TestMemSchedules(t *testing.T) {
 	t.Parallel()
 
@@ -61,10 +59,12 @@ func TestScheduleSuiteSensitivity(t *testing.T) {
 	}{
 		{durabletest.BreakTickBacklog, "missed_ticks_collapse_into_one_run"},
 		{durabletest.BreakClock, "an_instance_clock_ahead_cannot_claim_a_tick_early"},
+		{durabletest.BreakNoSchedule, "an_instance_clock_ahead_cannot_claim_a_tick_early"},
+		{durabletest.BreakNoSchedule, "a_new_schedule_is_due_at_once_and_ensure_keeps_its_next_run"},
 	}
 
 	for _, tc := range cases {
-		t.Run(tc.rule, func(t *testing.T) {
+		t.Run(tc.rule+"/"+tc.catcher, func(t *testing.T) {
 			t.Parallel()
 
 			out := runSuiteCaseAgainstFake(t, "TestScheduleSuiteSensitivity", tc.rule, tc.catcher)
@@ -76,6 +76,8 @@ func TestScheduleSuiteSensitivity(t *testing.T) {
 	}
 }
 
+// TestSuiteSensitivity runs, for each broken store, the case that must
+// catch it, and checks that this case fails.
 func TestSuiteSensitivity(t *testing.T) {
 	t.Parallel()
 

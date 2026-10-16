@@ -17,11 +17,12 @@ type ScheduleSpec struct {
 }
 
 // Validate returns ErrInvalid when spec has an empty name or kind, a
-// negative version or an interval that is not positive.
+// negative version or an interval below one millisecond. The stores keep
+// milliseconds, so a shorter interval would round to 0.
 func (spec ScheduleSpec) Validate() error {
-	if spec.Name == "" || spec.Kind == "" || spec.Version < 0 || spec.Interval <= 0 {
-		return fmt.Errorf("%w: schedule %q needs a name, a kind, a version of 0 or more and a positive interval",
-			ErrInvalid, spec.Name)
+	if spec.Name == "" || spec.Kind == "" || spec.Version < 0 || spec.Interval < time.Millisecond {
+		return fmt.Errorf("%w: schedule %q needs a name, a kind, a version of 0 or more and an interval of 1 ms "+
+			"or more", ErrInvalid, spec.Name)
 	}
 
 	return nil
@@ -75,12 +76,15 @@ type ScheduleStore interface {
 	// ClaimTick claims the tick of the schedule of spec when it is due, and
 	// starts its operation, in one transaction. One conditional update
 	// claims the tick: it requires NextRunAt to be now or earlier, and sets
-	// NextRunAt to now plus the interval and LastClaimedAt to now. So the
+	// NextRunAt to now plus the stored interval and LastClaimedAt to now.
+	// The stored interval is the one of the last EnsureSchedule, not
+	// spec.Interval. So the
 	// ticks that no instance ran collapse into one, and of several
 	// concurrent claims at most one succeeds. The operation has the key
 	// TickKey(spec.Name, the NextRunAt before the claim), and spec.Kind,
 	// spec.Version and spec.Input, with the rules of Store.Start. It returns
-	// ErrNoWork, with the schedule, when the tick is not due, ErrNotFound for
+	// ErrNoWork when the tick is not due, and then the Tick holds the
+	// schedule, so that the caller can wait Schedule.Wait(); ErrNotFound for
 	// a schedule that does not exist, and ErrInvalid for a spec that fails
 	// Validate.
 	ClaimTick(ctx context.Context, spec ScheduleSpec) (Tick, error)
