@@ -7,26 +7,24 @@ created: 2026-10-10
 
 # RFC 36. Scale out to several instances on one database
 
-Status: discussing. This RFC covers only the scale-out half of high
-availability: several server instances on one PostgreSQL database and one
-object store, in one region. SQLite stays one instance. Geo replication
-between regions stays with ADR 4 and is out of scope.
+Status: discussing. The project owner decided questions 1 to 7 on
+2026-10-16 (see "Decisions"). Questions 8 and 9 stay open, and each has a
+proposal below. The decided parts go to an ADR. This RFC stays open until
+the owner answers questions 8 and 9.
 
-This RFC proposes an architecture, not a set of patches. It has three parts
-that the project owner asked for on 2026-10-16:
-
-1. a definition of the durable-execution capability that the server needs;
-2. our own port in `pkg` for that capability, with a conformance suite that
-   encodes the known failure modes;
-3. a bake-off of two adapters against that suite, our own minimal adapter and
-   DBOS Transact, decided on evidence.
+This RFC covers only the scale-out half of high availability: several
+server instances on one PostgreSQL database and one object store, in one
+region. SQLite stays one instance. Geo replication between regions stays
+with ADR 4 and is out of scope.
 
 The background is in the research note
 [durable execution](../research/durable-execution.md), cited below as
-"research, part N". An architecture review of 2026-10-16 is a second input.
-This RFC cites its findings by their ID (for example "review B1"). Findings
-that a test or a second reading verified have their own issue, and this RFC
-cites that issue as a fact. Code references are at commit 6909035.
+"research, part N". The
+[architecture review of 2026-10-16](../architecture-reviews/2026-10-16.md)
+and its [verdicts](../architecture-reviews/2026-10-16-verdicts.md) are a
+second input. This RFC cites their findings by ID (for example "review B1").
+Findings that a test or a second reading verified have their own issue, and
+this RFC cites that issue as a fact. Code references are at commit 6909035.
 
 ## Problem
 
@@ -59,8 +57,8 @@ These parts already work with several instances:
 
 ### What fails
 
-I reproduced two failures with two instances on one PostgreSQL database. Both
-tests are on local branches and fail on `main`:
+Two failures are reproduced with two instances on one PostgreSQL database.
+Both tests are on local branches and fail on `main`:
 
 - **A start fails the work of a live instance (#667).** Each start marks every
   running backup and every running restore failed
@@ -151,10 +149,10 @@ research note.
   The claim transaction commits at once. No row lock is held while the work
   runs (review A5, research part 5).
 - **Fenced step.** A step runs in a transaction that the adapter opens on our
-  store handle. The step's domain writes, the namespace fence check, the claim
-  token check and the step record commit together, or none of them do. A step
-  without a domain write runs at least once, so it must be idempotent
-  (research, part 1).
+  store handle. The step's domain writes, the namespace fence check, the
+  installation check, the claim token check and the step record commit
+  together, or none of them do. A step without a domain write runs at least
+  once, so it must be idempotent (research, part 1).
 - **Takeover.** When the owner stops, another instance takes the operation
   within one expiry period, with no operator action. A start never takes the
   work of a live owner.
@@ -168,78 +166,52 @@ research note.
   cannot end as succeeded.
 - **Restore.** A claim from before a restore cannot write after it.
 
-## Options
+## Decisions
 
-### Who decides that an owner is dead
+The project owner decided these questions on 2026-10-16. Each one goes into
+the ADR for this RFC.
 
-Something must turn silence into "dead" after a timeout. Both shapes below
-use the database clock and fence every write with a claim token.
+1. **Adapter: our own minimal adapter.** The durable-operations port in
+   `pkg` gets one adapter that we write, with the conformance suite below.
+   DBOS is not adopted. A DBOS adapter stays possible later behind the same
+   port. Decider: the project owner, 2026-10-16.
+2. **Liveness: a lease per job (L1).** Each claimed operation has an expiry
+   on the database clock. Its worker extends the expiry. Each claim has a
+   fencing token that grows on each takeover, and every step write checks
+   it. There is no instance registry. Decider: the project owner,
+   2026-10-16. (Question 1.)
+3. **Maintenance: the write-path check.** Every write transaction checks the
+   installation state in the same statement as its namespace fence. Writes at
+   installation scope run the same check. This replaces ADR 48 decisions 5
+   to 8, through a superseding ADR. Decider: the project owner, 2026-10-16.
+   (Question 2.)
+4. **Control tables move out of the restore swap.** On PostgreSQL they live
+   in a schema that the swap never renames. On SQLite the swap copies them
+   into the staged file. A coverage test fails for a table that is in
+   neither the backup list nor the control list. Decider: the project owner,
+   2026-10-16. (Question 3.)
+5. **Pre-release code goes now.** The compatibility code for data from older
+   pre-release builds is deleted now. The migrations of each dialect collapse
+   into one baseline now, not at the first tag. The owner said: "We can do
+   whatever we want before the first tag." Decider: the project owner,
+   2026-10-16. (Question 4.)
+6. **The DBOS spike is closed.** Decision 1 answers question 5. Decider: the
+   project owner, 2026-10-16.
+7. **Sign-in failure budget: a shared counter.** The budget is a windowed
+   counter in the database, shared by all instances, with one write per
+   failed attempt. Decider: the project owner, 2026-10-16. (Question 6.)
+8. **Cache: an in-process cache port first.** A cache port in `pkg` with an
+   in-process cache of write-once blob keys comes first. groupcache comes
+   only after a load measurement shows a need. This was the proposal of this
+   RFC, and the owner raised no objection on 2026-10-16. (Question 7.)
 
-- **L1: an expiry on each claim.** The worker extends the expiry of each
-  operation that it runs. One write per running operation per period. No
-  registry. The research note recommends this shape, with a fencing epoch
-  that grows on each takeover (research, part 6).
-- **L2: one lease per instance.** Each instance holds one registration row
-  with a lease (ADR 48 decisions 1 and 2). A claim records the owner's
-  registration ID and a claim token. Another instance takes over when the
-  owner's registration ended plus a clock-skew bound. One write per instance
-  per period. The registry also gives status and a peer list. The review
-  recommends this shape (review A1, A5, A6).
-
-In both shapes, `SELECT ... FOR UPDATE SKIP LOCKED` appears only in the short
-claim transaction. A row lock held for minutes pins a pool connection, holds
-back vacuum, fails behind a transaction-mode pooler, survives a dead host for
-the TCP keepalive time, and can wait on the restore swap in a cycle that the
-deadlock detector cannot see (review A5, research part 5). A singleton
-schedule needs no `SKIP LOCKED`: one conditional `UPDATE ... RETURNING` on its
-row is the claim.
-
-### Which engine runs operations
-
-1. **Do nothing.** Every instance keeps its tickers and in-process slots.
-   #667 and #668 stay data loss.
-2. **Our own minimal adapter.** Two or three tables in our migrations
-   (operations, steps, schedules), claims in a short transaction, and the
-   conformance suite below. The repository already has the same code in three
-   places: update leases, the sink lease and the chain migration claim.
-3. **DBOS Transact Go** behind our port (MIT, v1.7.0 of 2026-10-15). See the
-   bake-off below.
-4. **River** (MPL-2.0, v0.49.0 of 2026-10-05). A strong PostgreSQL queue. It
-   can insert and complete a job in our own pgx transaction (`InsertTx`,
-   `JobCompleteTx`). Its SQLite driver says it is "in early testing", durable
-   periodic jobs and workflows are a paid extension, and its migrations would
-   have to move into our frozen migrations. Not in the bake-off.
-5. **go-workflows** (MIT, v1.4.2 of 2026-06-05). Deterministic replay like
-   Temporal, but no start or completion inside our transaction, constructors
-   that panic, unqualified table names and one maintainer. Not in the
-   bake-off.
-6. **A replay engine with its own cluster** (Temporal and similar). Not
-   embeddable, and replay engines put the highest cost on workflow code
-   (research, part 2). Not in the bake-off.
-
-### How a restore knows that writes stopped
-
-ADR 48 decisions 5 to 8 make the restore ask every live instance over the
-network whether it sees maintenance mode. Two alternatives keep the database
-as the only coordination point:
-
-1. **A write-path installation check.** Every write transaction reads the
-   installation state in the same statement that reads its namespace fence,
-   under a shared advisory transaction lock. Maintenance enter changes the row
-   under the exclusive form of that lock, so it waits for the writes in
-   flight, and every later write sees maintenance and fails. Writes at
-   installation scope run the same check.
-2. **Confirmation through the registry** (review B3). Each instance writes the
-   epoch that its gate enforces into its registration row, after its older
-   requests drain. The restore waits until every live registration reports
-   the new epoch.
-
-## Proposal
+## Design for the decided parts
 
 ### Principles
 
 1. Instances are stateless and interchangeable. They coordinate only through
-   transactional state in our database: no lock service, no leader.
+   transactional state in our database: no lock service, no leader, no
+   instance registry.
 2. Background work and long operations are durable rows. Crash recovery means
    "the claim expired, so another instance can claim it". Start-up steps stop
    being special.
@@ -247,21 +219,48 @@ as the only coordination point:
    a write by a stale holder fails in its own transaction, like the namespace
    fence.
 4. One small port in `pkg`. Domain packages never import an engine (ADR 35),
-   and no claim SQL appears outside the adapters.
+   and no claim SQL appears outside the store adapters.
 
-Where the code challenges these principles: the inactivity disable and the
-sign-in request prune are already safe to run on every instance. The
-inactivity disable takes the server audit lock and compares with the database
-clock (`pkg/store/postgres/accesstokens.go:281-300`), and the prune is one
+The inactivity disable and the sign-in request prune are already safe to run
+on every instance. The inactivity disable takes the server audit lock and
+compares with the database clock
+(`pkg/store/postgres/accesstokens.go:281-300`), and the prune is one
 `DELETE`. They become schedules only to stop the duplicated work.
+
+### Liveness with a lease per job
+
+- A claim sets the owner, increments the claim token and sets the expiry to
+  the database clock plus the lease period, in one short transaction that
+  commits at once.
+- The worker extends the expiry of each operation that it runs. An extension
+  succeeds only when the claim token is still its own. One write per running
+  operation per period. The number of running operations is small (see "The
+  workloads").
+- Another instance can claim an operation only after its expiry on the
+  database clock. A start never claims an operation with a live expiry, so
+  #667 goes away.
+- Every step write checks the claim token in its own transaction. A holder
+  that lost its claim cannot write, renew or complete.
+- The audit sink lease and the audit chain migration claim fold into the same
+  claim rule. The hand-made claims go away.
+
+Without a registry, the server has no list of live instances. Three users of
+that list need another source:
+
+- Status: the operations list shows the owner and the expiry of each claim.
+- The single-instance guard on SQLite: the SQLite adapter must refuse a
+  second process on one file without a registry. The ADR states the rule. The
+  mechanism is an issue of its own.
+- groupcache peers: groupcache is deferred (decision 8). If it comes later,
+  its peer list is a new question.
 
 ### Where the SQL lives
 
-The proposal adds tables in both dialects: operations, steps, schedules and,
-with L2, registrations. Today each dialect has its own SQL and its own adapter
-code (ADR 3). The owner has not yet decided on a shared store core with a
-policy per dialect (review E1). That decision changes how much code these
-tables cost: with a shared core, the claim and fence logic is written once.
+The proposal adds tables in both dialects: operations, steps and schedules.
+Today each dialect has its own SQL and its own adapter code (ADR 3). The
+owner has not yet decided on a shared store core with a policy per dialect
+(review E1). That decision changes how much code these tables cost: with a
+shared core, the claim and fence logic is written once.
 
 ### The port
 
@@ -289,7 +288,7 @@ A `durabletest` package holds the conformance suite.
 
 ### The conformance suite
 
-The suite comes before any adapter. It holds the 18 cases of research,
+The suite comes before the adapter. It holds the 18 cases of research,
 part 6, and three more:
 
 1. Two instances claim one operation at the same time: exactly one succeeds.
@@ -310,7 +309,7 @@ part 6, and three more:
    started, or fails it with an error that names the version.
 10. Two starts with one key give one operation.
 11. N instances fire one tick of a schedule. A tick missed while no instance
-    ran follows the stated policy.
+    ran follows the policy of question 8.
 12. After a takeover, a step with a stored result does not run again.
 13. A start in the transaction of a domain write does not exist after a
     rollback.
@@ -332,172 +331,32 @@ one schema twice (review E2). A shared fixture, `internal/servertest`, starts
 N real `Run()` servers on one database and can kill and restart one
 (review H1).
 
-### The bake-off
-
-Two adapters run against the suite: our own minimal adapter and DBOS. A
-throwaway spike on a branch models one long operation (backup) and one
-schedule (the retention sweep) through the port on both stores, with two
-instances and a kill in the middle of a step. The RFC gets the results before
-the owner decides.
-
-What the DBOS v1.7.0 source shows before the spike:
-
-- **Recovery across instances.** Without Conductor, a commercial product, a
-  process recovers at start only the workflows of its own executor ID
-  (`dbos/dbos.go:903-904`). The default ID is `"local"`. With one ID on every
-  instance, instances recover each other's live work, which is #667. With
-  unique IDs, the work of a stopped instance stays pending. An adapter would
-  need our own liveness signal and the internal recovery call
-  (`internals.RecoverPendingWorkflows`). Cases 7 and 8 fail as shipped.
-- **Versions.** The default application version is a hash of the binary, and
-  recovery takes only workflows of its own version. A rolling deploy strands
-  pending work unless we set the version ourselves. Case 9 fails as shipped.
-- **Our transaction.** A step commits atomically with its checkpoint only
-  when the data source is the same pool as the system database
-  (`dbos/datasource.go:390`). The callback receives `dbos.Tx`, not `pgx.Tx` or
-  `*sql.Tx`. Our sqlc PostgreSQL code would need a `pgx.Rows` adapter. Our
-  sqlc SQLite code needs the concrete `*sql.Rows` and cannot run in it.
-- **The pool.** `Shutdown` closes the pool or `*sql.DB` that we pass in
-  (`dbos/internal/sysdb/system_database.go:1317`), so DBOS needs a dedicated
-  pool, and that loses the atomic mode above. Case 19 fails as shipped.
-- **Storage.** On PostgreSQL its tables live in their own schema (`dbos`,
-  configurable). On SQLite the schema option is ignored, so its tables land
-  next to ours. It runs about 123 migrations of its own at start, with
-  `CREATE INDEX CONCURRENTLY`, plpgsql functions and a trigger, and no
-  advisory lock.
-- **What it does well.** A cron tick fires once because the workflow ID is the
-  primary key. Dequeue uses `SKIP LOCKED`. Queue limits are counted in the
-  database. It has start keys, cancellation and a patching API. It links
-  `google/uuid`, `pgx`, `pgerrcode`, `robfig/cron` and `modernc.org/sqlite`.
-  Its logger is an injectable `*slog.Logger`, and its default writes to
-  standard output.
-- **Determinism.** Recovery runs the workflow function from the start and
-  returns stored step results by step ID. Renaming a step function breaks
-  recovery.
-- **Other backends.** The backend set is closed (PostgreSQL, CockroachDB,
-  SQLite). A future database without a DBOS dialect needs our own adapter
-  behind the port, so the cost of that adapter is the cost of option 2.
-
-The research note recommends our own adapter in its paradigm (d), a state
-machine in domain rows with a fencing epoch (research, part 6). This RFC
-keeps the bake-off, because the owner asked for evidence from both adapters.
-
-### Bake-off results (spike of 2026-10-16)
-
-A throwaway spike (draft #693, commit d0d9160, not for merge) implements a
-small version of the port
-(`Start`, `Get`, kinds with ordered steps, schedules) and two adapters:
-
-- **Our adapter:** 436 lines, two tables. A claim per operation with a token
-  and an expiry from the database clock (shape L1). Claims use
-  `SKIP LOCKED` on PostgreSQL. Each step updates the step record under the
-  claim token in the step's own transaction. A schedule is claimed with one
-  conditional `UPDATE`. It runs on PostgreSQL and SQLite through
-  `database/sql`.
-- **DBOS adapter:** 269 lines over DBOS v1.7.0. One registered workflow
-  dispatches by kind. Each step is a `RunAsTransaction` on the DBOS system
-  pool (the atomic mode). Each schedule is a DBOS cron schedule.
-
-The suite runs eight cases on both stores. Instance A of the kill cases runs
-in a helper process that the test kills with `SIGKILL` inside step 2. The
-domain write of every step inserts a row, so a step that runs twice shows as
-two rows.
-
-| Case | Ours, PostgreSQL | Ours, SQLite | DBOS, PostgreSQL | DBOS, SQLite |
-| --- | --- | --- | --- | --- |
-| Start key gives one operation | Pass | Pass | Pass | Pass |
-| Status from another instance | Pass | Pass | Pass | Pass |
-| A fenced step that fails rolls back its domain write | Pass | Pass | Pass | Pass |
-| Kill in step 2 while instance B runs: B completes it | Pass | Pass | **Fail** (1) | **Fail** (1) |
-| Kill in step 2; B starts later with the same executor ID | — | — | Pass | Pass |
-| A second instance starts while A runs: no step runs twice | Pass | Pass | Pass (2) | Not run (3) |
-| A stalled holder loses its claim and cannot write | Pass | **Fail** (4) | **Fail** (5) | Not run (3) |
-| A 1 s schedule on two instances fires once per tick | Pass | Pass | Pass | Pass |
-
-1. With unique executor IDs, the killed instance's workflow stays `PENDING`
-   with executor A, and step 1 is the only step done. Nothing recovers it
-   without Conductor.
-2. Both instances used the executor ID `local`. Steps did not run twice: in
-   the atomic mode, the owner check of DBOS rolls back the losing step's
-   domain write together with its checkpoint.
-3. On SQLite, opening a second DBOS instance while a step of the first one
-   stalls inside its transaction never returns. The stalled step holds the
-   one write lock, and `Launch` retries its first write with no limit. The
-   first attempt ran into a 30-minute test timeout.
-4. On SQLite, the stalled step of A holds the one write lock, so B cannot
-   claim until A ends. See the finding below.
-5. DBOS has no takeover of a live but stalled owner: the operation waits for
-   A. With the atomic mode, a late write of A is still fenced by the owner
-   check.
-
-Other results of the spike:
-
-- **Registration.** DBOS identifies a workflow by its Go function name, even
-  with `WithWorkflowName`. Workflow closures made per kind share one name and
-  panic at registration with `ConflictingRegistration`. The adapter
-  registers one generic workflow instead.
-- **Schedules.** `CreateSchedule` is not idempotent across instances: the
-  second instance gets a unique violation. The adapter treats it as
-  "the schedule exists".
-- **Storage.** On PostgreSQL, DBOS creates 13 tables and 3 plpgsql functions
-  in its own schema, and records migration version 123. Our restore swap does
-  not touch that schema. In the atomic mode it adds no table to our schema.
-  On SQLite the DBOS tables land in our database file.
-- **Dependencies.** The DBOS module adds two modules that the binary does not
-  link today: `jackc/pgerrcode` and `robfig/cron/v3`, both MIT. `govulncheck`
-  on the spike packages finds no vulnerability. `make trivy`, with its
-  license scan, passes with the module added.
-- **goleak.** The passing cases of both adapters end with goleak clean, so a
-  clean shutdown leaves no goroutine in both adapters.
-
-A finding for the suite: on SQLite, one stalled write transaction blocks
-every writer, so no other worker can take over or even claim. The "stalled
-holder" case must therefore be defined per dialect: on PostgreSQL, another
-instance takes over and the late write is fenced; on SQLite, the case needs
-a bound on the step transaction (a statement or transaction timeout) so that
-a stall ends, or the case does not apply. The port must state which, and a
-step that does slow work outside the database must not hold its transaction
-open while it waits.
-
-What the results say about each adapter:
-
-- **Ours** passes every case on PostgreSQL. Its gap on SQLite is a property
-  of SQLite, not of the adapter.
-- **DBOS** passes the cases inside one live instance, and it fences late
-  writes well in the atomic mode. It fails takeover across instances, the
-  case that #667 is about. To pass, a DBOS adapter needs our own liveness
-  signal and the internal recovery call, which the research note calls an
-  internal contract between DBOS and its commercial module. The atomic mode
-  also needs DBOS to own the pool that our steps write through, and
-  `Shutdown` closes that pool.
-
-### Liveness
-
-This RFC proposes L2 for liveness and a claim token for fencing:
-
-- One write per instance per period, not per operation.
-- One expiry rule for every claim, the chain migration claim and the sink
-  leases.
-- The registry also answers "which instances are live" for status, for the
-  single-node guard on SQLite and for any later cache peers.
-
-L1 is the fallback if the owner does not want a registry. Both shapes are
-suite cases, so the decision changes the adapter, not the port.
+The bake-off found that the "stalled holder" case differs per dialect. On
+SQLite, one stalled write transaction blocks every writer, so no other worker
+can take over or even claim. On PostgreSQL, another instance takes over and
+the late write is fenced. On SQLite, the case needs a bound on the step
+transaction (a statement or transaction timeout) so that a stall ends. The
+port states this. A step that does slow work outside the database must not
+hold its transaction open while it waits.
 
 ### Maintenance and restore
 
-This RFC proposes the write-path installation check (option 1 above). It is
-the stronger option against ADR 48 decisions 5 to 8:
+Every write transaction reads the installation state in the same statement
+that reads its namespace fence, under a shared advisory transaction lock.
+Maintenance enter changes the row under the exclusive form of that lock, so
+it waits for the writes in flight, and every later write sees maintenance
+and fails. Writes at installation scope run the same check (#684).
 
 - It needs no registry, no drain counter and no calls between instances.
-- The same statement fences installation-scope writes (#684).
 - Reads during maintenance stay bounded by the 2 s cache, which is safe:
   they change nothing.
+- The restore apply needs no confirmation from each instance and no wait for
+  the cache.
 
-I measured its cost on PostgreSQL 16, over loopback, on 4 vCPUs with other
-load running, so the numbers are noisy. Each figure is the median of three to
-seven runs. The write is a fenced insert: the namespace fence read, one
-`INSERT`, and the commit.
+A first measurement on PostgreSQL 16, over loopback, on 4 vCPUs with other
+load running, gave these numbers. They are noisy. Each figure is the median
+of three to seven runs. The write is a fenced insert: the namespace fence
+read, one `INSERT`, and the commit.
 
 | Variant | Serial | 16 parallel |
 | --- | --- | --- |
@@ -508,33 +367,28 @@ seven runs. The write is a fenced insert: the namespace fence read, one
 
 The folded check costs no extra round trip, and a shared advisory lock
 creates no row-level lock records on the one hot row. The difference is
-inside the noise of these runs. A benchmark in the PostgreSQL adapter must
-confirm it before the decision.
-
-With this check, the restore apply needs no confirmation from each instance
-and no wait for the cache. ADR 48 decisions 5 to 8 become unnecessary, which
-needs a superseding ADR.
+inside the noise of these runs. A benchmark in the PostgreSQL adapter
+records the cost when the check lands.
 
 ### Control tables outside the restore swap
 
 Today the installation, backups, restores and sink cursor and lease tables
 are part of the data that a restore replaces. The swap keeps only the audit
 chain state, so a restore ends maintenance mode when its swap commits
-(#678). This RFC proposes a declared list of bookkeeping tables, each
-with "keep" or "clear" across a swap (review B1):
+(#678). A declared list of control tables, each with "keep" or "clear"
+across a swap, fixes this (review B1):
 
 - On PostgreSQL the control tables (operations, steps, schedules,
-  registrations, installation, backups, restores) live in a schema that the
-  swap never renames.
+  installation, backups, restores) live in a schema that the swap never
+  renames.
 - On SQLite the swap copies them into the staged file in its fence
   transaction, as it does for the chain state today.
 - A coverage test fails for any table that is in neither the backup list nor
-  the bookkeeping list.
+  the control list.
 
 Then any instance can answer the status of a restore during the swap, and
 the in-memory `inflight` map, `recreateAfterSwap`, `PreserveAfterRestore` and
-the "superseded" sweep go away. A DBOS schema would sit outside the swap in
-the same way.
+the "superseded" sweep go away.
 
 Small first steps from the review, each with its own test:
 
@@ -568,13 +422,13 @@ Small first steps from the review, each with its own test:
 | Backup and restore requests | Goroutine and in-process slot | Start an operation; status from the database | The slots, `yieldToEarlierRunner` |
 | Token policy cache | 5 s per instance | A join in the credential lookup (review A9) | The cache |
 | Maintenance cache | 2 s per instance | Stays for reads; writes check the database | Nothing |
-| Auth failure budget | Per instance | See below | Nothing |
+| Auth failure budget | Per instance | A windowed counter in the database | The per-process counter |
 | Workspace restore stripe | In-process mutex | Idempotency in the store (review G2) | The striped mutexes |
 
 ### Pre-release compatibility code
 
-Nothing has shipped, so this RFC proposes to delete code that exists only for
-data from before a change, instead of making it safe for several instances:
+Nothing has shipped, so the code that exists only for data from before a
+change goes, instead of being made safe for several instances:
 
 - the seal of unsealed OpenTofu state at start, the after-restore seal and the
   unsealed read and copy paths. #668 then goes away with its cause;
@@ -586,13 +440,21 @@ data from before a change, instead of making it safe for several instances:
 - the refusal message for backup manifest format 1;
 - audit hash fields that are conditional on "from before this column".
 
-The owner already has the migration squash on their list (review A12): one
-baseline per dialect instead of 52 migrations each, before the first
-release. That resets the frozen hashes and the
-schema list of the binary. After the first release, a rolling deploy runs
-two server versions on one schema for minutes, so migrations would follow an
-expand-and-contract rule with a test of the previous release against the new
-schema (review A12).
+The migrations collapse into one baseline per dialect instead of 53 each
+(review A12). The baseline gets a new version number, so that a database or
+a portable backup from before the baseline is refused by name. The collapse
+resets the frozen hashes of `TestFrozenMigrations` and the schema list of the
+binary. It is a one-time exception to the rule that an applied migration
+never changes, and the ADR records it.
+
+### Sign-in failure budget
+
+The budget is a windowed counter row per source in the database. A failed
+attempt increments the counter of its window in one statement. An attempt
+reads the counter before it checks the credential. A successful attempt
+writes nothing. The cost is one write per failed attempt, so a guessing
+attack becomes database writes on every instance. The counter rows need a
+prune, which can be a schedule.
 
 ### Caching
 
@@ -603,17 +465,10 @@ invalidation is best effort. It has no discovery: we push a peer list. Its
 peer handler has no authentication, reads a PUT body with no limit, and has a
 nil-group panic path. It also brings our first OpenTelemetry dependencies.
 
-This RFC proposes a cache port in `pkg` with an in-process cache of write-once
-blob keys first, as a `blob.Store` decorator (review A8). groupcache stays a
-later option, only after a load measurement shows a need, and only with peer
-authentication and the registry as its peer list.
-
-### Auth failure budget
-
-This RFC proposes to keep the budget per instance for now and to state the
-factor in the guide for several instances. A write on every failed attempt
-would turn a guessing attack into database load on every instance. A shared
-penalty list, written only when a source goes over its budget, can follow.
+The cache port in `pkg` comes first, with an in-process cache of write-once
+blob keys as a `blob.Store` decorator (review A8). groupcache stays a later
+option, only after a load measurement shows a need, and only with peer
+authentication and a peer list.
 
 ### Operator rules
 
@@ -626,44 +481,284 @@ A guide for several instances states:
   sink are per host.
 - Set `--public-url` behind a load balancer.
 
-### Rollout
+## Proposal for question 8: a missed schedule tick
+
+### The problem
+
+A schedule row has `next_run_at`. When no instance runs for longer than one
+interval, for example during an outage or a full stop for an upgrade, one or
+more ticks pass with no run. At the next start, every instance starts its
+scheduler at about the same time. The owner does not want a thundering herd
+at start-up.
+
+The jobs that become schedules are the retention sweep, the audit chain
+check, the inactivity disable, the sign-in request prune and the counter
+prune. Each one is a sweep: one run does all the work that the missed runs
+would do. None of them needs to know how many ticks it missed.
+
+### The proposal
+
+1. **A catch-up runs at most once.** When `next_run_at` is in the past, the
+   schedule is due once, whatever the number of missed ticks. The claim sets
+   `next_run_at` to the database clock plus the interval, not to the old
+   `next_run_at` plus the interval. So the missed ticks collapse into one run,
+   and the schedule then continues at its normal interval.
+2. **One instance claims it.** The claim is one conditional statement on the
+   schedule row:
+
+   ```sql
+   UPDATE schedules
+      SET next_run_at = now() + interval, last_claimed_at = now()
+    WHERE kind = $1 AND next_run_at <= now()
+   RETURNING next_run_at;
+   ```
+
+   The instance that gets a row starts the operation, with the schedule kind
+   and the claimed `next_run_at` as its start key. A second start with that
+   key gives the same operation. The operation has a lease like every other
+   operation, so if the instance stops, another instance takes it over.
+3. **The first claim waits a random delay.** At start-up, each instance waits
+   a random delay before its first claim of each schedule. The delay is
+   uniform from 0 to a bound. The bound is the smaller of 60 s and one tenth
+   of the interval. Each schedule draws its own delay, so the catch-ups of
+   different schedules do not start at the same moment on one instance.
+4. **The other instances never run it.** An instance that gets no row from
+   the claim does nothing for that tick. It never runs the job without a
+   claim, and it never retries the claim before the next `next_run_at`.
+
+The cost: one column (`last_claimed_at`) for status, the random delay in the
+scheduler loop, and two cases in the suite:
+
+- Three instances start together after a stop of three intervals. The job
+  runs once. `next_run_at` is one interval after the claim.
+- The first claim attempts of the instances spread over the delay bound. A
+  test with a fixed random source checks the bound.
+
+### Alternatives
+
+- **Skip every missed tick.** The schedule moves `next_run_at` to the next
+  boundary after now and runs then. No run at start-up at all. The cost: an
+  inactive token can stay enabled for up to one more interval after a long
+  stop, and a retention sweep can wait one more interval.
+- **Run each missed tick.** A backlog of runs at start-up. None of the jobs
+  needs it, and it is the herd that the owner does not want.
+
+The proposal is the first option above (catch-up once). It gives the work of
+the missed ticks in one run, and the delay spreads the claims. A schedule
+that must count missed ticks does not exist today. If one comes, it needs
+its own policy.
+
+## Proposal for question 9: upgrades and rolling deploys
+
+The owner asked: "Can we do better than N-1? Can we make it possible for
+upgrades to skip versions?" These are two different questions:
+
+1. **Upgrade path.** Can an installation that stopped on an old release start
+   the new release directly, with no release in between?
+2. **Coexistence.** Which binary versions can run together on one schema
+   while a rolling deploy replaces them?
+
+### Part 1. The upgrade path: skipping versions
+
+The migration runner already applies every embedded migration that the
+database does not record, in order
+(`pkg/store/postgres/postgres.go:798-815`,
+`pkg/store/sqlite/sqlite.go:1072-1089`). So a stopped upgrade can skip any
+number of releases today. What is missing is the proof.
+
+Proposal:
+
+- **An upgrade test from each supported old release straight to the new
+  one.** ADR 33 decision 7 tests only from the newest tag. The test grows to
+  a list of old tags. For each tag it builds that release, writes data with
+  the real Pulumi CLI and OpenTofu, stops it, starts the new binary on the
+  same database, and checks the data, the secrets and the held lock.
+- **A cheaper schema test for every tag.** For each old tag, the test applies
+  that tag's migrations, then the new migrations, and compares the schema
+  with a fresh install of the new binary. It needs no CLI and runs in
+  seconds per tag, so it can run in `make check` for all tags.
+- **Data migrations stay idempotent and ordered.** A migration that rewrites
+  data must work from any older schema in the chain, not only from the
+  release just before it. A slow data migration can run as a durable
+  operation after start, so that a large skip does not hold the start.
+- **A later baseline sets a floor.** If the migrations collapse again after
+  the first tag, the new baseline refuses an older database by name and names
+  the release to upgrade through. The proposal is to collapse no migration
+  after the first tag unless the owner decides it.
+
+Cost: the schema test is small and runs on every change. The full upgrade
+test takes one build and one e2e run per old tag and per dialect. Today one
+run has a limit of 20 minutes. To keep the cost bounded, the full test runs
+from the first tag and from the last few tags, and the schema test covers
+every tag.
+
+### Part 2. Coexistence: running several versions together
+
+A rolling deploy starts new instances while old instances still serve.
+Today ADR 33 decision 1 makes an older binary refuse any schema that it does
+not know. So the first new instance migrates, and every old instance fails
+at its next start (ADR 33 decision 5). An old instance that does not
+restart keeps serving on a schema that it does not know, with no check.
+
+Proposal: expand and contract, with each contract delayed by a support
+window of K releases.
+
+1. **Expand.** A release adds tables, columns and indexes only in a way that
+   older binaries ignore. New columns are nullable or have a default. A
+   release that changes a shape writes both the old and the new shape.
+2. **Contract later.** A step that removes or narrows something (drop a
+   column or a table, add `NOT NULL`, change a type) ships K releases after
+   the expand that made it unused, not in the same release.
+3. **The schema records a minimum binary version.** The schema stores the
+   oldest binary version that can use it. A contract migration raises it. A
+   binary below the minimum refuses to start, and the error names both
+   versions. A binary at or above the minimum starts on a newer schema. This
+   changes ADR 33 decision 1 from "refuse any newer schema" to "refuse a
+   schema whose minimum is above this binary", which needs a superseding
+   ADR.
+4. **Each instance writes its version at start-up.** At start-up, each
+   instance writes one row with its binary version and its start time. The
+   row is not a liveness lease: nothing renews it. A clean stop deletes it.
+   The installation API lists the rows, and an administrator can delete a row
+   of a crashed instance, with its own action (ADR 17).
+5. **A contract runs only when no older instance is recorded.** A contract
+   migration that raises the minimum does not run while a version row below
+   the new minimum exists. The binary then starts without that migration,
+   and the error names the rows that block it.
+6. **The write path checks the minimum.** The write-path check of decision 3
+   reads the installation row already. The same statement compares the
+   minimum with the version of the writing binary. So an old instance that
+   is still running when the minimum goes up, for example because an
+   administrator deleted its row, cannot write after that. Its writes fail in
+   their own transaction, like a namespace fence. This makes step 5 a
+   precondition for the operator, not the only protection.
+7. **A test matrix.** CI runs the new schema against each of the last K
+   release binaries. Each old binary runs the e2e steps of the real CLIs
+   while a new binary serves on the same database.
+
+What this gives: during a rolling deploy, binaries from release R−K to R can
+run together on one schema. A rolling deploy can skip up to K−1 releases. A
+stopped upgrade can skip any number (part 1).
+
+Cost of each step:
+
+| Step | Cost |
+| --- | --- |
+| Expand only | Each shape change becomes two releases or more. Code writes both shapes for K releases. |
+| Delayed contract | A list of pending contracts, each with the release that may run it. A review rule. |
+| Minimum version | One column, a check at start, and the change to ADR 33 decision 1. |
+| Version rows | One table, one write at start and one delete at stop, one API route to list and one to delete, with an action. |
+| Contract precondition | One query in the migration runner. |
+| Write-path minimum | One comparison in a statement that decision 3 adds anyway. |
+| Test matrix | K builds and K mixed e2e runs per dialect for each release. The cost grows linearly with K. |
+
+### Why this must be decided before the first tag
+
+A released binary keeps its refusal rule. If `v0.1.0` refuses any newer
+schema (ADR 33 decision 1 as it stands), then no `v0.1.0` instance can serve
+next to a `v0.2.0` instance, whatever `v0.2.0` does. ADR 33 decision 2 uses
+the same argument for the refusal itself. So steps 3 and 6 must be in the
+first tag. K itself is a number in the schema, and a later release can
+change it.
+
+### Recommendation for K
+
+K = 2. Three releases (R−2, R−1, R) can run together on one schema, so a
+rolling deploy can skip one release. A stopped upgrade can skip any number.
+K = 1 (N−1) is the minimum for a rolling deploy at all. Each step above K = 2
+adds one build and one mixed e2e run per dialect to every release, and keeps
+dual-shape code for one more release. The project has no release cadence
+yet. When it has one, K can grow if operators need it.
+
+## Considered and rejected
+
+These options were in earlier drafts of this RFC. The owner decided against
+them on 2026-10-16. They are kept here so that later reviews do not propose
+them again.
+
+- **One lease per instance (L2, an instance registry).** Each instance holds
+  one registration row with a lease, and a claim records the owner's
+  registration ID (review A1, A5, A6). Rejected: the owner chose a lease per
+  job (decision 2). A registry adds a table, a renewal loop on every
+  instance and a rule for an instance that loses its lease, only to answer
+  "is the owner live". A lease per job answers it with one write per running
+  operation, and the number of running operations is small.
+- **Confirmation through the registry** (review B3). Each instance writes the
+  maintenance epoch that its gate enforces into its registration row, and the
+  restore waits for every live row. Rejected with the registry, and the
+  write-path check (decision 3) needs no wait.
+- **DBOS Transact Go behind the port.** A throwaway spike (draft #693,
+  commit d0d9160, not for merge) ran eight cases on both stores against our
+  adapter (436 lines) and a DBOS v1.7.0 adapter (269 lines). Rejected
+  (decision 1) for these reasons from the spike and the source:
+  - Without Conductor, a commercial product, a process recovers only the
+    workflows of its own executor ID. With unique IDs, the work of a killed
+    instance stays `PENDING`. With one shared ID, instances recover each
+    other's live work (#667). The takeover case failed on both stores.
+  - The default application version is a hash of the binary, and recovery
+    takes only workflows of its own version, so a rolling deploy strands
+    work.
+  - A step commits atomically with its checkpoint only on the DBOS pool, and
+    `Shutdown` closes that pool. Our sqlc SQLite code cannot run in its
+    transaction type.
+  - On SQLite, a second DBOS instance blocked with no limit while a step of
+    the first one stalled. On SQLite its tables land in our database file.
+  - It adds about 123 migrations of its own, plpgsql functions and a trigger,
+    and two modules that the binary does not link today.
+  - Our adapter passed every case on PostgreSQL. Its one failure on SQLite is
+    a property of SQLite (see the suite).
+- **River** (MPL-2.0). A strong PostgreSQL queue, but its SQLite driver is
+  "in early testing", durable periodic jobs are a paid extension, and its
+  migrations would have to move into our migrations.
+- **go-workflows** (MIT). No start or completion inside our transaction,
+  constructors that panic, unqualified table names and one maintainer.
+- **A replay engine with its own cluster** (Temporal and similar). Not
+  embeddable, and replay engines put the highest cost on workflow code
+  (research, part 2).
+- **Do nothing.** #667 and #668 stay data loss.
+- **A row lock held while the work runs** (`SELECT ... FOR UPDATE SKIP
+  LOCKED` for the whole job). It pins a pool connection, holds back vacuum,
+  fails behind a transaction-mode pooler, survives a dead host for the TCP
+  keepalive time, and can wait on the restore swap in a cycle that the
+  deadlock detector cannot see (review A5, research part 5). `SKIP LOCKED`
+  stays only in the short claim transaction.
+- **The sign-in failure budget per instance, with the factor in the guide.**
+  Rejected: the owner chose a shared counter (decision 7).
+- **Squash the migrations only at the first tag** (review A12). Rejected: the
+  owner chose to collapse them now (decision 5).
+
+## Rollout
 
 1. The two-handle store factory and `internal/servertest`, with the #667 and
    #668 reproductions on them.
 2. The port and the conformance suite.
-3. The bake-off spike and its report in this RFC. The owner decides the
-   engine.
+3. Our adapter on both stores.
 4. The control-table schema and the write-path installation check, with the
-   superseding ADR for ADR 48.
+   ADR that supersedes ADR 48 decisions 5 to 8.
 5. Backup, restore and the chain migration as operations; the start-up
    recovery steps go away.
 6. The tickers become schedules.
-7. Deletion of the pre-release code, before the first release.
+7. The shared sign-in failure counter.
+8. Deletion of the pre-release code and the baseline migration per dialect.
+   This can go first, because it shrinks the code that the later steps
+   change.
 
 SQLite runs the same port and the same suite with one instance. A guard
 refuses a second instance on one SQLite file.
 
 ## Open questions
 
-1. Liveness: one lease per instance (L2, a registry) or an expiry on each
-   claim (L1)?
-2. Maintenance: replace ADR 48 decisions 5 to 8 with the write-path
-   installation check, through a superseding ADR?
-3. Control tables in their own schema, outside the restore swap and the
-   backup scope: does that need a small new ADR?
-4. Delete the pre-release compatibility code together with the migration
-   squash that is already on the owner's list?
-5. The DBOS spike stays on a throwaway branch, and adopting DBOS needs the
-   owner's approval of the dependency. Is DBOS still worth the spike, given
-   what the source shows?
-6. Auth failure budget: per instance and stated in the guide, or a shared
-   counter in the database?
-7. Caching: an in-process blob cache first, with groupcache only after a load
-   measurement?
-8. Schedules: skip a tick that no instance ran, or run it once at the next
-   start?
-9. Rolling deploys: adopt expand-and-contract migrations with a compatibility
-   test after the baseline?
+1. Schedules: does a missed tick run once after a random delay at start-up,
+   claimed by one instance (the proposal for question 8)?
+2. Rolling deploys: expand and contract with a support window of K = 2,
+   a minimum binary version in the schema, version rows written at start-up
+   and a write-path check of the minimum (the proposal for question 9)? If
+   yes, it supersedes ADR 33 decision 1 and must land before the first tag.
+3. ADR 48 decisions 1 to 3 and 9 to 11 define an instance registry with a
+   lease. Decision 2 above says that there is no instance registry, and
+   decisions 5 to 8 were the only users of the registry. Are decisions 1 to
+   3 and 9 to 11 superseded too? Decision 4 (the version check at start)
+   moves to question 2.
 
 ## Appendix: background jobs and long operations today
 
@@ -703,4 +798,5 @@ refuses a second instance on one SQLite file.
 
 ## Outcome
 
-None yet.
+Questions 1 to 7 decided on 2026-10-16. The ADR for them is proposed in its
+own pull request. Questions 8 and 9 are open.
