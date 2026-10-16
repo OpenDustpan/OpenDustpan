@@ -34,8 +34,11 @@ var (
 	ErrMissingDependency = errors.New("missing dependency")
 )
 
-// Lifetime is the fixed time a temporary administrator works after its
-// create. The create sets the expiry once, and nothing extends it.
+// Lifetime is the longest time a temporary administrator works after its
+// create. The create sets the expiry once, and nothing extends it. A create
+// with a shorter lifetime ends earlier: the host command uses the token
+// policy maximum when that is below Lifetime, so the record and the token
+// end together.
 const Lifetime = 24 * time.Hour
 
 // maxIDLength bounds the principal ID of a record, in bytes.
@@ -43,7 +46,7 @@ const maxIDLength = 64
 
 // TempAdmin is one temporary administrator. PrincipalID is the stable ID of
 // the principal, with the prefix "prn-". Subject is the name of the person
-// the host command passed. ExpiresAt is the fixed end of the grant, exactly
+// the host command passed. ExpiresAt is the end of the grant, at most
 // Lifetime after CreatedAt. CreatedBy names the host operator that made it.
 type TempAdmin struct {
 	CreatedAt   time.Time
@@ -61,7 +64,8 @@ func (r TempAdmin) ActiveAt(now time.Time) bool {
 
 // Validate reports whether r holds usable values: a principal ID in ID
 // form, a subject that principal.ValidateSubject accepts, a named creator,
-// and an expiry exactly Lifetime after the creation.
+// and an expiry after the creation and at most Lifetime after it, in whole
+// milliseconds.
 func (r TempAdmin) Validate() error {
 	if !ident.Valid(r.PrincipalID, maxIDLength) {
 		return fmt.Errorf("%w: principal %q", ErrInvalid, r.PrincipalID)
@@ -75,9 +79,15 @@ func (r TempAdmin) Validate() error {
 		return fmt.Errorf("%w: missing creator", ErrInvalid)
 	}
 
-	want := r.CreatedAt.UTC().Truncate(time.Millisecond).Add(Lifetime)
-	if !r.ExpiresAt.Equal(want) {
-		return fmt.Errorf("%w: the expiry is not %s after the creation", ErrInvalid, Lifetime)
+	created := r.CreatedAt.UTC().Truncate(time.Millisecond)
+	expires := r.ExpiresAt.UTC().Truncate(time.Millisecond)
+
+	if !r.ExpiresAt.Equal(expires) {
+		return fmt.Errorf("%w: the expiry is not a whole count of milliseconds", ErrInvalid)
+	}
+
+	if !expires.After(created) || expires.Sub(created) > Lifetime {
+		return fmt.Errorf("%w: the expiry is not within %s after the creation", ErrInvalid, Lifetime)
 	}
 
 	return nil

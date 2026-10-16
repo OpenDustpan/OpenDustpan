@@ -33,6 +33,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
@@ -48,6 +49,9 @@ var (
 	// ErrPersonExists reports a host run that names a person that a
 	// principal already holds.
 	ErrPersonExists = errors.New("person already exists")
+	// errHostBadLifetime reports a token policy with no positive maximum
+	// lifetime.
+	errHostBadLifetime = errors.New("read token policy: maximum lifetime is not positive")
 )
 
 // hostSubject is the subject of the audit entries of the host command: the
@@ -167,16 +171,33 @@ type hostMade struct {
 }
 
 // createTempAdmin makes person a temporary administrator through the store
-// st: it sweeps the records that ended, makes a new person principal,
-// grants it the site-administrator role, issues its personal token, and
-// records the temporary administrator with its fixed expiry. Each step
-// writes its audit entry.
+// st: it reads the token policy first, sweeps the records that ended, makes
+// a new person principal, grants it the site-administrator role, records
+// the temporary administrator, and issues its personal token. The record
+// and the token share one lifetime: the token policy maximum when that is
+// below the fixed temporary administrator lifetime, or that lifetime
+// otherwise. Each step writes its audit entry. A step that fails after the
+// person exists undoes the earlier steps before the error returns, so no
+// live grant, person or record stays without a token.
 func createTempAdmin(ctx context.Context, st store, person string) (hostMade, error) {
 	var made hostMade
 
 	temps, err := tempadmin.NewService(tempadmin.Config{Store: st, Now: nil})
 	if err != nil {
 		return made, fmt.Errorf("temporary administrator service: %w", err)
+	}
+
+	tokens, tokensErr := accesstoken.NewService(accesstoken.Config{
+		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
+		Now: nil, NewID: nil,
+	})
+	if tokensErr != nil {
+		return made, fmt.Errorf("access token service: %w", tokensErr)
+	}
+
+	lifetime, err := hostLifetime(ctx, tokens)
+	if err != nil {
+		return made, err
 	}
 
 	_, sweepErr := temps.Sweep(ctx, hostEntry(tempadmin.Action))
@@ -196,47 +217,147 @@ func createTempAdmin(ctx context.Context, st store, person string) (hostMade, er
 		return made, personErr
 	}
 
-	if adminErr := ensureSiteAdmin(ctx, st, p); adminErr != nil {
-		return made, adminErr
+	grantID, grantErr := grantSiteAdmin(ctx, st, p)
+	if grantErr != nil {
+		dropPerson(ctx, st, p)
+
+		return made, grantErr
 	}
 
-	expires, expiresErr := tempExpires(ctx, temps, p, person)
+	expires, expiresErr := tempExpires(ctx, temps, p, person, lifetime)
 	if expiresErr != nil {
+		revokeHostGrant(ctx, st, grantID)
+		dropPerson(ctx, st, p)
+
 		return made, expiresErr
 	}
 
-	tokens, tokensErr := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
-		Now: nil, NewID: nil,
-	})
-	if tokensErr != nil {
-		return made, fmt.Errorf("access token service: %w", tokensErr)
-	}
-
-	tok, secret, createErr := tokens.Create(ctx, hostCaller(), hostEntry(string(identity.ActionServerManageTokens)),
-		accesstoken.ScopePersonal, accesstoken.Input{PrincipalID: p.ID, Name: hostTokenName, ExpiresAt: expires})
+	tok, secret, createErr := issueHostToken(ctx, tokens, p, expires, person)
 	if createErr != nil {
-		return made, fmt.Errorf("issue access token for %q: %w", person, createErr)
+		endHostRecord(ctx, st, p.ID)
+		revokeHostGrant(ctx, st, grantID)
+		dropPerson(ctx, st, p)
+
+		return made, createErr
 	}
 
 	return hostMade{subject: person, secret: secret.Reveal(), expires: tok.ExpiresAt}, nil
 }
 
-// tempExpires records the principal p as a temporary administrator and
-// answers its fixed expiry, exactly Lifetime after the create.
+// hostLifetime answers the lifetime the host command uses for one record
+// and its token: the token policy maximum when that is below the fixed
+// temporary administrator lifetime, or that lifetime otherwise.
+func hostLifetime(ctx context.Context, tokens *accesstoken.Service) (time.Duration, error) {
+	policyMax, err := tokens.MaxLifetime(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("read token policy: %w", err)
+	}
+
+	if policyMax <= 0 {
+		return 0, errHostBadLifetime
+	}
+
+	return min(tempadmin.Lifetime, policyMax), nil
+}
+
+// tempExpires records the principal p as a temporary administrator for the
+// shared lifetime and answers its expiry.
 func tempExpires(
-	ctx context.Context, temps *tempadmin.Service, p principal.Principal, person string,
+	ctx context.Context, temps *tempadmin.Service, p principal.Principal, person string, lifetime time.Duration,
 ) (time.Time, error) {
-	rec, err := temps.Create(ctx, hostEntry(tempadmin.Action), tempadmin.Input{
+	rec, err := temps.CreateWithLifetime(ctx, hostEntry(tempadmin.Action), tempadmin.Input{
 		Subject:     person,
 		PrincipalID: p.ID,
 		CreatedBy:   hostOperator(),
-	})
+	}, lifetime)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("record temporary administrator for %q: %w", person, err)
 	}
 
 	return rec.ExpiresAt, nil
+}
+
+// issueHostToken issues the personal recovery token of the principal p
+// with the expiry expires.
+func issueHostToken(
+	ctx context.Context, tokens *accesstoken.Service, p principal.Principal, expires time.Time, person string,
+) (accesstoken.Token, accesstoken.Secret, error) {
+	tok, secret, err := tokens.Create(ctx, hostCaller(), hostEntry(string(identity.ActionServerManageTokens)),
+		accesstoken.ScopePersonal, accesstoken.Input{PrincipalID: p.ID, Name: hostTokenName, ExpiresAt: expires})
+	if err != nil {
+		return accesstoken.Token{}, accesstoken.Secret{}, fmt.Errorf("issue access token for %q: %w", person, err)
+	}
+
+	return tok, secret, nil
+}
+
+// revokeHostGrant ends the grant grantID. No ID means the grant exists
+// already and keeps working, so there is nothing to undo. A grant that is
+// already gone stays gone.
+func revokeHostGrant(ctx context.Context, st store, grantID string) {
+	if grantID == "" {
+		return
+	}
+
+	entry := hostCleanupEntry(string(identity.ActionServerManageAccess), access.GrantIDRef(grantID))
+
+	fence := namespace.Fence{Namespace: "", FailoverVersion: 0}
+
+	if err := st.RevokeGrant(ctx, grantID, fence, entry, nil); err != nil &&
+		!errors.Is(err, access.ErrNotFound) {
+		return
+	}
+}
+
+// dropPerson deletes the person p. A person that is already gone stays
+// gone: the delete also ends its grants, so no live grant stays.
+func dropPerson(ctx context.Context, st store, p principal.Principal) {
+	entry := hostCleanupEntry(string(identity.ActionServerManagePrincipals), principal.Ref(p.ID))
+
+	if err := st.DeletePrincipal(ctx, p.ID, entry); err != nil && !errors.Is(err, principal.ErrNotFound) {
+		return
+	}
+}
+
+// endHostRecord ends the temporary administrator record of the principal
+// principalID. A record that is already ended or gone stays as it is.
+func endHostRecord(ctx context.Context, st store, principalID string) {
+	entry := hostCleanupEntry(tempadmin.Action, tempadmin.Ref(principalID))
+
+	if err := st.ExpireTempAdmin(ctx, principalID, entry); err != nil &&
+		!errors.Is(err, tempadmin.ErrNotFound) && !errors.Is(err, tempadmin.ErrExpired) {
+		return
+	}
+}
+
+// hostCleanupEntry returns the audit entry of one undo step of the host
+// command: the host as the subject, in the server scope, with the action
+// and the object of the caller.
+func hostCleanupEntry(action, object string) audit.Entry {
+	return audit.Entry{
+		FenceVersion: 0,
+		At:           time.Now().UTC().Truncate(time.Millisecond),
+		Namespace:    audit.ServerScope,
+		Subject:      hostSubject,
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       action,
+		Object:       object,
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "",
+		UserAgent:    "",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+	}
 }
 
 // hostOperator names the OS user that runs the host command, for the
@@ -284,24 +405,25 @@ func personOf(
 	return made, nil
 }
 
-// ensureSiteAdmin grants the person p the site-administrator role on the
-// installation. A grant that exists already keeps working.
-func ensureSiteAdmin(ctx context.Context, st store, p principal.Principal) error {
+// grantSiteAdmin grants the person p the site-administrator role on the
+// installation. It answers the ID of the new grant, or no ID when the
+// grant exists already and keeps working.
+func grantSiteAdmin(ctx context.Context, st store, p principal.Principal) (string, error) {
 	authz, authzErr := access.NewAuthorizer(
 		access.AuthorizerConfig{Store: st, Callers: st, Collections: nil, Units: nil, Principals: nil},
 	)
 	if authzErr != nil {
-		return fmt.Errorf("access authorizer: %w", authzErr)
+		return "", fmt.Errorf("access authorizer: %w", authzErr)
 	}
 
 	grants, grantsErr := access.NewService(access.ServiceConfig{
 		Store: st, Directory: st, Namespaces: st, Authorizer: authz, Now: nil, NewID: nil, BootstrapAdmins: nil,
 	})
 	if grantsErr != nil {
-		return fmt.Errorf("access service: %w", grantsErr)
+		return "", fmt.Errorf("access service: %w", grantsErr)
 	}
 
-	_, grantErr := grants.Grant(
+	made, grantErr := grants.Grant(
 		ctx,
 		hostEntry(string(identity.ActionServerManageAccess)),
 		hostCaller(),
@@ -313,11 +435,11 @@ func ensureSiteAdmin(ctx context.Context, st store, p principal.Principal) error
 	)
 	if grantErr != nil {
 		if errors.Is(grantErr, access.ErrAlreadyExists) {
-			return nil
+			return "", nil
 		}
 
-		return fmt.Errorf("grant site-administrator to %q: %w", p.Subject, grantErr)
+		return "", fmt.Errorf("grant site-administrator to %q: %w", p.Subject, grantErr)
 	}
 
-	return nil
+	return made.ID, nil
 }

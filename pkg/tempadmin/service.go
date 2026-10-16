@@ -59,41 +59,23 @@ type Input struct {
 
 // Create records the principal principalID as a temporary administrator of
 // the person subject, with the entry e of the host operator. The expiry is
-// fixed: exactly Lifetime after the create, and nothing extends it. The
+// Lifetime after the create, and nothing extends it. The
 // principal itself already exists: the host command makes it first, or
 // reuses the record of a person that lost access.
 func (s *Service) Create(ctx context.Context, e audit.Entry, in Input) (TempAdmin, error) {
-	if err := principal.ValidateSubject(in.Subject); err != nil {
-		return TempAdmin{}, fmt.Errorf("create temporary administrator: %w", err)
-	}
+	return s.insertRecord(ctx, e, in, Lifetime)
+}
 
-	if in.PrincipalID == "" {
-		return TempAdmin{}, fmt.Errorf("create temporary administrator: %w: missing principal", ErrInvalid)
-	}
-
-	if in.CreatedBy == "" {
-		return TempAdmin{}, fmt.Errorf("create temporary administrator: %w: missing creator", ErrInvalid)
-	}
-
-	at := s.Now()
-
-	r := TempAdmin{
-		CreatedAt:   at,
-		ExpiresAt:   at.Add(Lifetime),
-		PrincipalID: in.PrincipalID,
-		Subject:     in.Subject,
-		CreatedBy:   in.CreatedBy,
-	}
-
-	if err := r.Validate(); err != nil {
-		return TempAdmin{}, fmt.Errorf("create temporary administrator: %w", err)
-	}
-
-	if err := s.store.CreateTempAdmin(ctx, r, change(e, at, Ref(r.PrincipalID))); err != nil {
-		return TempAdmin{}, fmt.Errorf("create temporary administrator for %q: %w", in.Subject, err)
-	}
-
-	return r, nil
+// CreateWithLifetime records the principal principalID as a temporary
+// administrator of the person subject, with the entry e of the host
+// operator. The expiry is lifetime after the create, which must be within
+// one millisecond to Lifetime, and nothing extends it. The host command
+// passes the token policy maximum when that is below Lifetime, so the
+// record and the token end together.
+func (s *Service) CreateWithLifetime(
+	ctx context.Context, e audit.Entry, in Input, lifetime time.Duration,
+) (TempAdmin, error) {
+	return s.insertRecord(ctx, e, in, lifetime)
 }
 
 // Get returns the record of the principal principalID.
@@ -153,6 +135,63 @@ func (s *Service) Sweep(ctx context.Context, e audit.Entry) ([]string, error) {
 	}
 
 	return done, nil
+}
+
+// insertRecord shares the create of Create and CreateWithLifetime.
+func (s *Service) insertRecord(
+	ctx context.Context, e audit.Entry, in Input, want time.Duration,
+) (TempAdmin, error) {
+	if err := principal.ValidateSubject(in.Subject); err != nil {
+		return TempAdmin{}, fmt.Errorf("create temporary administrator: %w", err)
+	}
+
+	if in.PrincipalID == "" {
+		return TempAdmin{}, fmt.Errorf("create temporary administrator: %w: missing principal", ErrInvalid)
+	}
+
+	if in.CreatedBy == "" {
+		return TempAdmin{}, fmt.Errorf("create temporary administrator: %w: missing creator", ErrInvalid)
+	}
+
+	lifetime, err := lifetimeOf(want)
+	if err != nil {
+		return TempAdmin{}, err
+	}
+
+	at := s.Now()
+
+	r := TempAdmin{
+		CreatedAt:   at,
+		ExpiresAt:   at.Add(lifetime),
+		PrincipalID: in.PrincipalID,
+		Subject:     in.Subject,
+		CreatedBy:   in.CreatedBy,
+	}
+
+	if err := r.Validate(); err != nil {
+		return TempAdmin{}, fmt.Errorf("create temporary administrator: %w", err)
+	}
+
+	if err := s.store.CreateTempAdmin(ctx, r, change(e, at, Ref(r.PrincipalID))); err != nil {
+		return TempAdmin{}, fmt.Errorf("create temporary administrator for %q: %w", in.Subject, err)
+	}
+
+	return r, nil
+}
+
+// lifetimeOf answers the lifetime of a create: Lifetime when want is zero,
+// or want when it is within one millisecond to Lifetime.
+func lifetimeOf(want time.Duration) (time.Duration, error) {
+	if want == 0 {
+		return Lifetime, nil
+	}
+
+	if want <= 0 || want > Lifetime || want%time.Millisecond != 0 {
+		return 0, fmt.Errorf("create temporary administrator: %w: lifetime %s is not 1ms to %s",
+			ErrInvalid, want, Lifetime)
+	}
+
+	return want, nil
 }
 
 // change completes the entry of the caller for one change of the record

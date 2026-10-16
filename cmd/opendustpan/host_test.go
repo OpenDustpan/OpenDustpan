@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
@@ -215,28 +217,53 @@ func checkHostToken(ctx context.Context, t *testing.T, st *sqlite.Store, token, 
 	}
 }
 
-// checkHostAudit proves one audit entry for each step: the principal and
-// the banner record.
+// checkHostAudit proves one audit entry for each step: the person create,
+// the site-administrator grant, the token, and the banner record. A
+// missing or repeated step fails the test.
 func checkHostAudit(ctx context.Context, t *testing.T, st *sqlite.Store, p principal.Principal) {
 	t.Helper()
 
 	entries := hostServerEntries(ctx, t, st)
+	counts := countHostActions(entries)
 
-	for _, want := range []string{principal.Ref(p.ID), tempadmin.Ref(p.ID)} {
-		found := false
-
-		for i := range entries {
-			if entries[i].Object == want {
-				found = true
-
-				break
-			}
-		}
-
-		if !found {
-			t.Fatalf("no audit entry names %q in %+v", want, entries)
+	for _, want := range []string{
+		string(identity.ActionServerManagePrincipals),
+		string(identity.ActionServerManageAccess),
+		string(identity.ActionServerManageTokens),
+		tempadmin.Action,
+	} {
+		if counts[want] != 1 {
+			t.Fatalf("audit entries with action %q = %d, want exactly 1 in %+v", want, counts[want], counts)
 		}
 	}
+
+	requireHostObject(t, entries, string(identity.ActionServerManagePrincipals), principal.Ref(p.ID))
+	requireHostObject(t, entries, tempadmin.Action, tempadmin.Ref(p.ID))
+}
+
+// requireHostObject proves the one entry with the given action names the
+// object object.
+func requireHostObject(t *testing.T, entries []audit.Entry, action, object string) {
+	t.Helper()
+
+	for i := range entries {
+		if entries[i].Action == action && entries[i].Object == object {
+			return
+		}
+	}
+
+	t.Fatalf("no audit entry with action %q names %q in %+v", action, object, entries)
+}
+
+// countHostActions counts the entries by action.
+func countHostActions(entries []audit.Entry) map[string]int {
+	counts := make(map[string]int, len(entries))
+
+	for i := range entries {
+		counts[entries[i].Action]++
+	}
+
+	return counts
 }
 
 // hostServerEntries returns the entries of @server, newest first.
@@ -357,5 +384,194 @@ func TestHostReadFailsForUnknownSubject(t *testing.T) {
 
 	if _, err := st.GetPrincipalBySubject(ctx, "stranger"); !errors.Is(err, principal.ErrNotFound) {
 		t.Fatalf("principal read of a stranger = %v, want ErrNotFound", err)
+	}
+}
+
+// TestHostShortPolicyLifetime proves a token policy with a maximum below
+// the fixed lifetime shortens both the token and the record: with a 1h
+// maximum the host run succeeds and both expire in 1h, not 24h.
+func TestHostShortPolicyLifetime(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db := hostTestDB(t)
+
+	setHostMaxLifetime(ctx, t, db, time.Hour)
+
+	creds := parseHostOutput(t, runHost(ctx, t, "host", "create-temp-admin", "--database", db, "alice"))
+
+	requireHostExpiryAbout(t, creds.expires, time.Hour)
+
+	st := openHostStore(ctx, t, db)
+
+	requireHostRecordExpiry(ctx, t, st, creds)
+	checkHostToken(ctx, t, st, creds.token, "alice")
+}
+
+// setHostMaxLifetime sets the token policy maximum lifetime of the database
+// db to capped.
+func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped time.Duration) {
+	t.Helper()
+
+	st := openHostStore(ctx, t, db)
+
+	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
+		Now: nil, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("access token service: %v", err)
+	}
+
+	change := accesstoken.PolicyChange{
+		MaxLifetime: &capped, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: nil,
+	}
+
+	if _, err := tokens.SetPolicy(ctx, hostPolicyEntry(), change); err != nil {
+		t.Fatalf("set maximum lifetime to %s: %v", capped, err)
+	}
+}
+
+// requireHostExpiryAbout proves expiry is within the hour before want from
+// now: after a short policy the host expiry is about want, not 24h.
+func requireHostExpiryAbout(t *testing.T, expiry time.Time, want time.Duration) {
+	t.Helper()
+
+	got := time.Until(expiry)
+
+	if got <= want-10*time.Minute || got > want {
+		t.Fatalf("expiry is in %s, want about %s", got, want)
+	}
+}
+
+// requireHostRecordExpiry proves the banner record expires with the printed
+// token expiry.
+func requireHostRecordExpiry(
+	ctx context.Context, t *testing.T, st *sqlite.Store, creds hostCredentials,
+) {
+	t.Helper()
+
+	rec, err := st.GetTempAdminBySubject(ctx, creds.person)
+	if err != nil {
+		t.Fatalf("read temporary administrator: %v", err)
+	}
+
+	if !rec.ExpiresAt.Equal(creds.expires) {
+		t.Fatalf("record expiry = %s, want the printed %s", rec.ExpiresAt, creds.expires)
+	}
+}
+
+// errFailToken reports the injected token failure of the cleanup test.
+var errFailToken = errors.New("injected token failure")
+
+// failTokenStore fails the token writes of the store it wraps, so a host
+// run fails at the token step after the person, the grant and the record.
+type failTokenStore struct {
+	store
+}
+
+// CreateToken implements accesstoken.TokenStore with an injected failure.
+func (f failTokenStore) CreateToken(
+	_ context.Context, _ accesstoken.Token, _ accesstoken.Digest, _ audit.Entry,
+) error {
+	return errFailToken
+}
+
+// TestHostTokenFailureCleansUp proves a token failure undoes the earlier
+// steps: no person, no live grant and no active record stay, so a retry
+// with the same name succeeds.
+func TestHostTokenFailureCleansUp(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(st.close)
+
+	if _, err := createTempAdmin(ctx, failTokenStore{store: st}, "alice"); err == nil {
+		t.Fatal("host run with a failing token store succeeded, want an error")
+	}
+
+	requireHostCleanup(ctx, t, st)
+	requireHostRetry(ctx, t, st)
+}
+
+// requireHostCleanup proves the failed run left no person, no live grant
+// and no usable record: the person is gone, no grant stays live, and any
+// record left is an ended tombstone whose principal is gone, so a retry
+// with the same name starts clean.
+func requireHostCleanup(ctx context.Context, t *testing.T, st store) {
+	t.Helper()
+
+	if _, err := st.GetPrincipalBySubject(ctx, "alice"); !errors.Is(err, principal.ErrNotFound) {
+		t.Fatalf("principal after a failed run = %v, want ErrNotFound", err)
+	}
+
+	listed, total, err := st.ListGrantsOn(ctx, identity.ServerObject(), access.GrantQuery{
+		AfterSubject: "", AfterRole: "", Subject: "", Role: "", Limit: 100,
+	})
+	if err != nil {
+		t.Fatalf("list grants after a failed run: %v", err)
+	}
+
+	if total != 0 || len(listed) != 0 {
+		t.Fatalf("grants after a failed run = %+v, want none live", listed)
+	}
+
+	requireHostRecordUnusable(ctx, t, st)
+}
+
+// requireHostRecordUnusable proves no usable record stays for the failed
+// person: either no record, or a tombstone whose principal is gone.
+func requireHostRecordUnusable(ctx context.Context, t *testing.T, st store) {
+	t.Helper()
+
+	rec, err := st.GetTempAdminBySubject(ctx, "alice")
+	if errors.Is(err, tempadmin.ErrNotFound) {
+		return
+	}
+
+	if err != nil {
+		t.Fatalf("record after a failed run = %v, want ErrNotFound or an ended record", err)
+	}
+
+	if _, err := st.GetPrincipal(ctx, rec.PrincipalID); !errors.Is(err, principal.ErrNotFound) {
+		t.Fatalf("principal %q of the failed record still exists, want it gone", rec.PrincipalID)
+	}
+}
+
+// requireHostRetry proves a retry with the same name succeeds after the
+// cleanup and signs in.
+func requireHostRetry(ctx context.Context, t *testing.T, st store) {
+	t.Helper()
+
+	made, err := createTempAdmin(ctx, st, "alice")
+	if err != nil {
+		t.Fatalf("retry after a failed run: %v", err)
+	}
+
+	if made.subject != "alice" || made.secret == "" || made.expires.IsZero() {
+		t.Fatalf("retry = %+v, want a person, a secret and an expiry", made)
+	}
+
+	tokens, err := accesstoken.NewService(accesstoken.Config{
+		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
+		Now: nil, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("access token service: %v", err)
+	}
+
+	got, err := tokens.AuthenticateToken(ctx, made.secret)
+	if err != nil {
+		t.Fatalf("authenticate the retry token: %v", err)
+	}
+
+	if got.Subject != "alice" {
+		t.Fatalf("retry token subject = %q, want alice", got.Subject)
 	}
 }
