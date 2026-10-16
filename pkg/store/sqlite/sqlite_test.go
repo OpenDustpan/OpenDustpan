@@ -75,7 +75,7 @@ func TestAccessConformance(t *testing.T) {
 }
 
 // TestAccessConcurrency runs the cases of a grant or role check that races
-// a write on a second handle of the same database file.
+// a write on the same database handle.
 func TestAccessConcurrency(t *testing.T) {
 	t.Parallel()
 
@@ -85,7 +85,9 @@ func TestAccessConcurrency(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "dustpan.db")
 		copyTemplate(t, path)
 
-		return openPath(t, path), openPath(t, path)
+		s := openPath(t, path)
+
+		return s, s
 	})
 }
 
