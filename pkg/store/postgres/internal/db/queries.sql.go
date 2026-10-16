@@ -2895,8 +2895,8 @@ FROM installation
 WHERE id = 1
 `
 
-// The installation state (ADR 38 decision 4): normal or maintenance. The
-// migration seeds the one row; a missing row reads normal.
+// The installation state: normal or maintenance. The migration seeds the
+// one row; a missing row is a fault.
 func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 	row := q.db.QueryRow(ctx, getInstallationState)
 	var state string
@@ -7275,6 +7275,22 @@ func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainState
 	return err
 }
 
+const setInstallationState = `-- name: SetInstallationState :execrows
+UPDATE installation
+SET state = $1
+WHERE id = 1
+`
+
+// Stores the installation state in the seeded row. It changes nothing when
+// the row is missing.
+func (q *Queries) SetInstallationState(ctx context.Context, state string) (int64, error) {
+	result, err := q.db.Exec(ctx, setInstallationState, state)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setInstallationStateIf = `-- name: SetInstallationStateIf :execrows
 UPDATE installation
 SET state = $1
@@ -7915,18 +7931,6 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const upsertInstallationState = `-- name: UpsertInstallationState :exec
-INSERT INTO installation (id, state)
-VALUES (1, $1)
-ON CONFLICT (id) DO UPDATE SET state = excluded.state
-`
-
-// Stores the installation state, creating the row when it is missing.
-func (q *Queries) UpsertInstallationState(ctx context.Context, state string) error {
-	_, err := q.db.Exec(ctx, upsertInstallationState, state)
-	return err
 }
 
 const upsertInventory = `-- name: UpsertInventory :exec
