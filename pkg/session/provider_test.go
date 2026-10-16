@@ -49,7 +49,7 @@ func TestBindProviders(t *testing.T) {
 	moved := session.Provider{ID: "corp", Issuer: "https://other.example"}
 
 	err := session.BindProviders(ctx, store, []session.Provider{moved}, time.Now())
-	if !errors.Is(err, session.ErrIssuerChanged) {
+	if err == nil || !errors.Is(err, session.ErrIssuerChanged) {
 		t.Fatalf("start with another issuer = %v, want ErrIssuerChanged", err)
 	}
 

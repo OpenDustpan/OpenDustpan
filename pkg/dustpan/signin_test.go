@@ -146,11 +146,12 @@ func TestRunRefusesAnotherIssuer(t *testing.T) {
 	defer stop()
 
 	err := moved.Run(runCtx)
-	if !errors.Is(err, session.ErrIssuerChanged) ||
-		!strings.Contains(
-			err.Error(),
-			`"https://idp.example"`,
-		) || !strings.Contains(err.Error(), `"https://other.example"`) {
-		t.Fatalf("run with another issuer = %v, want ErrIssuerChanged that names both issuers", err)
+	if err == nil || !errors.Is(err, session.ErrIssuerChanged) {
+		t.Fatalf("run with another issuer = %v, want ErrIssuerChanged", err)
+	}
+
+	if text := err.Error(); !strings.Contains(text, `"https://idp.example"`) ||
+		!strings.Contains(text, `"https://other.example"`) {
+		t.Fatalf("run with another issuer = %q, want both issuers named", text)
 	}
 }
