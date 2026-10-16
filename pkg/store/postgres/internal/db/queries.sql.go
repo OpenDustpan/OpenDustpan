@@ -7499,6 +7499,40 @@ func (q *Queries) SubjectsOfCaller(ctx context.Context, subject string) ([]Subje
 	return items, nil
 }
 
+const subjectsOfEnabledCaller = `-- name: SubjectsOfEnabledCaller :many
+SELECT p.id AS principal_id, COALESCE(m.group_id, '')::text AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
+WHERE p.subject COLLATE "C" = $1::text AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL
+`
+
+type SubjectsOfEnabledCallerRow struct {
+	PrincipalID string
+	GroupID     string
+}
+
+// The subjects of a caller as the check of a grant write reads them: a
+// principal that is disabled has none.
+func (q *Queries) SubjectsOfEnabledCaller(ctx context.Context, subject string) ([]SubjectsOfEnabledCallerRow, error) {
+	rows, err := q.db.Query(ctx, subjectsOfEnabledCaller, subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SubjectsOfEnabledCallerRow
+	for rows.Next() {
+		var i SubjectsOfEnabledCallerRow
+		if err := rows.Scan(&i.PrincipalID, &i.GroupID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const takeSignInRequest = `-- name: TakeSignInRequest :one
 DELETE FROM sign_in_requests WHERE digest = $1
 RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms

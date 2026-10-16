@@ -81,7 +81,7 @@ var (
 	)
 	// errSizeLimit reports a negative size limit.
 	errSizeLimit = errors.New(
-		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
+		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes, --max-body-bytes-in-flight or --blob-cache-bytes to 0 or more",
 	)
 	// errRetention reports a soft-delete retention that is not a duration of
 	// at least one hour.
@@ -290,6 +290,7 @@ type serveFlags struct {
 	maxCheckpointBytes           int64
 	maxSecretBatchBytes          int64
 	maxStateBytes                int64
+	blobCacheBytes               int64
 	maxBodyBytesInFlight         int64
 	checkpointDeltaCutoff        int64
 	disablePulumiJournaling      bool
@@ -325,6 +326,7 @@ func (f *serveFlags) check() error {
 		f.maxSecretBatchBytes,
 		f.maxStateBytes,
 		f.maxBodyBytesInFlight,
+		f.blobCacheBytes,
 	}
 
 	if err := checkSizeFlags(sizeLimits); err != nil {
@@ -425,6 +427,7 @@ func (f *serveFlags) registerKey(fs *flag.FlagSet) {
 // AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN only.
 func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("blob-store").String(fs, &f.blobStore)
+	cli.ByFlag("blob-cache-bytes").Int64(fs, &f.blobCacheBytes)
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
@@ -1156,6 +1159,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxSecretBatchBytes(int(f.maxSecretBatchBytes)),
 		dustpan.WithMaxStateBytes(f.maxStateBytes),
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
+		dustpan.WithBlobCache(f.blobCacheBytes),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
 		dustpan.WithAuditChain(chain),

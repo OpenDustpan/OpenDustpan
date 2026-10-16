@@ -1110,6 +1110,14 @@ FROM principals p
 LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
 WHERE p.subject COLLATE "C" = @subject::text AND p.deleted_at_ms IS NULL;
 
+-- name: SubjectsOfEnabledCaller :many
+-- The subjects of a caller as the check of a grant write reads them: a
+-- principal that is disabled has none.
+SELECT p.id AS principal_id, COALESCE(m.group_id, '')::text AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
+WHERE p.subject COLLATE "C" = @subject::text AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL;
+
 -- name: ReviewGrants :many
 -- One page of an access-review export (ADR 52, decision 10). The join on
 -- group_members reads the memberships of the groups of the grants: of one
