@@ -1,6 +1,6 @@
 -- minimum-binary-version: v0.1.0
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the sqlite migrations of origin/main (df0e2278aec5).
+-- from the sqlite migrations of origin/main (9e9c08978d02).
 -- This baseline replaced every migration before it, as a one-time exception
 -- to the rule that an applied migration never changes. No binary opens a
 -- database or restores a backup from before it.
@@ -49,7 +49,7 @@ CREATE TABLE checkpoints (
     invalid        INTEGER NOT NULL,
     features_json  TEXT    NOT NULL,
     deployment     BLOB    NOT NULL,
-    saved_at_ms    INTEGER NOT NULL, resource_count INTEGER, blob_key TEXT, size INTEGER, blob_size INTEGER, blob_md5 BLOB,
+    saved_at_ms    INTEGER NOT NULL, blob_key TEXT, size INTEGER, blob_size INTEGER, blob_md5 BLOB,
     PRIMARY KEY (stack_id, update_id),
     FOREIGN KEY (stack_id) REFERENCES stacks (id) ON DELETE CASCADE,
     FOREIGN KEY (stack_id, update_id) REFERENCES updates (stack_id, id) ON DELETE CASCADE

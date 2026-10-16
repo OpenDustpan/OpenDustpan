@@ -356,7 +356,7 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
 	}
 
-	return codec.FromCheckpointRow(fromCheckpointRow(db.GetCheckpointByUpdateRow(row)), ref)
+	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
 }
 
 // CheckpointByVersion implements stack.CheckpointStore.
@@ -387,7 +387,7 @@ func (s *Store) CheckpointByVersion(
 		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
 	}
 
-	return codec.FromCheckpointRow(fromCheckpointRow(db.GetCheckpointByUpdateRow(row)), ref)
+	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
 }
 
 // CheckpointByUpdate implements stack.CheckpointStore.
@@ -771,7 +771,7 @@ func fromListUpdateRow(row db.ListUpdatesRow) codec.UpdateRow {
 	}
 }
 
-func fromCheckpointRow(row db.GetCheckpointByUpdateRow) codec.CheckpointRow {
+func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
 	return codec.CheckpointRow{
 		StackID:       row.StackID,
 		UpdateID:      row.UpdateID,

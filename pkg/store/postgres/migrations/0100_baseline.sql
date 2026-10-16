@@ -1,6 +1,6 @@
 -- minimum-binary-version: v0.1.0
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the postgres migrations of origin/main (df0e2278aec5).
+-- from the postgres migrations of origin/main (9e9c08978d02).
 -- This baseline replaced every migration before it, as a one-time exception
 -- to the rule that an applied migration never changes. No binary opens a
 -- database or restores a backup from before it.
@@ -110,7 +110,6 @@ CREATE TABLE checkpoints (
     deployment bytea NOT NULL,
     saved_at_ms bigint NOT NULL,
     stack_id text NOT NULL,
-    resource_count bigint,
     blob_key text,
     size bigint,
     blob_size bigint,

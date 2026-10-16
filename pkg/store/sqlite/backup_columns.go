@@ -120,7 +120,6 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"features_json",
 				"deployment",
 				"saved_at_ms",
-				"resource_count",
 				"blob_key",
 				backupColSize,
 				"blob_size",

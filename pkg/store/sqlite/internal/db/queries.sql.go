@@ -2454,26 +2454,9 @@ type GetCheckpointByUpdateParams struct {
 	UpdateID string
 }
 
-type GetCheckpointByUpdateRow struct {
-	StackID       string
-	UpdateID      string
-	LeaseDigest   []byte
-	SchemaVersion int64
-	Sequence      int64
-	Digest        []byte
-	Invalid       bool
-	FeaturesJson  string
-	Deployment    []byte
-	SavedAtMs     int64
-	BlobKey       sql.NullString
-	Size          sql.NullInt64
-	BlobSize      sql.NullInt64
-	BlobMd5       []byte
-}
-
-func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (GetCheckpointByUpdateRow, error) {
+func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (Checkpoint, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpointByUpdate, arg.StackID, arg.UpdateID)
-	var i GetCheckpointByUpdateRow
+	var i Checkpoint
 	err := row.Scan(
 		&i.StackID,
 		&i.UpdateID,
@@ -2507,26 +2490,9 @@ type GetCheckpointByVersionParams struct {
 	Version int64
 }
 
-type GetCheckpointByVersionRow struct {
-	StackID       string
-	UpdateID      string
-	LeaseDigest   []byte
-	SchemaVersion int64
-	Sequence      int64
-	Digest        []byte
-	Invalid       bool
-	FeaturesJson  string
-	Deployment    []byte
-	SavedAtMs     int64
-	BlobKey       sql.NullString
-	Size          sql.NullInt64
-	BlobSize      sql.NullInt64
-	BlobMd5       []byte
-}
-
-func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (GetCheckpointByVersionRow, error) {
+func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (Checkpoint, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpointByVersion, arg.StackID, arg.Version)
-	var i GetCheckpointByVersionRow
+	var i Checkpoint
 	err := row.Scan(
 		&i.StackID,
 		&i.UpdateID,
@@ -2837,26 +2803,9 @@ ORDER BY u.version DESC
 LIMIT 1
 `
 
-type GetLatestCheckpointRow struct {
-	StackID       string
-	UpdateID      string
-	LeaseDigest   []byte
-	SchemaVersion int64
-	Sequence      int64
-	Digest        []byte
-	Invalid       bool
-	FeaturesJson  string
-	Deployment    []byte
-	SavedAtMs     int64
-	BlobKey       sql.NullString
-	Size          sql.NullInt64
-	BlobSize      sql.NullInt64
-	BlobMd5       []byte
-}
-
-func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetLatestCheckpointRow, error) {
+func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Checkpoint, error) {
 	row := q.db.QueryRowContext(ctx, getLatestCheckpoint, stackID)
-	var i GetLatestCheckpointRow
+	var i Checkpoint
 	err := row.Scan(
 		&i.StackID,
 		&i.UpdateID,
