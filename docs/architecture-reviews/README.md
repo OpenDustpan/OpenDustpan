@@ -15,6 +15,8 @@ date of the review.
   commits can move them.
 - Decisions go in issues, RFCs and ADRs (ADR 15). When a candidate gets a
   verdict, record the verdict there, and link the report.
+- A file named `<date>-verdicts.md` records the result of a check of each
+  candidate against the code, with the issue filed for it.
 
 ## Rules for a new report
 
