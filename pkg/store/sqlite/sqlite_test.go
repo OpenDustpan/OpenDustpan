@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -621,6 +622,7 @@ type backupStore struct {
 var (
 	_ storetest.Reopener       = (*backupStore)(nil)
 	_ storetest.StagingWitness = (*backupStore)(nil)
+	_ storetest.DurableHolder  = (*backupStore)(nil)
 )
 
 // openBackup returns a fresh backup-capable store in a temporary directory,
@@ -688,6 +690,11 @@ func (s *backupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reope
 
 // CurrentStagingID implements storetest.StagingWitness: the path of the
 // current staging file, or empty when none exists.
+// DurableStore implements storetest.DurableHolder.
+func (s *backupStore) DurableStore() durable.Store { //nolint:ireturn // The capability returns the port.
+	return s.DurableOperations()
+}
+
 func (s *backupStore) CurrentStagingID() string {
 	return s.StagingPathForTest()
 }

@@ -123,7 +123,7 @@ func TestDurableStalledStepEndsAtBound(t *testing.T) {
 	default:
 	}
 
-	if writeErr := <-done; !errors.Is(writeErr, sqlite.ErrStepTransactionBoundForTest) {
+	if writeErr := <-done; !errors.Is(writeErr, sqlite.ErrStepTransactionBound) {
 		t.Fatalf("stalled WriteStep: error = %v, want the step transaction bound", writeErr)
 	}
 
@@ -174,4 +174,69 @@ func checkNothingRecorded(t *testing.T, h durabletest.Harness, s durable.Store, 
 	if len(values) != 0 {
 		t.Fatalf("domain values after a stalled step transaction = %v, want none", values)
 	}
+}
+
+// TestDurableStepWaitsBehindWriteLock proves that a step record reads the
+// clock of the store after it holds the write lock, not before. One handle
+// holds the write lock longer than a short lease; a RecordStep of another
+// handle waits behind it and then finds the claim expired.
+func TestDurableStepWaitsBehindWriteLock(t *testing.T) {
+	t.Parallel()
+
+	const (
+		lease = 300 * time.Millisecond
+		hold  = 900 * time.Millisecond
+	)
+
+	h := durableHarness(t)
+	holder, other := h.Open(t, 0), h.Open(t, 0)
+
+	ns, err := h.Domain.CreateNamespace(t.Context(), "ns-lock")
+	if err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	req := durable.StartRequest{Key: "k", Kind: stallKind, Version: 0, Input: nil}
+	if _, _, startErr := holder.Start(t.Context(), req); startErr != nil {
+		t.Fatalf("start: %v", startErr)
+	}
+
+	held, err := holder.Claim(t.Context(), durable.ClaimRequest{
+		Owner: "instance-a", Kinds: []durable.Kind{stallKind}, MaxVersions: nil, Lease: lease,
+	})
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+
+	locked := make(chan struct{})
+	done := make(chan error, 1)
+
+	go func() {
+		done <- h.Domain.WriteStep(t.Context(), held.Claim.Step("held"), ns, "held", durabletest.Hooks{
+			Before: func() error {
+				close(locked)
+
+				select {
+				case <-time.After(hold):
+				case <-t.Context().Done():
+				}
+
+				return nil
+			},
+			After: nil,
+		})
+	}()
+
+	<-locked
+
+	recordErr := other.RecordStep(t.Context(), held.Claim.Step("late"), nil)
+	if !errors.Is(recordErr, durable.ErrClaimLost) {
+		t.Fatalf("RecordStep behind a held write lock: error = %v, want ErrClaimLost", recordErr)
+	}
+
+	if writeErr := <-done; !errors.Is(writeErr, durable.ErrClaimLost) {
+		t.Fatalf("WriteStep that held the lock past the lease: error = %v, want ErrClaimLost", writeErr)
+	}
+
+	checkNothingRecorded(t, h, other, held.ID)
 }
