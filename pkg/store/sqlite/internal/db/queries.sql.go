@@ -2280,33 +2280,45 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
-  ), 0)) AS INTEGER) AS principal_active_at_ms
+  ), 0)) AS INTEGER) AS principal_active_at_ms,
+  ap.max_lifetime_ms AS policy_max_lifetime_ms, ap.inactivity_ms AS policy_inactivity_ms,
+  ap.disable_tokens AS policy_disable_tokens, ap.disable_accounts AS policy_disable_accounts,
+  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
-WHERE t.digest = ? AND p.deleted_at_ms IS NULL
+CROSS JOIN access_token_policy ap
+WHERE t.digest = ? AND p.deleted_at_ms IS NULL AND ap.id = 1
 `
 
 type GetAccessTokenByDigestRow struct {
-	ID                    string
-	PrincipalID           string
-	Name                  string
-	Kind                  string
-	Digest                string
-	CreatedAtMs           int64
-	ExpiresAtMs           int64
-	LastUsedAtMs          sql.NullInt64
-	RevokedAtMs           sql.NullInt64
-	ReplacedBy            sql.NullString
-	CreatedBy             string
-	DisabledAtMs          sql.NullInt64
-	Subject               string
-	DisplayName           string
-	PrincipalKind         string
-	PrincipalDisabledAtMs sql.NullInt64
-	PrincipalBreakGlass   bool
-	PrincipalActiveAtMs   int64
+	ID                      string
+	PrincipalID             string
+	Name                    string
+	Kind                    string
+	Digest                  string
+	CreatedAtMs             int64
+	ExpiresAtMs             int64
+	LastUsedAtMs            sql.NullInt64
+	RevokedAtMs             sql.NullInt64
+	ReplacedBy              sql.NullString
+	CreatedBy               string
+	DisabledAtMs            sql.NullInt64
+	Subject                 string
+	DisplayName             string
+	PrincipalKind           string
+	PrincipalDisabledAtMs   sql.NullInt64
+	PrincipalBreakGlass     bool
+	PrincipalActiveAtMs     int64
+	PolicyMaxLifetimeMs     int64
+	PolicyInactivityMs      int64
+	PolicyDisableTokens     bool
+	PolicyDisableAccounts   bool
+	PolicyDisableBreakGlass bool
+	PolicyUpdatedAtMs       int64
 }
 
+// The token, its owner and the token policy of the installation in one read,
+// so a policy change applies to the next lookup on every instance.
 func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (GetAccessTokenByDigestRow, error) {
 	row := q.db.QueryRowContext(ctx, getAccessTokenByDigest, digest)
 	var i GetAccessTokenByDigestRow
@@ -2329,6 +2341,12 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 		&i.PrincipalDisabledAtMs,
 		&i.PrincipalBreakGlass,
 		&i.PrincipalActiveAtMs,
+		&i.PolicyMaxLifetimeMs,
+		&i.PolicyInactivityMs,
+		&i.PolicyDisableTokens,
+		&i.PolicyDisableAccounts,
+		&i.PolicyDisableBreakGlass,
+		&i.PolicyUpdatedAtMs,
 	)
 	return i, err
 }
@@ -6224,63 +6242,6 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 	return items, nil
 }
 
-const listUnsealedStateVersions = `-- name: ListUnsealedStateVersions :many
-SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
-       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
-FROM state_versions
-WHERE sealed = 0 AND status = 'finalized' AND content_key <> ''
-ORDER BY id ASC
-`
-
-// Finalized versions that still hold plain content, ordered by ID, so the
-// seal job seals them in a stable order. A version without content stays
-// out: a pending row names no content yet.
-func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion, error) {
-	rows, err := q.db.QueryContext(ctx, listUnsealedStateVersions)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []StateVersion
-	for rows.Next() {
-		var i StateVersion
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.Status,
-			&i.Serial,
-			&i.Lineage,
-			&i.Md5,
-			&i.Size,
-			&i.ContentKey,
-			&i.Outputs,
-			&i.Force,
-			&i.UploadDigest,
-			&i.UploadExpiresAtMs,
-			&i.Holder,
-			&i.LockID,
-			&i.CreatedAtMs,
-			&i.FinalizedAtMs,
-			&i.RestoredFrom,
-			&i.Sealed,
-			&i.SensitiveMarks,
-			&i.FencedBy,
-			&i.UnlockedWrite,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -7385,29 +7346,6 @@ func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (i
 		arg.ID,
 		arg.ExpectedRevision,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const sealStateVersion = `-- name: SealStateVersion :execrows
-UPDATE state_versions
-SET content_key = ?1, outputs = ?2, sealed = 1
-WHERE id = ?3 AND sealed = 0
-`
-
-type SealStateVersionParams struct {
-	ContentKey string
-	Outputs    []byte
-	ID         string
-}
-
-// Moves one unsealed version to its sealed blob with its sealed outputs and
-// marks it sealed. The write matches only an unsealed row, so a retry after
-// a crash succeeds and changes nothing.
-func (q *Queries) SealStateVersion(ctx context.Context, arg SealStateVersionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, sealStateVersion, arg.ContentKey, arg.Outputs, arg.ID)
 	if err != nil {
 		return 0, err
 	}

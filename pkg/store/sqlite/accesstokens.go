@@ -108,6 +108,11 @@ func (s *Store) GetTokenByDigest(ctx context.Context, d accesstoken.Digest) (acc
 			BreakGlass: row.PrincipalBreakGlass,
 		}),
 		Digest: stored,
+		Policy: policyOf(db.GetAccessTokenPolicyRow{
+			MaxLifetimeMs: row.PolicyMaxLifetimeMs, InactivityMs: row.PolicyInactivityMs,
+			DisableTokens: row.PolicyDisableTokens, DisableAccounts: row.PolicyDisableAccounts,
+			DisableBreakGlass: row.PolicyDisableBreakGlass, UpdatedAtMs: row.PolicyUpdatedAtMs,
+		}),
 	}, nil
 }
 

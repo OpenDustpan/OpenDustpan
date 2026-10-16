@@ -369,7 +369,7 @@ The key, kept outside the OpenDustpan database, that encrypts data keys.
 _Avoid_: Master key, root key, KEK
 
 **Sealed**:
-Encrypted at rest with the data key of a scope. The server seals OpenTofu state and outputs (ADR 41). The server seals a state version that an older server wrote at start or after a restore (ADR 41, decision 11). The part of the server that seals and opens state is the sealer.
+Encrypted at rest with the data key of a scope. The server seals OpenTofu state and outputs (ADR 41). The part of the server that seals and opens state is the sealer.
 _Avoid_: Encrypted (when it can mean the client-side encryption of OpenTofu)
 
 **Secret value**:
