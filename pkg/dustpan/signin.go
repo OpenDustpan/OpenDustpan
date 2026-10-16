@@ -94,7 +94,7 @@ func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Se
 	providers := make([]serverapi.SignInProvider, 0, len(cfg.oidcProviders))
 
 	for _, p := range cfg.oidcProviders {
-		provider, err := signInProvider(p, base, providers)
+		provider, err := signInProvider(p, base, cfg.now, providers)
 		if err != nil {
 			return nil, err
 		}
@@ -215,7 +215,9 @@ func signInOrigin(base string) (string, error) {
 
 // signInProvider returns the provider of p for the public URL base. It
 // refuses an ID of the wrong form or one that an earlier provider has.
-func signInProvider(p OIDCProvider, base string, earlier []serverapi.SignInProvider) (serverapi.SignInProvider, error) {
+func signInProvider(
+	p OIDCProvider, base string, now func() time.Time, earlier []serverapi.SignInProvider,
+) (serverapi.SignInProvider, error) {
 	var none serverapi.SignInProvider
 
 	if !providerIDPattern.MatchString(p.ID) {
@@ -228,7 +230,7 @@ func signInProvider(p OIDCProvider, base string, earlier []serverapi.SignInProvi
 	}
 
 	client, err := oauth.NewLazy(oauth.Config{
-		HTTPClient: p.HTTPClient, Now: nil, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: p.ClientSecret,
+		HTTPClient: p.HTTPClient, Now: now, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: p.ClientSecret,
 		RedirectURL: base + "/api/server/sign-in/" + p.ID + "/callback", Scopes: p.Scopes,
 	})
 	if err != nil {
