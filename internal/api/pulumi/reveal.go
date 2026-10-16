@@ -287,7 +287,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 		return false
 	}
 
-	entry := audit.Entry{
+	entry := audit.Bound(audit.Entry{
 		At:           time.Now().UTC(),
 		Namespace:    a.object.Namespace(),
 		Subject:      a.principal.Subject,
@@ -300,7 +300,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 		ValueCount:   nil,
 		Changes:      nil,
 		SourceIP:     clientip.String(a.request),
-		UserAgent:    truncateUserAgent(a.request.UserAgent()),
+		UserAgent:    audit.TruncateUserAgent(a.request.UserAgent()),
 		Channel:      sessionauth.AuditChannel(a.request, channelHeader),
 		Kind:         audit.KindReveal,
 		Outcome:      a.outcome,
@@ -310,7 +310,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAudit) bool {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
-	}
+	})
 
 	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {
 		h.logger.ErrorContext(ctx, "audit append failed", slog.String("path", a.path))

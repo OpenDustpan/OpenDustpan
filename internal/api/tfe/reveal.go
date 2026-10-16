@@ -254,7 +254,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAuditEntry) boo
 		return false
 	}
 
-	entry := audit.Entry{
+	entry := audit.Bound(audit.Entry{
 		At:           time.Now().UTC(),
 		Namespace:    a.object.Namespace(),
 		Subject:      a.principal.Subject,
@@ -267,7 +267,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAuditEntry) boo
 		ValueCount:   nil,
 		Changes:      nil,
 		SourceIP:     clientip.String(a.request),
-		UserAgent:    truncateRevealUserAgent(a.request.UserAgent()),
+		UserAgent:    audit.TruncateUserAgent(a.request.UserAgent()),
 		Channel:      audit.NormalizeChannel(a.request.Header.Get(revealChannelHeader)),
 		Kind:         audit.KindReveal,
 		Outcome:      a.outcome,
@@ -277,7 +277,7 @@ func (h *Handler) appendRevealEntry(ctx context.Context, a revealAuditEntry) boo
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
-	}
+	})
 
 	if _, err := h.audit.Append(ctx, ns.Fence(), entry); err != nil {
 		h.logger.ErrorContext(ctx, "audit append failed", slog.String("path", a.path))
@@ -298,21 +298,6 @@ func (h *Handler) failRevealAudit(ctx context.Context) {
 	if h.onAuditFailure != nil {
 		h.onAuditFailure()
 	}
-}
-
-// truncateRevealUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8
-// rune boundary, so a multi-byte rune is never split.
-func truncateRevealUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-
-	return s[:cut]
 }
 
 // writeNoStore answers err with Cache-Control: no-store, so no reveal

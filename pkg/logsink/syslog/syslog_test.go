@@ -258,9 +258,25 @@ func TestRecordThatCannotFitIsSkippedAndTheRestArrive(t *testing.T) {
 		t.Fatalf("write: got %v, want a skip of 1 record", err)
 	}
 
-	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
-	if len(msgs) != 1 || !bytes.Contains(msgs[0], []byte(`"msg":"small"`)) {
-		t.Fatalf("received %q, want only the small record", msgs)
+	// The skipped record arrives as a small marker with its scope, sequence
+	// and "skipped": "size", so the receiver still sees that the entry
+	// exists. The small record arrives intact.
+	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) >= 2 })
+	if len(msgs) != 2 {
+		t.Fatalf("received %d messages, want the marker and the small record", len(msgs))
+	}
+
+	marker := decodeBody(t, body(t, msgs[0]))
+	if marker["scope"] != "acme" || marker["sequence"] != float64(7) || marker["skipped"] != "size" {
+		t.Fatalf("marker lacks the scope, sequence and skip reason: %s", body(t, msgs[0]))
+	}
+
+	if _, found := marker["action"]; found {
+		t.Fatalf("marker carries the record fields, want only scope, sequence and skipped: %s", body(t, msgs[0]))
+	}
+
+	if len(msgs[1]) == 0 || !bytes.Contains(msgs[1], []byte(`"msg":"small"`)) {
+		t.Fatalf("received %q, want the small record second", msgs)
 	}
 }
 

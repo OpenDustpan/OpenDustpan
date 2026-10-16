@@ -33,7 +33,7 @@ type serverChange struct {
 // back to its session. The Service of a change sets the time, the scope,
 // the kind, the outcome and the record.
 func callerEntry(r *http.Request, p identity.Principal, action identity.Action) audit.Entry {
-	return audit.Entry{
+	return audit.Bound(audit.Entry{
 		At:           time.Time{},
 		Namespace:    "",
 		Subject:      p.Subject,
@@ -46,7 +46,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		ValueCount:   nil,
 		Changes:      sessionChanges(r),
 		SourceIP:     clientip.String(r),
-		UserAgent:    truncateUserAgent(r.UserAgent()),
+		UserAgent:    audit.TruncateUserAgent(r.UserAgent()),
 		Channel:      callerChannel(r),
 		Kind:         "",
 		Outcome:      "",
@@ -56,7 +56,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
-	}
+	})
 }
 
 // sessionKeyID is the key of the change that records the console session
@@ -156,19 +156,4 @@ func (h *Handler) failAudit(ctx context.Context) {
 	if h.onAuditFailure != nil {
 		h.onAuditFailure()
 	}
-}
-
-// truncateUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8 rune
-// boundary, so a multi-byte rune is never split.
-func truncateUserAgent(s string) string {
-	if len(s) <= audit.MaxUserAgentLen {
-		return s
-	}
-
-	cut := audit.MaxUserAgentLen
-	for cut > 0 && s[cut]&0xC0 == 0x80 {
-		cut--
-	}
-
-	return s[:cut]
 }

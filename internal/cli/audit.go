@@ -30,7 +30,7 @@ func AuditSettings(resolved []Resolved) []audit.Change {
 // the instance ID as the subject and channel as the channel (ADR 63
 // decisions 9 and 10).
 func SettingsEntry(channel audit.Channel, instanceID string, at time.Time, changes []audit.Change) audit.Entry {
-	return audit.Entry{
+	return audit.Bound(audit.Entry{
 		At:           at.UTC(),
 		Namespace:    audit.ServerScope,
 		Subject:      instanceID,
@@ -53,5 +53,5 @@ func SettingsEntry(channel audit.Channel, instanceID string, at time.Time, chang
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
-	}
+	})
 }

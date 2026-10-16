@@ -399,7 +399,7 @@ func (h *Handler) authorize(
 func auditEntry(
 	r *http.Request, p identity.Principal, obj identity.Object, action identity.Action, version string,
 ) audit.Entry {
-	return audit.Entry{
+	return audit.Bound(audit.Entry{
 		At:           time.Time{},
 		Namespace:    obj.Namespace(),
 		Subject:      p.Subject,
@@ -411,7 +411,7 @@ func auditEntry(
 		ValuePath:    "",
 		ValueCount:   nil,
 		SourceIP:     clientip.String(r),
-		UserAgent:    truncateUserAgent(r.UserAgent()),
+		UserAgent:    audit.TruncateUserAgent(r.UserAgent()),
 		Channel:      sessionauth.AuditChannel(r, channelHeader),
 		Kind:         audit.KindChange,
 		Outcome:      audit.OutcomeSuccess,
@@ -422,7 +422,7 @@ func auditEntry(
 		Changes:      nil,
 		ObjectID:     "",
 		FenceVersion: 0,
-	}
+	})
 }
 
 // readCollectionName decodes a create body. It refuses an unknown field, a body

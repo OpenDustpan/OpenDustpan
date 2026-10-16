@@ -110,7 +110,7 @@ func (h *Handler) appendOverrideAudit(
 
 	ctx := r.Context()
 
-	entry := audit.Entry{
+	entry := audit.Bound(audit.Entry{
 		At:           time.Now().UTC(),
 		Namespace:    obj.Namespace(),
 		Subject:      p.Subject,
@@ -123,7 +123,7 @@ func (h *Handler) appendOverrideAudit(
 		ValueCount:   nil,
 		Changes:      nil,
 		SourceIP:     clientip.String(r),
-		UserAgent:    truncateUserAgent(r.UserAgent()),
+		UserAgent:    audit.TruncateUserAgent(r.UserAgent()),
 		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind:         audit.KindOverride,
 		Outcome:      audit.OutcomeSuccess,
@@ -133,7 +133,7 @@ func (h *Handler) appendOverrideAudit(
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
-	}
+	})
 
 	ns, err := h.namespaces.Get(ctx, entry.Namespace)
 	if err != nil {
