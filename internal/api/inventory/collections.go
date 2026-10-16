@@ -7,10 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -410,7 +410,7 @@ func auditEntry(
 		Version:      version,
 		ValuePath:    "",
 		ValueCount:   nil,
-		SourceIP:     sourceIP(r),
+		SourceIP:     clientip.String(r),
 		UserAgent:    truncateUserAgent(r.UserAgent()),
 		Channel:      sessionauth.AuditChannel(r, channelHeader),
 		Kind:         audit.KindChange,
@@ -497,14 +497,4 @@ func collectionOf(c collection.Collection) collectionEntry {
 		Name:      c.Ref.Name.String(),
 		CreatedAt: c.CreatedAt.Unix(),
 	}
-}
-
-// sourceIP returns the remote address that the server sees, without the port.
-func sourceIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-
-	return host
 }

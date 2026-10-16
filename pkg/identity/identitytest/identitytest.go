@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -55,6 +56,31 @@ func Run(t *testing.T, newAuthorizer AuthorizerFactory) {
 	t.Run("unit A and unit B are distinct objects", func(t *testing.T) {
 		t.Parallel()
 		testUnitsDistinct(t, newAuthorizer(t))
+	})
+
+	t.Run("admin lists every object", func(t *testing.T) {
+		t.Parallel()
+		testAdminListsAll(t, newAuthorizer(t))
+	})
+
+	t.Run("other principals list no object", func(t *testing.T) {
+		t.Parallel()
+		testListsNone(t, newAuthorizer(t))
+	})
+
+	t.Run("the list of an administrator is never wider than Authorize", func(t *testing.T) {
+		t.Parallel()
+
+		admin := identity.Principal{
+			Subject: adminSubject, DisplayName: adminSubject, Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		}
+		authz := newAuthorizer(t)
+
+		for _, action := range testActions() {
+			CheckListWithinAuthorize(t.Context(), t, ListCheck{
+				Authorizer: authz, Principal: admin, Action: action, Every: testObjects(t),
+			})
+		}
 	})
 }
 
@@ -105,6 +131,60 @@ func RunObjectSensitive(t *testing.T) {
 		t.Parallel()
 		testAdminDespiteGrants(t)
 	})
+
+	t.Run("a grant on unit A lists only unit A", func(t *testing.T) {
+		t.Parallel()
+		testListUnitGrant(t)
+	})
+
+	t.Run("a grant on a namespace lists that namespace", func(t *testing.T) {
+		t.Parallel()
+		testListNamespaceGrant(t)
+	})
+
+	t.Run("a list is never wider than Authorize", func(t *testing.T) {
+		t.Parallel()
+		testListWithinAuthorize(t)
+	})
+}
+
+// ListCheck is one case of CheckListWithinAuthorize: the authorizer, the
+// principal and the action, and Every, the objects that the test can name,
+// which a scope with All set must all allow.
+type ListCheck struct {
+	Authorizer identity.Authorizer
+	Principal  identity.Principal
+	Action     identity.Action
+	Every      []identity.Object
+}
+
+// CheckListWithinAuthorize fails the test unless Authorize allows the
+// principal of c the action of c on each object that ListObjects lists for
+// them, both called with ctx. For a scope with All set, it checks each
+// object of c.Every. Run it against each Authorizer and each decorator,
+// with the grants of the test, so a list never shows an object that a
+// check of that object denies.
+func CheckListWithinAuthorize(ctx context.Context, t *testing.T, c ListCheck) {
+	t.Helper()
+
+	authz, p, action, every := c.Authorizer, c.Principal, c.Action, c.Every
+
+	scope, err := authz.ListObjects(ctx, p, action)
+	if err != nil {
+		t.Fatalf("list %s for %s: %v", action, p.Subject, err)
+	}
+
+	listed := slices.Concat(scope.Namespaces, scope.Collections, scope.Units, scope.Principals)
+	if scope.All {
+		listed = append(listed, every...)
+	}
+
+	for i := range listed {
+		obj := listed[i]
+		if err := authz.Authorize(ctx, p, action, obj); err != nil {
+			t.Fatalf("%s lists %q for %s, but Authorize denies it: %v", p.Subject, obj.String(), action, err)
+		}
+	}
 }
 
 // testSubjects names the principals the suite signs in as.
@@ -118,7 +198,8 @@ const (
 // administrators on every object, allows one subject the listed (action,
 // object) pairs, and denies the rest with ErrDenied. A listed namespace
 // object grants the action on every unit in that namespace, so tests can
-// prove namespace-wide grants. It exists for the conformance suite and for
+// prove namespace-wide grants. A listed server object grants the action on
+// every object. It exists for the conformance suite and for
 // route tests that must prove which object a route authorizes.
 type PolicyAuthorizer struct {
 	subject string
@@ -154,7 +235,7 @@ func (a *PolicyAuthorizer) Authorize(
 		return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 	}
 
-	if a.allow[action][obj.String()] {
+	if a.allow[action][obj.String()] || a.allow[action][identity.ServerObject().String()] {
 		return nil
 	}
 
@@ -165,6 +246,52 @@ func (a *PolicyAuthorizer) Authorize(
 	}
 
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+// ListObjects implements identity.Authorizer. An administrator gets every
+// object. The subject gets the listed objects of action, each in the set of
+// its kind, and the server object as every object, as Authorize allows
+// them. Any other principal gets none.
+func (a *PolicyAuthorizer) ListObjects(
+	_ context.Context, p identity.Principal, action identity.Action,
+) (identity.Scope, error) {
+	out := identity.AdminScope(p)
+	if p.Admin || p.Subject != a.subject {
+		return out, nil
+	}
+
+	names := make([]string, 0, len(a.allow[action]))
+	for name := range a.allow[action] {
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	for _, name := range names {
+		if name == identity.CallerObject().String() {
+			continue
+		}
+
+		obj, err := identity.ParseObject(name)
+		if err != nil {
+			return identity.AdminScope(p), fmt.Errorf("parse granted object %q: %w", name, err)
+		}
+
+		switch {
+		case obj.IsServer():
+			out.All = true
+		case obj.IsPrincipal():
+			out.Principals = append(out.Principals, obj)
+		case obj.IsUnit():
+			out.Units = append(out.Units, obj)
+		case obj.IsCollection():
+			out.Collections = append(out.Collections, obj)
+		default:
+			out.Namespaces = append(out.Namespaces, obj)
+		}
+	}
+
+	return out, nil
 }
 
 // testObjects returns the objects every generic case runs: a namespace, two
@@ -492,5 +619,181 @@ func testAdminDespiteGrants(t *testing.T) {
 
 	if err := authz.Authorize(t.Context(), admin, identity.ActionUnitRead, unitB); err != nil {
 		t.Fatalf("admin unit:read on unit B: %v", err)
+	}
+}
+
+// testAdminListsAll proves ListObjects gives an administrator every object
+// of each action.
+func testAdminListsAll(t *testing.T, authz identity.Authorizer) {
+	t.Helper()
+
+	admin := identity.Principal{
+		Subject:        adminSubject,
+		DisplayName:    adminSubject,
+		Admin:          true,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
+
+	for _, action := range testActions() {
+		scope, err := authz.ListObjects(t.Context(), admin, action)
+		if err != nil {
+			t.Fatalf("admin list %s: %v", action, err)
+		}
+
+		if !scope.All {
+			t.Fatalf("admin list %s: all = false, want true", action)
+		}
+	}
+}
+
+// testListsNone proves ListObjects gives a principal without admin and
+// without grants no object and no error.
+func testListsNone(t *testing.T, authz identity.Authorizer) {
+	t.Helper()
+
+	viewer := identity.Principal{
+		Subject:        viewerSubject,
+		DisplayName:    viewerSubject,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
+
+	for _, action := range testActions() {
+		scope, err := authz.ListObjects(t.Context(), viewer, action)
+		if err != nil {
+			t.Fatalf("viewer list %s: %v", action, err)
+		}
+
+		if !scope.IsEmpty() {
+			t.Fatalf("viewer list %s = %+v, want no object", action, scope)
+		}
+	}
+}
+
+// testListUnitGrant proves ListObjects gives a grant on unit A as unit A
+// only, and gives nothing for an action with no grant.
+func testListUnitGrant(t *testing.T) {
+	t.Helper()
+
+	ns, err := namespace.ParseName("acme")
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	unitA, err := identity.UnitObject("pulumi", ns, "web/prod")
+	if err != nil {
+		t.Fatalf("unit A: %v", err)
+	}
+
+	authz := NewPolicyAuthorizer(aliceSubject, map[identity.Action][]string{
+		identity.ActionUnitRead: {unitA.String()},
+	})
+	alice := identity.Principal{
+		Subject:        aliceSubject,
+		DisplayName:    aliceSubject,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
+
+	scope, err := authz.ListObjects(t.Context(), alice, identity.ActionUnitRead)
+	if err != nil {
+		t.Fatalf("alice list unit:read: %v", err)
+	}
+
+	if scope.All || len(scope.Namespaces) != 0 || len(scope.Collections) != 0 || len(scope.Principals) != 0 ||
+		len(scope.Units) != 1 || scope.Units[0].String() != unitA.String() {
+		t.Fatalf("alice list unit:read = %+v, want unit %q only", scope, unitA.String())
+	}
+
+	scope, err = authz.ListObjects(t.Context(), alice, identity.ActionUnitWrite)
+	if err != nil {
+		t.Fatalf("alice list unit:write: %v", err)
+	}
+
+	if !scope.IsEmpty() {
+		t.Fatalf("alice list unit:write = %+v, want no object", scope)
+	}
+}
+
+// testListNamespaceGrant proves ListObjects gives a grant on a namespace as
+// that namespace, and gives another subject nothing.
+func testListNamespaceGrant(t *testing.T) {
+	t.Helper()
+
+	acme, err := namespace.ParseName("acme")
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	authz := NewPolicyAuthorizer(aliceSubject, map[identity.Action][]string{
+		identity.ActionUnitRead: {identity.NamespaceObject(acme).String()},
+	})
+	alice := identity.Principal{
+		Subject:        aliceSubject,
+		DisplayName:    aliceSubject,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
+	}
+
+	scope, err := authz.ListObjects(t.Context(), alice, identity.ActionUnitRead)
+	if err != nil {
+		t.Fatalf("alice list unit:read: %v", err)
+	}
+
+	if scope.All || len(scope.Units) != 0 || len(scope.Namespaces) != 1 || scope.Namespaces[0].Namespace() != acme {
+		t.Fatalf("alice list unit:read = %+v, want namespace %q only", scope, acme)
+	}
+
+	viewer := alice
+	viewer.Subject = viewerSubject
+
+	scope, err = authz.ListObjects(t.Context(), viewer, identity.ActionUnitRead)
+	if err != nil {
+		t.Fatalf("viewer list unit:read: %v", err)
+	}
+
+	if !scope.IsEmpty() {
+		t.Fatalf("viewer list unit:read = %+v, want no object", scope)
+	}
+}
+
+// testListWithinAuthorize proves for the policy authorizer and for
+// SelfAllowed around it that each object that a grant lists passes
+// Authorize: a grant on a unit, on a namespace, and on the installation.
+func testListWithinAuthorize(t *testing.T) {
+	t.Helper()
+
+	acme, err := namespace.ParseName("acme")
+	if err != nil {
+		t.Fatalf("parse namespace: %v", err)
+	}
+
+	unitA, err := identity.UnitObject("pulumi", acme, "web/prod")
+	if err != nil {
+		t.Fatalf("unit A: %v", err)
+	}
+
+	authz := NewPolicyAuthorizer(aliceSubject, map[identity.Action][]string{
+		identity.ActionUnitRead:      {unitA.String()},
+		identity.ActionNamespaceRead: {identity.NamespaceObject(acme).String()},
+		identity.ActionServerBackup:  {identity.ServerObject().String()},
+	})
+	alice := identity.Principal{
+		Subject: aliceSubject, DisplayName: aliceSubject, Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+	}
+
+	for _, under := range []identity.Authorizer{
+		authz,
+		identity.SelfAllowed{Next: authz, Actions: []identity.Action{identity.ActionTokenManageOwn}},
+	} {
+		for _, action := range testActions() {
+			CheckListWithinAuthorize(t.Context(), t, ListCheck{
+				Authorizer: under, Principal: alice, Action: action, Every: testObjects(t),
+			})
+		}
 	}
 }

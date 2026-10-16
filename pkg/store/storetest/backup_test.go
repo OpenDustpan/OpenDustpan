@@ -1966,6 +1966,14 @@ func (s *fakeBackupStore) CreateBackup(_ context.Context, r backup.Record) error
 		return backup.ErrAlreadyExists
 	}
 
+	if r.State == backup.StateRunning && !s.allowDuplicate {
+		for id := range s.data.backups {
+			if s.data.backups[id].State == backup.StateRunning {
+				return backup.ErrAlreadyRunning
+			}
+		}
+	}
+
 	s.data.backups[r.ID.String()] = r
 
 	return nil
@@ -2101,6 +2109,14 @@ func (s *fakeBackupStore) CreateRestore(_ context.Context, r backup.RestoreRecor
 
 	if _, ok := s.data.restores[r.ID.String()]; ok {
 		return backup.ErrRestoreExists
+	}
+
+	if r.State == backup.RestoreChecking || r.State == backup.RestoreApplying {
+		for id := range s.data.restores {
+			if st := s.data.restores[id].State; st == backup.RestoreChecking || st == backup.RestoreApplying {
+				return backup.ErrRestoreRunning
+			}
+		}
 	}
 
 	s.data.restores[r.ID.String()] = r
@@ -2601,6 +2617,11 @@ func TestBackupDetectsOldestFirst(t *testing.T) {
 
 		if err := s.CreateBackup(t.Context(), r); err != nil {
 			t.Fatalf("create backup: %v", err)
+		}
+
+		// One backup runs at a time: each ends before the next starts.
+		if _, err := s.FinishBackup(t.Context(), r.ID, backup.StateSucceeded, "", fakeTime()); err != nil {
+			t.Fatalf("finish backup: %v", err)
 		}
 
 		ids = append(ids, r.ID)

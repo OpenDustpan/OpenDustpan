@@ -438,6 +438,15 @@ func (r *recordingAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordingAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // checkServerActions fails when a route can resolve to the installation object
 // and declares no ServerActions. The check asks the resolver itself, with the
 // organization @server, so a new route cannot skip it.

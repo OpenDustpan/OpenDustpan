@@ -260,9 +260,8 @@ func (s *Store) ListUpdates(ctx context.Context, ref stack.Ref, page stack.Page)
 // PutCheckpoint implements stack.CheckpointStore. A row with a blob key keeps
 // the key with the size, the digest and the sequence, and no content; a row
 // without a key keeps the content as given. Each write of the running update
-// overwrites the row of that update. The row stores a NULL resource count, so
-// the save path never scans the deployment; the delete guard counts the
-// latest deployment when it needs the count.
+// overwrites the row of that update. The row stores no resource count, so
+// the save path never scans the deployment.
 func (s *Store) PutCheckpoint(ctx context.Context, cp stack.Checkpoint, fence namespace.Fence) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -317,10 +316,6 @@ func writeCheckpoint(
 		FeaturesJson:  string(row.Features),
 		Deployment:    row.Deployment,
 		SavedAtMs:     row.SavedAtMs,
-		// The row stores no resource count, so the save path never scans
-		// the deployment; the delete guard counts the latest deployment
-		// when it needs the count.
-		ResourceCount: sql.NullInt64{Int64: 0, Valid: false},
 		BlobKey:       sql.NullString{String: row.BlobKey, Valid: row.BlobKey != ""},
 		// Size is always stored: rows from before blobs hold the content
 		// length, so history needs no fallback for new rows, while reads
@@ -361,7 +356,7 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
 	}
 
-	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
+	return codec.FromCheckpointRow(fromCheckpointRow(db.GetCheckpointByUpdateRow(row)), ref)
 }
 
 // CheckpointByVersion implements stack.CheckpointStore.
@@ -392,7 +387,7 @@ func (s *Store) CheckpointByVersion(
 		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
 	}
 
-	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
+	return codec.FromCheckpointRow(fromCheckpointRow(db.GetCheckpointByUpdateRow(row)), ref)
 }
 
 // CheckpointByUpdate implements stack.CheckpointStore.
@@ -776,7 +771,7 @@ func fromListUpdateRow(row db.ListUpdatesRow) codec.UpdateRow {
 	}
 }
 
-func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
+func fromCheckpointRow(row db.GetCheckpointByUpdateRow) codec.CheckpointRow {
 	return codec.CheckpointRow{
 		StackID:       row.StackID,
 		UpdateID:      row.UpdateID,
@@ -788,9 +783,6 @@ func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
-		// The domain checkpoint holds no count; the delete guard reads the
-		// stored count itself and counts the latest deployment when it is
-		// NULL.
 		// A NULL key predates blobs; the row keeps content instead. A NULL
 		// size reads as 0 here; history falls back to the content length in
 		// SQL itself.

@@ -77,7 +77,7 @@ type delegationFixture struct {
 	alice  e2ePrincipal
 	// opsToken is a personal token of ops, which holds token-manager on
 	// deploy only.
-	opsToken e2eToken
+	opsToken e2e.PersonalToken
 }
 
 // runDelegationOnStore runs the delegation steps on one store.
@@ -89,7 +89,7 @@ func runDelegationOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -101,7 +101,7 @@ func runDelegationOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}{
 		{&f.deploy, `{"subject":"ci-deploy","kind":"service"}`},
 		{&f.other, `{"subject":"ci-other","kind":"service"}`},
-		{&f.ops, `{"subject":"ops@example.com","kind":"person"}`},
+		{&f.ops, `{"subject":"` + e2e.SignInSubject("ops@example.com") + `","kind":"person"}`},
 		{&f.alice, `{"subject":"alice@example.com","kind":"person"}`},
 	} {
 		principalCall(ctx, t, env,
@@ -110,10 +110,7 @@ func runDelegationOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	grant := checkPrincipalGrants(ctx, t, env, &f)
 
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + f.ops.ID + `","name":"ops"}`,
-		http.StatusCreated,
-	}, &f.opsToken)
+	f.opsToken = env.PersonalToken(ctx, t, f.ops.ID, "ops")
 
 	checkTokenFollowsGrants(ctx, t, env, &f)
 	checkHolderReads(ctx, t, env, &f)
