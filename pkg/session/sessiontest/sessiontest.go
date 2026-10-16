@@ -63,6 +63,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a session use counts as activity for the inactivity disable", test: testSessionUseIsActivity},
 		{name: "a session use counts as activity in the token lookup", test: testSessionUseInTokenLookup},
 		{name: "a session use never enables a disabled person", test: testSessionUseKeepsDisable},
+		{name: "a touch leaves an idle or expired session as it is", test: testTouchKeepsInactiveSession},
+		{name: "the lookup answers the activity and the break-glass flag of the owner", test: testOwnerActivity},
 		{name: "a sign-in request works once", test: testRequestOnce},
 		{name: "an expired sign-in request is gone", test: testRequestExpired},
 		{name: "a sign-in request that fails validation is ErrInvalid", test: testInvalidRequest},
@@ -241,10 +243,17 @@ func testRoundTrip(t *testing.T, s Store) {
 		t.Fatalf("stored digest = %s, want %s", m.Digest, digest(1))
 	}
 
+	// The owner was made at minute 0. Its latest activity is the sign-in
+	// of the session, at minute 5.
 	wantOwner := session.Owner{
-		DisabledAt: time.Time{}, ID: "prn-1", Subject: "subject of prn-1", DisplayName: "Name of prn-1",
-		Kind: principal.KindPerson,
+		ActiveAt: ss.CreatedAt, DisabledAt: time.Time{}, ID: "prn-1", Subject: "subject of prn-1",
+		DisplayName: "Name of prn-1", Kind: principal.KindPerson, BreakGlass: false,
 	}
+	if !m.Owner.ActiveAt.Equal(wantOwner.ActiveAt) {
+		t.Fatalf("owner active at = %s, want %s", m.Owner.ActiveAt, wantOwner.ActiveAt)
+	}
+
+	m.Owner.ActiveAt = wantOwner.ActiveAt
 	if m.Owner != wantOwner {
 		t.Fatalf("owner = %+v, want %+v", m.Owner, wantOwner)
 	}
@@ -325,7 +334,7 @@ func testMissing(t *testing.T, s Store) {
 	wantErr(t, "end", s.EndSession(t.Context(), "ses-none", session.ReasonSignOut, entry("ses-none", at(5))),
 		session.ErrNotFound)
 
-	if err := s.TouchSession(t.Context(), "ses-none", at(5), time.Minute); err != nil {
+	if err := s.TouchSession(t.Context(), "ses-none", at(5), time.Minute, noLimits()); err != nil {
 		t.Fatalf("touch of a missing session: %v", err)
 	}
 }
@@ -388,7 +397,7 @@ func testTouch(t *testing.T, s Store) {
 	touch := func(when time.Time) {
 		t.Helper()
 
-		if err := s.TouchSession(ctx, "ses-1", when, time.Minute); err != nil {
+		if err := s.TouchSession(ctx, "ses-1", when, time.Minute, noLimits()); err != nil {
 			t.Fatalf("touch: %v", err)
 		}
 	}
@@ -458,7 +467,7 @@ func testChangeAppendsEntry(t *testing.T, s Store) {
 	mustPerson(t, s, "prn-1")
 	mustSession(t, s, newSession("ses-1", "prn-1", at(5)), digest(1))
 
-	if err := s.TouchSession(ctx, "ses-1", at(6), time.Minute); err != nil {
+	if err := s.TouchSession(ctx, "ses-1", at(6), time.Minute, noLimits()); err != nil {
 		t.Fatalf("touch: %v", err)
 	}
 
@@ -505,6 +514,108 @@ func testRefusedEntryChangesNothing(t *testing.T, s Store) {
 	wantErr(t, "end with a refused entry", s.EndSession(ctx, "ses-1", session.ReasonSignOut, refused("ses-1", at(7))),
 		audit.ErrInvalidEntry)
 	equalSession(t, mustGet(t, s), ss)
+}
+
+// testTouchKeepsInactiveSession proves that a touch never moves the last
+// use of a session that is idle or expired at the time of the touch.
+func testTouchKeepsInactiveSession(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	mustPerson(t, s, "prn-1")
+	mustSession(t, s, newSession("ses-1", "prn-1", at(0)), digest(1))
+	mustSession(t, s, newSession("ses-2", "prn-1", at(0)), digest(2))
+
+	touch := func(id string, when time.Time, l session.Limits) time.Time {
+		t.Helper()
+
+		if err := s.TouchSession(ctx, id, when, time.Minute, l); err != nil {
+			t.Fatalf("touch %s: %v", id, err)
+		}
+
+		got, err := s.GetSession(ctx, id)
+		if err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+
+		return got.LastSeenAt
+	}
+
+	idle := session.Limits{Idle: 30 * time.Minute, MaxLength: 0}
+
+	if got := touch("ses-1", at(30), idle); !got.Equal(at(0)) {
+		t.Fatalf("last use after a touch of an idle session = %s, want %s", got, at(0))
+	}
+
+	if got := touch("ses-1", at(29), idle); !got.Equal(at(29)) {
+		t.Fatalf("last use after a touch within the idle limit = %s, want %s", got, at(29))
+	}
+
+	short := session.Limits{Idle: 0, MaxLength: time.Hour}
+
+	if got := touch("ses-2", at(60), short); !got.Equal(at(0)) {
+		t.Fatalf("last use after a touch of an expired session = %s, want %s", got, at(0))
+	}
+
+	if got := touch("ses-2", at(59), short); !got.Equal(at(59)) {
+		t.Fatalf("last use after a touch within the maximum length = %s, want %s", got, at(59))
+	}
+}
+
+// testOwnerActivity proves that the lookup by digest answers the latest
+// activity of the owner, from its sessions and its tokens, and its
+// break-glass flag.
+func testOwnerActivity(t *testing.T, s Store) {
+	t.Helper()
+
+	ctx := t.Context()
+	old := testNow().Add(-3 * sweepPeriod)
+	recent := mustUseLater(t, s, "prn-1", old)
+
+	m, err := s.GetSessionByDigest(ctx, digest(1))
+	if err != nil {
+		t.Fatalf("get by digest: %v", err)
+	}
+
+	if !m.Owner.ActiveAt.Equal(recent) || m.Owner.BreakGlass {
+		t.Fatalf("owner active at %s, break glass %t; want %s and false", m.Owner.ActiveAt, m.Owner.BreakGlass, recent)
+	}
+
+	mustOldToken(t, s, "prn-1", old)
+
+	used := recent.Add(time.Minute)
+	if touchErr := s.TouchToken(ctx, "tok-1", used, time.Minute); touchErr != nil {
+		t.Fatalf("touch token: %v", touchErr)
+	}
+
+	if m, err = s.GetSessionByDigest(ctx, digest(1)); err != nil || !m.Owner.ActiveAt.Equal(used) {
+		t.Fatalf("owner active at %s, %v; want the token use %s", m.Owner.ActiveAt, err, used)
+	}
+
+	p := principal.Principal{
+		CreatedAt: old, UpdatedAt: old, DisabledAt: time.Time{}, ID: "prn-bg", Subject: "subject of prn-bg",
+		DisplayName: "Break glass", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "",
+		GroupCount: 0, BreakGlass: true,
+	}
+
+	e := entry("ses-x", old)
+	e.Object = principal.Ref(p.ID)
+
+	if createErr := s.CreatePrincipal(ctx, p, e); createErr != nil {
+		t.Fatalf("create break-glass principal: %v", createErr)
+	}
+
+	mustSession(t, s, newSession("ses-bg", "prn-bg", old), digest(3))
+
+	if m, err = s.GetSessionByDigest(ctx, digest(3)); err != nil || !m.Owner.BreakGlass {
+		t.Fatalf("break-glass owner = %+v, %v; want the break-glass flag", m.Owner, err)
+	}
+}
+
+// noLimits applies no idle limit and no maximum length to a touch.
+func noLimits() session.Limits {
+	return session.Limits{Idle: 0, MaxLength: 0}
 }
 
 // sweepPeriod is the inactivity period of the sweeps of the suite.
@@ -586,7 +697,7 @@ func mustUseLater(t *testing.T, s Store, id string, old time.Time) time.Time {
 	mustPrincipalAt(t, s, id, principal.KindPerson, old)
 	mustSession(t, s, newSession("ses-1", id, old), digest(1))
 
-	if err := s.TouchSession(t.Context(), "ses-1", recent, time.Minute); err != nil {
+	if err := s.TouchSession(t.Context(), "ses-1", recent, time.Minute, noLimits()); err != nil {
 		t.Fatalf("touch: %v", err)
 	}
 
@@ -640,7 +751,7 @@ func testSessionUseKeepsDisable(t *testing.T, s Store) {
 	}
 
 	recent := testNow().Truncate(time.Millisecond)
-	if err := s.TouchSession(ctx, "ses-1", recent, time.Minute); err != nil {
+	if err := s.TouchSession(ctx, "ses-1", recent, time.Minute, noLimits()); err != nil {
 		t.Fatalf("touch: %v", err)
 	}
 

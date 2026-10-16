@@ -493,6 +493,9 @@ type Server struct {
 	beforeServe func(ctx context.Context) error
 	// deleted runs the retention sweep of the deleted units on a schedule.
 	deleted *deletedSweeper
+	// signInRequests deletes the expired sign-in requests on a schedule, or
+	// is nil with no console sign-in.
+	signInRequests *session.Sessions
 }
 
 // services holds the domain services that NewServer wires together.
@@ -732,6 +735,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		shipper:         shipper,
 		beforeServe:     cfg.beforeServe,
 		deleted:         deleted,
+		signInRequests:  adapters.signInSessions(),
 	}, nil
 }
 
@@ -747,6 +751,18 @@ type adapters struct {
 	maintenance *maintenance.Watcher
 	restores    *backup.RestoreService
 	chain       *auditChain
+	// signIn is the console sign-in, or nil with no provider.
+	signIn *serverapi.SignIn
+}
+
+// signInSessions returns the session service of the console sign-in, or
+// nil with no sign-in.
+func (a adapters) signInSessions() *session.Sessions {
+	if a.signIn == nil {
+		return nil
+	}
+
+	return a.signIn.Sessions
 }
 
 // newAdapters builds every HTTP adapter from the services and settings.
@@ -771,7 +787,7 @@ func newAdapters(
 
 	gate := bodygate.New(cfg.maxBodyBytesInFlight)
 
-	sessionPolicies, signIn, err := newConsoleSignIn(cfg)
+	sessionPolicies, signIn, err := newConsoleSignIn(cfg, svc.tokens)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -820,6 +836,7 @@ func newAdapters(
 		maintenance: watcher,
 		restores:    restores,
 		chain:       chain,
+		signIn:      signIn,
 	}, nil
 }
 
@@ -1277,6 +1294,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
 	sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
+	sweeps.Go(func() { s.pruneSignInRequests(sweepCtx) })
 
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.

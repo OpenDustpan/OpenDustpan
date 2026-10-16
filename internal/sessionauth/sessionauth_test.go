@@ -38,8 +38,8 @@ func aliceMatch() session.Match {
 			ID: "ses-1", PrincipalID: "prn-1", Provider: "corp", EndReason: "", SourceIP: "", UserAgent: "",
 		},
 		Owner: session.Owner{
-			DisabledAt: time.Time{}, ID: "prn-1", Subject: "corp:alice", DisplayName: "Alice",
-			Kind: principal.KindPerson,
+			ActiveAt: time.Time{}, DisabledAt: time.Time{}, ID: "prn-1", Subject: "corp:alice", DisplayName: "Alice",
+			Kind: principal.KindPerson, BreakGlass: false,
 		},
 		Digest: session.Digest{},
 	}

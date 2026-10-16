@@ -238,7 +238,9 @@ func newServiceBackedHandler(
 		t.Fatalf("session policy service: %v", err)
 	}
 
-	sessions, err := session.NewSessions(session.SessionsConfig{Store: st, Policies: sessionPolicies, Now: nil})
+	sessions, err := session.NewSessions(
+		session.SessionsConfig{Store: st, Policies: sessionPolicies, Inactivity: nil, Now: nil},
+	)
 	if err != nil {
 		t.Fatalf("session service: %v", err)
 	}

@@ -643,6 +643,29 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	}, nil
 }
 
+// AccountInactive reports whether the user account o is past the
+// inactivity period of the policy at the time of the service, as the token
+// lookup decides for the owner of a token: the account disable is on, the
+// period is not zero, o is a person that is not a break-glass account, and
+// o.ActiveAt is at or before now minus the period. Another sign-in, such as
+// a console session, applies it, so that its use does not keep an account
+// alive that the sweep would disable. A failed read of the policy answers
+// its error, so the caller fails closed.
+func (s *Service) AccountInactive(ctx context.Context, o Owner) (bool, error) {
+	if o.BreakGlass {
+		return false, nil
+	}
+
+	now := s.Now()
+
+	p, err := s.policies.get(ctx, now, s.Policy)
+	if err != nil {
+		return false, fmt.Errorf("account inactivity: %w", err)
+	}
+
+	return p.accountInactiveAt(o, now), nil
+}
+
 // checkPolicyActive refuses the token t of the owner o when the policy disables
 // t, or the user account o, as inactive at now, before the sweep writes the
 // disable: the sweep runs once an hour, and a use would else move the last

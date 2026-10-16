@@ -1,6 +1,7 @@
 package oauth_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -808,6 +809,34 @@ func TestFinishAuthorizedParty(t *testing.T) {
 	}
 }
 
+func TestFinishIssuedAt(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name     string
+		issuedIn time.Duration
+		wantErr  bool
+	}{
+		{name: "issued within the skew", issuedIn: 30 * time.Second, wantErr: false},
+		{name: "issued in the future", issuedIn: 2 * time.Minute, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t, oauthtest.RS256, fault(func(f *oauthtest.Faults) { f.IssuedIn = tc.issuedIn }))
+
+			_, err := s.signIn(t, oauth.Options{State: "", MaxAge: 0, HasMaxAge: false})
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("Finish error = %v, want an error: %v", err, tc.wantErr)
+			}
+
+			if tc.wantErr && (!errors.Is(err, oauth.ErrIDToken) || !strings.Contains(err.Error(), "iat")) {
+				t.Fatalf("Finish error = %v, want ErrIDToken about iat", err)
+			}
+		})
+	}
+}
+
 func TestCheckState(t *testing.T) {
 	t.Parallel()
 
@@ -901,6 +930,86 @@ func TestLazyReadsDiscoveryAtFirstUse(t *testing.T) {
 	authURL, pending, err := lazy.Begin(t.Context(), opts)
 	if err != nil || pending.State == "" || !strings.HasPrefix(authURL, srv.URL+"/authorize?") {
 		t.Fatalf("Begin with the provider up = %q, %+v, %v", authURL, pending, err)
+	}
+}
+
+// slowProvider is a Lazy client whose provider holds each request until
+// release closes. hit gets a value for each request that the provider holds.
+type slowProvider struct {
+	lazy    *oauth.Lazy
+	hit     <-chan struct{}
+	release chan<- struct{}
+}
+
+func slowLazy(t *testing.T) slowProvider {
+	t.Helper()
+
+	hits := make(chan struct{}, 8)
+	gate := make(chan struct{})
+
+	inner := discoveryServer(t, discoveryDoc)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits <- struct{}{}
+		<-gate
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	inner.URL = srv.URL
+
+	l, err := oauth.NewLazy(oauth.Config{
+		HTTPClient: srv.Client(), Now: nil, Issuer: srv.URL, ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+	if err != nil {
+		t.Fatalf("NewLazy: %v", err)
+	}
+
+	return slowProvider{lazy: l, hit: hits, release: gate}
+}
+
+// TestLazyWaiterLeavesAtItsDeadline proves that a use that waits for the
+// read of another use returns when its own context ends, and that the read
+// of the first use ends although the context of its request was canceled.
+func TestLazyWaiterLeavesAtItsDeadline(t *testing.T) {
+	t.Parallel()
+
+	slow := slowLazy(t)
+	lazy := slow.lazy
+	opts := oauth.Options{State: "", MaxAge: 0, HasMaxAge: false}
+
+	firstCtx, cancelFirst := context.WithCancel(t.Context())
+	first := make(chan error, 1)
+
+	go func() {
+		_, _, err := lazy.Begin(firstCtx, opts)
+		first <- err
+	}()
+
+	<-slow.hit
+	cancelFirst()
+
+	waitCtx, cancelWait := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancelWait()
+
+	start := time.Now()
+	if _, _, err := lazy.Begin(waitCtx, opts); !errors.Is(err, oauth.ErrProvider) ||
+		!errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Begin while another use reads = %v, want ErrProvider and DeadlineExceeded", err)
+	}
+
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Fatalf("the waiting use returned after %s", waited)
+	}
+
+	close(slow.release)
+
+	if err := <-first; err != nil {
+		t.Fatalf("Begin of the first use, with its request canceled = %v, want the read to end", err)
+	}
+
+	if _, _, err := lazy.Begin(t.Context(), opts); err != nil {
+		t.Fatalf("Begin after the read: %v", err)
 	}
 }
 

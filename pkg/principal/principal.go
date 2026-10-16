@@ -94,7 +94,7 @@ func ParseKind(s string) (Kind, error) {
 // Source names where a principal or a group comes from.
 type Source string
 
-// Sources of records (ADR 55). The directory sync sets SourceLDAP and
+// Sources of records. The directory sync sets SourceLDAP and
 // SourceSCIM.
 const (
 	// SourceLocal is a record made through the API.

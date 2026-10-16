@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -131,20 +132,27 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 			UserAgent:   row.UserAgent,
 		},
 		Owner: session.Owner{
+			ActiveAt:    codec.FromMillis(row.PrincipalActiveAtMs),
 			DisabledAt:  codec.FromOptionalMillis(row.PrincipalDisabledAtMs.Int64),
 			ID:          row.PrincipalID,
 			Subject:     row.Subject,
 			DisplayName: row.DisplayName,
 			Kind:        principal.Kind(row.PrincipalKind),
+			BreakGlass:  row.PrincipalBreakGlass,
 		},
 		Digest: stored,
 	}, nil
 }
 
 // TouchSession implements session.Store.
-func (s *Store) TouchSession(ctx context.Context, id string, at time.Time, every time.Duration) error {
+func (s *Store) TouchSession(
+	ctx context.Context, id string, at time.Time, every time.Duration, l session.Limits,
+) error {
+	bounds := l.ActiveAfter(at)
+
 	err := s.queries.TouchSession(ctx, db.TouchSessionParams{
 		AtMs: codec.Millis(at), ID: id, BeforeMs: codec.Millis(at.Add(-every)),
+		SeenAfterMs: boundMillis(bounds.LastSeen), CreatedAfterMs: boundMillis(bounds.Created),
 	})
 	if err != nil {
 		return fmt.Errorf("touch session: %w", err)
@@ -296,3 +304,13 @@ func setSessionPolicy(ctx context.Context, q *db.Queries, p session.Policy) erro
 // errNoSessionPolicyRow reports a database without the seeded session
 // policy row.
 var errNoSessionPolicyRow = errors.New("session policy row is missing")
+
+// boundMillis returns t in Unix milliseconds, or the lowest value for the
+// zero time: a bound that every stored time passes.
+func boundMillis(t time.Time) int64 {
+	if t.IsZero() {
+		return math.MinInt64
+	}
+
+	return codec.Millis(t)
+}

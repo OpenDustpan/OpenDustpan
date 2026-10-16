@@ -42,7 +42,7 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 	}
 
 	sessions, err := session.NewSessions(session.SessionsConfig{
-		Store: st, Policies: coverageSessionPolicies(tb), Now: nil,
+		Store: st, Policies: coverageSessionPolicies(tb), Inactivity: nil, Now: nil,
 	})
 	if err != nil {
 		tb.Fatalf("session service: %v", err)

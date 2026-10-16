@@ -189,7 +189,10 @@ func (h *Handler) admitSignIn(ctx context.Context) error {
 	return h.signIn.limiter.Admit(ctx)
 }
 
-// failSignIn counts one failure of the address of the request.
+// failSignIn spends one unit of the failure budget of the address of the
+// request, as a failed token lookup does. Each start of a sign-in and each
+// failed callback spends one, so the address of a request bounds the
+// sign-in requests that it can store.
 func (h *Handler) failSignIn(ctx context.Context) {
 	if h.signIn.limiter != nil {
 		h.signIn.limiter.Fail(ctx)
@@ -199,7 +202,8 @@ func (h *Handler) failSignIn(ctx context.Context) {
 // startSignIn stores a new sign-in request, binds the browser to it with
 // the sign-in cookie, and sends the browser to the identity provider. The
 // query parameter return names where the browser goes after the sign-in:
-// a path of this server.
+// a path of this server. Each start spends one unit of the failure budget
+// of its address, whatever its result.
 func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object) {
 	ctx := r.Context()
 
@@ -209,9 +213,10 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
+	h.failSignIn(ctx)
+
 	provider, ok := h.signIn.providers[r.PathValue("provider")]
 	if !ok {
-		h.failSignIn(ctx)
 		h.writeError(ctx, w, errUnknownProvider)
 
 		return

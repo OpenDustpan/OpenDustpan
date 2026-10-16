@@ -59,6 +59,14 @@ subject at the provider: `<provider ID>:<sub>`. For example,
 A new ID makes new subjects, so each person gets a new principal with no
 grant.
 
+The issuer is not part of the subject. If you set `--oidc-issuer` to
+another provider and keep the provider ID, a person of the new provider
+with the same `sub` gets the principal of the person of the old provider.
+To use another issuer, set a new provider ID too.
+
+A principal with the subject `<provider ID>:<sub>` is the principal of
+that person, also when an administrator made it as a local principal.
+
 The server never links a person by email address.
 
 ## The first sign-in of a person

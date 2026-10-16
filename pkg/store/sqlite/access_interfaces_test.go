@@ -14,13 +14,14 @@ import (
 // interface of that case, and skips it otherwise. These assignments fail the
 // build when a method is missing, so a skip cannot hide the drift.
 var (
-	_ access.Store         = (*sqlite.Store)(nil)
-	_ access.Callers       = (*sqlite.Store)(nil)
-	_ access.Units         = (*sqlite.Store)(nil)
-	_ access.ReviewStore   = (*sqlite.Store)(nil)
-	_ namespace.Store      = (*sqlite.Store)(nil)
-	_ principal.Store      = (*sqlite.Store)(nil)
-	_ audit.Store          = (*sqlite.Store)(nil)
-	_ collection.Store     = (*sqlite.Store)(nil)
-	_ accesstest.UnitStore = (*sqlite.Store)(nil)
+	_ access.Store             = (*sqlite.Store)(nil)
+	_ access.Callers           = (*sqlite.Store)(nil)
+	_ access.Units             = (*sqlite.Store)(nil)
+	_ access.ReviewStore       = (*sqlite.Store)(nil)
+	_ access.ServicePrincipals = (*sqlite.Store)(nil)
+	_ namespace.Store          = (*sqlite.Store)(nil)
+	_ principal.Store          = (*sqlite.Store)(nil)
+	_ audit.Store              = (*sqlite.Store)(nil)
+	_ collection.Store         = (*sqlite.Store)(nil)
+	_ accesstest.UnitStore     = (*sqlite.Store)(nil)
 )

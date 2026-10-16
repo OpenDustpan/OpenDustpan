@@ -133,6 +133,11 @@ SELECT id
 FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;
 
+-- name: StackRefByID :one
+SELECT namespace, project, name
+FROM stacks
+WHERE id = $1;
+
 -- name: LockStackForUpdates :one
 -- Serializes starts and ends of the stack's updates. NO KEY UPDATE does not
 -- block the foreign-key checks of checkpoint and event writes.
@@ -831,6 +836,29 @@ WHERE stack_id = $1 AND update_id = $2;
 
 -- name: DeleteJournal :exec
 DELETE FROM update_journal
+WHERE stack_id = $1 AND update_id = $2;
+
+-- name: NextRefusalArrival :one
+SELECT (COALESCE(MAX(arrival), 0) + 1)::BIGINT AS arrival
+FROM update_journal_refusals
+WHERE stack_id = $1 AND update_id = $2;
+
+-- name: InsertJournalRefusal :exec
+INSERT INTO update_journal_refusals (stack_id, update_id, arrival, sequence_ids, status, reason)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: ListJournalRefusals :many
+SELECT sequence_ids, status, reason FROM update_journal_refusals
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY arrival;
+
+-- name: ListJournalSequences :many
+SELECT sequence FROM update_journal_sequences
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY sequence;
+
+-- name: DeleteJournalRefusals :exec
+DELETE FROM update_journal_refusals
 WHERE stack_id = $1 AND update_id = $2;
 
 -- name: JournalState :one
@@ -1730,16 +1758,26 @@ SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms,
 FROM sessions WHERE id = $1;
 
 -- name: GetSessionByDigest :one
+-- principal_active_at_ms is the latest activity of the owner by the account
+-- rule of the inactivity disable, as in GetAccessTokenByDigest.
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
+  GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
+    SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
+  ), 0))::bigint AS principal_active_at_ms
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 WHERE s.digest = $1 AND p.deleted_at_ms IS NULL;
 
 -- name: TouchSession :exec
+-- An idle or expired session keeps its last use: seen_after_ms and
+-- created_after_ms are the bounds of an active session at at_ms.
 UPDATE sessions SET last_seen_at_ms = sqlc.arg('at_ms')::bigint
-WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL AND last_seen_at_ms <= sqlc.arg('before_ms')::bigint;
+WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL AND last_seen_at_ms <= sqlc.arg('before_ms')::bigint
+  AND last_seen_at_ms > sqlc.arg('seen_after_ms')::bigint AND created_at_ms > sqlc.arg('created_after_ms')::bigint;
 
 -- name: EndSession :execrows
 UPDATE sessions SET ended_at_ms = sqlc.arg('at_ms')::bigint, end_reason = sqlc.arg('end_reason')

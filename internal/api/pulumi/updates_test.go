@@ -21,6 +21,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -63,6 +64,8 @@ type memUpdateStore struct {
 	stackVersion map[stack.Ref]int64
 	checkpoints  map[stack.UpdateID]stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
+	refusals     map[stack.UpdateID][]stack.JournalRefusal
+	seqs         map[stack.UpdateID][]int64
 	mu           sync.Mutex
 }
 
@@ -72,6 +75,8 @@ func newMemUpdateStore() *memUpdateStore {
 		stackVersion: map[stack.Ref]int64{},
 		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
 		events:       map[stack.UpdateID][]stack.Event{},
+		refusals:     map[stack.UpdateID][]stack.JournalRefusal{},
+		seqs:         map[stack.UpdateID][]int64{},
 		mu:           sync.Mutex{},
 	}
 }
@@ -485,7 +490,7 @@ func newUpdateFixtureWithAuthenticator(
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
 		Journal:            journalWriterFor(t, blobs, mem),
-		Replayer:           nil,
+		Replayer:           pulumijournal.NewReplayer(time.Now, ""),
 		Tokens:             checker,
 	})
 	if err != nil {

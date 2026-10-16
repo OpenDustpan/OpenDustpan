@@ -1581,6 +1581,21 @@ func (q *Queries) DeleteJournalOfStack(ctx context.Context, stackID string) erro
 	return err
 }
 
+const deleteJournalRefusals = `-- name: DeleteJournalRefusals :exec
+DELETE FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?
+`
+
+type DeleteJournalRefusalsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) DeleteJournalRefusals(ctx context.Context, arg DeleteJournalRefusalsParams) error {
+	_, err := q.db.ExecContext(ctx, deleteJournalRefusals, arg.StackID, arg.UpdateID)
+	return err
+}
+
 const deleteJournalSequences = `-- name: DeleteJournalSequences :exec
 DELETE FROM update_journal_sequences
 WHERE stack_id = ? AND update_id = ?
@@ -2865,7 +2880,12 @@ func (q *Queries) GetSession(ctx context.Context, id string) (GetSessionRow, err
 const getSessionByDigest = `-- name: GetSessionByDigest :one
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
+    SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
+  ), 0)) AS INTEGER) AS principal_active_at_ms
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
 WHERE s.digest = ? AND p.deleted_at_ms IS NULL
@@ -2887,8 +2907,12 @@ type GetSessionByDigestRow struct {
 	DisplayName           string
 	PrincipalKind         string
 	PrincipalDisabledAtMs sql.NullInt64
+	PrincipalBreakGlass   bool
+	PrincipalActiveAtMs   int64
 }
 
+// principal_active_at_ms is the latest activity of the owner by the account
+// rule of the inactivity disable, as in GetAccessTokenByDigest.
 func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
 	row := q.db.QueryRowContext(ctx, getSessionByDigest, digest)
 	var i GetSessionByDigestRow
@@ -2908,6 +2932,8 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.DisplayName,
 		&i.PrincipalKind,
 		&i.PrincipalDisabledAtMs,
+		&i.PrincipalBreakGlass,
+		&i.PrincipalActiveAtMs,
 	)
 	return i, err
 }
@@ -3724,6 +3750,32 @@ func (q *Queries) InsertJournal(ctx context.Context, arg InsertJournalParams) er
 		arg.LowestSequence,
 		arg.SequenceIds,
 		arg.OperationIds,
+	)
+	return err
+}
+
+const insertJournalRefusal = `-- name: InsertJournalRefusal :exec
+INSERT INTO update_journal_refusals (stack_id, update_id, arrival, sequence_ids, status, reason)
+VALUES (?, ?, ?, ?, ?, ?)
+`
+
+type InsertJournalRefusalParams struct {
+	StackID     string
+	UpdateID    string
+	Arrival     int64
+	SequenceIds string
+	Status      int64
+	Reason      string
+}
+
+func (q *Queries) InsertJournalRefusal(ctx context.Context, arg InsertJournalRefusalParams) error {
+	_, err := q.db.ExecContext(ctx, insertJournalRefusal,
+		arg.StackID,
+		arg.UpdateID,
+		arg.Arrival,
+		arg.SequenceIds,
+		arg.Status,
+		arg.Reason,
 	)
 	return err
 }
@@ -5056,6 +5108,80 @@ func (q *Queries) ListJournalOperations(ctx context.Context, arg ListJournalOper
 	return items, nil
 }
 
+const listJournalRefusals = `-- name: ListJournalRefusals :many
+SELECT sequence_ids, status, reason FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival
+`
+
+type ListJournalRefusalsParams struct {
+	StackID  string
+	UpdateID string
+}
+
+type ListJournalRefusalsRow struct {
+	SequenceIds string
+	Status      int64
+	Reason      string
+}
+
+func (q *Queries) ListJournalRefusals(ctx context.Context, arg ListJournalRefusalsParams) ([]ListJournalRefusalsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listJournalRefusals, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListJournalRefusalsRow
+	for rows.Next() {
+		var i ListJournalRefusalsRow
+		if err := rows.Scan(&i.SequenceIds, &i.Status, &i.Reason); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listJournalSequences = `-- name: ListJournalSequences :many
+SELECT sequence FROM update_journal_sequences
+WHERE stack_id = ? AND update_id = ?
+ORDER BY sequence
+`
+
+type ListJournalSequencesParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) ListJournalSequences(ctx context.Context, arg ListJournalSequencesParams) ([]int64, error) {
+	rows, err := q.db.QueryContext(ctx, listJournalSequences, arg.StackID, arg.UpdateID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var sequence int64
+		if err := rows.Scan(&sequence); err != nil {
+			return nil, err
+		}
+		items = append(items, sequence)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listNamespaces = `-- name: ListNamespaces :many
 SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
 FROM namespaces
@@ -5750,6 +5876,24 @@ type NextJournalArrivalParams struct {
 
 func (q *Queries) NextJournalArrival(ctx context.Context, arg NextJournalArrivalParams) (int64, error) {
 	row := q.db.QueryRowContext(ctx, nextJournalArrival, arg.StackID, arg.UpdateID)
+	var arrival int64
+	err := row.Scan(&arrival)
+	return arrival, err
+}
+
+const nextRefusalArrival = `-- name: NextRefusalArrival :one
+SELECT CAST(COALESCE(MAX(arrival), 0) + 1 AS INTEGER) AS arrival
+FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?
+`
+
+type NextRefusalArrivalParams struct {
+	StackID  string
+	UpdateID string
+}
+
+func (q *Queries) NextRefusalArrival(ctx context.Context, arg NextRefusalArrivalParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, nextRefusalArrival, arg.StackID, arg.UpdateID)
 	var arrival int64
 	err := row.Scan(&arrival)
 	return arrival, err
@@ -6978,6 +7122,25 @@ func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspa
 	return result.RowsAffected()
 }
 
+const stackRefByID = `-- name: StackRefByID :one
+SELECT namespace, project, name
+FROM stacks
+WHERE id = ?
+`
+
+type StackRefByIDRow struct {
+	Namespace string
+	Project   string
+	Name      string
+}
+
+func (q *Queries) StackRefByID(ctx context.Context, id string) (StackRefByIDRow, error) {
+	row := q.db.QueryRowContext(ctx, stackRefByID, id)
+	var i StackRefByIDRow
+	err := row.Scan(&i.Namespace, &i.Project, &i.Name)
+	return i, err
+}
+
 const subjectsOfCaller = `-- name: SubjectsOfCaller :many
 SELECT p.id AS principal_id, CAST(COALESCE(m.group_id, '') AS TEXT) AS group_id
 FROM principals p
@@ -7062,16 +7225,28 @@ const touchSession = `-- name: TouchSession :exec
 UPDATE sessions SET last_seen_at_ms = CAST(?1 AS INTEGER)
 WHERE id = ?2 AND ended_at_ms IS NULL
   AND last_seen_at_ms <= CAST(?3 AS INTEGER)
+  AND last_seen_at_ms > CAST(?4 AS INTEGER)
+  AND created_at_ms > CAST(?5 AS INTEGER)
 `
 
 type TouchSessionParams struct {
-	AtMs     int64
-	ID       string
-	BeforeMs int64
+	AtMs           int64
+	ID             string
+	BeforeMs       int64
+	SeenAfterMs    int64
+	CreatedAfterMs int64
 }
 
+// An idle or expired session keeps its last use: seen_after_ms and
+// created_after_ms are the bounds of an active session at at_ms.
 func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) error {
-	_, err := q.db.ExecContext(ctx, touchSession, arg.AtMs, arg.ID, arg.BeforeMs)
+	_, err := q.db.ExecContext(ctx, touchSession,
+		arg.AtMs,
+		arg.ID,
+		arg.BeforeMs,
+		arg.SeenAfterMs,
+		arg.CreatedAfterMs,
+	)
 	return err
 }
 

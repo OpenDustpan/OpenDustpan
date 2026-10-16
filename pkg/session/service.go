@@ -29,20 +29,33 @@ const TouchEvery = time.Minute
 // session of a disabled principal.
 var ErrUnauthenticated = errors.New("session is not valid")
 
+// InactivityRule answers whether the user account of the owner o of a
+// session is past the inactivity period, by the rule that also refuses an
+// access token of that account: the account disable is on, the period is
+// not zero, o is a person that is not a break-glass account, and o.ActiveAt
+// is at or before now minus the period. It returns an error when it cannot
+// decide.
+type InactivityRule interface {
+	AccountInactive(ctx context.Context, o Owner) (bool, error)
+}
+
 // SessionsConfig holds the dependencies of a Sessions service. Store and
-// Policies are required. A nil Now uses time.Now.
+// Policies are required. A nil Inactivity applies no inactivity rule. A
+// nil Now uses time.Now.
 type SessionsConfig struct {
-	Store    Store
-	Policies *Policies
-	Now      func() time.Time
+	Store      Store
+	Policies   *Policies
+	Inactivity InactivityRule
+	Now        func() time.Time
 }
 
 // Sessions starts, checks and ends console sessions, and keeps the sign-in
 // requests between the start and the callback of a sign-in.
 type Sessions struct {
-	store    Store
-	policies *Policies
-	now      func() time.Time
+	store      Store
+	policies   *Policies
+	inactivity InactivityRule
+	now        func() time.Time
 }
 
 // NewSessions returns a Sessions service. It returns ErrMissingDependency
@@ -60,7 +73,7 @@ func NewSessions(cfg SessionsConfig) (*Sessions, error) {
 		now = time.Now
 	}
 
-	return &Sessions{store: cfg.Store, policies: cfg.Policies, now: now}, nil
+	return &Sessions{store: cfg.Store, policies: cfg.Policies, inactivity: cfg.Inactivity, now: now}, nil
 }
 
 // Now returns the time of the clock of the service, in UTC, to the
@@ -124,8 +137,9 @@ func (s *Sessions) Start(ctx context.Context, e audit.Entry, in Start) (Session,
 // Authenticate returns the session with the secret and its owner when the
 // session can authenticate at the time of the clock: it has not ended, is
 // not idle or expired under the current policy, and its owner is a person
-// who is not disabled. It records the use at most once in TouchEvery. It
-// returns ErrUnauthenticated otherwise.
+// who is not disabled and whose account is not past the inactivity period.
+// It records the use at most once in TouchEvery. It returns
+// ErrUnauthenticated otherwise, and then records no use.
 func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, error) {
 	m, err := s.store.GetSessionByDigest(ctx, DigestOf(secret))
 	if errors.Is(err, ErrNotFound) {
@@ -151,7 +165,18 @@ func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, erro
 		return Match{}, fmt.Errorf("%w: the principal cannot sign in", ErrUnauthenticated)
 	}
 
-	if err := s.store.TouchSession(ctx, m.Session.ID, now, TouchEvery); err != nil {
+	if s.inactivity != nil {
+		inactive, err := s.inactivity.AccountInactive(ctx, m.Owner)
+		if err != nil {
+			return Match{}, fmt.Errorf("check account inactivity: %w", err)
+		}
+
+		if inactive {
+			return Match{}, fmt.Errorf("%w: the user account is inactive", ErrUnauthenticated)
+		}
+	}
+
+	if err := s.store.TouchSession(ctx, m.Session.ID, now, TouchEvery, policy.Limits); err != nil {
 		return Match{}, fmt.Errorf("record session use: %w", err)
 	}
 
@@ -214,6 +239,17 @@ func (s *Sessions) TakeRequest(ctx context.Context, state Secret) (Request, erro
 	}
 
 	return r, nil
+}
+
+// PruneRequests deletes the sign-in requests that expired at or before
+// now, and returns how many it deleted.
+func (s *Sessions) PruneRequests(ctx context.Context) (int64, error) {
+	n, err := s.store.PruneRequests(ctx, s.Now())
+	if err != nil {
+		return 0, fmt.Errorf("prune sign-in requests: %w", err)
+	}
+
+	return n, nil
 }
 
 // entry completes the entry of the caller for one change of the record

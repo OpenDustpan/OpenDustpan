@@ -43,6 +43,7 @@ func sweepChainServer(
 		shipper:         nil,
 		beforeServe:     nil,
 		deleted:         deleted,
+		signInRequests:  nil,
 	}
 }
 

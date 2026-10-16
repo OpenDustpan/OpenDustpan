@@ -1,18 +1,22 @@
 package dustpan
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
+	"time"
 
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -54,7 +58,7 @@ var errSignInSetup = errors.New("console sign-in")
 
 // newSignIn returns the console sign-in of cfg, or nil when cfg names no
 // provider.
-func newSignIn(cfg *settings, policies *session.Policies) (*serverapi.SignIn, error) {
+func newSignIn(cfg *settings, policies *session.Policies, tokens *accesstoken.Service) (*serverapi.SignIn, error) {
 	if len(cfg.oidcProviders) == 0 {
 		return nil, nil //nolint:nilnil // No provider is a valid setup: the sign-in routes stay unmounted.
 	}
@@ -76,7 +80,14 @@ func newSignIn(cfg *settings, policies *session.Policies) (*serverapi.SignIn, er
 		return nil, err
 	}
 
-	sessions, err := session.NewSessions(session.SessionsConfig{Store: store, Policies: policies, Now: cfg.now})
+	var inactivity session.InactivityRule
+	if tokens != nil {
+		inactivity = tokenInactivity{tokens: tokens}
+	}
+
+	sessions, err := session.NewSessions(session.SessionsConfig{
+		Store: store, Policies: policies, Inactivity: inactivity, Now: cfg.now,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("session service: %w", err)
 	}
@@ -84,7 +95,7 @@ func newSignIn(cfg *settings, policies *session.Policies) (*serverapi.SignIn, er
 	providers := make([]serverapi.SignInProvider, 0, len(cfg.oidcProviders))
 
 	for _, p := range cfg.oidcProviders {
-		provider, err := signInProvider(p, base, providers)
+		provider, err := signInProvider(p, base, cfg.now, providers)
 		if err != nil {
 			return nil, err
 		}
@@ -106,14 +117,16 @@ func newSignIn(cfg *settings, policies *session.Policies) (*serverapi.SignIn, er
 
 // newConsoleSignIn builds the session policy service and the console
 // sign-in of cfg, and sets the session cookie check of cfg for the APIs
-// other than the installation API. Each result is nil when cfg has none.
-func newConsoleSignIn(cfg *settings) (*session.Policies, *serverapi.SignIn, error) {
+// other than the installation API. A session applies the account
+// inactivity rule of tokens, when tokens is not nil. Each result is nil
+// when cfg has none.
+func newConsoleSignIn(cfg *settings, tokens *accesstoken.Service) (*session.Policies, *serverapi.SignIn, error) {
 	policies, err := newSessionPolicyService(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	signIn, err := newSignIn(cfg, policies)
+	signIn, err := newSignIn(cfg, policies, tokens)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -139,6 +152,64 @@ func sessionCookies(in *serverapi.SignIn) (*sessionauth.Checker, error) {
 	}
 
 	return c, nil
+}
+
+// tokenInactivity applies the account inactivity rule of the access token
+// service to the owner of a console session, so that a session does not
+// keep an account alive that the token lookup and the sweep would end.
+type tokenInactivity struct {
+	tokens *accesstoken.Service
+}
+
+// AccountInactive implements session.InactivityRule.
+func (r tokenInactivity) AccountInactive(ctx context.Context, o session.Owner) (bool, error) {
+	inactive, err := r.tokens.AccountInactive(ctx, accesstoken.Owner{
+		ActiveAt: o.ActiveAt, DisabledAt: o.DisabledAt, ID: o.ID, Subject: o.Subject, DisplayName: o.DisplayName,
+		Kind: o.Kind, BreakGlass: o.BreakGlass,
+	})
+	if err != nil {
+		return false, fmt.Errorf("account inactivity of %s: %w", o.ID, err)
+	}
+
+	return inactive, nil
+}
+
+// signInRequestPruneEvery is the period of the deletion of the expired
+// sign-in requests: one lifetime of a request.
+const signInRequestPruneEvery = session.RequestLifetime
+
+// pruneSignInRequests deletes the expired sign-in requests once each
+// signInRequestPruneEvery, until ctx is done. A failed run logs no error
+// text, which may hold driver detail, and the next run tries again.
+func (s *Server) pruneSignInRequests(ctx context.Context) {
+	if s.signInRequests == nil {
+		return
+	}
+
+	ticker := time.NewTicker(signInRequestPruneEvery)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.pruneSignInRequestsOnce(ctx)
+		}
+	}
+}
+
+// pruneSignInRequestsOnce deletes the expired sign-in requests once.
+func (s *Server) pruneSignInRequestsOnce(ctx context.Context) {
+	n, err := s.signInRequests.PruneRequests(ctx)
+
+	switch {
+	case err != nil && !errors.Is(ctx.Err(), context.Canceled):
+		s.logger.WarnContext(ctx, "prune of the expired sign-in requests failed")
+	case n > 0:
+		s.logger.InfoContext(ctx, "pruned the expired sign-in requests", slog.Int64("requests", n))
+	default:
+	}
 }
 
 // signInOrigin returns the origin of the public URL base, which the
@@ -167,7 +238,9 @@ func signInOrigin(base string) (string, error) {
 
 // signInProvider returns the provider of p for the public URL base. It
 // refuses an ID of the wrong form or one that an earlier provider has.
-func signInProvider(p OIDCProvider, base string, earlier []serverapi.SignInProvider) (serverapi.SignInProvider, error) {
+func signInProvider(
+	p OIDCProvider, base string, now func() time.Time, earlier []serverapi.SignInProvider,
+) (serverapi.SignInProvider, error) {
 	var none serverapi.SignInProvider
 
 	if !providerIDPattern.MatchString(p.ID) {
@@ -180,7 +253,7 @@ func signInProvider(p OIDCProvider, base string, earlier []serverapi.SignInProvi
 	}
 
 	client, err := oauth.NewLazy(oauth.Config{
-		HTTPClient: p.HTTPClient, Now: nil, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: p.ClientSecret,
+		HTTPClient: p.HTTPClient, Now: now, Issuer: p.Issuer, ClientID: p.ClientID, ClientSecret: p.ClientSecret,
 		RedirectURL: base + "/api/server/sign-in/" + p.ID + "/callback", Scopes: p.Scopes,
 	})
 	if err != nil {
