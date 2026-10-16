@@ -237,13 +237,10 @@ func (s *Store) ApplyStaging(ctx context.Context) error {
 
 // fenceStagedFile increments the failover version of every namespace in the
 // staged file at path, so the rename carries fenced versions, and writes the
-// audit chain record chain of the live database into it, in one
-// transaction. It opens the
-// file in rollback-journal mode, so no write-ahead-log sidecar survives the
-// fence to leak beside the renamed database.
+// bookkeeping rows keep of the live database into it, in one transaction. It
+// opens the file in rollback-journal mode, so no write-ahead-log sidecar
+// survives the fence to leak beside the renamed database.
 func fenceStagedFile(ctx context.Context, path string, keep bookkeeping) error {
-	chain := keep.chain
-
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("fence staged namespaces: %w", err)
 	}
@@ -289,28 +286,8 @@ func fenceStagedFile(ctx context.Context, path string, keep bookkeeping) error {
 		return errors.Join(fmt.Errorf("fence staged namespaces: %w", err), tx.Rollback())
 	}
 
-	// The swap replaces the log, so the copy of the record sets
-	// log_replaced: the server compares the restored log with the state,
-	// also after a crash. The copy keeps no migration: a new approval
-	// starts it again. The copy keeps entered_maintenance false: the chain
-	// enters maintenance mode again when it still waits.
-	const keepChain = `INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
-    VALUES (1, ?, ?, ?, ?, 0, 1, 0)`
-
-	_, err = tx.ExecContext(ctx, keepChain, string(chain.State), codec.Millis(chain.ChangedAt), chain.ChangedBy,
-		chain.Pending)
-	if err != nil {
-		return errors.Join(fmt.Errorf("keep audit chain state: %w", err), tx.Rollback())
-	}
-
-	// A restore runs in maintenance mode. The installation row from the
-	// backup would end maintenance mode when the rename lands, before the
-	// restore has finished, so the staged file takes the live state.
-	const keepState = `INSERT INTO installation (id, state) VALUES (1, ?)
-    ON CONFLICT (id) DO UPDATE SET state = excluded.state`
-
-	if _, err := tx.ExecContext(ctx, keepState, string(keep.state)); err != nil {
-		return errors.Join(fmt.Errorf("keep installation state: %w", err), tx.Rollback())
+	if err := writeStagedBookkeeping(ctx, tx, keep); err != nil {
+		return errors.Join(err, tx.Rollback())
 	}
 
 	// The restored log can reuse sequences that a sink already holds, and
@@ -328,6 +305,38 @@ func fenceStagedFile(ctx context.Context, path string, keep bookkeeping) error {
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	return nil
+}
+
+// writeStagedBookkeeping writes the bookkeeping rows keep of the live
+// database into the staged file, in tx.
+func writeStagedBookkeeping(ctx context.Context, tx *sql.Tx, keep bookkeeping) error {
+	// The swap replaces the log, so the copy of the record sets
+	// log_replaced: the server compares the restored log with the state,
+	// also after a crash. The copy keeps no migration: a new approval
+	// starts it again. The copy keeps entered_maintenance false: the chain
+	// enters maintenance mode again when it still waits.
+	const keepChain = `INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+    VALUES (1, ?, ?, ?, ?, 0, 1, 0)`
+
+	chain := keep.chain
+
+	_, err := tx.ExecContext(ctx, keepChain, string(chain.State), codec.Millis(chain.ChangedAt), chain.ChangedBy,
+		chain.Pending)
+	if err != nil {
+		return fmt.Errorf("keep audit chain state: %w", err)
+	}
+
+	// A restore runs in maintenance mode. The installation row from the
+	// backup would end maintenance mode when the rename lands, before the
+	// restore has finished, so the staged file takes the live state.
+	const keepState = `INSERT INTO installation (id, state) VALUES (1, ?)
+    ON CONFLICT (id) DO UPDATE SET state = excluded.state`
+
+	if _, err := tx.ExecContext(ctx, keepState, string(keep.state)); err != nil {
+		return fmt.Errorf("keep installation state: %w", err)
 	}
 
 	return nil
