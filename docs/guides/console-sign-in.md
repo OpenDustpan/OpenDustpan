@@ -144,11 +144,34 @@ The rules:
   Make a new provider ID for another identity provider.
 - The server sends a PKCE challenge and a state, as for an OpenID
   provider.
-- A plain OAuth 2.0 provider gives no time of the authentication. So the
-  server takes the time of the sign-in. A new sign-in with `fresh=1`
-  proves a new round trip through the provider, not a new authentication
-  at the provider: many providers sign the person in again from their
-  own session, with no password and no second factor.
+
+### A fresh sign-in through a plain OAuth 2.0 provider
+
+A plain OAuth 2.0 provider has no `max_age` and no `auth_time`. So the
+server cannot make the provider ask the person for a password or a second
+factor again. The server also cannot read when the person last gave them.
+The server takes the time of the sign-in as the time of the
+authentication.
+
+This gives less protection than an OpenID provider. A new sign-in with
+`fresh=1` proves only that the person has a live session at the provider.
+Many providers sign the person in again from that session, with no
+password and no second factor. Thus a person or a process with access to
+a browser that has a live session at the provider can start a fresh
+console session. Then it can create access tokens for that person.
+
+OpenDustpan has no second factor of its own. For people who sign in
+through a plain OAuth 2.0 provider, do these steps:
+
+- Make the provider require a second factor for each of these people, for
+  example in the settings of your GitHub organization.
+- Give these people only the roles that they need.
+- Use an OpenID provider for people with administration roles, if you
+  can.
+
+If you do not do these steps, you accept this risk: a person or a process
+with access to a live session at the provider can create access tokens in
+the name of that person.
 
 ## Keep the provider ID
 
