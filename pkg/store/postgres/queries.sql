@@ -133,6 +133,11 @@ SELECT id
 FROM stacks
 WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL;
 
+-- name: StackRefByID :one
+SELECT namespace, project, name
+FROM stacks
+WHERE id = $1;
+
 -- name: LockStackForUpdates :one
 -- Serializes starts and ends of the stack's updates. NO KEY UPDATE does not
 -- block the foreign-key checks of checkpoint and event writes.
@@ -840,6 +845,29 @@ WHERE stack_id = $1 AND update_id = $2;
 
 -- name: DeleteJournal :exec
 DELETE FROM update_journal
+WHERE stack_id = $1 AND update_id = $2;
+
+-- name: NextRefusalArrival :one
+SELECT (COALESCE(MAX(arrival), 0) + 1)::BIGINT AS arrival
+FROM update_journal_refusals
+WHERE stack_id = $1 AND update_id = $2;
+
+-- name: InsertJournalRefusal :exec
+INSERT INTO update_journal_refusals (stack_id, update_id, arrival, sequence_ids, status, reason)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: ListJournalRefusals :many
+SELECT sequence_ids, status, reason FROM update_journal_refusals
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY arrival;
+
+-- name: ListJournalSequences :many
+SELECT sequence FROM update_journal_sequences
+WHERE stack_id = $1 AND update_id = $2
+ORDER BY sequence;
+
+-- name: DeleteJournalRefusals :exec
+DELETE FROM update_journal_refusals
 WHERE stack_id = $1 AND update_id = $2;
 
 -- name: JournalState :one

@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -24,10 +26,11 @@ import (
 type journalMemStore struct {
 	*memUpdates
 
-	journal map[stack.UpdateID][]stack.JournalRow
-	seqs    map[stack.UpdateID]map[int64][sha256.Size]byte
-	closed  map[stack.UpdateID]bool
-	changed map[stack.UpdateID]bool
+	journal  map[stack.UpdateID][]stack.JournalRow
+	seqs     map[stack.UpdateID]map[int64][sha256.Size]byte
+	closed   map[stack.UpdateID]bool
+	changed  map[stack.UpdateID]bool
+	refusals map[stack.UpdateID][]stack.JournalRefusal
 }
 
 func newJournalMemStore() *journalMemStore {
@@ -37,6 +40,7 @@ func newJournalMemStore() *journalMemStore {
 		seqs:       map[stack.UpdateID]map[int64][sha256.Size]byte{},
 		closed:     map[stack.UpdateID]bool{},
 		changed:    map[stack.UpdateID]bool{},
+		refusals:   map[stack.UpdateID][]stack.JournalRefusal{},
 	}
 }
 
@@ -86,6 +90,55 @@ func (m *journalMemStore) JournalSweepable(
 	return m.closed[update] || u.Status != stack.StatusRunning, nil
 }
 
+// RecordJournalRefusal implements stack.JournalStore.
+func (m *journalMemStore) RecordJournalRefusal(
+	_ context.Context, refusal stack.JournalRefusal, fence namespace.Fence,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(refusal.Ref, fence); err != nil {
+		return err
+	}
+
+	if _, ok := m.updates[refusal.Update]; !ok {
+		return nil
+	}
+
+	m.refusals[refusal.Update] = append(m.refusals[refusal.Update], refusal)
+
+	return nil
+}
+
+// JournalRefusals implements stack.JournalStore.
+func (m *journalMemStore) JournalRefusals(
+	_ context.Context, _ stack.ID, update stack.UpdateID,
+) ([]stack.JournalRefusal, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return slices.Clone(m.refusals[update]), nil
+}
+
+// JournalSequences implements stack.JournalStore.
+func (m *journalMemStore) JournalSequences(
+	_ context.Context, _ stack.ID, update stack.UpdateID,
+) ([]int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	stored := m.seqs[update]
+	out := make([]int64, 0, len(stored))
+
+	for seq := range stored {
+		out = append(out, seq)
+	}
+
+	slices.Sort(out)
+
+	return out, nil
+}
+
 // PutBuiltCheckpoint implements stack.BuiltCheckpointStore.
 func (m *journalMemStore) PutBuiltCheckpoint(
 	_ context.Context, cp stack.Checkpoint, fence namespace.Fence,
@@ -116,6 +169,7 @@ func (m *journalMemStore) PutBuiltCheckpoint(
 
 	delete(m.journal, cp.Update)
 	delete(m.seqs, cp.Update)
+	delete(m.refusals, cp.Update)
 	m.closed[cp.Update] = true
 
 	return keys, nil
@@ -212,7 +266,7 @@ func (m *journalMemStore) verifyJournalRow(row stack.JournalRow) error {
 
 	changed, err := row.Verify(known, m.changed[row.Update])
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", stack.ErrJournalBatch, err)
 	}
 
 	if changed {
