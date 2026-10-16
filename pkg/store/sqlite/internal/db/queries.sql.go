@@ -462,6 +462,22 @@ func (q *Queries) CountCallerGrants(ctx context.Context, arg CountCallerGrantsPa
 	return count, err
 }
 
+const countDurableStep = `-- name: CountDurableStep :one
+SELECT COUNT(*) FROM durable_steps WHERE operation_id = ? AND name = ?
+`
+
+type CountDurableStepParams struct {
+	OperationID string
+	Name        string
+}
+
+func (q *Queries) CountDurableStep(ctx context.Context, arg CountDurableStepParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countDurableStep, arg.OperationID, arg.Name)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countEndedGrantRecords = `-- name: CountEndedGrantRecords :one
 SELECT (SELECT COUNT(*) FROM principals p WHERE CAST(?1 AS TEXT) = 'principal'
           AND p.id = CAST(?2 AS TEXT) AND p.deleted_at_ms IS NOT NULL)
@@ -2719,6 +2735,68 @@ func (q *Queries) GetDeletedWorkspace(ctx context.Context, arg GetDeletedWorkspa
 	return deleted_name, err
 }
 
+const getDurableOperation = `-- name: GetDurableOperation :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = ?
+`
+
+func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOperation, error) {
+	row := q.db.QueryRowContext(ctx, getDurableOperation, id)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getDurableOperationByKey = `-- name: GetDurableOperationByKey :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE start_key = ?
+`
+
+func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string) (DurableOperation, error) {
+	row := q.db.QueryRowContext(ctx, getDurableOperationByKey, startKey)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getFailoverVersion = `-- name: GetFailoverVersion :one
 SELECT failover_version
 FROM namespaces
@@ -4054,6 +4132,68 @@ func (q *Queries) InsertDeletedInventory(ctx context.Context, arg InsertDeletedI
 	return err
 }
 
+const insertDurableOperation = `-- name: InsertDurableOperation :exec
+
+INSERT INTO durable_operations (
+    id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, '', NULL, 0, NULL, 0, ?, ?, ?)
+`
+
+type InsertDurableOperationParams struct {
+	ID          string
+	StartKey    string
+	Kind        string
+	Input       []byte
+	Version     int64
+	NotBeforeMs int64
+	CreatedAtMs int64
+	UpdatedAtMs int64
+}
+
+// Durable operations. Every time comes from DatabaseNowMs, the clock of the
+// store. Each write runs in an IMMEDIATE transaction, so the read of a row
+// and its write see no other writer between them.
+func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableOperationParams) error {
+	_, err := q.db.ExecContext(ctx, insertDurableOperation,
+		arg.ID,
+		arg.StartKey,
+		arg.Kind,
+		arg.Input,
+		arg.Version,
+		arg.NotBeforeMs,
+		arg.CreatedAtMs,
+		arg.UpdatedAtMs,
+	)
+	return err
+}
+
+const insertDurableStep = `-- name: InsertDurableStep :exec
+INSERT INTO durable_steps (operation_id, name, seq, result, done_at_ms)
+VALUES (
+    ?1, ?2,
+    (SELECT COALESCE(MAX(seq), 0) + 1 FROM durable_steps WHERE operation_id = ?1),
+    ?3, ?4
+)
+`
+
+type InsertDurableStepParams struct {
+	OperationID string
+	Name        string
+	Result      []byte
+	DoneAtMs    int64
+}
+
+func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepParams) error {
+	_, err := q.db.ExecContext(ctx, insertDurableStep,
+		arg.OperationID,
+		arg.Name,
+		arg.Result,
+		arg.DoneAtMs,
+	)
+	return err
+}
+
 const insertJournal = `-- name: InsertJournal :exec
 INSERT INTO update_journal (
     stack_id, update_id, arrival, blob_key, sha256, md5, size,
@@ -4786,6 +4926,39 @@ func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([
 			&i.DeletedAtMs,
 			&i.PurgeAfterMs,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDurableSteps = `-- name: ListDurableSteps :many
+SELECT name, result, done_at_ms FROM durable_steps WHERE operation_id = ? ORDER BY seq
+`
+
+type ListDurableStepsRow struct {
+	Name     string
+	Result   []byte
+	DoneAtMs int64
+}
+
+func (q *Queries) ListDurableSteps(ctx context.Context, operationID string) ([]ListDurableStepsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listDurableSteps, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDurableStepsRow
+	for rows.Next() {
+		var i ListDurableStepsRow
+		if err := rows.Scan(&i.Name, &i.Result, &i.DoneAtMs); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -7766,6 +7939,47 @@ func (q *Queries) UnitWorkspacesByIDs(ctx context.Context, ids []string) ([]Unit
 		return nil, err
 	}
 	return items, nil
+}
+
+const updateDurableOperation = `-- name: UpdateDurableOperation :exec
+UPDATE durable_operations
+SET state = ?, attempt = ?, expiries = ?, failures = ?, last_error = ?, claim_owner = ?, claim_token = ?,
+    claim_expires_at_ms = ?, cancel_requested = ?, not_before_ms = ?, updated_at_ms = ?
+WHERE id = ?
+`
+
+type UpdateDurableOperationParams struct {
+	State            string
+	Attempt          int64
+	Expiries         int64
+	Failures         int64
+	LastError        string
+	ClaimOwner       sql.NullString
+	ClaimToken       int64
+	ClaimExpiresAtMs sql.NullInt64
+	CancelRequested  bool
+	NotBeforeMs      int64
+	UpdatedAtMs      int64
+	ID               string
+}
+
+// Writes every column that changes after the start of an operation.
+func (q *Queries) UpdateDurableOperation(ctx context.Context, arg UpdateDurableOperationParams) error {
+	_, err := q.db.ExecContext(ctx, updateDurableOperation,
+		arg.State,
+		arg.Attempt,
+		arg.Expiries,
+		arg.Failures,
+		arg.LastError,
+		arg.ClaimOwner,
+		arg.ClaimToken,
+		arg.ClaimExpiresAtMs,
+		arg.CancelRequested,
+		arg.NotBeforeMs,
+		arg.UpdatedAtMs,
+		arg.ID,
+	)
+	return err
 }
 
 const updateGroup = `-- name: UpdateGroup :execrows
