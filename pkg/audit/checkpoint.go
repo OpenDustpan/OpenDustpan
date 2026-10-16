@@ -554,21 +554,20 @@ func (c *Checkpoints) NewEpoch(ctx context.Context, now time.Time) (int64, error
 // ErrCheckpointMismatch, and later checks of the scope fail until a new
 // epoch starts. When the scope failed to match before in this epoch, it
 // signs nothing and answers false and an error that wraps
-// ErrCheckpointMismatch. A bad epoch object also signs nothing and returns
-// an error that wraps ErrCheckpointMismatch. The caller counts such an
-// error as a scope that does not match. When the epoch changes before the
-// store, it stores nothing and answers false and no error.
+// ErrCheckpointMismatch. When the log ends before the newest stored
+// checkpoint, it signs nothing, marks the scope, and answers false and an
+// error that wraps ErrCheckpointMismatch. A bad epoch object also signs
+// nothing and returns an error that wraps ErrCheckpointMismatch. The caller
+// counts such an error as a scope that does not match. When the epoch
+// changes before the store, it stores nothing and answers false and no
+// error.
 func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.Time) (bool, error) {
 	last, found, err := c.entries.LastEntry(ctx, scope)
 	if err != nil {
 		return false, fmt.Errorf("read last audit entry of %s: %w", scope, err)
 	}
 
-	if !found {
-		return false, nil
-	}
-
-	if last.Hash == "" {
+	if !found || last.Hash == "" {
 		return false, nil
 	}
 
@@ -583,57 +582,24 @@ func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.
 		return false, fmt.Errorf("audit checkpoint of %s at %d does not match: %w", scope, seq, ErrCheckpointMismatch)
 	}
 
-	cp := c.signer.Sign(Checkpoint{
-		At:        now,
-		Scope:     scope,
-		Hash:      last.Hash,
-		KeyID:     "",
-		Signature: nil,
-		Sequence:  last.Sequence,
-		Epoch:     epoch,
-	})
-
-	key, err := CheckpointKey(epoch, scope, cp.Sequence)
-	if err != nil {
-		return false, err
+	if headErr := c.checkHead(ctx, gk, epoch, scope, last.Sequence); headErr != nil {
+		return false, headErr
 	}
 
-	raw, err := MarshalCheckpoint(cp)
-	if err != nil {
-		return false, err
-	}
-
-	again, err := c.Epoch(ctx)
-	if err != nil {
-		return false, err
-	}
-
-	if again != epoch {
-		return false, nil
-	}
-
-	err = c.blobs.Put(ctx, key, bytes.NewReader(raw))
-	if errors.Is(err, blob.ErrExists) {
-		return c.keep(ctx, gk, key, last.Hash)
-	}
-
-	if err != nil {
-		return false, fmt.Errorf("store audit checkpoint %s: %w", key, err)
-	}
-
-	return true, nil
+	return c.storeNew(ctx, gk, last, now)
 }
 
 // Verify checks the checkpoints of scope in the current epoch: the newest
-// one in every check, every one newer than the last one that matched, up to
-// MaxNewCheckpoints, and up to CheckpointSample older ones at random. For
-// each it checks the signature, the key, the scope, the sequence and the
-// epoch that its key names, and the hash of the entry at its sequence. A
-// bad epoch object fails the scope with Valid false and BadSequence 0. It
-// also fails when the scope holds no entry or ends before the newest
-// checkpoint, so a cut at the end of the log fails the next check. A scope
-// that failed to match before fails again until a new epoch starts. It
-// answers an error only when it cannot read a checkpoint or an entry.
+// one first in every check, every one newer than the last one that matched,
+// up to MaxNewCheckpoints, and up to CheckpointSample older ones at random.
+// For each it checks the signature, the key, the scope, the sequence and
+// the epoch that its key names, and the hash of the entry at its sequence.
+// A bad epoch object fails the scope with Valid false and BadSequence 0.
+// It also fails when the scope holds no entry or ends before the newest
+// checkpoint, so a cut at the end of the log fails the next check. It fails
+// when stored checkpoints are missing below the last one that matched. A
+// scope that failed to match before fails again until a new epoch starts.
+// It answers an error only when it cannot read a checkpoint or an entry.
 func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (CheckpointResult, error) {
 	result := CheckpointResult{Reason: "", Checked: 0, BadSequence: 0, Valid: true}
 
@@ -661,6 +627,14 @@ func (c *Checkpoints) Verify(ctx context.Context, scope namespace.Name) (Checkpo
 
 	good := c.lastGood(gk)
 	highest, highestKey := highestCheckpoint(objects)
+
+	if highest < good {
+		c.markBad(gk, good)
+
+		return result.fail(good, fmt.Sprintf("checkpoints are missing: newest stored checkpoint is %d, want %d",
+			highest, good)), nil
+	}
+
 	read := withNewest(c.plan(objects, good), highest, highestKey, good)
 
 	var best int64
@@ -781,23 +755,95 @@ func highestCheckpoint(objects []blob.Object) (int64, blob.Key) {
 	return best, key
 }
 
-// withNewest adds the newest checkpoint to the plan, first so a cut at the
-// end fails fast, unless the plan already holds it. The sample alone can
-// miss a cut at the end of the log.
+// withNewest puts the newest checkpoint first in the plan and keeps it
+// once, so a cut at the end fails at the newest sequence.
 func withNewest(plan readPlan, highest int64, key blob.Key, good int64) readPlan {
 	if highest <= 0 {
 		return plan
 	}
 
+	out := readPlan{read: make([]planned, 0, len(plan.read)+1)}
+	out.read = append(out.read, planned{Key: key, newer: highest > good})
+
 	for _, obj := range plan.read {
 		if obj.Key == key {
-			return plan
+			continue
 		}
+
+		out.read = append(out.read, obj)
 	}
 
-	plan.read = append([]planned{{Key: key, newer: highest > good}}, plan.read...)
+	return out
+}
 
-	return plan
+// checkHead fails when the last sequence ends before the newest stored
+// checkpoint of the scope, so a cut below it signs nothing. It marks the
+// scope, so later checks fail until a new epoch starts.
+func (c *Checkpoints) checkHead(
+	ctx context.Context,
+	gk goodKey,
+	epoch int64,
+	scope namespace.Name,
+	seq int64,
+) error {
+	stored, err := c.blobs.List(ctx, checkpointDir(epoch, scope))
+	if err != nil {
+		return fmt.Errorf("list audit checkpoints of %s: %w", scope, err)
+	}
+
+	highest, _ := highestCheckpoint(stored)
+	if seq < highest {
+		c.markBad(gk, highest)
+
+		return fmt.Errorf("audit checkpoint of %s: log ends at %d before checkpoint %d: %w",
+			scope, seq, highest, ErrCheckpointMismatch)
+	}
+
+	return nil
+}
+
+// storeNew signs the hash of last and stores it. When the epoch changes
+// before the store, it stores nothing and answers false and no error.
+func (c *Checkpoints) storeNew(ctx context.Context, gk goodKey, last Entry, now time.Time) (bool, error) {
+	cp := c.signer.Sign(Checkpoint{
+		At:        now,
+		Scope:     gk.scope,
+		Hash:      last.Hash,
+		KeyID:     "",
+		Signature: nil,
+		Sequence:  last.Sequence,
+		Epoch:     gk.epoch,
+	})
+
+	key, err := CheckpointKey(gk.epoch, gk.scope, cp.Sequence)
+	if err != nil {
+		return false, err
+	}
+
+	raw, err := MarshalCheckpoint(cp)
+	if err != nil {
+		return false, err
+	}
+
+	again, err := c.Epoch(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	if again != gk.epoch {
+		return false, nil
+	}
+
+	err = c.blobs.Put(ctx, key, bytes.NewReader(raw))
+	if errors.Is(err, blob.ErrExists) {
+		return c.keep(ctx, gk, key, last.Hash)
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("store audit checkpoint %s: %w", key, err)
+	}
+
+	return true, nil
 }
 
 // checkTail fails when the scope holds no entry or ends before the newest

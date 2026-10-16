@@ -320,6 +320,8 @@ Keep the blob store apart from the database: give the two stores different crede
 If the blob store has object lock, turn it on for the prefix `audit-checkpoints/`.
 An entry is safe from a rewrite only after a checkpoint signs it, so the window is at most one hour.
 A person who can delete checkpoints can hide a rewrite of the entries that came before the next checkpoint.
+The server remembers the newest checkpoint that matched, so a later check finds deleted checkpoints.
+The server forgets this at a restart, so without object lock only later checks find a deletion from before a restart.
 
 ### Epochs
 

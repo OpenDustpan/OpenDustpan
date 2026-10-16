@@ -22,6 +22,9 @@ import (
 // errNoStep is the refusal of stepFreshness.
 var errNoStep = errors.New("no MFA step")
 
+// errRestoreCheck is the failure of the restore check in the tests.
+var errRestoreCheck = errors.New("restore check fails")
+
 // stepFreshness asks for an MFA step that the caller did not pass.
 type stepFreshness struct{}
 
@@ -562,5 +565,56 @@ func TestCheckWritesNoCheckpointWhileRestoreRuns(t *testing.T) {
 
 	if got := checkpointCount(t, blobs); got != 1 {
 		t.Fatalf("checkpoints after the restore: got %d objects, want one", got)
+	}
+}
+
+// TestCheckWritesNoCheckpointWhenRestoreCheckFails proves that when the
+// restore check fails, check writes no checkpoint.
+func TestCheckWritesNoCheckpointWhenRestoreCheckFails(t *testing.T) {
+	t.Parallel()
+
+	chain := newTestAuditChain(t, audit.ChainOn)
+
+	blobs := openTestBlobs(t)
+
+	reader, ok := chain.entries.(audit.EntryReader)
+	if !ok {
+		t.Fatal("audit store reads no single entry")
+	}
+
+	chain.checkpoints = audit.NewCheckpoints(audit.CheckpointsConfig{
+		Blobs:   blobs,
+		Entries: reader,
+		Signer:  newTestCheckpointSigner(t),
+		Now:     nil,
+	})
+	chain.observed = metrics.NewServerMetrics("test", time.Now())
+
+	stored, err := chain.server.AppendServer(t.Context(), pendingTestEntry())
+	if err != nil {
+		t.Fatalf("append server entry: %v", err)
+	}
+
+	if stored.Hash == "" {
+		t.Fatal("server entry: no hash, want the chain on")
+	}
+
+	rec, err := chain.store.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	rec.Pending = false
+
+	if err := chain.store.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	chain.restoreRunning = func(context.Context) (bool, error) { return false, errRestoreCheck }
+
+	chain.check(t.Context())
+
+	if got := checkpointCount(t, blobs); got != 0 {
+		t.Fatalf("checkpoints when the restore check fails: got %d objects, want none", got)
 	}
 }

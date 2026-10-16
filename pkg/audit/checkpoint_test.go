@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
@@ -300,10 +301,50 @@ func TestCheckpointsFindACutAtTheEnd(t *testing.T) {
 
 		f.entries.entries = f.entries.entries[:total-5]
 
-		// The sample can hold a cut checkpoint before the newest one, so
-		// the check may report any sequence of the cut.
-		if got := verifyWith(t, f.cps); got.Valid || got.BadSequence <= total-5 || got.BadSequence > total {
-			t.Fatalf("run %d: verify after the cut: got %+v, want invalid in %d..%d", run, got, total-4, total)
+		if got := verifyWith(t, f.cps); got.Valid || got.BadSequence != total {
+			t.Fatalf("run %d: verify after the cut: got %+v, want invalid at %d", run, got, total)
+		}
+	}
+}
+
+func TestCheckpointsReadNewestFirst(t *testing.T) {
+	t.Parallel()
+
+	const (
+		total = 200
+		runs  = 20
+	)
+
+	// Each run starts fresh, so no mismatch from an earlier run sticks and
+	// every run depends on the read of the newest checkpoint alone. The
+	// tail keeps its length, so only the newest hash shows the rewrite.
+	for run := range runs {
+		f := newCheckpointFixture(t, 0)
+
+		for range total {
+			f.entries.add()
+
+			if !f.write(t) {
+				t.Fatal("write: no checkpoint written")
+			}
+		}
+
+		if got := f.verify(t); !got.Valid {
+			t.Fatalf("run %d: verify before the rewrite: got %+v, want valid", run, got)
+		}
+
+		f.entries.entries = f.entries.entries[:total-5]
+
+		for range 5 {
+			f.entries.add()
+
+			last := &f.entries.entries[len(f.entries.entries)-1]
+			last.Subject = "mallory"
+			last.Hash = audit.ComputeHash(*last, last.PrevHash)
+		}
+
+		if got := verifyWith(t, f.cps); got.Valid || got.BadSequence != total {
+			t.Fatalf("run %d: verify after the rewrite: got %+v, want invalid at %d", run, got, total)
 		}
 	}
 }
@@ -346,6 +387,90 @@ func TestCheckpointsWriteFindsReusedSequences(t *testing.T) {
 
 	if got := f.verify(t); got.Valid {
 		t.Fatalf("verify after reused sequences: got %+v, want invalid", got)
+	}
+}
+
+func TestCheckpointsFindADeletedNewestCheckpoint(t *testing.T) {
+	t.Parallel()
+
+	f := newCheckpointFixture(t, 3)
+	f.write(t)
+
+	if got := f.verify(t); !got.Valid {
+		t.Fatalf("verify before the deletion: got %+v, want valid", got)
+	}
+
+	if err := f.blobs.Delete(t.Context(), key(t, 0, 3)); err != nil {
+		t.Fatalf("delete newest checkpoint: %v", err)
+	}
+
+	f.entries.entries = f.entries.entries[:2]
+
+	if got := f.verify(t); got.Valid || got.BadSequence != 3 {
+		t.Fatalf("verify after the deletion: got %+v, want invalid at 3", got)
+	}
+}
+
+func TestCheckpointsFindDeletedCheckpoints(t *testing.T) {
+	t.Parallel()
+
+	const total = 5
+
+	f := newCheckpointFixture(t, 0)
+
+	for range total {
+		f.entries.add()
+
+		if !f.write(t) {
+			t.Fatal("write: no checkpoint written")
+		}
+	}
+
+	if got := f.verify(t); !got.Valid {
+		t.Fatalf("verify before the deletion: got %+v, want valid", got)
+	}
+
+	for seq := 1; seq <= total; seq++ {
+		if err := f.blobs.Delete(t.Context(), key(t, 0, int64(seq))); err != nil {
+			t.Fatalf("delete checkpoint %d: %v", seq, err)
+		}
+	}
+
+	if got := f.verify(t); got.Valid || got.BadSequence != total {
+		t.Fatalf("verify after the deletion: got %+v, want invalid at %d", got, total)
+	}
+}
+
+func TestCheckpointsWriteRefusesACutBelowNewest(t *testing.T) {
+	t.Parallel()
+
+	const total = 5
+
+	f := newCheckpointFixture(t, 0)
+
+	for range total {
+		f.entries.add()
+
+		if !f.write(t) {
+			t.Fatal("write: no checkpoint written")
+		}
+	}
+
+	before := checkpointObjects(t, f.blobs)
+
+	f.entries.entries = f.entries.entries[:total-2]
+
+	wrote, err := f.cps.Write(t.Context(), "acme", time.Unix(1_700_000_100, 0))
+	if !errors.Is(err, audit.ErrCheckpointMismatch) {
+		t.Fatalf("write below the newest checkpoint: got %v, %v, want ErrCheckpointMismatch", wrote, err)
+	}
+
+	if wrote {
+		t.Fatal("write below the newest checkpoint: wrote a checkpoint")
+	}
+
+	if got := checkpointObjects(t, f.blobs); got != before {
+		t.Fatalf("checkpoints after the refused write: got %d objects, want %d", got, before)
 	}
 }
 
@@ -634,6 +759,41 @@ func TestCheckpointsRefuseForgedEpochObjects(t *testing.T) {
 		return raw
 	}
 
+	realID := newSigner(t, 7).KeyID()
+
+	missingSig := []byte(fmt.Sprintf(`{"at":"2026-10-15T12:00:00.123Z","keyID":%q,"epoch":1}`, realID))
+
+	zeroRec := audit.EpochRecord{
+		At:        at,
+		KeyID:     realID,
+		Signature: make([]byte, 64),
+		Epoch:     1,
+	}
+
+	zeroRaw, err := audit.MarshalEpoch(zeroRec)
+	if err != nil {
+		t.Fatalf("marshal zero signature epoch: %v", err)
+	}
+
+	signedTwo := newSigner(t, 7).SignEpoch(audit.EpochRecord{
+		At:        at,
+		KeyID:     "",
+		Signature: nil,
+		Epoch:     2,
+	})
+
+	wrongRec := audit.EpochRecord{
+		At:        at,
+		KeyID:     realID,
+		Signature: signedTwo.Signature,
+		Epoch:     1,
+	}
+
+	wrongRaw, err := audit.MarshalEpoch(wrongRec)
+	if err != nil {
+		t.Fatalf("marshal wrong signature epoch: %v", err)
+	}
+
 	cases := []struct {
 		raw  []byte
 		name string
@@ -641,6 +801,9 @@ func TestCheckpointsRefuseForgedEpochObjects(t *testing.T) {
 		{name: "unsigned body", raw: []byte(`{"at":"2026-10-15T12:00:00.123Z"}`)},
 		{name: "another key", raw: signedBy(t, 9, 1)},
 		{name: "number differs from key", raw: signedBy(t, 7, 2)},
+		{name: "missing signature", raw: missingSig},
+		{name: "zero signature", raw: zeroRaw},
+		{name: "signature of another message", raw: wrongRaw},
 	}
 
 	for _, tc := range cases {
