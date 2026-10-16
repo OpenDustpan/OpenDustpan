@@ -95,6 +95,9 @@ type envInput struct {
 	// ipAllowlists turns IP allowlists on for the server and applies them to
 	// the bootstrap admin token too.
 	ipAllowlists bool
+	// signIn turns on the console sign-in through a test OpenID provider.
+	// Only the in-process mode serves it.
+	signIn bool
 }
 
 // backendConfig groups the settings of one backend process.
@@ -990,6 +993,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		backendLogs:   handle.logs,
 		certBundle:    "",
 		dbProxy:       dbProxy,
+		signIn:        nil,
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)

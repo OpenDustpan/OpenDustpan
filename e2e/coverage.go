@@ -785,12 +785,13 @@ func coverageServerRoutes(tb testing.TB) []RouteRef {
 		AuditSinks:     nil,
 		IPAllowlists:   coverageIPAllowlists(tb),
 		SessionPolicy:  coverageSessionPolicies(tb),
+		SignIn:         nil,
 	})
 	if err != nil {
 		tb.Fatalf("server handler: %v", err)
 	}
 
-	return serverRefs(handler.Routes())
+	return append(serverRefs(handler.Routes()), coverageSignInRoutes(tb)...)
 }
 
 // routeRefs formats one adapter's table as method and path pairs. Each
@@ -888,6 +889,7 @@ func CoverageAllowlist() []AllowEntry {
 		tokenAllowEntries(),
 		tokenPolicyAllowEntries(),
 		sessionPolicyAllowEntries(),
+		signInAllowEntries(),
 		ipAllowlistAllowEntries(),
 		delegationAllowEntries(),
 		namespacePrincipalAllowEntries(),
@@ -1147,6 +1149,30 @@ func tokenPolicyAllowEntries() []AllowEntry {
 	for _, r := range routes {
 		out = append(out, AllowEntry{
 			Method: r.method, Path: r.path, CoveringTest: "TestTokenPolicy", Reason: reason,
+		})
+	}
+
+	return out
+}
+
+// signInAllowEntries returns the console sign-in routes. The steps of
+// TestSignIn drive each one in the browser flow against a test OpenID
+// provider, on each store.
+func signInAllowEntries() []AllowEntry {
+	reason := "Console route: no CLI signs in through a browser. " +
+		"The harness plays the browser with a cookie jar against a test OpenID provider and checks each answer."
+
+	routes := []struct{ method, path string }{
+		{http.MethodGet, "/api/server/sign-in/{provider}"},
+		{http.MethodGet, "/api/server/sign-in/{provider}/callback"},
+		{http.MethodGet, "/api/server/session"},
+		{http.MethodPost, "/api/server/sign-out"},
+	}
+
+	out := make([]AllowEntry, 0, len(routes))
+	for _, r := range routes {
+		out = append(out, AllowEntry{
+			Method: r.method, Path: r.path, CoveringTest: "TestSignIn", Reason: reason,
 		})
 	}
 

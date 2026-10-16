@@ -184,6 +184,8 @@ type Env struct {
 	binPath string
 	// backupDir is the backup target directory of the in-process server.
 	backupDir string
+	// signIn is the console sign-in of an env from NewEnvWithSignIn, or nil.
+	signIn *signInSetup
 	// backendCfg holds the database URL, blob directory, certificate and
 	// key files and tokens of the binary backend.
 	backendCfg backendConfig
@@ -261,6 +263,7 @@ func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, st
 		deltaCutoff:       0,
 		disableJournaling: true,
 		ipAllowlists:      false,
+		signIn:            false,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -291,6 +294,7 @@ func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, sto
 		deltaCutoff:       0,
 		disableJournaling: false,
 		ipAllowlists:      true,
+		signIn:            false,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -321,6 +325,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		deltaCutoff:       cutoff,
 		disableJournaling: false,
 		ipAllowlists:      false,
+		signIn:            false,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -337,13 +342,27 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 	return newInprocessEnv(ctx, in)
 }
 
-// newInprocessEnv starts an in-process server for cli and returns the
-// environment.
-func newInprocessEnv(ctx context.Context, in envInput) *Env {
+// startInprocessServer builds the in-process server of in and starts it.
+// The handler is set before the server starts. The listener exists
+// already, so the sign-in knows its public URL before the build.
+func startInprocessServer(
+	ctx context.Context,
+	in envInput,
+	member string,
+) (*httptest.Server, serverBuild, *signInSetup) {
 	tb := in.tb
 	tb.Helper()
 
-	member := newToken(tb)
+	var handler http.Handler
+
+	ts := httptest.NewUnstartedServer(in.rec.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handler.ServeHTTP(w, r)
+	})))
+
+	var signIn *signInSetup
+	if in.signIn {
+		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String())
+	}
 
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
@@ -352,14 +371,29 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		deltaCutoff:       in.deltaCutoff,
 		disableJournaling: in.disableJournaling,
 		ipAllowlists:      in.ipAllowlists,
+		signIn:            signIn,
 	})
 
-	ts := httptest.NewUnstartedServer(in.rec.Middleware(build.handler))
-	if in.cli.Tool == ToolTofu {
+	handler = build.handler
+
+	if in.cli.Tool == ToolTofu || in.signIn {
 		ts.StartTLS()
 	} else {
 		ts.Start()
 	}
+
+	return ts, build, signIn
+}
+
+// newInprocessEnv starts an in-process server for cli and returns the
+// environment.
+func newInprocessEnv(ctx context.Context, in envInput) *Env {
+	tb := in.tb
+	tb.Helper()
+
+	member := newToken(tb)
+
+	ts, build, signIn := startInprocessServer(ctx, in, member)
 
 	tb.Cleanup(ts.Close)
 
@@ -384,7 +418,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		project:       filepath.Join(in.dir, "project"),
 		remoteProject: "",
 		steps:         nil,
-		tls:           in.cli.Tool == ToolTofu,
+		tls:           in.cli.Tool == ToolTofu || in.signIn,
 		binPath:       "",
 		backendCfg:    backendConfig{}, //nolint:exhaustruct_v5 // The in-process mode has no binary backend.
 		backendPort:   "",
@@ -392,6 +426,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		backendLogs:   nil,
 		certBundle:    "",
 		dbProxy:       build.dbProxy,
+		signIn:        signIn,
 		backupDir:     build.backupDir,
 	}
 
@@ -485,6 +520,9 @@ type serverArgs struct {
 	// ipAllowlists turns IP allowlists on for the in-process server and
 	// applies them to the bootstrap admin token too.
 	ipAllowlists bool
+	// signIn turns on the console sign-in of the in-process server, or is
+	// nil.
+	signIn *signInSetup
 }
 
 // ipAllowlistOptions adds the IP allowlist options to opts when args turns
@@ -539,7 +577,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	workspaces := newWorkspaceService(tb, st, blobs, namespaces)
 	target, targetName := openBackupTarget(tb, args.dbPath)
 
-	srv, err := dustpan.NewServer(ipAllowlistOptions(
+	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
 		st,
 		args,
 		[]dustpan.Option{
@@ -560,7 +598,7 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 			dustpan.WithCheckpointDeltaCutoff(args.deltaCutoff),
 			dustpan.WithDisablePulumiJournaling(args.disableJournaling),
 		},
-	)...)
+	), args.signIn.options()...)...)
 	if err != nil {
 		tb.Fatalf("new server: %v", err)
 	}

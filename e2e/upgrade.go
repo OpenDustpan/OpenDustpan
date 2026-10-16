@@ -163,6 +163,7 @@ func NewEnvWithBinary(ctx context.Context, tb testing.TB, cli Install, store Sto
 		deltaCutoff:       0,
 		disableJournaling: false,
 		ipAllowlists:      false,
+		signIn:            false,
 	}
 
 	return newBinaryEnvWithBin(ctx, in, binPath)
@@ -264,6 +265,7 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		backendLogs:   handle.logs,
 		certBundle:    "",
 		dbProxy:       nil,
+		signIn:        nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {
