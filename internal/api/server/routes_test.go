@@ -66,11 +66,11 @@ func publicPatterns() []string {
 // authorization URL goes nowhere, and every callback fails.
 type stubOIDC struct{}
 
-func (stubOIDC) Begin(opts oauth.Options) (string, oauth.Pending) {
+func (stubOIDC) Begin(_ context.Context, opts oauth.Options) (string, oauth.Pending, error) {
 	return "https://idp.example/authorize?state=" + opts.State, oauth.Pending{
 		State: opts.State, Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43), MaxAge: 0,
 		HasMaxAge: false,
-	}
+	}, nil
 }
 
 func (stubOIDC) Finish(context.Context, string, oauth.Pending) (oauth.Identity, error) {

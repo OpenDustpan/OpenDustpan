@@ -61,6 +61,7 @@ const (
 // Errors of the sign-in routes.
 var (
 	errUnknownProvider = errors.New("unknown sign-in provider")
+	errProviderDown    = errors.New("identity provider is not available: try again later")
 	errReturnPath      = errors.New("return path is not a path of this server")
 	errSignInFailed    = errors.New("sign-in failed: start the sign-in again")
 	errSignInRefused   = fmt.Errorf("%w: sign-in refused", identity.ErrDenied)
@@ -71,11 +72,13 @@ var (
 		identity.ErrDenied)
 )
 
-// OIDCClient is the client of one OpenID Connect provider. *oauth.Client
+// OIDCClient is the client of one OpenID Connect provider. *oauth.Lazy
 // meets it.
 type OIDCClient interface {
-	// Begin returns the authorization URL and the pending request.
-	Begin(opts oauth.Options) (string, oauth.Pending)
+	// Begin returns the authorization URL and the pending request. It
+	// returns an error that wraps oauth.ErrProvider when the provider
+	// cannot be reached.
+	Begin(ctx context.Context, opts oauth.Options) (string, oauth.Pending, error)
 	// Finish exchanges the code and checks the ID token against p.
 	Finish(ctx context.Context, code string, p oauth.Pending) (oauth.Identity, error)
 }
@@ -229,7 +232,17 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 		return
 	}
 
-	authURL, pending := provider.Client.Begin(oauth.Options{State: state.Reveal(), MaxAge: 0, HasMaxAge: false})
+	authURL, pending, err := provider.Client.Begin(
+		ctx,
+		oauth.Options{State: state.Reveal(), MaxAge: 0, HasMaxAge: false},
+	)
+	if err != nil {
+		h.logger.WarnContext(ctx, "identity provider not available", slog.String("provider", provider.ID),
+			slog.String("error", err.Error()))
+		h.writeError(ctx, w, errProviderDown)
+
+		return
+	}
 
 	err = h.signIn.sessions.BeginRequest(ctx, session.Begin{
 		State: state, Provider: provider.ID, Nonce: pending.Nonce, Verifier: pending.Verifier, ReturnPath: returnPath,
@@ -677,6 +690,8 @@ func classifySignIn(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, errUnknownProvider):
 		return http.StatusNotFound, errUnknownProvider.Error(), true
+	case errors.Is(err, errProviderDown):
+		return http.StatusBadGateway, errProviderDown.Error(), true
 	case errors.Is(err, errReturnPath):
 		return http.StatusBadRequest, errReturnPath.Error(), true
 	case errors.Is(err, errSignInFailed):

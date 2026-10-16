@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/oauth"
@@ -92,7 +93,7 @@ func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 		Algorithm: oauthtest.RS256, User: alice(), Mode: oauthtest.ModeOIDC, Faults: noFaults, TLS: true,
 	})
 
-	client, err := oauth.New(t.Context(), oauth.Config{
+	client, err := oauth.NewLazy(oauth.Config{
 		HTTPClient: idp.Client(), Now: nil, Issuer: idp.Issuer(), ClientID: "dustpan",
 		ClientSecret: "client-secret-for-tests", RedirectURL: signInCallback, Scopes: []string{"profile", "email"},
 	})
@@ -667,5 +668,74 @@ func TestSignInSessionCookieOnlyForSignIn(t *testing.T) {
 	}
 	if rec := e.get(t, "/api/server/namespaces", bad); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("GET namespaces with an unknown session = %d, want 401", rec.Code)
+	}
+}
+
+// downOIDC is a provider that cannot be reached.
+type downOIDC struct{}
+
+func (downOIDC) Begin(context.Context, oauth.Options) (string, oauth.Pending, error) {
+	return "", oauth.Pending{State: "", Nonce: "", Verifier: "", MaxAge: 0, HasMaxAge: false}, oauth.ErrProvider
+}
+
+func (downOIDC) Finish(context.Context, string, oauth.Pending) (oauth.Identity, error) {
+	return oauth.Identity{AuthTime: time.Time{}, Subject: "", Name: "", PreferredUsername: "", Email: ""},
+		oauth.ErrProvider
+}
+
+func TestSignInProviderDown(t *testing.T) {
+	t.Parallel()
+
+	st := openRouteTestStore(t)
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	policies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: nil})
+	if err != nil {
+		t.Fatalf("session policies: %v", err)
+	}
+
+	sessions, err := session.NewSessions(session.SessionsConfig{Store: st, Policies: policies, Now: nil})
+	if err != nil {
+		t.Fatalf("sessions: %v", err)
+	}
+
+	principals, err := principal.NewService(principal.Config{
+		Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("principals: %v", err)
+	}
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Authenticator: tokenAuthenticator{}, Authorizer: selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger: slog.New(slog.DiscardHandler), Namespaces: namespaces, Backups: nil, Restores: nil,
+		Maintenance: newFakeMaintenance(maintenance.StateNormal), Metrics: stubMetrics{}, Version: "test",
+		Schema: st, Journal: st, Principals: principals, Tokens: nil, Access: nil, Audit: st,
+		OnAuditFailure: nil, DeletedUnits: stubSweeper{}, AuditSinks: nil, IPAllowlists: nil, SessionPolicy: policies,
+		SignIn: &apiserver.SignIn{
+			Sessions: sessions,
+			Limiter:  nil,
+			Origins:  nil,
+			Providers: []apiserver.SignInProvider{
+				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(
+		rec,
+		httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/server/sign-in/corp", http.NoBody),
+	)
+
+	if rec.Code != http.StatusBadGateway || cookieOf(rec, apiserver.SignInCookie) != nil {
+		t.Fatalf("start with the provider down = %d, want 502 with no cookie: %s", rec.Code, rec.Body.String())
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -857,5 +858,60 @@ func TestBeginWithState(t *testing.T) {
 
 	if got := u.Query().Get("state"); got != state || pending.State != state {
 		t.Fatalf("state = %q, pending %q; want %q", got, pending.State, state)
+	}
+}
+
+func TestLazyReadsDiscoveryAtFirstUse(t *testing.T) {
+	t.Parallel()
+
+	var ready atomic.Bool
+
+	inner := discoveryServer(t, discoveryDoc)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !ready.Load() {
+			http.Error(w, "down", http.StatusServiceUnavailable)
+
+			return
+		}
+
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+
+	// The discovery of inner names inner as the issuer: serve it under the
+	// URL of srv instead.
+	inner.URL = srv.URL
+
+	lazy, err := oauth.NewLazy(oauth.Config{
+		HTTPClient: srv.Client(), Now: nil, Issuer: srv.URL, ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+	if err != nil {
+		t.Fatalf("NewLazy: %v", err)
+	}
+
+	opts := oauth.Options{State: "", MaxAge: 0, HasMaxAge: false}
+
+	if _, _, downErr := lazy.Begin(t.Context(), opts); !errors.Is(downErr, oauth.ErrProvider) {
+		t.Fatalf("Begin with the provider down = %v, want ErrProvider", downErr)
+	}
+
+	ready.Store(true)
+
+	authURL, pending, err := lazy.Begin(t.Context(), opts)
+	if err != nil || pending.State == "" || !strings.HasPrefix(authURL, srv.URL+"/authorize?") {
+		t.Fatalf("Begin with the provider up = %q, %+v, %v", authURL, pending, err)
+	}
+}
+
+func TestNewLazyRefusesConfig(t *testing.T) {
+	t.Parallel()
+
+	_, err := oauth.NewLazy(oauth.Config{
+		HTTPClient: nil, Now: nil, Issuer: "http://idp.example", ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+	if !errors.Is(err, oauth.ErrConfig) {
+		t.Fatalf("NewLazy error = %v, want ErrConfig", err)
 	}
 }
