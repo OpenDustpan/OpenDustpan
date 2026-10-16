@@ -188,6 +188,7 @@ type Principal struct {
 	LastActiveAtMs int64
 	LastSignInAtMs sql.NullInt64
 	Namespace      string
+	BreakGlass     bool
 }
 
 type PrincipalGroup struct {

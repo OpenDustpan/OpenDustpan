@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -39,7 +40,8 @@ const (
 )
 
 // Directory is what the service reads of the principals and groups, to check
-// the subject of a grant. principal.Store meets it.
+// the subject of a grant and to list the service principals in a group for
+// the audit entry of a grant to the group. principal.Store meets it.
 type Directory interface {
 	// GetPrincipal returns the principal with the ID id, or
 	// principal.ErrNotFound.
@@ -49,6 +51,9 @@ type Directory interface {
 	GetPrincipalBySubject(ctx context.Context, subject string) (principal.Principal, error)
 	// GetGroup returns the group with the ID id, or principal.ErrNotFound.
 	GetGroup(ctx context.Context, id string) (principal.Group, error)
+	// ListMembers returns the members of the group groupID, ordered by
+	// subject, or principal.ErrNotFound when the group does not exist.
+	ListMembers(ctx context.Context, groupID string, q principal.Query) ([]principal.Member, int64, error)
 }
 
 // Namespaces is what the service reads of the namespaces: one namespace, so
@@ -317,7 +322,11 @@ type GrantInput struct {
 // The audit entry of a grant to a service principal names, in the change
 // "tokenManagers", every holder of principal:manage-tokens on that
 // principal: each of them can act as the principal, with the new grant
-// too.
+// too. The audit entry of a grant to a group names, in one change
+// "tokenManagers", the same list for each service principal that is a
+// member of the group, as one line per principal in the form
+// "<principal ID>: <holder>, <holder>", with the lines sorted by principal
+// ID.
 func (s *Service) Grant(ctx context.Context, e audit.Entry, granter identity.Principal, in GrantInput) (Grant, error) {
 	role, err := s.GetRole(ctx, in.Role)
 	if err != nil {
@@ -858,6 +867,121 @@ func (s *Service) checkDelegationGranter(ctx context.Context, granter identity.P
 	return err
 }
 
+// servicePrincipalsOfGroup returns the sorted IDs of the service
+// principals that are members of the group groupID. It returns
+// principal.ErrNotFound when the group does not exist.
+func (s *Service) servicePrincipalsOfGroup(ctx context.Context, groupID string) ([]string, error) {
+	var out []string
+
+	after := ""
+
+	for {
+		members, _, err := s.directory.ListMembers(
+			ctx,
+			groupID,
+			principal.Query{After: after, Low: "", High: "", Limit: principal.MaxLimit},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("list members of group %q: %w", groupID, err)
+		}
+
+		for i := range members {
+			if members[i].Principal.Kind == principal.KindService {
+				out = append(out, members[i].Principal.ID)
+			}
+		}
+
+		if len(members) < principal.MaxLimit {
+			break
+		}
+
+		after = members[len(members)-1].Principal.Subject
+	}
+
+	slices.Sort(out)
+
+	return out, nil
+}
+
+// installationTokenHolders returns the sorted holders of
+// principal:manage-tokens on the installation: the subjects of the bootstrap
+// admin tokens and of the current grants on the installation with a role
+// that holds the action.
+func (s *Service) installationTokenHolders(ctx context.Context) ([]string, error) {
+	roles, err := s.authz.rolesWith(ctx, identity.ActionPrincipalManageTokens)
+	if err != nil {
+		return nil, err
+	}
+
+	want := make(map[string]bool, len(roles))
+	for _, r := range roles {
+		want[r] = true
+	}
+
+	seen := make(map[string]bool, len(s.bootstrap))
+	for _, b := range s.bootstrap {
+		seen[b] = true
+	}
+
+	afterSubject, afterRole := "", ""
+
+	for {
+		listed, _, err := s.store.ListGrantsOn(ctx, identity.ServerObject(), GrantQuery{
+			AfterSubject: afterSubject, AfterRole: afterRole, Subject: "", Role: "", Limit: MaxLimit,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list grants on %q: %w", identity.ServerObject().String(), err)
+		}
+
+		for i := range listed {
+			if want[listed[i].Grant.Role] {
+				seen[listed[i].Grant.Subject.String()] = true
+			}
+		}
+
+		if len(listed) < MaxLimit {
+			break
+		}
+
+		last := listed[len(listed)-1].Grant
+		afterSubject, afterRole = last.Subject.String(), last.Role
+	}
+
+	return slices.Sorted(maps.Keys(seen)), nil
+}
+
+// directTokenHolders returns the subjects of the current grants on the
+// service principal with the ID id. Every grant on a service principal holds
+// principal:manage-tokens, so every subject is a holder.
+func (s *Service) directTokenHolders(ctx context.Context, id string) ([]string, error) {
+	obj := identity.PrincipalObject(id)
+	var out []string
+
+	afterSubject, afterRole := "", ""
+
+	for {
+		listed, _, err := s.store.ListGrantsOn(ctx, obj, GrantQuery{
+			AfterSubject: afterSubject, AfterRole: afterRole, Subject: "", Role: "", Limit: MaxLimit,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("list grants on %q: %w", obj.String(), err)
+		}
+
+		for i := range listed {
+			out = append(out, listed[i].Grant.Subject.String())
+		}
+
+		if len(listed) < MaxLimit {
+			break
+		}
+
+		last := listed[len(listed)-1].Grant
+		afterSubject, afterRole = last.Subject.String(), last.Role
+	}
+
+	return out, nil
+}
+
 // checkNamespaceTokenGranter refuses a role with
 // namespace:manage-principal-tokens unless granter holds every data action
 // on the namespace of obj, or server:manage-access on the installation. A
@@ -907,31 +1031,101 @@ func (s *Service) checkNamespaceTokenGranter(
 
 // withTokenManagers returns e with the change "tokenManagers" when subject
 // is a service principal: the sorted holders of principal:manage-tokens on
-// it. It returns e as it is for any other subject.
+// it. When subject is a group, it returns e with one change "tokenManagers"
+// that lists each service principal member and its holders, as lines sorted
+// by principal ID, one line per principal in the form
+// "<principal ID>: <holder>, <holder>". It returns e as it is for any other
+// subject.
 func (s *Service) withTokenManagers(ctx context.Context, e audit.Entry, subject Subject) (audit.Entry, error) {
-	if subject.Kind != SubjectPrincipal {
+	switch subject.Kind {
+	case SubjectPrincipal:
+		p, err := s.directory.GetPrincipal(ctx, subject.ID)
+		if err != nil {
+			return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
+		}
+
+		if p.Kind != principal.KindService {
+			return e, nil
+		}
+
+		holders, err := s.TokenManagers(ctx, p.ID)
+		if err != nil {
+			return e, err
+		}
+
+		e.Changes = append(slices.Clone(e.Changes), audit.Change{
+			Key: "tokenManagers", Old: nil, New: strings.Join(holders, ", "), Layer: "", TakesEffect: "",
+		})
+
+		return e, nil
+	case SubjectGroup:
+		return s.groupTokenManagers(ctx, e, subject)
+	default:
 		return e, nil
 	}
+}
 
-	p, err := s.directory.GetPrincipal(ctx, subject.ID)
+// groupTokenManagers returns e with one change "tokenManagers" that lists
+// each service principal member of subject and its holders, as lines sorted
+// by principal ID, one line per principal in the form
+// "<principal ID>: <holder>, <holder>". It returns e as it is when the
+// group has no service principal members.
+func (s *Service) groupTokenManagers(
+	ctx context.Context, e audit.Entry, subject Subject,
+) (audit.Entry, error) {
+	ids, err := s.servicePrincipalsOfGroup(ctx, subject.ID)
 	if err != nil {
 		return e, fmt.Errorf("grant subject %s: %w", subject.String(), err)
 	}
 
-	if p.Kind != principal.KindService {
+	if len(ids) == 0 {
 		return e, nil
 	}
 
-	holders, err := s.TokenManagers(ctx, p.ID)
+	installation, err := s.installationTokenHolders(ctx)
 	if err != nil {
 		return e, err
 	}
 
-	e.Changes = append(slices.Clone(e.Changes), audit.Change{
-		Key: "tokenManagers", Old: nil, New: strings.Join(holders, ", "), Layer: "", TakesEffect: "",
+	base := slices.Clone(e.Changes)
+	lines := make([]string, 0, len(ids))
+
+	for _, id := range ids {
+		holders, err := s.tokenHoldersOf(ctx, installation, id)
+		if err != nil {
+			return e, err
+		}
+
+		lines = append(lines, id+": "+strings.Join(holders, ", "))
+	}
+
+	base = append(base, audit.Change{
+		Key: "tokenManagers", Old: nil, New: strings.Join(lines, "\n"), Layer: "", TakesEffect: "",
 	})
+	e.Changes = base
 
 	return e, nil
+}
+
+// tokenHoldersOf returns the sorted union of installation and the direct
+// holders of principal:manage-tokens on the service principal with the ID
+// id.
+func (s *Service) tokenHoldersOf(ctx context.Context, installation []string, id string) ([]string, error) {
+	direct, err := s.directTokenHolders(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool, len(installation)+len(direct))
+	for _, h := range installation {
+		seen[h] = true
+	}
+
+	for _, h := range direct {
+		seen[h] = true
+	}
+
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 // fenceOf returns the fence of the namespace of obj, or the zero fence for

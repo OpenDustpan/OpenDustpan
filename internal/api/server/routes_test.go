@@ -279,8 +279,17 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	at := time.Now().UTC().Truncate(time.Millisecond)
 
 	caller := principal.Principal{
-		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testCallerID, Subject: "tester",
-		DisplayName: "Tester", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          testCallerID,
+		Subject:     "tester",
+		DisplayName: "Tester",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
 	}
 	if err := st.CreatePrincipal(ctx, caller, storetest.ServerChange(at, principal.Ref(testCallerID))); err != nil {
 		t.Fatalf("seed caller: %v", err)
@@ -459,7 +468,7 @@ func seedNamespacePrincipal(t *testing.T, st *sqlite.Store, at time.Time) {
 	p := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: testNamespacePrincipalID, Subject: "ci-routes",
 		DisplayName: "CI routes", Kind: principal.KindService, Source: principal.SourceLocal,
-		Namespace: testNamespace, GroupCount: 0,
+		Namespace: testNamespace, GroupCount: 0, BreakGlass: false,
 	}
 
 	fence, e := storetest.GrantWrite(t, st, identity.NamespaceObject(testNamespace), at, principal.Ref(p.ID))
@@ -485,7 +494,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 			Kind:        principal.KindPerson,
 			Source:      principal.SourceLocal,
 			Namespace:   "",
-			GroupCount:  0,
+			GroupCount:  0, BreakGlass: false,
 		},
 		{
 			CreatedAt:   at,
@@ -497,7 +506,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 			Kind:        principal.KindService,
 			Source:      principal.SourceLocal,
 			Namespace:   "",
-			GroupCount:  0,
+			GroupCount:  0, BreakGlass: false,
 		},
 	}
 	for i := range seeds {
@@ -522,7 +531,9 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 
 	seedNamespacePrincipal(t, st, at)
 
-	svc, err := principal.NewService(principal.Config{Store: st, Guard: nil, Namespaces: st, Now: nil, NewID: nil})
+	svc, err := principal.NewService(principal.Config{
+		Store: st, Guard: nil, Namespaces: st, Tokens: nil, Now: nil, NewID: nil,
+	})
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}

@@ -45,7 +45,7 @@ func (s *Service) CreateNamespacePrincipal(
 	p := Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: s.newID(principalIDPrefix),
 		Subject: in.Subject, DisplayName: displayName, Kind: KindService, Source: SourceLocal,
-		Namespace: ns, GroupCount: 0,
+		Namespace: ns, GroupCount: 0, BreakGlass: false,
 	}
 
 	if validErr := p.Validate(); validErr != nil {

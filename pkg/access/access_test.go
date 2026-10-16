@@ -108,9 +108,17 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 	tb.Helper()
 
 	err := f.store.CreatePrincipal(tb.Context(), principal.Principal{
-		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
-		DisabledAt: time.Time{},
+		CreatedAt:   time.Unix(0, 0),
+		UpdatedAt:   time.Unix(0, 0),
+		ID:          "prn-" + subject,
+		Subject:     subject,
+		DisplayName: "",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
+		DisabledAt:  time.Time{},
 	}, storetest.ServerChange(time.Unix(0, 0), "principal:prn-"+subject))
 	if err != nil {
 		tb.Fatalf("create principal %q: %v", subject, err)
@@ -1124,7 +1132,7 @@ func (f *fixture) namespaceBot(tb testing.TB, id, subject string, ns namespace.N
 	p := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: id, Subject: subject,
 		DisplayName: subject, Kind: principal.KindService, Source: principal.SourceLocal,
-		Namespace: ns, GroupCount: 0,
+		Namespace: ns, GroupCount: 0, BreakGlass: false,
 	}
 
 	fence, e := storetest.GrantWrite(tb, f.store, identity.NamespaceObject(ns), at, principal.Ref(id))
@@ -1141,7 +1149,7 @@ func (f *fixture) installationService(tb testing.TB, id, subject string) {
 	p := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: id, Subject: subject,
 		DisplayName: subject, Kind: principal.KindService, Source: principal.SourceLocal,
-		Namespace: "", GroupCount: 0,
+		Namespace: "", GroupCount: 0, BreakGlass: false,
 	}
 
 	if err := f.store.CreatePrincipal(tb.Context(), p, storetest.ServerChange(at, principal.Ref(id))); err != nil {

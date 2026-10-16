@@ -33,8 +33,8 @@ func testListGrantHolders(t *testing.T, s access.Store) {
 			Kind:        principal.KindPerson,
 			Source:      principal.SourceLocal,
 			Namespace:   "",
-			GroupCount:  0,
-			DisabledAt:  time.Time{},
+			GroupCount:  0, BreakGlass: false,
+			DisabledAt: time.Time{},
 		},
 		{
 			CreatedAt:   at(0),
@@ -45,8 +45,8 @@ func testListGrantHolders(t *testing.T, s access.Store) {
 			Kind:        principal.KindService,
 			Source:      principal.SourceLocal,
 			Namespace:   "",
-			GroupCount:  0,
-			DisabledAt:  time.Time{},
+			GroupCount:  0, BreakGlass: false,
+			DisabledAt: time.Time{},
 		},
 	}
 	for i := range people {
