@@ -1737,14 +1737,13 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 	return handler, nil
 }
 
-// writeOnceFamilies are the blob key families that are written once: a key
-// in them never holds other bytes, also after a delete. OpenTofu state
-// versions and signed audit checkpoints have such keys. Pulumi checkpoints
-// and journal batches do not: a retry or a restore can write a deleted key
-// again.
+// writeOnceFamilies are the blob key families that the cache keeps: a key in
+// them never holds other bytes, also after a delete. OpenTofu state versions
+// have such keys. Pulumi checkpoints and journal batches do not: a retry or a
+// restore can write a deleted key again.
 //
 //nolint:gochecknoglobals // A fixed list; Go has no constant slices.
-var writeOnceFamilies = []string{"tofu/", audit.CheckpointPrefix + "/"}
+var writeOnceFamilies = []string{"tofu/"}
 
 // wrapBlobCache sets the blob store of the workspace service: the in-process
 // cache over the blob store when WithBlobCache sets a size, else the blob
