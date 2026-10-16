@@ -12,6 +12,7 @@ import (
 	serverapi "opendustpan.org/opendustpan/internal/api/server"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/oauth"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -101,6 +102,43 @@ func newSignIn(cfg *settings, policies *session.Policies) (*serverapi.SignIn, er
 	}
 
 	return in, nil
+}
+
+// newConsoleSignIn builds the session policy service and the console
+// sign-in of cfg, and sets the session cookie check of cfg for the APIs
+// other than the installation API. Each result is nil when cfg has none.
+func newConsoleSignIn(cfg *settings) (*session.Policies, *serverapi.SignIn, error) {
+	policies, err := newSessionPolicyService(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	signIn, err := newSignIn(cfg, policies)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if cfg.sessionCookies, err = sessionCookies(signIn); err != nil {
+		return nil, nil, err
+	}
+
+	return policies, signIn, nil
+}
+
+// sessionCookies returns the session cookie check of the APIs other than
+// the installation API, with the sessions and the origins of in. A nil in
+// gives a nil check: those APIs then take access tokens only.
+func sessionCookies(in *serverapi.SignIn) (*sessionauth.Checker, error) {
+	if in == nil {
+		return nil, nil //nolint:nilnil // No sign-in is a valid setup: the APIs take access tokens only.
+	}
+
+	c, err := sessionauth.New(in.Sessions, in.Origins)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", errSignInSetup, err)
+	}
+
+	return c, nil
 }
 
 // signInOrigin returns the origin of the public URL base, which the

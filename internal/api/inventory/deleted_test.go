@@ -191,6 +191,7 @@ func buildDeletedFixture(
 		Collections:   nil,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           func() time.Time { return time.Unix(deletedNowUnix, 0) },
 	})

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apiinventory "opendustpan.org/opendustpan/internal/api/inventory"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	coreinventory "opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -182,6 +183,17 @@ func newBehaviorHandler(
 ) *apiinventory.Handler {
 	t.Helper()
 
+	return newBehaviorHandlerWithSessions(t, nsStore, reader, authz, nil)
+}
+
+// newBehaviorHandlerWithSessions is newBehaviorHandler with the session
+// cookie check sessions; nil takes access tokens only.
+func newBehaviorHandlerWithSessions(
+	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer,
+	sessions *sessionauth.Checker,
+) *apiinventory.Handler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
 	)
@@ -199,6 +211,7 @@ func newBehaviorHandler(
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      sessions,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})
@@ -865,9 +878,9 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
-		Now:           nil,
+		Sessions:      nil, Authorizer: selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger: slog.New(slog.DiscardHandler),
+		Now:    nil,
 	}
 
 	cases := []struct {

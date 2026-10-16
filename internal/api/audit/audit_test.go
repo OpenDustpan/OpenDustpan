@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apitaudit "opendustpan.org/opendustpan/internal/api/audit"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -265,6 +266,7 @@ func newTestHandler(t *testing.T) *apitaudit.Handler {
 		Entries:       entries,
 		Authenticator: stubAuthenticator{},
 		Authorizer:    stubAuthorizer{},
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
@@ -278,6 +280,16 @@ func newTestHandler(t *testing.T) *apitaudit.Handler {
 // the enforcement tests can tell authorization apart from backend failures.
 func newEnforcingHandler(
 	t *testing.T, authz identity.Authorizer,
+) (*apitaudit.Handler, *memAuditStore) {
+	t.Helper()
+
+	return newEnforcingHandlerWithSessions(t, authz, nil)
+}
+
+// newEnforcingHandlerWithSessions is newEnforcingHandler with the session
+// cookie check sessions; nil takes access tokens only.
+func newEnforcingHandlerWithSessions(
+	t *testing.T, authz identity.Authorizer, sessions *sessionauth.Checker,
 ) (*apitaudit.Handler, *memAuditStore) {
 	t.Helper()
 
@@ -295,6 +307,7 @@ func newEnforcingHandler(
 		Entries:       entries,
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
+		Sessions:      sessions,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
@@ -506,8 +519,8 @@ func TestListEntriesOfAnUnknownNamespaceAnswers404(t *testing.T) {
 		Namespaces:    namespaces,
 		Entries:       entries,
 		Authenticator: tokenAuthenticator{},
-		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:        slog.New(slog.DiscardHandler),
+		Sessions:      nil, Authorizer: selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger: slog.New(slog.DiscardHandler),
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

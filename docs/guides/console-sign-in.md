@@ -106,9 +106,13 @@ server also refuses a request with the cookie from another site. An
 `Origin` header must name the public URL or an origin of
 `--allowed-origins`.
 
-Only the installation API (`/api/server/`) takes the session cookie. The
-other APIs answer 401 to a request with the cookie and no token. A request
-with an `Authorization` header uses the header and ignores the cookie.
+The APIs of the console take the session cookie: the installation API
+(`/api/server/`), the inventory API (`/api/inventory/`), the audit API
+(`/api/audit/`) and the API that works with the Pulumi CLI. Each API
+applies the same CSRF and origin checks. The TFE-compatible API does not
+take the cookie: it answers 401 to a request with the cookie and no token.
+A request with an `Authorization` header uses the header and ignores the
+cookie.
 
 A console session cannot create or rotate an access token yet. Use an
 access token for that.

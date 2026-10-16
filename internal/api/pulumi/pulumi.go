@@ -34,6 +34,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -85,8 +86,11 @@ type Config struct {
 	Namespaces    *namespace.Service
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
-	AddressGate   AddressGate
-	Logger        *slog.Logger
+	// Sessions checks the console session cookie of a request with no
+	// Authorization header. Nil accepts access tokens only.
+	Sessions    *sessionauth.Checker
+	AddressGate AddressGate
+	Logger      *slog.Logger
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
@@ -119,6 +123,7 @@ type Handler struct {
 	secrets        *secret.Service
 	namespaces     *namespace.Service
 	authn          identity.Authenticator
+	sessions       *sessionauth.Checker
 	authz          identity.Authorizer
 	addressGate    AddressGate
 	logger         *slog.Logger
@@ -139,7 +144,7 @@ type Handler struct {
 	supportedJournal int
 }
 
-// NewHandler returns a Handler. Every Config field is required.
+// NewHandler returns a Handler. Every Config field but Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Stacks == nil:
@@ -166,6 +171,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		secrets:        cfg.Secrets,
 		namespaces:     cfg.Namespaces,
 		authn:          cfg.Authenticator,
+		sessions:       cfg.Sessions,
 		authz:          cfg.Authorizer,
 		addressGate:    cfg.AddressGate,
 		logger:         cfg.Logger,
@@ -835,8 +841,16 @@ func unitObject(ref stack.Ref) (identity.Object, error) {
 }
 
 // authenticate resolves the "Authorization: token <t>" header to a principal.
+// A request with no Authorization header uses the console session cookie.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
+	header := r.Header.Get("Authorization")
+	if header == "" {
+		p, _, err := h.sessions.Authenticate(r)
+
+		return p, err
+	}
+
+	raw, ok := strings.CutPrefix(header, tokenScheme)
 	if !ok || raw == "" {
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
@@ -864,6 +878,24 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
+// classifyAuth maps the errors of the authentication and the
+// authorization of a request.
+func classifyAuth(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, identity.ErrRateLimited):
+		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
+	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid),
+		errors.Is(err, stack.ErrAccessTokenUnchecked):
+		return http.StatusUnauthorized, "unauthenticated", true
+	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
+		return http.StatusForbidden, err.Error(), true
+	case errors.Is(err, identity.ErrDenied):
+		return http.StatusForbidden, "forbidden", true
+	default:
+		return 0, "", false
+	}
+}
+
 // classify maps domain errors to an HTTP status and a message safe to show callers.
 // Today only the secret package produces key-encryption key fingerprints
 // (builtin- IDs in its wrapper-mismatch detail), and that detail leaves
@@ -873,14 +905,11 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // holds no fingerprint; scopes there are the request's own names, not key
 // material.
 func classify(err error) (int, string) {
+	if status, message, ok := classifyAuth(err); ok {
+		return status, message
+	}
+
 	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
-	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid),
-		errors.Is(err, stack.ErrAccessTokenUnchecked):
-		return http.StatusUnauthorized, "unauthenticated"
-	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, invalidBodyMessage
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),

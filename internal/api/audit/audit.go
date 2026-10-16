@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -36,7 +37,10 @@ type Config struct {
 	Entries       audit.Store
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
-	Logger        *slog.Logger
+	// Sessions checks the console session cookie of a request with no
+	// Authorization header. Nil accepts access tokens only.
+	Sessions *sessionauth.Checker
+	Logger   *slog.Logger
 }
 
 // Handler serves the audit API under /api/audit/.
@@ -44,13 +48,14 @@ type Handler struct {
 	namespaces *namespace.Service
 	entries    audit.Store
 	authn      identity.Authenticator
+	sessions   *sessionauth.Checker
 	authz      identity.Authorizer
 	logger     *slog.Logger
 	mux        *patternMux
 	routes     []Route
 }
 
-// NewHandler returns a Handler. Every Config field is required.
+// NewHandler returns a Handler. Every Config field but Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Namespaces == nil:
@@ -69,6 +74,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		namespaces: cfg.Namespaces,
 		entries:    cfg.Entries,
 		authn:      cfg.Authenticator,
+		sessions:   cfg.Sessions,
 		authz:      cfg.Authorizer,
 		logger:     cfg.Logger,
 		mux:        newPatternMux(),
@@ -319,8 +325,16 @@ func parsePage(r *http.Request) (audit.Page, error) {
 }
 
 // authenticate resolves the "Authorization: token <t>" header to a principal.
+// A request with no Authorization header uses the console session cookie.
 func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
+	header := r.Header.Get("Authorization")
+	if header == "" {
+		p, _, err := h.sessions.Authenticate(r)
+
+		return p, err
+	}
+
+	raw, ok := strings.CutPrefix(header, tokenScheme)
 	if !ok || raw == "" {
 		return identity.Principal{}, identity.ErrUnauthenticated
 	}
@@ -353,6 +367,8 @@ func classify(err error) (int, string) {
 		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
 	case errors.Is(err, identity.ErrUnauthenticated):
 		return http.StatusUnauthorized, "unauthenticated"
+	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite):
+		return http.StatusForbidden, err.Error()
 	case errors.Is(err, identity.ErrDenied):
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, errMissingOrganization), errors.Is(err, errInvalidPage):

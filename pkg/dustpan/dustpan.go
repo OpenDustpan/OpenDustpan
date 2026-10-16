@@ -56,6 +56,7 @@ import (
 	"opendustpan.org/opendustpan/internal/metrics"
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
@@ -176,6 +177,10 @@ type settings struct {
 	// gate is the per-address failure limit of the token lookups. The
 	// sign-in routes share it. wireTokens sets it; nil means no limit.
 	gate *authgate.Gate
+	// sessionCookies checks the console session cookie on the inventory,
+	// audit and Pulumi APIs. newAdapters sets it before it builds them; nil
+	// means no console sign-in.
+	sessionCookies *sessionauth.Checker
 	// instanceID names this server process in the sink leases of its audit
 	// shipper. See WithInstanceID.
 	instanceID string
@@ -542,6 +547,7 @@ func defaultSettings() *settings {
 		publicURL:               "",
 		oidcProviders:           nil,
 		gate:                    nil,
+		sessionCookies:          nil,
 		version:                 "",
 		maxCheckpointBytes:      0,
 		maxSecretBatchBytes:     0,
@@ -765,17 +771,17 @@ func newAdapters(
 
 	gate := bodygate.New(cfg.maxBodyBytesInFlight)
 
+	sessionPolicies, signIn, err := newConsoleSignIn(cfg)
+	if err != nil {
+		return adapters{}, err
+	}
+
 	api, err := newPulumiHandler(svc, cfg, base, observed, gate)
 	if err != nil {
 		return adapters{}, err
 	}
 
-	units, err := newInventoryHandler(svc, cfg)
-	if err != nil {
-		return adapters{}, err
-	}
-
-	entries, err := newAuditHandler(svc, cfg)
+	neutral, err := newNeutralHandlers(svc, cfg)
 	if err != nil {
 		return adapters{}, err
 	}
@@ -796,6 +802,8 @@ func newAdapters(
 		maint:    maint,
 		observed: observed,
 		chain:    chain,
+		policies: sessionPolicies,
+		signIn:   signIn,
 	})
 	if err != nil {
 		return adapters{}, err
@@ -803,8 +811,8 @@ func newAdapters(
 
 	return adapters{
 		pulumi:      api,
-		inventory:   units,
-		audit:       entries,
+		inventory:   neutral.inventory,
+		audit:       neutral.audit,
 		tfe:         tfeAPI,
 		tofuHTTP:    tofuHTTPAPI,
 		server:      serverAPI,
@@ -813,6 +821,27 @@ func newAdapters(
 		restores:    restores,
 		chain:       chain,
 	}, nil
+}
+
+// neutralHandlers are the tool-neutral inventory API and audit API.
+type neutralHandlers struct {
+	inventory http.Handler
+	audit     http.Handler
+}
+
+// newNeutralHandlers builds the tool-neutral inventory API and audit API.
+func newNeutralHandlers(svc services, cfg *settings) (neutralHandlers, error) {
+	units, err := newInventoryHandler(svc, cfg)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
+	entries, err := newAuditHandler(svc, cfg)
+	if err != nil {
+		return neutralHandlers{}, err
+	}
+
+	return neutralHandlers{inventory: units, audit: entries}, nil
 }
 
 // newReadiness builds the readiness probe: it pings the store and the blob
@@ -1591,6 +1620,7 @@ func newPulumiHandler(
 		Namespaces:           svc.namespaces,
 		Authenticator:        cfg.authenticator,
 		Authorizer:           cfg.authorizer,
+		Sessions:             cfg.sessionCookies,
 		AddressGate:          allowlistAddressGate(cfg.ipAllowlists),
 		Logger:               cfg.logger,
 		BaseURL:              base,
@@ -1625,6 +1655,7 @@ func newAuditHandler(svc services, cfg *settings) (http.Handler, error) {
 		Entries:       entries,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
+		Sessions:      cfg.sessionCookies,
 		Logger:        cfg.logger,
 	})
 	if err != nil {
@@ -1683,6 +1714,7 @@ func newInventoryHandler(svc services, cfg *settings) (http.Handler, error) {
 		Moves:         moves,
 		Authenticator: cfg.authenticator,
 		Authorizer:    cfg.authorizer,
+		Sessions:      cfg.sessionCookies,
 		Logger:        cfg.logger,
 		Now:           cfg.now,
 	})
@@ -1709,6 +1741,10 @@ type installationDeps struct {
 	maint    *maintenance.Service
 	observed *metrics.ServerMetrics
 	chain    *auditChain
+	// policies is the session policy service, nil for a store with no
+	// session policy. signIn is the console sign-in, nil with no provider.
+	policies *session.Policies
+	signIn   *serverapi.SignIn
 }
 
 // newInstallationAPI builds the restore service and the tool-neutral
@@ -1753,16 +1789,6 @@ func newServerHandler(
 		return nil, err
 	}
 
-	sessionPolicies, err := newSessionPolicyService(cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	signIn, err := newSignIn(cfg, sessionPolicies)
-	if err != nil {
-		return nil, err
-	}
-
 	var sinks serverapi.AuditSinkSource
 	if cfg.auditShipper != nil {
 		sinks = cfg.auditShipper
@@ -1784,7 +1810,7 @@ func newServerHandler(
 		Access:        grants,
 		Tokens:        deps.services.tokens,
 		IPAllowlists:  allow,
-		SessionPolicy: sessionPolicies,
+		SessionPolicy: deps.policies,
 		Audit:         serverAuditOf(cfg.namespaceStore),
 		OnAuditFailure: func() {
 			deps.observed.IncAuditAppendFailure()
@@ -1792,7 +1818,7 @@ func newServerHandler(
 		DeletedUnits: deps.services.deleted,
 		AuditChain:   auditChainPort(deps.chain),
 		AuditSinks:   sinks,
-		SignIn:       signIn,
+		SignIn:       deps.signIn,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("server api: %w", err)

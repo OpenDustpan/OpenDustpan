@@ -128,6 +128,7 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		Sessions:                nil,
 		AddressGate:             nil,
 		Logger:                  cfg.logger,
 		BaseURL:                 baseurl.Resolver{},

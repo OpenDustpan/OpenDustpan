@@ -205,6 +205,7 @@ func coveragePulumiRoutes(tb testing.TB, namespaces *namespace.Service) []RouteR
 		Namespaces:              namespaces,
 		Authenticator:           coverageAuthenticator{},
 		Authorizer:              coverageAuthorizer{},
+		Sessions:                nil,
 		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -535,6 +536,7 @@ func coverageInventoryRoutes(tb testing.TB, namespaces *namespace.Service) []Rou
 		ReadScope:     coverageScope{},
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})
@@ -637,6 +639,7 @@ func coverageAuditRoutes(tb testing.TB, namespaces *namespace.Service) []RouteRe
 		Entries:       coverageAuditStore{},
 		Authenticator: coverageAuthenticator{},
 		Authorizer:    coverageAuthorizer{},
+		Sessions:      nil,
 		Logger:        slog.New(slog.DiscardHandler),
 	})
 	if err != nil {

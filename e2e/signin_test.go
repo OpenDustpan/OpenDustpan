@@ -26,9 +26,10 @@ type e2eSession struct {
 // TestSignIn drives the console sign-in through the browser flow, against
 // a test OpenID provider, on each store. No CLI signs in through a
 // browser, so the test plays the browser with a cookie jar. It signs in,
-// reads the session, proves that the other APIs ignore the session cookie,
-// refuses a callback with another state, lets a session go idle and reach
-// its maximum length on a shared test clock, and signs out.
+// reads the session, proves that the APIs of the console take the session
+// cookie and the TFE-compatible API does not, refuses a callback with
+// another state, lets a session go idle and reach its maximum length on a
+// shared test clock, and signs out.
 func TestSignIn(t *testing.T) {
 	t.Parallel()
 
@@ -187,27 +188,43 @@ func runSignInOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	b := newBrowser(t, env)
 	b.signIn(t)
 
-	checkOtherAPIsIgnoreTheCookie(t, b)
+	checkConsoleAPIsTakeTheCookie(t, b)
 	checkCallbackOfAnotherState(t, b)
 	checkSessionLimits(t, b)
 	checkSignOut(t, b)
 }
 
-// checkOtherAPIsIgnoreTheCookie proves that only the installation API takes
-// the session cookie: each other API answers 401 to a request with the
-// cookie and no token.
-func checkOtherAPIsIgnoreTheCookie(t *testing.T, b browser) {
+// checkConsoleAPIsTakeTheCookie proves that the APIs of the console take
+// the session cookie, and that the TFE-compatible API does not. The person
+// has no grant, so a read of one namespace answers 403, not 401. A change
+// with the cookie and no CSRF value answers 403 that names the header.
+func checkConsoleAPIsTakeTheCookie(t *testing.T, b browser) {
 	t.Helper()
 
+	if a := b.do(t, b.server, http.MethodGet, b.env.URL+"/api/user", nil); a.status != http.StatusOK ||
+		!strings.Contains(a.body, e2e.SignInProvider+":248289761001") {
+		t.Errorf("GET /api/user with the session cookie = %d %s, want 200 with the subject", a.status, a.body)
+	}
+
 	for _, path := range []string{
-		"/api/user",
 		"/api/inventory/namespaces/" + e2e.Namespace + "/collections",
 		"/api/audit/entries?organization=" + e2e.Namespace,
-		"/api/v2/organizations/" + e2e.Namespace + "/workspaces",
 	} {
-		if a := b.do(t, b.server, http.MethodGet, b.env.URL+path, nil); a.status != http.StatusUnauthorized {
-			t.Errorf("GET %s with the session cookie = %d, want 401: %s", path, a.status, a.body)
+		if a := b.do(t, b.server, http.MethodGet, b.env.URL+path, nil); a.status != http.StatusForbidden {
+			t.Errorf("GET %s with the session cookie and no grant = %d, want 403: %s", path, a.status, a.body)
 		}
+	}
+
+	rename := b.env.URL + "/api/stacks/" + e2e.Namespace + "/proj/dev/rename"
+	if a := b.do(t, b.server, http.MethodPost, rename, nil); a.status != http.StatusForbidden ||
+		!strings.Contains(a.body, "X-Dustpan-CSRF") {
+		t.Errorf("POST with the session cookie and no CSRF value = %d %s, want 403 that names the header",
+			a.status, a.body)
+	}
+
+	tfe := "/api/v2/organizations/" + e2e.Namespace + "/workspaces"
+	if a := b.do(t, b.server, http.MethodGet, b.env.URL+tfe, nil); a.status != http.StatusUnauthorized {
+		t.Errorf("GET %s with the session cookie = %d, want 401: %s", tfe, a.status, a.body)
 	}
 }
 
