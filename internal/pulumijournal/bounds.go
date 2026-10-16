@@ -9,16 +9,16 @@ import "errors"
 // only the new states and the link index.
 const (
 	// MaxEntriesPerUpdate bounds the journal entries of one update.
-	// Measured by BenchmarkJournalBuildChange10000: 20,000 entries.
+	// Measured by BenchmarkJournalBuildChange10000: 20000 entries.
 	MaxEntriesPerUpdate = 60000
 	// MaxNewStateBytesPerUpdate bounds the new resource states of one update, in bytes.
-	// Measured by BenchmarkJournalBuildChange10000: 2,210,000 bytes.
+	// Measured by BenchmarkJournalBuildChange10000: 2210000 new-state-bytes.
 	MaxNewStateBytesPerUpdate = 12 << 20
 	// MaxLinkIndexEntriesPerUpdate bounds the link index of one build, in resources.
-	// Measured by BenchmarkJournalBuildChange10000: 10,000 resources.
+	// Measured by BenchmarkJournalBuildChange10000: 10000 link-index.
 	MaxLinkIndexEntriesPerUpdate = 25000
 	// MaxBuildMemoryBytes bounds the estimated memory of one build, in bytes.
-	// Measured by BenchmarkJournalBuildChange10000: peak heap 34,564,080 bytes.
+	// Measured by BenchmarkJournalBuildChange10000: peak heap 34262392 bytes, measured under load.
 	MaxBuildMemoryBytes = 64 << 20
 )
 
