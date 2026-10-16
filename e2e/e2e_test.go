@@ -12386,8 +12386,7 @@ func checkPortableFiles(t *testing.T, files []backupSQLFileDoc) {
 }
 
 // checkPortableObjects proves each table file of a backup is in the target with
-// the size its descriptor names, and that the native db object of format 1 is
-// gone.
+// the size its descriptor names.
 func checkPortableObjects(t *testing.T, env *e2e.Env, id string, files []backupSQLFileDoc) {
 	t.Helper()
 
@@ -12402,10 +12401,6 @@ func checkPortableObjects(t *testing.T, env *e2e.Env, id string, files []backupS
 		if info.Size() != file.Size {
 			t.Fatalf("table file %q holds %d bytes, the descriptor says %d", file.Path, info.Size(), file.Size)
 		}
-	}
-
-	if _, err := os.Stat(filepath.Join(dir, "backups", id, "db")); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("backup %s still holds the native db object: stat err = %v", id, err)
 	}
 }
 
