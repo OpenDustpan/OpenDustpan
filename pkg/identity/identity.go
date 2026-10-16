@@ -636,9 +636,12 @@ type Authorizer interface {
 	// Authorize returns nil if allowed and an error wrapping ErrDenied otherwise.
 	Authorize(ctx context.Context, p Principal, action Action, obj Object) error
 	// ListObjects returns the scope of the objects where p may perform
-	// action. A list filters with the scope in its own query, never with one
+	// action. Authorize allows p action on each object in the scope. A
+	// list filters with the scope in its own query, never with one
 	// Authorize call for each object. A principal with no object gets the
 	// empty Scope and no error. It returns the store errors of the adapter.
+	// A decorator that does not filter the scope says so; its callers then
+	// Authorize the namespace of the list first.
 	ListObjects(ctx context.Context, p Principal, action Action) (Scope, error)
 }
 

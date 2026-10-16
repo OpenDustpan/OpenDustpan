@@ -48,7 +48,9 @@ func (g Gate) Authorize(ctx context.Context, p identity.Principal, action identi
 	return g.checkNamespace(ctx, obj.Namespace())
 }
 
-// ListObjects asks Next.
+// ListObjects asks Next. It does not apply the allowlists to the scope, so
+// it can list an object that Authorize refuses for the client address. A
+// caller must Authorize the namespace of its list through the gate first.
 func (g Gate) ListObjects(
 	ctx context.Context, p identity.Principal, action identity.Action,
 ) (identity.Scope, error) {

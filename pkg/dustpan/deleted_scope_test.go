@@ -17,17 +17,25 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
+	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
 const (
 	deletedAdminToken  = "deleted-admin-token-0123456789abcdef"
 	deletedViewerToken = "deleted-viewer-token-0123456789abcde"
+	deletedReaderToken = "deleted-reader-token-0123456789abcde"
 )
 
+// namespaceReaderRole is a custom role that holds namespace:read and no
+// unit:read.
+const namespaceReaderRole = "rol-namespace-reader"
+
 // newDeletedScopeServer opens a store with the namespaces acme and other, a
-// principal nina holding the viewer role on acme only, and returns a server
-// over it with the real access authorizer. The token deletedAdminToken signs
-// in an administrator, and deletedViewerToken signs in nina.
+// principal nina holding the viewer role on acme only, and a principal rita
+// holding namespace:read and no unit:read on other. It returns a server over
+// it with the real access authorizer. The token deletedAdminToken signs in an
+// administrator, deletedViewerToken signs in nina, and deletedReaderToken
+// signs in rita.
 func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 	t.Helper()
 
@@ -70,12 +78,27 @@ func newDeletedScopeServer(t *testing.T) *dustpan.Server {
 	storePrincipal(t, st, "nina")
 	storeGrant(t, st, "nina", access.RoleViewer, identity.NamespaceObject("acme"))
 
+	role := access.Role{
+		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: namespaceReaderRole, Name: "namespace-reader",
+		Description: "Reads namespaces only.", Actions: []identity.Action{identity.ActionNamespaceRead}, BuiltIn: false,
+	}
+	roleErr := st.CreateRole(t.Context(), role, storetest.ServerChange(time.Unix(0, 0), "role:"+role.ID))
+	if roleErr != nil {
+		t.Fatalf("create role: %v", roleErr)
+	}
+
+	storePrincipal(t, st, "rita")
+	storeGrant(t, st, "rita", namespaceReaderRole, identity.NamespaceObject("other"))
+
 	authn := tokenMapAuthenticator{tokens: map[string]identity.Principal{
 		deletedAdminToken: {
 			Subject: "operator", DisplayName: "operator", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 		},
 		deletedViewerToken: {
 			Subject: "nina", DisplayName: "nina", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+		},
+		deletedReaderToken: {
+			Subject: "rita", DisplayName: "rita", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
 		},
 	}}
 
@@ -143,13 +166,10 @@ func serveDeletedScope(t *testing.T, srv *dustpan.Server, call deletedScopeCall)
 	return rec.Code, string(got)
 }
 
-// TestDeletedUnitsFollowNamespaceGrant proves, through the assembled server,
-// that a principal with unit:read on one namespace lists the deleted units
-// of that namespace, and no deleted unit of another namespace.
-func TestDeletedUnitsFollowNamespaceGrant(t *testing.T) {
-	t.Parallel()
-
-	srv := newDeletedScopeServer(t)
+// seedDeletedUnits creates and deletes the stack web/prod in acme and in
+// other as the administrator.
+func seedDeletedUnits(t *testing.T, srv *dustpan.Server) {
+	t.Helper()
 
 	for _, ns := range []string{"acme", "other"} {
 		code, body := serveDeletedScope(t, srv, deletedScopeCall{
@@ -167,30 +187,59 @@ func TestDeletedUnitsFollowNamespaceGrant(t *testing.T) {
 			t.Fatalf("delete stack in %s: %d %s", ns, code, body)
 		}
 	}
+}
 
-	code, body := serveDeletedScope(t, srv, deletedScopeCall{
-		method: http.MethodGet, target: "/api/inventory/deleted-units?organization=acme",
-		token: deletedViewerToken, body: "",
-	})
-	if code != http.StatusOK {
-		t.Fatalf("list deleted units of acme: %d %s", code, body)
-	}
+// listDeleted lists the deleted units of ns with token. It answers the
+// status, the decoded page of a 200 answer and the body.
+func listDeleted(t *testing.T, srv *dustpan.Server, token, ns string) (int, deletedPageWire, string) {
+	t.Helper()
 
 	var page deletedPageWire
+
+	code, body := serveDeletedScope(t, srv, deletedScopeCall{
+		method: http.MethodGet, target: "/api/inventory/deleted-units?organization=" + ns, token: token, body: "",
+	})
+	if code != http.StatusOK {
+		return code, page, body
+	}
 
 	if err := json.Unmarshal([]byte(body), &page); err != nil {
 		t.Fatalf("decode %s: %v", body, err)
 	}
 
-	if page.Total != 1 || len(page.Units) != 1 || page.Units[0].Namespace != "acme" {
-		t.Fatalf("deleted units of acme = %s, want the one unit of acme", body)
+	return code, page, body
+}
+
+// TestDeletedUnitsFollowNamespaceGrant proves, through the assembled server,
+// that a principal with unit:read on one namespace lists the deleted units
+// of that namespace, and no deleted unit of another namespace.
+func TestDeletedUnitsFollowNamespaceGrant(t *testing.T) {
+	t.Parallel()
+
+	srv := newDeletedScopeServer(t)
+	seedDeletedUnits(t, srv)
+
+	code, page, body := listDeleted(t, srv, deletedViewerToken, "acme")
+	if code != http.StatusOK || page.Total != 1 || len(page.Units) != 1 || page.Units[0].Namespace != "acme" {
+		t.Fatalf("deleted units of acme = %d %s, want the one unit of acme", code, body)
 	}
 
-	code, body = serveDeletedScope(t, srv, deletedScopeCall{
-		method: http.MethodGet, target: "/api/inventory/deleted-units?organization=other",
-		token: deletedViewerToken, body: "",
-	})
-	if code != http.StatusForbidden {
+	if code, _, body = listDeleted(t, srv, deletedViewerToken, "other"); code != http.StatusForbidden {
 		t.Fatalf("list deleted units of other: %d %s, want 403", code, body)
+	}
+}
+
+// TestDeletedUnitsNeedUnitRead proves, through the assembled server, that a
+// principal with namespace:read and no unit:read on a namespace passes the
+// route and lists none of its deleted units.
+func TestDeletedUnitsNeedUnitRead(t *testing.T) {
+	t.Parallel()
+
+	srv := newDeletedScopeServer(t)
+	seedDeletedUnits(t, srv)
+
+	code, page, body := listDeleted(t, srv, deletedReaderToken, "other")
+	if code != http.StatusOK || page.Total != 0 || len(page.Units) != 0 {
+		t.Fatalf("deleted units of other without unit:read = %d %s, want 200 and none", code, body)
 	}
 }
