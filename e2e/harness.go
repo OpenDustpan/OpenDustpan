@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -152,10 +153,10 @@ type Env struct {
 	Recorder *Recorder
 	cli      Install
 	store    Store
-	server   serverStore
 	client   *http.Client
-	// workspaces runs the workspace use cases the seed helpers need.
-	workspaces *workspace.Service
+	// inprocess is the store of the in-process server, or nil for the binary
+	// server, whose database the test process never holds open while it runs.
+	inprocess serverStore
 	// blobs holds checkpoint and state content, so the seed helpers save
 	// through the same store as the server.
 	blobs blob.Store
@@ -220,14 +221,13 @@ type serverStore interface {
 	ipallow.Store
 }
 
-// serverBuild groups the handler, stores and database proxy newServer opens,
-// so the constructor stays within the result limit.
+// serverBuild groups the handler, blob store and database proxy newServer
+// opens, so the constructor stays within the result limit.
 type serverBuild struct {
-	handler    http.Handler
-	store      serverStore
-	workspaces *workspace.Service
-	blobs      blob.Store
-	dbProxy    *DBProxy
+	handler http.Handler
+	store   serverStore
+	blobs   blob.Store
+	dbProxy *DBProxy
 	// backupDir is the directory of the dir: backup target the server writes.
 	backupDir string
 }
@@ -442,9 +442,8 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		Recorder:      in.rec,
 		cli:           in.cli,
 		store:         in.store,
-		server:        build.store,
 		client:        client,
-		workspaces:    build.workspaces,
+		inprocess:     build.store,
 		blobs:         build.blobs,
 		blobName:      blobNameOf(tb),
 		s3Endpoint:    s3EndpointOf(tb),
@@ -582,11 +581,6 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 
 	st, dbProxy := openServerStore(ctx, tb, args.store, args.dbPath)
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
-	if err != nil {
-		tb.Fatalf("namespace service: %v", err)
-	}
-
 	// The first namespace is created through POST /api/server/namespaces
 	// after the server starts (see newInprocessEnv and newBinaryEnv), so a
 	// new installation is proven through the API with the bootstrap admin
@@ -611,7 +605,6 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	}
 
 	blobs := openTestBlobStore(ctx, tb, args.dbPath)
-	workspaces := newWorkspaceService(tb, st, blobs, namespaces)
 	target, targetName := openBackupTarget(tb, args.dbPath)
 
 	srv, err := dustpan.NewServer(append(ipAllowlistOptions(
@@ -641,12 +634,11 @@ func newServer(ctx context.Context, tb testing.TB, args serverArgs) serverBuild 
 	}
 
 	return serverBuild{
-		handler:    srv.Handler(),
-		store:      st,
-		workspaces: workspaces,
-		blobs:      blobs,
-		dbProxy:    dbProxy,
-		backupDir:  strings.TrimPrefix(targetName, "dir:"),
+		handler:   srv.Handler(),
+		store:     st,
+		blobs:     blobs,
+		dbProxy:   dbProxy,
+		backupDir: strings.TrimPrefix(targetName, "dir:"),
 	}
 }
 
@@ -671,32 +663,6 @@ func openBackupTarget(tb testing.TB, dbPath string) (*fs.Store, string) {
 	})
 
 	return target, "dir:" + path
-}
-
-// newWorkspaceService returns the workspace use cases over st and blobs,
-// for the seed helpers.
-func newWorkspaceService(
-	tb testing.TB, st serverStore, blobs blob.Store, namespaces *namespace.Service,
-) *workspace.Service {
-	tb.Helper()
-
-	workspaces, err := workspace.NewService(workspace.Config{
-		Workspaces:         st,
-		States:             st,
-		Blobs:              blobs,
-		Namespaces:         namespaces,
-		Sealer:             nil,
-		Logger:             nil,
-		Now:                nil,
-		MaxStateBytes:      0,
-		MaxPendingVersions: 0,
-		Retention:          0,
-	})
-	if err != nil {
-		tb.Fatalf("workspace service: %v", err)
-	}
-
-	return workspaces
 }
 
 // openSQLiteStore opens the SQLite file at dbPath for one test.
@@ -768,77 +734,36 @@ const seedDeployment = `{"manifest":{},"resources":[` +
 	`"type":"custom:resource:Type","custom":true,"id":"res1-id"}]}`
 
 // SeedResources records a finished update with one managed resource as the
-// latest checkpoint of the stack named stackName in Project. It exists so
-// delete tests can set up a stack with resources without driving a full
-// update through routes that later issues own.
+// latest checkpoint of the stack named stackName in Project. It drives the
+// update routes as principal A: it creates and starts an update, saves the
+// checkpoint with the lease token and completes the update. Delete tests use
+// it to set up a stack with resources without a provider that makes real
+// resources.
 func (e *Env) SeedResources(ctx context.Context, tb testing.TB, stackName string) {
 	tb.Helper()
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: e.server, Now: nil, Region: region})
-	if err != nil {
-		tb.Fatalf("namespace service: %v", err)
-	}
+	held := e.StartHeldUpdate(ctx, tb, Namespace, Project, stackName)
 
-	ref, err := stack.ParseRef(Namespace, Project, stackName)
-	if err != nil {
-		tb.Fatalf("parse ref: %v", err)
-	}
-
-	updates, err := stack.NewUpdates(stack.UpdatesConfig{
-		Updates:            e.server,
-		Tokens:             nil,
-		Checkpoints:        e.server,
-		Events:             e.server,
-		Namespaces:         namespaces,
-		Stacks:             e.server,
-		Blobs:              e.blobs,
-		Now:                nil,
-		Logger:             nil,
-		MaxCheckpointBytes: 0,
-		Journal:            nil,
-		Replayer:           nil,
+	e.apiCall(ctx, tb, apiRequest{
+		Method: http.MethodPatch,
+		Path:   "/api/stacks/" + Namespace + "/" + Project + "/" + stackName + "/update/" + held.ID + "/checkpoint",
+		Auth:   "update-token " + held.Lease,
+		Body:   `{"version":` + strconv.Itoa(seedSchemaVersion) + `,"deployment":` + seedDeployment + `}`,
+		Out:    nil,
 	})
-	if err != nil {
-		tb.Fatalf("updates service: %v", err)
-	}
 
-	u, err := updates.Create(ctx, ref, stack.Plan{
-		Kind: stack.KindUpdate, DryRun: false, CreatedBy: "", RestoredFrom: 0,
-	})
-	if err != nil {
-		tb.Fatalf("create update: %v", err)
-	}
-
-	started, err := updates.Start(ctx, ref, u.ID)
-	if err != nil {
-		tb.Fatalf("start update: %v", err)
-	}
-
-	err = updates.SaveCheckpoint(ctx, ref, u.ID, started.Token, stack.CheckpointInput{
-		Features:      nil,
-		Deployment:    []byte(seedDeployment),
-		SchemaVersion: seedSchemaVersion,
-		Sequence:      0,
-		Invalid:       false,
-	})
-	if err != nil {
-		tb.Fatalf("save checkpoint: %v", err)
-	}
-
-	if _, err := updates.Complete(ctx, ref, u.ID, started.Token, stack.StatusSucceeded); err != nil {
-		tb.Fatalf("complete update: %v", err)
-	}
+	e.EndHeldUpdate(ctx, tb, held, "succeeded")
 }
 
 const (
-	// seedHolder locks the workspace while SeedTofuState writes.
-	seedHolder = "seed"
+	// seedLockReason is the lock reason SeedTofuState sends.
+	seedLockReason = "seed"
 	// seedStateLineage is the lineage SeedTofuState writes when the workspace
 	// has no state yet.
 	seedStateLineage = "seed-lineage"
 	// seedStateOutputs is the outputs document of the seeded state. The stored
-	// outputs come from the uploaded body, so SeedTofuState writes it there
-	// too: the greeting output with its cty value and type, plus a sensitive
+	// outputs come from the uploaded body, so SeedTofuState writes it there:
+	// the greeting output with its cty value and type, plus a sensitive
 	// output so the run also proves the single-output route the CLI uses for
 	// it.
 	seedStateOutputs = `{"greeting":{"sensitive":false,"value":"hello","type":"string"},` +
@@ -856,69 +781,85 @@ func seedStateDocument(lineage string, serial int64) []byte {
 	return []byte(doc)
 }
 
-// SeedTofuState writes a finalized state version with a greeting output
-// straight to the store for the scenario workspace, as SeedResources does
-// for Pulumi. It chains the lineage and serial after the current state when
-// one exists. It locks as seed and releases the lock, so later steps see an
+// seedStateAttributes holds the attributes of a state version document that
+// SeedTofuState reads: the lineage and serial of the current state, and the
+// upload URL of a new state version.
+type seedStateAttributes struct {
+	Lineage   string `json:"lineage"`
+	Serial    int64  `json:"serial"`
+	UploadURL string `json:"hosted-state-upload-url"` //nolint:tagliatelle // The TFE wire name.
+}
+
+// seedStateData is the data member of a state version document.
+type seedStateData struct {
+	Attributes seedStateAttributes `json:"attributes"`
+}
+
+// seedStateDoc is a state version document of the TFE-compatible API.
+type seedStateDoc struct {
+	Data seedStateData `json:"data"`
+}
+
+// SeedTofuState writes a finalized state version with a greeting output for
+// the scenario workspace, as SeedResources does for Pulumi. It drives the
+// TFE-compatible routes as principal A: it locks the workspace, declares the
+// state version, uploads its content and unlocks. It chains the lineage and
+// serial after the current state when one exists, so later steps see an
 // unlocked workspace with state.
-func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) workspace.StateVersion {
+func (e *Env) SeedTofuState(ctx context.Context, tb testing.TB) {
 	tb.Helper()
 
-	ns, err := namespace.ParseName(Namespace)
-	if err != nil {
-		tb.Fatalf("parse namespace %q: %v", Namespace, err)
-	}
+	byID := "/api/v2/workspaces/" + e.WorkspaceID(ctx, tb)
 
-	name, err := workspace.ParseName(Workspace)
-	if err != nil {
-		tb.Fatalf("parse workspace %q: %v", Workspace, err)
-	}
-
-	ws, err := e.server.GetWorkspace(ctx, workspace.Ref{Namespace: ns, Name: name})
-	if err != nil {
-		tb.Fatalf("get workspace %s/%s: %v", Namespace, Workspace, err)
-	}
-
-	if _, lockErr := e.workspaces.Lock(ctx, ws.ID, seedHolder, "seed"); lockErr != nil {
-		tb.Fatalf("lock workspace for seed: %v", lockErr)
-	}
+	e.seedCall(ctx, tb, seedRequest{
+		method: http.MethodPost, path: byID + "/actions/lock",
+		body: `{"data":{"attributes":{"reason":"` + seedLockReason + `"}}}`, want: http.StatusOK, out: nil,
+	})
 
 	lineage, serial := seedStateLineage, int64(1)
 
-	current, currentErr := e.workspaces.Current(ctx, ws.ID)
+	current, err := e.TFEStatusHeaders(ctx, e.token, http.MethodGet, byID+"/current-state-version", "")
+	if err != nil {
+		tb.Fatalf("read current state version: %v", err)
+	}
 
-	switch {
-	case currentErr == nil:
-		lineage, serial = current.Lineage, current.Serial+1
-	case errors.Is(currentErr, workspace.ErrNoState):
+	switch current.Status {
+	case http.StatusOK:
+		var doc seedStateDoc
+		if decodeErr := json.Unmarshal([]byte(current.Body), &doc); decodeErr != nil {
+			tb.Fatalf("decode current state version: %v (%s)", decodeErr, current.Body)
+		}
+
+		lineage, serial = doc.Data.Attributes.Lineage, doc.Data.Attributes.Serial+1
+	case http.StatusNotFound:
 	default:
-		tb.Fatalf("current state: %v", currentErr)
+		tb.Fatalf("read current state version answers %d: %s", current.Status, current.Body)
 	}
 
 	content := seedStateDocument(lineage, serial)
 	sum := md5.Sum(content) //nolint:gosec // The TFE protocol names state by MD5 for integrity.
 
-	pending, beginErr := e.workspaces.BeginState(ctx, ws.ID, seedHolder, workspace.NewState{
-		Lineage: lineage,
-		MD5:     hex.EncodeToString(sum[:]),
-		Outputs: []byte(seedStateOutputs),
-		Serial:  serial,
-		Force:   false,
-	}, workspace.Authority{Allow: namespace.Overrides{Forced: false, Unlocked: false}, Record: nil})
-	if beginErr != nil {
-		tb.Fatalf("begin seed state: %v", beginErr)
+	var created seedStateDoc
+
+	e.seedCall(ctx, tb, seedRequest{
+		method: http.MethodPost, path: byID + "/state-versions",
+		body: `{"data":{"type":"state-versions","attributes":{"serial":` + strconv.FormatInt(serial, 10) +
+			`,"lineage":` + strconv.Quote(lineage) + `,"md5":"` + hex.EncodeToString(sum[:]) + `"}}}`,
+		want: http.StatusCreated, out: &created,
+	})
+
+	uploadPath, ok := strings.CutPrefix(created.Data.Attributes.UploadURL, e.URL)
+	if !ok {
+		tb.Fatalf("upload URL %q is not on the server %s", created.Data.Attributes.UploadURL, e.URL)
 	}
 
-	sv, uploadErr := e.workspaces.Upload(ctx, pending.Version.ID, pending.Upload, bytes.NewReader(content))
-	if uploadErr != nil {
-		tb.Fatalf("upload seed state: %v", uploadErr)
-	}
+	e.seedCall(ctx, tb, seedRequest{
+		method: http.MethodPut, path: uploadPath, body: string(content), want: http.StatusOK, out: nil,
+	})
 
-	if _, unlockErr := e.workspaces.Unlock(ctx, ws.ID, seedHolder); unlockErr != nil {
-		tb.Fatalf("unlock workspace after seed: %v", unlockErr)
-	}
-
-	return sv
+	e.seedCall(ctx, tb, seedRequest{
+		method: http.MethodPost, path: byID + "/actions/unlock", body: "", want: http.StatusOK, out: nil,
+	})
 }
 
 // CreateNamespace creates a namespace homed in the test region through the
@@ -930,10 +871,13 @@ func (e *Env) CreateNamespace(ctx context.Context, tb testing.TB, name string) {
 	e.createNamespaceThroughAPI(ctx, tb, name)
 }
 
-// CreateForeignNamespace stores a namespace homed in region through a direct
-// store call, so a step can prove what the server answers for a namespace
-// that another region owns. The installation API creates namespaces in the
-// server's own region only.
+// CreateForeignNamespace stores a namespace homed in region, so a step can
+// prove what the server answers for a namespace that another region owns.
+// The installation API creates namespaces in the server's own region only,
+// so this is a direct store write. The binary server owns its database, so
+// the write runs while the binary is stopped, on a handle that is closed
+// before the binary starts again. The in-process server writes through its
+// own store.
 func (e *Env) CreateForeignNamespace(ctx context.Context, tb testing.TB, name, region string) {
 	tb.Helper()
 
@@ -945,26 +889,58 @@ func (e *Env) CreateForeignNamespace(ctx context.Context, tb testing.TB, name, r
 		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
 	}
 
-	if err := e.server.CreateNamespace(ctx, ns); err != nil {
-		tb.Fatalf("create namespace %q homed in %q: %v", name, region, err)
+	if e.binPath == "" {
+		if err := e.inprocess.CreateNamespace(ctx, ns); err != nil {
+			tb.Fatalf("create namespace %q homed in %q: %v", name, region, err)
+		}
+
+		return
 	}
+
+	e.StopServer(ctx, tb)
+	e.writeStopped(ctx, tb, func(st namespace.Store) error { return st.CreateNamespace(ctx, ns) })
+	e.StartServer(ctx, tb)
 }
 
-// ListInventory returns the inventory entries of ns, so scenarios can prove
-// a CLI step published its unit through a direct store call.
-func (e *Env) ListInventory(ctx context.Context, ns string) ([]inventory.Entry, error) {
-	name, err := namespace.ParseName(ns)
-	if err != nil {
-		return nil, fmt.Errorf("parse namespace %q: %w", ns, err)
-	}
+// InventoryUnit is one unit of the inventory API list: the tool label
+// ("Pulumi" or "OpenTofu"), the unit reference with the lowercase tool code,
+// the namespace and the tool's own name of the unit.
+type InventoryUnit struct {
+	Tool      string `json:"tool"`
+	Reference string `json:"reference"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+}
 
-	entries, err := e.server.ListUnits(ctx, name)
+// inventoryUnitList is the document of GET /api/inventory/units.
+type inventoryUnitList struct {
+	Units []InventoryUnit `json:"units"`
+}
+
+// ListInventory returns the inventory units of ns through the inventory API
+// as principal A, so scenarios can prove a CLI step published its unit.
+func (e *Env) ListInventory(ctx context.Context, ns string) ([]InventoryUnit, error) {
+	path := "/api/inventory/units?organization=" + url.QueryEscape(ns)
+
+	status, body, err := e.APIStatus(ctx, http.MethodGet, path, "")
 	if err != nil {
 		return nil, fmt.Errorf("list inventory of %q: %w", ns, err)
 	}
 
-	return entries, nil
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("%w: GET %s answers %d: %s", errInventoryList, path, status, body)
+	}
+
+	var doc inventoryUnitList
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return nil, fmt.Errorf("decode inventory of %q: %w", ns, err)
+	}
+
+	return doc.Units, nil
 }
+
+// errInventoryList reports an inventory list that did not answer 200.
+var errInventoryList = errors.New("inventory list failed")
 
 // Steps returns the scenario steps run so far.
 func (e *Env) Steps() []StepResult {
@@ -2197,6 +2173,40 @@ func (e *Env) apiCall(ctx context.Context, tb testing.TB, req apiRequest) {
 		if err := json.Unmarshal(respBody, req.Out); err != nil {
 			tb.Fatalf("decode %s %s: %v (%s)", req.Method, req.Path, err, string(respBody))
 		}
+	}
+}
+
+// seedRequest is one TFE API request of SeedTofuState as principal A: the
+// method, the path, the body ("" sends none), the status it must answer and
+// the document to decode the answer into (nil decodes nothing).
+type seedRequest struct {
+	method string
+	path   string
+	body   string
+	want   int
+	out    any
+}
+
+// seedCall sends one seed request and fails the test when the status differs
+// from req.want.
+func (e *Env) seedCall(ctx context.Context, tb testing.TB, req seedRequest) {
+	tb.Helper()
+
+	resp, err := e.TFEStatusHeaders(ctx, e.token, req.method, req.path, req.body)
+	if err != nil {
+		tb.Fatalf("seed %s %s: %v", req.method, req.path, err)
+	}
+
+	if resp.Status != req.want {
+		tb.Fatalf("seed %s %s answers %d, want %d: %s", req.method, req.path, resp.Status, req.want, resp.Body)
+	}
+
+	if req.out == nil {
+		return
+	}
+
+	if err := json.Unmarshal([]byte(resp.Body), req.out); err != nil {
+		tb.Fatalf("decode seed %s %s: %v (%s)", req.method, req.path, err, resp.Body)
 	}
 }
 
