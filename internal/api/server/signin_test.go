@@ -109,13 +109,16 @@ func alice() oauthtest.User {
 func newSignInEnv(t *testing.T, autoCreate bool) signInEnv {
 	t.Helper()
 
-	return newSignInEnvWith(t, signInEnvOptions{autoCreate: autoCreate, noPolicyRoutes: false})
+	return newSignInEnvWith(t, signInEnvOptions{autoCreate: autoCreate, noPolicyRoutes: false, stored: nil})
 }
 
 // signInEnvOptions are the options of a sign-in environment. autoCreate
 // lets the sign-in create a principal. noPolicyRoutes gives the handler no
-// session policy service, so it mounts no session policy route.
+// session policy service, so it mounts no session policy route. stored,
+// when set, gives the handler the service and the lookup of the stored
+// providers, for the store and the clock of the environment.
 type signInEnvOptions struct {
+	stored         func(st *sqlite.Store, clock *envClock) (*session.ProviderAdmin, apiserver.StoredProviders)
 	autoCreate     bool
 	noPolicyRoutes bool
 }
@@ -171,6 +174,15 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		policyRoutes = nil
 	}
 
+	var (
+		admin  *session.ProviderAdmin
+		stored apiserver.StoredProviders
+	)
+
+	if opts.stored != nil {
+		admin, stored = opts.stored(st, clock)
+	}
+
 	handler, err := apiserver.NewHandler(apiserver.Config{
 		Authenticator:  tokenAuthenticator{},
 		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
@@ -194,7 +206,11 @@ func newSignInEnvWith(t *testing.T, opts signInEnvOptions) signInEnv {
 		IPAllowlists:   nil,
 		SessionPolicy:  policyRoutes,
 		SignIn: &apiserver.SignIn{
-			Sessions: sessions, Limiter: limiter, Origins: []string{signInBase, consoleOrigin},
+			Sessions: sessions,
+			Limiter:  limiter,
+			Stored:   stored,
+			Admin:    admin,
+			Origins:  []string{signInBase, consoleOrigin},
 			Providers: []apiserver.SignInProvider{
 				{Client: client, ID: "corp", DisplayName: "Corp", AutoCreate: opts.autoCreate},
 			},
@@ -1013,9 +1029,9 @@ func TestSignInProviderDown(t *testing.T) {
 		IPAllowlists:   nil,
 		SessionPolicy:  policies,
 		SignIn: &apiserver.SignIn{
-			Sessions: sessions,
-			Limiter:  limiter,
-			Origins:  nil,
+			Sessions: sessions, Stored: nil, Admin: nil,
+			Limiter: limiter,
+			Origins: nil,
 			Providers: []apiserver.SignInProvider{
 				{Client: downOIDC{}, ID: "corp", DisplayName: "Corp", AutoCreate: true},
 			},
@@ -1147,7 +1163,7 @@ func TestSignInSessionPolicyChangeNeedsAFreshSignIn(t *testing.T) {
 func TestSignInFreshnessWithNoPolicyService(t *testing.T) {
 	t.Parallel()
 
-	e := newSignInEnvWith(t, signInEnvOptions{autoCreate: true, noPolicyRoutes: true})
+	e := newSignInEnvWith(t, signInEnvOptions{autoCreate: true, noPolicyRoutes: true, stored: nil})
 
 	created := e.postWithSession(t, e.signIn(t), "/api/server/caller/tokens", ownTokenBody())
 	if created.Code != http.StatusCreated {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -111,19 +112,56 @@ type SignInProvider struct {
 // Limiter sets no failure limit. Origins are the origins that may send a
 // request with the session cookie: the origin of the public URL and each
 // allowed origin of the console.
+//
+// Providers are the providers of the configuration of the server. Stored
+// finds the providers that the API keeps, and Admin manages them; with a
+// nil Admin, no provider route is mounted. A provider of the
+// configuration wins over a stored provider with the same ID.
 type SignIn struct {
 	Sessions  *session.Sessions
 	Limiter   SignInLimiter
+	Stored    StoredProviders
+	Admin     *session.ProviderAdmin
 	Providers []SignInProvider
 	Origins   []string
+}
+
+// StoredProviders finds the sign-in providers that the API keeps.
+type StoredProviders interface {
+	// Provider returns the enabled stored provider id. It returns false
+	// for an ID with no enabled stored provider, and an error when the
+	// store or the client secret fails.
+	Provider(ctx context.Context, id string) (SignInProvider, bool, error)
 }
 
 // signInState is the sign-in of a handler.
 type signInState struct {
 	sessions  *session.Sessions
 	limiter   SignInLimiter
+	stored    StoredProviders
+	admin     *session.ProviderAdmin
 	providers map[string]SignInProvider
 	checker   *sessionauth.Checker
+}
+
+// provider returns the sign-in provider id: a provider of the
+// configuration, else an enabled stored provider. It returns false for an
+// unknown ID.
+func (s *signInState) provider(ctx context.Context, id string) (SignInProvider, bool, error) {
+	if p, ok := s.providers[id]; ok {
+		return p, true, nil
+	}
+
+	if s.stored == nil {
+		return SignInProvider{Client: nil, ID: "", DisplayName: "", AutoCreate: false}, false, nil
+	}
+
+	p, ok, err := s.stored.Provider(ctx, id)
+	if err != nil {
+		return p, false, fmt.Errorf("find sign-in provider %q: %w", id, err)
+	}
+
+	return p, ok, nil
 }
 
 // newSignInState returns the sign-in of cfg, or nil when cfg is nil.
@@ -150,7 +188,10 @@ func newSignInState(cfg *SignIn) (*signInState, error) {
 		return nil, fmt.Errorf("session cookie check: %w", err)
 	}
 
-	return &signInState{sessions: cfg.Sessions, limiter: cfg.Limiter, providers: providers, checker: checker}, nil
+	return &signInState{
+		sessions: cfg.Sessions, limiter: cfg.Limiter, stored: cfg.Stored, admin: cfg.Admin, providers: providers,
+		checker: checker,
+	}, nil
 }
 
 // signInRoutes returns the sign-in rows of the route table. No sign-in
@@ -217,9 +258,9 @@ func (h *Handler) startSignIn(w http.ResponseWriter, r *http.Request, _ identity
 
 	h.failSignIn(ctx)
 
-	provider, ok := h.signIn.providers[r.PathValue("provider")]
-	if !ok {
-		h.writeError(ctx, w, errUnknownProvider)
+	provider, ok, err := h.signIn.provider(ctx, r.PathValue("provider"))
+	if err != nil || !ok {
+		h.writeError(ctx, w, cmp.Or(err, errUnknownProvider))
 
 		return
 	}
@@ -292,10 +333,10 @@ func (h *Handler) finishSignIn(w http.ResponseWriter, r *http.Request, _ identit
 		return
 	}
 
-	provider, ok := h.signIn.providers[r.PathValue("provider")]
-	if !ok {
+	provider, ok, err := h.signIn.provider(ctx, r.PathValue("provider"))
+	if err != nil || !ok {
 		h.failSignIn(ctx)
-		h.writeError(ctx, w, errUnknownProvider)
+		h.writeError(ctx, w, cmp.Or(err, errUnknownProvider))
 
 		return
 	}

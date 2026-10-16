@@ -54,7 +54,9 @@ func coverageSignInRoutes(tb testing.TB) []RouteRef {
 		Metrics: coverageMetrics{}, Version: "test", Schema: coverageSchema{}, Journal: nil, Principals: principals,
 		Access: nil, Tokens: nil, Audit: nil, OnAuditFailure: nil, DeletedUnits: nil, AuditSinks: nil, AuditChain: nil,
 		IPAllowlists: nil, SessionPolicy: nil,
-		SignIn:           &serverapi.SignIn{Sessions: sessions, Limiter: nil, Providers: nil, Origins: nil},
+		SignIn: &serverapi.SignIn{
+			Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Providers: nil, Origins: nil,
+		},
 		CheckpointEpochs: nil,
 	})
 	if err != nil {

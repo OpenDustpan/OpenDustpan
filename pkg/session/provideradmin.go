@@ -426,7 +426,7 @@ func providerFields() []providerField {
 	return []providerField{
 		{key: "issuer", value: func(p ProviderConfig) string { return p.Issuer }},
 		{key: "displayName", value: func(p ProviderConfig) string { return p.DisplayName }},
-		{key: "clientId", value: func(p ProviderConfig) string { return p.ClientID }},
+		{key: "clientID", value: func(p ProviderConfig) string { return p.ClientID }},
 		{key: "scopes", value: func(p ProviderConfig) string { return strings.Join(p.Scopes, " ") }},
 		{key: "autoCreate", value: func(p ProviderConfig) string { return strconv.FormatBool(p.AutoCreate) }},
 		{key: "enabled", value: func(p ProviderConfig) string { return strconv.FormatBool(p.Enabled) }},
