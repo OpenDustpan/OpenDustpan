@@ -92,8 +92,9 @@ func (s *Service) within(
 }
 
 // grantCheck returns the check that a grant of the role with the ID role
-// on obj, by granter, runs in its write: the role as it is now goes on obj,
-// and granter holds every action of it there.
+// on obj, by granter, runs in its write: granter still holds the
+// manage-access action of obj, which the route authorized, the role as it
+// is now goes on obj, and granter holds every action of it there.
 func (s *Service) grantCheck(
 	granter identity.Principal, obj identity.Object, chain []identity.Object, role string,
 ) GrantCheck {
@@ -114,12 +115,17 @@ func (s *Service) grantCheck(
 			return err
 		}
 
-		return w.checkEscalation(ctx, granter, obj, r)
+		if err := w.checkEscalation(ctx, granter, obj, r); err != nil {
+			return err
+		}
+
+		return w.authz.Authorize(ctx, granter, manageAccessAction(kind), obj)
 	}
 }
 
 // roleCheck returns the check that an update of the custom role to r, by
-// caller, runs in its write: caller holds every action of r, and every
+// caller, runs in its write: caller still holds server:manage-roles, which
+// the route authorized, caller holds every action of r, and every
 // action that the update takes away from the role as it is now, on the
 // installation, and r still fits each object that the role is granted on.
 func (s *Service) roleCheck(caller identity.Principal, r Role) GrantCheck {
@@ -140,13 +146,39 @@ func (s *Service) roleCheck(caller identity.Principal, r Role) GrantCheck {
 			return err
 		}
 
-		return w.checkPlacement(ctx, r)
+		if err := w.checkPlacement(ctx, r); err != nil {
+			return err
+		}
+
+		return w.authz.Authorize(ctx, caller, identity.ActionServerManageRoles, server)
 	}
+}
+
+// manageAccessAction returns the action that manages the grants on an
+// object of kind: the action that the grant routes authorize on the object.
+// The installation and a principal take server:manage-access.
+func manageAccessAction(kind ObjectKind) identity.Action {
+	if a, ok := manageAccessActions[kind]; ok {
+		return a
+	}
+
+	return identity.ActionServerManageAccess
+}
+
+// manageAccessActions holds the manage-access action of each object kind
+// below the installation.
+//
+//nolint:gochecknoglobals // A constant table of actions; Go has no constant maps.
+var manageAccessActions = map[ObjectKind]identity.Action{
+	ObjectNamespace:  identity.ActionNamespaceManageAccess,
+	ObjectCollection: identity.ActionCollectionManageAccess,
+	ObjectUnit:       identity.ActionUnitManageAccess,
 }
 
 // revokeCheck returns the check that a revoke of g by caller runs in its
 // write: caller holds every action that g gives on its object, with the
-// role of g as it is now.
+// role of g as it is now, and still holds the manage-access action of that
+// object, which the route authorized.
 func (s *Service) revokeCheck(caller identity.Principal, g Grant, chain []identity.Object) GrantCheck {
 	return func(ctx context.Context, reads GrantReads) error {
 		if err := s.checkUnitCollection(ctx, reads, g.Object, chain); err != nil {
@@ -155,7 +187,13 @@ func (s *Service) revokeCheck(caller identity.Principal, g Grant, chain []identi
 
 		w, ctx := s.within(ctx, reads, g.Object, chain)
 
-		return w.checkGrantHeld(ctx, caller, g)
+		if err := w.checkGrantHeld(ctx, caller, g); err != nil {
+			return err
+		}
+
+		kind, _ := KindOf(g.Object)
+
+		return w.authz.Authorize(ctx, caller, manageAccessAction(kind), g.Object)
 	}
 }
 

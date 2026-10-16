@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -39,6 +41,7 @@ func checkCases() []struct {
 		{name: "a grant check reads the current grants, roles and subjects", test: testGrantCheckReads},
 		{name: "a role check reads where the role is granted", test: testRoleCheckReads},
 		{name: "a grant check reads the collection of a unit", test: testCheckReadsUnitCollection},
+		{name: "a grant check reads no subject of a disabled principal", test: testCheckReadsNoDisabledSubject},
 	}
 }
 
@@ -327,6 +330,10 @@ func RunConcurrent(t *testing.T, newPair PairFactory) {
 		{name: "a grant check sees a revoke that committed first", test: testCheckSeesRevoke},
 		{name: "a grant waits for a role check", test: testGrantWaitsForRoleCheck},
 		{name: "a role update waits for a grant check", test: testRoleUpdateWaitsForGrantCheck},
+		{name: "a membership removal waits for a grant check", test: testSubjectChangeWaits(removeMembership)},
+		{name: "a principal delete waits for a grant check", test: testSubjectChangeWaits(deletePrincipal)},
+		{name: "a group delete waits for a grant check", test: testSubjectChangeWaits(deleteGroup)},
+		{name: "an inactivity disable waits for a grant check", test: testSubjectChangeWaits(disableInactive)},
 		{name: "a revoke of the caller's grant waits for a revoke check", test: testRevokeWaitsForRevokeCheck},
 		{name: "a unit move waits for a grant check on the unit", test: testMoveWaitsForGrantCheck},
 		{name: "a grant check sees a unit move that committed first", test: testCheckSeesMove},
@@ -554,6 +561,161 @@ func testRoleUpdateWaitsForGrantCheck(t *testing.T, a, b access.Store) {
 
 	if err := awaitRace(t, done); err != nil {
 		t.Fatalf("role update after the grant: %v", err)
+	}
+}
+
+// sweeper is a store that disables inactive principals.
+type sweeper interface {
+	SweepInactive(
+		ctx context.Context, sw accesstoken.Sweep, entry accesstoken.SweepEntryFunc,
+	) (accesstoken.SweepResult, error)
+}
+
+// sweepEntry is the audit entry of one record of a sweep.
+func sweepEntry(at time.Time, object string) audit.Entry {
+	e := entry()
+	e.At = at
+	e.Object = object
+
+	return e
+}
+
+// disableAll disables every inactive principal of s: alice, who has no
+// activity after her creation.
+func disableAll(ctx context.Context, s sweeper) error {
+	_, err := s.SweepInactive(
+		ctx,
+		accesstoken.Sweep{Inactivity: time.Millisecond, Tokens: false, Accounts: true},
+		sweepEntry,
+	)
+	if err != nil {
+		return fmt.Errorf("sweep inactive principals: %w", err)
+	}
+
+	return nil
+}
+
+// testCheckReadsNoDisabledSubject checks that the reads of a grant check
+// answer no subject for a principal that is disabled.
+func testCheckReadsNoDisabledSubject(t *testing.T, s access.Store) {
+	t.Helper()
+
+	ps, isPrincipals := s.(principal.Store)
+	sw, isSweeper := s.(sweeper)
+
+	if !isPrincipals || !isSweeper {
+		t.Skip("the store keeps no principals or disables no principal")
+	}
+
+	seedCaller(t, ps)
+
+	if err := disableAll(t.Context(), sw); err != nil {
+		t.Fatal(err)
+	}
+
+	ran := false
+	check := func(ctx context.Context, r access.GrantReads) error {
+		ran = true
+
+		subjects, err := r.SubjectsOf(ctx, "alice")
+		if err != nil {
+			return err
+		}
+
+		if len(subjects) != 0 {
+			t.Errorf("subjects of a disabled principal in the check = %v, want none", subjects)
+		}
+
+		return nil
+	}
+
+	g := newGrant("grt-new", principalSubject("prn-a"), access.RoleViewer, identity.ServerObject())
+	if err := s.CreateGrant(t.Context(), g, fenceOf(t, s, ""), entry(), check); err != nil {
+		t.Fatalf("grant with a check: %v", err)
+	}
+
+	if !ran {
+		t.Fatal("the store did not run the check of the grant")
+	}
+}
+
+// subjectStore is a store that keeps principals and disables inactive
+// ones.
+type subjectStore interface {
+	principal.Store
+	sweeper
+}
+
+// subjectChange is a write on handle b that takes the group grp-1 from the
+// subjects of alice.
+type subjectChange func(ctx context.Context, b subjectStore) error
+
+func removeMembership(ctx context.Context, b subjectStore) error {
+	return b.RemoveMember(ctx, "grp-1", "prn-a", entry())
+}
+
+func deletePrincipal(ctx context.Context, b subjectStore) error {
+	return b.DeletePrincipal(ctx, "prn-a", entry())
+}
+
+func deleteGroup(ctx context.Context, b subjectStore) error {
+	return b.DeleteGroup(ctx, "grp-1", entry())
+}
+
+func disableInactive(ctx context.Context, b subjectStore) error {
+	return disableAll(ctx, b)
+}
+
+// aliceInGroup is a check that refuses the write with ErrEscalation
+// unless the group grp-1 is a subject of alice, as an escalation check
+// through a group grant does.
+func aliceInGroup(ctx context.Context, r access.GrantReads) error {
+	subjects, err := r.SubjectsOf(ctx, "alice")
+	if err != nil {
+		return err
+	}
+
+	if !slices.Contains(subjects, opsGroup1()) {
+		return access.ErrEscalation
+	}
+
+	return nil
+}
+
+// testSubjectChangeWaits checks that change on handle b, which takes the
+// group grp-1 from the subjects of alice, waits for a grant on handle a
+// while its check runs, and that a later check sees the change.
+func testSubjectChangeWaits(change subjectChange) func(t *testing.T, a, b access.Store) {
+	return func(t *testing.T, a, b access.Store) {
+		t.Helper()
+
+		as, aOK := a.(subjectStore)
+		bs, bOK := b.(subjectStore)
+
+		if !aOK || !bOK {
+			t.Skip("the store keeps no principals or disables no principal")
+		}
+
+		seedCaller(t, as)
+
+		ctx := t.Context()
+		fence := fenceOf(t, a, "")
+
+		check, done := blocking(t, func() error { return change(ctx, bs) }, aliceInGroup)
+
+		g := newGrant("grt-1", principalSubject("prn-b"), access.RoleViewer, identity.ServerObject())
+		if err := a.CreateGrant(ctx, g, fence, entry(), check); err != nil {
+			t.Fatalf("grant while alice is in grp-1: %v", err)
+		}
+
+		if err := awaitRace(t, done); err != nil {
+			t.Fatalf("change after the grant: %v", err)
+		}
+
+		later := newGrant("grt-2", principalSubject("prn-b"), access.RoleWriter, identity.ServerObject())
+		if err := a.CreateGrant(ctx, later, fence, entry(), aliceInGroup); !errors.Is(err, access.ErrEscalation) {
+			t.Fatalf("grant after the change: err = %v, want ErrEscalation", err)
+		}
 	}
 }
 
