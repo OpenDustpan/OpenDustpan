@@ -406,18 +406,6 @@ func (fakeStates) DeleteExpiredPendingStateVersions(
 	return nil, nil
 }
 
-func (fakeStates) ListUnsealedStateVersions(
-	context.Context,
-) ([]workspace.StateVersion, error) {
-	return nil, nil
-}
-
-func (fakeStates) SealStateVersion(
-	context.Context, workspace.StateVersionID, blob.Key, []byte, namespace.Fence,
-) error {
-	return nil
-}
-
 // fakeBlobs answers no content. The force-unlock path reads none.
 type fakeBlobs struct{}
 
@@ -1057,19 +1045,64 @@ func TestWatcherCachesWithinLimit(t *testing.T) {
 	}
 }
 
-func TestWatcherFallsBackOnError(t *testing.T) {
+// flakyStore answers state, or errTestUnavailable while fail is set.
+type flakyStore struct {
+	state maintenance.State
+	fail  bool
+}
+
+func (s *flakyStore) GetState(context.Context) (maintenance.State, error) {
+	if s.fail {
+		return "", errTestUnavailable
+	}
+
+	return s.state, nil
+}
+
+func (s *flakyStore) SetState(_ context.Context, state maintenance.State) error {
+	s.state = state
+
+	return nil
+}
+
+func (s *flakyStore) SetStateIf(_ context.Context, _, next maintenance.State) error {
+	s.state = next
+
+	return nil
+}
+
+// TestWatcherFailsClosedBeforeTheFirstRead proves that a watcher whose
+// reads all failed answers maintenance, and that after a good read a
+// failed read keeps the last state it read.
+func TestWatcherFailsClosedBeforeTheFirstRead(t *testing.T) {
 	t.Parallel()
 
 	watcher := maintenance.NewWatcher(errStore{}, nil, 0)
-	if got := watcher.State(t.Context()); got != maintenance.StateNormal {
-		t.Fatalf("watcher state with no good read = %q, want normal", got)
+	if got := watcher.State(t.Context()); got != maintenance.StateMaintenance {
+		t.Fatalf("watcher state with no good read = %q, want maintenance", got)
 	}
 
-	store := &countStore{state: maintenance.StateMaintenance, reads: 0}
-	flaky := maintenance.NewWatcher(store, nil, time.Minute)
+	for _, last := range []maintenance.State{maintenance.StateNormal, maintenance.StateMaintenance} {
+		now := time.Unix(0, 0)
+		store := &flakyStore{state: last, fail: true}
+		flaky := maintenance.NewWatcher(store, func() time.Time { return now }, time.Minute)
 
-	if got := flaky.State(t.Context()); got != maintenance.StateMaintenance {
-		t.Fatalf("flaky watcher state = %q, want maintenance", got)
+		if got := flaky.State(t.Context()); got != maintenance.StateMaintenance {
+			t.Fatalf("flaky watcher state before a good read = %q, want maintenance", got)
+		}
+
+		store.fail = false
+
+		if got := flaky.State(t.Context()); got != last {
+			t.Fatalf("flaky watcher state after a good read = %q, want %q", got, last)
+		}
+
+		store.fail = true
+		now = now.Add(2 * time.Minute)
+
+		if got := flaky.State(t.Context()); got != last {
+			t.Fatalf("flaky watcher state after a failed read = %q, want the last read %q", got, last)
+		}
 	}
 }
 

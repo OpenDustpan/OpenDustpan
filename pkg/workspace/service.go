@@ -131,7 +131,11 @@ type StateStore interface {
 	//   - the workspace is held by lock sv.LockID, else ErrNotLocked or
 	//     ErrLockedByOther;
 	//   - unless sv.Force, the current state (if any) has sv.Lineage, else
-	//     ErrLineageMismatch, and a lower serial, else ErrStaleSerial.
+	//     ErrLineageMismatch, and a lower serial, else ErrStaleSerial;
+	//   - when sv.RestoredFrom is set, the current state (if any) does not
+	//     restore sv.RestoredFrom for sv.Holder, else ErrAlreadyRestored: two
+	//     concurrent restores of one version write one version, also across
+	//     services.
 	// Those errors, ErrNotFound, ErrStateVersionNotFound,
 	// namespace.ErrNotFound and namespace.ErrFenced mean nothing was
 	// written. Any other error leaves the outcome unknown: the version may
@@ -214,25 +218,6 @@ type StateStore interface {
 	// when fence is stale. A refused streamed write uses it when the finalize
 	// outcome is known, so its placeholder does not fill the pending cap.
 	DiscardStateVersion(ctx context.Context, id StateVersionID, fence namespace.Fence) error
-	// ListUnsealedStateVersions returns the finalized state versions that
-	// still hold plain content, ordered by version ID, so the seal job
-	// seals them. A version without content stays out: a pending row names
-	// no content yet. It returns no sentinel errors.
-	ListUnsealedStateVersions(ctx context.Context) ([]StateVersion, error)
-	// SealStateVersion moves the finalized unsealed version id to the
-	// sealed blob under content with the sealed outputs document, and
-	// marks it sealed, in one fenced transaction. It is idempotent: a
-	// version that is already sealed succeeds and changes nothing, so a
-	// retry after a crash never fails. It returns ErrStateVersionNotFound
-	// when id does not exist, namespace.ErrNotFound when the namespace
-	// does not exist, or namespace.ErrFenced when fence is stale.
-	SealStateVersion(
-		ctx context.Context,
-		id StateVersionID,
-		content blob.Key,
-		outputs []byte,
-		fence namespace.Fence,
-	) error
 }
 
 // Config holds the dependencies of a Service.
@@ -1335,6 +1320,10 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	}
 
 	sv, err := s.copyState(ctx, w, src)
+	if errors.Is(err, ErrAlreadyRestored) {
+		sv, err = s.answerDuplicateRestore(ctx, id, from, holder, err)
+	}
+
 	if !release {
 		return sv, err
 	}
@@ -1342,6 +1331,25 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	_, unlockErr := s.Unlock(ctx, id, holder)
 
 	return sv, errors.Join(err, unlockErr)
+}
+
+// answerDuplicateRestore answers the version that a concurrent restore of from
+// made current, after the store refused this restore as a duplicate with
+// dupErr. The duplicate wrote nothing. When the current state no longer
+// restores from, dupErr stays the answer.
+func (s *Service) answerDuplicateRestore(
+	ctx context.Context, id ID, from StateVersionID, holder string, dupErr error,
+) (StateVersion, error) {
+	retried, found, err := s.restoredCurrent(ctx, id, from, holder)
+	if err != nil {
+		return StateVersion{}, errors.Join(dupErr, err)
+	}
+
+	if !found {
+		return StateVersion{}, dupErr
+	}
+
+	return retried, nil
 }
 
 // followedState returns the current state version of the unit, and whether the
@@ -1670,14 +1678,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	sv.Content = key
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
-		err = fmt.Errorf("finalize restored state %s: %w", sv.ID, err)
-		if rejected(err) {
-			// Nothing was written, so this attempt's blob is an orphan.
-			return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
-		}
-
-		// The outcome is unknown; the version may point at this blob. Keep it.
-		return StateVersion{}, err
+		return StateVersion{}, s.refusedRestore(ctx, sv, fence, err)
 	}
 
 	// The caller renders the new version: carry the plain outputs, while the
@@ -1685,6 +1686,26 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	sv.Outputs = outputs
 
 	return sv, nil
+}
+
+// refusedRestore cleans up after the failed finalize of the restored version
+// sv and returns the error. A rejection wrote nothing, so the blob of the
+// attempt is an orphan and goes. A duplicate restore also discards its pending
+// row, so the row does not fill the pending cap. Any other error leaves the
+// outcome unknown: the version may name the blob, so it stays.
+func (s *Service) refusedRestore(
+	ctx context.Context, sv StateVersion, fence namespace.Fence, finalizeErr error,
+) error {
+	err := fmt.Errorf("finalize restored state %s: %w", sv.ID, finalizeErr)
+
+	switch {
+	case errors.Is(err, ErrAlreadyRestored):
+		return errors.Join(err, s.blobs.Delete(ctx, sv.Content), s.states.DiscardStateVersion(ctx, sv.ID, fence))
+	case rejected(err):
+		return errors.Join(err, s.blobs.Delete(ctx, sv.Content))
+	default:
+		return err
+	}
 }
 
 // openRestoreOutputs opens the stored outputs of src, so the new version
@@ -1957,6 +1978,7 @@ func (s *Service) lockKey(key string) func() {
 func rejected(err error) bool {
 	for _, sentinel := range []error{
 		ErrUploadDenied,
+		ErrAlreadyRestored,
 		ErrNotLocked,
 		ErrLockedByOther,
 		ErrLineageMismatch,

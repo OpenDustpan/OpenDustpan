@@ -52,11 +52,7 @@ func TestForceUnlockFencesSealedState(t *testing.T) {
 	f := newSealFixture(t)
 	ctx := t.Context()
 
-	f.pushPlain(t, stateDoc, nil, 1)
-
-	if _, err := f.sealed.SealUnsealedStates(ctx); err != nil {
-		t.Fatalf("seal v1: %v", err)
-	}
+	f.pushSealed(t, stateDoc, nil, 1)
 
 	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
@@ -112,6 +108,61 @@ func assertBlobHidesState(t *testing.T, f sealFixture, cur workspace.StateVersio
 
 	if strings.Contains(string(stored), "null_resource") || strings.Contains(string(stored), cur.Lineage) {
 		t.Fatal("the fence blob holds plain state")
+	}
+}
+
+// A force-unlock on a sealing service of a state that a server without a
+// sealer wrote writes a sealed fence: the blob and the outputs column hold no
+// plain state, and both read back plain through the service.
+func TestForceUnlockSealsAPlainStateOnASealingService(t *testing.T) {
+	t.Parallel()
+
+	const secret = "s3cr3t-fence-output"
+
+	doc := `{"version":4,"lineage":"lin-old","serial":1,` +
+		`"outputs":{"token":{"value":"` + secret + `","type":"string","sensitive":true}},` +
+		`"resources":[{"type":"null_resource","name":"a"}]}`
+
+	f := newSealFixture(t)
+	ctx := t.Context()
+
+	f.pushPlain(t, doc, 1)
+
+	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	if _, _, err := f.sealed.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+		t.Fatalf("force unlock: %v", err)
+	}
+
+	cur, err := f.sealed.Current(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+
+	if !cur.Sealed || cur.FenceBy != "admin" || cur.Serial != 2 {
+		t.Fatalf("fence sealed=%t by %q serial %d, want a sealed admin fence at serial 2",
+			cur.Sealed, cur.FenceBy, cur.Serial)
+	}
+
+	assertBlobHidesState(t, f, cur)
+
+	stored, err := f.store.GetStateVersion(ctx, cur.ID)
+	if err != nil {
+		t.Fatalf("get fence row: %v", err)
+	}
+
+	if strings.Contains(string(stored.Outputs), secret) {
+		t.Fatal("the outputs column of the fence holds the plain output value")
+	}
+
+	if !strings.Contains(string(cur.Outputs), secret) {
+		t.Fatalf("outputs of the fence read %s, want the plain output value", cur.Outputs)
+	}
+
+	if got := readFenced(t, f.sealed, cur); string(got["lineage"]) != `"`+cur.Lineage+`"` {
+		t.Fatalf("fence lineage %s, want %s", got["lineage"], cur.Lineage)
 	}
 }
 
@@ -186,11 +237,7 @@ func TestForceUnlockSealedNeedsSealer(t *testing.T) {
 	f := newSealFixture(t)
 	ctx := t.Context()
 
-	f.pushPlain(t, stateDoc, nil, 1)
-
-	if _, err := f.sealed.SealUnsealedStates(ctx); err != nil {
-		t.Fatalf("seal v1: %v", err)
-	}
+	f.pushSealed(t, stateDoc, nil, 1)
 
 	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)

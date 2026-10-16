@@ -165,6 +165,11 @@ func (d objectDenier) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (objectDenier) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // moveFixture is a namespace with two collections and one unit in "old".
 type moveFixture struct {
 	handler  http.Handler

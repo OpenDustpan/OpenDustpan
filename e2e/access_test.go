@@ -177,7 +177,7 @@ func runRevokeByIDOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -192,7 +192,10 @@ func runRevokeByIDOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		http.MethodPost, "/api/server/principals", `{"subject":"byid-bob","kind":"person"}`, http.StatusCreated,
 	}, &bob)
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"byid-carol","kind":"person"}`, http.StatusCreated,
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("byid-carol") + `","kind":"person"}`,
+		http.StatusCreated,
 	}, &carol)
 
 	// A grant names a unit that exists.
@@ -246,11 +249,7 @@ func runRevokeByIDOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		`{"subject":"principal:` + carol.ID + `","role":"viewer"}`, http.StatusCreated,
 	}, nil)
 
-	var carolToken e2eToken
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + carol.ID + `","name":"revoke-check"}`,
-		http.StatusCreated,
-	}, &carolToken)
+	carolToken := env.PersonalToken(ctx, t, carol.ID, "revoke-check")
 
 	var target e2eGrant
 	principalCall(ctx, t, env, principalStep{
