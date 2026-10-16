@@ -723,8 +723,11 @@ WHERE ($7::boolean
     OR g.target = $9::text
     OR (g.target = ANY($10::text[])
       AND (g.role = ANY($11::text[])
+        OR ($3::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR ($12::text <> '' AND g.target = $12::text
+      AND (g.role = ANY($13::text[])
         OR ($3::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND ($12::text = '' OR g.subject = $12::text
+  AND ($14::text = '' OR g.subject = $14::text
     OR ($1::text <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN $3::boolean THEN
     g.created_at_ms < $4::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > $5::bigint
@@ -732,18 +735,20 @@ WHERE ($7::boolean
 `
 
 type CountReviewGrantsParams struct {
-	Principal      string
-	Expand         bool
-	History        bool
-	ToMs           int64
-	FromMs         int64
-	AsOfMs         int64
-	AllGrants      bool
-	Namespace      string
-	Target         string
-	Containers     []string
-	ContainerRoles []string
-	Subject        string
+	Principal           string
+	Expand              bool
+	History             bool
+	ToMs                int64
+	FromMs              int64
+	AsOfMs              int64
+	AllGrants           bool
+	Namespace           string
+	Target              string
+	Containers          []string
+	ContainerRoles      []string
+	TokenNamespace      string
+	TokenNamespaceRoles []string
+	Subject             string
 }
 
 func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsParams) (int64, error) {
@@ -759,6 +764,8 @@ func (q *Queries) CountReviewGrants(ctx context.Context, arg CountReviewGrantsPa
 		arg.Target,
 		arg.Containers,
 		arg.ContainerRoles,
+		arg.TokenNamespace,
+		arg.TokenNamespaceRoles,
 		arg.Subject,
 	)
 	var count int64
@@ -1029,8 +1036,8 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 }
 
 const createPrincipal = `-- name: CreatePrincipal :execrows
-INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace, break_glass)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT DO NOTHING
 `
 
@@ -1043,6 +1050,7 @@ type CreatePrincipalParams struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	Namespace   string
+	BreakGlass  bool
 }
 
 func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams) (int64, error) {
@@ -1055,6 +1063,7 @@ func (q *Queries) CreatePrincipal(ctx context.Context, arg CreatePrincipalParams
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 		arg.Namespace,
+		arg.BreakGlass,
 	)
 	if err != nil {
 		return 0, err
@@ -1738,6 +1747,10 @@ const disableInactiveAccessTokens = `-- name: DisableInactiveAccessTokens :many
 UPDATE access_tokens SET disabled_at_ms = $1::bigint
 WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > $1::bigint
   AND COALESCE(last_used_at_ms, created_at_ms) <= $2::bigint
+  AND NOT EXISTS (
+    SELECT 1 FROM principals p
+    WHERE p.id = access_tokens.principal_id AND p.break_glass = TRUE
+  )
 RETURNING id, principal_id
 `
 
@@ -1751,6 +1764,8 @@ type DisableInactiveAccessTokensRow struct {
 	PrincipalID string
 }
 
+// A token of a break-glass account is always exempt from the inactivity
+// disable.
 func (q *Queries) DisableInactiveAccessTokens(ctx context.Context, arg DisableInactiveAccessTokensParams) ([]DisableInactiveAccessTokensRow, error) {
 	rows, err := q.db.Query(ctx, disableInactiveAccessTokens, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -1774,6 +1789,7 @@ func (q *Queries) DisableInactiveAccessTokens(ctx context.Context, arg DisableIn
 const disableInactivePrincipals = `-- name: DisableInactivePrincipals :many
 UPDATE principals SET disabled_at_ms = $1::bigint
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND break_glass = FALSE
   AND created_at_ms <= $2::bigint
   AND last_active_at_ms <= $2::bigint
   AND COALESCE(last_sign_in_at_ms, 0) <= $2::bigint
@@ -1792,7 +1808,8 @@ type DisableInactivePrincipalsParams struct {
 
 // A person is inactive when its creation, its activity baseline, its last
 // sign-in, and the creation and the last use of each of its tokens are all
-// at or before the cutoff.
+// at or before the cutoff. A break-glass account is always exempt from the
+// inactivity disable.
 func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInactivePrincipalsParams) ([]string, error) {
 	rows, err := q.db.Query(ctx, disableInactivePrincipals, arg.AtMs, arg.CutoffMs)
 	if err != nil {
@@ -2076,7 +2093,7 @@ func (q *Queries) GetAccessToken(ctx context.Context, id string) (GetAccessToken
 const getAccessTokenByDigest = `-- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms,
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0))::bigint AS principal_active_at_ms
@@ -2102,6 +2119,7 @@ type GetAccessTokenByDigestRow struct {
 	DisplayName           string
 	PrincipalKind         string
 	PrincipalDisabledAtMs pgtype.Int8
+	PrincipalBreakGlass   bool
 	PrincipalActiveAtMs   int64
 }
 
@@ -2125,6 +2143,7 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 		&i.DisplayName,
 		&i.PrincipalKind,
 		&i.PrincipalDisabledAtMs,
+		&i.PrincipalBreakGlass,
 		&i.PrincipalActiveAtMs,
 	)
 	return i, err
@@ -2717,6 +2736,7 @@ func (q *Queries) GetNamespaceIPAllowlist(ctx context.Context, name string) (str
 
 const getPrincipal = `-- name: GetPrincipal :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.id = $1 AND p.deleted_at_ms IS NULL
 `
@@ -2731,6 +2751,7 @@ type GetPrincipalRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs pgtype.Int8
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 }
 
@@ -2747,6 +2768,7 @@ func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow,
 		&i.UpdatedAtMs,
 		&i.DisabledAtMs,
 		&i.Namespace,
+		&i.BreakGlass,
 		&i.GroupCount,
 	)
 	return i, err
@@ -2754,6 +2776,7 @@ func (q *Queries) GetPrincipal(ctx context.Context, id string) (GetPrincipalRow,
 
 const getPrincipalBySubject = `-- name: GetPrincipalBySubject :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.subject COLLATE "C" = $1::text AND p.deleted_at_ms IS NULL
 `
@@ -2768,6 +2791,7 @@ type GetPrincipalBySubjectRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs pgtype.Int8
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 }
 
@@ -2784,6 +2808,7 @@ func (q *Queries) GetPrincipalBySubject(ctx context.Context, subject string) (Ge
 		&i.UpdatedAtMs,
 		&i.DisabledAtMs,
 		&i.Namespace,
+		&i.BreakGlass,
 		&i.GroupCount,
 	)
 	return i, err
@@ -4640,6 +4665,7 @@ func (q *Queries) ListGrantsOn(ctx context.Context, arg ListGrantsOnParams) ([]L
 
 const listGroupMembers = `-- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
   m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
@@ -4669,6 +4695,7 @@ type ListGroupMembersRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs pgtype.Int8
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 	AddedAtMs    int64
 }
@@ -4698,6 +4725,7 @@ func (q *Queries) ListGroupMembers(ctx context.Context, arg ListGroupMembersPara
 			&i.UpdatedAtMs,
 			&i.DisabledAtMs,
 			&i.Namespace,
+			&i.BreakGlass,
 			&i.GroupCount,
 			&i.AddedAtMs,
 		); err != nil {
@@ -4971,6 +4999,7 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 
 const listPrincipals = `-- name: ListPrincipals :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
@@ -5002,6 +5031,7 @@ type ListPrincipalsRow struct {
 	UpdatedAtMs  int64
 	DisabledAtMs pgtype.Int8
 	Namespace    string
+	BreakGlass   bool
 	GroupCount   int64
 }
 
@@ -5031,6 +5061,7 @@ func (q *Queries) ListPrincipals(ctx context.Context, arg ListPrincipalsParams) 
 			&i.UpdatedAtMs,
 			&i.DisabledAtMs,
 			&i.Namespace,
+			&i.BreakGlass,
 			&i.GroupCount,
 		); err != nil {
 			return nil, err
@@ -6051,41 +6082,46 @@ WHERE ($7::boolean
     OR g.target = $9::text
     OR (g.target = ANY($10::text[])
       AND (g.role = ANY($11::text[])
+        OR ($4::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR ($12::text <> '' AND g.target = $12::text
+      AND (g.role = ANY($13::text[])
         OR ($4::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
-  AND ($12::text = '' OR g.subject = $12::text
+  AND ($14::text = '' OR g.subject = $14::text
     OR ($2::text <> '' AND m.principal_id IS NOT NULL))
   AND CASE WHEN $4::boolean THEN
     g.created_at_ms < $5::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > $6::bigint
   ELSE g.created_at_ms <= $1::bigint AND COALESCE(g.revoked_at_ms, 9223372036854775807) > $1::bigint END
-  AND (g.created_at_ms > $13::bigint
-    OR (g.created_at_ms = $13::bigint
-      AND (g.id COLLATE "C" > $14::text
-        OR (g.id = $14::text
-          AND (COALESCE(m.added_at_ms, 0) > $15::bigint
-            OR (COALESCE(m.added_at_ms, 0) = $15::bigint
-              AND COALESCE(m.principal_id, '') COLLATE "C" > $16::text))))))
+  AND (g.created_at_ms > $15::bigint
+    OR (g.created_at_ms = $15::bigint
+      AND (g.id COLLATE "C" > $16::text
+        OR (g.id = $16::text
+          AND (COALESCE(m.added_at_ms, 0) > $17::bigint
+            OR (COALESCE(m.added_at_ms, 0) = $17::bigint
+              AND COALESCE(m.principal_id, '') COLLATE "C" > $18::text))))))
 ORDER BY g.created_at_ms, g.id COLLATE "C", member_added_at_ms, COALESCE(m.principal_id, '') COLLATE "C"
-LIMIT $17::bigint
+LIMIT $19::bigint
 `
 
 type ReviewGrantsParams struct {
-	AsOfMs          int64
-	Principal       string
-	Expand          bool
-	History         bool
-	ToMs            int64
-	FromMs          int64
-	AllGrants       bool
-	Namespace       string
-	Target          string
-	Containers      []string
-	ContainerRoles  []string
-	Subject         string
-	AfterAtMs       int64
-	AfterID         string
-	AfterMemberAtMs int64
-	AfterMemberID   string
-	RowLimit        int64
+	AsOfMs              int64
+	Principal           string
+	Expand              bool
+	History             bool
+	ToMs                int64
+	FromMs              int64
+	AllGrants           bool
+	Namespace           string
+	Target              string
+	Containers          []string
+	ContainerRoles      []string
+	TokenNamespace      string
+	TokenNamespaceRoles []string
+	Subject             string
+	AfterAtMs           int64
+	AfterID             string
+	AfterMemberAtMs     int64
+	AfterMemberID       string
+	RowLimit            int64
 }
 
 type ReviewGrantsRow struct {
@@ -6129,6 +6165,8 @@ func (q *Queries) ReviewGrants(ctx context.Context, arg ReviewGrantsParams) ([]R
 		arg.Target,
 		arg.Containers,
 		arg.ContainerRoles,
+		arg.TokenNamespace,
+		arg.TokenNamespaceRoles,
 		arg.Subject,
 		arg.AfterAtMs,
 		arg.AfterID,
