@@ -62,7 +62,7 @@ func limitFixture(t *testing.T, maxState int64) (fixture, *recordingBlobs) {
 		States:             store,
 		Blobs:              rec,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             newMemSealer(t, namespaces),
 		Logger:             nil,
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      maxState,

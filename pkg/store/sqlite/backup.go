@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 var (
@@ -459,6 +460,10 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(keysErr))
 	}
 
+	if sealedErr := checkSealedStateVersions(ctx, conn); sealedErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", sealedErr)
+	}
+
 	sum, err := summarizeConn(ctx, conn)
 	if err != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(err))
@@ -549,6 +554,25 @@ func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
 
 	if len(tables) > 0 {
 		return fmt.Errorf("backup breaks foreign keys of %q: %w", tables, backup.ErrCorrupt)
+	}
+
+	return nil
+}
+
+// checkSealedStateVersions refuses a staged backup with a state version that
+// is not sealed: every stored version is sealed, so an import with a plain
+// row fails instead of serving plain state.
+func checkSealedStateVersions(ctx context.Context, conn *sql.DB) error {
+	const query = `SELECT EXISTS(SELECT 1 FROM state_versions WHERE sealed = 0)`
+
+	var unsealed bool
+
+	if err := conn.QueryRowContext(ctx, query).Scan(&unsealed); err != nil {
+		return fmt.Errorf("read staged state versions: %w", backup.ErrExportRead)
+	}
+
+	if unsealed {
+		return fmt.Errorf("import holds an unsealed state version: %w", workspace.ErrUnsealedState)
 	}
 
 	return nil

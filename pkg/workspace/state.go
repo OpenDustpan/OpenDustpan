@@ -45,6 +45,9 @@ var (
 	// lie about the content, and serving sealed bytes as state would hand
 	// ciphertext to the CLI, so both fail instead.
 	ErrSealerNotConfigured = errors.New("sealed state without a sealer")
+	// ErrUnsealedState reports a state version that is not sealed. Every
+	// stored version is sealed, so an import with a plain row fails.
+	ErrUnsealedState = errors.New("state version is not sealed")
 	// ErrClientEncrypted reports a state version the client encrypted: the
 	// server keeps the envelope but cannot read the resources inside it. The
 	// resource routes answer 409, while the outputs list still works.
@@ -142,8 +145,8 @@ type StateVersion struct {
 	// override of ADR 44 decision 5. Its finalize does not check the lock.
 	UnlockedWrite bool
 	// Sealed reports that the content blob and the outputs document are
-	// sealed with the data key of the workspace scope (ADR 41 decision 10).
-	// Rows without it are read as before.
+	// sealed with the data key of the workspace scope. Every stored
+	// version is sealed.
 	Sealed bool
 	// SensitiveMarks holds the secret paths of the version, by resource
 	// instance address: each entry names the JSON Pointer paths, relative to
