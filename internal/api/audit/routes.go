@@ -79,6 +79,17 @@ func (h *Handler) buildRoutes() []Route {
 		},
 		{
 			Method: http.MethodGet,
+			Path:   "/api/audit/entries/{sequence}",
+			// The object is the namespace in the organization query value, or
+			// the installation for the value @server, as for the list.
+			Scope:         ScopeAuthorized,
+			Actions:       []identity.Action{identity.ActionNamespaceReadAudit},
+			ServerActions: []identity.Action{identity.ActionServerReadAudit},
+			Resolve:       resolveAuditObject,
+			Serve:         h.getEntry,
+		},
+		{
+			Method: http.MethodGet,
 			Path:   "/api/audit/check",
 			// The object is the namespace in the organization query value, or
 			// the installation for the value @server.
