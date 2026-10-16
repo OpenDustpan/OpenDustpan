@@ -189,6 +189,7 @@ func newCheckpoints(cfg *settings) (*audit.Checkpoints, error) {
 		Blobs:   cfg.blobStore,
 		Entries: reader,
 		Signer:  cfg.auditSigner,
+		Now:     cfg.now,
 	}), nil
 }
 
@@ -965,9 +966,9 @@ func (c *auditChain) checkChain(ctx context.Context, scopes []namespace.Name) {
 
 // checkChainAndCheckpoints runs the chain check of each scope, then the
 // checkpoint step: it checks the stored checkpoints of the scope and signs
-// a new checkpoint only when both match. While a change of the chain waits,
-// it checks but signs nothing. A scope that fails either check counts in
-// dustpan_audit_chain_invalid.
+// a new checkpoint only when both match. While a change of the chain waits
+// or a restore runs, it checks but signs nothing. A scope that fails either
+// check counts in dustpan_audit_chain_invalid.
 func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []namespace.Name) {
 	rec, err := c.store.ChainRecord(ctx)
 	if err != nil {
@@ -977,6 +978,8 @@ func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []name
 
 		return
 	}
+
+	restoring := c.restoring(ctx)
 
 	var (
 		invalid int
@@ -995,7 +998,7 @@ func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []name
 			continue
 		}
 
-		if rec.Pending {
+		if rec.Pending || restoring {
 			continue
 		}
 
@@ -1006,6 +1009,25 @@ func (c *auditChain) checkChainAndCheckpoints(ctx context.Context, scopes []name
 	}
 
 	c.reportCheck(ctx, invalid, errors.Join(errs...))
+}
+
+// restoring reports whether a restore runs. A nil check means no restore
+// runs. A failed check logs the error and skips the writes of this check.
+func (c *auditChain) restoring(ctx context.Context) bool {
+	if c.restoreRunning == nil {
+		return false
+	}
+
+	running, err := c.restoreRunning(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.logger.WarnContext(ctx, "audit chain check: read running restores", slog.String("error", err.Error()))
+		}
+
+		return true
+	}
+
+	return running
 }
 
 // checkScope checks the chain of scope and the stored checkpoints of

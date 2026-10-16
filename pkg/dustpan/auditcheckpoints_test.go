@@ -66,7 +66,10 @@ func TestAuditCheckpointsNeedTheChain(t *testing.T) {
 	srv, _ := newCheckpointServer(t, st, openCheckpointBlobs(t),
 		dustpan.WithAuditChain(audit.ChainOff), dustpan.WithAuditCheckpoints(newTestSigner(t, 1)))
 
-	if err := srv.Run(t.Context()); !errors.Is(err, dustpan.ErrCheckpointsNeedChain) {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Run(ctx); !errors.Is(err, dustpan.ErrCheckpointsNeedChain) {
 		t.Fatalf("run: got %v, want ErrCheckpointsNeedChain", err)
 	}
 }

@@ -459,6 +459,7 @@ func TestCheckWritesNoCheckpointWhileAChangeWaits(t *testing.T) {
 		Blobs:   blobs,
 		Entries: reader,
 		Signer:  newTestCheckpointSigner(t),
+		Now:     nil,
 	})
 	chain.observed = metrics.NewServerMetrics("test", time.Now())
 
@@ -496,5 +497,70 @@ func TestCheckWritesNoCheckpointWhileAChangeWaits(t *testing.T) {
 
 	if got := checkpointCount(t, blobs); got != 1 {
 		t.Fatalf("checkpoints after the wait: got %d objects, want one", got)
+	}
+}
+
+// TestCheckWritesNoCheckpointWhileRestoreRuns proves that with checkpoints
+// on, check runs the chain check and the checkpoint check but writes no
+// checkpoint while a restore runs. After the restore ends, the next check
+// signs the head.
+func TestCheckWritesNoCheckpointWhileRestoreRuns(t *testing.T) {
+	t.Parallel()
+
+	chain := newTestAuditChain(t, audit.ChainOn)
+
+	blobs := openTestBlobs(t)
+
+	reader, ok := chain.entries.(audit.EntryReader)
+	if !ok {
+		t.Fatal("audit store reads no single entry")
+	}
+
+	chain.checkpoints = audit.NewCheckpoints(audit.CheckpointsConfig{
+		Blobs:   blobs,
+		Entries: reader,
+		Signer:  newTestCheckpointSigner(t),
+		Now:     nil,
+	})
+	chain.observed = metrics.NewServerMetrics("test", time.Now())
+
+	stored, err := chain.server.AppendServer(t.Context(), pendingTestEntry())
+	if err != nil {
+		t.Fatalf("append server entry: %v", err)
+	}
+
+	if stored.Hash == "" {
+		t.Fatal("server entry: no hash, want the chain on")
+	}
+
+	rec, err := chain.store.ChainRecord(t.Context())
+	if err != nil {
+		t.Fatalf("chain record: %v", err)
+	}
+
+	rec.Pending = false
+
+	if err := chain.store.SaveChainRecord(t.Context(), rec); err != nil {
+		t.Fatalf("save chain record: %v", err)
+	}
+
+	chain.restoreRunning = func(context.Context) (bool, error) { return true, nil }
+
+	chain.check(t.Context())
+
+	if got := checkpointCount(t, blobs); got != 0 {
+		t.Fatalf("checkpoints while a restore runs: got %d objects, want none", got)
+	}
+
+	if got := metricLine(t, chain); !strings.Contains(got, "dustpan_audit_chain_invalid 0") {
+		t.Fatalf("metrics after the check while a restore runs:\n%s\nwant no invalid scope", got)
+	}
+
+	chain.restoreRunning = func(context.Context) (bool, error) { return false, nil }
+
+	chain.check(t.Context())
+
+	if got := checkpointCount(t, blobs); got != 1 {
+		t.Fatalf("checkpoints after the restore: got %d objects, want one", got)
 	}
 }

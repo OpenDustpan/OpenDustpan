@@ -27,6 +27,26 @@ func (c *countingEpochs) NewEpoch(context.Context, time.Time) (int64, error) {
 	return c.next, nil
 }
 
+func (c *countingEpochs) Now() time.Time {
+	return time.Now()
+}
+
+// clockEpochs records the time that NewEpoch receives.
+type clockEpochs struct {
+	now time.Time
+	got time.Time
+}
+
+func (c *clockEpochs) NewEpoch(_ context.Context, at time.Time) (int64, error) {
+	c.got = at
+
+	return 7, nil
+}
+
+func (c *clockEpochs) Now() time.Time {
+	return c.now
+}
+
 // newEpochHandler builds a Handler with epochs and the audit store st.
 func newEpochHandler(t *testing.T, epochs apiserver.CheckpointEpochs, st *sqlite.Store) *apiserver.Handler {
 	t.Helper()
@@ -115,5 +135,22 @@ func TestNewCheckpointEpochWhileCheckpointsAreOff(t *testing.T) {
 	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/audit/checkpoint-epochs", "")
 	if status != http.StatusConflict || !strings.Contains(body, "audit checkpoints are off") {
 		t.Fatalf("new epoch with checkpoints off: status %d, body %s, want 409", status, body)
+	}
+}
+
+func TestNewCheckpointEpochUsesTheTimeOfThePort(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, time.October, 15, 12, 0, 0, 0, time.UTC)
+	epochs := &clockEpochs{now: at, got: time.Time{}}
+	handler := newEpochHandler(t, epochs, openEpochStore(t))
+
+	status, body := serveMaintenance(t, handler, http.MethodPost, "/api/server/audit/checkpoint-epochs", "")
+	if status != http.StatusCreated || !strings.Contains(body, `"epoch":7`) {
+		t.Fatalf("new epoch: status %d, body %s, want 201 and epoch 7", status, body)
+	}
+
+	if !epochs.got.Equal(at) {
+		t.Fatalf("new epoch time: got %s, want %s", epochs.got.Format(time.RFC3339Nano), at.Format(time.RFC3339Nano))
 	}
 }

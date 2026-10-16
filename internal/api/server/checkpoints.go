@@ -16,6 +16,8 @@ import (
 type CheckpointEpochs interface {
 	// NewEpoch starts the epoch after the current one at now and answers it.
 	NewEpoch(ctx context.Context, now time.Time) (int64, error)
+	// Now answers the time of the checkpoints.
+	Now() time.Time
 }
 
 // errCheckpointsOff reports a checkpoint route while signed checkpoints are
@@ -58,7 +60,7 @@ func (h *Handler) newCheckpointEpoch(
 		return
 	}
 
-	now := time.Now()
+	now := h.epochs.Now()
 
 	epoch, err := h.epochs.NewEpoch(ctx, now)
 	if err != nil {

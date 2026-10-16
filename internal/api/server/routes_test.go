@@ -976,6 +976,8 @@ type fakeEpochs struct{}
 
 func (fakeEpochs) NewEpoch(context.Context, time.Time) (int64, error) { return 1, nil }
 
+func (fakeEpochs) Now() time.Time { return time.Now() }
+
 // wantSuccessStatus answers the success status of route: POST
 // /api/server/backups and POST /api/server/restores start work in the
 // background and answer 202, POST /api/server/namespaces creates a namespace

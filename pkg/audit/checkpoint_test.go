@@ -97,13 +97,17 @@ func newCheckpointFixture(t *testing.T, n int) checkpointFixture {
 	return checkpointFixture{
 		blobs:   blobs,
 		entries: entries,
-		cps:     audit.NewCheckpoints(audit.CheckpointsConfig{Blobs: blobs, Entries: entries, Signer: newSigner(t, 7)}),
+		cps: audit.NewCheckpoints(audit.CheckpointsConfig{
+			Blobs: blobs, Entries: entries, Signer: newSigner(t, 7), Now: nil,
+		}),
 	}
 }
 
 // with returns checkpoints over the same blobs and entries with signer.
 func (f checkpointFixture) with(signer *audit.Signer) *audit.Checkpoints {
-	return audit.NewCheckpoints(audit.CheckpointsConfig{Blobs: f.blobs, Entries: f.entries, Signer: signer})
+	return audit.NewCheckpoints(audit.CheckpointsConfig{
+		Blobs: f.blobs, Entries: f.entries, Signer: signer, Now: nil,
+	})
 }
 
 func (f checkpointFixture) write(t *testing.T) bool {
@@ -848,6 +852,91 @@ func TestSignerVerifyFailsOnAnyFieldChange(t *testing.T) {
 				t.Fatalf("verify: got %v, want ErrCheckpointMismatch", err)
 			}
 		})
+	}
+}
+
+// epochSwapBlobs wraps a blob store and starts epoch 1 after the first
+// list of the epoch prefix, so the epoch changes between the two reads of
+// one Write.
+type epochSwapBlobs struct {
+	inner  blob.Store
+	signer *audit.Signer
+	lists  int
+}
+
+func (s *epochSwapBlobs) Put(ctx context.Context, key blob.Key, r io.Reader) error {
+	return s.inner.Put(ctx, key, r)
+}
+
+func (s *epochSwapBlobs) Get(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
+	return s.inner.Get(ctx, key)
+}
+
+func (s *epochSwapBlobs) Delete(ctx context.Context, key blob.Key) error {
+	return s.inner.Delete(ctx, key)
+}
+
+// List answers the objects under prefix. After the first list of the epoch
+// prefix, it stores epoch 1, so the next epoch read finds a new epoch.
+func (s *epochSwapBlobs) List(ctx context.Context, prefix string) ([]blob.Object, error) {
+	out, err := s.inner.List(ctx, prefix)
+	if err != nil || prefix != "audit-checkpoints/epochs/" || s.lists != 0 {
+		return out, err
+	}
+
+	s.lists++
+
+	rec := s.signer.SignEpoch(audit.EpochRecord{
+		At:        time.Unix(1_700_000_100, 0),
+		KeyID:     "",
+		Signature: nil,
+		Epoch:     1,
+	})
+
+	raw, marshalErr := audit.MarshalEpoch(rec)
+	if marshalErr != nil {
+		return out, marshalErr
+	}
+
+	key, keyErr := audit.EpochKey(1)
+	if keyErr != nil {
+		return out, keyErr
+	}
+
+	if putErr := s.inner.Put(ctx, key, bytes.NewReader(raw)); putErr != nil {
+		return out, putErr
+	}
+
+	return out, nil
+}
+
+func (s *epochSwapBlobs) Ping(ctx context.Context) error {
+	return s.inner.Ping(ctx)
+}
+
+// TestCheckpointsWriteSkipsAnEpochChange proves that Write stores nothing
+// when the epoch changes between its two reads.
+func TestCheckpointsWriteSkipsAnEpochChange(t *testing.T) {
+	t.Parallel()
+
+	f := newCheckpointFixture(t, 3)
+	signer := newSigner(t, 7)
+	swap := &epochSwapBlobs{inner: f.blobs, signer: signer, lists: 0}
+	cps := audit.NewCheckpoints(audit.CheckpointsConfig{
+		Blobs: swap, Entries: f.entries, Signer: signer, Now: nil,
+	})
+
+	wrote, err := cps.Write(t.Context(), "acme", time.Unix(1_700_000_100, 0))
+	if err != nil {
+		t.Fatalf("write across an epoch change: got error %v, want no error", err)
+	}
+
+	if wrote {
+		t.Fatal("write across an epoch change: wrote a checkpoint")
+	}
+
+	if n := checkpointObjects(t, f.blobs); n != 0 {
+		t.Fatalf("checkpoints across an epoch change: got %d objects, want none", n)
 	}
 }
 

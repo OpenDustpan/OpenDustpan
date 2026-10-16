@@ -390,6 +390,7 @@ type CheckpointsConfig struct {
 	Blobs   blob.Store
 	Entries EntryReader
 	Signer  *Signer
+	Now     func() time.Time
 }
 
 // Checkpoints writes and checks the checkpoints of the audit log. It keeps
@@ -404,6 +405,7 @@ type Checkpoints struct {
 	blobs   blob.Store
 	entries EntryReader
 	signer  *Signer
+	now     func() time.Time
 	mu      sync.Mutex
 }
 
@@ -421,6 +423,7 @@ func NewCheckpoints(cfg CheckpointsConfig) *Checkpoints {
 		blobs:   cfg.Blobs,
 		entries: cfg.Entries,
 		signer:  cfg.Signer,
+		now:     cfg.Now,
 		mu:      sync.Mutex{},
 	}
 }
@@ -428,6 +431,15 @@ func NewCheckpoints(cfg CheckpointsConfig) *Checkpoints {
 // Signer answers the signer of the checkpoints.
 func (c *Checkpoints) Signer() *Signer {
 	return c.signer
+}
+
+// Now answers the time of the checkpoints.
+func (c *Checkpoints) Now() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+
+	return time.Now()
 }
 
 // CheckpointResult reports the checkpoint check of a scope. Valid is true
@@ -544,7 +556,8 @@ func (c *Checkpoints) NewEpoch(ctx context.Context, now time.Time) (int64, error
 // signs nothing and answers false and an error that wraps
 // ErrCheckpointMismatch. A bad epoch object also signs nothing and returns
 // an error that wraps ErrCheckpointMismatch. The caller counts such an
-// error as a scope that does not match.
+// error as a scope that does not match. When the epoch changes before the
+// store, it stores nothing and answers false and no error.
 func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.Time) (bool, error) {
 	last, found, err := c.entries.LastEntry(ctx, scope)
 	if err != nil {
@@ -588,6 +601,15 @@ func (c *Checkpoints) Write(ctx context.Context, scope namespace.Name, now time.
 	raw, err := MarshalCheckpoint(cp)
 	if err != nil {
 		return false, err
+	}
+
+	again, err := c.Epoch(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	if again != epoch {
+		return false, nil
 	}
 
 	err = c.blobs.Put(ctx, key, bytes.NewReader(raw))
