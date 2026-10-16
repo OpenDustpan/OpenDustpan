@@ -170,3 +170,21 @@ var manageAccessActions = map[ObjectKind]identity.Action{
 	ObjectCollection: identity.ActionCollectionManageAccess,
 	ObjectUnit:       identity.ActionUnitManageAccess,
 }
+
+// revokeCheck returns the check that a revoke of g by caller runs in its
+// write: caller holds every action that g gives on its object, with the
+// role of g as it is now, and still holds the manage-access action of that
+// object, which the route authorized.
+func (s *Service) revokeCheck(caller identity.Principal, g Grant, chain []identity.Object) GrantCheck {
+	return func(ctx context.Context, reads GrantReads) error {
+		w, ctx := s.within(ctx, reads, g.Object, chain)
+
+		if err := w.checkGrantHeld(ctx, caller, g); err != nil {
+			return err
+		}
+
+		kind, _ := KindOf(g.Object)
+
+		return w.authz.Authorize(ctx, caller, manageAccessAction(kind), g.Object)
+	}
+}
