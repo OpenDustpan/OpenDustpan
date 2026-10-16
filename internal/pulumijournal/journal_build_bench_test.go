@@ -107,10 +107,17 @@ func benchChangeEntries(n int) []byte {
 	return []byte(b.String())
 }
 
+// benchCounts holds the decoded entry counts that benchBuild reports.
+type benchCounts struct {
+	entryCount    int
+	newStateBytes int
+	linkIndex     int
+}
+
 // benchBuild runs the replayer on base and entries and reports the peak heap
-// in bytes. entryCount and newStateBytes come from decoding entries, and
-// linkIndex is the resources of the output.
-func benchBuild(b *testing.B, base string, entries []byte, entryCount, newStateBytes, linkIndex int) {
+// in bytes. counts holds the entry count and new state bytes from decoding
+// entries, and the resources of the output as the link index.
+func benchBuild(b *testing.B, base string, entries []byte, counts benchCounts) {
 	b.Helper()
 
 	now := func() time.Time { return time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC) }
@@ -152,16 +159,17 @@ func benchBuild(b *testing.B, base string, entries []byte, entryCount, newStateB
 	b.ReportMetric(float64(peak), "peak-heap-bytes")
 	b.ReportMetric(float64(len(entries)), "batch-bytes")
 	b.ReportMetric(float64(out.Len()), "out-bytes")
-	b.ReportMetric(float64(entryCount), "entries")
-	b.ReportMetric(float64(newStateBytes), "new-state-bytes")
-	b.ReportMetric(float64(linkIndex), "link-index")
+	b.ReportMetric(float64(counts.entryCount), "entries")
+	b.ReportMetric(float64(counts.newStateBytes), "new-state-bytes")
+	b.ReportMetric(float64(counts.linkIndex), "link-index")
 }
 
 // countBenchEntries decodes entries and returns its entry count and its new
 // state bytes, counted as the replay counts them.
-func countBenchEntries(b *testing.B, entries []byte) (int, int) {
+//
+//nolint:nonamedreturns // The names keep the entry count and the new state bytes in order at callers.
+func countBenchEntries(b *testing.B, entries []byte) (count, stateBytes int) {
 	b.Helper()
-	var count, stateBytes int
 	err := pulumijournal.DecodeEntries(bytes.NewReader(entries), 2, func(entry pulumijournal.JournalEntry) error {
 		count++
 		stateBytes += len(entry.State)
@@ -187,10 +195,11 @@ func countBenchEntries(b *testing.B, entries []byte) (int, int) {
 func BenchmarkJournalBuildCreate3000(b *testing.B) {
 	entries := benchCreateEntries(3000)
 	count, stateBytes := countBenchEntries(b, entries)
+	counts := benchCounts{entryCount: count, newStateBytes: stateBytes, linkIndex: 3000}
 	b.SetBytes(int64(len(entries)))
 	b.ResetTimer()
 	for b.Loop() {
-		benchBuild(b, `{"resources":[]}`, entries, count, stateBytes, 3000)
+		benchBuild(b, `{"resources":[]}`, entries, counts)
 	}
 }
 
@@ -200,10 +209,11 @@ func BenchmarkJournalBuildChange3000(b *testing.B) {
 	base := benchBase(3000)
 	entries := benchChangeEntries(3000)
 	count, stateBytes := countBenchEntries(b, entries)
+	counts := benchCounts{entryCount: count, newStateBytes: stateBytes, linkIndex: 3000}
 	b.SetBytes(int64(len(entries)))
 	b.ResetTimer()
 	for b.Loop() {
-		benchBuild(b, base, entries, count, stateBytes, 3000)
+		benchBuild(b, base, entries, counts)
 	}
 }
 
@@ -212,10 +222,11 @@ func BenchmarkJournalBuildChange3000(b *testing.B) {
 func BenchmarkJournalBuildCreate10000(b *testing.B) {
 	entries := benchCreateEntries(10000)
 	count, stateBytes := countBenchEntries(b, entries)
+	counts := benchCounts{entryCount: count, newStateBytes: stateBytes, linkIndex: 10000}
 	b.SetBytes(int64(len(entries)))
 	b.ResetTimer()
 	for b.Loop() {
-		benchBuild(b, `{"resources":[]}`, entries, count, stateBytes, 10000)
+		benchBuild(b, `{"resources":[]}`, entries, counts)
 	}
 }
 
@@ -225,9 +236,10 @@ func BenchmarkJournalBuildChange10000(b *testing.B) {
 	base := benchBase(10000)
 	entries := benchChangeEntries(10000)
 	count, stateBytes := countBenchEntries(b, entries)
+	counts := benchCounts{entryCount: count, newStateBytes: stateBytes, linkIndex: 10000}
 	b.SetBytes(int64(len(entries)))
 	b.ResetTimer()
 	for b.Loop() {
-		benchBuild(b, base, entries, count, stateBytes, 10000)
+		benchBuild(b, base, entries, counts)
 	}
 }
