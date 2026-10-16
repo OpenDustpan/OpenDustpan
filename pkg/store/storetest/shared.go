@@ -14,8 +14,9 @@ import (
 // connections: a write through one handle must not depend on a cache or a
 // lock of the other. The factory closes both handles when the subtest ends.
 //
-// A SQLite adapter opens one file twice. A PostgreSQL adapter opens one
-// schema twice:
+// An adapter that allows one handle per database, such as SQLite, passes
+// that handle twice: one database with two concurrent callers. A PostgreSQL
+// adapter opens one schema twice:
 //
 //	storetest.RunShared(t, func(t *testing.T) (storetest.Store, storetest.Store) {
 //		url := newSchemaURL(t)

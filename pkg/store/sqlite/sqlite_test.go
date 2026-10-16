@@ -44,8 +44,9 @@ func TestConformance(t *testing.T) {
 	})
 }
 
-// TestSharedConformance runs the two-handle suite: both handles open one
-// file, as two processes open one database.
+// TestSharedConformance runs the two-handle suite. One SQLite file allows
+// one store, so the suite gets that store twice: one database with two
+// concurrent callers.
 func TestSharedConformance(t *testing.T) {
 	t.Parallel()
 
@@ -56,7 +57,9 @@ func TestSharedConformance(t *testing.T) {
 
 		copyTemplate(t, path)
 
-		return openPath(t, path), openPath(t, path)
+		s := openPath(t, path)
+
+		return s, s
 	})
 }
 
@@ -230,22 +233,9 @@ func TestAuditChainConformance(t *testing.T) {
 					t.Fatalf("change entry %d: %v", seq, err)
 				}
 			},
-			Reopen: func(t *testing.T) audittest.ChainStore {
-				t.Helper()
-
-				second, err := sqlite.Open(t.Context(), path)
-				if err != nil {
-					t.Fatalf("reopen store: %v", err)
-				}
-
-				t.Cleanup(func() {
-					if err := second.Close(); err != nil {
-						t.Errorf("close store: %v", err)
-					}
-				})
-
-				return second
-			},
+			// One SQLite file allows one store, so there is no second
+			// handle to reopen.
+			Reopen: nil,
 		}
 	})
 }

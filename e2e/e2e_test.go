@@ -38,6 +38,7 @@ import (
 	"opendustpan.org/opendustpan/e2e"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
+	storeschema "opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 const (
@@ -11051,11 +11052,18 @@ const upgradeReleasedClient = "v0.1.0"
 const upgradeSchemaMinimum = "v0.2.0"
 
 // runUpgradeCheckOnStore runs the upgrade check cases on one store through
-// the running binary server: the migrated database is up to date, and the
-// newer, old and fresh states are reached by editing schema_migrations while
-// the server runs, each through `upgrade check --server` with the environment
-// token. The cases run in order on one server and restore its rows, so they
-// never run in parallel.
+// the real binary server and the real `upgrade check --server` command. The
+// test process never opens the database while the binary runs: it reads and
+// changes schema_migrations only while the binary is stopped, and it checks
+// after each run that it holds no handle on the SQLite file.
+//
+// The up-to-date case reads the migrated database. The newer case writes a
+// future migration row while the binary is stopped, then starts it again: a
+// binary at or above the schema minimum starts on a newer schema. A running
+// server never has an old or a fresh schema, because it applies every
+// pending migration at start. So the old and fresh cases rewrite the upgrade
+// check answer in the recording proxy instead: the client then sees the
+// answer of a server whose schema is older than the client binary.
 func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	t.Helper()
 
@@ -11067,10 +11075,18 @@ func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	env := e2e.NewEnv(ctx, t, cli, store)
 	released := e2e.BuildBinaryWithVersion(ctx, t, t.TempDir(), upgradeReleasedClient)
 
-	checkUpgradeUpToDateServer(ctx, t, env, store)
+	env.StopServer(ctx, t)
+	pristine := snapshotServerDB(ctx, t, env, store)
+	env.StartServer(ctx, t)
+
+	checkUpgradeUpToDateServer(ctx, t, env)
+	checkUpgradeOldServer(ctx, t, env)
+	checkUpgradeFreshServer(ctx, t, env)
+
+	env.StopServer(ctx, t)
+	checkServerDBUnchanged(t, pristine, snapshotServerDB(ctx, t, env, store))
+
 	checkUpgradeNewerServer(ctx, t, env, store, released)
-	checkUpgradeOldServer(ctx, t, env, store)
-	checkUpgradeFreshServer(ctx, t, env, store)
 }
 
 // runUpgradeCheckServer runs `opendustpan upgrade check --server` against the
@@ -11400,159 +11416,11 @@ func deleteServerVersion(ctx context.Context, t *testing.T, env *e2e.Env, store 
 	}
 }
 
-// trimServerVersions removes every schema_migrations row above keep from the
-// server database of env on store and returns the removed rows, so the caller
-// restores them after the check.
-func trimServerVersions(
-	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, keep int64,
-) []serverMigrationRow {
-	t.Helper()
-
-	switch store {
-	case e2e.StoreSQLite:
-		return trimServerSQLiteVersions(ctx, t, env, keep)
-	case e2e.StorePostgres:
-		return trimServerPostgresVersions(ctx, t, env, keep)
-	default:
-		t.Fatalf("unknown store: %s", store)
-
-		return nil
-	}
-}
-
-// trimServerSQLiteVersions removes every schema_migrations row above keep
-// from the SQLite file the server of env serves and returns the removed
-// rows.
-func trimServerSQLiteVersions(
-	ctx context.Context, t *testing.T, env *e2e.Env, keep int64,
-) []serverMigrationRow {
-	t.Helper()
-
-	path := sqliteServerPath(t, env)
-
-	var removed []serverMigrationRow
-
-	for _, row := range readServerSQLiteRows(ctx, t, path) {
-		if row.version > keep {
-			removed = append(removed, row)
-		}
-	}
-
-	execServerSQLite(ctx, t, path, `DELETE FROM schema_migrations WHERE version > ?`, keep)
-
-	return removed
-}
-
-// trimServerPostgresVersions removes every schema_migrations row above keep
-// from the PostgreSQL schema the server of env serves and returns the
-// removed rows.
-func trimServerPostgresVersions(
-	ctx context.Context, t *testing.T, env *e2e.Env, keep int64,
-) []serverMigrationRow {
-	t.Helper()
-
-	conn, err := pgx.Connect(ctx, env.DatabaseURL(t))
-	if err != nil {
-		t.Fatalf("connect to postgres: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			t.Errorf("close postgres connection: %v", closeErr)
-		}
-	}()
-
-	versionRows, err := conn.Query(ctx, `SELECT version, name FROM schema_migrations ORDER BY version`)
-	if err != nil {
-		t.Fatalf("read schema versions: %v", err)
-	}
-
-	defer func() {
-		versionRows.Close()
-	}()
-
-	var removed []serverMigrationRow
-
-	for versionRows.Next() {
-		var row serverMigrationRow
-
-		if scanErr := versionRows.Scan(&row.version, &row.name); scanErr != nil {
-			t.Fatalf("read schema version: %v", scanErr)
-		}
-
-		if row.version > keep {
-			removed = append(removed, row)
-		}
-	}
-
-	if rowsErr := versionRows.Err(); rowsErr != nil {
-		t.Fatalf("read schema versions: %v", rowsErr)
-	}
-
-	if _, err := conn.Exec(ctx, `DELETE FROM schema_migrations WHERE version > $1`, keep); err != nil {
-		t.Fatalf("trim versions above %d: %v", keep, err)
-	}
-
-	return removed
-}
-
-// restoreServerVersions inserts rows back into the server database of env on
-// store.
-func restoreServerVersions(
-	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, rows []serverMigrationRow,
-) {
-	t.Helper()
-
-	switch store {
-	case e2e.StoreSQLite:
-		path := sqliteServerPath(t, env)
-
-		for _, row := range rows {
-			execServerSQLite(ctx, t, path,
-				`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
-		}
-	case e2e.StorePostgres:
-		conn, err := pgx.Connect(ctx, env.DatabaseURL(t))
-		if err != nil {
-			t.Fatalf("connect to postgres: %v", err)
-		}
-
-		defer func() {
-			if closeErr := conn.Close(ctx); closeErr != nil {
-				t.Errorf("close postgres connection: %v", closeErr)
-			}
-		}()
-
-		const recordRow = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-
-		for _, row := range rows {
-			if _, execErr := conn.Exec(ctx, recordRow, row.version, row.name); execErr != nil {
-				t.Fatalf("restore version %d: %v", row.version, execErr)
-			}
-		}
-	default:
-		t.Fatalf("unknown store: %s", store)
-	}
-}
-
-// checkRestoredServerDB proves the server database of env on store holds the
-// rows of want after the test restores them.
-func checkRestoredServerDB(
-	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, want serverSchemaSnapshot,
-) {
-	t.Helper()
-
-	if got := snapshotServerDB(ctx, t, env, store); !slices.Equal(got.versions, want.versions) {
-		t.Fatalf("versions after restore = %v, want %v", got.versions, want.versions)
-	}
-}
-
 // checkUpgradeUpToDateServer proves upgrade check on the migrated server
-// database: it exits 0 with `up to date` and writes nothing.
-func checkUpgradeUpToDateServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+// database: it exits 0 with `up to date`.
+func checkUpgradeUpToDateServer(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	before := snapshotServerDB(ctx, t, env, store)
 	res := runUpgradeCheckServer(ctx, t, env)
 	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "up to date", exitCode: 0, pending: false})
 
@@ -11561,22 +11429,25 @@ func checkUpgradeUpToDateServer(ctx context.Context, t *testing.T, env *e2e.Env,
 		t.Fatalf("schema versions differ: database %d, binary %d:\n%s", database, binary, res.Stdout)
 	}
 
-	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
+	env.CheckNoOwnDatabaseHandle(t)
 }
 
 // checkUpgradeNewerServer proves upgrade check on a schema that records a
 // migration the binaries do not embed, with a minimum binary version. The
-// suite's dev build counts as newer than every release: it answers `up to
-// date` and exits 0. A client stamped below the minimum answers `cannot
-// start`, exits 1 and names both versions. Neither writes anything. The
-// test removes the future row after the check.
+// binary is stopped on entry. The test writes the future row, starts the
+// binary, and runs the command: the suite's dev build counts as newer than
+// every release, so it answers `up to date` and exits 0. A client stamped
+// below the minimum answers `cannot start`, exits 1 and names both versions.
+// The test then stops the binary, proves that the command wrote nothing,
+// removes the future row and starts the binary again.
 func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, released string) {
 	t.Helper()
 
 	pristine := snapshotServerDB(ctx, t, env, store)
 	future := insertServerFuture(ctx, t, env, store, upgradeSchemaMinimum)
+	withFuture := snapshotServerDB(ctx, t, env, store)
 
-	before := snapshotServerDB(ctx, t, env, store)
+	env.StartServer(ctx, t)
 
 	dev := runUpgradeCheckServer(ctx, t, env)
 	checkUpgradeResult(t, dev, wantUpgradeResult{verdict: "up to date", exitCode: 0, pending: false})
@@ -11600,28 +11471,88 @@ func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, st
 		}
 	}
 
-	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
+	env.CheckNoOwnDatabaseHandle(t)
+	env.StopServer(ctx, t)
 
+	checkServerDBUnchanged(t, withFuture, snapshotServerDB(ctx, t, env, store))
 	deleteServerVersion(ctx, t, env, store, future)
-	restoreServerVersions(ctx, t, env, store, nil)
-	checkRestoredServerDB(ctx, t, env, store, pristine)
+	checkServerDBUnchanged(t, pristine, snapshotServerDB(ctx, t, env, store))
+
+	env.StartServer(ctx, t)
 }
 
-// checkUpgradeOldServer proves upgrade check with only versions 1 through
-// oldFixtureMaxVersion in the server database: it exits 0 with `upgrade
-// possible` and writes nothing. It restores the removed rows after the
-// check.
-func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+// upgradeCheckPath is the route that `upgrade check` reads.
+const upgradeCheckPath = "/api/server/upgrade-check"
+
+// answerUpTo returns an answer rewrite for upgradeCheckPath: it keeps the
+// applied migrations up to version maxVersion and sets the schema version to
+// the newest of them, as a server with an older schema answers. maxVersion 0
+// keeps none, as a server with a fresh database answers.
+func answerUpTo(t *testing.T, maxVersion int64) func([]byte) []byte {
 	t.Helper()
 
-	pristine := snapshotServerDB(ctx, t, env, store)
-	removed := trimServerVersions(ctx, t, env, store, oldFixtureMaxVersion)
+	return func(body []byte) []byte {
+		var doc map[string]json.RawMessage
+		if err := json.Unmarshal(body, &doc); err != nil {
+			t.Errorf("decode upgrade check answer to rewrite: %v", err)
 
-	if len(removed) == 0 {
-		t.Fatalf("trim above %d removed nothing, want pending migrations", oldFixtureMaxVersion)
+			return body
+		}
+
+		var applied []string
+		if err := json.Unmarshal(doc["appliedMigrations"], &applied); err != nil {
+			t.Errorf("decode applied migrations to rewrite: %v", err)
+
+			return body
+		}
+
+		kept := []string{}
+
+		var newest int64
+
+		for _, name := range applied {
+			version, err := storeschema.ParseMigrationVersion(name)
+			if err != nil {
+				t.Errorf("parse applied migration %q: %v", name, err)
+
+				return body
+			}
+
+			if version <= maxVersion {
+				kept = append(kept, name)
+				newest = max(newest, version)
+			}
+		}
+
+		doc["appliedMigrations"] = mustJSON(t, kept)
+		doc["schemaVersion"] = mustJSON(t, newest)
+
+		return mustJSON(t, doc)
+	}
+}
+
+// mustJSON encodes v, failing the test on an error.
+func mustJSON(t *testing.T, v any) []byte {
+	t.Helper()
+
+	out, err := json.Marshal(v)
+	if err != nil {
+		t.Errorf("encode %T: %v", v, err)
 	}
 
-	before := snapshotServerDB(ctx, t, env, store)
+	return out
+}
+
+// checkUpgradeOldServer proves upgrade check against a server whose schema
+// records only versions 1 through oldFixtureMaxVersion: it exits 0 with
+// `upgrade possible`. A running server never has such a schema, so the
+// recording proxy rewrites its answer.
+func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	undo := env.RewriteAnswer(t, upgradeCheckPath, answerUpTo(t, oldFixtureMaxVersion))
+	defer undo()
+
 	res := runUpgradeCheckServer(ctx, t, env)
 	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
 
@@ -11632,26 +11563,19 @@ func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env, stor
 		t.Fatalf("old output lacks database schema version %d:\n%s", oldFixtureMaxVersion, out)
 	}
 
-	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
-
-	restoreServerVersions(ctx, t, env, store, removed)
-	checkRestoredServerDB(ctx, t, env, store, pristine)
+	env.CheckNoOwnDatabaseHandle(t)
 }
 
-// checkUpgradeFreshServer proves upgrade check with no version row in the
-// server database: it exits 0 with `upgrade possible` and writes nothing. It
-// restores the removed rows after the check.
-func checkUpgradeFreshServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+// checkUpgradeFreshServer proves upgrade check against a server whose
+// database records no migration: it exits 0 with `upgrade possible`. A
+// running server never has such a database, so the recording proxy rewrites
+// its answer.
+func checkUpgradeFreshServer(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	pristine := snapshotServerDB(ctx, t, env, store)
-	removed := trimServerVersions(ctx, t, env, store, 0)
+	undo := env.RewriteAnswer(t, upgradeCheckPath, answerUpTo(t, 0))
+	defer undo()
 
-	if len(removed) == 0 {
-		t.Fatal("trim above 0 removed nothing, want every migration pending")
-	}
-
-	before := snapshotServerDB(ctx, t, env, store)
 	res := runUpgradeCheckServer(ctx, t, env)
 	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
 
@@ -11659,10 +11583,7 @@ func checkUpgradeFreshServer(ctx context.Context, t *testing.T, env *e2e.Env, st
 		t.Fatalf("fresh output lacks database schema version 0:\n%s", out)
 	}
 
-	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
-
-	restoreServerVersions(ctx, t, env, store, removed)
-	checkRestoredServerDB(ctx, t, env, store, pristine)
+	env.CheckNoOwnDatabaseHandle(t)
 }
 
 // wantUpgradeResult holds the expected outcome of one upgrade check run:
