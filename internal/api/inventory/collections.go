@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -411,7 +412,7 @@ func auditEntry(
 		ValueCount:   nil,
 		SourceIP:     sourceIP(r),
 		UserAgent:    truncateUserAgent(r.UserAgent()),
-		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
+		Channel:      sessionauth.AuditChannel(r, channelHeader),
 		Kind:         audit.KindChange,
 		Outcome:      audit.OutcomeSuccess,
 		RequestID:    requestid.FromContext(r.Context()),

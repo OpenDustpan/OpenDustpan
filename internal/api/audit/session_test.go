@@ -105,3 +105,36 @@ func TestNoSessionCheckIgnoresTheCookie(t *testing.T) {
 		t.Fatalf("entry list with the cookie and no session check = %d, want 401", rec.Code)
 	}
 }
+
+// TestAuthorizationHeaderNeverFallsBackToTheCookie proves that a request
+// with an Authorization header uses only the header: a refused header
+// answers 401 even with a valid session cookie.
+func TestAuthorizationHeaderNeverFallsBackToTheCookie(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newEnforcingHandlerWithSessions(t, selectiveAuthorizer{deny: map[identity.Action]bool{}}, aliceChecker(t))
+
+	for _, header := range []string{"token bad", "Bearer x", "token "} {
+		req := cookieRequest(t, http.MethodGet, "/api/audit/entries?organization=acme")
+		req.Header.Set("Authorization", header)
+
+		if rec := serveCookie(h, req); rec.Code != http.StatusUnauthorized {
+			t.Errorf("entry list with a valid cookie and %q = %d %s, want 401", header, rec.Code, rec.Body.String())
+		}
+	}
+}
+
+// TestSessionCookieOnlyServesReads proves that the audit API has no route
+// for a method that can change state, so the CSRF check has nothing to
+// guard here: a POST with the cookie answers 405 before the cookie check.
+func TestSessionCookieOnlyServesReads(t *testing.T) {
+	t.Parallel()
+
+	h, _ := newEnforcingHandlerWithSessions(t, selectiveAuthorizer{deny: map[identity.Action]bool{}}, aliceChecker(t))
+
+	for _, target := range []string{"/api/audit/entries?organization=acme", "/api/audit/check?organization=acme"} {
+		if rec := serveCookie(h, cookieRequest(t, http.MethodPost, target)); rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("POST %s with the cookie = %d, want 405", target, rec.Code)
+		}
+	}
+}

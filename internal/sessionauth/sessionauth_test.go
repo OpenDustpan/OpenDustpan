@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/sessionauth"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -217,5 +218,40 @@ func checkAlice(t *testing.T, err error, p identity.Principal, caller sessionaut
 
 	if caller.Match.Session.ID != "ses-1" || caller.Secret.Reveal() != secret.Reveal() {
 		t.Fatalf("caller = session %q, want ses-1 with the cookie secret", caller.Match.Session.ID)
+	}
+}
+
+func TestWithSessionMarksTheContext(t *testing.T) {
+	t.Parallel()
+
+	if sessionauth.FromSession(t.Context()) {
+		t.Fatal("FromSession of a plain context = true, want false")
+	}
+
+	if !sessionauth.FromSession(sessionauth.WithSession(t.Context())) {
+		t.Fatal("FromSession of a marked context = false, want true")
+	}
+}
+
+func TestAuditChannel(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", http.NoBody)
+	req.Header.Set("Dustpan-Channel", "console")
+
+	if got := sessionauth.AuditChannel(req, "Dustpan-Channel"); got != audit.ChannelConsole {
+		t.Fatalf("channel of a token request that declares console = %q, want console", got)
+	}
+
+	req.Header.Set("Dustpan-Channel", "api")
+
+	if got := sessionauth.AuditChannel(req, "Dustpan-Channel"); got != audit.ChannelAPI {
+		t.Fatalf("channel of a token request that declares api = %q, want api", got)
+	}
+
+	marked := req.WithContext(sessionauth.WithSession(req.Context()))
+
+	if got := sessionauth.AuditChannel(marked, "Dustpan-Channel"); got != audit.ChannelConsole {
+		t.Fatalf("channel of a session request that declares api = %q, want console", got)
 	}
 }

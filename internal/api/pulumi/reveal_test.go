@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -58,6 +59,16 @@ type revealDoc struct {
 // newRevealFixture builds the reveal fixture with authz and the audit wiring
 // of cfg.
 func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit) revealFixture {
+	t.Helper()
+
+	return newRevealFixtureWithSessions(t, authz, cfg, nil)
+}
+
+// newRevealFixtureWithSessions builds the reveal fixture with authz, the
+// audit wiring of cfg and the session cookie check sessions.
+func newRevealFixtureWithSessions(
+	t *testing.T, authz identity.Authorizer, cfg fixtureAudit, sessions *sessionauth.Checker,
+) revealFixture {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
@@ -128,7 +139,7 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
-		Sessions:                nil,
+		Sessions:                sessions,
 		AddressGate:             nil,
 		Logger:                  cfg.logger,
 		BaseURL:                 baseurl.Resolver{},

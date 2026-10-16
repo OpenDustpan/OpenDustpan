@@ -194,6 +194,25 @@ func newBehaviorHandlerWithSessions(
 ) *apiinventory.Handler {
 	t.Helper()
 
+	return newBehaviorHandlerWith(t, nsStore, reader, authz, behaviorWiring{
+		sessions: sessions, lifecycles: testLifecycles(),
+	})
+}
+
+// behaviorWiring is the session cookie check and the lifecycle of each tool
+// of a behavior handler.
+type behaviorWiring struct {
+	sessions   *sessionauth.Checker
+	lifecycles map[string]coreinventory.Lifecycle
+}
+
+// newBehaviorHandlerWith is newBehaviorHandlerWithSessions with the
+// session check and the lifecycles of wiring.
+func newBehaviorHandlerWith(
+	t *testing.T, nsStore *memNamespaceStore, reader *memReader, authz identity.Authorizer, wiring behaviorWiring,
+) *apiinventory.Handler {
+	t.Helper()
+
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: nsStore, Now: nil, Region: "test-region"},
 	)
@@ -207,11 +226,11 @@ func newBehaviorHandlerWithSessions(
 		Namespaces:    namespaces,
 		Units:         reader,
 		Deleted:       seededDeleted(),
-		Lifecycles:    testLifecycles(),
+		Lifecycles:    wiring.lifecycles,
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
 		Authorizer:    authz,
-		Sessions:      sessions,
+		Sessions:      wiring.sessions,
 		Logger:        slog.New(slog.DiscardHandler),
 		Now:           nil,
 	})
@@ -878,9 +897,10 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Authenticator: tokenAuthenticator{},
-		Sessions:      nil, Authorizer: selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger: slog.New(slog.DiscardHandler),
-		Now:    nil,
+		Sessions:      nil,
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Now:           nil,
 	}
 
 	cases := []struct {
