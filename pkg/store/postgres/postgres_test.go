@@ -259,7 +259,7 @@ func TestUpdatesConformance(t *testing.T) {
 	storetest.RunUpdates(t, func(t *testing.T) storetest.UpdatesStore {
 		t.Helper()
 
-		return openUncounted(t, base)
+		return openSQLUpdates(t, base)
 	})
 }
 
@@ -933,28 +933,23 @@ func openURL(tb testing.TB, schemaURL string) *postgres.Store {
 	return s
 }
 
-// uncountedStore wraps a Store with its schema URL so the uncounted-checkpoint
-// case sets the stored count to NULL with a direct SQL update: the port
-// always writes the count, so only SQL seeds rows from before the column.
-type uncountedStore struct {
+// sqlUpdatesStore wraps a Store with its schema URL, so a case can change its
+// rows with direct SQL, as the audit case does to break audit appends.
+type sqlUpdatesStore struct {
 	storetest.UpdatesStore
 
 	url string
 	t   *testing.T
 }
 
-var (
-	_ storetest.CountNullifier = (*uncountedStore)(nil)
-	_ storetest.CountSetter    = (*uncountedStore)(nil)
-	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
-)
+var _ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
 
 // errNoJournalCount reports a wrapped store without the journaled count.
 var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
 
-// openUncounted returns a store in a fresh schema of the database at base
-// that the uncounted-checkpoint case can NULL through SQL.
-func openUncounted(t *testing.T, base string) *uncountedStore {
+// openSQLUpdates returns a store in a fresh schema of the database at base
+// that a case can change through SQL.
+func openSQLUpdates(t *testing.T, base string) *sqlUpdatesStore {
 	t.Helper()
 
 	schemaURL := isolatedURL(t, base)
@@ -966,12 +961,12 @@ func openUncounted(t *testing.T, base string) *uncountedStore {
 
 	t.Cleanup(s.Close)
 
-	return &uncountedStore{UpdatesStore: s, url: schemaURL, t: t}
+	return &sqlUpdatesStore{UpdatesStore: s, url: schemaURL, t: t}
 }
 
 // CountRunningJournaledUpdates forwards to the wrapped store, whose method
 // the embedded UpdatesStore interface hides.
-func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+func (s *sqlUpdatesStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
 	counter, ok := s.UpdatesStore.(interface {
 		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 	})
@@ -987,55 +982,14 @@ func (s *uncountedStore) CountRunningJournaledUpdates(ctx context.Context) (int6
 	return count, nil
 }
 
-// NullifyResourceCount implements storetest.CountNullifier.
-func (s *uncountedStore) NullifyResourceCount(ctx context.Context) error {
-	conn, err := pgx.Connect(ctx, s.url)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			s.t.Errorf("close: %v", closeErr)
-		}
-	}()
-
-	if _, err := conn.Exec(ctx, `UPDATE checkpoints SET resource_count = NULL`); err != nil {
-		return fmt.Errorf("nullify the checkpoint count: %w", err)
-	}
-
-	return nil
-}
-
-// SetResourceCount implements storetest.CountSetter: it plants a stored
-// count from before saves stopped counting.
-func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) error {
-	conn, err := pgx.Connect(ctx, s.url)
-	if err != nil {
-		return fmt.Errorf("connect: %w", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			s.t.Errorf("close: %v", closeErr)
-		}
-	}()
-
-	if _, err := conn.Exec(ctx, `UPDATE checkpoints SET resource_count = $1`, count); err != nil {
-		return fmt.Errorf("set the checkpoint count: %w", err)
-	}
-
-	return nil
-}
-
 // List forwards to the audit list of the wrapped store, which the embedded
 // interface hides, so the delete case can read the entry of a delete.
 // Inner implements storetest.Wrapper.
-func (s *uncountedStore) Inner() any {
+func (s *sqlUpdatesStore) Inner() any {
 	return s.UpdatesStore
 }
 
-func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
+func (s *sqlUpdatesStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
 		return audit.Listing{}, errNoAuditList
@@ -1053,7 +1007,7 @@ func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit
 var errNoAuditList = errors.New("wrapped store lists no audit entries")
 
 // BreakAuditAppends implements storetest.AuditBreaker.
-func (s *uncountedStore) BreakAuditAppends(ctx context.Context) error {
+func (s *sqlUpdatesStore) BreakAuditAppends(ctx context.Context) error {
 	return breakAuditAppends(ctx, s.url)
 }
 

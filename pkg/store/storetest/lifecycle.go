@@ -30,9 +30,17 @@ func lifecycleEntry(ns namespace.Name, action string) audit.Entry {
 func deleteFixtureStack(t *testing.T, f fixture) stack.Stack {
 	t.Helper()
 
+	return deleteFixtureStackWith(t, f, stack.EmptyGuard())
+}
+
+// deleteFixtureStackWith deletes the fixture stack under guard and returns
+// the stack as it was before the delete.
+func deleteFixtureStackWith(t *testing.T, f fixture, guard stack.DeleteGuard) stack.Stack {
+	t.Helper()
+
 	st := mustGetFixtureStack(t, f)
 
-	err := f.s.DeleteStack(t.Context(), f.ref, f.fence, stack.EmptyGuard(), inventory.Deletion{
+	err := f.s.DeleteStack(t.Context(), f.ref, f.fence, guard, inventory.Deletion{
 		Entry: deleteEntry(f.ref.Namespace), PurgeAfter: purgeAt(),
 	})
 	if err != nil {
@@ -169,7 +177,7 @@ func testPurgeStack(t *testing.T, f fixture) {
 
 	f.end(t, u, stack.StatusSucceeded)
 
-	before := deleteFixtureStack(t, f)
+	before := deleteFixtureStackWith(t, f, countedGuard(u, `{"v":1}`))
 	entry := lifecycleEntry(f.ref.Namespace, "unit:purge")
 
 	if err := f.s.PurgeStack(t.Context(), before.ID, f.fence, time.Time{}, entry); err != nil {
