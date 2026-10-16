@@ -154,6 +154,50 @@ func sessionCookies(in *serverapi.SignIn) (*sessionauth.Checker, error) {
 	return c, nil
 }
 
+// providerBinding is the store and the providers of the console sign-in,
+// whose issuers the start binds. The zero value binds nothing.
+type providerBinding struct {
+	store     session.ProviderStore
+	providers []session.Provider
+}
+
+// bindingOf returns the provider binding of cfg when signIn is not nil and
+// the store keeps the providers, else the zero value. newSignIn already
+// refused a store that keeps no sessions; both SQL adapters keep both.
+func bindingOf(cfg *settings, signIn *serverapi.SignIn) providerBinding {
+	store, ok := cfg.namespaceStore.(session.ProviderStore)
+	if signIn == nil || !ok {
+		return providerBinding{store: nil, providers: nil}
+	}
+
+	providers := make([]session.Provider, 0, len(cfg.oidcProviders))
+	for _, p := range cfg.oidcProviders {
+		providers = append(providers, session.Provider{ID: p.ID, Issuer: p.Issuer})
+	}
+
+	return providerBinding{store: store, providers: providers}
+}
+
+// bindSignInProviders binds each provider of the console sign-in to its
+// issuer, and refuses the start when the issuer of a provider ID changed:
+// the subject of a person holds the provider ID, not the issuer.
+func (s *Server) bindSignInProviders(ctx context.Context) error {
+	if s.signInProviders.store == nil {
+		return nil
+	}
+
+	b := s.signInProviders
+
+	// The refusal of a changed issuer is one sentence, so it goes to the
+	// operator as it is.
+	return session.BindProviders(
+		ctx,
+		b.store,
+		b.providers,
+		s.now().UTC(),
+	)
+}
+
 // tokenInactivity applies the account inactivity rule of the access token
 // service to the owner of a console session, so that a session does not
 // keep an account alive that the token lookup and the sweep would end.

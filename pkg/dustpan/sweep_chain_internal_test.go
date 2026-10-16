@@ -45,6 +45,7 @@ func sweepChainServer(
 		deleted:          deleted,
 		signInRequests:   nil,
 		signInPruneEvery: 0,
+		signInProviders:  providerBinding{store: nil, providers: nil},
 	}
 }
 

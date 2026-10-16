@@ -351,6 +351,12 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
 	}
 
+	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
+		h.writeJSON(ctx, w, status, reauthenticateResponse{Code: status, Message: message, Reauthenticate: fresh.url})
+
+		return
+	}
+
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 

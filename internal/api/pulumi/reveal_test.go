@@ -47,6 +47,7 @@ type revealFixture struct {
 	updates *stack.Updates
 	secrets *secret.Service
 	stacks  *stack.Service
+	store   *recordingStackStore
 	ref     stack.Ref
 }
 
@@ -158,7 +159,9 @@ func newRevealFixtureWithSessions(
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return revealFixture{handler: handler, updates: updates, secrets: secrets, stacks: stacks, ref: ref}
+	return revealFixture{
+		handler: handler, updates: updates, secrets: secrets, stacks: stacks, store: stores, ref: ref,
+	}
 }
 
 // seedRevealVersion encrypts the test secret under the stack's data key,

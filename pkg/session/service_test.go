@@ -467,7 +467,7 @@ func begin(t *testing.T, returnPath string) (session.Secret, session.Begin) {
 
 	return state, session.Begin{
 		State: state, Provider: "corp", Nonce: strings.Repeat("n", 43), Verifier: strings.Repeat("v", 43),
-		ReturnPath: returnPath,
+		ReturnPath: returnPath, MaxAge: 0, HasMaxAge: false,
 	}
 }
 
