@@ -224,7 +224,7 @@ type Membership struct {
 // Validate reports whether m holds usable values. An empty source or state
 // takes the default: local and active.
 func (m Membership) Validate() error {
-	def := m.withDefaults()
+	def := m.WithDefaults()
 
 	if _, err := ParseMembershipSource(string(def.Source)); err != nil {
 		return err
@@ -257,9 +257,9 @@ func (m Membership) Validate() error {
 	return nil
 }
 
-// withDefaults returns m with an empty source set to local and an empty
+// WithDefaults returns m with an empty source set to local and an empty
 // state set to active. A local add carries neither, so it defaults to both.
-func (m Membership) withDefaults() Membership {
+func (m Membership) WithDefaults() Membership {
 	if m.Source == "" {
 		m.Source = MembershipSourceLocal
 	}

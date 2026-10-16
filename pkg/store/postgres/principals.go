@@ -407,7 +407,7 @@ func (s *Store) AddMember(ctx context.Context, m principal.Membership, e audit.E
 			return err
 		}
 
-		m = withMembershipDefaults(m)
+		m = m.WithDefaults()
 
 		if err := m.Validate(); err != nil {
 			return err
@@ -699,20 +699,6 @@ func rowLimit(limit int) int32 {
 // to case. Group names hold ASCII only (principal.ValidateGroupName).
 func groupNameKey(name string) string {
 	return strings.ToLower(name)
-}
-
-// withMembershipDefaults sets an empty membership source to local and an
-// empty state to active: a local add carries neither.
-func withMembershipDefaults(m principal.Membership) principal.Membership {
-	if m.Source == "" {
-		m.Source = principal.MembershipSourceLocal
-	}
-
-	if m.State == "" {
-		m.State = principal.MembershipStateActive
-	}
-
-	return m
 }
 
 // uniqueViolation is the SQLSTATE of a PostgreSQL unique violation.
