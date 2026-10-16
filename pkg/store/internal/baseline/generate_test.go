@@ -1,14 +1,19 @@
-// Package baseline_test writes the baseline migration of each store dialect
-// from the numbered migrations that came before it. The test runs only when
-// DUSTPAN_TEST_BASELINE_IN names a directory that holds those migrations, in
-// pkg/store/<dialect>/migrations/. scripts/regenerate-baseline.sh sets it up and runs
-// the test.
+// Package baseline_test writes and checks the baseline migration of each
+// store dialect.
 //
-// For each dialect the test applies every old migration in order to an
-// empty database, then the statements of testdata/after-<dialect>.sql, and
-// writes the schema and the rows of that database as one baseline file. It
-// then applies the baseline to a second empty database and fails when the
-// schema or the rows of the two databases differ.
+// The write tests run only when DUSTPAN_TEST_BASELINE_IN names a directory
+// that holds the numbered migrations from before the baseline, in
+// pkg/store/<dialect>/migrations/. scripts/regenerate-baseline.sh sets it up
+// and runs them. For each dialect a write test applies every old migration
+// in order to an empty database, then the statements of
+// testdata/after-<dialect>.sql, and writes the schema and the rows of that
+// database as one baseline file. It then applies the baseline to a second
+// empty database and fails when the schema or the rows of the two databases
+// differ.
+//
+// The round-trip tests run in every test run. Each one applies the committed
+// baseline to an empty database and fails when the dump of that database
+// differs from the baseline, so the file stays what the generator writes.
 package baseline_test
 
 import (
@@ -37,18 +42,48 @@ import (
 const (
 	envIn       = "DUSTPAN_TEST_BASELINE_IN"
 	envOut      = "DUSTPAN_TEST_BASELINE_OUT"
+	envRef      = "DUSTPAN_TEST_BASELINE_REF"
 	envPostgres = "DUSTPAN_TEST_POSTGRES_URL"
 )
 
 // schemaSuffixBytes is the number of random bytes in a schema name.
 const schemaSuffixBytes = 8
 
-// header starts each baseline file. The generator writes the rest.
-const header = `-- Baseline schema. It replaces every migration before it, as a one-time
--- exception to the rule that an applied migration never changes. A database
--- or a backup from before this version cannot be opened or restored.
--- scripts/regenerate-baseline.sh writes this file. Do not edit it.
+// minimumLine is the first line of each baseline file. The migration
+// loader reads the minimum binary version of the baseline from it.
+const minimumLine = "-- minimum-binary-version: v0.1.0"
+
+// header returns the comment block that starts the baseline file of dialect,
+// written from the migrations of ref. The generator writes the rest.
+func header(dialect, ref string) string {
+	return minimumLine + `
+-- Generated file. Do not edit it by hand. make regenerate-baseline writes it
+-- from the ` + dialect + ` migrations of ` + ref + `.
+-- This baseline replaced every migration before it, as a one-time exception
+-- to the rule that an applied migration never changes. No binary opens a
+-- database or restores a backup from before it.
 `
+}
+
+// baselineBody returns the body of a baseline file: every line after its
+// header. The header is every line up to the first empty line, and each of
+// them is a comment.
+func baselineBody(t *testing.T, file string) string {
+	t.Helper()
+
+	head, body, ok := strings.Cut(file, "\n\n")
+	if !ok {
+		t.Fatal("the baseline has no empty line after its header")
+	}
+
+	for line := range strings.SplitSeq(head, "\n") {
+		if !strings.HasPrefix(line, "--") {
+			t.Fatalf("header line %q is not a comment", line)
+		}
+	}
+
+	return body
+}
 
 // paths holds the directory of the old migrations and the root of the
 // repository that gets the baseline files.
@@ -109,9 +144,15 @@ func after(t *testing.T, dialect string) string {
 func writeBaseline(t *testing.T, out, dialect, body string) {
 	t.Helper()
 
+	ref := os.Getenv(envRef)
+	if ref == "" {
+		t.Fatalf("set %s to the Git ref of the old migrations", envRef)
+	}
+
 	path := filepath.Join(out, "pkg", "store", dialect, "migrations", schema.BaselineName)
 
-	if err := os.WriteFile(path, []byte(header+"\n"+body), 0o600); err != nil {
+	//nolint:gosec // out is the repository root that the regeneration script passes; the test writes only there.
+	if err := os.WriteFile(path, []byte(header(dialect, ref)+"\n"+body), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }

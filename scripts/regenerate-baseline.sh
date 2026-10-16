@@ -31,7 +31,9 @@ trap 'rm -rf "$IN"' EXIT
 
 git -C "$ROOT" archive "$REF" pkg/store/sqlite/migrations pkg/store/postgres/migrations | tar -x -C "$IN"
 
-DUSTPAN_TEST_BASELINE_IN="$IN" DUSTPAN_TEST_BASELINE_OUT="$ROOT" \
+SHA="$(git -C "$ROOT" rev-parse --short=12 "$REF^{commit}")"
+
+DUSTPAN_TEST_BASELINE_IN="$IN" DUSTPAN_TEST_BASELINE_OUT="$ROOT" DUSTPAN_TEST_BASELINE_REF="$REF ($SHA)" \
 	go -C "$ROOT" test -count=1 -run '^TestWrite(SQLite|Postgres)Baseline$' ./pkg/store/internal/baseline/
 
 # The baseline has version 0100. Delete each migration file with a lower
