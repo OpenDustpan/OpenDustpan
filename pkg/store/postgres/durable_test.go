@@ -57,7 +57,7 @@ func TestDurableConformance(t *testing.T) {
 
 				t.Cleanup(s.Close)
 
-				return s.Durable()
+				return s.DurableOperations()
 			},
 			Domain: domain,
 		}
@@ -84,7 +84,7 @@ func TestDurableClaimSkipsALockedRow(t *testing.T) {
 
 	t.Cleanup(s.Close)
 
-	op, _, err := s.Durable().Start(t.Context(), durable.StartRequest{Key: "k", Kind: "kind-a", Input: nil})
+	op, _, err := s.DurableOperations().Start(t.Context(), durable.StartRequest{Key: "k", Kind: "kind-a", Input: nil})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestDurableClaimSkipsALockedRow(t *testing.T) {
 	defer cancel()
 
 	req := durable.ClaimRequest{Owner: "instance-a", Kinds: []durable.Kind{"kind-a"}, Lease: time.Minute}
-	if _, err := s.Durable().Claim(ctx, req); !errors.Is(err, durable.ErrNoWork) {
+	if _, err := s.DurableOperations().Claim(ctx, req); !errors.Is(err, durable.ErrNoWork) {
 		t.Fatalf("claim of a locked operation: err = %v, want ErrNoWork without a wait for the lock", err)
 	}
 }
@@ -143,7 +143,7 @@ func TestDurableRowsRoundTripThroughAPortableBackup(t *testing.T) {
 
 	t.Cleanup(s.Close)
 
-	seedDurableRows(t, s.Durable())
+	seedDurableRows(t, s.DurableOperations())
 
 	ctx := t.Context()
 	files, sum, descs := storetest.PortableFiles(t, s)
@@ -175,7 +175,7 @@ func TestDurableRowsRoundTripThroughAPortableBackup(t *testing.T) {
 
 // seedDurableRows starts two operations on d, claims the first one, and
 // records one step of it.
-func seedDurableRows(t *testing.T, d *postgres.DurableStore) {
+func seedDurableRows(t *testing.T, d *postgres.DurableOperations) {
 	t.Helper()
 
 	ctx := t.Context()

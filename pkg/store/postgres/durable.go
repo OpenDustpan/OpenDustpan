@@ -19,7 +19,7 @@ import (
 // durableIDPrefix starts the ID of each durable operation.
 const durableIDPrefix = "op-"
 
-// DurableStore implements durable.Store on the database of a Store. It is a
+// DurableOperations implements durable.Store on the database of a Store. It is a
 // type of its own because the method names of the port, such as List, are
 // already taken on Store by other ports.
 //
@@ -28,19 +28,20 @@ const durableIDPrefix = "op-"
 // of an instance nor the start of a long transaction moves a decision. A
 // write of a holder locks the row of its operation, reads the clock, and
 // checks the claim token in the transaction of the write.
-type DurableStore struct {
+type DurableOperations struct {
 	store *Store
 }
 
-var _ durable.Store = (*DurableStore)(nil)
+var _ durable.Store = (*DurableOperations)(nil)
 
-// Durable returns the store of durable operations on the database of s.
-func (s *Store) Durable() *DurableStore {
-	return &DurableStore{store: s}
+// DurableOperations returns the store of durable operations on the database
+// of s.
+func (s *Store) DurableOperations() *DurableOperations {
+	return &DurableOperations{store: s}
 }
 
 // Start implements durable.Store.
-func (d *DurableStore) Start(ctx context.Context, req durable.StartRequest) (durable.Operation, bool, error) {
+func (d *DurableOperations) Start(ctx context.Context, req durable.StartRequest) (durable.Operation, bool, error) {
 	if err := req.Validate(); err != nil {
 		return durable.Operation{}, false, err
 	}
@@ -104,7 +105,7 @@ func startOperation(ctx context.Context, q *db.Queries, req durable.StartRequest
 }
 
 // Get implements durable.Store.
-func (d *DurableStore) Get(ctx context.Context, id durable.ID) (durable.Operation, error) {
+func (d *DurableOperations) Get(ctx context.Context, id durable.ID) (durable.Operation, error) {
 	var op durable.Operation
 
 	err := d.store.inSnapshotTx(ctx, func(q *db.Queries) error {
@@ -129,7 +130,7 @@ func (d *DurableStore) Get(ctx context.Context, id durable.ID) (durable.Operatio
 }
 
 // List implements durable.Store.
-func (d *DurableStore) List(ctx context.Context, f durable.Filter) ([]durable.Operation, error) {
+func (d *DurableOperations) List(ctx context.Context, f durable.Filter) ([]durable.Operation, error) {
 	states := make([]string, 0, len(f.States))
 	for _, st := range f.States {
 		states = append(states, string(st))
@@ -173,7 +174,7 @@ func (d *DurableStore) List(ctx context.Context, f durable.Filter) ([]durable.Op
 // the oldest operation that can run. It commits before Claim returns. A
 // row that a concurrent claim holds is skipped, so the loser of a race gets
 // ErrNoWork.
-func (d *DurableStore) Claim(ctx context.Context, req durable.ClaimRequest) (durable.Operation, error) {
+func (d *DurableOperations) Claim(ctx context.Context, req durable.ClaimRequest) (durable.Operation, error) {
 	if err := req.Validate(); err != nil {
 		return durable.Operation{}, err
 	}
@@ -223,7 +224,7 @@ func (d *DurableStore) Claim(ctx context.Context, req durable.ClaimRequest) (dur
 }
 
 // Extend implements durable.Store.
-func (d *DurableStore) Extend(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
+func (d *DurableOperations) Extend(ctx context.Context, c durable.Claim, lease time.Duration) (durable.Claim, error) {
 	if lease <= 0 {
 		return durable.Claim{}, durable.ErrInvalid
 	}
@@ -260,7 +261,7 @@ func (d *DurableStore) Extend(ctx context.Context, c durable.Claim, lease time.D
 }
 
 // RecordStep implements durable.Store.
-func (d *DurableStore) RecordStep(ctx context.Context, f durable.StepFence, result []byte) error {
+func (d *DurableOperations) RecordStep(ctx context.Context, f durable.StepFence, result []byte) error {
 	err := d.store.inTx(ctx, func(q *db.Queries) error {
 		return recordStep(ctx, q, f, result)
 	})
@@ -308,7 +309,7 @@ func recordStep(ctx context.Context, q *db.Queries, f durable.StepFence, result 
 }
 
 // Complete implements durable.Store.
-func (d *DurableStore) Complete(ctx context.Context, c durable.Claim) error {
+func (d *DurableOperations) Complete(ctx context.Context, c durable.Claim) error {
 	err := d.end(ctx, c, func(row db.DurableOperation, now int64) (db.EndDurableClaimParams, error) {
 		if row.CancelRequested {
 			return db.EndDurableClaimParams{}, durable.ErrCanceled
@@ -324,7 +325,7 @@ func (d *DurableStore) Complete(ctx context.Context, c durable.Claim) error {
 }
 
 // Fail implements durable.Store.
-func (d *DurableStore) Fail(ctx context.Context, c durable.Claim, f durable.Failure) error {
+func (d *DurableOperations) Fail(ctx context.Context, c durable.Claim, f durable.Failure) error {
 	err := d.end(ctx, c, func(row db.DurableOperation, now int64) (db.EndDurableClaimParams, error) {
 		switch {
 		case row.CancelRequested:
@@ -345,7 +346,7 @@ func (d *DurableStore) Fail(ctx context.Context, c durable.Claim, f durable.Fail
 }
 
 // Release implements durable.Store.
-func (d *DurableStore) Release(ctx context.Context, c durable.Claim) error {
+func (d *DurableOperations) Release(ctx context.Context, c durable.Claim) error {
 	err := d.end(ctx, c, func(row db.DurableOperation, now int64) (db.EndDurableClaimParams, error) {
 		if row.CancelRequested {
 			return endParams(row, durable.StateCanceled, row.LastError, row.NotBeforeMs, now), nil
@@ -361,7 +362,7 @@ func (d *DurableStore) Release(ctx context.Context, c durable.Claim) error {
 }
 
 // Cancel implements durable.Store.
-func (d *DurableStore) Cancel(ctx context.Context, id durable.ID) error {
+func (d *DurableOperations) Cancel(ctx context.Context, id durable.ID) error {
 	err := d.store.inTx(ctx, func(q *db.Queries) error {
 		row, err := q.LockDurableOperation(ctx, string(id))
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -410,7 +411,7 @@ func (d *DurableStore) Cancel(ctx context.Context, id durable.ID) error {
 // end checks that c is the live claim of its operation and ends the claim
 // with the params that next returns. When next returns an error, end
 // changes nothing.
-func (d *DurableStore) end(
+func (d *DurableOperations) end(
 	ctx context.Context,
 	c durable.Claim,
 	next func(row db.DurableOperation, now int64) (db.EndDurableClaimParams, error),
