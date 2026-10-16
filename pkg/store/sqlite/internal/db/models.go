@@ -288,6 +288,12 @@ type Role struct {
 	DeletedAtMs sql.NullInt64
 }
 
+type SchemaMigration struct {
+	Version          int64
+	Name             string
+	MinBinaryVersion string
+}
+
 type SecretKey struct {
 	Namespace   string
 	StackID     string
