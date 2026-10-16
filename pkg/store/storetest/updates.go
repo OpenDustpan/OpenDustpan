@@ -128,6 +128,8 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "journal refuses leases, previews, stacks, fences and foreign keys", test: testJournalRefusals},
 		{name: "journal refuses a batch for an update with version 0", test: testJournalRefusesVersionZero},
 		{name: "journal refuses batches after a cancel", test: testJournalAfterCancel},
+		{name: "journal end stops on an unstored refusal", test: testJournalEndStopsOnUnstoredRefusal},
+		{name: "journal end keeps a refusal whose sequences are stored", test: testJournalEndKeepsStoredRefusal},
 		{name: "journal stores two batches of one update that arrive at once", test: testJournalConcurrentRows},
 		{name: "journal stores one copy of a batch sent twice at once", test: testJournalConcurrentRetry},
 		{name: "journal check sees the stored operations and refusals store nothing", test: testJournalVerify},
@@ -475,6 +477,65 @@ func (f historyFixture) historySize(t *testing.T, id stack.UpdateID) int64 {
 	t.Fatalf("update %s is missing from history", id)
 
 	return 0
+}
+
+// testJournalEndStopsOnUnstoredRefusal shows that the end transition of a
+// journaled update that succeeds stops on a refusal of a batch that is still
+// unstored, and that the update keeps running.
+func testJournalEndStopsOnUnstoredRefusal(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 1, 1), f.fence); err != nil {
+		t.Fatalf("store batch: %v", err)
+	}
+
+	recordRefusal(t, f, journalRefusal(u, []int64{3}, 400, "unknown kind"))
+
+	err := f.s.SaveUpdate(t.Context(), ended(u, stack.StatusSucceeded), f.fence)
+	if !errors.Is(err, stack.ErrJournalIncomplete) {
+		t.Fatalf("end with an unstored refusal: err %v, want ErrJournalIncomplete", err)
+	}
+
+	got, err := f.s.GetUpdate(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("get update: %v", err)
+	}
+
+	if got.Status != stack.StatusRunning {
+		t.Fatalf("status after the refused end = %q, want %q", got.Status, stack.StatusRunning)
+	}
+
+	// A stack runs one update at a time, so the update ends here.
+	f.end(t, u, stack.StatusCanceled)
+}
+
+// testJournalEndKeepsStoredRefusal shows that a refusal whose sequence IDs are
+// all stored, because a retry stored the batch, does not stop the end.
+func testJournalEndKeepsStoredRefusal(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u2")
+
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 1, 1), f.fence); err != nil {
+		t.Fatalf("store batch: %v", err)
+	}
+
+	recordRefusal(t, f, journalRefusal(u, []int64{1}, 400, "unknown kind"))
+
+	if err := f.s.SaveUpdate(t.Context(), ended(u, stack.StatusSucceeded), f.fence); err != nil {
+		t.Fatalf("end with stored sequences: %v", err)
+	}
+
+	got, err := f.s.GetUpdate(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("get update: %v", err)
+	}
+
+	if got.Status != stack.StatusSucceeded {
+		t.Fatalf("status after the end = %q, want %q", got.Status, stack.StatusSucceeded)
+	}
 }
 
 func testUpdateRoundTrip(t *testing.T, f fixture) {

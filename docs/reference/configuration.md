@@ -44,10 +44,10 @@ the same list.
 | `--audit-sink` | `DUSTPAN_AUDIT_SINK` | `audit-sink` | (none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit` |
 
 With journaling on, the server refuses to complete an update with
-`succeeded` while a journal batch of the update is unstored. A missing last
-batch is not detected: if the last journal batch of an update is never sent,
-complete does not refuse it. Cancel the update when its batches stop
-arriving.
+`succeeded` while the server has not stored a journal batch of the update. The
+server does not detect a missing last batch: if the last journal batch of an
+update is never sent, complete does not refuse it. Cancel the update when its
+batches stop arriving.
 
 ## Configuration file
 
