@@ -51,6 +51,56 @@ provider at the first sign-in, not at start. So the server starts while the
 provider is down. When the provider does not answer, the start of a
 sign-in answers 502.
 
+## Set providers through the API
+
+An administrator can also add sign-in providers through the API, with no
+restart. The server keeps them in its database. Each provider has its own
+ID, issuer and client, so several providers can work side by side.
+
+```sh
+curl -X POST https://dustpan.example/api/server/sign-in-providers \
+  -H "Authorization: Bearer $DUSTPAN_TOKEN" \
+  -d '{"id":"partner","issuer":"https://idp.partner.example","displayName":"Partner",
+       "clientID":"dustpan","clientSecret":"...","scopes":["profile","email"]}'
+```
+
+| Route | Action |
+| --- | --- |
+| `GET /api/server/sign-in-providers` | `server:read-tokens` |
+| `GET /api/server/sign-in-providers/{id}` | `server:read-tokens` |
+| `POST /api/server/sign-in-providers` | `server:manage-sign-in` |
+| `PATCH /api/server/sign-in-providers/{id}` | `server:manage-sign-in` |
+| `DELETE /api/server/sign-in-providers/{id}` | `server:manage-sign-in` |
+
+The rules:
+
+- The server needs the public URL with HTTPS, and a key-encryption key
+  (`DUSTPAN_KEY_ENCRYPTION_KEY`). It seals the client secret with that key.
+  No answer and no audit entry holds the client secret. An answer has
+  `clientSecretSet` only.
+- The list also holds the providers of the flags, with the source
+  `static`. The API cannot change them: change the flags instead.
+- A `PATCH` sends `version`, the version that it read. When the provider
+  has another version, the change answers 409. Read the provider again
+  and send the change again.
+- A change applies at the next sign-in, with no restart.
+- The issuer must be an `https` URL. The server accepts an `http` URL only
+  on a loopback host, for tests.
+- The server does not read the discovery document of a new provider. The
+  first sign-in through a provider with a bad issuer answers 502.
+- At a sign-in, the server reads the discovery document from the issuer.
+  So only a site administrator may set the issuer: give
+  `server:manage-sign-in` to no other person.
+- Disable a provider with `"enabled": false`. A disabled provider answers
+  404 at the start of a sign-in. The disable also ends every active
+  session of a person with a subject of the provider, and its audit entry
+  holds the count as `sessionsEnded`. A sign-in through the provider that
+  is in progress gets no session. The server deletes a provider only
+  when no principal has a subject of its ID. Else the delete answers 409.
+  So a provider that the server deletes has no session.
+- A change from a console session needs a sign-in inside the token
+  freshness window, as a new token does.
+
 ## Keep the provider ID
 
 The server makes the subject of each person from the provider ID and the

@@ -84,7 +84,9 @@ func newSessionsFixture(t *testing.T) sessionsFixture {
 		t.Fatalf("policies: %v", err)
 	}
 
-	svc, err := session.NewSessions(session.SessionsConfig{Store: st, Policies: pol, Inactivity: nil, Now: c.Now})
+	svc, err := session.NewSessions(session.SessionsConfig{
+		Store: st, Providers: nil, Policies: pol, Inactivity: nil, Now: c.Now,
+	})
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
 	}
@@ -105,6 +107,7 @@ func signInEntry() audit.Entry {
 func startInput(authTime time.Time) session.Start {
 	return session.Start{
 		AuthTime: authTime, PrincipalID: personID, Provider: "corp", SourceIP: "192.0.2.1", UserAgent: "test",
+		Stored: false,
 	}
 }
 
@@ -327,7 +330,9 @@ func TestSessionsRefuseDisabledOwner(t *testing.T) {
 	}
 
 	svc, err := session.NewSessions(
-		session.SessionsConfig{Store: disabledOwner{f.store}, Policies: pol, Inactivity: nil, Now: f.clock.Now},
+		session.SessionsConfig{
+			Store: disabledOwner{f.store}, Providers: nil, Policies: pol, Inactivity: nil, Now: f.clock.Now,
+		},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
@@ -369,7 +374,7 @@ func (f sessionsFixture) withInactivity(t *testing.T, rule session.InactivityRul
 	}
 
 	svc, err := session.NewSessions(
-		session.SessionsConfig{Store: f.store, Policies: pol, Inactivity: rule, Now: f.clock.Now},
+		session.SessionsConfig{Store: f.store, Providers: nil, Policies: pol, Inactivity: rule, Now: f.clock.Now},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
@@ -565,11 +570,26 @@ func TestNewSessionsNeedsDependencies(t *testing.T) {
 	}
 
 	for _, cfg := range []session.SessionsConfig{
-		{Store: nil, Policies: pol, Inactivity: nil, Now: nil},
-		{Store: disabledOwner{Store: nil}, Policies: nil, Inactivity: nil, Now: nil},
+		{Store: nil, Providers: nil, Policies: pol, Inactivity: nil, Now: nil},
+		{Store: disabledOwner{Store: nil}, Providers: nil, Policies: nil, Inactivity: nil, Now: nil},
 	} {
 		if _, err := session.NewSessions(cfg); !errors.Is(err, session.ErrMissingDependency) {
 			t.Errorf("NewSessions(%+v) = %v, want ErrMissingDependency", cfg, err)
 		}
+	}
+}
+
+// TestStartStoredNeedsProviderSessions proves that the start of a session
+// of a stored provider fails, and creates no session, when the service has
+// no provider session store.
+func TestStartStoredNeedsProviderSessions(t *testing.T) {
+	t.Parallel()
+
+	f := newSessionsFixture(t)
+	in := startInput(f.clock.Now())
+	in.Stored = true
+
+	if _, _, err := f.svc.Start(t.Context(), signInEntry(), in); !errors.Is(err, session.ErrMissingDependency) {
+		t.Fatalf("stored start with no provider session store = %v, want ErrMissingDependency", err)
 	}
 }

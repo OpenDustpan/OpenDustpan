@@ -6,6 +6,8 @@ const (
 	portColName         = "name"
 	portColNameKey      = "name_key"
 	portColCreatedAtMs  = "created_at_ms"
+	portColDisplayName  = "display_name"
+	portColProviderID   = "provider_id"
 	portColCreatedBy    = "created_by"
 	portColNamespace    = "namespace"
 	portColVersion      = "version"
@@ -194,7 +196,7 @@ func portableSpec() []PortableTable {
 				{Name: portColTool, Kind: KindText},
 				{Name: portColName, Kind: KindText},
 				{Name: portColUnitID, Kind: KindText},
-				{Name: "display_name", Kind: KindText},
+				{Name: portColDisplayName, Kind: KindText},
 				{Name: "last_changed_ms", Kind: KindTime},
 				{Name: portColStatus, Kind: KindText},
 				{Name: "resource_count", Kind: KindInteger},
@@ -328,7 +330,7 @@ func portableSpec() []PortableTable {
 			Columns: []Column{
 				{Name: "id", Kind: KindText},
 				{Name: portColSubject, Kind: KindText},
-				{Name: "display_name", Kind: KindText},
+				{Name: portColDisplayName, Kind: KindText},
 				{Name: portColKind, Kind: KindText},
 				{Name: portColSource, Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
@@ -420,12 +422,39 @@ func portableSpec() []PortableTable {
 			},
 		},
 		{
-			Table:   "oidc_providers",
-			OrderBy: []string{"provider_id"},
+			Table:   TableOIDCProviders,
+			OrderBy: []string{portColProviderID},
 			Columns: []Column{
-				{Name: "provider_id", Kind: KindText},
+				{Name: portColProviderID, Kind: KindText},
 				{Name: "issuer", Kind: KindText},
 				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   TableInstallationSecretKeys,
+			OrderBy: []string{"scope_id"},
+			Columns: []Column{
+				{Name: "scope_id", Kind: KindText},
+				{Name: "wrapper_id", Kind: KindText},
+				{Name: "ciphertext", Kind: KindBytes},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+			},
+		},
+		{
+			Table:   TableSignInProviders,
+			OrderBy: []string{portColProviderID},
+			Columns: []Column{
+				{Name: portColProviderID, Kind: KindText},
+				{Name: "issuer", Kind: KindText},
+				{Name: portColDisplayName, Kind: KindText},
+				{Name: "client_id", Kind: KindText},
+				{Name: "client_secret", Kind: KindBytes},
+				{Name: "scopes", Kind: KindText},
+				{Name: "auto_create", Kind: KindBool},
+				{Name: "enabled", Kind: KindBool},
+				{Name: portColCreatedAtMs, Kind: KindTime},
+				{Name: "updated_at_ms", Kind: KindTime},
+				{Name: "version", Kind: KindInteger},
 			},
 		},
 		{

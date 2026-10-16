@@ -29,31 +29,73 @@ func (s *Store) CreateSession(ctx context.Context, ss session.Session, d session
 	}
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		n, err := q.CreateSession(ctx, db.CreateSessionParams{
-			ID:          ss.ID,
-			Digest:      d.String(),
-			Provider:    ss.Provider,
-			CreatedAtMs: codec.Millis(ss.CreatedAt),
-			AuthTimeMs:  codec.Millis(ss.AuthTime),
-			SourceIp:    ss.SourceIP,
-			UserAgent:   ss.UserAgent,
-			PrincipalID: ss.PrincipalID,
-		})
-		if err != nil {
-			return fmt.Errorf("insert session: %w", err)
-		}
-
-		if n != 1 {
-			return refusedSession(ctx, q, ss.PrincipalID)
-		}
-
-		last := db.SetLastSignInParams{AtMs: codec.Millis(ss.CreatedAt), ID: ss.PrincipalID}
-		if err := q.SetLastSignIn(ctx, last); err != nil {
-			return fmt.Errorf("set last sign-in: %w", err)
-		}
-
-		return nil
+		return insertSession(ctx, q, ss, d)
 	})
+}
+
+// CreateProviderSession implements session.ProviderSessionStore.
+func (s *Store) CreateProviderSession(
+	ctx context.Context, ss session.Session, d session.Digest, e audit.Entry,
+) error {
+	if err := ss.Validate(); err != nil {
+		return err
+	}
+
+	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		if err := checkProviderEnabled(ctx, q, ss.Provider); err != nil {
+			return err
+		}
+
+		return insertSession(ctx, q, ss, d)
+	})
+}
+
+// checkProviderEnabled returns ErrProviderNotFound when the stored provider
+// id is gone and ErrProviderDisabled when it is disabled.
+func checkProviderEnabled(ctx context.Context, q *db.Queries, id string) error {
+	enabled, err := q.GetSignInProviderEnabled(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: %s", session.ErrProviderNotFound, id)
+	}
+
+	if err != nil {
+		return fmt.Errorf("select sign-in provider: %w", err)
+	}
+
+	if !enabled {
+		return fmt.Errorf("%w: %s", session.ErrProviderDisabled, id)
+	}
+
+	return nil
+}
+
+// insertSession inserts ss with the digest d and sets the last sign-in of
+// its principal, in the transaction of q.
+func insertSession(ctx context.Context, q *db.Queries, ss session.Session, d session.Digest) error {
+	n, err := q.CreateSession(ctx, db.CreateSessionParams{
+		ID:          ss.ID,
+		Digest:      d.String(),
+		Provider:    ss.Provider,
+		CreatedAtMs: codec.Millis(ss.CreatedAt),
+		AuthTimeMs:  codec.Millis(ss.AuthTime),
+		SourceIp:    ss.SourceIP,
+		UserAgent:   ss.UserAgent,
+		PrincipalID: ss.PrincipalID,
+	})
+	if err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+
+	if n != 1 {
+		return refusedSession(ctx, q, ss.PrincipalID)
+	}
+
+	last := db.SetLastSignInParams{AtMs: codec.Millis(ss.CreatedAt), ID: ss.PrincipalID}
+	if err := q.SetLastSignIn(ctx, last); err != nil {
+		return fmt.Errorf("set last sign-in: %w", err)
+	}
+
+	return nil
 }
 
 // refusedSession names why the insert of a session of the principal id

@@ -346,6 +346,15 @@ func (s *Store) PeekPortableKey(
 	return codec.PeekPortableSecretKey(ctx, open, file, wrapperID)
 }
 
+// PeekPortableInstallationKey implements backup.InstallationKeyPeeker: it
+// reads one installation key of wrapperID from the installation_secret_keys
+// file of a portable backup.
+func (s *Store) PeekPortableInstallationKey(
+	ctx context.Context, open backup.PortableOpener, file backup.PortableFile, wrapperID string,
+) (secret.WrappedKey, error) {
+	return codec.PeekPortableInstallationKey(ctx, open, file, wrapperID)
+}
+
 // capture copies the database into a new file with VACUUM INTO and returns
 // its path. The target must not exist, so it reserves a new name first. The
 // caller removes the file.
@@ -681,7 +690,7 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 	wrappers, err := stringColumn(
 		ctx,
 		conn,
-		`SELECT DISTINCT wrapper_id FROM secret_keys ORDER BY wrapper_id`,
+		`SELECT wrapper_id FROM secret_keys UNION SELECT wrapper_id FROM installation_secret_keys ORDER BY wrapper_id`,
 	)
 	if err != nil {
 		return backup.Summary{}, err

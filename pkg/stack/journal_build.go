@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -60,7 +61,10 @@ type builtBlob struct {
 // base checkpoint and returns the checkpoint that results, without storing
 // it. It holds the batches and the built deployment in memory; a later
 // streaming build replaces this function without changing its callers. It
-// returns ErrMissingDependency without a replayer or a journal writer.
+// returns ErrMissingDependency without a replayer or a journal writer. A build
+// past MaxJournalBuildDuration is refused with ErrJournalBuildTimeout. A build
+// past a replay bound is refused with ErrTooLarge, which names the bound and
+// its limit. A canceled parent context is a cancel, not a timeout.
 func (s *Updates) buildJournalCheckpoint(
 	ctx context.Context, ref Ref, u Update, batches [][]byte,
 ) (Checkpoint, error) {
@@ -70,9 +74,15 @@ func (s *Updates) buildJournalCheckpoint(
 		return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, ErrMissingDependency)
 	}
 
-	base, err := s.journalBase(ctx, ref, u)
+	buildCtx, cancel := context.WithTimeout(ctx, MaxJournalBuildDuration)
+	defer cancel()
+
+	base, err := s.journalBase(buildCtx, ref, u)
 	if err != nil {
-		return zero, err
+		if errors.Is(buildCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, ErrJournalBuildTimeout)
+		}
+		return zero, s.mapReplayBound(u.ID, err)
 	}
 
 	combined, err := combineBatches(batches)
@@ -86,11 +96,61 @@ func (s *Updates) buildJournalCheckpoint(
 
 	var out bytes.Buffer
 
-	if err := s.replayer.Replay(ctx, open, bytes.NewReader(combined), &out); err != nil {
-		return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, err)
+	if err := s.replayer.Replay(buildCtx, open, bytes.NewReader(combined), &out); err != nil {
+		if errors.Is(buildCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+			return zero, fmt.Errorf("build checkpoint of update %s: %w", u.ID, ErrJournalBuildTimeout)
+		}
+		return zero, s.mapReplayBound(u.ID, err)
 	}
 
 	return s.builtCheckpoint(ref, u, out.Bytes())
+}
+
+// mapReplayBound maps a replay bound error to ErrTooLarge with a clear
+// message, so the handler answers 413. The message names the bound, its
+// limit and the one command that helps. Any other error passes through with
+// the update ID.
+func (s *Updates) mapReplayBound(id UpdateID, err error) error {
+	if errors.Is(err, pulumijournal.ErrTooManyEntries) ||
+		errors.Is(err, pulumijournal.ErrNewStateTooLarge) ||
+		errors.Is(err, pulumijournal.ErrLinkIndexTooLarge) ||
+		errors.Is(err, pulumijournal.ErrAddedBytesTooLarge) {
+		return fmt.Errorf(
+			"build checkpoint of update %s: %w: %w: split the update into smaller updates and run `pulumi up` again",
+			id,
+			ErrTooLarge,
+			err,
+		)
+	}
+	return fmt.Errorf("build checkpoint of update %s: %w", id, err)
+}
+
+// ReplayBoundMessage returns the message the server answers for a replay
+// bound refusal: one sentence that names the bound, its count and limit, and
+// the one command that helps. It reports false when err holds no replay
+// bound, so the caller answers the error text itself.
+func ReplayBoundMessage(err error) (string, bool) {
+	var bound *pulumijournal.BoundError
+	if !errors.As(err, &bound) {
+		return "", false
+	}
+
+	return fmt.Sprintf(
+		"This update has %d %s, more than the limit of %d: run `pulumi up` with fewer resources.",
+		bound.Count, bound.Bound, bound.Limit,
+	), true
+}
+
+// TooLargeMessage returns the one-sentence message the server answers for a
+// size refusal of a journaled update: a replay bound or a journal batch over
+// its bound. It reports false when err holds neither, so the caller answers
+// the error text itself.
+func TooLargeMessage(err error) (string, bool) {
+	if batch, ok := errors.AsType[*batchLimitError](err); ok {
+		return batch.Message(), true
+	}
+
+	return ReplayBoundMessage(err)
 }
 
 // journalBase returns the deployment the replay starts from: the checkpoint

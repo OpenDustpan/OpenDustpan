@@ -300,6 +300,8 @@ Reference:
 
 - [Configuration](docs/reference/configuration.md): every flag and
   environment variable.
+- [Journal limits](docs/reference/journal-limits.md): the size and time limits
+  of a journaled update.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
 - [Glossary](GLOSSARY.md): the words this project uses.
 
