@@ -275,7 +275,27 @@ func classify(err error) (int, string) {
 		return status, message
 	}
 
+	if status, message, ok := classifyNamespace(err); ok {
+		return status, message
+	}
+
 	return http.StatusInternalServerError, "internal error"
+}
+
+// classifyNamespace maps the namespace errors of a write to a status. The
+// message is the fixed text of the error, never the wrapped detail. ok is
+// false for any other error.
+func classifyNamespace(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, namespace.ErrFenced):
+		return http.StatusConflict, namespace.ErrFenced.Error(), true
+	case errors.Is(err, namespace.ErrNotHome):
+		return http.StatusMisdirectedRequest, namespace.ErrNotHome.Error(), true
+	case errors.Is(err, namespace.ErrUnavailable):
+		return http.StatusServiceUnavailable, namespace.ErrUnavailable.Error() + ": try again after the Retry-After time", true
+	default:
+		return 0, "", false
+	}
 }
 
 // classifyAccess maps the errors of the sign-in, the names and the lock to a
