@@ -17,6 +17,9 @@ import (
 // titleForbidden is the JSON:API title of a 403 answer.
 const titleForbidden = "forbidden"
 
+// titleConflict is the JSON:API title of a 409 answer.
+const titleConflict = "conflict"
+
 // jsonAPIMediaType is the media type of every response, including errors.
 const jsonAPIMediaType = "application/vnd.api+json"
 
@@ -101,7 +104,7 @@ func (h *Handler) writeNotFound(ctx context.Context, w http.ResponseWriter, deta
 
 // writeConflict answers 409.
 func (h *Handler) writeConflict(ctx context.Context, w http.ResponseWriter, detail string) {
-	h.writeJSONAPIError(ctx, w, http.StatusConflict, "conflict", detail)
+	h.writeJSONAPIError(ctx, w, http.StatusConflict, titleConflict, detail)
 }
 
 // writeUnprocessable answers 422.
@@ -149,10 +152,38 @@ func classifyTooLarge(err error) (errorClass, bool) {
 	}
 }
 
+// classifyNamespace maps the namespace errors of a write: a fenced write to
+// 409, a namespace homed in another region to 421, and a database that does
+// not answer to 503. ok is false for any other error.
+func classifyNamespace(err error) (errorClass, bool) {
+	switch {
+	case errors.Is(err, namespace.ErrFenced):
+		return errorClass{status: http.StatusConflict, title: titleConflict, detail: err.Error()}, true
+	case errors.Is(err, namespace.ErrNotHome):
+		return errorClass{
+			status: http.StatusMisdirectedRequest,
+			title:  "misdirected request",
+			detail: err.Error(),
+		}, true
+	case errors.Is(err, namespace.ErrUnavailable):
+		return errorClass{
+			status: http.StatusServiceUnavailable,
+			title:  "service unavailable",
+			detail: "database unavailable: try again after the Retry-After time",
+		}, true
+	default:
+		return errorClass{status: 0, title: "", detail: ""}, false
+	}
+}
+
 // classify maps domain errors to a status, title and detail safe to show
 // callers. Unknown errors map to 500 with a generic detail.
 func classify(err error) errorClass {
 	if class, ok := classifyTooLarge(err); ok {
+		return class
+	}
+
+	if class, ok := classifyNamespace(err); ok {
 		return class
 	}
 
@@ -170,17 +201,15 @@ func classify(err error) errorClass {
 		errors.Is(err, workspace.ErrNoState), errors.Is(err, workspace.ErrStateVersionNotFound),
 		errors.Is(err, workspace.ErrResourceNotFound):
 		return errorClass{status: http.StatusNotFound, title: notFoundTitle, detail: err.Error()}
-	case errors.Is(err, workspace.ErrClientEncrypted):
-		return errorClass{status: http.StatusConflict, title: "conflict", detail: err.Error()}
-	case errors.Is(err, workspace.ErrAlreadyExists),
+	case errors.Is(err, workspace.ErrClientEncrypted),
+		errors.Is(err, workspace.ErrAlreadyExists),
 		errors.Is(err, workspace.ErrLocked),
 		errors.Is(err, workspace.ErrPendingState),
 		errors.Is(err, workspace.ErrNotLocked),
 		errors.Is(err, workspace.ErrLockedByOther),
 		errors.Is(err, workspace.ErrConcurrentModification),
-		errors.Is(err, workspace.ErrTooManyPending),
-		errors.Is(err, namespace.ErrFenced):
-		return errorClass{status: http.StatusConflict, title: "conflict", detail: err.Error()}
+		errors.Is(err, workspace.ErrTooManyPending):
+		return errorClass{status: http.StatusConflict, title: titleConflict, detail: err.Error()}
 	case errors.Is(err, workspace.ErrBusy):
 		return errorClass{
 			status: http.StatusServiceUnavailable,
