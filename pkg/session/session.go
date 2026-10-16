@@ -195,7 +195,9 @@ type Match struct {
 // Provider names the sign-in method. Nonce goes into the ID token, and
 // Verifier is the PKCE code verifier (RFC 7636): both are secret until the
 // callback. ReturnPath is where the browser goes after the sign-in: a path
-// of this server. A request expires at ExpiresAt and works once.
+// of this server. MaxAge is the max_age that the start sent to the provider,
+// when HasMaxAge is true: the callback refuses an authentication older
+// than it. A request expires at ExpiresAt and works once.
 type Request struct {
 	CreatedAt  time.Time
 	ExpiresAt  time.Time
@@ -203,6 +205,8 @@ type Request struct {
 	Nonce      string
 	Verifier   string
 	ReturnPath string
+	MaxAge     time.Duration
+	HasMaxAge  bool
 }
 
 // RequestLifetime is how long a sign-in can take from its start to its
@@ -312,6 +316,9 @@ func (r Request) Validate() error {
 		return fmt.Errorf("%w: return path %q is not a path of this server", ErrInvalid, r.ReturnPath)
 	case r.CreatedAt.IsZero() || !r.ExpiresAt.After(r.CreatedAt):
 		return fmt.Errorf("%w: the expiry is not after the creation time", ErrInvalid)
+	case r.MaxAge < 0 || r.MaxAge%time.Second != 0 || (!r.HasMaxAge && r.MaxAge != 0):
+		return fmt.Errorf("%w: max_age %s is not a count of whole seconds that the request sent", ErrInvalid,
+			r.MaxAge)
 	default:
 		return nil
 	}

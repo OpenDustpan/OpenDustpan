@@ -500,6 +500,9 @@ type Server struct {
 	// that schedule.
 	signInRequests   *session.Sessions
 	signInPruneEvery time.Duration
+	// signInProviders binds each provider of the console sign-in to its
+	// issuer at the start, or is the zero value with no console sign-in.
+	signInProviders providerBinding
 }
 
 // services holds the domain services that NewServer wires together.
@@ -742,6 +745,7 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		deleted:          deleted,
 		signInRequests:   adapters.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
+		signInProviders:  bindingOf(cfg, adapters.signIn),
 	}, nil
 }
 
@@ -1506,6 +1510,10 @@ func (s *Server) runStartUp(ctx context.Context) error {
 
 	if startErr == nil {
 		startErr = s.startUpAuditChain(ctx)
+	}
+
+	if startErr == nil {
+		startErr = s.bindSignInProviders(ctx)
 	}
 
 	if startErr != nil && ctx.Err() == nil {

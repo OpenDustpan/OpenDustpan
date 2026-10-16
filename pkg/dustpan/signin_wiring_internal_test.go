@@ -256,6 +256,7 @@ func TestRunPrunesSignInRequests(t *testing.T) {
 	r := session.Request{
 		CreatedAt: now, ExpiresAt: now.Add(session.RequestLifetime), Provider: "corp",
 		Nonce: "n-0S6_WzA2Mj-rG7k3QpL", Verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", ReturnPath: "/",
+		MaxAge: 0, HasMaxAge: false,
 	}
 
 	if err := w.store.CreateRequest(t.Context(), r, session.DigestOf(state)); err != nil {

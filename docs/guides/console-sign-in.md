@@ -59,10 +59,16 @@ subject at the provider: `<provider ID>:<sub>`. For example,
 A new ID makes new subjects, so each person gets a new principal with no
 grant.
 
-The issuer is not part of the subject. If you set `--oidc-issuer` to
-another provider and keep the provider ID, a person of the new provider
-with the same `sub` gets the principal of the person of the old provider.
-To use another issuer, set a new provider ID too.
+The issuer is not part of the subject. So the server records the issuer
+of each provider ID at its first start. A later start that gives a
+recorded provider ID another issuer stops before it serves, and the
+error names the provider ID and both issuers. The server compares the
+issuers with a lowercase scheme and host and with no trailing slash, so
+`https://IdP.example/` and `https://idp.example` are the same issuer.
+
+If the issuer changed by mistake, set `--oidc-issuer` back to the
+recorded issuer. Set a new provider ID only when you move to another
+identity provider: each person then gets a new principal with no grant.
 
 A principal with the subject `<provider ID>:<sub>` is the principal of
 that person, also when an administrator made it as a local principal.
@@ -122,14 +128,32 @@ take the cookie: it answers 401 to a request with the cookie and no token.
 A request with an `Authorization` header uses the header and ignores the
 cookie. A refused header answers 401, also when the cookie is valid.
 
-A console session cannot create or rotate an access token yet. Use an
-access token for that.
-
 The API that works with the Pulumi CLI answers 403 to a console session on
 the routes that create and start an update, and on the encrypt and decrypt
 routes of the secrets provider. The Pulumi CLI uses these routes with an
 access token. A sign-out cannot stop an update, so a session cannot start
 one.
+
+## Tokens from a console session
+
+A signed-in person can create and rotate access tokens from the console,
+on the same routes as with a token. The sign-in of the session must be
+fresh: the token freshness window of the session policy sets how old it
+can be. The default is 15 minutes, and 0 turns the check off.
+
+When the sign-in is older than the window, a create or a rotation answers
+401 with the field `reauthenticate`, for example
+`/api/server/sign-in/corp?fresh=1`. The console sends the browser to that
+path, with its own `return` parameter. With `fresh=1`, the server asks the
+identity provider for a new authentication (`max_age=0`), and the callback
+refuses an authentication that is older. The new session then creates the
+token.
+
+Set the window with `PATCH /api/server/session-policy` and the field
+`tokenFreshnessSeconds` (action `server:manage-sign-in`): 0, or 60 to
+604800 seconds. A change of the session policy from a console session
+also needs a sign-in inside the window, so an old session cannot turn the
+window off.
 
 ## Audit entries
 
@@ -142,4 +166,7 @@ cookie value.
 
 An entry of a request with the session cookie has the channel `console`,
 whatever channel the request declares. Its subject is the subject of the
-person, and it has no token ID.
+person, and it has no token ID. In the installation audit log, the entry
+also records the ID of the session under the key `sessionId`. The
+`session:sign-in` entry of that session names the same ID in its object.
+So a token that a console session creates leads back to its sign-in.

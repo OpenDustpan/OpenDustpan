@@ -259,3 +259,43 @@ func TestSessionRevealRecordsTheConsoleChannel(t *testing.T) {
 			got[0].Channel, got[0].Subject, got[0].TokenID)
 	}
 }
+
+// TestSessionDeleteRecordsTheConsoleChannel proves that the audit entry of
+// a stack delete by a console session has the channel console, also when
+// the request declares another channel.
+func TestSessionDeleteRecordsTheConsoleChannel(t *testing.T) {
+	t.Parallel()
+
+	f := newRevealFixtureWithSessions(
+		t,
+		allowAll(),
+		fixtureAudit{
+			store: &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}, onFail: nil,
+			logger: slog.New(slog.DiscardHandler),
+		},
+		aliceChecker(t),
+	)
+
+	secret, err := session.NewSecret()
+	if err != nil {
+		t.Fatalf("secret: %v", err)
+	}
+
+	req := sessionPost(t, "/api/stacks/acme/web/prod", secret, "")
+	req.Method = http.MethodDelete
+	req.Header.Set("Dustpan-Channel", "api")
+
+	if rec := serve(f.handler, req); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete with a session = %d %s, want 204", rec.Code, rec.Body.String())
+	}
+
+	if len(f.store.entries) != 1 {
+		t.Fatalf("delete entries = %d, want 1", len(f.store.entries))
+	}
+
+	e := f.store.entries[0]
+	if e.Channel != audit.ChannelConsole || e.Subject != "corp:alice" || e.TokenID != "" {
+		t.Fatalf("entry channel %q subject %q token %q, want console, corp:alice and no token",
+			e.Channel, e.Subject, e.TokenID)
+	}
+}

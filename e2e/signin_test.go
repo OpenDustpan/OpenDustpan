@@ -53,10 +53,20 @@ func TestSignIn(t *testing.T) {
 		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
 	}
 
+	tofuVersions := e2e.OpenTofu().Versions()
+	if len(tofuVersions) == 0 {
+		t.Fatal("the OpenTofu tool needs at least one version in its matrix")
+	}
+
+	tofu, err := fetcher.Install(installCtx, e2e.OpenTofu(), tofuVersions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.OpenTofu().Name, tofuVersions[0], err)
+	}
+
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			runSignInOnStore(t, cli, db)
+			runSignInOnStore(t, cli, tofu, db)
 		})
 	}
 }
@@ -173,7 +183,7 @@ func (b browser) session(t *testing.T) (e2eSession, int) {
 }
 
 // runSignInOnStore runs the sign-in steps on one store.
-func runSignInOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+func runSignInOnStore(t *testing.T, cli, tofu e2e.Install, store e2e.Store) {
 	t.Helper()
 
 	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
@@ -190,17 +200,189 @@ func runSignInOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkConsoleAPIsTakeTheCookie(t, b)
 	checkCallbackOfAnotherState(t, b)
+	checkTokensFromSession(t, b, tofu)
 
-	// The idle limit and the maximum length need hours of server time, so
-	// they run on the clock that the in-process server shares. The binary
-	// server keeps the real time.
+	// The token freshness window, the idle limit and the maximum length
+	// need server time to pass, so they run on the clock that the
+	// in-process server shares. The binary server keeps the real time.
 	if env.SharesClock() {
+		checkTokenFreshness(t, b)
 		checkSessionLimits(t, b)
 	} else {
-		t.Log("binary server: the idle limit and the maximum length run with the in-process server only")
+		t.Log("binary server: the token freshness window, the idle limit and the maximum length run with " +
+			"the in-process server only")
 	}
 
 	checkSignOut(t, b)
+}
+
+// doBody sends one request with body and the headers, and returns its
+// answer.
+func (b browser) doBody(t *testing.T, method, target, body string, header http.Header) answer {
+	t.Helper()
+
+	req, err := http.NewRequestWithContext(t.Context(), method, target, strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("request %s %s: %v", method, target, err)
+	}
+
+	maps.Copy(req.Header, header)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := b.server.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, target, err)
+	}
+
+	raw, err := io.ReadAll(resp.Body)
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Errorf("close body: %v", closeErr)
+	}
+
+	if err != nil {
+		t.Fatalf("read %s %s: %v", method, target, err)
+	}
+
+	return answer{status: resp.StatusCode, location: resp.Header.Get("Location"), body: string(raw)}
+}
+
+// tokenChange sends a token create or rotation with the session cookie
+// and its CSRF value.
+func (b browser) tokenChange(t *testing.T, path, body string) answer {
+	t.Helper()
+
+	sess, status := b.session(t)
+	if status != http.StatusOK {
+		t.Fatalf("session before a token change = %d", status)
+	}
+
+	return b.doBody(t, http.MethodPost, b.env.URL+path, body, http.Header{"X-Dustpan-Csrf": {sess.CSRFToken}})
+}
+
+// ownToken creates an own token from the console session and returns it.
+func (b browser) ownToken(t *testing.T, body string) e2eToken {
+	t.Helper()
+
+	a := b.tokenChange(t, "/api/server/caller/tokens", body)
+	if a.status != http.StatusCreated {
+		t.Fatalf("own token from the session = %d, want 201: %s", a.status, a.body)
+	}
+
+	var tok e2eToken
+	if err := json.Unmarshal([]byte(a.body), &tok); err != nil || tok.Secret == "" || tok.ID == "" {
+		t.Fatalf("decode the own token: %v", err)
+	}
+
+	return tok
+}
+
+// rotateOwnToken rotates the own token id from the console session and
+// returns the new token.
+func (b browser) rotateOwnToken(t *testing.T, id string) e2eToken {
+	t.Helper()
+
+	a := b.tokenChange(t, "/api/server/caller/tokens/"+id+"/rotate", `{}`)
+	if a.status != http.StatusCreated {
+		t.Fatalf("rotation from the session = %d, want 201: %s", a.status, a.body)
+	}
+
+	var rotation struct {
+		Token e2eToken `json:"token"`
+	}
+
+	if err := json.Unmarshal([]byte(a.body), &rotation); err != nil || rotation.Token.Secret == "" {
+		t.Fatalf("decode the rotation: %v", err)
+	}
+
+	return rotation.Token
+}
+
+// checkTokensFromSession creates an own token from the console session,
+// uses it with the Pulumi CLI and the OpenTofu CLI after an administrator
+// grants the person the role maintainer on the namespace, and rotates it.
+func checkTokensFromSession(t *testing.T, b browser, tofu e2e.Install) {
+	t.Helper()
+
+	ctx := t.Context()
+	expires := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
+	tok := b.ownToken(t, `{"name":"laptop","expiresAt":"`+expires+`"}`)
+
+	grant := `{"subject":"principal:` + tok.PrincipalID + `","role":"maintainer"}`
+
+	status, body, err := b.env.ServerAPIStatus(ctx, http.MethodPost, "/api/server/namespaces/"+e2e.Namespace+"/grants",
+		grant)
+	if err != nil || status != http.StatusCreated {
+		t.Fatalf("grant maintainer = %d, %v: %s", status, err, body)
+	}
+
+	checkPulumiWhoami(ctx, t, b.env, tok.Secret)
+
+	init, err := b.env.RunTofuWithToken(ctx, t, tofu, tok.Secret, "init", "-input=false")
+	if err != nil || init.ExitCode != 0 {
+		t.Fatalf("tofu init with the token of the session = %+v, %v", init, err)
+	}
+
+	rotated := b.rotateOwnToken(t, tok.ID)
+	if rotated.Secret == tok.Secret {
+		t.Fatal("the rotation answered the old secret")
+	}
+
+	checkPulumiWhoami(ctx, t, b.env, rotated.Secret)
+}
+
+// checkPulumiWhoami runs pulumi whoami with token, and fails unless it
+// names the person of the test provider.
+func checkPulumiWhoami(ctx context.Context, t *testing.T, env *e2e.Env, token string) {
+	t.Helper()
+
+	res, err := env.Run(ctx, []string{"PULUMI_ACCESS_TOKEN=" + token}, "whoami")
+	if err != nil || res.ExitCode != 0 || !strings.Contains(res.Stdout, e2e.SignInProvider+":248289761001") {
+		t.Fatalf("pulumi whoami with the token of the session = %+v, %v", res, err)
+	}
+}
+
+// checkTokenFreshness proves the token freshness window: a session whose
+// sign-in is older than 15 minutes cannot create a token, and gets the
+// path of a new sign-in; that sign-in asks the provider for a new
+// authentication, and its session creates a token.
+func checkTokenFreshness(t *testing.T, b browser) {
+	t.Helper()
+
+	clock := b.env.Clock(t)
+	expires := time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)
+	body := `{"name":"fresh","expiresAt":"` + expires + `"}`
+
+	b.signIn(t)
+	clock.Advance(10 * time.Minute)
+	b.session(t)
+	clock.Advance(6 * time.Minute)
+
+	a := b.tokenChange(t, "/api/server/caller/tokens", body)
+
+	var refusal struct {
+		Reauthenticate string `json:"reauthenticate"`
+	}
+
+	if err := json.Unmarshal([]byte(a.body), &refusal); err != nil || a.status != http.StatusUnauthorized ||
+		refusal.Reauthenticate != "/api/server/sign-in/"+e2e.SignInProvider+"?fresh=1" {
+		t.Fatalf("token from a stale session = %d %s, want 401 with the path of a new sign-in", a.status, a.body)
+	}
+
+	signIns := b.env.IdentityProvider(t).SignIns()
+
+	start := b.do(t, b.server, http.MethodGet, b.env.URL+refusal.Reauthenticate+"&return=/console", nil)
+	if start.status != http.StatusFound || !strings.Contains(start.location, "max_age=0") {
+		t.Fatalf("fresh sign-in start = %d to %q, want 302 with max_age=0", start.status, start.location)
+	}
+
+	auth := b.do(t, b.idp, http.MethodGet, start.location, nil)
+
+	back := b.do(t, b.server, http.MethodGet, auth.location, nil)
+	if back.status != http.StatusSeeOther || b.env.IdentityProvider(t).SignIns() != signIns+1 {
+		t.Fatalf("fresh callback = %d, want 303 after a new authentication: %s", back.status, back.body)
+	}
+
+	b.ownToken(t, body)
 }
 
 // checkConsoleAPIsTakeTheCookie proves that the APIs of the console take

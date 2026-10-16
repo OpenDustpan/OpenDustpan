@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/stack"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -245,6 +246,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	seedBackupTokens(t, s)
 	seedBackupAccess(t, s)
 	seedBackupPurge(t, s, acme)
+	seedBackupSignIn(t, s)
 
 	return backupSeed{
 		acme:       acme,
@@ -399,6 +401,44 @@ func seedBackupTokens(t *testing.T, s BackupStore) {
 	}
 
 	seedBackupSweep(t, ts)
+}
+
+// seedBackupSignIn writes a provider binding, a sign-in request with a
+// max_age and a token freshness window when s keeps the console sign-in,
+// so the round trip compares the new columns and the provider table row by
+// row.
+func seedBackupSignIn(t *testing.T, s BackupStore) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if ps, ok := s.(session.ProviderStore); ok {
+		if _, err := ps.BindProvider(ctx, "corp", "https://idp.example", now()); err != nil {
+			t.Fatalf("bind provider: %v", err)
+		}
+	}
+
+	if ss, ok := s.(session.Store); ok {
+		r := session.Request{
+			CreatedAt: now(), ExpiresAt: now().Add(session.RequestLifetime), Provider: "corp",
+			Nonce: "n-0S6_WzA2Mj-rG7k3QpL", Verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", ReturnPath: "/",
+			MaxAge: 0, HasMaxAge: true,
+		}
+		if err := ss.CreateRequest(ctx, r, session.Digest{7}); err != nil {
+			t.Fatalf("create sign-in request: %v", err)
+		}
+	}
+
+	if pol, ok := s.(session.PolicyStore); ok {
+		_, err := pol.UpdateSessionPolicy(ctx, func(old session.Policy) (session.Policy, audit.Entry, error) {
+			old.TokenFreshness, old.TokenFreshnessDefault, old.UpdatedAt = 30*time.Minute, false, now()
+
+			return old, ServerChange(now(), session.PolicyRef), nil
+		})
+		if err != nil {
+			t.Fatalf("set the token freshness window: %v", err)
+		}
+	}
 }
 
 // seedBackupSweep changes the token policy and runs one sweep, so the round

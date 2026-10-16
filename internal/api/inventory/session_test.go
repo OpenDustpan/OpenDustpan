@@ -179,3 +179,65 @@ func TestSessionRestoreRecordsTheConsoleChannel(t *testing.T) {
 			e.Channel, e.Subject, e.TokenID)
 	}
 }
+
+// sessionChange returns a request with the session cookie of secret, its
+// CSRF value, a declared channel api and body.
+func sessionChange(t *testing.T, method, target string, secret session.Secret, body string) *http.Request {
+	t.Helper()
+
+	req := httptest.NewRequestWithContext(t.Context(), method, target, strings.NewReader(body))
+	req.AddCookie(&http.Cookie{
+		Name: sessionauth.Cookie, Value: secret.Reveal(), Path: "/", Secure: true, HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
+	req.Header.Set(sessionauth.CSRFHeader, session.CSRFValue(secret))
+	req.Header.Set("Dustpan-Channel", "api")
+
+	return req
+}
+
+// TestSessionCollectionChangesRecordTheConsoleChannel proves that the audit
+// entries of a collection create, a unit move and a collection delete by a
+// console session have the channel console, also when the request declares
+// another channel.
+func TestSessionCollectionChangesRecordTheConsoleChannel(t *testing.T) {
+	t.Parallel()
+
+	f := newMoveFixtureWithSessions(t, selectiveAuthorizer{deny: map[identity.Action]bool{}}, allowMoves{},
+		aliceChecker(t))
+
+	secret, err := session.NewSecret()
+	if err != nil {
+		t.Fatalf("secret: %v", err)
+	}
+
+	steps := []struct {
+		method, target, body string
+		want                 int
+	}{
+		{http.MethodPost, "/api/inventory/namespaces/acme/collections", `{"name":"team"}`, http.StatusCreated},
+		{
+			http.MethodPut, "/api/inventory/unit-collection?unit=" + f.unitText, `{"collection":"new"}`,
+			http.StatusOK,
+		},
+		{http.MethodDelete, "/api/inventory/namespaces/acme/collections/team", "", http.StatusNoContent},
+	}
+
+	for _, s := range steps {
+		if rec := serveCookie(f.handler, sessionChange(t, s.method, s.target, secret, s.body)); rec.Code != s.want {
+			t.Fatalf("%s %s with a session = %d %s, want %d", s.method, s.target, rec.Code, rec.Body.String(), s.want)
+		}
+	}
+
+	if len(f.store.entries) != len(steps) {
+		t.Fatalf("collection entries = %d, want %d", len(f.store.entries), len(steps))
+	}
+
+	for i := range f.store.entries {
+		e := f.store.entries[i]
+		if e.Channel != audit.ChannelConsole || e.Subject != "corp:alice" || e.TokenID != "" {
+			t.Errorf("entry %s: channel %q subject %q token %q, want console, corp:alice and no token",
+				e.Action, e.Channel, e.Subject, e.TokenID)
+		}
+	}
+}

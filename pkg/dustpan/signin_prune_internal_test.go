@@ -53,7 +53,7 @@ func TestPruneSignInRequestsOnce(t *testing.T) {
 
 		begin := session.Begin{
 			State: state, Provider: "corp", Nonce: "n-0S6_WzA2Mj-rG7k3QpL",
-			Verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", ReturnPath: "/",
+			Verifier: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk", ReturnPath: "/", MaxAge: 0, HasMaxAge: false,
 		}
 		if beginErr := sessions.BeginRequest(t.Context(), begin); beginErr != nil {
 			t.Fatalf("begin: %v", beginErr)

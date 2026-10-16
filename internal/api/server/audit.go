@@ -28,8 +28,10 @@ type serverChange struct {
 }
 
 // callerEntry returns the audit entry of the caller p for action: who acted,
-// from where and through which channel. The Service of a change sets the
-// time, the scope, the kind, the outcome and the record.
+// from where and through which channel. For a console session, the entry
+// also records the session ID, so a token that a session creates leads
+// back to its session. The Service of a change sets the time, the scope,
+// the kind, the outcome and the record.
 func callerEntry(r *http.Request, p identity.Principal, action identity.Action) audit.Entry {
 	return audit.Entry{
 		At:           time.Time{},
@@ -42,7 +44,7 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		Version:      "",
 		ValuePath:    "",
 		ValueCount:   nil,
-		Changes:      nil,
+		Changes:      sessionChanges(r),
 		SourceIP:     clientip.String(r),
 		UserAgent:    truncateUserAgent(r.UserAgent()),
 		Channel:      callerChannel(r),
@@ -55,6 +57,24 @@ func callerEntry(r *http.Request, p identity.Principal, action identity.Action) 
 		Sequence:     0,
 		FenceVersion: 0,
 	}
+}
+
+// sessionKeyID is the key of the change that records the console session
+// of an entry.
+const sessionKeyID = "sessionId"
+
+// sessionChanges returns the session ID of the console session of r as a
+// recorded value with no old value, or nil for a request with an access
+// token.
+func sessionChanges(r *http.Request) []audit.Change {
+	caller, ok := sessionFromRequest(r)
+	if !ok {
+		return nil
+	}
+
+	return []audit.Change{{
+		Key: sessionKeyID, Old: nil, New: caller.Match.Session.ID, Layer: "", TakesEffect: "",
+	}}
 }
 
 // callerChannel returns the audit channel of r: the console for a request
