@@ -3,6 +3,8 @@ package access
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -169,4 +171,76 @@ var manageAccessActions = map[ObjectKind]identity.Action{
 	ObjectNamespace:  identity.ActionNamespaceManageAccess,
 	ObjectCollection: identity.ActionCollectionManageAccess,
 	ObjectUnit:       identity.ActionUnitManageAccess,
+}
+
+// ActsAs returns, sorted and each once, what the members of subject can
+// act as through the current grants of subject, as r reads them. Each line
+// is the wire form of the object of a grant, as the access review names
+// it: "principal:<id>" for a service principal on which a grant gives
+// principal:manage-tokens, the name of a namespace whose grant gives
+// namespace:manage-principal-tokens, so each service principal of that
+// namespace, and "@server" for a grant on the installation that gives
+// principal:manage-tokens, so every service principal. A store calls it
+// with the reads of a membership write.
+func ActsAs(ctx context.Context, r GrantReads, subject Subject) ([]string, error) {
+	grants, err := r.GrantsOf(ctx, subject)
+	if err != nil {
+		return nil, fmt.Errorf("read grants of %s: %w", subject.String(), err)
+	}
+
+	roles, err := rolesOfGrants(ctx, r, grants)
+	if err != nil {
+		return nil, fmt.Errorf("read roles of %s: %w", subject.String(), err)
+	}
+
+	seen := map[string]bool{}
+
+	for i := range grants {
+		role, ok := roles[grants[i].Role]
+		if ok && givesActAs(role, grants[i].Object) {
+			seen[grants[i].Object.String()] = true
+		}
+	}
+
+	return slices.Sorted(maps.Keys(seen)), nil
+}
+
+// givesActAs reports whether a grant of role on obj lets its holder make
+// the tokens of a service principal: principal:manage-tokens on the
+// installation or on a principal, and namespace:manage-principal-tokens on
+// a namespace, as the Authorizer decides.
+func givesActAs(role Role, obj identity.Object) bool {
+	if isNamespaceGrant(obj) {
+		return role.Has(identity.ActionNamespaceManagePrincipalTokens)
+	}
+
+	return (obj.IsServer() || obj.IsPrincipal()) && role.Has(identity.ActionPrincipalManageTokens)
+}
+
+// rolesOfGrants returns the role of each grant of grants that exists, by
+// ID: the built-in roles from code, and the custom roles with r in one
+// read.
+func rolesOfGrants(ctx context.Context, r GrantReads, grants []Grant) (map[string]Role, error) {
+	out := map[string]Role{}
+
+	var custom []string
+
+	for i := range grants {
+		if role, ok := BuiltInRole(grants[i].Role); ok {
+			out[role.ID] = role
+		} else if !slices.Contains(custom, grants[i].Role) {
+			custom = append(custom, grants[i].Role)
+		}
+	}
+
+	roles, err := r.GetRoles(ctx, custom)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range roles {
+		out[roles[i].ID] = roles[i]
+	}
+
+	return out, nil
 }

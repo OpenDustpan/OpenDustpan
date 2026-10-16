@@ -119,7 +119,7 @@ func seedBench(b *testing.B, s principal.Store) {
 				State:       principal.MembershipStateActive,
 				Pinned:      false,
 			}
-			if err := s.AddMember(ctx, m, entry()); err != nil {
+			if err := s.AddMember(ctx, m, entry(), nil); err != nil {
 				b.Fatalf("seed member: %v", err)
 			}
 		}

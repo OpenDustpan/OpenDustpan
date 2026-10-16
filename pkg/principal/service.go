@@ -361,6 +361,14 @@ func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, caller identit
 // change "tokenManagers", every holder of principal:manage-tokens on that
 // principal: each of them can act as the principal, with the grants of the
 // group too. The entry of a person or a workload names none.
+//
+// When the grants of the group let its members act as service principals,
+// the entry names them in the change "actsAs", one per line, as the access
+// review names them: "principal:<id>" for one service principal, the name
+// of a namespace for each service principal of that namespace, and
+// "@server" for every service principal. The store
+// reads them in the transaction of the write, so a grant or a revoke that
+// commits first is in the list.
 func (s *Service) AddMember(
 	ctx context.Context, e audit.Entry, caller identity.Principal, groupID, principalID string,
 ) (Membership, error) {
@@ -410,7 +418,7 @@ func (s *Service) AddMember(
 		})
 	}
 
-	err := s.store.AddMember(ctx, m, entry)
+	err := s.store.AddMember(ctx, m, entry, actsAsChange(groupID))
 	if errors.Is(err, ErrAlreadyExists) {
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w: the principal is a member of the group, "+
 			"or it left the group in this millisecond. If it is not a member, try again", principalID, groupID, err)
@@ -609,4 +617,23 @@ func signInDisplayName(in SignInInput) string {
 	}
 
 	return in.Subject
+}
+
+// actsAsChange returns the audit of a membership add that the store runs in
+// the transaction of the write: when the grants of the group groupID let
+// its members act as service principals, the change "actsAs" names each,
+// one per line, so the entry records what the new member can now act as.
+func actsAsChange(groupID string) MemberAudit {
+	return func(ctx context.Context, r GroupReads) ([]audit.Change, error) {
+		ids, err := r.ActsAs(ctx, groupID)
+		if err != nil {
+			return nil, fmt.Errorf("read what the members of group %q act as: %w", groupID, err)
+		}
+
+		if len(ids) == 0 {
+			return nil, nil
+		}
+
+		return []audit.Change{{Key: "actsAs", Old: nil, New: strings.Join(ids, "\n"), Layer: "", TakesEffect: ""}}, nil
+	}
 }

@@ -331,7 +331,7 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
 			Pinned: false,
 		}
-		if err := ps.AddMember(ctx, m, ServerChange(m.AddedAt, "group:grp-ops#member:"+id)); err != nil {
+		if err := ps.AddMember(ctx, m, ServerChange(m.AddedAt, "group:grp-ops#member:"+id), nil); err != nil {
 			t.Fatalf("add member %q: %v", id, err)
 		}
 	}
@@ -341,7 +341,7 @@ func seedBackupPrincipals(t *testing.T, s BackupStore) {
 		PrincipalID: "prn-suspended", Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
 		State: principal.MembershipStateSuspended, Pinned: true,
 	}
-	addErr := ps.AddMember(ctx, suspended, ServerChange(suspended.AddedAt, "group:grp-ops#member:prn-suspended"))
+	addErr := ps.AddMember(ctx, suspended, ServerChange(suspended.AddedAt, "group:grp-ops#member:prn-suspended"), nil)
 	if addErr != nil {
 		t.Fatalf("add suspended member: %v", addErr)
 	}

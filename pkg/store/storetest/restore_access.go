@@ -1135,7 +1135,7 @@ func createLiveOnlyPrincipal(t *testing.T, ports keepAccessPorts) {
 
 	memberEntry := ServerChange(at, "group:grp-ops#member:prn-live-only")
 
-	if err := ports.principals.AddMember(ctx, member, memberEntry); err != nil {
+	if err := ports.principals.AddMember(ctx, member, memberEntry, nil); err != nil {
 		t.Fatalf("add live-only member: %v", err)
 	}
 }

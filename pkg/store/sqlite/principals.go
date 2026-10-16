@@ -434,15 +434,26 @@ func (s *Store) DeleteGroup(ctx context.Context, id string, e audit.Entry) error
 }
 
 // AddMember implements principal.Store. It checks the group and the
-// principal in the same transaction as the insert. An empty source or state
+// principal, and runs more, in the same transaction as the insert. An empty source or state
 // defaults to local and active.
-func (s *Store) AddMember(ctx context.Context, m principal.Membership, e audit.Entry) error {
+func (s *Store) AddMember(
+	ctx context.Context, m principal.Membership, e audit.Entry, more principal.MemberAudit,
+) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	return s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
 		if err := groupAndPrincipalExist(ctx, q, m.GroupID, m.PrincipalID); err != nil {
 			return err
+		}
+
+		if more != nil {
+			changes, err := more(ctx, grantReads{q: q})
+			if err != nil {
+				return err
+			}
+
+			e.Changes = append(e.Changes, changes...)
 		}
 
 		m = m.WithDefaults()
