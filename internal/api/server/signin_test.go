@@ -494,6 +494,8 @@ func TestSignInHeaderWinsOverCookie(t *testing.T) {
 	}
 }
 
+// TestSignInRefusesTokenFromSession proves that a console session mints no
+// token: each route that creates or rotates a token answers 403.
 func TestSignInRefusesTokenFromSession(t *testing.T) {
 	t.Parallel()
 
@@ -501,16 +503,29 @@ func TestSignInRefusesTokenFromSession(t *testing.T) {
 	sess := e.signIn(t)
 	_, body := e.readSession(t, sess)
 
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/server/caller/tokens",
-		strings.NewReader(`{"name":"laptop"}`))
-	req.AddCookie(sess)
-	req.Header.Set(apiserver.CSRFHeader, body.CSRFToken)
+	principalTokens := "/api/server/principals/" + testOtherPrincipalID + "/tokens"
 
-	rec := httptest.NewRecorder()
-	e.handler.ServeHTTP(rec, req)
+	for _, target := range []string{
+		"/api/server/tokens",
+		"/api/server/tokens/" + testServiceTokenID + "/rotate",
+		"/api/server/service-tokens",
+		"/api/server/service-tokens/" + testServiceTokenID + "/rotate",
+		"/api/server/caller/tokens",
+		"/api/server/caller/tokens/" + testServiceTokenID + "/rotate",
+		principalTokens,
+		principalTokens + "/" + testServiceTokenID + "/rotate",
+	} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, target,
+			strings.NewReader(`{"name":"laptop","principalId":"`+testOtherPrincipalID+`"}`))
+		req.AddCookie(sess)
+		req.Header.Set(apiserver.CSRFHeader, body.CSRFToken)
 
-	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "cannot create or rotate a token") {
-		t.Fatalf("token create from a session = %d %s, want 403", rec.Code, rec.Body.String())
+		rec := httptest.NewRecorder()
+		e.handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "cannot create or rotate a token") {
+			t.Errorf("POST %s from a session = %d %s, want 403", target, rec.Code, rec.Body.String())
+		}
 	}
 }
 

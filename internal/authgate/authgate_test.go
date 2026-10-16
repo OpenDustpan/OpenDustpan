@@ -367,6 +367,32 @@ func TestFailSpendsTheBudgetOfTheSource(t *testing.T) {
 	}
 }
 
+// TestTokenAndSignInFailuresShareTheBudget proves that failed token
+// lookups and failed sign-in callbacks of one source spend one budget.
+func TestTokenAndSignInFailuresShareTheBudget(t *testing.T) {
+	t.Parallel()
+
+	g := newGate(t, &countingAuthenticator{lookups: atomic.Int64{}}, newClock(),
+		gateOptions{penalty: time.Hour, maxWaiting: 4, maxSources: 0})
+
+	for i := range 2 {
+		if err := attempt(t.Context(), g, "192.0.2.1", "bad"); !errors.Is(err, identity.ErrUnauthenticated) {
+			t.Fatalf("miss %d: err = %v, want ErrUnauthenticated", i+1, err)
+		}
+	}
+
+	// Admit spends no budget, so it probes the source with no side effect.
+	if err := g.Admit(authgate.WithRequest(canceled(t), "192.0.2.1")); err != nil {
+		t.Fatalf("admit after two failed token lookups: %v", err)
+	}
+
+	g.Fail(authgate.WithRequest(t.Context(), "192.0.2.1"))
+
+	if err := g.Admit(authgate.WithRequest(canceled(t), "192.0.2.1")); !errors.Is(err, identity.ErrRateLimited) {
+		t.Fatalf("admit after two failed token lookups and one failed callback: err = %v, want ErrRateLimited", err)
+	}
+}
+
 func TestAdmitAndFailWithoutRequestState(t *testing.T) {
 	t.Parallel()
 
