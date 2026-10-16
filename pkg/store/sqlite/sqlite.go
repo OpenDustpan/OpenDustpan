@@ -231,12 +231,19 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// processGuard holds the lock on the guard file next to the database,
+	// so a second store cannot open the same file. Close releases it.
+	processGuard *processGuard
 }
 
 var (
 	_ namespace.Store = (*Store)(nil)
 	_ stack.Store     = (*Store)(nil)
 )
+
+// ErrInUse reports that another store holds the database file open. One
+// SQLite file serves one server process only.
+var ErrInUse = errors.New("another process holds the SQLite database file")
 
 // Option tunes Open. Options keep backward compatibility: callers that pass
 // none get the defaults.
@@ -262,6 +269,8 @@ func WithBinaryVersion(version string) Option {
 }
 
 // Open opens (creating if needed) the database file at path and migrates it.
+// It locks the file first: a second Open of the same file, in this process
+// or in another one, fails with ErrInUse until Close of the first store.
 //
 // Open leaves running backup rows alone: crash recovery inspects them before
 // the server marks them failed with FailRunningBackups at start, and offline
@@ -272,9 +281,14 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
-	conn, err := openDatabase(ctx, abs)
+	guard, err := acquireGuard(abs)
 	if err != nil {
 		return nil, err
+	}
+
+	conn, err := openDatabase(ctx, abs)
+	if err != nil {
+		return nil, errors.Join(err, guard.release())
 	}
 
 	s := &Store{
@@ -291,12 +305,13 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		busyWarned:          false,
 		keepAccessHook:      nil,
 		binaryVersion:       "",
+		processGuard:        guard,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 	if err := s.migrate(ctx); err != nil {
-		return nil, errors.Join(err, conn.Close())
+		return nil, errors.Join(err, conn.Close(), guard.release())
 	}
 
 	guardCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -335,7 +350,9 @@ func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
 
 // Close closes the database. It stops the write-ahead log guard and waits
 // for it first, so no checkpoint runs on a closed handle. It removes a
-// staged restore file first, so no scratch file survives the handle.
+// staged restore file first, so no scratch file survives the handle. It
+// releases the lock on the database file last, so another store can open
+// the file only after this one closed it.
 func (s *Store) Close() error {
 	if s.guardCancel != nil {
 		s.guardCancel()
@@ -356,10 +373,10 @@ func (s *Store) Close() error {
 	}
 
 	if err := s.conn.Close(); err != nil {
-		return fmt.Errorf("close sqlite database: %w", err)
+		return errors.Join(fmt.Errorf("close sqlite database: %w", err), s.processGuard.release())
 	}
 
-	return nil
+	return s.processGuard.release()
 }
 
 // Ping implements namespace.Store. It maps any driver failure to
