@@ -14,7 +14,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -779,54 +778,59 @@ func checkBlobDir(t *testing.T, dir string) {
 	}
 }
 
-//nolint:paralleltest // serve reads process environment, so this test sets it.
-func TestNewerSchemaRefusesCommands(t *testing.T) {
+// setBinaryVersion sets the version of the binary for one test and restores
+// it after. Only tests that run in order may call it.
+func setBinaryVersion(t *testing.T, v string) {
+	t.Helper()
+
+	old := version
+	version = v
+
+	t.Cleanup(func() { version = old })
+}
+
+//nolint:paralleltest // serve reads process environment and the binary version, so this test sets them.
+func TestServeRefusesBinaryBelowMinimum(t *testing.T) {
 	setServeEnv(t, testKeyBase64())
+	setBinaryVersion(t, "v0.1.0")
 
-	path, dbVersion, binVersion := newerSchemaDatabase(t)
+	path := newerSchemaDatabase(t, "v0.2.0")
 
-	if err := serveDatabase(t, path); !isNewerSchemaError(t, err, dbVersion, binVersion) {
-		t.Fatalf("serve newer database: err = %v, want it to name %d, %d and %q", err, dbVersion, binVersion, version)
+	err := serveDatabase(t, path)
+	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		t.Fatalf("serve below the schema minimum: err = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	for _, want := range []string{"v0.1.0", "v0.2.0", "or restore a backup"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("serve below the schema minimum: error %q does not name %q", err, want)
+		}
 	}
 }
 
-// isNewerSchemaError reports whether err wraps ErrSchemaNewer and names the
-// schema version of the database, the schema version of the binary, the
-// version of the binary and the one action.
-func isNewerSchemaError(t *testing.T, err error, dbVersion, binVersion int64) bool {
-	t.Helper()
+//nolint:paralleltest // serve reads process environment, so this test sets it.
+func TestServeDevBuildWarnsOnSchemaMinimum(t *testing.T) {
+	setServeEnv(t, testKeyBase64())
 
-	if err == nil || !errors.Is(err, schema.ErrSchemaNewer) {
-		return false
+	path := newerSchemaDatabase(t, "v9.0.0")
+
+	logs, err := startServerLogs(t, "--database", "sqlite:"+path)
+	if err != nil {
+		t.Fatalf("serve a dev build on a newer schema: %v", err)
 	}
 
-	msg := err.Error()
-
-	for _, want := range []string{
-		strconv.FormatInt(dbVersion, 10),
-		strconv.FormatInt(binVersion, 10),
-		version,
-		"start a newer binary or restore a backup",
-	} {
-		if !strings.Contains(msg, want) {
-			t.Errorf("error %q does not name %q", msg, want)
-
-			return false
-		}
+	if !strings.Contains(logs, "dev build ignores the minimum binary version of the database schema") ||
+		!strings.Contains(logs, "v9.0.0") {
+		t.Fatalf("serve logs lack the dev build warning:\n%s", logs)
 	}
-
-	return true
 }
 
 // newerSchemaDatabase creates a SQLite database at the embedded migrations
-// plus one future version row, and returns its path with the database and
-// binary schema versions.
-//
-//nolint:nonamedreturns // The names keep the database and binary versions in order at callers.
-func newerSchemaDatabase(t *testing.T) (path string, dbVersion, binVersion int64) {
+// plus one future version row that sets minimum, and returns its path.
+func newerSchemaDatabase(t *testing.T, minimum string) string {
 	t.Helper()
 
-	path = filepath.Join(t.TempDir(), "dustpan.db")
+	path := filepath.Join(t.TempDir(), "dustpan.db")
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -848,22 +852,24 @@ func newerSchemaDatabase(t *testing.T) (path string, dbVersion, binVersion int64
 		}
 	}()
 
+	var binVersion int64
+
 	row := conn.QueryRowContext(t.Context(), `SELECT MAX(version) FROM schema_migrations`)
 	if scanErr := row.Scan(&binVersion); scanErr != nil {
 		t.Fatalf("read binary schema version: %v", scanErr)
 	}
 
-	dbVersion = binVersion + 1
+	dbVersion := binVersion + 1
 
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+	const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES (?, ?, ?)`
 
 	name := fmt.Sprintf("%04d_future.sql", dbVersion)
 
-	if _, execErr := conn.ExecContext(t.Context(), record, dbVersion, name); execErr != nil {
+	if _, execErr := conn.ExecContext(t.Context(), record, dbVersion, name, minimum); execErr != nil {
 		t.Fatalf("record future version: %v", execErr)
 	}
 
-	return path, dbVersion, binVersion
+	return path
 }
 
 func TestBackupTargetFlagPrecedence(t *testing.T) {

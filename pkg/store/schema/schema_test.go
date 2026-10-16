@@ -8,23 +8,109 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
-func TestSchemaNewerError(t *testing.T) {
+func TestCheckMinimum(t *testing.T) {
 	t.Parallel()
 
-	err := schema.NewSchemaNewerError([]int64{1, 2, 11}, []int64{1, 2, 10})
-
-	if !errors.Is(err, schema.ErrSchemaNewer) {
-		t.Fatalf("errors.Is = false, want true for %v", err)
+	cases := []struct {
+		name    string
+		minimum string
+		binary  string
+		refuse  bool
+	}{
+		{name: "no minimum", minimum: "", binary: "v0.1.0", refuse: false},
+		{name: "equal", minimum: "v0.2.0", binary: "v0.2.0", refuse: false},
+		{name: "above", minimum: "v0.2.0", binary: "v0.10.0", refuse: false},
+		{name: "major above", minimum: "v0.9.9", binary: "v1.0.0", refuse: false},
+		{name: "below patch", minimum: "v0.2.1", binary: "v0.2.0", refuse: true},
+		{name: "below minor", minimum: "v0.10.0", binary: "v0.9.0", refuse: true},
+		{name: "below major", minimum: "v2.0.0", binary: "v1.9.9", refuse: true},
+		{
+			name:    "describe suffix counts as its tag",
+			minimum: "v0.2.0",
+			binary:  "v0.2.0-3-gabc1234-dirty",
+			refuse:  false,
+		},
+		{name: "describe suffix below", minimum: "v0.3.0", binary: "v0.2.0-3-gabc1234", refuse: true},
+		{name: "dev build", minimum: "v9.0.0", binary: "dev", refuse: false},
+		{name: "empty build", minimum: "v9.0.0", binary: "", refuse: false},
+		{name: "commit hash build", minimum: "v9.0.0", binary: "c69fb92-dirty", refuse: false},
 	}
 
-	if err.DatabaseVersion != 11 || err.BinaryVersion != 10 {
-		t.Fatalf("versions = %d/%d, want 11/10", err.DatabaseVersion, err.BinaryVersion)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := schema.CheckMinimum(tc.minimum, tc.binary)
+			if tc.refuse != errors.Is(err, schema.ErrBinaryBelowMinimum) {
+				t.Fatalf("CheckMinimum(%q, %q) = %v, want refusal %v", tc.minimum, tc.binary, err, tc.refuse)
+			}
+
+			if !tc.refuse && err != nil {
+				t.Fatalf("CheckMinimum(%q, %q) = %v, want nil", tc.minimum, tc.binary, err)
+			}
+		})
+	}
+}
+
+func TestMinimumErrorNamesBothVersions(t *testing.T) {
+	t.Parallel()
+
+	err := schema.CheckMinimum("v0.3.0", "v0.2.0")
+
+	minimum, ok := errors.AsType[*schema.MinimumError](err)
+	if !ok {
+		t.Fatalf("err = %v, want a *MinimumError", err)
 	}
 
-	want := "database schema version 11 is newer than binary schema version 10: " +
-		"start a newer binary or restore a backup"
+	if minimum.SchemaMinimum != "v0.3.0" || minimum.BinaryVersion != "v0.2.0" {
+		t.Fatalf("versions = %q/%q, want v0.3.0/v0.2.0", minimum.SchemaMinimum, minimum.BinaryVersion)
+	}
+
+	want := "binary version v0.2.0 is below v0.3.0, the minimum binary version of the database schema: " +
+		"start a binary of version v0.3.0 or later, or restore a backup"
 	if err.Error() != want {
 		t.Fatalf("message = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestCheckMinimumRefusesBadMinimum(t *testing.T) {
+	t.Parallel()
+
+	if err := schema.CheckMinimum("next", "v0.2.0"); !errors.Is(err, schema.ErrBadMinimum) {
+		t.Fatalf("CheckMinimum with a bad minimum = %v, want ErrBadMinimum", err)
+	}
+}
+
+func TestHighestMinimum(t *testing.T) {
+	t.Parallel()
+
+	got, err := schema.HighestMinimum([]string{"", "v0.2.0", "v0.10.0", "v0.9.1", ""})
+	if err != nil || got != "v0.10.0" {
+		t.Fatalf("HighestMinimum = %q, %v, want v0.10.0, nil", got, err)
+	}
+
+	if got, err := schema.HighestMinimum([]string{"", ""}); err != nil || got != "" {
+		t.Fatalf("HighestMinimum of none = %q, %v, want \"\", nil", got, err)
+	}
+
+	if _, err := schema.HighestMinimum([]string{"v0.1.0", "soon"}); !errors.Is(err, schema.ErrBadMinimum) {
+		t.Fatalf("HighestMinimum with a bad value = %v, want ErrBadMinimum", err)
+	}
+}
+
+func TestIsDevBuild(t *testing.T) {
+	t.Parallel()
+
+	for _, v := range []string{"", "dev", "c69fb92", "c69fb92-dirty", "v1", "1.2.3"} {
+		if !schema.IsDevBuild(v) {
+			t.Errorf("IsDevBuild(%q) = false, want true", v)
+		}
+	}
+
+	for _, v := range []string{"v0.1.0", "v1.2.3-rc.1", "v0.1.0-3-gabc1234-dirty"} {
+		if schema.IsDevBuild(v) {
+			t.Errorf("IsDevBuild(%q) = true, want false", v)
+		}
 	}
 }
 

@@ -1537,17 +1537,22 @@ func (s postgresStore) close() { s.Close() }
 var openStore = func(ctx context.Context, database string, logger *slog.Logger) (store, error) {
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
-		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"), sqlite.WithLogger(logger))
+		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"),
+			sqlite.WithLogger(logger), sqlite.WithBinaryVersion(version))
 		if err != nil {
-			return nil, fmt.Errorf("open sqlite store: %w", withBinaryVersion(err))
+			return nil, fmt.Errorf("open sqlite store: %w", err)
 		}
+
+		warnDevBuild(ctx, logger, s)
 
 		return sqliteStore{s}, nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
-		s, err := postgres.Open(ctx, database)
+		s, err := postgres.Open(ctx, database, postgres.WithBinaryVersion(version))
 		if err != nil {
-			return nil, fmt.Errorf("open postgres store: %w", withBinaryVersion(err))
+			return nil, fmt.Errorf("open postgres store: %w", err)
 		}
+
+		warnDevBuild(ctx, logger, s)
 
 		return postgresStore{s}, nil
 	default:
@@ -1555,17 +1560,39 @@ var openStore = func(ctx context.Context, database string, logger *slog.Logger) 
 	}
 }
 
-// withBinaryVersion adds the version of the binary to a newer-schema refusal,
-// so the message names the schema version of the database, the schema version
-// of the binary and the version of the binary. The adapters do not know the
-// binary version, so only this command adds it.
-func withBinaryVersion(err error) error {
-	newer, ok := errors.AsType[*schema.NewerError](err)
-	if !ok {
-		return err
+// appliedMigrationsReader reads the applied migrations of an open store.
+type appliedMigrationsReader interface {
+	AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error)
+}
+
+// warnDevBuild logs a warning when a dev build opens a schema that records a
+// minimum binary version. A dev build counts as newer than every release, so
+// the minimum never refuses it.
+func warnDevBuild(ctx context.Context, logger *slog.Logger, s appliedMigrationsReader) {
+	if !schema.IsDevBuild(version) {
+		return
 	}
 
-	return fmt.Errorf("binary version is %s. %w", version, newer)
+	applied, err := s.AppliedMigrations(ctx)
+	if err != nil {
+		logger.WarnContext(ctx, "read the minimum binary version of the database schema",
+			slog.String("error", err.Error()))
+
+		return
+	}
+
+	minimums := make([]string, 0, len(applied))
+	for _, m := range applied {
+		minimums = append(minimums, m.MinBinaryVersion)
+	}
+
+	minimum, err := schema.HighestMinimum(minimums)
+	if err != nil || minimum == "" {
+		return
+	}
+
+	logger.WarnContext(ctx, "dev build ignores the minimum binary version of the database schema",
+		slog.String("binary_version", version), slog.String("schema_minimum", minimum))
 }
 
 // minRetention is the shortest soft-delete retention the server accepts.

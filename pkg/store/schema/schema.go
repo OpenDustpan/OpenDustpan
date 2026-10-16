@@ -1,5 +1,7 @@
 // Package schema reports the schema versions of the database and the
-// binary. It holds the newer-schema refusal shared by every store adapter.
+// binary. It holds the minimum binary version rule shared by every store
+// adapter: a binary refuses a schema only when the minimum binary version
+// that the schema records is above its own version.
 //
 // It lives here, not in store/internal/migrate, because both store adapters
 // and cmd/opendustpan must import it: a package under store/internal can only
@@ -17,44 +19,174 @@ import (
 	"strings"
 )
 
-// ErrSchemaNewer reports a database that records a migration version the
-// binary does not embed.
-var ErrSchemaNewer = errors.New("database schema is newer than the binary knows")
+// ErrBinaryBelowMinimum reports a binary whose version is below the minimum
+// binary version that the database schema records.
+var ErrBinaryBelowMinimum = errors.New("binary version is below the minimum of the database schema")
 
-// NewerError reports the schema version of the database and the schema
-// version of the binary when the database is newer. The adapters return it.
-// The command adds the version of the binary to the text, because the
-// adapters do not know it.
-type NewerError struct {
-	// DatabaseVersion is the newest migration version the database records.
-	DatabaseVersion int64
-	// BinaryVersion is the newest migration version the binary embeds.
-	BinaryVersion int64
+// ErrBadMinimum reports a minimum binary version that is not of the form
+// vMAJOR.MINOR.PATCH.
+var ErrBadMinimum = errors.New("minimum binary version must have the form vMAJOR.MINOR.PATCH")
+
+// ErrSchemaDiverged reports a database that records migrations the binary
+// does not embed and lacks migrations the binary embeds.
+var ErrSchemaDiverged = errors.New("database schema and binary have diverged")
+
+// MinimumError reports the minimum binary version of the database schema and
+// the version of the binary that is below it. The adapters return it.
+type MinimumError struct {
+	// SchemaMinimum is the minimum binary version the database schema records.
+	SchemaMinimum string
+	// BinaryVersion is the version of the binary.
+	BinaryVersion string
 }
 
-// NewSchemaNewerError builds the refusal for recorded versions the binary
-// does not embed.
-func NewSchemaNewerError(recorded, embedded []int64) *NewerError {
-	return &NewerError{
-		DatabaseVersion: DatabaseVersion(recorded),
-		BinaryVersion:   BinaryVersion(embedded),
-	}
-}
-
-// Error describes the refusal and the one action: start a newer binary or
-// restore a backup.
-func (e *NewerError) Error() string {
+// Error names both versions and the one action: start a binary at or above
+// the minimum, or restore a backup.
+func (e *MinimumError) Error() string {
 	return fmt.Sprintf(
-		"database schema version %d is newer than binary schema version %d: "+
-			"start a newer binary or restore a backup",
-		e.DatabaseVersion,
+		"binary version %s is below %s, the minimum binary version of the database schema: "+
+			"start a binary of version %s or later, or restore a backup",
 		e.BinaryVersion,
+		e.SchemaMinimum,
+		e.SchemaMinimum,
 	)
 }
 
-// Unwrap returns ErrSchemaNewer, so errors.Is finds the sentinel.
-func (e *NewerError) Unwrap() error {
-	return ErrSchemaNewer
+// Unwrap returns ErrBinaryBelowMinimum, so errors.Is finds the sentinel.
+func (e *MinimumError) Unwrap() error {
+	return ErrBinaryBelowMinimum
+}
+
+// release is the MAJOR.MINOR.PATCH part of a binary version.
+type release struct {
+	major, minor, patch int
+}
+
+// compare returns -1, 0 or 1 when r is below, equal to or above other.
+func (r release) compare(other release) int {
+	switch {
+	case r.major != other.major:
+		return cmpInt(r.major, other.major)
+	case r.minor != other.minor:
+		return cmpInt(r.minor, other.minor)
+	default:
+		return cmpInt(r.patch, other.patch)
+	}
+}
+
+func cmpInt(a, b int) int {
+	switch {
+	case a < b:
+		return -1
+	case a > b:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// parseRelease reads vMAJOR.MINOR.PATCH at the start of v. A suffix after
+// "-" or "+" is ignored, so a `git describe` version such as
+// v0.1.0-3-gabc1234-dirty counts as its tag v0.1.0.
+func parseRelease(v string) (release, bool) {
+	var none release
+
+	rest, ok := strings.CutPrefix(v, "v")
+	if !ok {
+		return none, false
+	}
+
+	if i := strings.IndexAny(rest, "-+"); i >= 0 {
+		rest = rest[:i]
+	}
+
+	parts := strings.Split(rest, ".")
+	if len(parts) != 3 { //nolint:mnd // MAJOR, MINOR and PATCH.
+		return none, false
+	}
+
+	numbers := make([]int, 0, len(parts))
+
+	for _, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 || part == "" || (len(part) > 1 && part[0] == '0') {
+			return none, false
+		}
+
+		numbers = append(numbers, n)
+	}
+
+	return release{major: numbers[0], minor: numbers[1], patch: numbers[2]}, true
+}
+
+// IsDevBuild reports whether version is not a release version: "dev", an
+// empty version, a commit hash or any other value that does not start with
+// vMAJOR.MINOR.PATCH. A dev build counts as newer than every release, so no
+// minimum refuses it.
+func IsDevBuild(version string) bool {
+	_, ok := parseRelease(version)
+
+	return !ok
+}
+
+// ValidMinimum returns ErrBadMinimum when v is not exactly vMAJOR.MINOR.PATCH.
+func ValidMinimum(v string) error {
+	r, ok := parseRelease(v)
+	if !ok || fmt.Sprintf("v%d.%d.%d", r.major, r.minor, r.patch) != v {
+		return fmt.Errorf("%w: %q", ErrBadMinimum, v)
+	}
+
+	return nil
+}
+
+// HighestMinimum returns the highest of the recorded minimum binary versions,
+// or "" when none is set. An empty value sets no minimum.
+func HighestMinimum(values []string) (string, error) {
+	highest := ""
+
+	var top release
+
+	for _, v := range values {
+		if v == "" {
+			continue
+		}
+
+		if err := ValidMinimum(v); err != nil {
+			return "", err
+		}
+
+		r, _ := parseRelease(v)
+		if highest == "" || r.compare(top) > 0 {
+			highest, top = v, r
+		}
+	}
+
+	return highest, nil
+}
+
+// CheckMinimum returns a *MinimumError when binaryVersion is below minimum.
+// An empty minimum and a dev build pass. A minimum that is not of the form
+// vMAJOR.MINOR.PATCH fails with ErrBadMinimum.
+func CheckMinimum(minimum, binaryVersion string) error {
+	if minimum == "" {
+		return nil
+	}
+
+	if err := ValidMinimum(minimum); err != nil {
+		return err
+	}
+
+	binary, ok := parseRelease(binaryVersion)
+	if !ok {
+		return nil
+	}
+
+	floor, _ := parseRelease(minimum)
+	if binary.compare(floor) < 0 {
+		return &MinimumError{SchemaMinimum: minimum, BinaryVersion: binaryVersion}
+	}
+
+	return nil
 }
 
 // DatabaseVersion returns the newest version the database records, or zero
@@ -94,6 +226,9 @@ type AppliedMigration struct {
 	Version int64
 	// Name is the migration file name, for example 0001_init.sql.
 	Name string
+	// MinBinaryVersion is the minimum binary version that the migration
+	// sets, or "" when it sets none.
+	MinBinaryVersion string
 }
 
 // ErrBadMigrationName reports a migration file not named
@@ -214,4 +349,7 @@ type Inspection struct {
 	// Unknown holds the recorded versions the binary does not embed,
 	// ordered. It is empty when the database is equal or older.
 	Unknown []int64
+	// Minimum is the minimum binary version the database schema records, or
+	// "" when it records none.
+	Minimum string
 }

@@ -1,10 +1,14 @@
 package migrate_test
 
 import (
+	"errors"
 	"slices"
 	"testing"
+	"testing/fstest"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
+	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 func migrations(versions ...int64) []migrate.Migration {
@@ -124,5 +128,144 @@ func TestUnknownRecorded(t *testing.T) {
 				t.Fatalf("unknown = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func applied(minimums map[int64]string, versions ...int64) []schema.AppliedMigration {
+	out := make([]schema.AppliedMigration, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, schema.AppliedMigration{Version: v, Name: "", MinBinaryVersion: minimums[v]})
+	}
+
+	return out
+}
+
+func TestCheck(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		recorded    []schema.AppliedMigration
+		embedded    []int64
+		binary      string
+		wantPending []int64
+		wantMinimum string
+		wantErr     error
+	}{
+		{
+			name: "empty database", recorded: nil, embedded: []int64{1, 2}, binary: "v0.1.0",
+			wantPending: []int64{1, 2}, wantMinimum: "", wantErr: nil,
+		},
+		{
+			name: "older", recorded: applied(nil, 1), embedded: []int64{1, 2}, binary: "v0.1.0",
+			wantPending: []int64{2}, wantMinimum: "", wantErr: nil,
+		},
+		{
+			name:     "newer schema at the minimum applies nothing",
+			recorded: applied(map[int64]string{3: "v0.2.0"}, 1, 2, 3), embedded: []int64{1, 2}, binary: "v0.2.0",
+			wantPending: nil, wantMinimum: "v0.2.0", wantErr: nil,
+		},
+		{
+			name:     "newer schema with no minimum applies nothing",
+			recorded: applied(nil, 1, 2, 3), embedded: []int64{1, 2}, binary: "v0.1.0",
+			wantPending: nil, wantMinimum: "", wantErr: nil,
+		},
+		{
+			name:     "binary below the minimum",
+			recorded: applied(map[int64]string{1: "v0.1.0", 3: "v0.3.0"}, 1, 2, 3), embedded: []int64{1, 2},
+			binary: "v0.2.0", wantPending: nil, wantMinimum: "v0.3.0", wantErr: schema.ErrBinaryBelowMinimum,
+		},
+		{
+			name:     "dev build below the minimum",
+			recorded: applied(map[int64]string{3: "v9.0.0"}, 1, 2, 3), embedded: []int64{1, 2},
+			binary: "dev", wantPending: nil, wantMinimum: "v9.0.0", wantErr: nil,
+		},
+		{
+			name:     "diverged schema",
+			recorded: applied(nil, 1, 3), embedded: []int64{1, 2}, binary: "v0.1.0",
+			wantPending: nil, wantMinimum: "", wantErr: schema.ErrSchemaDiverged,
+		},
+		{
+			name:     "bad recorded minimum",
+			recorded: applied(map[int64]string{1: "later"}, 1), embedded: []int64{1}, binary: "v0.1.0",
+			wantPending: nil, wantMinimum: "", wantErr: schema.ErrBadMinimum,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			plan, err := migrate.Check(tc.recorded, migrations(tc.embedded...), tc.binary)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Check err = %v, want %v", err, tc.wantErr)
+				}
+
+				return
+			}
+
+			checkPlan(t, plan, err, tc.wantPending, tc.wantMinimum)
+		})
+	}
+}
+
+// checkPlan proves that Check succeeded with the pending versions and the
+// minimum.
+func checkPlan(t *testing.T, plan migrate.Plan, err error, wantPending []int64, wantMinimum string) {
+	t.Helper()
+
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+
+	pending := make([]int64, 0, len(plan.Pending))
+	for _, m := range plan.Pending {
+		pending = append(pending, m.Version)
+	}
+
+	if !slices.Equal(pending, wantPending) {
+		t.Fatalf("pending = %v, want %v", pending, wantPending)
+	}
+
+	if plan.Minimum != wantMinimum {
+		t.Fatalf("minimum = %q, want %q", plan.Minimum, wantMinimum)
+	}
+}
+
+func TestLoadReadsMinimumHeader(t *testing.T) {
+	t.Parallel()
+
+	fsys := fstest.MapFS{
+		"m/0001_init.sql": {Data: []byte("CREATE TABLE a (x INTEGER);\n"), Mode: 0, ModTime: time.Time{}, Sys: nil},
+		"m/0002_contract.sql": {Data: []byte(
+			"-- Drop the old column.\n-- minimum-binary-version: v0.3.0\nALTER TABLE a DROP COLUMN x;\n",
+		), Mode: 0, ModTime: time.Time{}, Sys: nil},
+	}
+
+	all, err := migrate.Load(fsys, "m")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	if len(all) != 2 || all[0].MinBinaryVersion != "" || all[1].MinBinaryVersion != "v0.3.0" {
+		t.Fatalf("minimums = %+v, want \"\" and v0.3.0", all)
+	}
+}
+
+func TestLoadRefusesBadMinimumHeader(t *testing.T) {
+	t.Parallel()
+
+	fsys := fstest.MapFS{
+		"m/0001_init.sql": {
+			Data:    []byte("-- minimum-binary-version: 0.3\nCREATE TABLE a (x INTEGER);\n"),
+			Mode:    0,
+			ModTime: time.Time{},
+			Sys:     nil,
+		},
+	}
+
+	if _, err := migrate.Load(fsys, "m"); !errors.Is(err, schema.ErrBadMinimum) {
+		t.Fatalf("load err = %v, want ErrBadMinimum", err)
 	}
 }

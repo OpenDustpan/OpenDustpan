@@ -52,6 +52,21 @@ type Store struct {
 	// Tests set it to prove the live access tables stay locked across that
 	// window. Nil in production.
 	keepAccessHook func(ctx context.Context, tx pgx.Tx, live string)
+	// binaryVersion is the version of the binary that opens the store. The
+	// migration check compares it with the minimum binary version of the
+	// schema. Empty counts as a dev build.
+	binaryVersion string
+}
+
+// Option tunes Open. Callers that pass none get the defaults.
+type Option func(*Store)
+
+// WithBinaryVersion sets the version of the binary, for example v0.1.0. Open
+// refuses a schema whose minimum binary version is above it with a
+// *schema.MinimumError. Without it, Open counts as a dev build, which no
+// minimum refuses.
+func WithBinaryVersion(version string) Option {
+	return func(s *Store) { s.binaryVersion = version }
 }
 
 var (
@@ -60,7 +75,7 @@ var (
 )
 
 // Open connects to the database at url and migrates it.
-func Open(ctx context.Context, url string) (*Store, error) {
+func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
@@ -74,7 +89,12 @@ func Open(ctx context.Context, url string) (*Store, error) {
 
 	s := &Store{
 		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
+		binaryVersion: "",
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()
 
@@ -737,7 +757,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		return migrateTx(ctx, tx, all)
+		return migrateTx(ctx, tx, all, s.binaryVersion)
 	})
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -746,31 +766,40 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
-// migrateTx applies pending migrations while holding the advisory lock.
-func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration) error {
+// migrateTx checks the schema and applies pending migrations while holding
+// the advisory lock. A binary below the minimum binary version of the schema
+// gets a *schema.MinimumError and applies nothing.
+func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, binaryVersion string) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationLockID); err != nil {
 		return fmt.Errorf("take migration lock: %w", err)
 	}
 
 	const createTable = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version BIGINT NOT NULL PRIMARY KEY,
-		name    TEXT   NOT NULL
+		version            BIGINT NOT NULL PRIMARY KEY,
+		name               TEXT   NOT NULL,
+		min_binary_version TEXT   NOT NULL DEFAULT ''
 	)`
 
 	if _, err := tx.Exec(ctx, createTable); err != nil {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
-	recorded, err := recordedVersions(ctx, tx)
+	const addColumn = `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS min_binary_version TEXT NOT NULL DEFAULT ''`
+	if _, err := tx.Exec(ctx, addColumn); err != nil {
+		return fmt.Errorf("add schema_migrations minimum column: %w", err)
+	}
+
+	recorded, err := recordedMigrations(ctx, tx)
 	if err != nil {
 		return err
 	}
 
-	if unknown := migrate.UnknownRecorded(recorded, all); len(unknown) > 0 {
-		return schema.NewSchemaNewerError(recorded, embeddedVersions(all))
+	plan, err := migrate.Check(recorded, all, binaryVersion)
+	if err != nil {
+		return fmt.Errorf("check schema: %w", err)
 	}
 
-	for _, m := range all {
+	for _, m := range plan.Pending {
 		if err := apply(ctx, tx, m); err != nil {
 			return err
 		}
@@ -779,36 +808,25 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration) error {
 	return nil
 }
 
-// embeddedVersions returns the versions the binary embeds, for the
-// newer-schema refusal.
-func embeddedVersions(all []migrate.Migration) []int64 {
-	out := make([]int64, 0, len(all))
-	for _, m := range all {
-		out = append(out, m.Version)
-	}
-
-	return out
-}
-
-// recordedVersions returns the versions schema_migrations records, ordered.
-// The caller holds the migration lock in the same transaction.
-func recordedVersions(ctx context.Context, tx pgx.Tx) ([]int64, error) {
-	rows, err := tx.Query(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+// recordedMigrations returns the rows of schema_migrations, ordered by
+// version. The caller holds the migration lock in the same transaction.
+func recordedMigrations(ctx context.Context, tx pgx.Tx) ([]schema.AppliedMigration, error) {
+	rows, err := tx.Query(ctx, `SELECT version, name, min_binary_version FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		return nil, fmt.Errorf("read schema versions: %w", err)
 	}
 
 	defer rows.Close()
 
-	var out []int64
+	var out []schema.AppliedMigration
 
 	for rows.Next() {
-		var version int64
-		if err := rows.Scan(&version); err != nil {
+		var row schema.AppliedMigration
+		if err := rows.Scan(&row.Version, &row.Name, &row.MinBinaryVersion); err != nil {
 			return nil, fmt.Errorf("read schema versions: %w", err)
 		}
 
-		out = append(out, version)
+		out = append(out, row)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -836,8 +854,8 @@ func apply(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
 		return fmt.Errorf("apply migration %s: %w", m.Name, err)
 	}
 
-	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-	if _, err := tx.Exec(ctx, record, m.Version, m.Name); err != nil {
+	const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES ($1, $2, $3)`
+	if _, err := tx.Exec(ctx, record, m.Version, m.Name, m.MinBinaryVersion); err != nil {
 		return fmt.Errorf("record migration %s: %w", m.Name, err)
 	}
 

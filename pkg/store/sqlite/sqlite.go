@@ -227,6 +227,10 @@ type Store struct {
 	// period. A successful truncate clears it, so the next failing period
 	// warns once more. Only the guard goroutine reads and writes it.
 	busyWarned bool
+	// binaryVersion is the version of the binary that opens the store. The
+	// migration check compares it with the minimum binary version of the
+	// schema. Empty counts as a dev build.
+	binaryVersion string
 }
 
 var (
@@ -247,6 +251,14 @@ func WithLogger(logger *slog.Logger) Option {
 			s.logger = logger
 		}
 	}
+}
+
+// WithBinaryVersion sets the version of the binary, for example v0.1.0. Open
+// refuses a schema whose minimum binary version is above it with a
+// *schema.MinimumError. Without it, Open counts as a dev build, which no
+// minimum refuses.
+func WithBinaryVersion(version string) Option {
+	return func(s *Store) { s.binaryVersion = version }
 }
 
 // Open opens (creating if needed) the database file at path and migrates it.
@@ -278,6 +290,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		lastTruncateSuccess: time.Now(),
 		busyWarned:          false,
 		keepAccessHook:      nil,
+		binaryVersion:       "",
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -1027,24 +1040,30 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	const createTable = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
+		version            INTEGER NOT NULL PRIMARY KEY,
+		name               TEXT    NOT NULL,
+		min_binary_version TEXT    NOT NULL DEFAULT ''
 	) STRICT`
 
 	if _, execErr := s.conn.ExecContext(ctx, createTable); execErr != nil {
 		return fmt.Errorf("create schema_migrations: %w", execErr)
 	}
 
-	recorded, recordedErr := s.recordedVersions(ctx)
+	if columnErr := s.addMinimumColumn(ctx); columnErr != nil {
+		return columnErr
+	}
+
+	recorded, recordedErr := s.recordedMigrations(ctx)
 	if recordedErr != nil {
 		return recordedErr
 	}
 
-	if unknown := migrate.UnknownRecorded(recorded, all); len(unknown) > 0 {
-		return schema.NewSchemaNewerError(recorded, embeddedVersions(all))
+	plan, checkErr := migrate.Check(recorded, all, s.binaryVersion)
+	if checkErr != nil {
+		return fmt.Errorf("check schema: %w", checkErr)
 	}
 
-	for _, m := range all {
+	for _, m := range plan.Pending {
 		if applyErr := s.apply(ctx, m); applyErr != nil {
 			return applyErr
 		}
@@ -1053,20 +1072,36 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
-// embeddedVersions returns the versions the binary embeds, for the
-// newer-schema refusal.
-func embeddedVersions(all []migrate.Migration) []int64 {
-	out := make([]int64, 0, len(all))
-	for _, m := range all {
-		out = append(out, m.Version)
+// addMinimumColumn adds the min_binary_version column to a schema_migrations
+// table from before the column existed. It does nothing when the column
+// exists.
+func (s *Store) addMinimumColumn(ctx context.Context) error {
+	var count int64
+
+	err := s.conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('schema_migrations') WHERE name = 'min_binary_version'`,
+	).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("check schema_migrations columns: %w", err)
 	}
 
-	return out
+	if count > 0 {
+		return nil
+	}
+
+	const addColumn = `ALTER TABLE schema_migrations ADD COLUMN min_binary_version TEXT NOT NULL DEFAULT ''`
+	if _, err := s.conn.ExecContext(ctx, addColumn); err != nil {
+		return fmt.Errorf("add schema_migrations minimum column: %w", err)
+	}
+
+	return nil
 }
 
-// recordedVersions returns the versions schema_migrations records, ordered.
-func (s *Store) recordedVersions(ctx context.Context) ([]int64, error) {
-	rows, err := s.conn.QueryContext(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+// recordedMigrations returns the rows of schema_migrations, ordered by
+// version.
+func (s *Store) recordedMigrations(ctx context.Context) ([]schema.AppliedMigration, error) {
+	rows, err := s.conn.QueryContext(ctx,
+		`SELECT version, name, min_binary_version FROM schema_migrations ORDER BY version`)
 	if err != nil {
 		return nil, fmt.Errorf("read schema versions: %w", err)
 	}
@@ -1077,16 +1112,15 @@ func (s *Store) recordedVersions(ctx context.Context) ([]int64, error) {
 		}
 	}()
 
-	var out []int64
+	var out []schema.AppliedMigration
 
 	for rows.Next() {
-		var version int64
-
-		if scanErr := rows.Scan(&version); scanErr != nil {
-			return nil, fmt.Errorf("read schema versions: %w", scanErr)
+		var row schema.AppliedMigration
+		if err := rows.Scan(&row.Version, &row.Name, &row.MinBinaryVersion); err != nil {
+			return nil, fmt.Errorf("read schema versions: %w", err)
 		}
 
-		out = append(out, version)
+		out = append(out, row)
 	}
 
 	if iterErr := rows.Err(); iterErr != nil {
@@ -1117,8 +1151,8 @@ func (s *Store) apply(ctx context.Context, m migrate.Migration) error {
 		return errors.Join(fmt.Errorf("apply migration %s: %w", m.Name, err), rollback(tx))
 	}
 
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-	if _, err := tx.ExecContext(ctx, record, m.Version, m.Name); err != nil {
+	const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES (?, ?, ?)`
+	if _, err := tx.ExecContext(ctx, record, m.Version, m.Name, m.MinBinaryVersion); err != nil {
 		return errors.Join(fmt.Errorf("record migration %s: %w", m.Name, err), rollback(tx))
 	}
 
