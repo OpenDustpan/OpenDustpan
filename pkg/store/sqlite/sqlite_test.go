@@ -86,24 +86,6 @@ func TestAccessConcurrency(t *testing.T) {
 	})
 }
 
-// openPath opens the store at path and closes it at the end of t.
-func openPath(t *testing.T, path string) *sqlite.Store {
-	t.Helper()
-
-	s, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("close store: %v", err)
-		}
-	})
-
-	return s
-}
-
 // TestDelegation runs the suite of the tokens of service principals.
 func TestDelegation(t *testing.T) {
 	t.Parallel()

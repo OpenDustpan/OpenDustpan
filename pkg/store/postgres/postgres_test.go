@@ -113,21 +113,6 @@ func TestAccessConcurrency(t *testing.T) {
 	})
 }
 
-// openURL opens the store at the schema URL u and closes it at the end of
-// t.
-func openURL(t *testing.T, u string) *postgres.Store {
-	t.Helper()
-
-	s, err := postgres.Open(t.Context(), u)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(s.Close)
-
-	return s
-}
-
 // TestDelegation runs the suite of the tokens of service principals.
 func TestDelegation(t *testing.T) {
 	t.Parallel()
