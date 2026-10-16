@@ -174,6 +174,14 @@ FROM updates
 WHERE stack_id = $1
   AND status = 'running' AND NOT dry_run AND kind <> 'preview';
 
+-- name: CountRunningJournaledUpdates :one
+-- The count of updates that run now with journal version 1 or higher, for
+-- the upgrade check: a downgrade to a binary without the journal route
+-- answers its journal batches with 404, which the Pulumi CLI does not retry.
+SELECT COUNT(*)
+FROM updates
+WHERE status = 'running' AND journal_version > 0;
+
 -- name: HighestUpdateVersion :one
 SELECT COALESCE(MAX(version), 0)::BIGINT
 FROM updates
@@ -801,6 +809,13 @@ SELECT operation_ids FROM update_journal
 WHERE stack_id = $1 AND update_id = $2
 ORDER BY arrival;
 
+-- name: ClearJournalOperations :exec
+-- A batch that holds a rebuilt base state entry starts the known set again:
+-- earlier batches keep their rows for the replay, but their operation IDs no
+-- longer count.
+UPDATE update_journal SET operation_ids = '[]'
+WHERE stack_id = $1 AND update_id = $2;
+
 -- name: JournalBlobKeys :many
 SELECT blob_key FROM update_journal
 WHERE stack_id = $1 AND update_id = $2
@@ -827,22 +842,25 @@ UPDATE updates SET journal_closed = TRUE
 WHERE stack_id = $1 AND id = $2;
 
 -- name: CreatePrincipal :execrows
-INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace, break_glass)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT DO NOTHING;
 
 -- name: GetPrincipal :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.id = $1 AND p.deleted_at_ms IS NULL;
 
 -- name: GetPrincipalBySubject :one
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p WHERE p.subject COLLATE "C" = @subject::text AND p.deleted_at_ms IS NULL;
 
 -- name: ListPrincipals :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
@@ -938,6 +956,7 @@ WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL;
 
 -- name: ListGroupMembers :many
 SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
   (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
   m.added_at_ms
 FROM group_members m JOIN principals p ON p.id = m.principal_id
@@ -1128,6 +1147,9 @@ WHERE (@all_grants::boolean
     OR g.target = @target::text
     OR (g.target = ANY(@containers::text[])
       AND (g.role = ANY(@container_roles::text[])
+        OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR (@token_namespace::text <> '' AND g.target = @token_namespace::text
+      AND (g.role = ANY(@token_namespace_roles::text[])
         OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
   AND (@subject::text = '' OR g.subject = @subject::text
     OR (@principal::text <> '' AND m.principal_id IS NOT NULL))
@@ -1161,6 +1183,9 @@ WHERE (@all_grants::boolean
     OR g.target = @target::text
     OR (g.target = ANY(@containers::text[])
       AND (g.role = ANY(@container_roles::text[])
+        OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR (@token_namespace::text <> '' AND g.target = @token_namespace::text
+      AND (g.role = ANY(@token_namespace_roles::text[])
         OR (@history::boolean AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
   AND (@subject::text = '' OR g.subject = @subject::text
     OR (@principal::text <> '' AND m.principal_id IS NOT NULL))
@@ -1274,7 +1299,7 @@ FROM access_tokens WHERE id = $1;
 -- name: GetAccessTokenByDigest :one
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms,
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   GREATEST(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0))::bigint AS principal_active_at_ms
@@ -1528,17 +1553,25 @@ WHERE id = 1;
 SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms;
 
 -- name: DisableInactiveAccessTokens :many
+-- A token of a break-glass account is always exempt from the inactivity
+-- disable.
 UPDATE access_tokens SET disabled_at_ms = sqlc.arg('at_ms')::bigint
 WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > sqlc.arg('at_ms')::bigint
   AND COALESCE(last_used_at_ms, created_at_ms) <= sqlc.arg('cutoff_ms')::bigint
+  AND NOT EXISTS (
+    SELECT 1 FROM principals p
+    WHERE p.id = access_tokens.principal_id AND p.break_glass = TRUE
+  )
 RETURNING id, principal_id;
 
 -- name: DisableInactivePrincipals :many
 -- A person is inactive when its creation, its activity baseline, its last
 -- sign-in, and the creation and the last use of each of its tokens are all
--- at or before the cutoff.
+-- at or before the cutoff. A break-glass account is always exempt from the
+-- inactivity disable.
 UPDATE principals SET disabled_at_ms = sqlc.arg('at_ms')::bigint
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND break_glass = FALSE
   AND created_at_ms <= sqlc.arg('cutoff_ms')::bigint
   AND last_active_at_ms <= sqlc.arg('cutoff_ms')::bigint
   AND COALESCE(last_sign_in_at_ms, 0) <= sqlc.arg('cutoff_ms')::bigint

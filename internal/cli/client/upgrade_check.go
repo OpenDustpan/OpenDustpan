@@ -51,12 +51,14 @@ const (
 )
 
 // UpgradeCheck runs `opendustpan upgrade check`: it asks the server for its
-// version, the schema version of its database and the names of the applied
-// migrations, compares them with the migrations in its own binary and prints
-// the binary version, the server version, the schema version of the database,
-// the schema version the binary needs, the names of the pending migrations
-// and one verdict. It writes nothing. The exit code is 0 for `up to date`
-// and `upgrade possible` and 1 for `cannot start` and for errors.
+// version, the schema version of its database, the names of the applied
+// migrations and the count of running journaled updates, compares the
+// migrations with the migrations in its own binary and prints the binary
+// version, the server version, the schema version of the database, the
+// schema version the binary needs, the names of the pending migrations, the
+// count of running journaled updates and one verdict. It writes nothing. The
+// exit code is 0 for `up to date` and `upgrade possible` and 1 for `cannot
+// start` and for errors.
 // binaryVersion is the stamped version of the binary: the report prints it,
 // so it names the same version as --version.
 func UpgradeCheck(
@@ -111,7 +113,9 @@ func UpgradeCheck(
 
 	warning := keyWarningFor(answer)
 
-	if err := writeUpgradeReport(stdout, answer.ServerVersion, binaryVersion, inspection, warning); err != nil {
+	report := newUpgradeReport(stdout, answer, binaryVersion, inspection, warning)
+
+	if err := writeUpgradeReport(report); err != nil {
 		return err
 	}
 
@@ -139,14 +143,16 @@ func (f *upgradeCheckFlags) register(fs *flag.FlagSet) {
 }
 
 // UpgradeCheckAnswer is the server answer the upgrade check compares: the
-// server version, the schema version of its database and the names of the
-// applied migrations ordered by version. KeyEncryptionKey is nil when the
-// server is older than ADR 41 and does not answer the field.
+// server version, the schema version of its database, the names of the
+// applied migrations ordered by version and the count of running journaled
+// updates. KeyEncryptionKey is nil when the server is older and does not
+// answer the field.
 type UpgradeCheckAnswer struct {
-	ServerVersion     string   `json:"version"`
-	SchemaVersion     int64    `json:"schemaVersion"`
-	AppliedMigrations []string `json:"appliedMigrations"`
-	KeyEncryptionKey  *bool    `json:"keyEncryptionKey"`
+	ServerVersion           string   `json:"version"`
+	SchemaVersion           int64    `json:"schemaVersion"`
+	AppliedMigrations       []string `json:"appliedMigrations"`
+	KeyEncryptionKey        *bool    `json:"keyEncryptionKey"`
+	RunningJournaledUpdates int64    `json:"runningJournaledUpdates"`
 }
 
 // KeyWarning is the upgrade report line for a server that runs without a
@@ -312,26 +318,60 @@ func upgradeVerdict(inspection schema.Inspection) string {
 	}
 }
 
+// upgradeReport holds the inputs of the upgrade report: where to write it,
+// the server and binary versions, the migration inspection, the key warning
+// (empty means none) and the count of running journaled updates.
+type upgradeReport struct {
+	stdout        io.Writer
+	serverVersion string
+	binaryVersion string
+	inspection    schema.Inspection
+	warning       string
+	journaled     int64
+}
+
+// newUpgradeReport gathers the inputs of the upgrade report: where to
+// write it, the server answer, the version of the binary, the migration
+// inspection and the key warning (empty means none).
+func newUpgradeReport(
+	stdout io.Writer,
+	answer UpgradeCheckAnswer,
+	binaryVersion string,
+	inspection schema.Inspection,
+	warning string,
+) upgradeReport {
+	return upgradeReport{
+		stdout:        stdout,
+		serverVersion: answer.ServerVersion,
+		binaryVersion: binaryVersion,
+		inspection:    inspection,
+		warning:       warning,
+		journaled:     answer.RunningJournaledUpdates,
+	}
+}
+
 // writeUpgradeReport writes the binary version, the server version, the
 // schema version of the database, the schema version the binary needs, the
-// pending migration names, the key warning when warning is not empty, and
-// the verdict. When migrations are pending it tells the operator to back up the
-// database first and that no downgrade path exists.
-func writeUpgradeReport(
-	stdout io.Writer, serverVersion, binaryVersion string, inspection schema.Inspection, warning string,
-) error {
+// pending migration names, the count of running journaled updates, the key
+// warning when warning is not empty, and the verdict. When migrations are
+// pending it tells the operator to back up the database first and that no
+// downgrade path exists. When journaled updates run it tells the operator to
+// let them finish or cancel them before a downgrade: a downgrade to a binary
+// without the journal route answers their journal batches with 404, which
+// the Pulumi CLI does not retry.
+func writeUpgradeReport(report upgradeReport) error {
 	lines := []string{
-		"binary version: " + binaryVersion,
-		"server version: " + serverVersion,
-		fmt.Sprintf("database schema version: %d", inspection.DatabaseVersion),
-		fmt.Sprintf("binary schema version: %d", inspection.BinaryVersion),
+		"binary version: " + report.binaryVersion,
+		"server version: " + report.serverVersion,
+		fmt.Sprintf("database schema version: %d", report.inspection.DatabaseVersion),
+		fmt.Sprintf("binary schema version: %d", report.inspection.BinaryVersion),
 	}
 
-	if len(inspection.Pending) == 0 {
+	if len(report.inspection.Pending) == 0 {
 		lines = append(lines, "pending migrations: none")
 	} else {
 		lines = append(lines, "pending migrations:")
-		for _, name := range inspection.Pending {
+		for _, name := range report.inspection.Pending {
 			lines = append(lines, "  "+name)
 		}
 
@@ -341,14 +381,23 @@ func writeUpgradeReport(
 		)
 	}
 
-	if warning != "" {
-		lines = append(lines, warning)
+	lines = append(lines, fmt.Sprintf("running journaled updates: %d", report.journaled))
+
+	if report.journaled > 0 {
+		lines = append(
+			lines,
+			"Let running journaled updates finish or cancel them before a downgrade.",
+		)
 	}
 
-	lines = append(lines, "verdict: "+upgradeVerdict(inspection))
+	if report.warning != "" {
+		lines = append(lines, report.warning)
+	}
+
+	lines = append(lines, "verdict: "+upgradeVerdict(report.inspection))
 
 	for _, line := range lines {
-		if _, err := fmt.Fprintln(stdout, line); err != nil {
+		if _, err := fmt.Fprintln(report.stdout, line); err != nil {
 			return fmt.Errorf("write output: %w", err)
 		}
 	}

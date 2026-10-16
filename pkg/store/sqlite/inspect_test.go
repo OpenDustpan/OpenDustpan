@@ -70,6 +70,8 @@ func checkAppliedMigrated(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
+	copyTemplate(t, path)
+
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -134,6 +136,8 @@ func checkAppliedMissingTable(t *testing.T) {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {

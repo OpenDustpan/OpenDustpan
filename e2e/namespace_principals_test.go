@@ -132,6 +132,7 @@ func runNamespacePrincipalsOnStore(t *testing.T, cli e2e.Install, store e2e.Stor
 
 	checkNamespacePrincipalLimits(ctx, t, env, bot)
 	checkNamespacePrincipalTokens(ctx, t, env, namespaceTokenFixture{lead: leadTok, outsider: outsiderTok, bot: bot})
+	checkNamespacePrincipalReview(ctx, t, env, lead, bot)
 
 	tokenCall(ctx, t, env, leadTok.Secret, principalStep{http.MethodDelete, one, "", http.StatusNoContent})
 	tokenCall(ctx, t, env, leadTok.Secret, principalStep{http.MethodGet, one, "", http.StatusNotFound})
@@ -159,6 +160,36 @@ func checkNamespacePrincipalLimits(ctx context.Context, t *testing.T, env *e2e.E
 	} {
 		principalCall(ctx, t, env, step, nil)
 	}
+}
+
+// checkNamespacePrincipalReview proves that the access-review export of a
+// principal of a namespace lists the grant of the namespace admin on the
+// namespace to the lead.
+func checkNamespacePrincipalReview(
+	ctx context.Context, t *testing.T, env *e2e.Env, lead, bot e2ePrincipal,
+) {
+	t.Helper()
+
+	var export e2eExport
+
+	status, body, err := env.ServerAPIStatus(
+		ctx, http.MethodGet, "/api/server/principals/"+bot.ID+"/access-review", "",
+	)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("export of the namespace principal = %d, %v (%s); want 200", status, err, body)
+	}
+
+	if err := json.Unmarshal([]byte(body), &export); err != nil {
+		t.Fatalf("decode export: %v", err)
+	}
+
+	for _, row := range export.Grants {
+		if row.Subject == "principal:"+lead.ID && row.Role == "admin" {
+			return
+		}
+	}
+
+	t.Fatalf("export of the namespace principal = %s, want the grant of admin to the lead", body)
 }
 
 // namespaceTokenFixture holds the stored tokens and the bot of the token

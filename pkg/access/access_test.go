@@ -108,9 +108,17 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 	tb.Helper()
 
 	err := f.store.CreatePrincipal(tb.Context(), principal.Principal{
-		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
-		DisabledAt: time.Time{},
+		CreatedAt:   time.Unix(0, 0),
+		UpdatedAt:   time.Unix(0, 0),
+		ID:          "prn-" + subject,
+		Subject:     subject,
+		DisplayName: "",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
+		DisabledAt:  time.Time{},
 	}, storetest.ServerChange(time.Unix(0, 0), "principal:prn-"+subject))
 	if err != nil {
 		tb.Fatalf("create principal %q: %v", subject, err)
@@ -926,6 +934,90 @@ func TestRevokeChecksTheObject(t *testing.T) {
 	}
 }
 
+func TestRevokeByID(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	f.person(t, "target")
+
+	payments := identity.CollectionObject("acme", "payments")
+	f.collection(payments)
+
+	web := f.unit(t, unitObject(t, "acme", "web/prod"))
+
+	const svcID = "prn-svc-byid"
+
+	svcErr := f.store.CreatePrincipal(ctx, principal.Principal{
+		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: svcID, Subject: "svc-byid",
+		DisplayName: "", Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
+		DisabledAt: time.Time{}, Namespace: "", BreakGlass: false,
+	}, storetest.ServerChange(time.Unix(0, 0), "principal:"+svcID))
+	if svcErr != nil {
+		t.Fatalf("create service principal: %v", svcErr)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		object identity.Object
+		role   string
+	}{
+		{name: "installation", object: identity.ServerObject(), role: access.RoleViewer},
+		{name: "namespace", object: identity.NamespaceObject("acme"), role: access.RoleViewer},
+		{name: "collection", object: payments, role: access.RoleViewer},
+		{name: "unit", object: web, role: access.RoleViewer},
+		{name: "principal", object: identity.PrincipalObject(svcID), role: access.RoleTokenManager},
+	} {
+		checkRevokeByID(t, f, tc.object, tc.role, tc.name)
+	}
+
+	if _, err := f.svc.RevokeByID(ctx, testEntry(), admin(), "grt-missing"); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("revoke unknown grant by ID = %v, want ErrNotFound", err)
+	}
+
+	nsadmin := f.person(t, "nsadmin")
+	f.grant(t, prn("nsadmin"), access.RoleAdmin, identity.NamespaceObject("acme"))
+
+	held, err := f.svc.Grant(ctx, testEntry(), admin(), access.GrantInput{
+		Object: identity.ServerObject(), Role: access.RoleViewer, Subject: prn("target"),
+	})
+	if err != nil {
+		t.Fatalf("grant on the installation: %v", err)
+	}
+
+	if _, err := f.svc.RevokeByID(ctx, testEntry(), nsadmin, held.ID); !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("revoke beyond held actions = %v, want ErrEscalation", err)
+	}
+}
+
+// checkRevokeByID grants role on obj to the target, revokes it by ID and
+// checks that the grant is gone.
+func checkRevokeByID(t *testing.T, f *fixture, obj identity.Object, role, name string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	g, err := f.svc.Grant(ctx, testEntry(), admin(), access.GrantInput{
+		Object: obj, Role: role, Subject: prn("target"),
+	})
+	if err != nil {
+		t.Fatalf("grant on %s: %v", name, err)
+	}
+
+	revoked, err := f.svc.RevokeByID(ctx, testEntry(), admin(), g.ID)
+	if err != nil {
+		t.Fatalf("revoke %s grant by ID: %v", name, err)
+	}
+
+	if revoked.ID != g.ID || revoked.Object.String() != g.Object.String() {
+		t.Fatalf("revoked = %+v, want %+v", revoked, g)
+	}
+
+	if _, err := f.store.GetGrant(ctx, g.ID); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("grant after revoke = %v, want ErrNotFound", err)
+	}
+}
+
 // testEntry is the entry of a caller, as the HTTP adapter builds it.
 func testEntry() audit.Entry {
 	return audit.Entry{
@@ -1040,7 +1132,7 @@ func (f *fixture) namespaceBot(tb testing.TB, id, subject string, ns namespace.N
 	p := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: id, Subject: subject,
 		DisplayName: subject, Kind: principal.KindService, Source: principal.SourceLocal,
-		Namespace: ns, GroupCount: 0,
+		Namespace: ns, GroupCount: 0, BreakGlass: false,
 	}
 
 	fence, e := storetest.GrantWrite(tb, f.store, identity.NamespaceObject(ns), at, principal.Ref(id))
@@ -1057,7 +1149,7 @@ func (f *fixture) installationService(tb testing.TB, id, subject string) {
 	p := principal.Principal{
 		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: id, Subject: subject,
 		DisplayName: subject, Kind: principal.KindService, Source: principal.SourceLocal,
-		Namespace: "", GroupCount: 0,
+		Namespace: "", GroupCount: 0, BreakGlass: false,
 	}
 
 	if err := f.store.CreatePrincipal(tb.Context(), p, storetest.ServerChange(at, principal.Ref(id))); err != nil {

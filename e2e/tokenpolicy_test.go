@@ -4,6 +4,7 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -27,6 +28,21 @@ type e2eTokenPolicy struct {
 type e2eSweep struct {
 	Tokens     []string `json:"tokens"`
 	Principals []string `json:"principals"`
+}
+
+// e2eAuditChange decodes one change of an audit entry.
+type e2eAuditChange struct {
+	Key string  `json:"key"`
+	Old *string `json:"old,omitempty"`
+	New string  `json:"new"`
+}
+
+// e2ePolicyAuditEntry decodes the fields of an audit entry that the policy
+// check needs.
+type e2ePolicyAuditEntry struct {
+	Action  string           `json:"action"`
+	Object  string           `json:"object"`
+	Changes []e2eAuditChange `json:"changes,omitempty"`
 }
 
 // TestTokenPolicy drives the token policy routes and the inactivity
@@ -115,16 +131,26 @@ func runTokenPolicyOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkInactivityPolicy(ctx, t, env, service, person)
 }
 
-// checkBreakGlassRefused turns on the disable of the break-glass credential:
-// it answers 400 and names ADR 57, because that credential has no stored
-// record yet.
+// checkBreakGlassRefused turns on the deprecated disable of the break-glass
+// account: it answers 400 that says the setting is no longer supported,
+// because a break-glass account is always exempt. False is accepted and
+// always reads back as false.
 func checkBreakGlassRefused(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
 	status, body, err := env.ServerAPIStatus(ctx, http.MethodPatch, "/api/server/token-policy",
 		`{"disableBreakGlass":true}`)
-	if err != nil || status != http.StatusBadRequest || !strings.Contains(body, "ADR 57") {
-		t.Fatalf("break-glass disable = %d, %v (%s); want 400 that names ADR 57", status, err, body)
+	if err != nil || status != http.StatusBadRequest || !strings.Contains(body, "no longer supported") {
+		t.Fatalf("break-glass disable = %d, %v (%s); want 400 that says no longer supported", status, err, body)
+	}
+
+	var policy e2eTokenPolicy
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPatch, "/api/server/token-policy", `{"disableBreakGlass":false}`, http.StatusOK,
+	}, &policy)
+
+	if policy.DisableBreakGlass {
+		t.Fatalf("policy with the deprecated field false = %+v, want false", policy)
 	}
 }
 
@@ -141,6 +167,8 @@ func checkMaxLifetime(ctx context.Context, t *testing.T, env *e2e.Env, service e
 	if policy.MaxLifetimeSeconds != 3600 || policy.UpdatedAt == nil || policy.InactivitySeconds != 90*86400 {
 		t.Fatalf("changed policy = %+v, want a maximum of 3600 s, an update time and the other defaults", policy)
 	}
+
+	checkPolicyAudit(ctx, t, env, map[string][2]string{"maxLifetimeSeconds": {"31536000", "3600"}})
 
 	later := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
 	principalCall(ctx, t, env, principalStep{
@@ -188,6 +216,8 @@ func checkInactivityPolicy(ctx context.Context, t *testing.T, env *e2e.Env, serv
 		t.Fatalf("changed policy = %+v, want an inactivity period of 3600 s with both disables on", policy)
 	}
 
+	checkPolicyAudit(ctx, t, env, map[string][2]string{"inactivitySeconds": {"7776000", "3600"}})
+
 	var swept e2eSweep
 	principalCall(
 		ctx,
@@ -228,5 +258,71 @@ func checkInactivityPolicy(ctx context.Context, t *testing.T, env *e2e.Env, serv
 
 	if len(off.Tokens) != 0 || len(off.Principals) != 0 {
 		t.Fatalf("sweep with the disable off = %+v, want nothing", off)
+	}
+}
+
+// checkPolicyAudit proves the latest token policy entry in @server holds
+// exactly the changed keys of want with their old and new text.
+func checkPolicyAudit(ctx context.Context, t *testing.T, env *e2e.Env, want map[string][2]string) {
+	t.Helper()
+
+	entries := listServerAuditEntries(ctx, t, env)
+
+	for i := range entries {
+		if entries[i].Object != "token-policy" {
+			continue
+		}
+
+		checkAuditChanges(t, entries[i].Changes, want)
+
+		return
+	}
+
+	t.Fatal("no token-policy entry in @server")
+}
+
+// listServerAuditEntries lists the audit entries of @server through the API.
+func listServerAuditEntries(ctx context.Context, t *testing.T, env *e2e.Env) []e2ePolicyAuditEntry {
+	t.Helper()
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, "/api/audit/entries?organization=@server", "")
+	if err != nil {
+		t.Fatalf("list @server audit entries: %v", err)
+	}
+
+	if status != http.StatusOK {
+		t.Fatalf("list @server audit entries answers %d, want %d (%s)", status, http.StatusOK, body)
+	}
+
+	var got struct {
+		Entries []e2ePolicyAuditEntry `json:"entries"`
+		Total   int64                 `json:"total"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("decode @server audit entries: %v (%s)", err, body)
+	}
+
+	return got.Entries
+}
+
+// checkAuditChanges proves changes hold exactly the keys of want with their
+// old and new text.
+func checkAuditChanges(t *testing.T, changes []e2eAuditChange, want map[string][2]string) {
+	t.Helper()
+
+	if len(changes) != len(want) {
+		t.Fatalf("policy changes hold %d items, want %d", len(changes), len(want))
+	}
+
+	for _, c := range changes {
+		pair, ok := want[c.Key]
+		if !ok {
+			t.Fatalf("policy change %q is not one of %v", c.Key, want)
+		}
+
+		if c.Old == nil || *c.Old != pair[0] || c.New != pair[1] {
+			t.Fatalf("policy change %q = %v to %q, want %q to %q", c.Key, c.Old, c.New, pair[0], pair[1])
+		}
 	}
 }

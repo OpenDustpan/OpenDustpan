@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -93,8 +94,24 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.ownTokenRoutes()...)
 	routes = append(routes, h.tokenPolicyRoutes()...)
 	routes = append(routes, h.sessionPolicyRoutes()...)
+	routes = append(routes, h.auditSinkRoutes()...)
 
 	return routes
+}
+
+// auditSinkRoutes returns the audit sink rows of the route table: the list
+// of the configured audit sinks with their delivery state.
+func (h *Handler) auditSinkRoutes() []Route {
+	return []Route{
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/audit/sinks",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerObserve},
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.listAuditSinks,
+		},
+	}
 }
 
 // coreRoutes returns the namespace and metrics rows of the route table.
@@ -325,6 +342,25 @@ func (h *Handler) enforcePublic(route Route) http.HandlerFunc {
 	}
 }
 
+// principalKey carries the authenticated principal for resolvers that
+// need it. Only enforce sets it, before Resolve runs, so a resolver that
+// reads it sees the caller of this request. Resolvers that need no caller
+// ignore it.
+type principalKey struct{}
+
+// withPrincipal returns ctx carrying p for a resolver.
+func withPrincipal(ctx context.Context, p identity.Principal) context.Context {
+	return context.WithValue(ctx, principalKey{}, p)
+}
+
+// principalFromRequest returns the principal that enforce stored on r, and
+// false when r went around enforce.
+func principalFromRequest(r *http.Request) (identity.Principal, bool) {
+	p, ok := r.Context().Value(principalKey{}).(identity.Principal)
+
+	return p, ok
+}
+
 // enforceAuthorized serves a route that needs a signed-in principal and the
 // Authorizer to allow every declared action on the resolved object.
 func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
@@ -337,6 +373,8 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 
 			return
 		}
+
+		r = r.WithContext(withPrincipal(ctx, p))
 
 		obj, err := route.Resolve(w, r)
 		if err != nil {

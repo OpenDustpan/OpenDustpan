@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"sync"
 	"time"
 
@@ -495,7 +496,8 @@ func (s *Service) Policy(ctx context.Context) (Policy, error) {
 }
 
 // PolicyChange names the fields of the policy that a change sets. A nil
-// field keeps its value.
+// field keeps its value. DisableBreakGlass is deprecated: the server
+// refuses true, and always keeps false.
 type PolicyChange struct {
 	MaxLifetime       *time.Duration
 	Inactivity        *time.Duration
@@ -518,7 +520,7 @@ func (s *Service) SetPolicy(ctx context.Context, e audit.Entry, c PolicyChange) 
 			return Policy{}, audit.Entry{}, err
 		}
 
-		return p, change(e, p.UpdatedAt, PolicyRef), nil
+		return p, policyEntry(e, p.UpdatedAt, old, p), nil
 	})
 
 	s.policies.forget()
@@ -563,9 +565,9 @@ func (c PolicyChange) applyTo(p Policy) Policy {
 // the entry e for each record that it disables. It reads the policy: with
 // an inactivity period of zero, or with tokens and accounts both off, it
 // changes nothing. The store takes the time of the run from the database
-// clock, and the entries carry that time. The break-glass credential of
-// ADR 57 has no stored record yet, so the bootstrap admin tokens are never
-// disabled here.
+// clock, and the entries carry that time. A break-glass account is always
+// exempt, with no setting. The bootstrap admin tokens have no stored
+// record, so a sweep never disables them here.
 func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult, error) {
 	p, err := s.Policy(ctx)
 	if err != nil {
@@ -644,9 +646,14 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 // checkPolicyActive refuses the token t of the owner o when the policy disables
 // t, or the user account o, as inactive at now, before the sweep writes the
 // disable: the sweep runs once an hour, and a use would else move the last
-// use forward and keep t, or o, alive. A failed read of the policy answers
-// its error, so the caller fails closed.
+// use forward and keep t, or o, alive. A break-glass account is always
+// exempt. A failed read of the policy answers its error, so the caller
+// fails closed.
 func (s *Service) checkPolicyActive(ctx context.Context, t Token, o Owner, now time.Time) error {
+	if o.BreakGlass {
+		return nil
+	}
+
 	p, err := s.policies.get(ctx, now, s.Policy)
 	if err != nil {
 		return fmt.Errorf("authenticate access token: %w", err)
@@ -711,6 +718,59 @@ func change(e audit.Entry, at time.Time, object string) audit.Entry {
 	e.Object = object
 
 	return e
+}
+
+// policyEntry returns e as the audit entry of a change of the policy from
+// old to updated at the time at.
+func policyEntry(e audit.Entry, at time.Time, old, updated Policy) audit.Entry {
+	e.At = at
+	e.Namespace = audit.ServerScope
+	e.Kind = audit.KindChange
+	e.Outcome = audit.OutcomeSuccess
+	e.Object = PolicyRef
+	e.Changes = nil
+
+	for _, c := range []struct {
+		key        string
+		old, value time.Duration
+	}{
+		{key: "maxLifetimeSeconds", old: old.MaxLifetime, value: updated.MaxLifetime},
+		{key: "inactivitySeconds", old: old.Inactivity, value: updated.Inactivity},
+	} {
+		if c.old == c.value {
+			continue
+		}
+
+		before := seconds(c.old)
+		e.Changes = append(e.Changes, audit.Change{
+			Key: c.key, Old: &before, New: seconds(c.value), Layer: "", TakesEffect: "",
+		})
+	}
+
+	for _, c := range []struct {
+		key        string
+		old, value bool
+	}{
+		{key: "disableTokens", old: old.DisableTokens, value: updated.DisableTokens},
+		{key: "disableAccounts", old: old.DisableAccounts, value: updated.DisableAccounts},
+		{key: "disableBreakGlass", old: old.DisableBreakGlass, value: updated.DisableBreakGlass},
+	} {
+		if c.old == c.value {
+			continue
+		}
+
+		before := strconv.FormatBool(c.old)
+		e.Changes = append(e.Changes, audit.Change{
+			Key: c.key, Old: &before, New: strconv.FormatBool(c.value), Layer: "", TakesEffect: "",
+		})
+	}
+
+	return e
+}
+
+// seconds returns d as a decimal count of whole seconds.
+func seconds(d time.Duration) string {
+	return strconv.FormatInt(int64(d/time.Second), 10)
 }
 
 // issued is a new token with its secret and the digest of the secret.

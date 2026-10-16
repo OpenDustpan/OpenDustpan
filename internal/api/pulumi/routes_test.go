@@ -1530,6 +1530,7 @@ func newDeleteHandlerWithAudit(
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -1893,6 +1894,7 @@ func newUnusedUpdates(t *testing.T, namespaces *namespace.Service) *stack.Update
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -1964,6 +1966,7 @@ func newEnforcingUpdates(t *testing.T, namespaces *namespace.Service) *stack.Upd
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)

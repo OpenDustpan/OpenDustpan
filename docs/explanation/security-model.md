@@ -82,6 +82,11 @@ persons and services.
   `GET /api/server/principals/{id}/access-review` lists the holders of
   `principal:manage-tokens` on the principal. The audit entry of each grant
   to a service principal names the same holders in the change
+  `tokenManagers`. The audit entry of each grant to a group names the same
+  holders for each service principal in the group in one change
+  `tokenManagers`, with one line per service principal in the form
+  `<principal ID>: <holder>, <holder>`. The audit entry of each membership
+  add of a service principal names the same holders in the change
   `tokenManagers`.
 - **A revoke of `principal:manage-tokens` does not end the tokens that
   its holder already made.** Those tokens act as the service principal
@@ -97,7 +102,9 @@ persons and services.
   lists and revokes the tokens of the principals of that namespace, through
   `principal:manage-tokens` on each of them. It reaches no other principal.
   A grant of a role with it needs every data action on that namespace, or
-  `server:manage-access` on the installation.
+  `server:manage-access` on the installation. The access-review export of
+  such a principal lists the holders of `namespace:manage-principal-tokens`
+  on its namespace.
 - **Only a site administrator can change the sign-in settings.** The
   action `server:manage-sign-in` changes the session policy with
   `PATCH /api/server/session-policy`: the idle limit (15 minutes by
