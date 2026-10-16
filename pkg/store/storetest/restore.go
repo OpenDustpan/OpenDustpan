@@ -400,11 +400,8 @@ func testRestoreRestartFailsRunning(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("mark restore applying: %v", err)
 	}
 
-	if err := s.FailRunningRestores(
-		t.Context(),
-		now().Add(150*time.Minute),
-		"server stopped during restore",
-	); err != nil {
+	err := s.FailRunningRestores(t.Context(), now().Add(150*time.Minute), "server stopped during restore")
+	if err != nil {
 		t.Fatalf("fail running restores: %v", err)
 	}
 
