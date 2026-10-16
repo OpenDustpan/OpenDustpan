@@ -476,7 +476,8 @@ WITH c AS MATERIALIZED (
   SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
 ), pick AS (
   SELECT o.id FROM durable_operations o, c
-  WHERE o.kind = ANY($3::text[]) AND (
+  WHERE o.kind = ANY($3::text[])
+    AND o.version <= ($4::bigint[])[array_position($3::text[], o.kind)] AND (
     (o.state = 'pending' AND o.not_before_ms <= c.now_ms)
     OR (o.state = 'running' AND o.claim_expires_at_ms <= c.now_ms AND NOT o.cancel_requested)
   )
@@ -496,19 +497,26 @@ RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.e
 `
 
 type ClaimDurableOperationParams struct {
-	Owner   string
-	LeaseMs int64
-	Kinds   []string
+	Owner       string
+	LeaseMs     int64
+	Kinds       []string
+	MaxVersions []int64
 }
 
-// Claims the oldest operation of the kinds that can run now: a pending one
+// Claims the oldest operation of the kinds, up to the version limit of its
+// kind, that can run now: a pending one
 // whose not_before_ms passed, or a running one whose claim expired without a
 // cancel request. A row that another claim holds is skipped, so of several
 // concurrent claims of one operation at most one gets it. The expiry is the
 // database clock plus the lease. A claim that takes over an expired claim
 // counts one more expiry.
 func (q *Queries) ClaimDurableOperation(ctx context.Context, arg ClaimDurableOperationParams) (DurableOperation, error) {
-	row := q.db.QueryRow(ctx, claimDurableOperation, arg.Owner, arg.LeaseMs, arg.Kinds)
+	row := q.db.QueryRow(ctx, claimDurableOperation,
+		arg.Owner,
+		arg.LeaseMs,
+		arg.Kinds,
+		arg.MaxVersions,
+	)
 	var i DurableOperation
 	err := row.Scan(
 		&i.ID,
@@ -2189,7 +2197,8 @@ WITH c AS MATERIALIZED (
   SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
 ), ended AS (
   SELECT o.id FROM durable_operations o, c
-  WHERE o.kind = ANY($1::text[]) AND o.state = 'running' AND o.cancel_requested
+  WHERE o.kind = ANY($1::text[])
+    AND o.version <= ($2::bigint[])[array_position($1::text[], o.kind)] AND o.state = 'running' AND o.cancel_requested
     AND o.claim_expires_at_ms <= c.now_ms
   FOR UPDATE OF o SKIP LOCKED
 )
@@ -2199,10 +2208,17 @@ FROM c, ended
 WHERE o.id = ended.id
 `
 
+type EndExpiredCanceledDurableOperationsParams struct {
+	Kinds       []string
+	MaxVersions []int64
+}
+
 // Ends canceled each running operation of the kinds whose claim expired
-// after a cancel request. A row that another claim holds is skipped.
-func (q *Queries) EndExpiredCanceledDurableOperations(ctx context.Context, kinds []string) error {
-	_, err := q.db.Exec(ctx, endExpiredCanceledDurableOperations, kinds)
+// after a cancel request. kinds and max_versions are pairs: a claim takes an
+// operation of a kind only up to its version limit. A row that another claim
+// holds is skipped.
+func (q *Queries) EndExpiredCanceledDurableOperations(ctx context.Context, arg EndExpiredCanceledDurableOperationsParams) error {
+	_, err := q.db.Exec(ctx, endExpiredCanceledDurableOperations, arg.Kinds, arg.MaxVersions)
 	return err
 }
 

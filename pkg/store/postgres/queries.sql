@@ -1929,12 +1929,15 @@ ORDER BY operation_id, seq;
 
 -- name: EndExpiredCanceledDurableOperations :exec
 -- Ends canceled each running operation of the kinds whose claim expired
--- after a cancel request. A row that another claim holds is skipped.
+-- after a cancel request. kinds and max_versions are pairs: a claim takes an
+-- operation of a kind only up to its version limit. A row that another claim
+-- holds is skipped.
 WITH c AS MATERIALIZED (
   SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
 ), ended AS (
   SELECT o.id FROM durable_operations o, c
-  WHERE o.kind = ANY(sqlc.arg('kinds')::text[]) AND o.state = 'running' AND o.cancel_requested
+  WHERE o.kind = ANY(sqlc.arg('kinds')::text[])
+    AND o.version <= (sqlc.arg('max_versions')::bigint[])[array_position(sqlc.arg('kinds')::text[], o.kind)] AND o.state = 'running' AND o.cancel_requested
     AND o.claim_expires_at_ms <= c.now_ms
   FOR UPDATE OF o SKIP LOCKED
 )
@@ -1944,7 +1947,8 @@ FROM c, ended
 WHERE o.id = ended.id;
 
 -- name: ClaimDurableOperation :one
--- Claims the oldest operation of the kinds that can run now: a pending one
+-- Claims the oldest operation of the kinds, up to the version limit of its
+-- kind, that can run now: a pending one
 -- whose not_before_ms passed, or a running one whose claim expired without a
 -- cancel request. A row that another claim holds is skipped, so of several
 -- concurrent claims of one operation at most one gets it. The expiry is the
@@ -1954,7 +1958,8 @@ WITH c AS MATERIALIZED (
   SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
 ), pick AS (
   SELECT o.id FROM durable_operations o, c
-  WHERE o.kind = ANY(sqlc.arg('kinds')::text[]) AND (
+  WHERE o.kind = ANY(sqlc.arg('kinds')::text[])
+    AND o.version <= (sqlc.arg('max_versions')::bigint[])[array_position(sqlc.arg('kinds')::text[], o.kind)] AND (
     (o.state = 'pending' AND o.not_before_ms <= c.now_ms)
     OR (o.state = 'running' AND o.claim_expires_at_ms <= c.now_ms AND NOT o.cancel_requested)
   )

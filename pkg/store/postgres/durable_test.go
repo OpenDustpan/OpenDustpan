@@ -84,7 +84,8 @@ func TestDurableClaimSkipsALockedRow(t *testing.T) {
 
 	t.Cleanup(s.Close)
 
-	op, _, err := s.DurableOperations().Start(t.Context(), durable.StartRequest{Key: "k", Kind: "kind-a", Input: nil})
+	op, _, err := s.DurableOperations().
+		Start(t.Context(), durable.StartRequest{Key: "k", Kind: "kind-a", Version: 0, Input: nil})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -118,7 +119,12 @@ func TestDurableClaimSkipsALockedRow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
-	req := durable.ClaimRequest{Owner: "instance-a", Kinds: []durable.Kind{"kind-a"}, Lease: time.Minute}
+	req := durable.ClaimRequest{
+		Owner:       "instance-a",
+		Kinds:       []durable.Kind{"kind-a"},
+		MaxVersions: nil,
+		Lease:       time.Minute,
+	}
 	if _, err := s.DurableOperations().Claim(ctx, req); !errors.Is(err, durable.ErrNoWork) {
 		t.Fatalf("claim of a locked operation: err = %v, want ErrNoWork without a wait for the lock", err)
 	}
@@ -181,15 +187,20 @@ func seedDurableRows(t *testing.T, d *postgres.DurableOperations) {
 	ctx := t.Context()
 
 	for _, req := range []durable.StartRequest{
-		{Key: "claimed", Kind: "kind-a", Input: []byte("input")},
-		{Key: "pending", Kind: "kind-b", Input: nil},
+		{Key: "claimed", Kind: "kind-a", Version: 0, Input: []byte("input")},
+		{Key: "pending", Kind: "kind-b", Version: 0, Input: nil},
 	} {
 		if _, _, err := d.Start(ctx, req); err != nil {
 			t.Fatalf("start %s: %v", req.Key, err)
 		}
 	}
 
-	req := durable.ClaimRequest{Owner: "instance-a", Kinds: []durable.Kind{"kind-a"}, Lease: time.Hour}
+	req := durable.ClaimRequest{
+		Owner:       "instance-a",
+		Kinds:       []durable.Kind{"kind-a"},
+		MaxVersions: nil,
+		Lease:       time.Hour,
+	}
 
 	held, err := d.Claim(ctx, req)
 	if err != nil {

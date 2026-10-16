@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"time"
 
@@ -74,10 +75,9 @@ func startOperation(ctx context.Context, q *db.Queries, req durable.StartRequest
 		return durable.Operation{}, false, err
 	}
 
-	// The port has no operation version yet, so every operation records 0.
 	row, err := q.InsertDurableOperation(ctx, db.InsertDurableOperationParams{
 		ID: ident.NewID(durableIDPrefix), StartKey: req.Key, Kind: string(req.Kind), Input: nonNilBytes(req.Input),
-		Version: 0,
+		Version: int64(req.Version),
 	})
 	if err == nil {
 		return operationFromRow(row, nil), true, nil
@@ -179,10 +179,7 @@ func (d *DurableOperations) Claim(ctx context.Context, req durable.ClaimRequest)
 		return durable.Operation{}, err
 	}
 
-	kinds := make([]string, 0, len(req.Kinds))
-	for _, k := range req.Kinds {
-		kinds = append(kinds, string(k))
-	}
+	kinds, maxVersions := claimLimits(req)
 
 	var (
 		op    durable.Operation
@@ -192,12 +189,13 @@ func (d *DurableOperations) Claim(ctx context.Context, req durable.ClaimRequest)
 	// No work is not an error of the transaction: the end of the canceled
 	// operations commits also when no operation can run.
 	err := d.store.inTx(ctx, func(q *db.Queries) error {
-		if err := q.EndExpiredCanceledDurableOperations(ctx, kinds); err != nil {
+		ended := db.EndExpiredCanceledDurableOperationsParams{Kinds: kinds, MaxVersions: maxVersions}
+		if err := q.EndExpiredCanceledDurableOperations(ctx, ended); err != nil {
 			return fmt.Errorf("end canceled operations: %w", err)
 		}
 
 		row, err := q.ClaimDurableOperation(ctx, db.ClaimDurableOperationParams{
-			Kinds: kinds, Owner: req.Owner, LeaseMs: req.Lease.Milliseconds(),
+			Kinds: kinds, MaxVersions: maxVersions, Owner: req.Owner, LeaseMs: req.Lease.Milliseconds(),
 		})
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
@@ -221,6 +219,25 @@ func (d *DurableOperations) Claim(ctx context.Context, req durable.ClaimRequest)
 	}
 
 	return op, nil
+}
+
+// claimLimits returns the kinds of req and the version limit of each kind,
+// as two lists of one length. A kind with no limit gets the largest
+// version, so it takes every operation of its kind.
+func claimLimits(req durable.ClaimRequest) ([]string, []int64) {
+	kinds := make([]string, 0, len(req.Kinds))
+	limits := make([]int64, 0, len(req.Kinds))
+
+	for _, k := range req.Kinds {
+		limit := int64(math.MaxInt64)
+		if v, ok := req.MaxVersions[k]; ok {
+			limit = int64(v)
+		}
+
+		kinds, limits = append(kinds, string(k)), append(limits, limit)
+	}
+
+	return kinds, limits
 }
 
 // Extend implements durable.Store.
@@ -500,8 +517,10 @@ func withSteps(ctx context.Context, q *db.Queries, row db.DurableOperation) (dur
 // belong to it, in the order of steps.
 func operationFromRow(row db.DurableOperation, steps []db.DurableStep) durable.Operation {
 	op := durable.Operation{
-		ID: durable.ID(row.ID), Key: row.StartKey, Kind: durable.Kind(row.Kind), Input: slices.Clone(row.Input),
-		State: durable.State(row.State), Steps: nil, Attempt: int(row.Attempt), LastError: row.LastError,
+		ID: durable.ID(row.ID), Key: row.StartKey, Kind: durable.Kind(row.Kind), Version: int(row.Version),
+		Input: slices.Clone(row.Input),
+		State: durable.State(row.State), Steps: nil, Attempt: int(row.Attempt), Failures: int(row.Failures),
+		Expiries: int(row.Expiries), LastError: row.LastError,
 		Claim: claimFromRow(row), CancelRequested: row.CancelRequested, NotBefore: codec.FromMillis(row.NotBeforeMs),
 		CreatedAt: codec.FromMillis(row.CreatedAtMs), UpdatedAt: codec.FromMillis(row.UpdatedAtMs),
 	}
