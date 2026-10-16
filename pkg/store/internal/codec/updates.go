@@ -42,16 +42,14 @@ type UpdateRow struct {
 
 // CheckpointRow is the column representation of a checkpoint. Features is a
 // JSON array of strings. The stack is its stable ID; the caller supplies the
-// current reference. The row carries no resource count: saves store NULL, so
-// the save path never scans the deployment. The one reader of the stored
-// count, the delete guard refuseResourcedStack in each store adapter, counts
-// the one latest deployment when the count is NULL; the inventory projection
-// publishes Pulumi stacks with an unknown count, and the Pulumi list-stacks
-// route answers 0. BlobKey names the gzip content in the blob store; rows
-// with a key keep no content. Size is the uncompressed size for history;
-// rows from before blobs hold NULL, which reads as the length of the stored
-// content. BlobSize with BlobMD5 describe the stored bytes for backups; rows
-// without a key hold no stored bytes.
+// current reference. The row carries no resource count, so the save path
+// never scans the deployment: the delete guard gets the count from the
+// service, the inventory projection publishes Pulumi stacks with an unknown
+// count, and the Pulumi list-stacks route answers 0. BlobKey names the gzip
+// content in the blob store; rows with a key keep no content. Size is the
+// uncompressed size for history; rows from before blobs hold NULL, which
+// reads as the length of the stored content. BlobSize with BlobMD5 describe
+// the stored bytes for backups; rows without a key hold no stored bytes.
 type CheckpointRow struct {
 	StackID       string
 	UpdateID      string
@@ -166,9 +164,7 @@ func FromUpdateRows(rows []UpdateRow, ref stack.Ref) ([]stack.Update, error) {
 }
 
 // ToCheckpointRow converts a domain checkpoint into a row for the stack with
-// stackID. It never scans the deployment: the row stores a NULL resource
-// count, and the delete guard counts the latest deployment when it needs the
-// count (see CheckpointRow).
+// stackID. It never scans the deployment (see CheckpointRow).
 func ToCheckpointRow(cp stack.Checkpoint, stackID stack.ID) (CheckpointRow, error) {
 	features := cp.Features
 	if features == nil {
