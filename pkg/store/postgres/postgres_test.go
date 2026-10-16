@@ -414,7 +414,16 @@ func tamperAuditColumn(field string) (string, bool) {
 		"sequence",
 		"changes",
 		"fence_version",
-		"value_path":
+		"value_path",
+		"value_count",
+		"object_id",
+		"idp_subject",
+		"token_id",
+		"version",
+		"source_ip",
+		"user_agent",
+		"channel",
+		"request_id":
 		return field, true
 	default:
 		return "", false
@@ -422,9 +431,10 @@ func tamperAuditColumn(field string) (string, bool) {
 }
 
 // tamperValue answers the parameter of the tamper hook for column: at_ms,
-// sequence and fence_version are numbers, every other column is text.
+// sequence, fence_version and value_count are numbers, every other column
+// is text.
 func tamperValue(column string) string {
-	if column == "at_ms" || column == "sequence" || column == "fence_version" {
+	if column == "at_ms" || column == "sequence" || column == "fence_version" || column == "value_count" {
 		return "$1::text::bigint"
 	}
 
