@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -281,6 +282,67 @@ func TestSessionsTouchEvery(t *testing.T) {
 	got, err = f.store.GetSession(t.Context(), sess.ID)
 	if err != nil || !got.LastSeenAt.Equal(f.svc.Now()) {
 		t.Fatalf("last use after 90 seconds = %v, %v; want %v", got.LastSeenAt, err, f.svc.Now())
+	}
+}
+
+// countingTouches is a session store that counts the TouchSession calls.
+type countingTouches struct {
+	*sqlite.Store
+
+	touches atomic.Int64
+}
+
+func (c *countingTouches) TouchSession(
+	ctx context.Context, id string, at time.Time, every time.Duration, l session.Limits,
+) error {
+	c.touches.Add(1)
+
+	return c.Store.TouchSession(ctx, id, at, every, l)
+}
+
+// TestSessionsSkipRecentTouch proves that a session used inside TouchEvery
+// of its last use sends no touch to the store, and that a later use does.
+func TestSessionsSkipRecentTouch(t *testing.T) {
+	t.Parallel()
+
+	f := newSessionsFixture(t)
+	counting := &countingTouches{Store: f.store, touches: atomic.Int64{}}
+
+	pol, err := session.NewPolicies(session.PolicyConfig{Store: f.policies, Now: f.clock.Now})
+	if err != nil {
+		t.Fatalf("policies: %v", err)
+	}
+
+	svc, err := session.NewSessions(session.SessionsConfig{
+		Store: counting, Providers: nil, Policies: pol, Inactivity: nil, Now: f.clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("sessions: %v", err)
+	}
+
+	_, secret, err := svc.Start(t.Context(), signInEntry(), startInput(f.clock.Now()))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	f.clock.Add(30 * time.Second)
+
+	if _, err := svc.Authenticate(t.Context(), secret); err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	if n := counting.touches.Load(); n != 0 {
+		t.Fatalf("touches 30 seconds after the last use = %d, want 0", n)
+	}
+
+	f.clock.Add(time.Minute)
+
+	if _, err := svc.Authenticate(t.Context(), secret); err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	if n := counting.touches.Load(); n != 1 {
+		t.Fatalf("touches 90 seconds after the last use = %d, want 1", n)
 	}
 }
 

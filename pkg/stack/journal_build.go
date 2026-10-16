@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/pkg/blob"
@@ -323,16 +324,70 @@ func (s *Updates) adoptBuiltBlob(ctx context.Context, stored builtBlob) error {
 
 	if storedSize, storedSum := storedAttrs(gave); storedSize != stored.size || storedSum != stored.sum {
 		deployment, derr := gunzipBytes(gave, s.maxCheckpoints)
-		if derr != nil || sha256.Sum256(deployment) != stored.save.built.Digest {
+		if derr != nil {
 			return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, ErrConcurrentModification)
 		}
 
-		size, sum := storedAttrs(gave)
+		digest := sha256.Sum256(deployment)
+		if !sameBuild(deployment, stored.save.built.Deployment) {
+			return fmt.Errorf("save built checkpoint of update %s: %w", stored.save.id, ErrConcurrentModification)
+		}
 
-		return s.commitBuiltRow(ctx, builtRow(stored.save, stored.key, stored.prev), size, sum)
+		// The row describes the stored blob, which may hold the manifest
+		// time of the first build.
+		save := stored.save
+		save.built.Deployment = deployment
+		save.built.Digest = digest
+
+		return s.commitBuiltRow(ctx, builtRow(save, stored.key, stored.prev), storedSize, storedSum)
 	}
 
 	return s.commitBuiltRow(ctx, builtRow(stored.save, stored.key, stored.prev), stored.size, stored.sum)
+}
+
+// sameBuild reports whether two built deployments are equal apart from the
+// time in their manifest. The replay writes the time of the build there, so
+// a retry after the clock moved builds the same deployment with a new time.
+func sameBuild(a, b []byte) bool {
+	aParts, aok := splitBuild(a)
+	bParts, bok := splitBuild(b)
+
+	return aok && bok &&
+		equalMembers(aParts.members, bParts.members) &&
+		equalMembers(aParts.manifest, bParts.manifest)
+}
+
+// buildParts holds the members of a deployment without its manifest, and the
+// members of the manifest without its time.
+type buildParts struct {
+	members  map[string]json.RawMessage
+	manifest map[string]json.RawMessage
+}
+
+// splitBuild returns the parts of a deployment that sameBuild compares. It
+// reports false when the deployment or its manifest is not a JSON object.
+func splitBuild(deployment []byte) (buildParts, bool) {
+	var parts buildParts
+
+	if err := json.Unmarshal(deployment, &parts.members); err != nil {
+		return buildParts{members: nil, manifest: nil}, false
+	}
+
+	if raw, found := parts.members["manifest"]; found {
+		if err := json.Unmarshal(raw, &parts.manifest); err != nil {
+			return buildParts{members: nil, manifest: nil}, false
+		}
+	}
+
+	delete(parts.members, "manifest")
+	delete(parts.manifest, "time")
+
+	return parts, true
+}
+
+// equalMembers reports whether two sets of JSON members hold the same bytes.
+func equalMembers(a, b map[string]json.RawMessage) bool {
+	return maps.EqualFunc(a, b, func(x, y json.RawMessage) bool { return bytes.Equal(x, y) })
 }
 
 // commitBuiltRow writes the row of a built checkpoint with the delete of its

@@ -43,7 +43,7 @@ const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ?
@@ -2240,33 +2240,45 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
-  ), 0)) AS INTEGER) AS principal_active_at_ms
+  ), 0)) AS INTEGER) AS principal_active_at_ms,
+  ap.max_lifetime_ms AS policy_max_lifetime_ms, ap.inactivity_ms AS policy_inactivity_ms,
+  ap.disable_tokens AS policy_disable_tokens, ap.disable_accounts AS policy_disable_accounts,
+  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
-WHERE t.digest = ? AND p.deleted_at_ms IS NULL
+CROSS JOIN access_token_policy ap
+WHERE t.digest = ? AND p.deleted_at_ms IS NULL AND ap.id = 1
 `
 
 type GetAccessTokenByDigestRow struct {
-	ID                    string
-	PrincipalID           string
-	Name                  string
-	Kind                  string
-	Digest                string
-	CreatedAtMs           int64
-	ExpiresAtMs           int64
-	LastUsedAtMs          sql.NullInt64
-	RevokedAtMs           sql.NullInt64
-	ReplacedBy            sql.NullString
-	CreatedBy             string
-	DisabledAtMs          sql.NullInt64
-	Subject               string
-	DisplayName           string
-	PrincipalKind         string
-	PrincipalDisabledAtMs sql.NullInt64
-	PrincipalBreakGlass   bool
-	PrincipalActiveAtMs   int64
+	ID                      string
+	PrincipalID             string
+	Name                    string
+	Kind                    string
+	Digest                  string
+	CreatedAtMs             int64
+	ExpiresAtMs             int64
+	LastUsedAtMs            sql.NullInt64
+	RevokedAtMs             sql.NullInt64
+	ReplacedBy              sql.NullString
+	CreatedBy               string
+	DisabledAtMs            sql.NullInt64
+	Subject                 string
+	DisplayName             string
+	PrincipalKind           string
+	PrincipalDisabledAtMs   sql.NullInt64
+	PrincipalBreakGlass     bool
+	PrincipalActiveAtMs     int64
+	PolicyMaxLifetimeMs     int64
+	PolicyInactivityMs      int64
+	PolicyDisableTokens     bool
+	PolicyDisableAccounts   bool
+	PolicyDisableBreakGlass bool
+	PolicyUpdatedAtMs       int64
 }
 
+// The token, its owner and the token policy of the installation in one read,
+// so a policy change applies to the next lookup on every instance.
 func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (GetAccessTokenByDigestRow, error) {
 	row := q.db.QueryRowContext(ctx, getAccessTokenByDigest, digest)
 	var i GetAccessTokenByDigestRow
@@ -2289,6 +2301,12 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 		&i.PrincipalDisabledAtMs,
 		&i.PrincipalBreakGlass,
 		&i.PrincipalActiveAtMs,
+		&i.PolicyMaxLifetimeMs,
+		&i.PolicyInactivityMs,
+		&i.PolicyDisableTokens,
+		&i.PolicyDisableAccounts,
+		&i.PolicyDisableBreakGlass,
+		&i.PolicyUpdatedAtMs,
 	)
 	return i, err
 }
@@ -2443,7 +2461,7 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features_json, deployment, saved_at_ms, resource_count,
+       digest, invalid, features_json, saved_at_ms,
        blob_key, size, blob_size, blob_md5
 FROM checkpoints
 WHERE stack_id = ? AND update_id = ?
@@ -2454,9 +2472,25 @@ type GetCheckpointByUpdateParams struct {
 	UpdateID string
 }
 
-func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (Checkpoint, error) {
+type GetCheckpointByUpdateRow struct {
+	StackID       string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	FeaturesJson  string
+	SavedAtMs     int64
+	BlobKey       sql.NullString
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
+}
+
+func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (GetCheckpointByUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpointByUpdate, arg.StackID, arg.UpdateID)
-	var i Checkpoint
+	var i GetCheckpointByUpdateRow
 	err := row.Scan(
 		&i.StackID,
 		&i.UpdateID,
@@ -2466,9 +2500,7 @@ func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointBy
 		&i.Digest,
 		&i.Invalid,
 		&i.FeaturesJson,
-		&i.Deployment,
 		&i.SavedAtMs,
-		&i.ResourceCount,
 		&i.BlobKey,
 		&i.Size,
 		&i.BlobSize,
@@ -2479,7 +2511,7 @@ func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointBy
 
 const getCheckpointByVersion = `-- name: GetCheckpointByVersion :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count,
+       c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -2491,9 +2523,25 @@ type GetCheckpointByVersionParams struct {
 	Version int64
 }
 
-func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (Checkpoint, error) {
+type GetCheckpointByVersionRow struct {
+	StackID       string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	FeaturesJson  string
+	SavedAtMs     int64
+	BlobKey       sql.NullString
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
+}
+
+func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (GetCheckpointByVersionRow, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpointByVersion, arg.StackID, arg.Version)
-	var i Checkpoint
+	var i GetCheckpointByVersionRow
 	err := row.Scan(
 		&i.StackID,
 		&i.UpdateID,
@@ -2503,9 +2551,7 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 		&i.Digest,
 		&i.Invalid,
 		&i.FeaturesJson,
-		&i.Deployment,
 		&i.SavedAtMs,
-		&i.ResourceCount,
 		&i.BlobKey,
 		&i.Size,
 		&i.BlobSize,
@@ -2764,8 +2810,8 @@ FROM installation
 WHERE id = 1
 `
 
-// The installation state (ADR 38 decision 4): normal or maintenance. The
-// migration seeds the one row; a missing row reads normal.
+// The installation state: normal or maintenance. The migration seeds the
+// one row; a missing row is a fault.
 func (q *Queries) GetInstallationState(ctx context.Context) (string, error) {
 	row := q.db.QueryRowContext(ctx, getInstallationState)
 	var state string
@@ -2796,7 +2842,7 @@ func (q *Queries) GetInventoryUnit(ctx context.Context, arg GetInventoryUnitPara
 
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count,
+       c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -2805,9 +2851,25 @@ ORDER BY u.version DESC
 LIMIT 1
 `
 
-func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Checkpoint, error) {
+type GetLatestCheckpointRow struct {
+	StackID       string
+	UpdateID      string
+	LeaseDigest   []byte
+	SchemaVersion int64
+	Sequence      int64
+	Digest        []byte
+	Invalid       bool
+	FeaturesJson  string
+	SavedAtMs     int64
+	BlobKey       sql.NullString
+	Size          sql.NullInt64
+	BlobSize      sql.NullInt64
+	BlobMd5       []byte
+}
+
+func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetLatestCheckpointRow, error) {
 	row := q.db.QueryRowContext(ctx, getLatestCheckpoint, stackID)
-	var i Checkpoint
+	var i GetLatestCheckpointRow
 	err := row.Scan(
 		&i.StackID,
 		&i.UpdateID,
@@ -2817,9 +2879,7 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Chec
 		&i.Digest,
 		&i.Invalid,
 		&i.FeaturesJson,
-		&i.Deployment,
 		&i.SavedAtMs,
-		&i.ResourceCount,
 		&i.BlobKey,
 		&i.Size,
 		&i.BlobSize,
@@ -3391,7 +3451,7 @@ const getUpdate = `-- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ? AND u.id = ?
@@ -3422,10 +3482,8 @@ type GetUpdateRow struct {
 	CheckpointBytes  int64
 }
 
-// The checkpoint size is the stored uncompressed size, or the byte length of
-// the saved deployment for rows from before blobs, read without loading the
-// document: the checkpoints table holds one row for each update, so the join
-// finds at most one row.
+// The checkpoint size is the stored uncompressed size: the checkpoints table
+// holds one row for each update, so the join finds at most one row.
 func (q *Queries) GetUpdate(ctx context.Context, arg GetUpdateParams) (GetUpdateRow, error) {
 	row := q.db.QueryRowContext(ctx, getUpdate, arg.StackID, arg.ID)
 	var i GetUpdateRow
@@ -4262,46 +4320,6 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.FenceVersion,
 	)
 	return i, err
-}
-
-const latestDeployment = `-- name: LatestDeployment :one
-SELECT c.deployment
-FROM checkpoints AS c
-JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
-WHERE c.stack_id = ?
-ORDER BY u.version DESC
-LIMIT 1
-`
-
-// The deployment of the stack's latest checkpoint, for the delete guard of a
-// checkpoint that predates the stored count. It loads one deployment only.
-func (q *Queries) LatestDeployment(ctx context.Context, stackID string) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, latestDeployment, stackID)
-	var deployment []byte
-	err := row.Scan(&deployment)
-	return deployment, err
-}
-
-const latestResourceCount = `-- name: LatestResourceCount :one
-SELECT (
-    SELECT c.resource_count
-    FROM checkpoints AS c
-    JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
-    WHERE c.stack_id = ?
-    ORDER BY u.version DESC
-    LIMIT 1
-)
-`
-
-// The stored managed resource count of the stack's latest checkpoint. It is
-// NULL when the stack has no checkpoint or when the checkpoint predates the
-// count: the caller then counts that one deployment. It reads only the count
-// column, never the deployment.
-func (q *Queries) LatestResourceCount(ctx context.Context, stackID string) (sql.NullInt64, error) {
-	row := q.db.QueryRowContext(ctx, latestResourceCount, stackID)
-	var resource_count sql.NullInt64
-	err := row.Scan(&resource_count)
-	return resource_count, err
 }
 
 const listAccessTokens = `-- name: ListAccessTokens :many
@@ -5985,68 +6003,11 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 	return items, nil
 }
 
-const listUnsealedStateVersions = `-- name: ListUnsealedStateVersions :many
-SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
-       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
-FROM state_versions
-WHERE sealed = 0 AND status = 'finalized' AND content_key <> ''
-ORDER BY id ASC
-`
-
-// Finalized versions that still hold plain content, ordered by ID, so the
-// seal job seals them in a stable order. A version without content stays
-// out: a pending row names no content yet.
-func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion, error) {
-	rows, err := q.db.QueryContext(ctx, listUnsealedStateVersions)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []StateVersion
-	for rows.Next() {
-		var i StateVersion
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.Status,
-			&i.Serial,
-			&i.Lineage,
-			&i.Md5,
-			&i.Size,
-			&i.ContentKey,
-			&i.Outputs,
-			&i.Force,
-			&i.UploadDigest,
-			&i.UploadExpiresAtMs,
-			&i.Holder,
-			&i.LockID,
-			&i.CreatedAtMs,
-			&i.FinalizedAtMs,
-			&i.RestoredFrom,
-			&i.Sealed,
-			&i.SensitiveMarks,
-			&i.FencedBy,
-			&i.UnlockedWrite,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ?
@@ -6411,9 +6372,9 @@ func (q *Queries) PurgeWorkspace(ctx context.Context, arg PurgeWorkspaceParams) 
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features_json, deployment, saved_at_ms, resource_count,
+    digest, invalid, features_json, deployment, saved_at_ms,
     blob_key, size, blob_size, blob_md5
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, X'', ?, ?, ?, ?, ?)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -6423,7 +6384,6 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     features_json = excluded.features_json,
     deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms,
-    resource_count = excluded.resource_count,
     blob_key = excluded.blob_key,
     size = excluded.size,
     blob_size = excluded.blob_size,
@@ -6439,9 +6399,7 @@ type PutCheckpointParams struct {
 	Digest        []byte
 	Invalid       bool
 	FeaturesJson  string
-	Deployment    []byte
 	SavedAtMs     int64
-	ResourceCount sql.NullInt64
 	BlobKey       sql.NullString
 	Size          sql.NullInt64
 	BlobSize      sql.NullInt64
@@ -6458,9 +6416,7 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.Digest,
 		arg.Invalid,
 		arg.FeaturesJson,
-		arg.Deployment,
 		arg.SavedAtMs,
-		arg.ResourceCount,
 		arg.BlobKey,
 		arg.Size,
 		arg.BlobSize,
@@ -7155,29 +7111,6 @@ func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (i
 	return result.RowsAffected()
 }
 
-const sealStateVersion = `-- name: SealStateVersion :execrows
-UPDATE state_versions
-SET content_key = ?1, outputs = ?2, sealed = 1
-WHERE id = ?3 AND sealed = 0
-`
-
-type SealStateVersionParams struct {
-	ContentKey string
-	Outputs    []byte
-	ID         string
-}
-
-// Moves one unsealed version to its sealed blob with its sealed outputs and
-// marks it sealed. The write matches only an unsealed row, so a retry after
-// a crash succeeds and changes nothing.
-func (q *Queries) SealStateVersion(ctx context.Context, arg SealStateVersionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, sealStateVersion, arg.ContentKey, arg.Outputs, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const setAccessTokenPolicy = `-- name: SetAccessTokenPolicy :execrows
 UPDATE access_token_policy
 SET max_lifetime_ms = CAST(?1 AS INTEGER), inactivity_ms = CAST(?2 AS INTEGER),
@@ -7241,6 +7174,22 @@ func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainState
 		arg.MigratingAtMs,
 	)
 	return err
+}
+
+const setInstallationState = `-- name: SetInstallationState :execrows
+UPDATE installation
+SET state = ?
+WHERE id = 1
+`
+
+// Stores the installation state in the seeded row. It changes nothing when
+// the row is missing.
+func (q *Queries) SetInstallationState(ctx context.Context, state string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setInstallationState, state)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setInstallationStateIf = `-- name: SetInstallationStateIf :execrows
@@ -7935,18 +7884,6 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-const upsertInstallationState = `-- name: UpsertInstallationState :exec
-INSERT INTO installation (id, state)
-VALUES (1, ?)
-ON CONFLICT (id) DO UPDATE SET state = excluded.state
-`
-
-// Stores the installation state, creating the row when it is missing.
-func (q *Queries) UpsertInstallationState(ctx context.Context, state string) error {
-	_, err := q.db.ExecContext(ctx, upsertInstallationState, state)
-	return err
 }
 
 const upsertInventory = `-- name: UpsertInventory :exec
