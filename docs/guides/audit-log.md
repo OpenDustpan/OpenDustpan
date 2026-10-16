@@ -140,8 +140,8 @@ namespace oldest first and answers whether it is valid.
 It needs the same action.
 The check reads the chain in pages of 100 entries, so a large log never
 grows the check without a bound.
-A valid chain answers `{"valid":true,"entriesChecked":N}`.
-A broken chain answers `{"valid":false,"badSequence":S,"entriesChecked":N}`,
+A valid chain answers `{"valid":true,"entriesChecked":N,"entriesUnchained":U}`.
+A broken chain answers `{"valid":false,"badSequence":S,"entriesChecked":N,"entriesUnchained":U}`,
 where `S` is the first entry that does not match.
 
 ```sh
@@ -160,6 +160,119 @@ curl -H "Authorization: token $DUSTPAN_ADMIN_TOKEN" \
 ```
 
 A new namespace audit log starts with the grant of its creator.
+
+## Turn the chain on or off
+
+The hash chain is on by default.
+`--audit-chain` (`DUSTPAN_AUDIT_CHAIN`, or `audit-chain` in the settings file) takes `on` or `off`.
+The server reads the setting once at start.
+No API call and no reload of the settings file changes it while the server runs.
+
+The database keeps the state of the chain: `on` or `off`, when it last changed, and who changed it.
+An installation without that state counts as `on`.
+At start, the server compares its setting with the stored state.
+When they agree, the server starts normally.
+
+When they differ, the server enters maintenance mode and changes nothing yet.
+A person approves the change:
+
+```sh
+opendustpan audit-chain status --server https://dustpan.example
+opendustpan audit-chain approve --server https://dustpan.example
+```
+
+The commands call `GET` and `POST` `/api/server/audit/chain`, the same routes as the console.
+The approval sets the chain to the setting of the server that receives it.
+
+- Turning the chain on needs the action `server:set-audit-chain` (operator family).
+- Turning the chain off needs `server:set-audit-chain` (operator family) and `server:disable-audit-chain` (administration family).
+  A service principal cannot approve it: a person must approve turning the chain off.
+  It also needs a fresh MFA step when the server asks for MFA.
+
+The approval writes an entry in `@server` with the kind `change`, the action `server:set-audit-chain` and the value path `/audit/chain/on` or `/audit/chain/off`.
+Then the server migrates the log in the background.
+It waits 4 seconds, so every instance refuses requests.
+It writes one entry in each scope that holds entries:
+
+- **On:** a start entry with the action `server:start-audit-chain`.
+  Its hash has an empty `prevHash`.
+  Its changes hold `digest`, a running SHA-256 of every earlier entry of the scope, and `entries`, their count.
+  The earlier entries keep their rows.
+- **Off:** an end entry with the action `server:end-audit-chain`, which names the person who approved the change.
+  Its hash links to the entry before it, so the chain ends with a chained entry.
+  Later entries hold an empty `prevHash` and an empty `hash`.
+
+Then the server stores the new state, waits 4 seconds so every instance can see it, and leaves maintenance mode.
+`opendustpan audit-chain status --server https://dustpan.example` shows `the migration runs` until then.
+A migration that stops before it ends keeps the old state, so the change waits for an approval again.
+A restart with the stored setting cancels a waiting change.
+The installation then leaves maintenance mode.
+Run `opendustpan audit-chain approve --server <url>` to approve a waiting change.
+
+While a change waits or migrates, every instance answers 503 on most routes.
+The probes, GET of the metrics route, GET and POST of the audit chain route, the maintenance routes and the console files stay available.
+The server refuses a restore while a change waits, and refuses an approval while a restore runs.
+An instance whose setting differs from the stored state also answers 503 on most routes, also after another instance approved the change.
+The maintenance routes stay available, so an operator can clear stale active work on an instance whose setting differs.
+Restart each instance with the stored setting.
+
+The server computes the digest of a start entry over each earlier entry in order of sequence.
+For each entry, the next digest is the hex SHA-256 of four parts joined with the unit separator (0x1F).
+The parts are the previous digest, the entry hash, the stored `prevHash` and the stored `hash`.
+The previous digest of the first entry is the empty string.
+The entry hash is the hash of the stored fields of the entry with an empty `prevHash`.
+
+The hash takes no key: any installation can compute it again from the stored fields.
+Each entry of a namespace holds `fenceVersion`, the failover version of the namespace when the server appended it.
+The hash covers it, so a verifier can see where a forced failover forked the chain of a namespace.
+Entries in `@server`, and entries from before the field, hold 0, and the audit API omits the field for them.
+A verifier who kept a digest outside the database can compute it again from the old rows.
+So the verifier can prove that the old rows did not change after the chain started.
+
+The check of a scope starts at its last start entry, or at sequence 1 when the scope holds none.
+From there, each entry holds a hash that matches its fields and links to the entry before it, with no gap.
+The chain goes up to now, or up to an end entry.
+After an end entry, entries hold no hash.
+A start entry also checks its digest against the earlier entries.
+With the chain on, a scope must not end after an end entry.
+With the chain off, a scope without a chain is valid only when its first entry comes after the time the chain went off.
+A row below sequence 1 fails the check.
+The store keeps the times of a scope in order.
+An entry whose time is earlier than the last entry of its scope takes the time of that entry.
+The check answers `entriesUnchained`: the count of entries without a hash.
+The check cannot prove that an entry before a start entry, or after an end entry, is unchanged.
+Signed checkpoints (see below) and the digest cover that case.
+
+A backup does not carry the state of the chain.
+A restore keeps the state of the target installation.
+After the swap, the server compares the restored log with that state.
+With the chain on, each scope must end with a chained entry that is not an end entry.
+With the chain off, each scope must end with an entry without a hash, or with an end entry.
+When the log agrees, the server checks the chain of every scope.
+When that check fails, the restore still succeeds.
+The server then logs an error and adds one to `dustpan_audit_restore_check_failures_total`.
+When the log does not agree, the installation stays in maintenance mode until a person approves the change.
+The approval runs the same migration on the restored log.
+A restore that stops after the swap gets the comparison at the next start.
+A restore trusts the audit log in the backup: signed checkpoints (see below) protect a backup.
+
+The server checks the chain of every namespace and of `@server` at start and every hour.
+`dustpan_audit_chain_invalid` holds the count of scopes whose check failed.
+
+```yaml
+      - alert: DustpanAuditChainInvalid
+        expr: dustpan_audit_chain_invalid > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: An OpenDustpan audit chain does not match
+      - alert: DustpanAuditRestoreCheckFailed
+        expr: increase(dustpan_audit_restore_check_failures_total[1h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: A restored OpenDustpan audit log does not match its chain
+```
 
 ## What the chain protects against
 

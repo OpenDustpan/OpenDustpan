@@ -307,6 +307,7 @@ func testEntry() audit.Entry {
 		Changes:  nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
-		ObjectID: "",
+		ObjectID:     "",
+		FenceVersion: 0,
 	}
 }
