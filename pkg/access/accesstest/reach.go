@@ -1,22 +1,26 @@
 package accesstest
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // reachStore is what the reach cases need: the grants and roles, the
-// subjects of each caller, the principals, and the namespaces whose fences
-// the writes check. Both SQL stores are one.
+// subjects of each caller, the principals, the units, and the namespaces
+// whose fences the writes check. Both SQL stores are one.
 type reachStore interface {
 	access.Store
 	access.Callers
+	access.Units
 	access.PrincipalNamespaces
 	access.ServicePrincipals
 	namespace.Store
@@ -36,6 +40,12 @@ func reachCases() []struct {
 	}{
 		{name: "service principals list every service", test: testListServicePrincipals},
 		{name: "reach follows direct, group and act-as grants", test: testReach},
+		{name: "reach follows act-as edges past the first hop", test: testReachChain},
+		{name: "a namespace token grant reaches the principals of the namespace", test: testReachNamespaceTokens},
+		{name: "grants answer on the objects they hold", test: testReachHierarchy},
+		{name: "a grant on a deleted unit gives nothing", test: testReachDeletedUnit},
+		{name: "a grant on a collection with another stable ID gives nothing", test: testReachStaleCollection},
+		{name: "a disabled principal is no act-as target", test: testReachDisabled},
 		{name: "reach of each operator action", test: testReachOperators},
 		{name: "reach covers holds each action on each object", test: testReachCovers},
 		{name: "reach stops on a cycle", test: testReachCycle},
@@ -58,7 +68,37 @@ func reachStores(t *testing.T, s access.Store) reachStore {
 
 // reachConfig reads the reach dependencies from s.
 func reachConfig(s reachStore) access.ReachConfig {
-	return access.ReachConfig{Grants: s, Roles: s, Callers: s, Principals: s, Services: s}
+	return access.ReachConfig{
+		Grants: s, Roles: s, Callers: s, Principals: s, Services: s,
+		Collections: testCollections(), Units: s,
+	}
+}
+
+// reachCollections maps the wire form of a unit to its collection. Each
+// named collection has the stable ID col-<name>.
+type reachCollections map[string]string
+
+// testCollections returns the collections of the reach cases: the Pulumi
+// stack web/prod is in the collection payments of the namespace acme, and
+// no other unit is in a collection.
+func testCollections() reachCollections {
+	return reachCollections{"pulumi:acme/web/prod": "payments"}
+}
+
+func (m reachCollections) CollectionOf(_ context.Context, unit identity.Object) (string, bool, error) {
+	name, ok := m[unit.String()]
+
+	return name, ok, nil
+}
+
+func (m reachCollections) CollectionID(_ context.Context, col identity.Object) (string, bool, error) {
+	for _, name := range m {
+		if name == col.CollectionName() {
+			return "col-" + name, true, nil
+		}
+	}
+
+	return "", false, nil
 }
 
 // mustCreatePerson stores a person with the ID id and the subject.
@@ -68,7 +108,7 @@ func mustCreatePerson(t *testing.T, s reachStore, id, subject string) {
 	p := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Subject: subject, DisplayName: "",
 		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
-		DisabledAt: time.Time{},
+		DisabledAt: time.Time{}, BreakGlass: false,
 	}
 	if err := s.CreatePrincipal(t.Context(), p, entry()); err != nil {
 		t.Fatalf("create principal %q: %v", subject, err)
@@ -82,7 +122,7 @@ func mustCreateService(t *testing.T, s reachStore, id, subject string) {
 	p := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Subject: subject, DisplayName: "",
 		Kind: principal.KindService, Source: principal.SourceLocal, Namespace: "", GroupCount: 0,
-		DisabledAt: time.Time{},
+		DisabledAt: time.Time{}, BreakGlass: false,
 	}
 	if err := s.CreatePrincipal(t.Context(), p, entry()); err != nil {
 		t.Fatalf("create principal %q: %v", subject, err)
@@ -96,7 +136,7 @@ func mustCreateBot(t *testing.T, s reachStore, id, subject string, ns namespace.
 	p := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Subject: subject, DisplayName: "",
 		Kind: principal.KindService, Source: principal.SourceLocal, Namespace: ns, GroupCount: 0,
-		DisabledAt: time.Time{},
+		DisabledAt: time.Time{}, BreakGlass: false,
 	}
 
 	fence := fenceOf(t, s, ns)
@@ -138,6 +178,32 @@ func reachOf(t *testing.T, s reachStore, id string) access.Reach {
 	}
 
 	return r
+}
+
+// reachHas reports whether the reach r holds action on obj, and fails t on
+// a resolver error.
+func reachHas(t *testing.T, r access.Reach, action identity.Action, obj identity.Object) bool {
+	t.Helper()
+
+	got, err := r.Has(t.Context(), action, obj)
+	if err != nil {
+		t.Fatalf("reach holds %s on %q: %v", action, obj.String(), err)
+	}
+
+	return got
+}
+
+// reachCovers reports whether the reach a covers the reach b, and fails t
+// on a resolver error.
+func reachCovers(t *testing.T, a, b access.Reach) bool {
+	t.Helper()
+
+	got, err := a.Covers(t.Context(), b)
+	if err != nil {
+		t.Fatalf("covers: %v", err)
+	}
+
+	return got
 }
 
 func testListServicePrincipals(t *testing.T, s access.Store) {
@@ -226,8 +292,8 @@ func testReach(t *testing.T, s access.Store) {
 		want   bool
 	}{
 		{
-			name: "an account administrator reaches an operator action through its act-as edge",
-			id:   "prn-account", action: identity.ActionServerBackup, obj: server, want: true,
+			name: "an account administrator does not reach an operator action through its act-as edge",
+			id:   "prn-account", action: identity.ActionServerBackup, obj: server, want: false,
 		},
 		{
 			name: "an account administrator keeps its administration actions",
@@ -264,10 +330,432 @@ func testReach(t *testing.T, s access.Store) {
 	for i := range cases {
 		tc := &cases[i]
 
-		if got := reachOf(t, rs, tc.id).Has(tc.action, tc.obj); got != tc.want {
+		if got := reachHas(t, reachOf(t, rs, tc.id), tc.action, tc.obj); got != tc.want {
 			t.Errorf("%s: reach of %q holds %s on %q = %t, want %t",
 				tc.name, tc.id, tc.action, tc.obj.String(), got, tc.want)
 		}
+	}
+}
+
+// testReachChain follows act-as edges past the first hop: alice manages
+// the tokens of the middle service principal, which manages the tokens of
+// the last one, which holds a grant on the namespace.
+func testReachChain(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	acme := identity.NamespaceObject("acme")
+
+	mustCreatePerson(t, rs, "prn-alice", "alice")
+	mustCreatePerson(t, rs, "prn-outsider", "outsider")
+	mustCreateService(t, rs, "prn-middle", "ci-middle")
+	mustCreateService(t, rs, "prn-last", "ci-last")
+
+	mustCreateGrant(t, rs, newGrant(
+		"grt-first", principalSubject("prn-alice"), access.RoleTokenManager,
+		identity.PrincipalObject("prn-middle"),
+	))
+	mustCreateGrant(t, rs, newGrant(
+		"grt-second", principalSubject("prn-middle"), access.RoleTokenManager,
+		identity.PrincipalObject("prn-last"),
+	))
+	mustCreateGrant(t, rs, newGrant("grt-viewer", principalSubject("prn-last"), access.RoleViewer, acme))
+
+	cases := []struct {
+		id     string
+		action identity.Action
+		obj    identity.Object
+		name   string
+		want   bool
+	}{
+		{
+			name: "a principal reaches past the first hop", id: "prn-alice",
+			action: identity.ActionNamespaceRead, obj: acme, want: true,
+		},
+		{
+			name: "the middle of the chain reaches the end", id: "prn-middle",
+			action: identity.ActionNamespaceRead, obj: acme, want: true,
+		},
+		{
+			name: "the end reaches its own grant", id: "prn-last",
+			action: identity.ActionNamespaceRead, obj: acme, want: true,
+		},
+		{
+			name: "an outsider misses the chain", id: "prn-outsider",
+			action: identity.ActionNamespaceRead, obj: acme, want: false,
+		},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+
+		if got := reachHas(t, reachOf(t, rs, tc.id), tc.action, tc.obj); got != tc.want {
+			t.Errorf("%s: reach of %q holds %s on %q = %t, want %t",
+				tc.name, tc.id, tc.action, tc.obj.String(), got, tc.want)
+		}
+	}
+}
+
+// testReachNamespaceTokens follows a namespace act-as edge: a grant of a
+// role with namespace:manage-principal-tokens on a namespace reaches the
+// service principals of that namespace and their actions.
+func testReachNamespaceTokens(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	acme := identity.NamespaceObject("acme")
+	bot := identity.PrincipalObject("prn-bot")
+
+	mustCreateRole(t, s, newRole(
+		"rol-ns-tokens", "namespace token manager", identity.ActionNamespaceManagePrincipalTokens,
+	))
+	mustCreatePerson(t, rs, "prn-manager", "manager")
+	mustCreatePerson(t, rs, "prn-outsider", "outsider")
+	mustCreateBot(t, rs, "prn-bot", "ci-acme", "acme")
+
+	mustCreateGrant(t, rs, newGrant("grt-manager", principalSubject("prn-manager"), "rol-ns-tokens", acme))
+	mustCreateGrant(t, rs, newGrant("grt-bot", principalSubject("prn-bot"), access.RoleViewer, acme))
+
+	cases := []struct {
+		id     string
+		action identity.Action
+		obj    identity.Object
+		name   string
+		want   bool
+	}{
+		{
+			name: "a token grant on a namespace reaches the principals of the namespace",
+			id:   "prn-manager", action: identity.ActionPrincipalManageTokens, obj: bot, want: true,
+		},
+		{
+			name: "a token grant on a namespace reaches through the principals",
+			id:   "prn-manager", action: identity.ActionNamespaceRead, obj: acme, want: true,
+		},
+		{
+			name: "a token grant on a namespace gives only what the principals hold",
+			id:   "prn-manager", action: identity.ActionUnitWrite, obj: acme, want: false,
+		},
+		{
+			name: "an outsider misses the principals of the namespace",
+			id:   "prn-outsider", action: identity.ActionPrincipalManageTokens, obj: bot, want: false,
+		},
+		{
+			name: "an outsider misses the grants of the principals",
+			id:   "prn-outsider", action: identity.ActionNamespaceRead, obj: acme, want: false,
+		},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+
+		if got := reachHas(t, reachOf(t, rs, tc.id), tc.action, tc.obj); got != tc.want {
+			t.Errorf("%s: reach of %q holds %s on %q = %t, want %t",
+				tc.name, tc.id, tc.action, tc.obj.String(), got, tc.want)
+		}
+	}
+}
+
+// testReachHierarchy checks the chain of a grant: a grant on the
+// installation answers on a namespace, a collection and a unit inside it,
+// a grant on a namespace answers on a collection and a unit inside it, and
+// a grant on a collection answers on a unit inside it and on nothing else.
+func testReachHierarchy(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	acme := identity.NamespaceObject("acme")
+	beta := identity.NamespaceObject("beta")
+	payments := identity.CollectionObject("acme", "payments").WithCollectionID("col-payments")
+
+	mustCreatePerson(t, rs, "prn-site", "site")
+	mustCreatePerson(t, rs, "prn-ns", "ns")
+	mustCreatePerson(t, rs, "prn-coll", "coll")
+	mustCreatePerson(t, rs, "prn-outsider", "outsider")
+
+	mustCreateGrant(
+		t,
+		rs,
+		newGrant("grt-site", principalSubject("prn-site"), access.RoleViewer, identity.ServerObject()),
+	)
+	mustCreateGrant(t, rs, newGrant("grt-ns", principalSubject("prn-ns"), access.RoleViewer, acme))
+	mustCreateGrant(t, rs, newGrant("grt-coll", principalSubject("prn-coll"), access.RoleViewer, payments))
+
+	web, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	api, err := identity.UnitObject("pulumi", "acme", "api/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	other, err := identity.UnitObject("pulumi", "beta", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	cases := []struct {
+		id     string
+		action identity.Action
+		obj    identity.Object
+		name   string
+		want   bool
+	}{
+		{
+			name: "a grant on the installation answers on a namespace",
+			id:   "prn-site", action: identity.ActionNamespaceRead, obj: acme, want: true,
+		},
+		{
+			name: "a grant on the installation answers on a unit",
+			id:   "prn-site", action: identity.ActionUnitRead, obj: web, want: true,
+		},
+		{
+			name: "a grant on the installation answers on a collection",
+			id:   "prn-site", action: identity.ActionCollectionRead, obj: payments, want: true,
+		},
+		{
+			name: "a grant on a namespace answers on a unit inside it",
+			id:   "prn-ns", action: identity.ActionUnitRead, obj: web, want: true,
+		},
+		{
+			name: "a grant on a namespace answers on a collection inside it",
+			id:   "prn-ns", action: identity.ActionCollectionRead, obj: payments, want: true,
+		},
+		{
+			name: "a grant on a namespace misses a unit outside it",
+			id:   "prn-ns", action: identity.ActionUnitRead, obj: other, want: false,
+		},
+		{
+			name: "a grant on a collection answers on a unit inside it",
+			id:   "prn-coll", action: identity.ActionUnitRead, obj: web, want: true,
+		},
+		{
+			name: "a grant on a collection answers on itself",
+			id:   "prn-coll", action: identity.ActionCollectionRead, obj: payments, want: true,
+		},
+		{
+			name: "a grant on a collection misses a unit outside it",
+			id:   "prn-coll", action: identity.ActionUnitRead, obj: api, want: false,
+		},
+		{
+			name: "a grant on a collection misses another namespace",
+			id:   "prn-coll", action: identity.ActionNamespaceRead, obj: beta, want: false,
+		},
+		{
+			name: "an outsider misses the collection",
+			id:   "prn-outsider", action: identity.ActionUnitRead, obj: web, want: false,
+		},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+
+		if got := reachHas(t, reachOf(t, rs, tc.id), tc.action, tc.obj); got != tc.want {
+			t.Errorf("%s: reach of %q holds %s on %q = %t, want %t",
+				tc.name, tc.id, tc.action, tc.obj.String(), got, tc.want)
+		}
+	}
+}
+
+// testReachDeletedUnit checks that a grant on a deleted unit gives nothing:
+// the grant row stays, but the unit has no stable ID, so the reach leaves
+// the grant out. A grant on a unit that exists still answers.
+func testReachDeletedUnit(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	ctx := t.Context()
+
+	ws, ok := any(s).(interface {
+		access.Units
+		namespace.Store
+		CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
+		DeleteWorkspace(ctx context.Context, ref workspace.Ref, fence namespace.Fence, d inventory.Deletion) error
+	})
+	if !ok {
+		t.Skip("the store keeps no workspaces")
+	}
+
+	mustCreatePerson(t, rs, "prn-reader", "reader")
+
+	live := workspaceObject(t, "live", "ws-live")
+	gone := workspaceObject(t, "gone", "ws-gone")
+
+	mustCreateWorkspace(t, s, ws, "live", "ws-live")
+	mustCreateWorkspace(t, s, ws, "gone", "ws-gone")
+	mustCreateGrant(t, rs, newGrant("grt-live", principalSubject("prn-reader"), access.RoleViewer, live))
+	mustCreateGrant(t, rs, newGrant("grt-gone", principalSubject("prn-reader"), access.RoleViewer, gone))
+
+	name, err := workspace.ParseName("gone")
+	if err != nil {
+		t.Fatalf("workspace name: %v", err)
+	}
+
+	deleted := entry()
+	deleted.Namespace, deleted.Action, deleted.Object = "acme", "unit:manage", "opentofu:acme/gone"
+	deletion := inventory.Deletion{Entry: deleted, PurgeAfter: deleted.At.Add(time.Hour)}
+
+	deleteErr := ws.DeleteWorkspace(
+		ctx,
+		workspace.Ref{Namespace: "acme", Name: name},
+		fenceOf(t, s, "acme"),
+		deletion,
+	)
+	if deleteErr != nil {
+		t.Fatalf("delete workspace: %v", deleteErr)
+	}
+
+	if _, err := s.GetGrant(ctx, "grt-gone"); err != nil {
+		t.Fatalf("grant of a deleted unit: %v, want the row to stay", err)
+	}
+
+	if got := reachHas(t, reachOf(t, rs, "prn-reader"), identity.ActionUnitRead, live); !got {
+		t.Errorf("reach holds %s on the live unit = %t, want true", identity.ActionUnitRead, got)
+	}
+
+	if got := reachHas(t, reachOf(t, rs, "prn-reader"), identity.ActionUnitRead, gone); got {
+		t.Errorf("reach holds %s on the deleted unit = %t, want false", identity.ActionUnitRead, got)
+	}
+}
+
+// workspaceObject returns the OpenTofu unit called name in the namespace
+// acme with the stable ID id.
+func workspaceObject(t *testing.T, name, id string) identity.Object {
+	t.Helper()
+
+	obj, err := identity.UnitObject("opentofu", "acme", name)
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	return obj.WithUnitID(id)
+}
+
+// mustCreateWorkspace stores the OpenTofu workspace called name with the
+// stable ID id in the namespace acme.
+func mustCreateWorkspace(t *testing.T, s access.Store, ws interface {
+	CreateWorkspace(ctx context.Context, w workspace.Workspace, fence namespace.Fence) error
+}, name, id string,
+) {
+	t.Helper()
+
+	parsed, err := workspace.ParseName(name)
+	if err != nil {
+		t.Fatalf("workspace name: %v", err)
+	}
+
+	w := workspace.Workspace{
+		CreatedAt: at(0), UpdatedAt: at(0),
+		Lock: workspace.Lock{LockedAt: at(0), ID: "", Holder: "", Reason: ""},
+		ID:   workspace.ID(id), Ref: workspace.Ref{Namespace: "acme", Name: parsed},
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, Revision: 1,
+	}
+
+	if err := ws.CreateWorkspace(t.Context(), w, fenceOf(t, s, "acme")); err != nil {
+		t.Fatalf("create workspace %q: %v", name, err)
+	}
+}
+
+// testReachStaleCollection checks that a grant on a collection with another
+// stable ID gives nothing: the collection was deleted and created again
+// under its name, so it is a new collection. The grant row stays.
+func testReachStaleCollection(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	ctx := t.Context()
+
+	mustCreatePerson(t, rs, "prn-reader", "reader")
+
+	old := identity.CollectionObject("acme", "payments").WithCollectionID("col-old")
+	current := identity.CollectionObject("acme", "payments").WithCollectionID("col-payments")
+
+	mustCreateGrant(t, rs, newGrant("grt-old", principalSubject("prn-reader"), access.RoleViewer, old))
+
+	if _, err := s.GetGrant(ctx, "grt-old"); err != nil {
+		t.Fatalf("grant on the old collection: %v, want the row to stay", err)
+	}
+
+	if got := reachHas(t, reachOf(t, rs, "prn-reader"), identity.ActionCollectionRead, current); got {
+		t.Errorf("reach holds %s on the new collection = %t, want false", identity.ActionCollectionRead, got)
+	}
+}
+
+// disabledAs answers the record rec for the principal id and s otherwise,
+// so a test can disable a principal that the store cannot disable.
+type disabledAs struct {
+	access.PrincipalNamespaces
+
+	id  string
+	rec principal.Principal
+}
+
+func (f disabledAs) GetPrincipal(ctx context.Context, id string) (principal.Principal, error) {
+	if id == f.id {
+		return f.rec, nil
+	}
+
+	return f.PrincipalNamespaces.GetPrincipal(ctx, id)
+}
+
+// testReachDisabled checks that a disabled principal is no act-as target: a
+// holder of principal:manage-tokens on it gets none of its grants. The
+// disabled principal itself keeps its own grants.
+func testReachDisabled(t *testing.T, s access.Store) {
+	t.Helper()
+
+	rs := reachStores(t, s)
+	ctx := t.Context()
+	acme := identity.NamespaceObject("acme")
+
+	mustCreatePerson(t, rs, "prn-holder", "holder")
+	mustCreateService(t, rs, "prn-deploy", "ci-deploy")
+
+	mustCreateGrant(t, rs, newGrant(
+		"grt-manage", principalSubject("prn-holder"), access.RoleTokenManager,
+		identity.PrincipalObject("prn-deploy"),
+	))
+	mustCreateGrant(t, rs, newGrant("grt-viewer", principalSubject("prn-deploy"), access.RoleViewer, acme))
+
+	rec, err := rs.GetPrincipal(ctx, "prn-deploy")
+	if err != nil {
+		t.Fatalf("get principal: %v", err)
+	}
+
+	rec.DisabledAt = at(3)
+
+	cfg := reachConfig(rs)
+	cfg.Principals = disabledAs{PrincipalNamespaces: rs, id: "prn-deploy", rec: rec}
+
+	holder, err := access.ReachOf(ctx, cfg, "prn-holder")
+	if err != nil {
+		t.Fatalf("reach of the holder: %v", err)
+	}
+
+	if got := reachHas(t, holder, identity.ActionNamespaceRead, acme); got {
+		t.Errorf("reach of the holder holds %s on %q = %t, want false",
+			identity.ActionNamespaceRead, acme.String(), got)
+	}
+
+	enabled, err := access.ReachOf(ctx, reachConfig(rs), "prn-holder")
+	if err != nil {
+		t.Fatalf("reach of the holder with the principal enabled: %v", err)
+	}
+
+	if got := reachHas(t, enabled, identity.ActionNamespaceRead, acme); !got {
+		t.Errorf("reach of the holder with the principal enabled holds %s on %q = %t, want true",
+			identity.ActionNamespaceRead, acme.String(), got)
+	}
+
+	target, err := access.ReachOf(ctx, cfg, "prn-deploy")
+	if err != nil {
+		t.Fatalf("reach of the disabled principal: %v", err)
+	}
+
+	if got := reachHas(t, target, identity.ActionNamespaceRead, acme); !got {
+		t.Errorf("reach of the disabled principal holds %s on %q = %t, want true",
+			identity.ActionNamespaceRead, acme.String(), got)
 	}
 }
 
@@ -330,7 +818,7 @@ func testReachOperators(t *testing.T, s access.Store) {
 	}
 
 	for _, tc := range cases {
-		if got := reaches[tc.role].Has(tc.action, server); got != tc.want {
+		if got := reachHas(t, reaches[tc.role], tc.action, server); got != tc.want {
 			t.Errorf("reach of %q holds %s = %t, want %t", tc.role, tc.action, got, tc.want)
 		}
 	}
@@ -381,8 +869,8 @@ func testReachCovers(t *testing.T, s access.Store) {
 		{name: "every reach covers an empty reach", a: viewer, b: empty, want: true},
 		{name: "an empty reach covers nothing else", a: empty, b: viewer, want: false},
 		{
-			name: "an account administrator covers an operator through its act-as edge",
-			a:    account, b: direct, want: true,
+			name: "an account administrator does not cover an operator",
+			a:    account, b: direct, want: false,
 		},
 		{
 			name: "an operator does not cover an account administrator",
@@ -390,8 +878,10 @@ func testReachCovers(t *testing.T, s access.Store) {
 		},
 	}
 
-	for _, tc := range cases {
-		if got := tc.a.Covers(tc.b); got != tc.want {
+	for i := range cases {
+		tc := &cases[i]
+
+		if got := reachCovers(t, tc.a, tc.b); got != tc.want {
 			t.Errorf("%s: covers = %t, want %t", tc.name, got, tc.want)
 		}
 	}
@@ -447,15 +937,15 @@ func testReachCycle(t *testing.T, s access.Store) {
 	for i := range cases {
 		tc := &cases[i]
 
-		if got := reachOf(t, rs, tc.id).Has(tc.action, tc.obj); got != tc.want {
+		if got := reachHas(t, reachOf(t, rs, tc.id), tc.action, tc.obj); got != tc.want {
 			t.Errorf("reach of %q holds %s on %q = %t, want %t",
 				tc.id, tc.action, tc.obj.String(), got, tc.want)
 		}
 	}
 
-	if left, right := reachOf(t, rs, "prn-left"), reachOf(t, rs, "prn-right"); !left.Covers(right) ||
-		!right.Covers(left) {
+	left, right := reachOf(t, rs, "prn-left"), reachOf(t, rs, "prn-right")
+	if !reachCovers(t, left, right) || !reachCovers(t, right, left) {
 		t.Errorf("the two sides of a cycle cover each other = %t, %t; want true, true",
-			left.Covers(right), right.Covers(left))
+			reachCovers(t, left, right), reachCovers(t, right, left))
 	}
 }

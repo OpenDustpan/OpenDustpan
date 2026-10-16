@@ -22,22 +22,35 @@ type ServicePrincipals interface {
 }
 
 // ReachConfig holds the dependencies of ReachOf. Grants, Roles, Callers,
-// Principals and Services are required.
+// Principals and Services are required. Collections answers the collection
+// of a unit: nil means no unit is in a collection, so no grant on a
+// collection gives anything. Units resolves the stable ID of a unit: nil
+// means no grant on a unit gives anything.
 type ReachConfig struct {
-	Grants     GrantLookups
-	Roles      RoleStore
-	Callers    Callers
-	Principals PrincipalNamespaces
-	Services   ServicePrincipals
+	Grants      GrantLookups
+	Roles       RoleStore
+	Callers     Callers
+	Principals  PrincipalNamespaces
+	Services    ServicePrincipals
+	Collections UnitCollections
+	Units       Units
 }
 
 // Reach is the set of actions on objects that one principal can do: the
 // union of the actions of its grants, of the grants of its groups, and of
 // the grants of each service principal that it can act as. An act-as edge
-// is a hold of principal:manage-tokens on a service principal. The reach
-// follows those edges transitively and stops on a cycle.
+// is a hold of principal:manage-tokens on a service principal, held
+// directly, on the installation, or through
+// namespace:manage-principal-tokens on the namespace of the principal. The
+// reach follows the direct and namespace edges transitively and stops on a
+// cycle. An installation-wide edge reaches a service principal only when
+// the reach without it already covers the reach of that principal, so an
+// account administrator holds no operator action through it.
 type Reach struct {
-	entries map[string]*reachEntry
+	entries     map[string]*reachEntry
+	collections UnitCollections
+	units       Units
+	principals  PrincipalNamespaces
 }
 
 // reachEntry is the actions that a reach holds on one object.
@@ -70,40 +83,30 @@ func reachTarget(obj identity.Object) string {
 	return obj.String()
 }
 
-// Has reports whether r holds action on obj: on obj itself, on the
-// installation, or on the namespace of obj for a namespace, a collection
-// or a unit inside it. A grant on the installation covers every object. A
-// unit or a collection matches by its stable ID, so an object with none
-// matches no grant on one.
-func (r Reach) Has(action identity.Action, obj identity.Object) bool {
-	if len(r.entries) == 0 {
-		return false
+// Has reports whether r holds action on obj: on obj itself or on an object
+// that holds it, along the chain unit, collection, namespace,
+// installation, as the authorizer reads it. A grant on a deleted unit or on
+// a collection with another stable ID gives nothing. It returns an error
+// only when a resolver fails.
+func (r Reach) Has(ctx context.Context, action identity.Action, obj identity.Object) (bool, error) {
+	chain, err := r.chain(ctx, obj)
+	if err != nil {
+		return false, err
 	}
 
-	if r.entryHas(reachTarget(obj), action) {
-		return true
+	for i := range chain {
+		if r.entryHas(reachTarget(chain[i]), action) {
+			return true, nil
+		}
 	}
 
-	if r.entryHas(identity.ServerObject().String(), action) {
-		return true
-	}
-
-	ns := obj.Namespace()
-	if ns == "" || obj.IsPrincipal() {
-		return false
-	}
-
-	kind, _ := KindOf(obj)
-	if kind != ObjectNamespace && kind != ObjectCollection && kind != ObjectUnit {
-		return false
-	}
-
-	return r.entryHas(identity.NamespaceObject(ns).String(), action)
+	return false, nil
 }
 
 // Covers reports whether r holds every action of other on every object of
-// other. An empty reach covers only another empty reach.
-func (r Reach) Covers(other Reach) bool {
+// other. An empty reach covers only another empty reach. It returns an
+// error only when a resolver fails.
+func (r Reach) Covers(ctx context.Context, other Reach) (bool, error) {
 	for key := range other.entries {
 		e := other.entries[key]
 		if e == nil {
@@ -111,17 +114,23 @@ func (r Reach) Covers(other Reach) bool {
 		}
 
 		for action := range e.actions {
-			if !r.Has(action, e.object) {
-				return false
+			holds, err := r.Has(ctx, action, e.object)
+			if err != nil {
+				return false, err
+			}
+
+			if !holds {
+				return false, nil
 			}
 		}
 	}
 
-	return true
+	return true, nil
 }
 
-// ActionsOn returns the sorted actions that r holds on obj.
-func (r Reach) ActionsOn(obj identity.Object) []identity.Action {
+// ActionsOn returns the sorted actions that r holds on obj. It returns an
+// error only when a resolver fails.
+func (r Reach) ActionsOn(ctx context.Context, obj identity.Object) ([]identity.Action, error) {
 	seen := map[identity.Action]bool{}
 
 	var out []identity.Action
@@ -133,7 +142,12 @@ func (r Reach) ActionsOn(obj identity.Object) []identity.Action {
 		}
 
 		for action := range e.actions {
-			if !seen[action] && r.Has(action, obj) {
+			holds, err := r.Has(ctx, action, obj)
+			if err != nil {
+				return nil, err
+			}
+
+			if !seen[action] && holds {
 				seen[action] = true
 				out = append(out, action)
 			}
@@ -142,7 +156,7 @@ func (r Reach) ActionsOn(obj identity.Object) []identity.Action {
 
 	sortActions(out)
 
-	return out
+	return out, nil
 }
 
 // entryHas reports whether the entry under key holds action. A missing or nil
@@ -178,12 +192,19 @@ func reachAdd(r *Reach, obj identity.Object, action identity.Action) {
 // of its grants, of the grants of its groups, and of the grants of each
 // service principal that it can act as through principal:manage-tokens,
 // followed transitively. An unknown or deleted principal has an empty
-// reach. A grant whose role no longer exists gives nothing.
+// reach. A grant whose role no longer exists gives nothing, as does a grant
+// on a deleted unit or on a collection with another stable ID.
+//
+// A direct act-as edge and a namespace edge reach every target. An
+// installation-wide edge reaches a service principal only when the reach
+// without it already covers the reach of that principal, and the check
+// repeats until nothing changes. A disabled principal is never an act-as
+// target: its tokens do not work.
 //
 // An act-as edge comes from a grant that holds principal:manage-tokens on
 // a service principal directly, from a grant that holds it on the
-// installation, which reaches every service principal, or from a grant
-// that holds namespace:manage-principal-tokens on a namespace, which
+// installation, which reaches each covered service principal, or from a
+// grant that holds namespace:manage-principal-tokens on a namespace, which
 // reaches the service principals of that namespace. Trust rules will add
 // another edge source at trustRuleTargets.
 func ReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
@@ -200,26 +221,52 @@ func ReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
 		return Reach{}, fmt.Errorf("%w: services", ErrMissingDependency)
 	}
 
-	w := reachWalker{
-		cfg: cfg, visited: map[string]bool{}, queued: map[string]bool{}, queue: nil,
-		grants: map[string]Grant{}, roles: map[string]Role{},
-		namespaceBots: map[namespace.Name][]string{}, namespaces: map[namespace.Name]bool{},
-		installation: false, installationID: false,
-	}
-
+	w := newReachWalker(cfg, id)
 	w.enqueue(id)
 
-	for len(w.queue) > 0 {
-		next := w.queue[0]
-		w.queue = w.queue[1:]
+	if err := w.close(ctx); err != nil {
+		return Reach{}, err
+	}
 
-		if err := w.visit(ctx, next); err != nil {
-			return Reach{}, err
-		}
+	current, err := w.finish(ctx)
+	if err != nil {
+		return Reach{}, err
+	}
 
-		if err := w.expand(ctx); err != nil {
-			return Reach{}, err
-		}
+	if !w.installation {
+		return current, nil
+	}
+
+	return w.absorbInstallation(ctx, current)
+}
+
+// emptyReach returns the reach with no entries over cfg.
+func emptyReach(cfg ReachConfig) Reach {
+	return Reach{
+		entries:     map[string]*reachEntry{},
+		collections: cfg.Collections,
+		units:       cfg.Units,
+		principals:  cfg.Principals,
+	}
+}
+
+// baseReachOf returns the reach of id through direct, group, explicit and
+// namespace edges only: no installation-wide edge. An unknown, deleted or
+// disabled principal has an empty reach.
+func baseReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
+	w := newReachWalker(cfg, id)
+
+	rec, err := cfg.Principals.GetPrincipal(ctx, id)
+	if err != nil && !errors.Is(err, principal.ErrNotFound) {
+		return Reach{}, fmt.Errorf("read principal %q: %w", id, err)
+	}
+
+	if err == nil && rec.DisabledAt.IsZero() {
+		w.enqueue(id)
+	}
+
+	if err := w.close(ctx); err != nil {
+		return Reach{}, err
 	}
 
 	return w.finish(ctx)
@@ -227,16 +274,28 @@ func ReachOf(ctx context.Context, cfg ReachConfig, id string) (Reach, error) {
 
 // reachWalker collects the grants of a reach breadth first.
 type reachWalker struct {
-	cfg            ReachConfig
-	queue          []string
-	visited        map[string]bool
-	queued         map[string]bool
-	grants         map[string]Grant
-	roles          map[string]Role
-	namespaceBots  map[namespace.Name][]string
-	namespaces     map[namespace.Name]bool
-	installation   bool
-	installationID bool
+	cfg           ReachConfig
+	root          string
+	queue         []string
+	visited       map[string]bool
+	queued        map[string]bool
+	disabled      map[string]bool
+	grants        map[string]Grant
+	roles         map[string]Role
+	namespaceBots map[namespace.Name][]string
+	namespaces    map[namespace.Name]bool
+	installation  bool
+}
+
+// newReachWalker returns a walker over cfg for the principal root.
+func newReachWalker(cfg ReachConfig, root string) *reachWalker {
+	return &reachWalker{
+		cfg: cfg, root: root, queue: nil,
+		visited: map[string]bool{}, queued: map[string]bool{}, disabled: map[string]bool{},
+		grants: map[string]Grant{}, roles: map[string]Role{},
+		namespaceBots: map[namespace.Name][]string{}, namespaces: map[namespace.Name]bool{},
+		installation: false,
+	}
 }
 
 // enqueue adds id to the queue once.
@@ -249,8 +308,29 @@ func (w *reachWalker) enqueue(id string) {
 	w.queue = append(w.queue, id)
 }
 
+// close visits each queued principal and queues its act-as targets until
+// nothing is left.
+func (w *reachWalker) close(ctx context.Context) error {
+	for len(w.queue) > 0 {
+		next := w.queue[0]
+		w.queue = w.queue[1:]
+
+		if err := w.visit(ctx, next); err != nil {
+			return err
+		}
+
+		if err := w.expand(ctx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // visit adds the grants of one principal and queues the principals that
-// its new grants can act as. An unknown or deleted principal adds none.
+// its new grants can act as. An unknown or deleted principal adds none. A
+// disabled principal other than the root adds none: its tokens do not work,
+// so it is no act-as target.
 func (w *reachWalker) visit(ctx context.Context, id string) error {
 	w.visited[id] = true
 
@@ -261,6 +341,12 @@ func (w *reachWalker) visit(ctx context.Context, id string) error {
 
 	if err != nil {
 		return fmt.Errorf("read principal %q: %w", id, err)
+	}
+
+	if !rec.DisabledAt.IsZero() && id != w.root {
+		w.disabled[id] = true
+
+		return nil
 	}
 
 	subjects, err := w.cfg.Callers.SubjectsOf(ctx, rec.Subject)
@@ -289,8 +375,9 @@ func (w *reachWalker) visit(ctx context.Context, id string) error {
 	return w.follow(ctx, fresh)
 }
 
-// follow queues the act-as targets of grants: the service principals that
-// a hold of principal:manage-tokens reaches.
+// follow records the act-as targets of grants: the service principals that
+// a hold of principal:manage-tokens reaches directly or through a
+// namespace, and whether a hold on the installation reaches further.
 func (w *reachWalker) follow(ctx context.Context, grants []Grant) error {
 	roles, err := w.rolesOf(ctx, grants)
 	if err != nil {
@@ -323,22 +410,9 @@ func (w *reachWalker) follow(ctx context.Context, grants []Grant) error {
 	return nil
 }
 
-// expand queues the service principals of each installation-wide and
-// namespace-wide act-as edge found so far.
+// expand queues the service principals of each namespace-wide act-as edge
+// found so far.
 func (w *reachWalker) expand(ctx context.Context) error {
-	if w.installation && !w.installationID {
-		w.installationID = true
-
-		ids, err := w.cfg.Services.ListServicePrincipals(ctx)
-		if err != nil {
-			return fmt.Errorf("list service principals: %w", err)
-		}
-
-		for _, id := range ids {
-			w.enqueue(id)
-		}
-	}
-
 	for ns := range w.namespaces {
 		if _, done := w.namespaceBots[ns]; done {
 			continue
@@ -363,6 +437,78 @@ func (w *reachWalker) expand(ctx context.Context) error {
 	return nil
 }
 
+// absorbInstallation adds each service principal whose reach the current
+// reach already covers, and repeats until nothing changes. It returns the
+// reach with every covered target in it.
+func (w *reachWalker) absorbInstallation(ctx context.Context, current Reach) (Reach, error) {
+	for {
+		ids, err := w.cfg.Services.ListServicePrincipals(ctx)
+		if err != nil {
+			return Reach{}, fmt.Errorf("list service principals: %w", err)
+		}
+
+		progressed := false
+
+		for _, id := range ids {
+			covered, err := w.absorbOne(ctx, id, &current)
+			if err != nil {
+				return Reach{}, err
+			}
+
+			progressed = progressed || covered
+		}
+
+		if !progressed {
+			return current, nil
+		}
+	}
+}
+
+// absorbOne adds the service principal id with its own edges when the
+// current reach covers its reach. It reports whether it added the
+// principal. A principal that is already visited or disabled, or that has
+// an empty reach, is left out.
+func (w *reachWalker) absorbOne(ctx context.Context, id string, current *Reach) (bool, error) {
+	if w.visited[id] || w.disabled[id] {
+		return false, nil
+	}
+
+	target, err := baseReachOf(ctx, w.cfg, id)
+	if err != nil {
+		return false, err
+	}
+
+	if len(target.entries) == 0 {
+		w.visited[id] = true
+
+		return false, nil
+	}
+
+	covers, err := current.Covers(ctx, target)
+	if err != nil {
+		return false, err
+	}
+
+	if !covers {
+		return false, nil
+	}
+
+	w.enqueue(id)
+
+	if err := w.close(ctx); err != nil {
+		return false, err
+	}
+
+	next, finishErr := w.finish(ctx)
+	if finishErr != nil {
+		return false, finishErr
+	}
+
+	*current = next
+
+	return true, nil
+}
+
 // trustRuleTargets returns the principals that the trust rules of the
 // installation let the reach act as. Trust rules are not stored yet, so it
 // returns none. It is the place to add that edge source later.
@@ -370,8 +516,9 @@ func trustRuleTargets() []string {
 	return nil
 }
 
-// namespacePrincipals returns the IDs of the principals of the namespace
-// ns that exist, in subject order.
+// namespacePrincipals returns the IDs of the enabled principals of the
+// namespace ns that exist, in subject order. A disabled principal is no
+// act-as target.
 func (w *reachWalker) namespacePrincipals(ctx context.Context, ns namespace.Name) ([]string, error) {
 	var out []string
 
@@ -390,7 +537,9 @@ func (w *reachWalker) namespacePrincipals(ctx context.Context, ns namespace.Name
 		}
 
 		for i := range rows {
-			out = append(out, rows[i].ID)
+			if rows[i].DisabledAt.IsZero() {
+				out = append(out, rows[i].ID)
+			}
 		}
 
 		if len(rows) < principal.MaxLimit {
@@ -405,53 +554,22 @@ func (w *reachWalker) namespacePrincipals(ctx context.Context, ns namespace.Name
 // and the custom roles in one query. A role that no longer exists is left
 // out, so its grants give nothing.
 func (w *reachWalker) rolesOf(ctx context.Context, grants []Grant) (map[string]Role, error) {
-	out := map[string]Role{}
+	get := func(id string) (Role, bool) {
+		r, ok := w.roles[id]
 
-	var missing []string
-
-	for i := range grants {
-		id := grants[i].Role
-		if _, done := out[id]; done {
-			continue
-		}
-
-		if r, ok := BuiltInRole(id); ok {
-			out[id] = r
-
-			continue
-		}
-
-		if r, ok := w.roles[id]; ok {
-			out[id] = r
-
-			continue
-		}
-
-		if !slices.Contains(missing, id) {
-			missing = append(missing, id)
-		}
+		return r, ok
+	}
+	keep := func(r Role) {
+		w.roles[r.ID] = r
 	}
 
-	if len(missing) == 0 {
-		return out, nil
-	}
-
-	custom, err := w.cfg.Roles.GetRoles(ctx, missing)
-	if err != nil {
-		return nil, fmt.Errorf("read roles: %w", err)
-	}
-
-	for i := range custom {
-		out[custom[i].ID] = custom[i]
-		w.roles[custom[i].ID] = custom[i]
-	}
-
-	return out, nil
+	return rolesByID(ctx, grants, get, keep, w.cfg.Roles)
 }
 
-// finish builds the reach from the collected grants.
+// finish builds the reach from the collected grants. A grant on a deleted
+// unit or on a collection with another stable ID gives nothing.
 func (w *reachWalker) finish(ctx context.Context) (Reach, error) {
-	var out Reach
+	out := emptyReach(w.cfg)
 
 	grants := make([]Grant, 0, len(w.grants))
 	for id := range w.grants {
@@ -463,9 +581,23 @@ func (w *reachWalker) finish(ctx context.Context) (Reach, error) {
 		return Reach{}, err
 	}
 
+	live, err := w.liveUnits(ctx, grants)
+	if err != nil {
+		return Reach{}, err
+	}
+
 	for i := range grants {
 		role, ok := roles[grants[i].Role]
 		if !ok {
+			continue
+		}
+
+		gives, err := w.grantLive(ctx, grants[i].Object, live)
+		if err != nil {
+			return Reach{}, err
+		}
+
+		if !gives {
 			continue
 		}
 
@@ -479,6 +611,71 @@ func (w *reachWalker) finish(ctx context.Context) (Reach, error) {
 	w.deriveNamespaceTokens(&out, grants, roles)
 
 	return out, nil
+}
+
+// liveUnits returns the stable IDs of the units of grants that exist. With
+// no unit port no unit is live, so no grant on a unit gives anything.
+func (w *reachWalker) liveUnits(ctx context.Context, grants []Grant) (map[string]bool, error) {
+	live := map[string]bool{}
+
+	if w.cfg.Units == nil {
+		return live, nil
+	}
+
+	var ids []string
+
+	for i := range grants {
+		if id := grants[i].Object.UnitID(); id != "" && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+
+	if len(ids) == 0 {
+		return live, nil
+	}
+
+	current, err := w.cfg.Units.UnitObjects(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("read units of grants: %w", err)
+	}
+
+	for id := range current {
+		live[id] = true
+	}
+
+	return live, nil
+}
+
+// grantLive reports whether the grant on obj still gives something: a unit
+// that exists, a collection that still holds its stable ID, or any other
+// object.
+func (w *reachWalker) grantLive(
+	ctx context.Context, obj identity.Object, live map[string]bool,
+) (bool, error) {
+	switch {
+	case obj.IsUnit():
+		return live[obj.UnitID()], nil
+	case obj.IsCollection():
+		return w.liveCollection(ctx, obj)
+	default:
+		return true, nil
+	}
+}
+
+// liveCollection reports whether obj names the collection that holds its
+// stable ID now. It is false when no collection port answers, and when the
+// name is gone or has another ID.
+func (w *reachWalker) liveCollection(ctx context.Context, obj identity.Object) (bool, error) {
+	if w.cfg.Collections == nil {
+		return false, nil
+	}
+
+	id, found, err := w.cfg.Collections.CollectionID(ctx, obj)
+	if err != nil {
+		return false, fmt.Errorf("read collection %q: %w", obj.String(), err)
+	}
+
+	return found && id == obj.CollectionID(), nil
 }
 
 // deriveNamespaceTokens adds principal:manage-tokens on each service
@@ -503,7 +700,35 @@ func (w *reachWalker) deriveNamespaceTokens(out *Reach, grants []Grant, roles ma
 
 	for ns := range namespaces {
 		for _, id := range w.namespaceBots[ns] {
-			reachAdd(out, identity.PrincipalObject(id), identity.ActionPrincipalManageTokens)
+			if !w.disabled[id] {
+				reachAdd(out, identity.PrincipalObject(id), identity.ActionPrincipalManageTokens)
+			}
 		}
 	}
+}
+
+// chain returns obj and every object that holds it, innermost first, as the
+// authorizer reads it.
+func (r Reach) chain(ctx context.Context, obj identity.Object) ([]identity.Object, error) {
+	return chainObjects(ctx, obj, r.collections, r.withUnitID, r.principals)
+}
+
+// withUnitID returns the unit obj with its stable ID. A unit that already
+// has one, that does not exist, or queried with no unit port, keeps what it
+// has: a grant on the unit then matches nothing.
+func (r Reach) withUnitID(ctx context.Context, obj identity.Object) (identity.Object, error) {
+	if obj.UnitID() != "" || r.units == nil {
+		return obj, nil
+	}
+
+	id, found, err := r.units.UnitID(ctx, obj)
+	if err != nil {
+		return obj, fmt.Errorf("read unit ID: %w", err)
+	}
+
+	if !found {
+		return obj, nil
+	}
+
+	return obj.WithUnitID(id), nil
 }
