@@ -18,20 +18,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 )
 
-// nativeFormatVersion is the manifest format number of the native format of ADR
-// 30. Restore refuses it before it changes anything (ADR 42, decision 4).
-const nativeFormatVersion = 1
-
-// ErrNativeFormat reports a backup in the native format of ADR 30, which this
-// server does not restore. A new backup is necessary.
-var ErrNativeFormat = errors.New(
-	"backup uses the native format, which this server does not restore; take a new backup",
-)
-
-// FormatVersion is the manifest format number of the portable format (ADR 42,
-// decision 4). Check and restore refuse a manifest with another number,
-// including the native format 1 of ADR 30, which a backup can no longer hold.
-// It changes only with a new ADR.
+// FormatVersion is the manifest format number of the portable format. Check
+// and restore refuse a manifest with another number. It changes only with a
+// new format version.
 const FormatVersion = PortableManifestFormat
 
 // S3ObjectLimit is the largest object an S3-compatible target holds (ADR 31):
@@ -516,7 +505,7 @@ func (s *Service) exportPortable(ctx context.Context, id ID) (sqlExport, error) 
 
 // sqlAggregate returns the total size of the table files and the SHA-256 of
 // their descriptors, as JSON. The manifest keeps both, so a restore pins the SQL
-// part as it pinned the one object of format 1.
+// part.
 func sqlAggregate(files []PortableFile) (int64, [sha256.Size]byte, error) {
 	var sha [sha256.Size]byte
 
@@ -1058,13 +1047,6 @@ func readManifest(ctx context.Context, target blob.Store, id ID) (Manifest, erro
 	}
 
 	switch {
-	case manifest.Format == nativeFormatVersion:
-		return Manifest{}, fmt.Errorf(
-			"backup %s uses the native format of ADR 30, which this server does not restore; "+
-				"a new backup is necessary: %w",
-			id,
-			ErrNativeFormat,
-		)
 	case manifest.Format != FormatVersion || manifest.SQLFormat != PortableFormat:
 		return Manifest{}, fmt.Errorf(
 			"backup %s uses manifest format %d with SQL format %q, this server reads format %d with %q: %w",
