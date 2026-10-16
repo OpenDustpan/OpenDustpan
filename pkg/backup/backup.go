@@ -84,6 +84,7 @@ var Tables = []string{
 	"roles",
 	"grants",
 	"audit_sink_cursors",
+	"audit_sink_leases",
 	"access_token_policy",
 	"session_policy",
 	"backups",

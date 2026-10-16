@@ -11,6 +11,34 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const acquireAuditSinkLease = `-- name: AcquireAuditSinkLease :execrows
+INSERT INTO audit_sink_leases (sink, holder, expires_at_ms)
+VALUES ($1, $2, FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + $3::bigint)
+ON CONFLICT (sink) DO UPDATE
+SET holder = EXCLUDED.holder, expires_at_ms = EXCLUDED.expires_at_ms
+WHERE audit_sink_leases.holder = EXCLUDED.holder OR audit_sink_leases.expires_at_ms <= FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
+`
+
+type AcquireAuditSinkLeaseParams struct {
+	Sink   string
+	Holder string
+	TtlMs  int64
+}
+
+// Takes or renews the lease of one sink in one conditional write. It writes
+// when no row exists, when the stored lease ended, or when the caller holds
+// it, and changes nothing while another instance holds a live lease. The
+// caller reads the changed row count: one means it holds the lease. The
+// expiry is the database clock plus the TTL, so a wrong clock on one
+// instance cannot hold every lease.
+func (q *Queries) AcquireAuditSinkLease(ctx context.Context, arg AcquireAuditSinkLeaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, acquireAuditSinkLease, arg.Sink, arg.Holder, arg.TtlMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -393,6 +421,27 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 		return nil, err
 	}
 	return items, nil
+}
+
+const claimAuditChainMigration = `-- name: ClaimAuditChainMigration :execrows
+UPDATE audit_chain_state
+SET migrating_at_ms = $1
+WHERE id = 1 AND pending AND (migrating_at_ms = 0 OR migrating_at_ms < $2)
+`
+
+type ClaimAuditChainMigrationParams struct {
+	MigratingAtMs   int64
+	MigratingAtMs_2 int64
+}
+
+// Starts the migration of a waiting change in one write: it stamps the start
+// time only when a change waits and no claim within the lease holds.
+func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditChainMigrationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimAuditChainMigration, arg.MigratingAtMs, arg.MigratingAtMs_2)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
@@ -2197,6 +2246,40 @@ func (q *Queries) GetAccessTokenPolicy(ctx context.Context) (GetAccessTokenPolic
 	return i, err
 }
 
+const getAuditChainState = `-- name: GetAuditChainState :one
+SELECT state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1
+`
+
+type GetAuditChainStateRow struct {
+	State              string
+	ChangedAtMs        int64
+	ChangedBy          string
+	Pending            bool
+	EnteredMaintenance bool
+	LogReplaced        bool
+	MigratingAtMs      int64
+}
+
+// The audit chain state that this installation keeps: the state, when it
+// last changed, who changed it, whether a change waits for an approval,
+// whether the chain entered maintenance mode itself, whether a restore
+// replaced the log, and when the running migration started, 0 when none
+// runs. No row means the chain is on.
+func (q *Queries) GetAuditChainState(ctx context.Context) (GetAuditChainStateRow, error) {
+	row := q.db.QueryRow(ctx, getAuditChainState)
+	var i GetAuditChainStateRow
+	err := row.Scan(
+		&i.State,
+		&i.ChangedAtMs,
+		&i.ChangedBy,
+		&i.Pending,
+		&i.EnteredMaintenance,
+		&i.LogReplaced,
+		&i.MigratingAtMs,
+	)
+	return i, err
+}
+
 const getAuditSinkCursor = `-- name: GetAuditSinkCursor :one
 SELECT sequence FROM audit_sink_cursors
 WHERE sink = $1 AND namespace = $2
@@ -3604,32 +3687,34 @@ func (q *Queries) HighestUpdateVersion(ctx context.Context, stackID string) (int
 const insertAuditEntry = `-- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    fence_version
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 `
 
 type InsertAuditEntryParams struct {
-	Namespace  string
-	Sequence   int64
-	Subject    string
-	IdpSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	AtMs       int64
-	SourceIp   string
-	UserAgent  string
-	Channel    string
-	Kind       string
-	Outcome    string
-	RequestID  string
-	PrevHash   string
-	Hash       string
-	ValueCount pgtype.Int8
-	Changes    pgtype.Text
-	ObjectID   string
+	Namespace    string
+	Sequence     int64
+	Subject      string
+	IdpSubject   string
+	TokenID      string
+	Action       string
+	Object       string
+	Version      string
+	ValuePath    string
+	AtMs         int64
+	SourceIp     string
+	UserAgent    string
+	Channel      string
+	Kind         string
+	Outcome      string
+	RequestID    string
+	PrevHash     string
+	Hash         string
+	ValueCount   pgtype.Int8
+	Changes      pgtype.Text
+	ObjectID     string
+	FenceVersion int64
 }
 
 func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryParams) error {
@@ -3655,6 +3740,7 @@ func (q *Queries) InsertAuditEntry(ctx context.Context, arg InsertAuditEntryPara
 		arg.ValueCount,
 		arg.Changes,
 		arg.ObjectID,
+		arg.FenceVersion,
 	)
 	return err
 }
@@ -3886,9 +3972,24 @@ func (q *Queries) LastAccessByPrincipals(ctx context.Context, principalIds []str
 	return items, nil
 }
 
+const lastAuditChainStartSequence = `-- name: LastAuditChainStartSequence :one
+SELECT CAST(COALESCE(MAX(sequence), 0) AS BIGINT) FROM audit_entries
+WHERE namespace = $1 AND action = 'server:start-audit-chain' AND sequence >= 1
+`
+
+// The sequence of the last start entry of the audit chain of a namespace,
+// or 0 when there is none. The chain check starts there.
+func (q *Queries) LastAuditChainStartSequence(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, lastAuditChainStartSequence, namespace)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const lastAuditEntry = `-- name: LastAuditEntry :one
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -3922,6 +4023,7 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.ValueCount,
 		&i.Changes,
 		&i.ObjectID,
+		&i.FenceVersion,
 	)
 	return i, err
 }
@@ -4049,7 +4151,8 @@ func (q *Queries) ListAccessTokens(ctx context.Context, arg ListAccessTokensPara
 
 const listAuditChainPage = `-- name: ListAuditChainPage :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = $1 AND sequence > $2
 ORDER BY sequence ASC
@@ -4097,6 +4200,7 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 			&i.ValueCount,
 			&i.Changes,
 			&i.ObjectID,
+			&i.FenceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -4110,7 +4214,8 @@ func (q *Queries) ListAuditChainPage(ctx context.Context, arg ListAuditChainPage
 
 const listAuditEntries = `-- name: ListAuditEntries :many
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = $1
 ORDER BY sequence DESC
@@ -4156,6 +4261,7 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 			&i.ValueCount,
 			&i.Changes,
 			&i.ObjectID,
+			&i.FenceVersion,
 		); err != nil {
 			return nil, err
 		}
@@ -5740,6 +5846,19 @@ func (q *Queries) MarkRestoreApplying(ctx context.Context, arg MarkRestoreApplyi
 	return result.RowsAffected(), nil
 }
 
+const minAuditSequence = `-- name: MinAuditSequence :one
+SELECT CAST(COALESCE(MIN(sequence), 1) AS BIGINT) FROM audit_entries WHERE namespace = $1
+`
+
+// The lowest sequence of a namespace, or 1 when it has no entry. The chain
+// check fails a namespace with a row below 1, because the walk starts at 1.
+func (q *Queries) MinAuditSequence(ctx context.Context, namespace string) (int64, error) {
+	row := q.db.QueryRow(ctx, minAuditSequence, namespace)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const nextJournalArrival = `-- name: NextJournalArrival :one
 SELECT (COALESCE(MAX(arrival), 0) + 1)::BIGINT AS arrival
 FROM update_journal
@@ -5981,6 +6100,37 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 	return err
 }
 
+const releaseAuditChainMigration = `-- name: ReleaseAuditChainMigration :exec
+UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1
+`
+
+// Releases the claim of a migration that stops without storing the new
+// state.
+func (q *Queries) ReleaseAuditChainMigration(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, releaseAuditChainMigration)
+	return err
+}
+
+const releaseAuditSinkLease = `-- name: ReleaseAuditSinkLease :execrows
+DELETE FROM audit_sink_leases
+WHERE sink = $1 AND holder = $2
+`
+
+type ReleaseAuditSinkLeaseParams struct {
+	Sink   string
+	Holder string
+}
+
+// Releases the lease of one sink only when holder holds it. It changes
+// nothing when no row exists or another instance holds the lease.
+func (q *Queries) ReleaseAuditSinkLease(ctx context.Context, arg ReleaseAuditSinkLeaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, releaseAuditSinkLease, arg.Sink, arg.Holder)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
 UPDATE group_members SET removed_at_ms = $1
 WHERE group_id = $2 AND principal_id = $3 AND removed_at_ms IS NULL
@@ -6018,6 +6168,20 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		arg.Project,
 		arg.Name_2,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const renewAuditChainMigration = `-- name: RenewAuditChainMigration :execrows
+UPDATE audit_chain_state SET migrating_at_ms = $1 WHERE id = 1 AND migrating_at_ms <> 0
+`
+
+// Moves the start of the held claim to the given time. It writes only
+// when a claim holds, so a renewal without a claim changes no row.
+func (q *Queries) RenewAuditChainMigration(ctx context.Context, migratingAtMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, renewAuditChainMigration, migratingAtMs)
 	if err != nil {
 		return 0, err
 	}
@@ -6631,6 +6795,39 @@ func (q *Queries) SetAccessTokenPolicy(ctx context.Context, arg SetAccessTokenPo
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setAuditChainState = `-- name: SetAuditChainState :exec
+INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+VALUES (1, $1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, changed_at_ms = EXCLUDED.changed_at_ms,
+    changed_by = EXCLUDED.changed_by, pending = EXCLUDED.pending,
+    entered_maintenance = EXCLUDED.entered_maintenance, log_replaced = EXCLUDED.log_replaced,
+    migrating_at_ms = EXCLUDED.migrating_at_ms
+`
+
+type SetAuditChainStateParams struct {
+	State              string
+	ChangedAtMs        int64
+	ChangedBy          string
+	Pending            bool
+	EnteredMaintenance bool
+	LogReplaced        bool
+	MigratingAtMs      int64
+}
+
+// Stores the audit chain state of this installation.
+func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainStateParams) error {
+	_, err := q.db.Exec(ctx, setAuditChainState,
+		arg.State,
+		arg.ChangedAtMs,
+		arg.ChangedBy,
+		arg.Pending,
+		arg.EnteredMaintenance,
+		arg.LogReplaced,
+		arg.MigratingAtMs,
+	)
+	return err
 }
 
 const setInstallationStateIf = `-- name: SetInstallationStateIf :execrows

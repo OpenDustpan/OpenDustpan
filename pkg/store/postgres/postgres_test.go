@@ -287,19 +287,88 @@ func TestAuditConformance(t *testing.T) {
 	})
 }
 
+// TestAuditChainConformance runs the chain switch cases: entries without a
+// hash, runs of chained entries, and the recorded chain state.
+func TestAuditChainConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	audittest.RunChain(t, func(t *testing.T) audittest.ChainTestStore {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		s, err := postgres.Open(t.Context(), schemaURL)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(s.Close)
+
+		return audittest.ChainTestStore{
+			Store: s,
+			TamperEntry: func(t *testing.T, ns namespace.Name, seq int64, field, value string) {
+				t.Helper()
+
+				change := auditFieldChange{field: field, value: value}
+				if err := tamperAuditEntry(t.Context(), schemaURL, ns, seq, change); err != nil {
+					t.Fatalf("change entry %d: %v", seq, err)
+				}
+			},
+			Reopen: func(t *testing.T) audittest.ChainStore {
+				t.Helper()
+
+				second, err := postgres.Open(t.Context(), schemaURL)
+				if err != nil {
+					t.Fatalf("reopen store: %v", err)
+				}
+
+				t.Cleanup(second.Close)
+
+				return second
+			},
+		}
+	})
+}
+
 // errUnknownAuditField reports a tamper hook field outside the whitelist.
 var errUnknownAuditField = errors.New("unknown audit field")
 
 // tamperAuditColumn maps a tamper hook field to its column. The column
 // equals the field; the switch keeps the field name out of SQL unless it
-// names one of the six whitelisted columns.
+// names one of the whitelisted columns.
 func tamperAuditColumn(field string) (string, bool) {
 	switch field {
-	case "subject", "action", "object", "outcome", "kind", "changes":
+	case "subject",
+		"action",
+		"object",
+		"outcome",
+		"kind",
+		"hash",
+		"prev_hash",
+		"at_ms",
+		"sequence",
+		"changes",
+		"fence_version",
+		"value_path":
 		return field, true
 	default:
 		return "", false
 	}
+}
+
+// tamperValue answers the parameter of the tamper hook for column: at_ms,
+// sequence and fence_version are numbers, every other column is text.
+func tamperValue(column string) string {
+	if column == "at_ms" || column == "sequence" || column == "fence_version" {
+		return "$1::text::bigint"
+	}
+
+	return "$1"
 }
 
 // auditFieldChange names one column change of the tamper hook.
@@ -329,7 +398,7 @@ func tamperAuditEntry(
 
 	_, execErr := conn.Exec(
 		ctx,
-		`UPDATE audit_entries SET `+column+` = $1 WHERE namespace = $2 AND sequence = $3`,
+		`UPDATE audit_entries SET `+column+` = `+tamperValue(column)+` WHERE namespace = $2 AND sequence = $3`,
 		change.value,
 		ns.String(),
 		seq,

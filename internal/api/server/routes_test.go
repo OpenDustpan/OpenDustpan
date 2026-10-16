@@ -223,6 +223,7 @@ func newServiceBackedHandler(
 		Audit:          st,
 		OnAuditFailure: nil,
 		DeletedUnits:   stubSweeper{},
+		AuditChain:     stubAuditChain{},
 		AuditSinks:     nil,
 		IPAllowlists:   allow,
 		SessionPolicy:  sessionPolicies,
@@ -657,6 +658,7 @@ func newRouteTestRestores(
 		Key:         nil,
 		Region:      "test",
 		AfterApply:  nil,
+		Admit:       nil,
 		Now:         nil,
 		Logger:      nil,
 	})
@@ -973,7 +975,8 @@ func createsRecord(path string) bool {
 // and answers 201, every other route answers 200.
 func wantSuccessStatus(route apiserver.Route) int {
 	if route.Method == http.MethodPost &&
-		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores") {
+		(route.Path == "/api/server/backups" || route.Path == "/api/server/restores" ||
+			route.Path == "/api/server/audit/chain") {
 		return http.StatusAccepted
 	}
 
@@ -1273,6 +1276,7 @@ func TestNewHandlerRequiresDependencies(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
@@ -1409,6 +1413,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
@@ -1439,6 +1444,7 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 		Audit:          nil,
 		OnAuditFailure: nil,
 		DeletedUnits:   nil,
+		AuditChain:     nil,
 		AuditSinks:     nil,
 		IPAllowlists:   nil,
 		SessionPolicy:  nil,
@@ -1454,6 +1460,21 @@ func TestNewHandlerKeepsBackupService(t *testing.T) {
 
 // stubSweeper is an apiserver.DeletedUnitSweeper that purges nothing.
 type stubSweeper struct{}
+
+// stubAuditChain answers an instance with the setting on and approves every
+// change.
+type stubAuditChain struct{}
+
+func (stubAuditChain) Setting() audit.ChainSetting { return audit.ChainOn }
+
+func (stubAuditChain) Status(context.Context) (apiserver.AuditChainStatus, error) {
+	return apiserver.AuditChainStatus{
+		ChangedAt: time.Time{}, ChangedBy: "", State: audit.ChainStateOn,
+		Setting: audit.ChainOn, Pending: false, Migrating: false,
+	}, nil
+}
+
+func (stubAuditChain) Approve(context.Context, audit.Entry) error { return nil }
 
 func (stubSweeper) Sweep(context.Context, audit.Entry) (inventory.SweepResult, error) {
 	return inventory.SweepResult{

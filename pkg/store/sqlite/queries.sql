@@ -661,7 +661,8 @@ SET failover_version = failover_version + 1;
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -670,14 +671,16 @@ LIMIT 1;
 -- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    fence_version
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -694,7 +697,8 @@ WHERE namespace = ?;
 -- audit.CheckPageSize entries after the last sequence it saw, so a namespace
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC
@@ -1338,6 +1342,51 @@ WHERE principal_id IN (SELECT value FROM json_each(CAST(sqlc.arg('principals') A
   AND last_used_at_ms IS NOT NULL
 GROUP BY principal_id;
 
+-- name: GetAuditChainState :one
+-- The audit chain state that this installation keeps: the state, when it
+-- last changed, who changed it, whether a change waits for an approval,
+-- whether the chain entered maintenance mode itself, whether a restore
+-- replaced the log, and when the running migration started, 0 when none
+-- runs. No row means the chain is on.
+SELECT state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1;
+
+-- name: SetAuditChainState :exec
+-- Stores the audit chain state of this installation.
+INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET state = excluded.state, changed_at_ms = excluded.changed_at_ms,
+    changed_by = excluded.changed_by, pending = excluded.pending,
+    entered_maintenance = excluded.entered_maintenance, log_replaced = excluded.log_replaced,
+    migrating_at_ms = excluded.migrating_at_ms;
+
+-- name: ClaimAuditChainMigration :execrows
+-- Starts the migration of a waiting change in one write: it stamps the start
+-- time only when a change waits and no claim within the lease holds.
+UPDATE audit_chain_state
+SET migrating_at_ms = ?
+WHERE id = 1 AND pending = 1 AND (migrating_at_ms = 0 OR migrating_at_ms < ?);
+
+-- name: ReleaseAuditChainMigration :exec
+-- Releases the claim of a migration that stops without storing the new
+-- state.
+UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1;
+
+-- name: RenewAuditChainMigration :execrows
+-- Moves the start of the held claim to the given time. It writes only
+-- when a claim holds, so a renewal without a claim changes no row.
+UPDATE audit_chain_state SET migrating_at_ms = ? WHERE id = 1 AND migrating_at_ms <> 0;
+
+-- name: LastAuditChainStartSequence :one
+-- The sequence of the last start entry of the audit chain of a namespace,
+-- or 0 when there is none. The chain check starts there.
+SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) FROM audit_entries
+WHERE namespace = ? AND action = 'server:start-audit-chain' AND sequence >= 1;
+
+-- name: MinAuditSequence :one
+-- The lowest sequence of a namespace, or 1 when it has no entry. The chain
+-- check fails a namespace with a row below 1, because the walk starts at 1.
+SELECT CAST(COALESCE(MIN(sequence), 1) AS INTEGER) FROM audit_entries WHERE namespace = ?;
+
 -- name: GetDeletedStack :one
 -- A deleted stack of one namespace by its stable ID (ADR 47), for a restore
 -- or a purge. A live stack matches no row.
@@ -1459,6 +1508,25 @@ VALUES (?, ?, ?, ?)
 ON CONFLICT (sink, namespace) DO UPDATE
 SET sequence = excluded.sequence, updated_at_ms = excluded.updated_at_ms
 WHERE excluded.sequence > audit_sink_cursors.sequence;
+
+-- name: AcquireAuditSinkLease :execrows
+-- Takes or renews the lease of one sink in one conditional write. It writes
+-- when no row exists, when the stored lease ended, or when the caller holds
+-- it, and changes nothing while another instance holds a live lease. The
+-- caller reads the changed row count: one means it holds the lease. The
+-- expiry is the database clock plus the TTL, so a wrong clock on one
+-- instance cannot hold every lease.
+INSERT INTO audit_sink_leases (sink, holder, expires_at_ms)
+VALUES (?1, ?2, CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) + CAST(sqlc.arg('ttl_ms') AS INTEGER))
+ON CONFLICT (sink) DO UPDATE
+SET holder = excluded.holder, expires_at_ms = excluded.expires_at_ms
+WHERE audit_sink_leases.holder = excluded.holder OR audit_sink_leases.expires_at_ms <= CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER);
+
+-- name: ReleaseAuditSinkLease :execrows
+-- Releases the lease of one sink only when holder holds it. It changes
+-- nothing when no row exists or another instance holds the lease.
+DELETE FROM audit_sink_leases
+WHERE sink = ? AND holder = ?;
 
 -- Token policy and the inactivity disable (ADR 53).
 
