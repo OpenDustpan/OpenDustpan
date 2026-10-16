@@ -1,7 +1,9 @@
 package pulumi_test
 
 import (
+	"encoding/json"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,21 +97,25 @@ func replayPaddedState(name string, pad int) string {
 const replayNewResource = `{"urn":"urn:pulumi:dev::web::t:mod:T::b","custom":true,"type":"t:mod:T","id":"b"}`
 
 // checkReplayBoundBody checks that a 413 body carries the one-sentence replay
-// bound message: it names the bound and its limit with the one command that
-// helps, and it holds no update wrapper prefix.
+// bound message exactly: it names the bound, its count and limit, and the one
+// command that helps, and it holds no update wrapper prefix.
 func checkReplayBoundBody(t *testing.T, resp, bound string, limit int) {
 	t.Helper()
 
-	for _, want := range []string{bound, "limit of " + strconv.Itoa(limit), "pulumi up"} {
-		if !strings.Contains(resp, want) {
-			t.Fatalf("413 body lacks %q: %s", want, resp)
-		}
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(resp), &body); err != nil {
+		t.Fatalf("decode 413 body: %v (%s)", err, resp)
 	}
 
-	for _, prefix := range []string{"build checkpoint of update", "payload too large"} {
-		if strings.Contains(resp, prefix) {
-			t.Fatalf("413 body holds the wrapper prefix %q: %s", prefix, resp)
-		}
+	want := regexp.MustCompile(
+		`^This update has \d+ ` + regexp.QuoteMeta(bound) +
+			`, more than the limit of ` + strconv.Itoa(limit) +
+			": run `pulumi up` with fewer resources\\.$",
+	)
+	if !want.MatchString(body.Message) {
+		t.Fatalf("413 message = %q, want the one-sentence replay bound message", body.Message)
 	}
 }
 

@@ -397,6 +397,40 @@ func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update Upd
 	return j.RemoveBlobs(ctx, orphans)
 }
 
+// batchLimitError reports a journal batch over MaxJournalBatchBytes. Its
+// Error text keeps the update wrapper for the log, and Message is the one
+// sentence the server answers. It wraps ErrTooLarge.
+type batchLimitError struct {
+	size  int
+	limit int
+}
+
+// Error returns the refusal with the batch size and the batch bound.
+func (e *batchLimitError) Error() string {
+	return fmt.Sprintf(
+		"%v: journal batch of %d bytes exceeds the limit of %d bytes: "+
+			"split the change into smaller updates and run `pulumi up` again",
+		ErrTooLarge, e.size, e.limit,
+	)
+}
+
+// Unwrap returns ErrTooLarge.
+func (e *batchLimitError) Unwrap() error { return ErrTooLarge }
+
+// BatchOverLimit returns the refusal of a journal batch of size bytes over the
+// batch bound limit. It wraps ErrTooLarge and answers one sentence at the edge.
+func BatchOverLimit(size, limit int) error {
+	return &batchLimitError{size: size, limit: limit}
+}
+
+// Message returns the one-sentence answer for the batch refusal.
+func (e *batchLimitError) Message() string {
+	return fmt.Sprintf(
+		"This journal batch has %d bytes, more than the limit of %d bytes: run `pulumi up` with fewer resources.",
+		e.size, e.limit,
+	)
+}
+
 // Append stores one batch. It returns nil when the batch is stored, or when it is
 // a retry of batch content that is already stored (ADR 43, decisions 6.2 and 6.3).
 // It returns ErrJournalConflict when the batch differs from what is stored, and
@@ -409,12 +443,7 @@ func (j *JournalEntries) SweepUpdate(ctx context.Context, stackID ID, update Upd
 // update, so a later complete with succeeded finds it.
 func (j *JournalEntries) Append(ctx context.Context, batch JournalBatch, fence namespace.Fence) error {
 	if batchTooLarge(batch.Content, j.maxCheckpointBytes) {
-		return fmt.Errorf(
-			"%w: journal batch of %d bytes exceeds the limit of %d bytes: split the change into smaller updates and run `pulumi up` again",
-			ErrTooLarge,
-			len(batch.Content),
-			MaxJournalBatchBytes,
-		)
+		return &batchLimitError{size: len(batch.Content), limit: MaxJournalBatchBytes}
 	}
 
 	ids, err := batchIDs(batch.Content)

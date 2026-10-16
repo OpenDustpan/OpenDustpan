@@ -126,8 +126,8 @@ func (s *Updates) mapReplayBound(id UpdateID, err error) error {
 }
 
 // ReplayBoundMessage returns the message the server answers for a replay
-// bound refusal: one sentence that names the bound, its count and limit,
-// and the one command that helps. It reports false when err holds no replay
+// bound refusal: one sentence that names the bound, its count and limit, and
+// the one command that helps. It reports false when err holds no replay
 // bound, so the caller answers the error text itself.
 func ReplayBoundMessage(err error) (string, bool) {
 	var bound *pulumijournal.BoundError
@@ -135,7 +135,22 @@ func ReplayBoundMessage(err error) (string, bool) {
 		return "", false
 	}
 
-	return bound.Error() + ": split the update into smaller updates and run `pulumi up` again", true
+	return fmt.Sprintf(
+		"This update has %d %s, more than the limit of %d: run `pulumi up` with fewer resources.",
+		bound.Count, bound.Bound, bound.Limit,
+	), true
+}
+
+// TooLargeMessage returns the one-sentence message the server answers for a
+// size refusal of a journaled update: a replay bound or a journal batch over
+// its bound. It reports false when err holds neither, so the caller answers
+// the error text itself.
+func TooLargeMessage(err error) (string, bool) {
+	if batch, ok := errors.AsType[*batchLimitError](err); ok {
+		return batch.Message(), true
+	}
+
+	return ReplayBoundMessage(err)
 }
 
 // journalBase returns the deployment the replay starts from: the checkpoint

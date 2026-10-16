@@ -976,7 +976,7 @@ func classifyUpdate(err error) (int, string) {
 		// names the bound, its limit and the one command that helps,
 		// without the update wrapper prefixes. Any other oversized
 		// request answers the error text itself.
-		if msg, ok := stack.ReplayBoundMessage(err); ok {
+		if msg, ok := stack.TooLargeMessage(err); ok {
 			return http.StatusRequestEntityTooLarge, msg
 		}
 

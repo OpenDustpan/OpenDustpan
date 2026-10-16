@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/stack"
 )
 
 // journalEntries stores one journal batch of a running update (ADR 43, decision
@@ -65,7 +66,7 @@ func (h *Handler) singleEntry(w http.ResponseWriter, r *http.Request, body []byt
 	}
 
 	if err := json.Unmarshal(body, &batch); err != nil || len(batch.Entries) != 1 {
-		h.writeTooLarge(w, r, limit)
+		h.writeError(r.Context(), w, stack.BatchOverLimit(len(body), int(limit)))
 
 		return false
 	}

@@ -1,7 +1,10 @@
 package pulumi_test
 
 import (
+	"encoding/json"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -189,6 +192,22 @@ func TestJournalEntriesAnswersBatchBoundWithSingleEntryException(t *testing.T) {
 			"multi-entry batch over the bound answers %d, want %d (%s)",
 			status, http.StatusRequestEntityTooLarge, resp,
 		)
+	}
+
+	var body struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(resp), &body); err != nil {
+		t.Fatalf("decode 413 body: %v (%s)", err, resp)
+	}
+
+	batchMessage := regexp.MustCompile(
+		`^This journal batch has \d+ bytes, more than the limit of ` +
+			strconv.Itoa(stack.MaxJournalBatchBytes) +
+			" bytes: run `pulumi up` with fewer resources\\.$",
+	)
+	if !batchMessage.MatchString(body.Message) {
+		t.Fatalf("413 message = %q, want the one-sentence batch message", body.Message)
 	}
 
 	status, resp = f.doUpdate(t, leaseRequest(http.MethodPatch, target, lease, single))

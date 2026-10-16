@@ -542,11 +542,9 @@ func (s *Updates) AppendJournal(ctx context.Context, ref Ref, id UpdateID, tok t
 
 	if batchTooLarge(content, s.maxCheckpoints) {
 		return fmt.Errorf(
-			"append journal to update %s: %w: journal batch of %d bytes exceeds the limit of %d bytes: split the change into smaller updates and run `pulumi up` again",
+			"append journal to update %s: %w",
 			id,
-			ErrTooLarge,
-			len(content),
-			MaxJournalBatchBytes,
+			&batchLimitError{size: len(content), limit: MaxJournalBatchBytes},
 		)
 	}
 
