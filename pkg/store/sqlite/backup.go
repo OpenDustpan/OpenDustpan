@@ -255,14 +255,15 @@ func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error)
 
 // SchemaTables implements backup.Inspector: the data tables the schema holds,
 // read from the catalog, never from backup.Tables, so the conformance suite
-// fails while the two differ. It excludes bookkeeping (schema_migrations)
+// fails while the two differ. It excludes bookkeeping (schema_migrations
+// and audit_chain_state, the chain state of this installation)
 // and SQLite internals.
 func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	const query = `SELECT name FROM sqlite_master
-		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations'
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations', 'audit_chain_state')
 		ORDER BY name`
 
 	rows, err := s.conn.QueryContext(ctx, query)

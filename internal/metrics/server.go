@@ -76,6 +76,8 @@ const MaxSinkSeries = 16
 // the HTTP middleware do (ADR 32 decision 9). It also holds the two
 // families of the reload of the configuration file (ADR 63 decision 5),
 // and counts the runs of the inactivity disable by result (ADR 53).
+// It also holds the audit chain families: the scopes whose check failed,
+// and the restores whose restored log failed the check.
 //
 // Create it with NewServerMetrics. It is safe for concurrent use.
 type ServerMetrics struct {
@@ -85,6 +87,7 @@ type ServerMetrics struct {
 	inFlight *Gauge
 	ready    *Counter
 	audit    *Counter
+	chain    chainFamilies
 	sinks    sinkFamilies
 	reloads  *Counter
 	reloadOK *Gauge
@@ -137,6 +140,7 @@ func NewServerMetrics(version string, startedAt time.Time) *ServerMetrics {
 			nil,
 			1,
 		),
+		chain: newChainFamilies(reg),
 		sinks: newSinkFamilies(reg),
 		reloads: reg.NewCounter(
 			"dustpan_config_reloads_total",
@@ -229,6 +233,53 @@ func (m *ServerMetrics) ReadinessFailures() *Counter {
 // entry besides the log line. Operators alert when it is above zero.
 func (m *ServerMetrics) IncAuditAppendFailure() {
 	m.audit.Inc()
+}
+
+// chainInvalidHelp is the help text of dustpan_audit_chain_invalid.
+const chainInvalidHelp = "Audit scopes whose chain check failed in the last scheduled check."
+
+// SetAuditChainInvalid sets the count of audit scopes whose chain check
+// failed in the last scheduled check. No label names a scope. Operators
+// alert when it is above zero.
+func (m *ServerMetrics) SetAuditChainInvalid(scopes int) {
+	m.chain.invalid.Set(float64(scopes))
+}
+
+// chainFamilies holds the audit chain families: the count of scopes whose
+// check failed, and the count of restores whose restored log failed the
+// check.
+type chainFamilies struct {
+	invalid    *Gauge
+	restoreBad *Counter
+}
+
+// newChainFamilies registers the audit chain families in reg.
+func newChainFamilies(reg *Registry) chainFamilies {
+	return chainFamilies{
+		invalid:    reg.NewGauge("dustpan_audit_chain_invalid", chainInvalidHelp, nil, 1),
+		restoreBad: newRestoreCheckCounter(reg),
+	}
+}
+
+// newRestoreCheckCounter registers dustpan_audit_restore_check_failures_total
+// in reg.
+func newRestoreCheckCounter(reg *Registry) *Counter {
+	c := reg.NewCounter("dustpan_audit_restore_check_failures_total",
+		"Restores whose restored audit log failed the chain check.", nil, 1)
+
+	// The series starts at 0, so an alert on increase() sees the first
+	// failure.
+	c.Add(0, []string{}...)
+
+	return c
+}
+
+// IncAuditRestoreCheckFailure adds one to the count of restores whose
+// restored audit log failed the chain check. The server still serves after
+// such a restore, so the counter and the error log are its record.
+// Operators alert when it is above zero.
+func (m *ServerMetrics) IncAuditRestoreCheckFailure() {
+	m.chain.restoreBad.Inc()
 }
 
 // sinkFamilies holds the audit and log sink families: counters labeled by sink,

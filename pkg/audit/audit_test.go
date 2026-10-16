@@ -15,27 +15,28 @@ func testEntry() audit.Entry {
 	}
 
 	return audit.Entry{
-		At:         time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC),
-		Namespace:  ns,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:decrypt",
-		Object:     "pulumi:acme/web/prod",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "pulumi-cli/3.200.0",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindReveal,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "req-1",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   1,
+		At:           time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC),
+		Namespace:    ns,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:decrypt",
+		Object:       "pulumi:acme/web/prod",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "pulumi-cli/3.200.0",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindReveal,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "req-1",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     1,
+		FenceVersion: 0,
 	}
 }
 
@@ -208,5 +209,39 @@ func TestPageNormalizedAppliesDefaultsAndCaps(t *testing.T) {
 
 	if got := (audit.Page{Number: 2, Size: audit.MaxPageSize + 1}).Normalized(); got.Size != audit.MaxPageSize {
 		t.Fatalf("oversize page = %+v, want capped at %d", got, audit.MaxPageSize)
+	}
+}
+
+// TestComputeHashCoversTheFenceVersion proves that the hash covers the
+// failover version of a namespace entry after the other optional fields,
+// that an entry with version 0 keeps the hash of the code before the field,
+// and pins the encoding, so another installation computes the same hash.
+func TestComputeHashCoversTheFenceVersion(t *testing.T) {
+	t.Parallel()
+
+	const wantFenced = "9037567e190eaf00bc4c1f3bdc6d00cd289ef98e7f0d6837070bbaec69d74aea"
+
+	before := audit.ComputeHash(testEntry(), "")
+
+	zero := testEntry()
+	zero.FenceVersion = 0
+
+	if got := audit.ComputeHash(zero, ""); got != before {
+		t.Fatalf("hash with fence version 0 = %q, want the hash without the field %q", got, before)
+	}
+
+	fenced := testEntry()
+	fenced.ObjectID = "stk-1"
+	fenced.FenceVersion = 2
+
+	got := audit.ComputeHash(fenced, "")
+	if got != wantFenced {
+		t.Fatalf("hash with an object ID and fence version 2 = %q, want %q", got, wantFenced)
+	}
+
+	fenced.FenceVersion = 3
+
+	if other := audit.ComputeHash(fenced, ""); other == got {
+		t.Fatal("hash did not change after the fence version changed")
 	}
 }

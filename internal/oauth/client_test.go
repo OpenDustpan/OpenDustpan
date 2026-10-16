@@ -1,0 +1,615 @@
+package oauth_test
+
+import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/oauth"
+	"opendustpan.org/opendustpan/internal/oauth/oauthtest"
+)
+
+const (
+	clientID     = "dustpan"
+	clientSecret = "client-secret-for-tests"
+	redirectURI  = "https://dustpan.example/api/server/sign-in/corp/callback"
+)
+
+// alice is the person whom the providers of the tests sign in.
+func alice() oauthtest.User {
+	return oauthtest.User{
+		Subject: "248289761001", Name: "Alice Doe", PreferredUsername: "alice", Email: "alice@example.com",
+	}
+}
+
+// clock is a clock that a test moves. The provider and the client share it.
+type clock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newClock() *clock {
+	return &clock{mu: sync.Mutex{}, now: time.Date(2026, time.October, 16, 9, 0, 0, 0, time.UTC)}
+}
+
+func (c *clock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.now
+}
+
+func (c *clock) Add(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.now = c.now.Add(d)
+}
+
+// noFaults returns faults that break nothing.
+func noFaults() oauthtest.Faults {
+	var none oauthtest.Faults
+
+	return none
+}
+
+// fault returns faults with the changes of set.
+func fault(set func(*oauthtest.Faults)) oauthtest.Faults {
+	f := noFaults()
+	set(&f)
+
+	return f
+}
+
+// setup is a provider and a client of it.
+type setup struct {
+	provider *oauthtest.Provider
+	client   *oauth.Client
+	clock    *clock
+}
+
+// newSetup starts a provider that signs with alg and has the faults f,
+// and makes a client of it.
+func newSetup(t *testing.T, alg string, f oauthtest.Faults) setup {
+	t.Helper()
+
+	c := newClock()
+	p := oauthtest.New(t, oauthtest.Config{
+		Now: c.Now, ClientID: clientID, ClientSecret: clientSecret, RedirectURI: redirectURI, Algorithm: alg,
+		User: alice(), Mode: oauthtest.ModeOIDC, Faults: f, TLS: true,
+	})
+
+	client, err := oauth.New(t.Context(), oauth.Config{
+		HTTPClient: p.Client(), Now: c.Now, Issuer: p.Issuer(), ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: []string{"profile", "email", "openid"},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	return setup{provider: p, client: client, clock: c}
+}
+
+// callback is the query of the redirect back to the server.
+type callback struct {
+	code  string
+	state string
+}
+
+// authorize sends the browser request to authURL and returns the callback
+// of the redirect back to the server.
+func authorize(t *testing.T, p *oauthtest.Provider, authURL string) callback {
+	t.Helper()
+
+	browser := *p.Client()
+	browser.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, authURL, http.NoBody)
+	if err != nil {
+		t.Fatalf("authorization request: %v", err)
+	}
+
+	resp, err := browser.Do(req)
+	if err != nil {
+		t.Fatalf("authorization request: %v", err)
+	}
+
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Errorf("close body: %v", closeErr)
+	}
+
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("authorization answer = %d, want %d", resp.StatusCode, http.StatusFound)
+	}
+
+	back, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatalf("redirect: %v", err)
+	}
+
+	if e := back.Query().Get("error"); e != "" {
+		t.Fatalf("provider refused the request: %s: %s", e, back.Query().Get("error_description"))
+	}
+
+	return callback{code: back.Query().Get("code"), state: back.Query().Get("state")}
+}
+
+// signIn runs Begin, the browser step and Finish with opts.
+func (s setup) signIn(t *testing.T, opts oauth.Options) (oauth.Identity, error) {
+	t.Helper()
+
+	authURL, pending := s.client.Begin(opts)
+	back := authorize(t, s.provider, authURL)
+
+	if back.state != pending.State {
+		t.Fatal("state of the callback differs from the state of the request")
+	}
+
+	return s.client.Finish(t.Context(), back.code, pending)
+}
+
+func TestSignInEachAlgorithm(t *testing.T) {
+	t.Parallel()
+
+	for _, alg := range []string{oauthtest.RS256, oauthtest.ES256, oauthtest.EdDSA} {
+		t.Run(alg, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t, alg, noFaults())
+
+			got, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false})
+			if err != nil {
+				t.Fatalf("sign in: %v", err)
+			}
+
+			want := oauth.Identity{
+				AuthTime: s.clock.Now().Truncate(time.Second), Subject: "248289761001", Name: "Alice Doe",
+				PreferredUsername: "alice", Email: "alice@example.com",
+			}
+			if !got.AuthTime.Equal(want.AuthTime) {
+				t.Errorf("AuthTime = %v, want %v", got.AuthTime, want.AuthTime)
+			}
+
+			got.AuthTime = want.AuthTime
+			if got != want {
+				t.Errorf("identity = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestBeginRequest(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.RS256, noFaults())
+
+	firstURL, first := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	_, second := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+
+	if first.State == second.State || first.Nonce == second.Nonce || first.Verifier == second.Verifier {
+		t.Error("two requests share a state, a nonce or a verifier")
+	}
+
+	u, err := url.Parse(firstURL)
+	if err != nil {
+		t.Fatalf("parse URL: %v", err)
+	}
+
+	q := u.Query()
+
+	for name, want := range map[string]string{
+		"response_type": "code", "client_id": clientID, "redirect_uri": redirectURI,
+		"scope": "openid profile email", "state": first.State, "nonce": first.Nonce,
+		"code_challenge_method": "S256",
+	} {
+		if got := q.Get(name); got != want {
+			t.Errorf("%s = %q, want %q", name, got, want)
+		}
+	}
+
+	if q.Get("code_challenge") == "" || q.Get("code_challenge") == first.Verifier {
+		t.Errorf("code_challenge = %q, want the S256 hash of the verifier", q.Get("code_challenge"))
+	}
+
+	if q.Has("max_age") {
+		t.Errorf("max_age = %q, want none", q.Get("max_age"))
+	}
+
+	if !strings.HasPrefix(firstURL, s.provider.AuthorizationEndpoint()+"?") {
+		t.Errorf("URL %q does not start with the authorization endpoint", firstURL)
+	}
+}
+
+func TestBeginMaxAge(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.RS256, noFaults())
+
+	for _, tc := range []struct {
+		maxAge time.Duration
+		want   string
+	}{
+		{maxAge: 0, want: "0"},
+		{maxAge: 15 * time.Minute, want: "900"},
+		{maxAge: 1500 * time.Millisecond, want: "1"},
+		{maxAge: -time.Minute, want: "0"},
+	} {
+		authURL, pending := s.client.Begin(oauth.Options{MaxAge: tc.maxAge, HasMaxAge: true})
+
+		u, err := url.Parse(authURL)
+		if err != nil {
+			t.Fatalf("parse URL: %v", err)
+		}
+
+		if got := u.Query().Get("max_age"); got != tc.want {
+			t.Errorf("max_age for %s = %q, want %q", tc.maxAge, got, tc.want)
+		}
+
+		if !pending.HasMaxAge || pending.MaxAge != mustSeconds(t, tc.want) {
+			t.Errorf("pending max age for %s = %s, want %s seconds", tc.maxAge, pending.MaxAge, tc.want)
+		}
+	}
+}
+
+// mustSeconds parses a number of seconds.
+func mustSeconds(t *testing.T, s string) time.Duration {
+	t.Helper()
+
+	d, err := time.ParseDuration(s + "s")
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+
+	return d
+}
+
+func TestFinishRefusesBadIDToken(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		faults oauthtest.Faults
+	}{
+		{name: "wrong issuer", faults: fault(func(f *oauthtest.Faults) { f.WrongIssuer = true })},
+		{name: "wrong audience", faults: fault(func(f *oauthtest.Faults) { f.WrongAudience = true })},
+		{name: "wrong nonce", faults: fault(func(f *oauthtest.Faults) { f.WrongNonce = true })},
+		{name: "expired", faults: fault(func(f *oauthtest.Faults) { f.Expired = true })},
+		{name: "bad signature", faults: fault(func(f *oauthtest.Faults) { f.BadSignature = true })},
+		{name: "alg none", faults: fault(func(f *oauthtest.Faults) { f.AlgNone = true })},
+		{name: "unknown key", faults: fault(func(f *oauthtest.Faults) { f.UnknownKey = true })},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t, oauthtest.RS256, tc.faults)
+
+			authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+			code := authorize(t, s.provider, authURL).code
+
+			_, err := s.client.Finish(t.Context(), code, pending)
+			if !errors.Is(err, oauth.ErrIDToken) {
+				t.Fatalf("Finish error = %v, want ErrIDToken", err)
+			}
+
+			checkNoSecret(t, err, code, pending)
+		})
+	}
+}
+
+// checkNoSecret fails the test when the text of err holds the code or a
+// secret of the pending request.
+func checkNoSecret(t *testing.T, err error, code string, p oauth.Pending) {
+	t.Helper()
+
+	for name, secret := range map[string]string{
+		"code": code, "state": p.State, "nonce": p.Nonce, "verifier": p.Verifier, "client secret": clientSecret,
+	} {
+		if secret != "" && strings.Contains(err.Error(), secret) {
+			t.Errorf("error text holds the %s: %v", name, err)
+		}
+	}
+}
+
+func TestFinishRefusesOtherNonce(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.ES256, noFaults())
+
+	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	code := authorize(t, s.provider, authURL).code
+
+	// The callback of another request: the same code, with the nonce of
+	// another pending request.
+	_, other := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	pending.Nonce = other.Nonce
+
+	_, err := s.client.Finish(t.Context(), code, pending)
+	if !errors.Is(err, oauth.ErrIDToken) {
+		t.Fatalf("Finish error = %v, want ErrIDToken", err)
+	}
+}
+
+func TestFinishRefusesEmptyPendingNonce(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.RS256, noFaults())
+
+	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	code := authorize(t, s.provider, authURL).code
+
+	pending.Nonce = ""
+
+	_, err := s.client.Finish(t.Context(), code, pending)
+	if !errors.Is(err, oauth.ErrIDToken) {
+		t.Fatalf("Finish error = %v, want ErrIDToken", err)
+	}
+}
+
+func TestFinishRefusedExchange(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		change func(code *string, p *oauth.Pending)
+	}{
+		{name: "wrong verifier", change: func(_ *string, p *oauth.Pending) { p.Verifier = strings.Repeat("v", 43) }},
+		{name: "unknown code", change: func(code *string, _ *oauth.Pending) { *code = "unknown-code-" + *code }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := newSetup(t, oauthtest.RS256, noFaults())
+
+			authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+			code := authorize(t, s.provider, authURL).code
+			tc.change(&code, &pending)
+
+			_, err := s.client.Finish(t.Context(), code, pending)
+			if !errors.Is(err, oauth.ErrProvider) {
+				t.Fatalf("Finish error = %v, want ErrProvider", err)
+			}
+
+			if !strings.Contains(err.Error(), `"invalid_grant"`) {
+				t.Errorf("error = %v, want the OAuth error code invalid_grant", err)
+			}
+
+			checkNoSecret(t, err, code, pending)
+		})
+	}
+}
+
+func TestFinishCodeUsedOnce(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.RS256, noFaults())
+
+	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	code := authorize(t, s.provider, authURL).code
+
+	if _, err := s.client.Finish(t.Context(), code, pending); err != nil {
+		t.Fatalf("first Finish: %v", err)
+	}
+
+	if _, err := s.client.Finish(t.Context(), code, pending); !errors.Is(err, oauth.ErrProvider) {
+		t.Fatalf("second Finish error = %v, want ErrProvider", err)
+	}
+}
+
+func TestMaxAgeSignsInAgain(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.EdDSA, noFaults())
+
+	first, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false})
+	if err != nil {
+		t.Fatalf("first sign-in: %v", err)
+	}
+
+	s.clock.Add(10 * time.Minute)
+
+	// The authentication is 10 minutes old, inside a max_age of 15
+	// minutes: the provider does not authenticate again.
+	kept, err := s.signIn(t, oauth.Options{MaxAge: 15 * time.Minute, HasMaxAge: true})
+	if err != nil {
+		t.Fatalf("sign-in inside max_age: %v", err)
+	}
+
+	if !kept.AuthTime.Equal(first.AuthTime) || s.provider.SignIns() != 1 {
+		t.Errorf("AuthTime = %v, sign-ins = %d, want %v and 1", kept.AuthTime, s.provider.SignIns(), first.AuthTime)
+	}
+
+	// max_age=0 makes the provider authenticate again, so auth_time is now.
+	again, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: true})
+	if err != nil {
+		t.Fatalf("sign-in with max_age 0: %v", err)
+	}
+
+	if !again.AuthTime.Equal(s.clock.Now()) || s.provider.SignIns() != 2 {
+		t.Errorf("AuthTime = %v, sign-ins = %d, want %v and 2", again.AuthTime, s.provider.SignIns(), s.clock.Now())
+	}
+}
+
+func TestFinishRefusesAuthenticationOlderThanMaxAge(t *testing.T) {
+	t.Parallel()
+
+	s := newSetup(t, oauthtest.RS256, noFaults())
+
+	if _, err := s.signIn(t, oauth.Options{MaxAge: 0, HasMaxAge: false}); err != nil {
+		t.Fatalf("first sign-in: %v", err)
+	}
+
+	s.clock.Add(10 * time.Minute)
+
+	// A provider that ignores max_age: the request sends none, but the
+	// pending request expects an authentication of at most 5 minutes.
+	authURL, pending := s.client.Begin(oauth.Options{MaxAge: 0, HasMaxAge: false})
+	code := authorize(t, s.provider, authURL).code
+
+	pending.MaxAge, pending.HasMaxAge = 5*time.Minute, true
+
+	_, err := s.client.Finish(t.Context(), code, pending)
+	if !errors.Is(err, oauth.ErrIDToken) || !strings.Contains(err.Error(), "max_age") {
+		t.Fatalf("Finish error = %v, want ErrIDToken about max_age", err)
+	}
+}
+
+func TestCheckAuthTime(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, time.October, 16, 9, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) *int64 {
+		sec := now.Add(d).Unix()
+
+		return &sec
+	}
+	noMaxAge := oauth.Pending{State: "", Nonce: "", Verifier: "", MaxAge: 0, HasMaxAge: false}
+	maxAge := func(d time.Duration) oauth.Pending {
+		return oauth.Pending{State: "", Nonce: "", Verifier: "", MaxAge: d, HasMaxAge: true}
+	}
+
+	for _, tc := range []struct {
+		name    string
+		claim   *int64
+		pending oauth.Pending
+		want    time.Time
+		wantErr bool
+	}{
+		{name: "no claim, no max_age", claim: nil, pending: noMaxAge, want: now, wantErr: false},
+		{name: "no claim with max_age", claim: nil, pending: maxAge(time.Hour), want: time.Time{}, wantErr: true},
+		{name: "claim in the past", claim: at(-time.Hour), pending: noMaxAge, want: now.Add(-time.Hour), wantErr: false},
+		{name: "claim inside the skew", claim: at(30 * time.Second), pending: noMaxAge, want: now.Add(30 * time.Second), wantErr: false},
+		{name: "claim in the future", claim: at(2 * time.Minute), pending: noMaxAge, want: time.Time{}, wantErr: true},
+		{name: "inside max_age", claim: at(-14 * time.Minute), pending: maxAge(15 * time.Minute), want: now.Add(-14 * time.Minute), wantErr: false},
+		{name: "max_age plus skew", claim: at(-16 * time.Minute), pending: maxAge(15 * time.Minute), want: now.Add(-16 * time.Minute), wantErr: false},
+		{name: "older than max_age", claim: at(-17 * time.Minute), pending: maxAge(15 * time.Minute), want: time.Time{}, wantErr: true},
+		{name: "max_age 0, fresh", claim: at(0), pending: maxAge(0), want: now, wantErr: false},
+		{name: "max_age 0, old", claim: at(-2 * time.Minute), pending: maxAge(0), want: time.Time{}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := oauth.CheckAuthTimeForTest(tc.claim, tc.pending, now)
+			if tc.wantErr {
+				if !errors.Is(err, oauth.ErrIDToken) {
+					t.Fatalf("error = %v, want ErrIDToken", err)
+				}
+
+				return
+			}
+
+			if err != nil || !got.Equal(tc.want) {
+				t.Fatalf("checkAuthTime = %v, %v, want %v", got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestNewRefusesConfig(t *testing.T) {
+	t.Parallel()
+
+	valid := oauth.Config{
+		HTTPClient: nil, Now: nil, Issuer: "https://idp.example", ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	}
+
+	for _, tc := range []struct {
+		name   string
+		change func(*oauth.Config)
+	}{
+		{name: "no client ID", change: func(c *oauth.Config) { c.ClientID = "" }},
+		{name: "no client secret", change: func(c *oauth.Config) { c.ClientSecret = "" }},
+		{name: "no redirect URL", change: func(c *oauth.Config) { c.RedirectURL = "" }},
+		{name: "relative issuer", change: func(c *oauth.Config) { c.Issuer = "idp.example" }},
+		{name: "http issuer", change: func(c *oauth.Config) { c.Issuer = "http://idp.example" }},
+		{name: "other scheme", change: func(c *oauth.Config) { c.Issuer = "ftp://idp.example" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := valid
+			tc.change(&cfg)
+
+			if _, err := oauth.New(t.Context(), cfg); !errors.Is(err, oauth.ErrConfig) {
+				t.Fatalf("New error = %v, want ErrConfig", err)
+			}
+		})
+	}
+}
+
+func TestNewAllowsHTTPOnLoopback(t *testing.T) {
+	t.Parallel()
+
+	p := oauthtest.New(t, oauthtest.Config{
+		Now: nil, ClientID: clientID, ClientSecret: clientSecret, RedirectURI: redirectURI, Algorithm: oauthtest.RS256,
+		User: alice(), Mode: oauthtest.ModeOIDC, Faults: noFaults(), TLS: false,
+	})
+
+	_, err := oauth.New(t.Context(), oauth.Config{
+		HTTPClient: p.Client(), Now: nil, Issuer: p.Issuer(), ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+	if err != nil {
+		t.Fatalf("New on a loopback http issuer: %v", err)
+	}
+}
+
+func TestNewRefusesProviderWithoutDiscovery(t *testing.T) {
+	t.Parallel()
+
+	p := oauthtest.New(t, oauthtest.Config{
+		Now: nil, ClientID: clientID, ClientSecret: clientSecret, RedirectURI: redirectURI, Algorithm: oauthtest.RS256,
+		User: alice(), Mode: oauthtest.ModeOAuth, Faults: noFaults(), TLS: true,
+	})
+
+	_, err := oauth.New(t.Context(), oauth.Config{
+		HTTPClient: p.Client(), Now: nil, Issuer: p.Issuer(), ClientID: clientID, ClientSecret: clientSecret,
+		RedirectURL: redirectURI, Scopes: nil,
+	})
+	if !errors.Is(err, oauth.ErrProvider) {
+		t.Fatalf("New error = %v, want ErrProvider", err)
+	}
+}
+
+func TestNewRefusesUnsupportedAlgorithms(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		algs string
+	}{
+		{name: "HMAC only", algs: `["HS256"]`},
+		{name: "none only", algs: `["none"]`},
+		{name: "no list", algs: `[]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var srv *httptest.Server
+
+			srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+
+				body := `{"issuer":"` + srv.URL + `","authorization_endpoint":"` + srv.URL + `/authorize",` +
+					`"token_endpoint":"` + srv.URL + `/token","jwks_uri":"` + srv.URL + `/jwks",` +
+					`"id_token_signing_alg_values_supported":` + tc.algs + `}`
+				if _, err := w.Write([]byte(body)); err != nil {
+					t.Errorf("write discovery: %v", err)
+				}
+			}))
+			t.Cleanup(srv.Close)
+
+			_, err := oauth.New(t.Context(), oauth.Config{
+				HTTPClient: srv.Client(), Now: nil, Issuer: srv.URL, ClientID: clientID, ClientSecret: clientSecret,
+				RedirectURL: redirectURI, Scopes: nil,
+			})
+			if !errors.Is(err, oauth.ErrProvider) {
+				t.Fatalf("New error = %v, want ErrProvider", err)
+			}
+		})
+	}
+}

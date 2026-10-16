@@ -144,7 +144,9 @@ func (f *fixture) group(tb testing.TB, name string, members ...string) access.Su
 
 	for _, m := range members {
 		mem := principal.Membership{
-			AddedAt: time.Unix(0, 0), GroupID: id, PrincipalID: "prn-" + m,
+			AddedAt: time.Unix(0, 0), SuspendedAt: time.Time{}, GroupID: id, PrincipalID: "prn-" + m,
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
 		}
 		if err := f.store.AddMember(ctx, mem, storetest.ServerChange(time.Unix(0, 0), "group:"+id)); err != nil {
 			tb.Fatalf("add member %q: %v", m, err)
@@ -1026,7 +1028,8 @@ func testEntry() audit.Entry {
 		Changes:  nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
-		ObjectID: "",
+		ObjectID:     "",
+		FenceVersion: 0,
 	}
 }
 
