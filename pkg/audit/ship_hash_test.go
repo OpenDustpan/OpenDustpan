@@ -98,6 +98,8 @@ func hashEntryWithRealHash(subject, object, userAgent, requestID string) audit.E
 		Object:       object,
 		Version:      "sv-1",
 		ValuePath:    "/outputs/db/password",
+		ValueCount:   nil,
+		Changes:      nil,
 		SourceIP:     "192.0.2.1",
 		UserAgent:    userAgent,
 		Channel:      audit.ChannelAPI,
@@ -226,6 +228,7 @@ func checkShippedHash(t *testing.T, body []byte) {
 		Version:      version,
 		ValuePath:    valuePath,
 		ValueCount:   valueCount,
+		Changes:      nil,
 		SourceIP:     sourceIP,
 		UserAgent:    userAgent,
 		Channel:      audit.Channel(channel),
@@ -294,15 +297,15 @@ func TestShippedEntryHashSurvivesSmallSinkLimit(t *testing.T) {
 	}
 
 	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("close sink: %v", err)
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close sink: %v", closeErr)
 		}
 	})
 
 	plain := hashEntryWithRealHash("admin", "pulumi:acme/web/prod", "pulumi-cli/3.200.0", "req-7")
 
-	if err := s.Write(t.Context(), []logsink.Record{audit.ToRecord(plain)}); err != nil {
-		t.Fatalf("write plain entry: %v", err)
+	if writeErr := s.Write(t.Context(), []logsink.Record{audit.ToRecord(plain)}); writeErr != nil {
+		t.Fatalf("write plain entry: %v", writeErr)
 	}
 
 	msgs := r.waitHashFor(t, 1)
@@ -366,7 +369,15 @@ func TestTrimmedAuditRecordHashMatchesFields(t *testing.T) {
 		strings.Repeat("u", 800),
 		strings.Repeat("r", 800),
 	)
-	entry.Changes = []audit.Change{{Key: "region", Old: nil, New: strings.Repeat("e", 200), Layer: "file", TakesEffect: ""}}
+	entry.Changes = []audit.Change{
+		{
+			Key:         "region",
+			Old:         nil,
+			New:         strings.Repeat("e", 200),
+			Layer:       "file",
+			TakesEffect: "",
+		},
+	}
 	entry.Hash = audit.ComputeHash(entry, entry.PrevHash)
 
 	longRec := audit.ToRecord(entry)

@@ -229,47 +229,52 @@ func TestTrimToFitNeverShortensProtectedAttribute(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			t.Parallel()
 
-			long := strings.Repeat("x", 5000)
-			rec := logsink.Record{
-				Time:    time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC),
-				Level:   logsink.LevelInfo,
-				Message: "audit entry",
-				Attrs: []logsink.Attr{
-					logsink.String(key, long),
-					logsink.String("note", strings.Repeat("n", 5000)),
-				},
-			}
-
-			got, ok, err := logsink.TrimToFit(rec, 480)
-			if err != nil {
-				t.Fatalf("trim: %v", err)
-			}
-
-			if ok {
-				kept, found := attrValue(got.Attrs, key)
-				if !found {
-					t.Fatalf("protected field %q is missing after trim", key)
-				}
-
-				if text, isString := kept.(string); !isString || text != long {
-					t.Fatalf("protected field %q was shortened: got %d bytes, want %d", key, len(text), len(long))
-				}
-
-				return
-			}
-
-			// A record that still exceeds the limit after trimming is
-			// skipped and the caller keeps the original: the protected
-			// value never ships shortened.
-			kept, found := attrValue(rec.Attrs, key)
-			if !found {
-				t.Fatalf("protected field %q is missing", key)
-			}
-
-			if text, isString := kept.(string); !isString || text != long {
-				t.Fatalf("protected field %q was shortened: got %d bytes, want %d", key, len(text), len(long))
-			}
+			checkProtectedKeySurvivesTrim(t, key)
 		})
+	}
+}
+
+func checkProtectedKeySurvivesTrim(t *testing.T, key string) {
+	t.Helper()
+
+	long := strings.Repeat("x", 5000)
+	rec := logsink.Record{
+		Time:    time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC),
+		Level:   logsink.LevelInfo,
+		Message: "audit entry",
+		Attrs: []logsink.Attr{
+			logsink.String(key, long),
+			logsink.String("note", strings.Repeat("n", 5000)),
+		},
+	}
+
+	got, ok, err := logsink.TrimToFit(rec, 480)
+	if err != nil {
+		t.Fatalf("trim: %v", err)
+	}
+
+	if ok {
+		assertAttrUnchanged(t, got.Attrs, key, long)
+
+		return
+	}
+
+	// A record that still exceeds the limit after trimming is skipped and
+	// the caller keeps the original: the protected value never ships shortened.
+	assertAttrUnchanged(t, rec.Attrs, key, long)
+}
+
+func assertAttrUnchanged(t *testing.T, attrs []logsink.Attr, key, want string) {
+	t.Helper()
+
+	kept, found := attrValue(attrs, key)
+	if !found {
+		t.Fatalf("protected field %q is missing after trim", key)
+	}
+
+	text, isString := kept.(string)
+	if !isString || text != want {
+		t.Fatalf("protected field %q was shortened", key)
 	}
 }
 
