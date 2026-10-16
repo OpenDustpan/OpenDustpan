@@ -13,6 +13,7 @@ import (
 	"time"
 
 	apiserver "opendustpan.org/opendustpan/internal/api/server"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -785,4 +786,273 @@ func TestRestoreWithoutTargetAnswers503(t *testing.T) {
 			t.Fatalf("%s %s body %q lacks the backup-target setting", target.method, target.path, body)
 		}
 	}
+}
+
+// TestStartRestoreWritesAccessModeAuditEntry proves a started restore writes
+// one audit entry that says whether the access tables were replaced or kept:
+// a caller that holds server:restore-access replaces them, any other caller
+// keeps the current rows.
+func TestStartRestoreWritesAccessModeAuditEntry(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		deny map[identity.Action]bool
+		want string
+	}{
+		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables replaced"},
+		{
+			name: "keeps without restore-access",
+			deny: map[identity.Action]bool{identity.ActionServerRestoreAccess: true},
+			want: "access tables kept",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkAccessModeAuditEntry(t, tc.deny, tc.want)
+		})
+	}
+}
+
+// checkAccessModeAuditEntry starts a restore with deny controlling
+// server:restore-access and proves the restore audit entry names want.
+func checkAccessModeAuditEntry(t *testing.T, deny map[identity.Action]bool, want string) {
+	t.Helper()
+
+	stores := openBackupDeps(t)
+
+	backups, err := backup.NewService(backup.Config{
+		Exporter:    stores.registry,
+		Registry:    stores.registry,
+		Blobs:       stores.live,
+		StateOpener: nil,
+		Target:      stores.target,
+		TargetName:  "dir:test",
+		Now:         nil,
+		Version:     "test",
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("new backup service: %v", err)
+	}
+
+	restores, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        stores.registry,
+		Registry:    stores.registry,
+		Backups:     backups,
+		Maintenance: newFakeMaintenance(maintenance.StateNormal),
+		Blobs:       stores.live,
+		Target:      stores.target,
+		Key:         nil,
+		Region:      "test",
+		AfterApply:  nil,
+		Admit:       nil,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service: %v", err)
+	}
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		CheckpointEpochs: nil,
+		SignIn:           nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: deny},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          backups,
+		Restores:         restores,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            stores.registry,
+		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	doc := startRestore(t, handler, `{"backupID":"bkp-missing000000000001"}`)
+
+	checkAuditEntryNamesAccessMode(t, stores, doc.ID, want)
+}
+
+// TestRestoreLeavesAuditEntryAfterSwap proves a restore that runs through
+// the swap leaves the restore audit entry, with the access mode, in the
+// restored audit log: an entry written before the swap would go away with
+// the old live data. A caller that holds server:restore-access replaces the
+// access tables, any other caller keeps the current rows.
+func TestRestoreLeavesAuditEntryAfterSwap(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		deny map[identity.Action]bool
+		want string
+	}{
+		{name: "replaces with restore-access", deny: map[identity.Action]bool{}, want: "access tables replaced"},
+		{
+			name: "keeps without restore-access",
+			deny: map[identity.Action]bool{identity.ActionServerRestoreAccess: true},
+			want: "access tables kept",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkRestoreAuditSurvivesSwap(t, tc.deny, tc.want)
+		})
+	}
+}
+
+// checkRestoreAuditSurvivesSwap takes a backup, restores it through the
+// routes to success, and proves the restored audit log holds the restore
+// audit entry naming want.
+func checkRestoreAuditSurvivesSwap(t *testing.T, deny map[identity.Action]bool, want string) {
+	t.Helper()
+
+	stores := openBackupDeps(t)
+	ctx := t.Context()
+
+	backups, err := backup.NewService(backup.Config{
+		Exporter:    stores.registry,
+		Registry:    stores.registry,
+		Blobs:       stores.live,
+		StateOpener: nil,
+		Target:      stores.target,
+		TargetName:  "dir:test",
+		Now:         nil,
+		Version:     "test",
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("new backup service: %v", err)
+	}
+
+	restores, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        stores.registry,
+		Registry:    stores.registry,
+		Backups:     backups,
+		Maintenance: newFakeMaintenance(maintenance.StateNormal),
+		Blobs:       stores.live,
+		Target:      stores.target,
+		Key:         nil,
+		Region:      "test",
+		AfterApply:  nil,
+		Admit:       nil,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service: %v", err)
+	}
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: stores.registry, Now: nil, Region: "test"})
+	if err != nil {
+		t.Fatalf("namespace service: %v", err)
+	}
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		CheckpointEpochs: nil,
+		SignIn:           nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: deny},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          backups,
+		Restores:         restores,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            stores.registry,
+		OnAuditFailure:   nil,
+		AuditChain:       nil,
+		DeletedUnits:     nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	backupID := backup.ID("bkp-test00000000000002")
+
+	if _, runErr := backups.Run(ctx, backupID); runErr != nil {
+		t.Fatalf("run backup %s: %v", backupID, runErr)
+	}
+
+	doc := startRestore(t, handler, `{"backupID":"`+backupID.String()+`"}`)
+	waitRestoreState(t, handler, doc.ID, "succeeded")
+
+	listing, err := stores.registry.List(ctx, audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	wantObject := "restore " + doc.ID + " of backup " + backupID.String() + " (" + want + ")"
+
+	for i := range listing.Entries {
+		entry := listing.Entries[i]
+		if entry.Action != string(identity.ActionServerRestore) {
+			continue
+		}
+
+		if entry.Object != wantObject {
+			t.Fatalf("restore audit object = %q, want %q", entry.Object, wantObject)
+		}
+
+		return
+	}
+
+	t.Fatalf("no audit entry holds %q", wantObject)
+}
+
+// checkAuditEntryNamesAccessMode proves the restore audit entry for id names
+// want.
+func checkAuditEntryNamesAccessMode(t *testing.T, stores backupStores, id, want string) {
+	t.Helper()
+
+	listing, err := stores.registry.List(
+		t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize},
+	)
+	if err != nil {
+		t.Fatalf("list entries: %v", err)
+	}
+
+	for i := range listing.Entries {
+		entry := listing.Entries[i]
+		if entry.Action != string(identity.ActionServerRestore) {
+			continue
+		}
+
+		if !strings.Contains(entry.Object, id) || !strings.Contains(entry.Object, want) {
+			t.Fatalf("restore audit object = %q, want restore %s with %q",
+				entry.Object, id, want)
+		}
+
+		return
+	}
+
+	t.Fatalf("no audit entry names restore %s with %q", id, want)
 }

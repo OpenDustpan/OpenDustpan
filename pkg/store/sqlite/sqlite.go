@@ -206,6 +206,11 @@ type Store struct {
 	// stagingMu guards stagingPath: one staged restore at a time.
 	stagingMu   sync.Mutex
 	stagingPath string
+	// keepAccessHook, when set, runs after the live access read and before
+	// the swap of a keep-access restore, while the write lock is held.
+	// Tests set it to prove a concurrent write stays blocked across that
+	// window. Nil in production.
+	keepAccessHook func(ctx context.Context)
 	// guardCancel stops the write-ahead log guard; guardDone closes when the
 	// guard ends. Close waits for the guard before it closes the connection,
 	// so no checkpoint runs on a closed handle.
@@ -272,6 +277,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		logger:              slog.New(slog.DiscardHandler),
 		lastTruncateSuccess: time.Now(),
 		busyWarned:          false,
+		keepAccessHook:      nil,
 	}
 	for _, opt := range opts {
 		opt(s)

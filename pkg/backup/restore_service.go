@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/secret"
 )
@@ -43,13 +45,17 @@ type RestoreMaintenance interface {
 }
 
 // RestoreRequest asks for one restore: the backup to apply, whether to check
-// only, whether to cancel active work, and who asked.
+// only, whether to cancel active work, who asked, and whether to keep the
+// current access tables. KeepAccessTables is true when the caller does not
+// hold server:restore-access: the restore replaces the other data and keeps
+// the current rows of the access tables.
 type RestoreRequest struct {
-	BackupID    ID
-	PreBackupID ID
-	CheckOnly   bool
-	Force       bool
-	RequestedBy string
+	BackupID         ID
+	PreBackupID      ID
+	CheckOnly        bool
+	Force            bool
+	RequestedBy      string
+	KeepAccessTables bool
 }
 
 // RestoreConfig holds the dependencies of a RestoreService.
@@ -501,6 +507,8 @@ func sanitizeRestoreError(err error) string {
 	switch {
 	case errors.Is(err, ErrRestoreRunning):
 		return ErrRestoreRunning.Error()
+	case errors.Is(err, ErrRestoreAccessMismatch):
+		return ErrRestoreAccessMismatch.Error()
 	case errors.Is(err, ErrCorrupt):
 		return ErrCorrupt.Error()
 	case errors.Is(err, ErrNativeFormat):
@@ -555,10 +563,11 @@ func secretRestoreMessage(err error) (string, bool) {
 }
 
 // logRestore writes one log line for a finished restore (issue 140): the
-// restore ID, the backup ID, the backup taken before it, who asked, and the
-// end state. It holds no secret and no driver text. The sanitized detail of
-// the failure goes to a second error line, so the operator can tell which
-// table, blob or check failed from the log alone.
+// restore ID, the backup ID, the backup taken before it, who asked, whether
+// the access tables were replaced or kept, and the end state. It holds no
+// secret and no driver text. The sanitized detail of the failure goes to a
+// second error line, so the operator can tell which table, blob or check
+// failed from the log alone.
 func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
 	record, getErr := s.registry.GetRestore(ctx, out.id)
 	pre := out.req.PreBackupID.String()
@@ -567,10 +576,16 @@ func (s *RestoreService) logRestore(ctx context.Context, out restoreOutcome) {
 		pre = record.PreBackupID.String()
 	}
 
+	accessMode := "replaced"
+	if out.req.KeepAccessTables {
+		accessMode = "kept"
+	}
+
 	attrs := []slog.Attr{
 		slog.String("restore_id", out.id.String()),
 		slog.String("backup_id", out.req.BackupID.String()),
 		slog.String("requested_by", out.req.RequestedBy),
+		slog.String("access_tables", accessMode),
 		slog.String("state", string(out.state)),
 	}
 
@@ -731,6 +746,7 @@ func isLogSentinel(err error) bool {
 		errors.Is(err, ErrRestoreExists),
 		errors.Is(err, ErrRestoreNotRunning),
 		errors.Is(err, ErrRestoreRunning),
+		errors.Is(err, ErrRestoreAccessMismatch),
 		errors.Is(err, maintenance.ErrActiveWork),
 		errors.Is(err, maintenance.ErrUnavailable),
 		errors.Is(err, maintenance.ErrInvalidState),
@@ -816,17 +832,19 @@ func (s *RestoreService) restore(ctx context.Context, id RestoreID, req RestoreR
 		s.trackRestore(marked)
 	}
 
-	return s.applyPinned(ctx, id, req.BackupID, pinned, pre)
+	return s.applyPinned(ctx, id, req, pinned, pre)
 }
 
 // applyPinned stages the pinned backup, copies its blobs, swaps the staged
 // data in one fenced step, fails the running rows the swap resurrected, and
 // preserves the restore row and the pre-backup row across the swap. The
 // manifest is pinned again first, so a target mutated after the checks cannot
-// be applied.
+// be applied. When req keeps the access tables, the swap keeps the current
+// rows of the access tables and replaces the other tables.
 func (s *RestoreService) applyPinned(
-	ctx context.Context, id RestoreID, backupID ID, pinned pinnedManifest, pre Record,
+	ctx context.Context, id RestoreID, req RestoreRequest, pinned pinnedManifest, pre Record,
 ) error {
+	backupID := req.BackupID
 	if repinErr := s.repinManifest(ctx, backupID, pinned); repinErr != nil {
 		return repinErr
 	}
@@ -858,8 +876,8 @@ func (s *RestoreService) applyPinned(
 	// and Get serves the held row until recreateAfterSwap stores it again.
 	s.trackRestore(before)
 
-	if applyErr := s.live.ApplyStaging(ctx); applyErr != nil {
-		return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
+	if err := s.applyStaged(ctx, id, req); err != nil {
+		return err
 	}
 
 	// The swap replaced the live data. A later step that fails still runs
@@ -868,6 +886,13 @@ func (s *RestoreService) applyPinned(
 	if err := s.afterSwap(ctx, id, before, pre); err != nil {
 		return errors.Join(err, s.runAfterApply(ctx, id))
 	}
+
+	// The audit entry for the start went away with the old live data: the
+	// swap replaced audit_entries from the backup. Write the entry after the
+	// swap, in the restored data, so it survives. The access mode lives in
+	// the existing object field: no new column. A lost entry does not fail
+	// the restore.
+	s.appendRestoreAudit(ctx, id, req)
 
 	return s.runAfterApply(ctx, id)
 }
@@ -915,11 +940,84 @@ func (s *RestoreService) runAfterApply(ctx context.Context, id RestoreID) error 
 	return nil
 }
 
+// appendRestoreAudit writes the audit entry of restore id after the swap, in
+// the restored data, so the entry survives the swap that replaced
+// audit_entries from the backup. The object names whether the access tables
+// were replaced or kept. The live store keeps the entry; a store without the
+// server audit port skips it. Best effort: a lost entry never fails the
+// restore.
+func (s *RestoreService) appendRestoreAudit(ctx context.Context, id RestoreID, req RestoreRequest) {
+	store, ok := s.live.(interface {
+		AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, error)
+	})
+	if !ok {
+		return
+	}
+
+	mode := "replaced"
+	if req.KeepAccessTables {
+		mode = "kept"
+	}
+
+	entry := audit.Entry{
+		At:           s.now().UTC(),
+		Namespace:    audit.ServerScope,
+		Subject:      req.RequestedBy,
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       string(identity.ActionServerRestore),
+		Object:       "restore " + id.String() + " of backup " + req.BackupID.String() + " (access tables " + mode + ")",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "",
+		UserAgent:    "",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
+	}
+
+	if _, err := store.AppendServer(ctx, entry); err != nil {
+		s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", id.String()))
+	}
+}
+
 // restoreSupersededText explains a running row the swap resurrected: the row
 // belongs to a restore whose data this restore replaced, so it can never
 // finish. The text holds only the superseding restore ID.
 func restoreSupersededText(id RestoreID) string {
 	return fmt.Sprintf("restore superseded by restore %s", id)
+}
+
+// applyStaged swaps the staged backup live. When req keeps the access
+// tables, the swap keeps the current rows of the access tables and replaces
+// the other tables.
+func (s *RestoreService) applyStaged(ctx context.Context, id RestoreID, req RestoreRequest) error {
+	if !req.KeepAccessTables {
+		if applyErr := s.live.ApplyStaging(ctx); applyErr != nil {
+			return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
+		}
+
+		return nil
+	}
+
+	keeper, ok := s.live.(AccessKeepingApplier)
+	if !ok {
+		return fmt.Errorf("apply staged data for restore %s: %w", id, ErrMissingDependency)
+	}
+
+	if applyErr := keeper.ApplyStagingKeepingAccess(ctx); applyErr != nil {
+		return fmt.Errorf("apply staged data for restore %s: %w", id, applyErr)
+	}
+
+	return nil
 }
 
 // pinnedManifest pins the manifest fields the second stage must still match,

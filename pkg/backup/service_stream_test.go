@@ -155,11 +155,12 @@ func restoreStreamedBackup(
 		applyGate:   nil,
 		stageCalls:  0,
 		applied:     0,
+		kept:        0,
 		bumped:      0,
+		keepingErr:  nil,
 		resurrect:   nil,
 		wipeBackups: nil,
 	}
-
 	backups, err := backup.NewService(backup.Config{
 		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
 		Registry:    newFakeRegistry(),
@@ -196,11 +197,12 @@ func restoreStreamedBackup(
 	restoreID := backup.RestoreID("rst-stream00000000001")
 
 	startErr := service.Start(t.Context(), restoreID, backup.RestoreRequest{
-		BackupID:    id,
-		PreBackupID: "",
-		CheckOnly:   false,
-		Force:       false,
-		RequestedBy: "tester",
+		BackupID:         id,
+		PreBackupID:      "",
+		CheckOnly:        false,
+		Force:            false,
+		RequestedBy:      "tester",
+		KeepAccessTables: false,
 	})
 	if startErr != nil {
 		t.Fatalf("start restore: %v", startErr)
