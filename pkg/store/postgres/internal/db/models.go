@@ -329,6 +329,12 @@ type SessionPolicy struct {
 	TokenFreshnessMs pgtype.Int8
 }
 
+type SignInFailure struct {
+	Source      string
+	WindowEndMs int64
+	Count       int64
+}
+
 type SignInProvider struct {
 	ProviderID       string
 	Issuer           string

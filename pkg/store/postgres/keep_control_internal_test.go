@@ -31,8 +31,9 @@ func connectKeepControl(t *testing.T) *pgx.Conn {
 }
 
 // durableSchema creates a schema with the baseline tables on conn and holds
-// one operation with key and token in it, with one step, and one schedule
-// called key whose next run is token.
+// one operation with key and token in it, with one step, one schedule
+// called key whose next run is token, and one sign-in failure window of key
+// that ends at token with count token.
 func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string {
 	t.Helper()
 
@@ -51,7 +52,12 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 		t.Fatalf("read baseline: %v", err)
 	}
 
-	for _, stmt := range []string{"CREATE SCHEMA " + ident, "SET search_path TO " + ident, string(ddl)} {
+	failuresDDL, err := migrations.ReadFile("migrations/0104_sign_in_failures.sql")
+	if err != nil {
+		t.Fatalf("read sign-in failures migration: %v", err)
+	}
+
+	for _, stmt := range []string{"CREATE SCHEMA " + ident, "SET search_path TO " + ident, string(ddl), string(failuresDDL)} {
 		if _, execErr := conn.Exec(ctx, stmt); execErr != nil {
 			t.Fatalf("create durable schema: %v", execErr)
 		}
@@ -72,6 +78,11 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 	insertSchedule := "INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms) VALUES ($1, 1000, $2)"
 	if _, execErr := conn.Exec(ctx, insertSchedule, key, token); execErr != nil {
 		t.Fatalf("insert schedule: %v", execErr)
+	}
+
+	insertFailure := "INSERT INTO sign_in_failures (source, window_end_ms, count) VALUES ($1, $2, $2)"
+	if _, execErr := conn.Exec(ctx, insertFailure, key, token); execErr != nil {
+		t.Fatalf("insert sign-in failure: %v", execErr)
 	}
 
 	if _, execErr := conn.Exec(ctx, "RESET search_path"); execErr != nil {
@@ -130,6 +141,8 @@ func TestKeepControlTablesKeepsTheLiveRows(t *testing.T) {
 	}
 
 	checkKeptSchedules(t, conn, ident)
+
+	checkKeptSignInFailures(t, conn, ident)
 }
 
 // checkKeptSchedules fails t unless the schema ident holds only the live
@@ -152,5 +165,29 @@ func checkKeptSchedules(t *testing.T, conn *pgx.Conn, ident string) {
 	if schedule != "live" || nextRun != 5 || rows != 1 {
 		t.Fatalf("restored schedules = %q next run %d (%d rows), want only the live schedule with next run 5",
 			schedule, nextRun, rows)
+	}
+}
+
+// checkKeptSignInFailures fails t unless the schema ident holds only the live
+// sign-in failure window, with the end and the count that it had before the
+// swap.
+func checkKeptSignInFailures(t *testing.T, conn *pgx.Conn, ident string) {
+	t.Helper()
+
+	var (
+		source string
+		end    int64
+		count  int64
+		rows   int
+	)
+
+	read := "SELECT source, window_end_ms, count, (SELECT count(*) FROM " + ident + ".sign_in_failures) FROM " +
+		ident + ".sign_in_failures"
+	if scanErr := conn.QueryRow(t.Context(), read).Scan(&source, &end, &count, &rows); scanErr != nil {
+		t.Fatalf("read restored sign-in failures: %v", scanErr)
+	}
+
+	if source != "live" || end != 5 || count != 5 || rows != 1 {
+		t.Fatalf("restored sign-in failures: source %q end %d count %d rows %d", source, end, count, rows)
 	}
 }
