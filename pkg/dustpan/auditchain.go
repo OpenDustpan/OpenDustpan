@@ -27,6 +27,11 @@ import (
 // auditChainCheckInterval is the time between two scheduled chain checks.
 const auditChainCheckInterval = time.Hour
 
+// auditChainDrainTimeout bounds the startup drain of left migration
+// operations: a long log or a stuck database call delays startup by at
+// most this time, then the background runner continues the migration.
+const auditChainDrainTimeout = 30 * time.Second
+
 // The durable operation that migrates the audit chain after an approval. One
 // start key gives one operation, so two approvals give one operation while
 // the first still runs.
@@ -316,10 +321,10 @@ func (c *auditChain) Status(ctx context.Context) (serverapi.AuditChainStatus, er
 }
 
 // Approve implements serverapi.AuditChain: it checks the MFA step of a
-// change to off, refuses while a restore runs, starts one durable operation
-// for the change, enters maintenance mode and writes the entry of the
-// approval in the server scope. Two approvals with one start key give one
-// operation: the second answers ErrChainMigrating.
+// change to off, refuses while a restore runs, enters maintenance mode,
+// writes the entry of the approval in the server scope and starts one
+// durable operation for the change. Two approvals with one start key give
+// one operation: the second answers ErrChainMigrating.
 func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 	if err := c.checkApprovalGate(ctx, caller); err != nil {
 		return err
@@ -333,14 +338,21 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 		return err
 	}
 
-	change := audit.ChainChange{At: c.chainNow(), By: caller.Subject, To: c.setting.State()}
-
-	op, err := c.startApprovalOp(ctx, change)
-	if err != nil {
+	if err := c.refuseWhileMigrating(ctx); err != nil {
 		return err
 	}
 
-	return c.finishApproval(ctx, caller, change, op)
+	change := audit.ChainChange{At: c.chainNow(), By: caller.Subject, To: c.setting.State()}
+
+	if err := c.enterForApproval(ctx); err != nil {
+		return err
+	}
+
+	if _, err := c.server.AppendServer(ctx, audit.ChainSetEntry(caller, change)); err != nil {
+		return fmt.Errorf("append audit chain approval: %w", err)
+	}
+
+	return c.startApprovalOp(ctx, change)
 }
 
 // checkApprovalGate refuses an approval while the migration loop stops,
@@ -384,51 +396,47 @@ func (c *auditChain) requirePendingChange(ctx context.Context) error {
 	return nil
 }
 
-// startApprovalOp starts one migration operation for change, and answers
-// it. Two approvals with one start key give one operation: the second
-// answers ErrChainMigrating. An approval after a finished operation starts
-// a new one under a new key.
-func (c *auditChain) startApprovalOp(ctx context.Context, change audit.ChainChange) (durable.Operation, error) {
-	op, created, err := c.startMigrationOp(ctx, auditChainKey, change)
+// refuseWhileMigrating refuses an approval while a migration operation
+// can run: a second approval while the first still runs answers
+// ErrChainMigrating before it writes anything.
+func (c *auditChain) refuseWhileMigrating(ctx context.Context) error {
+	running, err := c.migrationRunning(ctx)
 	if err != nil {
-		return durable.Operation{}, err
-	}
-
-	if created {
-		return op, nil
-	}
-
-	if !terminalMigration(op) {
-		return durable.Operation{}, audit.ErrChainMigrating
-	}
-
-	next, created, err := c.startMigrationOp(ctx, auditChainRetryKey(), change)
-	if err != nil {
-		return durable.Operation{}, err
-	}
-
-	if !created {
-		return durable.Operation{}, audit.ErrChainMigrating
-	}
-
-	return next, nil
-}
-
-// finishApproval enters maintenance mode for an approved change and writes
-// its entry. A failure cancels the migration operation it started.
-func (c *auditChain) finishApproval(
-	ctx context.Context, caller audit.Entry, change audit.ChainChange, op durable.Operation,
-) error {
-	if err := c.enterForApproval(ctx); err != nil {
-		c.cancelMigrationOp(ctx, op.ID)
-
 		return err
 	}
 
-	if _, err := c.server.AppendServer(ctx, audit.ChainSetEntry(caller, change)); err != nil {
-		c.cancelMigrationOp(ctx, op.ID)
+	if running {
+		return audit.ErrChainMigrating
+	}
 
-		return fmt.Errorf("append audit chain approval: %w", err)
+	return nil
+}
+
+// startApprovalOp starts one migration operation for change. Two approvals
+// with one start key give one operation: the second answers
+// ErrChainMigrating. An approval after a finished operation starts a new
+// one under a new key.
+func (c *auditChain) startApprovalOp(ctx context.Context, change audit.ChainChange) error {
+	op, created, err := c.startMigrationOp(ctx, auditChainKey, change)
+	if err != nil {
+		return err
+	}
+
+	if created {
+		return nil
+	}
+
+	if !terminalMigration(op) {
+		return audit.ErrChainMigrating
+	}
+
+	_, created, err = c.startMigrationOp(ctx, auditChainRetryKey(), change)
+	if err != nil {
+		return err
+	}
+
+	if !created {
+		return audit.ErrChainMigrating
 	}
 
 	return nil
@@ -466,16 +474,6 @@ func terminalMigration(op durable.Operation) bool {
 // migration that already ended. The key is unique per call.
 func auditChainRetryKey() string {
 	return auditChainKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-}
-
-// cancelMigrationOp cancels the migration operation id after an approval
-// that started it stops. A failed cancel only logs: the operation stays to
-// run or to end.
-func (c *auditChain) cancelMigrationOp(ctx context.Context, id durable.ID) {
-	if err := c.durableOps.Cancel(ctx, id); err != nil {
-		c.logger.WarnContext(ctx, "cancel audit chain migration",
-			slog.String("error", err.Error()))
-	}
 }
 
 // migrationRunning reports whether a migration operation can run now: one
@@ -564,12 +562,9 @@ func (c *auditChain) startUp(ctx context.Context) error {
 		return fmt.Errorf("audit chain: %w", err)
 	}
 
-	if c.setting.State() != rec.State && !rec.Pending {
-		rec.Pending = true
-
-		if err := c.store.SaveChainRecord(ctx, rec); err != nil {
-			return fmt.Errorf("audit chain: %w", err)
-		}
+	rec, err = c.markWaitingChange(ctx, rec)
+	if err != nil {
+		return fmt.Errorf("audit chain: %w", err)
 	}
 
 	c.remember(rec)
@@ -591,15 +586,23 @@ func (c *auditChain) startUp(ctx context.Context) error {
 	return c.enterMaintenance(ctx)
 }
 
-// startUpRecord runs the migration operations that an earlier instance
-// left before they ended, and answers the stored state for this start. A
-// left operation may have stored the new state already: without the drain,
-// this start would set the wait of its own change, and the left operation
-// would then clear it, or an approval would meet a migration that still
+// startUpRecord answers the stored state for this start. It first drains
+// the migration operations that an earlier instance left, with a timeout:
+// a left operation may have stored the new state already, and without the
+// drain this start would set the wait of its own change and the left
+// operation would then clear it. After the timeout the background runner
+// continues the migration, and the start sets no wait of its own while it
 // runs.
 func (c *auditChain) startUpRecord(ctx context.Context) (audit.ChainRecord, error) {
-	if err := c.drainMigrations(ctx); err != nil {
-		return audit.ChainRecord{}, fmt.Errorf("audit chain: %w", err)
+	drainCtx, cancel := context.WithTimeout(ctx, auditChainDrainTimeout)
+	defer cancel()
+
+	if err := c.drainMigrations(drainCtx); err != nil {
+		if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(drainCtx.Err(), context.DeadlineExceeded) {
+			return audit.ChainRecord{}, fmt.Errorf("audit chain: %w", err)
+		}
+
+		c.logger.WarnContext(ctx, "audit chain drain timed out; the background runner continues the migration")
 	}
 
 	rec, err := c.store.ChainRecord(ctx)
@@ -611,10 +614,7 @@ func (c *auditChain) startUpRecord(ctx context.Context) (audit.ChainRecord, erro
 }
 
 // drainMigrations runs the migration operations that an earlier instance
-// left before they ended, before this start reads the stored state. A left
-// operation may have stored the new state already: without the drain, this
-// start would set the wait of its own change, and the left operation would
-// then clear it, or an approval would meet a migration that still runs. It
+// left before they ended, before this start reads the stored state. It
 // stops at the first claim that finds no work, or at an operation of a
 // newer binary, which stays for a newer instance.
 func (c *auditChain) drainMigrations(ctx context.Context) error {
@@ -629,6 +629,33 @@ func (c *auditChain) drainMigrations(ctx context.Context) error {
 			return fmt.Errorf("run pending audit chain migration: %w", err)
 		}
 	}
+}
+
+// markWaitingChange sets the wait of this start when its setting differs
+// from the stored state and no wait exists. While a left migration still
+// runs, it sets nothing: the migration owns the stored state until it ends,
+// and the background runner continues it.
+func (c *auditChain) markWaitingChange(ctx context.Context, rec audit.ChainRecord) (audit.ChainRecord, error) {
+	if c.setting.State() == rec.State || rec.Pending {
+		return rec, nil
+	}
+
+	running, err := c.migrationRunning(ctx)
+	if err != nil {
+		return rec, err
+	}
+
+	if running {
+		return rec, nil
+	}
+
+	rec.Pending = true
+
+	if err := c.store.SaveChainRecord(ctx, rec); err != nil {
+		return rec, fmt.Errorf("save audit chain state: %w", err)
+	}
+
+	return rec, nil
 }
 
 // cancelWaitingChange clears a waiting change when the setting matches the
