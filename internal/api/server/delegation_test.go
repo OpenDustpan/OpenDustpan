@@ -61,8 +61,8 @@ func TestDelegationRoutesRefuse(t *testing.T) {
 
 	var service, personal tokenDoc
 	f.as(t, "admin", apiCall{http.MethodPost, deploy + "/tokens", `{"name":"ci"}`, http.StatusCreated}, &service)
-	f.as(t, "admin", apiCall{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"prn-alice","name":"laptop"}`, http.StatusCreated,
+	f.as(t, "alice", apiCall{
+		http.MethodPost, "/api/server/caller/tokens", `{"name":"laptop"}`, http.StatusCreated,
 	}, &personal)
 
 	for _, c := range []struct {
@@ -250,5 +250,32 @@ func TestNamespacePrincipalRoutes(t *testing.T) {
 		{"alice", apiCall{http.MethodDelete, one, "", http.StatusNoContent}},
 	} {
 		f.as(t, c.subject, c.call, nil)
+	}
+}
+
+// TestNoRouteMakesAPersonalTokenOfAnother proves that no route makes or
+// rotates a personal token of another person, for an administrator too:
+// the person makes its own under /api/server/caller/tokens. The list, the
+// read and the revoke of every token stay.
+func TestNoRouteMakesAPersonalTokenOfAnother(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	var own tokenDoc
+	f.as(
+		t,
+		"alice",
+		apiCall{http.MethodPost, "/api/server/caller/tokens", `{"name":"laptop"}`, http.StatusCreated},
+		&own,
+	)
+
+	for _, c := range []apiCall{
+		{http.MethodPost, "/api/server/tokens", `{"principalID":"prn-alice","name":"laptop"}`, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/api/server/tokens/" + own.ID + "/rotate", `{}`, http.StatusNotFound},
+		{http.MethodGet, "/api/server/tokens/" + own.ID, "", http.StatusOK},
+		{http.MethodDelete, "/api/server/tokens/" + own.ID, "", http.StatusNoContent},
+	} {
+		f.as(t, "admin", c, nil)
 	}
 }

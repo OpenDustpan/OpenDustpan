@@ -581,8 +581,6 @@ func tokenTargets() []string {
 	principalTokens := "/api/server/principals/" + testOtherPrincipalID + "/tokens"
 
 	return []string{
-		"/api/server/tokens",
-		"/api/server/tokens/" + testServiceTokenID + "/rotate",
 		"/api/server/service-tokens",
 		"/api/server/service-tokens/" + testServiceTokenID + "/rotate",
 		"/api/server/caller/tokens",
