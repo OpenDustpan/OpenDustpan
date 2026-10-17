@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 func TestGateStatus(t *testing.T) {
@@ -17,7 +19,7 @@ func TestGateStatus(t *testing.T) {
 	approve := func(subject string) job.Approval {
 		return job.Approval{
 			Gate: job.GateApproval, Subject: subject, Agent: "", Verdict: job.VerdictApprove, Comment: "",
-			Plan: nil, At: time.Time{}, MFAAt: time.Time{},
+			Plan: nil, At: time.Time{}, Auth: "", AuthAt: time.Time{},
 		}
 	}
 	reject := func(subject string) job.Approval {
@@ -105,7 +107,22 @@ func TestConfirmationGateStatus(t *testing.T) {
 			[]job.Approval{confirmation("al", job.ConfirmFreshness+time.Second)},
 			job.GateWaiting,
 		},
-		{"the requester with no MFA step", []job.Approval{noMFA(confirmation("al", 0))}, job.GateWaiting},
+		{"the requester with no MFA step", []job.Approval{noAuth(confirmation("al", 0))}, job.GateWaiting},
+		{
+			"the requester with a fresh SSO sign-in",
+			[]job.Approval{withAuth(confirmation("al", time.Minute), job.ConfirmAuthSSO)},
+			job.GateOpen,
+		},
+		{
+			"the requester with an old SSO sign-in",
+			[]job.Approval{withAuth(confirmation("al", job.ConfirmFreshness+time.Second), job.ConfirmAuthSSO)},
+			job.GateWaiting,
+		},
+		{
+			"a fresh time with no kind of authentication",
+			[]job.Approval{withAuth(confirmation("al", time.Minute), "")},
+			job.GateWaiting,
+		},
 		{
 			"an MFA step after the confirmation",
 			[]job.Approval{confirmation("al", -time.Minute)},
@@ -355,7 +372,7 @@ func TestCheckAgent(t *testing.T) {
 
 			a := job.Actor{Principal: identity.Principal{
 				Subject: "al", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
-			}, Agent: tt.agent, Mode: tt.mode}
+			}, Agent: tt.agent, Mode: tt.mode, ConfirmAuth: job.ConfirmAuthMFA, AuthAt: time.Time{}}
 
 			confirm, err := job.CheckAgent(&tt.spec, a, tt.sw)
 			if (tt.err == nil && err != nil) || (tt.err != nil && !errors.Is(err, tt.err)) {
@@ -369,20 +386,114 @@ func TestCheckAgent(t *testing.T) {
 	}
 }
 
+// TestCheckAgentFreshAuth checks the rules of the fresh authentication
+// and of the runner operations in each mode.
+func TestCheckAgentFreshAuth(t *testing.T) {
+	t.Parallel()
+
+	unit := identity.NamespaceObject("acme")
+	all := job.DirectSwitches{Server: true, Namespace: true, User: true}
+
+	tests := []struct {
+		name    string
+		op      job.Operation
+		mode    job.AgentMode
+		auth    job.ConfirmAuth
+		confirm bool
+		err     error
+	}{
+		{
+			"approve-first with MFA confirms",
+			job.OperationApply,
+			job.AgentModeApproveFirst,
+			job.ConfirmAuthMFA,
+			true,
+			nil,
+		},
+		{
+			"approve-first with SSO confirms",
+			job.OperationApply,
+			job.AgentModeApproveFirst,
+			job.ConfirmAuthSSO,
+			true,
+			nil,
+		},
+		{
+			"approve-first with no fresh authentication is refused", job.OperationApply, job.AgentModeApproveFirst,
+			"", false, job.ErrAgentDenied,
+		},
+		{
+			"an empty mode with no fresh authentication is refused",
+			job.OperationDestroy,
+			"",
+			"",
+			false,
+			job.ErrAgentDenied,
+		},
+		{
+			"a plan with no fresh authentication in approve-first",
+			job.OperationPlan,
+			job.AgentModeApproveFirst,
+			"",
+			false,
+			nil,
+		},
+		{"a plan in review-request mode", job.OperationPlan, job.AgentModeReviewRequest, "", false, nil},
+		{"a plan in direct mode", job.OperationPlan, job.AgentModeDirect, "", false, nil},
+		{
+			"review-request mode refuses a runner destroy", job.OperationDestroy, job.AgentModeReviewRequest,
+			job.ConfirmAuthMFA, false, job.ErrAgentDenied,
+		},
+		{
+			"review-request mode refuses a runner refresh", job.OperationRefresh, job.AgentModeReviewRequest,
+			job.ConfirmAuthMFA, false, job.ErrAgentDenied,
+		},
+		{"direct mode needs no fresh authentication", job.OperationApply, job.AgentModeDirect, "", false, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			spec := newSpec(unit, tt.op, job.ExecutorRunner)
+			a := job.Actor{Principal: identity.Principal{
+				Subject: "al", DisplayName: "", Admin: false, TokenID: "", TokenExpiresAt: time.Time{},
+			}, Agent: "dusty", Mode: tt.mode, ConfirmAuth: tt.auth, AuthAt: time.Time{}}
+
+			confirm, err := job.CheckAgent(&spec, a, all)
+			if (tt.err == nil && err != nil) || (tt.err != nil && !errors.Is(err, tt.err)) {
+				t.Fatalf("CheckAgent() error = %v, want %v", err, tt.err)
+			}
+
+			if confirm != tt.confirm {
+				t.Fatalf("CheckAgent() confirm = %t, want %t", confirm, tt.confirm)
+			}
+		})
+	}
+}
+
 // confirmation returns a confirmation by subject at a fixed time, with
-// the MFA step mfaAge before it.
-func confirmation(subject string, mfaAge time.Duration) job.Approval {
+// an MFA step authAge before it.
+func confirmation(subject string, authAge time.Duration) job.Approval {
 	at := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 
 	return job.Approval{
 		Gate: job.GateConfirmation, Subject: subject, Agent: "", Verdict: job.VerdictApprove, Comment: "",
-		Plan: nil, At: at, MFAAt: at.Add(-mfaAge),
+		Plan: nil, At: at, Auth: job.ConfirmAuthMFA, AuthAt: at.Add(-authAge),
 	}
 }
 
-// noMFA returns a with no MFA step.
-func noMFA(a job.Approval) job.Approval {
-	a.MFAAt = time.Time{}
+// noAuth returns a with no fresh authentication.
+func noAuth(a job.Approval) job.Approval {
+	a.Auth = ""
+	a.AuthAt = time.Time{}
+
+	return a
+}
+
+// withAuth returns a with the fresh authentication of the kind c.
+func withAuth(a job.Approval, c job.ConfirmAuth) job.Approval {
+	a.Auth = c
 
 	return a
 }
@@ -462,12 +573,12 @@ func TestCheckPlan(t *testing.T) {
 // the hashes display and apply of its two parts.
 func storedPlan(sv string, made time.Time, display, apply string) *job.PlanRef {
 	return &job.PlanRef{
-		ID: "pln-" + display + apply, ItemKey: "ik-" + display + apply, StateVersion: sv,
+		ID: "pln-" + display + apply, ItemKey: secret.ItemKeyID("ik-" + display + apply), StateVersion: sv,
 		Parts: []job.PlanPart{
 			{Kind: job.OutputPlanDisplay, Size: 10, SHA256: display, Secret: false},
 			{Kind: job.OutputPlanApply, Size: 20, SHA256: apply, Secret: true},
 		},
-		CreatedAt: made, ExpiresAt: made.Add(400 * 24 * time.Hour), RedactedAt: time.Time{},
+		CreatedAt: made, ExpiresAt: history.ExpiresAt(made, history.DefaultRetention), RedactedAt: time.Time{},
 	}
 }
 

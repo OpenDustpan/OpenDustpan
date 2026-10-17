@@ -38,10 +38,32 @@ const (
 	DefaultDispatchTimeout = 24 * time.Hour
 )
 
-// ConfirmFreshness is the longest time from the last MFA step of a
-// person to the confirmation that the person records. It is the default
-// freshness window for a secret reveal.
+// ConfirmFreshness is the maximum age of the fresh authentication of a
+// confirmation: the longest time from the MFA step, or from the new
+// authentication at the SSO provider, to the confirmation that the person
+// records. It is the same number as the default freshness window for a
+// secret reveal and for a token from an SSO session.
 const ConfirmFreshness = 15 * time.Minute
+
+// ConfirmAuth is the fresh authentication that a person gives for a
+// confirmation.
+type ConfirmAuth string
+
+// The fresh authentications of a confirmation.
+const (
+	// ConfirmAuthMFA is a new step of the built-in MFA, where MFA covers
+	// the person.
+	ConfirmAuthMFA ConfirmAuth = "mfa"
+	// ConfirmAuthSSO is a new authentication at the SSO identity provider
+	// of the person, asked with a maximum age, where MFA does not cover the
+	// person. Its time is the authentication time that the provider gives.
+	ConfirmAuthSSO ConfirmAuth = "sso"
+)
+
+// Valid reports whether c is one of the fresh authentications.
+func (c ConfirmAuth) Valid() bool {
+	return c == ConfirmAuthMFA || c == ConfirmAuthSSO
+}
 
 // GateType names who can pass a gate.
 type GateType string
@@ -55,7 +77,8 @@ const (
 	// GateConfirmation is in front of each phase that changes, for a job
 	// that an agent started in AgentModeApproveFirst. Only the person who
 	// asked the agent passes it, with a request of their own (no agent) and
-	// a fresh MFA step. It applies also with no policy installed. A policy
+	// a fresh authentication (ConfirmAuth). It applies also with no policy
+	// installed. A policy
 	// never gives it and never removes it.
 	GateConfirmation GateType = "confirmation"
 )
@@ -152,10 +175,14 @@ type Approval struct {
 	// version that they read.
 	Plan *PlanBinding
 	At   time.Time
-	// MFAAt is the time of the last MFA step of the session of Subject,
-	// for a confirmation. A confirmation counts only when At - MFAAt is
-	// at most ConfirmFreshness.
-	MFAAt time.Time
+	// Auth is the fresh authentication of a confirmation, or empty for a
+	// verdict on a gate of type GateApproval.
+	Auth ConfirmAuth
+	// AuthAt is the time of the fresh authentication of a confirmation:
+	// the MFA step, or the authentication at the SSO provider. A
+	// confirmation counts only when Auth is valid and At - AuthAt is at
+	// most ConfirmFreshness.
+	AuthAt time.Time
 }
 
 // typeOf returns the gate type t, with empty as GateApproval.
@@ -192,7 +219,7 @@ const (
 // approval.
 //
 // A gate of type GateConfirmation opens with one confirmation by startedBy
-// with an MFA step at most ConfirmFreshness before it.
+// with a fresh authentication at most ConfirmFreshness before it.
 func (g Gate) Status(approvals []Approval, startedBy string) GateStatus {
 	passed := 0
 	seen := make(map[string]bool, len(approvals))
@@ -229,16 +256,17 @@ func (g Gate) counts(a *Approval, startedBy string) bool {
 	}
 
 	if typeOf(g.Type) == GateConfirmation {
-		return a.Subject == startedBy && freshMFA(a)
+		return a.Subject == startedBy && freshAuth(a)
 	}
 
 	return a.Subject != startedBy || g.AllowSelf
 }
 
-// freshMFA reports whether the MFA step of a is at most ConfirmFreshness
-// before a, and not after it.
-func freshMFA(a *Approval) bool {
-	return !a.MFAAt.IsZero() && !a.MFAAt.After(a.At) && a.At.Sub(a.MFAAt) <= ConfirmFreshness
+// freshAuth reports whether a has a valid fresh authentication at most
+// ConfirmFreshness before a, and not after it.
+func freshAuth(a *Approval) bool {
+	return a.Auth.Valid() && !a.AuthAt.IsZero() && !a.AuthAt.After(a.At) &&
+		a.At.Sub(a.AuthAt) <= ConfirmFreshness
 }
 
 // GatesStatus returns the result of approvals for all gates of one
@@ -268,13 +296,17 @@ type AgentMode string
 // The agent modes.
 const (
 	// AgentModeApproveFirst puts a confirmation gate in front of each phase
-	// that changes. Only the person who asked the agent passes it. It is
-	// the default.
+	// that changes. Only the person who asked the agent passes it, with a
+	// fresh authentication. It is the default. It is not available to a
+	// person whom the server cannot ask for a fresh authentication
+	// (Actor.ConfirmAuth is empty), for example in an installation with
+	// static tokens only: such a person uses AgentModeReviewRequest.
 	AgentModeApproveFirst AgentMode = "approve-first"
 	// AgentModeReviewRequest lets an agent change a unit only through a
 	// write-back job that delivers as a review request. The review of the
 	// forge is the check of a person. A direct push and a runner job that
-	// changes fail with ErrAgentDenied.
+	// changes resources or state (apply, destroy, refresh) fail with
+	// ErrAgentDenied. A runner plan is allowed in every mode.
 	AgentModeReviewRequest AgentMode = "review-request"
 	// AgentModeDirect lets an agent change a unit with no confirmation. It
 	// needs all three switches of DirectSwitches.
@@ -294,10 +326,12 @@ type DirectSwitches struct {
 // CheckAgent returns what the agent mode of a needs for the start of
 // spec. confirm is true when each phase that changes needs a confirmation
 // gate (WithConfirmations). It returns false and nil for a start with no agent,
-// and for a job that changes nothing (a runner plan). It returns an error
-// that wraps:
+// and for a job that changes nothing (a runner plan), in every mode. It
+// returns an error that wraps:
+//   - ErrAgentDenied in AgentModeApproveFirst, when the server cannot ask
+//     the person for a fresh authentication (a.ConfirmAuth is not valid),
 //   - ErrAgentDenied in AgentModeReviewRequest, for a direct push or a
-//     runner job that changes,
+//     runner job that changes (apply, destroy, refresh),
 //   - ErrAgentDenied in AgentModeDirect, when a switch of sw is off,
 //   - ErrInvalid for an unknown mode.
 func CheckAgent(spec *Spec, a Actor, sw DirectSwitches) (bool, error) {
@@ -307,7 +341,7 @@ func CheckAgent(spec *Spec, a Actor, sw DirectSwitches) (bool, error) {
 
 	switch a.Mode {
 	case "", AgentModeApproveFirst:
-		return true, nil
+		return checkApproveFirst(a)
 	case AgentModeReviewRequest:
 		if spec.Executor == ExecutorWriteBack && spec.Delivery != DeliveryDirectPush {
 			return false, nil
@@ -326,6 +360,19 @@ func CheckAgent(spec *Spec, a Actor, sw DirectSwitches) (bool, error) {
 	default:
 		return false, fmt.Errorf("%w: unknown agent mode %q", ErrInvalid, a.Mode)
 	}
+}
+
+// checkApproveFirst returns true when the server can ask the person of a
+// for the fresh authentication of a confirmation, and ErrAgentDenied when
+// it cannot.
+func checkApproveFirst(a Actor) (bool, error) {
+	if !a.ConfirmAuth.Valid() {
+		return false, fmt.Errorf("%w: agent %s: a confirmation needs a fresh MFA step or SSO sign-in, "+
+			"and the server cannot ask %s for one; use the mode %s", ErrAgentDenied, a.Agent,
+			a.Principal.Subject, AgentModeReviewRequest)
+	}
+
+	return true, nil
 }
 
 // DecisionInput is what the policy sees at the start of a job. It holds no

@@ -6,9 +6,11 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // deliver stores a write-back job of unit with the delivery d that
@@ -202,12 +204,8 @@ func verify(t *testing.T, h Harness, f fixture, id job.ID) {
 	}
 }
 
-// planSize is the size of the plan parts of the stale plan case, and
-// planRetention the retention of its plans.
-const (
-	planSize      = 2
-	planRetention = 400 * 24 * time.Hour
-)
+// planSize is the size of the plan parts of the stale plan case.
+const planSize = 2
 
 // planned stores an apply job whose plan phase made plans that read the
 // state version sv at made, and that waits to dispatch its apply phase.
@@ -218,12 +216,12 @@ func planned(t *testing.T, h Harness, f fixture, sv string, made time.Time) job.
 	j.Current = 1
 	j.Phases[0].StateVersion = sv
 	j.Phases[0].Plan = &job.PlanRef{
-		ID: "pln-" + string(j.ID), ItemKey: "ik-" + string(j.ID), StateVersion: sv,
+		ID: "pln-" + string(j.ID), ItemKey: secret.NewItemKeyID(), StateVersion: sv,
 		Parts: []job.PlanPart{
 			{Kind: job.OutputPlanDisplay, Size: planSize, SHA256: "d1", Secret: false},
 			{Kind: job.OutputPlanApply, Size: planSize, SHA256: "a1", Secret: true},
 		},
-		CreatedAt: made, ExpiresAt: made.Add(planRetention), RedactedAt: time.Time{},
+		CreatedAt: made, ExpiresAt: history.ExpiresAt(made, history.DefaultRetention), RedactedAt: time.Time{},
 	}
 
 	return create(t, h, f, j, nil)

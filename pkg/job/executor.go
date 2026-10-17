@@ -189,7 +189,9 @@ type Recorder interface {
 	EndStep(ctx context.Context, c PhaseClaim, r StepRecord) error
 	// AppendLog stores the next chunk of the log of the step called step,
 	// as the blob LogChunkKey. Seq starts at 0 and grows by 1. Chunk 0
-	// creates the log version of the step under c, with a new item key. A
+	// creates the log version of the step under c, with a new item key of
+	// the kind secret.ItemKindJobLog and LogRef.ExpiresAt from
+	// history.RetentionSettings.JobLog. A
 	// chunk with a seq that the log has already, and the same SHA-256,
 	// changes nothing, so a retry is safe. A chunk with a known seq and
 	// another hash returns ErrConflict. A chunk above MaxLogChunk, or a seq
@@ -197,8 +199,10 @@ type Recorder interface {
 	// log version.
 	AppendLog(ctx context.Context, c PhaseClaim, step string, seq int, chunk io.Reader) error
 	// PutPlan stores the plan of a plan phase, with one part for each
-	// upload, and returns its reference. It writes the item key and the
-	// part blobs first, and then the plan in one transaction. In that
+	// upload, and returns its reference. It writes the item key (of the
+	// kind secret.ItemKindPlan) and the part blobs first, and then the plan
+	// in one transaction, with PlanRef.ExpiresAt from
+	// history.RetentionSettings.Plan. In that
 	// transaction it sets PlanRef.StateVersion to Phase.StateVersion, and
 	// checks that it is still the current state version of the unit. When
 	// it is not, the transaction fails the phase (EventPhaseFailed, with a

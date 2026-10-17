@@ -243,24 +243,29 @@ type Service interface {
 	// Confirm records the verdict of the person who asked the agent, on the
 	// confirmation gate of the current phase. It needs the start action of
 	// the job on its unit, not job:approve. The request must come from the
-	// person, with no agent: it records the time of the last MFA step of
-	// the session in Approval.MFAAt. It returns ErrTransition when the job
-	// does not wait for a confirmation, ErrAgentDenied for an agent,
-	// ErrNotRequester for a principal that is not Job.StartedBy, ErrMFAStale
-	// when the last MFA step is older than ConfirmFreshness, ErrPlanChanged
-	// and ErrPlanStale as Approve does, and ErrFinished for a job that
-	// ended. A rejection ends the job rejected.
+	// person, with no agent, and with a fresh authentication of the kind
+	// a.ConfirmAuth: a new MFA step, or a new authentication at the SSO
+	// provider with ConfirmFreshness as its maximum age. It records
+	// a.ConfirmAuth in Approval.Auth and a.AuthAt in Approval.AuthAt. It
+	// returns ErrTransition when the job does not wait for a confirmation,
+	// ErrAgentDenied for an agent, ErrNotRequester for a principal that is
+	// not Job.StartedBy, ErrAuthStale when the fresh authentication is
+	// missing or older than ConfirmFreshness, ErrPlanChanged and
+	// ErrPlanStale as Approve does, and ErrFinished for a job that ended. A
+	// rejection ends the job rejected.
 	Confirm(ctx context.Context, a Actor, id ID, v Verdict, plan PlanBinding) (Job, error)
 	// RedactLog replaces each match of subs in the log version with the ID
 	// version, of the job id, writes the result as the next version with
-	// ArtifactStore.ReplaceLog, and then redacts version through the
-	// history model, with reason as the reason of the redaction. It needs
-	// the redact action of the history model on the unit. It returns the
-	// new version, ErrLogOpen for a log that is not closed, ErrRedacted
-	// for a version that is redacted already, and ErrInvalid for no
-	// substitution or an empty match. When an earlier RedactLog of version
-	// wrote the next version and its redaction of version failed, a retry
-	// only redacts version.
+	// ArtifactStore.ReplaceLog, and then redacts version through
+	// history.Redactor, with history.CauseRequest and reason as the reason
+	// of the redaction. It needs the action unit:redact on the unit. It
+	// returns the new version, history.ErrInProgress for a log that is not
+	// closed, history.ErrRedacted for a version that is redacted already,
+	// the error of history.ValidateReason for a bad reason, and ErrInvalid
+	// for no substitution or an empty match. When an earlier RedactLog of
+	// version wrote the next version and its redaction of version failed, a
+	// retry only redacts version. The audit entry never holds the text of
+	// subs.
 	RedactLog(ctx context.Context, a Actor, id ID, version string, subs []Substitution, reason string) (LogRef,
 		error)
 }

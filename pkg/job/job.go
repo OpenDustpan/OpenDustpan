@@ -86,9 +86,9 @@ var (
 	// ErrNotRequester reports a confirmation by a principal that is not the
 	// person who asked the agent for the job.
 	ErrNotRequester = errors.New("only the person who asked the agent can confirm the job")
-	// ErrMFAStale reports a confirmation with no MFA step inside the
-	// freshness window.
-	ErrMFAStale = errors.New("the confirmation needs a fresh MFA step")
+	// ErrAuthStale reports a confirmation with no fresh authentication
+	// (ConfirmAuth) inside ConfirmFreshness.
+	ErrAuthStale = errors.New("the confirmation needs a fresh authentication")
 	// ErrLimit reports a start above a limit of open jobs.
 	ErrLimit = errors.New("too many open jobs")
 	// ErrClaimLost reports a write by an executor whose claim on the phase is
@@ -267,6 +267,17 @@ type Actor struct {
 	// Agent is empty. An agent with an empty mode works in
 	// AgentModeApproveFirst.
 	Mode AgentMode
+	// ConfirmAuth is the fresh authentication that the server can ask of
+	// Principal for a confirmation: ConfirmAuthMFA when built-in MFA covers
+	// the person, else ConfirmAuthSSO when the person signs in through an
+	// SSO identity provider, else empty, for example in an installation
+	// with static tokens only. The server sets it from the sign-in of the
+	// principal. No client gives it.
+	ConfirmAuth ConfirmAuth
+	// AuthAt is the time of the last fresh authentication of the kind
+	// ConfirmAuth in the session of the request, or the zero time. The
+	// server sets it. Confirm records it in Approval.AuthAt.
+	AuthAt time.Time
 }
 
 // BreakGlass records a start through an active change freeze. Reason is

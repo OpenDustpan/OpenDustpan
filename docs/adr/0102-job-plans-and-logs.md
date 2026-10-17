@@ -27,7 +27,11 @@ approved this split on 17 October 2026:
   a plan, the chunks of a log, the blob layout, the upload and read ports,
   the routes, and the actions `job:read-plans` and `job:read-logs`.
 - **The history model** owns the item key and its seal, redaction
-  (`unit:redact`) and the retention policy.
+  (`unit:redact`, `history.Redactor`) and the retention policy, with its
+  defaults and the names of its settings.
+
+ADR 152 has the table of the names that this ADR uses. Its names are the
+reference.
 
 [RFC 28](../rfc/0028-stored-plans.md) proposes stored plans and approvals
 bound to a plan hash.
@@ -37,10 +41,14 @@ The owner approved the decisions of this ADR on 17 October 2026.
 ## Decision
 
 1. **IDs.** A stored plan has an ID with the prefix `pln-`. Each version of
-   the log of one step has an ID with the prefix `jlv-`. The item key of a
-   plan or of a log version has its own ID, with the prefix `ik-`
-   (ADR 151). No key has the ID of a plan or of a log version, and no plan
-   or log uses a data key of a scope.
+   the log of one step has an ID with the prefix `jlv-`. These are the IDs
+   of the items, not of keys. The item key of a plan or of a log version
+   has its own ID, with the prefix `ik-` (`secret.ItemKeyID`, ADR 151),
+   and the item kind `plan` (`secret.ItemKindPlan`) or `job-log`
+   (`secret.ItemKindJobLog`). `job.PlanItem` and `job.LogItem` give the
+   `history.ItemRef` of a plan and of a log version. No key has the ID of a
+   plan or of a log version, and no plan or log uses a data key of a
+   scope.
 2. **One plan for each plan phase, with two parts.** A plan phase stores one
    plan, `job.PlanRef`. Each part is one blob with a kind, a size, the
    SHA-256 of the plaintext and a flag `secret`:
@@ -64,12 +72,13 @@ The owner approved the decisions of this ADR on 17 October 2026.
 4. **Sealed with one item key for each plan and for each log version.** The
    sealing is the rule of ADR 151. Each plan, and each version of a log, has
    one random item key. It seals every part of the plan, or every chunk of
-   the version, and nothing else. The server writes the wrapped item key as
-   a blob first, outside SQL. It then writes the key record in the fenced
-   transaction that creates the plan or the log version. A redaction shreds
-   the item key and writes the shred ledger in each backup target, as for a
-   state item. The job model adds no delete of a key to the `secret`
-   package.
+   the version, and nothing else (`secret.ItemSealer`). The server writes
+   the wrapped item key as a blob first, outside SQL
+   (`item-keys/<item key ID>`). It then writes the key record in the fenced
+   transaction that creates the plan or the log version
+   (`secret.ItemKeyIndex`). A redaction shreds the item key and writes the
+   shred ledger in each backup target, as for a state item. The job model
+   adds no delete of a key to the `secret` package.
 5. **Uploads.** An executor uploads through `job.Recorder`, with its phase
    claim:
    - `PutPlan` stores the whole plan in one call, after the last step that
@@ -128,7 +137,8 @@ The owner approved the decisions of this ADR on 17 October 2026.
    never lets an update make a change that no person approved.
 8. **Reads.** `job.ArtifactStore` opens content: `OpenPlanPart` for a part
    of a plan, and `OpenLog` for a log version, with its chunks in order. A
-   read of redacted content fails with `ErrRedacted`. The metadata stays in
+   read of content whose item key a redaction shredded fails with
+   `secret.ErrShredded`. The metadata stays in
    the job record: `PlanRef` on the plan phase, and `LogRef` on each step
    record. The actions:
    - `job:read-plans` on the unit allows a read of the readable plan, with
@@ -154,51 +164,92 @@ The owner approved the decisions of this ADR on 17 October 2026.
      `unit:read-secrets` too.
    - `GET /api/jobs/{job_id}/steps/{step}/logs/{log_version_id}`: the
      content of a log version, with `job:read-logs`.
+   - `POST /api/jobs/{job_id}/plan/redact`: the redaction of the whole
+     plan, with a reason, with `unit:redact` (ADR 152 decision 8).
    - `POST /api/jobs/{job_id}/steps/{step}/logs/{log_version_id}/redact`:
-     the redaction of decision 11, with `unit:redact`.
-   - A redaction of a whole plan or of a whole log version is the redaction
-     route of ADR 152.
+     with a reason, and with text to replace, the redaction by substitution
+     of decision 11. With a reason only, the redaction of the whole log
+     version. Both need `unit:redact`.
 
    The runner uploads through the runner protocol (`/runner/v1`), not
    through these routes.
-10. **Retention is the history model's.** The history model gives the
-    retention of plans and of job logs, with its settings (ADR 152): 400
-    days by default, at least 1 day, counted from the creation of the item.
-    The server stores the end of the retention with each plan and each log
-    version (`ExpiresAt`) when it creates it, so a change of a setting
-    never makes an item expire at once. At the end, the history model
-    redacts the item with the cause `retention`, through the same path as a
-    redaction by a person. The job model has no retention sweep and no
-    schedule for it.
+10. **Retention is the history model's.** ADR 152 gives the retention
+    policy, and the `history` package holds its values. The job model
+    reads them and keeps no retention value of its own:
+    - The period is 400 days by default (`history.DefaultRetention`), and
+      at least 1 day (`history.MinRetention`). The settings are
+      `--plan-retention` (`DUSTPAN_PLAN_RETENTION`) and
+      `--job-log-retention` (`DUSTPAN_JOB_LOG_RETENTION`), and
+      `history.RetentionSettings.Validate` checks them. The settings belong
+      to the history model.
+    - The period starts at the creation of the item, not at the end of its
+      job. The server stores the end of the period with each plan and each
+      log version when it creates it (`ExpiresAt`, with
+      `history.ExpiresAt`), so a change of a setting applies to new items
+      only.
+    - At the end of the period, the retention sweep redacts the item
+      through the `history.Redactor` of the job model (decision 11), with
+      the actor `@server`, the cause `retention`
+      (`history.CauseRetention`) and the reason `retention period ended`.
+      This is the same path as a redaction by a person. Retention may
+      expire the current version of a log. A plan of a job that has not
+      ended does not expire before the end of its job
+      (`history.ErrInProgress`), and the next sweep after the end redacts
+      it.
 11. **Redaction.** A redaction of a plan or of a log version is the
-    redaction of ADR 151, with the action `unit:redact`. The artifact
-    store implements the redactor port of the history model for plans and
-    log versions. The job model adds one feature on that primitive:
-    **redaction of a log by substitution**.
+    redaction of ADR 151, with the action `unit:redact`. The job model
+    implements `history.Redactor` for plans and log versions:
+    `job.ArtifactStore` embeds it. One fenced transaction marks the item
+    redacted, shreds its item key, appends the record to the
+    `history.RedactionLog` and writes the audit entry. The rules of the job
+    model are `job.CheckPlanRedaction` and `job.CheckLogRedaction`:
+    - A plan of a job that has not ended answers `history.ErrInProgress`,
+      for every cause.
+    - An open log version (the step runs) answers `history.ErrInProgress`,
+      for every cause.
+    - A request (cause `request`) for the current version of a log answers
+      `history.ErrLatest`. The cause `retention` redacts it.
+    - An item that is already redacted answers `history.ErrRedacted`, and
+      a read of its content `secret.ErrShredded`.
+
+    The reference adapter runs `historytest.RunRedactor` with
+    `historytest.JobArtifactSituations()` for plans and
+    `historytest.JobLogSituations()` for log versions. The ledger object
+    of each redaction is `history.LedgerRecord`, with its `Cause`. After a
+    restore, `history.RedactionLog.RequeueShreds` sets the shred targets of
+    the live blob store and of the source target to pending again, as for
+    every item kind. The job model has no ledger, no shred operation and no
+    error of its own for these cases.
+
+    The job model adds one feature on this primitive: **redaction of a log
+    by substitution**.
     - A principal gives the text to replace in one log version, and a
       reason. `job.Service.RedactLog` reads that version, replaces each
       match with `[redacted]`, and writes the result as the next version,
       with a new item key (`ArtifactStore.ReplaceLog`). The new version is
       then the current one.
-    - It then redacts the older version through the history model, with
-      the reason. The history model shreds its item key and deletes its
-      chunks, also in the backup targets.
-    - A log of a step that runs cannot be redacted (`ErrLogOpen`). A
-      version that is already redacted fails with `ErrRedacted`. When the
-      redaction of the older version fails after the new version exists, a
-      retry only redacts the older version.
+    - It then redacts the older version through `history.Redactor`, with
+      the cause `request` and the reason. The history model shreds its item
+      key and deletes its chunks, also in the backup targets.
+    - A log of a step that runs cannot be redacted
+      (`history.ErrInProgress`). A version that is already redacted fails
+      with `history.ErrRedacted`. When the redaction of the older version
+      fails after the new version exists, a retry only redacts the older
+      version.
     - The audit entry is the entry of the redaction of ADR 151, with the
       reason. The job record keeps the number of matches and the hashes of
-      the two versions. It never keeps the text that the principal gave.
+      the two versions. Neither ever keeps the text that the principal
+      gave.
 
 ## Consequences
 
 - The plan and log stores of the history model move to the job model. The
   history model keeps the item key, the redaction and the retention, and
   the job model calls them.
-- A backup taken before a redaction holds the item key blob. The shred
-  ledger of ADR 151 reaches each backup target, so a restore from such a
-  backup keeps the item redacted.
+- A redaction deletes the item key blob and the content blobs of a plan or
+  a log version in the live blob store and in each backup target, and
+  writes the ledger object first (ADR 151). A restore applies every
+  redaction, so a redacted plan or log version stays redacted.
 - A log has one blob for each chunk. A long log makes many small objects. A
   later change may join the chunks of a closed log into one blob.
 - Plans and logs add storage for the retention period of each job. An
@@ -218,9 +269,9 @@ The owner approved the decisions of this ADR on 17 October 2026.
   The item key of the version would seal the joined blob too.
 - Are 1 MiB for a log chunk and 256 MiB for a part of a plan the right
   limits? A large OpenTofu plan file of many resources may need more.
-- Does the history model keep a plan of a job that has not ended until the
-  job ends, also after its retention? ADR 152 says so for plans. The same
-  question applies to the log of a job that waits for days in
-  `awaiting-state`.
+- A plan of a job that has not ended does not expire before the end of its
+  job (ADR 152 decision 6). Does the same rule apply to the log of a job
+  that waits for days in `awaiting-state`? This ADR follows ADR 152: a log
+  version expires at the end of its period.
 - Does a namespace or a unit get its own retention, below the installation
   setting? The history model decides it.

@@ -296,7 +296,7 @@ func testConfirmationStored(t *testing.T, h Harness) {
 	confirm := change(&stored, job.EventApproved)
 	confirm.Approval = &job.Approval{
 		Gate: job.GateConfirmation, Subject: "al", Agent: "", Verdict: job.VerdictApprove, Comment: "",
-		Plan: nil, At: now, MFAAt: now.Add(-time.Minute),
+		Plan: nil, At: now, Auth: job.ConfirmAuthMFA, AuthAt: now.Add(-time.Minute),
 	}
 
 	got := apply(t, h, f, confirm)
@@ -305,9 +305,9 @@ func testConfirmationStored(t *testing.T, h Harness) {
 	}
 
 	a := got.Phases[0].Approvals[0]
-	if a.Gate != job.GateConfirmation || !a.MFAAt.Equal(confirm.Approval.MFAAt) {
-		t.Fatalf("stored confirmation = gate %q, MFA %v; want confirmation at %v", a.Gate, a.MFAAt,
-			confirm.Approval.MFAAt)
+	if a.Gate != job.GateConfirmation || a.Auth != job.ConfirmAuthMFA || !a.AuthAt.Equal(confirm.Approval.AuthAt) {
+		t.Fatalf("stored confirmation = gate %q, auth %q at %v; want a confirmation with MFA at %v", a.Gate,
+			a.Auth, a.AuthAt, confirm.Approval.AuthAt)
 	}
 
 	if s := job.GatesStatus(got.Phases[0].Gates, got.Phases[0].Approvals, got.StartedBy); s != job.GateOpen {

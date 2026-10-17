@@ -22,11 +22,14 @@ The project owner decided:
 - Dusty runs inside the server and acts as the user who asked it. The audit
   log records both the user and the agent.
 - An agent job in approve-first mode needs a confirmation by the person who
-  asked, with a fresh MFA step. An agent in review-request mode changes code
-  only through a review request. A direct change by an agent needs three
-  switches: the server, the namespace and the user.
+  asked, with a fresh authentication. An agent in review-request mode
+  changes code only through a review request. A direct change by an agent
+  needs three switches: the server, the namespace and the user.
 
-The owner approved the decisions of this ADR on 17 October 2026.
+The owner approved the decisions of this ADR on 17 October 2026. On the
+same day, the project manager decided for the owner how the person
+authenticates a confirmation (decision 2), and kept the rule for runner
+phases in review-request mode (decision 12).
 
 ## Decision
 
@@ -55,8 +58,21 @@ The owner approved the decisions of this ADR on 17 October 2026.
      that changes, for a job that an agent started in approve-first mode
      (decision 12). Only the person who asked the agent can pass it: one
      confirmation by the starter, in a request of their own with no agent,
-     with an MFA step at most 15 minutes old (`job.ConfirmFreshness`, the
-     default window of ADR 56). It binds to the plan when a plan phase
+     with a fresh authentication (`job.ConfirmAuth`):
+     - a new MFA step, where built-in MFA covers the person
+       (`job.ConfirmAuthMFA`, ADR 56).
+     - otherwise a new authentication at the SSO identity provider of the
+       person, asked with a maximum age (`job.ConfirmAuthSSO`, ADR 71).
+       The time is the authentication time that the provider gives.
+
+     The authentication is at most 15 minutes old (`job.ConfirmFreshness`),
+     the same number as ADR 56 decision 2 and ADR 71 decision 1. The
+     approval records its kind and its time (`Approval.Auth`,
+     `Approval.AuthAt`). A confirmation with no fresh authentication fails
+     with `ErrAuthStale`. When the server can ask the person for neither,
+     for example in an installation with static tokens only, approve-first
+     mode is not available for the agent jobs of that person
+     (decision 12). The confirmation binds to the plan when a plan phase
      comes before. It applies also with no policy installed. A policy
      never gives it and never removes it, and the rule of the starter of an
      approval gate does not apply to it. The service records it with
@@ -160,12 +176,19 @@ The owner approved the decisions of this ADR on 17 October 2026.
     mode.
     - **Approve-first** is the default. Each phase that changes gets a
       confirmation gate (decision 2), with or without a policy. The policy
-      gates still apply, with their own rules.
+      gates still apply, with their own rules. The server sets the fresh
+      authentication that it can ask of the person (`Actor.ConfirmAuth`)
+      from the sign-in of the person. When it can ask for neither an MFA
+      step nor an SSO authentication, the start fails with
+      `ErrAgentDenied`, and the agent of that person must use
+      review-request mode.
     - **Review-request.** The agent changes a unit only through a
       write-back job that delivers as a review request. The review of the
       forge is the check of a person, so the job gets no confirmation gate.
       A direct push from an agent in this mode fails with `ErrAgentDenied`.
-      A runner job that changes fails in the same way.
+      A runner job whose phases change resources or state (`apply`,
+      `destroy`, `refresh`) fails in the same way. A runner job that only
+      plans starts in this mode, as in every mode.
     - **Direct.** The agent changes a unit with no confirmation. This needs
       three switches, each off by default: an installation setting of the
       server, a setting of the namespace of the unit, and a setting of the
@@ -186,11 +209,12 @@ The owner approved the decisions of this ADR on 17 October 2026.
   approval. RFC 13 proposes "approve first" for apply jobs as the default.
   That choice waits for RFC 13. A job of an agent gets the confirmation of
   its mode with or without a policy.
-- A confirmation needs an MFA step. Built-in MFA (ADR 46) does not exist
-  yet, and ADR 56 adds no MFA step where MFA is off. Until MFA covers the
-  person, an agent job in approve-first mode cannot get its confirmation.
-  The person then starts the change without the agent, or uses
-  review-request mode.
+- A confirmation needs a fresh MFA step or a fresh SSO authentication.
+  Built-in MFA (ADR 46) does not exist yet, so a person who signs in through
+  an SSO provider gives a confirmation with a new SSO authentication. In an
+  installation with static tokens only, approve-first mode is not
+  available: an agent there works in review-request mode, and a person
+  starts a runner change without the agent.
 
 ## Open questions
 
@@ -203,7 +227,7 @@ The owner approved the decisions of this ADR on 17 October 2026.
   it and start a new one with break-glass?
 - Does a freeze also hold the approvals that end during it, or only the
   dispatch?
-- How does a confirmation get a fresh MFA step with an SSO identity
-  provider? ADR 56 keeps this open for token creation too.
-- Is 15 minutes the right window for a confirmation, and is it a setting of
-  its own or the window of secret reveal?
+- ADR 71 lets an operator set the freshness window of SSO sessions to 0,
+  which turns off its check for tokens. This ADR keeps 15 minutes
+  (`job.ConfirmFreshness`) as the maximum age of a confirmation in every
+  case. Does a window of 0 also apply to a confirmation?

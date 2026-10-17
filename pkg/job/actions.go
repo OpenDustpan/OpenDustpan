@@ -31,8 +31,9 @@ const (
 	// logs. Its object is a unit, or the namespace for a list.
 	ActionJobRead identity.Action = "job:read"
 	// ActionJobReadLogs allows reading the content of job logs. Its object
-	// is a unit. A redaction of a log needs the redact action of the
-	// history model instead.
+	// is a unit. A redaction of a plan or of a log, also by substitution,
+	// needs the action unit:redact of the history model: the job model has
+	// no redact action of its own.
 	ActionJobReadLogs identity.Action = "job:read-logs"
 	// ActionJobReadPlans allows reading the content of stored plans, with
 	// the values that the tool marks as sensitive masked. The unmasked plan

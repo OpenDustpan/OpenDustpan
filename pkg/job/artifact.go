@@ -2,13 +2,14 @@ package job
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/history"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 )
 
 // DefaultMaxPlanAge is the oldest plan that an apply phase applies. An
@@ -24,21 +25,14 @@ const (
 	MaxPlanPart = 256 << 20
 )
 
-// ID prefixes of the artifacts of a job.
+// ID prefixes of the artifacts of a job. These are the IDs of the items,
+// not of their item keys: an item key ID has the prefix of
+// secret.NewItemKeyID.
 const (
 	// PlanIDPrefix starts the ID of a stored plan.
 	PlanIDPrefix = "pln-"
 	// LogVersionIDPrefix starts the ID of one version of the log of a step.
 	LogVersionIDPrefix = "jlv-"
-)
-
-var (
-	// ErrRedacted reports a read of a plan or a log version whose content
-	// the history model redacted: by a request, or at the end of its
-	// retention. Its item key is shredded. The metadata and the hashes stay.
-	ErrRedacted = errors.New("content was redacted")
-	// ErrLogOpen reports a redaction of the log of a step that still runs.
-	ErrLogOpen = errors.New("the log is still open")
 )
 
 // PlanPart is one part of a stored plan: one blob, sealed with the item
@@ -60,8 +54,9 @@ type PlanPart struct {
 type PlanRef struct {
 	// ID has the prefix pln-.
 	ID string
-	// ItemKey is the ID of the item key of the plan, with the prefix ik-.
-	ItemKey string
+	// ItemKey is the ID of the item key of the plan, of the kind
+	// secret.ItemKindPlan.
+	ItemKey secret.ItemKeyID
 	// StateVersion is the state version of the unit that the plan read.
 	// The server sets it from Phase.StateVersion, which the store records
 	// at the claim of the plan phase. No executor gives it. An apply phase
@@ -69,8 +64,10 @@ type PlanRef struct {
 	StateVersion string
 	Parts        []PlanPart
 	CreatedAt    time.Time
-	// ExpiresAt is the end of the retention of the plan. The server sets it
-	// at creation from the plan retention of the history model.
+	// ExpiresAt is the end of the retention period of the plan:
+	// history.ExpiresAt(CreatedAt, history.RetentionSettings.Plan). The
+	// server sets it at creation, so a later change of the setting applies
+	// to new plans only.
 	ExpiresAt time.Time
 	// RedactedAt is the time that the history model redacted the plan, or
 	// the zero time.
@@ -164,9 +161,9 @@ func CheckPlan(p *PlanRef, bound *PlanBinding, current string, notBefore time.Ti
 type LogRef struct {
 	// ID has the prefix jlv-.
 	ID string
-	// ItemKey is the ID of the item key of the version, with the prefix
-	// ik-.
-	ItemKey string
+	// ItemKey is the ID of the item key of the version, of the kind
+	// secret.ItemKindJobLog.
+	ItemKey secret.ItemKeyID
 	Version int
 	// Chunks is the number of chunks. SHA256 is the hash of the plaintext of
 	// all chunks in order. Both are set when the log closes.
@@ -175,8 +172,10 @@ type LogRef struct {
 	Size      int64
 	CreatedAt time.Time
 	ClosedAt  time.Time
-	// ExpiresAt is the end of the retention of the version. The server sets
-	// it at creation from the job log retention of the history model.
+	// ExpiresAt is the end of the retention period of the version:
+	// history.ExpiresAt(CreatedAt, history.RetentionSettings.JobLog). The
+	// server sets it at creation, so a later change of the setting applies
+	// to new versions only.
 	ExpiresAt time.Time
 	// RedactedAt is the time that the history model redacted the version,
 	// or the zero time.
@@ -187,6 +186,50 @@ type LogRef struct {
 	// replaced.
 	ReplacedBy string
 	Matches    int
+}
+
+// PlanItem returns the history item of the plan with the ID plan of unit.
+func PlanItem(unit history.Unit, plan string) history.ItemRef {
+	return history.ItemRef{Unit: unit, Kind: secret.ItemKindPlan, Item: plan}
+}
+
+// LogItem returns the history item of the log version with the ID version
+// of unit.
+func LogItem(unit history.Unit, version string) history.ItemRef {
+	return history.ItemRef{Unit: unit, Kind: secret.ItemKindJobLog, Item: version}
+}
+
+// CheckPlanRedaction returns the error of a redaction of a stored plan
+// whose job is in the state s, for every cause: history.ErrInProgress
+// while the job has not ended, so that a plan that an open approval names
+// stays readable, and nil after. When the job ends after the expiry time
+// of the plan, the next retention sweep redacts the plan.
+func CheckPlanRedaction(s State) error {
+	if !s.Terminal() {
+		return fmt.Errorf("%w: the job of the plan has not ended", history.ErrInProgress)
+	}
+
+	return nil
+}
+
+// CheckLogRedaction returns the error of a redaction with the cause c of
+// the log version v. current is true when no later version of the log
+// exists. It returns:
+//   - history.ErrInProgress for a version that is open (the step runs),
+//     for every cause,
+//   - history.ErrLatest for the current version, except with
+//     history.CauseRetention: the end of the retention period may expire
+//     the current version, a request may not,
+//   - nil otherwise.
+func CheckLogRedaction(v *LogRef, current bool, c history.Cause) error {
+	switch {
+	case v.ClosedAt.IsZero():
+		return fmt.Errorf("%w: log version %s is open", history.ErrInProgress, v.ID)
+	case current && c != history.CauseRetention:
+		return fmt.Errorf("%w: log version %s is the current version", history.ErrLatest, v.ID)
+	default:
+		return nil
+	}
 }
 
 // PlanPartKey returns the blob key of the part k of the plan with the ID
@@ -217,32 +260,40 @@ type PlanUpload struct {
 
 // ArtifactStore is the persistence port for the content of plans and logs.
 // The content is in the blob store, sealed with the item key of its plan or
-// log version. The item key, its blob and its shred are the rules of the
-// history model: the server writes the wrapped item key as a blob first,
-// and then its key record in the fenced transaction that creates the plan
-// or the log version. The adapter also implements the redactor port of the
-// history model for plans and log versions, so that a redaction and the
-// end of a retention shred the item key in the same way as for a state
-// item.
+// log version (secret.ItemSealer). The item key follows the rules of the
+// history model: the server writes the wrapped item key as a blob outside
+// SQL first (secret.ItemKeyID.Object), and then its key record in the
+// fenced transaction that creates the plan or the log version.
+//
+// The adapter implements history.Redactor for the items of the kinds
+// secret.ItemKindPlan and secret.ItemKindJobLog, with the rules of
+// CheckPlanRedaction and CheckLogRedaction. A redaction by a person
+// (history.CauseRequest) and the end of a retention period
+// (history.CauseRetention) take this one path. Its conformance suite is
+// historytest.RunRedactor, with historytest.JobArtifactSituations for plans
+// and historytest.JobLogSituations for log versions.
 //
 // Every write in a namespace checks fence in its transaction, and returns
 // namespace.ErrFenced when it is stale.
 type ArtifactStore interface {
+	history.Redactor
 	// OpenPlanPart returns the plaintext of the part k of the plan with the
 	// ID plan. It returns ErrNotFound for an unknown plan or part, and
-	// ErrRedacted for a plan that the history model redacted. The caller
-	// checks the actions, and masks the readable plan.
+	// secret.ErrShredded for a plan whose item key a redaction shredded.
+	// The caller checks the actions, and masks the readable plan.
 	OpenPlanPart(ctx context.Context, ns namespace.Name, plan string, k OutputKind) (io.ReadCloser, error)
 	// OpenLog returns the plaintext of the log version with the ID version,
 	// its chunks in order. It returns ErrNotFound for an unknown version,
-	// and ErrRedacted for a version that the history model redacted.
+	// and secret.ErrShredded for a version whose item key a redaction
+	// shredded.
 	OpenLog(ctx context.Context, ns namespace.Name, version string) (io.ReadCloser, error)
 	// ReplaceLog writes the next version of the log whose current version
 	// is from, with the content body and a new item key, and makes it the
 	// current version. by is the subject of the redaction. It returns
-	// ErrLogOpen for a log that is not closed, ErrConflict when from is not
-	// the current version, and ErrRedacted when from was redacted. The
-	// caller then redacts from through the history model.
+	// history.ErrInProgress for a log that is not closed, ErrConflict when
+	// from is not the current version, and secret.ErrShredded when the item
+	// key of from is shredded. The caller then redacts from through
+	// history.Redactor, with history.CauseRequest.
 	ReplaceLog(ctx context.Context, ns namespace.Name, from string, body io.Reader, by string,
 		fence namespace.Fence) (LogRef, error)
 }

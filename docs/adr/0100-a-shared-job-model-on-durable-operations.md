@@ -257,8 +257,10 @@ The owner approved the decisions of this ADR on 17 October 2026.
 
     A table-driven test checks the rule, and the conformance suite has a
     case for a cancel whose claim expires. The retention of plans and logs
-    is not a schedule of the job model: the history model redacts them
-    when their retention ends (ADR 152).
+    is not a schedule of the job model: at the end of the retention period
+    of an item, the retention sweep of the history model redacts it
+    through the `history.Redactor` of the job model, with the cause
+    `retention` (ADR 102 decision 10, ADR 152).
 15. **A final state version closes a write-back job.** The internal wiring
     of the server reports each state version that a tool writes as a
     tool-neutral `job.StateVersion`. The store adapter applies the rule of
@@ -318,9 +320,13 @@ The owner approved the decisions of this ADR on 17 October 2026.
 18. **Ports with conformance first.** `job.Store` and `job.FreezeStore` get
     the suite `pkg/job/jobtest` before any SQL adapter. A reference adapter
     in memory, in the tests of that package, runs the suite, so each case
-    runs today. The suites of `job.Claimer`, `job.Recorder` and
-    `job.ArtifactStore` come with their first implementation, because they
-    need the blob store and the item keys of ADR 151.
+    runs today. The same reference adapter implements `history.Redactor`
+    for plans and log versions and runs `historytest.RunRedactor` with
+    `historytest.JobArtifactSituations()` and
+    `historytest.JobLogSituations()`. The suites of `job.Claimer`,
+    `job.Recorder` and the reads of `job.ArtifactStore` come with their
+    first implementation, because they need the blob store and the item
+    keys of ADR 151.
 19. **Terms.** The owner uses "executor" for the way a job runs: write-back
     or runners. This ADR supersedes the _Avoid_ entry "executor" of the term
     Runner in RFC 6. It also supersedes the definition of Job in RFC 6 as
