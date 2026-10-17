@@ -8149,6 +8149,21 @@ func (q *Queries) TouchStack(ctx context.Context, arg TouchStackParams) error {
 	return err
 }
 
+const unitCollectionID = `-- name: UnitCollectionID :one
+SELECT c.id
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = $1
+`
+
+// The stable ID of the collection of one unit by its ID.
+func (q *Queries) UnitCollectionID(ctx context.Context, unitID string) (string, error) {
+	row := q.db.QueryRow(ctx, unitCollectionID, unitID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
+}
+
 const unitStackID = `-- name: UnitStackID :one
 SELECT id FROM stacks WHERE namespace = $1 AND project = $2 AND name = $3 AND deleted_at_ms IS NULL
 `
