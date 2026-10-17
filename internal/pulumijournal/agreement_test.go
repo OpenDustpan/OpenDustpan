@@ -83,11 +83,97 @@ func agreementReplay(t *testing.T, prior, referrer string) error {
 	)
 }
 
+// agreementMigrationState is an inserted resource state with a valid URN for
+// the migration agreement tests.
+const agreementMigrationState = `{"urn":"urn:pulumi:dev::corpus::test:resource::m","custom":true,"type":"test:resource","id":"m"}`
+
+// agreementPatchedState is the replacement state of the new-state patch in
+// the migration agreement tests. Its URN differs from the inserted state, so
+// the migrated snapshot holds no duplicate.
+const agreementPatchedState = `{"urn":"urn:pulumi:dev::corpus::test:resource::p","custom":true,"type":"test:resource","id":"p"}`
+
+// agreementMigration returns a state migration entry with one inserted state
+// and no patches.
+func agreementMigration(seq int64) string {
+	return agreementMigrationEntry(seq, "")
+}
+
+// agreementMigrationWithPatch returns a state migration entry with one
+// inserted state and a new-state patch for operation 10.
+func agreementMigrationWithPatch(seq int64) string {
+	return agreementMigrationEntry(
+		seq,
+		`,"newStatePatches":[{"operationID":10,"state":`+agreementPatchedState+`}]`,
+	)
+}
+
+// agreementMigrationEntry returns a state migration entry with one inserted
+// state and the given patch member, which is empty for no patches.
+func agreementMigrationEntry(seq int64, patches string) string {
+	return `{"version":2,"kind":10,"sequenceID":` + strconv.FormatInt(seq, 10) +
+		`,"operationID":0,"removeOld":null,"removeNew":null,` +
+		`"layout":[{"stateIndex":0}],"states":[` + agreementMigrationState + `]` + patches + `}`
+}
+
 // agreementVerify runs the verifier over the body with known and reports its error.
 func agreementVerify(body string, known []int64) error {
-	_, err := (pulumijournal.Verifier{}).VerifyBatch([]byte(body), 1, known, false)
+	return agreementVerifyVersion(body, 1, known)
+}
+
+// agreementVerifyVersion runs the verifier over the body with known and the
+// negotiated version, and reports its error.
+func agreementVerifyVersion(body string, version int, known []int64) error {
+	_, err := (pulumijournal.Verifier{}).VerifyBatch([]byte(body), version, known, false)
 
 	return err
+}
+
+// TestVerifierAndReplayerAgreeOnNewStatePatches checks that a new-state patch
+// for an operation that no applied entry created is refused by both with
+// ErrMissingReference, and that a patch for a completed operation passes both.
+func TestVerifierAndReplayerAgreeOnNewStatePatches(t *testing.T) {
+	t.Parallel()
+
+	migration := agreementMigrationWithPatch(1)
+	if err := agreementVerifyVersion(`{"entries":[`+migration+`]}`, 2, nil); !errors.Is(
+		err,
+		pulumijournal.ErrMissingReference,
+	) {
+		t.Fatalf("verifier patch of an unknown operation: err = %v, want ErrMissingReference", err)
+	}
+
+	if err := agreementReplay(t, "", migration); !errors.Is(err, pulumijournal.ErrMissingReference) {
+		t.Fatalf("replayer patch of an unknown operation: err = %v, want ErrMissingReference", err)
+	}
+
+	prior := agreementPrior(1, 1, 10, agreementResource) + `,` + agreementMigrationWithPatch(2)
+	next := agreementReferrer(3, 11, "removeNew", 10)
+	if err := agreementVerifyVersion(`{"entries":[`+prior+`,`+next+`]}`, 2, nil); err != nil {
+		t.Fatalf("verifier patch of a completed operation: %v", err)
+	}
+
+	if err := agreementReplay(t, prior, next); err != nil {
+		t.Fatalf("replayer patch of a completed operation: %v", err)
+	}
+}
+
+// TestVerifierAndReplayerAgreeAfterMigration checks that a reference to an
+// operation completed before a state migration passes both: the replay keeps
+// its operation index across the migration, and the verifier keeps the held
+// operation.
+func TestVerifierAndReplayerAgreeAfterMigration(t *testing.T) {
+	t.Parallel()
+
+	prior := agreementPrior(1, 1, 5, agreementResource) + `,` + agreementMigration(2)
+	referrer := agreementReferrer(3, 7, "removeNew", 5)
+
+	if err := agreementVerifyVersion(`{"entries":[`+referrer+`]}`, 2, []int64{5}); err != nil {
+		t.Fatalf("verifier reference after a migration: %v", err)
+	}
+
+	if err := agreementReplay(t, prior, referrer); err != nil {
+		t.Fatalf("replayer reference after a migration: %v", err)
+	}
 }
 
 // agreementCase is one reference case: a prior entry and a success referrer

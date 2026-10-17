@@ -29,6 +29,14 @@ replaces each provider-assigned UUID with one fixed marker, and it sorts the
 resources by URN, because the checkpoint lists them in engine completion
 order and the replay lists them in journal order.
 
+## Synthetic cases
+
+The `state-migration-replace` and `state-migration-patch` cases are
+hand-written, not recorded: they cover the state migration entry (kind 10)
+with a layout replacement and with base and new-state patches. A recorded run
+of the state migration e2e step should replace them once its traffic is
+available.
+
 ## How to record a new case
 
 The e2e HTTP log truncates bodies, so it cannot supply the batch files.
