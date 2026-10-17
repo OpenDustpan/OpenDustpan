@@ -77,7 +77,14 @@ func (s *Store) AppendServer(ctx context.Context, e audit.Entry) (audit.Entry, e
 // does (ADR 60, fail closed). An entry that fails validation changes
 // nothing. The write lock of the transaction orders the appends.
 func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Queries) error) error {
-	if err := validServerEntry(e); err != nil {
+	return s.inAuditedTxOf(ctx, &e, fn)
+}
+
+// inAuditedTxOf is inAuditedTx with an entry that fn may change before the
+// append, for example to add changes that only the transaction can read. It
+// checks the entry again after fn.
+func (s *Store) inAuditedTxOf(ctx context.Context, e *audit.Entry, fn func(q *db.Queries) error) error {
+	if err := validServerEntry(*e); err != nil {
 		return err
 	}
 
@@ -86,7 +93,11 @@ func (s *Store) inAuditedTx(ctx context.Context, e audit.Entry, fn func(q *db.Qu
 			return err
 		}
 
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+		if err := validServerEntry(*e); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, *e); err != nil {
 			return fmt.Errorf("append audit entry: %w", err)
 		}
 

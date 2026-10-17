@@ -1329,6 +1329,13 @@ FROM collection_members AS m
 JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 WHERE m.unit_id = ?;
 
+-- name: UnitCollectionID :one
+-- The stable ID of the collection of one unit by its ID.
+SELECT c.id
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?;
+
 -- name: UpsertUnitCollection :exec
 INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
 VALUES (?, ?, ?, ?)

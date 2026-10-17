@@ -63,10 +63,10 @@ const (
 	reasonSubjectLength = "subject over 255 bytes"
 )
 
-// maxIDPSubjectLen caps the sub claim of a sign-in, in bytes. The audit
-// entry keeps the subject, so a longer subject is refused instead of
-// stored.
-const maxIDPSubjectLen = 255
+// maxSubjectLen caps the composed subject of a sign-in, in bytes. It
+// matches the principal subject limit, so a longer subject is refused
+// before the subject reaches the audit entry.
+const maxSubjectLen = 255
 
 // Errors of the sign-in routes.
 var (
@@ -438,10 +438,10 @@ func (h *Handler) startSession(
 ) {
 	ctx := r.Context()
 
+	subject := provider.ID + ":" + id.Subject
 	// Refuse before the subject reaches the audit entry: the entry keeps
-	// the subject, so a longer one would be stored. The refusal names the
-	// provider only, which has a fixed form.
-	if len(id.Subject) > maxIDPSubjectLen {
+	// the composed subject. The refusal names the provider only.
+	if len(subject) > maxSubjectLen {
 		h.refuseSignIn(w, r, refusal{
 			err: errSignInRefused, providerID: provider.ID, idpSubject: "", reason: reasonSubjectLength,
 		})
@@ -449,7 +449,6 @@ func (h *Handler) startSession(
 		return
 	}
 
-	subject := provider.ID + ":" + id.Subject
 	e := signInEntry(r, subject, id.Subject, session.ActionSignIn)
 
 	p, _, err := h.principals.SignInPrincipal(ctx, e, principal.SignInInput{

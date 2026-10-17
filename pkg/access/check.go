@@ -3,6 +3,8 @@ package access
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -99,6 +101,10 @@ func (s *Service) grantCheck(
 	granter identity.Principal, obj identity.Object, chain []identity.Object, role string,
 ) GrantCheck {
 	return func(ctx context.Context, reads GrantReads) error {
+		if err := s.checkUnitCollection(ctx, reads, obj, chain); err != nil {
+			return err
+		}
+
 		w, ctx := s.within(ctx, reads, obj, chain)
 
 		r, err := w.GetRole(ctx, role)
@@ -171,12 +177,89 @@ var manageAccessActions = map[ObjectKind]identity.Action{
 	ObjectUnit:       identity.ActionUnitManageAccess,
 }
 
+// ActsAs returns, sorted and each once, what the members of subject can
+// act as through the current grants of subject, as r reads them. Each line
+// is the wire form of the object of a grant, as the access review names
+// it: "principal:<id>" for a service principal on which a grant gives
+// principal:manage-tokens, the name of a namespace whose grant gives
+// namespace:manage-principal-tokens, so each service principal of that
+// namespace, and "@server" for a grant on the installation that gives
+// principal:manage-tokens, so every service principal. It covers grants
+// only: the trust rules are a second source of act-as rights that ActsAs
+// does not cover. A store calls it with the reads of a membership write.
+func ActsAs(ctx context.Context, r GrantReads, subject Subject) ([]string, error) {
+	grants, err := r.GrantsOf(ctx, subject)
+	if err != nil {
+		return nil, fmt.Errorf("read grants of %s: %w", subject.String(), err)
+	}
+
+	roles, err := rolesOfGrants(ctx, r, grants)
+	if err != nil {
+		return nil, fmt.Errorf("read roles of %s: %w", subject.String(), err)
+	}
+
+	seen := map[string]bool{}
+
+	for i := range grants {
+		role, ok := roles[grants[i].Role]
+		if ok && givesActAs(role, grants[i].Object) {
+			seen[grants[i].Object.String()] = true
+		}
+	}
+
+	return slices.Sorted(maps.Keys(seen)), nil
+}
+
+// givesActAs reports whether a grant of role on obj lets its holder make
+// the tokens of a service principal: principal:manage-tokens on the
+// installation or on a principal, and namespace:manage-principal-tokens on
+// a namespace, as the Authorizer decides.
+func givesActAs(role Role, obj identity.Object) bool {
+	if isNamespaceGrant(obj) {
+		return role.Has(identity.ActionNamespaceManagePrincipalTokens)
+	}
+
+	return (obj.IsServer() || obj.IsPrincipal()) && role.Has(identity.ActionPrincipalManageTokens)
+}
+
+// rolesOfGrants returns the role of each grant of grants that exists, by
+// ID: the built-in roles from code, and the custom roles with r in one
+// read.
+func rolesOfGrants(ctx context.Context, r GrantReads, grants []Grant) (map[string]Role, error) {
+	out := map[string]Role{}
+
+	var custom []string
+
+	for i := range grants {
+		if role, ok := BuiltInRole(grants[i].Role); ok {
+			out[role.ID] = role
+		} else if !slices.Contains(custom, grants[i].Role) {
+			custom = append(custom, grants[i].Role)
+		}
+	}
+
+	roles, err := r.GetRoles(ctx, custom)
+	if err != nil {
+		return nil, err
+	}
+
+	for i := range roles {
+		out[roles[i].ID] = roles[i]
+	}
+
+	return out, nil
+}
+
 // revokeCheck returns the check that a revoke of g by caller runs in its
 // write: caller holds every action that g gives on its object, with the
 // role of g as it is now, and still holds the manage-access action of that
 // object, which the route authorized.
 func (s *Service) revokeCheck(caller identity.Principal, g Grant, chain []identity.Object) GrantCheck {
 	return func(ctx context.Context, reads GrantReads) error {
+		if err := s.checkUnitCollection(ctx, reads, g.Object, chain); err != nil {
+			return err
+		}
+
 		w, ctx := s.within(ctx, reads, g.Object, chain)
 
 		if err := w.checkGrantHeld(ctx, caller, g); err != nil {
@@ -187,4 +270,41 @@ func (s *Service) revokeCheck(caller identity.Principal, g Grant, chain []identi
 
 		return w.authz.Authorize(ctx, caller, manageAccessAction(kind), g.Object)
 	}
+}
+
+// checkUnitCollection refuses with ErrUnitMoved when obj is a unit and the
+// collection that it is in now, as reads answers in the transaction of the
+// write, is not the collection in chain: the chain that the Service read
+// before the write, through the collection port. An Authorizer with no
+// collection port puts no unit in a collection, so it checks nothing.
+func (s *Service) checkUnitCollection(
+	ctx context.Context, reads GrantReads, obj identity.Object, chain []identity.Object,
+) error {
+	if !obj.IsUnit() || obj.UnitID() == "" || s.authz.collections == nil {
+		return nil
+	}
+
+	want := ""
+
+	for i := range chain {
+		if chain[i].IsCollection() {
+			want = chain[i].CollectionID()
+		}
+	}
+
+	got, found, err := reads.UnitCollectionID(ctx, obj.UnitID())
+	if err != nil {
+		return fmt.Errorf("read collection of unit in the write: %w", err)
+	}
+
+	if !found {
+		got = ""
+	}
+
+	if got != want {
+		return fmt.Errorf("%w: unit %q changed collection during the request; send the request again",
+			ErrUnitMoved, obj.String())
+	}
+
+	return nil
 }

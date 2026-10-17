@@ -165,7 +165,7 @@ func mustCreateMemberGroup(t *testing.T, s reachStore, id, name, principalID str
 		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
 		Pinned: false,
 	}
-	if err := s.AddMember(ctx, m, entry()); err != nil {
+	if err := s.AddMember(ctx, m, entry(), nil); err != nil {
 		t.Fatalf("add member to %q: %v", name, err)
 	}
 

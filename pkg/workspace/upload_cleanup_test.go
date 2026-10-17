@@ -65,7 +65,7 @@ func TestUploadCleanupSurvivesTheRequest(t *testing.T) {
 		States:             f.store,
 		Blobs:              ctxBlobs{Store: f.blobs},
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,

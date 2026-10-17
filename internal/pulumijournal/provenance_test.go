@@ -12,6 +12,7 @@ func portedFiles() []string {
 		"features.go",
 		"integrity.go",
 		"links.go",
+		"migration.go",
 		"normalize.go",
 		"reference.go",
 		"replay.go",
