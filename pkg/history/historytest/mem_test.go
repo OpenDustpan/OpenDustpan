@@ -29,6 +29,13 @@ func TestSuites(t *testing.T) {
 		})
 	})
 
+	t.Run("tombstones", func(t *testing.T) {
+		t.Parallel()
+		historytest.RunTombstones(t, func(*testing.T) historytest.TombstoneStore {
+			return newMem("opentofu", secret.ItemKindState)
+		})
+	})
+
 	tools := []struct {
 		name       string
 		tool       string
@@ -52,6 +59,12 @@ func TestSuites(t *testing.T) {
 			tool:       "opentofu",
 			kind:       secret.ItemKindPlan,
 			situations: historytest.JobArtifactSituations(),
+		},
+		{
+			name:       "job log redactor",
+			tool:       "opentofu",
+			kind:       secret.ItemKindJobLog,
+			situations: historytest.JobLogSituations(),
 		},
 	}
 
@@ -78,6 +91,7 @@ type mem struct {
 	namespaces map[namespace.Name]namespace.Namespace
 	keys       map[secret.ItemRef]secret.ItemKey
 	redactions map[history.RedactionID]history.Redaction
+	tombstones map[history.TombstoneID]history.Tombstone
 	items      map[history.ItemRef]*memItem
 	tool       string
 	kind       secret.ItemKind
@@ -90,6 +104,7 @@ func newMem(tool string, kind secret.ItemKind) *mem {
 		namespaces: map[namespace.Name]namespace.Namespace{},
 		keys:       map[secret.ItemRef]secret.ItemKey{},
 		redactions: map[history.RedactionID]history.Redaction{},
+		tombstones: map[history.TombstoneID]history.Tombstone{},
 		items:      map[history.ItemRef]*memItem{},
 		tool:       tool,
 		kind:       kind,
@@ -323,6 +338,131 @@ func (m *mem) NoteShredFailure(_ context.Context, sf history.ShredFailure, f nam
 	return nil
 }
 
+func (m *mem) RequeueShreds(_ context.Context, names []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id := range m.redactions {
+		r := m.redactions[id]
+		r.Targets = requeue(r.Targets, names)
+		m.redactions[id] = r
+	}
+
+	return nil
+}
+
+// requeue returns a copy of targets with each target named in names set
+// to pending again.
+func requeue(targets []history.ShredTarget, names []string) []history.ShredTarget {
+	out := slices.Clone(targets)
+
+	for i := range out {
+		if slices.Contains(names, out[i].Target) {
+			out[i].State = history.ShredPending
+			out[i].DoneAt = time.Time{}
+		}
+	}
+
+	return out
+}
+
+func (m *mem) AppendTombstone(
+	_ context.Context, tb history.Tombstone, targets []string, f namespace.Fence,
+) (history.Tombstone, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.fenced(f); err != nil {
+		return history.Tombstone{}, err
+	}
+
+	if err := tb.Validate(); err != nil {
+		return history.Tombstone{}, err
+	}
+
+	if stored, err := m.tombstoneOfLocked(tb.Unit); err == nil {
+		return stored, history.ErrPurged
+	}
+
+	tb.Targets = newTargets(targets)
+	m.tombstones[tb.ID] = tb
+
+	return tb, nil
+}
+
+func (m *mem) TombstoneOf(_ context.Context, unit history.Unit) (history.Tombstone, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.tombstoneOfLocked(unit)
+}
+
+func (m *mem) ListTombstones(_ context.Context, after history.TombstoneID, limit int) ([]history.Tombstone, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return pageTombstones(m.tombstones, after, limit, func(history.Tombstone) bool { return true }), nil
+}
+
+func (m *mem) ListPendingTombstones(
+	_ context.Context, after history.TombstoneID, limit int,
+) ([]history.Tombstone, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return pageTombstones(m.tombstones, after, limit, history.Tombstone.Pending), nil
+}
+
+func (m *mem) FinishTombstone(_ context.Context, id history.TombstoneID, name string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tb, i, err := m.tombstoneTarget(id, name)
+	if err != nil {
+		return err
+	}
+
+	if tb.Targets[i].State != history.ShredDone {
+		tb.Targets[i].State = history.ShredDone
+		tb.Targets[i].DoneAt = at
+		m.tombstones[id] = tb
+	}
+
+	return nil
+}
+
+func (m *mem) NoteTombstoneFailure(_ context.Context, tf history.TombstoneFailure) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tb, i, err := m.tombstoneTarget(tf.ID, tf.Target)
+	if err != nil {
+		return err
+	}
+
+	if tb.Targets[i].State != history.ShredDone {
+		tb.Targets[i].Attempts++
+		tb.Targets[i].LastError = tf.Text
+		tb.Targets[i].LastTryAt = tf.At
+		m.tombstones[tf.ID] = tb
+	}
+
+	return nil
+}
+
+func (m *mem) RequeueTombstones(_ context.Context, names []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for id := range m.tombstones {
+		tb := m.tombstones[id]
+		tb.Targets = requeue(tb.Targets, names)
+		m.tombstones[id] = tb
+	}
+
+	return nil
+}
+
 // Redact redacts an item of the tool table in one step under the lock: it
 // checks everything first, then changes the table, the key, the log and the
 // audit entries together.
@@ -345,7 +485,7 @@ func (m *mem) Redact(
 		return stored, history.ErrRedacted
 	}
 
-	if err := refusal(item.situation); err != nil {
+	if err := refusal(item.situation, r.Cause); err != nil {
 		return history.Redaction{}, err
 	}
 
@@ -437,12 +577,18 @@ func (m *mem) AuditEntries(_ context.Context, ns namespace.Name) ([]audit.Entry,
 	return out, nil
 }
 
-// refusal returns the error of a redaction of an item in the situation s,
-// or nil when the item can be redacted.
-func refusal(s historytest.Situation) error {
+// refusal returns the error of a redaction with the cause c of an item in
+// the situation s, or nil when the item can be redacted.
+func refusal(s historytest.Situation, c history.Cause) error {
 	switch s {
 	case historytest.SituationOld:
 		return nil
+	case historytest.SituationCurrentLog:
+		if c == history.CauseRetention {
+			return nil
+		}
+
+		return history.ErrLatest
 	case historytest.SituationLatest, historytest.SituationReplayBase:
 		return history.ErrLatest
 	case historytest.SituationRunning, historytest.SituationUpdateActive:
@@ -529,18 +675,7 @@ func (m *mem) appendLocked(r history.Redaction, targets []string) (history.Redac
 		return stored, history.ErrRedacted
 	}
 
-	r.Targets = nil
-	for _, name := range slices.Concat([]string{history.LiveTarget}, targets) {
-		r.Targets = append(r.Targets, history.ShredTarget{
-			DoneAt:    time.Time{},
-			LastTryAt: time.Time{},
-			Target:    name,
-			State:     history.ShredPending,
-			LastError: "",
-			Attempts:  0,
-		})
-	}
-
+	r.Targets = newTargets(targets)
 	m.redactions[r.ID] = r
 
 	return r, nil
@@ -566,4 +701,74 @@ func (m *mem) target(id history.RedactionID, name string, f namespace.Fence) (hi
 	r.Targets = slices.Clone(r.Targets)
 
 	return r, i, nil
+}
+
+// newTargets returns a pending shred target for LiveTarget, then one for
+// each name in targets.
+func newTargets(targets []string) []history.ShredTarget {
+	out := make([]history.ShredTarget, 0, len(targets)+1)
+
+	for _, name := range slices.Concat([]string{history.LiveTarget}, targets) {
+		out = append(out, history.ShredTarget{
+			DoneAt:    time.Time{},
+			LastTryAt: time.Time{},
+			Target:    name,
+			State:     history.ShredPending,
+			LastError: "",
+			Attempts:  0,
+		})
+	}
+
+	return out
+}
+
+// tombstoneOfLocked returns the tombstone of unit, or ErrTombstoneNotFound.
+// The caller holds the lock.
+func (m *mem) tombstoneOfLocked(unit history.Unit) (history.Tombstone, error) {
+	for id := range m.tombstones {
+		tb := m.tombstones[id]
+		if tb.Unit == unit {
+			return tb, nil
+		}
+	}
+
+	return history.Tombstone{}, history.ErrTombstoneNotFound
+}
+
+// tombstoneTarget returns the tombstone id and the index of its target
+// name. The caller holds the lock.
+func (m *mem) tombstoneTarget(id history.TombstoneID, name string) (history.Tombstone, int, error) {
+	tb, ok := m.tombstones[id]
+	if !ok {
+		return history.Tombstone{}, 0, history.ErrTombstoneNotFound
+	}
+
+	i := slices.IndexFunc(tb.Targets, func(t history.ShredTarget) bool { return t.Target == name })
+	if i < 0 {
+		return history.Tombstone{}, 0, history.ErrTargetNotFound
+	}
+
+	tb.Targets = slices.Clone(tb.Targets)
+
+	return tb, i, nil
+}
+
+// pageTombstones returns at most limit tombstones of all after the ID
+// after, ordered by ID, that keep accepts. The caller holds the lock.
+func pageTombstones(
+	all map[history.TombstoneID]history.Tombstone, after history.TombstoneID, limit int,
+	keep func(history.Tombstone) bool,
+) []history.Tombstone {
+	var out []history.Tombstone
+
+	for id := range all {
+		tb := all[id]
+		if id > after && keep(tb) {
+			out = append(out, tb)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b history.Tombstone) int { return cmp.Compare(a.ID, b.ID) })
+
+	return out[:min(limit, len(out))]
 }

@@ -96,6 +96,11 @@ func TestRedactionValidate(t *testing.T) {
 			edit: func(r *history.Redaction) { r.Cause = "manual" },
 			want: history.ErrInvalidRedaction,
 		},
+		{
+			name: "a purge writes a tombstone, not a redaction",
+			edit: func(r *history.Redaction) { r.Cause = history.CausePurge },
+			want: history.ErrInvalidRedaction,
+		},
 		{name: "no time", edit: func(r *history.Redaction) { r.At = time.Time{} }, want: history.ErrInvalidRedaction},
 		{
 			name: "a bad item key",
@@ -136,8 +141,8 @@ func TestLedgerHoldsNoReason(t *testing.T) {
 	r.AuditHash = "4f2a"
 	l := r.Ledger()
 
-	if l.ID != r.ID || l.UnitID != "stk-one" || l.Item != "upd-1" || l.ItemKey != r.ItemKey ||
-		l.AuditHash != r.AuditHash || l.AtMs != r.At.UnixMilli() {
+	if l.ID != r.ID || l.Cause != history.CauseRequest || l.UnitID != "stk-one" || l.Item != "upd-1" ||
+		l.ItemKey != r.ItemKey || l.AuditHash != r.AuditHash || l.AtMs != r.At.UnixMilli() {
 		t.Errorf("ledger = %+v, want the fields of %+v", l, r)
 	}
 

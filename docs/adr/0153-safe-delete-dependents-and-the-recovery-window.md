@@ -55,7 +55,7 @@ What exists:
   receives a new state item.
 
 The owner approved every decision of this ADR on 2026-10-17, after review
-round 1 of the pull request that adds it.
+rounds 1 and 2 of the pull request that adds it.
 
 ## Decision
 
@@ -163,10 +163,17 @@ round 1 of the pull request that adds it.
       `-force` calls safe-delete.
     - **409 with no unit names.** Safe-delete answers 409 as a JSON:API error
       when the workspace holds resources, when it is locked, or when a
-      blocking edge exists. The detail never names a unit. For a lock, the
-      detail holds the word `locked`, so go-tfe gives the lock error. For
-      resources and for dependents, the detail says which of the two it is,
-      and names the dependents route and the console page of the workspace.
+      blocking edge exists. The detail never names a unit, and never holds
+      the name of the workspace: it names the console page by the workspace
+      ID only. For a lock, the detail holds the word `locked`, so go-tfe
+      gives the lock error. Only the lock case may hold the word `locked` or
+      the words `being processed`: go-tfe reads the detail for those words
+      only (see "Context"), so any other 409 that held them would give the
+      wrong error. The detail of every other 409 holds fixed text with
+      neither. For resources and for dependents, the detail says which of the
+      two it is, and names the dependents route and the console page of the
+      workspace. A test checks the detail of each 409 for the words, and
+      checks that no detail holds the workspace name.
     - **The fixed text of go-tfe stays.** OpenTofu prints the fixed text of
       go-tfe (see "Context"), also for dependents. The server cannot change
       that text, and this ADR accepts it. The release notes and the OpenTofu

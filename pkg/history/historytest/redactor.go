@@ -38,6 +38,10 @@ const (
 	// SituationBlamePending is a state item before blame compared it and
 	// the next state item. A redaction of it answers history.ErrBlamePending.
 	SituationBlamePending Situation = "blame-pending"
+	// SituationCurrentLog is the current version of a job log: it is closed
+	// and no later version exists. A request to redact it answers
+	// history.ErrLatest. The end of its retention period redacts it.
+	SituationCurrentLog Situation = "current-log"
 )
 
 // PulumiSituations returns the situations of the state items of a Pulumi
@@ -59,10 +63,16 @@ func OpenTofuSituations() []Situation {
 	return []Situation{SituationOld, SituationLatest, SituationRunning, SituationBlamePending}
 }
 
-// JobArtifactSituations returns the situations of a stored plan or a job
-// log.
+// JobArtifactSituations returns the situations of a stored plan. A plan has
+// no latest version: every plan of a finished job can be redacted.
 func JobArtifactSituations() []Situation {
 	return []Situation{SituationOld, SituationRunning}
+}
+
+// JobLogSituations returns the situations of a version of a job log: an
+// older closed version, an open version, and the current version.
+func JobLogSituations() []Situation {
+	return []Situation{SituationOld, SituationRunning, SituationCurrentLog}
 }
 
 // RedactorFixture is every port that RunRedactor exercises: namespaces for
@@ -118,6 +128,21 @@ func RunRedactor(t *testing.T, situations []Situation, newFixture RedactorFactor
 			name:      "an item before its blame is ErrBlamePending",
 			situation: SituationBlamePending,
 			test:      refuse(history.ErrBlamePending),
+		},
+		{
+			name:      "a request for the current log version is ErrLatest",
+			situation: SituationCurrentLog,
+			test:      refuse(history.ErrLatest),
+		},
+		{
+			name:      "the end of retention redacts the current log version",
+			situation: SituationCurrentLog,
+			test:      testRetainCurrentLog,
+		},
+		{
+			name:      "the end of retention never redacts the latest state",
+			situation: SituationLatest,
+			test:      testRetainLatest,
 		},
 		{name: "a second redaction is ErrRedacted", situation: SituationOld, test: testRedactTwice},
 		{name: "a missing item is ErrItemNotFound", situation: SituationOld, test: testRedactMissing},
@@ -341,6 +366,70 @@ func testRedactAuditFails(t *testing.T, f RedactorFixture, s Situation) {
 
 	if _, err := f.Redact(t.Context(), r, nil, e, fence); !errors.Is(err, audit.ErrInvalidEntry) {
 		t.Errorf("redact with an invalid audit entry err = %v, want ErrInvalidEntry", err)
+	}
+
+	assertUnchanged(t, f, item)
+}
+
+// retentionOf returns r as the end of a retention period: the actor is the
+// server, the cause CauseRetention and the reason RetentionReason.
+func retentionOf(r history.Redaction) history.Redaction {
+	r.By = history.Actor{Subject: history.ServerSubject, TokenID: "", JobID: ""}
+	r.Cause = history.CauseRetention
+	r.Reason = history.RetentionReason
+
+	return r
+}
+
+// retentionEntry returns the audit entry of the end of a retention period
+// of item: the subject is the server.
+func retentionEntry(item history.ItemRef) audit.Entry {
+	e := changeEntry(item)
+	e.Subject = history.ServerSubject
+	e.TokenID = ""
+
+	return e
+}
+
+// testRetainCurrentLog checks that retention may expire the current version
+// of a job log, which a request may not redact.
+func testRetainCurrentLog(t *testing.T, f RedactorFixture, s Situation) {
+	t.Helper()
+	fence := makeNamespace(t, f)
+	item, r := seedRedaction(t, f, s, fence)
+	r = retentionOf(r)
+
+	stored, err := f.Redact(t.Context(), r, []string{backupTarget}, retentionEntry(item), fence)
+	if err != nil {
+		t.Fatalf("redact at the end of retention: %v", err)
+	}
+
+	if stored.Cause != history.CauseRetention || stored.By.Subject != history.ServerSubject {
+		t.Errorf("stored record = %+v, want the cause retention and the actor %s", stored, history.ServerSubject)
+	}
+
+	if mark, markErr := f.Mark(t.Context(), item); markErr != nil || mark != r.ID {
+		t.Errorf("mark = %q, %v, want %s", mark, markErr, r.ID)
+	}
+
+	if _, keyErr := itemKeyOf(t, f, item); !errors.Is(keyErr, secret.ErrShredded) {
+		t.Errorf("get item key err = %v, want ErrShredded", keyErr)
+	}
+
+	assertStoredRecord(t, f, item, stored)
+	assertOneAuditEntry(t, f, item, stored.AuditHash)
+}
+
+// testRetainLatest checks that the cause retention does not pass the rule
+// on the latest state item.
+func testRetainLatest(t *testing.T, f RedactorFixture, s Situation) {
+	t.Helper()
+	fence := makeNamespace(t, f)
+	item, r := seedRedaction(t, f, s, fence)
+
+	_, err := f.Redact(t.Context(), retentionOf(r), nil, retentionEntry(item), fence)
+	if !errors.Is(err, history.ErrLatest) {
+		t.Errorf("redact of the latest state at the end of retention err = %v, want ErrLatest", err)
 	}
 
 	assertUnchanged(t, f, item)

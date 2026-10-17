@@ -1,10 +1,12 @@
 // Package historytest is the conformance suite for the ports of the history
-// package: the redaction log, and the Redactor of each kind of history item.
+// package: the redaction log, the tombstone log, and the Redactor of each
+// kind of history item.
 // Every built-in store runs it, and a custom store should too:
 //
 //	func TestHistoryConformance(t *testing.T) {
 //		t.Parallel()
 //		historytest.RunRedactions(t, func(t *testing.T) historytest.RedactionStore { return newMyStore(t) })
+//		historytest.RunTombstones(t, func(t *testing.T) historytest.TombstoneStore { return newMyStore(t) })
 //		historytest.RunRedactor(t, historytest.PulumiSituations(), func(t *testing.T) historytest.RedactorFixture {
 //			return newMyPulumiFixture(t)
 //		})

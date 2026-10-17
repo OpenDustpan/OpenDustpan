@@ -47,16 +47,15 @@ const (
 	// CauseRestore is a redaction that a restore found in the ledger of a
 	// backup target. It has no reason, because the ledger holds none.
 	CauseRestore Cause = "restore"
+	// CausePurge is the cause of a Tombstone: the final delete of a unit.
+	// A Redaction never has it.
+	CausePurge Cause = "purge"
 )
 
-// Valid reports whether c is one of the causes.
+// Valid reports whether c is one of the causes of a Redaction. CausePurge
+// is the cause of a Tombstone only, so it is not valid here.
 func (c Cause) Valid() bool {
-	switch c {
-	case CauseRequest, CauseRetention, CauseRestore:
-		return true
-	default:
-		return false
-	}
+	return c == CauseRequest || c == CauseRetention || c == CauseRestore
 }
 
 // LiveTarget is the shred target of the live blob store. Every redaction
@@ -227,6 +226,13 @@ type RedactionLog interface {
 	// namespace.ErrFenced when the fence is stale. A call on a done target
 	// changes nothing and answers nil.
 	NoteShredFailure(ctx context.Context, f ShredFailure, fence namespace.Fence) error
+	// RequeueShreds sets each shred target named in names, of every record
+	// of every namespace, to pending again, and keeps its count of tries. A
+	// target of another name stays as it is. A restore calls it after the
+	// swap with LiveTarget and the source target only: those are the two
+	// places that a restore can bring a blob back to. The restore is a write
+	// of the installation, not of one namespace, so it carries no fence.
+	RequeueShreds(ctx context.Context, names []string) error
 }
 
 // Redactor redacts one kind of history item. Each tool implements it for its
@@ -243,7 +249,10 @@ type Redactor interface {
 	//   - ErrItemNotFound when the item does not exist,
 	//   - ErrLatest for the latest state item of the unit, which includes
 	//     the replay base of an update that has not ended or whose journal
-	//     is not replayed yet,
+	//     is not replayed yet, with every cause. ErrLatest also for the
+	//     current version of a job log when r.Cause is CauseRequest. With
+	//     CauseRetention, the current version of a job log is redacted like
+	//     any other version: retention may expire it, a person may not,
 	//   - ErrInProgress for an item that is not finished, and for any item
 	//     of a stack while an update on that stack is active,
 	//   - ErrBlamePending for a state item before blame compared it and the
@@ -266,6 +275,7 @@ func LedgerObject(id RedactionID) blob.Key {
 // reason or a name.
 type LedgerRecord struct {
 	ID        RedactionID      `json:"id"`
+	Cause     Cause            `json:"cause"`
 	Namespace namespace.Name   `json:"namespace"`
 	Tool      string           `json:"tool"`
 	UnitID    string           `json:"unitID"`
@@ -281,6 +291,7 @@ type LedgerRecord struct {
 func (r Redaction) Ledger() LedgerRecord {
 	return LedgerRecord{
 		ID:        r.ID,
+		Cause:     r.Cause,
 		Namespace: r.Item.Unit.Namespace,
 		Tool:      r.Item.Unit.Tool,
 		UnitID:    r.Item.Unit.ID,

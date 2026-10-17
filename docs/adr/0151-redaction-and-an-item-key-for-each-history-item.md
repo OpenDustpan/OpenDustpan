@@ -19,7 +19,7 @@ customer record. The project owner decided the rules of redaction on
   that a redaction also covers backups.
 
 The owner approved every decision of this ADR on 2026-10-17, after review
-round 1 of the pull request that adds it.
+rounds 1 and 2 of the pull request that adds it.
 
 The facts that the design must meet:
 
@@ -140,11 +140,24 @@ The facts that the design must meet:
      routes open the current state version, which is never redacted.
    - A restore (ADR 28) opens the old state version and seals the copy with
      the item key of the new state version.
-8. **A purge shreds every item key of the unit.** The final delete
-   (ADR 47) shreds the item key of each item of the unit, in addition to
-   the data key and the blobs. It then deletes the key blobs, in the live
-   blob store and in each backup target (decision 16). So a purge also
-   reaches backups.
+8. **A purge shreds every item key of the unit, and writes a tombstone.**
+   The final delete (ADR 47) shreds the item key of each item of the unit,
+   in addition to the data key and the blobs. In the same fenced
+   transaction, it writes one tombstone for the unit (`history.Tombstone`,
+   ID prefix `tmb-`), with the cause `purge`. The tombstone is a durable
+   shred record in a control table (decision 20). It names the unit, every
+   item key of the unit, the blob key prefixes that hold the content of the
+   unit, the actor, the time and the hash of the audit entry of the purge,
+   and one shred target for the live blob store and for each backup target
+   that the `backups` table names. The shred operation (decision 16) then
+   finishes the tombstone as it finishes a redaction: on each target it
+   writes the ledger object `tombstones/<tombstone ID>.json`, then deletes
+   the key blobs and every blob under the prefixes. So a purge also reaches
+   backups, and `backup check` and a restore treat the blobs of a purged
+   unit as expected gaps (decisions 21 and 22). The tombstone outlives the
+   unit and can outlive its namespace. So only its append carries the
+   fence, and the shred operation finishes its targets without a fence, as
+   the blob purge of ADR 47 does.
 9. **Start-up check.** The wrapper IDs of the item key records count in
    the start-up check of ADR 23 decision 3, as the wrapper IDs of data keys
    do.
@@ -168,16 +181,45 @@ The facts that the design must meet:
     (ADR 43). Without this rule, a redaction of the base would make the
     checkpoint of that update impossible to build. A request for any item
     of the latest state item answers 409 with an error that says that the
-    latest state cannot be redacted.
+    latest state cannot be redacted (`history.ErrLatest`), for every cause.
+    No retention applies to state items (see "Relation to the RFCs").
 13. **Active updates.** While an update on a stack is active, a redaction
-    of any state item of that stack answers 409. An active update is an
-    update that runs, or a journaled update that the server did not replay
-    yet. The error tells the client to try again after the update ends.
+    of any state item of that stack answers 409 (`history.ErrInProgress`).
+    An active update is an update that runs, or a journaled update that the
+    server did not replay yet. The 409 message tells the client to try again
+    after the update ends, and names the one command that ends an update
+    that runs: `pulumi cancel` (ADR 43 decision 10.3).
+
+    **A replay that fails for good.** The server replays a journaled update
+    when it builds its checkpoint, on `complete` and on `pulumi cancel`
+    (ADR 43 decision 7.1). A build that fails for a bound of time answers
+    503, and the update stays active, so the client tries `pulumi cancel`
+    again. A build that fails for good is a build that cannot succeed on a
+    second try: an entry that the replay cannot apply, or a size bound of
+    the build (`docs/reference/journaling.md`). On `pulumi cancel`, such a
+    failure does not keep the update active. The cancel ends the update as
+    `cancelled` with no checkpoint of its own, and records the replay
+    failure on the update, with a metric. The update is then not active,
+    and the server never replays it again. Its replay base stays the latest
+    state item (decision 12), so no redaction can target it. Redaction of
+    the other items of the stack is then possible. The operator path to
+    unblock redaction is so: `pulumi cancel`, then `pulumi refresh` or
+    `pulumi up`, which makes a new update with its own checkpoint. The
+    journaling guide gives these steps.
 14. **The other targets.**
     - A Pulumi update that runs and an OpenTofu state version that is still
       pending answer 409.
     - A stored plan, and a closed version of a job log, can be redacted.
       A log version that is still open answers 409 (ADR 102).
+    - **The current version of a job log.** The current version is the
+      latest closed version of a log. A request (cause `request`) for it
+      answers 409 with `history.ErrLatest`, so a person never destroys the
+      only readable copy of a log. A substitution (ADR 152 decision 9) first
+      writes a new version, which becomes the current version. The end of
+      its retention period (cause `retention`, ADR 152 decision 5) redacts
+      the current version like any other version: retention may expire it,
+      a request may not. The conformance suite tests both causes
+      (`historytest.SituationCurrentLog`).
 
     A request for an item that is already redacted answers 409 and names the
     earlier redaction.
@@ -205,11 +247,17 @@ The facts that the design must meet:
     the mark, the shred and the record.
 16. **The shred operation.** After the commit, a durable operation (ADR 72)
     finishes the redaction:
-    1. It deletes the key blob and the content blobs from the live blob
+    1. It waits until no backup that started before the commit still runs.
+       Only one backup runs at a time (ADR 30). Such a backup read its SQL
+       snapshot before the commit, so it names the blobs of the item, and it
+       copies them from the live blob store. The wait comes before the live
+       delete, so that backup never finds a blob missing and never fails.
+       The wait does not leave the content readable: the key record is
+       shredded at the commit, and every open checks the record first
+       (decision 4). A backup that started after the commit skips the blobs
+       of the item (decision 18).
+    2. It deletes the key blob and the content blobs from the live blob
        store.
-    2. It waits until no backup that started before the commit still runs.
-       Only one backup runs at a time (ADR 30). A backup that started after
-       the commit skips the blobs of the item (decision 18).
     3. For each backup target of the redaction, it writes the ledger object
        `redactions/<redaction ID>.json`, then deletes
        `blobs/item-keys/<item key ID>`, then deletes the content blobs
@@ -217,6 +265,10 @@ The facts that the design must meet:
     4. It marks each target done. A target that does not answer stays
        pending. The operation tries again with a back-off and counts the
        failure in a metric.
+
+    The operation finishes a tombstone (decision 8) in the same steps: the
+    ledger object is `tombstones/<tombstone ID>.json`, and the deletes are
+    the key blobs of the tombstone and every blob under its prefixes.
 
     The redaction record answers the state of each target, so an operator
     can see which backups the redaction reached.
@@ -236,38 +288,58 @@ The facts that the design must meet:
     record names the content blobs. So a backup that starts after a
     redaction never puts the content into a target, also a target that the
     redaction did not name.
-19. **Each target gets the ledger of every redaction.** A backup writes the
-    ledger object of each redaction in its snapshot that the target does not
-    hold yet, before it copies a blob. So a new target gets ledger objects
-    for all redactions that exist, and `backup check` and a restore of that
-    target treat each gap as a redaction.
-20. **Redaction records survive the restore swap.** The tables of
-    redaction records and of their shred targets are control tables
-    (ADR 72 decision 5). A restore does not replace them. The item key
-    records and the tool tables are data, which the restore replaces.
-21. **A restore applies every redaction.** A restore (ADR 38) applies the
-    redactions before the swap, in this order:
-    1. It reads the ledger objects of the source target. For each one that
-       names an item that the live redaction records do not hold, it writes
-       a redaction record with the cause `restore`, no reason, and the audit
-       hash from the ledger object.
-    2. It applies each live redaction record to the staged data: it marks
+19. **Each target gets the ledger of every redaction and every purge.** A
+    backup writes the ledger object of each redaction and of each tombstone
+    in its snapshot that the target does not hold yet, before it copies a
+    blob. So a new target gets ledger objects for all redactions and purges
+    that exist, and `backup check` and a restore of that target treat each
+    gap as a redaction or a purge. The snapshot of a backup that starts
+    after a purge holds no row of the purged unit, so it names no blob of
+    the unit.
+20. **Redaction records and tombstones survive the restore swap.** The
+    tables of redaction records, of tombstones, and of their shred targets
+    are control tables (ADR 72 decision 5). A restore does not replace them.
+    The item key records and the tool tables are data, which the restore
+    replaces.
+21. **A restore applies every redaction and every purge.** A restore
+    (ADR 38) applies the redactions and the purges before the swap, in this
+    order:
+    1. It reads the ledger objects of the source target. For each redaction
+       ledger object that names an item that the live redaction records do
+       not hold, it writes a redaction record with the cause `restore`, no
+       reason, and the audit hash from the ledger object. For each tombstone
+       ledger object that names a unit that the live tombstones do not hold,
+       it writes a tombstone with the cause `purge` and the audit hash from
+       the ledger object.
+    2. It applies each live tombstone to the staged data: it deletes the
+       purged unit from the staged data, as the final delete does, and marks
+       each item key of the unit shredded. A tombstone whose unit is not in
+       the staged data stays as it is.
+    3. It applies each live redaction record to the staged data: it marks
        the item redacted and the item key shredded. A record whose item is
        not in the staged data stays as it is.
-    3. It writes the ledger object of each live redaction record that the
-       source target does not hold yet, and deletes the key blob and the
-       content blobs of that redaction from the source target.
-    4. It copies no blob that a redaction names into the live blob store.
-    5. After the swap, it sets every shred target of every redaction to
-       pending again, and starts the shred operation. So the operation
-       deletes the blobs again on every target, and a target that a blob
-       came back to loses it.
+    4. It writes the ledger object of each live redaction record and of each
+       live tombstone that the source target does not hold yet, and deletes
+       from the source target the blobs that each one names.
+    5. It copies no blob that a redaction or a tombstone names into the
+       live blob store (`history.Gaps`).
+    6. After the swap, it sets to pending again only the shred targets of
+       the live blob store and of the source target, for every redaction
+       and every tombstone (`RequeueShreds`, `RequeueTombstones`), and
+       starts the shred operation. These are the only two places that a
+       restore can bring a blob back to. A done target of another backup
+       target stays done, so a restore does not make the operation write to
+       every target again.
 
-    A restore from a backup made before a redaction so stays redacted.
+    A restore from a backup made before a redaction or a purge so stays
+    redacted or purged.
 22. **`backup check`, the scrub, and the orphan sweep.**
-    - `backup check` reads the ledger objects of the target. A missing object
-      that a ledger object names is not an error. The check reports the count
-      of redacted items. It reports a key blob that a ledger object names and
+    - `backup check` reads the ledger objects of the target, of redactions
+      and of tombstones. A missing object that a ledger object names is not
+      an error: a blob that a redaction names, a key blob that a tombstone
+      names, and a blob under a prefix of a tombstone count as expected
+      gaps (`history.Gaps`). The check reports the count of redacted items and of
+      purged units. It reports a key blob that a ledger object names and
       that the target still holds, and a key record of the backup that is not
       shredded and whose key blob the target does not hold.
     - A periodic scrub compares the item key records with the key blobs in
@@ -281,7 +353,8 @@ The facts that the design must meet:
       committed yet.
     - A key blob that is missing with no ledger object and no shredded
       record stays an error in a restore, as ADR 30 decision 8 says for a
-      missing blob.
+      missing blob. A restore and `backup check` share one rule for the gaps
+      (`history.Gaps`), so they never disagree on a blob.
 
 ### The audit entry and the reason
 
@@ -388,8 +461,17 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   plain bytes. A redacted state version cannot be restored.
 - **ADR 30, decision 8, and ADR 38:** a blob that a backup names and the
   target does not hold stops a restore. A blob that a redaction names is
-  now an expected gap. A backup skips shredded content, and a restore
-  applies every redaction (decisions 18 to 22).
+  now an expected gap, and so is a blob of a purged unit that a tombstone
+  names. A backup skips shredded content, and a restore applies every
+  redaction and every purge (decisions 18 to 22).
+- **ADR 47:** the final delete deletes the rows and the blobs of a unit, and
+  a blob purge record finishes the live delete. The purge now also writes a
+  tombstone in a control table, and the shred operation deletes the key
+  blobs and the content in every backup target (decision 8).
+- **ADR 43, decision 10.3:** `pulumi cancel` builds the checkpoint first.
+  When that build fails for good, the cancel now still ends the update as
+  `cancelled`, with no checkpoint of its own and with the replay failure
+  recorded (decision 13).
 
 ## Relation to the RFCs
 
@@ -448,19 +530,25 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   2. The item sealer, with the key blob and the open check.
   3. Seal Pulumi checkpoints, event payloads and journal batches, and move
      OpenTofu sealing to item keys.
-  4. The redaction log (`history.RedactionLog`), its conformance suite
-     (`historytest.RunRedactions`) and the SQL adapters, with the redaction
-     tables in the control list.
+  4. The redaction log (`history.RedactionLog`) and the tombstone log
+     (`history.TombstoneLog`), their conformance suites
+     (`historytest.RunRedactions`, `historytest.RunTombstones`) and the SQL
+     adapters, with the redaction and tombstone tables in the control list.
   5. The `Redactor` of each tool, with `historytest.RunRedactor` and the
      table of that tool, then the routes and the audit field `reason`.
   6. The shred operation, the ledger objects, the backup skip, `backup
      check`, the scrub, the orphan sweep grace period and the restore rule.
-  7. Item key shredding in the purge.
-  8. E2e steps: two `up` runs, a redaction of version 1, `stack history`,
+  7. Item key shredding and the tombstone in the purge, and the restore
+     step that deletes a purged unit from the staged data.
+  8. The cancel rule for a replay that fails for good (decision 13), with
+     its e2e step.
+  9. E2e steps: two `up` runs, a redaction of version 1, `stack history`,
      `stack export --version 1` (410), `stack export`, and `up`. A redaction
      during a running `up` (409). Two `apply` runs, a redaction of the first
      state version, `tofu state pull`, and an `apply`. A backup before the
-     redaction and a restore after it, with the item still redacted.
+     redaction and a restore after it, with the item still redacted. A
+     backup before a `stack rm`, then a restore, with the stack still
+     purged.
 
 ## Answered questions
 

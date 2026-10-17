@@ -18,7 +18,7 @@ The project owner decided on 2026-10-17:
 - State readers can read plans.
 
 The owner approved every decision of this ADR on 2026-10-17, after review
-round 1 of the pull requests that add this ADR and ADRs 100 to 103. That
+rounds 1 and 2 of the pull requests that add this ADR and ADRs 100 to 103. That
 review found two designs for plans and job logs, one in each pull request.
 This ADR and ADR 102 now split the work, so that one design remains.
 
@@ -35,33 +35,46 @@ This ADR and ADR 102 now split the work, so that one design remains.
 2. **History owns redaction and retention.** The `history` package and
    ADR 151 own the redaction of every item kind: one action
    (`unit:redact`), one `Redactor` port, one `RedactionLog` and one shape of
-   audit entry. This ADR owns the retention policy of plans and job logs.
-   The job model implements `history.Redactor` for its items, and runs the
-   conformance suite `historytest.RunRedactor` with the table of job
-   artifacts.
+   audit entry. This ADR owns the retention policy of plans and job logs,
+   and the `history` package holds its defaults, its minimum, the names of
+   its settings and the check of a setting (decision 3). The job model reads
+   them. It implements `history.Redactor` for its items, and runs the
+   conformance suite `historytest.RunRedactor` with the table of plans
+   (`historytest.JobArtifactSituations`) and the table of job logs
+   (`historytest.JobLogSituations`).
 
 ### Retention
 
 3. **The periods.** The server keeps a plan and a version of a job log for
-   400 days from the creation of the item. Two settings change the periods
-   for an installation (ADR 63): `--plan-retention`
-   (`DUSTPAN_PLAN_RETENTION`) and `--job-log-retention`
-   (`DUSTPAN_JOB_LOG_RETENTION`). The minimum is one day, so that a typing
-   error cannot shred every plan and log at the next sweep. A change of a
-   setting writes an audit entry (ADR 63). The hosted distribution sets its
-   own periods (ADR 59).
+   400 days from the creation of the item (`history.DefaultRetention`). Two
+   settings change the periods for an installation (ADR 63):
+   `--plan-retention` (`DUSTPAN_PLAN_RETENTION`) and `--job-log-retention`
+   (`DUSTPAN_JOB_LOG_RETENTION`). The minimum is one day
+   (`history.MinRetention`, 24 hours), so that a typing error cannot shred
+   every plan and log at the next sweep. The `history` package holds these
+   values in Go: the two durations, the four setting names
+   (`history.PlanRetentionFlag`, `history.PlanRetentionEnv`,
+   `history.JobLogRetentionFlag`, `history.JobLogRetentionEnv`), the type
+   `history.RetentionSettings` with `DefaultRetentionSettings`, and its
+   check `Validate`, which answers `history.ErrInvalidRetention` for a
+   period below the minimum. The binary registers the flags with these
+   names and refuses to start with a period below the minimum. A change of
+   a setting writes an audit entry (ADR 63). The hosted distribution sets
+   its own periods (ADR 59).
 4. **The expiry is stored with each item.** The server computes the expiry
-   time when it creates the item, and stores it with the item. A new period
-   applies to new items only. So a change of a setting never makes an item
-   expire at once. The period starts at the creation of the item, not at the
-   end of its job.
+   time when it creates the item (`history.ExpiresAt`), and stores it with
+   the item. A new period applies to new items only. So a change of a
+   setting never makes an item expire at once. The period starts at the
+   creation of the item, not at the end of its job.
 5. **The end of the period is a redaction.** The retention sweep finds each
    plan and each log version whose expiry time is in the past. It redacts
    each one through the `Redactor` of the job model, on the path of
    ADR 151 decisions 15 and 16, with the actor `@server`, the cause
    `retention` and the reason `retention period ended`. The audit entry has
    the shape of ADR 151 decision 26, with the action `unit:redact`. The
-   metadata stays.
+   metadata stays. The sweep also redacts the current version of a job
+   log when its period ends: retention may expire the current version, a
+   request may not (decision 9, ADR 151 decision 14).
 6. **Plans of a job that has not ended.** A plan of a job that has not
    ended does not expire before the end of its job. This covers a plan that
    an open approval names (ADR 103). When the job ends after the expiry
@@ -80,10 +93,12 @@ This ADR and ADR 102 now split the work, so that one design remains.
    redaction of a log (ADR 102): a person gives text to replace, the server
    writes the next version of the log with each match replaced and a new
    item key, and then redacts the older version through the `Redactor`,
-   with the cause `request` and the reason of the person. The current
-   version of a log cannot be redacted, and an open version answers 409.
-   The audit entry of the substitution never holds the text that the person
-   gave.
+   with the cause `request` and the reason of the person. A request to
+   redact the current version of a log answers 409 with `history.ErrLatest`,
+   and an open version answers 409 with `history.ErrInProgress`. The end of
+   the retention period of the current version redacts it with the cause
+   `retention` (decision 5). The audit entry of the substitution never
+   holds the text that the person gave.
 
 ### Actions and roles
 
@@ -92,7 +107,7 @@ This ADR and ADR 102 now split the work, so that one design remains.
     | Operation | Action | Object |
     | --- | --- | --- |
     | Read the readable plan, masked | `job:read-plans` | unit |
-    | Read a plan part that holds plain secret values | `job:read-plans`, `unit:read-secrets` | unit |
+    | Read the readable plan, unmasked | `job:read-plans`, `unit:read-secrets` | unit |
     | Read the content of a job log | `job:read-logs` | unit |
     | Redact a plan or a log version | `unit:redact` | unit |
     | Change a retention period | `server:manage-settings` | `@server` |
@@ -125,8 +140,28 @@ This ADR and ADR 102 now split the work, so that one design remains.
 - **RFC 39** gives the masking rules that the read of the readable plan
   uses.
 
-This ADR supersedes no decision. ADR 102 follows decision 4: the period
-starts at the creation of the item.
+This ADR supersedes no decision. ADR 102 must follow decision 4: the
+period starts at the creation of the item, not at the end of its job.
+
+### Names that the job model must adopt
+
+The names of this ADR and of ADR 151 are the reference. ADR 102, ADR 103
+and the `job` package must use them:
+
+| Concept | Name |
+| --- | --- |
+| Item key ID prefix | `ik-` |
+| Action of every redaction | `unit:redact` |
+| Redaction port | `history.Redactor` |
+| Cause at the end of a retention period | `history.CauseRetention` (`retention`), actor `@server` |
+| Start of a retention period | the creation of the item (`history.ExpiresAt`) |
+| Error of an open of shredded content | `secret.ErrShredded` |
+| Error of a request for the current log version | `history.ErrLatest` |
+| Error of an item that is not finished | `history.ErrInProgress` |
+| Setting of the plan period | `--plan-retention`, `DUSTPAN_PLAN_RETENTION` |
+| Setting of the job log period | `--job-log-retention`, `DUSTPAN_JOB_LOG_RETENTION` |
+| Defaults and check of the periods | `history.DefaultRetention`, `history.MinRetention`, `history.RetentionSettings` |
+| Conformance tables | `historytest.JobArtifactSituations`, `historytest.JobLogSituations` |
 
 ## Consequences
 
@@ -134,13 +169,15 @@ starts at the creation of the item.
   The sizing guide states the growth for each job.
 - The retention sweep writes one audit entry for each expired item.
 - The `history` package holds no type and no port for plans or job logs.
-  The job model holds them, with the defaults of decision 3.
+  The job model holds them. The `history` package holds the retention
+  defaults, the minimum, the setting names and the check of decision 3,
+  and the job model reads them.
 - Built-in roles change: each role with `unit:read` gets `job:read-plans`.
   The role table of the `identity` package needs this change.
 - Open work, with the job model of ADRs 100 to 103:
   1. The `Redactor` of the job model, with `historytest.RunRedactor`.
-  2. The retention settings, the expiry time of each item and the sweep
-     step.
+  2. The flags of the retention settings with the names of decision 3, the
+     expiry time of each item and the sweep step.
   3. The role table change of decision 11.
 
 ## Answered questions

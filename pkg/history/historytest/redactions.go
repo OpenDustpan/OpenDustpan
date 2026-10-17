@@ -40,6 +40,7 @@ func RunRedactions(t *testing.T, newStore RedactionFactory) {
 		{name: "a failure counts the try and keeps the target pending", test: testNoteFailure},
 		{name: "an unknown target is ErrTargetNotFound", test: testUnknownTarget},
 		{name: "a stale fence refuses every write", test: testRedactionFenced},
+		{name: "a requeue sets only the named targets pending again", test: testRequeueShreds},
 	}
 
 	for _, tc := range cases {
@@ -383,5 +384,61 @@ func testRedactionFenced(t *testing.T, s RedactionStore) {
 	)
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Errorf("note failure with a stale fence err = %v, want ErrFenced", err)
+	}
+}
+
+// testRequeueShreds checks the restore rule: after the swap, only the live
+// target and the source target of the restore become pending again.
+func testRequeueShreds(t *testing.T, s RedactionStore) {
+	t.Helper()
+	fence := makeNamespace(t, s)
+	const other = "s3://bucket/prefix"
+	r := mustAppend(
+		t, s, newRedaction(stateItem("ws-one", "sv-1"), suiteTime()), []string{backupTarget, other}, fence,
+	)
+
+	err := s.NoteShredFailure(
+		t.Context(),
+		history.ShredFailure{At: suiteTime(), ID: r.ID, Target: backupTarget, Text: "target does not answer"},
+		fence,
+	)
+	if err != nil {
+		t.Fatalf("note failure: %v", err)
+	}
+
+	for _, target := range []string{history.LiveTarget, backupTarget, other} {
+		if finishErr := s.FinishShred(t.Context(), r.ID, target, suiteTime().Add(time.Hour), fence); finishErr != nil {
+			t.Fatalf("finish %s: %v", target, finishErr)
+		}
+	}
+
+	if requeueErr := s.RequeueShreds(t.Context(), []string{history.LiveTarget, backupTarget}); requeueErr != nil {
+		t.Fatalf("requeue: %v", requeueErr)
+	}
+
+	got, err := s.GetRedaction(t.Context(), "acme", r.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	want := map[string]history.ShredState{
+		history.LiveTarget: history.ShredPending,
+		backupTarget:       history.ShredPending,
+		other:              history.ShredDone,
+	}
+
+	for _, target := range got.Targets {
+		if target.State != want[target.Target] {
+			t.Errorf("target %s after a requeue = %s, want %s", target.Target, target.State, want[target.Target])
+		}
+	}
+
+	if got.Targets[1].Attempts != 1 {
+		t.Errorf("tries of %s after a requeue = %d, want 1", backupTarget, got.Targets[1].Attempts)
+	}
+
+	pending, err := s.ListPendingShreds(t.Context(), "", 10)
+	if err != nil || len(pending) != 1 {
+		t.Errorf("pending after a requeue = %d, %v, want 1", len(pending), err)
 	}
 }

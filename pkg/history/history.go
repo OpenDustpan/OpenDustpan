@@ -1,8 +1,10 @@
 // Package history holds the tool-neutral parts of the history of a unit: the
 // actor of an item, the redaction of any item kind (state, plan, job log)
-// through one Redactor port and one RedactionLog, and the retention rule: the
-// expiry of an item is a redaction with the cause CauseRetention. The job
-// model stores plans and job logs and implements Redactor for them.
+// through one Redactor port and one RedactionLog, the tombstone of a purged
+// unit, and the retention rule: the expiry of an item is a redaction with
+// the cause CauseRetention. The package owns the retention defaults and the
+// names of the retention settings. The job model stores plans and job logs,
+// reads the settings, and implements Redactor for its items.
 //
 // A history item is one entry in the history of a unit that has content:
 // one Pulumi update, one OpenTofu state version, one stored plan or one
@@ -33,9 +35,11 @@ var (
 	ErrItemNotFound = errors.New("history item not found")
 	// ErrLatest reports a redaction of the latest state item of a unit,
 	// which includes the replay base of an update that has not ended or
-	// whose journal is not replayed yet. The latest state cannot be
-	// redacted.
-	ErrLatest = errors.New("the latest state cannot be redacted")
+	// whose journal is not replayed yet, or a request to redact the current
+	// version of a job log. The latest state cannot be redacted. The current
+	// version of a job log can expire at the end of its retention period,
+	// but a person cannot redact it.
+	ErrLatest = errors.New("the latest item cannot be redacted")
 	// ErrInProgress reports a redaction of an item that is not finished: an
 	// update that runs, a state version that is pending, the log of a job
 	// step that runs, or any item of a stack while an update on that stack
@@ -58,6 +62,12 @@ var (
 	// ErrInvalidRedaction reports a redaction record that fails validation
 	// for another cause than its reason.
 	ErrInvalidRedaction = errors.New("invalid redaction")
+	// ErrPurged reports a second tombstone for a unit that already has one.
+	ErrPurged = errors.New("the unit is purged")
+	// ErrTombstoneNotFound reports a tombstone that does not exist.
+	ErrTombstoneNotFound = errors.New("tombstone not found")
+	// ErrInvalidTombstone reports a tombstone that fails validation.
+	ErrInvalidTombstone = errors.New("invalid tombstone")
 )
 
 // Limits of the references.
