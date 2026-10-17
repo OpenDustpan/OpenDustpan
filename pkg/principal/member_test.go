@@ -157,7 +157,9 @@ func TestAddMemberNamesWhatTheMemberActsAs(t *testing.T) {
 	t.Parallel()
 
 	caller := identity.Principal{
-		Subject: "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+		TemporaryAdministrator: false,
+		TemporaryExpiresAt:     time.Time{},
+		Subject:                "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
 	}
 
 	for _, tc := range []struct {
