@@ -1155,13 +1155,13 @@ func TestDeleteSweepTreatsGoneRowAsDone(t *testing.T) {
 		t.Fatalf("writable namespace: %v", err)
 	}
 
-	if err := f.store.DiscardStateVersion(ctx, pending.Version.ID, writable.Fence()); err != nil {
-		t.Fatalf("discard pending version: %v", err)
+	if discardErr := f.store.DiscardStateVersion(ctx, pending.Version.ID, writable.Fence()); discardErr != nil {
+		t.Fatalf("discard pending version: %v", discardErr)
 	}
 
 	if stored.Content != "" {
-		if err := f.blobs.Delete(ctx, stored.Content); err != nil {
-			t.Fatalf("delete pending blob: %v", err)
+		if deleteErr := f.blobs.Delete(ctx, stored.Content); deleteErr != nil {
+			t.Fatalf("delete pending blob: %v", deleteErr)
 		}
 	}
 
@@ -1212,6 +1212,27 @@ func TestDeleteSweepsStuckPendingAfterBackup(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
+	f := newStuckBackupFixture(ctx, t)
+	pending, stuckKey := stageStuckPending(ctx, t, f)
+	assertBackupOmitsStuckKey(ctx, t, f.store, stuckKey)
+	assertDeleteSweepsStuckPending(ctx, t, f, pending.Version.ID)
+}
+
+// stuckBackupFixture holds a workspace with a clock the test moves past
+// the upload window plus the sweep grace period.
+type stuckBackupFixture struct {
+	svc        *workspace.Service
+	store      *sqlite.Store
+	namespaces *namespace.Service
+	blobs      *fs.Store
+	now        *time.Time
+	ws         workspace.Workspace
+}
+
+// newStuckBackupFixture opens a blob store and a SQLite store with one
+// workspace, so the test stages a stuck pending version against them.
+func newStuckBackupFixture(ctx context.Context, t *testing.T) stuckBackupFixture {
+	t.Helper()
 
 	blobs, err := fs.Open(t.TempDir())
 	if err != nil {
@@ -1224,7 +1245,9 @@ func TestDeleteSweepsStuckPendingAfterBackup(t *testing.T) {
 		}
 	})
 
-	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "dustpan.db"))
+	var store *sqlite.Store
+
+	store, err = sqlite.Open(ctx, filepath.Join(t.TempDir(), "dustpan.db"))
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -1237,16 +1260,20 @@ func TestDeleteSweepsStuckPendingAfterBackup(t *testing.T) {
 
 	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	var namespaces *namespace.Service
+
+	namespaces, err = namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
 	if err != nil {
 		t.Fatalf("namespaces: %v", err)
 	}
 
-	if _, err := namespaces.Create(ctx, "acme"); err != nil {
+	if _, err = namespaces.Create(ctx, "acme"); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
 
-	svc, err := workspace.NewService(workspace.Config{
+	var svc *workspace.Service
+
+	svc, err = workspace.NewService(workspace.Config{
 		Workspaces:         store,
 		States:             store,
 		Blobs:              blobs,
@@ -1262,74 +1289,109 @@ func TestDeleteSweepsStuckPendingAfterBackup(t *testing.T) {
 		t.Fatalf("service: %v", err)
 	}
 
-	name, err := workspace.ParseName("e2e-workspace")
+	var name workspace.Name
+
+	name, err = workspace.ParseName("e2e-workspace")
 	if err != nil {
 		t.Fatalf("name: %v", err)
 	}
 
-	ws, err := svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	var ws workspace.Workspace
+
+	ws, err = svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 
-	if _, err := svc.Lock(ctx, ws.ID, "alice", "apply"); err != nil {
+	return stuckBackupFixture{svc: svc, store: store, namespaces: namespaces, blobs: blobs, now: &now, ws: ws}
+}
+
+// stageStuckPending locks the workspace, declares a version, records a
+// content key for it without finalizing, and writes that blob: the row
+// stays pending with committed content that the backup must leave out.
+func stageStuckPending(
+	ctx context.Context, t *testing.T, f stuckBackupFixture,
+) (workspace.PendingState, blob.Key) {
+	t.Helper()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
 	}
 
-	pending, err := svc.BeginState(ctx, ws.ID, "alice", newState("l1", 1, "{\"v\":1}"), authority(forcedOnly(), nil))
+	pending, err := f.svc.BeginState(
+		ctx, f.ws.ID, "alice", newState("l1", 1, "{\"v\":1}"), authority(forcedOnly(), nil),
+	)
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
 
-	stuckKey := blob.Key("tofu/" + ws.ID.String() + "/" + pending.Version.ID.String() + "/a1")
+	stuckKey := blob.Key("tofu/" + f.ws.ID.String() + "/" + pending.Version.ID.String() + "/a1")
 
-	writable, err := namespaces.WritableHere(ctx, "acme")
+	var writable namespace.Namespace
+
+	writable, err = f.namespaces.WritableHere(ctx, "acme")
 	if err != nil {
 		t.Fatalf("writable namespace: %v", err)
 	}
 
-	if _, err := store.RecordUploadAttempt(ctx, pending.Version.ID, stuckKey, writable.Fence()); err != nil {
+	if _, err = f.store.RecordUploadAttempt(ctx, pending.Version.ID, stuckKey, writable.Fence()); err != nil {
 		t.Fatalf("record upload attempt: %v", err)
 	}
 
-	if err := blobs.Put(ctx, stuckKey, strings.NewReader("{\"v\":1}")); err != nil {
+	if err = f.blobs.Put(ctx, stuckKey, strings.NewReader("{\"v\":1}")); err != nil {
 		t.Fatalf("put stuck blob: %v", err)
 	}
+
+	return pending, stuckKey
+}
+
+// assertBackupOmitsStuckKey proves a portable export succeeds without
+// naming the stuck pending key: a pending row has no committed content.
+func assertBackupOmitsStuckKey(ctx context.Context, t *testing.T, store *sqlite.Store, stuckKey blob.Key) {
+	t.Helper()
 
 	sink := func(string) (io.WriteCloser, error) {
 		return nopWriteCloser{Writer: io.Discard}, nil
 	}
 
-	sum, _, err := store.ExportPortable(ctx, sink)
+	summary, _, err := store.ExportPortable(ctx, sink)
 	if err != nil {
 		t.Fatalf("export portable: %v", err)
 	}
 
-	for _, ref := range sum.Blobs {
+	for _, ref := range summary.Blobs {
 		if ref.Key == stuckKey.String() {
 			t.Fatalf("export names stuck key %q, want only finalized content", stuckKey)
 		}
 	}
+}
 
-	if _, err := svc.Unlock(ctx, ws.ID, "alice"); err != nil {
+// assertDeleteSweepsStuckPending proves the delete is refused before the
+// expiry with ErrPendingState and sweeps the expired row after it.
+func assertDeleteSweepsStuckPending(
+	ctx context.Context, t *testing.T, f stuckBackupFixture, pendingID workspace.StateVersionID,
+) {
+	t.Helper()
+
+	if _, err := f.svc.Unlock(ctx, f.ws.ID, "alice"); err != nil {
 		t.Fatalf("unlock: %v", err)
 	}
 
-	if err := svc.Delete(ctx, ws.Ref, retentionEntry()); !errors.Is(err, workspace.ErrPendingState) {
+	if err := f.svc.Delete(ctx, f.ws.Ref, retentionEntry()); !errors.Is(err, workspace.ErrPendingState) {
 		t.Fatalf("delete before expiry: err = %v, want ErrPendingState", err)
 	}
 
-	now = now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
 
-	if err := svc.Delete(ctx, ws.Ref, retentionEntry()); err != nil {
+	if err := f.svc.Delete(ctx, f.ws.Ref, retentionEntry()); err != nil {
 		t.Fatalf("delete after expiry: %v", err)
 	}
 
-	if _, err := svc.Get(ctx, ws.Ref); !errors.Is(err, workspace.ErrNotFound) {
+	if _, err := f.svc.Get(ctx, f.ws.Ref); !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("get after delete: err = %v, want ErrNotFound", err)
 	}
 
-	if _, err := store.GetStateVersion(ctx, pending.Version.ID); !errors.Is(
+	if _, err := f.store.GetStateVersion(ctx, pendingID); !errors.Is(
 		err, workspace.ErrStateVersionNotFound,
 	) {
 		t.Fatalf("get swept version: %v, want ErrStateVersionNotFound", err)
