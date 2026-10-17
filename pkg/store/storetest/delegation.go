@@ -69,6 +69,7 @@ func RunDelegation(t *testing.T, newStore DelegationFactory) {
 			test: testGroupGrantNamesGroupHolder,
 		},
 		{name: "the audit entry of a membership add names the token managers", test: testMembershipNamesTokenManagers},
+		{name: "the audit entry of a membership add names what the member acts as", test: testMembershipNamesActsAs},
 		{name: "the export of a principal lists its token managers", test: testPrincipalExport},
 		{name: "a delete of a principal ends the grants on it", test: testDeleteEndsPrincipalGrants},
 		{name: "a delete of a principal audits its grants in their namespaces", test: testDeletePrincipalGrantsAudit},
@@ -889,5 +890,98 @@ func testDeleteEndsPrincipalGrants(t *testing.T, d *delegation) {
 
 	if err := d.authz.Authorize(ctx, signedIn(ops), identity.ActionPrincipalManageTokens, target); err == nil {
 		t.Fatal("a grant on a deleted principal still gives principal:manage-tokens")
+	}
+}
+
+// grantRoleToGroup gives role on obj to the group g for the bootstrap admin.
+func (d *delegation) grantRoleToGroup(t *testing.T, g principal.Group, role string, obj identity.Object) access.Grant {
+	t.Helper()
+
+	granted, err := d.access.Grant(t.Context(), changeEntry(bootstrap(), identity.ActionServerManageAccess),
+		bootstrap(), access.GrantInput{
+			Object: obj, Role: role, Subject: access.Subject{Kind: access.SubjectGroup, ID: g.ID},
+		})
+	if err != nil {
+		t.Fatalf("grant %s on %q to group %q: %v", role, obj.String(), g.Name, err)
+	}
+
+	return granted
+}
+
+// testMembershipNamesActsAs proves that the audit entry of a membership add
+// names, in one change "actsAs" with one line each and sorted, what the
+// grants of the group let the new member act as, as the access review
+// names it: "principal:<id>" for a grant on a service principal, the
+// namespace for a grant on it with namespace:manage-principal-tokens, and
+// "@server" for a grant on the installation with principal:manage-tokens. A
+// revoked grant, a grant of another role, and a grant of the admin role on
+// the installation name nothing, and a group with
+// no such grant adds no change.
+func testMembershipNamesActsAs(t *testing.T, d *delegation) {
+	t.Helper()
+
+	alice := d.principalOf(t, "alice@example.com", principal.KindPerson)
+	bob := d.principalOf(t, "bob@example.com", principal.KindPerson)
+	carol := d.principalOf(t, "carol@example.com", principal.KindPerson)
+	dave := d.principalOf(t, "dave@example.com", principal.KindPerson)
+	erin := d.principalOf(t, "erin@example.com", principal.KindPerson)
+	deploy := d.principalOf(t, "ci-deploy", principal.KindService)
+	build := d.principalOf(t, "ci-build", principal.KindService)
+	release := d.principalOf(t, "ci-release", principal.KindService)
+
+	deployers := d.groupOf(t, "deployers")
+	d.grantRoleToGroup(t, deployers, access.RoleTokenManager, identity.PrincipalObject(deploy.ID))
+	d.grantRoleToGroup(t, deployers, access.RoleTokenManager, identity.PrincipalObject(build.ID))
+	d.grantToGroup(t, deployers, identity.NamespaceObject("acme"))
+
+	gone := d.grantRoleToGroup(t, deployers, access.RoleTokenManager, identity.PrincipalObject(release.ID))
+	revokeEntry := changeEntry(bootstrap(), identity.ActionServerManageAccess)
+
+	if _, err := d.access.RevokeByID(t.Context(), revokeEntry, bootstrap(), gone.ID); err != nil {
+		t.Fatalf("revoke grant on %s: %v", release.Subject, err)
+	}
+
+	admins := d.groupOf(t, "admins")
+	d.grantRoleToGroup(t, admins, access.RoleAccountAdministrator, identity.ServerObject())
+
+	nsAdmins := d.groupOf(t, "ns-admins")
+	d.grantRoleToGroup(t, nsAdmins, access.RoleAdmin, identity.NamespaceObject("acme"))
+
+	serverAdmins := d.groupOf(t, "server-admins")
+	d.grantRoleToGroup(t, serverAdmins, access.RoleAdmin, identity.ServerObject())
+
+	readers := d.groupOf(t, "readers")
+	d.grantToGroup(t, readers, identity.NamespaceObject("acme"))
+
+	d.addMemberOf(t, deployers, alice)
+	d.addMemberOf(t, admins, bob)
+	d.addMemberOf(t, readers, carol)
+	d.addMemberOf(t, nsAdmins, dave)
+	d.addMemberOf(t, serverAdmins, erin)
+
+	lines := []string{
+		identity.PrincipalObject(deploy.ID).String(), identity.PrincipalObject(build.ID).String(),
+	}
+	slices.Sort(lines)
+
+	cases := []struct {
+		group principal.Group
+		p     principal.Principal
+		want  string
+	}{
+		{group: deployers, p: alice, want: strings.Join(lines, "\n")},
+		{group: admins, p: bob, want: "@server"},
+		{group: nsAdmins, p: dave, want: "acme"},
+		{group: serverAdmins, p: erin, want: ""},
+		{group: readers, p: carol, want: ""},
+	}
+
+	for i := range cases {
+		tc := &cases[i]
+
+		got := d.changeOf(t, audit.ServerScope, principal.MemberRef(tc.group.ID, tc.p.ID), "actsAs")
+		if got != tc.want {
+			t.Fatalf("actsAs of %s joining %s = %q, want %q", tc.p.Subject, tc.group.Name, got, tc.want)
+		}
 	}
 }

@@ -149,7 +149,7 @@ func (f *fixture) group(tb testing.TB, name string, members ...string) access.Su
 			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
 			Pinned: false,
 		}
-		if err := f.store.AddMember(ctx, mem, storetest.ServerChange(time.Unix(0, 0), "group:"+id)); err != nil {
+		if err := f.store.AddMember(ctx, mem, storetest.ServerChange(time.Unix(0, 0), "group:"+id), nil); err != nil {
 			tb.Fatalf("add member %q: %v", m, err)
 		}
 	}

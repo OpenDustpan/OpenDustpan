@@ -960,7 +960,7 @@ func seedCaller(t *testing.T, ps principal.Store) {
 			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
 			Pinned: false,
 		}
-		if err := ps.AddMember(ctx, m, entry()); err != nil {
+		if err := ps.AddMember(ctx, m, entry(), nil); err != nil {
 			t.Fatalf("add member: %v", err)
 		}
 	}

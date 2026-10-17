@@ -77,6 +77,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
 		{name: "export does not tear a concurrent stack write", test: testRestoreExportDoesNotTear},
 		{name: "staging loads a backup without touching live data", test: testRestoreStagingKeepsLive},
+		{name: "staging refuses a backup with an unsealed state version", test: testRestoreStagingRefusesUnsealedState},
 		{name: "a new stage discards the previous staging area", test: testRestoreStagingReplacesPrevious},
 		{name: "staging keeps a checkpoint held in blobs", test: testRestoreStagingKeepsCheckpointBlobs},
 		{name: "a restore keeps the journal rows of a running update", test: testRestoreJournalBlob},
