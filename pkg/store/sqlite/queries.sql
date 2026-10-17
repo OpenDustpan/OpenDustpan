@@ -1877,9 +1877,6 @@ SET next_run_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER) + interval_ms,
 WHERE name = sqlc.arg('name') AND next_run_at_ms = sqlc.arg('due_at_ms')
     AND next_run_at_ms <= CAST(sqlc.arg('now_ms') AS INTEGER);
 
--- Sign-in failure budget. Every time comes from DatabaseNowMs, the clock of
--- the store, read in the same transaction as the write.
-
 -- Sign-in failure budget. The upsert is one atomic write, so concurrent adds
 -- each count once. The window comes from DatabaseNowMs, the clock of the
 -- store, read in the same transaction as the write, so the clock of an

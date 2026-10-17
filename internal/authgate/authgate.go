@@ -124,7 +124,9 @@ type Config struct {
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
 	// Failures counts the misses of every instance. Nil keeps the budget
-	// in the process only.
+	// in the process only. A failed counter call does not block the sign-in,
+	// and the budget of the process still applies, because an unavailable
+	// database must not lock every user out.
 	Failures FailureCounter
 	// Window is the length of one window of Failures, 1 ms or longer. A
 	// source whose count in a window reaches Burst is over the budget until

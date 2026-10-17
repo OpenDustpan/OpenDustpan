@@ -131,7 +131,6 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 
 const addSignInFailure = `-- name: AddSignInFailure :one
 
-
 INSERT INTO sign_in_failures (source, window_end_ms, count)
 VALUES (?, ?, 1)
 ON CONFLICT (source, window_end_ms) DO UPDATE SET count = sign_in_failures.count + 1
@@ -143,8 +142,6 @@ type AddSignInFailureParams struct {
 	WindowEndMs int64
 }
 
-// Sign-in failure budget. Every time comes from DatabaseNowMs, the clock of
-// the store, read in the same transaction as the write.
 // Sign-in failure budget. The upsert is one atomic write, so concurrent adds
 // each count once. The window comes from DatabaseNowMs, the clock of the
 // store, read in the same transaction as the write, so the clock of an

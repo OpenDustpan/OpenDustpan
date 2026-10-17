@@ -50,6 +50,7 @@ func RunSignInFailures(t *testing.T, newHarness SignInFailureFactory) {
 	}{
 		{name: "an add answers the count of its window", test: testFailuresCount},
 		{name: "sources count apart", test: testFailuresApart},
+		{name: "two handles share one budget", test: testFailuresShared},
 		{name: "a window ends on the clock of the store", test: testFailuresWindowEdge},
 		{name: "an instance clock ahead or behind does not move the window", test: testFailuresSkew},
 		{name: "concurrent adds each count once", test: testFailuresConcurrent},
@@ -130,6 +131,33 @@ func testFailuresApart(t *testing.T, h SignInFailureHarness) {
 
 	wantRuns(t, first)
 	wantRuns(t, other)
+}
+
+// testFailuresShared proves that two handles on one store count in one
+// budget: misses through one handle spend the budget, and the next miss
+// through the other handle answers the count of both.
+func testFailuresShared(t *testing.T, h SignInFailureHarness) {
+	t.Helper()
+
+	first := h.Open(t, 0)
+	second := h.Open(t, 0)
+
+	got := []authgate.FailureCount{
+		addFailure(t, first, "192.0.2.1", failureLongWindow),
+		addFailure(t, first, "192.0.2.1", failureLongWindow),
+		addFailure(t, second, "192.0.2.1", failureLongWindow),
+	}
+
+	wantRuns(t, got)
+
+	if got[2].Count != 3 {
+		t.Fatalf("third miss through the second handle = %d, want 3", got[2].Count)
+	}
+
+	other := addFailure(t, second, "192.0.2.2", failureLongWindow)
+	if other.Count != 1 {
+		t.Fatalf("miss of another source through the second handle = %d, want 1", other.Count)
+	}
 }
 
 // testFailuresWindowEdge adds misses through several short windows. Each
