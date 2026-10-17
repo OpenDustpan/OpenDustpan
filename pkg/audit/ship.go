@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -85,12 +86,16 @@ type Feed interface {
 	SinkCursor(ctx context.Context, sink string, ns namespace.Name) (int64, error)
 	// AdvanceSinkCursor sets the cursor of sink in the namespace of fence
 	// to seq. A cursor that is already at seq or higher stays, so two
-	// instances that ship the same batch never move a cursor back. It
-	// returns namespace.ErrNotFound if the fence names a missing namespace
-	// and namespace.ErrFenced if the fence carries a stale failover version.
-	// A fence that names ServerScope has no failover version: the store
-	// moves that cursor with no fence check.
-	AdvanceSinkCursor(ctx context.Context, fence namespace.Fence, sink string, seq int64) error
+	// instances that ship the same batch never move a cursor back. The
+	// write checks claim in the transaction of the write, with the claim
+	// rule of the sink lease: it answers durable.ErrClaimLost, and changes
+	// nothing, when claim is not the live claim of the sink. It returns
+	// namespace.ErrNotFound if the fence names a missing namespace and
+	// namespace.ErrFenced if the fence carries a stale failover version:
+	// the fence check runs before the claim check. A fence that names
+	// ServerScope has no failover version: the store moves that cursor
+	// with no fence check, but still checks the claim.
+	AdvanceSinkCursor(ctx context.Context, fence namespace.Fence, claim durable.Claim, sink string, seq int64) error
 }
 
 // NamespaceLister lists the namespaces whose entries the shipper copies.
@@ -312,7 +317,7 @@ func (s *Shipper) ShipOnce(ctx context.Context) error {
 	var errs []error
 
 	for _, sink := range s.cfg.Sinks {
-		held, err := s.acquire(ctx, sink.Name)
+		claim, held, err := s.acquire(ctx, sink.Name)
 		if err != nil {
 			s.fail(ctx, sink.Name, err)
 			s.setLastError(sink.Name, ErrorClass(err))
@@ -326,7 +331,7 @@ func (s *Shipper) ShipOnce(ctx context.Context) error {
 			continue
 		}
 
-		if err := s.round(ctx, sink); err != nil {
+		if err := s.round(ctx, sink, claim); err != nil {
 			if errors.Is(err, errRoundEnded) {
 				s.setLastError(sink.Name, "")
 			} else {
@@ -365,9 +370,9 @@ func (s *Shipper) loop(ctx context.Context, sink ShipSink) {
 	}
 
 	renew := s.cfg.RenewInterval
-	state := &leasedState{wait: interval, lastShip: time.Now()}
+	state := &leasedState{wait: interval, lastShip: time.Now(), claim: zeroClaim()}
 
-	defer s.release(ctx, sink.Name)
+	defer s.release(ctx, sink.Name, &state.claim)
 
 	for {
 		if !waitNextRound(ctx, leaseSleep(state.wait, renew)) {
@@ -380,10 +385,12 @@ func (s *Shipper) loop(ctx context.Context, sink ShipSink) {
 	}
 }
 
-// leasedState holds the backoff and the last ship time of one leased loop.
+// leasedState holds the backoff, the last ship time and the live claim of
+// one leased loop. The loop releases the claim when it stops.
 type leasedState struct {
 	wait     time.Duration
 	lastShip time.Time
+	claim    durable.Claim
 }
 
 // shipInterval answers the time between two rounds of sink.
@@ -423,7 +430,7 @@ func waitNextRound(ctx context.Context, sleep time.Duration) bool {
 // stepLeasedShip takes or renews the lease of sink and ships when due. It
 // updates state and answers whether the loop goes on: false when ctx ends.
 func (s *Shipper) stepLeased(ctx context.Context, sink ShipSink, interval time.Duration, state *leasedState) bool {
-	held, err := s.acquire(ctx, sink.Name)
+	claim, held, err := s.acquire(ctx, sink.Name)
 	if err != nil {
 		return s.handleLeaseError(ctx, sink.Name, err, state)
 	}
@@ -433,6 +440,8 @@ func (s *Shipper) stepLeased(ctx context.Context, sink ShipSink, interval time.D
 
 		return true
 	}
+
+	state.claim = claim
 
 	if time.Since(state.lastShip) < interval {
 		return true
@@ -460,7 +469,7 @@ func (s *Shipper) handleLeaseError(ctx context.Context, name string, err error, 
 // the wait of the loop and starts the next round with no failure. It
 // answers whether the loop goes on: false when ctx ends.
 func (s *Shipper) shipAndAccount(ctx context.Context, sink ShipSink, interval time.Duration, state *leasedState) bool {
-	if err := s.round(ctx, sink); err != nil {
+	if err := s.round(ctx, sink, state.claim); err != nil {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -514,7 +523,7 @@ func (s *Shipper) loopWithoutLease(ctx context.Context, sink ShipSink, interval 
 		case <-timer.C:
 		}
 
-		if err := s.round(ctx, sink); err != nil {
+		if err := s.round(ctx, sink, zeroClaim()); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -536,26 +545,33 @@ func (s *Shipper) loopWithoutLease(ctx context.Context, sink ShipSink, interval 
 }
 
 // acquire takes or renews the lease of sink for this shipper. It answers
-// false without an error while another instance holds a live lease. Without
-// a lease store it always answers true.
-func (s *Shipper) acquire(ctx context.Context, sink string) (bool, error) {
+// the live claim and true while this shipper holds the lease, and a zero
+// claim and false without an error while another instance holds a live
+// lease. Without a lease store it always answers held with a zero claim:
+// the feed then moves its cursors with no claim check.
+func (s *Shipper) acquire(ctx context.Context, sink string) (durable.Claim, bool, error) {
 	if s.cfg.Leases == nil {
-		return true, nil
+		return zeroClaim(), true, nil
 	}
 
-	held, err := s.cfg.Leases.AcquireSinkLease(ctx, sink, s.cfg.InstanceID, s.cfg.LeaseTTL)
+	claim, err := s.cfg.Leases.AcquireSinkLease(ctx, sink, s.cfg.InstanceID, s.cfg.LeaseTTL)
+	if errors.Is(err, durable.ErrNoWork) {
+		return zeroClaim(), false, nil
+	}
+
 	if err != nil {
-		return false, &shipError{step: stepLease, err: err, seq: 0, hasSeq: false}
+		return zeroClaim(), false, &shipError{step: stepLease, err: err, seq: 0, hasSeq: false}
 	}
 
-	return held, nil
+	return claim, true, nil
 }
 
-// release releases the lease of sink held by this shipper. Without a lease
-// store it does nothing. It runs at loop shutdown with a detached context,
-// so a canceled loop still releases.
-func (s *Shipper) release(ctx context.Context, sink string) {
-	if s.cfg.Leases == nil {
+// release releases the claim on the sink operation. Without a lease store
+// it does nothing. It runs at loop shutdown with a detached context, so a
+// canceled loop still releases. A claim that is no longer live releases
+// nothing: the store answers durable.ErrClaimLost.
+func (s *Shipper) release(ctx context.Context, sink string, claim *durable.Claim) {
+	if s.cfg.Leases == nil || claim.Token == 0 {
 		return
 	}
 
@@ -564,7 +580,7 @@ func (s *Shipper) release(ctx context.Context, sink string) {
 	ctx, cancel := context.WithTimeout(ctx, ShipReleaseTimeout)
 	defer cancel()
 
-	if err := s.cfg.Leases.ReleaseSinkLease(ctx, sink, s.cfg.InstanceID); err != nil {
+	if err := s.cfg.Leases.ReleaseSinkLease(ctx, *claim); err != nil {
 		s.cfg.Logger.DebugContext(ctx, "audit sink lease release failed",
 			slog.String("sink", sink), slog.String("error", ErrorClass(err)))
 	}
@@ -788,8 +804,11 @@ func (s *Shipper) withRoundTimeout(ctx context.Context) (context.Context, contex
 // that failed. A leased round runs under a deadline shorter than the lease
 // and renews the lease between scopes and between batches: when the
 // deadline passes or another instance holds the lease, the round stops at
-// once without moving a cursor past what the sink acknowledged.
-func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
+// once without moving a cursor past what the sink acknowledged. Every
+// cursor write carries claim, so a holder that lost its claim cannot move
+// a cursor: the write fails with durable.ErrClaimLost and the round ends
+// cleanly.
+func (s *Shipper) round(ctx context.Context, sink ShipSink, claim durable.Claim) error {
 	outer := ctx
 
 	ctx, cancel := s.withRoundTimeout(ctx)
@@ -802,7 +821,7 @@ func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
 
 	namespaces = append(namespaces, serverScope())
 
-	return markRoundEnded(outer, ctx, s.shipScopes(ctx, sink, namespaces))
+	return markRoundEnded(outer, ctx, s.shipScopes(ctx, sink, claim, namespaces))
 }
 
 // markRoundEnded reports a round that stopped at its round deadline or lost
@@ -835,9 +854,11 @@ func markRoundEnded(outer, roundCtx context.Context, err error) error {
 }
 
 // roundEndOnly reports whether err ends a round cleanly: it matches
-// errRoundEnded or errLeaseLost, or the round context is done and it matches
-// context.DeadlineExceeded or context.Canceled. A joined error ends a round
-// cleanly only when every part does.
+// errRoundEnded, errLeaseLost or durable.ErrClaimLost, or the round context
+// is done and it matches context.DeadlineExceeded or context.Canceled. A
+// cursor write of a holder that lost its claim fails with ErrClaimLost, and
+// the round ends cleanly without moving the cursor. A joined error ends a
+// round cleanly only when every part does.
 func roundEndOnly(roundCtx context.Context, err error) bool {
 	if err == nil {
 		return true
@@ -861,13 +882,22 @@ func roundEndOnly(roundCtx context.Context, err error) bool {
 		return true
 	}
 
+	if errors.Is(err, durable.ErrClaimLost) {
+		return true
+	}
+
 	return roundCtx.Err() != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled))
 }
 
 // shipScopes ships every namespace of one round in order. Before every
 // scope but the first it renews the lease: when another instance holds it,
-// the round stops at once.
-func (s *Shipper) shipScopes(ctx context.Context, sink ShipSink, namespaces []namespace.Namespace) error {
+// the round stops at once. Every cursor write carries the live claim.
+func (s *Shipper) shipScopes(
+	ctx context.Context,
+	sink ShipSink,
+	claim durable.Claim,
+	namespaces []namespace.Namespace,
+) error {
 	var errs []error
 
 	for i, ns := range namespaces {
@@ -876,12 +906,15 @@ func (s *Shipper) shipScopes(ctx context.Context, sink ShipSink, namespaces []na
 		}
 
 		if i > 0 {
-			if err := s.renewLease(ctx, sink.Name); err != nil {
+			renewed, err := s.renewLease(ctx, sink.Name)
+			if err != nil {
 				return errors.Join(append(errs, err)...)
 			}
+
+			claim = renewed
 		}
 
-		if err := s.shipScope(ctx, sink, ns); err != nil {
+		if err := s.shipScope(ctx, sink, claim, ns); err != nil {
 			if errors.Is(err, errLeaseLost) {
 				return errors.Join(append(errs, err)...)
 			}
@@ -894,29 +927,29 @@ func (s *Shipper) shipScopes(ctx context.Context, sink ShipSink, namespaces []na
 }
 
 // shipScope ships one scope. It names the scope in a failure.
-func (s *Shipper) shipScope(ctx context.Context, sink ShipSink, ns namespace.Namespace) error {
-	if err := s.shipNamespace(ctx, sink, ns); err != nil {
+func (s *Shipper) shipScope(ctx context.Context, sink ShipSink, claim durable.Claim, ns namespace.Namespace) error {
+	if err := s.shipNamespace(ctx, sink, claim, ns); err != nil {
 		return fmt.Errorf("namespace %s: %w", ns.Name, err)
 	}
 
 	return nil
 }
 
-// renewLease renews the lease of sink. Without a lease store it does
-// nothing. It answers errLeaseLost at once when another instance holds the
-// lease.
-func (s *Shipper) renewLease(ctx context.Context, sink string) error {
+// renewLease renews the lease of sink and answers the live claim. Without
+// a lease store it answers a zero claim and does nothing. It answers
+// errLeaseLost at once when another instance holds the lease.
+func (s *Shipper) renewLease(ctx context.Context, sink string) (durable.Claim, error) {
 	if s.cfg.Leases == nil {
-		return nil
+		return zeroClaim(), nil
 	}
 
-	held, err := s.acquire(ctx, sink)
+	claim, held, err := s.acquire(ctx, sink)
 	if err != nil {
-		return err
+		return zeroClaim(), err
 	}
 
 	if !held {
-		return &shipError{
+		return durable.Claim{}, &shipError{
 			step:   stepLease,
 			err:    fmt.Errorf("%w: %w", errRoundEnded, errLeaseLost),
 			seq:    0,
@@ -924,14 +957,15 @@ func (s *Shipper) renewLease(ctx context.Context, sink string) error {
 		}
 	}
 
-	return nil
+	return claim, nil
 }
 
 // shipNamespace copies the entries of ns above the cursor of sink, one
 // batch of at most ShipBatchSize entries at a time. Between batches it
 // renews the sink lease when the shipper keeps leases: when another
-// instance holds the lease, it stops the round at once.
-func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, ns namespace.Namespace) error {
+// instance holds the lease, it stops the round at once. Every cursor write
+// carries the live claim.
+func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, claim durable.Claim, ns namespace.Namespace) error {
 	cursor, err := s.cfg.Feed.SinkCursor(ctx, sink.Name, ns.Name)
 	if err != nil {
 		return &shipError{step: stepCursor, err: err, seq: 0, hasSeq: false}
@@ -941,9 +975,12 @@ func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, ns namespace
 
 	for {
 		if !first {
-			if err := s.renewLease(ctx, sink.Name); err != nil {
+			renewed, err := s.renewLease(ctx, sink.Name)
+			if err != nil {
 				return err
 			}
+
+			claim = renewed
 		}
 
 		first = false
@@ -957,7 +994,7 @@ func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, ns namespace
 			return nil
 		}
 
-		if err := s.shipBatch(ctx, sink, ns, entries); err != nil {
+		if err := s.shipBatch(ctx, sink, claim, ns, entries); err != nil {
 			return err
 		}
 
@@ -991,8 +1028,15 @@ func (s *Shipper) nextBatch(ctx context.Context, ns namespace.Namespace, cursor 
 }
 
 // shipBatch writes entries to sink, then moves the cursor of sink in ns
-// past the last of them.
-func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Namespace, entries []Entry) error {
+// past the last of them. The cursor write carries claim: a holder that
+// lost its claim cannot move the cursor.
+func (s *Shipper) shipBatch(
+	ctx context.Context,
+	sink ShipSink,
+	claim durable.Claim,
+	ns namespace.Namespace,
+	entries []Entry,
+) error {
 	records := make([]logsink.Record, 0, len(entries))
 	for i := range entries {
 		records = append(records, ToRecord(entries[i]))
@@ -1013,7 +1057,7 @@ func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Nam
 
 	last := entries[len(entries)-1].Sequence
 
-	if err := s.cfg.Feed.AdvanceSinkCursor(ctx, ns.Fence(), sink.Name, last); err != nil {
+	if err := s.cfg.Feed.AdvanceSinkCursor(ctx, ns.Fence(), claim, sink.Name, last); err != nil {
 		return &shipError{step: stepAdvance, err: err, seq: entries[0].Sequence, hasSeq: true}
 	}
 

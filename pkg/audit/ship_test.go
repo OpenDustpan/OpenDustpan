@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -83,7 +84,13 @@ func (f *memFeed) SinkCursor(_ context.Context, sink string, ns namespace.Name) 
 	return f.cursors[sink+"/"+ns.String()], nil
 }
 
-func (f *memFeed) AdvanceSinkCursor(_ context.Context, fence namespace.Fence, sink string, seq int64) error {
+func (f *memFeed) AdvanceSinkCursor(
+	_ context.Context,
+	fence namespace.Fence,
+	_ durable.Claim,
+	sink string,
+	seq int64,
+) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -705,51 +712,77 @@ func hasAttr(r logsink.Record, key string, value any) bool {
 	return false
 }
 
-// memLeaser is an in-memory audit.SinkLeaser. It holds one lease per sink
-// with its holder and expiry.
+// memLease is the live claim of one sink in a memLeaser.
+type memLease struct {
+	operation durable.ID
+	owner     string
+	token     int64
+	expires   time.Time
+}
+
+// memLeaser is an in-memory audit.SinkLeaser with the claim rule: one live
+// claim per sink with its holder, a token that grows on each new claim and
+// an expiry. A renew by the holder keeps the token.
 type memLeaser struct {
-	mu      sync.Mutex
-	holders map[string]string
-	expires map[string]time.Time
+	mu     sync.Mutex
+	leases map[string]memLease
 }
 
 func newMemLeaser() *memLeaser {
-	return &memLeaser{mu: sync.Mutex{}, holders: map[string]string{}, expires: map[string]time.Time{}}
+	return &memLeaser{mu: sync.Mutex{}, leases: map[string]memLease{}}
 }
 
-func (l *memLeaser) AcquireSinkLease(_ context.Context, sink, holder string, ttl time.Duration) (bool, error) {
+func (l *memLeaser) AcquireSinkLease(
+	_ context.Context,
+	sink, holder string,
+	ttl time.Duration,
+) (durable.Claim, error) {
 	if sink == "" || holder == "" || ttl <= 0 {
-		return false, fmt.Errorf("%w: sink %q holder %q", audit.ErrInvalidSinkLease, sink, holder)
+		return durable.Claim{}, fmt.Errorf("%w: sink %q holder %q", audit.ErrInvalidSinkLease, sink, holder)
 	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := time.Now()
-	if h, ok := l.holders[sink]; ok && h != holder && now.Before(l.expires[sink]) {
-		return false, nil
+	operation := durable.ID("op-sink-" + sink)
+
+	if old, ok := l.leases[sink]; ok && old.owner != holder && now.Before(old.expires) {
+		return durable.Claim{}, durable.ErrNoWork
 	}
 
-	l.holders[sink] = holder
-	l.expires[sink] = now.Add(ttl)
+	token := int64(1)
+	if old, ok := l.leases[sink]; ok {
+		token = old.token
+		if old.owner != holder || !now.Before(old.expires) {
+			token = old.token + 1
+		}
+	}
 
-	return true, nil
+	l.leases[sink] = memLease{operation: operation, owner: holder, token: token, expires: now.Add(ttl)}
+
+	return durable.Claim{Operation: operation, Owner: holder, Token: token, ExpiresAt: now.Add(ttl)}, nil
 }
 
-func (l *memLeaser) ReleaseSinkLease(_ context.Context, sink, holder string) error {
-	if sink == "" || holder == "" {
-		return fmt.Errorf("%w: sink %q holder %q", audit.ErrInvalidSinkLease, sink, holder)
-	}
-
+func (l *memLeaser) ReleaseSinkLease(_ context.Context, claim durable.Claim) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.holders[sink] == holder {
-		delete(l.holders, sink)
-		delete(l.expires, sink)
+	for sink, old := range l.leases {
+		if old.operation != claim.Operation {
+			continue
+		}
+
+		if old.token != claim.Token || time.Now().After(old.expires) {
+			return durable.ErrClaimLost
+		}
+
+		delete(l.leases, sink)
+
+		return nil
 	}
 
-	return nil
+	return durable.ErrClaimLost
 }
 
 func newLeasedShipper(t *testing.T, feed *memFeed, leases *memLeaser, holder string, sink logsink.Sink) *audit.Shipper {
@@ -1079,7 +1112,11 @@ type loseOnceLeaser struct {
 	calls int
 }
 
-func (l *loseOnceLeaser) AcquireSinkLease(ctx context.Context, sink, holder string, ttl time.Duration) (bool, error) {
+func (l *loseOnceLeaser) AcquireSinkLease(
+	ctx context.Context,
+	sink, holder string,
+	ttl time.Duration,
+) (durable.Claim, error) {
 	l.mu.Lock()
 	l.calls++
 	n := l.calls
@@ -1089,11 +1126,11 @@ func (l *loseOnceLeaser) AcquireSinkLease(ctx context.Context, sink, holder stri
 		return l.inner.AcquireSinkLease(ctx, sink, holder, ttl)
 	}
 
-	return false, nil
+	return durable.Claim{}, durable.ErrNoWork
 }
 
-func (l *loseOnceLeaser) ReleaseSinkLease(ctx context.Context, sink, holder string) error {
-	return l.inner.ReleaseSinkLease(ctx, sink, holder)
+func (l *loseOnceLeaser) ReleaseSinkLease(ctx context.Context, claim durable.Claim) error {
+	return l.inner.ReleaseSinkLease(ctx, claim)
 }
 
 // acquires answers how many lease takes the leaser saw.
@@ -1299,13 +1336,13 @@ func TestShipperReleasesItsLeaseOnShutdown(t *testing.T) {
 	cancel()
 	<-done
 
-	held, err := leases.AcquireSinkLease(t.Context(), "siem", "ins-holder-b", 30*time.Second)
+	claim, err := leases.AcquireSinkLease(t.Context(), "siem", "ins-holder-b", 30*time.Second)
 	if err != nil {
 		t.Fatalf("acquire after shutdown: %v", err)
 	}
 
-	if !held {
-		t.Fatal("lease after shutdown: got false, want true")
+	if claim.Token == 0 || claim.Owner != "ins-holder-b" {
+		t.Fatalf("lease after shutdown: got %+v, want the claim of ins-holder-b", claim)
 	}
 }
 
@@ -1395,11 +1432,11 @@ func (l *blockingReleaseLeaser) AcquireSinkLease(
 	ctx context.Context,
 	sink, holder string,
 	ttl time.Duration,
-) (bool, error) {
+) (durable.Claim, error) {
 	return l.inner.AcquireSinkLease(ctx, sink, holder, ttl)
 }
 
-func (l *blockingReleaseLeaser) ReleaseSinkLease(ctx context.Context, _, _ string) error {
+func (l *blockingReleaseLeaser) ReleaseSinkLease(ctx context.Context, _ durable.Claim) error {
 	l.mu.Lock()
 	if dl, ok := ctx.Deadline(); ok {
 		l.remaining, l.seen = time.Until(dl), true

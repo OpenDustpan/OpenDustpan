@@ -11,34 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const acquireAuditSinkLease = `-- name: AcquireAuditSinkLease :execrows
-INSERT INTO audit_sink_leases (sink, holder, expires_at_ms)
-VALUES ($1, $2, FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + $3::bigint)
-ON CONFLICT (sink) DO UPDATE
-SET holder = EXCLUDED.holder, expires_at_ms = EXCLUDED.expires_at_ms
-WHERE audit_sink_leases.holder = EXCLUDED.holder OR audit_sink_leases.expires_at_ms <= FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
-`
-
-type AcquireAuditSinkLeaseParams struct {
-	Sink   string
-	Holder string
-	TtlMs  int64
-}
-
-// Takes or renews the lease of one sink in one conditional write. It writes
-// when no row exists, when the stored lease ended, or when the caller holds
-// it, and changes nothing while another instance holds a live lease. The
-// caller reads the changed row count: one means it holds the lease. The
-// expiry is the database clock plus the TTL, so a wrong clock on one
-// instance cannot hold every lease.
-func (q *Queries) AcquireAuditSinkLease(ctx context.Context, arg AcquireAuditSinkLeaseParams) (int64, error) {
-	result, err := q.db.Exec(ctx, acquireAuditSinkLease, arg.Sink, arg.Holder, arg.TtlMs)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -537,6 +509,48 @@ func (q *Queries) ClaimDurableOperation(ctx context.Context, arg ClaimDurableOpe
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
 	)
+	return i, err
+}
+
+const claimSinkOperation = `-- name: ClaimSinkOperation :one
+UPDATE durable_operations
+SET state = 'running', attempt = attempt + 1, expiries = expiries + $1::bigint,
+  claim_owner = $2::text, claim_token = $3::bigint,
+  claim_expires_at_ms = $4::bigint, updated_at_ms = $5::bigint
+WHERE id = $6::text
+RETURNING claim_token, claim_expires_at_ms
+`
+
+type ClaimSinkOperationParams struct {
+	AddExpiries int64
+	Owner       string
+	Token       int64
+	ExpiresAtMs int64
+	NowMs       int64
+	ID          string
+}
+
+type ClaimSinkOperationRow struct {
+	ClaimToken       int64
+	ClaimExpiresAtMs pgtype.Int8
+}
+
+// Claims the sink operation id for a new holder: the state returns to
+// running, the attempt and the claim token grow, and the expiry is the
+// database clock plus the TTL. The caller holds the row, checked the claim
+// first, and passes the new token. It adds add_expiries to the expiries:
+// one when the claim takes over an expired claim, none for a first claim.
+func (q *Queries) ClaimSinkOperation(ctx context.Context, arg ClaimSinkOperationParams) (ClaimSinkOperationRow, error) {
+	row := q.db.QueryRow(ctx, claimSinkOperation,
+		arg.AddExpiries,
+		arg.Owner,
+		arg.Token,
+		arg.ExpiresAtMs,
+		arg.NowMs,
+		arg.ID,
+	)
+	var i ClaimSinkOperationRow
+	err := row.Scan(&i.ClaimToken, &i.ClaimExpiresAtMs)
 	return i, err
 }
 
@@ -7021,26 +7035,6 @@ UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1
 func (q *Queries) ReleaseAuditChainMigration(ctx context.Context) error {
 	_, err := q.db.Exec(ctx, releaseAuditChainMigration)
 	return err
-}
-
-const releaseAuditSinkLease = `-- name: ReleaseAuditSinkLease :execrows
-DELETE FROM audit_sink_leases
-WHERE sink = $1 AND holder = $2
-`
-
-type ReleaseAuditSinkLeaseParams struct {
-	Sink   string
-	Holder string
-}
-
-// Releases the lease of one sink only when holder holds it. It changes
-// nothing when no row exists or another instance holds the lease.
-func (q *Queries) ReleaseAuditSinkLease(ctx context.Context, arg ReleaseAuditSinkLeaseParams) (int64, error) {
-	result, err := q.db.Exec(ctx, releaseAuditSinkLease, arg.Sink, arg.Holder)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const removeGroupMember = `-- name: RemoveGroupMember :execrows

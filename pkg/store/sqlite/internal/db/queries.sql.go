@@ -11,34 +11,6 @@ import (
 	"strings"
 )
 
-const acquireAuditSinkLease = `-- name: AcquireAuditSinkLease :execrows
-INSERT INTO audit_sink_leases (sink, holder, expires_at_ms)
-VALUES (?1, ?2, CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) + CAST(?3 AS INTEGER))
-ON CONFLICT (sink) DO UPDATE
-SET holder = excluded.holder, expires_at_ms = excluded.expires_at_ms
-WHERE audit_sink_leases.holder = excluded.holder OR audit_sink_leases.expires_at_ms <= CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER)
-`
-
-type AcquireAuditSinkLeaseParams struct {
-	Sink   string
-	Holder string
-	TtlMs  int64
-}
-
-// Takes or renews the lease of one sink in one conditional write. It writes
-// when no row exists, when the stored lease ended, or when the caller holds
-// it, and changes nothing while another instance holds a live lease. The
-// caller reads the changed row count: one means it holds the lease. The
-// expiry is the database clock plus the TTL, so a wrong clock on one
-// instance cannot hold every lease.
-func (q *Queries) AcquireAuditSinkLease(ctx context.Context, arg AcquireAuditSinkLeaseParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, acquireAuditSinkLease, arg.Sink, arg.Holder, arg.TtlMs)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -6719,26 +6691,6 @@ UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1
 func (q *Queries) ReleaseAuditChainMigration(ctx context.Context) error {
 	_, err := q.db.ExecContext(ctx, releaseAuditChainMigration)
 	return err
-}
-
-const releaseAuditSinkLease = `-- name: ReleaseAuditSinkLease :execrows
-DELETE FROM audit_sink_leases
-WHERE sink = ? AND holder = ?
-`
-
-type ReleaseAuditSinkLeaseParams struct {
-	Sink   string
-	Holder string
-}
-
-// Releases the lease of one sink only when holder holds it. It changes
-// nothing when no row exists or another instance holds the lease.
-func (q *Queries) ReleaseAuditSinkLease(ctx context.Context, arg ReleaseAuditSinkLeaseParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, releaseAuditSinkLease, arg.Sink, arg.Holder)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }
 
 const removeGroupMember = `-- name: RemoveGroupMember :execrows

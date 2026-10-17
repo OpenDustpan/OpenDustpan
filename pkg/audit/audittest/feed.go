@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -51,6 +52,9 @@ func RunFeed(t *testing.T, newStore FeedFactory) {
 		{name: "another holder is refused while the lease is live", test: testLeaseRefusedWhileLive},
 		{name: "a sink lease is taken after expiry", test: testLeaseTakenAfterExpiry},
 		{name: "a released sink lease is taken by another holder", test: testLeaseRelease},
+		{name: "a sink lease with an unusable name, holder or ttl is refused", test: testLeaseValidates},
+		{name: "a release by a non-holder fails and changes nothing", test: testLeaseReleaseByNonHolder},
+		{name: "a stale holder cannot advance a cursor", test: testStaleHolderCannotAdvance},
 	}
 
 	for _, tc := range cases {
@@ -98,12 +102,19 @@ func cursor(t *testing.T, s FeedStore, sink string, ns namespace.Name) int64 {
 	return got
 }
 
-// advance moves a cursor and fails the test on error.
-func advance(t *testing.T, s FeedStore, fence namespace.Fence, sink string, seq int64) {
+// sinkLease is the live claim of one sink in a conformance test.
+type sinkLease struct {
+	sink  string
+	claim durable.Claim
+}
+
+// advance moves the cursor of the sink of lease with its claim and fails
+// the test on error.
+func advance(t *testing.T, s FeedStore, fence namespace.Fence, lease sinkLease, seq int64) {
 	t.Helper()
 
-	if err := s.AdvanceSinkCursor(t.Context(), fence, sink, seq); err != nil {
-		t.Fatalf("advance %s to %d: %v", sink, seq, err)
+	if err := s.AdvanceSinkCursor(t.Context(), fence, lease.claim, lease.sink, seq); err != nil {
+		t.Fatalf("advance %s to %d: %v", lease.sink, seq, err)
 	}
 }
 
@@ -196,9 +207,12 @@ func testCursorKeys(t *testing.T, s FeedStore) {
 	ns := newNamespace(t, s)
 	other := otherNamespace(t, s)
 
-	advance(t, s, ns.Fence(), "siem", 4)
-	advance(t, s, ns.Fence(), "archive", 2)
-	advance(t, s, other.Fence(), "siem", 9)
+	siem := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
+	archive := acquireLease(t, s, "archive", "ins-holder-a", 30*time.Second)
+
+	advance(t, s, ns.Fence(), siem, 4)
+	advance(t, s, ns.Fence(), archive, 2)
+	advance(t, s, other.Fence(), siem, 9)
 
 	checks := []struct {
 		sink string
@@ -222,15 +236,16 @@ func testCursorNeverBack(t *testing.T, s FeedStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s)
+	claim := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
 
-	advance(t, s, ns.Fence(), "siem", 5)
-	advance(t, s, ns.Fence(), "siem", 3)
+	advance(t, s, ns.Fence(), claim, 5)
+	advance(t, s, ns.Fence(), claim, 3)
 
 	if got := cursor(t, s, "siem", ns.Name); got != 5 {
 		t.Fatalf("cursor after a lower advance: got %d, want 5", got)
 	}
 
-	advance(t, s, ns.Fence(), "siem", 6)
+	advance(t, s, ns.Fence(), claim, 6)
 
 	if got := cursor(t, s, "siem", ns.Name); got != 6 {
 		t.Fatalf("cursor after a higher advance: got %d, want 6", got)
@@ -241,9 +256,10 @@ func testCursorStaleFence(t *testing.T, s FeedStore) {
 	t.Helper()
 
 	ns := newNamespace(t, s)
+	claim := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
 	stale := namespace.Fence{Namespace: ns.Name, FailoverVersion: ns.FailoverVersion + 1}
 
-	err := s.AdvanceSinkCursor(t.Context(), stale, "siem", 1)
+	err := s.AdvanceSinkCursor(t.Context(), stale, claim.claim, "siem", 1)
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("advance with a stale fence: got %v, want ErrFenced", err)
 	}
@@ -256,9 +272,10 @@ func testCursorStaleFence(t *testing.T, s FeedStore) {
 func testCursorMissingNamespace(t *testing.T, s FeedStore) {
 	t.Helper()
 
+	claim := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
 	missing := namespace.Fence{Namespace: "ghost", FailoverVersion: 1}
 
-	err := s.AdvanceSinkCursor(t.Context(), missing, "siem", 1)
+	err := s.AdvanceSinkCursor(t.Context(), missing, claim.claim, "siem", 1)
 	if !errors.Is(err, namespace.ErrNotFound) {
 		t.Fatalf("advance in a missing namespace: got %v, want namespace.ErrNotFound", err)
 	}
@@ -281,85 +298,118 @@ func testServerScopeFeed(t *testing.T, s FeedStore) {
 		t.Fatalf("after on the server scope: got %d entries, want the one appended", len(got))
 	}
 
-	advance(t, s, namespace.Fence{Namespace: audit.ServerScope, FailoverVersion: 0}, "siem", stored.Sequence)
+	claim := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
+	advance(t, s, namespace.Fence{Namespace: audit.ServerScope, FailoverVersion: 0}, claim, stored.Sequence)
 
 	if c := cursor(t, s, "siem", audit.ServerScope); c != stored.Sequence {
 		t.Fatalf("server scope cursor: got %d, want %d", c, stored.Sequence)
 	}
 }
 
-// acquireLease takes or renews the lease of the siem sink for holder and
-// answers whether the caller holds it after the call.
-func acquireLease(t *testing.T, s FeedStore, holder string, ttl time.Duration) bool {
+// acquireLease takes or renews the lease of sink for holder and answers
+// its live claim. It fails the test when another instance holds the lease.
+func acquireLease(t *testing.T, s FeedStore, sink, holder string, ttl time.Duration) sinkLease {
 	t.Helper()
 
-	held, err := s.AcquireSinkLease(t.Context(), "siem", holder, ttl)
+	claim, err := s.AcquireSinkLease(t.Context(), sink, holder, ttl)
 	if err != nil {
-		t.Fatalf("acquire lease siem for %s: %v", holder, err)
+		t.Fatalf("acquire lease %s for %s: %v", sink, holder, err)
 	}
 
-	return held
+	lease := sinkLease{sink: sink, claim: claim}
+	checkClaim(t, lease, holder)
+
+	return lease
 }
 
-// releaseLease releases the lease of sink held by holder.
-func releaseLease(t *testing.T, s FeedStore, sink, holder string) {
+// releaseLease releases the claim of lease and fails the test on error.
+func releaseLease(t *testing.T, s FeedStore, lease sinkLease) {
 	t.Helper()
 
-	if err := s.ReleaseSinkLease(t.Context(), sink, holder); err != nil {
-		t.Fatalf("release lease %s of %s: %v", sink, holder, err)
+	if err := s.ReleaseSinkLease(t.Context(), lease.claim); err != nil {
+		t.Fatalf("release lease of %s: %v", lease.claim.Operation, err)
+	}
+}
+
+// checkClaim fails the test unless the claim of lease is the live claim of
+// holder on its sink operation: the operation is set, the owner is holder
+// and the token is not zero.
+func checkClaim(t *testing.T, lease sinkLease, holder string) {
+	t.Helper()
+
+	claim := lease.claim
+
+	if claim.Operation == "" || claim.Owner != holder || claim.Token == 0 || claim.ExpiresAt.IsZero() {
+		t.Fatalf("claim = %+v, want the live claim of %s", claim, holder)
 	}
 }
 
 func testLeaseTake(t *testing.T, s FeedStore) {
 	t.Helper()
 
-	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
-		t.Fatal("take lease: got false, want true")
-	}
+	checkClaim(t, acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second), "ins-holder-a")
 }
 
 func testLeaseRenewByHolder(t *testing.T, s FeedStore) {
 	t.Helper()
 
-	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
-		t.Fatal("take lease: got false, want true")
-	}
+	first := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
+	second := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
 
-	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
-		t.Fatal("renew lease by the holder: got false, want true")
+	if second.claim.Operation != first.claim.Operation || second.claim.Token != first.claim.Token ||
+		second.claim.Owner != "ins-holder-a" {
+		t.Fatalf("renew lease by the holder: got %+v after %+v, want one claim with one token", second, first)
 	}
 }
 
 func testLeaseRefusedWhileLive(t *testing.T, s FeedStore) {
 	t.Helper()
 
-	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
-		t.Fatal("take lease: got false, want true")
+	ns := newNamespace(t, s)
+	held := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
+
+	_, err := s.AcquireSinkLease(t.Context(), "siem", "ins-holder-b", 30*time.Second)
+	if !errors.Is(err, durable.ErrNoWork) {
+		t.Fatalf("acquire by another holder while live: got %v, want ErrNoWork", err)
 	}
 
-	if acquireLease(t, s, "ins-holder-b", 30*time.Second) {
-		t.Fatal("acquire by another holder while live: got true, want false")
-	}
+	advance(t, s, ns.Fence(), held, 1)
 
-	releaseLease(t, s, "siem", "ins-holder-b")
-
-	if acquireLease(t, s, "ins-holder-b", 30*time.Second) {
-		t.Fatal("acquire by another holder after its release: got true, want false")
+	if got := cursor(t, s, "siem", ns.Name); got != 1 {
+		t.Fatalf("cursor after a refused acquire: got %d, want 1", got)
 	}
 }
 
+// testLeaseTakenAfterExpiry proves that a sink lease is taken after its
+// expiry with a higher token for the new holder.
 func testLeaseTakenAfterExpiry(t *testing.T, s FeedStore) {
 	t.Helper()
 
-	if !acquireLease(t, s, "ins-holder-a", 150*time.Millisecond) {
-		t.Fatal("take lease: got false, want true")
+	first := acquireLease(t, s, "siem", "ins-holder-a", 150*time.Millisecond)
+
+	second := acquireWhenExpired(t, s)
+
+	if second.claim.Operation != first.claim.Operation || second.claim.Token <= first.claim.Token ||
+		second.claim.Owner != "ins-holder-b" {
+		t.Fatalf("claim after expiry: got %+v after %+v, want a higher token for ins-holder-b", second, first)
 	}
+}
+
+// acquireWhenExpired acquires the siem sink for ins-holder-b as soon as no
+// live claim holds it, and fails the test after 10 seconds.
+func acquireWhenExpired(t *testing.T, s FeedStore) sinkLease {
+	t.Helper()
 
 	deadline := time.Now().Add(10 * time.Second)
 
 	for {
-		if acquireLease(t, s, "ins-holder-b", 30*time.Second) {
-			return
+		claim, err := s.AcquireSinkLease(t.Context(), "siem", "ins-holder-b", 30*time.Second)
+		if err == nil {
+			return sinkLease{sink: "siem", claim: claim}
+		}
+
+		if !errors.Is(err, durable.ErrNoWork) {
+			t.Fatalf("acquire lease siem for ins-holder-b: %v", err)
 		}
 
 		if time.Now().After(deadline) {
@@ -388,14 +438,95 @@ func waitLeaseExpiry(t *testing.T) {
 func testLeaseRelease(t *testing.T, s FeedStore) {
 	t.Helper()
 
-	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
-		t.Fatal("take lease: got false, want true")
+	first := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
+	releaseLease(t, s, first)
+
+	second := acquireLease(t, s, "siem", "ins-holder-b", 30*time.Second)
+
+	if second.claim.Operation != first.claim.Operation || second.claim.Token <= first.claim.Token {
+		t.Fatalf("take lease after release: got %+v after %+v, want a higher token", second, first)
+	}
+}
+
+func testLeaseValidates(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	for _, tc := range []struct {
+		name   string
+		sink   string
+		holder string
+		ttl    time.Duration
+	}{
+		{name: "empty sink", sink: "", holder: "ins-holder-a", ttl: 30 * time.Second},
+		{name: "empty holder", sink: "siem", holder: "", ttl: 30 * time.Second},
+		{name: "zero ttl", sink: "siem", holder: "ins-holder-a", ttl: 0},
+		{name: "negative ttl", sink: "siem", holder: "ins-holder-a", ttl: -time.Second},
+		{name: "ttl below one millisecond", sink: "siem", holder: "ins-holder-a", ttl: 500 * time.Microsecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := s.AcquireSinkLease(t.Context(), tc.sink, tc.holder, tc.ttl)
+			if !errors.Is(err, audit.ErrInvalidSinkLease) {
+				t.Fatalf("acquire lease %q for %q with ttl %s: got %v, want ErrInvalidSinkLease",
+					tc.sink, tc.holder, tc.ttl, err)
+			}
+		})
+	}
+}
+
+func testLeaseReleaseByNonHolder(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	held := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
+
+	forged := held
+	forged.claim.Token++
+	forged.claim.Owner = "ins-holder-b"
+
+	err := s.ReleaseSinkLease(t.Context(), forged.claim)
+	if !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("release with a claim that is not live: got %v, want ErrClaimLost", err)
 	}
 
-	releaseLease(t, s, "siem", "ins-holder-a")
+	ns := newNamespace(t, s)
+	advance(t, s, ns.Fence(), held, 1)
 
-	if !acquireLease(t, s, "ins-holder-b", 30*time.Second) {
-		t.Fatal("take lease after release: got false, want true")
+	if got := cursor(t, s, "siem", ns.Name); got != 1 {
+		t.Fatalf("cursor after a release by a non-holder: got %d, want 1", got)
+	}
+}
+
+// testStaleHolderCannotAdvance proves the claim rule of the sink lease:
+// holder A loses its claim, holder B claims, and the next cursor write of
+// A fails with durable.ErrClaimLost and changes nothing, while B advances
+// the cursor.
+func testStaleHolderCannotAdvance(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s)
+
+	old := acquireLease(t, s, "siem", "ins-holder-a", 150*time.Millisecond)
+	advance(t, s, ns.Fence(), old, 4)
+
+	live := acquireWhenExpired(t, s)
+	if live.claim.Token <= old.claim.Token {
+		t.Fatalf("claim after expiry: got %+v after %+v, want a higher token", live, old)
+	}
+
+	err := s.AdvanceSinkCursor(t.Context(), ns.Fence(), old.claim, "siem", 5)
+	if !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("advance by a stale holder: got %v, want ErrClaimLost", err)
+	}
+
+	if got := cursor(t, s, "siem", ns.Name); got != 4 {
+		t.Fatalf("cursor after an advance by a stale holder: got %d, want 4", got)
+	}
+
+	advance(t, s, ns.Fence(), live, 5)
+
+	if got := cursor(t, s, "siem", ns.Name); got != 5 {
+		t.Fatalf("cursor after an advance by the live holder: got %d, want 5", got)
 	}
 }
 

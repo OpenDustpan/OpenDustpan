@@ -5,13 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
 
@@ -52,20 +51,34 @@ func (s *Store) SinkCursor(ctx context.Context, sink string, ns namespace.Name) 
 }
 
 // AdvanceSinkCursor implements audit.Feed: it moves the cursor up in one
-// transaction with the fence check, and never moves it down. The cursor of
-// audit.ServerScope has no fence: the scope describes the installation.
-func (s *Store) AdvanceSinkCursor(ctx context.Context, fence namespace.Fence, sink string, seq int64) error {
+// transaction with the fence check, and never moves it down. The write
+// checks claim with the claim rule of the sink lease, and answers
+// durable.ErrClaimLost when claim is not the live claim of the sink. The
+// cursor of audit.ServerScope has no fence: the scope describes the
+// installation.
+func (s *Store) AdvanceSinkCursor(
+	ctx context.Context,
+	fence namespace.Fence,
+	claim durable.Claim,
+	sink string,
+	seq int64,
+) error {
 	inTx := func(fn func(q *db.Queries) error) error { return s.inFencedTx(ctx, fence, fn) }
 	if fence.Namespace == audit.ServerScope {
 		inTx = func(fn func(q *db.Queries) error) error { return s.inTx(ctx, fn) }
 	}
 
 	return inTx(func(q *db.Queries) error {
-		err := q.AdvanceAuditSinkCursor(ctx, db.AdvanceAuditSinkCursorParams{
+		now, err := checkSinkClaim(ctx, q, sink, claim)
+		if err != nil {
+			return err
+		}
+
+		err = q.AdvanceAuditSinkCursor(ctx, db.AdvanceAuditSinkCursorParams{
 			Sink:        sink,
 			Namespace:   fence.Namespace.String(),
 			Sequence:    seq,
-			UpdatedAtMs: codec.Millis(time.Now()),
+			UpdatedAtMs: now,
 		})
 		if err != nil {
 			return fmt.Errorf("advance audit sink cursor: %w", err)
