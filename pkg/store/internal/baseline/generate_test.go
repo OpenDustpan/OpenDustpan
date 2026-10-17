@@ -20,6 +20,7 @@ package baseline_test
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -194,9 +195,18 @@ func writeBaseline(t *testing.T, out, dialect, extra, body string) {
 
 	path := filepath.Join(out, "pkg", "store", dialect, "migrations", schema.BaselineName)
 
+	content := header(dialect, ref, extra) + "\n" + body
+
 	//nolint:gosec // out is the repository root that the regeneration script passes; the test writes only there.
-	if err := os.WriteFile(path, []byte(header(dialect, ref, extra)+"\n"+body), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+
+	sum := sha256.Sum256([]byte(content))
+
+	//nolint:gosec // The hash file belongs next to the baseline file the test writes.
+	if err := os.WriteFile(path+".sha256", []byte(hex.EncodeToString(sum[:])+"\n"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path+".sha256", err)
 	}
 }
 
