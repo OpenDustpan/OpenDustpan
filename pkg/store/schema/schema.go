@@ -12,6 +12,7 @@
 package schema
 
 import (
+	"embed"
 	"errors"
 	"fmt"
 	"regexp"
@@ -426,26 +427,58 @@ func ParseMigrationVersion(name string) (int64, error) {
 	return version, nil
 }
 
-// embeddedMigrationNames is the single ordered list of migration file names
-// every dialect embeds. Both store adapters embed the same names with their
-// own SQL, and the upgrade check client reads this list without importing a
-// store adapter (ADR 39 decision 4). Adapter tests pin that each embedded
-// directory holds exactly these names: add a migration to both dialects and
-// to this list together.
+// embeddedMigrations holds one file per shared migration, named exactly as
+// the migration file of each store dialect. Only the names matter here: each
+// dialect holds its own SQL under the same name.
 //
-//nolint:gochecknoglobals // The shared frozen migration list: Go has no constant slices, and both dialects use this one source.
-var embeddedMigrationNames = []string{
-	BaselineName,
-	"0103_control_tables.sql",
-}
+//go:embed migrations/*.sql
+var embeddedMigrations embed.FS
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary
-// embeds with the newest version. Both adapters and the upgrade check client
-// share it, so the verdict never depends on which dialect the server runs.
+// embeds with the newest version. The names come from the embedded
+// migrations directory of this package: a migration adds one file there, so
+// parallel changes add different files and never edit one shared list. Both
+// store adapters embed the same names with their own SQL, and the upgrade
+// check client reads this list without importing a store adapter, so the
+// verdict never depends on which dialect the server runs. Adapter tests pin
+// that each embedded directory holds exactly these names: add a migration
+// file to both dialects and to this directory together, with the hash file
+// of each dialect next to its SQL file.
 func EmbeddedMigrationNames() ([]string, int64) {
+	entries, err := embeddedMigrations.ReadDir("migrations")
+	if err != nil {
+		return []string{}, 0
+	}
+
+	names := make([]string, 0, len(entries))
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+
+	slices.SortFunc(names, func(a, b string) int {
+		versionA, errA := ParseMigrationVersion(a)
+		versionB, errB := ParseMigrationVersion(b)
+
+		if errA != nil || errB != nil {
+			return strings.Compare(a, b)
+		}
+
+		switch {
+		case versionA < versionB:
+			return -1
+		case versionA > versionB:
+			return 1
+		default:
+			return strings.Compare(a, b)
+		}
+	})
+
 	var newest int64
 
-	for _, name := range embeddedMigrationNames {
+	for _, name := range names {
 		version, err := ParseMigrationVersion(name)
 		if err != nil {
 			continue
@@ -456,7 +489,7 @@ func EmbeddedMigrationNames() ([]string, int64) {
 		}
 	}
 
-	return slices.Clone(embeddedMigrationNames), newest
+	return names, newest
 }
 
 // Inspection is the read-only schema state of one database. Inspect in each

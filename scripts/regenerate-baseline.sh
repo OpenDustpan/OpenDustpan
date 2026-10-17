@@ -21,8 +21,8 @@
 # Needs git, tar, go and pg_dump. The major version of pg_dump must be the
 # major version of the server, because the output of pg_dump can change
 # between major versions; the PostgreSQL baseline records it. Use the major
-# version that CI runs. After the script, update the hashes of
-# TestFrozenMigrations with the lines it prints, then run make generate.
+# version that CI runs. The baseline tests write the hash file of each
+# baseline next to it. After the script, run make generate.
 set -eu
 
 REF="${1:-origin/main}"
@@ -48,16 +48,12 @@ DUSTPAN_TEST_BASELINE_IN="$IN" DUSTPAN_TEST_BASELINE_OUT="$ROOT" DUSTPAN_TEST_BA
 # The baseline has version 0100. Delete each migration file with a lower
 # version, and keep the files after the baseline.
 for dialect in sqlite postgres; do
-	for file in "$ROOT/pkg/store/$dialect/migrations/"*.sql; do
-		name="$(basename "$file")"
+	for file in "$ROOT/pkg/store/$dialect/migrations/"*.sql "$ROOT/pkg/store/$dialect/migrations/"*.sql.sha256; do
+		[ -e "$file" ] || continue
+		name="$(basename "$file" .sha256)"
 		version="$(printf '%s' "$name" | cut -d_ -f1 | sed 's/^0*//')"
 		if [ "${version:-0}" -lt 100 ]; then
 			rm "$file"
 		fi
 	done
-done
-
-for dialect in sqlite postgres; do
-	sum="$(sha256sum "$ROOT/pkg/store/$dialect/migrations/0100_baseline.sql" | cut -d' ' -f1)"
-	echo "$dialect: \"0100_baseline.sql\": \"$sum\","
 done
