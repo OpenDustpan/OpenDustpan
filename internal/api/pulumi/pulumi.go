@@ -917,6 +917,8 @@ func classify(err error) (int, string) {
 	switch {
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, invalidBodyMessage
+	case errors.Is(err, errRevealPathTooLong):
+		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
 		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
 		return http.StatusBadRequest, err.Error()
