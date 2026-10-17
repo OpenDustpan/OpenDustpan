@@ -227,12 +227,27 @@ type Store struct {
 	// period. A successful truncate clears it, so the next failing period
 	// warns once more. Only the guard goroutine reads and writes it.
 	busyWarned bool
+	// binaryVersion is the version of the binary that opens the store. The
+	// migration check compares it with the minimum binary version of the
+	// schema. Empty counts as a dev build.
+	binaryVersion string
+	// processGuard holds the lock on the guard file next to the database,
+	// so a second store cannot open the same file. Close releases it.
+	processGuard *processGuard
+
+	// stepTxBound is the longest time that a step transaction of a durable
+	// operation stays open before it rolls back.
+	stepTxBound time.Duration
 }
 
 var (
 	_ namespace.Store = (*Store)(nil)
 	_ stack.Store     = (*Store)(nil)
 )
+
+// ErrInUse reports that another store holds the database file open. One
+// SQLite file serves one server process only.
+var ErrInUse = errors.New("another process holds the SQLite database file")
 
 // Option tunes Open. Options keep backward compatibility: callers that pass
 // none get the defaults.
@@ -249,7 +264,20 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
+// WithBinaryVersion sets the version of the binary, for example v0.1.0. Open
+// refuses a schema whose minimum binary version is above it with a
+// *schema.MinimumError. Without it, Open counts as a dev build, which no
+// minimum refuses.
+func WithBinaryVersion(version string) Option {
+	return func(s *Store) { s.binaryVersion = version }
+}
+
 // Open opens (creating if needed) the database file at path and migrates it.
+// It locks the file first: a second Open of the same file, in this process
+// or in another one, fails with ErrInUse until Close of the first store. The
+// guard resolves symbolic links before it names the guard file, so the same
+// file opened through another spelling shares the one guard. A hard link to
+// the database file is not detected.
 //
 // Open leaves running backup rows alone: crash recovery inspects them before
 // the server marks them failed with FailRunningBackups at start, and offline
@@ -260,15 +288,25 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
-	conn, err := openDatabase(ctx, abs)
+	resolved, err := resolveDatabasePath(abs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve database path: %w", err)
+	}
+
+	guard, err := acquireGuard(resolved)
 	if err != nil {
 		return nil, err
+	}
+
+	conn, err := openDatabase(ctx, resolved)
+	if err != nil {
+		return nil, errors.Join(err, guard.release())
 	}
 
 	s := &Store{
 		conn:                conn,
 		queries:             db.New(conn),
-		path:                abs,
+		path:                resolved,
 		mu:                  sync.RWMutex{},
 		stagingMu:           sync.Mutex{},
 		stagingPath:         "",
@@ -278,12 +316,15 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		lastTruncateSuccess: time.Now(),
 		busyWarned:          false,
 		keepAccessHook:      nil,
+		binaryVersion:       "",
+		processGuard:        guard,
+		stepTxBound:         DefaultStepTransactionBound,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 	if err := s.migrate(ctx); err != nil {
-		return nil, errors.Join(err, conn.Close())
+		return nil, errors.Join(err, conn.Close(), guard.release())
 	}
 
 	guardCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -293,6 +334,81 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	go s.guardLoop(guardCtx)
 
 	return s, nil
+}
+
+// maxSymlinkChain caps the links resolveDatabasePath follows at one path:
+// a chain with more links fails with an error.
+const maxSymlinkChain = 40
+
+// errTooManyLinks reports a symbolic link chain with more links than
+// maxSymlinkChain allows.
+var errTooManyLinks = errors.New("too many links")
+
+// resolveDatabasePath returns the canonical path of the database file at abs,
+// with symbolic links resolved, so two spellings of one file share one guard
+// file. When the file exists, it returns EvalSymlinks of abs. When the file
+// does not exist, it follows the chain of links at abs with Lstat and
+// Readlink, resolving each relative target against the directory of its link,
+// up to 40 links, then resolves the directory of the final target and joins
+// the base name of the final target, so a database created through a dangling
+// link still maps to the same guard. A plain missing file with no link
+// resolves its directory and joins the base name. It returns an error when
+// the chain holds more than 40 links. It never names the database file itself
+// for the guard: closing our descriptor would release the POSIX locks SQLite
+// holds on that file.
+func resolveDatabasePath(abs string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+
+	final, err := followLinkChain(abs)
+	if err != nil {
+		return "", err
+	}
+
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(final)); err == nil {
+		return filepath.Join(dir, filepath.Base(final)), nil
+	}
+
+	return final, nil
+}
+
+// followLinkChain walks the chain of symbolic links at abs and returns the
+// final target. A relative target resolves against the directory of its link.
+// A path that is no link, or that does not exist, ends the chain. A chain
+// with more than maxSymlinkChain links returns errTooManyLinks.
+func followLinkChain(abs string) (string, error) {
+	current := abs
+
+	for followed := 0; ; followed++ {
+		info, err := os.Lstat(current)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return "", fmt.Errorf("stat database path %s: %w", current, err)
+			}
+
+			return current, nil
+		}
+
+		if info.Mode()&os.ModeSymlink == 0 {
+			return current, nil
+		}
+
+		if followed >= maxSymlinkChain {
+			return "", fmt.Errorf("%w at %s", errTooManyLinks, abs)
+		}
+
+		target, err := os.Readlink(current)
+		if err != nil {
+			return "", fmt.Errorf("read database link %s: %w", current, err)
+		}
+
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(current), target)
+		}
+
+		current = target
+	}
 }
 
 // openDatabase opens the database file at abs with the store pragmas.
@@ -322,7 +438,9 @@ func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
 
 // Close closes the database. It stops the write-ahead log guard and waits
 // for it first, so no checkpoint runs on a closed handle. It removes a
-// staged restore file first, so no scratch file survives the handle.
+// staged restore file first, so no scratch file survives the handle. It
+// releases the lock on the database file last, so another store can open
+// the file only after this one closed it.
 func (s *Store) Close() error {
 	if s.guardCancel != nil {
 		s.guardCancel()
@@ -343,10 +461,10 @@ func (s *Store) Close() error {
 	}
 
 	if err := s.conn.Close(); err != nil {
-		return fmt.Errorf("close sqlite database: %w", err)
+		return errors.Join(fmt.Errorf("close sqlite database: %w", err), s.processGuard.release())
 	}
 
-	return nil
+	return s.processGuard.release()
 }
 
 // Ping implements namespace.Store. It maps any driver failure to
@@ -1035,20 +1153,22 @@ func (s *Store) migrate(ctx context.Context) error {
 		return fmt.Errorf("create schema_migrations: %w", execErr)
 	}
 
-	recorded, recordedErr := s.recordedVersions(ctx)
+	recorded, recordedErr := s.recordedMigrations(ctx)
 	if recordedErr != nil {
 		return recordedErr
 	}
 
-	if baselineErr := schema.CheckBaseline(recorded); baselineErr != nil {
+	if baselineErr := schema.CheckBaseline(recordedVersions(recorded)); baselineErr != nil {
 		return fmt.Errorf("check schema versions: %w", baselineErr)
 	}
 
-	if unknown := migrate.UnknownRecorded(recorded, all); len(unknown) > 0 {
-		return schema.NewSchemaNewerError(recorded, embeddedVersions(all))
+	plan, checkErr := migrate.Check(recorded, all, s.binaryVersion)
+
+	if checkErr != nil {
+		return fmt.Errorf("check schema: %w", checkErr)
 	}
 
-	for _, m := range all {
+	for _, m := range plan.Pending {
 		if applyErr := s.apply(ctx, m); applyErr != nil {
 			return applyErr
 		}
@@ -1057,20 +1177,52 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
-// embeddedVersions returns the versions the binary embeds, for the
-// newer-schema refusal.
-func embeddedVersions(all []migrate.Migration) []int64 {
-	out := make([]int64, 0, len(all))
-	for _, m := range all {
-		out = append(out, m.Version)
-	}
-
-	return out
+// sqlQueryer runs one query on a connection or in a transaction.
+type sqlQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// recordedVersions returns the versions schema_migrations records, ordered.
-func (s *Store) recordedVersions(ctx context.Context) ([]int64, error) {
-	rows, err := s.conn.QueryContext(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+// hasMinimumColumn reports whether schema_migrations has the
+// min_binary_version column. A migration adds it. Before that migration,
+// the schema records no minimum.
+func hasMinimumColumn(ctx context.Context, q sqlQueryer) (bool, error) {
+	var count int64
+
+	err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM pragma_table_info('schema_migrations') WHERE name = 'min_binary_version'`,
+	).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("check schema_migrations columns: %w", err)
+	}
+
+	return count > 0, nil
+}
+
+// appliedQuery returns the query that reads the rows of schema_migrations
+// ordered by version: with the minimum binary version when the column
+// exists, and with the empty value before.
+func appliedQuery(ctx context.Context, q sqlQueryer) (string, error) {
+	exists, err := hasMinimumColumn(ctx, q)
+	if err != nil {
+		return "", err
+	}
+
+	if exists {
+		return `SELECT version, name, min_binary_version FROM schema_migrations ORDER BY version`, nil
+	}
+
+	return `SELECT version, name, '' FROM schema_migrations ORDER BY version`, nil
+}
+
+// recordedMigrations returns the rows of schema_migrations, ordered by
+// version.
+func (s *Store) recordedMigrations(ctx context.Context) ([]schema.AppliedMigration, error) {
+	query, err := appliedQuery(ctx, s.conn)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("read schema versions: %w", err)
 	}
@@ -1081,16 +1233,15 @@ func (s *Store) recordedVersions(ctx context.Context) ([]int64, error) {
 		}
 	}()
 
-	var out []int64
+	var out []schema.AppliedMigration
 
 	for rows.Next() {
-		var version int64
-
-		if scanErr := rows.Scan(&version); scanErr != nil {
-			return nil, fmt.Errorf("read schema versions: %w", scanErr)
+		var row schema.AppliedMigration
+		if err := rows.Scan(&row.Version, &row.Name, &row.MinBinaryVersion); err != nil {
+			return nil, fmt.Errorf("read schema versions: %w", err)
 		}
 
-		out = append(out, version)
+		out = append(out, row)
 	}
 
 	if iterErr := rows.Err(); iterErr != nil {
@@ -1098,6 +1249,18 @@ func (s *Store) recordedVersions(ctx context.Context) ([]int64, error) {
 	}
 
 	return out, nil
+}
+
+// recordedVersions returns the versions of the recorded migrations,
+// ordered as recorded, for the baseline check.
+func recordedVersions(recorded []schema.AppliedMigration) []int64 {
+	versions := make([]int64, 0, len(recorded))
+
+	for _, r := range recorded {
+		versions = append(versions, r.Version)
+	}
+
+	return versions
 }
 
 func (s *Store) apply(ctx context.Context, m migrate.Migration) error {
@@ -1121,13 +1284,43 @@ func (s *Store) apply(ctx context.Context, m migrate.Migration) error {
 		return errors.Join(fmt.Errorf("apply migration %s: %w", m.Name, err), rollback(tx))
 	}
 
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-	if _, err := tx.ExecContext(ctx, record, m.Version, m.Name); err != nil {
-		return errors.Join(fmt.Errorf("record migration %s: %w", m.Name, err), rollback(tx))
+	if err := recordMigration(ctx, tx, m); err != nil {
+		return errors.Join(err, rollback(tx))
 	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration %s: %w", m.Name, err)
+	}
+
+	return nil
+}
+
+// recordMigration records m in schema_migrations in tx, after its SQL ran.
+// It records the minimum binary version of m when the column exists. A
+// migration that sets a minimum before the column exists fails.
+func recordMigration(ctx context.Context, tx *sql.Tx, m migrate.Migration) error {
+	exists, err := hasMinimumColumn(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	if !exists {
+		if m.MinBinaryVersion != "" {
+			return fmt.Errorf("record migration %s: %w: schema_migrations has no min_binary_version column",
+				m.Name, schema.ErrBadMinimum)
+		}
+
+		const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+		if _, err := tx.ExecContext(ctx, record, m.Version, m.Name); err != nil {
+			return fmt.Errorf("record migration %s: %w", m.Name, err)
+		}
+
+		return nil
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES (?, ?, ?)`
+	if _, err := tx.ExecContext(ctx, record, m.Version, m.Name, m.MinBinaryVersion); err != nil {
+		return fmt.Errorf("record migration %s: %w", m.Name, err)
 	}
 
 	return nil

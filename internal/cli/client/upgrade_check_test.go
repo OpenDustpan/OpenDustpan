@@ -63,7 +63,7 @@ func runUpgradeCheck(t *testing.T, srv *httptest.Server) string {
 
 	args := []string{"--server", srv.URL}
 
-	err := client.UpgradeCheck(t.Context(), args, &stdout, &stderr, "test-binary")
+	err := client.UpgradeCheck(t.Context(), args, &stdout, &stderr, "v1.0.0")
 	if err != nil {
 		t.Fatalf("upgrade check: %v", err)
 	}
@@ -124,8 +124,8 @@ func TestUpgradeCheckRefusesSchemaBeforeBaseline(t *testing.T) {
 		t.Fatalf("upgrade check: err = %v, want ErrSchemaBeforeBaseline", err)
 	}
 
-	if errors.Is(err, schema.ErrSchemaNewer) {
-		t.Fatalf("upgrade check: err = %v, want no newer-schema refusal", err)
+	if errors.Is(err, schema.ErrSchemaDiverged) {
+		t.Fatalf("upgrade check: err = %v, want no diverged-schema refusal", err)
 	}
 
 	if out := stdout.String(); !strings.Contains(out, "verdict: "+client.VerdictCannotStart) {

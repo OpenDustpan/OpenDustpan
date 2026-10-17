@@ -255,7 +255,7 @@ func newServiceBackedHandler(
 	}
 
 	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Providers: nil, Policies: sessionPolicies, Inactivity: nil, Now: nil},
+		session.SessionsConfig{Store: st, Providers: nil, Inactivity: nil, Now: nil},
 	)
 	if err != nil {
 		t.Fatalf("session service: %v", err)
@@ -286,7 +286,14 @@ func newServiceBackedHandler(
 		SignIn: &apiserver.SignIn{
 			Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			Providers: []apiserver.SignInProvider{
-				{Client: stubOIDC{}, ID: testProvider, DisplayName: "Corp", AutoCreate: true, Stored: false},
+				{
+					Client:      stubOIDC{},
+					ID:          testProvider,
+					DisplayName: "Corp",
+					AutoCreate:  true,
+					Stored:      false,
+					Source:      principal.SourceOIDC,
+				},
 			},
 		},
 		CheckpointEpochs: fakeEpochs{},
@@ -318,12 +325,6 @@ const (
 	testOwnTokenID           = "tok-routes0000000000003"
 	testRoleID               = "rol-routes0000000000001"
 )
-
-// allowGrants passes every escalation check, so the routes that create or
-// rotate a token for another principal answer their success status.
-type allowGrants struct{}
-
-func (allowGrants) RequireHeld(context.Context, identity.Principal, string) error { return nil }
 
 // allowAll allows every action, so the token service passes its own check
 // of principal:manage-tokens and the route alone decides.
@@ -401,7 +402,7 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Authorizer: allowAll{}, Logger: nil, Now: nil,
+		Store: st, Principals: st, Freshness: nil, Authorizer: allowAll{}, Logger: nil, Now: nil,
 		NewID: nil,
 	})
 	if err != nil {

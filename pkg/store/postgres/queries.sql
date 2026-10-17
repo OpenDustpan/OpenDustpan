@@ -1740,7 +1740,9 @@ FROM sessions WHERE id = $1;
 
 -- name: GetSessionByDigest :one
 -- principal_active_at_ms is the latest activity of the owner by the account
--- rule of the inactivity disable, as in GetAccessTokenByDigest.
+-- rule of the inactivity disable, as in GetAccessTokenByDigest. The session
+-- policy and the account part of the token policy come from the same read,
+-- so a policy change applies to the next lookup on every instance.
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
@@ -1748,10 +1750,15 @@ SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
-  ), 0))::bigint AS principal_active_at_ms
+  ), 0))::bigint AS principal_active_at_ms,
+  sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
+  sp.token_freshness_ms AS policy_token_freshness_ms,
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
-WHERE s.digest = $1 AND p.deleted_at_ms IS NULL;
+CROSS JOIN session_policy sp
+CROSS JOIN access_token_policy ap
+WHERE s.digest = $1 AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1;
 
 -- name: TouchSession :exec
 -- An idle or expired session keeps its last use: seen_after_ms and
@@ -1817,28 +1824,36 @@ ORDER BY wrapper_id;
 -- name: CreateSignInProvider :execrows
 INSERT INTO sign_in_providers (
     provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 ON CONFLICT DO NOTHING;
 
 -- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 WHERE provider_id = $1;
 
 -- name: ListSignInProviders :many
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 ORDER BY provider_id COLLATE "C";
 
 -- name: UpdateSignInProvider :execrows
--- The update applies only to the version that the change read.
+-- The update applies only to the version that the change read. The mode
+-- never changes.
 UPDATE sign_in_providers
 SET issuer = sqlc.arg('issuer'), display_name = sqlc.arg('display_name'), client_id = sqlc.arg('client_id'),
     client_secret = sqlc.arg('client_secret'), scopes = sqlc.arg('scopes'),
     auto_create = sqlc.arg('auto_create'), enabled = sqlc.arg('enabled'),
+    authorization_url = sqlc.arg('authorization_url'), token_url = sqlc.arg('token_url'),
+    userinfo_url = sqlc.arg('userinfo_url'), subject_claim = sqlc.arg('subject_claim'),
+    name_claim = sqlc.arg('name_claim'), username_claim = sqlc.arg('username_claim'),
+    email_claim = sqlc.arg('email_claim'),
     updated_at_ms = sqlc.arg('updated_at_ms'), version = sqlc.arg('version')
 WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version') - 1;
 
@@ -1866,3 +1881,141 @@ WHERE ended_at_ms IS NULL
 -- The prefix is "<provider ID>:". The compare is exact, with no pattern
 -- and no case folding. Deleted principals count too.
 SELECT COUNT(*) FROM principals WHERE starts_with(subject, sqlc.arg('prefix'));
+
+-- Durable operations. Every time comes from the database clock, read with
+-- clock_timestamp() when the statement runs, so neither the clock of an
+-- instance nor the start of a long transaction moves a decision.
+
+-- name: InsertDurableOperation :one
+-- Creates a pending operation that can run at once. It inserts nothing when
+-- the start key names an operation, and then returns no row.
+INSERT INTO durable_operations (
+  id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+)
+SELECT sqlc.arg('id')::text, sqlc.arg('start_key')::text, sqlc.arg('kind')::text, sqlc.arg('input')::bytea,
+  sqlc.arg('version')::bigint, 'pending', 0, 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
+FROM (SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms) c
+ON CONFLICT (start_key) DO NOTHING
+RETURNING id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms;
+
+-- name: GetDurableOperation :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = $1;
+
+-- name: GetDurableOperationByKey :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE start_key = $1;
+
+-- name: LockDurableOperation :one
+-- Holds the row of one operation until the transaction ends, so the checks
+-- and the write of a holder see one state.
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = $1
+FOR UPDATE;
+
+-- name: ListDurableOperations :many
+-- An empty kind or state list matches every operation. A limit of 0 means
+-- no limit.
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations
+WHERE (sqlc.arg('kind')::text = '' OR kind = sqlc.arg('kind')::text)
+  AND (cardinality(sqlc.arg('states')::text[]) = 0 OR state = ANY(sqlc.arg('states')::text[]))
+ORDER BY created_at_ms, id
+LIMIT NULLIF(sqlc.arg('max_rows')::bigint, 0);
+
+-- name: ListDurableSteps :many
+SELECT operation_id, name, seq, result, done_at_ms
+FROM durable_steps
+WHERE operation_id = ANY(sqlc.arg('ids')::text[])
+ORDER BY operation_id, seq;
+
+-- name: EndExpiredCanceledDurableOperations :exec
+-- Ends canceled each running operation of the kinds whose claim expired
+-- after a cancel request. kinds and max_versions are pairs: a claim takes an
+-- operation of a kind only up to its version limit. A row that another claim
+-- holds is skipped.
+WITH c AS MATERIALIZED (
+  SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
+), ended AS (
+  SELECT o.id FROM durable_operations o, c
+  WHERE o.kind = ANY(sqlc.arg('kinds')::text[])
+    AND o.version <= (sqlc.arg('max_versions')::bigint[])[array_position(sqlc.arg('kinds')::text[], o.kind)] AND o.state = 'running' AND o.cancel_requested
+    AND o.claim_expires_at_ms <= c.now_ms
+  FOR UPDATE OF o SKIP LOCKED
+)
+UPDATE durable_operations o
+SET state = 'canceled', claim_owner = NULL, claim_expires_at_ms = NULL, updated_at_ms = c.now_ms
+FROM c, ended
+WHERE o.id = ended.id;
+
+-- name: ClaimDurableOperation :one
+-- Claims the oldest operation of the kinds, up to the version limit of its
+-- kind, that can run now: a pending one
+-- whose not_before_ms passed, or a running one whose claim expired without a
+-- cancel request. A row that another claim holds is skipped, so of several
+-- concurrent claims of one operation at most one gets it. The expiry is the
+-- database clock plus the lease. A claim that takes over an expired claim
+-- counts one more expiry.
+WITH c AS MATERIALIZED (
+  SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
+), pick AS (
+  SELECT o.id FROM durable_operations o, c
+  WHERE o.kind = ANY(sqlc.arg('kinds')::text[])
+    AND o.version <= (sqlc.arg('max_versions')::bigint[])[array_position(sqlc.arg('kinds')::text[], o.kind)] AND (
+    (o.state = 'pending' AND o.not_before_ms <= c.now_ms)
+    OR (o.state = 'running' AND o.claim_expires_at_ms <= c.now_ms AND NOT o.cancel_requested)
+  )
+  ORDER BY o.created_at_ms, o.id
+  LIMIT 1
+  FOR UPDATE OF o SKIP LOCKED
+)
+UPDATE durable_operations o
+SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
+  expiries = o.expiries + CASE WHEN o.state = 'running' THEN 1 ELSE 0 END,
+  claim_owner = sqlc.arg('owner')::text, claim_expires_at_ms = c.now_ms + sqlc.arg('lease_ms')::bigint,
+  updated_at_ms = c.now_ms
+FROM c, pick
+WHERE o.id = pick.id
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
+  o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms;
+
+-- name: ExtendDurableClaim :exec
+UPDATE durable_operations
+SET claim_expires_at_ms = sqlc.arg('expires_at_ms')::bigint, updated_at_ms = sqlc.arg('now_ms')::bigint
+WHERE id = sqlc.arg('id')::text;
+
+-- name: DurableStepExists :one
+SELECT EXISTS (SELECT 1 FROM durable_steps WHERE operation_id = $1 AND name = $2) AS done;
+
+-- name: InsertDurableStep :exec
+-- The caller holds the row of the operation, so the next seq is safe.
+INSERT INTO durable_steps (operation_id, name, seq, result, done_at_ms)
+SELECT sqlc.arg('operation_id')::text, sqlc.arg('name')::text, COALESCE(MAX(seq), 0) + 1,
+  sqlc.arg('result')::bytea, sqlc.arg('now_ms')::bigint
+FROM durable_steps WHERE operation_id = sqlc.arg('operation_id')::text;
+
+-- name: TouchDurableOperation :exec
+UPDATE durable_operations SET updated_at_ms = sqlc.arg('now_ms')::bigint WHERE id = sqlc.arg('id')::text;
+
+-- name: EndDurableClaim :exec
+-- Ends the claim of an operation with its next state, and adds add_failures
+-- to its failures. The claim token stays, so the next claim gets a larger
+-- one.
+UPDATE durable_operations
+SET state = sqlc.arg('state')::text, last_error = sqlc.arg('last_error')::text,
+  failures = failures + sqlc.arg('add_failures')::bigint,
+  not_before_ms = sqlc.arg('not_before_ms')::bigint, claim_owner = NULL, claim_expires_at_ms = NULL,
+  updated_at_ms = sqlc.arg('now_ms')::bigint
+WHERE id = sqlc.arg('id')::text;
+
+-- name: CancelDurableOperation :exec
+UPDATE durable_operations
+SET state = sqlc.arg('state')::text, cancel_requested = sqlc.arg('cancel_requested')::boolean,
+  updated_at_ms = sqlc.arg('now_ms')::bigint
+WHERE id = sqlc.arg('id')::text;

@@ -23,9 +23,10 @@ type ChainStore interface {
 
 // ChainTestStore is one fresh, empty store with the tamper hook of
 // TestStore, so a case can change an entry behind the back of the store.
-// Reopen answers a second handle on the same database. DeleteChainState
-// deletes the row of the chain state behind the back of the store, as a
-// corrupt database lacks it.
+// Reopen answers a second handle on the same database. It is nil for an
+// adapter that allows one handle per database: the case that needs a fresh
+// handle then skips. DeleteChainState deletes the row of the chain state
+// behind the back of the store, as a corrupt database lacks it.
 type ChainTestStore struct {
 	Store            ChainStore
 	TamperEntry      func(t *testing.T, ns namespace.Name, seq int64, field, value string)
@@ -1098,7 +1099,7 @@ func testChainSecondHandle(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
 	if ts.Reopen == nil {
-		t.Fatal("suite needs Reopen to prove a second handle follows the state")
+		t.Skip("the adapter allows one handle per database, so no fresh handle can read the chain state")
 	}
 
 	tl := newTimeline(t, ts.Store)

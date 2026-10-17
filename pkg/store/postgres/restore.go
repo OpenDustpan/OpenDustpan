@@ -272,6 +272,10 @@ func finishSwap(ctx context.Context, tx pgx.Tx, live, previous string) error {
 		return err
 	}
 
+	if err := keepControlTables(ctx, tx, live, previous); err != nil {
+		return err
+	}
+
 	if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
 		return fmt.Errorf("drop previous schema: %w", err)
 	}
@@ -350,6 +354,46 @@ func keepInstallationState(ctx context.Context, tx pgx.Tx, live, previous string
 
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("keep installation state: row is missing: %w", maintenance.ErrUnavailable)
+	}
+
+	return nil
+}
+
+// durableOperationColumns lists the columns of durable_operations.
+const durableOperationColumns = "id, start_key, kind, input, version, state, attempt, expiries, failures, " +
+	"last_error, claim_owner, claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, " +
+	"updated_at_ms"
+
+// durableScheduleColumns lists every column of durable_schedules, for the
+// copy of the control tables.
+const durableScheduleColumns = "name, interval_ms, next_run_at_ms, last_claimed_at_ms"
+
+// keepControlTables replaces the rows of each table of backup.ControlTables
+// in the restored schema live with the rows of the schema previous, in tx. A
+// restore keeps the control tables of the live installation: the claim
+// tokens of durable operations only grow, and an older token from a backup
+// would let a stale holder write. The lock holds every durable operation
+// write of another instance out until the swap commits, so the copy has the
+// last committed rows.
+func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) error {
+	stmts := []string{
+		"LOCK TABLE " + pgIdent(previous) + ".durable_operations, " + pgIdent(previous) +
+			".durable_steps, " + pgIdent(previous) + ".durable_schedules IN EXCLUSIVE MODE",
+		"DELETE FROM " + pgIdent(live) + ".durable_steps",
+		"DELETE FROM " + pgIdent(live) + ".durable_operations",
+		"DELETE FROM " + pgIdent(live) + ".durable_schedules",
+		"INSERT INTO " + pgIdent(live) + ".durable_operations (" + durableOperationColumns + ") SELECT " +
+			durableOperationColumns + " FROM " + pgIdent(previous) + ".durable_operations",
+		"INSERT INTO " + pgIdent(live) + ".durable_steps (operation_id, name, seq, result, done_at_ms)" +
+			" SELECT operation_id, name, seq, result, done_at_ms FROM " + pgIdent(previous) + ".durable_steps",
+		"INSERT INTO " + pgIdent(live) + ".durable_schedules (" + durableScheduleColumns + ") SELECT " +
+			durableScheduleColumns + " FROM " + pgIdent(previous) + ".durable_schedules",
+	}
+
+	for _, stmt := range stmts {
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("keep control tables: %w", err)
+		}
 	}
 
 	return nil

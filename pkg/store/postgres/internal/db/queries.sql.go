@@ -425,6 +425,30 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 	return items, nil
 }
 
+const cancelDurableOperation = `-- name: CancelDurableOperation :exec
+UPDATE durable_operations
+SET state = $1::text, cancel_requested = $2::boolean,
+  updated_at_ms = $3::bigint
+WHERE id = $4::text
+`
+
+type CancelDurableOperationParams struct {
+	State           string
+	CancelRequested bool
+	NowMs           int64
+	ID              string
+}
+
+func (q *Queries) CancelDurableOperation(ctx context.Context, arg CancelDurableOperationParams) error {
+	_, err := q.db.Exec(ctx, cancelDurableOperation,
+		arg.State,
+		arg.CancelRequested,
+		arg.NowMs,
+		arg.ID,
+	)
+	return err
+}
+
 const claimAuditChainMigration = `-- name: ClaimAuditChainMigration :execrows
 UPDATE audit_chain_state
 SET migrating_at_ms = $1
@@ -444,6 +468,75 @@ func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditCh
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const claimDurableOperation = `-- name: ClaimDurableOperation :one
+WITH c AS MATERIALIZED (
+  SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
+), pick AS (
+  SELECT o.id FROM durable_operations o, c
+  WHERE o.kind = ANY($3::text[])
+    AND o.version <= ($4::bigint[])[array_position($3::text[], o.kind)] AND (
+    (o.state = 'pending' AND o.not_before_ms <= c.now_ms)
+    OR (o.state = 'running' AND o.claim_expires_at_ms <= c.now_ms AND NOT o.cancel_requested)
+  )
+  ORDER BY o.created_at_ms, o.id
+  LIMIT 1
+  FOR UPDATE OF o SKIP LOCKED
+)
+UPDATE durable_operations o
+SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
+  expiries = o.expiries + CASE WHEN o.state = 'running' THEN 1 ELSE 0 END,
+  claim_owner = $1::text, claim_expires_at_ms = c.now_ms + $2::bigint,
+  updated_at_ms = c.now_ms
+FROM c, pick
+WHERE o.id = pick.id
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
+  o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms
+`
+
+type ClaimDurableOperationParams struct {
+	Owner       string
+	LeaseMs     int64
+	Kinds       []string
+	MaxVersions []int64
+}
+
+// Claims the oldest operation of the kinds, up to the version limit of its
+// kind, that can run now: a pending one
+// whose not_before_ms passed, or a running one whose claim expired without a
+// cancel request. A row that another claim holds is skipped, so of several
+// concurrent claims of one operation at most one gets it. The expiry is the
+// database clock plus the lease. A claim that takes over an expired claim
+// counts one more expiry.
+func (q *Queries) ClaimDurableOperation(ctx context.Context, arg ClaimDurableOperationParams) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, claimDurableOperation,
+		arg.Owner,
+		arg.LeaseMs,
+		arg.Kinds,
+		arg.MaxVersions,
+	)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
 }
 
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
@@ -1328,23 +1421,32 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 const createSignInProvider = `-- name: CreateSignInProvider :execrows
 INSERT INTO sign_in_providers (
     provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 ON CONFLICT DO NOTHING
 `
 
 type CreateSignInProviderParams struct {
-	ProviderID   string
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   bool
-	Enabled      bool
-	CreatedAtMs  int64
-	UpdatedAtMs  int64
-	Version      int64
+	ProviderID       string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       bool
+	Enabled          bool
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	Version          int64
+	Mode             string
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
 }
 
 func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProviderParams) (int64, error) {
@@ -1360,6 +1462,14 @@ func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProv
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 		arg.Version,
+		arg.Mode,
+		arg.AuthorizationUrl,
+		arg.TokenUrl,
+		arg.UserinfoUrl,
+		arg.SubjectClaim,
+		arg.NameClaim,
+		arg.UsernameClaim,
+		arg.EmailClaim,
 	)
 	if err != nil {
 		return 0, err
@@ -2028,6 +2138,22 @@ func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInac
 	return items, nil
 }
 
+const durableStepExists = `-- name: DurableStepExists :one
+SELECT EXISTS (SELECT 1 FROM durable_steps WHERE operation_id = $1 AND name = $2) AS done
+`
+
+type DurableStepExistsParams struct {
+	OperationID string
+	Name        string
+}
+
+func (q *Queries) DurableStepExists(ctx context.Context, arg DurableStepExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, durableStepExists, arg.OperationID, arg.Name)
+	var done bool
+	err := row.Scan(&done)
+	return done, err
+}
+
 const enablePrincipal = `-- name: EnablePrincipal :execrows
 UPDATE principals SET disabled_at_ms = NULL, updated_at_ms = $1::bigint,
   last_active_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
@@ -2047,6 +2173,69 @@ func (q *Queries) EnablePrincipal(ctx context.Context, arg EnablePrincipalParams
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const endDurableClaim = `-- name: EndDurableClaim :exec
+UPDATE durable_operations
+SET state = $1::text, last_error = $2::text,
+  failures = failures + $3::bigint,
+  not_before_ms = $4::bigint, claim_owner = NULL, claim_expires_at_ms = NULL,
+  updated_at_ms = $5::bigint
+WHERE id = $6::text
+`
+
+type EndDurableClaimParams struct {
+	State       string
+	LastError   string
+	AddFailures int64
+	NotBeforeMs int64
+	NowMs       int64
+	ID          string
+}
+
+// Ends the claim of an operation with its next state, and adds add_failures
+// to its failures. The claim token stays, so the next claim gets a larger
+// one.
+func (q *Queries) EndDurableClaim(ctx context.Context, arg EndDurableClaimParams) error {
+	_, err := q.db.Exec(ctx, endDurableClaim,
+		arg.State,
+		arg.LastError,
+		arg.AddFailures,
+		arg.NotBeforeMs,
+		arg.NowMs,
+		arg.ID,
+	)
+	return err
+}
+
+const endExpiredCanceledDurableOperations = `-- name: EndExpiredCanceledDurableOperations :exec
+WITH c AS MATERIALIZED (
+  SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
+), ended AS (
+  SELECT o.id FROM durable_operations o, c
+  WHERE o.kind = ANY($1::text[])
+    AND o.version <= ($2::bigint[])[array_position($1::text[], o.kind)] AND o.state = 'running' AND o.cancel_requested
+    AND o.claim_expires_at_ms <= c.now_ms
+  FOR UPDATE OF o SKIP LOCKED
+)
+UPDATE durable_operations o
+SET state = 'canceled', claim_owner = NULL, claim_expires_at_ms = NULL, updated_at_ms = c.now_ms
+FROM c, ended
+WHERE o.id = ended.id
+`
+
+type EndExpiredCanceledDurableOperationsParams struct {
+	Kinds       []string
+	MaxVersions []int64
+}
+
+// Ends canceled each running operation of the kinds whose claim expired
+// after a cancel request. kinds and max_versions are pairs: a claim takes an
+// operation of a kind only up to its version limit. A row that another claim
+// holds is skipped.
+func (q *Queries) EndExpiredCanceledDurableOperations(ctx context.Context, arg EndExpiredCanceledDurableOperationsParams) error {
+	_, err := q.db.Exec(ctx, endExpiredCanceledDurableOperations, arg.Kinds, arg.MaxVersions)
+	return err
 }
 
 const endMembershipsInGroup = `-- name: EndMembershipsInGroup :exec
@@ -2146,6 +2335,23 @@ func (q *Queries) EndSessionsWithSubjectPrefix(ctx context.Context, arg EndSessi
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const extendDurableClaim = `-- name: ExtendDurableClaim :exec
+UPDATE durable_operations
+SET claim_expires_at_ms = $1::bigint, updated_at_ms = $2::bigint
+WHERE id = $3::text
+`
+
+type ExtendDurableClaimParams struct {
+	ExpiresAtMs int64
+	NowMs       int64
+	ID          string
+}
+
+func (q *Queries) ExtendDurableClaim(ctx context.Context, arg ExtendDurableClaimParams) error {
+	_, err := q.db.Exec(ctx, extendDurableClaim, arg.ExpiresAtMs, arg.NowMs, arg.ID)
+	return err
 }
 
 const failRunningBackups = `-- name: FailRunningBackups :exec
@@ -2781,6 +2987,68 @@ func (q *Queries) GetDeletedWorkspace(ctx context.Context, arg GetDeletedWorkspa
 	return deleted_name, err
 }
 
+const getDurableOperation = `-- name: GetDurableOperation :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = $1
+`
+
+func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, getDurableOperation, id)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getDurableOperationByKey = `-- name: GetDurableOperationByKey :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE start_key = $1
+`
+
+func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, getDurableOperationByKey, startKey)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const getFailoverVersionForShare = `-- name: GetFailoverVersionForShare :one
 SELECT failover_version
 FROM namespaces
@@ -3282,34 +3550,47 @@ SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
-  ), 0))::bigint AS principal_active_at_ms
+  ), 0))::bigint AS principal_active_at_ms,
+  sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
+  sp.token_freshness_ms AS policy_token_freshness_ms,
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
-WHERE s.digest = $1 AND p.deleted_at_ms IS NULL
+CROSS JOIN session_policy sp
+CROSS JOIN access_token_policy ap
+WHERE s.digest = $1 AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1
 `
 
 type GetSessionByDigestRow struct {
-	ID                    string
-	PrincipalID           string
-	Digest                string
-	Provider              string
-	CreatedAtMs           int64
-	LastSeenAtMs          int64
-	AuthTimeMs            int64
-	EndedAtMs             pgtype.Int8
-	EndReason             string
-	SourceIp              string
-	UserAgent             string
-	Subject               string
-	DisplayName           string
-	PrincipalKind         string
-	PrincipalDisabledAtMs pgtype.Int8
-	PrincipalBreakGlass   bool
-	PrincipalActiveAtMs   int64
+	ID                     string
+	PrincipalID            string
+	Digest                 string
+	Provider               string
+	CreatedAtMs            int64
+	LastSeenAtMs           int64
+	AuthTimeMs             int64
+	EndedAtMs              pgtype.Int8
+	EndReason              string
+	SourceIp               string
+	UserAgent              string
+	Subject                string
+	DisplayName            string
+	PrincipalKind          string
+	PrincipalDisabledAtMs  pgtype.Int8
+	PrincipalBreakGlass    bool
+	PrincipalActiveAtMs    int64
+	PolicyIdleMs           int64
+	PolicyMaxLengthMs      int64
+	PolicyUpdatedAtMs      int64
+	PolicyTokenFreshnessMs pgtype.Int8
+	AccountsInactivityMs   int64
+	AccountsDisable        bool
 }
 
 // principal_active_at_ms is the latest activity of the owner by the account
-// rule of the inactivity disable, as in GetAccessTokenByDigest.
+// rule of the inactivity disable, as in GetAccessTokenByDigest. The session
+// policy and the account part of the token policy come from the same read,
+// so a policy change applies to the next lookup on every instance.
 func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getSessionByDigest, digest)
 	var i GetSessionByDigestRow
@@ -3331,6 +3612,12 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.PrincipalDisabledAtMs,
 		&i.PrincipalBreakGlass,
 		&i.PrincipalActiveAtMs,
+		&i.PolicyIdleMs,
+		&i.PolicyMaxLengthMs,
+		&i.PolicyUpdatedAtMs,
+		&i.PolicyTokenFreshnessMs,
+		&i.AccountsInactivityMs,
+		&i.AccountsDisable,
 	)
 	return i, err
 }
@@ -3378,7 +3665,8 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 
 const getSignInProvider = `-- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 WHERE provider_id = $1
 `
@@ -3398,6 +3686,14 @@ func (q *Queries) GetSignInProvider(ctx context.Context, providerID string) (Sig
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
 		&i.Version,
+		&i.Mode,
+		&i.AuthorizationUrl,
+		&i.TokenUrl,
+		&i.UserinfoUrl,
+		&i.SubjectClaim,
+		&i.NameClaim,
+		&i.UsernameClaim,
+		&i.EmailClaim,
 	)
 	return i, err
 }
@@ -4087,6 +4383,89 @@ func (q *Queries) InsertDeletedInventory(ctx context.Context, arg InsertDeletedI
 		arg.Name,
 		arg.DeletedAtMs,
 		arg.PurgeAfterMs,
+	)
+	return err
+}
+
+const insertDurableOperation = `-- name: InsertDurableOperation :one
+
+INSERT INTO durable_operations (
+  id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+)
+SELECT $1::text, $2::text, $3::text, $4::bytea,
+  $5::bigint, 'pending', 0, 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
+FROM (SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms) c
+ON CONFLICT (start_key) DO NOTHING
+RETURNING id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+`
+
+type InsertDurableOperationParams struct {
+	ID       string
+	StartKey string
+	Kind     string
+	Input    []byte
+	Version  int64
+}
+
+// Durable operations. Every time comes from the database clock, read with
+// clock_timestamp() when the statement runs, so neither the clock of an
+// instance nor the start of a long transaction moves a decision.
+// Creates a pending operation that can run at once. It inserts nothing when
+// the start key names an operation, and then returns no row.
+func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableOperationParams) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, insertDurableOperation,
+		arg.ID,
+		arg.StartKey,
+		arg.Kind,
+		arg.Input,
+		arg.Version,
+	)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const insertDurableStep = `-- name: InsertDurableStep :exec
+INSERT INTO durable_steps (operation_id, name, seq, result, done_at_ms)
+SELECT $1::text, $2::text, COALESCE(MAX(seq), 0) + 1,
+  $3::bytea, $4::bigint
+FROM durable_steps WHERE operation_id = $1::text
+`
+
+type InsertDurableStepParams struct {
+	OperationID string
+	Name        string
+	Result      []byte
+	NowMs       int64
+}
+
+// The caller holds the row of the operation, so the next seq is safe.
+func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepParams) error {
+	_, err := q.db.Exec(ctx, insertDurableStep,
+		arg.OperationID,
+		arg.Name,
+		arg.Result,
+		arg.NowMs,
 	)
 	return err
 }
@@ -4792,6 +5171,95 @@ func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([
 			&i.Name,
 			&i.DeletedAtMs,
 			&i.PurgeAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDurableOperations = `-- name: ListDurableOperations :many
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations
+WHERE ($1::text = '' OR kind = $1::text)
+  AND (cardinality($2::text[]) = 0 OR state = ANY($2::text[]))
+ORDER BY created_at_ms, id
+LIMIT NULLIF($3::bigint, 0)
+`
+
+type ListDurableOperationsParams struct {
+	Kind    string
+	States  []string
+	MaxRows int64
+}
+
+// An empty kind or state list matches every operation. A limit of 0 means
+// no limit.
+func (q *Queries) ListDurableOperations(ctx context.Context, arg ListDurableOperationsParams) ([]DurableOperation, error) {
+	rows, err := q.db.Query(ctx, listDurableOperations, arg.Kind, arg.States, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DurableOperation
+	for rows.Next() {
+		var i DurableOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.StartKey,
+			&i.Kind,
+			&i.Input,
+			&i.Version,
+			&i.State,
+			&i.Attempt,
+			&i.Expiries,
+			&i.Failures,
+			&i.LastError,
+			&i.ClaimOwner,
+			&i.ClaimToken,
+			&i.ClaimExpiresAtMs,
+			&i.CancelRequested,
+			&i.NotBeforeMs,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDurableSteps = `-- name: ListDurableSteps :many
+SELECT operation_id, name, seq, result, done_at_ms
+FROM durable_steps
+WHERE operation_id = ANY($1::text[])
+ORDER BY operation_id, seq
+`
+
+func (q *Queries) ListDurableSteps(ctx context.Context, ids []string) ([]DurableStep, error) {
+	rows, err := q.db.Query(ctx, listDurableSteps, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DurableStep
+	for rows.Next() {
+		var i DurableStep
+		if err := rows.Scan(
+			&i.OperationID,
+			&i.Name,
+			&i.Seq,
+			&i.Result,
+			&i.DoneAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -5716,7 +6184,8 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 
 const listSignInProviders = `-- name: ListSignInProviders :many
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 ORDER BY provider_id COLLATE "C"
 `
@@ -5742,6 +6211,14 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 			&i.Version,
+			&i.Mode,
+			&i.AuthorizationUrl,
+			&i.TokenUrl,
+			&i.UserinfoUrl,
+			&i.SubjectClaim,
+			&i.NameClaim,
+			&i.UsernameClaim,
+			&i.EmailClaim,
 		); err != nil {
 			return nil, err
 		}
@@ -6083,6 +6560,40 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockDurableOperation = `-- name: LockDurableOperation :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = $1
+FOR UPDATE
+`
+
+// Holds the row of one operation until the transaction ends, so the checks
+// and the write of a holder see one state.
+func (q *Queries) LockDurableOperation(ctx context.Context, id string) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, lockDurableOperation, id)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
 }
 
 const lockServerAuditScope = `-- name: LockServerAuditScope :exec
@@ -7579,6 +8090,20 @@ func (q *Queries) TouchAccessToken(ctx context.Context, arg TouchAccessTokenPara
 	return err
 }
 
+const touchDurableOperation = `-- name: TouchDurableOperation :exec
+UPDATE durable_operations SET updated_at_ms = $1::bigint WHERE id = $2::text
+`
+
+type TouchDurableOperationParams struct {
+	NowMs int64
+	ID    string
+}
+
+func (q *Queries) TouchDurableOperation(ctx context.Context, arg TouchDurableOperationParams) error {
+	_, err := q.db.Exec(ctx, touchDurableOperation, arg.NowMs, arg.ID)
+	return err
+}
+
 const touchSession = `-- name: TouchSession :exec
 UPDATE sessions SET last_seen_at_ms = $1::bigint
 WHERE id = $2 AND ended_at_ms IS NULL AND last_seen_at_ms <= $3::bigint
@@ -7861,24 +8386,36 @@ UPDATE sign_in_providers
 SET issuer = $1, display_name = $2, client_id = $3,
     client_secret = $4, scopes = $5,
     auto_create = $6, enabled = $7,
-    updated_at_ms = $8, version = $9
-WHERE provider_id = $10 AND version = $9 - 1
+    authorization_url = $8, token_url = $9,
+    userinfo_url = $10, subject_claim = $11,
+    name_claim = $12, username_claim = $13,
+    email_claim = $14,
+    updated_at_ms = $15, version = $16
+WHERE provider_id = $17 AND version = $16 - 1
 `
 
 type UpdateSignInProviderParams struct {
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   bool
-	Enabled      bool
-	UpdatedAtMs  int64
-	Version      int64
-	ProviderID   string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       bool
+	Enabled          bool
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
+	UpdatedAtMs      int64
+	Version          int64
+	ProviderID       string
 }
 
-// The update applies only to the version that the change read.
+// The update applies only to the version that the change read. The mode
+// never changes.
 func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProviderParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateSignInProvider,
 		arg.Issuer,
@@ -7888,6 +8425,13 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		arg.Scopes,
 		arg.AutoCreate,
 		arg.Enabled,
+		arg.AuthorizationUrl,
+		arg.TokenUrl,
+		arg.UserinfoUrl,
+		arg.SubjectClaim,
+		arg.NameClaim,
+		arg.UsernameClaim,
+		arg.EmailClaim,
 		arg.UpdatedAtMs,
 		arg.Version,
 		arg.ProviderID,

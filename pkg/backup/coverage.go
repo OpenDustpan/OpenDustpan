@@ -13,6 +13,24 @@ import (
 // The error names the table and the column.
 var ErrCoverage = errors.New("backup column list and schema differ")
 
+// ControlTables lists the tables of the schema that a backup leaves out and
+// a restore keeps: the live rows stay across the swap. The tables of
+// durable operations hold claim tokens that only grow. A restore that
+// brought back older tokens would give a new claim the token of a live
+// holder, and the writes of that holder would pass the fence. A restore
+// that brought back an older next run of a schedule would fire a tick
+// again. The schema holds every table of Tables and of ControlTables, and
+// no other table (schema_migrations and audit_chain_state aside, which the
+// adapters keep as bookkeeping). Treat the list as a constant and never
+// mutate it.
+//
+//nolint:gochecknoglobals // A shared frozen table list, as Tables is.
+var ControlTables = []string{
+	TableDurableOperations,
+	TableDurableSteps,
+	TableDurableSchedules,
+}
+
 // ErrSchemaRead reports that the store could not read its live schema to
 // compare it with a column list. The driver error stays out of the value: an
 // adapter translates it into this sentinel (CLAUDE.md, backend rules).

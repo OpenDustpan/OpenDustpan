@@ -61,19 +61,32 @@ func SubjectPrefix(id string) string {
 // ProviderConfig is a sign-in provider that the API manages. SealedSecret
 // is the client secret, sealed in the installation scope of the provider,
 // never the secret itself. Version counts the changes of the provider. A
-// provider that is not Enabled refuses each sign-in.
+// provider that is not Enabled refuses each sign-in. A provider in
+// ModeOIDC has an Issuer and empty OAuth settings; a provider in ModeOAuth
+// has OAuth settings and an empty Issuer.
 type ProviderConfig struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	ID           string
+	Mode         ProviderMode
 	Issuer       string
 	DisplayName  string
 	ClientID     string
 	SealedSecret []byte
 	Scopes       []string
+	OAuth        OAuthSettings
 	Version      int64
 	AutoCreate   bool
 	Enabled      bool
+}
+
+// Binding returns what identifies the people of p, for BindProviders.
+func (p ProviderConfig) Binding() Provider {
+	if p.Mode == ModeOAuth {
+		return Provider{ID: p.ID, Issuer: "", UserinfoURL: p.OAuth.UserinfoURL, SubjectClaim: p.OAuth.SubjectClaim}
+	}
+
+	return Provider{ID: p.ID, Issuer: p.Issuer, UserinfoURL: "", SubjectClaim: ""}
 }
 
 // Validate returns ErrInvalidProvider for a provider that a store must
@@ -95,15 +108,18 @@ func (p ProviderConfig) Validate() error {
 	}
 }
 
-// validateNames checks the ID, the issuer, the display name and the
-// client ID of p.
+// validateNames checks the ID, the mode with its issuer or OAuth
+// settings, the display name and the client ID of p.
 func (p ProviderConfig) validateNames() error {
-	switch {
-	case !ValidProviderID(p.ID):
+	if !ValidProviderID(p.ID) {
 		return fmt.Errorf("%w: the provider ID %q does not match %s", ErrInvalidProvider, p.ID, providerIDPattern)
-	case !validIssuer(p.Issuer):
-		return fmt.Errorf("%w: the issuer must be an absolute https URL, or http on a loopback host, "+
-			"of at most %d bytes", ErrInvalidProvider, maxIssuer)
+	}
+
+	if err := p.validateMode(); err != nil {
+		return err
+	}
+
+	switch {
 	case p.DisplayName == "" || len(p.DisplayName) > maxDisplayName || hasControl(p.DisplayName):
 		return fmt.Errorf("%w: the display name must have 1 to %d bytes and no control character",
 			ErrInvalidProvider, maxDisplayName)
@@ -112,6 +128,33 @@ func (p ProviderConfig) validateNames() error {
 			ErrInvalidProvider, maxClientID)
 	default:
 		return nil
+	}
+}
+
+// validateMode checks the mode of p and the issuer or the OAuth settings
+// that the mode needs.
+func (p ProviderConfig) validateMode() error {
+	switch p.Mode {
+	case ModeOIDC:
+		if !p.OAuth.isZero() {
+			return fmt.Errorf("%w: a provider in the mode %q has no OAuth endpoints or claims", ErrInvalidProvider,
+				ModeOIDC)
+		}
+
+		if !validIssuer(p.Issuer) {
+			return fmt.Errorf("%w: the issuer must be an absolute https URL, or http on a loopback host, "+
+				"of at most %d bytes", ErrInvalidProvider, maxIssuer)
+		}
+
+		return nil
+	case ModeOAuth:
+		if p.Issuer != "" {
+			return fmt.Errorf("%w: a provider in the mode %q has no issuer", ErrInvalidProvider, ModeOAuth)
+		}
+
+		return p.OAuth.validate()
+	default:
+		return fmt.Errorf("%w: the mode must be %q or %q", ErrInvalidProvider, ModeOIDC, ModeOAuth)
 	}
 }
 
@@ -129,7 +172,7 @@ func validIssuer(issuer string) bool {
 		return false
 	}
 
-	return u.Scheme == "https" || (u.Scheme == "http" && loopbackHost(u.Hostname()))
+	return u.Scheme == schemeHTTPS || (u.Scheme == schemeHTTP && loopbackHost(u.Hostname()))
 }
 
 // loopbackHost reports whether host is localhost or a loopback IP address.

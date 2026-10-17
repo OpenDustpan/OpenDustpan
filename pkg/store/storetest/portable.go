@@ -590,6 +590,10 @@ func testPortableStageRefusesDuplicate(t *testing.T, newStore PortableFactory) {
 	seedBackupStore(t, s)
 
 	sink, sum, files := exportPortable(t, s)
+	if len(files) == 0 {
+		t.Fatal("export wrote no table file, want one for each table")
+	}
+
 	files = append(files, files[0])
 
 	assertStageRefused(t, s, sink, portableExport{sum: sum, files: files}, "namespaces")

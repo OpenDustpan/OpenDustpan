@@ -194,8 +194,43 @@ Issues for this repo live in GitHub Issues. The skills use the `gh` CLI. See `do
 
 ### Triage labels
 
-The five canonical triage roles map to same-named labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+The five canonical triage roles map to same-named labels: `needs-triage`, `needs-info`, `ready-for-agent`,
+`ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
 Single-context layout: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+<!-- rtk-instructions v2 -->
+
+# Command output
+
+Command output here is condensed to save tokens, keeping every signal and
+dropping costly noise. Treat it as the complete result: run commands
+normally, and batch related commands into one call to avoid extra turns.
+Truncated results state their recovery path in their own output. Re-run a
+command as `rtk proxy <cmd>` only when its result is unusable: empty when
+output was clearly expected, contradicting its exit code, or garbled.
+<!-- /rtk-instructions -->
+
+## Repowise
+
+The Repowise MCP server gives indexed documentation, symbols, history, decisions and code
+health for this workspace. The index has no checkout. It shows pushed commits only. The
+checkout is the truth.
+
+- Call `list_repos` first. Pass `repo` (`opendustpan-opendustpan` or `opendustpan-console`)
+  to limit a call to one repository. `get_symbol` always needs `repo`.
+- Call `get_answer` for a question about how, where or why. Call `search_codebase` to find
+  a symbol, a file or a concept. Call `get_context` for a summary of files.
+- `get_symbol` returns a signature, a location and graph edges. It does not return source.
+  Read the file at the returned line range.
+- Call `get_risk` before you edit a hotspot. Call `get_why` before you refactor.
+- `get_change_risk` scores one pushed commit by its sha. It does not score a range or
+  uncommitted work.
+- Read the file again when `_meta.stale_warning` is present, when `confidence` is `low`, or
+  when a hit has `search_method: bm25`.
+- Use `rg` to find every call site for a rename.
+
+The skills `codebase-exploration`, `pre-modification-check`, `change-review`, `code-health`,
+`dead-code-cleanup` and `architectural-decisions` in `.agents/skills/` use these tools.

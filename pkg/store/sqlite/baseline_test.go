@@ -29,13 +29,16 @@ func TestOpenRefusesSchemaBeforeBaseline(t *testing.T) {
 		t.Fatalf("create schema_migrations: %v", execErr)
 	}
 
+	const old = 76
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+	if _, execErr := conn.ExecContext(t.Context(), record, old, "0076_sign_in_providers.sql"); execErr != nil {
+		t.Fatalf("record migration before the baseline: %v", execErr)
+	}
+
 	if closeErr := conn.Close(); closeErr != nil {
 		t.Fatalf("close raw database: %v", closeErr)
 	}
-
-	const old = 76
-
-	insertFutureVersion(t, path, old)
 
 	beforeVersions, beforeTables := newerSchemaSnapshot(t, path)
 
