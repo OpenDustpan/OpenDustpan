@@ -447,7 +447,7 @@ var embeddedMigrations embed.FS
 func EmbeddedMigrationNames() ([]string, int64) {
 	entries, err := embeddedMigrations.ReadDir("migrations")
 	if err != nil {
-		return nil, 0
+		return []string{}, 0
 	}
 
 	names := make([]string, 0, len(entries))
