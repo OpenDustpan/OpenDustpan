@@ -35,6 +35,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
 )
 
@@ -143,6 +144,14 @@ func hostCreateTempAdmin(
 
 	st, err := openStore(ctx, f.database, logger)
 	if err != nil {
+		if errors.Is(err, sqlite.ErrInUse) {
+			return fmt.Errorf(
+				"host create-temp-admin: database %s is in use: stop the server that uses this file, then run the command again: %w",
+				f.database,
+				err,
+			)
+		}
+
 		return err
 	}
 

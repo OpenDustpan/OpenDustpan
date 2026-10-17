@@ -310,13 +310,17 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 	ctx := t.Context()
 	db := hostTestDB(t)
 
-	st := openHostStore(ctx, t, db)
+	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
 		Now: nil, NewID: nil,
 	})
 	if err != nil {
+		st.close()
 		t.Fatalf("access token service: %v", err)
 	}
 
@@ -328,8 +332,11 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 
 	_, setErr := tokens.SetPolicy(ctx, hostPolicyEntry(), change)
 	if !errors.Is(setErr, accesstoken.ErrInvalid) {
+		st.close()
 		t.Fatalf("set break-glass disable = %v, want ErrInvalid", setErr)
 	}
+
+	st.close()
 
 	creds := parseHostOutput(t, runHost(ctx, t, "host", "create-temp-admin", "--database", db, "bob"))
 
@@ -337,7 +344,24 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 		t.Fatalf("person = %q, want bob", creds.person)
 	}
 
-	if _, err := tokens.AuthenticateToken(ctx, creds.token); err != nil {
+	checkSt := openHostStore(ctx, t, db)
+
+	checkTokens, err := accesstoken.NewService(accesstoken.Config{
+		Store:      checkSt,
+		Principals: checkSt,
+		TempAdmins: checkSt,
+		Freshness:  nil,
+		Grants:     nil,
+		Authorizer: nil,
+		Logger:     nil,
+		Now:        nil,
+		NewID:      nil,
+	})
+	if err != nil {
+		t.Fatalf("access token service: %v", err)
+	}
+
+	if _, err := checkTokens.AuthenticateToken(ctx, creds.token); err != nil {
 		t.Fatalf("authenticate with the break-glass disable refused: %v", err)
 	}
 }
@@ -414,7 +438,12 @@ func TestHostShortPolicyLifetime(t *testing.T) {
 func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped time.Duration) {
 	t.Helper()
 
-	st := openHostStore(ctx, t, db)
+	st, err := openStore(ctx, db, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	defer st.close()
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
 		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
@@ -430,6 +459,40 @@ func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped tim
 
 	if _, err := tokens.SetPolicy(ctx, hostPolicyEntry(), change); err != nil {
 		t.Fatalf("set maximum lifetime to %s: %v", capped, err)
+	}
+}
+
+// TestHostRefusesWhenSQLiteFileIsInUse proves the host command against a
+// SQLite file held by a running server fails with the file and the one
+// step: stop the server that uses this file, then run the command again.
+func TestHostRefusesWhenSQLiteFileIsInUse(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db := hostTestDB(t)
+
+	held := openHostStore(ctx, t, db)
+
+	_ = held
+
+	var stdout, stderr bytes.Buffer
+
+	err := run(ctx, []string{"host", "create-temp-admin", "--database", db, "alice"}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("host run while the server holds the file succeeded, want a refusal")
+	}
+
+	if !errors.Is(err, sqlite.ErrInUse) {
+		t.Fatalf("host run while the server holds the file = %v, want ErrInUse", err)
+	}
+
+	if !strings.Contains(err.Error(), strings.TrimPrefix(db, "sqlite:")) {
+		t.Fatalf("refusal = %v, want it to name the database file", err)
+	}
+
+	if !strings.Contains(err.Error(), "stop the server that uses this file") ||
+		!strings.Contains(err.Error(), "run the command again") {
+		t.Fatalf("refusal = %v, want the stop-the-server step", err)
 	}
 }
 
