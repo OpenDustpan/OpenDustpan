@@ -52,8 +52,8 @@ func approvalEntryCount(t *testing.T, st chainApprovalStore) int {
 
 	var count int
 
-	for _, e := range listing.Entries {
-		if e.Action == audit.ActionSetChain {
+	for i := range listing.Entries {
+		if listing.Entries[i].Action == audit.ActionSetChain {
 			count++
 		}
 	}
@@ -65,10 +65,11 @@ func approvalEntryCount(t *testing.T, st chainApprovalStore) int {
 func saveWaitingChange(t *testing.T, st chainApprovalStore) {
 	t.Helper()
 
-	if err := st.SaveChainRecord(t.Context(), audit.ChainRecord{
+	err := st.SaveChainRecord(t.Context(), audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
 		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("save chain record: %v", err)
 	}
 }
@@ -184,7 +185,7 @@ func checkConcurrentApprovalsLeaveOnePostgres(t *testing.T) {
 	ns := createPostgresNamespace(t, st)
 	appendPostgresEntry(t, st, ns, "req-1")
 
-	srv := runPostgresChainServer(t, st, audit.ChainOff)
+	srv := runPostgresChainServer(t, st)
 	waitForPostgresRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
 
 	const approvals = 4
@@ -298,7 +299,7 @@ func checkLateApprovalWritesNoEntryPostgres(t *testing.T) {
 	ns := createPostgresNamespace(t, st)
 	appendPostgresEntry(t, st, ns, "req-1")
 
-	srv := runPostgresChainServer(t, st, audit.ChainOff)
+	srv := runPostgresChainServer(t, st)
 	waitForPostgresRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
 
 	if status, body := srv.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusAccepted {
@@ -315,7 +316,7 @@ func checkLateApprovalWritesNoEntryPostgres(t *testing.T) {
 		t.Fatalf("approval entries after the migration = %d, want 1", got)
 	}
 
-	srv = runPostgresChainServer(t, st, audit.ChainOff)
+	srv = runPostgresChainServer(t, st)
 
 	if status, _ := srv.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusConflict {
 		t.Fatalf("late approval: %d, want 409", status)
@@ -360,19 +361,24 @@ func checkConflictingStartKeyLeavesNoEntrySQLite(t *testing.T) {
 	st := openChainStore(t)
 	saveWaitingChange(t, st)
 
-	if _, _, err := st.DurableOperations().Start(t.Context(), durable.StartRequest{
+	_, _, startErr := st.DurableOperations().Start(t.Context(), durable.StartRequest{
 		Key: "audit-chain-migration", Kind: "other-kind", Version: 1, Input: nil,
-	}); err != nil {
-		t.Fatalf("start conflicting operation: %v", err)
+	})
+	if startErr != nil {
+		t.Fatalf("start conflicting operation: %v", startErr)
 	}
 
 	change := audit.ChainChange{At: time.Now(), By: "alice", To: audit.ChainStateOff}
 	caller := approvalCaller()
 
-	if _, err := st.ApproveChainChange(
-		t.Context(), audit.ChainSetEntry(caller, change), approvalFixedRequest(t, change), "audit-chain-migration-retry",
-	); !errors.Is(err, durable.ErrKeyConflict) {
-		t.Fatalf("approve with a conflicting start key: %v, want ErrKeyConflict", err)
+	_, approveErr := st.ApproveChainChange(
+		t.Context(),
+		audit.ChainSetEntry(caller, change),
+		approvalFixedRequest(t, change),
+		"audit-chain-migration-retry",
+	)
+	if !errors.Is(approveErr, durable.ErrKeyConflict) {
+		t.Fatalf("approve with a conflicting start key: %v, want ErrKeyConflict", approveErr)
 	}
 
 	if got := approvalEntryCount(t, st); got != 0 {
@@ -389,19 +395,24 @@ func checkConflictingStartKeyLeavesNoEntryPostgres(t *testing.T) {
 	st := openPostgresChainStore(t, base)
 	saveWaitingChange(t, st)
 
-	if _, _, err := st.DurableOperationsPort().Start(t.Context(), durable.StartRequest{
+	_, _, startErr := st.DurableOperationsPort().Start(t.Context(), durable.StartRequest{
 		Key: "audit-chain-migration", Kind: "other-kind", Version: 1, Input: nil,
-	}); err != nil {
-		t.Fatalf("start conflicting operation: %v", err)
+	})
+	if startErr != nil {
+		t.Fatalf("start conflicting operation: %v", startErr)
 	}
 
 	change := audit.ChainChange{At: time.Now(), By: "alice", To: audit.ChainStateOff}
 	caller := approvalCaller()
 
-	if _, err := st.ApproveChainChange(
-		t.Context(), audit.ChainSetEntry(caller, change), approvalFixedRequest(t, change), "audit-chain-migration-retry",
-	); !errors.Is(err, durable.ErrKeyConflict) {
-		t.Fatalf("approve with a conflicting start key: %v, want ErrKeyConflict", err)
+	_, approveErr := st.ApproveChainChange(
+		t.Context(),
+		audit.ChainSetEntry(caller, change),
+		approvalFixedRequest(t, change),
+		"audit-chain-migration-retry",
+	)
+	if !errors.Is(approveErr, durable.ErrKeyConflict) {
+		t.Fatalf("approve with a conflicting start key: %v, want ErrKeyConflict", approveErr)
 	}
 
 	if got := approvalEntryCount(t, st); got != 0 {
@@ -438,18 +449,24 @@ func checkApprovalAfterCanceledMigrationSQLite(t *testing.T) {
 	caller := approvalCaller()
 
 	first, err := st.ApproveChainChange(
-		t.Context(), audit.ChainSetEntry(caller, change), approvalFixedRequest(t, change), "audit-chain-migration-retry",
+		t.Context(),
+		audit.ChainSetEntry(caller, change),
+		approvalFixedRequest(t, change),
+		"audit-chain-migration-retry",
 	)
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 
-	if err := st.DurableOperations().Cancel(t.Context(), first.ID); err != nil {
-		t.Fatalf("cancel migration operation: %v", err)
+	if cancelErr := st.DurableOperations().Cancel(t.Context(), first.ID); cancelErr != nil {
+		t.Fatalf("cancel migration operation: %v", cancelErr)
 	}
 
 	second, err := st.ApproveChainChange(
-		t.Context(), audit.ChainSetEntry(caller, change), approvalFixedRequest(t, change), "audit-chain-migration-retry",
+		t.Context(),
+		audit.ChainSetEntry(caller, change),
+		approvalFixedRequest(t, change),
+		"audit-chain-migration-retry",
 	)
 	if err != nil {
 		t.Fatalf("approve after a canceled migration: %v", err)
@@ -483,18 +500,24 @@ func checkApprovalAfterCanceledMigrationPostgres(t *testing.T) {
 	ops := st.DurableOperationsPort()
 
 	first, err := st.ApproveChainChange(
-		t.Context(), audit.ChainSetEntry(caller, change), approvalFixedRequest(t, change), "audit-chain-migration-retry",
+		t.Context(),
+		audit.ChainSetEntry(caller, change),
+		approvalFixedRequest(t, change),
+		"audit-chain-migration-retry",
 	)
 	if err != nil {
 		t.Fatalf("approve: %v", err)
 	}
 
-	if err := ops.Cancel(t.Context(), first.ID); err != nil {
-		t.Fatalf("cancel migration operation: %v", err)
+	if cancelErr := ops.Cancel(t.Context(), first.ID); cancelErr != nil {
+		t.Fatalf("cancel migration operation: %v", cancelErr)
 	}
 
 	second, err := st.ApproveChainChange(
-		t.Context(), audit.ChainSetEntry(caller, change), approvalFixedRequest(t, change), "audit-chain-migration-retry",
+		t.Context(),
+		audit.ChainSetEntry(caller, change),
+		approvalFixedRequest(t, change),
+		"audit-chain-migration-retry",
 	)
 	if err != nil {
 		t.Fatalf("approve after a canceled migration: %v", err)

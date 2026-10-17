@@ -292,9 +292,9 @@ func approvalEntriesOf(t *testing.T, chain *auditChain) []audit.Entry {
 
 	var out []audit.Entry
 
-	for _, e := range listing.Entries {
-		if e.Action == audit.ActionSetChain {
-			out = append(out, e)
+	for i := range listing.Entries {
+		if listing.Entries[i].Action == audit.ActionSetChain {
+			out = append(out, listing.Entries[i])
 		}
 	}
 
@@ -335,41 +335,28 @@ func TestFailedApprovalWritesNoEntryAndRetryWritesOne(t *testing.T) {
 	}
 }
 
-// TestConcurrentApprovalsLeaveOneEntry proves that two approvals of one
-// waiting change that run at the same time leave exactly one approval entry
-// and one operation: the approval whose start loses writes nothing.
-func TestConcurrentApprovalsLeaveOneEntry(t *testing.T) {
-	t.Parallel()
+// newConcurrentApprovalChain answers a chain on st with the migration loop
+// marked running, ready for an approval of a change to off.
+func newConcurrentApprovalChain(t *testing.T, st *sqlite.Store) *auditChain {
+	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
+	cfg := defaultSettings()
+	cfg.namespaceStore = st
+	cfg.auditChain = audit.ChainOff
+
+	chain, err := newAuditChain(cfg, nil)
+	if err != nil || chain == nil {
+		t.Fatalf("new audit chain = %v, %v", chain, err)
 	}
 
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	chain.migrationsRunning.Store(true)
 
-	newChain := func() *auditChain {
-		t.Helper()
+	return chain
+}
 
-		cfg := defaultSettings()
-		cfg.namespaceStore = st
-		cfg.auditChain = audit.ChainOff
-
-		chain, err := newAuditChain(cfg, nil)
-		if err != nil || chain == nil {
-			t.Fatalf("new audit chain = %v, %v", chain, err)
-		}
-
-		chain.migrationsRunning.Store(true)
-
-		return chain
-	}
-
-	first, second := newChain(), newChain()
+// saveConcurrentWaitingChange stores a waiting change to on in st.
+func saveConcurrentWaitingChange(t *testing.T, st *sqlite.Store) {
+	t.Helper()
 
 	saveErr := st.SaveChainRecord(t.Context(), audit.ChainRecord{
 		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
@@ -378,15 +365,27 @@ func TestConcurrentApprovalsLeaveOneEntry(t *testing.T) {
 	if saveErr != nil {
 		t.Fatalf("save chain record: %v", saveErr)
 	}
+}
+
+// approvalCounts is the outcome of runConcurrentApprovals.
+type approvalCounts struct {
+	won  int
+	held int
+}
+
+// runConcurrentApprovals approves with every chain at the same time and
+// answers the count of approvals that won and the count refused while a
+// migration runs.
+func runConcurrentApprovals(t *testing.T, chains []*auditChain) approvalCounts {
+	t.Helper()
 
 	var (
-		wg   sync.WaitGroup
-		mu   sync.Mutex
-		won  int
-		held int
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		won, held int
 	)
 
-	for _, chain := range []*auditChain{first, second} {
+	for _, chain := range chains {
 		wg.Go(func() {
 			err := chain.Approve(t.Context(), approver())
 
@@ -406,8 +405,35 @@ func TestConcurrentApprovalsLeaveOneEntry(t *testing.T) {
 
 	wg.Wait()
 
-	if won != 1 || held != 1 {
-		t.Fatalf("concurrent approvals: won %d, held %d, want 1 and 1", won, held)
+	return approvalCounts{won: won, held: held}
+}
+
+// TestConcurrentApprovalsLeaveOneEntry proves that two approvals of one
+// waiting change that run at the same time leave exactly one approval entry
+// and one operation: the approval whose start loses writes nothing.
+func TestConcurrentApprovalsLeaveOneEntry(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	first := newConcurrentApprovalChain(t, st)
+	second := newConcurrentApprovalChain(t, st)
+
+	saveConcurrentWaitingChange(t, st)
+
+	counts := runConcurrentApprovals(t, []*auditChain{first, second})
+
+	if counts.won != 1 || counts.held != 1 {
+		t.Fatalf("concurrent approvals: won %d, held %d, want 1 and 1", counts.won, counts.held)
 	}
 
 	if got := approvalEntriesOf(t, first); len(got) != 1 {

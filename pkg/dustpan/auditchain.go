@@ -395,9 +395,10 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 		return fmt.Errorf("approve audit chain change: %w", err)
 	}
 
-	if _, err := c.approve.ApproveChainChange(
+	_, err = c.approve.ApproveChainChange(
 		ctx, audit.ChainSetEntry(caller, change), fixed, auditChainRetryKey(),
-	); err != nil {
+	)
+	if err != nil {
 		return fmt.Errorf("approve audit chain change: %w", err)
 	}
 
