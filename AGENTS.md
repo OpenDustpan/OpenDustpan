@@ -122,17 +122,23 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   we can implement from. Any endpoint change must be checked against the real
   CLI with `make e2e`.
 
-## The APIs are contracts
+## The tool-compatible APIs are contracts
 
-Every tool's CLI depends on its API, and the console, which ships from another
-repository on its own schedule, depends on them too.
+The real CLIs depend on the tool-compatible APIs, and we cannot change the
+CLIs. Until 1.0, everything else can break (ADR 73).
 
-- Never remove or rename a field, endpoint or status code that a released
-  console or a supported CLI version uses. Add new fields. Deprecate old ones first.
+- The Pulumi Cloud-compatible API, the TFE-compatible API and the OpenTofu
+  HTTP backend must match what each supported version of the real CLI sends
+  and expects. Never break them. Check each change with `make e2e`.
 - Each API keeps the shapes its tool expects. The Pulumi Cloud-compatible API:
   camelCase JSON, errors `{"code": <status>, "message": "..."}`. The
   TFE-compatible API: JSON:API documents and errors.
-- An API change the console needs lands here first, released, then in the console.
+- Before 1.0, the console and the tool-neutral APIs can change and break.
+  Do not deprecate first. When a change breaks an API that the console uses,
+  change the console in the same push window.
+- Do not write compatibility code, aliases or data conversions for a shape
+  that no tag shipped. A shape that a tag shipped keeps its upgrade path
+  (ADR 72).
 - Give every feature a REST API (ADR 17). The console, the CLI and all other
   clients use only that API. Do not add a feature that only the console, a CLI
   or a configuration file can use.
@@ -175,6 +181,9 @@ skill (ADR 14):
 ## Working in this repo
 
 - Ask before adding a dependency. Prefer the standard library.
+- Never add telemetry code, also not code that is off by default (ADR 74).
+- AI-assisted changes follow `CONTRIBUTING.md` (ADR 76): disclose the tool,
+  sign off each commit, understand all of it, and pass `make check`.
 - Keep changes small and reviewable, with one concern per change.
 - If you are unsure of the intent, ask rather than guess.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,
