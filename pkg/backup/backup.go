@@ -39,6 +39,14 @@ const (
 	DialectPostgres Dialect = "postgres"
 )
 
+// The tables of durable operations: one row for each operation, one row for
+// each recorded step, and one row for each schedule.
+const (
+	TableDurableOperations = "durable_operations"
+	TableDurableSteps      = "durable_steps"
+	TableDurableSchedules  = "durable_schedules"
+)
+
 // Tables lists every table that an export covers, in foreign-key order, so an
 // import can load parents before children. Both dialects share the table
 // names, so both adapters use this list as the single source: they must not
@@ -66,6 +74,7 @@ var Tables = []string{
 	"update_events",
 	"update_journal",
 	"update_journal_sequences",
+	"update_journal_refusals",
 	"secret_keys",
 	"inventory",
 	"inventory_deleted",
@@ -75,17 +84,21 @@ var Tables = []string{
 	"workspaces",
 	"state_versions",
 	"audit_entries",
-	"principals",
-	"principal_groups",
-	"group_members",
-	"access_tokens",
-	"sessions",
-	"sign_in_requests",
-	"roles",
-	"grants",
+	TablePrincipals,
+	TablePrincipalGroups,
+	TableGroupMembers,
+	TableAccessTokens,
+	TableSessions,
+	TableSignInRequests,
+	TableOIDCProviders,
+	TableInstallationSecretKeys,
+	TableSignInProviders,
+	TableRoles,
+	TableGrants,
 	"audit_sink_cursors",
-	"access_token_policy",
-	"session_policy",
+	"audit_sink_leases",
+	TableAccessTokenPolicy,
+	TableSessionPolicy,
 	"backups",
 	"restores",
 	"installation",
@@ -179,6 +192,24 @@ type Summary struct {
 	SchemaVersion int
 }
 
+// BaselineSchemaVersion is the schema version of the baseline migration of
+// the store adapters. The baseline replaced every migration before it, so a
+// backup with a lower schema version cannot be restored by any binary. It
+// equals schema.BaselineVersion of the store package, which this package
+// cannot import; a test pins the two.
+const BaselineSchemaVersion = 100
+
+// RestoredRunningText is the error text of a backup row that a restore
+// brought back as running: the backup was running when it took the
+// snapshot that the restore applied, so no process runs it here.
+const RestoredRunningText = "the backup was running in the restored data"
+
+// RestoredRunningRestoreText is the error text of a restore row that a
+// restore brought back as checking or applying: a restore takes a backup of
+// the live data before it applies, and that backup holds the restore row as
+// running, so no process runs it here.
+const RestoredRunningRestoreText = "the restore was running in the restored data"
+
 // Sentinel errors returned by this package and by its ports.
 var (
 	// ErrNotFound reports that a backup row does not exist.
@@ -191,6 +222,11 @@ var (
 	// the schema version of the destination. A backup restores into the same
 	// schema version only.
 	ErrSchemaMismatch = errors.New("backup schema version differs from destination schema version")
+	// ErrSchemaBeforeBaseline reports a backup with a schema version from
+	// before BaselineSchemaVersion. No binary can restore it.
+	ErrSchemaBeforeBaseline = errors.New(
+		"backup schema version is older than the baseline schema version: no binary can restore this backup",
+	)
 	// ErrCorrupt reports that the backup data is incomplete, or that it does
 	// not match its descriptors, row counts or manifest.
 	ErrCorrupt = errors.New("backup data is corrupt")
@@ -205,7 +241,9 @@ var (
 // not one namespace. A server that starts marks every running row failed.
 type Registry interface {
 	// CreateBackup stores r as a running backup. It returns ErrAlreadyExists
-	// if the ID is taken.
+	// if the ID is taken, and ErrAlreadyRunning when another backup of the
+	// installation is running: one backup runs at a time, across every
+	// instance on the database.
 	CreateBackup(ctx context.Context, r Record) error
 	// FinishBackup moves the running backup id to state, which is
 	// StateSucceeded or StateFailed, with the error text and the end time.

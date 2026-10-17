@@ -48,7 +48,9 @@ func TestGuardChecksEveryChangeOfWhoHoldsGrants(t *testing.T) {
 	checks := 0
 	guard := fakeGuard{refuse: map[string]bool{}, checks: &checks}
 
-	svc, err := principal.NewService(principal.Config{Store: openStore(t), Guard: guard, Now: nil, NewID: nil})
+	svc, err := principal.NewService(
+		principal.Config{Store: openStore(t), Guard: guard, Namespaces: nil, Tokens: nil, Now: nil, NewID: nil},
+	)
 	if err != nil {
 		t.Fatalf("service: %v", err)
 	}

@@ -282,6 +282,128 @@ func TestCallerAccess(t *testing.T) {
 	}
 }
 
+// grantedByDoc, missingActionDoc and callerAccessFullDoc decode the access
+// of the caller with the roles that give each missing action.
+type grantedByDoc struct {
+	BuiltInRoles []string `json:"builtInRoles"`
+	CustomRoles  []string `json:"customRoles"`
+}
+
+type missingActionDoc struct {
+	Action    string       `json:"action"`
+	GrantedBy grantedByDoc `json:"grantedBy"`
+}
+
+type callerAccessFullDoc struct {
+	Object         string             `json:"object"`
+	Actions        []string           `json:"actions"`
+	Grants         []grantDoc         `json:"grants"`
+	MissingActions []missingActionDoc `json:"missingActions"`
+}
+
+// TestCallerAccessGrantedBy reads the access of a caller without grants on
+// acme: the missing unit:read-secrets lists the built-in roles that give it
+// and the custom role that gives it. The bootstrap admin holds every action
+// and misses none.
+func TestCallerAccessGrantedBy(t *testing.T) {
+	t.Parallel()
+
+	f := newAccessFixture(t)
+
+	var revealer roleDoc
+	f.as(t, "admin", apiCall{
+		http.MethodPost, "/api/server/roles", `{"name":"secret-revealer","actions":["unit:read-secrets"]}`,
+		http.StatusCreated,
+	}, &revealer)
+
+	f.seed(t, "erin", "", identity.Object{})
+
+	// unit:read-secrets is missing for the caller. The built-in roles
+	// that hold it are secret-viewer, admin, account-administrator and
+	// site-administrator, in catalog order.
+	wantBuiltIn := []string{"secret-viewer", "admin", "account-administrator", "site-administrator"}
+
+	got := callerMissing(t, f, "erin", "acme")
+	if len(got.Actions) != 0 || len(got.Grants) != 0 || got.Object != "acme" {
+		t.Fatalf("access of erin = %+v, want no action and no grant on acme", got)
+	}
+
+	checkGrantedBy(t, got, grantedByWant{
+		action: "unit:read-secrets", builtIn: wantBuiltIn, custom: []string{revealer.ID},
+	})
+
+	var admin callerAccessFullDoc
+	f.as(t, "admin", apiCall{http.MethodGet, "/api/server/caller/access?object=acme", "", http.StatusOK}, &admin)
+
+	if len(admin.MissingActions) != 0 {
+		t.Fatalf("missing actions of the bootstrap admin = %+v, want none", admin.MissingActions)
+	}
+}
+
+// callerMissing reads the access of subject on object.
+func callerMissing(t *testing.T, f accessFixture, subject, object string) callerAccessFullDoc {
+	t.Helper()
+
+	var got callerAccessFullDoc
+	f.as(t, subject, apiCall{
+		http.MethodGet, "/api/server/caller/access?object=" + object, "", http.StatusOK,
+	}, &got)
+
+	return got
+}
+
+// grantedByWant is one expected missing action: its built-in roles and its
+// custom roles.
+type grantedByWant struct {
+	action  string
+	builtIn []string
+	custom  []string
+}
+
+// checkGrantedBy checks the missing action of got against want. It also
+// checks that every missing action is sorted and lists at least one
+// built-in role.
+func checkGrantedBy(t *testing.T, got callerAccessFullDoc, want grantedByWant) {
+	t.Helper()
+
+	if len(got.MissingActions) == 0 {
+		t.Fatalf("missing actions on %s = none, want %s", got.Object, want.action)
+	}
+
+	names := make([]string, 0, len(got.MissingActions))
+
+	for i := range got.MissingActions {
+		m := &got.MissingActions[i]
+		names = append(names, m.Action)
+
+		if len(m.GrantedBy.BuiltInRoles) == 0 {
+			t.Errorf("missing %s lists no built-in role", m.Action)
+		}
+
+		if m.Action != want.action {
+			continue
+		}
+
+		if !slices.Equal(m.GrantedBy.BuiltInRoles, want.builtIn) ||
+			!slices.Equal(m.GrantedBy.CustomRoles, want.custom) {
+			t.Errorf(
+				"missing %s = built-in %q custom %q, want built-in %q custom %q",
+				m.Action, m.GrantedBy.BuiltInRoles, m.GrantedBy.CustomRoles, want.builtIn, want.custom,
+			)
+		}
+	}
+
+	if !slices.IsSorted(names) {
+		t.Errorf("missing actions = %q, want sorted", names)
+	}
+
+	for _, self := range []string{"caller:read", "role:read", "token:manage-own"} {
+		if slices.Contains(names, self) {
+			t.Errorf("missing actions = %q, want no self action %s", names, self)
+		}
+	}
+}
+
 // TestCallerGrants reads the grants of callers: bob holds a grant of his
 // own and one through a group, read one row a page.
 func TestCallerGrants(t *testing.T) {
@@ -374,10 +496,13 @@ func seedOpsGrants(t *testing.T, f accessFixture) {
 		t.Fatalf("seed group: %v", err)
 	}
 
-	member := principal.Membership{AddedAt: at, GroupID: "grp-ops", PrincipalID: "prn-bob"}
+	member := principal.Membership{
+		AddedAt: at, SuspendedAt: time.Time{}, GroupID: "grp-ops", PrincipalID: "prn-bob",
+		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
+	}
 	joined := storetest.ServerChange(at, "group:grp-ops#member:prn-bob")
 
-	if err := f.store.AddMember(t.Context(), member, joined); err != nil {
+	if err := f.store.AddMember(t.Context(), member, joined, nil); err != nil {
 		t.Fatalf("seed member: %v", err)
 	}
 
@@ -400,7 +525,7 @@ func seedOpsGrants(t *testing.T, f accessFixture) {
 
 	for i := range grants {
 		fence, e := storetest.GrantWrite(t, f.store, grants[i].Object, at, "grant:"+grants[i].ID)
-		if err := f.store.CreateGrant(t.Context(), grants[i], fence, e); err != nil {
+		if err := f.store.CreateGrant(t.Context(), grants[i], fence, e, nil); err != nil {
 			t.Fatalf("seed grant: %v", err)
 		}
 	}
@@ -448,7 +573,7 @@ func TestCallerAccessPaging(t *testing.T) {
 			CreatedBy: "admin", Subject: access.Subject{Kind: access.SubjectPrincipal, ID: "prn-bob"},
 		}
 		fence, e := storetest.GrantWrite(t, f.store, o, at, "grant:"+g.ID)
-		if err := f.store.CreateGrant(t.Context(), g, fence, e); err != nil {
+		if err := f.store.CreateGrant(t.Context(), g, fence, e, nil); err != nil {
 			t.Fatalf("seed grant: %v", err)
 		}
 	}

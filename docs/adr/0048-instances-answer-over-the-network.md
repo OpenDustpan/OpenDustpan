@@ -1,6 +1,6 @@
 # 48. Instances report maintenance mode over the network
 
-Status: accepted · 2026-10-13
+Status: accepted · 2026-10-13 · decisions 1 to 3 and 5 to 11 superseded by ADR 72
 
 ## Context
 

@@ -207,6 +207,12 @@ func CheckWrapper(ctx context.Context, keys KeyStore, wrapper Wrapper) error {
 		return fmt.Errorf("list wrapped keys: %w", err)
 	}
 
+	return checkWrapperIDs(ids, wrapper)
+}
+
+// checkWrapperIDs needs wrapper to name each of the stored wrapper IDs ids.
+// No ID passes with no wrapper.
+func checkWrapperIDs(ids []string, wrapper Wrapper) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -262,16 +268,43 @@ func (s *Service) Encrypt(ctx context.Context, scope Scope, plaintexts [][]byte)
 	out := make([][]byte, len(plaintexts))
 
 	for i, p := range plaintexts {
-		nonce := make([]byte, aead.NonceSize(), 1+aead.NonceSize()+len(p)+aead.Overhead())
-		if _, err := rand.Read(nonce); err != nil {
-			return nil, fmt.Errorf("generate nonce: %w", err)
+		out[i], err = sealValue(aead, scope.aad(), p)
+		if err != nil {
+			return nil, err
 		}
-
-		sealed := aead.Seal(nil, nonce, p, scope.aad())
-		out[i] = append(append([]byte{formatV1}, nonce...), sealed...)
 	}
 
 	return out, nil
+}
+
+// sealValue seals p with aead and binds it to aad. The result is the
+// format byte, the nonce and the sealed value.
+func sealValue(aead cipher.AEAD, aad, p []byte) ([]byte, error) {
+	nonce := make([]byte, aead.NonceSize(), 1+aead.NonceSize()+len(p)+aead.Overhead())
+	if _, err := rand.Read(nonce); err != nil {
+		return nil, fmt.Errorf("generate nonce: %w", err)
+	}
+
+	sealed := aead.Seal(nil, nonce, p, aad)
+
+	return append(append([]byte{formatV1}, nonce...), sealed...), nil
+}
+
+// openValue reverses sealValue. It returns false for a value that is
+// malformed or does not open with aead and aad.
+func openValue(aead cipher.AEAD, aad, c []byte) ([]byte, bool) {
+	if len(c) < 1+aead.NonceSize()+aead.Overhead() || c[0] != formatV1 {
+		return nil, false
+	}
+
+	nonce, sealed := c[1:1+aead.NonceSize()], c[1+aead.NonceSize():]
+
+	p, err := aead.Open(nil, nonce, sealed, aad)
+	if err != nil {
+		return nil, false
+	}
+
+	return p, true
 }
 
 // Decrypt opens each ciphertext made by Encrypt for the same scope. Any
@@ -290,14 +323,8 @@ func (s *Service) Decrypt(ctx context.Context, scope Scope, ciphertexts [][]byte
 	out := make([][]byte, len(ciphertexts))
 
 	for i, c := range ciphertexts {
-		if len(c) < 1+aead.NonceSize()+aead.Overhead() || c[0] != formatV1 {
-			return nil, fmt.Errorf("%w: value %d of %s is malformed", ErrDecrypt, i, scope)
-		}
-
-		nonce, sealed := c[1:1+aead.NonceSize()], c[1+aead.NonceSize():]
-
-		p, err := aead.Open(nil, nonce, sealed, scope.aad())
-		if err != nil {
+		p, ok := openValue(aead, scope.aad(), c)
+		if !ok {
 			return nil, fmt.Errorf("%w: value %d of %s", ErrDecrypt, i, scope)
 		}
 

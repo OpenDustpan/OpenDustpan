@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,16 +24,7 @@ func membershipSetup(t *testing.T) (*Store, namespace.Namespace, workspace.ID) {
 	ctx := t.Context()
 	at := time.UnixMilli(1_700_000_000_000).UTC()
 
-	s, err := Open(ctx, filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	s := openInternalTemplated(t)
 
 	ns := namespace.Namespace{
 		CreatedAt: at, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1,
@@ -208,6 +198,7 @@ func membershipEntry(at time.Time, ns namespace.Name, action string) audit.Entry
 		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
 		Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
 		Changes: nil, ObjectID: "",
+		FenceVersion: 0,
 	}
 }
 

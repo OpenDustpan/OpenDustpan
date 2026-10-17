@@ -5,7 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sync"
+	"slices"
+	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/internal/ident"
@@ -58,11 +59,6 @@ type Config struct {
 	// Freshness checks the MFA step before a create or a rotation. Nil
 	// adds no step: MFA does not exist yet (ADR 56, decision 5).
 	Freshness Freshness
-	// Grants runs the escalation check of a personal token for another
-	// person. The server wires the grants of the access model. Nil lets only an
-	// administrator act for another person (fail closed): a store that
-	// keeps no grants.
-	Grants GrantCheck
 	// Authorizer decides principal:manage-tokens on the service principal
 	// of a service token. Nil lets only an administrator act on service
 	// tokens (fail closed).
@@ -87,12 +83,10 @@ type Service struct {
 	store      Store
 	principals PrincipalReader
 	freshness  Freshness
-	grants     GrantCheck
 	authz      identity.Authorizer
 	logger     *slog.Logger
 	now        func() time.Time
 	newID      func(prefix string) string
-	policies   *policyCache
 }
 
 var _ identity.Authenticator = (*Service)(nil)
@@ -122,9 +116,8 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	return &Service{
-		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness, grants: cfg.Grants,
+		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness,
 		authz: cfg.Authorizer, logger: logger, now: now, newID: newID,
-		policies: &policyCache{readAt: time.Time{}, policy: DefaultPolicy(), mu: sync.Mutex{}, valid: false},
 	}, nil
 }
 
@@ -144,8 +137,10 @@ type Input struct {
 
 // Create issues a new token for a principal in scope, with the entry e
 // of caller. For ScopeOwn the principal is the person of caller, and
-// in.PrincipalID is ignored. For the other scopes it is in.PrincipalID, its
-// kind must fit the scope, and the check of mayActFor runs. It returns the
+// in.PrincipalID is ignored. ScopePersonal makes nothing: it returns
+// ErrNotOwnToken, wrapped with identity.ErrDenied. For ScopeService the
+// principal is in.PrincipalID, its kind must fit the scope, and the check of
+// mayActFor runs. It returns the
 // token and its secret: the only time the server shows the secret.
 func (s *Service) Create(
 	ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, in Input,
@@ -388,9 +383,10 @@ type Rotation struct {
 // Rotate issues a new token for the owner of the token in.ID and sets an end
 // time for the old token (ADR 53, decision 8), with the entry e of caller.
 // The new token keeps the name and the kind. For in.Scope ScopeOwn the token must
-// belong to the person of caller. For the other scopes its kind must fit
-// the scope, and the escalation check runs: the new token acts as its
-// principal. It returns the secret of the new token: the only time the
+// belong to the person of caller. ScopePersonal rotates nothing: it returns
+// ErrNotOwnToken, wrapped with identity.ErrDenied. For ScopeService the token
+// must be a service token, and caller needs principal:manage-tokens on its
+// principal: the new token acts as its principal. It returns the secret of the new token: the only time the
 // server shows it.
 func (s *Service) Rotate(
 	ctx context.Context, caller identity.Principal, e audit.Entry, in RotateInput,
@@ -408,6 +404,10 @@ func (s *Service) Rotate(
 
 	if authErr := s.authorizeRotate(ctx, caller, in.Scope, old); authErr != nil {
 		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, authErr)
+	}
+
+	if ownerErr := s.checkRotateOwner(ctx, old); ownerErr != nil {
+		return Rotation{}, Secret{}, fmt.Errorf("rotate access token %q: %w", id, ownerErr)
 	}
 
 	at := s.Now()
@@ -491,7 +491,8 @@ func (s *Service) Policy(ctx context.Context) (Policy, error) {
 }
 
 // PolicyChange names the fields of the policy that a change sets. A nil
-// field keeps its value.
+// field keeps its value. DisableBreakGlass is deprecated: the server
+// refuses true, and always keeps false.
 type PolicyChange struct {
 	MaxLifetime       *time.Duration
 	Inactivity        *time.Duration
@@ -514,10 +515,8 @@ func (s *Service) SetPolicy(ctx context.Context, e audit.Entry, c PolicyChange) 
 			return Policy{}, audit.Entry{}, err
 		}
 
-		return p, change(e, p.UpdatedAt, PolicyRef), nil
+		return p, policyEntry(e, p.UpdatedAt, old, p), nil
 	})
-
-	s.policies.forget()
 
 	if errors.Is(err, ErrInvalid) {
 		return Policy{}, err
@@ -559,9 +558,9 @@ func (c PolicyChange) applyTo(p Policy) Policy {
 // the entry e for each record that it disables. It reads the policy: with
 // an inactivity period of zero, or with tokens and accounts both off, it
 // changes nothing. The store takes the time of the run from the database
-// clock, and the entries carry that time. The break-glass credential of
-// ADR 57 has no stored record yet, so the bootstrap admin tokens are never
-// disabled here.
+// clock, and the entries carry that time. A break-glass account is always
+// exempt, with no setting. The bootstrap admin tokens have no stored
+// record, so a sweep never disables them here.
 func (s *Service) SweepInactive(ctx context.Context, e audit.Entry) (SweepResult, error) {
 	p, err := s.Policy(ctx)
 	if err != nil {
@@ -622,7 +621,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 			identity.ErrUnauthenticated)
 	}
 
-	if err := s.checkPolicyActive(ctx, m.Token, m.Owner, now); err != nil {
+	if err := checkPolicyActive(m, now); err != nil {
 		return identity.Principal{}, err
 	}
 
@@ -637,22 +636,25 @@ func (s *Service) AuthenticateToken(ctx context.Context, raw string) (identity.P
 	}, nil
 }
 
-// checkPolicyActive refuses the token t of the owner o when the policy disables
-// t, or the user account o, as inactive at now, before the sweep writes the
-// disable: the sweep runs once an hour, and a use would else move the last
-// use forward and keep t, or o, alive. A failed read of the policy answers
-// its error, so the caller fails closed.
-func (s *Service) checkPolicyActive(ctx context.Context, t Token, o Owner, now time.Time) error {
-	p, err := s.policies.get(ctx, now, s.Policy)
-	if err != nil {
-		return fmt.Errorf("authenticate access token: %w", err)
+// checkPolicyActive refuses the token of m when the policy of m disables
+// the token, or the user account of its owner, as inactive at now, before
+// the sweep writes the disable: the sweep runs once an hour, and a use would
+// else move the last use forward and keep the token, or the account, alive.
+// A break-glass account is always exempt. The policy comes from the same
+// lookup as the token, so a change applies to the next lookup on every
+// instance.
+func checkPolicyActive(m Match, now time.Time) error {
+	t, o, p := m.Token, m.Owner, m.Policy
+
+	if o.BreakGlass {
+		return nil
 	}
 
 	if p.inactiveAt(t, now) {
 		return fmt.Errorf("%w: access token inactive for %s", identity.ErrUnauthenticated, p.Inactivity)
 	}
 
-	if p.accountInactiveAt(o, now) {
+	if p.AccountInactiveAt(o, now) {
 		return fmt.Errorf("%w: the user account of the access token is inactive for %s",
 			identity.ErrUnauthenticated, p.Inactivity)
 	}
@@ -709,6 +711,61 @@ func change(e audit.Entry, at time.Time, object string) audit.Entry {
 	return e
 }
 
+// policyEntry returns e as the audit entry of a change of the policy from
+// old to updated at the time at. It keeps the changes of the caller, for
+// example the session ID of a console session, and adds the changed
+// settings.
+func policyEntry(e audit.Entry, at time.Time, old, updated Policy) audit.Entry {
+	e.At = at
+	e.Namespace = audit.ServerScope
+	e.Kind = audit.KindChange
+	e.Outcome = audit.OutcomeSuccess
+	e.Object = PolicyRef
+	e.Changes = slices.Clone(e.Changes)
+
+	for _, c := range []struct {
+		key        string
+		old, value time.Duration
+	}{
+		{key: "maxLifetimeSeconds", old: old.MaxLifetime, value: updated.MaxLifetime},
+		{key: "inactivitySeconds", old: old.Inactivity, value: updated.Inactivity},
+	} {
+		if c.old == c.value {
+			continue
+		}
+
+		before := seconds(c.old)
+		e.Changes = append(e.Changes, audit.Change{
+			Key: c.key, Old: &before, New: seconds(c.value), Layer: "", TakesEffect: "",
+		})
+	}
+
+	for _, c := range []struct {
+		key        string
+		old, value bool
+	}{
+		{key: "disableTokens", old: old.DisableTokens, value: updated.DisableTokens},
+		{key: "disableAccounts", old: old.DisableAccounts, value: updated.DisableAccounts},
+		{key: "disableBreakGlass", old: old.DisableBreakGlass, value: updated.DisableBreakGlass},
+	} {
+		if c.old == c.value {
+			continue
+		}
+
+		before := strconv.FormatBool(c.old)
+		e.Changes = append(e.Changes, audit.Change{
+			Key: c.key, Old: &before, New: strconv.FormatBool(c.value), Layer: "", TakesEffect: "",
+		})
+	}
+
+	return e
+}
+
+// seconds returns d as a decimal count of whole seconds.
+func seconds(d time.Duration) string {
+	return strconv.FormatInt(int64(d/time.Second), 10)
+}
+
 // issued is a new token with its secret and the digest of the secret.
 type issued struct {
 	token  Token
@@ -748,4 +805,19 @@ func (s *Service) newToken(spec tokenSpec) (issued, error) {
 	}
 
 	return issued{token: t, secret: secret, digest: DigestOf(secret)}, nil
+}
+
+// checkRotateOwner returns ErrPrincipalNotFound when the principal of t
+// was deleted.
+func (s *Service) checkRotateOwner(ctx context.Context, t Token) error {
+	_, err := s.principals.GetPrincipal(ctx, t.PrincipalID)
+	if errors.Is(err, principal.ErrNotFound) {
+		return fmt.Errorf("%w: %q", ErrPrincipalNotFound, t.PrincipalID)
+	}
+
+	if err != nil {
+		return fmt.Errorf("read principal: %w", err)
+	}
+
+	return nil
 }

@@ -75,8 +75,16 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 	}
 
 	me := principal.Principal{
-		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-me", Subject: "me", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0, DisabledAt: time.Time{},
+		CreatedAt:   at(0),
+		UpdatedAt:   at(0),
+		ID:          "prn-me",
+		Subject:     "me",
+		DisplayName: "",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0, BreakGlass: false,
+		DisabledAt: time.Time{},
 	}
 	if err := s.CreatePrincipal(ctx, me, entry()); err != nil {
 		b.Fatalf("seed principal: %v", err)
@@ -93,8 +101,12 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 			b.Fatalf("seed group: %v", err)
 		}
 
-		m := principal.Membership{AddedAt: at(1), GroupID: id, PrincipalID: "prn-me"}
-		if err := s.AddMember(ctx, m, entry()); err != nil {
+		m := principal.Membership{
+			AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: id, PrincipalID: "prn-me",
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		}
+		if err := s.AddMember(ctx, m, entry(), nil); err != nil {
 			b.Fatalf("seed member: %v", err)
 		}
 
@@ -109,7 +121,9 @@ func seedBenchCaller(b *testing.B, s BenchStore) *access.Service {
 		benchGrant(b, s, fmt.Sprintf("grt-me%03d", i), subject, fmt.Sprintf("me%03d", i))
 	}
 
-	authz, err := access.NewAuthorizer(access.AuthorizerConfig{Store: s, Callers: s, Collections: nil, Units: s})
+	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
+		Store: s, Callers: s, Collections: nil, Units: s, Principals: nil,
+	})
 	if err != nil {
 		b.Fatalf("authorizer: %v", err)
 	}
@@ -135,7 +149,7 @@ func benchGrant(b *testing.B, s BenchStore, id string, subject access.Subject, c
 		Subject: subject,
 	}
 
-	if err := s.CreateGrant(b.Context(), g, newNamespace("bench").Fence(), scoped(entry(), "bench")); err != nil {
+	if err := s.CreateGrant(b.Context(), g, newNamespace("bench").Fence(), scoped(entry(), "bench"), nil); err != nil {
 		b.Fatalf("seed grant %s: %v", id, err)
 	}
 }

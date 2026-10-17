@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -85,12 +86,26 @@ func (f *fakeBlobs) Ping(context.Context) error { return nil }
 // fakeRows is a stack.JournalStore that answers the configured error and records
 // each row it is given.
 type fakeRows struct {
-	err     error
-	rows    []stack.JournalRow
-	keys    []blob.Key
-	retried bool
-	running bool
-	calls   []string
+	err      error
+	rows     []stack.JournalRow
+	keys     []blob.Key
+	refusals []stack.JournalRefusal
+	retried  bool
+	running  bool
+	calls    []string
+}
+
+// newFakeRows returns an empty fake of the journal rows.
+func newFakeRows() *fakeRows {
+	return &fakeRows{
+		err:      nil,
+		rows:     nil,
+		keys:     nil,
+		refusals: nil,
+		retried:  false,
+		running:  false,
+		calls:    nil,
+	}
 }
 
 func (f *fakeRows) PutJournalRow(_ context.Context, row stack.JournalRow, _ namespace.Fence) (bool, error) {
@@ -98,7 +113,7 @@ func (f *fakeRows) PutJournalRow(_ context.Context, row stack.JournalRow, _ name
 	f.rows = append(f.rows, row)
 
 	if row.Verify != nil {
-		if err := row.Verify(nil); err != nil {
+		if _, err := row.Verify(nil, false); err != nil {
 			return false, fmt.Errorf("%w: %w", stack.ErrJournalBatch, err)
 		}
 	}
@@ -110,7 +125,7 @@ func (f *fakeRows) PutJournalRow(_ context.Context, row stack.JournalRow, _ name
 func newEntries(t *testing.T, blobs blob.Store, rows stack.JournalStore, v stack.BatchVerifier) *stack.JournalEntries {
 	t.Helper()
 
-	entries, err := stack.NewJournalEntries(blobs, rows, v)
+	entries, err := stack.NewJournalEntries(blobs, rows, v, 0)
 	if err != nil {
 		t.Fatalf("new journal writer: %v", err)
 	}
@@ -129,25 +144,67 @@ func (f *fakeRows) JournalSweepable(context.Context, stack.ID, stack.UpdateID) (
 	return !f.running, nil
 }
 
+// RecordJournalRefusal implements stack.JournalStore. The fake keeps each
+// refusal it is given.
+func (f *fakeRows) RecordJournalRefusal(
+	_ context.Context, refusal stack.JournalRefusal, _ namespace.Fence,
+) error {
+	f.calls = append(f.calls, "refusal")
+	f.refusals = append(f.refusals, refusal)
+
+	return nil
+}
+
+// JournalRefusals implements stack.JournalStore.
+func (f *fakeRows) JournalRefusals(
+	_ context.Context, _ stack.ID, _ stack.UpdateID,
+) ([]stack.JournalRefusal, error) {
+	return f.refusals, nil
+}
+
+// JournalSequences implements stack.JournalStore. The fake derives the stored
+// sequence IDs from the rows it kept, in order.
+func (f *fakeRows) JournalSequences(
+	_ context.Context, _ stack.ID, _ stack.UpdateID,
+) ([]int64, error) {
+	var out []int64
+
+	for i := range f.rows {
+		out = append(out, f.rows[i].SequenceIDs...)
+	}
+
+	slices.Sort(out)
+
+	return out, nil
+}
+
 // allowAll is a verifier that accepts every batch.
 type allowAll struct{}
 
-func (allowAll) VerifyBatch([]byte, int, []int64) error { return nil }
+func (allowAll) VerifyBatch([]byte, int, []int64, bool) (bool, error) { return false, nil }
 
 // recordVerifier records the arguments of each call and answers err.
 type recordVerifier struct {
-	body    []byte
-	known   []int64
-	version int
-	err     error
+	body           []byte
+	known          []int64
+	version        int
+	recordsChanged bool
+	changed        bool
+	err            error
 }
 
-func (v *recordVerifier) VerifyBatch(body []byte, version int, known []int64) error {
+func (v *recordVerifier) VerifyBatch(
+	body []byte,
+	version int,
+	known []int64,
+	recordsChanged bool,
+) (bool, error) {
 	v.body = body
 	v.version = version
 	v.known = known
+	v.recordsChanged = recordsChanged
 
-	return v.err
+	return v.changed, v.err
 }
 
 // batchBody returns a journal batch body with the given sequence IDs.
@@ -187,13 +244,44 @@ func fence() namespace.Fence {
 	return namespace.Fence{Namespace: "acme", FailoverVersion: 1}
 }
 
+// TestJournalAppendDropsOperationsBeforeRebuild checks that a batch that holds
+// a rebuilt base state entry keeps only the completed operations after the
+// last such entry, and reports the rebuild, so the store starts the known
+// set again from this batch.
+func TestJournalAppendDropsOperationsBeforeRebuild(t *testing.T) {
+	t.Parallel()
+
+	state := `{"urn":"urn:a","custom":true,"type":"t:mod:T","id":"x"}`
+	body := []byte(`{"entries":[` +
+		`{"sequenceID":1,"operationID":5,"kind":1,"state":` + state + `},` +
+		`{"sequenceID":2,"operationID":6,"kind":7},` +
+		`{"sequenceID":3,"operationID":8,"kind":1,"state":` + state + `}]}`)
+
+	blobs := newFakeBlobs()
+	rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
+	entries := newEntries(t, blobs, rows, allowAll{})
+
+	if err := entries.Append(t.Context(), journalBatchFor(body), fence()); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	row := rows.rows[0]
+	if !row.HasRebuild {
+		t.Fatal("HasRebuild = false, want true for a batch with a rebuild entry")
+	}
+
+	if fmt.Sprint(row.OperationIDs) != "[8]" {
+		t.Fatalf("operation IDs = %v, want [8]", row.OperationIDs)
+	}
+}
+
 // TestJournalAppendWritesBlobBeforeRow checks the order of the write: the blob
 // first, then the row, and the blob key holds the lowest sequence ID.
 func TestJournalAppendWritesBlobBeforeRow(t *testing.T) {
 	t.Parallel()
 
 	blobs := newFakeBlobs()
-	rows := &fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil}
+	rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
 	entries := newEntries(t, blobs, rows, allowAll{})
 
 	if err := entries.Append(t.Context(), journalBatchFor(batchBody(5, 3, 4)), fence()); err != nil {
@@ -233,7 +321,7 @@ func TestJournalAppendDeletesBlobOnRefusal(t *testing.T) {
 		namespace.ErrFenced,
 	} {
 		blobs := newFakeBlobs()
-		rows := &fakeRows{err: refusal, rows: nil, keys: nil, running: false, retried: false, calls: nil}
+		rows := &fakeRows{err: refusal, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
 		entries := newEntries(t, blobs, rows, allowAll{})
 
 		err := entries.Append(t.Context(), journalBatchFor(batchBody(1)), fence())
@@ -253,7 +341,10 @@ func TestJournalAppendKeepsBlobOnOtherFailure(t *testing.T) {
 	t.Parallel()
 
 	blobs := newFakeBlobs()
-	rows := &fakeRows{err: io.ErrUnexpectedEOF, rows: nil, keys: nil, running: false, retried: false, calls: nil}
+	rows := &fakeRows{
+		err: io.ErrUnexpectedEOF, rows: nil, keys: nil, refusals: nil,
+		running: false, retried: false, calls: nil,
+	}
 	entries := newEntries(t, blobs, rows, allowAll{})
 
 	if err := entries.Append(t.Context(), journalBatchFor(batchBody(1)), fence()); err == nil {
@@ -271,7 +362,7 @@ func TestJournalAppendRetryWritesNoBlob(t *testing.T) {
 	t.Parallel()
 
 	blobs := newFakeBlobs()
-	rows := &fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: true, calls: nil}
+	rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: true, calls: nil}
 	entries := newEntries(t, blobs, rows, allowAll{})
 	body := batchBody(1, 2)
 
@@ -289,13 +380,13 @@ func TestJournalAppendRetryWritesNoBlob(t *testing.T) {
 }
 
 // TestJournalAppendRefusesOtherBlobContent checks that a blob under the key that holds
-// other bytes stops the write before the row, and that nothing is deleted.
+// other bytes stops the write before the row, records the refusal, and deletes nothing.
 func TestJournalAppendRefusesOtherBlobContent(t *testing.T) {
 	t.Parallel()
 
 	blobs := newFakeBlobs()
 	blobs.objects[blob.Key("pulumi/stack-1/upd-1/journal/1")] = []byte("other bytes")
-	rows := &fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil}
+	rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
 	entries := newEntries(t, blobs, rows, allowAll{})
 
 	err := entries.Append(t.Context(), journalBatchFor(batchBody(1)), fence())
@@ -303,31 +394,67 @@ func TestJournalAppendRefusesOtherBlobContent(t *testing.T) {
 		t.Fatalf("err = %v, want ErrJournalConflict", err)
 	}
 
-	if len(rows.calls) != 0 {
+	if len(rows.rows) != 0 {
 		t.Fatal("the row was written for a blob with other content")
+	}
+
+	if len(rows.refusals) != 1 {
+		t.Fatalf("refusals = %d, want the recorded refusal", len(rows.refusals))
+	}
+
+	refusal := rows.refusals[0]
+
+	if len(refusal.SequenceIDs) != 1 || refusal.SequenceIDs[0] != 1 {
+		t.Fatalf("refusal sequences = %v, want [1]", refusal.SequenceIDs)
+	}
+
+	if refusal.Status != 409 {
+		t.Fatalf("refusal status = %d, want 409", refusal.Status)
 	}
 }
 
 // TestJournalAppendRefusesMalformedBatch checks the batch shape: entries, positive
-// sequence IDs, and no sequence ID twice.
+// sequence IDs, and no sequence ID twice. A malformed batch writes no blob and
+// no row, but its refusal is recorded with the sequence IDs the server read.
 func TestJournalAppendRefusesMalformedBatch(t *testing.T) {
 	t.Parallel()
 
-	for name, body := range map[string][]byte{
-		"not json":     []byte("{"),
-		"zero seq":     []byte(`{"entries":[{"sequenceID":0,"operationID":1}]}`),
-		"repeated seq": []byte(`{"entries":[{"sequenceID":2},{"sequenceID":2}]}`),
-	} {
+	cases := map[string]struct {
+		body []byte
+		seqs []int64
+	}{
+		"not json":     {body: []byte("{"), seqs: nil},
+		"zero seq":     {body: []byte(`{"entries":[{"sequenceID":0,"operationID":1}]}`), seqs: []int64{0}},
+		"repeated seq": {body: []byte(`{"entries":[{"sequenceID":2},{"sequenceID":2}]}`), seqs: []int64{2, 2}},
+	}
+
+	for name, tc := range cases {
 		blobs := newFakeBlobs()
-		rows := &fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil}
+		rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
 		entries := newEntries(t, blobs, rows, allowAll{})
 
-		if err := entries.Append(t.Context(), journalBatchFor(body), fence()); !errors.Is(err, stack.ErrJournalBatch) {
+		if err := entries.Append(t.Context(), journalBatchFor(tc.body), fence()); !errors.Is(
+			err, stack.ErrJournalBatch,
+		) {
 			t.Fatalf("%s: err = %v, want ErrJournalBatch", name, err)
 		}
 
-		if len(blobs.calls) != 0 || len(rows.calls) != 0 {
-			t.Fatalf("%s: wrote to the stores before the check", name)
+		if len(blobs.calls) != 0 || len(rows.rows) != 0 {
+			t.Fatalf("%s: wrote a blob or a row before the check", name)
+		}
+
+		if len(rows.refusals) != 1 {
+			t.Fatalf("%s: refusals = %d, want the recorded refusal", name, len(rows.refusals))
+		}
+
+		refusal := rows.refusals[0]
+
+		if !slices.Equal(refusal.SequenceIDs, tc.seqs) {
+			t.Fatalf("%s: refusal sequences = %v, want %v", name, refusal.SequenceIDs, tc.seqs)
+		}
+
+		if refusal.Status != 400 {
+			t.Fatalf("%s: refusal status = %d, want 400", name, refusal.Status)
 		}
 	}
 }
@@ -340,7 +467,7 @@ func TestJournalAppendReadsBackTheSameBytes(t *testing.T) {
 	blobs := newFakeBlobs()
 	body := batchBody(9)
 	blobs.objects[blob.Key("pulumi/stack-1/upd-1/journal/9")] = bytes.Clone(body)
-	rows := &fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil}
+	rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
 	entries := newEntries(t, blobs, rows, allowAll{})
 
 	if err := entries.Append(t.Context(), journalBatchFor(body), fence()); err != nil {
@@ -359,7 +486,7 @@ func TestJournalAppendAcceptsEmptyBatch(t *testing.T) {
 
 	for _, body := range [][]byte{[]byte("{}"), []byte(`{"entries":[]}`)} {
 		blobs := newFakeBlobs()
-		rows := &fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil}
+		rows := &fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil}
 		entries := newEntries(t, blobs, rows, allowAll{})
 
 		if err := entries.Append(t.Context(), journalBatchFor(body), fence()); err != nil {
@@ -377,10 +504,10 @@ func TestJournalAppendAcceptsEmptyBatch(t *testing.T) {
 func TestJournalAppendPassesTheBatchToTheVerifier(t *testing.T) {
 	t.Parallel()
 
-	verifier := &recordVerifier{err: nil, body: nil, known: nil, version: 0}
+	verifier := &recordVerifier{err: nil, body: nil, known: nil, version: 0, recordsChanged: false, changed: false}
 	entries := newEntries(t,
 		newFakeBlobs(),
-		&fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil},
+		&fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil},
 		verifier,
 	)
 	body := batchBody(4)
@@ -406,11 +533,13 @@ func TestJournalAppendDeletesBlobOnVerifierRefusal(t *testing.T) {
 	t.Parallel()
 
 	blobs := newFakeBlobs()
-	verifier := &recordVerifier{err: io.ErrUnexpectedEOF, body: nil, known: nil, version: 0}
+	verifier := &recordVerifier{
+		err: io.ErrUnexpectedEOF, body: nil, known: nil, version: 0, recordsChanged: false, changed: false,
+	}
 	entries := newEntries(
 		t,
 		blobs,
-		&fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil},
+		&fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil},
 		verifier,
 	)
 
@@ -450,8 +579,9 @@ func TestNewJournalEntriesRefusesNilVerifier(t *testing.T) {
 
 	_, err := stack.NewJournalEntries(
 		newFakeBlobs(),
-		&fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil},
+		&fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil},
 		nil,
+		0,
 	)
 	if !errors.Is(err, stack.ErrNilVerifier) {
 		t.Fatalf("nil verifier: err = %v, want ErrNilVerifier", err)
@@ -478,7 +608,10 @@ func TestJournalSweepKeepsNamedAndYoungBlobs(t *testing.T) {
 	entries := newEntries(
 		t,
 		blobs,
-		&fakeRows{err: nil, rows: nil, keys: []blob.Key{named}, running: false, retried: false, calls: nil},
+		&fakeRows{
+			err: nil, rows: nil, keys: []blob.Key{named}, refusals: nil,
+			running: false, retried: false, calls: nil,
+		},
 		allowAll{},
 	)
 
@@ -506,7 +639,7 @@ func TestJournalRemoveBlobsJoinsFailures(t *testing.T) {
 	entries := newEntries(
 		t,
 		blobs,
-		&fakeRows{err: nil, rows: nil, keys: nil, running: false, retried: false, calls: nil},
+		&fakeRows{err: nil, rows: nil, keys: nil, refusals: nil, running: false, retried: false, calls: nil},
 		allowAll{},
 	)
 

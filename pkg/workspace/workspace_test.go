@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -568,29 +569,22 @@ func (m *memStore) FenceAndUnlock(
 		return err
 	}
 
-	stored, ok := m.workspaces[w.ID]
-	if !ok {
-		return workspace.ErrNotFound
+	if err := checkMemFence(m, w, sv, expect); err != nil {
+		return err
 	}
 
-	if !stored.Lock.Locked() {
-		return workspace.ErrNotLocked
-	}
-
-	if stored.Revision != w.Revision-1 {
-		return workspace.ErrConcurrentModification
-	}
-
-	curID, found := m.current[w.ID]
-	if (found && curID != expect) || (!found && expect != "") {
-		return workspace.ErrConcurrentModification
-	}
-
-	if found && sv.Serial != m.versions[curID].Serial+1 {
-		return fmt.Errorf("%w: fence serial %d", workspace.ErrStaleSerial, sv.Serial)
-	}
-
-	m.versions[sv.ID] = sv
+	// The write sets only the finalize columns of the staged row, as the SQL
+	// stores do: the staged sealed flag stays, so a staged plain row never
+	// finalizes as sealed.
+	staged := m.versions[sv.ID]
+	staged.Serial = sv.Serial
+	staged.Lineage = sv.Lineage
+	staged.MD5 = sv.MD5
+	staged.Outputs = sv.Outputs
+	staged.Status = sv.Status
+	staged.FinalizedAt = sv.FinalizedAt
+	staged.Size = sv.Size
+	m.versions[sv.ID] = staged
 	m.current[w.ID] = sv.ID
 	m.workspaces[w.ID] = w
 	m.publish(w)
@@ -655,6 +649,52 @@ func (m *memStore) FinalizeStateVersion(
 	return nil
 }
 
+// checkMemFence runs the checks of FenceAndUnlock: the workspace is locked at
+// the revision before w, the current version is expect, the fence serial is
+// the next one, and sv is stored as pending with its content key. The caller
+// holds mu.
+func checkMemFence(
+	m *memStore,
+	w workspace.Workspace,
+	sv workspace.StateVersion,
+	expect workspace.StateVersionID,
+) error {
+	stored, ok := m.workspaces[w.ID]
+	if !ok {
+		return workspace.ErrNotFound
+	}
+
+	if !stored.Lock.Locked() {
+		return workspace.ErrNotLocked
+	}
+
+	if stored.Revision != w.Revision-1 {
+		return workspace.ErrConcurrentModification
+	}
+
+	curID, found := m.current[w.ID]
+	if (found && curID != expect) || (!found && expect != "") {
+		return workspace.ErrConcurrentModification
+	}
+
+	if found && sv.Serial != m.versions[curID].Serial+1 {
+		return fmt.Errorf("%w: fence serial %d", workspace.ErrStaleSerial, sv.Serial)
+	}
+
+	return checkMemStaged(m, sv)
+}
+
+// checkMemStaged refuses a fence version that is not stored as pending with
+// its content key. The caller holds mu.
+func checkMemStaged(m *memStore, sv workspace.StateVersion) error {
+	staged, ok := m.versions[sv.ID]
+	if !ok || staged.Status != workspace.StatusPending || staged.Content != sv.Content {
+		return workspace.ErrUploadDenied
+	}
+
+	return nil
+}
+
 // checkMemFinalize runs the lock, lineage and serial checks of a finalize.
 // The caller holds mu.
 func checkMemFinalize(m *memStore, w workspace.Workspace, sv workspace.StateVersion) error {
@@ -685,6 +725,21 @@ func checkMemFinalize(m *memStore, w workspace.Workspace, sv workspace.StateVers
 		case current.Serial >= sv.Serial:
 			return workspace.ErrStaleSerial
 		}
+	}
+
+	return checkMemRestore(m, sv)
+}
+
+// checkMemRestore refuses a restored version when the current state already
+// restores the same version for the same holder. The caller holds mu.
+func checkMemRestore(m *memStore, sv workspace.StateVersion) error {
+	cur, ok := m.current[sv.Workspace]
+	if !ok || sv.RestoredFrom == "" {
+		return nil
+	}
+
+	if current := m.versions[cur]; current.RestoredFrom == sv.RestoredFrom && current.Holder == sv.Holder {
+		return workspace.ErrAlreadyRestored
 	}
 
 	return nil
@@ -848,60 +903,6 @@ func (m *memStore) DeleteExpiredPendingStateVersions(
 	return out, nil
 }
 
-// ListUnsealedStateVersions implements workspace.StateStore.
-func (m *memStore) ListUnsealedStateVersions(
-	_ context.Context,
-) ([]workspace.StateVersion, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var out []workspace.StateVersion
-
-	for vid := range m.versions {
-		if sv := m.versions[vid]; !sv.Sealed && sv.Status == workspace.StatusFinalized && sv.Content != "" {
-			out = append(out, sv)
-		}
-	}
-
-	slices.SortFunc(out, func(a, b workspace.StateVersion) int {
-		return strings.Compare(a.ID.String(), b.ID.String())
-	})
-
-	return out, nil
-}
-
-// SealStateVersion implements workspace.StateStore.
-func (m *memStore) SealStateVersion(
-	_ context.Context,
-	id workspace.StateVersionID,
-	content blob.Key,
-	outputs []byte,
-	fence namespace.Fence,
-) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if err := m.checkFence(fence); err != nil {
-		return err
-	}
-
-	sv, ok := m.versions[id]
-	if !ok {
-		return workspace.ErrStateVersionNotFound
-	}
-
-	if sv.Sealed {
-		return nil
-	}
-
-	sv.Content = content
-	sv.Outputs = outputs
-	sv.Sealed = true
-	m.versions[id] = sv
-
-	return nil
-}
-
 // ListStateVersions implements workspace.StateStore: finalized versions of
 // the workspace, newest first by finalize time, with the total count.
 func (m *memStore) ListStateVersions(
@@ -963,6 +964,7 @@ type fixture struct {
 	svc        *workspace.Service
 	store      *memStore
 	namespaces *namespace.Service
+	secrets    *secret.Service
 	blobs      blob.Store
 	now        *time.Time
 	ws         workspace.Workspace
@@ -1016,12 +1018,14 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 		t.Fatalf("namespaces: %v", err)
 	}
 
+	secrets := newMemSealer(t, namespaces)
+
 	svc, err := workspace.NewService(workspace.Config{
 		Workspaces:         store,
 		States:             store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      64,
@@ -1042,7 +1046,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 		t.Fatalf("create: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, namespaces: namespaces, blobs: blobs, now: &now, ws: ws}
+	return fixture{svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: blobs, now: &now, ws: ws}
 }
 
 // TestDeleteRecordsRetention proves that a delete records the end of the
@@ -1058,7 +1062,7 @@ func TestDeleteRecordsRetention(t *testing.T) {
 		States:             f.store,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      0,
@@ -1084,31 +1088,354 @@ func TestDeleteRecordsRetention(t *testing.T) {
 	}
 }
 
+// TestDeleteSweepsExpiredPending proves a stuck pending version blocks a
+// workspace delete before its expiry with ErrPendingState, and past the
+// upload window plus the sweep grace period the delete sweeps it and succeeds.
+func TestDeleteSweepsExpiredPending(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
+
+	if _, err := f.svc.Unlock(ctx, f.ws.ID, "alice"); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+
+	if err := f.svc.Delete(ctx, f.ws.Ref, retentionEntry()); !errors.Is(err, workspace.ErrPendingState) {
+		t.Fatalf("delete before expiry: err = %v, want ErrPendingState", err)
+	}
+
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	if err := f.svc.Delete(ctx, f.ws.Ref, retentionEntry()); err != nil {
+		t.Fatalf("delete after expiry: %v", err)
+	}
+
+	if _, err := f.svc.Get(ctx, f.ws.Ref); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get after delete: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := f.store.GetStateVersion(ctx, pending.Version.ID); !errors.Is(
+		err, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("get swept version: %v, want ErrStateVersionNotFound", err)
+	}
+}
+
+// TestDeleteSweepTreatsGoneRowAsDone proves a delete whose sweep finds the
+// pending row already deleted does not fail: a gone row counts as done.
+func TestDeleteSweepTreatsGoneRowAsDone(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
+
+	if _, err := f.svc.Unlock(ctx, f.ws.ID, "alice"); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	stored, err := f.store.GetStateVersion(ctx, pending.Version.ID)
+	if err != nil {
+		t.Fatalf("get pending version: %v", err)
+	}
+
+	writable, err := f.namespaces.WritableHere(ctx, "acme")
+	if err != nil {
+		t.Fatalf("writable namespace: %v", err)
+	}
+
+	if discardErr := f.store.DiscardStateVersion(ctx, pending.Version.ID, writable.Fence()); discardErr != nil {
+		t.Fatalf("discard pending version: %v", discardErr)
+	}
+
+	if stored.Content != "" {
+		if deleteErr := f.blobs.Delete(ctx, stored.Content); deleteErr != nil {
+			t.Fatalf("delete pending blob: %v", deleteErr)
+		}
+	}
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             goneStates{StateStore: f.store},
+		Blobs:              f.blobs,
+		Namespaces:         f.namespaces,
+		Sealer:             f.secrets,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 0,
+		Retention:          0,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	if err := svc.Delete(ctx, f.ws.Ref, retentionEntry()); err != nil {
+		t.Fatalf("delete with a gone pending row: %v", err)
+	}
+
+	if _, err := svc.Get(ctx, f.ws.Ref); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get after delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+// goneStates reports the expired pending row as already gone, as an
+// overlapping sweep would after the first sweep deletes it.
+type goneStates struct {
+	workspace.StateStore
+}
+
+// DeleteExpiredPendingStateVersions implements workspace.StateStore: it
+// reports the row as already gone, with no error for the caller to join.
+func (g goneStates) DeleteExpiredPendingStateVersions(
+	_ context.Context, _ workspace.ID, _ time.Time, _ namespace.Fence,
+) ([]workspace.StateVersion, error) {
+	return nil, workspace.ErrStateVersionNotFound
+}
+
+// TestDeleteSweepsStuckPendingAfterBackup proves a stuck pending version
+// with a content key stays out of the backup and does not fail it, and past
+// the upload window plus the sweep grace period the workspace delete sweeps
+// it and succeeds.
+func TestDeleteSweepsStuckPendingAfterBackup(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	f := newStuckBackupFixture(ctx, t)
+	pending, stuckKey := stageStuckPending(ctx, t, f)
+	assertBackupOmitsStuckKey(ctx, t, f.store, stuckKey)
+	assertDeleteSweepsStuckPending(ctx, t, f, pending.Version.ID)
+}
+
+// stuckBackupFixture holds a workspace with a clock the test moves past
+// the upload window plus the sweep grace period.
+type stuckBackupFixture struct {
+	svc        *workspace.Service
+	store      *sqlite.Store
+	namespaces *namespace.Service
+	blobs      *fs.Store
+	now        *time.Time
+	ws         workspace.Workspace
+}
+
+// newStuckBackupFixture opens a blob store and a SQLite store with one
+// workspace, so the test stages a stuck pending version against them.
+func newStuckBackupFixture(ctx context.Context, t *testing.T) stuckBackupFixture {
+	t.Helper()
+
+	blobs, err := fs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	var store *sqlite.Store
+
+	store, err = sqlite.Open(ctx, filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+
+	var namespaces *namespace.Service
+
+	namespaces, err = namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespaces: %v", err)
+	}
+
+	if _, err = namespaces.Create(ctx, "acme"); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	var svc *workspace.Service
+
+	svc, err = workspace.NewService(workspace.Config{
+		Workspaces:         store,
+		States:             store,
+		Blobs:              blobs,
+		Namespaces:         namespaces,
+		Sealer:             newMemSealer(t, namespaces),
+		Logger:             nil,
+		Now:                func() time.Time { return now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 0,
+		Retention:          0,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	var name workspace.Name
+
+	name, err = workspace.ParseName("e2e-workspace")
+	if err != nil {
+		t.Fatalf("name: %v", err)
+	}
+
+	var ws workspace.Workspace
+
+	ws, err = svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	return stuckBackupFixture{svc: svc, store: store, namespaces: namespaces, blobs: blobs, now: &now, ws: ws}
+}
+
+// stageStuckPending locks the workspace, declares a version, records a
+// content key for it without finalizing, and writes that blob: the row
+// stays pending with committed content that the backup must leave out.
+func stageStuckPending(
+	ctx context.Context, t *testing.T, f stuckBackupFixture,
+) (workspace.PendingState, blob.Key) {
+	t.Helper()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending, err := f.svc.BeginState(
+		ctx, f.ws.ID, "alice", newState("l1", 1, "{\"v\":1}"), authority(forcedOnly(), nil),
+	)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	stuckKey := blob.Key("tofu/" + f.ws.ID.String() + "/" + pending.Version.ID.String() + "/a1")
+
+	var writable namespace.Namespace
+
+	writable, err = f.namespaces.WritableHere(ctx, "acme")
+	if err != nil {
+		t.Fatalf("writable namespace: %v", err)
+	}
+
+	if _, err = f.store.RecordUploadAttempt(ctx, pending.Version.ID, stuckKey, writable.Fence()); err != nil {
+		t.Fatalf("record upload attempt: %v", err)
+	}
+
+	if err = f.blobs.Put(ctx, stuckKey, strings.NewReader("{\"v\":1}")); err != nil {
+		t.Fatalf("put stuck blob: %v", err)
+	}
+
+	return pending, stuckKey
+}
+
+// assertBackupOmitsStuckKey proves a portable export succeeds without
+// naming the stuck pending key: a pending row has no committed content.
+func assertBackupOmitsStuckKey(ctx context.Context, t *testing.T, store *sqlite.Store, stuckKey blob.Key) {
+	t.Helper()
+
+	sink := func(string) (io.WriteCloser, error) {
+		return nopWriteCloser{Writer: io.Discard}, nil
+	}
+
+	summary, _, err := store.ExportPortable(ctx, sink)
+	if err != nil {
+		t.Fatalf("export portable: %v", err)
+	}
+
+	for _, ref := range summary.Blobs {
+		if ref.Key == stuckKey.String() {
+			t.Fatalf("export names stuck key %q, want only finalized content", stuckKey)
+		}
+	}
+}
+
+// assertDeleteSweepsStuckPending proves the delete is refused before the
+// expiry with ErrPendingState and sweeps the expired row after it.
+func assertDeleteSweepsStuckPending(
+	ctx context.Context, t *testing.T, f stuckBackupFixture, pendingID workspace.StateVersionID,
+) {
+	t.Helper()
+
+	if _, err := f.svc.Unlock(ctx, f.ws.ID, "alice"); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+
+	if err := f.svc.Delete(ctx, f.ws.Ref, retentionEntry()); !errors.Is(err, workspace.ErrPendingState) {
+		t.Fatalf("delete before expiry: err = %v, want ErrPendingState", err)
+	}
+
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	if err := f.svc.Delete(ctx, f.ws.Ref, retentionEntry()); err != nil {
+		t.Fatalf("delete after expiry: %v", err)
+	}
+
+	if _, err := f.svc.Get(ctx, f.ws.Ref); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get after delete: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := f.store.GetStateVersion(ctx, pendingID); !errors.Is(
+		err, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("get swept version: %v, want ErrStateVersionNotFound", err)
+	}
+}
+
+// nopWriteCloser discards one portable file: the test checks the summary,
+// not the bytes.
+type nopWriteCloser struct {
+	io.Writer
+}
+
+// Close does nothing: the bytes stay discarded.
+func (nopWriteCloser) Close() error { return nil }
+
 // retentionEntry returns a valid audit entry for a delete of acme's workspace.
 // The service sets its time.
 func retentionEntry() audit.Entry {
 	return audit.Entry{
-		At:         time.Time{},
-		Namespace:  "acme",
-		Subject:    "alice@example.com",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:manage",
-		Object:     "opentofu:acme/e2e-workspace",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "workspace_test",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           time.Time{},
+		Namespace:    "acme",
+		Subject:      "alice@example.com",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:manage",
+		Object:       "opentofu:acme/e2e-workspace",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "workspace_test",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 
@@ -1122,7 +1449,7 @@ func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
 		States:             f.store,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -2655,7 +2982,7 @@ func newGatedService(t *testing.T, f fixture, gated *gateCounter) *workspace.Ser
 		States:             gated,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -2838,7 +3165,7 @@ func newSecondService(t *testing.T, f fixture, blobs blob.Store) *workspace.Serv
 		States:             f.store,
 		Blobs:              blobs,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -3597,13 +3924,24 @@ func TestRestoreFailedCopyKeepsCurrent(t *testing.T) {
 
 	mustUnlock(t, f)
 
-	// Replace the source content with other bytes under the same key, as a
-	// damaged object would read.
+	// Replace the source content with other sealed bytes under the same key,
+	// as a damaged object would read: the open succeeds, and the MD5 check
+	// of the copy fails.
 	if err := blobs.Delete(ctx, first.Content); err != nil {
 		t.Fatalf("delete source blob: %v", err)
 	}
 
-	if err := blobs.Put(ctx, first.Content, strings.NewReader("tampered")); err != nil {
+	sealed, err := f.secrets.SealState(ctx, f.ws.Ref.Namespace, f.ws.ID.String(), strings.NewReader("tampered"))
+	if err != nil {
+		t.Fatalf("seal tampered content: %v", err)
+	}
+
+	tampered, err := io.ReadAll(sealed)
+	if err != nil {
+		t.Fatalf("read tampered content: %v", err)
+	}
+
+	if err = blobs.Put(ctx, first.Content, bytes.NewReader(tampered)); err != nil {
 		t.Fatalf("tamper source blob: %v", err)
 	}
 
@@ -3611,7 +3949,7 @@ func TestRestoreFailedCopyKeepsCurrent(t *testing.T) {
 
 	*f.now = f.now.Add(time.Second)
 
-	_, err := f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+	_, err = f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
 	if !errors.Is(err, workspace.ErrChecksumMismatch) {
 		t.Fatalf("restore: %v, want ErrChecksumMismatch", err)
 	}
@@ -3697,7 +4035,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 		States:             fencedStates{memStore: f.store},
 		Blobs:              blobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
 		Logger:             nil,
@@ -3857,7 +4195,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 		States:             f.store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
 		Logger:             nil,
@@ -4052,7 +4390,7 @@ func newSealedFixture(t *testing.T) fixture {
 		t.Fatalf("create: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, namespaces: namespaces, blobs: blobs, now: &now, ws: ws}
+	return fixture{svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: blobs, now: &now, ws: ws}
 }
 
 // sealedOutputsDoc is the outputs document of the sealing tests: one
@@ -4084,55 +4422,32 @@ func TestSealedUploadLeavesNoPlaintext(t *testing.T) {
 	assertCurrentOutputsPlain(t, f, outputValue)
 }
 
-// TestSealedReadWithoutSealerFails proves that a service without a sealer
-// never serves sealed bytes as state or outputs: an SDK user who wires the
-// stores without a sealer gets ErrSealerNotConfigured, not ciphertext.
-func TestSealedReadWithoutSealerFails(t *testing.T) {
+// TestNewServiceWithoutSealerFails proves NewService without a Sealer fails:
+// every service seals state, so none runs without one.
+func TestNewServiceWithoutSealerFails(t *testing.T) {
 	t.Parallel()
 
-	f := newSealedFixture(t)
-	sv := uploadSealedState(
-		t,
-		f,
-		`{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-output-value"}}}`,
-		"s3cr3t-output-value",
-	)
-	ctx := t.Context()
+	store := newMemStore()
 
-	plain, err := workspace.NewService(workspace.Config{
-		Workspaces:         f.store,
-		States:             f.store,
-		Blobs:              f.blobs,
-		Namespaces:         f.namespaces,
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespaces: %v", err)
+	}
+
+	_, err = workspace.NewService(workspace.Config{
+		Workspaces:         store,
+		States:             store,
+		Blobs:              openFixtureBlobs(t),
+		Namespaces:         namespaces,
 		Sealer:             nil,
 		Logger:             nil,
-		Now:                func() time.Time { return *f.now },
+		Now:                nil,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
 	})
-	if err != nil {
-		t.Fatalf("service without a sealer: %v", err)
-	}
-
-	if r, openErr := plain.Open(ctx, sv); !errors.Is(openErr, workspace.ErrSealerNotConfigured) {
-		if r != nil {
-			_ = r.Close() //nolint:errcheck // The test fails on the open result below.
-		}
-
-		t.Fatalf("open sealed state without a sealer: err = %v, want ErrSealerNotConfigured", openErr)
-	}
-
-	if r, blobErr := plain.OpenStateBlob(ctx, sv.Content); !errors.Is(blobErr, workspace.ErrSealerNotConfigured) {
-		if r != nil {
-			_ = r.Close() //nolint:errcheck // The test fails on the open result below.
-		}
-
-		t.Fatalf("open sealed blob without a sealer: err = %v, want ErrSealerNotConfigured", blobErr)
-	}
-
-	if _, currentErr := plain.Current(ctx, f.ws.ID); !errors.Is(currentErr, workspace.ErrSealerNotConfigured) {
-		t.Fatalf("read sealed outputs without a sealer: err = %v, want ErrSealerNotConfigured", currentErr)
+	if !errors.Is(err, workspace.ErrMissingSealer) {
+		t.Fatalf("NewService without a sealer: err = %v, want ErrMissingSealer", err)
 	}
 }
 

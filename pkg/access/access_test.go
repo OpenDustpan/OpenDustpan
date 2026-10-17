@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/identity/identitytest"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -67,7 +68,7 @@ func newFixture(tb testing.TB) *fixture {
 	units := collections{}
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: st, Callers: st, Collections: units, Units: st,
+		Store: st, Callers: st, Collections: units, Units: st, Principals: st,
 	})
 	if err != nil {
 		tb.Fatalf("new authorizer: %v", err)
@@ -108,9 +109,17 @@ func (f *fixture) person(tb testing.TB, subject string) identity.Principal {
 	tb.Helper()
 
 	err := f.store.CreatePrincipal(tb.Context(), principal.Principal{
-		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: "prn-" + subject, Subject: subject,
-		DisplayName: "", Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
-		DisabledAt: time.Time{},
+		CreatedAt:   time.Unix(0, 0),
+		UpdatedAt:   time.Unix(0, 0),
+		ID:          "prn-" + subject,
+		Subject:     subject,
+		DisplayName: "",
+		Kind:        principal.KindPerson,
+		Source:      principal.SourceLocal,
+		Namespace:   "",
+		GroupCount:  0,
+		BreakGlass:  false,
+		DisabledAt:  time.Time{},
 	}, storetest.ServerChange(time.Unix(0, 0), "principal:prn-"+subject))
 	if err != nil {
 		tb.Fatalf("create principal %q: %v", subject, err)
@@ -136,9 +145,11 @@ func (f *fixture) group(tb testing.TB, name string, members ...string) access.Su
 
 	for _, m := range members {
 		mem := principal.Membership{
-			AddedAt: time.Unix(0, 0), GroupID: id, PrincipalID: "prn-" + m,
+			AddedAt: time.Unix(0, 0), SuspendedAt: time.Time{}, GroupID: id, PrincipalID: "prn-" + m,
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
 		}
-		if err := f.store.AddMember(ctx, mem, storetest.ServerChange(time.Unix(0, 0), "group:"+id)); err != nil {
+		if err := f.store.AddMember(ctx, mem, storetest.ServerChange(time.Unix(0, 0), "group:"+id), nil); err != nil {
 			tb.Fatalf("add member %q: %v", m, err)
 		}
 	}
@@ -208,7 +219,7 @@ func (f *fixture) grant(tb testing.TB, subject access.Subject, role string, obj 
 		CreatedAt: time.Unix(0, 0), Condition: nil, Object: obj,
 		ID:   fmt.Sprintf("grt-%s-%s-%s", subject.ID, role, obj.String()),
 		Role: role, CreatedBy: "admin", Subject: subject,
-	}, fence, e)
+	}, fence, e, nil)
 	if err != nil {
 		tb.Fatalf("create grant: %v", err)
 	}
@@ -738,7 +749,7 @@ func TestExplainListsOnlyGrantsThatGive(t *testing.T) {
 	lost := &lostRoleStore{Store: f.store, role: gone.ID}
 
 	authz, err := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: lost, Callers: lost, Collections: nil, Units: lost},
+		access.AuthorizerConfig{Store: lost, Callers: lost, Collections: nil, Units: lost, Principals: lost},
 	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
@@ -926,6 +937,90 @@ func TestRevokeChecksTheObject(t *testing.T) {
 	}
 }
 
+func TestRevokeByID(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	f.person(t, "target")
+
+	payments := identity.CollectionObject("acme", "payments")
+	f.collection(payments)
+
+	web := f.unit(t, unitObject(t, "acme", "web/prod"))
+
+	const svcID = "prn-svc-byid"
+
+	svcErr := f.store.CreatePrincipal(ctx, principal.Principal{
+		CreatedAt: time.Unix(0, 0), UpdatedAt: time.Unix(0, 0), ID: svcID, Subject: "svc-byid",
+		DisplayName: "", Kind: principal.KindService, Source: principal.SourceLocal, GroupCount: 0,
+		DisabledAt: time.Time{}, Namespace: "", BreakGlass: false,
+	}, storetest.ServerChange(time.Unix(0, 0), "principal:"+svcID))
+	if svcErr != nil {
+		t.Fatalf("create service principal: %v", svcErr)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		object identity.Object
+		role   string
+	}{
+		{name: "installation", object: identity.ServerObject(), role: access.RoleViewer},
+		{name: "namespace", object: identity.NamespaceObject("acme"), role: access.RoleViewer},
+		{name: "collection", object: payments, role: access.RoleViewer},
+		{name: "unit", object: web, role: access.RoleViewer},
+		{name: "principal", object: identity.PrincipalObject(svcID), role: access.RoleTokenManager},
+	} {
+		checkRevokeByID(t, f, tc.object, tc.role, tc.name)
+	}
+
+	if _, err := f.svc.RevokeByID(ctx, testEntry(), admin(), "grt-missing"); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("revoke unknown grant by ID = %v, want ErrNotFound", err)
+	}
+
+	nsadmin := f.person(t, "nsadmin")
+	f.grant(t, prn("nsadmin"), access.RoleAdmin, identity.NamespaceObject("acme"))
+
+	held, err := f.svc.Grant(ctx, testEntry(), admin(), access.GrantInput{
+		Object: identity.ServerObject(), Role: access.RoleViewer, Subject: prn("target"),
+	})
+	if err != nil {
+		t.Fatalf("grant on the installation: %v", err)
+	}
+
+	if _, err := f.svc.RevokeByID(ctx, testEntry(), nsadmin, held.ID); !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("revoke beyond held actions = %v, want ErrEscalation", err)
+	}
+}
+
+// checkRevokeByID grants role on obj to the target, revokes it by ID and
+// checks that the grant is gone.
+func checkRevokeByID(t *testing.T, f *fixture, obj identity.Object, role, name string) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	g, err := f.svc.Grant(ctx, testEntry(), admin(), access.GrantInput{
+		Object: obj, Role: role, Subject: prn("target"),
+	})
+	if err != nil {
+		t.Fatalf("grant on %s: %v", name, err)
+	}
+
+	revoked, err := f.svc.RevokeByID(ctx, testEntry(), admin(), g.ID)
+	if err != nil {
+		t.Fatalf("revoke %s grant by ID: %v", name, err)
+	}
+
+	if revoked.ID != g.ID || revoked.Object.String() != g.Object.String() {
+		t.Fatalf("revoked = %+v, want %+v", revoked, g)
+	}
+
+	if _, err := f.store.GetGrant(ctx, g.ID); !errors.Is(err, access.ErrNotFound) {
+		t.Fatalf("grant after revoke = %v, want ErrNotFound", err)
+	}
+}
+
 // testEntry is the entry of a caller, as the HTTP adapter builds it.
 func testEntry() audit.Entry {
 	return audit.Entry{
@@ -934,7 +1029,8 @@ func testEntry() audit.Entry {
 		Changes:  nil,
 		SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "", Outcome: "",
 		RequestID: "", PrevHash: "", Hash: "", Sequence: 0,
-		ObjectID: "",
+		ObjectID:     "",
+		FenceVersion: 0,
 	}
 }
 
@@ -984,7 +1080,13 @@ func TestRequestCache(t *testing.T) {
 	counted := &countingStore{Store: f.store, subjects: atomic.Int64{}, roles: atomic.Int64{}}
 
 	authz, err := access.NewAuthorizer(
-		access.AuthorizerConfig{Store: counted, Callers: counted, Collections: nil, Units: counted},
+		access.AuthorizerConfig{
+			Store:       counted,
+			Callers:     counted,
+			Collections: nil,
+			Units:       counted,
+			Principals:  counted,
+		},
 	)
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
@@ -1024,4 +1126,318 @@ func TestRequestCache(t *testing.T) {
 	if got := counted.subjects.Load(); got != 2 {
 		t.Errorf("subject reads after a new request = %d, want 2", got)
 	}
+}
+
+// namespaceBot stores a service principal of ns with the ID id.
+func (f *fixture) namespaceBot(tb testing.TB, id, subject string, ns namespace.Name) {
+	tb.Helper()
+
+	at := time.Unix(0, 0)
+	p := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: id, Subject: subject,
+		DisplayName: subject, Kind: principal.KindService, Source: principal.SourceLocal,
+		Namespace: ns, GroupCount: 0, BreakGlass: false,
+	}
+
+	fence, e := storetest.GrantWrite(tb, f.store, identity.NamespaceObject(ns), at, principal.Ref(id))
+	if err := f.store.CreateNamespacePrincipal(tb.Context(), p, fence, e); err != nil {
+		tb.Fatalf("create principal %q in %q: %v", subject, ns, err)
+	}
+}
+
+// installationService stores a service principal of the installation.
+func (f *fixture) installationService(tb testing.TB, id, subject string) {
+	tb.Helper()
+
+	at := time.Unix(0, 0)
+	p := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: id, Subject: subject,
+		DisplayName: subject, Kind: principal.KindService, Source: principal.SourceLocal,
+		Namespace: "", GroupCount: 0, BreakGlass: false,
+	}
+
+	if err := f.store.CreatePrincipal(tb.Context(), p, storetest.ServerChange(at, principal.Ref(id))); err != nil {
+		tb.Fatalf("create principal %q: %v", subject, err)
+	}
+}
+
+// tokenRole creates a custom role with only namespace:manage-principal-tokens.
+func (f *fixture) tokenRole(tb testing.TB, name string) access.Role {
+	tb.Helper()
+
+	r, err := f.svc.CreateRole(tb.Context(), testEntry(), admin(), access.RoleInput{
+		Name: name, Description: "",
+		Actions: []identity.Action{identity.ActionNamespaceManagePrincipalTokens},
+	})
+	if err != nil {
+		tb.Fatalf("create role %q: %v", name, err)
+	}
+
+	return r
+}
+
+// namespaceTokenFixture holds the callers and the principals of the
+// namespace token test.
+type namespaceTokenFixture struct {
+	alice   identity.Principal
+	bob     identity.Principal
+	carol   identity.Principal
+	acmeBot identity.Object
+	betaBot identity.Object
+	deploy  identity.Object
+}
+
+// seedNamespaceTokens stores two namespace bots, one installation service,
+// and the grants of the test, and returns the callers.
+func seedNamespaceTokens(t *testing.T, f *fixture) namespaceTokenFixture {
+	t.Helper()
+
+	alice := f.person(t, "alice")
+	bob := f.person(t, "bob")
+	carol := f.person(t, "carol")
+
+	f.namespaceBot(t, "prn-bot-acme", "ci-acme", "acme")
+	f.namespaceBot(t, "prn-bot-beta", "ci-beta", "beta")
+	f.installationService(t, "prn-deploy", "ci-deploy")
+
+	tokenRole := f.tokenRole(t, "ns-token")
+
+	f.grant(t, prn("alice"), access.RoleAdmin, identity.NamespaceObject("acme"))
+	f.grant(t, prn("bob"), access.RoleViewer, identity.NamespaceObject("acme"))
+	f.grant(t, prn("carol"), tokenRole.ID, identity.ServerObject())
+
+	return namespaceTokenFixture{
+		alice: alice, bob: bob, carol: carol, acmeBot: identity.PrincipalObject("prn-bot-acme"),
+		betaBot: identity.PrincipalObject("prn-bot-beta"), deploy: identity.PrincipalObject("prn-deploy"),
+	}
+}
+
+// checkNamespaceTokenDecisions proves who holds principal:manage-tokens on
+// each principal, and that a namespace grant gives no data action on it.
+func checkNamespaceTokenDecisions(t *testing.T, f *fixture, fx *namespaceTokenFixture) {
+	t.Helper()
+
+	manage := identity.ActionPrincipalManageTokens
+
+	assertChecks(t, f.authz, fx.alice, []check{
+		{fx.acmeBot, manage, true},
+		{fx.betaBot, manage, false},
+		{fx.deploy, manage, false},
+		{fx.acmeBot, identity.ActionNamespaceRead, false},
+		{fx.acmeBot, identity.ActionUnitRead, false},
+	})
+	assertChecks(t, f.authz, fx.bob, []check{
+		{fx.acmeBot, manage, false},
+		{fx.betaBot, manage, false},
+	})
+	assertChecks(t, f.authz, fx.carol, []check{
+		{fx.acmeBot, manage, false},
+		{fx.betaBot, manage, false},
+		{fx.deploy, manage, false},
+	})
+}
+
+// checkNamespaceTokenExplain proves that Explain lists only the namespace
+// grant that gives principal:manage-tokens.
+func checkNamespaceTokenExplain(t *testing.T, f *fixture, fx *namespaceTokenFixture) {
+	t.Helper()
+
+	ctx := t.Context()
+	manage := identity.ActionPrincipalManageTokens
+
+	got, err := f.authz.Explain(ctx, fx.alice, fx.acmeBot)
+	if err != nil {
+		t.Fatalf("explain: %v", err)
+	}
+
+	if len(got.Actions) != 1 || got.Actions[0] != manage {
+		t.Fatalf("actions on acme bot = %v, want only %s", got.Actions, manage)
+	}
+
+	if len(got.Grants) != 1 || got.Grants[0].Object.String() != "acme" {
+		t.Fatalf("grants on acme bot = %+v, want the namespace grant only", got.Grants)
+	}
+
+	none, explainErr := f.authz.Explain(ctx, fx.bob, fx.acmeBot)
+	if explainErr != nil {
+		t.Fatalf("explain: %v", explainErr)
+	}
+
+	if len(none.Actions) != 0 || len(none.Grants) != 0 {
+		t.Fatalf("actions of bob on acme bot = %+v, want none", none)
+	}
+}
+
+// TestNamespacePrincipalTokens proves the namespace token rule: a grant on
+// the namespace with namespace:manage-principal-tokens gives
+// principal:manage-tokens on a principal of that namespace only, never a
+// data action on the principal, and never on another namespace or on the
+// installation. A grant on the installation with the action gives it on no
+// principal: on the installation, only principal:manage-tokens does.
+func TestNamespacePrincipalTokens(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	fx := seedNamespaceTokens(t, f)
+
+	checkNamespaceTokenDecisions(t, f, &fx)
+	checkNamespaceTokenExplain(t, f, &fx)
+	checkNamespaceTokenLists(t, f, &fx)
+}
+
+// checkNamespaceTokenLists proves that ListObjects names the principals of
+// the namespaces where the caller holds the action.
+func checkNamespaceTokenLists(t *testing.T, f *fixture, fx *namespaceTokenFixture) {
+	t.Helper()
+
+	ctx := t.Context()
+	manage := identity.ActionPrincipalManageTokens
+
+	scope, err := f.authz.ListObjects(ctx, fx.alice, manage)
+	if err != nil {
+		t.Fatalf("list objects: %v", err)
+	}
+
+	if scope.All || len(scope.Principals) != 1 || scope.Principals[0].String() != fx.acmeBot.String() {
+		t.Fatalf("principals of alice = %+v, want only %q", scope, fx.acmeBot.String())
+	}
+
+	empty, listErr := f.authz.ListObjects(ctx, fx.bob, manage)
+	if listErr != nil {
+		t.Fatalf("list objects: %v", listErr)
+	}
+
+	if empty.All || len(empty.Principals) != 0 {
+		t.Fatalf("principals of bob = %+v, want none", empty)
+	}
+}
+
+// TestNamespaceTokenGrantRule proves who can give
+// namespace:manage-principal-tokens: a holder of every data action on the
+// namespace, or of server:manage-access on the installation. A holder of
+// namespace:manage-access and the action, without the other data actions,
+// cannot.
+func TestNamespaceTokenGrantRule(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+	f.person(t, "target")
+	f.person(t, "target2")
+
+	tokenRole := f.tokenRole(t, "ns-token-give")
+	limited, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
+		Name: "ns-limited", Description: "",
+		Actions: []identity.Action{identity.ActionNamespaceManageAccess, identity.ActionNamespaceManagePrincipalTokens},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	accessOnly, err := f.svc.CreateRole(ctx, testEntry(), admin(), access.RoleInput{
+		Name: "access-only", Description: "", Actions: []identity.Action{identity.ActionServerManageAccess},
+	})
+	if err != nil {
+		t.Fatalf("create role: %v", err)
+	}
+
+	partial := f.person(t, "partial")
+	full := f.person(t, "full")
+	root := f.person(t, "root")
+
+	f.grant(t, prn("partial"), limited.ID, identity.NamespaceObject("acme"))
+	f.grant(t, prn("full"), access.RoleAdmin, identity.NamespaceObject("acme"))
+	// The route of a grant on acme authorizes namespace:manage-access on
+	// acme first, so root holds it with the token action.
+	f.grant(t, prn("root"), limited.ID, identity.NamespaceObject("acme"))
+	f.grant(t, prn("root"), accessOnly.ID, identity.ServerObject())
+
+	acme := identity.NamespaceObject("acme")
+
+	_, partialErr := f.svc.Grant(ctx, testEntry(), partial, access.GrantInput{
+		Object: acme, Role: tokenRole.ID, Subject: prn("target"),
+	})
+	if !errors.Is(partialErr, access.ErrEscalation) {
+		t.Fatalf("grant by a holder without every data action = %v, want ErrEscalation", partialErr)
+	}
+
+	_, fullErr := f.svc.Grant(ctx, testEntry(), full, access.GrantInput{
+		Object: acme, Role: tokenRole.ID, Subject: prn("target"),
+	})
+	if fullErr != nil {
+		t.Fatalf("grant by a holder of every data action: %v", fullErr)
+	}
+
+	_, rootErr := f.svc.Grant(ctx, testEntry(), root, access.GrantInput{
+		Object: acme, Role: tokenRole.ID, Subject: prn("target2"),
+	})
+	if rootErr != nil {
+		t.Fatalf("grant by a holder of server:manage-access: %v", rootErr)
+	}
+
+	_, installErr := f.svc.Grant(ctx, testEntry(), partial, access.GrantInput{
+		Object: identity.ServerObject(), Role: tokenRole.ID, Subject: prn("target"),
+	})
+	if !errors.Is(installErr, access.ErrEscalation) {
+		t.Fatalf("grant on the installation without server:manage-access = %v, want ErrEscalation", installErr)
+	}
+}
+
+// TestListObjectsWithinAuthorize proves that each object that ListObjects
+// lists for a grant passes Authorize, alone and behind SelfAllowed: a grant
+// on a unit, on a namespace, through a group, and on the installation.
+func TestListObjectsWithinAuthorize(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	webProd := f.unit(t, mustUnit(t, "acme", "web/prod"))
+	betaUnit := f.unit(t, mustUnit(t, "beta", "api/prod"))
+
+	una := f.person(t, "una")
+	nora := f.person(t, "nora")
+	gale := f.person(t, "gale")
+	ida := f.person(t, "ida")
+
+	f.grant(t, access.Subject{Kind: access.SubjectPrincipal, ID: "prn-una"}, access.RoleViewer, webProd)
+	f.grant(t, access.Subject{Kind: access.SubjectPrincipal, ID: "prn-nora"}, access.RoleViewer,
+		identity.NamespaceObject("acme"))
+	f.grant(t, f.group(t, "readers", "gale"), access.RoleWriter, identity.NamespaceObject("beta"))
+	f.grant(t, access.Subject{Kind: access.SubjectPrincipal, ID: "prn-ida"}, access.RoleViewer, identity.ServerObject())
+
+	every := []identity.Object{
+		identity.NamespaceObject("acme"), identity.NamespaceObject("beta"), webProd, betaUnit,
+	}
+
+	for _, p := range []identity.Principal{una, nora, gale, ida} {
+		scope, err := f.authz.ListObjects(t.Context(), p, identity.ActionUnitRead)
+		if err != nil || scope.IsEmpty() {
+			t.Fatalf("%s lists unit:read = %+v, %v, want an object", p.Subject, scope, err)
+		}
+	}
+	actions := []identity.Action{identity.ActionNamespaceRead, identity.ActionUnitRead, identity.ActionUnitWrite}
+
+	for _, authz := range []identity.Authorizer{
+		f.authz,
+		identity.SelfAllowed{Next: f.authz, Actions: []identity.Action{identity.ActionTokenManageOwn}},
+	} {
+		for _, p := range []identity.Principal{una, nora, gale, ida} {
+			for _, action := range actions {
+				identitytest.CheckListWithinAuthorize(t.Context(), t, identitytest.ListCheck{
+					Authorizer: authz, Principal: p, Action: action, Every: every,
+				})
+			}
+		}
+	}
+}
+
+// mustUnit returns the Pulumi unit name in ns.
+func mustUnit(t *testing.T, ns namespace.Name, name string) identity.Object {
+	t.Helper()
+
+	obj, err := identity.UnitObject("pulumi", ns, name)
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	return obj
 }

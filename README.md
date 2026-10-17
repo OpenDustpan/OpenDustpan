@@ -124,6 +124,12 @@ token instead of a credentials file. The [TFE-compatible API
 notes](docs/tfe-api.md) list the endpoints, the `remote` backend with a
 workspace prefix, and the differences from TFE.
 
+A refused `tofu state push -force` of another lineage keeps the workspace
+lock. The error names the command that clears it. Run
+`tofu force-unlock <namespace>/<workspace>` to clear the lock. Do not push
+the same file again, because its lineage is still different. Run `tofu apply`,
+or push a state file that has the lineage of the workspace.
+
 ### Web console
 
 The web console is a separate repository,
@@ -287,11 +293,19 @@ How-to guides:
   the units that a delete keeps until its retention period ends.
 - [Architecture and sizing](docs/guides/architecture-and-sizing.md): the
   layout of an installation, and how to measure its size.
+- [Run several instances](docs/guides/several-instances.md): the settings
+  that each instance shares, for the target design.
+- [Console sign-in](docs/guides/console-sign-in.md) with an OpenID Connect
+  provider.
 
 Reference:
 
 - [Configuration](docs/reference/configuration.md): every flag and
   environment variable.
+- [Journaling](docs/reference/journaling.md): the setting, the recovery
+  steps and the bounds of a journaled update.
+- [Journal limits](docs/reference/journal-limits.md): the size and time limits
+  of a journaled update.
 - [TFE-compatible API](docs/tfe-api.md): the endpoints that OpenTofu uses.
 - [Glossary](GLOSSARY.md): the words this project uses.
 
@@ -401,6 +415,14 @@ runs the S3 blob suite. It needs `DUSTPAN_TEST_S3_ENDPOINT`,
 server. It downloads them first, as `e2e/doc.go` describes. `E2E_BLOBS=s3`
 with the four S3 variables drives the runs with the live blobs on the
 S3-compatible server.
+
+`make checks-agent` syncs the current branch with `main`, then runs
+`make generate`, `make check`, `make e2e`, and a TruffleHog scan of the branch
+commits. It starts a PostgreSQL container when `DUSTPAN_TEST_POSTGRES_URL` is
+not set, and it deletes the container and the temporary files it made.
+`SYNC` selects how the branch takes in `main`: `merge` (default), `rebase`,
+or `none`. `SKIP` lists steps to skip, for example `SKIP="e2e trufflehog"`.
+`CLEAN_CACHE=1` also deletes the e2e CLI download cache.
 
 Start with [CONTRIBUTING.md](CONTRIBUTING.md), then `CLAUDE.md` (rules for
 agents and contributors) and `docs/adr/` (why things are the way they are).

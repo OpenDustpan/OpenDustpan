@@ -28,6 +28,7 @@ the same list.
 | `--log-sink` | `DUSTPAN_LOG_SINK` | `log-sink` | (none: stderr). For example `stderr syslog+tls://logs.example:6514` |
 | `--blob-dir` | `DUSTPAN_BLOB_DIR` | `blob-dir` | `blobs` next to the SQLite file, or `./blobs` for PostgreSQL |
 | `--blob-store` | `DUSTPAN_BLOB_STORE` | `blob-store` | `fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]` |
+| `--blob-cache-bytes` | `DUSTPAN_BLOB_CACHE_BYTES` | `blob-cache-bytes` | `0`: no cache. The cache keeps only blobs that are written once: OpenTofu state versions. One blob takes at most one eighth of the cache |
 | `--s3-endpoint` | `DUSTPAN_S3_ENDPOINT` | `s3-endpoint` | (none: AWS) |
 | `--s3-region` | `DUSTPAN_S3_REGION` | `s3-region` | `us-east-1` |
 | `--backup-target` | `DUSTPAN_BACKUP_TARGET` | `backup-target` | (none: no backups), or `dir:/path` or `s3://<bucket>[/<prefix>]` |
@@ -39,8 +40,24 @@ the same list.
 | `--max-secret-batch-bytes` | `DUSTPAN_MAX_SECRET_BATCH_BYTES` | `max-secret-batch-bytes` | `0`: 32 MiB, the largest batch of Pulumi secrets |
 | `--max-state-bytes` | `DUSTPAN_MAX_STATE_BYTES` | `max-state-bytes` | `0`: 32 MiB, the largest OpenTofu state |
 | `--max-body-bytes-in-flight` | `DUSTPAN_MAX_BODY_BYTES_IN_FLIGHT` | `max-body-bytes-in-flight` | `0`: 128 MiB of large request bodies of the Pulumi CLI and OpenTofu at the same time. The budget covers OpenTofu state uploads as well. An upload whose OpenTofu state has a large outputs document asks for more budget as the document grows. One sealed state with 16 MiB of outputs takes about 72 MiB of the budget. Installations with large outputs should raise this value. An upload that can never fit answers 413. |
+| `--audit-chain` | `DUSTPAN_AUDIT_CHAIN` | `audit-chain` | `on`. `off` turns the chain off. A change starts the server in maintenance mode until a person runs `opendustpan audit-chain approve` |
+| `--audit-checkpoints` | `DUSTPAN_AUDIT_CHECKPOINTS` | `audit-checkpoints` | (none: off). Set `true` to sign checkpoints. Needs `--audit-chain=on` and a signing key file |
+| `--audit-signing-key-file` | `DUSTPAN_AUDIT_SIGNING_KEY_FILE` | `audit-signing-key-file` | (none) |
+| `--audit-verify-keys-file` | `DUSTPAN_AUDIT_VERIFY_KEYS_FILE` | `audit-verify-keys-file` | (none) |
 | `--soft-delete-retention` | `DUSTPAN_SOFT_DELETE_RETENTION` | `soft-delete-retention` | `720h` (30 days, ADR 47). A Go duration of at least `1h`, for example `168h`. A delete records the end of its retention, so a change applies to later deletes |
 | `--audit-sink` | `DUSTPAN_AUDIT_SINK` | `audit-sink` | (none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit` |
+| `--oidc-issuer` | `DUSTPAN_OIDC_ISSUER` | `oidc-issuer` | (none: no console sign-in). The identity of a person does not hold the issuer. To use another issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a person of the old issuer with the same `sub`. |
+| `--oidc-provider` | `DUSTPAN_OIDC_PROVIDER` | `oidc-provider` | (none). The ID is part of the identity of each person who signs in: the subject `<provider ID>:<sub>`. A principal with that subject, a local one too, is the principal of that person. Never change the ID after the first sign-in. A new issuer needs a new ID. |
+| `--oidc-display-name` | `DUSTPAN_OIDC_DISPLAY_NAME` | `oidc-display-name` | (the provider ID) |
+| `--oidc-client-id` | `DUSTPAN_OIDC_CLIENT_ID` | `oidc-client-id` | (none) |
+| `--oidc-scopes` | `DUSTPAN_OIDC_SCOPES` | `oidc-scopes` | `profile,email` |
+| `--oidc-no-auto-create` | `DUSTPAN_OIDC_NO_AUTO_CREATE` | `oidc-no-auto-create` | false |
+
+With journaling on, the server refuses to complete an update with
+`succeeded` while the server has not stored a journal batch of the update. The
+server does not detect a missing last batch: if the last journal batch of an
+update is never sent, complete does not refuse it. Cancel the update when its
+batches stop arriving.
 
 ## Configuration file
 
@@ -68,9 +85,9 @@ the example below quotes each string.
 
 The file refuses a `database` URL with a password. Set such a URL in
 `DUSTPAN_DATABASE`, because a secret comes only from a variable or from a
-file that a `*_FILE` key names (ADR 63 decision 4). The `--database` flag
-still takes a URL with a password, but it is deprecated: `serve` logs a
-WARN line when it does. Use `DUSTPAN_DATABASE` instead.
+file that a `*_FILE` key names. The `--database` flag refuses a URL with a
+password too: `serve` stops with an error before it opens the database.
+Use `DUSTPAN_DATABASE` instead.
 
 At start, the server writes one INFO line for each setting, with its key,
 its value and its layer: `flag`, `env`, `file` or `default`. When more than
@@ -166,8 +183,9 @@ next to the data does not protect a backup of that data.
 ## Client commands
 
 `opendustpan namespace create`, `opendustpan backup`, `opendustpan backup
-check`, `opendustpan upgrade check` and `opendustpan restore` call a running
-server. They read the server URL from `--server` or
+check`, `opendustpan upgrade check`, `opendustpan restore` and the
+`opendustpan audit-chain` commands call a running server. They read the
+server URL from `--server` or
 `DUSTPAN_SERVER`, and the token from `DUSTPAN_ADMIN_TOKEN` or
 `DUSTPAN_ADMIN_TOKEN_FILE`. `--ca-file` adds a PEM bundle of CA certificates
 to the system store.
@@ -181,9 +199,12 @@ Each client command takes only the flags in its row:
 | `opendustpan backup check --backup <id>` | `--server`, `--ca-file`, `--backup` |
 | `opendustpan restore --backup <id>` | `--server`, `--ca-file`, `--backup`, `--check-only`, `--force` |
 | `opendustpan upgrade check` | `--server`, `--ca-file` |
+| `opendustpan audit-chain status` | `--server`, `--ca-file` |
+| `opendustpan audit-chain approve` | `--server`, `--ca-file` |
 | `opendustpan health` | `--listen`, `--tls-cert` |
 
 `opendustpan health` reads `--listen`, `--tls-cert` and their variables, as
 `serve` does. The [observe guide](../guides/observe.md) shows the probes.
 The [backup guide](../guides/backup-restore-upgrade.md) shows the flags of
-the backup commands.
+the backup commands. The [audit log guide](../guides/audit-log.md) shows
+the audit chain commands.

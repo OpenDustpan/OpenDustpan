@@ -10,7 +10,9 @@ import (
 	"net/http"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -104,14 +106,14 @@ func (h *Handler) lockWorkspace(w http.ResponseWriter, r *http.Request, c call) 
 
 	info, err := readLockInfo(w, r)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeLockError(ctx, w, err)
 
 		return
 	}
 
 	ws, err := h.workspaceOf(ctx, c)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeLockError(ctx, w, err)
 
 		return
 	}
@@ -124,12 +126,28 @@ func (h *Handler) lockWorkspace(w http.ResponseWriter, r *http.Request, c call) 
 	}
 
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeLockError(ctx, w, err)
 
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+// writeLockError answers a failed LOCK. A fenced LOCK answers 503 with a
+// Retry-After time, not 409: OpenTofu reads a 409 on LOCK as a lock that
+// another client holds, and shows lock info that does not exist. It retries a
+// 503, and the retry reads the namespace again. Any other error answers as
+// writeError does.
+func (h *Handler) writeLockError(ctx context.Context, w http.ResponseWriter, err error) {
+	if !errors.Is(err, namespace.ErrFenced) {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	bodygate.SetRetryAfterJitter(w)
+	http.Error(w, namespace.ErrFenced.Error()+": try again after the Retry-After time", http.StatusServiceUnavailable)
 }
 
 // writeHeld answers a refused LOCK with the lock that holds the workspace now.

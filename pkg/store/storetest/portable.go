@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
 )
@@ -45,6 +46,7 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "a portable export stages with the same rows", test: testPortableStages},
 		{name: "a table file that differs from its descriptor is refused", test: testPortableStageRefusesCorrupt},
 		{name: "a portable stage refuses another schema version", test: testPortableStageRefusesVersion},
+		{name: "a portable stage refuses a backup from before the baseline", test: testPortableStageRefusesBaseline},
 		{name: "an empty byte value is the empty string, not null", test: testPortableEmptyBytes},
 		{name: "a files list with a duplicate table is refused", test: testPortableStageRefusesDuplicate},
 		{name: "a files list with an unknown table is refused", test: testPortableStageRefusesUnknown},
@@ -57,9 +59,14 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "peek returns one key of the wrapper without loading", test: testPortablePeekKey},
 		{name: "peek refuses an unknown wrapper", test: testPortablePeekUnknownWrapper},
 		{name: "peek refuses a corrupt key file", test: testPortablePeekCorrupt},
+		{name: "peek returns one installation key without loading", test: testPortablePeekInstallationKey},
+		{name: "the key check opens a backup with installation keys only", test: testPortableKeyOnlyInstallation},
+		{name: "the key check opens a backup with both kinds of keys", test: testPortableKeyBothKinds},
+		{name: "the key check refuses the wrong key of installation keys", test: testPortableKeyWrongKey},
 		{name: "a soft delete keeps every child row of the stack", test: testPortableDeleteKeepsChildren},
 		{name: "a purge removes every row of the stack", test: testPortablePurgeRemovesChildren},
 		{name: "a purge removes every row of the workspace", test: testPortablePurgeRemovesWorkspaceRows},
+		{name: "a pending version that names content stays out of the backup", test: testPortablePendingNamesNoBlob},
 	}
 
 	for _, tc := range cases {
@@ -275,6 +282,23 @@ func testPortableStageRefusesVersion(t *testing.T, newStore PortableFactory) {
 	}
 }
 
+// testPortableStageRefusesBaseline checks that a portable backup from
+// before the baseline schema is refused with ErrSchemaBeforeBaseline.
+func testPortableStageRefusesBaseline(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	sum.SchemaVersion = backup.BaselineSchemaVersion - 1
+
+	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	if !errors.Is(err, backup.ErrSchemaBeforeBaseline) {
+		t.Fatalf("stage a backup from before the baseline: err = %v, want ErrSchemaBeforeBaseline", err)
+	}
+}
+
 // portableColumnNames returns the portable column names of table, in order.
 func portableColumnNames(table string) []string {
 	for _, spec := range backup.PortableTables() {
@@ -397,7 +421,7 @@ func testPortableJournalBlob(t *testing.T, newStore PortableFactory) {
 
 	src := newStore(t)
 	f := newFixture(t, src)
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 
 	row := journalRow(t, src, u, 7, 1)
 	row.Size = 33
@@ -473,8 +497,8 @@ func testPortablePeekUnknownWrapper(t *testing.T, newStore PortableFactory) {
 	dst := newStore(t)
 
 	_, err := dst.PeekPortableKey(t.Context(), sink.read, portableFileNamed(t, files, "secret_keys"), "kek-unknown")
-	if !errors.Is(err, backup.ErrCorrupt) {
-		t.Fatalf("peek key of an unknown wrapper: err = %v, want ErrCorrupt", err)
+	if !errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, backup.ErrNoDataKey) {
+		t.Fatalf("peek key of an unknown wrapper: err = %v, want ErrNoDataKey", err)
 	}
 
 	assertBackupEmpty(t, dst)
@@ -568,6 +592,10 @@ func testPortableStageRefusesDuplicate(t *testing.T, newStore PortableFactory) {
 	seedBackupStore(t, s)
 
 	sink, sum, files := exportPortable(t, s)
+	if len(files) == 0 {
+		t.Fatal("export wrote no table file, want one for each table")
+	}
+
 	files = append(files, files[0])
 
 	assertStageRefused(t, s, sink, portableExport{sum: sum, files: files}, "namespaces")
@@ -772,4 +800,47 @@ func testPortableStageRefusesBlobs(t *testing.T, newStore PortableFactory) {
 	if left := mustListNamespaces(t, dst); len(left) != 0 {
 		t.Fatalf("namespaces after a refused stage = %+v, want none", left)
 	}
+}
+
+// testPortablePendingNamesNoBlob stages a pending state version that names a
+// content key and never finalizes it. The export succeeds and names the
+// committed content, but not the pending key: a pending row has no committed
+// content.
+func testPortablePendingNamesNoBlob(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	ns := newWorkspaceNamespace(t, s, "acme")
+	w := createTestWorkspace(t, s, ns, "network")
+	locked := lockTestWorkspace(t, s, ns, w, "alice")
+
+	first := createPendingVersion(t, s, ns, newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v1", 1)))
+	finalized := finalizedVersion(first, now().Add(2*time.Hour), "v1")
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalized); err != nil {
+		t.Fatalf("finalize state version: %v", err)
+	}
+
+	stuck := createPendingVersion(t, s, ns, newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v2", 2)))
+	stuckKey := attemptKeyOf(stuck, "a1")
+
+	if _, err := s.RecordUploadAttempt(t.Context(), stuck.ID, stuckKey, ns.Fence()); err != nil {
+		t.Fatalf("record upload attempt: %v", err)
+	}
+
+	_, sum, _ := exportPortable(t, s)
+
+	for _, ref := range sum.Blobs {
+		if ref.Key == string(stuckKey) {
+			t.Fatalf("export names pending key %q, want only finalized content", stuckKey)
+		}
+	}
+
+	for _, ref := range sum.Blobs {
+		if ref.Key == string(finalized.Content) {
+			return
+		}
+	}
+
+	t.Fatalf("export names %+v, want the finalized key %q", sum.Blobs, finalized.Content)
 }

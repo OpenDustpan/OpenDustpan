@@ -44,7 +44,9 @@ func TestRunShipsAuditEntriesToAFileSink(t *testing.T) {
 		}
 	})
 
-	srv := newAuditSinkServer(t, st, audit.ShipSink{Sink: sink, Name: "file", Interval: 10 * time.Millisecond})
+	srv := newAuditSinkServer(t, st, audit.ShipSink{
+		Sink: sink, Name: "file", Kind: "file", Interval: 10 * time.Millisecond,
+	})
 
 	ctx, cancel := context.WithCancel(t.Context())
 	done := runServer(ctx, srv)
@@ -97,7 +99,7 @@ func TestNewServerRefusesTwoSinksWithOneName(t *testing.T) {
 		}
 	})
 
-	one := audit.ShipSink{Sink: sink, Name: "file", Interval: 0}
+	one := audit.ShipSink{Sink: sink, Name: "file", Kind: "file", Interval: 0}
 
 	_, err = dustpan.NewServer(append(auditSinkServerOptions(t, st), dustpan.WithAuditSinks(one, one))...)
 	if !errors.Is(err, audit.ErrInvalidShipper) {
@@ -147,27 +149,28 @@ func appendAuditEntry(t *testing.T, st *sqlite.Store, ns namespace.Namespace, re
 	t.Helper()
 
 	stored, err := st.Append(t.Context(), ns.Fence(), audit.Entry{
-		At:         time.Now(),
-		Namespace:  ns.Name,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "unit:read-secrets",
-		Object:     "opentofu:acme/prod",
-		Version:    "sv-1",
-		ValuePath:  "/outputs/db",
-		ValueCount: nil,
-		ObjectID:   "",
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "test",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindReveal,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  requestID,
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           time.Now(),
+		Namespace:    ns.Name,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "unit:read-secrets",
+		Object:       "opentofu:acme/prod",
+		Version:      "sv-1",
+		ValuePath:    "/outputs/db",
+		ValueCount:   nil,
+		ObjectID:     "",
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "test",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindReveal,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    requestID,
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	})
 	if err != nil {
 		t.Fatalf("append audit entry: %v", err)

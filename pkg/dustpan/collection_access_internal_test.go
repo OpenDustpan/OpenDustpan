@@ -145,8 +145,16 @@ func createPrincipals(t *testing.T, st *sqlite.Store, at time.Time, subjects ...
 
 	for _, subject := range subjects {
 		p := principal.Principal{
-			CreatedAt: at, UpdatedAt: at, ID: "prn-" + subject, Subject: subject, DisplayName: "",
-			Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0, DisabledAt: time.Time{},
+			CreatedAt:   at,
+			UpdatedAt:   at,
+			ID:          "prn-" + subject,
+			Subject:     subject,
+			DisplayName: "",
+			Kind:        principal.KindPerson,
+			Source:      principal.SourceLocal,
+			Namespace:   "",
+			GroupCount:  0, BreakGlass: false,
+			DisabledAt: time.Time{},
 		}
 		if err := st.CreatePrincipal(t.Context(), p, storetest.ServerChange(at, "principal:"+p.ID)); err != nil {
 			t.Fatalf("create principal %q: %v", subject, err)

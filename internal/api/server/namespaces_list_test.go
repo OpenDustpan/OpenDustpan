@@ -17,7 +17,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
-	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 )
 
@@ -66,7 +65,7 @@ func grantViewerOn(t *testing.T, f accessFixture, principalID, ns, grantID strin
 	}
 
 	fence, e := storetest.GrantWrite(t, f.store, obj, at, "grant:"+grantID)
-	if err := f.store.CreateGrant(t.Context(), grt, fence, e); err != nil {
+	if err := f.store.CreateGrant(t.Context(), grt, fence, e, nil); err != nil {
 		t.Fatalf("seed grant on %q: %v", ns, err)
 	}
 }
@@ -312,7 +311,7 @@ func TestNamespaceListSkipsUnitGrant(t *testing.T) {
 	}
 
 	fence, e := storetest.GrantWrite(t, f.store, unit, at, "grant:grt-list-unit")
-	if err := f.store.CreateGrant(t.Context(), grt, fence, e); err != nil {
+	if err := f.store.CreateGrant(t.Context(), grt, fence, e, nil); err != nil {
 		t.Fatalf("seed unit grant: %v", err)
 	}
 
@@ -344,7 +343,7 @@ func TestNamespaceListSkipsCollectionGrant(t *testing.T) {
 	}
 
 	fence, e := storetest.GrantWrite(t, f.store, obj, at, "grant:grt-list-collection")
-	if grantErr := f.store.CreateGrant(t.Context(), grt, fence, e); grantErr != nil {
+	if grantErr := f.store.CreateGrant(t.Context(), grt, fence, e, nil); grantErr != nil {
 		t.Fatalf("seed collection grant: %v", grantErr)
 	}
 
@@ -360,16 +359,7 @@ func TestNamespaceListSkipsCollectionGrant(t *testing.T) {
 func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []string) *apiserver.Handler {
 	t.Helper()
 
-	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := st.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
+	st := openServerTemplateStore(t, filepath.Join(t.TempDir(), "dustpan.db"))
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: "test"})
 	if err != nil {
@@ -388,24 +378,29 @@ func newListNoAccessHandler(t *testing.T, authn identity.Authenticator, names []
 	}
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:  authn,
-		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     namespaces,
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "",
-		Schema:         stubSchema{migrations: nil},
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
-		IPAllowlists:   nil,
-		SessionPolicy:  nil,
-		DeletedUnits:   nil,
+		Authenticator:    authn,
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       namespaces,
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "",
+		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -494,24 +489,29 @@ func TestNamespaceListWithoutPager(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:  subjectAuthenticator{},
-		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     newNoPagerNamespaces(t),
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "",
-		Schema:         stubSchema{migrations: nil},
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
-		IPAllowlists:   nil,
-		SessionPolicy:  nil,
-		DeletedUnits:   nil,
+		Authenticator:    subjectAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newNoPagerNamespaces(t),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "",
+		Schema:           stubSchema{migrations: nil},
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)

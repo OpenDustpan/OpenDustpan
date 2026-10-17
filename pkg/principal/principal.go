@@ -1,9 +1,11 @@
 // Package principal keeps the principals and the groups of an installation
 // (ADR 52, decisions 1, 2 and 4).
 //
-// A principal is a person, a service or a workload. It belongs to the whole
-// installation, not to one namespace. A grant on each object decides what a
-// principal can do there (RFC 19). A group is a named set of principals. It
+// A principal is a person, a service or a workload. Most principals belong
+// to the whole installation. A service principal can instead belong to one
+// namespace: it can only hold grants inside that namespace, and it cannot be
+// a member of a group. A grant on each object decides what a principal can
+// do there. A group is a named set of principals. It
 // also belongs to the whole installation. Any principal can be a member of
 // more than one group.
 //
@@ -28,6 +30,7 @@ import (
 	"unicode/utf8"
 
 	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Sentinel errors returned by this package and by Store implementations.
@@ -51,6 +54,15 @@ var (
 	ErrManagedByDirectory = errors.New("group is managed by a directory")
 	// ErrNotDisabled reports an enable of a principal that is not disabled.
 	ErrNotDisabled = errors.New("principal is not disabled")
+	// ErrBreakGlassKind reports a break-glass account that is not a person.
+	// Only a person can be a break-glass account.
+	ErrBreakGlassKind = errors.New("break-glass account must be a person")
+	// ErrDisabled reports a principal that is disabled.
+	ErrDisabled = errors.New("principal is disabled")
+	// ErrNotSignInTarget reports a principal that a sign-in through an
+	// identity provider cannot name: one that is not a person, a principal
+	// of a namespace, or a break-glass account.
+	ErrNotSignInTarget = errors.New("principal cannot sign in through an identity provider")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -82,8 +94,8 @@ func ParseKind(s string) (Kind, error) {
 // Source names where a principal or a group comes from.
 type Source string
 
-// Sources of records (ADR 55). Only SourceLocal exists today: the directory
-// sync sets the others.
+// Sources of records. The directory sync sets SourceLDAP and
+// SourceSCIM.
 const (
 	// SourceLocal is a record made through the API.
 	SourceLocal Source = "local"
@@ -91,6 +103,12 @@ const (
 	SourceLDAP Source = "ldap"
 	// SourceSCIM is a record that a SCIM sync keeps.
 	SourceSCIM Source = "scim"
+	// SourceOIDC is a person that the first sign-in through an OpenID
+	// Connect provider made.
+	SourceOIDC Source = "oidc"
+	// SourceOAuth is a person that the first sign-in through a plain
+	// OAuth 2.0 provider made.
+	SourceOAuth Source = "oauth"
 )
 
 // Limits of the text fields, in bytes.
@@ -117,6 +135,12 @@ const (
 // DisabledAt is zero for a principal that the inactivity disable of access
 // tokens did not end (ADR 53, decision 4). A disabled principal does not
 // authenticate until an administrator enables it again. A write ignores it.
+// Namespace is empty for a principal of the installation, and names the
+// namespace of a principal of a namespace: a service principal that can only
+// hold grants inside that namespace. It does not change after the create.
+// BreakGlass marks a break-glass account: a person that signs in without
+// the identity provider. A break-glass account is always exempt from the
+// inactivity disable. Only a person can have it.
 type Principal struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -126,7 +150,9 @@ type Principal struct {
 	DisplayName string
 	Kind        Kind
 	Source      Source
+	Namespace   namespace.Name
 	GroupCount  int64
+	BreakGlass  bool
 }
 
 // Group is the stored record of one group. ID is stable and opaque, with the
@@ -143,17 +169,135 @@ type Group struct {
 	MemberCount int64
 }
 
-// Member is one principal in a group, with the time it joined.
-type Member struct {
-	AddedAt   time.Time
-	Principal Principal
+// MembershipSource names where a group membership comes from: a local
+// change through the API, a SCIM call, or a group claim at sign-in.
+type MembershipSource string
+
+// Sources of a membership.
+const (
+	// MembershipSourceLocal is a membership made through the API.
+	MembershipSourceLocal MembershipSource = "local"
+	// MembershipSourceSCIM is a membership that a SCIM call keeps.
+	MembershipSourceSCIM MembershipSource = "scim"
+	// MembershipSourceClaim is a membership from a group claim at sign-in.
+	MembershipSourceClaim MembershipSource = "claim"
+)
+
+// ParseMembershipSource returns the MembershipSource that s names, or
+// ErrInvalid.
+func ParseMembershipSource(s string) (MembershipSource, error) {
+	switch src := MembershipSource(s); src {
+	case MembershipSourceLocal, MembershipSourceSCIM, MembershipSourceClaim:
+		return src, nil
+	default:
+		return "", fmt.Errorf("%w: unknown membership source %q", ErrInvalid, s)
+	}
 }
 
-// Membership puts one principal in one group.
+// MembershipState names whether a group membership is in effect.
+type MembershipState string
+
+// States of a membership. A suspended membership gives no rights until it
+// is active again.
+const (
+	// MembershipStateActive is a membership in effect.
+	MembershipStateActive MembershipState = "active"
+	// MembershipStateSuspended is a membership that gives no rights.
+	MembershipStateSuspended MembershipState = "suspended"
+)
+
+// ParseMembershipState returns the MembershipState that s names, or
+// ErrInvalid.
+func ParseMembershipState(s string) (MembershipState, error) {
+	switch st := MembershipState(s); st {
+	case MembershipStateActive, MembershipStateSuspended:
+		return st, nil
+	default:
+		return "", fmt.Errorf("%w: unknown membership state %q", ErrInvalid, s)
+	}
+}
+
+// Membership puts one principal in one group. SourceID names the identity
+// provider or the SCIM token of a membership from a claim or from SCIM, and
+// is empty for a local membership. SuspendedAt is zero while the membership
+// is active. Pinned keeps a restored membership through the next directory
+// sync.
 type Membership struct {
 	AddedAt     time.Time
+	SuspendedAt time.Time
 	GroupID     string
 	PrincipalID string
+	Source      MembershipSource
+	SourceID    string
+	State       MembershipState
+	Pinned      bool
+}
+
+// Validate reports whether m holds usable values. An empty source or state
+// takes the default: local and active.
+func (m Membership) Validate() error {
+	def := m.WithDefaults()
+
+	if _, err := ParseMembershipSource(string(def.Source)); err != nil {
+		return err
+	}
+
+	if _, err := ParseMembershipState(string(def.State)); err != nil {
+		return err
+	}
+
+	if def.Source == MembershipSourceLocal && def.SourceID != "" {
+		return fmt.Errorf("%w: a local membership names no identity provider or SCIM token", ErrInvalid)
+	}
+
+	if def.Source != MembershipSourceLocal && def.SourceID == "" {
+		return fmt.Errorf("%w: a membership from %s names its identity provider or SCIM token", ErrInvalid, def.Source)
+	}
+
+	if err := validateText("source ID", def.SourceID, maxSubjectLength); err != nil {
+		return err
+	}
+
+	if def.State == MembershipStateActive && !def.SuspendedAt.IsZero() {
+		return fmt.Errorf("%w: an active membership has no suspend time", ErrInvalid)
+	}
+
+	if def.State == MembershipStateSuspended && def.SuspendedAt.IsZero() {
+		return fmt.Errorf("%w: a suspended membership names when it was suspended", ErrInvalid)
+	}
+
+	return nil
+}
+
+// WithDefaults returns m with an empty source set to local and an empty
+// state set to active. A local add carries neither, so it defaults to both.
+func (m Membership) WithDefaults() Membership {
+	if m.Source == "" {
+		m.Source = MembershipSourceLocal
+	}
+
+	if m.State == "" {
+		m.State = MembershipStateActive
+	}
+
+	return m
+}
+
+// Member is one principal in a group, with the time it joined and where the
+// membership comes from. SourceID names the identity provider or the SCIM
+// token of a membership from a claim or from SCIM, and is empty for a local
+// membership. SuspendedAt is zero while the membership is active. Pinned
+// keeps a restored membership through the next directory sync.
+type Member struct {
+	AddedAt     time.Time
+	SuspendedAt time.Time
+	Principal   Principal
+	GroupID     string
+	PrincipalID string
+	Source      MembershipSource
+	SourceID    string
+	State       MembershipState
+	Pinned      bool
 }
 
 // ValidateSubject reports whether s is a usable subject for a principal
@@ -218,11 +362,9 @@ func ValidateGroupName(s string) error {
 	return nil
 }
 
-// validateText checks one text field. A required field must not be empty.
-func validateText(field, s string, maxLen int, required bool) error {
+// validateText checks one optional text field. An empty field is valid.
+func validateText(field, s string, maxLen int) error {
 	switch {
-	case s == "" && required:
-		return fmt.Errorf("%w: missing %s", ErrInvalid, field)
 	case len(s) > maxLen:
 		return fmt.Errorf("%w: %s longer than %d bytes", ErrInvalid, field, maxLen)
 	case !utf8.ValidString(s):
@@ -245,13 +387,14 @@ func validateText(field, s string, maxLen int, required bool) error {
 }
 
 // Validate reports whether p holds usable values. It does not check ID or
-// the times: the Service sets them.
+// the times: the Service sets them. It returns ErrBreakGlassKind when a
+// principal that is not a person is marked as a break-glass account.
 func (p Principal) Validate() error {
 	if err := ValidateSubject(p.Subject); err != nil {
 		return err
 	}
 
-	if err := validateText("display name", p.DisplayName, maxDisplayNameLength, false); err != nil {
+	if err := validateText("display name", p.DisplayName, maxDisplayNameLength); err != nil {
 		return err
 	}
 
@@ -259,14 +402,40 @@ func (p Principal) Validate() error {
 		return err
 	}
 
+	if p.BreakGlass && p.Kind != KindPerson {
+		return fmt.Errorf("%w: kind %q", ErrBreakGlassKind, p.Kind)
+	}
+
+	if err := p.validateNamespace(); err != nil {
+		return err
+	}
+
 	return validateSource(p.Source)
 }
 
-// validateSource returns ErrInvalid for a source that is not local, ldap or
-// scim.
+// validateNamespace returns ErrInvalid for a principal of a namespace with
+// a namespace name that is not valid, or that is not a service principal.
+func (p Principal) validateNamespace() error {
+	if p.Namespace == "" {
+		return nil
+	}
+
+	if _, err := namespace.ParseName(p.Namespace.String()); err != nil {
+		return fmt.Errorf("%w: namespace %q", ErrInvalid, p.Namespace.String())
+	}
+
+	if p.Kind != KindService {
+		return fmt.Errorf("%w: a principal of a namespace must be a service principal, not a %s", ErrInvalid, p.Kind)
+	}
+
+	return nil
+}
+
+// validateSource returns ErrInvalid for a source that is not local, ldap,
+// scim, oidc or oauth.
 func validateSource(s Source) error {
 	switch s {
-	case SourceLocal, SourceLDAP, SourceSCIM:
+	case SourceLocal, SourceLDAP, SourceSCIM, SourceOIDC, SourceOAuth:
 		return nil
 	default:
 		return fmt.Errorf("%w: unknown source %q", ErrInvalid, s)
@@ -284,7 +453,7 @@ func (g Group) Validate() error {
 		return err
 	}
 
-	return validateText("description", g.Description, maxDescriptionLength, false)
+	return validateText("description", g.Description, maxDescriptionLength)
 }
 
 // Audit object names of the records that a change acts on (ADR 60,

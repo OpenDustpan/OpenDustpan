@@ -20,7 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
-	"opendustpan.org/opendustpan/pkg/inventory"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -31,7 +31,6 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/schema"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
-	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 func TestConformance(t *testing.T) {
@@ -44,6 +43,25 @@ func TestConformance(t *testing.T) {
 	})
 }
 
+// TestSharedConformance runs the two-handle suite. One SQLite file allows
+// one store, so the suite gets that store twice: one database with two
+// concurrent callers.
+func TestSharedConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunShared(t, func(t *testing.T) (storetest.Store, storetest.Store) {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
+
+		s := openPath(t, path)
+
+		return s, s
+	})
+}
+
 // TestAccessConformance runs the role and grant store suite.
 func TestAccessConformance(t *testing.T) {
 	t.Parallel()
@@ -52,6 +70,23 @@ func TestAccessConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t)
+	})
+}
+
+// TestAccessConcurrency runs the cases of a grant or role check that races
+// a write on the same database handle.
+func TestAccessConcurrency(t *testing.T) {
+	t.Parallel()
+
+	accesstest.RunConcurrent(t, func(t *testing.T) (access.Store, access.Store) {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+		copyTemplate(t, path)
+
+		s := openPath(t, path)
+
+		return s, s
 	})
 }
 
@@ -88,6 +123,33 @@ func TestSessionConformance(t *testing.T) {
 	})
 }
 
+// TestSessionFreshConformance runs the session cases that change a policy
+// on one handle and use a session on the other. One SQLite file allows one
+// store, so the suite gets that store twice.
+func TestSessionFreshConformance(t *testing.T) {
+	t.Parallel()
+
+	sessiontest.RunFresh(t, func(t *testing.T) (sessiontest.Store, sessiontest.Store) {
+		t.Helper()
+
+		s := open(t)
+
+		return s, s
+	})
+}
+
+// TestNamespacePrincipalConformance runs the suite of the principals of a
+// namespace.
+func TestNamespacePrincipalConformance(t *testing.T) {
+	t.Parallel()
+
+	principaltest.RunNamespace(t, func(t *testing.T) principaltest.NamespaceStore {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
 // TestPrincipalConformance runs the principal and group store suite.
 func TestPrincipalConformance(t *testing.T) {
 	t.Parallel()
@@ -107,18 +169,7 @@ func TestAuditFeedConformance(t *testing.T) {
 	audittest.RunFeed(t, func(t *testing.T) audittest.FeedStore {
 		t.Helper()
 
-		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-		if err != nil {
-			t.Fatalf("open store: %v", err)
-		}
-
-		t.Cleanup(func() {
-			if err := s.Close(); err != nil {
-				t.Errorf("close store: %v", err)
-			}
-		})
-
-		return s
+		return open(t)
 	})
 }
 
@@ -133,6 +184,8 @@ func TestAuditConformance(t *testing.T) {
 		t.Helper()
 
 		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		copyTemplate(t, path)
 
 		s, err := sqlite.Open(t.Context(), path)
 		if err != nil {
@@ -157,15 +210,121 @@ func TestAuditConformance(t *testing.T) {
 	})
 }
 
+// TestAuditEntryReaderConformance runs the audit.EntryReader cases: one
+// entry at a sequence and the last entry of a scope.
+func TestAuditEntryReaderConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.RunEntryReader(t, func(t *testing.T) audittest.EntryStore {
+		t.Helper()
+
+		s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return s
+	})
+}
+
+// TestAuditChainConformance runs the chain switch cases: entries without a
+// hash, runs of chained entries, and the recorded chain state.
+func TestAuditChainConformance(t *testing.T) {
+	t.Parallel()
+
+	audittest.RunChain(t, func(t *testing.T) audittest.ChainTestStore {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "dustpan.db")
+
+		s, err := sqlite.Open(t.Context(), path)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(func() {
+			if err := s.Close(); err != nil {
+				t.Errorf("close store: %v", err)
+			}
+		})
+
+		return audittest.ChainTestStore{
+			Store: s,
+			TamperEntry: func(t *testing.T, ns namespace.Name, seq int64, field, value string) {
+				t.Helper()
+
+				change := auditFieldChange{field: field, value: value}
+				if err := tamperAuditEntry(t.Context(), path, ns, seq, change); err != nil {
+					t.Fatalf("change entry %d: %v", seq, err)
+				}
+			},
+			// One SQLite file allows one store, so there is no second
+			// handle to reopen.
+			Reopen: nil,
+			DeleteChainState: func(t *testing.T) {
+				t.Helper()
+
+				execRawSQL(t, path, `DELETE FROM audit_chain_state`)
+			},
+		}
+	})
+}
+
+// execRawSQL runs one statement on a raw handle on the database at path.
+func execRawSQL(t *testing.T, path, statement string) {
+	t.Helper()
+
+	conn, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	if _, execErr := conn.ExecContext(t.Context(), statement); execErr != nil {
+		t.Fatalf("%s: %v", statement, execErr)
+	}
+}
+
 // errUnknownAuditField reports a tamper hook field outside the whitelist.
 var errUnknownAuditField = errors.New("unknown audit field")
 
 // tamperAuditColumn maps a tamper hook field to its column. The column
 // equals the field; the switch keeps the field name out of SQL unless it
-// names one of the six whitelisted columns.
+// names one of the whitelisted columns.
 func tamperAuditColumn(field string) (string, bool) {
 	switch field {
-	case "subject", "action", "object", "outcome", "kind", "changes":
+	case "subject",
+		"action",
+		"object",
+		"outcome",
+		"kind",
+		"hash",
+		"prev_hash",
+		"at_ms",
+		"sequence",
+		"changes",
+		"fence_version",
+		"value_path",
+		"value_count",
+		"object_id",
+		"idp_subject",
+		"token_id",
+		"version",
+		"source_ip",
+		"user_agent",
+		"channel",
+		"request_id":
 		return field, true
 	default:
 		return "", false
@@ -248,7 +407,11 @@ func TestSchemaConformance(t *testing.T) {
 func TestPingClosed(t *testing.T) {
 	t.Parallel()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
@@ -282,6 +445,8 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, openErr := sqlite.Open(t.Context(), path)
 	if openErr != nil {
@@ -329,10 +494,77 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 	}
 }
 
+// TestMissingStateRowIsUnavailable deletes the seeded installation row and
+// proves that GetState and SetState answer ErrUnavailable, and that
+// SetState does not create the row again: the migration seeds the row, so a
+// missing row is a server fault.
+func TestMissingStateRowIsUnavailable(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+
+	s, openErr := sqlite.Open(t.Context(), path)
+	if openErr != nil {
+		t.Fatalf("open store: %v", openErr)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	conn, connErr := openRawDB(path)
+	if connErr != nil {
+		t.Fatalf("open raw database: %v", connErr)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	ctx := t.Context()
+
+	if _, execErr := conn.ExecContext(ctx, `DELETE FROM installation`); execErr != nil {
+		t.Fatalf("delete installation row: %v", execErr)
+	}
+
+	if _, err := s.GetState(ctx); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("get installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	if err := s.SetState(ctx, maintenance.StateMaintenance); !errors.Is(err, maintenance.ErrUnavailable) {
+		t.Fatalf("set installation state without a row: err = %v, want ErrUnavailable", err)
+	}
+
+	var rows int64
+	if scanErr := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM installation`).Scan(&rows); scanErr != nil {
+		t.Fatalf("count installation rows: %v", scanErr)
+	}
+
+	if rows != 0 {
+		t.Fatalf("installation rows after the writes = %d, want 0", rows)
+	}
+}
+
 func TestSecretsConformance(t *testing.T) {
 	t.Parallel()
 
 	secrettest.Run(t, func(t *testing.T) secrettest.Store {
+		t.Helper()
+
+		return open(t)
+	})
+}
+
+func TestInstallationSecretsConformance(t *testing.T) {
+	t.Parallel()
+
+	secrettest.RunInstallation(t, func(t *testing.T) secrettest.InstallationStore {
 		t.Helper()
 
 		return open(t)
@@ -345,7 +577,7 @@ func TestUpdatesConformance(t *testing.T) {
 	storetest.RunUpdates(t, func(t *testing.T) storetest.UpdatesStore {
 		t.Helper()
 
-		return openUncounted(t)
+		return openSQLUpdates(t)
 	})
 
 	// History fields of ADR 28 decision 4: creator, restore source and
@@ -444,13 +676,17 @@ type backupStore struct {
 var (
 	_ storetest.Reopener       = (*backupStore)(nil)
 	_ storetest.StagingWitness = (*backupStore)(nil)
+	_ storetest.DurableHolder  = (*backupStore)(nil)
 )
 
-// openBackup returns a fresh backup-capable store in a temporary directory.
+// openBackup returns a fresh backup-capable store in a temporary directory,
+// copied from the migrated template.
 func openBackup(t *testing.T) storetest.BackupStore { //nolint:ireturn // Factory signature returns the interface.
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -506,6 +742,11 @@ func (s *backupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reope
 	return b
 }
 
+// DurableStore implements storetest.DurableHolder.
+func (s *backupStore) DurableStore() durable.Store { //nolint:ireturn // The capability returns the port.
+	return s.DurableOperations()
+}
+
 // CurrentStagingID implements storetest.StagingWitness: the path of the
 // current staging file, or empty when none exists.
 func (s *backupStore) CurrentStagingID() string {
@@ -524,170 +765,39 @@ func (s *backupStore) StagingAlive(id string) bool {
 	return err == nil
 }
 
-func TestMigration0010Workspaces(t *testing.T) {
-	t.Parallel()
-
-	t.Run("empty database", func(t *testing.T) {
-		t.Parallel()
-
-		s := open(t)
-
-		checkWorkspacesUsable(t, s, "acme")
-	})
-
-	t.Run("database with data from 0008", func(t *testing.T) {
-		t.Parallel()
-
-		path := filepath.Join(t.TempDir(), "dustpan.db")
-
-		seedAt0008WithStacks(t, path)
-
-		s, err := sqlite.Open(t.Context(), path)
-		if err != nil {
-			t.Fatalf("open migrated store: %v", err)
-		}
-
-		t.Cleanup(func() {
-			if closeErr := s.Close(); closeErr != nil {
-				t.Errorf("close store: %v", closeErr)
-			}
-		})
-
-		checkMigratedInventory(t, s)
-		checkWorkspacesUsable(t, s, "acme")
-	})
-}
-
-// checkWorkspacesUsable creates a namespace (unless it exists) and a
-// workspace, proving migration 0010 applied and the tables accept writes.
-func checkWorkspacesUsable(t *testing.T, s *sqlite.Store, nsName string) {
-	t.Helper()
-
-	stored := ensureWorkspaceNamespace(t, s, nsName)
-	w := createUsableWorkspace(t, s, stored)
-	checkUsableWorkspace(t, s, stored, w)
-}
-
-// ensureWorkspaceNamespace creates the namespace unless it exists, and
-// returns it.
-func ensureWorkspaceNamespace(t *testing.T, s *sqlite.Store, nsName string) namespace.Namespace {
-	t.Helper()
-
-	ctx := t.Context()
-	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
-
-	ns := namespace.Namespace{
-		CreatedAt:       now,
-		Name:            namespace.Name(nsName),
-		HomeRegion:      "eu-west",
-		FailoverVersion: 1,
-		Overrides:       namespace.Overrides{Forced: false, Unlocked: false},
-	}
-	if createErr := s.CreateNamespace(ctx, ns); createErr != nil &&
-		!errors.Is(createErr, namespace.ErrAlreadyExists) {
-		t.Fatalf("create namespace: %v", createErr)
-	}
-
-	stored, err := s.GetNamespace(ctx, namespace.Name(nsName))
-	if err != nil {
-		t.Fatalf("get namespace: %v", err)
-	}
-
-	return stored
-}
-
-// createUsableWorkspace creates one workspace in ns and returns it.
-func createUsableWorkspace(
-	t *testing.T, s *sqlite.Store, ns namespace.Namespace,
-) workspace.Workspace {
-	t.Helper()
-
-	now := time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC)
-
-	name, err := workspace.ParseName("network")
-	if err != nil {
-		t.Fatalf("parse workspace name: %v", err)
-	}
-
-	w := workspace.Workspace{
-		CreatedAt: now,
-		UpdatedAt: now,
-		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
-		ID:        workspace.ID(ident.NewID("ws-")),
-		Ref:       workspace.Ref{Namespace: ns.Name, Name: name},
-		Revision:  1,
-		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
-	}
-
-	if createErr := s.CreateWorkspace(t.Context(), w, ns.Fence()); createErr != nil {
-		t.Fatalf("create workspace: %v", createErr)
-	}
-
-	return w
-}
-
-// checkUsableWorkspace reads w back by name and in the namespace listing.
-func checkUsableWorkspace(t *testing.T, s *sqlite.Store, ns namespace.Namespace, w workspace.Workspace) {
-	t.Helper()
-
-	got, err := s.GetWorkspace(t.Context(), w.Ref)
-	if err != nil {
-		t.Fatalf("get workspace: %v", err)
-	}
-
-	if got.ID != w.ID || got.Ref != w.Ref || got.Revision != w.Revision {
-		t.Fatalf("workspace = %+v, want %+v", got, w)
-	}
-
-	list, err := s.ListWorkspaces(t.Context(), ns.Name)
-	if err != nil {
-		t.Fatalf("list workspaces: %v", err)
-	}
-
-	if len(list) != 1 || list[0].ID != w.ID {
-		t.Fatalf("listed workspaces = %+v, want one workspace %q", list, w.ID)
-	}
-}
-
-// open returns a fresh store in a temporary directory.
+// open returns a fresh store in a temporary directory, copied from the
+// migrated template so only the first test of the binary runs every
+// migration.
 func open(t *testing.T) *sqlite.Store {
 	t.Helper()
 
-	s, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if err := s.Close(); err != nil {
-			t.Errorf("close store: %v", err)
-		}
-	})
-
-	return s
+	return openTemplated(t)
 }
 
-// uncountedStore wraps a Store with its path so the uncounted-checkpoint
-// case sets the stored count to NULL with a direct SQL update: the port
-// always writes the count, so only SQL seeds rows from before the column.
-type uncountedStore struct {
+// sqlUpdatesStore wraps a Store with its path, so a case can change its rows
+// with direct SQL, as the audit case does to break audit appends.
+type sqlUpdatesStore struct {
 	storetest.UpdatesStore
 
 	path string
 }
 
 var (
-	_ storetest.CountNullifier = (*uncountedStore)(nil)
-	_ storetest.CountSetter    = (*uncountedStore)(nil)
-	_ storetest.AuditBreaker   = (*uncountedStore)(nil)
+	_ storetest.AuditBreaker = (*sqlUpdatesStore)(nil)
+	_ storetest.KeyEraser    = (*sqlUpdatesStore)(nil)
 )
 
-// openUncounted returns a fresh store in a temporary directory that the
-// uncounted-checkpoint case can NULL through SQL.
-func openUncounted(t *testing.T) *uncountedStore {
+// errNoJournalCount reports a wrapped store without the journaled count.
+var errNoJournalCount = errors.New("wrapped store does not count running journaled updates")
+
+// openSQLUpdates returns a fresh store in a temporary directory that a case
+// can change through SQL, copied from the migrated template.
+func openSQLUpdates(t *testing.T) *sqlUpdatesStore {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -700,58 +810,35 @@ func openUncounted(t *testing.T) *uncountedStore {
 		}
 	})
 
-	return &uncountedStore{UpdatesStore: s, path: path}
+	return &sqlUpdatesStore{UpdatesStore: s, path: path}
 }
 
-// NullifyResourceCount implements storetest.CountNullifier.
-func (s *uncountedStore) NullifyResourceCount(ctx context.Context) (err error) {
-	conn, err := openRawDB(s.path)
+// CountRunningJournaledUpdates forwards to the wrapped store, whose method
+// the embedded UpdatesStore interface hides.
+func (s *sqlUpdatesStore) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	counter, ok := s.UpdatesStore.(interface {
+		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
+	})
+	if !ok {
+		return 0, fmt.Errorf("count running journaled updates: %w", errNoJournalCount)
+	}
+
+	count, err := counter.CountRunningJournaledUpdates(ctx)
 	if err != nil {
-		return fmt.Errorf("open raw database: %w", err)
+		return 0, fmt.Errorf("count running journaled updates: %w", err)
 	}
 
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
-		}
-	}()
-
-	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = NULL`); err != nil {
-		return fmt.Errorf("nullify the checkpoint count: %w", err)
-	}
-
-	return nil
-}
-
-// SetResourceCount implements storetest.CountSetter: it plants a stored
-// count from before saves stopped counting.
-func (s *uncountedStore) SetResourceCount(ctx context.Context, count int64) (err error) {
-	conn, err := openRawDB(s.path)
-	if err != nil {
-		return fmt.Errorf("open raw database: %w", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
-		}
-	}()
-
-	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET resource_count = ?`, count); err != nil {
-		return fmt.Errorf("set the checkpoint count: %w", err)
-	}
-
-	return nil
+	return count, nil
 }
 
 // List forwards to the audit list of the wrapped store, which the embedded
 // interface hides, so the delete case can read the entry of a delete.
 // Inner implements storetest.Wrapper.
-func (s *uncountedStore) Inner() any {
+func (s *sqlUpdatesStore) Inner() any {
 	return s.UpdatesStore
 }
 
-func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
+func (s *sqlUpdatesStore) List(ctx context.Context, ns namespace.Name, page audit.Page) (audit.Listing, error) {
 	lister, ok := s.UpdatesStore.(audit.Store)
 	if !ok {
 		return audit.Listing{}, errNoAuditList
@@ -769,8 +856,28 @@ func (s *uncountedStore) List(ctx context.Context, ns namespace.Name, page audit
 var errNoAuditList = errors.New("wrapped store lists no audit entries")
 
 // BreakAuditAppends implements storetest.AuditBreaker.
-func (s *uncountedStore) BreakAuditAppends(ctx context.Context) error {
+func (s *sqlUpdatesStore) BreakAuditAppends(ctx context.Context) error {
 	return breakAuditAppends(ctx, s.path)
+}
+
+// EraseCheckpointKeys implements storetest.KeyEraser.
+func (s *sqlUpdatesStore) EraseCheckpointKeys(ctx context.Context) (err error) {
+	conn, err := openRawDB(s.path)
+	if err != nil {
+		return fmt.Errorf("open raw database: %w", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close raw database: %w", closeErr))
+		}
+	}()
+
+	if _, err = conn.ExecContext(ctx, `UPDATE checkpoints SET blob_key = NULL`); err != nil {
+		return fmt.Errorf("erase the checkpoint keys: %w", err)
+	}
+
+	return nil
 }
 
 // auditedWorkspaces is a store for the workspace suite that can break its
@@ -790,11 +897,13 @@ func (s *auditedWorkspaces) BreakAuditAppends(ctx context.Context) error {
 }
 
 // openAuditedWorkspaces returns a fresh store in a temporary directory whose
-// audit appends the suite can break.
+// audit appends the suite can break, copied from the migrated template.
 func openAuditedWorkspaces(t *testing.T) *auditedWorkspaces {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -903,796 +1012,156 @@ func TestRenameKeepsTags(t *testing.T) {
 	}
 }
 
-func TestMigration0003FillsIDs(t *testing.T) {
+// TestOpenRefusesBinaryBelowMinimum proves that a database whose schema
+// records a minimum binary version above the version of the binary stops
+// open, names both versions and leaves the database unchanged.
+func TestOpenRefusesBinaryBelowMinimum(t *testing.T) {
+	t.Parallel()
+
+	path, wantVersions, wantTables := newerSchemaDatabase(t, "v0.3.0")
+
+	_, err := sqlite.Open(t.Context(), path, sqlite.WithBinaryVersion("v0.2.0"))
+	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		t.Fatalf("open below the minimum: err = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	if !strings.Contains(err.Error(), "v0.2.0") || !strings.Contains(err.Error(), "v0.3.0") {
+		t.Fatalf("open below the minimum: err = %v, want it to name v0.2.0 and v0.3.0", err)
+	}
+
+	afterVersions, afterTables := newerSchemaSnapshot(t, path)
+
+	if !slices.Equal(afterVersions, wantVersions) {
+		t.Fatalf("versions after refusal = %v, want %v", afterVersions, wantVersions)
+	}
+
+	if !slices.Equal(afterTables, wantTables) {
+		t.Fatalf("tables after refusal = %v, want %v", afterTables, wantTables)
+	}
+}
+
+// TestOpenUsesTheHighestMinimum records two future migrations whose
+// minimums sort in the other order as text: v0.10.0 is the higher one. A
+// binary between them refuses to open.
+func TestOpenUsesTheHighestMinimum(t *testing.T) {
+	t.Parallel()
+
+	path, versions, _ := newerSchemaDatabase(t, "v0.10.0")
+	insertFutureVersion(t, path, versions[len(versions)-1]+1, "v0.3.0")
+
+	if _, err := sqlite.Open(t.Context(), path, sqlite.WithBinaryVersion("v0.5.0")); !errors.Is(
+		err, schema.ErrBinaryBelowMinimum,
+	) {
+		t.Fatalf("open between two minimums: err = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	s, err := sqlite.Open(t.Context(), path, sqlite.WithBinaryVersion("v0.10.0"))
+	if err != nil {
+		t.Fatalf("open at the highest minimum: %v", err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+}
+
+// TestOpenStartsOnNewerSchemaAtMinimum proves that a binary at or above the
+// minimum opens a database that records a migration it does not embed, and
+// applies nothing.
+func TestOpenStartsOnNewerSchemaAtMinimum(t *testing.T) {
+	t.Parallel()
+
+	for _, binary := range []string{"v0.3.0", "v0.4.1", "dev"} {
+		t.Run(binary, func(t *testing.T) {
+			t.Parallel()
+			openNewerSchemaAt(t, binary)
+		})
+	}
+}
+
+// openNewerSchemaAt opens a database with a future migration that sets
+// minimum v0.3.0 as a binary of version binary. The open succeeds, applies
+// nothing and reads the minimum back.
+func openNewerSchemaAt(t *testing.T, binary string) {
+	t.Helper()
+
+	path, wantVersions, wantTables := newerSchemaDatabase(t, "v0.3.0")
+
+	s, err := sqlite.Open(t.Context(), path, sqlite.WithBinaryVersion(binary))
+	if err != nil {
+		t.Fatalf("open at the minimum: %v", err)
+	}
+
+	applied, err := s.AppliedMigrations(t.Context())
+	if closeErr := s.Close(); closeErr != nil {
+		t.Fatalf("close store: %v", closeErr)
+	}
+
+	if err != nil {
+		t.Fatalf("applied migrations: %v", err)
+	}
+
+	if len(applied) == 0 {
+		t.Fatal("applied migrations are empty, want the recorded migrations")
+	}
+
+	if last := applied[len(applied)-1]; last.MinBinaryVersion != "v0.3.0" {
+		t.Fatalf("newest applied migration %+v, want minimum v0.3.0", last)
+	}
+
+	afterVersions, afterTables := newerSchemaSnapshot(t, path)
+
+	if !slices.Equal(afterVersions, wantVersions) {
+		t.Fatalf("versions after open = %v, want %v", afterVersions, wantVersions)
+	}
+
+	if !slices.Equal(afterTables, wantTables) {
+		t.Fatalf("tables after open = %v, want %v", afterTables, wantTables)
+	}
+}
+
+// TestOpenBeforeMinimumColumn proves that a database from before the baseline
+// is refused with the named error.
+func TestOpenBeforeMinimumColumn(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
-
-	seedAt0002(t, path)
-
-	s, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	list, err := s.ListStacks(t.Context(), stack.Filter{Namespace: "acme", Project: ""})
-	if err != nil {
-		t.Fatalf("list stacks: %v", err)
-	}
-
-	if len(list) != 2 {
-		t.Fatalf("migrated stacks = %d, want 2", len(list))
-	}
-
-	seen := map[stack.ID]bool{}
-
-	for _, st := range list {
-		if st.ID == "" || !strings.HasPrefix(st.ID.String(), "stk-") {
-			t.Fatalf("migrated stack %s ID = %q, want stk- prefix", st.Ref, st.ID)
-		}
-
-		if seen[st.ID] {
-			t.Fatalf("duplicate migrated ID %q", st.ID)
-		}
-
-		seen[st.ID] = true
-	}
-}
-
-func TestMigration0005KeepsHistory(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-
-	seedAt0003WithHistory(t, path)
-
-	s, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	ref, err := stack.ParseRef("acme", "web", "prod")
-	if err != nil {
-		t.Fatalf("parse ref: %v", err)
-	}
-
-	checkMigratedStack(t, s, ref)
-	checkMigratedUpdate(t, s, ref)
-	checkMigratedHistory(t, s, ref)
-	checkMigratedCheckpoint(t, s, ref)
-	checkMigratedEvents(t, s, ref)
-}
-
-func checkMigratedStack(t *testing.T, s *sqlite.Store, ref stack.Ref) {
-	t.Helper()
-
-	gotStack, err := s.GetStack(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("get stack: %v", err)
-	}
-
-	if gotStack.ID.String() != "stk-aaaaaaaaaaaaaaaaaaaa" {
-		t.Fatalf("migrated stack ID = %q, want stk-aaaaaaaaaaaaaaaaaaaa", gotStack.ID)
-	}
-}
-
-func checkMigratedUpdate(t *testing.T, s *sqlite.Store, ref stack.Ref) {
-	t.Helper()
-
-	gotUpdate, err := s.GetUpdate(t.Context(), ref, "u1")
-	if err != nil {
-		t.Fatalf("get update: %v", err)
-	}
-
-	if gotUpdate.Version != 1 || gotUpdate.Status != stack.StatusSucceeded {
-		t.Fatalf("migrated update = version %d status %q, want 1 succeeded", gotUpdate.Version, gotUpdate.Status)
-	}
-}
-
-func checkMigratedHistory(t *testing.T, s *sqlite.Store, ref stack.Ref) {
-	t.Helper()
-
-	history, err := s.ListUpdates(t.Context(), ref, stack.Page{Limit: 10, Offset: 0})
-	if err != nil {
-		t.Fatalf("list updates: %v", err)
-	}
-
-	if len(history) != 1 || history[0].ID != "u1" {
-		t.Fatalf("migrated history = %+v, want one update u1", history)
-	}
-}
-
-func checkMigratedCheckpoint(t *testing.T, s *sqlite.Store, ref stack.Ref) {
-	t.Helper()
-
-	cp, err := s.LatestCheckpoint(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("latest checkpoint: %v", err)
-	}
-
-	if string(cp.Deployment) != "{}" || cp.Update != "u1" {
-		t.Fatalf("migrated checkpoint = deployment %q update %q, want {} u1", cp.Deployment, cp.Update)
-	}
-}
-
-func checkMigratedEvents(t *testing.T, s *sqlite.Store, ref stack.Ref) {
-	t.Helper()
-
-	events, err := s.ListEvents(t.Context(), ref, "u1", -1, 10)
-	if err != nil {
-		t.Fatalf("list events: %v", err)
-	}
-
-	if len(events) != 2 {
-		t.Fatalf("migrated events = %d, want 2", len(events))
-	}
-}
-
-func TestMigration0007KeepsTags(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-
-	seedAt0006WithTags(t, path)
-
-	s, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	ref, err := stack.ParseRef("acme", "web", "prod")
-	if err != nil {
-		t.Fatalf("parse ref: %v", err)
-	}
-
-	got, err := s.GetStack(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("get stack: %v", err)
-	}
-
-	if got.Tags["team"] != "platform" || len(got.Tags) != 1 {
-		t.Fatalf("migrated tags = %v, want map[team:platform]", got.Tags)
-	}
-}
-
-func TestMigration0009FillsInventory(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-
-	seedAt0008WithStacks(t, path)
-
-	s, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	checkMigratedInventory(t, s)
-}
-
-// checkMigratedInventory checks the migration filled one entry per stack.
-func checkMigratedInventory(t *testing.T, s *sqlite.Store) {
-	t.Helper()
-
-	entries, err := s.ListUnits(t.Context(), "acme")
-	if err != nil {
-		t.Fatalf("list inventory: %v", err)
-	}
-
-	if len(entries) != 2 {
-		t.Fatalf("migrated inventory entries = %+v, want two", entries)
-	}
-
-	for i := range entries {
-		checkMigratedEntry(t, &entries[i])
-	}
-}
-
-// checkMigratedEntry checks one migrated entry against its stack.
-func checkMigratedEntry(t *testing.T, e *inventory.Entry) {
-	t.Helper()
-
-	want := map[string]struct {
-		unitID      string
-		lastChanged time.Time
-	}{
-		"web/prod": {unitID: "stk-aaaaaaaaaaaaaaaaaaaa", lastChanged: time.UnixMilli(2000).UTC()},
-		"web/dev":  {unitID: "stk-bbbbbbbbbbbbbbbbbbbb", lastChanged: time.UnixMilli(3000).UTC()},
-	}
-
-	w, ok := want[e.Name]
-	if !ok {
-		t.Fatalf("migrated inventory entry name = %q, want web/prod or web/dev", e.Name)
-	}
-
-	if e.Tool != "pulumi" || e.Namespace.String() != "acme" || e.UnitID != w.unitID ||
-		e.DisplayName != e.Name || !e.LastChanged.Equal(w.lastChanged) ||
-		e.Status != "" || e.ResourceCount != nil {
-		t.Fatalf("migrated inventory entry = %+v, want unit %q changed %v", e, w.unitID, w.lastChanged)
-	}
-}
-
-// seedAt0008WithStacks creates a database at migration 0008 with two stacks
-// and no inventory rows.
-func seedAt0008WithStacks(t *testing.T, path string) {
-	t.Helper()
 
 	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
 
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	applyMigrations0008(t, conn)
-	recordMigrations0008(t, conn)
-	seedInventoryStacks(t, conn)
-}
-
-// applyMigrations0008 applies migrations 0001 to 0008 to conn.
-func applyMigrations0008(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
-		"0007_stack_tags.sql", "0008_secret_keys.sql",
+	const create = `CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL) STRICT`
+	if _, execErr := conn.ExecContext(t.Context(), create); execErr != nil {
+		t.Fatalf("create schema_migrations: %v", execErr)
 	}
 
-	for _, name := range names {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		if _, execErr := conn.ExecContext(t.Context(), string(data)); execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-}
-
-// recordMigrations0008 records migrations 0001 to 0008 as applied.
-func recordMigrations0008(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
-	) STRICT`
-
-	if _, err := conn.ExecContext(t.Context(), createMigrations); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
+	const old = 76
 
 	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
-		"0007_stack_tags.sql", "0008_secret_keys.sql",
+	if _, execErr := conn.ExecContext(t.Context(), record, old, "0076_sign_in_providers.sql"); execErr != nil {
+		t.Fatalf("record migration before the baseline: %v", execErr)
 	}
 
-	for i, name := range names {
-		if _, err := conn.ExecContext(t.Context(), record, i+1, name); err != nil {
-			t.Fatalf("record migration: %v", err)
-		}
+	if closeErr := conn.Close(); closeErr != nil {
+		t.Fatalf("close raw database: %v", closeErr)
+	}
+
+	if _, err := sqlite.Open(t.Context(), path); !errors.Is(err, schema.ErrSchemaBeforeBaseline) {
+		t.Fatalf("open a database from before the baseline: err = %v, want ErrSchemaBeforeBaseline", err)
 	}
 }
 
-// seedInventoryStacks seeds a namespace with two stacks.
-func seedInventoryStacks(t *testing.T, conn *sql.DB) {
+// newerSchemaDatabase migrates a database, then records one future migration
+// that sets minimum. It returns the path with the recorded versions and the
+// tables.
+func newerSchemaDatabase(t *testing.T, minimum string) (string, []int64, []string) {
 	t.Helper()
-
-	const seedNamespace = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'eu-west', 1, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seedNamespace); err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-
-	const seedStack = `INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
-		VALUES ('acme', 'web', ?, ?, 0, 1000, ?)`
-
-	for _, s := range []struct {
-		name    string
-		id      string
-		updated int64
-	}{
-		{name: "prod", id: "stk-aaaaaaaaaaaaaaaaaaaa", updated: 2000},
-		{name: "dev", id: "stk-bbbbbbbbbbbbbbbbbbbb", updated: 3000},
-	} {
-		if _, err := conn.ExecContext(t.Context(), seedStack, s.name, s.id, s.updated); err != nil {
-			t.Fatalf("seed stack %s: %v", s.name, err)
-		}
-	}
-}
-
-// seedAt0006WithTags creates a database at migration 0006 with a stack whose
-// tags still live in the stacks row.
-func seedAt0006WithTags(t *testing.T, path string) {
-	t.Helper()
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	for _, name := range []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
-	} {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		if _, execErr := conn.ExecContext(t.Context(), string(data)); execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
-	) STRICT`
-
-	if _, err := conn.ExecContext(t.Context(), createMigrations); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
-	}
-
-	for i, name := range names {
-		if _, err := conn.ExecContext(t.Context(), record, i+1, name); err != nil {
-			t.Fatalf("record migration: %v", err)
-		}
-	}
-
-	const seedNamespace = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'eu-west', 1, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seedNamespace); err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-
-	const seedStack = `INSERT INTO stacks (namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms)
-		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', '{"team":"platform"}', 0, 0, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seedStack); err != nil {
-		t.Fatalf("seed stack: %v", err)
-	}
-}
-
-func TestMigration0006KeepsOneRowData(t *testing.T) {
-	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
-	seedAt0005WithOneRow(t, path)
-
-	s, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	ref, err := stack.ParseRef("acme", "web", "prod")
-	if err != nil {
-		t.Fatalf("parse ref: %v", err)
-	}
-
-	cp, err := s.LatestCheckpoint(t.Context(), ref)
-	if err != nil {
-		t.Fatalf("latest checkpoint: %v", err)
-	}
-
-	if string(cp.Deployment) != `{"v":1}` || cp.Update != "u1" {
-		t.Fatalf("migrated checkpoint = deployment %q update %q, want {\"v\":1} u1", cp.Deployment, cp.Update)
-	}
-
-	byVersion, err := s.CheckpointByVersion(t.Context(), ref, 1)
-	if err != nil {
-		t.Fatalf("checkpoint of version 1: %v", err)
-	}
-
-	if string(byVersion.Deployment) != `{"v":1}` || byVersion.Update != "u1" {
-		t.Fatalf(
-			"migrated checkpoint of version 1 = deployment %q update %q, want {\"v\":1} u1",
-			byVersion.Deployment,
-			byVersion.Update,
-		)
-	}
-
-	if _, err := s.CheckpointByVersion(t.Context(), ref, 2); !errors.Is(err, stack.ErrNoState) {
-		t.Fatalf("checkpoint of missing version 2: err = %v, want ErrNoState", err)
-	}
-}
-
-// seedAt0005WithOneRow creates a database at migration 0005 with a stack, one
-// finished update and its checkpoint: the one-row-per-stack layout.
-func seedAt0005WithOneRow(t *testing.T, path string) {
-	t.Helper()
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	applyMigrations0005(t, conn)
-	recordMigrations0005(t, conn)
-	seedOneRowNamespace(t, conn)
-	seedOneRowStack(t, conn)
-	seedOneRowUpdate(t, conn)
-	seedOneRowCheckpoint(t, conn)
-}
-
-func applyMigrations0005(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	for _, name := range []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql",
-	} {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		if _, execErr := conn.ExecContext(t.Context(), string(data)); execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-}
-
-func recordMigrations0005(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
-	) STRICT`
-
-	if _, err := conn.ExecContext(t.Context(), createMigrations); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql",
-	}
-
-	for i, name := range names {
-		if _, err := conn.ExecContext(t.Context(), record, i+1, name); err != nil {
-			t.Fatalf("record migration: %v", err)
-		}
-	}
-}
-
-func seedOneRowNamespace(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'eu-west', 1, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-}
-
-func seedOneRowStack(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO stacks (namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms)
-		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', '{}', 1, 0, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed stack: %v", err)
-	}
-}
-
-func seedOneRowUpdate(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO updates (stack_id, id, kind, dry_run, status, version, revision,
-		lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms)
-		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', 'update', 0, 'succeeded', 1, 3, X'', 0, 1000, 2000, 3000)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed update: %v", err)
-	}
-}
-
-func seedOneRowCheckpoint(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO checkpoints (stack_id, update_id, lease_digest, schema_version, sequence,
-		digest, invalid, features_json, deployment, saved_at_ms)
-		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', X'', 3, 0,
-		X'0000000000000000000000000000000000000000000000000000000000000000', 0, '[]', X'7b2276223a317d', 4000)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed checkpoint: %v", err)
-	}
-}
-
-// seedAt0003WithHistory creates a database at migration 0003 with a stack,
-// one update, its checkpoint and two events, all keyed by name.
-func seedAt0003WithHistory(t *testing.T, path string) {
-	t.Helper()
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	applyMigrations0003(t, conn)
-	recordMigrations0003(t, conn)
-	seedHistoryNamespace(t, conn)
-	seedHistoryStack(t, conn)
-	seedHistoryUpdate(t, conn)
-	seedHistoryCheckpoint(t, conn)
-	seedHistoryEvents(t, conn)
-}
-
-func applyMigrations0003(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	for _, name := range []string{"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql"} {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		_, execErr := conn.ExecContext(t.Context(), string(data))
-		if execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-}
-
-func recordMigrations0003(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
-	) STRICT`
-
-	_, err := conn.ExecContext(t.Context(), createMigrations)
-	if err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-
-	for _, m := range [][2]any{{1, "0001_init.sql"}, {2, "0002_updates.sql"}, {3, "0003_stack_id.sql"}} {
-		_, err := conn.ExecContext(t.Context(), record, m[0], m[1])
-		if err != nil {
-			t.Fatalf("record migration: %v", err)
-		}
-	}
-}
-
-func seedHistoryNamespace(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'eu-west', 1, 0)`
-
-	_, err := conn.ExecContext(t.Context(), seed)
-	if err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-}
-
-func seedHistoryStack(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO stacks (namespace, project, name, id, tags_json, version, created_at_ms, updated_at_ms)
-		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', '{}', 1, 0, 0)`
-
-	_, err := conn.ExecContext(t.Context(), seed)
-	if err != nil {
-		t.Fatalf("seed stack: %v", err)
-	}
-}
-
-func seedHistoryUpdate(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO updates (namespace, project, stack, id, kind, dry_run, status, version, revision,
-		lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms)
-		VALUES ('acme', 'web', 'prod', 'u1', 'update', 0, 'succeeded', 1, 3, X'', 0, 1000, 2000, 3000)`
-
-	_, err := conn.ExecContext(t.Context(), seed)
-	if err != nil {
-		t.Fatalf("seed update: %v", err)
-	}
-}
-
-func seedHistoryCheckpoint(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO checkpoints (namespace, project, stack, update_id, lease_digest, schema_version, sequence,
-		digest, invalid, features_json, deployment, saved_at_ms)
-		VALUES ('acme', 'web', 'prod', 'u1', X'', 3, 0,
-		X'0000000000000000000000000000000000000000000000000000000000000000', 0, '[]', X'7b7d', 4000)`
-
-	_, err := conn.ExecContext(t.Context(), seed)
-	if err != nil {
-		t.Fatalf("seed checkpoint: %v", err)
-	}
-}
-
-func seedHistoryEvents(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO update_events (namespace, project, stack, update_id, sequence, timestamp_ms, payload)
-		VALUES ('acme', 'web', 'prod', 'u1', ?, ?, X'7b7d')`
-
-	_, err := conn.ExecContext(t.Context(), seed, 0, 5000)
-	if err != nil {
-		t.Fatalf("seed event 0: %v", err)
-	}
-
-	_, err = conn.ExecContext(t.Context(), seed, 1, 5001)
-	if err != nil {
-		t.Fatalf("seed event 1: %v", err)
-	}
-}
-
-// seedAt0002 creates a database at migration 0002 with two stacks and no IDs.
-func seedAt0002(t *testing.T, path string) {
-	t.Helper()
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	applyBaseMigrations(t, conn)
-	recordBaseMigrations(t, conn)
-	seedBaseStacks(t, conn)
-}
-
-func applyBaseMigrations(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	for _, name := range []string{"0001_init.sql", "0002_updates.sql"} {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		if _, execErr := conn.ExecContext(t.Context(), string(data)); execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-}
-
-func recordBaseMigrations(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
-	) STRICT`
-
-	if _, err := conn.ExecContext(t.Context(), createMigrations); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-
-	for _, m := range [][2]any{{1, "0001_init.sql"}, {2, "0002_updates.sql"}} {
-		if _, err := conn.ExecContext(t.Context(), record, m[0], m[1]); err != nil {
-			t.Fatalf("record migration: %v", err)
-		}
-	}
-}
-
-func seedBaseStacks(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	_, err := conn.ExecContext(
-		t.Context(),
-		`INSERT INTO namespaces (name, home_region, failover_version, created_at_ms) VALUES ('acme', 'eu-west', 1, 0)`,
-	)
-	if err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-
-	const seedStack = `INSERT INTO stacks
-		(namespace, project, name, tags_json, version, created_at_ms, updated_at_ms)
-		VALUES ('acme', ?, ?, '{}', 0, 0, 0)`
-
-	for _, s := range [][2]string{{"web", "prod"}, {"web", "dev"}} {
-		if _, err := conn.ExecContext(t.Context(), seedStack, s[0], s[1]); err != nil {
-			t.Fatalf("seed stack %s: %v", s[1], err)
-		}
-	}
-}
-
-// TestOpenRefusesNewerSchema proves that a database with a version the binary
-// does not embed stops open and leaves the database unchanged.
-func TestOpenRefusesNewerSchema(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
+	copyTemplate(t, path)
 
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
@@ -1710,7 +1179,7 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 
 	extra := beforeVersions[len(beforeVersions)-1] + 1
 
-	insertFutureVersion(t, path, extra)
+	insertFutureVersion(t, path, extra, minimum)
 
 	wantVersions := append(slices.Clone(beforeVersions), extra)
 	gotVersions, gotTables := newerSchemaSnapshot(t, path)
@@ -1719,19 +1188,7 @@ func TestOpenRefusesNewerSchema(t *testing.T) {
 		t.Fatalf("seeded versions = %v, want %v", gotVersions, wantVersions)
 	}
 
-	if _, err := sqlite.Open(t.Context(), path); !errors.Is(err, schema.ErrSchemaNewer) {
-		t.Fatalf("open newer database: err = %v, want ErrSchemaNewer", err)
-	}
-
-	afterVersions, afterTables := newerSchemaSnapshot(t, path)
-
-	if !slices.Equal(afterVersions, wantVersions) {
-		t.Fatalf("versions after refusal = %v, want %v", afterVersions, wantVersions)
-	}
-
-	if !slices.Equal(afterTables, gotTables) {
-		t.Fatalf("tables after refusal = %v, want %v", afterTables, gotTables)
-	}
+	return path, wantVersions, gotTables
 }
 
 // newerSchemaSnapshot reads the recorded versions and the table names of the
@@ -1823,7 +1280,7 @@ func readSchemaTables(t *testing.T, conn *sql.DB) []string {
 }
 
 // insertFutureVersion records one version newer than the binary embeds.
-func insertFutureVersion(t *testing.T, path string, version int64) {
+func insertFutureVersion(t *testing.T, path string, version int64, minimum string) {
 	t.Helper()
 
 	conn, err := openRawDB(path)
@@ -1839,441 +1296,10 @@ func insertFutureVersion(t *testing.T, path string, version int64) {
 
 	name := fmt.Sprintf("%04d_future.sql", version)
 
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+	const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES (?, ?, ?)`
 
-	if _, execErr := conn.ExecContext(t.Context(), record, version, name); execErr != nil {
+	if _, execErr := conn.ExecContext(t.Context(), record, version, name, minimum); execErr != nil {
 		t.Fatalf("record future version: %v", execErr)
-	}
-}
-
-// TestMigration0011FillsRestoredFrom checks that migration 0011 keeps the
-// finalized versions of a database at 0010: every existing row reads back
-// with an empty restored_from, and the list stays newest first with the
-// right total.
-func TestMigration0011FillsRestoredFrom(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-
-	seedAt0010WithStateVersions(t, path)
-
-	s, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	checkMigratedStateVersions(t, s)
-}
-
-// checkMigratedStateVersions checks the migrated versions are listed newest
-// first with an empty restored_from and the right total.
-func checkMigratedStateVersions(t *testing.T, s *sqlite.Store) {
-	t.Helper()
-
-	ctx := t.Context()
-	wsID := workspace.ID("ws-aaaaaaaaaaaaaaaaaaaa")
-
-	list, total, err := s.ListStateVersions(ctx, wsID, workspace.Page{Limit: 10, Offset: 0})
-	if err != nil {
-		t.Fatalf("list state versions: %v", err)
-	}
-
-	if total != 2 {
-		t.Fatalf("migrated total = %d, want 2", total)
-	}
-
-	if len(list) != 2 {
-		t.Fatalf("migrated state versions = %d, want 2", len(list))
-	}
-
-	if list[0].ID.String() != "sv-bbbbbbbbbbbbbbbbbbbb" ||
-		list[1].ID.String() != "sv-aaaaaaaaaaaaaaaaaaaa" {
-		t.Fatalf("migrated order = [%s %s], want newest first", list[0].ID, list[1].ID)
-	}
-
-	for i := range list {
-		if list[i].RestoredFrom != "" {
-			t.Fatalf("migrated state version %s restored_from = %q, want empty", list[i].ID, list[i].RestoredFrom)
-		}
-	}
-
-	for _, id := range []workspace.StateVersionID{
-		"sv-aaaaaaaaaaaaaaaaaaaa",
-		"sv-bbbbbbbbbbbbbbbbbbbb",
-		"sv-cccccccccccccccccccc",
-	} {
-		got, err := s.GetStateVersion(ctx, id)
-		if err != nil {
-			t.Fatalf("get state version %s: %v", id, err)
-		}
-
-		if got.RestoredFrom != "" {
-			t.Fatalf("migrated state version %s restored_from = %q, want empty", id, got.RestoredFrom)
-		}
-	}
-}
-
-// seedAt0010WithStateVersions creates a database at migration 0010 with one
-// workspace, two finalized state versions and one pending version.
-func seedAt0010WithStateVersions(t *testing.T, path string) {
-	t.Helper()
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	applyMigrations0010(t, conn)
-	recordMigrations0010(t, conn)
-	seed0010Namespace(t, conn)
-	seed0010Workspace(t, conn)
-	seed0010StateVersions(t, conn)
-}
-
-// applyMigrations0010 applies migrations 0001 to 0010 to conn.
-func applyMigrations0010(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
-		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql",
-		"0010_workspaces.sql",
-	}
-
-	for _, name := range names {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		if _, execErr := conn.ExecContext(t.Context(), string(data)); execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-}
-
-// recordMigrations0010 records migrations 0001 to 0010 as applied.
-func recordMigrations0010(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
-	) STRICT`
-
-	if _, err := conn.ExecContext(t.Context(), createMigrations); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
-		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql",
-		"0010_workspaces.sql",
-	}
-
-	for i, name := range names {
-		if _, err := conn.ExecContext(t.Context(), record, i+1, name); err != nil {
-			t.Fatalf("record migration: %v", err)
-		}
-	}
-}
-
-// seed0010Namespace seeds the namespace of the migrated workspace.
-func seed0010Namespace(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'eu-west', 1, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-}
-
-// seed0010Workspace seeds one workspace that points at its newest version.
-func seed0010Workspace(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO workspaces (id, namespace, name, revision, lock_id, lock_holder,
-		lock_reason, locked_at_ms, current_state_version_id, created_at_ms, updated_at_ms)
-		VALUES ('ws-aaaaaaaaaaaaaaaaaaaa', 'acme', 'network', 1, '', '', '', 0,
-		'sv-bbbbbbbbbbbbbbbbbbbb', 1000, 3000)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed workspace: %v", err)
-	}
-}
-
-// seed0010StateVersions seeds two finalized versions and one pending version
-// with the 0010 columns: no restored_from yet.
-func seed0010StateVersions(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO state_versions (id, workspace_id, status, serial, lineage, md5, size,
-		content_key, outputs, force, upload_digest, upload_expires_at_ms, holder, lock_id,
-		created_at_ms, finalized_at_ms)
-		VALUES
-		('sv-aaaaaaaaaaaaaaaaaaaa', 'ws-aaaaaaaaaaaaaaaaaaaa', 'finalized', 1, 'lineage-1',
-		X'00000000000000000000000000000001', 11, 'content-old', NULL, 0, X'', 5000,
-		'seed', 'lock-1', 1000, 2000),
-		('sv-bbbbbbbbbbbbbbbbbbbb', 'ws-aaaaaaaaaaaaaaaaaaaa', 'finalized', 2, 'lineage-1',
-		X'00000000000000000000000000000002', 22, 'content-new', NULL, 0, X'', 5000,
-		'seed', 'lock-1', 2000, 3000),
-		('sv-cccccccccccccccccccc', 'ws-aaaaaaaaaaaaaaaaaaaa', 'pending', 3, 'lineage-1',
-		X'00000000000000000000000000000003', 0, '', NULL, 0, X'', 5000,
-		'seed', 'lock-1', 2500, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed state versions: %v", err)
-	}
-}
-
-// TestMigration0012UpdateHistoryFields seeds updates before migration 0012
-// and checks every old row reads no creator and no restore source after it.
-func TestMigration0012UpdateHistoryFields(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "dustpan.db")
-
-	seedAt0011WithUpdates(t, path)
-
-	s, err := sqlite.Open(t.Context(), path)
-	if err != nil {
-		t.Fatalf("open migrated store: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if closeErr := s.Close(); closeErr != nil {
-			t.Errorf("close store: %v", closeErr)
-		}
-	})
-
-	ref, err := stack.ParseRef("acme", "web", "prod")
-	if err != nil {
-		t.Fatalf("parse ref: %v", err)
-	}
-
-	checkMigratedUpdateDefaults(t, s, ref)
-	checkMigratedHistoryDefaults(t, s, ref)
-}
-
-// checkMigratedUpdateDefaults checks every migrated update reads the column
-// defaults: no creator and no restore source. The checkpoint join still
-// reports the size of the saved deployment.
-func checkMigratedUpdateDefaults(t *testing.T, s *sqlite.Store, ref stack.Ref) {
-	t.Helper()
-
-	for _, want := range []struct {
-		id   stack.UpdateID
-		size int64
-	}{
-		{id: "u1", size: int64(len(`{"v":1}`))},
-		{id: "u2", size: 0},
-	} {
-		got, err := s.GetUpdate(t.Context(), ref, want.id)
-		if err != nil {
-			t.Fatalf("get update %s: %v", want.id, err)
-		}
-
-		checkMigratedHistoryRow(t, got, want.size)
-	}
-}
-
-// checkMigratedHistoryRow checks one migrated update against its checkpoint size.
-func checkMigratedHistoryRow(t *testing.T, got stack.Update, size int64) {
-	t.Helper()
-
-	if got.CreatedBy != "" || got.RestoredFrom != 0 || got.CheckpointBytes != size {
-		t.Fatalf(
-			"migrated update %s = creator %q restore source %d size %d, want empty, 0 and %d",
-			got.ID,
-			got.CreatedBy,
-			got.RestoredFrom,
-			got.CheckpointBytes,
-			size,
-		)
-	}
-}
-
-// checkMigratedHistoryDefaults checks the migrated history lists both updates
-// with no creator and no restore source.
-func checkMigratedHistoryDefaults(t *testing.T, s *sqlite.Store, ref stack.Ref) {
-	t.Helper()
-
-	history, err := s.ListUpdates(t.Context(), ref, stack.Page{Limit: 10, Offset: 0})
-	if err != nil {
-		t.Fatalf("list updates: %v", err)
-	}
-
-	if len(history) != 2 || history[0].ID != "u2" || history[1].ID != "u1" {
-		t.Fatalf("migrated history = %+v, want [u2 u1]", history)
-	}
-
-	for i := range history {
-		if history[i].CreatedBy != "" || history[i].RestoredFrom != 0 {
-			t.Fatalf(
-				"migrated history %s = creator %q restore source %d, want empty and 0",
-				history[i].ID,
-				history[i].CreatedBy,
-				history[i].RestoredFrom,
-			)
-		}
-	}
-}
-
-// seedAt0011WithUpdates creates a database at migration 0011 with a stack,
-// two updates and the checkpoint of the first.
-func seedAt0011WithUpdates(t *testing.T, path string) {
-	t.Helper()
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	applyMigrations0011(t, conn)
-	recordMigrations0011(t, conn)
-	seedHistoryNamespace0012(t, conn)
-	seedHistoryStack0012(t, conn)
-	seedHistoryUpdates0012(t, conn)
-	seedHistoryCheckpoint0012(t, conn)
-}
-
-// applyMigrations0011 applies migrations 0001 to 0011 to conn.
-func applyMigrations0011(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
-		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql", "0010_workspaces.sql",
-		"0011_restored_from.sql",
-	}
-
-	for _, name := range names {
-		data, readErr := os.ReadFile( //nolint:gosec // test fixture reads fixed migration files
-			filepath.Join("migrations", name),
-		)
-		if readErr != nil {
-			t.Fatalf("read %s: %v", name, readErr)
-		}
-
-		if _, execErr := conn.ExecContext(t.Context(), string(data)); execErr != nil {
-			t.Fatalf("apply %s: %v", name, execErr)
-		}
-	}
-}
-
-// recordMigrations0011 records migrations 0001 to 0011 as applied.
-func recordMigrations0011(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const createMigrations = `CREATE TABLE IF NOT EXISTS schema_migrations (
-		version INTEGER NOT NULL PRIMARY KEY,
-		name    TEXT    NOT NULL
-	) STRICT`
-
-	if _, err := conn.ExecContext(t.Context(), createMigrations); err != nil {
-		t.Fatalf("create schema_migrations: %v", err)
-	}
-
-	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
-
-	names := []string{
-		"0001_init.sql", "0002_updates.sql", "0003_stack_id.sql",
-		"0004_updates_stack_id.sql", "0005_updates_drop_names.sql", "0006_checkpoints_per_update.sql",
-		"0007_stack_tags.sql", "0008_secret_keys.sql", "0009_inventory.sql", "0010_workspaces.sql",
-		"0011_restored_from.sql",
-	}
-
-	for i, name := range names {
-		if _, err := conn.ExecContext(t.Context(), record, i+1, name); err != nil {
-			t.Fatalf("record migration: %v", err)
-		}
-	}
-}
-
-func seedHistoryNamespace0012(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-		VALUES ('acme', 'eu-west', 1, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed namespace: %v", err)
-	}
-}
-
-func seedHistoryStack0012(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO stacks (namespace, project, name, id, version, created_at_ms, updated_at_ms)
-		VALUES ('acme', 'web', 'prod', 'stk-aaaaaaaaaaaaaaaaaaaa', 1, 0, 0)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed stack: %v", err)
-	}
-}
-
-// seedHistoryUpdates0012 seeds one finished update and one running update
-// with the columns migration 0011 knows: no creator, no restore source.
-func seedHistoryUpdates0012(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO updates (stack_id, id, kind, dry_run, status, version, revision,
-		lease_digest, lease_expires_at_ms, created_at_ms, started_at_ms, ended_at_ms)
-		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', ?, 'update', 0, ?, ?, ?, X'', 0, 1000, 2000, ?)`
-
-	for _, u := range []struct {
-		id       string
-		status   string
-		version  int64
-		revision int64
-		ended    int64
-	}{
-		{id: "u1", status: "succeeded", version: 1, revision: 3, ended: 3000},
-		{id: "u2", status: "running", version: 2, revision: 2, ended: 0},
-	} {
-		if _, err := conn.ExecContext(t.Context(), seed, u.id, u.status, u.version, u.revision, u.ended); err != nil {
-			t.Fatalf("seed update %s: %v", u.id, err)
-		}
-	}
-}
-
-func seedHistoryCheckpoint0012(t *testing.T, conn *sql.DB) {
-	t.Helper()
-
-	const seed = `INSERT INTO checkpoints (stack_id, update_id, lease_digest, schema_version, sequence,
-		digest, invalid, features_json, deployment, saved_at_ms)
-		VALUES ('stk-aaaaaaaaaaaaaaaaaaaa', 'u1', X'', 3, 0,
-		X'0000000000000000000000000000000000000000000000000000000000000000', 0, '[]', X'7b2276223a317d', 4000)`
-
-	if _, err := conn.ExecContext(t.Context(), seed); err != nil {
-		t.Fatalf("seed checkpoint: %v", err)
 	}
 }
 

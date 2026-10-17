@@ -57,8 +57,8 @@ type Setting struct {
 	Sensitive bool
 	URL       bool
 	// NoPasswordInFile refuses a URL with a password in the configuration
-	// file: a secret comes from a variable or a *_FILE key only (ADR 63
-	// decision 4).
+	// file and in the flag: a flag shows in a process list, so a secret
+	// comes from a variable or a *_FILE key only.
 	NoPasswordInFile bool
 }
 
@@ -142,7 +142,7 @@ func (s *Setting) CheckURL(value string) error {
 }
 
 // WithNoPasswordInFile refuses a URL with a password for the setting in the
-// configuration file and answers it.
+// configuration file and in the flag and answers it.
 func (s *Setting) WithNoPasswordInFile() *Setting {
 	s.NoPasswordInFile = true
 

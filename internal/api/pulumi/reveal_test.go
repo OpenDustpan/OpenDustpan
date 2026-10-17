@@ -15,6 +15,7 @@ import (
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -46,6 +47,7 @@ type revealFixture struct {
 	updates *stack.Updates
 	secrets *secret.Service
 	stacks  *stack.Service
+	store   *recordingStackStore
 	ref     stack.Ref
 }
 
@@ -58,6 +60,16 @@ type revealDoc struct {
 // newRevealFixture builds the reveal fixture with authz and the audit wiring
 // of cfg.
 func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit) revealFixture {
+	t.Helper()
+
+	return newRevealFixtureWithSessions(t, authz, cfg, nil)
+}
+
+// newRevealFixtureWithSessions builds the reveal fixture with authz, the
+// audit wiring of cfg and the session cookie check sessions.
+func newRevealFixtureWithSessions(
+	t *testing.T, authz identity.Authorizer, cfg fixtureAudit, sessions *sessionauth.Checker,
+) revealFixture {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(
@@ -98,6 +110,7 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("updates service: %v", err)
@@ -127,6 +140,7 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		Sessions:                sessions,
 		AddressGate:             nil,
 		Logger:                  cfg.logger,
 		BaseURL:                 baseurl.Resolver{},
@@ -145,7 +159,9 @@ func newRevealFixture(t *testing.T, authz identity.Authorizer, cfg fixtureAudit)
 		t.Fatalf("parse ref: %v", err)
 	}
 
-	return revealFixture{handler: handler, updates: updates, secrets: secrets, stacks: stacks, ref: ref}
+	return revealFixture{
+		handler: handler, updates: updates, secrets: secrets, stacks: stacks, store: stores, ref: ref,
+	}
 }
 
 // seedRevealVersion encrypts the test secret under the stack's data key,
@@ -696,5 +712,55 @@ func TestRevealBodyOverLimitAnswers413(t *testing.T) {
 
 	if len(entries.entries) != 0 {
 		t.Fatalf("entries = %d, want none for an oversized body", len(entries.entries))
+	}
+}
+
+// TestRevealPathOverLimitAnswers400 proves a value path one byte over 1024
+// answers 400 with the documented message, no value and no audit entry,
+// while a path of exactly 1024 bytes passes the limit and answers 404 as an
+// unknown path.
+func TestRevealPathOverLimitAnswers400(t *testing.T) {
+	t.Parallel()
+
+	entries := &memAuditStore{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	f := newRevealFixture(
+		t,
+		allowAll(),
+		fixtureAudit{store: entries, onFail: nil, logger: slog.New(slog.DiscardHandler)},
+	)
+
+	seedRevealVersion(t, f, "service")
+
+	status, header, body := reveal(t, f, revealBody(t, strings.Repeat("x", 1025)))
+
+	if status != http.StatusBadRequest {
+		t.Fatalf("over-long path answers %d, want %d (%s)", status, http.StatusBadRequest, body)
+	}
+
+	if !strings.Contains(body, "reveal path over 1024 bytes") {
+		t.Fatalf("400 body misses the limit message: %s", body)
+	}
+
+	if strings.Contains(body, revealSecretValue) {
+		t.Fatalf("400 body holds the secret value: %s", body)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	entries.mu.Lock()
+	overEntries := len(entries.entries)
+	entries.mu.Unlock()
+
+	if overEntries != 0 {
+		t.Fatalf("entries = %d, want none for a refused path", overEntries)
+	}
+
+	status, _, body = reveal(t, f, revealBody(t, strings.Repeat("x", 1024)))
+
+	if status != http.StatusNotFound {
+		t.Fatalf("path at the limit answers %d, want %d (%s)", status, http.StatusNotFound, body)
 	}
 }

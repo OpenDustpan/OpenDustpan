@@ -3,17 +3,19 @@ package audittest
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // FeedStore is every port the feed cases exercise: namespaces for fixtures,
-// the audit store to append entries, and the feed under test.
+// the audit store to append entries, and the feed and sink leases under test.
 type FeedStore interface {
 	Store
 	audit.ServerStore
 	audit.Feed
+	audit.SinkLeaser
 }
 
 // FeedFactory returns a fresh, empty store for one feed subtest.
@@ -44,6 +46,11 @@ func RunFeed(t *testing.T, newStore FeedFactory) {
 		{name: "advance with a stale fence fails", test: testCursorStaleFence},
 		{name: "advance in a missing namespace fails", test: testCursorMissingNamespace},
 		{name: "the server scope reads and keeps a cursor with no fence", test: testServerScopeFeed},
+		{name: "a sink lease is taken when no row exists", test: testLeaseTake},
+		{name: "the holder renews its sink lease", test: testLeaseRenewByHolder},
+		{name: "another holder is refused while the lease is live", test: testLeaseRefusedWhileLive},
+		{name: "a sink lease is taken after expiry", test: testLeaseTakenAfterExpiry},
+		{name: "a released sink lease is taken by another holder", test: testLeaseRelease},
 	}
 
 	for _, tc := range cases {
@@ -278,6 +285,117 @@ func testServerScopeFeed(t *testing.T, s FeedStore) {
 
 	if c := cursor(t, s, "siem", audit.ServerScope); c != stored.Sequence {
 		t.Fatalf("server scope cursor: got %d, want %d", c, stored.Sequence)
+	}
+}
+
+// acquireLease takes or renews the lease of the siem sink for holder and
+// answers whether the caller holds it after the call.
+func acquireLease(t *testing.T, s FeedStore, holder string, ttl time.Duration) bool {
+	t.Helper()
+
+	held, err := s.AcquireSinkLease(t.Context(), "siem", holder, ttl)
+	if err != nil {
+		t.Fatalf("acquire lease siem for %s: %v", holder, err)
+	}
+
+	return held
+}
+
+// releaseLease releases the lease of sink held by holder.
+func releaseLease(t *testing.T, s FeedStore, sink, holder string) {
+	t.Helper()
+
+	if err := s.ReleaseSinkLease(t.Context(), sink, holder); err != nil {
+		t.Fatalf("release lease %s of %s: %v", sink, holder, err)
+	}
+}
+
+func testLeaseTake(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
+		t.Fatal("take lease: got false, want true")
+	}
+}
+
+func testLeaseRenewByHolder(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
+		t.Fatal("take lease: got false, want true")
+	}
+
+	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
+		t.Fatal("renew lease by the holder: got false, want true")
+	}
+}
+
+func testLeaseRefusedWhileLive(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
+		t.Fatal("take lease: got false, want true")
+	}
+
+	if acquireLease(t, s, "ins-holder-b", 30*time.Second) {
+		t.Fatal("acquire by another holder while live: got true, want false")
+	}
+
+	releaseLease(t, s, "siem", "ins-holder-b")
+
+	if acquireLease(t, s, "ins-holder-b", 30*time.Second) {
+		t.Fatal("acquire by another holder after its release: got true, want false")
+	}
+}
+
+func testLeaseTakenAfterExpiry(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	if !acquireLease(t, s, "ins-holder-a", 150*time.Millisecond) {
+		t.Fatal("take lease: got false, want true")
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		if acquireLease(t, s, "ins-holder-b", 30*time.Second) {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatal("lease was not taken after expiry within 10 seconds")
+		}
+
+		waitLeaseExpiry(t)
+	}
+}
+
+// waitLeaseExpiry waits a short time for a sink lease to end, or stops the
+// test when its context ends.
+func waitLeaseExpiry(t *testing.T) {
+	t.Helper()
+
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-t.Context().Done():
+		t.Fatal("lease was not taken after expiry within 10 seconds: test context done")
+	case <-timer.C:
+	}
+}
+
+func testLeaseRelease(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	if !acquireLease(t, s, "ins-holder-a", 30*time.Second) {
+		t.Fatal("take lease: got false, want true")
+	}
+
+	releaseLease(t, s, "siem", "ins-holder-a")
+
+	if !acquireLease(t, s, "ins-holder-b", 30*time.Second) {
+		t.Fatal("take lease after release: got false, want true")
 	}
 }
 

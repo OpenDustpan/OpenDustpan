@@ -1,0 +1,1 @@
+{"entries":[{"version":2,"kind":10,"sequenceID":1,"operationID":0,"removeOld":null,"removeNew":null,"layout":[{"baseIndex":0},{"stateIndex":0}],"states":[{"urn":"urn:pulumi:dev::corpus::test:resource::b","custom":true,"type":"test:resource","id":"b","inputs":{"value":"b"},"outputs":{"value":"b"}}]}]}

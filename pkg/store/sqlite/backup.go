@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 var (
@@ -46,7 +47,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 	}
 
 	if n == 0 {
-		return backup.ErrAlreadyExists
+		return s.createBackupConflict(ctx, r.ID)
 	}
 
 	return nil
@@ -255,14 +256,15 @@ func (s *Store) liveColumns(ctx context.Context, table string) ([]string, error)
 
 // SchemaTables implements backup.Inspector: the data tables the schema holds,
 // read from the catalog, never from backup.Tables, so the conformance suite
-// fails while the two differ. It excludes bookkeeping (schema_migrations)
+// fails while the two differ. It excludes bookkeeping (schema_migrations
+// and audit_chain_state, the chain state of this installation)
 // and SQLite internals.
 func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	const query = `SELECT name FROM sqlite_master
-		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations'
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations', 'audit_chain_state')
 		ORDER BY name`
 
 	rows, err := s.conn.QueryContext(ctx, query)
@@ -345,6 +347,15 @@ func (s *Store) PeekPortableKey(
 	return codec.PeekPortableSecretKey(ctx, open, file, wrapperID)
 }
 
+// PeekPortableInstallationKey implements backup.InstallationKeyPeeker: it
+// reads one installation key of wrapperID from the installation_secret_keys
+// file of a portable backup.
+func (s *Store) PeekPortableInstallationKey(
+	ctx context.Context, open backup.PortableOpener, file backup.PortableFile, wrapperID string,
+) (secret.WrappedKey, error) {
+	return codec.PeekPortableInstallationKey(ctx, open, file, wrapperID)
+}
+
 // capture copies the database into a new file with VACUUM INTO and returns
 // its path. The target must not exist, so it reserves a new name first. The
 // caller removes the file.
@@ -374,6 +385,19 @@ func (s *Store) capture(ctx context.Context) (string, error) {
 func (s *Store) swapDatabase(ctx context.Context, temp string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	return s.swapDatabaseLocked(ctx, temp)
+}
+
+// swapDatabaseLocked is swapDatabase with the store lock already held: the
+// keep-access apply holds the write lock from the live snapshot through the
+// swap, so it swaps without taking the lock again.
+func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
+	// The lock holds every durable operation write out, so the copy has
+	// the last committed rows of the control tables.
+	if err := keepControlTables(ctx, temp, s.path); err != nil {
+		return err
+	}
 
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close database for restore: %w", err)
@@ -440,6 +464,10 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 
 	if keysErr := checkForeignKeys(ctx, conn); keysErr != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(keysErr))
+	}
+
+	if sealedErr := checkSealedStateVersions(ctx, conn); sealedErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", sealedErr)
 	}
 
 	sum, err := summarizeConn(ctx, conn)
@@ -532,6 +560,25 @@ func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
 
 	if len(tables) > 0 {
 		return fmt.Errorf("backup breaks foreign keys of %q: %w", tables, backup.ErrCorrupt)
+	}
+
+	return nil
+}
+
+// checkSealedStateVersions refuses a staged backup with a state version that
+// is not sealed: every stored version is sealed, so an import with a plain
+// row fails instead of serving plain state.
+func checkSealedStateVersions(ctx context.Context, conn *sql.DB) error {
+	const query = `SELECT EXISTS(SELECT 1 FROM state_versions WHERE sealed = 0)`
+
+	var unsealed bool
+
+	if err := conn.QueryRowContext(ctx, query).Scan(&unsealed); err != nil {
+		return fmt.Errorf("read staged state versions: %w", backup.ErrExportRead)
+	}
+
+	if unsealed {
+		return fmt.Errorf("import holds an unsealed state version: %w", workspace.ErrUnsealedState)
 	}
 
 	return nil
@@ -673,7 +720,7 @@ func summarizeConn(ctx context.Context, conn *sql.DB) (backup.Summary, error) {
 	wrappers, err := stringColumn(
 		ctx,
 		conn,
-		`SELECT DISTINCT wrapper_id FROM secret_keys ORDER BY wrapper_id`,
+		`SELECT wrapper_id FROM secret_keys UNION SELECT wrapper_id FROM installation_secret_keys ORDER BY wrapper_id`,
 	)
 	if err != nil {
 		return backup.Summary{}, err
@@ -764,17 +811,16 @@ func countRows(ctx context.Context, conn *sql.DB, table string) (int64, error) {
 }
 
 // blobRefs reads the blob references of a snapshot: the content key, size and
-// MD5 of every state version that names content, with the blob key, size and
+// MD5 of every finalized state version that names content, with the blob key, size and
 // MD5 of every checkpoint kept in blobs and every journal batch, ordered by key. Size and MD5 stay
 // those of the plain bytes, as the state version stores them; sealed versions
 // mark their references sealed, so the backup opens them to check and stores
-// the sealed bytes. A pending version names no content, so only finalized
-// versions appear.
+// the sealed bytes. A pending version has no committed content, so the backup
+// leaves pending rows out.
 func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
-	const query = `SELECT content_key, size, md5, sealed FROM state_versions WHERE content_key <> ''
+	const query = `SELECT content_key, size, md5, sealed FROM state_versions WHERE content_key <> '' AND status = 'finalized'
 		UNION ALL
 		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM checkpoints
-		WHERE blob_key IS NOT NULL AND blob_key <> ''
 		UNION ALL
 		SELECT blob_key AS content_key, size AS size, md5 AS md5, 0 AS sealed FROM update_journal
 		ORDER BY content_key`
@@ -880,4 +926,36 @@ func quoteLiteral(s string) string {
 // corrupt wraps a staged-backup failure as ErrCorrupt, keeping the cause.
 func corrupt(err error) error {
 	return errors.Join(err, backup.ErrCorrupt)
+}
+
+// createBackupConflict answers why CreateBackup inserted no row: the ID is
+// taken (ErrAlreadyExists), or the unique index on running backups refused a
+// second running backup (ErrAlreadyRunning).
+func (s *Store) createBackupConflict(ctx context.Context, id backup.ID) error {
+	_, err := s.fetchBackup(ctx, id)
+	if err == nil {
+		return backup.ErrAlreadyExists
+	}
+
+	if errors.Is(err, backup.ErrNotFound) {
+		return backup.ErrAlreadyRunning
+	}
+
+	return err
+}
+
+// createRestoreConflict answers why CreateRestore inserted no row: the ID is
+// taken (ErrRestoreExists), or the unique index on running restores refused a
+// second running restore (ErrRestoreRunning).
+func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) error {
+	_, err := s.fetchRestore(ctx, id)
+	if err == nil {
+		return backup.ErrRestoreExists
+	}
+
+	if errors.Is(err, backup.ErrRestoreNotFound) {
+		return backup.ErrRestoreRunning
+	}
+
+	return err
 }

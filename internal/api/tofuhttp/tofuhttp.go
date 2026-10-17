@@ -166,6 +166,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 
+// Routes returns a copy of the route table. The Actions lists are copied
+// too, so callers cannot change handler state through the result.
+func (h *Handler) Routes() []Route {
+	out := make([]Route, len(h.routes))
+	for i, route := range h.routes {
+		out[i] = route
+		out[i].Actions = slices.Clone(route.Actions)
+	}
+
+	return out
+}
+
 // buildRoutes returns the route table. It is the single source of the patterns
 // that NewHandler registers and of what each pattern enforces.
 func (h *Handler) buildRoutes() []Route {
@@ -285,7 +297,27 @@ func classify(err error) (int, string) {
 		return status, message
 	}
 
+	if status, message, ok := classifyNamespace(err); ok {
+		return status, message
+	}
+
 	return http.StatusInternalServerError, "internal error"
+}
+
+// classifyNamespace maps the namespace errors of a write to a status. The
+// message is the fixed text of the error, never the wrapped detail. ok is
+// false for any other error.
+func classifyNamespace(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, namespace.ErrFenced):
+		return http.StatusConflict, namespace.ErrFenced.Error(), true
+	case errors.Is(err, namespace.ErrNotHome):
+		return http.StatusMisdirectedRequest, namespace.ErrNotHome.Error(), true
+	case errors.Is(err, namespace.ErrUnavailable):
+		return http.StatusServiceUnavailable, namespace.ErrUnavailable.Error() + ": try again after the Retry-After time", true
+	default:
+		return 0, "", false
+	}
 }
 
 // classifyAccess maps the errors of the sign-in, the names and the lock to a

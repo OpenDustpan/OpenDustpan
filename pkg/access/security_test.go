@@ -22,7 +22,9 @@ import (
 func (f *fixture) principals(tb testing.TB) *principal.Service {
 	tb.Helper()
 
-	svc, err := principal.NewService(principal.Config{Store: f.store, Guard: f.svc, Now: nil, NewID: nil})
+	svc, err := principal.NewService(
+		principal.Config{Store: f.store, Guard: f.svc, Namespaces: nil, Tokens: f.svc, Now: nil, NewID: nil},
+	)
 	if err != nil {
 		tb.Fatalf("principal service: %v", err)
 	}
@@ -634,5 +636,69 @@ func TestSignInSettingsAreSiteOnly(t *testing.T) {
 	})
 	if !errors.Is(err, access.ErrEscalation) {
 		t.Fatalf("create a role with %s = %v, want ErrEscalation", a, err)
+	}
+}
+
+// TestRestoreAccessIsSiteOnly places server:restore-access: it is in the
+// administration family, and of the built-in roles only the site
+// administrator holds it. A restore with the access tables replaces who
+// has access, so the account administrator and the operator do not hold
+// it, and an account administrator cannot give it to itself through a
+// custom role.
+func TestRestoreAccessIsSiteOnly(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	acct := f.accountAdministrator(t, "restore-acct")
+	site := f.person(t, "restore-site")
+	ops := f.person(t, "restore-ops")
+
+	f.grant(t, prn("restore-site"), access.RoleSiteAdministrator, identity.ServerObject())
+	f.grant(t, prn("restore-ops"), access.RoleInstallationOperator, identity.ServerObject())
+
+	a := identity.ActionServerRestoreAccess
+	if family, ok := access.FamilyOf(a); !ok || family != access.FamilyAdministration {
+		t.Errorf("family of %s = %q, %t; want administration", a, family, ok)
+	}
+
+	for _, r := range access.BuiltInRoles() {
+		want := r.ID == access.RoleSiteAdministrator
+		if got := r.Has(a); got != want {
+			t.Errorf("built-in role %q has %s = %t, want %t", r.ID, a, got, want)
+		}
+	}
+
+	server := identity.ServerObject()
+	assertChecks(t, f.authz, site, []check{{server, a, true}})
+	assertChecks(t, f.authz, acct, []check{{server, a, false}})
+	assertChecks(t, f.authz, ops, []check{{server, a, false}})
+
+	_, err := f.svc.CreateRole(t.Context(), testEntry(), acct, access.RoleInput{
+		Name: "restorer", Description: "", Actions: []identity.Action{a},
+	})
+	if !errors.Is(err, access.ErrEscalation) {
+		t.Fatalf("create a role with %s = %v, want ErrEscalation", a, err)
+	}
+}
+
+// TestManageSignInCatalogIsSiteOnly walks the role catalog: only the site
+// administrator holds server:manage-sign-in, and the operator family holds
+// no such action, so no operator role gains it by a family change.
+func TestManageSignInCatalogIsSiteOnly(t *testing.T) {
+	t.Parallel()
+
+	a := identity.ActionServerManageSignIn
+
+	for _, r := range access.BuiltInRoles() {
+		want := r.ID == access.RoleSiteAdministrator
+		if got := r.Has(a); got != want {
+			t.Errorf("role %q holds %s = %t, want %t", r.ID, a, got, want)
+		}
+	}
+
+	for _, o := range access.Actions(access.FamilyOperator) {
+		if o == a {
+			t.Errorf("operator family holds %s, want no such action", a)
+		}
 	}
 }

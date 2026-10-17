@@ -64,6 +64,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a deleted role frees its name and its grants give nothing", test: testDeletedRole},
 		{name: "get roles reads several custom roles", test: testGetRoles},
 		{name: "subjects of a caller are its principal and current groups", test: testSubjectsOf},
+		{name: "a suspended membership gives no group", test: testSuspendedMembershipGivesNoRights},
 		{name: "an entry that the audit log refuses changes nothing", test: testRefusedEntry},
 		{name: "grants of a subject are its current grants on every object", test: testGrantsOf},
 		{name: "a role granted below the installation or on a principal is reported", test: testRoleGrantedBelow},
@@ -71,7 +72,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a grant inside a namespace checks its fence and audits there", test: testGrantFence},
 	}
 
-	for _, tc := range slices.Concat(cases, reviewCases(), unitCases(), moveCases()) {
+	for _, tc := range slices.Concat(cases, checkCases(), reviewCases(), unitCases(), moveCases(), reachCases()) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			tc.test(t, newStore(t))
@@ -119,27 +120,28 @@ func opsGroup() access.Subject {
 // @server, as a Service builds it.
 func entry() audit.Entry {
 	return audit.Entry{
-		At:         at(9),
-		Namespace:  audit.ServerScope,
-		Subject:    "admin",
-		IDPSubject: "",
-		TokenID:    "",
-		Action:     "server:manage-access",
-		Object:     "grant:test",
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   "192.0.2.1",
-		UserAgent:  "accesstest",
-		Channel:    audit.ChannelAPI,
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  "",
-		ObjectID:   "",
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           at(9),
+		Namespace:    audit.ServerScope,
+		Subject:      "admin",
+		IDPSubject:   "",
+		TokenID:      "",
+		Action:       "server:manage-access",
+		Object:       "grant:test",
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     "192.0.2.1",
+		UserAgent:    "accesstest",
+		Channel:      audit.ChannelAPI,
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    "",
+		ObjectID:     "",
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }
 
@@ -303,7 +305,7 @@ func testMissingRole(t *testing.T, s access.Store) {
 		t.Fatalf("get missing role = %v, want ErrNotFound", err)
 	}
 
-	if err := s.UpdateRole(ctx, newRole("rol-missing", "Missing"), entry()); !errors.Is(err, access.ErrNotFound) {
+	if err := s.UpdateRole(ctx, newRole("rol-missing", "Missing"), entry(), nil); !errors.Is(err, access.ErrNotFound) {
 		t.Fatalf("update missing role = %v, want ErrNotFound", err)
 	}
 
@@ -344,7 +346,7 @@ func testUpdateRole(t *testing.T, s access.Store) {
 	want.Description = "Runs releases"
 	want.UpdatedAt = at(5)
 
-	if err := s.UpdateRole(t.Context(), want, entry()); err != nil {
+	if err := s.UpdateRole(t.Context(), want, entry(), nil); err != nil {
 		t.Fatalf("update role: %v", err)
 	}
 
@@ -362,7 +364,7 @@ func testRenameRoleTaken(t *testing.T, s access.Store) {
 	mustCreateRole(t, s, newRole("rol-one", "Deployer"))
 	mustCreateRole(t, s, newRole("rol-two", "Reader"))
 
-	err := s.UpdateRole(t.Context(), newRole("rol-two", "deployer"), entry())
+	err := s.UpdateRole(t.Context(), newRole("rol-two", "deployer"), entry(), nil)
 	if !errors.Is(err, access.ErrAlreadyExists) {
 		t.Fatalf("rename to taken name = %v, want ErrAlreadyExists", err)
 	}
@@ -373,7 +375,7 @@ func testRenameRoleCase(t *testing.T, s access.Store) {
 
 	mustCreateRole(t, s, newRole("rol-one", "Deployer"))
 
-	if err := s.UpdateRole(t.Context(), newRole("rol-one", "DEPLOYER"), entry()); err != nil {
+	if err := s.UpdateRole(t.Context(), newRole("rol-one", "DEPLOYER"), entry(), nil); err != nil {
 		t.Fatalf("rename to another case of own name: %v", err)
 	}
 }
@@ -633,8 +635,10 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 	ctx := t.Context()
 	ns := newNamespace("acme")
 	g := newGrant("grt-one", principalSubject("prn-a"), access.RoleNamespaceAdmin, identity.NamespaceObject("acme"))
+	e := entry()
+	e.Object = access.GrantRef(g)
 
-	if err := s.CreateNamespaceWithGrant(ctx, ns, g, entry()); err != nil {
+	if err := s.CreateNamespaceWithGrant(ctx, ns, g, e); err != nil {
 		t.Fatalf("create namespace with grant: %v", err)
 	}
 
@@ -651,6 +655,8 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 		}
 	}
 
+	checkCreatorGrantEntry(t, s, g, e)
+
 	var noGrant access.Grant // A grant with no ID stores the namespace alone.
 	if err = s.CreateNamespaceWithGrant(ctx, newNamespace("beta"), noGrant, entry()); err != nil {
 		t.Fatalf("create namespace without grant: %v", err)
@@ -662,6 +668,46 @@ func testNamespaceWithGrant(t *testing.T, s access.Store) {
 	}
 
 	assertIDs(t, "grants on beta", grantsOf(list))
+}
+
+// checkCreatorGrantEntry proves that the create wrote the grant of the
+// creator as the first entry of the chain of the new namespace, with the
+// same action and object as the entry of @server, and that the chain of the
+// new namespace checks as valid. A store without the audit log skips it.
+func checkCreatorGrantEntry(t *testing.T, s access.Store, g access.Grant, e audit.Entry) {
+	t.Helper()
+
+	log, ok := s.(audit.Store)
+	if !ok {
+		return
+	}
+
+	ctx := t.Context()
+	ns := g.Object.Namespace()
+
+	listing, err := log.List(ctx, ns, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list audit of %q: %v", ns, err)
+	}
+
+	if listing.Total != 1 {
+		t.Fatalf("entries of %q = %d, want the grant of its creator", ns, listing.Total)
+	}
+
+	first := listing.Entries[len(listing.Entries)-1]
+	if first.Sequence != 1 || first.Namespace != ns || first.Action != e.Action ||
+		first.Object != e.Object || first.Kind != audit.KindChange {
+		t.Fatalf("first entry of %q = %+v, want the admin grant %q", ns, first, e.Object)
+	}
+
+	check, err := log.Check(ctx, ns)
+	if err != nil {
+		t.Fatalf("check audit of %q: %v", ns, err)
+	}
+
+	if !check.Valid {
+		t.Fatalf("check of %q = %+v, want a valid chain", ns, check)
+	}
 }
 
 func testNamespaceWithGrantTaken(t *testing.T, s access.Store) {
@@ -704,7 +750,7 @@ func testDeleteSubjectGrants(t *testing.T, s access.Store) {
 
 	prn := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		DisabledAt: time.Time{},
 	}
 	if err := ps.CreatePrincipal(ctx, prn, entry()); err != nil {
@@ -893,7 +939,7 @@ func seedCaller(t *testing.T, ps principal.Store) {
 
 	alice := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-a", Subject: "alice", DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		DisabledAt: time.Time{},
 	}
 	if err := ps.CreatePrincipal(ctx, alice, entry()); err != nil {
@@ -909,8 +955,12 @@ func seedCaller(t *testing.T, ps principal.Store) {
 			t.Fatalf("create group: %v", err)
 		}
 
-		m := principal.Membership{AddedAt: at(1), GroupID: id, PrincipalID: "prn-a"}
-		if err := ps.AddMember(ctx, m, entry()); err != nil {
+		m := principal.Membership{
+			AddedAt: at(1), SuspendedAt: time.Time{}, GroupID: id, PrincipalID: "prn-a",
+			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
+			Pinned: false,
+		}
+		if err := ps.AddMember(ctx, m, entry(), nil); err != nil {
 			t.Fatalf("add member: %v", err)
 		}
 	}

@@ -20,6 +20,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/tfe"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -104,6 +105,11 @@ func (stubAuthorizer) Authorize(
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (stubAuthorizer) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // readOnlyAuthorizer allows the read actions of a namespace and a unit and
 // denies the rest: a caller that sees an object but cannot change it.
 type readOnlyAuthorizer struct{}
@@ -119,6 +125,15 @@ func (readOnlyAuthorizer) Authorize(
 	}
 
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (readOnlyAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // failingReadAuthorizer denies every action except the read actions, and
@@ -137,6 +152,15 @@ func (failingReadAuthorizer) Authorize(
 	}
 
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (failingReadAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // errStoreDown is the store error of failingReadAuthorizer.
@@ -160,6 +184,15 @@ func (s selectiveAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (selectiveAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // recordedCall is one Authorize call: the action on the object wire form.
 type recordedCall struct {
 	action identity.Action
@@ -180,6 +213,15 @@ func (r *recordingAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordingAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // denyObjectAuthorizer denies the one object wire form in deny and allows
 // everything else, so tests prove a route authorizes the resolved object:
 // denying it answers 403.
@@ -195,6 +237,15 @@ func (d denyObjectAuthorizer) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (denyObjectAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // newObjectHandler returns a production Handler (no test-only routes) with
@@ -1288,9 +1339,32 @@ func checkRouteAuthentication(t *testing.T, route tfe.Route) {
 }
 
 // checkRouteAuthenticationUnauthorized proves one authorized route answers
-// 401 without a token and with a wrong token.
+// 401 without a token, with a wrong token, and with only a console session
+// cookie: the TFE-compatible API does not take the cookie.
 func checkRouteAuthenticationUnauthorized(t *testing.T, route tfe.Route) {
 	t.Helper()
+
+	t.Run("session cookie", func(t *testing.T) {
+		t.Parallel()
+
+		allowed := newEnforcingHandler(t, selectiveAuthorizer{deny: map[identity.Action]bool{}})
+
+		req := routeRequest(t, route, "")
+		req.AddCookie(&http.Cookie{
+			Name: sessionauth.Cookie, Value: "session-secret", Path: "/", Secure: true, HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+		req.Header.Set(sessionauth.CSRFHeader, "csrf-value")
+
+		rec := httptest.NewRecorder()
+		allowed.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("request with the session cookie answers %d, want %d", rec.Code, http.StatusUnauthorized)
+		}
+
+		checkJSONAPIError(t, rec, http.StatusUnauthorized)
+	})
 
 	cases := []struct {
 		name  string

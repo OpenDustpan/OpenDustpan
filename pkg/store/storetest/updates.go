@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/md5" //nolint:gosec // Test digests of stored bytes, for integrity, not security.
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"slices"
@@ -32,28 +33,17 @@ type UpdatesStore interface {
 	stack.BuiltCheckpointStore
 }
 
+// KeyEraser is an optional UpdatesStore capability for the keyless row case:
+// it tries to set the blob key of every checkpoint row to NULL with a direct
+// SQL update. The port refuses such a write, and the schema refuses the SQL
+// update too.
+type KeyEraser interface {
+	// EraseCheckpointKeys sets the blob key of every checkpoint row to NULL.
+	EraseCheckpointKeys(ctx context.Context) error
+}
+
 // UpdatesFactory returns a fresh, empty store for one subtest.
 type UpdatesFactory func(t *testing.T) UpdatesStore
-
-// CountNullifier is an optional UpdatesStore capability for the uncounted
-// checkpoint case: it sets every stored checkpoint count to NULL. Saves store
-// NULL already, so nullifying changes nothing; the case keeps covering the
-// delete-guard fallback that counts the one latest deployment.
-type CountNullifier interface {
-	UpdatesStore
-	// NullifyResourceCount sets every stored checkpoint count to NULL.
-	NullifyResourceCount(ctx context.Context) error
-}
-
-// CountSetter is an optional UpdatesStore capability for the stored-count
-// case: it sets every stored checkpoint count to count with a direct SQL
-// update, planting rows from before saves stopped counting. The port always
-// writes NULL, so only SQL seeds such rows.
-type CountSetter interface {
-	UpdatesStore
-	// SetResourceCount sets every stored checkpoint count to count.
-	SetResourceCount(ctx context.Context, count int64) error
-}
 
 // RunUpdates executes the conformance suite of the update-cycle ports
 // (stack.UpdateStore, stack.CheckpointStore, stack.EventStore) against stores
@@ -89,6 +79,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		},
 		{name: "journal version round trip", test: testJournalVersionRoundTrip},
 		{name: "journal version of a new update is zero", test: testJournalVersionDefaultsToZero},
+		{name: "count of running journaled updates", test: testCountRunningJournaledUpdates},
 		{name: "missing update is ErrUpdateNotFound", test: testMissingUpdate},
 		{name: "update of missing stack is ErrNotFound", test: testUpdateMissingStack},
 		{name: "stale fence is ErrFenced on every write", test: testUpdateWritesFenced},
@@ -103,21 +94,21 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "checkpoint blob metadata round trip", test: testCheckpointBlobMetadata},
 		{name: "checkpoint by update returns only that update", test: testCheckpointByUpdate},
 		{name: "history reports the stored size for blob rows", test: testHistoryBlobSize},
-		{name: "referenced checkpoint keys list only blob rows", test: testReferencedCheckpointKeys},
+		{name: "referenced checkpoint keys list every key of the stack", test: testReferencedCheckpointKeys},
 		{name: "checkpoint needs the running update's lease", test: testCheckpointLease},
 		{name: "checkpoint sequence numbers are idempotent", test: testCheckpointSequence},
 		{name: "latest checkpoint spans updates", test: testCheckpointAcrossUpdates},
 		{name: "latest checkpoint is the highest version", test: testCheckpointLatestIsHighest},
 		{name: "checkpoint by version returns only that version", test: testCheckpointByVersion},
 		{name: "checkpoint of a preview is rejected", test: testCheckpointPreviewRejected},
+		{name: "checkpoint without a blob key is refused", test: testCheckpointWithoutKeyRefused},
+		{name: "the schema refuses a checkpoint row without a blob key", test: testKeylessRowRefused},
 		{name: "canceled or failed update keeps its checkpoint", test: testCheckpointKeepsAfterEnd},
 		{name: "children of a deleted stack are not reachable by name", test: testDeletedStackChildrenUnreachable},
 		{name: "delete during a running update is ErrUpdateConflict", test: testDeleteDuringRunningUpdate},
 		{name: "delete without force refuses a stack with resources", test: testDeleteRefusesResources},
 		{name: "delete with force removes a stack with resources", test: testDeleteWithForceRemovesResources},
 		{name: "delete without force follows the latest checkpoint", test: testDeleteFollowsLatestCheckpoint},
-		{name: "delete with a stored count uses it", test: testDeleteWithStoredCount},
-		{name: "delete with an uncounted checkpoint counts its deployment", test: testDeleteWithUncountedCheckpoint},
 		{name: "delete with a blob checkpoint uses the domain count", test: testDeleteWithBlobCheckpoint},
 		{name: "delete races a finishing update without dropping resources", test: testDeleteRaceWithFinishingUpdate},
 		{name: "delete races a new update without dropping resources", test: testDeleteRaceWithNewUpdate},
@@ -125,16 +116,32 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "events need the running update's lease", test: testEventsLease},
 		{name: "journal rows get arrivals and retries write nothing", test: testJournalPut},
 		{name: "journal refuses leases, previews, stacks, fences and foreign keys", test: testJournalRefusals},
+		{name: "journal refuses a batch for an update with version 0", test: testJournalRefusesVersionZero},
 		{name: "journal refuses batches after a cancel", test: testJournalAfterCancel},
+		{name: "journal end stops on an unstored refusal", test: testJournalEndStopsOnUnstoredRefusal},
+		{name: "journal end keeps a refusal whose sequences are stored", test: testJournalEndKeepsStoredRefusal},
 		{name: "journal stores two batches of one update that arrive at once", test: testJournalConcurrentRows},
 		{name: "journal stores one copy of a batch sent twice at once", test: testJournalConcurrentRetry},
 		{name: "journal check sees the stored operations and refusals store nothing", test: testJournalVerify},
+		{name: "journal refuses a write after a stored change", test: testJournalRefusesWriteAfterStoredChange},
+		{name: "journal refuses a reference to a begun-only operation", test: testJournalBegunRefusal},
+		{
+			name: "journal refuses a reference before a stored rebuild",
+			test: testJournalRefusesReferenceAfterStoredRebuild,
+		},
 		{name: "build removes the journal and returns its blob keys", test: testJournalBuild},
 		{name: "build races a batch without losing its key", test: testJournalBuildRace},
 		{name: "build leaves other updates and stacks journaled", test: testJournalBuildIsolation},
 		{name: "build refuses a preview and a stale sequence and keeps the journal", test: testJournalBuildRefusals},
 		{name: "journal is sweepable only when closed or no longer running", test: testJournalSweepable},
 		{name: "journal keys follow a stack rename", test: testJournalKeysFollowRename},
+		{name: "journal refusals read back in arrival order", test: testJournalRefusalsRoundTrip},
+		{name: "journal refusals of a missing update record nothing", test: testJournalRefusalsMissingUpdate},
+		{name: "journal refusals of an ended update record nothing", test: testJournalRefusalsOnlyRunning},
+		{name: "journal refusal rows are gone after cancel or failure", test: testJournalEndDropsRefusals},
+		{name: "journal refusal with a stale fence is fenced", test: testJournalRefusalStaleFence},
+		{name: "journal sequences read back in order", test: testJournalSequences},
+		{name: "build removes the refusals with the journal", test: testJournalBuildRemovesRefusals},
 		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
 		{name: "inventory follows an update finish", test: testInventoryAfterUpdateFinish},
 		{name: "inventory holds the lock of a running update", test: testInventoryHoldsRunningLock},
@@ -462,6 +469,65 @@ func (f historyFixture) historySize(t *testing.T, id stack.UpdateID) int64 {
 	return 0
 }
 
+// testJournalEndStopsOnUnstoredRefusal shows that the end transition of a
+// journaled update that succeeds stops on a refusal of a batch that is still
+// unstored, and that the update keeps running.
+func testJournalEndStopsOnUnstoredRefusal(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u1")
+
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 1, 1), f.fence); err != nil {
+		t.Fatalf("store batch: %v", err)
+	}
+
+	recordRefusal(t, f, journalRefusal(u, []int64{3}, 400, "unknown kind"))
+
+	err := f.s.SaveUpdate(t.Context(), ended(u, stack.StatusSucceeded), f.fence)
+	if !errors.Is(err, stack.ErrJournalIncomplete) {
+		t.Fatalf("end with an unstored refusal: err %v, want ErrJournalIncomplete", err)
+	}
+
+	got, err := f.s.GetUpdate(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("get update: %v", err)
+	}
+
+	if got.Status != stack.StatusRunning {
+		t.Fatalf("status after the refused end = %q, want %q", got.Status, stack.StatusRunning)
+	}
+
+	// A stack runs one update at a time, so the update ends here.
+	f.end(t, u, stack.StatusCanceled)
+}
+
+// testJournalEndKeepsStoredRefusal shows that a refusal whose sequence IDs are
+// all stored, because a retry stored the batch, does not stop the end.
+func testJournalEndKeepsStoredRefusal(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.runJournaled(t, f.ref, "u2")
+
+	if _, err := f.s.PutJournalRow(t.Context(), journalRow(t, f.s, u, 1, 1), f.fence); err != nil {
+		t.Fatalf("store batch: %v", err)
+	}
+
+	recordRefusal(t, f, journalRefusal(u, []int64{1}, 400, "unknown kind"))
+
+	if err := f.s.SaveUpdate(t.Context(), ended(u, stack.StatusSucceeded), f.fence); err != nil {
+		t.Fatalf("end with stored sequences: %v", err)
+	}
+
+	got, err := f.s.GetUpdate(t.Context(), f.ref, u.ID)
+	if err != nil {
+		t.Fatalf("get update: %v", err)
+	}
+
+	if got.Status != stack.StatusSucceeded {
+		t.Fatalf("status after the end = %q, want %q", got.Status, stack.StatusSucceeded)
+	}
+}
+
 func testUpdateRoundTrip(t *testing.T, f fixture) {
 	t.Helper()
 
@@ -562,6 +628,78 @@ func testJournalVersionDefaultsToZero(t *testing.T, f fixture) {
 	got := f.start(t, want)
 	if got.JournalVersion != 0 {
 		t.Fatalf("started update journal version = %d, want 0", got.JournalVersion)
+	}
+}
+
+// testCountRunningJournaledUpdates checks the count of running updates with
+// journal version above 0: an empty store counts 0, each running journaled
+// update counts once, a running update without journaling changes nothing,
+// and an ended journaled update leaves the count.
+func testCountRunningJournaledUpdates(t *testing.T, f fixture) {
+	t.Helper()
+
+	counter, ok := f.s.(interface {
+		CountRunningJournaledUpdates(ctx context.Context) (int64, error)
+	})
+	if !ok {
+		t.Fatal("store does not count running journaled updates")
+	}
+
+	count := func() int64 {
+		t.Helper()
+
+		got, err := counter.CountRunningJournaledUpdates(t.Context())
+		if err != nil {
+			t.Fatalf("count running journaled updates: %v", err)
+		}
+
+		return got
+	}
+
+	startJournaled := func(ref stack.Ref, id string, version int64) stack.Update {
+		t.Helper()
+
+		u := started(t, f.create(t, ref, id, mutating()))
+		u.JournalVersion = version
+
+		got, err := f.s.StartUpdate(t.Context(), u, f.fence)
+		if err != nil {
+			t.Fatalf("start journaled update %s: %v", id, err)
+		}
+
+		return got
+	}
+
+	if got := count(); got != 0 {
+		t.Fatalf("empty count = %d, want 0", got)
+	}
+
+	first := startJournaled(f.ref, "u1", 1)
+	if got := count(); got != 1 {
+		t.Fatalf("count with one running journaled update = %d, want 1", got)
+	}
+
+	other := f.other(t)
+	second := startJournaled(other, "u2", 2)
+	if got := count(); got != 2 {
+		t.Fatalf("count with two running journaled updates = %d, want 2", got)
+	}
+
+	f.end(t, first, stack.StatusSucceeded)
+	if got := count(); got != 1 {
+		t.Fatalf("count after one journaled update ended = %d, want 1", got)
+	}
+
+	plain := f.run(t, f.ref, "u3", mutating())
+	if got := count(); got != 1 {
+		t.Fatalf("count with a running update without journaling = %d, want 1", got)
+	}
+
+	f.end(t, second, stack.StatusSucceeded)
+	f.end(t, plain, stack.StatusSucceeded)
+
+	if got := count(); got != 0 {
+		t.Fatalf("count after every update ended = %d, want 0", got)
 	}
 }
 
@@ -1126,8 +1264,12 @@ func (f fixture) blobKey(t *testing.T, u stack.Update, seq int64) blob.Key {
 	return key
 }
 
-// newCheckpoint returns a checkpoint of u written under its current lease.
+// newCheckpoint returns a checkpoint of u written under its current lease,
+// under a placeholder blob key. The store never reads the blob store, so the
+// key needs no object.
 func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoint {
+	size, sum := gzipAttrs(deployment)
+
 	return stack.Checkpoint{
 		SavedAt:       now().Add(2 * time.Second),
 		Features:      []string{"deltaCheckpointUploadsV2", "verbatim"},
@@ -1139,10 +1281,23 @@ func newCheckpoint(u stack.Update, seq int64, deployment string) stack.Checkpoin
 		Sequence:      seq,
 		Digest:        sha256.Sum256([]byte(deployment)),
 		Invalid:       false,
-		BlobKey:       "",
-		BlobSize:      0,
-		BlobMD5:       [md5.Size]byte{},
+		BlobKey:       placeholderKey(u, seq),
+		BlobSize:      size,
+		BlobMD5:       sum,
 	}
+}
+
+// placeholderKey returns a blob key of a save of u with seq that no object
+// holds.
+func placeholderKey(u stack.Update, seq int64) blob.Key {
+	key, err := blob.ParseKey(
+		"pulumi/placeholder/" + hex.EncodeToString([]byte(u.ID)) + "/" + strconv.FormatInt(seq, 10),
+	)
+	if err != nil {
+		panic(err)
+	}
+
+	return key
 }
 
 func testCheckpointRoundTrip(t *testing.T, f fixture) {
@@ -1471,9 +1626,8 @@ func testHistoryBlobSize(t *testing.T, f fixture) {
 }
 
 // testReferencedCheckpointKeys checks that the referenced keys hold every
-// blob key the stack's checkpoints name, ordered, without the rows that keep
-// content. A stack without checkpoints, or one that does not exist, yields an
-// empty list.
+// blob key the stack's checkpoints name, ordered. A stack without
+// checkpoints, or one that does not exist, yields an empty list.
 func testReferencedCheckpointKeys(t *testing.T, f fixture) {
 	t.Helper()
 
@@ -1482,7 +1636,9 @@ func testReferencedCheckpointKeys(t *testing.T, f fixture) {
 	}
 
 	first := f.run(t, f.ref, "u1", mutating())
-	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(first, 0, `{"v":1}`), f.fence); err != nil {
+	firstKey := f.blobKey(t, first, 0)
+
+	if err := f.s.PutCheckpoint(t.Context(), newBlobCheckpoint(first, firstKey, 0, `{"v":1}`), f.fence); err != nil {
 		t.Fatalf("put checkpoint of u1: %v", err)
 	}
 
@@ -1502,8 +1658,8 @@ func testReferencedCheckpointKeys(t *testing.T, f fixture) {
 		t.Fatalf("referenced keys: %v", err)
 	}
 
-	if !slices.Equal(keys, []blob.Key{secondKey}) {
-		t.Fatalf("referenced keys = %v, want [%s]", keys, secondKey)
+	if !slices.Equal(keys, []blob.Key{firstKey, secondKey}) {
+		t.Fatalf("referenced keys = %v, want [%s %s]", keys, firstKey, secondKey)
 	}
 
 	if keys, err := f.s.ReferencedCheckpointKeys(t.Context(), f.other(t)); err != nil || len(keys) != 0 {
@@ -1513,6 +1669,57 @@ func testReferencedCheckpointKeys(t *testing.T, f fixture) {
 	ghost := stack.Ref{Namespace: f.ref.Namespace, Project: f.ref.Project, Stack: "ghost"}
 	if keys, err := f.s.ReferencedCheckpointKeys(t.Context(), ghost); err != nil || len(keys) != 0 {
 		t.Fatalf("referenced keys of a missing stack = %v, %v; want empty", keys, err)
+	}
+}
+
+// testCheckpointWithoutKeyRefused checks that a checkpoint write without a
+// blob key fails with ErrCheckpointNoKey and stores nothing, through both the
+// checkpoint save and the built checkpoint write. The store keeps no content,
+// so such a row could never be read.
+func testCheckpointWithoutKeyRefused(t *testing.T, f fixture) {
+	t.Helper()
+
+	u := f.run(t, f.ref, "u1", mutating())
+	cp := newCheckpoint(u, 0, `{"v":1}`)
+	cp.BlobKey = ""
+
+	if err := f.s.PutCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointNoKey) {
+		t.Fatalf("put checkpoint without a key: err = %v, want ErrCheckpointNoKey", err)
+	}
+
+	if _, err := f.s.PutBuiltCheckpoint(t.Context(), cp, f.fence); !errors.Is(err, stack.ErrCheckpointNoKey) {
+		t.Fatalf("put built checkpoint without a key: err = %v, want ErrCheckpointNoKey", err)
+	}
+
+	if _, err := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID); !errors.Is(err, stack.ErrNoState) {
+		t.Fatalf("checkpoint after refused writes: err = %v, want ErrNoState", err)
+	}
+}
+
+// testKeylessRowRefused checks that the schema refuses a checkpoint row
+// without a blob key, also from a direct SQL update: the store keeps no
+// content, so such a row can never exist, and the checkpoint stays readable.
+func testKeylessRowRefused(t *testing.T, f fixture) {
+	t.Helper()
+
+	eraser, ok := f.s.(KeyEraser)
+	if !ok {
+		t.Skip("store cannot try to plant a checkpoint row without a blob key")
+	}
+
+	u := f.run(t, f.ref, "u1", mutating())
+	if err := f.s.PutCheckpoint(t.Context(), newCheckpoint(u, 0, `{"v":1}`), f.fence); err != nil {
+		t.Fatalf("put checkpoint: %v", err)
+	}
+
+	f.end(t, u, stack.StatusSucceeded)
+
+	if err := eraser.EraseCheckpointKeys(t.Context()); err == nil {
+		t.Fatal("erase the checkpoint keys: err = nil, want the schema to refuse a row without a blob key")
+	}
+
+	if _, err := f.s.CheckpointByUpdate(t.Context(), f.ref, u.ID); err != nil {
+		t.Fatalf("checkpoint after the refused erase: %v", err)
 	}
 }
 
@@ -1590,7 +1797,7 @@ func testDeletedStackChildrenUnreachable(t *testing.T, f fixture) {
 		t.Context(),
 		f.ref,
 		f.fence,
-		stack.EmptyGuard(),
+		countedGuard(u, `{"v":1}`),
 		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if err != nil {
@@ -1687,20 +1894,30 @@ func finishWithDeployment(t *testing.T, f fixture, id, deployment string) stack.
 	return f.end(t, u, stack.StatusSucceeded)
 }
 
+// countedGuard returns the guard of a delete that counted deployment as the
+// latest checkpoint of u, as the service does outside the transaction.
+func countedGuard(u stack.Update, deployment string) stack.DeleteGuard {
+	return stack.DeleteGuard{
+		UpdateID:      u.ID,
+		Digest:        sha256.Sum256([]byte(deployment)),
+		HasCheckpoint: true,
+		HasResources:  stack.CountManagedResources([]byte(deployment)) > 0,
+	}
+}
+
 // testDeleteRefusesResources finishes an update with one managed resource
 // and checks that the final delete without force refuses with
-// ErrHasResources and removes nothing. Saves store a NULL count, so the
-// guard counts the one latest deployment.
+// ErrHasResources and removes nothing.
 func testDeleteRefusesResources(t *testing.T, f fixture) {
 	t.Helper()
 
-	finishWithDeployment(t, f, "u1", resourcedDeployment)
+	u := finishWithDeployment(t, f, "u1", resourcedDeployment)
 
 	err := f.s.DeleteStack(
 		t.Context(),
 		f.ref,
 		f.fence,
-		stack.EmptyGuard(),
+		countedGuard(u, resourcedDeployment),
 		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(err, stack.ErrHasResources) {
@@ -1754,13 +1971,13 @@ func testDeleteFollowsLatestCheckpoint(t *testing.T, f fixture) {
 	t.Helper()
 
 	finishWithDeployment(t, f, "u1", resourcedDeployment)
-	finishWithDeployment(t, f, "u2", emptyDeployment)
+	latest := finishWithDeployment(t, f, "u2", emptyDeployment)
 
 	err := f.s.DeleteStack(
 		t.Context(),
 		f.ref,
 		f.fence,
-		stack.EmptyGuard(),
+		countedGuard(latest, emptyDeployment),
 		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if err != nil {
@@ -1770,13 +1987,13 @@ func testDeleteFollowsLatestCheckpoint(t *testing.T, f fixture) {
 	other := f.other(t)
 	g := fixture{s: f.s, ref: other, fence: f.fence}
 	finishWithDeployment(t, g, "u1", emptyDeployment)
-	finishWithDeployment(t, g, "u2", resourcedDeployment)
+	latest = finishWithDeployment(t, g, "u2", resourcedDeployment)
 
 	err = f.s.DeleteStack(
 		t.Context(),
 		other,
 		f.fence,
-		stack.EmptyGuard(),
+		countedGuard(latest, resourcedDeployment),
 		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
 	)
 	if !errors.Is(err, stack.ErrHasResources) {
@@ -1784,173 +2001,13 @@ func testDeleteFollowsLatestCheckpoint(t *testing.T, f fixture) {
 	}
 }
 
-// testDeleteWithStoredCount covers rows with a stored count from before
-// saves stopped counting: the delete uses the stored count, not the
-// deployment content and not the domain guard. A resourced deployment with a
-// stored 0 deletes without force; an empty deployment with a stored 1 is
-// refused with ErrHasResources even under a guard that counted no resources;
-// force always removes.
-func testDeleteWithStoredCount(t *testing.T, f fixture) {
-	t.Helper()
-
-	setter, ok := f.s.(CountSetter)
-	if !ok {
-		t.Skip("store cannot plant a stored checkpoint count")
-	}
-
-	// The stored count wins over the content: a resourced deployment with a
-	// stored 0 deletes without force, even under a guard that claims
-	// resources on another checkpoint.
-	finishWithDeployment(t, f, "u1", resourcedDeployment)
-
-	if err := setter.SetResourceCount(t.Context(), 0); err != nil {
-		t.Fatalf("plant a stored count of 0: %v", err)
-	}
-
-	stale := stack.DeleteGuard{
-		UpdateID: "other", Digest: sha256.Sum256([]byte(resourcedDeployment)),
-		HasCheckpoint: true, HasResources: true,
-	}
-
-	err := f.s.DeleteStack(
-		t.Context(),
-		f.ref,
-		f.fence,
-		stale,
-		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
-	)
-	if err != nil {
-		t.Fatalf("delete a stack with a stored count of 0: %v", err)
-	}
-
-	if _, err = f.s.GetStack(t.Context(), f.ref); !errors.Is(err, stack.ErrNotFound) {
-		t.Fatalf("get deleted stack: err = %v, want ErrNotFound", err)
-	}
-
-	// The stored count wins over the guard: an empty deployment with a
-	// stored 1 is refused even under a guard that counted no resources.
-	other := f.other(t)
-	g := fixture{s: f.s, ref: other, fence: f.fence}
-	finishWithDeployment(t, g, "u1", emptyDeployment)
-
-	if err = setter.SetResourceCount(t.Context(), 1); err != nil {
-		t.Fatalf("plant a stored count of 1: %v", err)
-	}
-
-	emptyGuard := stack.DeleteGuard{
-		UpdateID: "u1", Digest: sha256.Sum256([]byte(emptyDeployment)),
-		HasCheckpoint: true, HasResources: false,
-	}
-
-	err = f.s.DeleteStack(
-		t.Context(),
-		other,
-		f.fence,
-		emptyGuard,
-		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
-	)
-	if !errors.Is(err, stack.ErrHasResources) {
-		t.Fatalf("delete a stack with a stored count of 1: err = %v, want ErrHasResources", err)
-	}
-
-	err = f.s.DeleteStack(
-		t.Context(),
-		other,
-		f.fence,
-		stack.EmptyGuard(),
-		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
-	)
-	if !errors.Is(
-		err,
-		stack.ErrHasResources,
-	) {
-		t.Fatalf("delete a stack with a stored count of 1 and no guard: err = %v, want ErrHasResources", err)
-	}
-
-	if _, err = f.s.GetStack(t.Context(), other); err != nil {
-		t.Fatalf("get stack after a refused delete: %v", err)
-	}
-
-	err = f.s.ForceDeleteStack(
-		t.Context(),
-		other,
-		f.fence,
-		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
-	)
-	if err != nil {
-		t.Fatalf("force delete a stack with a stored count of 1: %v", err)
-	}
-
-	if _, err := f.s.GetStack(t.Context(), other); !errors.Is(err, stack.ErrNotFound) {
-		t.Fatalf("get force-deleted stack: err = %v, want ErrNotFound", err)
-	}
-}
-
-// testDeleteWithUncountedCheckpoint covers the NULL stored count every save
-// writes: the delete guard counts the one latest deployment. A checkpoint
-// with only the root stack resource deletes without force; one with a
-// managed resource is refused with ErrHasResources.
-func testDeleteWithUncountedCheckpoint(t *testing.T, f fixture) {
-	t.Helper()
-
-	nullify, ok := f.s.(CountNullifier)
-	if !ok {
-		t.Skip("store cannot leave the checkpoint count uncounted")
-	}
-
-	finishWithDeployment(t, f, "u1", emptyDeployment)
-
-	other := f.other(t)
-	g := fixture{s: f.s, ref: other, fence: f.fence}
-	finishWithDeployment(t, g, "u1", resourcedDeployment)
-
-	if err := nullify.NullifyResourceCount(t.Context()); err != nil {
-		t.Fatalf("nullify the checkpoint count: %v", err)
-	}
-
-	err := f.s.DeleteStack(
-		t.Context(),
-		f.ref,
-		f.fence,
-		stack.EmptyGuard(),
-		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
-	)
-	if err != nil {
-		t.Fatalf("delete a stack whose uncounted checkpoint holds no resources: %v", err)
-	}
-
-	if _, err = f.s.GetStack(t.Context(), f.ref); !errors.Is(err, stack.ErrNotFound) {
-		t.Fatalf("get deleted stack: err = %v, want ErrNotFound", err)
-	}
-
-	err = f.s.DeleteStack(
-		t.Context(),
-		other,
-		f.fence,
-		stack.EmptyGuard(),
-		inventory.Deletion{Entry: deleteEntry(f.fence.Namespace), PurgeAfter: purgeAt()},
-	)
-	if !errors.Is(err, stack.ErrHasResources) {
-		t.Fatalf(
-			"delete a stack whose uncounted checkpoint manages resources: err = %v, want ErrHasResources",
-			err,
-		)
-	}
-
-	if _, err := f.s.GetStack(t.Context(), other); err != nil {
-		t.Fatalf("get stack after a refused delete: %v", err)
-	}
-}
-
-// testDeleteWithBlobCheckpoint covers the production shape every save
-// writes since blobs: a NULL stored count with an empty deployment column and
-// a blob key. The store cannot count it, so the caller counts outside the
+// testDeleteWithBlobCheckpoint covers the row every save writes: a blob key
+// and no content. The store cannot count it, so the caller counts outside the
 // transaction and passes the guard. An empty deployment deletes without
 // force; a resourced one is refused with ErrHasResources; a stale guard
 // answers ErrConcurrentModification so the caller recounts; force always
-// removes. An empty guard on a blob row answers ErrConcurrentModification,
-// which proves the save left the stored count NULL: a stored count would
-// answer ErrHasResources or nil without the guard.
+// removes. An empty guard on a blob row answers ErrConcurrentModification:
+// the store answers only from the guard.
 func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 	t.Helper()
 
@@ -2100,8 +2157,7 @@ func testDeleteWithBlobCheckpoint(t *testing.T, f fixture) {
 }
 
 // finishWithBlobDeployment runs one mutating update of f.ref with deployment
-// as its blob checkpoint and ends it succeeded: the production shape with a
-// NULL stored count, an empty deployment column and a blob key.
+// as its blob checkpoint under the key of the stack and ends it succeeded.
 func finishWithBlobDeployment(t *testing.T, f fixture, id, deployment string) {
 	t.Helper()
 
@@ -2119,7 +2175,8 @@ func finishWithBlobDeployment(t *testing.T, f fixture, id, deployment string) {
 // delete without force runs while an update that adds resources finishes.
 // The check runs inside the delete transaction, so the delete never drops
 // the stack: it fails with ErrUpdateConflict while the update runs and with
-// ErrHasResources once it finished.
+// ErrConcurrentModification once it finished, because the empty guard
+// counted no checkpoint.
 func testDeleteRaceWithFinishingUpdate(t *testing.T, f fixture) {
 	t.Helper()
 
@@ -2159,11 +2216,14 @@ func testDeleteRaceWithFinishingUpdate(t *testing.T, f fixture) {
 	}
 
 	if deleteErr == nil {
-		t.Fatal("delete during a finishing update succeeded, want ErrUpdateConflict or ErrHasResources")
+		t.Fatal("delete during a finishing update succeeded, want ErrUpdateConflict or ErrConcurrentModification")
 	}
 
-	if !errors.Is(deleteErr, stack.ErrUpdateConflict) && !errors.Is(deleteErr, stack.ErrHasResources) {
-		t.Fatalf("delete during a finishing update: err = %v, want ErrUpdateConflict or ErrHasResources", deleteErr)
+	if !errors.Is(deleteErr, stack.ErrUpdateConflict) && !errors.Is(deleteErr, stack.ErrConcurrentModification) {
+		t.Fatalf(
+			"delete during a finishing update: err = %v, want ErrUpdateConflict or ErrConcurrentModification",
+			deleteErr,
+		)
 	}
 
 	if _, err := f.s.GetStack(t.Context(), f.ref); err != nil {
@@ -2245,12 +2305,15 @@ func checkDeleteRace(t *testing.T, f fixture, updateErr, deleteErr error) {
 }
 
 // checkDeleteLost proves a delete that lost to the update refused with the
-// lock or the resource guard, and removed nothing.
+// lock or the stale empty guard, and removed nothing.
 func checkDeleteLost(t *testing.T, f fixture, deleteErr error) {
 	t.Helper()
 
-	if !errors.Is(deleteErr, stack.ErrUpdateConflict) && !errors.Is(deleteErr, stack.ErrHasResources) {
-		t.Fatalf("delete lost to the update: err = %v, want ErrUpdateConflict or ErrHasResources", deleteErr)
+	if !errors.Is(deleteErr, stack.ErrUpdateConflict) && !errors.Is(deleteErr, stack.ErrConcurrentModification) {
+		t.Fatalf(
+			"delete lost to the update: err = %v, want ErrUpdateConflict or ErrConcurrentModification",
+			deleteErr,
+		)
 	}
 
 	if _, err := f.s.GetStack(t.Context(), f.ref); err != nil {
@@ -2802,10 +2865,10 @@ func assertCheckpointVersion(t *testing.T, f fixture, ref stack.Ref, version int
 func assertSameCheckpoint(t *testing.T, got, want stack.Checkpoint, what string) {
 	t.Helper()
 
+	// The store keeps no content: a read returns the metadata only.
 	if !sameCheckpointRow(got, want) || !sameCheckpointBlob(got, want) ||
-		!bytes.Equal(got.Deployment, want.Deployment) || !slices.Equal(got.Features, want.Features) {
-		t.Fatalf("%s = %+v (deployment %q), want %+v (deployment %q)",
-			what, got, got.Deployment, want, want.Deployment)
+		len(got.Deployment) != 0 || !slices.Equal(got.Features, want.Features) {
+		t.Fatalf("%s = %+v (deployment %q), want %+v without a deployment", what, got, got.Deployment, want)
 	}
 }
 

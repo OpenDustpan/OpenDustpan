@@ -111,8 +111,8 @@ func coverageScope(served []e2e.RouteRef, runs []e2e.Run) []e2e.RouteRef {
 }
 
 // inCoverageScope reports whether route's adapter ran: the Pulumi CLI table
-// needs a Pulumi run, the TFE-compatible table needs an OpenTofu run, and
-// every other table is always in scope.
+// needs a Pulumi run, the TFE-compatible and http backend tables need an
+// OpenTofu run, and every other table is always in scope.
 func inCoverageScope(route e2e.RouteRef, tools map[string]bool) bool {
 	switch adapterOf(route) {
 	case e2e.ToolPulumi:
@@ -128,7 +128,8 @@ func inCoverageScope(route e2e.RouteRef, tools map[string]bool) bool {
 // tool-neutral tables that are always in scope.
 func adapterOf(route e2e.RouteRef) string {
 	switch {
-	case strings.HasPrefix(route.Path, "/api/v2/") || strings.HasPrefix(route.Path, "/.well-known/"):
+	case strings.HasPrefix(route.Path, "/api/v2/") || strings.HasPrefix(route.Path, "/.well-known/") ||
+		strings.HasPrefix(route.Path, "/tofu/"):
 		return e2e.ToolTofu
 	case strings.HasPrefix(route.Path, "/api/inventory/") ||
 		strings.HasPrefix(route.Path, "/api/server/") ||

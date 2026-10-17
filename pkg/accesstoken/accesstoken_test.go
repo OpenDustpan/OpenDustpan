@@ -55,6 +55,7 @@ func caller() audit.Entry {
 		Action: string(identity.ActionServerManageTokens), Object: "", Version: "", ValuePath: "",
 		ValueCount: nil, Changes: nil, SourceIP: "192.0.2.1", UserAgent: "test", Channel: audit.ChannelAPI, Kind: "",
 		Outcome: "", RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0,
 	}
 }
 
@@ -88,13 +89,15 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 
 	c := &clock{now: start, mu: sync.Mutex{}}
 
-	principals, err := principal.NewService(principal.Config{Store: st, Guard: nil, Now: c.Now, NewID: nil})
+	principals, err := principal.NewService(
+		principal.Config{Store: st, Guard: nil, Namespaces: nil, Tokens: nil, Now: c.Now, NewID: nil},
+	)
 	if err != nil {
 		t.Fatalf("principal service: %v", err)
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: fresh, Grants: nil, Authorizer: nil, Logger: nil, Now: c.Now, NewID: nil,
+		Store: st, Principals: st, Freshness: fresh, Authorizer: nil, Logger: nil, Now: c.Now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -123,8 +126,8 @@ func newFixtureAt(t *testing.T, fresh accesstoken.Freshness, start time.Time) fi
 	return f
 }
 
-// admin is the bootstrap administrator: it passes the escalation check
-// with no GrantCheck wired.
+// admin is the bootstrap administrator: with no Authorizer wired, it passes
+// the check of principal:manage-tokens.
 func admin() identity.Principal {
 	return identity.Principal{
 		Subject:        "admin",
@@ -135,34 +138,31 @@ func admin() identity.Principal {
 	}
 }
 
-// scopeFor returns the administrator scope of the tokens of the principal
-// id: personal for the person, service for every other principal.
-func (f *fixture) scopeFor(id string) accesstoken.Scope {
-	if id == f.person.ID {
-		return accesstoken.ScopePersonal
+// createIn creates a token of the principal of in: the person makes its
+// own personal token, and the administrator makes a token of any other
+// principal.
+func (f *fixture) createIn(ctx context.Context, in accesstoken.Input) (accesstoken.Token, accesstoken.Secret, error) {
+	if in.PrincipalID == f.person.ID {
+		in.PrincipalID = ""
+
+		return f.svc.Create(ctx, as(f.person), caller(), accesstoken.ScopeOwn, in)
 	}
 
-	return accesstoken.ScopeService
+	return f.svc.Create(ctx, admin(), caller(), accesstoken.ScopeService, in)
 }
 
-// createIn creates a token as the administrator, in the scope that fits
-// the principal.
-func (f *fixture) createIn(ctx context.Context, in accesstoken.Input) (accesstoken.Token, accesstoken.Secret, error) {
-	return f.svc.Create(ctx, admin(), caller(), f.scopeFor(in.PrincipalID), in)
-}
-
-// rotate rotates the token id as the administrator, in the scope that
-// fits its kind.
+// rotate rotates the token id: the person rotates its own personal token,
+// and the administrator rotates a service token.
 func (f *fixture) rotate(
 	ctx context.Context, id string, in accesstoken.RotateInput,
 ) (accesstoken.Rotation, accesstoken.Secret, error) {
-	scope := accesstoken.ScopeService
-
 	if tok, err := f.svc.Get(ctx, id); err == nil && tok.Kind == accesstoken.KindPersonal {
-		scope = accesstoken.ScopePersonal
+		in.ID, in.Scope = id, accesstoken.ScopeOwn
+
+		return f.svc.Rotate(ctx, as(f.person), caller(), in)
 	}
 
-	in.ID, in.Scope = id, scope
+	in.ID, in.Scope = id, accesstoken.ScopeService
 
 	return f.svc.Rotate(ctx, admin(), caller(), in)
 }
@@ -198,7 +198,7 @@ func TestNewServiceNeedsDependencies(t *testing.T) {
 	t.Parallel()
 
 	_, err := accesstoken.NewService(accesstoken.Config{
-		Store: nil, Principals: nil, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: nil, NewID: nil,
+		Store: nil, Principals: nil, Freshness: nil, Authorizer: nil, Logger: nil, Now: nil, NewID: nil,
 	})
 	if !errors.Is(err, accesstoken.ErrMissingDependency) {
 		t.Fatalf("err = %v, want ErrMissingDependency", err)
@@ -818,25 +818,22 @@ func TestScopesFitTheKind(t *testing.T) {
 	f := newFixture(t, nil)
 	ctx := t.Context()
 
-	cases := []struct {
-		target principal.Principal
-		scope  accesstoken.Scope
-	}{
-		{f.service, accesstoken.ScopePersonal},
-		{f.person, accesstoken.ScopeService},
+	_, _, err := f.svc.Create(ctx, admin(), caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.person.ID, Name: "x"})
+	if !errors.Is(err, accesstoken.ErrWrongKind) {
+		t.Errorf("create for a person in the service scope: err = %v, want ErrWrongKind", err)
 	}
 
-	for _, tc := range cases {
-		_, _, err := f.svc.Create(ctx, admin(), caller(), tc.scope,
-			accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: tc.target.ID, Name: "x"})
-		if !errors.Is(err, accesstoken.ErrWrongKind) {
-			t.Errorf("create for %s in scope %d: err = %v, want ErrWrongKind", tc.target.Kind, tc.scope, err)
-		}
+	// The personal scope makes no token at all, whatever the kind.
+	_, _, err = f.svc.Create(ctx, admin(), caller(), accesstoken.ScopePersonal,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"})
+	if !errors.Is(err, accesstoken.ErrNotOwnToken) {
+		t.Errorf("create for a service in the personal scope: err = %v, want ErrNotOwnToken", err)
 	}
 
 	service, _ := f.create(t, f.service, "deploy")
 
-	_, _, err := f.svc.Rotate(
+	_, _, err = f.svc.Rotate(
 		ctx,
 		admin(),
 		caller(),
@@ -847,8 +844,8 @@ func TestScopesFitTheKind(t *testing.T) {
 			Scope:     accesstoken.ScopePersonal,
 		},
 	)
-	if !errors.Is(err, accesstoken.ErrWrongKind) {
-		t.Fatalf("rotate a service token in the personal scope: err = %v, want ErrWrongKind", err)
+	if !errors.Is(err, accesstoken.ErrNotOwnToken) {
+		t.Fatalf("rotate a service token in the personal scope: err = %v, want ErrNotOwnToken", err)
 	}
 
 	// A revoke never raises access: an administrator revokes any kind.
@@ -864,8 +861,9 @@ func TestEscalationCheck(t *testing.T) {
 	ctx := t.Context()
 	alice := as(f.person)
 
-	// With no GrantCheck and no Authorizer, only an administrator can act
-	// for another principal: the checks fail closed.
+	// With no Authorizer, only an administrator can act for a service
+	// principal, and nobody makes a personal token of another person: the
+	// checks fail closed.
 	_, _, err := f.svc.Create(ctx, alice, caller(), accesstoken.ScopeService,
 		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "x"})
 	if !errors.Is(err, identity.ErrDenied) {
@@ -875,7 +873,7 @@ func TestEscalationCheck(t *testing.T) {
 	_, _, err = f.svc.Create(ctx, alice, caller(), accesstoken.ScopePersonal,
 		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.person.ID, Name: "x"})
 	if !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("create for a person with no grant check: err = %v, want ErrDenied", err)
+		t.Fatalf("create for another person: err = %v, want ErrDenied", err)
 	}
 
 	tok, _ := f.create(t, f.service, "deploy")
@@ -898,29 +896,8 @@ func TestEscalationCheck(t *testing.T) {
 	laptop, _ := f.create(t, f.person, "laptop")
 
 	if err := f.svc.Revoke(ctx, alice, caller(), accesstoken.ScopePersonal, laptop.ID); err != nil {
-		t.Fatalf("revoke of a personal token needs no escalation check: %v", err)
+		t.Fatalf("revoke of a personal token needs no grant check: %v", err)
 	}
-}
-
-// recordGrants answers the escalation check from a set of allowed
-// principals and records each principal it checks.
-type recordGrants struct {
-	allowed map[string]bool
-	checked []string
-	mu      sync.Mutex
-}
-
-func (g *recordGrants) RequireHeld(_ context.Context, _ identity.Principal, principalID string) error {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-
-	g.checked = append(g.checked, principalID)
-
-	if !g.allowed[principalID] {
-		return fmt.Errorf("%w: holds less than %s", identity.ErrDenied, principalID)
-	}
-
-	return nil
 }
 
 // recordAuthorizer allows the actions on the objects in allowed and
@@ -947,15 +924,22 @@ func (a *recordAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // newCheckedService returns a token service over the store of f with the
-// grant check grants and the authorizer authz.
-func newCheckedService(
-	t *testing.T, f *fixture, grants accesstoken.GrantCheck, authz identity.Authorizer,
-) *accesstoken.Service {
+// authorizer authz.
+func newCheckedService(t *testing.T, f *fixture, authz identity.Authorizer) *accesstoken.Service {
 	t.Helper()
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: f.store, Principals: f.store, Freshness: nil, Grants: grants, Authorizer: authz, Logger: nil,
+		Store: f.store, Principals: f.store, Freshness: nil, Authorizer: authz, Logger: nil,
 		Now: f.clock.Now, NewID: nil,
 	})
 	if err != nil {
@@ -965,49 +949,9 @@ func newCheckedService(
 	return svc
 }
 
-func TestEscalationCheckUsesTheGrants(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t, nil)
-	ctx := t.Context()
-
-	grants := &recordGrants{allowed: map[string]bool{f.person.ID: true}, checked: nil, mu: sync.Mutex{}}
-	authz := &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}}
-	svc := newCheckedService(t, &f, grants, authz)
-
-	root := as(f.person)
-	root.Subject = "root@example.com"
-
-	allowed := accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.person.ID, Name: "x"}
-	if _, _, createErr := svc.Create(ctx, root, caller(), accesstoken.ScopePersonal, allowed); createErr != nil {
-		t.Fatalf("create for an allowed person: %v", createErr)
-	}
-
-	other, err := f.principals.CreatePrincipal(ctx, caller(),
-		principal.Input{Subject: "bob@example.com", DisplayName: "", Kind: principal.KindPerson})
-	if err != nil {
-		t.Fatalf("create principal: %v", err)
-	}
-
-	_, _, err = svc.Create(ctx, root, caller(), accesstoken.ScopePersonal,
-		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: other.ID, Name: "x"})
-	if !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("create for a person who holds more: err = %v, want ErrDenied", err)
-	}
-
-	if len(grants.checked) != 2 || grants.checked[1] != other.ID {
-		t.Fatalf("checked = %q, want both persons", grants.checked)
-	}
-
-	if len(authz.checked) != 0 {
-		t.Fatalf("a personal token asked the authorizer %q", authz.checked)
-	}
-}
-
 // TestServiceTokensNeedManageTokens proves that principal:manage-tokens on
-// the service principal decides a service token, in place of the
-// escalation check: a create, a rotation and a revoke each ask it, and a
-// principal without it is refused.
+// the service principal decides a service token: a create, a rotation and a
+// revoke each ask it, and a principal without it is refused.
 func TestServiceTokensNeedManageTokens(t *testing.T) {
 	t.Parallel()
 
@@ -1021,9 +965,8 @@ func TestServiceTokensNeedManageTokens(t *testing.T) {
 	}
 
 	want := string(identity.ActionPrincipalManageTokens) + " principal:" + f.service.ID
-	grants := &recordGrants{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}}
 	authz := &recordAuthorizer{allowed: map[string]bool{want: true}, checked: nil, mu: sync.Mutex{}}
-	svc := newCheckedService(t, &f, grants, authz)
+	svc := newCheckedService(t, &f, authz)
 	alice := as(f.person)
 
 	tok, _, err := svc.Create(ctx, alice, caller(), accesstoken.ScopeService,
@@ -1057,10 +1000,6 @@ func TestServiceTokensNeedManageTokens(t *testing.T) {
 
 	if len(authz.checked) != 5 || authz.checked[0] != want {
 		t.Fatalf("authorizer checks = %q, want five, the first %q", authz.checked, want)
-	}
-
-	if len(grants.checked) != 0 {
-		t.Fatalf("a service token ran the escalation check for %q", grants.checked)
 	}
 }
 
@@ -1229,6 +1168,70 @@ func TestSweepDisablesInactiveTokensAndAccounts(t *testing.T) {
 	}
 }
 
+func TestSweepNeverDisablesBreakGlass(t *testing.T) {
+	t.Parallel()
+
+	f := newFixtureAt(t, nil, sweepStart())
+	ctx := t.Context()
+
+	at := f.clock.Now()
+	glass := principal.Principal{
+		CreatedAt: at, UpdatedAt: at, DisabledAt: time.Time{}, ID: "prn-glass",
+		Subject: "glass@example.com", DisplayName: "Break Glass", Kind: principal.KindPerson,
+		Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: true,
+	}
+
+	e := caller()
+	e.At, e.Namespace, e.Kind, e.Outcome, e.Object = at, audit.ServerScope, audit.KindChange,
+		audit.OutcomeSuccess, principal.Ref(glass.ID)
+
+	if err := f.store.CreatePrincipal(ctx, glass, e); err != nil {
+		t.Fatalf("create break-glass principal: %v", err)
+	}
+
+	_, glassSecret := func() (accesstoken.Token, accesstoken.Secret) {
+		t.Helper()
+
+		tok, secret, err := f.svc.Create(ctx, as(glass), caller(), accesstoken.ScopeOwn,
+			accesstoken.Input{
+				ExpiresAt: f.clock.Now().Add(200 * 24 * time.Hour), PrincipalID: "", Name: "emergency",
+			})
+		if err != nil {
+			t.Fatalf("create token of a break-glass account: %v", err)
+		}
+
+		return tok, secret
+	}()
+
+	f.createLong(t, f.person, "laptop")
+
+	f.clock.Advance(accesstoken.DefaultInactivity + time.Hour)
+
+	res, err := f.svc.SweepInactive(ctx, caller())
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+
+	for _, id := range res.Principals {
+		if id == glass.ID {
+			t.Fatalf("sweep = %+v, disabled a break-glass account", res)
+		}
+	}
+
+	if len(res.Principals) != 1 || res.Principals[0] != f.person.ID {
+		t.Fatalf("sweep = %+v, want only the idle person", res)
+	}
+
+	got, err := f.store.GetPrincipal(ctx, glass.ID)
+	if err != nil || !got.DisabledAt.IsZero() || !got.BreakGlass {
+		t.Fatalf("break-glass principal = %+v, %v; want it enabled with the flag", got, err)
+	}
+
+	if _, err := f.svc.AuthenticateToken(ctx, glassSecret.Reveal()); err != nil {
+		t.Fatalf("token of a break-glass account after the sweep: %v", err)
+	}
+}
+
 func TestSweepFollowsThePolicy(t *testing.T) {
 	t.Parallel()
 
@@ -1345,8 +1348,20 @@ func TestBreakGlassDisableIsRefused(t *testing.T) {
 	_, err := f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(true),
 	})
-	if !errors.Is(err, accesstoken.ErrBreakGlassUnavailable) || !strings.Contains(err.Error(), "ADR 57") {
-		t.Fatalf("err = %v, want ErrBreakGlassUnavailable that names ADR 57", err)
+	if !errors.Is(err, accesstoken.ErrInvalid) || !strings.Contains(err.Error(), "no longer supported") {
+		t.Fatalf("err = %v, want ErrInvalid that says the setting is no longer supported", err)
+	}
+
+	_, err = f.svc.SetPolicy(t.Context(), caller(), accesstoken.PolicyChange{
+		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: nil, DisableBreakGlass: new(false),
+	})
+	if err != nil {
+		t.Fatalf("set policy with the deprecated field false: %v", err)
+	}
+
+	p, err := f.svc.Policy(t.Context())
+	if err != nil || p.DisableBreakGlass {
+		t.Fatalf("policy = %+v, %v; want the deprecated field always false", p, err)
 	}
 }
 
@@ -1385,7 +1400,11 @@ func TestInactiveTokenIsRefusedBeforeTheSweep(t *testing.T) {
 	}
 }
 
-func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
+// TestPolicyChangeOfAnotherInstanceAppliesAtOnce proves that a policy change
+// that another instance writes applies to the next token lookup of this
+// instance: the lookup reads the policy with the token, so no instance keeps
+// an old policy for a while.
+func TestPolicyChangeOfAnotherInstanceAppliesAtOnce(t *testing.T) {
 	t.Parallel()
 
 	f := newFixtureAt(t, nil, sweepStart())
@@ -1393,7 +1412,6 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 
 	_, first := f.createLong(t, f.service, "first")
 	_, second := f.createLong(t, f.service, "second")
-	_, third := f.createLong(t, f.service, "third")
 
 	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
@@ -1404,13 +1422,11 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 
 	f.clock.Advance(accesstoken.DefaultInactivity + time.Minute)
 
-	// The first token reads the policy, and the cache keeps it.
 	if _, authErr := f.svc.AuthenticateToken(ctx, first.Reveal()); authErr != nil {
 		t.Fatalf("token with the disable off: %v", authErr)
 	}
 
-	// Another instance turns the disable on: this one sees it after the
-	// cache time at most.
+	// Another instance turns the disable on.
 	_, err = f.store.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
 		old.DisableTokens = true
 		e := caller()
@@ -1423,45 +1439,8 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 		t.Fatalf("update policy in the store: %v", err)
 	}
 
-	if _, err := f.svc.AuthenticateToken(ctx, second.Reveal()); err != nil {
-		t.Fatalf("inactive token inside the cache time: %v, want the cached policy", err)
-	}
-
-	f.clock.Advance(10 * time.Second)
-
-	if _, err := f.svc.AuthenticateToken(ctx, third.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
-		t.Fatalf("inactive token after the cache time: err = %v, want ErrUnauthenticated", err)
-	}
-}
-
-// failingPolicy is a store whose policy read fails.
-type failingPolicy struct {
-	*sqlite.Store
-}
-
-var errPolicyRead = errors.New("policy read failed")
-
-func (failingPolicy) GetPolicy(context.Context) (accesstoken.Policy, error) {
-	return accesstoken.Policy{}, errPolicyRead
-}
-
-func TestPolicyReadErrorFailsClosed(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t, nil)
-	_, secret := f.createLong(t, f.service, "deploy")
-
-	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: failingPolicy{f.store}, Principals: f.store, Freshness: nil, Grants: nil, Authorizer: nil,
-		Logger: nil,
-		Now:    f.clock.Now, NewID: nil,
-	})
-	if err != nil {
-		t.Fatalf("token service: %v", err)
-	}
-
-	if _, err := svc.AuthenticateToken(t.Context(), secret.Reveal()); !errors.Is(err, errPolicyRead) {
-		t.Fatalf("authenticate with a failed policy read: err = %v, want the read error", err)
+	if _, err := f.svc.AuthenticateToken(ctx, second.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("inactive token right after the change of another instance: err = %v, want ErrUnauthenticated", err)
 	}
 }
 
@@ -1499,6 +1478,55 @@ func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
 	// The account rule covers persons only.
 	if _, err := f.svc.AuthenticateToken(ctx, serviceSecret.Reveal()); err != nil {
 		t.Fatalf("token of a service: %v", err)
+	}
+}
+
+// TestAccountInactiveAt proves the account rule of the token lookup, which
+// a console session applies too: the period, the account switch, persons
+// only, and the break-glass exemption.
+func TestAccountInactiveAt(t *testing.T) {
+	t.Parallel()
+
+	now := sweepStart()
+	policy := accesstoken.DefaultPolicy()
+
+	owner := func(kind principal.Kind, breakGlass bool, activeAt time.Time) accesstoken.Owner {
+		return accesstoken.Owner{
+			ActiveAt: activeAt, DisabledAt: time.Time{}, ID: "prn-x", Subject: "x", DisplayName: "X", Kind: kind,
+			BreakGlass: breakGlass,
+		}
+	}
+
+	old := now.Add(-accesstoken.DefaultInactivity)
+	recent := now.Add(-accesstoken.DefaultInactivity + time.Minute)
+
+	for _, tc := range []struct {
+		name string
+		o    accesstoken.Owner
+		want bool
+	}{
+		{name: "a person active within the period", o: owner(principal.KindPerson, false, recent), want: false},
+		{name: "a person past the period", o: owner(principal.KindPerson, false, old), want: true},
+		{name: "a break-glass person past the period", o: owner(principal.KindPerson, true, old), want: false},
+		{name: "a service past the period", o: owner(principal.KindService, false, old), want: false},
+	} {
+		if got := policy.AccountInactiveAt(tc.o, now); got != tc.want {
+			t.Errorf("%s: AccountInactiveAt = %t, want %t", tc.name, got, tc.want)
+		}
+	}
+
+	off := policy
+	off.DisableAccounts = false
+
+	if off.AccountInactiveAt(owner(principal.KindPerson, false, old), now) {
+		t.Fatal("AccountInactiveAt with the account disable off = true, want false")
+	}
+
+	zero := policy
+	zero.Inactivity = 0
+
+	if zero.AccountInactiveAt(owner(principal.KindPerson, false, old), now) {
+		t.Fatal("AccountInactiveAt with a zero period = true, want false")
 	}
 }
 
@@ -1564,7 +1592,7 @@ func TestListOfPrincipal(t *testing.T) {
 		manage + f.workload.ID: true,
 		manage + "prn-none":    true,
 	}, checked: nil, mu: sync.Mutex{}}
-	svc := newCheckedService(t, &f, nil, authz)
+	svc := newCheckedService(t, &f, authz)
 	alice := as(f.person)
 
 	f.create(t, f.service, "deploy")
@@ -1596,5 +1624,227 @@ func TestListOfPrincipal(t *testing.T) {
 		if !errors.Is(err, identity.ErrDenied) || !strings.Contains(err.Error(), "list the tokens of") {
 			t.Fatalf("tokens of %s without principal:manage-tokens: err = %v, want ErrDenied for a list", id, err)
 		}
+	}
+}
+
+// namespacedReader reads the principals of the store, and reports the
+// principal id as a principal of the namespace acme.
+type namespacedReader struct {
+	accesstoken.PrincipalReader
+
+	id string
+}
+
+func (r namespacedReader) GetPrincipal(ctx context.Context, id string) (principal.Principal, error) {
+	p, err := r.PrincipalReader.GetPrincipal(ctx, id)
+	if err == nil && p.ID == r.id {
+		p.Namespace = "acme"
+	}
+
+	return p, err
+}
+
+// TestNamespacePrincipalTokens proves that the service makes, rotates and
+// lists the tokens of a principal of a namespace for a holder of
+// principal:manage-tokens on it, and refuses a caller without it. The
+// token signs in as the principal.
+func TestNamespacePrincipalTokens(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+	reader := namespacedReader{PrincipalReader: f.store, id: f.service.ID}
+	manage := string(identity.ActionPrincipalManageTokens) + " principal:" + f.service.ID
+	alice := as(f.person)
+
+	holder, err := accesstoken.NewService(accesstoken.Config{
+		Store: f.store, Principals: reader, Freshness: nil,
+		Authorizer: &recordAuthorizer{allowed: map[string]bool{manage: true}, checked: nil, mu: sync.Mutex{}},
+		Logger:     nil,
+		Now:        f.clock.Now, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	denied, err := accesstoken.NewService(accesstoken.Config{
+		Store: f.store, Principals: reader, Freshness: nil,
+		Authorizer: &recordAuthorizer{allowed: map[string]bool{}, checked: nil, mu: sync.Mutex{}},
+		Logger:     nil,
+		Now:        f.clock.Now, NewID: nil,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	made, secret, createErr := holder.Create(ctx, alice, caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "deploy"})
+	if createErr != nil {
+		t.Fatalf("create for a holder: %v", createErr)
+	}
+
+	_, _, deniedCreateErr := denied.Create(ctx, alice, caller(), accesstoken.ScopeService,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.service.ID, Name: "more"})
+	if !errors.Is(deniedCreateErr, identity.ErrDenied) {
+		t.Fatalf("create without principal:manage-tokens = %v, want ErrDenied", deniedCreateErr)
+	}
+
+	all := accesstoken.PageRequest{PrincipalID: "", Cursor: "", Filter: accesstoken.FilterAll, Limit: 0}
+
+	page, listErr := holder.ListOfPrincipal(ctx, alice, f.service.ID, all)
+	if listErr != nil || page.Total < 1 {
+		t.Fatalf("list for a holder = %+v, %v; want at least the made token", page, listErr)
+	}
+
+	_, deniedListErr := denied.ListOfPrincipal(ctx, alice, f.service.ID, all)
+	if !errors.Is(deniedListErr, identity.ErrDenied) {
+		t.Fatalf("list without principal:manage-tokens = %v, want ErrDenied", deniedListErr)
+	}
+
+	rot, _, rotateErr := holder.Rotate(ctx, alice, caller(), accesstoken.RotateInput{
+		ID: made.ID, Scope: accesstoken.ScopeService, ExpiresAt: time.Time{}, OldEndsAt: nil,
+	})
+	if rotateErr != nil {
+		t.Fatalf("rotate for a holder: %v", rotateErr)
+	}
+
+	_, _, deniedRotateErr := denied.Rotate(ctx, alice, caller(), accesstoken.RotateInput{
+		ID: rot.New.ID, Scope: accesstoken.ScopeService, ExpiresAt: time.Time{}, OldEndsAt: nil,
+	})
+	if !errors.Is(deniedRotateErr, identity.ErrDenied) {
+		t.Fatalf("rotate without principal:manage-tokens = %v, want ErrDenied", deniedRotateErr)
+	}
+
+	got, authErr := holder.AuthenticateToken(ctx, secret.Reveal())
+	if authErr != nil || got.Subject != f.service.Subject {
+		t.Fatalf("authenticate = %+v, %v; want the service subject", got, authErr)
+	}
+}
+
+// TestSetPolicyRecordsChanges proves the audit entry of a policy change
+// names each field that changed with its old and new text, and names no
+// field that kept its value.
+func TestSetPolicyRecordsChanges(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	lifetime := 30 * 24 * time.Hour
+	disabled := false
+
+	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: new(lifetime), Inactivity: nil, DisableTokens: new(disabled), DisableAccounts: nil,
+		DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	want := map[string][2]string{
+		"maxLifetimeSeconds": {"31536000", "2592000"},
+		"disableTokens":      {"true", "false"},
+	}
+	got := policyEntryChanges(t, &f)
+	checkChanges(t, got, want)
+
+	// The maximum is already 30 days, so only the inactivity period changed.
+	hour := time.Hour
+
+	_, err = f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
+		MaxLifetime: new(lifetime), Inactivity: new(hour), DisableTokens: nil, DisableAccounts: nil,
+		DisableBreakGlass: nil,
+	})
+	if err != nil {
+		t.Fatalf("set policy: %v", err)
+	}
+
+	want = map[string][2]string{"inactivitySeconds": {"7776000", "3600"}}
+	got = policyEntryChanges(t, &f)
+	checkChanges(t, got, want)
+}
+
+// policyEntryChanges returns the changes of the latest token policy audit
+// entry in the scope @server.
+func policyEntryChanges(t *testing.T, f *fixture) []audit.Change {
+	t.Helper()
+
+	listing, err := f.store.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.DefaultPageSize})
+	if err != nil {
+		t.Fatalf("list @server entries: %v", err)
+	}
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Object == accesstoken.PolicyRef {
+			return listing.Entries[i].Changes
+		}
+	}
+
+	t.Fatalf("no %q entry in @server", accesstoken.PolicyRef)
+
+	return nil
+}
+
+// checkChanges proves changes hold exactly the keys of want with its old
+// and new text.
+func checkChanges(t *testing.T, changes []audit.Change, want map[string][2]string) {
+	t.Helper()
+
+	if len(changes) != len(want) {
+		t.Fatalf("changes = %+v, want %d items", changes, len(want))
+	}
+
+	for _, c := range changes {
+		pair, ok := want[c.Key]
+		if !ok {
+			t.Fatalf("change %q = %+v, want one of %v", c.Key, c, want)
+		}
+
+		if c.Old == nil || *c.Old != pair[0] || c.New != pair[1] {
+			t.Fatalf("change %q = %v to %q, want %q to %q", c.Key, c.Old, c.New, pair[0], pair[1])
+		}
+
+		if c.Layer != "" || c.TakesEffect != "" {
+			t.Fatalf("change %q holds layer %q and takes effect %q, want both empty", c.Key, c.Layer, c.TakesEffect)
+		}
+	}
+}
+
+// TestNoPersonalTokenOfAnotherPerson proves that no principal makes or
+// rotates a personal token of another person, an administrator included,
+// and that an administrator still revokes one. The person makes and rotates
+// its own personal tokens.
+func TestNoPersonalTokenOfAnotherPerson(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t, nil)
+	ctx := t.Context()
+
+	_, _, err := f.svc.Create(ctx, admin(), caller(), accesstoken.ScopePersonal,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: f.person.ID, Name: "laptop"})
+	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, accesstoken.ErrNotOwnToken) {
+		t.Fatalf("administrator create for a person: err = %v, want ErrDenied and ErrNotOwnToken", err)
+	}
+
+	tok, _, err := f.svc.Create(ctx, as(f.person), caller(), accesstoken.ScopeOwn,
+		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "", Name: "laptop"})
+	if err != nil {
+		t.Fatalf("own create: %v", err)
+	}
+
+	_, _, err = f.svc.Rotate(ctx, admin(), caller(),
+		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}, ID: tok.ID, Scope: accesstoken.ScopePersonal})
+	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, accesstoken.ErrNotOwnToken) {
+		t.Fatalf("administrator rotation of a personal token: err = %v, want ErrDenied and ErrNotOwnToken", err)
+	}
+
+	rot, _, err := f.svc.Rotate(ctx, as(f.person), caller(),
+		accesstoken.RotateInput{OldEndsAt: nil, ExpiresAt: time.Time{}, ID: tok.ID, Scope: accesstoken.ScopeOwn})
+	if err != nil {
+		t.Fatalf("own rotation: %v", err)
+	}
+
+	if err := f.svc.Revoke(ctx, admin(), caller(), accesstoken.ScopePersonal, rot.New.ID); err != nil {
+		t.Fatalf("administrator revoke of a personal token: %v", err)
 	}
 }

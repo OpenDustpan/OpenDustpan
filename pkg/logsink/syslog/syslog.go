@@ -59,12 +59,28 @@ const maxFacility = 23
 const defaultTimeout = 10 * time.Second
 
 // Message size limits. RFC 5424 section 6.1 makes every receiver accept
-// 480 octets and advises 2048. Common receivers accept 8192.
+// 480 octets and advises 2048. A UDP datagram cannot hold more than 65507
+// bytes of payload over IPv4, so a UDP sink keeps the common default of
+// 8192. Over TCP and TLS the octet count of RFC 6587 carries no such limit,
+// so those sinks default to 64 KiB, which holds the largest entry the
+// server writes. The operator still raises the matching limit of the
+// receiver: rsyslog drops longer messages past $MaxMessageSize (default 8k)
+// and past the MaxFrameSize of a TCP input, and syslog-ng past
+// log-msg-size.
 const (
+	// DefaultMaxMessageBytes is the message cap of a UDP sink that sets
+	// none.
 	DefaultMaxMessageBytes = 8192
-	MinMaxMessageBytes     = 480
-	// MaxMaxMessageBytes is the largest UDP payload over IPv4.
+	// DefaultStreamMaxMessageBytes is the message cap of a TCP or TLS sink
+	// that sets none.
+	DefaultStreamMaxMessageBytes = 65536
+	MinMaxMessageBytes           = 480
+	// MaxMaxMessageBytes is the largest UDP payload over IPv4. It caps an
+	// explicit message cap of a UDP sink.
 	MaxMaxMessageBytes = 65507
+	// MaxStreamMessageBytes caps an explicit message cap of a TCP or TLS
+	// sink: 64 KiB.
+	MaxStreamMessageBytes = 65536
 )
 
 // defaultAppName is the APP-NAME of a message when Config sets none.
@@ -103,10 +119,12 @@ type Config struct {
 	Facility int
 	// Timeout bounds one dial and one batch write. Zero means 10 seconds.
 	Timeout time.Duration
-	// MaxMessageBytes caps one message, header included. Write skips a
-	// record above the cap and answers a *logsink.SkipError, so a record
-	// that the receiver cannot hold never blocks the records after it. Zero
-	// means 8192. The value must be from 480 to 65507.
+	// MaxMessageBytes caps one message, header included. Write refuses a
+	// record above the cap and answers a *logsink.SkipError for it, so a
+	// record that the receiver cannot hold never blocks the records after
+	// it. It never cuts a field and never sends a changed entry. Zero
+	// means 8192 over UDP and 65536 over TCP and TLS. The value must be
+	// from 480 to 65507 over UDP and from 480 to 65536 over TCP and TLS.
 	MaxMessageBytes int
 }
 
@@ -149,7 +167,7 @@ func New(cfg Config) (*Sink, error) {
 		cfg.Timeout = defaultTimeout
 	}
 
-	maxBytes, err := messageCap(cfg.MaxMessageBytes)
+	maxBytes, err := messageCap(cfg.MaxMessageBytes, cfg.Network)
 	if err != nil {
 		return nil, err
 	}
@@ -179,16 +197,27 @@ func New(cfg Config) (*Sink, error) {
 	}, nil
 }
 
-// messageCap answers the message cap for the configured value n: 8192 for
-// zero, n when it is from 480 to 65507, else an error.
-func messageCap(n int) (int, error) {
-	if n == 0 {
-		return DefaultMaxMessageBytes, nil
+// messageCap answers the message cap for the configured value n on
+// network: the default of the network for zero, n when it is in the range
+// of the network, else an error. UDP caps at the largest payload over IPv4
+// (65507); TCP and TLS cap at 64 KiB (65536).
+func messageCap(n int, network Network) (int, error) {
+	maxBytes := MaxStreamMessageBytes
+	if network == UDP {
+		maxBytes = MaxMaxMessageBytes
 	}
 
-	if n < MinMaxMessageBytes || n > MaxMaxMessageBytes {
+	if n == 0 {
+		if network == UDP {
+			return DefaultMaxMessageBytes, nil
+		}
+
+		return DefaultStreamMaxMessageBytes, nil
+	}
+
+	if n < MinMaxMessageBytes || n > maxBytes {
 		return 0, fmt.Errorf("%w: syslog message cap %d: want %d to %d",
-			logsink.ErrInvalidConfig, n, MinMaxMessageBytes, MaxMaxMessageBytes)
+			logsink.ErrInvalidConfig, n, MinMaxMessageBytes, maxBytes)
 	}
 
 	return n, nil
@@ -217,24 +246,33 @@ func headerField(s string, limit int) string {
 }
 
 // Format returns the RFC 5424 message for r, without transport framing.
+// A record above the message cap is refused with a *logsink.SkipError.
+// It never cuts a field and never sends a changed entry.
 func (s *Sink) Format(r logsink.Record) ([]byte, error) {
+	var prefix bytes.Buffer
+
+	prefix.WriteByte('<')
+	prefix.WriteString(strconv.Itoa(s.facility*8 + severity(r.Level)))
+	prefix.WriteString(">1 ")
+	prefix.WriteString(r.Time.UTC().Format(logsink.TimeFormat))
+	prefix.WriteByte(' ')
+	prefix.WriteString(s.header)
+	prefix.WriteString(" - - ")
+
 	msg, err := logsink.MarshalJSON(r)
 	if err != nil {
 		return nil, err
 	}
 
-	var buf bytes.Buffer
+	if prefix.Len()+len(msg) > s.cfg.MaxMessageBytes {
+		return nil, &logsink.SkipError{
+			Reason:  fmt.Sprintf("syslog message above %d bytes", s.cfg.MaxMessageBytes),
+			Skipped: 1,
+			Indexes: nil,
+		}
+	}
 
-	buf.WriteByte('<')
-	buf.WriteString(strconv.Itoa(s.facility*8 + severity(r.Level)))
-	buf.WriteString(">1 ")
-	buf.WriteString(r.Time.UTC().Format(logsink.TimeFormat))
-	buf.WriteByte(' ')
-	buf.WriteString(s.header)
-	buf.WriteString(" - - ")
-	buf.Write(msg)
-
-	return buf.Bytes(), nil
+	return append(prefix.Bytes(), msg...), nil
 }
 
 // severity maps a level to the RFC 5424 severity code.
@@ -262,14 +300,25 @@ func (s *Sink) Write(ctx context.Context, records []logsink.Record) error {
 	msgs := make([][]byte, 0, len(records))
 	skipped := 0
 
+	var indexes []int
+
 	for i := range records {
 		m, err := s.Format(records[i])
 		if err != nil {
+			skip, ok := errors.AsType[*logsink.SkipError](err)
+			if ok {
+				skipped += skip.Skipped
+				indexes = append(indexes, i)
+
+				continue
+			}
+
 			return err
 		}
 
 		if len(m) > s.cfg.MaxMessageBytes {
 			skipped++
+			indexes = append(indexes, i)
 
 			continue
 		}
@@ -285,6 +334,7 @@ func (s *Sink) Write(ctx context.Context, records []logsink.Record) error {
 		return &logsink.SkipError{
 			Reason:  fmt.Sprintf("syslog message above %d bytes", s.cfg.MaxMessageBytes),
 			Skipped: skipped,
+			Indexes: indexes,
 		}
 	}
 

@@ -20,6 +20,10 @@ const (
 	// maxStateCreateBytes bounds a state version create body: the base64
 	// outputs document alone may hold 16 MiB.
 	maxStateCreateBytes = 32 << 20
+	// maxOutputNameLen caps one output name of the json-state-outputs
+	// document, in bytes. The version keeps the document, so a longer
+	// name is refused instead of stored.
+	maxOutputNameLen = 256
 	// inlineStateDetail is the 422 detail when a client sends the inline
 	// state attribute, which the server never serves: state always follows
 	// through the upload capability.
@@ -94,7 +98,9 @@ func parseStateVersionCreate(body []byte) (workspace.NewState, error) {
 // decodeStateOutputs decodes the base64 json-state-outputs attribute into
 // the opaque outputs document the state version keeps. A missing attribute
 // means no outputs. Anything else that does not decode, or that is not the
-// outputs shape the read routes render, fails with a 422 error. The CLI
+// outputs shape the read routes render, fails with a 422 error. An output
+// name over maxOutputNameLen bytes fails too: the version keeps the
+// document, so a longer name is refused instead of stored. The CLI
 // sends the flat map of outputs at the top level; the wrapped form stays
 // accepted for versions stored before the flat shape was served.
 func decodeStateOutputs(raw *string) ([]byte, error) {
@@ -107,8 +113,15 @@ func decodeStateOutputs(raw *string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: json-state-outputs is not valid base64", workspace.ErrInvalidState)
 	}
 
-	if _, err := parseStoredOutputs(decoded); err != nil {
+	outputs, err := parseStoredOutputs(decoded)
+	if err != nil {
 		return nil, fmt.Errorf("%w: json-state-outputs is not valid: %w", workspace.ErrInvalidState, err)
+	}
+
+	for name := range outputs {
+		if len(name) > maxOutputNameLen {
+			return nil, fmt.Errorf("%w: output name over %d bytes", workspace.ErrInvalidState, maxOutputNameLen)
+		}
 	}
 
 	return decoded, nil
@@ -201,12 +214,32 @@ func (h *Handler) createStateVersion(
 
 	pending, err := h.workspaces.BeginState(ctx, id, p.Subject, in, auth)
 	if err != nil {
-		h.writeError(ctx, w, err)
+		h.writeError(ctx, w, h.lineageLockedDetail(ctx, id, p.Subject, err))
 
 		return
 	}
 
 	h.writeStateVersionCreate(ctx, w, r, pending)
+}
+
+// lineageLockedDetail names the force-unlock command in a refused state
+// upload while the caller holds the lock of the workspace: the CLI took the
+// lock for the upload and does not release it after the refusal. The lock
+// ID is the namespace and workspace name the CLI accepts. A lock of another
+// holder is a lock of another job, so the error never tells the caller to
+// clear it. An unlocked workspace, an unreadable workspace and any other
+// error keep the error as is.
+func (h *Handler) lineageLockedDetail(ctx context.Context, id workspace.ID, subject string, err error) error {
+	if !errors.Is(err, workspace.ErrLineageMismatch) {
+		return err
+	}
+
+	ws, readErr := h.workspaces.GetByID(ctx, id)
+	if readErr != nil || !ws.Lock.Locked() || ws.Lock.Holder != subject {
+		return err
+	}
+
+	return fmt.Errorf("%w: workspace stays locked, run tofu force-unlock %s to clear the lock", err, ws.Ref)
 }
 
 // writeStateVersionCreate writes the 201 create response: the state version

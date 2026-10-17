@@ -21,6 +21,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -63,6 +64,9 @@ type memUpdateStore struct {
 	stackVersion map[stack.Ref]int64
 	checkpoints  map[stack.UpdateID]stack.Checkpoint
 	events       map[stack.UpdateID][]stack.Event
+	journal      map[stack.UpdateID][]blob.Key
+	refusals     map[stack.UpdateID][]stack.JournalRefusal
+	seqs         map[stack.UpdateID][]int64
 	mu           sync.Mutex
 }
 
@@ -72,6 +76,9 @@ func newMemUpdateStore() *memUpdateStore {
 		stackVersion: map[stack.Ref]int64{},
 		checkpoints:  map[stack.UpdateID]stack.Checkpoint{},
 		events:       map[stack.UpdateID][]stack.Event{},
+		journal:      map[stack.UpdateID][]blob.Key{},
+		refusals:     map[stack.UpdateID][]stack.JournalRefusal{},
+		seqs:         map[stack.UpdateID][]int64{},
 		mu:           sync.Mutex{},
 	}
 }
@@ -425,17 +432,19 @@ func newUpdateFixtureWithCutoff(
 		t,
 		authz,
 		tokenAuthenticator{},
-		fixtureOptions{checker: nil, limit: limit, cutoff: cutoff},
+		fixtureOptions{checker: nil, limit: limit, cutoff: cutoff, replayer: nil},
 	)
 }
 
 // fixtureOptions holds the settings of an update fixture beyond its policy and
-// authenticator: the checkpoint limit, the delta cutoff, and the check of the
-// access token that started an update.
+// authenticator: the checkpoint limit, the delta cutoff, the check of the
+// access token that started an update, and the journal replayer (nil builds
+// no checkpoint).
 type fixtureOptions struct {
-	checker stack.TokenChecker
-	limit   int
-	cutoff  int
+	checker  stack.TokenChecker
+	limit    int
+	cutoff   int
+	replayer stack.JournalReplayer
 }
 
 // newUpdateFixtureWithAuthenticator builds a Handler as newUpdateFixtureWithCutoff
@@ -446,6 +455,10 @@ func newUpdateFixtureWithAuthenticator(
 	t.Helper()
 
 	limit, cutoff, checker := opts.limit, opts.cutoff, opts.checker
+	replayer := opts.replayer
+	if replayer == nil {
+		replayer = pulumijournal.NewReplayer(time.Now, "")
+	}
 
 	namespaces, err := namespace.NewService(
 		namespace.Config{Store: homedNamespaceStore{}, Now: nil, Region: "test-region"},
@@ -484,7 +497,8 @@ func newUpdateFixtureWithAuthenticator(
 		Now:                nil,
 		Logger:             nil,
 		MaxCheckpointBytes: limit,
-		Journal:            journalWriterFor(t, blobs, mem),
+		Journal:            journalWriterFor(t, blobs, mem, limit),
+		Replayer:           replayer,
 		Tokens:             checker,
 	})
 	if err != nil {
@@ -499,6 +513,7 @@ func newUpdateFixtureWithAuthenticator(
 		Namespaces:              namespaces,
 		Authenticator:           authn,
 		Authorizer:              authz,
+		Sessions:                nil,
 		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},
@@ -1318,6 +1333,15 @@ func (a *objectToggleAuthorizer) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (*objectToggleAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // historyEntry is one entry of the stack history as the tests decode it.
@@ -2694,6 +2718,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 		Tokens:             nil,
 	})
 	if err != nil {
@@ -2708,6 +2733,7 @@ func TestNegativeDeltaCutoffFails(t *testing.T) {
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              allowAll(),
+		Sessions:                nil,
 		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},

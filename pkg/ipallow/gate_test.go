@@ -34,6 +34,11 @@ func (f *fakeNext) Authorize(
 	return f.err
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*fakeNext) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // fakeRules is an ipallow Rules port over a fixed map that counts calls.
 type fakeRules struct {
 	calls int

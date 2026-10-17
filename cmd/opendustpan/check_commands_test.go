@@ -77,6 +77,14 @@ func newCheckFakeServer(t *testing.T, path string, status int, body string) *che
 func upgradeCheckBody(t *testing.T, applied []string) string {
 	t.Helper()
 
+	return upgradeCheckBodyWithMinimum(t, applied, "")
+}
+
+// upgradeCheckBodyWithMinimum is upgradeCheckBody with the minimum binary
+// version of the schema.
+func upgradeCheckBodyWithMinimum(t *testing.T, applied []string, minimum string) string {
+	t.Helper()
+
 	versions := make([]int64, 0, len(applied))
 
 	for _, name := range applied {
@@ -89,10 +97,12 @@ func upgradeCheckBody(t *testing.T, applied []string) string {
 	}
 
 	body, err := json.Marshal(upgradeCheckAnswer{
-		ServerVersion:     checkServerVersion,
-		SchemaVersion:     schema.DatabaseVersion(versions),
-		AppliedMigrations: applied,
-		KeyEncryptionKey:  nil,
+		ServerVersion:           checkServerVersion,
+		SchemaVersion:           schema.DatabaseVersion(versions),
+		MinimumBinaryVersion:    minimum,
+		AppliedMigrations:       applied,
+		KeyEncryptionKey:        nil,
+		RunningJournaledUpdates: 0,
 	})
 	if err != nil {
 		t.Fatalf("encode upgrade check answer: %v", err)
@@ -205,30 +215,31 @@ func TestUpgradeCheckFresh(t *testing.T) {
 }
 
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
-func TestUpgradeCheckOld(t *testing.T) {
-	names, binVersion := embeddedNames(t)
+func TestUpgradeCheckBeforeBaseline(t *testing.T) {
+	_, binVersion := embeddedNames(t)
 
-	const oldMax = 8
+	const oldVersion = 76
 
-	old := slices.Clone(names[:oldMax])
 	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
-		http.StatusOK, upgradeCheckBody(t, old))
+		http.StatusOK, upgradeCheckBody(t, []string{"0075_sign_in_freshness.sql", "0076_sign_in_providers.sql"}))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
-	if err != nil {
-		t.Fatalf("upgrade check on an old database: %v", err)
+	if err == nil || !errors.Is(err, schema.ErrSchemaBeforeBaseline) {
+		t.Fatalf("upgrade check on a database from before the baseline: err = %v, want ErrSchemaBeforeBaseline", err)
 	}
 
 	checkUpgradeReport(t, out, wantUpgradeReport{
 		serverVersion: checkServerVersion,
-		dbVersion:     oldMax,
+		dbVersion:     oldVersion,
 		binVersion:    binVersion,
 		pending:       true,
-		verdict:       verdictUpgradePossible,
+		verdict:       verdictCannotStart,
 	})
 
-	if !strings.Contains(out, names[oldMax]) {
-		t.Fatalf("upgrade check output lacks pending migration %q:\n%s", names[oldMax], out)
+	for _, want := range []string{strconv.FormatInt(oldVersion, 10), strconv.FormatInt(schema.BaselineVersion, 10)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("upgrade check error %q does not name %q", err, want)
+		}
 	}
 }
 
@@ -253,16 +264,17 @@ func TestUpgradeCheckCurrent(t *testing.T) {
 }
 
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
-func TestUpgradeCheckNewer(t *testing.T) {
+func TestUpgradeCheckNewerAtMinimum(t *testing.T) {
 	names, binVersion := embeddedNames(t)
+	setBinaryVersion(t, "v0.2.0")
 
 	newer := append(slices.Clone(names), fmt.Sprintf("%04d_future.sql", binVersion+1))
 	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
-		http.StatusOK, upgradeCheckBody(t, newer))
+		http.StatusOK, upgradeCheckBodyWithMinimum(t, newer, "v0.2.0"))
 
 	out, err := runUpgradeCheckCommand(t, fake.server.URL)
-	if err == nil || !errors.Is(err, schema.ErrSchemaNewer) {
-		t.Fatalf("upgrade check on a newer database: err = %v, want ErrSchemaNewer", err)
+	if err != nil {
+		t.Fatalf("upgrade check on a newer database at the minimum: %v", err)
 	}
 
 	checkUpgradeReport(t, out, wantUpgradeReport{
@@ -270,16 +282,83 @@ func TestUpgradeCheckNewer(t *testing.T) {
 		dbVersion:     binVersion + 1,
 		binVersion:    binVersion,
 		pending:       false,
+		verdict:       verdictUpToDate,
+	})
+
+	for _, line := range []string{
+		"schema minimum binary version: v0.2.0",
+		"Migrations in the database that this binary does not know: 1.",
+	} {
+		if !strings.Contains(out, line) {
+			t.Fatalf("upgrade check output lacks %q:\n%s", line, out)
+		}
+	}
+}
+
+//nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
+func TestUpgradeCheckBelowMinimum(t *testing.T) {
+	names, binVersion := embeddedNames(t)
+	setBinaryVersion(t, "v0.1.0")
+
+	fake := newCheckFakeServer(t, "/api/server/upgrade-check",
+		http.StatusOK, upgradeCheckBodyWithMinimum(t, names, "v0.2.0"))
+
+	out, err := runUpgradeCheckCommand(t, fake.server.URL)
+	if err == nil || !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		t.Fatalf("upgrade check below the schema minimum: err = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	checkUpgradeReport(t, out, wantUpgradeReport{
+		serverVersion: checkServerVersion,
+		dbVersion:     binVersion,
+		binVersion:    binVersion,
+		pending:       false,
 		verdict:       verdictCannotStart,
 	})
 
-	for _, want := range []string{
-		strconv.FormatInt(binVersion+1, 10),
-		strconv.FormatInt(binVersion, 10),
-		version,
-	} {
+	for _, want := range []string{"v0.1.0", "v0.2.0"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("upgrade check error %q does not name %q", err, want)
+		}
+	}
+
+	for _, warning := range []string{devBinaryWarning, devServerWarning} {
+		if strings.Contains(out, warning) {
+			t.Fatalf("upgrade check output of release builds holds %q:\n%s", warning, out)
+		}
+	}
+}
+
+//nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
+func TestUpgradeCheckDevBuildIgnoresMinimum(t *testing.T) {
+	names, binVersion := embeddedNames(t)
+
+	body, err := json.Marshal(upgradeCheckAnswer{
+		ServerVersion: "dev", SchemaVersion: binVersion, MinimumBinaryVersion: "v9.0.0", AppliedMigrations: names,
+		KeyEncryptionKey: nil, RunningJournaledUpdates: 0,
+	})
+	if err != nil {
+		t.Fatalf("encode upgrade check answer: %v", err)
+	}
+
+	fake := newCheckFakeServer(t, "/api/server/upgrade-check", http.StatusOK, string(body))
+
+	out, err := runUpgradeCheckCommand(t, fake.server.URL)
+	if err != nil {
+		t.Fatalf("upgrade check of a dev build: %v", err)
+	}
+
+	checkUpgradeReport(t, out, wantUpgradeReport{
+		serverVersion: "dev",
+		dbVersion:     binVersion,
+		binVersion:    binVersion,
+		pending:       false,
+		verdict:       verdictUpToDate,
+	})
+
+	for _, warning := range []string{devBinaryWarning, devServerWarning} {
+		if !strings.Contains(out, warning) {
+			t.Fatalf("upgrade check output of dev builds lacks %q:\n%s", warning, out)
 		}
 	}
 }
@@ -287,10 +366,12 @@ func TestUpgradeCheckNewer(t *testing.T) {
 //nolint:paralleltest // The command reads process environment, so this test sets it and runs in order.
 func TestUpgradeCheckVersionMismatch(t *testing.T) {
 	body, err := json.Marshal(upgradeCheckAnswer{
-		ServerVersion:     checkServerVersion,
-		SchemaVersion:     99,
-		AppliedMigrations: nil,
-		KeyEncryptionKey:  nil,
+		ServerVersion:           checkServerVersion,
+		SchemaVersion:           99,
+		MinimumBinaryVersion:    "",
+		AppliedMigrations:       nil,
+		KeyEncryptionKey:        nil,
+		RunningJournaledUpdates: 0,
 	})
 	if err != nil {
 		t.Fatalf("encode mismatched answer: %v", err)
@@ -619,10 +700,12 @@ func TestUpgradeCheckKeyWarning(t *testing.T) {
 		{name: "server with a key", key: &keyed, want: false},
 	} {
 		body, err := json.Marshal(upgradeCheckAnswer{
-			ServerVersion:     checkServerVersion,
-			SchemaVersion:     binVersion,
-			AppliedMigrations: names,
-			KeyEncryptionKey:  tc.key,
+			ServerVersion:           checkServerVersion,
+			SchemaVersion:           binVersion,
+			MinimumBinaryVersion:    "",
+			AppliedMigrations:       names,
+			KeyEncryptionKey:        tc.key,
+			RunningJournaledUpdates: 0,
 		})
 		if err != nil {
 			t.Fatalf("%s: encode upgrade check answer: %v", tc.name, err)

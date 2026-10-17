@@ -333,10 +333,13 @@ func decodeNamespaceCursor(cursor string) (namespace.Name, bool, error) {
 }
 
 // visibleNamespaces answers the filter of the namespaces where p holds
-// namespace:read. Empty is true when no namespace can qualify, so the
-// caller answers the empty page without calling the store. With no access
-// service only an administrator sees every namespace. The filter runs in
-// the SQL query, never after paging.
+// namespace:read, as the authorizer of the routes lists them, so the IP
+// allowlist of each namespace applies. A caller whose scope holds every
+// namespace, such as an administrator, is not filtered by the allowlists
+// yet. Empty is true when no namespace can qualify, so the caller answers
+// the empty page without calling the store. With no access service only an
+// administrator sees every namespace. The filter runs in the SQL query,
+// never after paging.
 func (h *Handler) visibleNamespaces(
 	ctx context.Context, p identity.Principal,
 ) (namespace.Filter, bool, error) {
@@ -350,7 +353,7 @@ func (h *Handler) visibleNamespaces(
 		return none, true, nil
 	}
 
-	scope, err := h.access.Authorizer().ListObjects(ctx, p, identity.ActionNamespaceRead)
+	scope, err := h.authz.ListObjects(ctx, p, identity.ActionNamespaceRead)
 	if err != nil {
 		return none, false, err
 	}

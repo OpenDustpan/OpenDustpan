@@ -1,6 +1,8 @@
 package access
 
 import (
+	"context"
+	"fmt"
 	"slices"
 	"time"
 
@@ -116,10 +118,11 @@ func maintainerActions() []identity.Action {
 
 // siteOnlyActions are the administration actions that, of the built-in
 // roles, only RoleSiteAdministrator holds. The sign-in settings decide who
-// can sign in to the whole installation, so the tenant side of a hosted
-// installation does not hold them.
+// can sign in to the whole installation, and a restore with the access
+// tables replaces who has access, so the tenant side of a hosted
+// installation holds neither of them.
 func siteOnlyActions() []identity.Action {
-	return []identity.Action{identity.ActionServerManageSignIn}
+	return []identity.Action{identity.ActionServerManageSignIn, identity.ActionServerRestoreAccess}
 }
 
 // accountAdministratorActions are the actions of RoleAccountAdministrator.
@@ -206,4 +209,59 @@ func BuiltInRole(id string) (Role, bool) {
 // epoch is the creation time of every built-in role: the Unix epoch, UTC.
 func epoch() time.Time {
 	return time.Unix(0, 0).UTC()
+}
+
+// rolesByID returns the roles that grants name, by ID: the built-in roles
+// from code and the custom roles in one query of store. cached answers the
+// roles read before, and keep keeps each role read now. A role that no
+// longer exists is left out, so its grants give nothing.
+func rolesByID(
+	ctx context.Context,
+	grants []Grant,
+	cached func(string) (Role, bool),
+	keep func(Role),
+	store RoleStore,
+) (map[string]Role, error) {
+	out := make(map[string]Role, len(grants))
+
+	var missing []string
+
+	for i := range grants {
+		id := grants[i].Role
+		if _, done := out[id]; done {
+			continue
+		}
+
+		if r, ok := BuiltInRole(id); ok {
+			out[id] = r
+
+			continue
+		}
+
+		if r, ok := cached(id); ok {
+			out[id] = r
+
+			continue
+		}
+
+		if !slices.Contains(missing, id) {
+			missing = append(missing, id)
+		}
+	}
+
+	if len(missing) == 0 {
+		return out, nil
+	}
+
+	custom, err := store.GetRoles(ctx, missing)
+	if err != nil {
+		return nil, fmt.Errorf("read roles: %w", err)
+	}
+
+	for i := range custom {
+		out[custom[i].ID] = custom[i]
+		keep(custom[i])
+	}
+
+	return out, nil
 }

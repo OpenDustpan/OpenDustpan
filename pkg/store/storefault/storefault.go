@@ -105,6 +105,8 @@ type Inner interface {
 	inventory.ExpiredDeleted
 	inventory.BlobPurges
 	maintenance.Store
+
+	CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 }
 
 // Store wraps an Inner store and applies faults before it delegates. The zero
@@ -437,6 +439,42 @@ func (s *Store) PutJournalRow(ctx context.Context, row stack.JournalRow, fence n
 	return s.inner.PutJournalRow(ctx, row, fence)
 }
 
+// RecordJournalRefusal stores one refused or unstored batch, unless a fault
+// fires first.
+func (s *Store) RecordJournalRefusal(
+	ctx context.Context, refusal stack.JournalRefusal, fence namespace.Fence,
+) error {
+	if err := s.before(ctx, "RecordJournalRefusal"); err != nil {
+		return err
+	}
+
+	return s.inner.RecordJournalRefusal(ctx, refusal, fence)
+}
+
+// JournalRefusals returns the recorded refusals of the update, unless a fault
+// fires first.
+func (s *Store) JournalRefusals(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]stack.JournalRefusal, error) {
+	if err := s.before(ctx, "JournalRefusals"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.JournalRefusals(ctx, stackID, update)
+}
+
+// JournalSequences returns the stored sequence IDs of the update, unless a
+// fault fires first.
+func (s *Store) JournalSequences(
+	ctx context.Context, stackID stack.ID, update stack.UpdateID,
+) ([]int64, error) {
+	if err := s.before(ctx, "JournalSequences"); err != nil {
+		return nil, err
+	}
+
+	return s.inner.JournalSequences(ctx, stackID, update)
+}
+
 // ListEvents returns the events of the update, unless a fault fires first.
 func (s *Store) ListEvents(
 	ctx context.Context, ref stack.Ref, id stack.UpdateID, after int64, limit int,
@@ -446,6 +484,16 @@ func (s *Store) ListEvents(
 	}
 
 	return s.inner.ListEvents(ctx, ref, id, after, limit)
+}
+
+// CountRunningJournaledUpdates counts the running journaled updates, unless a
+// fault fires first.
+func (s *Store) CountRunningJournaledUpdates(ctx context.Context) (int64, error) {
+	if err := s.before(ctx, "CountRunningJournaledUpdates"); err != nil {
+		return 0, err
+	}
+
+	return s.inner.CountRunningJournaledUpdates(ctx)
 }
 
 // CreateWorkspace persists a new workspace, unless a fault fires first.
@@ -702,32 +750,6 @@ func (s *Store) DeleteExpiredPendingStateVersions(
 	}
 
 	return s.inner.DeleteExpiredPendingStateVersions(ctx, id, expiredBefore, fence)
-}
-
-// ListUnsealedStateVersions returns the finalized versions that still hold
-// plain content, unless a fault fires first.
-func (s *Store) ListUnsealedStateVersions(ctx context.Context) ([]workspace.StateVersion, error) {
-	if err := s.before(ctx, "ListUnsealedStateVersions"); err != nil {
-		return nil, err
-	}
-
-	return s.inner.ListUnsealedStateVersions(ctx)
-}
-
-// SealStateVersion moves one unsealed version to its sealed blob, unless a
-// fault fires first.
-func (s *Store) SealStateVersion(
-	ctx context.Context,
-	id workspace.StateVersionID,
-	content blob.Key,
-	outputs []byte,
-	fence namespace.Fence,
-) error {
-	if err := s.before(ctx, "SealStateVersion"); err != nil {
-		return err
-	}
-
-	return s.inner.SealStateVersion(ctx, id, content, outputs, fence)
 }
 
 // ListUnits returns the inventory entries of ns, unless a fault fires first.

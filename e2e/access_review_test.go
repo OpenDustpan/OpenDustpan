@@ -53,11 +53,25 @@ type e2eReview struct {
 }
 
 // e2eAccess and e2eAccessObjects decode the two forms of the access of the
-// caller.
+// caller. MissingActions names each other grantable action that the caller
+// does not hold on the object, with the roles that give it.
 type e2eAccess struct {
-	Object  string     `json:"object"`
-	Actions []string   `json:"actions"`
-	Grants  []e2eGrant `json:"grants"`
+	Object         string             `json:"object"`
+	Actions        []string           `json:"actions"`
+	Grants         []e2eGrant         `json:"grants"`
+	MissingActions []e2eMissingAction `json:"missingActions"`
+}
+
+// e2eMissingAction is one missing action with the roles that give it.
+type e2eMissingAction struct {
+	Action    string       `json:"action"`
+	GrantedBy e2eGrantedBy `json:"grantedBy"`
+}
+
+// e2eGrantedBy names the built-in and custom roles that give one action.
+type e2eGrantedBy struct {
+	BuiltInRoles []string `json:"builtInRoles"`
+	CustomRoles  []string `json:"customRoles"`
 }
 
 type e2eAccessObjects struct {
@@ -126,7 +140,7 @@ func runReviewOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -150,6 +164,7 @@ func runReviewOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	checkReviewRefusals(ctx, t, env)
 	checkCallerAccess(ctx, t, env)
+	checkCallerAccessRoles(ctx, t, env)
 }
 
 // seedReview makes a principal in a group, a namespace and five grants:
@@ -167,7 +182,10 @@ func seedReview(ctx context.Context, t *testing.T, env *e2e.Env) reviewFixture {
 	f.beforeAtMs = time.Now().UnixMilli() - 1
 
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"carol","kind":"person"}`, http.StatusCreated,
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("carol") + `","kind":"person"}`,
+		http.StatusCreated,
 	}, &f.carol)
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/groups", `{"name":"reviewers"}`, http.StatusCreated,
@@ -385,7 +403,7 @@ func checkReviewRow(t *testing.T, f reviewFixture, r *e2eReviewRow) {
 // isCarolRow reports whether r is a row of carol. No token of carol was
 // used yet, so a principal row is tracked with no last access time.
 func isCarolRow(f reviewFixture, r *e2eReviewRow) bool {
-	return r.Subject == f.carolRef && r.SubjectName == "carol" && r.LastAccessTracked != nil &&
+	return r.Subject == f.carolRef && r.SubjectName == e2e.SignInSubject("carol") && r.LastAccessTracked != nil &&
 		*r.LastAccessTracked && r.LastAccessAtMs == nil && r.MemberCount == nil
 }
 
@@ -448,7 +466,8 @@ func checkReviewExpand(ctx context.Context, t *testing.T, env *e2e.Env, f review
 			continue
 		}
 
-		if r.Via == nil || r.Via.Member != f.carolRef || r.Via.MemberSubject != "carol" || r.EffectiveFromMs == nil ||
+		if r.Via == nil || r.Via.Member != f.carolRef || r.Via.MemberSubject != e2e.SignInSubject("carol") ||
+			r.EffectiveFromMs == nil ||
 			*r.EffectiveFromMs < r.Via.MemberFromMs {
 			t.Fatalf("expanded row = %+v, want carol through the group", r)
 		}
@@ -582,17 +601,111 @@ func checkCallerAccess(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}
 }
 
-// carolToken returns the secret of a personal token of carol.
+// checkCallerAccessRoles proves what a refused caller learns about the
+// roles that give a missing action: erin holds no grant, so the missing
+// unit:read-secrets lists the built-in roles that give it and the custom
+// role that gives it.
+func checkCallerAccessRoles(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces", `{"name":"roles"}`, http.StatusCreated,
+	}, nil)
+
+	var revealer e2eRole
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/roles", `{"name":"secret-revealer","actions":["unit:read-secrets"]}`,
+		http.StatusCreated,
+	}, &revealer)
+
+	var erin e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("erin") + `","kind":"person"}`,
+		http.StatusCreated,
+	}, &erin)
+
+	erinSecret := callerToken(ctx, t, env, erin.ID)
+
+	// The built-in roles that hold unit:read-secrets, in catalog order.
+	builtIn := []string{"secret-viewer", "admin", "account-administrator", "site-administrator"}
+
+	got := callerAccessAs(ctx, t, env, erinSecret, "/api/server/caller/access?object=roles")
+	if got.Object != "roles" || len(got.Actions) != 0 || len(got.Grants) != 0 {
+		t.Fatalf("access of erin on roles = %+v, want no action and no grant", got)
+	}
+
+	checkRoleGrantedBy(t, got, roleGrantedByWant{
+		action: "unit:read-secrets", builtIn: builtIn, custom: []string{revealer.ID},
+	})
+}
+
+// callerToken returns the secret of a personal token that the person
+// principalID makes after a sign-in.
+func callerToken(ctx context.Context, t *testing.T, env *e2e.Env, principalID string) string {
+	t.Helper()
+
+	return env.PersonalToken(ctx, t, principalID, "roles").Secret
+}
+
+// callerAccessAs reads the access of the caller of secret on path.
+func callerAccessAs(ctx context.Context, t *testing.T, env *e2e.Env, secret, path string) e2eAccess {
+	t.Helper()
+
+	status, body, err := env.ServerAPIStatusAs(ctx, secret, http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET %s = %d, %v (%s), want 200", path, status, err, body)
+	}
+
+	var out e2eAccess
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+
+	return out
+}
+
+// roleGrantedByWant is one expected missing action: its built-in roles and
+// its custom roles.
+type roleGrantedByWant struct {
+	action  string
+	builtIn []string
+	custom  []string
+}
+
+// checkRoleGrantedBy fails unless access names the missing action of want
+// with its built-in roles and its custom roles.
+func checkRoleGrantedBy(t *testing.T, access e2eAccess, want roleGrantedByWant) {
+	t.Helper()
+
+	for i := range access.MissingActions {
+		m := &access.MissingActions[i]
+		if m.Action != want.action {
+			continue
+		}
+
+		if !slices.Equal(m.GrantedBy.BuiltInRoles, want.builtIn) ||
+			!slices.Equal(m.GrantedBy.CustomRoles, want.custom) {
+			t.Fatalf(
+				"missing %s = built-in %q custom %q, want built-in %q custom %q",
+				m.Action, m.GrantedBy.BuiltInRoles, m.GrantedBy.CustomRoles,
+				want.builtIn, want.custom,
+			)
+		}
+
+		return
+	}
+
+	t.Fatalf("missing actions = %+v, want %s", access.MissingActions, want.action)
+}
+
+// carolToken returns the secret of a personal token that carol makes after
+// a sign-in.
 func carolToken(ctx context.Context, t *testing.T, env *e2e.Env, f reviewFixture) string {
 	t.Helper()
 
-	var token e2eToken
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + f.carol.ID + `","name":"review"}`,
-		http.StatusCreated,
-	}, &token)
-
-	return token.Secret
+	return env.PersonalToken(ctx, t, f.carol.ID, "review").Secret
 }
 
 // checkCallerGrants reads the grants of the caller of secret two rows a

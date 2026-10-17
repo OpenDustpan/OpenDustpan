@@ -3,6 +3,7 @@ package principaltest
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/principal"
 )
@@ -110,10 +111,15 @@ func seedBench(b *testing.B, s principal.Store) {
 		for k := range groups {
 			m := principal.Membership{
 				AddedAt:     at(1),
+				SuspendedAt: time.Time{},
 				GroupID:     fmt.Sprintf("grp-%04d", (i+k)%benchGroups),
 				PrincipalID: id,
+				Source:      principal.MembershipSourceLocal,
+				SourceID:    "",
+				State:       principal.MembershipStateActive,
+				Pinned:      false,
 			}
-			if err := s.AddMember(ctx, m, entry()); err != nil {
+			if err := s.AddMember(ctx, m, entry(), nil); err != nil {
 				b.Fatalf("seed member: %v", err)
 			}
 		}

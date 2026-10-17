@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -217,7 +218,7 @@ func (h *Handler) secretRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitEncrypt},
 			Resolve: resolveGetStack,
-			Serve:   h.encryptValue,
+			Serve:   h.refuseSession(errSessionSecrets, h.encryptValue),
 		},
 		{
 			Method:  http.MethodPost,
@@ -225,7 +226,7 @@ func (h *Handler) secretRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitEncrypt},
 			Resolve: resolveGetStack,
-			Serve:   h.batchEncrypt,
+			Serve:   h.refuseSession(errSessionSecrets, h.batchEncrypt),
 		},
 		{
 			Method:  http.MethodPost,
@@ -233,7 +234,7 @@ func (h *Handler) secretRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitDecrypt},
 			Resolve: resolveGetStack,
-			Serve:   h.decryptValue,
+			Serve:   h.refuseSession(errSessionSecrets, h.decryptValue),
 		},
 		{
 			Method:  http.MethodPost,
@@ -241,7 +242,7 @@ func (h *Handler) secretRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitDecrypt},
 			Resolve: resolveGetStack,
-			Serve:   h.batchDecrypt,
+			Serve:   h.refuseSession(errSessionSecrets, h.batchDecrypt),
 		},
 		{
 			Method:  http.MethodPost,
@@ -249,7 +250,7 @@ func (h *Handler) secretRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitDecrypt},
 			Resolve: resolveGetStack,
-			Serve:   h.logDecryption,
+			Serve:   h.refuseSession(errSessionSecrets, h.logDecryption),
 		},
 		{
 			Method:  http.MethodPost,
@@ -257,7 +258,7 @@ func (h *Handler) secretRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitDecrypt},
 			Resolve: resolveGetStack,
-			Serve:   h.logBatchDecryption,
+			Serve:   h.refuseSession(errSessionSecrets, h.logBatchDecryption),
 		},
 	}
 }
@@ -285,7 +286,7 @@ func (h *Handler) updateCreateRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
-			Serve:   h.createUpdateHandler(k.kind),
+			Serve:   h.refuseSession(errSessionUpdate, h.createUpdateHandler(k.kind)),
 		})
 	}
 
@@ -314,7 +315,7 @@ func (h *Handler) updateLeaseRoutes() []Route {
 			Scope:   ScopeAuthorized,
 			Actions: []identity.Action{identity.ActionUnitWrite},
 			Resolve: resolveGetStack,
-			Serve:   h.startUpdate,
+			Serve:   h.refuseSession(errSessionUpdate, h.startUpdate),
 		},
 		{
 			Method:  http.MethodPost,
@@ -706,11 +707,16 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		p, err := h.authenticate(r)
+		p, session, err := h.authenticate(r)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
+		}
+
+		if session {
+			ctx = sessionauth.WithSession(ctx)
+			r = r.WithContext(ctx)
 		}
 
 		obj, err := route.Resolve(w, r)

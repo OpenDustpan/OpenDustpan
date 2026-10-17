@@ -133,7 +133,7 @@ func (s *Service) Review(ctx context.Context, obj identity.Object, req ReviewReq
 		return ReviewPage{}, err
 	}
 
-	return s.reviewEntries(ctx, rs, reviewRead{
+	return s.reviewEntries(ctx, rs, &reviewRead{
 		read: rs.ReviewGrants, grantAccess: grantAccess, obj: obj, q: q, boot: boot,
 	})
 }
@@ -154,8 +154,9 @@ type reviewRead struct {
 }
 
 // reviewEntries reads the page of r and returns it with the state of each
-// unit and who can grant access.
-func (s *Service) reviewEntries(ctx context.Context, rs ReviewStore, r reviewRead) (ReviewPage, error) {
+// unit and who can grant access. It takes r by pointer: the query it holds
+// is too heavy to copy.
+func (s *Service) reviewEntries(ctx context.Context, rs ReviewStore, r *reviewRead) (ReviewPage, error) {
 	page, rows, err := s.reviewPage(ctx, r.read, r.obj, r.q, r.boot)
 	if err != nil {
 		return ReviewPage{}, err
@@ -358,8 +359,8 @@ func (s *Service) unitStates(ctx context.Context, rs ReviewStore, rows []ReviewR
 	return states, nil
 }
 
-// lastAccess reads the latest last-use time of the access tokens of each
-// principal of rows, with one lookup for the page.
+// lastAccess reads the latest last-use time of the access tokens and the
+// console sessions of each principal of rows, with one lookup for the page.
 func (s *Service) lastAccess(ctx context.Context, rs ReviewStore, rows []ReviewRow) (map[string]time.Time, error) {
 	uses, err := rs.LastAccess(ctx, principalIDsOf(rows))
 	if err != nil {
@@ -403,8 +404,8 @@ func principalIDsOf(rows []ReviewRow) []string {
 }
 
 // setLastAccess sets the last access of each row of rows from uses: a row
-// of a principal is tracked, with the latest use of its tokens, or with no
-// time when no token was ever used. A group row with no Via keeps neither.
+// of a principal is tracked, with the latest use of its tokens and its
+// console sessions, or with no time when none was ever used. A group row with no Via keeps neither.
 func setLastAccess(rows []ReviewRow, uses map[string]time.Time) {
 	for i := range rows {
 		id := principalOfRow(&rows[i])
@@ -424,7 +425,10 @@ func setLastAccess(rows []ReviewRow, uses map[string]time.Time) {
 // reviewScope returns the scope of the export of obj, and the roles that
 // manage access.
 func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewScope, map[string]bool, error) {
-	scope := ReviewScope{Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, All: false}
+	scope := ReviewScope{
+		Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+		TokenNamespaceRoles: nil, All: false,
+	}
 
 	roles, grantAccess, err := s.authz.reviewRoles(ctx)
 	if err != nil {
@@ -483,13 +487,18 @@ func (s *Service) reviewScope(ctx context.Context, obj identity.Object) (ReviewS
 }
 
 // principalReviewScope returns the scope of the export of obj, a service
-// principal: the grants on the principal, and the grants on the
-// installation with a role that holds principal:manage-tokens. So the
-// export answers who can make a token for the principal and act as it. It
-// returns ErrNotFound when the principal does not exist, and ErrInvalid
-// when it is not a service principal.
+// principal: the grants on the principal, the grants on the installation
+// with a role that holds principal:manage-tokens, and, for a principal of
+// a namespace, the grants on its namespace with a role that holds
+// namespace:manage-principal-tokens. So the export answers who can make a
+// token for the principal and act as it. It returns ErrNotFound when the
+// principal does not exist, and ErrInvalid when it is not a service
+// principal.
 func (s *Service) principalReviewScope(ctx context.Context, obj identity.Object) (ReviewScope, error) {
-	scope := ReviewScope{Object: obj, Namespace: "", Containers: nil, ContainerRoles: nil, All: false}
+	scope := ReviewScope{
+		Object: obj, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+		TokenNamespaceRoles: nil, All: false,
+	}
 
 	p, err := s.directory.GetPrincipal(ctx, obj.PrincipalID())
 	if errors.Is(err, principal.ErrNotFound) {
@@ -510,6 +519,17 @@ func (s *Service) principalReviewScope(ctx context.Context, obj identity.Object)
 	}
 
 	scope.Containers = []string{identity.ServerObject().String()}
+
+	if p.Namespace != "" {
+		scope.TokenNamespace = identity.NamespaceObject(p.Namespace).String()
+
+		tokenRoles, rolesErr := s.authz.rolesWith(ctx, identity.ActionNamespaceManagePrincipalTokens)
+		if rolesErr != nil {
+			return scope, rolesErr
+		}
+
+		scope.TokenNamespaceRoles = tokenRoles
+	}
 
 	return scope, nil
 }
@@ -567,12 +587,16 @@ func (s *Service) reviewNamespace(ctx context.Context, obj identity.Object) erro
 }
 
 // inheritedFrom returns the object of a grant when it is a container of the
-// scope, else nil.
+// scope, or the token namespace of the scope, else nil.
 func inheritedFrom(scope ReviewScope, obj identity.Object) *identity.Object {
 	for _, c := range scope.Containers {
 		if c == obj.String() {
 			return &obj
 		}
+	}
+
+	if scope.TokenNamespace != "" && obj.String() == scope.TokenNamespace {
+		return &obj
 	}
 
 	return nil
@@ -585,11 +609,8 @@ func inheritedFrom(scope ReviewScope, obj identity.Object) *identity.Object {
 func reviewQuery(req ReviewRequest, obj identity.Object, now time.Time) (ReviewQuery, int, error) {
 	q := ReviewQuery{
 		Scope: ReviewScope{
-			Object:         identity.Object{},
-			Namespace:      "",
-			Containers:     nil,
-			ContainerRoles: nil,
-			All:            false,
+			Object: identity.Object{}, Namespace: "", Containers: nil, ContainerRoles: nil, TokenNamespace: "",
+			TokenNamespaceRoles: nil, All: false,
 		},
 		Subject:   "",
 		Principal: "",
