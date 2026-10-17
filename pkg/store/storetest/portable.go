@@ -46,6 +46,7 @@ func RunPortable(t *testing.T, newStore PortableFactory) {
 		{name: "a portable export stages with the same rows", test: testPortableStages},
 		{name: "a table file that differs from its descriptor is refused", test: testPortableStageRefusesCorrupt},
 		{name: "a portable stage refuses another schema version", test: testPortableStageRefusesVersion},
+		{name: "a portable stage refuses a backup from before the baseline", test: testPortableStageRefusesBaseline},
 		{name: "an empty byte value is the empty string, not null", test: testPortableEmptyBytes},
 		{name: "a files list with a duplicate table is refused", test: testPortableStageRefusesDuplicate},
 		{name: "a files list with an unknown table is refused", test: testPortableStageRefusesUnknown},
@@ -278,6 +279,23 @@ func testPortableStageRefusesVersion(t *testing.T, newStore PortableFactory) {
 	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
 	if !errors.Is(err, backup.ErrSchemaMismatch) {
 		t.Fatalf("stage another schema version: err = %v, want ErrSchemaMismatch", err)
+	}
+}
+
+// testPortableStageRefusesBaseline checks that a portable backup from
+// before the baseline schema is refused with ErrSchemaBeforeBaseline.
+func testPortableStageRefusesBaseline(t *testing.T, newStore PortableFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	seedBackupStore(t, s)
+
+	sink, sum, files := exportPortable(t, s)
+	sum.SchemaVersion = backup.BaselineSchemaVersion - 1
+
+	_, err := s.StagePortable(t.Context(), sink.read, sum, files)
+	if !errors.Is(err, backup.ErrSchemaBeforeBaseline) {
+		t.Fatalf("stage a backup from before the baseline: err = %v, want ErrSchemaBeforeBaseline", err)
 	}
 }
 

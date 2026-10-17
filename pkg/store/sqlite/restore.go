@@ -353,7 +353,10 @@ func writeStagedBookkeeping(ctx context.Context, tx *sql.Tx, keep bookkeeping) e
 	// starts it again. The copy keeps entered_maintenance false: the chain
 	// enters maintenance mode again when it still waits.
 	const keepChain = `INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
-    VALUES (1, ?, ?, ?, ?, 0, 1, 0)`
+    VALUES (1, ?, ?, ?, ?, 0, 1, 0)
+    ON CONFLICT (id) DO UPDATE SET state = excluded.state, changed_at_ms = excluded.changed_at_ms,
+        changed_by = excluded.changed_by, pending = excluded.pending, entered_maintenance = 0,
+        log_replaced = 1, migrating_at_ms = 0`
 
 	chain := keep.chain
 

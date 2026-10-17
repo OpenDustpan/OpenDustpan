@@ -148,7 +148,7 @@ func writeRestoreManifest(
 		Version:       "test-1.0",
 		SQLSHA256:     sqlSHA,
 		Format:        backup.FormatVersion,
-		SchemaVersion: 10,
+		SchemaVersion: backup.BaselineSchemaVersion,
 		SQLSize:       sqlSize,
 		RowCounts:     maps.Clone(in.dump.Rows),
 		SQLFormat:     backup.PortableFormat,

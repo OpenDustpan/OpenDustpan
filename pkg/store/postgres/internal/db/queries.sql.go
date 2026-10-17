@@ -189,7 +189,6 @@ WHERE content_key <> '' AND status = 'finalized'
 UNION ALL
 SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
-WHERE blob_key IS NOT NULL AND blob_key <> ''
 UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
@@ -2793,7 +2792,7 @@ type GetCheckpointByUpdateRow struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -2844,7 +2843,7 @@ type GetCheckpointByVersionRow struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -3273,7 +3272,7 @@ type GetLatestCheckpointRow struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -5142,22 +5141,22 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
 SELECT blob_key
 FROM checkpoints
-WHERE stack_id = $1 AND blob_key IS NOT NULL AND blob_key <> ''
+WHERE stack_id = $1
 ORDER BY blob_key
 `
 
-// Every blob key the checkpoints of one stack name, without the empty ones,
-// ordered. A sweeper compares this set against the stored objects to find
-// blobs no checkpoint references.
-func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]pgtype.Text, error) {
+// Every blob key the checkpoints of one stack name, ordered. A sweeper
+// compares this set against the stored objects to find blobs no checkpoint
+// references.
+func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, listCheckpointBlobKeys, stackID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []pgtype.Text
+	var items []string
 	for rows.Next() {
-		var blob_key pgtype.Text
+		var blob_key string
 		if err := rows.Scan(&blob_key); err != nil {
 			return nil, err
 		}
@@ -7020,9 +7019,9 @@ func (q *Queries) PurgeWorkspace(ctx context.Context, arg PurgeWorkspaceParams) 
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features, deployment, saved_at_ms,
+    digest, invalid, features, saved_at_ms,
     blob_key, size, blob_size, blob_md5
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ''::BYTEA, $9, $10, $11, $12, $13)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -7030,7 +7029,6 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     digest = excluded.digest,
     invalid = excluded.invalid,
     features = excluded.features,
-    deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms,
     blob_key = excluded.blob_key,
     size = excluded.size,
@@ -7048,7 +7046,7 @@ type PutCheckpointParams struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
