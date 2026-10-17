@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -130,8 +129,7 @@ func newDelegation(t *testing.T, st DelegationStore) *delegation {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: tokengrants.Check{Grants: svc, Principals: st},
-		Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
+		Store: st, Principals: st, Freshness: nil, Authorizer: authz, Logger: nil, Now: nil, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)
@@ -319,8 +317,8 @@ func testNoRightOnPersonalTokens(t *testing.T, d *delegation) {
 	d.mustGrant(t, bootstrap(), ops, access.RoleTokenManager, identity.ServerObject())
 	d.mustGrant(t, bootstrap(), root, access.RoleSiteAdministrator, identity.ServerObject())
 
-	tok, secret, err := d.tokens.Create(ctx, bootstrap(), changeEntry(bootstrap(), identity.ActionServerManageTokens),
-		accesstoken.ScopePersonal, accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: root.ID, Name: "laptop"})
+	tok, secret, err := d.tokens.Create(ctx, signedIn(root), changeEntry(signedIn(root), identity.ActionTokenManageOwn),
+		accesstoken.ScopeOwn, accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: "", Name: "laptop"})
 	if err != nil {
 		t.Fatalf("personal token: %v", err)
 	}
@@ -447,9 +445,9 @@ func testPrincipalGrantRules(t *testing.T, d *delegation) {
 	}
 }
 
-// testNoPersonalEscalation proves that the escalation check stays for a
-// personal token: an account administrator cannot make a token for a site
-// administrator, who holds more. It can still make a token for any
+// testNoPersonalEscalation proves that no administrator makes a personal
+// token for another person: an account administrator cannot make one for a
+// site administrator, who holds more. It can still make a token for any
 // service principal.
 func testNoPersonalEscalation(t *testing.T, d *delegation) {
 	t.Helper()
@@ -465,8 +463,8 @@ func testNoPersonalEscalation(t *testing.T, d *delegation) {
 	_, _, err := d.tokens.Create(t.Context(), signedIn(account),
 		changeEntry(signedIn(account), identity.ActionServerManageTokens), accesstoken.ScopePersonal,
 		accesstoken.Input{ExpiresAt: time.Time{}, PrincipalID: site.ID, Name: "laptop"})
-	if !errors.Is(err, identity.ErrDenied) {
-		t.Fatalf("personal token for a site administrator: err = %v, want ErrDenied", err)
+	if !errors.Is(err, identity.ErrDenied) || !errors.Is(err, accesstoken.ErrNotOwnToken) {
+		t.Fatalf("personal token for a site administrator: err = %v, want ErrDenied and ErrNotOwnToken", err)
 	}
 
 	if _, _, err := d.serviceToken(t, signedIn(account), deploy); err != nil {
