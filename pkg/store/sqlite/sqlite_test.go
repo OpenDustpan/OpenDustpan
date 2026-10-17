@@ -1120,92 +1120,36 @@ func openNewerSchemaAt(t *testing.T, binary string) {
 	}
 }
 
-// TestOpenBeforeMinimumColumn proves that a database whose version table
-// lacks the minimum column opens with no minimum, applies the pending
-// baseline, which builds the column again, and then records minimums.
+// TestOpenBeforeMinimumColumn proves that a database from before the baseline
+// is refused with the named error.
 func TestOpenBeforeMinimumColumn(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
-
-	copyTemplate(t, path)
 
 	conn, err := openRawDB(path)
 	if err != nil {
 		t.Fatalf("open raw database: %v", err)
 	}
 
-	for _, stmt := range []string{
-		`ALTER TABLE schema_migrations DROP COLUMN min_binary_version`,
-		`DELETE FROM schema_migrations WHERE name = '0100_baseline.sql'`,
-	} {
-		if _, execErr := conn.ExecContext(t.Context(), stmt); execErr != nil {
-			t.Fatalf("%s: %v", stmt, execErr)
-		}
+	const create = `CREATE TABLE schema_migrations (version INTEGER NOT NULL PRIMARY KEY, name TEXT NOT NULL) STRICT`
+	if _, execErr := conn.ExecContext(t.Context(), create); execErr != nil {
+		t.Fatalf("create schema_migrations: %v", execErr)
+	}
+
+	const old = 76
+
+	const record = `INSERT INTO schema_migrations (version, name) VALUES (?, ?)`
+	if _, execErr := conn.ExecContext(t.Context(), record, old, "0076_sign_in_providers.sql"); execErr != nil {
+		t.Fatalf("record migration before the baseline: %v", execErr)
 	}
 
 	if closeErr := conn.Close(); closeErr != nil {
 		t.Fatalf("close raw database: %v", closeErr)
 	}
 
-	s, err := sqlite.Open(t.Context(), path, sqlite.WithBinaryVersion("v0.1.0"))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-
-	applied, err := s.AppliedMigrations(t.Context())
-	if closeErr := s.Close(); closeErr != nil {
-		t.Fatalf("close store: %v", closeErr)
-	}
-
-	if err != nil || len(applied) == 0 {
-		t.Fatalf("applied migrations = %v, %v, want the embedded migrations", applied, err)
-	}
-
-	if len(applied) == 0 {
-		t.Fatal("applied migrations are empty, want the recorded migrations")
-	}
-
-	isBaseline := func(m schema.AppliedMigration) bool { return m.Name == schema.BaselineName }
-	if !slices.ContainsFunc(applied, isBaseline) {
-		t.Fatalf("applied migrations = %+v, want 0100_baseline.sql among them", applied)
-	}
-
-	if last := applied[len(applied)-1]; last.MinBinaryVersion != "v0.1.0" {
-		t.Fatalf("newest applied migration %+v, want minimum v0.1.0", last)
-	}
-
-	checkMinimumColumnBack(t, path)
-}
-
-// checkMinimumColumnBack fails t unless the version table of the database at
-// path holds the minimum column again.
-func checkMinimumColumnBack(t *testing.T, path string) {
-	t.Helper()
-
-	conn, err := openRawDB(path)
-	if err != nil {
-		t.Fatalf("open raw database: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close raw database: %v", closeErr)
-		}
-	}()
-
-	var count int64
-
-	err = conn.QueryRowContext(
-		t.Context(),
-		`SELECT COUNT(*) FROM pragma_table_info('schema_migrations') WHERE name = 'min_binary_version'`,
-	).Scan(&count)
-	if err != nil {
-		t.Fatalf("read the version table columns: %v", err)
-	}
-
-	if count != 1 {
-		t.Fatalf("the version table holds the minimum column %d times, want once", count)
+	if _, err := sqlite.Open(t.Context(), path); !errors.Is(err, schema.ErrSchemaBeforeBaseline) {
+		t.Fatalf("open a database from before the baseline: err = %v, want ErrSchemaBeforeBaseline", err)
 	}
 }
 

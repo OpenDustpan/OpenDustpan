@@ -318,6 +318,35 @@ func TestCheckRefusesPendingMinimumAboveBinary(t *testing.T) {
 	}
 }
 
+func TestCheckRefusesStoredMinimumWithPendingMigrations(t *testing.T) {
+	t.Parallel()
+
+	fsys := fstest.MapFS{
+		"m/0001_init.sql":  mapFile("CREATE TABLE a (x INTEGER);\n"),
+		"m/0002_extra.sql": mapFile("ALTER TABLE a ADD COLUMN y INTEGER;\n"),
+	}
+
+	embedded, err := migrate.Load(fsys, "m")
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	recorded := applied(map[int64]string{1: "v0.3.0"}, 1)
+
+	if _, err := migrate.Check(recorded, embedded, "v0.2.0"); !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+		t.Fatalf("Check below the stored minimum with a pending migration = %v, want ErrBinaryBelowMinimum", err)
+	}
+
+	plan, err := migrate.Check(recorded, embedded, "v0.3.0")
+	if err != nil {
+		t.Fatalf("Check at the stored minimum: %v", err)
+	}
+
+	if len(plan.Pending) != 1 || plan.Pending[0].Version != 2 {
+		t.Fatalf("pending = %+v, want the version 2 migration", plan.Pending)
+	}
+}
+
 func TestCheckRefusesBadBinaryVersion(t *testing.T) {
 	t.Parallel()
 
