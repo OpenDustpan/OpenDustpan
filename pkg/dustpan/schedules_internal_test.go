@@ -156,6 +156,43 @@ func testServer(durableStore DurableStore, owner string) *Server {
 	}
 }
 
+// waitForPurge polls until every unit of units has no blob left, or fails
+// after 10 seconds. The sweep purges every due unit in each run, so two
+// ended runs prove progress but not that an in-flight run finished its
+// page: teardown must wait for the blobs, not only for the runs.
+func waitForPurge(t *testing.T, f sweepFixture, units []sweptUnit) {
+	t.Helper()
+
+	deadline := time.Now().Add(10 * time.Second)
+
+	for {
+		pendingID := ""
+		pendingN := 0
+
+		for _, u := range units {
+			if n := f.blobCount(t, u.prefix); n != 0 {
+				pendingID, pendingN = u.id, n
+
+				break
+			}
+		}
+
+		if pendingID == "" {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("blobs of %s = %d, want 0 after 10 seconds: the sweep purged the unit", pendingID, pendingN)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("test context done while waiting for the purge of %s: %v", pendingID, t.Context().Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
 // TestJobSchedulesRunDeletedSweepOncePerTick proves that two instances on one
 // store purge each deleted unit once per tick: the store holds about one
 // operation per tick, not two, and the units are gone. The intervals are
@@ -187,16 +224,11 @@ func TestJobSchedulesRunDeletedSweepOncePerTick(t *testing.T) {
 	}
 
 	waitForTwoRuns(t, a, kindDeleted)
+	waitForPurge(t, f, units)
 	cancel()
 	wg.Wait()
 
 	checkTickKeysOnce(t, a, kindDeleted)
-
-	for _, u := range units {
-		if n := f.blobCount(t, u.prefix); n != 0 {
-			t.Fatalf("blobs of %s = %d, want 0: the sweep purged the unit", u.id, n)
-		}
-	}
 }
 
 // TestJobSchedulesRunSignInPruneOncePerTick proves that two instances on one
