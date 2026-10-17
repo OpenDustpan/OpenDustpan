@@ -55,7 +55,7 @@ func racingService(t *testing.T, f *fixture, race func()) (*access.Service, *acc
 	return racingServiceWith(t, f, f.units, race)
 }
 
-// racingServiceWith is racingService with the collection port port.
+// racingServiceWith is racingService with the collection port.
 func racingServiceWith(
 	t *testing.T, f *fixture, port access.UnitCollections, race func(),
 ) (*access.Service, *access.Authorizer) {
