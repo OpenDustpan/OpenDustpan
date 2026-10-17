@@ -9,6 +9,11 @@
         "mcp"
       ],
       "enabled": true
+    },
+    "repowise": {
+      "type": "remote",
+      "url": "https://api.repowise.dev/mcp/w/6092d588-b806-4005-8af9-efdb7abf90de",
+      "enabled": true
     }
   },
   // The model advertises a 1,048,576-token window, but a request is rejected
