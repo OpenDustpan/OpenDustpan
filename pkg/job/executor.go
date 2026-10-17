@@ -117,8 +117,9 @@ type ClaimRequest struct {
 type Assignment struct {
 	Claim PhaseClaim
 	Job   Job
-	// Plans are the plans that an apply phase applies, with their hashes.
-	Plans PlanSet
+	// Plan is the plan that an apply phase applies, with the hashes of its
+	// parts, or nil.
+	Plan *PlanRef
 }
 
 // Outcome is how an executor ends a phase.
@@ -139,22 +140,28 @@ type Outcome struct {
 type Claimer interface {
 	// Claim takes one phase of req.Kinds that can run, moves its job to
 	// running, and returns the assignment with the namespace fence of the
-	// unit. A takeover is a new claim on the same operation, with a new
-	// token: the phase runs again from its first step. When the last
-	// executor recorded the start of a step that changes resources, and
-	// no end, the takeover fails the phase instead (AfterLostClaim) and
-	// Claim looks for another one. It returns durable.ErrNoWork when no
-	// phase can run now, and ErrInvalid for a request with no owner, no
-	// kind or a lease that is not positive.
+	// unit. The claim of a plan phase records the current state version of
+	// the unit in Phase.StateVersion, in the same transaction. A takeover is
+	// a new claim on the same operation, with a new token: the phase runs
+	// again from its first step. When an earlier claim recorded the start
+	// of a step that changes resources, whether or not it recorded its end,
+	// the takeover fails the phase instead (AfterLostClaim), so a finished
+	// change never runs again, and Claim looks for another phase. A deliver
+	// phase has no such step, and its takeover runs the lookup of
+	// NeedsCommitLookup. It returns durable.ErrNoWork when no phase can run
+	// now, and ErrInvalid for a request with no owner, no kind or a lease
+	// that is not positive.
 	Claim(ctx context.Context, req ClaimRequest) (Assignment, error)
 	// Renew moves the expiry of c to now plus d on the clock of the store,
 	// and returns the new claim. It returns ErrCanceled when a cancel
 	// arrived: the executor then stops the phase and calls Finish.
 	Renew(ctx context.Context, c PhaseClaim, d time.Duration) (PhaseClaim, error)
-	// Release gives the phase back before it ends. With no recorded start
-	// of a step that changes resources, the operation waits for the next
-	// claim. Else the phase fails. During a cancel, the job ends canceled
-	// when no change began, and failed when one began.
+	// Release gives the phase back before it ends, with the rule of
+	// AfterLostClaim. With no recorded start of a step that changes
+	// resources under any claim of the phase, the operation waits for the
+	// next claim. Else the phase fails, also when the change ended. During
+	// a cancel, the job ends canceled when no change began, and failed when
+	// one began: a release after a change never ends canceled.
 	Release(ctx context.Context, c PhaseClaim) error
 	// Finish ends the phase with o, and moves the job by the state machine:
 	// to the next phase, to succeeded or to failed. A phase that fails
@@ -180,14 +187,27 @@ type Recorder interface {
 	// EndStep records the outcome of a step that BeginStep started. It
 	// returns ErrInvalid for a step with no begin record.
 	EndStep(ctx context.Context, c PhaseClaim, r StepRecord) error
-	// AppendLog stores the next chunk of the log of the step called step.
-	// Seq starts at 0 and grows by 1. A chunk with a seq that the log has
-	// already, and the same SHA-256, changes nothing, so a retry is safe. A
-	// chunk with a known seq and another hash returns ErrConflict.
+	// AppendLog stores the next chunk of the log of the step called step,
+	// as the blob LogChunkKey. Seq starts at 0 and grows by 1. Chunk 0
+	// creates the log version of the step under c, with a new item key. A
+	// chunk with a seq that the log has already, and the same SHA-256,
+	// changes nothing, so a retry is safe. A chunk with a known seq and
+	// another hash returns ErrConflict. A chunk above MaxLogChunk, or a seq
+	// that is not the next one, returns ErrInvalid. EndStep closes the
+	// log version.
 	AppendLog(ctx context.Context, c PhaseClaim, step string, seq int, chunk io.Reader) error
-	// PutPlan stores an output of a plan phase and returns its reference.
-	// It returns ErrInvalid for an output kind that is not a plan.
-	PutPlan(ctx context.Context, c PhaseClaim, kind OutputKind, plan io.Reader) (PlanRef, error)
+	// PutPlan stores the plan of a plan phase, with one part for each
+	// upload, and returns its reference. It writes the item key and the
+	// part blobs first, and then the plan in one transaction. In that
+	// transaction it sets PlanRef.StateVersion to Phase.StateVersion, and
+	// checks that it is still the current state version of the unit. When
+	// it is not, the transaction fails the phase (EventPhaseFailed, with a
+	// reason that names both versions), stores no plan, and PutPlan
+	// returns ErrPlanStale. It returns ErrInvalid for a phase that is not a
+	// plan phase, a kind that is not a plan output, a kind twice, or a part
+	// above MaxPlanPart, and ErrConflict for a phase that has a plan
+	// already. A plan does not change after PutPlan.
+	PutPlan(ctx context.Context, c PhaseClaim, parts []PlanUpload) (PlanRef, error)
 	// Delivered records the commit of a deliver phase. It returns
 	// ErrInvalid when the phase is not a deliver phase.
 	Delivered(ctx context.Context, c PhaseClaim, d DeliveryResult) error
@@ -197,14 +217,38 @@ type Recorder interface {
 // They have no Step in the spec: the executor runs them in the server.
 const (
 	// WriteBackStepCommit is the commit through the forge. The executor
-	// records its begin before the forge call. A takeover that finds the
-	// begin and no end looks for a commit with the TrailerJob trailer of
-	// the job on the target ref, or for the branch of the review request,
-	// and records that commit with no second commit.
+	// records its begin before the forge call. Before it commits on a claim
+	// for which NeedsCommitLookup is true, it looks for a commit with the
+	// TrailerJob trailer of the job on the target ref, or for the branch
+	// BranchPrefix + the job ID, and records the commit that it finds with
+	// no second commit.
 	WriteBackStepCommit = "commit"
 	// WriteBackStepReview opens the review request of the commit.
 	WriteBackStepReview = "review-request"
+	// BranchPrefix starts the branch of the review request of a write-back
+	// job. The branch is BranchPrefix + the job ID.
+	BranchPrefix = "dustpan/"
 )
+
+// NeedsCommitLookup reports whether the write-back executor must look for
+// the commit of the job before it commits in the deliver phase p: on every
+// claim after the first (p.Claims above 1), and whenever a claim recorded
+// the begin of WriteBackStepCommit. Each takeover runs the lookup, whatever
+// the earlier claim recorded, because the forge can have made the commit
+// before or after the begin record.
+func NeedsCommitLookup(p *Phase) bool {
+	if p.Claims > 1 {
+		return true
+	}
+
+	for _, r := range p.Steps {
+		if r.Name == WriteBackStepCommit {
+			return true
+		}
+	}
+
+	return false
+}
 
 // StepPlanner gives the default steps of an operation for the units of one
 // tool, so that the job core never knows a command of a tool. The adapter

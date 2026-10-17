@@ -96,39 +96,49 @@ func TestAfterLostClaim(t *testing.T) {
 	steps := []job.Step{applyStep("init", false), applyStep("apply", true), applyStep("notify", false)}
 
 	tests := []struct {
-		name         string
-		begun, ended []string
-		ev           job.Event
-		want         job.Event
+		name    string
+		records []job.StepRecord
+		ev      job.Event
+		want    job.Event
 	}{
-		{"takeover, nothing started", nil, nil, job.EventClaim, job.EventClaim},
-		{"takeover, safe step started", []string{"init"}, nil, job.EventClaim, job.EventClaim},
+		{"takeover, nothing started", nil, job.EventClaim, job.EventClaim},
+		{"takeover, safe step started", []job.StepRecord{begun("init", 1)}, job.EventClaim, job.EventClaim},
+		{
+			"takeover, safe step done",
+			[]job.StepRecord{ended("init", 1)},
+			job.EventClaim, job.EventClaim,
+		},
 		{
 			"takeover, change started",
-			[]string{"init", "apply"},
-			[]string{"init"},
+			[]job.StepRecord{ended("init", 1), begun("apply", 1)},
 			job.EventClaim, job.EventPhaseFailed,
 		},
 		{
 			"takeover, change done",
-			[]string{"init", "apply"},
-			[]string{"init", "apply"},
-			job.EventClaim, job.EventClaim,
+			[]job.StepRecord{ended("init", 1), ended("apply", 1)},
+			job.EventClaim, job.EventPhaseFailed,
 		},
-		{"release, nothing started", nil, nil, job.EventRelease, job.EventRelease},
-		{"release, safe step done", []string{"init"}, []string{"init"}, job.EventRelease, job.EventRelease},
+		{
+			"takeover, change done under the first of two claims",
+			[]job.StepRecord{ended("init", 1), ended("apply", 1), ended("init", 2)},
+			job.EventClaim, job.EventPhaseFailed,
+		},
+		{"release, nothing started", nil, job.EventRelease, job.EventRelease},
+		{"release, safe step done", []job.StepRecord{ended("init", 1)}, job.EventRelease, job.EventRelease},
 		{
 			"release, change started",
-			[]string{"init", "apply"},
-			[]string{"init"},
+			[]job.StepRecord{ended("init", 1), begun("apply", 1)},
 			job.EventRelease, job.EventPhaseFailed,
 		},
 		{
 			"release after change, safe step started",
-			[]string{"init", "apply", "notify"},
-			[]string{"init", "apply"},
-			job.EventRelease,
-			job.EventRelease,
+			[]job.StepRecord{ended("init", 1), ended("apply", 1), begun("notify", 1)},
+			job.EventRelease, job.EventPhaseFailed,
+		},
+		{
+			"a record of an unknown step does not count",
+			[]job.StepRecord{begun("other", 1)},
+			job.EventRelease, job.EventRelease,
 		},
 	}
 
@@ -136,7 +146,7 @@ func TestAfterLostClaim(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, reason := job.AfterLostClaim(steps, tt.begun, tt.ended, tt.ev)
+			got, reason := job.AfterLostClaim(steps, tt.records, tt.ev)
 			if got != tt.want {
 				t.Fatalf("AfterLostClaim() = %s, want %s", got, tt.want)
 			}
@@ -145,13 +155,163 @@ func TestAfterLostClaim(t *testing.T) {
 				t.Fatalf("AfterLostClaim() reason = %q for %s", reason, got)
 			}
 
-			if got != tt.ev {
-				if _, err := job.Next(job.StateRunning, got); err != nil {
-					t.Fatalf("Next(running, %s) = %v", got, err)
-				}
+			checkLostClaimEvent(t, tt.ev, got)
+		})
+	}
+}
+
+// checkLostClaimEvent fails t when got, the event of AfterLostClaim for
+// ev, is not allowed in the states where it applies, or when a failure
+// does not end the job failed.
+func checkLostClaimEvent(t *testing.T, ev, got job.Event) {
+	t.Helper()
+
+	// A takeover during a cancel never happens: the durable store ends a
+	// canceled operation whose claim expired, and the reconcile schedule
+	// applies AfterOperationEnded.
+	from := []job.State{job.StateRunning}
+	if ev == job.EventRelease {
+		from = append(from, job.StateCanceling)
+	}
+
+	for _, s := range from {
+		to, err := job.Next(s, got)
+		if err != nil {
+			t.Fatalf("Next(%s, %s) = %v", s, got, err)
+		}
+
+		if got == job.EventPhaseFailed && to != job.StateFailed {
+			t.Fatalf("Next(%s, %s) = %s, want failed", s, got, to)
+		}
+	}
+}
+
+func TestAfterOperationEnded(t *testing.T) {
+	t.Parallel()
+
+	changeBegun := []job.StepRecord{ended("init", 1), begun("apply", 1)}
+	changeDone := []job.StepRecord{ended("init", 1), ended("apply", 1)}
+
+	tests := []struct {
+		name    string
+		state   job.State
+		records []job.StepRecord
+		missing bool
+		want    job.Event
+		end     job.State
+		reason  string
+	}{
+		{"dispatched, ended", job.StateDispatched, nil, false, job.EventPhaseFailed, job.StateFailed, ""},
+		{
+			"dispatched, restored", job.StateDispatched, nil, true, job.EventPhaseFailed, job.StateFailed,
+			job.ReasonRestored,
+		},
+		{"running, no change", job.StateRunning, nil, false, job.EventPhaseFailed, job.StateFailed, ""},
+		{"running, change began", job.StateRunning, changeBegun, false, job.EventPhaseFailed, job.StateFailed, ""},
+		{"canceling, no change", job.StateCanceling, nil, false, job.EventRelease, job.StateCanceled, ""},
+		{
+			"canceling, safe step done", job.StateCanceling,
+			[]job.StepRecord{ended("init", 1)},
+			false,
+			job.EventRelease, job.StateCanceled, "",
+		},
+		{
+			"canceling, change began", job.StateCanceling, changeBegun, false, job.EventPhaseFailed,
+			job.StateFailed, "",
+		},
+		{
+			"canceling, change done", job.StateCanceling, changeDone, false, job.EventPhaseFailed,
+			job.StateFailed, "",
+		},
+		{
+			"canceling, restored, no change", job.StateCanceling, nil, true, job.EventRelease,
+			job.StateCanceled, job.ReasonRestored,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			j := jobIn(tt.state, nil)
+			j.Spec = newSpec(identity.NamespaceObject("acme"), job.OperationRefresh, job.ExecutorRunner)
+			j.Spec.Steps = []job.Step{applyStep("init", false), applyStep("apply", true)}
+			j.Phases = []job.Phase{phaseOf(job.PhaseApply, 1, tt.records)}
+
+			got, reason, err := job.AfterOperationEnded(&job.Orphan{Job: j, Missing: tt.missing})
+			if err != nil || got != tt.want || reason == "" {
+				t.Fatalf("AfterOperationEnded() = %s, %q, %v; want %s with a reason", got, reason, err, tt.want)
+			}
+
+			if tt.reason != "" && reason != tt.reason {
+				t.Fatalf("AfterOperationEnded() reason = %q, want %q", reason, tt.reason)
+			}
+
+			if to, err := job.Next(tt.state, got); err != nil || to != tt.end {
+				t.Fatalf("Next(%s, %s) = %s, %v; want %s", tt.state, got, to, err, tt.end)
 			}
 		})
 	}
+
+	queued := job.Orphan{Job: jobIn(job.StateQueued, nil), Missing: false}
+	if _, _, err := job.AfterOperationEnded(&queued); !errors.Is(err, job.ErrTransition) {
+		t.Fatalf("AfterOperationEnded(queued) = %v, want ErrTransition", err)
+	}
+}
+
+func TestNeedsCommitLookup(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		claims int
+		steps  []job.StepRecord
+		want   bool
+	}{
+		{"first claim, nothing recorded", 1, nil, false},
+		{"first claim, commit began", 1, []job.StepRecord{begun(job.WriteBackStepCommit, 1)}, true},
+		{"takeover, nothing recorded", 2, nil, true},
+		{"takeover, commit ended", 2, []job.StepRecord{ended(job.WriteBackStepCommit, 1)}, true},
+		{"third claim", 3, nil, true},
+		{"first claim, other step", 1, []job.StepRecord{begun(job.WriteBackStepReview, 1)}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			p := phaseOf(job.PhaseDeliver, tt.claims, tt.steps)
+			if got := job.NeedsCommitLookup(&p); got != tt.want {
+				t.Fatalf("NeedsCommitLookup() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// phaseOf returns a phase of kind k with the count of claims and the step
+// records steps.
+func phaseOf(k job.PhaseKind, claims int, steps []job.StepRecord) job.Phase {
+	return job.Phase{
+		Kind: k, Operation: "op-1", Claims: claims, Executor: "runner-1", Steps: steps, StateVersion: "", Plan: nil,
+		Gates: nil, Approvals: nil, StartedAt: time.Time{}, FinishedAt: time.Time{},
+	}
+}
+
+// begun returns the record of the step name that began under the claim
+// token and did not end.
+func begun(name string, token int64) job.StepRecord {
+	return job.StepRecord{
+		Name: name, Token: token, ExitCode: 0, StartedAt: time.Unix(10, 0), FinishedAt: time.Time{}, Log: nil,
+	}
+}
+
+// ended returns the record of the step name that began and ended under the
+// claim token.
+func ended(name string, token int64) job.StepRecord {
+	r := begun(name, token)
+	r.FinishedAt = time.Unix(20, 0)
+
+	return r
 }
 
 func TestCheckCancel(t *testing.T) {
@@ -206,6 +366,7 @@ func jobIn(s job.State, d *job.DeliveryResult) job.Job {
 		Current:        0,
 		StartedBy:      "al",
 		Agent:          "",
+		AgentMode:      "",
 		BreakGlass:     nil,
 		Delivery:       d,
 		Closed:         nil,

@@ -31,11 +31,13 @@ const (
 	// logs. Its object is a unit, or the namespace for a list.
 	ActionJobRead identity.Action = "job:read"
 	// ActionJobReadLogs allows reading the content of job logs. Its object
-	// is a unit.
+	// is a unit. A redaction of a log needs the redact action of the
+	// history model instead.
 	ActionJobReadLogs identity.Action = "job:read-logs"
 	// ActionJobReadPlans allows reading the content of stored plans, with
 	// the values that the tool marks as sensitive masked. The unmasked plan
-	// also needs identity.ActionUnitReadSecrets. Its object is a unit.
+	// also needs identity.ActionUnitReadSecrets. Its object is a unit. Each
+	// built-in role with identity.ActionUnitRead also gets it.
 	ActionJobReadPlans identity.Action = "job:read-plans"
 	// ActionJobCancel allows canceling a job. Its object is a unit.
 	ActionJobCancel identity.Action = "job:cancel"
@@ -43,10 +45,6 @@ const (
 	// approval. Its object is a unit. The gate can also limit the approvers
 	// to groups.
 	ActionJobApprove identity.Action = "job:approve"
-	// ActionJobRedactLogs allows writing a redacted version of a job log and
-	// shredding the older version. It cannot be undone. Its object is a
-	// unit.
-	ActionJobRedactLogs identity.Action = "job:redact-logs"
 	// ActionNamespaceManageFreezes allows creating and ending the change
 	// freezes of a namespace. Its object is a namespace.
 	ActionNamespaceManageFreezes identity.Action = "namespace:manage-freezes"

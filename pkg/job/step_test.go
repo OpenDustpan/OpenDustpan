@@ -223,6 +223,10 @@ func TestValidateEdits(t *testing.T) {
 		{"CI workflow", "", []job.FileEdit{edit(".github/workflows/apply.yml")}, false},
 		{"GitLab CI file", "", []job.FileEdit{edit(".gitlab-ci.yml")}, false},
 		{"code directory in CI configuration", ".github", []job.FileEdit{edit("x.yml")}, false},
+		{"CI workflow in another case", "", []job.FileEdit{edit(".GitHub/workflows/apply.yml")}, false},
+		{"GitLab CI file in another case", "", []job.FileEdit{edit(".GitLab-CI.yml")}, false},
+		{"code directory in CI configuration, upper case", ".GITHUB", []job.FileEdit{edit("x.yml")}, false},
+		{"a name that only starts like CI", "network", []job.FileEdit{edit(".githubber.yml")}, true},
 		{"same file twice", "network", []job.FileEdit{edit("a.tfvars.json"), edit("a.tfvars.json")}, false},
 		{"no key", "network", []job.FileEdit{{Path: "a.tfvars.json", Keys: nil}}, false},
 		{"empty key path", "network", []job.FileEdit{{

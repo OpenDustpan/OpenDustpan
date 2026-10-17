@@ -46,7 +46,10 @@ type memDB struct {
 	durable durable.Store
 	fences  map[namespace.Name]int64
 	// states maps a unit ID to its current state version.
-	states  map[string]string
+	states map[string]string
+	// finals maps a unit ID to its last final state version, as
+	// ObserveStateVersion records it.
+	finals  map[string]job.StateVersion
 	jobs    map[job.ID]*job.Job
 	order   []job.ID
 	keys    map[string]job.ID
@@ -60,6 +63,7 @@ func newMemDB() *memDB {
 		durable: durabletest.NewMem().Store(),
 		fences:  map[namespace.Name]int64{},
 		states:  map[string]string{},
+		finals:  map[string]job.StateVersion{},
 		jobs:    map[job.ID]*job.Job{},
 		order:   nil,
 		keys:    map[string]job.ID{},
@@ -260,6 +264,10 @@ func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, 
 		next.Reason = c.Reason
 	}
 
+	if err := m.closeLate(ctx, &next, c.Event); err != nil {
+		return job.Job{}, err
+	}
+
 	if err := m.afterChange(ctx, cur, &next, c.Event); err != nil {
 		return job.Job{}, err
 	}
@@ -289,27 +297,22 @@ func (m *memDB) ObserveStateVersion(ctx context.Context, v job.StateVersion, fen
 
 	for _, id := range m.order {
 		j, ok := m.lookup(id)
-		if !ok {
-			continue
-		}
-
-		if !closes(j, v) {
+		if !ok || !j.ClosedBy(v) {
 			continue
 		}
 
 		next := copyJob(j)
-		closing := v
-		next.State, next.Closed, next.Verification = job.StateSucceeded, &closing, job.VerificationPending
-		next.Version++
-		next.UpdatedAt = time.Now().UTC()
-
-		if err := m.followUp(ctx, next.ID, job.KindVerify); err != nil {
+		if err := m.close(ctx, &next, v); err != nil {
 			return nil, err
 		}
 
+		next.Version++
+		next.UpdatedAt = time.Now().UTC()
 		m.jobs[id] = &next
 		closed = append(closed, copyJob(&next))
 	}
+
+	m.finals[v.Unit.UnitID()] = v
 
 	return closed, nil
 }
@@ -348,11 +351,11 @@ func (m *memDB) SetVerification(_ context.Context, id job.ID, v job.Verification
 }
 
 // Orphans implements job.Store.
-func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Job, error) {
+func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Orphan, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var out []job.Job
+	var out []job.Orphan
 
 	for _, id := range m.order {
 		j, ok := m.lookup(id)
@@ -373,7 +376,7 @@ func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Job, error) {
 			continue
 		}
 
-		out = append(out, copyJob(j))
+		out = append(out, job.Orphan{Job: copyJob(j), Missing: err != nil})
 		if len(out) == limit {
 			break
 		}
@@ -549,18 +552,19 @@ func (m *memDB) checkPlans(j *job.Job, notBefore time.Time) error {
 		return nil
 	}
 
-	plans := j.Phases[j.Current-1].Plans
+	plan := j.Phases[j.Current-1].Plan
 	current := m.states[j.Spec.Unit.UnitID()]
 	bindings := []*job.PlanBinding{nil}
 
-	for _, a := range j.Phases[j.Current].Approvals {
-		if a.Plan != nil {
-			bindings = append(bindings, a.Plan)
+	approvals := j.Phases[j.Current].Approvals
+	for i := range approvals {
+		if approvals[i].Plan != nil {
+			bindings = append(bindings, approvals[i].Plan)
 		}
 	}
 
 	for _, b := range bindings {
-		if err := job.CheckPlan(plans, b, current, notBefore); err != nil {
+		if err := job.CheckPlan(plan, b, current, notBefore); err != nil {
 			return fmt.Errorf("dispatch of phase %d: %w", j.Current, err)
 		}
 	}
@@ -594,6 +598,10 @@ func (m *memDB) change(ctx context.Context, next *job.Job, c *job.Change, now ti
 
 	if c.Event == job.EventDispatch {
 		return m.dispatch(ctx, next, c, now)
+	}
+
+	if c.Event == job.EventClaim && next.Current < len(next.Phases) && next.Phases[next.Current].Kind == job.PhasePlan {
+		next.Phases[next.Current].StateVersion = m.states[next.Spec.Unit.UnitID()]
 	}
 
 	if f, ok := changes[c.Event]; ok {
@@ -646,7 +654,8 @@ func followUpOf(next *job.Job, ev job.Event) (durable.Kind, bool) {
 	switch {
 	case next.Delivery == nil:
 		return "", false
-	case ev == job.EventDelivered && next.Delivery.Delivery == job.DeliveryReviewRequest:
+	case ev == job.EventDelivered && next.Delivery.Delivery == job.DeliveryReviewRequest &&
+		next.State == job.StateAwaitingState:
 		return job.KindReviewWatch, true
 	case ev == job.EventCancel || ev == job.EventRejected || ev == job.EventExpire:
 		return job.KindAbandon, true
@@ -690,7 +699,8 @@ func replanChange(next *job.Job, _ *job.Change, _ time.Time) error {
 
 	next.Phases[next.Current].Approvals = nil
 	next.Current--
-	next.Phases[next.Current].Plans = job.PlanSet{Display: nil, Apply: nil}
+	next.Phases[next.Current].Plan = nil
+	next.Phases[next.Current].StateVersion = ""
 	next.Phases[next.Current].Operation = ""
 
 	return nil
@@ -729,6 +739,7 @@ func copyJob(j *job.Job) job.Job {
 
 	for i := range out.Phases {
 		out.Phases[i].Steps = slices.Clone(out.Phases[i].Steps)
+		out.Phases[i].Gates = slices.Clone(out.Phases[i].Gates)
 		out.Phases[i].Approvals = slices.Clone(out.Phases[i].Approvals)
 	}
 
@@ -740,15 +751,35 @@ func holds(j *job.Job) bool {
 	return j.State.HoldsUnit() && j.Current < len(j.Phases) && j.Phases[j.Current].Kind.Changes()
 }
 
-// closes reports whether the final state version v closes j.
-func closes(j *job.Job, v job.StateVersion) bool {
-	if j.State != job.StateAwaitingState || j.Delivery == nil || j.Spec.Unit.UnitID() != v.Unit.UnitID() {
-		return false
+// close applies EventStateObserved with the closing version v to next, sets
+// its verification to pending and starts its verify operation.
+func (m *memDB) close(ctx context.Context, next *job.Job, v job.StateVersion) error {
+	to, err := job.Next(next.State, job.EventStateObserved)
+	if err != nil {
+		return err
 	}
 
-	if j.Delivery.Delivery == job.DeliveryReviewRequest {
-		return !j.Delivery.MergedAt.IsZero() && j.Delivery.MergedAt.Before(v.At)
+	if err := m.followUp(ctx, next.ID, job.KindVerify); err != nil {
+		return err
 	}
 
-	return j.Delivery.DeliveredAt.Before(v.At)
+	closing := v
+	next.State, next.Closed, next.Verification = to, &closing, job.VerificationPending
+
+	return nil
+}
+
+// closeLate closes next on the last final state version of its unit, after
+// EventMerged or EventDelivered, when that version closes it.
+func (m *memDB) closeLate(ctx context.Context, next *job.Job, ev job.Event) error {
+	if ev != job.EventMerged && ev != job.EventDelivered {
+		return nil
+	}
+
+	v, ok := m.finals[next.Spec.Unit.UnitID()]
+	if !ok || !next.ClosedBy(v) {
+		return nil
+	}
+
+	return m.close(ctx, next, v)
 }

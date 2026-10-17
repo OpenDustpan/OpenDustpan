@@ -3,6 +3,7 @@ package job
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -37,23 +38,93 @@ const (
 	DefaultDispatchTimeout = 24 * time.Hour
 )
 
-// Gate is what the dispatch of a phase needs, from the decision at start.
-// The zero Gate needs nothing.
+// ConfirmFreshness is the longest time from the last MFA step of a
+// person to the confirmation that the person records. It is the default
+// freshness window for a secret reveal.
+const ConfirmFreshness = 15 * time.Minute
+
+// GateType names who can pass a gate.
+type GateType string
+
+// The types of a gate.
+const (
+	// GateApproval comes from the policy decision. Approvers with the
+	// approve action pass it, and the starter counts only when AllowSelf
+	// is true.
+	GateApproval GateType = "approval"
+	// GateConfirmation is in front of each phase that changes, for a job
+	// that an agent started in AgentModeApproveFirst. Only the person who
+	// asked the agent passes it, with a request of their own (no agent) and
+	// a fresh MFA step. It applies also with no policy installed. A policy
+	// never gives it and never removes it.
+	GateConfirmation GateType = "confirmation"
+)
+
+// Gate is what the dispatch of a phase needs. The zero Gate of type
+// GateApproval needs nothing.
 type Gate struct {
-	// Approvals is the number of approvals that the phase needs. Zero needs
-	// none.
+	// Type names who can pass the gate. Empty is GateApproval.
+	Type GateType
+	// Approvals is the number of approvals that a gate of type GateApproval
+	// needs. Zero needs none. A confirmation gate needs one confirmation.
 	Approvals int
 	// Groups limits the approvers to members of these groups. Empty allows
 	// any principal with the approve action on the unit.
 	Groups []string
-	// AllowSelf lets the principal that started the job approve it.
+	// AllowSelf lets the principal that started the job approve it. It has
+	// no effect on a confirmation gate.
 	AllowSelf bool
 	// Timeout is the time from the start of the wait to its expiry. Zero
 	// takes DefaultApprovalTimeout.
 	Timeout time.Duration
-	// BindPlan binds each approval to the hash of the plan of the phase
-	// before. The apply phase refuses a plan with another hash.
+	// BindPlan binds each approval to the plan of the phase before. The
+	// apply phase refuses a plan with another hash.
 	BindPlan bool
+}
+
+// ConfirmationGate returns the gate of type GateConfirmation. bindPlan
+// binds the confirmation to the plan of the phase before, when there is
+// one.
+func ConfirmationGate(bindPlan bool) Gate {
+	return Gate{
+		Type: GateConfirmation, Approvals: 1, Groups: nil, AllowSelf: false, Timeout: 0, BindPlan: bindPlan,
+	}
+}
+
+// PolicyGates returns the gates of each phase of kinds, in order: the gate
+// that d gives for the kind, as a gate of type GateApproval. A phase with no
+// gate in d gets none.
+func PolicyGates(kinds []PhaseKind, d Decision) [][]Gate {
+	out := make([][]Gate, len(kinds))
+
+	for i, k := range kinds {
+		if g, ok := d.Gates[k]; ok {
+			g.Type = GateApproval
+			out[i] = append(out[i], g)
+		}
+	}
+
+	return out
+}
+
+// WithConfirmations returns gates, the gates of each phase of kinds, with a
+// confirmation gate added in front of each phase that changes. A
+// confirmation gate binds to the plan when a plan phase comes before its
+// phase. The service calls it when CheckAgent asks for confirmations.
+func WithConfirmations(kinds []PhaseKind, gates [][]Gate) [][]Gate {
+	out := make([][]Gate, len(kinds))
+
+	for i, k := range kinds {
+		if i < len(gates) {
+			out[i] = slices.Clone(gates[i])
+		}
+
+		if k.Changes() {
+			out[i] = append(out[i], ConfirmationGate(i > 0 && kinds[i-1] == PhasePlan))
+		}
+	}
+
+	return out
 }
 
 // Verdict is the answer of one approver.
@@ -65,8 +136,11 @@ const (
 	VerdictReject  Verdict = "reject"
 )
 
-// Approval is one principal's verdict on the gate of one phase.
+// Approval is one principal's verdict on a gate of one phase.
 type Approval struct {
+	// Gate is the type of the gate that the verdict is for. Empty is
+	// GateApproval.
+	Gate    GateType
 	Subject string
 	// Agent names the agent that recorded the verdict for Subject, or is
 	// empty. An agent can record a rejection, never an approval.
@@ -78,6 +152,19 @@ type Approval struct {
 	// version that they read.
 	Plan *PlanBinding
 	At   time.Time
+	// MFAAt is the time of the last MFA step of the session of Subject,
+	// for a confirmation. A confirmation counts only when At - MFAAt is
+	// at most ConfirmFreshness.
+	MFAAt time.Time
+}
+
+// typeOf returns the gate type t, with empty as GateApproval.
+func typeOf(t GateType) GateType {
+	if t == "" {
+		return GateApproval
+	}
+
+	return t
 }
 
 // GateStatus is the result of the approvals of a gate so far.
@@ -94,30 +181,151 @@ const (
 )
 
 // Status returns the result of approvals for g, for a job that startedBy
-// started. One rejection rejects. Each subject counts once. An approval by
-// startedBy counts only when g allows it. A user who started the job
+// started. One rejection of any gate rejects. Only the verdicts for the
+// type of g count. A verdict that an agent records never counts as an
+// approval or a confirmation.
+//
+// A gate of type GateApproval: each subject counts once, and an approval
+// by startedBy counts only when g allows it. A user who started the job
 // through an agent is the starter too. Status does not check groups: the
-// service checks the groups of each approver when it records the approval.
+// service checks the groups of each approver when it records the
+// approval.
+//
+// A gate of type GateConfirmation opens with one confirmation by startedBy
+// with an MFA step at most ConfirmFreshness before it.
 func (g Gate) Status(approvals []Approval, startedBy string) GateStatus {
+	passed := 0
 	seen := make(map[string]bool, len(approvals))
 
-	for _, a := range approvals {
+	for i := range approvals {
+		a := &approvals[i]
 		if a.Verdict == VerdictReject {
 			return GateRejected
 		}
 
-		if a.Agent != "" || (a.Subject == startedBy && !g.AllowSelf) {
-			continue
+		if g.counts(a, startedBy) && !seen[a.Subject] {
+			seen[a.Subject] = true
+			passed++
 		}
-
-		seen[a.Subject] = true
 	}
 
-	if len(seen) >= g.Approvals {
+	need := g.Approvals
+	if typeOf(g.Type) == GateConfirmation {
+		need = 1
+	}
+
+	if passed >= need {
 		return GateOpen
 	}
 
 	return GateWaiting
+}
+
+// counts reports whether the approval a counts for g, in a job that
+// startedBy started.
+func (g Gate) counts(a *Approval, startedBy string) bool {
+	if a.Agent != "" || a.Verdict != VerdictApprove || typeOf(a.Gate) != typeOf(g.Type) {
+		return false
+	}
+
+	if typeOf(g.Type) == GateConfirmation {
+		return a.Subject == startedBy && freshMFA(a)
+	}
+
+	return a.Subject != startedBy || g.AllowSelf
+}
+
+// freshMFA reports whether the MFA step of a is at most ConfirmFreshness
+// before a, and not after it.
+func freshMFA(a *Approval) bool {
+	return !a.MFAAt.IsZero() && !a.MFAAt.After(a.At) && a.At.Sub(a.MFAAt) <= ConfirmFreshness
+}
+
+// GatesStatus returns the result of approvals for all gates of one
+// phase: rejected when a verdict rejects, open when every gate is open,
+// and waiting otherwise. A phase with no gate is open.
+func GatesStatus(gates []Gate, approvals []Approval, startedBy string) GateStatus {
+	status := GateOpen
+
+	for _, g := range gates {
+		st := g.Status(approvals, startedBy)
+		if st == GateRejected {
+			return GateRejected
+		}
+
+		if st == GateWaiting {
+			status = GateWaiting
+		}
+	}
+
+	return status
+}
+
+// AgentMode is how a job that an agent starts reaches the code or the
+// resources of a unit. The user sets it for the agent.
+type AgentMode string
+
+// The agent modes.
+const (
+	// AgentModeApproveFirst puts a confirmation gate in front of each phase
+	// that changes. Only the person who asked the agent passes it. It is
+	// the default.
+	AgentModeApproveFirst AgentMode = "approve-first"
+	// AgentModeReviewRequest lets an agent change a unit only through a
+	// write-back job that delivers as a review request. The review of the
+	// forge is the check of a person. A direct push and a runner job that
+	// changes fail with ErrAgentDenied.
+	AgentModeReviewRequest AgentMode = "review-request"
+	// AgentModeDirect lets an agent change a unit with no confirmation. It
+	// needs all three switches of DirectSwitches.
+	AgentModeDirect AgentMode = "direct"
+)
+
+// DirectSwitches are the three settings that allow AgentModeDirect. Each
+// is off by default, and each is a separate opt-in: the installation
+// setting of the server, the setting of the namespace of the unit, and
+// the setting of the user who asks the agent.
+type DirectSwitches struct {
+	Server    bool
+	Namespace bool
+	User      bool
+}
+
+// CheckAgent returns what the agent mode of a needs for the start of
+// spec. confirm is true when each phase that changes needs a confirmation
+// gate (WithConfirmations). It returns false and nil for a start with no agent,
+// and for a job that changes nothing (a runner plan). It returns an error
+// that wraps:
+//   - ErrAgentDenied in AgentModeReviewRequest, for a direct push or a
+//     runner job that changes,
+//   - ErrAgentDenied in AgentModeDirect, when a switch of sw is off,
+//   - ErrInvalid for an unknown mode.
+func CheckAgent(spec *Spec, a Actor, sw DirectSwitches) (bool, error) {
+	if a.Agent == "" || !spec.Changes() {
+		return false, nil
+	}
+
+	switch a.Mode {
+	case "", AgentModeApproveFirst:
+		return true, nil
+	case AgentModeReviewRequest:
+		if spec.Executor == ExecutorWriteBack && spec.Delivery != DeliveryDirectPush {
+			return false, nil
+		}
+
+		return false, fmt.Errorf("%w: agent %s works in mode %s and delivers only as a review request",
+			ErrAgentDenied, a.Agent, a.Mode)
+	case AgentModeDirect:
+		if !sw.Server || !sw.Namespace || !sw.User {
+			return false, fmt.Errorf("%w: agent %s: direct changes need the server, the namespace and the user "+
+				"to allow them (server %t, namespace %t, user %t)", ErrAgentDenied, a.Agent, sw.Server,
+				sw.Namespace, sw.User)
+		}
+
+		return false, nil
+	default:
+		return false, fmt.Errorf("%w: unknown agent mode %q", ErrInvalid, a.Mode)
+	}
 }
 
 // DecisionInput is what the policy sees at the start of a job. It holds no
@@ -126,6 +334,8 @@ func (g Gate) Status(approvals []Approval, startedBy string) GateStatus {
 type DecisionInput struct {
 	Principal identity.Principal
 	Agent     string
+	// AgentMode is the mode of Agent, or empty.
+	AgentMode AgentMode
 	Spec      Spec
 	// Keys are the key paths that the edits of a write-back job change.
 	Keys []string
@@ -133,7 +343,8 @@ type DecisionInput struct {
 
 // Decision is the result of a policy evaluation at start. Allow false
 // denies the start, and Reason tells why. Gates maps a phase kind to its
-// gate. A phase kind with no entry needs nothing.
+// approval gate. A phase kind with no entry needs no approval. A decision
+// never gives or removes a confirmation gate (PolicyGates).
 type Decision struct {
 	Allow  bool
 	Reason string

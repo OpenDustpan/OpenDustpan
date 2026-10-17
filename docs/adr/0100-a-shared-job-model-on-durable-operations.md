@@ -37,7 +37,9 @@ the rule that each value has one home.
 approvals. [RFC 28](../rfc/0028-stored-plans.md) proposes stored plans.
 [RFC 29](../rfc/0029-existing-ci.md) asks whether an existing CI is one
 more kind of runner. ADR 101 decides the executors, ADR 102 the plans and
-logs, and ADR 103 the gates, the actions and the audit entries.
+logs, and ADR 103 the gates, the actions and the audit entries. The history
+model (ADR 151 and ADR 152) decides the item keys, the redaction and the
+retention of plans and logs.
 
 The owner approved the decisions of this ADR on 17 October 2026.
 
@@ -136,12 +138,15 @@ The owner approved the decisions of this ADR on 17 October 2026.
    - `running` + `claim` is a takeover: the same durable operation with a
      new claim token (decision 9).
    - `queued` + `replan` moves the job back to its plan phase when the plan
-     is stale (ADR 102 decision 5).
+     is stale (ADR 102 decision 7).
    - The job never hides what happened. When the last phase ends before
      the executor sees a cancel, the job ends `succeeded`. A phase that
      fails during a cancel ends the job `failed`, because a step can have
-     changed resources before it stopped. Only a release before a change
-     began, or the end of a phase that is not the last, ends `canceled`.
+     changed resources before it stopped. Only a release when no claim of
+     the phase began a step that changes resources, or the end of a phase
+     that is not the last, ends `canceled`. A release after a change began
+     is `phase-failed` (decision 9), so `canceling` + `release` never ends
+     `canceled` after a change, also when the change ended.
    - A push cannot be undone. A write-back job that delivers during a
      cancel waits for the state version, as without the cancel.
    - A review request that a person closes without a merge ends the job
@@ -169,19 +174,25 @@ The owner approved the decisions of this ADR on 17 October 2026.
    between the two writes finds `finish` done, and only completes.
 9. **A takeover never repeats a change.** Before a runner starts a step that
    changes resources, it records the start of the step through its claim.
-   At a takeover, the job store reads the step records of the phase:
-   - With a start record and no end record of a step that changes
-     resources, the phase fails. Its reason tells the operator to read the
-     state of the unit. OpenDustpan never repeats the change.
+   At a takeover, the job store reads the step records of every earlier
+   claim of the phase:
+   - When any earlier claim recorded the start of a step that changes
+     resources, the phase fails. This is true whether or not that claim
+     recorded the end of the step. A change that ended is still a change: a
+     new run of the phase from its first step would make it again. The
+     reason tells the operator to read the state of the unit. OpenDustpan
+     never repeats a change, finished or not.
    - Else the job stays `running` under the new claim, and the phase runs
      again from its first step on the new runner, with a fresh checkout.
      The records of the earlier claim stay, with the token of that claim.
 
    `job.AfterLostClaim` holds the rule, and a table-driven test checks it.
-   The same rule applies to a release. A failed step also fails the phase.
-   A person starts a new job: OpenDustpan never applies again on its own.
-   The write-back executor makes its commit idempotent instead (ADR 101
-   decision 3), so a takeover of a deliver phase does not fail.
+   The same rule applies to a release, also during a cancel (decision 7). A
+   failed step also fails the phase. A person starts a new job: OpenDustpan
+   never applies again on its own. A deliver phase has no step that changes
+   resources. The write-back executor makes its commit idempotent instead,
+   with a lookup on every takeover (ADR 101 decision 3), so a takeover of a
+   deliver phase does not fail.
 10. **One change at a time on a unit.** A dispatch of a phase that changes
     resources, state or the code in git fails with `ErrUnitBusy` while
     another job of the unit is `dispatched`, `running` or `canceling` with
@@ -189,10 +200,13 @@ The owner approved the decisions of this ADR on 17 October 2026.
     on the unit ID of the jobs table, over the rows whose state holds the
     unit and whose current phase changes. The index fails the second
     dispatch in its own transaction. `Store.Create` with a dispatch checks
-    the index and the freeze as any dispatch does. The job then stays
-    `queued` with the wait reason `unit-busy`. A plan phase never holds the
-    unit. A job that waits for approval or for a state version does not
-    hold the unit either. A hold of days would stop every other change.
+    the index and the freeze as any dispatch does, and on `ErrUnitBusy` it
+    stores nothing. `Service.Start` then creates the job again with no
+    dispatch, `queued` with the wait reason `unit-busy`, and returns it with
+    no error. The reconcile schedule dispatches it when the unit is free. A
+    plan phase never holds the unit. A job that waits for approval or for a
+    state version does not hold the unit either. A hold of days would stop
+    every other change.
 11. **Cancel.** A cancel of a job that no executor holds ends it `canceled`
     at once, and cancels its operation in the same transaction. A cancel of
     a running job moves it to `canceling` and requests the cancel of the
@@ -220,32 +234,59 @@ The owner approved the decisions of this ADR on 17 October 2026.
     backup of a namespace holds its jobs. The durable operations are control
     tables, which a restore keeps (ADR 72 decision 5). After a restore, a
     job can name an operation that does not exist or that ended.
-    `Store.Orphans` finds them, and the reconcile schedule fails each one
-    with the reason `restored`. A phase that changes resources never
-    dispatches again because of a restore.
-14. **Two schedules, no ticker.** Two schedule rows of ADR 72 decision 3 do
-    the periodic work:
-    - `job.reconcile`, every minute. It dispatches queued jobs whose wait
-      ended, expires jobs past their limits, fails orphans, and moves a job
-      whose operation ended with no job change. The last case is a durable
-      failure at the expiry limit, for example.
-    - `job.retention`, every day. It shreds expired plans and logs (ADR 102).
+    `Store.Orphans` finds them, and the reconcile schedule applies the rule
+    of decision 14 to each one, with the reason `restored` when no change
+    began. A phase that changes resources never dispatches again because of
+    a restore.
+14. **One schedule, no ticker.** One schedule row of ADR 72 decision 3,
+    `job.reconcile`, does the periodic work every minute. It dispatches
+    queued jobs whose wait ended, expires jobs past their limits, and
+    applies `job.AfterOperationEnded` to each job that `Store.Orphans`
+    returns: a job that is `dispatched`, `running` or `canceling` while the
+    operation of its current phase ended with no `Finish`, or does not
+    exist. Such an operation comes from a restore, from a durable failure
+    at the limit of expired claims, or from a claim that expires during a
+    cancel: the durable store ends a canceled operation when its claim
+    expires, so no takeover follows. The rule:
+    - A `dispatched` job fails. No executor saw the phase.
+    - A `running` or `canceling` job gets the rule of `job.AfterLostClaim`
+      (decision 9) with a release. When any claim of the phase began a step
+      that changes resources, the job fails. Else a `canceling` job ends
+      `canceled`, and a `running` job fails, because its operation cannot
+      run again.
+
+    A table-driven test checks the rule, and the conformance suite has a
+    case for a cancel whose claim expires. The retention of plans and logs
+    is not a schedule of the job model: the history model redacts them
+    when their retention ends (ADR 152).
 15. **A final state version closes a write-back job.** The internal wiring
     of the server reports each state version that a tool writes as a
     tool-neutral `job.StateVersion`. The store adapter applies the rule of
     `Store.ObserveStateVersion` in the transaction of that state write. A
-    tool package never imports `job`. The rule is:
+    tool package never imports `job`. The rule is (`Job.ClosedBy`):
     - Only the final state version of a run closes a job: the release of
       the OpenTofu state lock, or the end of a Pulumi update. An
       intermediate write of a run never does.
-    - A direct push must deliver before the state version.
-    - A review request must merge before the state version. With no known
-      merge, the job waits. The **review watcher** records merges and
+    - A direct push must deliver at or before the state version. The
+      delivery time is the time that the forge gives for the commit, also
+      when a takeover finds the commit later by its trailer.
+    - A review request must merge at or before the state version. With no
+      known merge, the job waits. The **review watcher** records merges and
       closes: a forge webhook gives them, and the `job.review-watch`
       operation polls the forge as the fallback for a lost webhook. A
-      merge applies `merged`. A close without a merge applies `rejected`.
+      merge applies `merged` with the merge time of the forge. A close
+      without a merge applies `rejected`.
     - A preview or a plan is not a state version. A final state write of
       any origin closes the job, also a state write from a workstation.
+    - **A late merge or a late delivery still closes.** The job store
+      records the last final state version of each unit, also when no job
+      waits. When `merged` or `delivered` applies, the store checks, in the
+      same transaction, whether that version is at or after the merge time
+      or the delivery time. If it is, the store also applies
+      `state-observed` with that version. So a merge that the poll sees
+      after a lost webhook, and a commit that a takeover finds after the
+      CI wrote the state, close the job as soon as the job store learns of
+      them. The conformance suite has a case for each.
 
     The close sets the verification of the job to `pending` and starts the
     `job.verify` operation. That operation asks the forge, outside the
@@ -259,9 +300,10 @@ The owner approved the decisions of this ADR on 17 October 2026.
     claim for 24 hours, expires. Installation settings can change these
     limits later.
 17. **What a caller calls.** The REST API, the Catalog and Dusty start and
-    drive jobs through one port, `job.Service`: `Start`, `Get`, `Cancel` and
-    `Approve`. Each method takes a `job.Actor`: the principal of the
-    request, and the agent that acts for it, if any. Dusty runs inside the
+    drive jobs through one port, `job.Service`: `Start`, `Get`, `Cancel`,
+    `Approve`, `Confirm` and `RedactLog`. Each method takes a `job.Actor`:
+    the principal of the request, and the agent that acts for it, if any,
+    with the mode of the agent (ADR 103 decision 12). Dusty runs inside the
     server as an agent loop on durable operations. It calls `job.Service`
     directly, and acts as the user who asked it, through an act-as edge of
     [ADR 70](0070-act-as-reach-idp-groups-and-break-glass.md). The actions
@@ -278,13 +320,25 @@ The owner approved the decisions of this ADR on 17 October 2026.
     in memory, in the tests of that package, runs the suite, so each case
     runs today. The suites of `job.Claimer`, `job.Recorder` and
     `job.ArtifactStore` come with their first implementation, because they
-    need the blob store and the data keys.
+    need the blob store and the item keys of ADR 151.
 19. **Terms.** The owner uses "executor" for the way a job runs: write-back
     or runners. This ADR supersedes the _Avoid_ entry "executor" of the term
     Runner in RFC 6. It also supersedes the definition of Job in RFC 6 as
     work for a runner only: a job is work that OpenDustpan asks an executor
     to do on one unit. The process that a runner starts for a step is the
     **launcher**, so that it does not clash with "executor".
+20. **The job token and the job-ID claim.** At the claim of a runner phase,
+    the server makes a **job token** for the steps of the phase. It is an
+    access token of the principal that started the job, limited to the
+    unit of the job, with the expiry of the claim. The runner gives it to
+    the tool as ADR 101 decision 10 says, never in a variable. The job
+    token puts one claim on the principal that it authenticates: the
+    **job-ID claim**, the ID of the job. The `identity` package gets the
+    field `Principal.JobID` for it, empty for every other credential. The
+    claim does not add an action. A state write with the job token reports
+    the claim as `StateVersion.Job`, so the job record and the history of
+    the unit can show which state version the job wrote. A job token of a
+    job that ended authenticates nothing.
 
 ## Consequences
 
@@ -322,8 +376,9 @@ The owner approved the decisions of this ADR on 17 October 2026.
   The console may need a batch ID to show them as one rollout. Is that a
   field of the job, or a record of its own that the Catalog owns?
 - How long does the server keep a job record? The content of plans and logs
-  has a retention of 400 days (ADR 102). The record and its audit entries
-  may need the retention of the audit log instead.
+  has the retention of the history model, 400 days by default (ADR 152).
+  The record and its audit entries may need the retention of the audit log
+  instead.
 - Does a `refresh` close a write-back job? It writes a state version, but it
   applies no change from git. This ADR closes the job on any final state
   version.

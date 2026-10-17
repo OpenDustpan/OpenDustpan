@@ -10,7 +10,7 @@
 // of the ports, and a reference adapter in memory, in the tests of this
 // package, runs them. The cases of job.Claimer, job.Recorder and
 // job.ArtifactStore come with their first implementation, because they need
-// the blob store and the data keys.
+// the blob store and the item keys.
 package jobtest
 
 import (
@@ -71,6 +71,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a key with another spec conflicts", testCreateKeyConflict},
 		{"create with a dispatch starts the durable operation", testCreateDispatch},
 		{"create with a dispatch obeys the one-change rule", testCreateUnitBusy},
+		{"after ErrUnitBusy, a create with no dispatch waits with unit-busy", testCreateWaits},
 		{"create with a dispatch obeys a freeze", testCreateFrozen},
 		{"create above the open jobs of a unit is ErrLimit", testCreateLimit},
 		{"a write on an older version is ErrConflict", testApplyConflict},
@@ -91,8 +92,15 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a stale fence on a state version closes nothing", testObserveStaleFence},
 		{"only a final state version closes the delivered jobs of its unit", testObserveStateVersion},
 		{"a review request closes after its merge, and then verifies", testMergeAndVerify},
+		{"a lost webhook: a merge that a later poll sees closes on the earlier state version", testLostWebhook},
+		{"a merge after the last final state version waits", testMergeBeforeOldVersion},
+		{"a late trailer: a commit that a takeover finds closes on the earlier state version", testLateTrailer},
+		{"the claim of a plan phase records the state version, and a takeover again", testPlanClaimRecordsVersion},
 		{"an apply dispatch with a stale plan is ErrPlanStale, and replan goes back", testPlanStale},
 		{"after a restore, orphans are the jobs whose operation ended", testOrphans},
+		{"a canceling job whose claim expires ends canceled at the reconcile", testCancelClaimExpires},
+		{"a running job whose operation fails ends failed at the reconcile", testRunningOperationFails},
+		{"the confirmation gate and a confirmation are stored", testConfirmationStored},
 		{"list filters by unit and state, newest first", testList},
 		{"freezes list, end once, and validate", testFreezes},
 	}
@@ -104,6 +112,14 @@ func Run(t *testing.T, newHarness Factory) {
 		})
 	}
 }
+
+// Values that several cases share: the ref of the code location, and two
+// state versions of the unit.
+const (
+	mainRef = "main"
+	svOne   = "sv-1"
+	svTwo   = "sv-2"
+)
 
 // fixture is a namespace with one OpenTofu unit.
 type fixture struct {
@@ -145,6 +161,7 @@ func newJob(unit identity.Object, op job.Operation, key string) *job.Job {
 		Current:        0,
 		StartedBy:      "al",
 		Agent:          "",
+		AgentMode:      "",
 		BreakGlass:     nil,
 		Delivery:       nil,
 		Closed:         nil,
@@ -169,7 +186,7 @@ func spec(unit identity.Object, op job.Operation) job.Spec {
 		Operation: op,
 		Executor:  job.ExecutorRunner,
 		Location: job.Location{
-			Connection: "github", Repository: "acme/infra", Ref: "main", Directory: "network", Revision: "abc123",
+			Connection: "github", Repository: "acme/infra", Ref: mainRef, Directory: "network", Revision: "abc123",
 		},
 		Steps: []job.Step{{
 			Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,

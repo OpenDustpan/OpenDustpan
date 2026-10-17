@@ -95,20 +95,26 @@ const (
 	// running job it is a takeover: the same durable operation with a new
 	// claim token. The phase then runs again from its first step.
 	EventClaim Event = "claim"
-	// EventRelease: the executor gave the phase back before it started a
-	// step that changes resources. The operation waits for the next claim.
+	// EventRelease: the executor gave the phase back, and no claim of the
+	// phase began a step that changes resources (AfterLostClaim). The
+	// operation waits for the next claim.
 	EventRelease Event = "release"
 	// EventReplan: the plan of the next apply phase is stale. The job goes
 	// back to the plan phase, which plans again and asks for approval again.
 	EventReplan Event = "replan"
 	// EventMerged: the forge reported the merge of the review request of a
-	// write-back job.
+	// write-back job. When the store already knows a final state version
+	// of the unit at or after the merge, it also applies
+	// EventStateObserved in the same transaction (Job.ClosedBy).
 	EventMerged Event = "merged"
 	// EventPhaseDone: the current phase succeeded, and more phases follow.
 	EventPhaseDone Event = "phase-done"
 	// EventLastPhaseDone: the last phase of a runner job succeeded.
 	EventLastPhaseDone Event = "last-phase-done"
-	// EventDelivered: the deliver phase of a write-back job made its commit.
+	// EventDelivered: the deliver phase of a write-back job made its commit,
+	// or found it after a takeover. When the store already knows a final
+	// state version of the unit at or after the delivery, it also applies
+	// EventStateObserved in the same transaction (Job.ClosedBy).
 	EventDelivered Event = "delivered"
 	// EventPhaseFailed: the current phase failed, or its executor stopped
 	// after it started a step that changes resources.
@@ -172,8 +178,10 @@ var transitions = map[State]map[Event]State{
 		EventCancel:        StateCanceling,
 	},
 	StateCanceling: {
-		// The executor gave the phase back before a change began, or ended a
-		// phase that is not the last: the cancel wins.
+		// The executor gave the phase back and no claim of the phase began a
+		// change, or it ended a phase that is not the last: the cancel wins.
+		// A release after a change began is EventPhaseFailed instead
+		// (AfterLostClaim), so it never ends canceled.
 		EventRelease:   StateCanceled,
 		EventPhaseDone: StateCanceled,
 		// A failure is never hidden behind the cancel: a step can have

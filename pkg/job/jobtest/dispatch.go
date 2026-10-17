@@ -312,18 +312,42 @@ func testOrphans(t *testing.T, h Harness) {
 	}
 
 	orphans, err := h.Jobs.Orphans(t.Context(), orphanPage)
-	if err != nil || len(orphans) != 1 || orphans[0].ID != lost.ID {
-		t.Fatalf("Orphans = %v, %v; want only %s (not %s or %s)", ids(orphans), err, lost.ID, live.ID, queued.ID)
+	if err != nil || len(orphans) != 1 || orphans[0].Job.ID != lost.ID || orphans[0].Missing {
+		t.Fatalf("Orphans = %v, %v; want only %s with an ended operation (not %s or %s)", orphanIDs(orphans), err,
+			lost.ID, live.ID, queued.ID)
 	}
 
-	failed := change(lost, job.EventPhaseFailed)
-	failed.Reason = "restored"
-
-	if got := apply(t, h, f, failed); got.State != job.StateFailed {
+	if got := reconcile(t, h, f, &orphans[0]); got.State != job.StateFailed {
 		t.Fatalf("reconcile of an orphan = %s, want failed", got.State)
 	}
 
 	if orphans, err = h.Jobs.Orphans(t.Context(), orphanPage); err != nil || len(orphans) != 0 {
-		t.Fatalf("Orphans after the reconcile = %v, %v; want none", ids(orphans), err)
+		t.Fatalf("Orphans after the reconcile = %v, %v; want none", orphanIDs(orphans), err)
 	}
+}
+
+// reconcile applies the event of AfterOperationEnded to the orphan o, as
+// the reconcile schedule does, and returns the job.
+func reconcile(t *testing.T, h Harness, f fixture, o *job.Orphan) job.Job {
+	t.Helper()
+
+	ev, reason, err := job.AfterOperationEnded(o)
+	if err != nil {
+		t.Fatalf("AfterOperationEnded = %v", err)
+	}
+
+	c := change(&o.Job, ev)
+	c.Reason = reason
+
+	return apply(t, h, f, c)
+}
+
+// orphanIDs returns the job IDs of orphans, in order.
+func orphanIDs(orphans []job.Orphan) []job.ID {
+	out := make([]job.ID, 0, len(orphans))
+	for i := range orphans {
+		out = append(out, orphans[i].Job.ID)
+	}
+
+	return out
 }

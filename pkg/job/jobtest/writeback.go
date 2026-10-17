@@ -26,7 +26,7 @@ func deliver(t *testing.T, h Harness, f fixture, unit identity.Object, d job.Del
 	claimOp(t, h, "instance-a", job.KindWriteBack, time.Minute)
 	stored = claimed(t, h, f, &stored, "instance-a")
 
-	branch, review := "main", ""
+	branch, review := mainRef, ""
 	if d == job.DeliveryReviewRequest {
 		branch, review = "dustpan/"+string(j.ID), "https://forge.example/acme/infra/pull/7"
 	}
@@ -48,7 +48,7 @@ func deliver(t *testing.T, h Harness, f fixture, unit identity.Object, d job.Del
 
 // version returns a state version of unit at at.
 func version(unit identity.Object, id string, at time.Time, final bool) job.StateVersion {
-	return job.StateVersion{Unit: unit, VersionID: id, Commit: "", At: at, Final: final}
+	return job.StateVersion{Unit: unit, VersionID: id, Commit: "", Job: "", At: at, Final: final}
 }
 
 // followUp reports whether the operation of kind k of the job id exists:
@@ -92,7 +92,7 @@ func testObserveStaleFence(t *testing.T, h Harness) {
 		t.Fatalf("BumpFence = %v", err)
 	}
 
-	_, err := h.Jobs.ObserveStateVersion(t.Context(), version(f.unit, "sv-1", time.Now().Add(time.Second), true),
+	_, err := h.Jobs.ObserveStateVersion(t.Context(), version(f.unit, svOne, time.Now().Add(time.Second), true),
 		f.fence)
 	if !errors.Is(err, namespace.ErrFenced) {
 		t.Fatalf("ObserveStateVersion with a stale fence = %v, want ErrFenced", err)
@@ -120,12 +120,12 @@ func testObserveStateVersion(t *testing.T, h Harness) {
 		"an intermediate write": version(f.unit, "sv-mid", after, false),
 	})
 
-	closed, err := h.Jobs.ObserveStateVersion(t.Context(), version(f.unit, "sv-1", after, true), f.fence)
+	closed, err := h.Jobs.ObserveStateVersion(t.Context(), version(f.unit, svOne, after, true), f.fence)
 	if err != nil || len(closed) != 1 || closed[0].ID != delivered.ID {
 		t.Fatalf("ObserveStateVersion closed %v, %v; want %s", ids(closed), err, delivered.ID)
 	}
 
-	if closed[0].State != job.StateSucceeded || closed[0].Closed == nil || closed[0].Closed.VersionID != "sv-1" ||
+	if closed[0].State != job.StateSucceeded || closed[0].Closed == nil || closed[0].Closed.VersionID != svOne ||
 		closed[0].Verification != job.VerificationPending {
 		t.Fatalf("closed job = %s, %+v, %q; want succeeded, closed by sv-1, verification pending",
 			closed[0].State, closed[0].Closed, closed[0].Verification)
@@ -162,7 +162,7 @@ func testMergeAndVerify(t *testing.T, h Harness) {
 	}
 
 	closesNone(t, h, f, map[string]job.StateVersion{
-		"a state version before the merge": version(f.unit, "sv-1", time.Now(), true),
+		"a state version before the merge": version(f.unit, svOne, time.Now(), true),
 	})
 
 	merged := change(&j, job.EventMerged)
@@ -174,7 +174,7 @@ func testMergeAndVerify(t *testing.T, h Harness) {
 	}
 
 	closed, err := h.Jobs.ObserveStateVersion(t.Context(),
-		version(f.unit, "sv-2", merged.MergedAt.Add(time.Second), true), f.fence)
+		version(f.unit, svTwo, merged.MergedAt.Add(time.Second), true), f.fence)
 	if err != nil || len(closed) != 1 || closed[0].ID != j.ID {
 		t.Fatalf("a state version after the merge closed %v, %v; want %s", ids(closed), err, j.ID)
 	}
@@ -202,8 +202,12 @@ func verify(t *testing.T, h Harness, f fixture, id job.ID) {
 	}
 }
 
-// planSize is the size of the plans of the stale plan case.
-const planSize = 2
+// planSize is the size of the plan parts of the stale plan case, and
+// planRetention the retention of its plans.
+const (
+	planSize      = 2
+	planRetention = 400 * 24 * time.Hour
+)
 
 // planned stores an apply job whose plan phase made plans that read the
 // state version sv at made, and that waits to dispatch its apply phase.
@@ -212,17 +216,14 @@ func planned(t *testing.T, h Harness, f fixture, sv string, made time.Time) job.
 
 	j := newJob(f.unit, job.OperationApply, "")
 	j.Current = 1
-	j.Phases[0].Plans = job.PlanSet{
-		Display: &job.PlanRef{
-			ID: "pln-display", Kind: job.OutputPlanDisplay, SHA256: "d1", StateVersion: sv, Size: planSize,
-			CreatedAt:  made,
-			ShreddedAt: time.Time{},
+	j.Phases[0].StateVersion = sv
+	j.Phases[0].Plan = &job.PlanRef{
+		ID: "pln-" + string(j.ID), ItemKey: "ik-" + string(j.ID), StateVersion: sv,
+		Parts: []job.PlanPart{
+			{Kind: job.OutputPlanDisplay, Size: planSize, SHA256: "d1", Secret: false},
+			{Kind: job.OutputPlanApply, Size: planSize, SHA256: "a1", Secret: true},
 		},
-		Apply: &job.PlanRef{
-			ID: "pln-apply", Kind: job.OutputPlanApply, SHA256: "a1", StateVersion: sv, Size: planSize,
-			CreatedAt:  made,
-			ShreddedAt: time.Time{},
-		},
+		CreatedAt: made, ExpiresAt: made.Add(planRetention), RedactedAt: time.Time{},
 	}
 
 	return create(t, h, f, j, nil)
@@ -234,7 +235,7 @@ func testPlanStale(t *testing.T, h Harness) {
 	f := setUp(t, h)
 	now := time.Now()
 
-	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, "sv-2"); err != nil {
+	if err := h.Domain.SetStateVersion(t.Context(), f.fence, f.unit, svTwo); err != nil {
 		t.Fatalf("SetStateVersion = %v", err)
 	}
 
@@ -244,9 +245,9 @@ func testPlanStale(t *testing.T, h Harness) {
 		made time.Time
 		want error
 	}{
-		{"another state version", "sv-1", now, job.ErrPlanStale},
-		{"too old", "sv-2", now.Add(-job.DefaultMaxPlanAge - time.Hour), job.ErrPlanStale},
-		{"fresh", "sv-2", now, nil},
+		{"another state version", svOne, now, job.ErrPlanStale},
+		{"too old", svTwo, now.Add(-job.DefaultMaxPlanAge - time.Hour), job.ErrPlanStale},
+		{"fresh", svTwo, now, nil},
 	}
 
 	for _, tt := range tests {
@@ -268,9 +269,9 @@ func testPlanStale(t *testing.T, h Harness) {
 		}
 
 		back := apply(t, h, f, change(&j, job.EventReplan))
-		if back.State != job.StateQueued || back.Current != 0 || back.Phases[0].Plans.Apply != nil {
-			t.Fatalf("%s: replan = %s, phase %d, plans %+v; want queued at the plan phase with no plan",
-				tt.name, back.State, back.Current, back.Phases[0].Plans)
+		if back.State != job.StateQueued || back.Current != 0 || back.Phases[0].Plan != nil {
+			t.Fatalf("%s: replan = %s, phase %d, plan %+v; want queued at the plan phase with no plan",
+				tt.name, back.State, back.Current, back.Phases[0].Plan)
 		}
 
 		apply(t, h, f, change(&back, job.EventCancel))

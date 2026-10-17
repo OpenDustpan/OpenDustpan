@@ -360,7 +360,8 @@ const (
 
 // ciPaths are the paths of CI configuration at the root of a repository or
 // in any directory. A write-back job never edits a file in them, also when
-// the tool allows the name.
+// the tool allows the name. The match ignores case, because some forges
+// and file systems do.
 //
 //nolint:gochecknoglobals // A fixed list, read only.
 var ciPaths = []string{
@@ -378,7 +379,8 @@ var ciPaths = []string{
 //   - a path that editable refuses: only the config and variable files of
 //     the unit, as the StepPlanner of its tool tells,
 //   - a path in which a part of dir or of the path is CI configuration,
-//     such as .github or .gitlab-ci.yml, whatever editable says,
+//     such as .github or .gitlab-ci.yml, in any case, whatever editable
+//     says,
 //   - no key, more than MaxEditKeys, an empty key path, or more than
 //     MaxEditBytes of values in total.
 func ValidateEdits(dir string, edits []FileEdit, editable func(p string) bool) error {
@@ -423,7 +425,7 @@ func validateEditPath(dir, p string, editable func(p string) bool) error {
 	}
 
 	for part := range strings.SplitSeq(path.Join(dir, p), "/") {
-		if slices.Contains(ciPaths, part) {
+		if slices.ContainsFunc(ciPaths, func(ci string) bool { return strings.EqualFold(ci, part) }) {
 			return fmt.Errorf("%w: %q is CI configuration, which a write-back job never edits", ErrInvalid, part)
 		}
 	}

@@ -44,7 +44,7 @@ The owner approved the decisions of this ADR on 17 October 2026.
    them on the durable store and the job store:
    - `job.Claimer`: `Claim`, `Renew`, `Release` and `Finish`.
    - `job.Recorder`: `BeginStep`, `EndStep`, `AppendLog`, `PutPlan` and
-     `Delivered`.
+     `Delivered`. ADR 102 gives the rules of `AppendLog` and `PutPlan`.
 
    Every call carries a `job.PhaseClaim`: the job, the phase index, the
    durable claim and the namespace fence that the claim took. The store
@@ -64,15 +64,26 @@ The owner approved the decisions of this ADR on 17 October 2026.
    - Record the start of the step `commit` through the claim, then commit
      through the API of the forge, never with a git client. Each commit
      has the trailer `Dustpan-Job: <job ID>`.
-   - For a direct push, a takeover that finds the start of `commit` and no
-     end looks for a commit with the trailer of the job on the target ref
-     before it commits. When it finds one, it records that commit and
-     makes no second commit. So a direct push never lands twice.
+   - **Every takeover looks first.** On any claim after the first
+     (`Phase.Claims` above 1), and on any claim when a claim recorded the
+     start of `commit`, the executor looks for the commit of the job
+     before it commits (`job.NeedsCommitLookup`). It does this whatever the
+     earlier claim recorded, because the forge can make the commit before
+     the job store has the start record, or after the executor lost its
+     claim. For a direct
+     push, it looks for a commit with the trailer of the job on the target
+     ref. For a review request, it looks for the branch `dustpan/<job ID>`
+     and the commit with the trailer on it, and for the open review
+     request of that branch. When it finds the commit, it records it and
+     makes no second commit. So a change never lands twice.
    - For a review request, commit to the branch `dustpan/<job ID>` and open
-     the review request. A takeover finds the branch by that name and the
-     commit by its trailer, and does not commit twice.
+     the review request.
    - Record the commit, the branch and the review request with
-     `Recorder.Delivered`. The job then waits in `awaiting-state`.
+     `Recorder.Delivered`. The delivery time is the time that the forge
+     gives for the commit, also for a commit that a lookup found. The job
+     then waits in `awaiting-state`, or closes at once when the job store
+     already knows a final state version after that time (ADR 100
+     decision 15).
 
    A forge error that can pass, such as a timeout or a rate limit, retries
    with the backoff of the durable runner. A conflict or a refusal by
@@ -138,10 +149,10 @@ The owner approved the decisions of this ADR on 17 October 2026.
     secrets come from the profile of the spec when the runner claims the
     phase, through the runner protocol. The runner masks them in the log.
     They reach the tool this way:
-    - **OpenTofu.** The job token reaches OpenTofu through a credentials
-      helper, which is the runner's own binary. The runner writes a CLI
-      configuration that names the helper, and the helper answers the token
-      for the host of the server.
+    - **OpenTofu.** The job token (ADR 100 decision 20) reaches OpenTofu
+      through a credentials helper, which is the runner's own binary. The
+      runner writes a CLI configuration that names the helper, and the
+      helper answers the token for the host of the server.
     - **Pulumi.** The runner writes the job token in a file of mode 0600 on
       a memory-backed volume, as the credentials file of a Pulumi home
       directory for the step. The secrets of the profile go to files of
@@ -153,8 +164,10 @@ The owner approved the decisions of this ADR on 17 October 2026.
     - The plan phase gets read-only credentials where the profile has them.
 11. **Plans and outputs.** A step can name output files: `plan-display` (the
     readable JSON plan) and `plan-apply` (the plan that the apply phase
-    reads, for example an OpenTofu plan file). The runner uploads them with
-    `Recorder.PutPlan` after the step (ADR 102).
+    reads, for example an OpenTofu plan file). They are the two parts of
+    the one plan of the phase. The runner uploads both with one
+    `Recorder.PutPlan` call after the last step that names an output
+    (ADR 102).
 12. **Linux, one job at a time.** A runner runs on Linux. It runs one phase
     at a time by default. Its launcher starts each step in its own process
     group. A later setting may allow more than one phase per runner.

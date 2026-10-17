@@ -21,6 +21,10 @@ The project owner decided:
 
 - Dusty runs inside the server and acts as the user who asked it. The audit
   log records both the user and the agent.
+- An agent job in approve-first mode needs a confirmation by the person who
+  asked, with a fresh MFA step. An agent in review-request mode changes code
+  only through a review request. A direct change by an agent needs three
+  switches: the server, the namespace and the user.
 
 The owner approved the decisions of this ADR on 17 October 2026.
 
@@ -28,21 +32,36 @@ The owner approved the decisions of this ADR on 17 October 2026.
 
 1. **A policy decision at start.** `job.Service.Start` asks the
    `job.Decider` port for a decision. The input is the principal, the agent
-   that acts for it, if any, the spec and the key paths of the edits. It
+   that acts for it, if any, with its mode, the spec and the key paths of the edits. It
    holds no secret value. So a policy can deny or gate a start by agent. The decision
    allows or denies the start, and gives a gate for each kind of phase. With
    no policy installed, the adapter allows every start and adds no gate. A
    denied start fails with `ErrPolicyDenied` and creates no job. A policy
    that fails is not a denial: the start fails and nothing changes.
-2. **A gate in front of a phase.** A gate names the number of approvals, the
-   groups of the approvers, whether the starter can approve, a timeout and
-   whether the approvals bind to the plans (ADR 102 decision 5). Before the
-   dispatch of a phase with a gate, the job waits in `awaiting-approval`. Each subject counts
-   once. One rejection rejects the job. The starter does not count unless
-   the gate allows it. A user who started the job through an agent is the
-   starter too. `Gate.Status` holds these rules, and a table-driven
-   test checks them. A job that waits longer than the timeout expires. The
-   default timeout is 7 days.
+2. **Gates in front of a phase, of two types.** A phase can have more than
+   one gate, and it dispatches only when every gate is open
+   (`job.GatesStatus`). Before that, the job waits in `awaiting-approval`.
+   One rejection of any gate rejects the job. A job that waits longer than
+   the timeout of a gate expires. The default timeout is 7 days.
+   `Gate.Status` holds the rules of each type, and table-driven tests check
+   them.
+   - **Approval** (`job.GateApproval`) comes from the policy decision. It
+     names the number of approvals, the groups of the approvers, whether
+     the starter can approve, a timeout and whether the approvals bind to
+     the plan (ADR 102 decision 7). Each subject counts once. The starter
+     does not count unless the gate allows it. A user who started the job
+     through an agent is the starter too.
+   - **Confirmation** (`job.GateConfirmation`) is in front of each phase
+     that changes, for a job that an agent started in approve-first mode
+     (decision 12). Only the person who asked the agent can pass it: one
+     confirmation by the starter, in a request of their own with no agent,
+     with an MFA step at most 15 minutes old (`job.ConfirmFreshness`, the
+     default window of ADR 56). It binds to the plan when a plan phase
+     comes before. It applies also with no policy installed. A policy
+     never gives it and never removes it, and the rule of the starter of an
+     approval gate does not apply to it. The service records it with
+     `job.Service.Confirm`, which needs the start action of the job, not
+     `job:approve`.
 3. **OpenDustpan approvals add to the forge.** For a write-back job, a gate
    on the deliver phase waits before the commit. After the commit, the
    review request still needs the approvals that the forge asks for. This
@@ -66,12 +85,13 @@ The owner approved the decisions of this ADR on 17 October 2026.
    the kind `override`. `namespace:break-freeze` is in another family than
    `namespace:manage-freezes`. So a principal that can end a freeze does not
    also get break-glass, and the reverse.
-7. **Agents never approve and never break a freeze.** An agent such as
-   Dusty acts as the user who asked it (ADR 100 decision 17). The job, each
-   approval and the decision input record the agent. An agent cannot record
-   an approval, and cannot ask for break-glass: both fail with
-   `ErrAgentDenied`. An agent can record a rejection, because a rejection
-   only stops a change.
+7. **Agents never approve, give a confirmation or break a freeze.** An
+   agent such as Dusty acts as the user who asked it (ADR 100 decision 17).
+   The job, each approval and the decision input record the agent and its
+   mode. An agent
+   cannot record an approval or a confirmation, and cannot ask for
+   break-glass: each fails with `ErrAgentDenied`. An agent can record a
+   rejection, because a rejection only stops a change.
 8. **Actions for each operation.** Each route of the job API declares these
    actions. The object of a job action is the unit of the job.
 
@@ -86,17 +106,20 @@ The owner approved the decisions of this ADR on 17 October 2026.
    | `job:read-logs` | unit | Read the content of logs. |
    | `job:read-plans` | unit | Read the readable plan, masked. |
    | `job:cancel` | unit | Cancel a job. |
-   | `job:approve` | unit | Approve or reject a job that waits. |
-   | `job:redact-logs` | unit | Redact a log and shred its older version. |
+   | `job:approve` | unit | Approve or reject a job that waits for an approval gate. |
    | `namespace:manage-freezes` | namespace | Create and end freezes. |
    | `namespace:break-freeze` | namespace | Start a job through a freeze. |
    | `namespace:manage-runners` | namespace | Manage runner pools and runners. |
    | `runner:claim` | runner pool | Claim and report on the phases of the pool. |
 
-   An unmasked plan also needs `unit:read-secrets`. `job.StartRequirements`
-   maps a spec to its start actions, and a table-driven test checks the
-   map. `runner:claim` needs a new object kind, the runner pool, in the
-   `identity` package.
+   An unmasked plan also needs `unit:read-secrets`. A redaction of a plan or
+   of a log, also a redaction of a log by substitution (ADR 102 decision
+   11), needs `unit:redact` of the history model (ADR 151). The job model
+   has no redact action of its own. A confirmation needs the start action
+   of the job (decision 2). Each built-in role that has `unit:read` also
+   gets `job:read-plans`. `job.StartRequirements` maps a spec to its start
+   actions, and a table-driven test checks the map. `runner:claim` needs a
+   new object kind, the runner pool, in the `identity` package.
 9. **Audit entries.** Each of these writes one audit entry in the
    transaction of the change:
 
@@ -104,11 +127,12 @@ The owner approved the decisions of this ADR on 17 October 2026.
    | --- | --- | --- | --- |
    | Start | the principal, and the agent | the start action | `change`, or `override` with break-glass |
    | Approval or rejection | the approver, and the agent of a rejection | `job:approve` | `change` |
+   | Confirmation or its rejection | the person who asked, and the agent of a rejection | the start action | `change` |
    | Cancel | the principal, and the agent | `job:cancel` | `change` |
    | Change of custom steps | the principal, and the agent | `unit:define-steps` | `change` |
    | Claim of a phase that changes resources | the runner or the instance | `runner:claim` | `change` |
    | Delivery of a write-back | the instance | `unit:write-back` | `change` |
-   | Redaction, and each shred | the principal, or the instance for retention | `job:redact-logs` | `change` |
+   | Redaction of a plan or a log | as ADR 151 decision 17 says | `unit:redact` | `change` |
    | Unmasked plan read | the principal | `job:read-plans` | `reveal` |
    | Freeze created or ended | the principal | `namespace:manage-freezes` | `change` |
 
@@ -130,19 +154,43 @@ The owner approved the decisions of this ADR on 17 October 2026.
     ID returns `ErrNotFound` when the caller lacks `job:read` on the unit of
     the job, so that a caller cannot learn that a job exists. With
     `job:read`, a missing action of the method returns `identity.ErrDenied`.
+12. **Agent modes.** The user sets the mode of the agent that acts for
+    them. `job.CheckAgent` holds the rule at start, and a table-driven test
+    checks it. A runner job that only plans changes nothing and needs no
+    mode.
+    - **Approve-first** is the default. Each phase that changes gets a
+      confirmation gate (decision 2), with or without a policy. The policy
+      gates still apply, with their own rules.
+    - **Review-request.** The agent changes a unit only through a
+      write-back job that delivers as a review request. The review of the
+      forge is the check of a person, so the job gets no confirmation gate.
+      A direct push from an agent in this mode fails with `ErrAgentDenied`.
+      A runner job that changes fails in the same way.
+    - **Direct.** The agent changes a unit with no confirmation. This needs
+      three switches, each off by default: an installation setting of the
+      server, a setting of the namespace of the unit, and a setting of the
+      user who asks (`job.DirectSwitches`). When one is off, the start fails
+      with `ErrAgentDenied` and names the switches.
 
 ## Consequences
 
-- Fifteen actions join the action list of the `identity` package, and the
-  built-in roles need them. The integrator adds them to the list and to the
-  route test.
+- Fourteen actions join the action list of the `identity` package, and the
+  built-in roles need them. Each built-in role with `unit:read` gets
+  `job:read-plans`. The integrator adds them to the list and to the route
+  test.
 - A gate makes a runner job wait without a runner. A runner is busy only
   while a phase runs.
 - A team can freeze OpenDustpan for an incident with one request, and
   undo it with one request. Its own CI does not freeze.
-- The default with no policy allows every job with no approval. RFC 13
-  proposes "approve first" for apply jobs as the default. That choice waits
-  for RFC 13.
+- The default with no policy allows every job of a person with no
+  approval. RFC 13 proposes "approve first" for apply jobs as the default.
+  That choice waits for RFC 13. A job of an agent gets the confirmation of
+  its mode with or without a policy.
+- A confirmation needs an MFA step. Built-in MFA (ADR 46) does not exist
+  yet, and ADR 56 adds no MFA step where MFA is off. Until MFA covers the
+  person, an agent job in approve-first mode cannot get its confirmation.
+  The person then starts the change without the agent, or uses
+  review-request mode.
 
 ## Open questions
 
@@ -155,3 +203,7 @@ The owner approved the decisions of this ADR on 17 October 2026.
   it and start a new one with break-glass?
 - Does a freeze also hold the approvals that end during it, or only the
   dispatch?
+- How does a confirmation get a fresh MFA step with an SSO identity
+  provider? ADR 56 keeps this open for token creation too.
+- Is 15 minutes the right window for a confirmation, and is it a setting of
+  its own or the window of secret reveal?

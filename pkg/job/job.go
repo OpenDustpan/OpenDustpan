@@ -79,9 +79,16 @@ var (
 	// git for good: a direct push, or a review request that merged. The job
 	// stays and waits for its state version.
 	ErrDelivered = errors.New("the change of the job is already in git")
-	// ErrAgentDenied reports an approval or a break-glass that an agent
-	// asks for. Only a person can approve or break a freeze.
+	// ErrAgentDenied reports an approval, a confirmation or a break-glass
+	// that an agent asks for, and a start that the agent mode does not
+	// allow. Only a person can approve, confirm or break a freeze.
 	ErrAgentDenied = errors.New("an agent cannot do this")
+	// ErrNotRequester reports a confirmation by a principal that is not the
+	// person who asked the agent for the job.
+	ErrNotRequester = errors.New("only the person who asked the agent can confirm the job")
+	// ErrMFAStale reports a confirmation with no MFA step inside the
+	// freshness window.
+	ErrMFAStale = errors.New("the confirmation needs a fresh MFA step")
 	// ErrLimit reports a start above a limit of open jobs.
 	ErrLimit = errors.New("too many open jobs")
 	// ErrClaimLost reports a write by an executor whose claim on the phase is
@@ -240,6 +247,12 @@ type Spec struct {
 	Delivery Delivery
 }
 
+// Changes reports whether a job of s can change resources, state or the
+// code in git: every job but a runner job that only plans.
+func (s *Spec) Changes() bool {
+	return s.Executor == ExecutorWriteBack || s.Operation != OperationPlan
+}
+
 // Actor is who asks for a change to a job: the principal of the request,
 // and the agent that acts for it, if any. An agent such as Dusty runs in the
 // server and acts as the user who asked, through an act-as edge. The
@@ -250,6 +263,10 @@ type Actor struct {
 	// Agent names the agent that acts for Principal, or is empty when the
 	// principal acts itself.
 	Agent string
+	// Mode is the agent mode that the user set for Agent. It is empty when
+	// Agent is empty. An agent with an empty mode works in
+	// AgentModeApproveFirst.
+	Mode AgentMode
 }
 
 // BreakGlass records a start through an active change freeze. Reason is
@@ -282,6 +299,9 @@ type Job struct {
 	// Agent names the agent that started the job for StartedBy, or is
 	// empty.
 	Agent string
+	// AgentMode is the agent mode of the start, or empty when no agent
+	// started the job.
+	AgentMode AgentMode
 	// BreakGlass is set when the job started through an active freeze.
 	BreakGlass *BreakGlass
 	// Delivery is the result of the deliver phase of a write-back job.
@@ -320,12 +340,19 @@ type Phase struct {
 	// the phase runs again from its first step, and the records of the
 	// earlier claims stay.
 	Steps []StepRecord
-	// Plans are the stored plans of a plan phase.
-	Plans PlanSet
-	// Gate is the gate in front of the phase, evaluated before its
-	// dispatch.
-	Gate Gate
-	// Approvals are the approvals that the gate got.
+	// StateVersion is the current state version of the unit at the last
+	// claim of a plan phase. The store sets it in the transaction of the
+	// claim. PutPlan copies it to the stored plan, and fails the phase when
+	// the current version changed before the plan is stored. It is empty
+	// for other phases.
+	StateVersion string
+	// Plan is the stored plan of a plan phase, or nil.
+	Plan *PlanRef
+	// Gates are the gates in front of the phase, evaluated before its
+	// dispatch: the approval gate of the policy decision, and the
+	// confirmation gate of an agent job in AgentModeApproveFirst.
+	Gates []Gate
+	// Approvals are the approvals and confirmations that the gates got.
 	Approvals  []Approval
 	StartedAt  time.Time
 	FinishedAt time.Time
@@ -343,8 +370,45 @@ type DeliveryResult struct {
 	ReviewRequest string
 	// MergedAt is the time that the forge reported a merge of the review
 	// request, or the zero time.
-	MergedAt    time.Time
+	MergedAt time.Time
+	// DeliveredAt is the time that the commit landed on the forge, as the
+	// forge reports it. After a takeover that finds the commit by its
+	// trailer, it is the time of that commit, not the time of the record.
 	DeliveredAt time.Time
+}
+
+// CloseAfter returns the time after which a final state version closes
+// the job of d: the delivery of a direct push, or the merge of a review
+// request. It returns false for a review request with no known merge,
+// which waits.
+func (d *DeliveryResult) CloseAfter() (time.Time, bool) {
+	switch {
+	case d == nil:
+		return time.Time{}, false
+	case d.Delivery == DeliveryDirectPush:
+		return d.DeliveredAt, true
+	case !d.MergedAt.IsZero():
+		return d.MergedAt, true
+	default:
+		return time.Time{}, false
+	}
+}
+
+// ClosedBy reports whether the state version v closes j: j waits in
+// awaiting-state, v is a final version of the unit of j, and v is at or
+// after the time of CloseAfter. The store applies the rule in three
+// places, in the transaction of each: ObserveStateVersion for a new
+// version, and EventMerged and EventDelivered for the last final version
+// of the unit that the store knows, so that a merge or a delivery that
+// the job sees late still closes it.
+func (j *Job) ClosedBy(v StateVersion) bool {
+	if j.State != StateAwaitingState || !v.Final || j.Spec.Unit.UnitID() != v.Unit.UnitID() {
+		return false
+	}
+
+	after, ok := j.Delivery.CloseAfter()
+
+	return ok && !v.At.Before(after)
 }
 
 // Settled reports whether the change of d is in git for good: a direct
@@ -388,7 +452,11 @@ type StateVersion struct {
 	Unit      identity.Object
 	VersionID string
 	Commit    string
-	At        time.Time
+	// Job is the job-ID claim of the principal that wrote the version: the
+	// job whose job token the tool used, or empty for a write with another
+	// credential.
+	Job ID
+	At  time.Time
 	// Final is true for the last state version of a run: the release of
 	// the OpenTofu state lock, or the end of a Pulumi update. Only a final
 	// version closes a write-back job. An intermediate write of a run
