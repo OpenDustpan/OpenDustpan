@@ -1517,44 +1517,6 @@ func TestPolicyChangeOfAnotherInstanceAppliesAtOnce(t *testing.T) {
 	}
 }
 
-// failingPolicy is a store whose policy read fails.
-type failingPolicy struct {
-	*sqlite.Store
-}
-
-var errPolicyRead = errors.New("policy read failed")
-
-func (failingPolicy) GetPolicy(context.Context) (accesstoken.Policy, error) {
-	return accesstoken.Policy{}, errPolicyRead
-}
-
-// TestPolicyReadErrorFailsClosed proves that the account inactivity check
-// of another sign-in, which reads the policy on its own, answers a failed
-// read with its error.
-func TestPolicyReadErrorFailsClosed(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t, nil)
-
-	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: failingPolicy{f.store}, Principals: f.store, Freshness: nil, Grants: nil, Authorizer: nil,
-		Logger: nil,
-		Now:    f.clock.Now, NewID: nil,
-	})
-	if err != nil {
-		t.Fatalf("token service: %v", err)
-	}
-
-	owner := accesstoken.Owner{
-		ActiveAt: f.clock.Now(), DisabledAt: time.Time{}, ID: "pri-reader", Subject: "alice", DisplayName: "Alice",
-		Kind: principal.KindPerson, BreakGlass: false,
-	}
-
-	if _, err := svc.AccountInactive(t.Context(), owner); !errors.Is(err, errPolicyRead) {
-		t.Fatalf("account inactivity with a failed policy read: err = %v, want the read error", err)
-	}
-}
-
 func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
 	t.Parallel()
 
@@ -1592,15 +1554,14 @@ func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
 	}
 }
 
-// TestAccountInactive proves that AccountInactive applies the account rule
-// of the token lookup: the period, the account switch, persons only, and
-// the break-glass exemption.
-func TestAccountInactive(t *testing.T) {
+// TestAccountInactiveAt proves the account rule of the token lookup, which
+// a console session applies too: the period, the account switch, persons
+// only, and the break-glass exemption.
+func TestAccountInactiveAt(t *testing.T) {
 	t.Parallel()
 
-	f := newFixtureAt(t, nil, sweepStart())
-	ctx := t.Context()
-	now := f.svc.Now()
+	now := sweepStart()
+	policy := accesstoken.DefaultPolicy()
 
 	owner := func(kind principal.Kind, breakGlass bool, activeAt time.Time) accesstoken.Owner {
 		return accesstoken.Owner{
@@ -1622,21 +1583,23 @@ func TestAccountInactive(t *testing.T) {
 		{name: "a break-glass person past the period", o: owner(principal.KindPerson, true, old), want: false},
 		{name: "a service past the period", o: owner(principal.KindService, false, old), want: false},
 	} {
-		got, err := f.svc.AccountInactive(ctx, tc.o)
-		if err != nil || got != tc.want {
-			t.Errorf("%s: AccountInactive = %t, %v; want %t", tc.name, got, err, tc.want)
+		if got := policy.AccountInactiveAt(tc.o, now); got != tc.want {
+			t.Errorf("%s: AccountInactiveAt = %t, want %t", tc.name, got, tc.want)
 		}
 	}
 
-	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
-		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: new(false), DisableBreakGlass: nil,
-	})
-	if err != nil {
-		t.Fatalf("set policy: %v", err)
+	off := policy
+	off.DisableAccounts = false
+
+	if off.AccountInactiveAt(owner(principal.KindPerson, false, old), now) {
+		t.Fatal("AccountInactiveAt with the account disable off = true, want false")
 	}
 
-	if got, err := f.svc.AccountInactive(ctx, owner(principal.KindPerson, false, old)); err != nil || got {
-		t.Fatalf("AccountInactive with the account disable off = %t, %v; want false", got, err)
+	zero := policy
+	zero.Inactivity = 0
+
+	if zero.AccountInactiveAt(owner(principal.KindPerson, false, old), now) {
+		t.Fatal("AccountInactiveAt with a zero period = true, want false")
 	}
 }
 

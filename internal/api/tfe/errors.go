@@ -217,6 +217,7 @@ func classify(err error) errorClass {
 			detail: "server is busy: try again after the Retry-After time",
 		}
 	case errors.Is(err, errInvalidBody),
+		errors.Is(err, errRevealPathTooLong),
 		errors.Is(err, workspace.ErrInvalidName),
 		errors.Is(err, namespace.ErrInvalidName),
 		errors.Is(err, identity.ErrInvalidObject),

@@ -60,7 +60,13 @@ const (
 	reasonDisabled      = "principal is disabled"
 	reasonNotTarget     = "principal cannot sign in through an identity provider"
 	reasonSubject       = "subject is not valid"
+	reasonSubjectLength = "subject over 255 bytes"
 )
+
+// maxIDPSubjectLen caps the sub claim of a sign-in, in bytes. The audit
+// entry keeps the subject, so a longer subject is refused instead of
+// stored.
+const maxIDPSubjectLen = 255
 
 // Errors of the sign-in routes.
 var (
@@ -431,6 +437,18 @@ func (h *Handler) startSession(
 	w http.ResponseWriter, r *http.Request, provider SignInProvider, id oauth.Identity, returnPath string,
 ) {
 	ctx := r.Context()
+
+	// Refuse before the subject reaches the audit entry: the entry keeps
+	// the subject, so a longer one would be stored. The refusal names the
+	// provider only, which has a fixed form.
+	if len(id.Subject) > maxIDPSubjectLen {
+		h.refuseSignIn(w, r, refusal{
+			err: errSignInRefused, providerID: provider.ID, idpSubject: "", reason: reasonSubjectLength,
+		})
+
+		return
+	}
+
 	subject := provider.ID + ":" + id.Subject
 	e := signInEntry(r, subject, id.Subject, session.ActionSignIn)
 

@@ -54,6 +54,23 @@ func testRestoreKeepsDurableOperations(t *testing.T, newStore RestoreFactory) {
 	}
 
 	held := mustClaimDurable(t, live)
+	want := []durable.Operation{held}
+
+	// A store that also keeps schedules: the backup holds a schedule that is
+	// due, and the live schedule has claimed its tick. The operation of that
+	// tick is live too.
+	schedules, hasSchedules := scheduleStores(srcOps.DurableStore(), live)
+	if hasSchedules {
+		mustEnsureSchedule(t, schedules.src)
+		mustEnsureSchedule(t, schedules.dst)
+
+		tick, err := schedules.dst.ClaimTick(ctx, restoreSchedule())
+		if err != nil {
+			t.Fatalf("claim the live tick: %v", err)
+		}
+
+		want = append(want, tick.Operation)
+	}
 
 	seedBackupStore(t, ps.src)
 	sink, sum, files := exportPortable(t, ps.src)
@@ -71,14 +88,82 @@ func testRestoreKeepsDurableOperations(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("list durable operations: %v", err)
 	}
 
-	if len(ops) != 1 || ops[0].ID != held.ID || ops[0].Claim.Token != held.Claim.Token {
-		t.Fatalf("durable operations after the restore = %+v, want only %s with token %d", ops, held.ID,
-			held.Claim.Token)
-	}
+	checkKeptOperations(t, ops, want)
 
 	// The live holder keeps its claim across the restore.
 	if _, err := dstOps.DurableStore().Extend(ctx, held.Claim, time.Minute); err != nil {
 		t.Fatalf("extend of the live claim after the restore: %v", err)
+	}
+
+	// The live schedule keeps its next run: the tick that it claimed does
+	// not fire again.
+	if hasSchedules {
+		if _, err := schedules.dst.ClaimTick(ctx, restoreSchedule()); !errors.Is(err, durable.ErrNoWork) {
+			t.Fatalf("claim of a tick after the restore: error = %v, want ErrNoWork", err)
+		}
+	}
+}
+
+// checkKeptOperations fails t unless ops holds exactly the operations of
+// want, each with the claim token that it had before the restore.
+func checkKeptOperations(t *testing.T, ops, want []durable.Operation) {
+	t.Helper()
+
+	tokens := make(map[durable.ID]int64, len(ops))
+	for i := range ops {
+		tokens[ops[i].ID] = ops[i].Claim.Token
+	}
+
+	if len(ops) != len(want) {
+		t.Fatalf("durable operations after the restore = %+v, want %d live operations", ops, len(want))
+	}
+
+	for i := range want {
+		token, ok := tokens[want[i].ID]
+		if !ok || token != want[i].Claim.Token {
+			t.Fatalf("durable operations after the restore = %+v, want %s with token %d", ops, want[i].ID,
+				want[i].Claim.Token)
+		}
+	}
+}
+
+// schedulePair holds the schedule stores of the source and the destination
+// of a restore.
+type schedulePair struct {
+	src durable.ScheduleStore
+	dst durable.ScheduleStore
+}
+
+// scheduleStores returns src and dst as schedule stores, and false when a
+// store keeps no schedules.
+func scheduleStores(src, dst durable.Store) (schedulePair, bool) {
+	srcSchedules, srcOK := src.(durable.ScheduleStore)
+	dstSchedules, dstOK := dst.(durable.ScheduleStore)
+
+	if !srcOK || !dstOK {
+		return schedulePair{src: nil, dst: nil}, false
+	}
+
+	return schedulePair{src: srcSchedules, dst: dstSchedules}, true
+}
+
+// restoreSchedule is the schedule of the control table case.
+func restoreSchedule() durable.ScheduleSpec {
+	return durable.ScheduleSpec{
+		Name:     "restore-sweep",
+		Kind:     durableRestoreKind,
+		Version:  0,
+		Interval: time.Hour,
+		Input:    nil,
+	}
+}
+
+// mustEnsureSchedule creates the schedule of the control table case in s.
+func mustEnsureSchedule(t *testing.T, s durable.ScheduleStore) {
+	t.Helper()
+
+	if _, err := s.EnsureSchedule(t.Context(), restoreSchedule()); err != nil {
+		t.Fatalf("ensure schedule: %v", err)
 	}
 }
 

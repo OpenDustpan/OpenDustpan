@@ -1658,7 +1658,9 @@ FROM sessions WHERE id = ?;
 
 -- name: GetSessionByDigest :one
 -- principal_active_at_ms is the latest activity of the owner by the account
--- rule of the inactivity disable, as in GetAccessTokenByDigest.
+-- rule of the inactivity disable, as in GetAccessTokenByDigest. The session
+-- policy and the account part of the token policy come from the same read,
+-- so a policy change applies to the next lookup on every instance.
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
@@ -1666,10 +1668,15 @@ SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
-  ), 0)) AS INTEGER) AS principal_active_at_ms
+  ), 0)) AS INTEGER) AS principal_active_at_ms,
+  sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
+  sp.token_freshness_ms AS policy_token_freshness_ms,
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
-WHERE s.digest = ? AND p.deleted_at_ms IS NULL;
+CROSS JOIN session_policy sp
+CROSS JOIN access_token_policy ap
+WHERE s.digest = ? AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1;
 
 -- name: TouchSession :exec
 -- An idle or expired session keeps its last use: seen_after_ms and
@@ -1837,3 +1844,29 @@ VALUES (
     (SELECT COALESCE(MAX(seq), 0) + 1 FROM durable_steps WHERE operation_id = sqlc.arg('operation_id')),
     sqlc.arg('result'), sqlc.arg('done_at_ms')
 );
+
+-- Durable schedules. Every time comes from DatabaseNowMs, the clock of the
+-- store, and each write runs in an IMMEDIATE transaction.
+
+-- name: GetDurableSchedule :one
+SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = ?;
+
+-- name: InsertDurableSchedule :exec
+INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms) VALUES (?, ?, ?, NULL);
+
+-- name: SetDurableScheduleInterval :exec
+-- Sets the interval, and moves the next run to now plus the interval when
+-- that is earlier.
+UPDATE durable_schedules
+SET interval_ms = sqlc.arg('interval_ms'),
+    next_run_at_ms = MIN(next_run_at_ms, CAST(sqlc.arg('now_ms') AS INTEGER) + sqlc.arg('interval_ms'))
+WHERE name = sqlc.arg('name');
+
+-- name: ClaimDurableScheduleTick :execrows
+-- The conditional update that claims a due tick: it changes the row only
+-- when next_run_at_ms is the value that the claim read and is due at now.
+UPDATE durable_schedules
+SET next_run_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER) + interval_ms,
+    last_claimed_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER)
+WHERE name = sqlc.arg('name') AND next_run_at_ms = sqlc.arg('due_at_ms')
+    AND next_run_at_ms <= CAST(sqlc.arg('now_ms') AS INTEGER);
