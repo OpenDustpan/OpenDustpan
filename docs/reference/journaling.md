@@ -3,13 +3,15 @@
 With journaling, the Pulumi CLI sends one small journal entry for each
 resource operation. The server builds the checkpoint of the update from
 the entries. Without journaling, the CLI saves checkpoints itself.
-Journaling is on by default.
+The release build does not offer journaling yet. It answers journal
+version 0 to every update, so the CLI saves checkpoints.
 
 ## Setting
 
-One setting turns journaling off. The flag is
-`--disable-pulumi-journaling`. The environment variable is
-`DUSTPAN_DISABLE_PULUMI_JOURNALING`. The file key is
+The setting has an effect only on a build that offers journaling, such as
+a build made for recording. In that build, journaling is on. One setting
+turns it off. The flag is `--disable-pulumi-journaling`. The environment
+variable is `DUSTPAN_DISABLE_PULUMI_JOURNALING`. The file key is
 `disable-pulumi-journaling`. The default is `false`, so journaling stays
 on. Set it to `true`. Restart the server. The server then answers journal
 version 0 to each new update. The Pulumi CLI then saves checkpoints. The
