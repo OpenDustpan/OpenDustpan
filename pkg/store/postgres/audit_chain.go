@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -27,59 +26,6 @@ func (s *Store) SaveChainRecord(ctx context.Context, rec audit.ChainRecord) erro
 	return s.inTx(ctx, func(q *db.Queries) error {
 		return saveChainRecord(ctx, q, rec)
 	})
-}
-
-// ClaimChainMigration implements audit.ChainStore: it stamps now in one
-// conditional write, so exactly one approval wins.
-func (s *Store) ClaimChainMigration(ctx context.Context, now time.Time, lease time.Duration) error {
-	nowMs := codec.Millis(now)
-	expireMs := codec.Millis(now.Add(-lease))
-
-	n, err := s.queries.ClaimAuditChainMigration(ctx, db.ClaimAuditChainMigrationParams{
-		MigratingAtMs: nowMs, MigratingAtMs_2: expireMs,
-	})
-	if err != nil {
-		return fmt.Errorf("claim audit chain migration: %w", err)
-	}
-
-	if n > 0 {
-		return nil
-	}
-
-	rec, err := readChainRecord(ctx, s.queries)
-	if err != nil {
-		return err
-	}
-
-	if !rec.Pending {
-		return audit.ErrNoChainChange
-	}
-
-	return audit.ErrChainMigrating
-}
-
-// ReleaseChainMigration implements audit.ChainStore.
-func (s *Store) ReleaseChainMigration(ctx context.Context) error {
-	if err := s.queries.ReleaseAuditChainMigration(ctx); err != nil {
-		return fmt.Errorf("release audit chain migration: %w", err)
-	}
-
-	return nil
-}
-
-// RenewChainMigration implements audit.ChainStore: it moves the start of
-// the held claim to now, so a long migration keeps its claim.
-func (s *Store) RenewChainMigration(ctx context.Context, now time.Time) error {
-	n, err := s.queries.RenewAuditChainMigration(ctx, codec.Millis(now))
-	if err != nil {
-		return fmt.Errorf("renew audit chain migration: %w", err)
-	}
-
-	if n == 0 {
-		return audit.ErrChainClaimLost
-	}
-
-	return nil
 }
 
 // StartChain implements audit.ChainStore: it reads the earlier entries of

@@ -109,7 +109,11 @@ func withAuditChainGate(next http.Handler, chain *auditChain, logger *slog.Logge
 			writeRefusal(r.Context(), w, shape, logger, chainMismatchMessage)
 		case rec.Pending:
 			message := chainPendingMessage
-			if chain.migrating.Load() || chainClaimHolds(rec, chain.chainNow()) {
+			running, err := chain.migrationRunning(r.Context())
+			if err != nil {
+				logger.WarnContext(r.Context(), "audit chain gate could not list migrations",
+					slog.String("error", err.Error()))
+			} else if running {
 				message = chainMigratingMessage
 			}
 
