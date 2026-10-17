@@ -96,6 +96,10 @@ _Avoid_: Minimum schema version, compatibility level
 The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot
 
+**Baseline migration**:
+The one migration of each dialect that replaced every migration before it, before the first tag. Its version is 100. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
+_Avoid_: Squash, initial migration
+
 **Portable format**:
 The dialect-neutral format of the SQL part of a backup: one compressed file of JSON rows for each table (ADR 42). It is the only backup format. It replaces the native format of ADR 30.
 _Avoid_: Export format, dump format

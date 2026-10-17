@@ -137,6 +137,10 @@ var (
 	// ErrChainClaimLost reports a renewal while no claim holds. The
 	// migration stops when it loses its claim.
 	ErrChainClaimLost = errors.New("the audit chain migration lost its claim")
+	// ErrChainStateMissing reports a database without the row of the chain
+	// state. Every schema seeds the row, so a missing row means a corrupt
+	// database.
+	ErrChainStateMissing = errors.New("the audit chain state row is missing: the database is corrupt, restore a backup")
 	// ErrChainMigrationsStopped reports an approval while the server runs
 	// no migration loop.
 	ErrChainMigrationsStopped = errors.New(
@@ -160,8 +164,8 @@ func ParseChainSetting(raw string) (ChainSetting, error) {
 // ChainStore is the port of the chain state and of its migration. The SQL
 // stores implement it next to Store.
 type ChainStore interface {
-	// ChainRecord answers the record of the installation. Without a row it
-	// answers ChainStateOn with a zero time.
+	// ChainRecord answers the record of the installation. It returns
+	// ErrChainStateMissing when the database holds no row.
 	ChainRecord(ctx context.Context) (ChainRecord, error)
 	// SaveChainRecord stores rec as the record of the installation.
 	SaveChainRecord(ctx context.Context, rec ChainRecord) error
