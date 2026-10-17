@@ -12,6 +12,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
@@ -56,7 +57,34 @@ type grantReads struct {
 	q *db.Queries
 }
 
-var _ access.GrantReads = grantReads{q: nil}
+var (
+	_ access.GrantReads    = grantReads{q: nil}
+	_ principal.GroupReads = grantReads{q: nil}
+)
+
+// ActsAs implements principal.GroupReads with the rule of access.ActsAs.
+func (r grantReads) ActsAs(ctx context.Context, groupID string) ([]string, error) {
+	ids, err := access.ActsAs(ctx, r, access.Subject{Kind: access.SubjectGroup, ID: groupID})
+	if err != nil {
+		return nil, fmt.Errorf("read what group %q acts as: %w", groupID, err)
+	}
+
+	return ids, nil
+}
+
+// UnitCollectionID implements access.GrantReads.
+func (r grantReads) UnitCollectionID(ctx context.Context, unitID string) (string, bool, error) {
+	id, err := r.q.UnitCollectionID(ctx, unitID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+
+	if err != nil {
+		return "", false, fmt.Errorf("select collection of unit: %w", err)
+	}
+
+	return id, true, nil
+}
 
 // insertGrant inserts g with q.
 func insertGrant(ctx context.Context, q *db.Queries, g access.Grant) error {
@@ -275,7 +303,12 @@ func (s *Store) GrantsOf(ctx context.Context, subject access.Subject) ([]access.
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	rows, err := s.queries.GrantsOfSubject(ctx, db.GrantsOfSubjectParams{
+	return grantReads{q: s.queries}.GrantsOf(ctx, subject)
+}
+
+// GrantsOf implements access.GrantReads.
+func (r grantReads) GrantsOf(ctx context.Context, subject access.Subject) ([]access.Grant, error) {
+	rows, err := r.q.GrantsOfSubject(ctx, db.GrantsOfSubjectParams{
 		SubjectKind: string(subject.Kind), SubjectID: subject.ID,
 	})
 	if err != nil {

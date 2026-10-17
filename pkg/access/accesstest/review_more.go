@@ -150,7 +150,7 @@ func seedTeam(t *testing.T, ps principal.Store) {
 			Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
 			Pinned: false,
 		}
-		if err := ps.AddMember(ctx, m, entryAt(at(1))); err != nil {
+		if err := ps.AddMember(ctx, m, entryAt(at(1)), nil); err != nil {
 			t.Fatalf("add member: %v", err)
 		}
 	}

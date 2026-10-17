@@ -64,6 +64,7 @@ func TestAuditSinks(t *testing.T) {
 	}
 
 	checkOneSink(t, body)
+	checkSinkLagMetrics(t, srv)
 }
 
 // newAuditSinkTestServer starts a server with one file sink.
@@ -199,5 +200,25 @@ func checkOneSink(t *testing.T, body string) {
 
 	if _, ok := sink.Cursor["acme"]; !ok {
 		t.Fatalf("sink cursor = %+v, want a cursor for acme", sink.Cursor)
+	}
+}
+
+// checkSinkLagMetrics proves the metrics output holds both delivery lags of
+// the file sink: the lag in seconds and the lag in entries.
+func checkSinkLagMetrics(t *testing.T, srv *dustpan.Server) {
+	t.Helper()
+
+	var out strings.Builder
+	if err := srv.Metrics().Write(&out); err != nil {
+		t.Fatalf("write metrics: %v", err)
+	}
+
+	for _, want := range []string{
+		`dustpan_audit_sink_lag_seconds{sink="file"}`,
+		`dustpan_audit_sink_lag_entries{sink="file"}`,
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("metrics lack %s:\n%s", want, out.String())
+		}
 	}
 }

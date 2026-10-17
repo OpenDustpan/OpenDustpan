@@ -32,13 +32,8 @@ func (s *Store) StagePortable(
 		return backup.Summary{}, err
 	}
 
-	if want.SchemaVersion != int(version) {
-		return backup.Summary{}, fmt.Errorf(
-			"stage portable backup of schema version %d into version %d: %w",
-			want.SchemaVersion,
-			version,
-			backup.ErrSchemaMismatch,
-		)
+	if schemaErr := backup.CheckStageSchema(want.SchemaVersion, int(version)); schemaErr != nil {
+		return backup.Summary{}, fmt.Errorf("stage portable backup: %w", schemaErr)
 	}
 
 	index, err := backup.IndexPortableFiles(files, want.RowCounts)

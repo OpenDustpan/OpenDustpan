@@ -8,19 +8,17 @@ package server
 //     @caller, and every authenticated person holds it with no grant.
 //   - server:read-tokens lists and reads the tokens of every principal,
 //     never their secrets. Its object is @server.
-//   - server:manage-tokens creates and rotates the personal tokens of other
-//     persons, and revokes them. Its object is @server.
+//   - server:manage-tokens revokes the personal tokens of other persons.
+//     Its object is @server. No route makes or rotates a personal token of
+//     another person: each person makes and rotates its own.
 //   - principal:manage-tokens creates, rotates and revokes the tokens of a
 //     service principal, under /api/server/principals/{principal}/tokens and
 //     /api/server/service-tokens, and through DELETE /api/server/tokens/{id}.
 //     Its object is the service principal, which the installation holds.
 //
-// A token acts as its principal. A create or a rotation of a personal token
-// for another person runs the escalation check: the caller must hold what
-// that person holds, so an administrator can never act as a stronger
-// person. A holder of principal:manage-tokens can act as the service
-// principal, with every grant that it has now or gets later: the grant is
-// the decision, and no escalation check runs. A revoke never raises access.
+// A token acts as its principal. A holder of principal:manage-tokens can act
+// as the service principal, with every grant that it has now or gets later:
+// the grant is the decision. A revoke never raises access.
 //
 // A create and a rotation answer the secret of the new token once, with
 // Cache-Control: no-store. No other answer holds a secret, and the server
@@ -293,14 +291,8 @@ func resolveCaller(_ http.ResponseWriter, _ *http.Request) (identity.Object, err
 // tokenRoutes returns the access token rows of the route table.
 func (h *Handler) tokenRoutes() []Route {
 	read := []identity.Action{identity.ActionServerReadTokens}
-	manage := []identity.Action{identity.ActionServerManageTokens}
 
 	return append([]Route{
-		{
-			Method: http.MethodPost, Path: tokensPath, Scope: ScopeAuthorized, Actions: manage, Resolve: resolveServer,
-			ActionsFor: nil,
-			Serve:      h.serveTokenChange(identity.ActionServerManageTokens, createToken(accesstoken.ScopePersonal)),
-		},
 		{
 			Method: http.MethodGet, Path: tokensPath, Scope: ScopeAuthorized,
 			Actions: read, Resolve: resolveServer, ActionsFor: nil, Serve: h.serveTokenRead(listTokens),
@@ -318,11 +310,6 @@ func (h *Handler) tokenRoutes() []Route {
 			Resolve:    h.resolveTokenOwner,
 			ActionsFor: revokeActions,
 			Serve:      h.serveTokenChange(identity.ActionServerManageTokens, revokeToken(accesstoken.ScopePersonal)),
-		},
-		{
-			Method: http.MethodPost, Path: tokenPath + "/rotate", Scope: ScopeAuthorized, Actions: manage,
-			Resolve: resolveServer, ActionsFor: nil,
-			Serve: h.serveTokenChange(identity.ActionServerManageTokens, rotateToken(accesstoken.ScopePersonal)),
 		},
 	}, h.serviceTokenRoutes()...)
 }
@@ -546,8 +533,8 @@ func (h *Handler) ownTokenRoutes() []Route {
 // and answers 201 with the token and its secret. For ScopeOwn the body
 // names no principal: the token belongs to the person of the caller. An
 // unknown principal answers 404. A principal whose kind does not fit the
-// route, a bad name or a bad expiry answers 400. A failed escalation check
-// answers 403.
+// route, a bad name or a bad expiry answers 400. A caller without
+// principal:manage-tokens on a service principal answers 403.
 func createToken(scope accesstoken.Scope) tokenOp {
 	return func(
 		w http.ResponseWriter, r *http.Request, svc *accesstoken.Service, p identity.Principal, e audit.Entry,

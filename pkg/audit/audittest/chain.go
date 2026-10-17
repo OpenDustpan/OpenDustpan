@@ -23,11 +23,15 @@ type ChainStore interface {
 
 // ChainTestStore is one fresh, empty store with the tamper hook of
 // TestStore, so a case can change an entry behind the back of the store.
-// Reopen answers a second handle on the same database.
+// Reopen answers a second handle on the same database. It is nil for an
+// adapter that allows one handle per database: the case that needs a fresh
+// handle then skips. DeleteChainState deletes the row of the chain state
+// behind the back of the store, as a corrupt database lacks it.
 type ChainTestStore struct {
-	Store       ChainStore
-	TamperEntry func(t *testing.T, ns namespace.Name, seq int64, field, value string)
-	Reopen      func(t *testing.T) ChainStore
+	Store            ChainStore
+	TamperEntry      func(t *testing.T, ns namespace.Name, seq int64, field, value string)
+	Reopen           func(t *testing.T) ChainStore
+	DeleteChainState func(t *testing.T)
 }
 
 // ChainFactory returns a fresh, empty store for one chain subtest.
@@ -45,6 +49,7 @@ func RunChain(t *testing.T, newStore ChainFactory) {
 		name string
 	}{
 		{name: "a new store keeps the chain on from the first entry", test: testChainDefaultOn},
+		{name: "a missing chain state row is ErrChainStateMissing", test: testChainStateMissing},
 		{name: "an end entry closes the chain and later entries hold no hash", test: testChainEnd},
 		{name: "a start entry holds the digest of the earlier entries", test: testChainStartDigest},
 		{name: "a changed entry before a start entry is found", test: testChainChangedBeforeStart},
@@ -244,6 +249,16 @@ func testChainDefaultOn(t *testing.T, ts ChainTestStore) {
 	}
 
 	wantValid(t, check(t, ts.Store, tl.ns.Name))
+}
+
+func testChainStateMissing(t *testing.T, ts ChainTestStore) {
+	t.Helper()
+
+	ts.DeleteChainState(t)
+
+	if _, err := ts.Store.ChainRecord(t.Context()); !errors.Is(err, audit.ErrChainStateMissing) {
+		t.Fatalf("chain record without a row: err = %v, want ErrChainStateMissing", err)
+	}
 }
 
 func testChainEnd(t *testing.T, ts ChainTestStore) {
@@ -1084,7 +1099,7 @@ func testChainSecondHandle(t *testing.T, ts ChainTestStore) {
 	t.Helper()
 
 	if ts.Reopen == nil {
-		t.Fatal("suite needs Reopen to prove a second handle follows the state")
+		t.Skip("the adapter allows one handle per database, so no fresh handle can read the chain state")
 	}
 
 	tl := newTimeline(t, ts.Store)

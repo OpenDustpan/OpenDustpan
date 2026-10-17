@@ -185,11 +185,10 @@ func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error 
 const backupBlobs = `-- name: BackupBlobs :many
 SELECT content_key, size, md5, sealed
 FROM state_versions
-WHERE content_key <> ''
+WHERE content_key <> '' AND status = 'finalized'
 UNION ALL
 SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
-WHERE blob_key IS NOT NULL AND blob_key <> ''
 UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
@@ -203,10 +202,11 @@ type BackupBlobsRow struct {
 	Sealed     bool
 }
 
-// Every blob key the state versions and the checkpoints name, with the size
+// Every blob key the finalized state versions and the checkpoints name, with the size
 // and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
 // state blobs are stored sealed: the backup opens them to check and stores
-// the sealed bytes.
+// the sealed bytes. A pending version has no committed content, so the backup
+// leaves pending rows out.
 func (q *Queries) BackupBlobs(ctx context.Context) ([]BackupBlobsRow, error) {
 	rows, err := q.db.Query(ctx, backupBlobs)
 	if err != nil {
@@ -426,6 +426,30 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 	return items, nil
 }
 
+const cancelDurableOperation = `-- name: CancelDurableOperation :exec
+UPDATE durable_operations
+SET state = $1::text, cancel_requested = $2::boolean,
+  updated_at_ms = $3::bigint
+WHERE id = $4::text
+`
+
+type CancelDurableOperationParams struct {
+	State           string
+	CancelRequested bool
+	NowMs           int64
+	ID              string
+}
+
+func (q *Queries) CancelDurableOperation(ctx context.Context, arg CancelDurableOperationParams) error {
+	_, err := q.db.Exec(ctx, cancelDurableOperation,
+		arg.State,
+		arg.CancelRequested,
+		arg.NowMs,
+		arg.ID,
+	)
+	return err
+}
+
 const claimAuditChainMigration = `-- name: ClaimAuditChainMigration :execrows
 UPDATE audit_chain_state
 SET migrating_at_ms = $1
@@ -445,6 +469,75 @@ func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditCh
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const claimDurableOperation = `-- name: ClaimDurableOperation :one
+WITH c AS MATERIALIZED (
+  SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
+), pick AS (
+  SELECT o.id FROM durable_operations o, c
+  WHERE o.kind = ANY($3::text[])
+    AND o.version <= ($4::bigint[])[array_position($3::text[], o.kind)] AND (
+    (o.state = 'pending' AND o.not_before_ms <= c.now_ms)
+    OR (o.state = 'running' AND o.claim_expires_at_ms <= c.now_ms AND NOT o.cancel_requested)
+  )
+  ORDER BY o.created_at_ms, o.id
+  LIMIT 1
+  FOR UPDATE OF o SKIP LOCKED
+)
+UPDATE durable_operations o
+SET state = 'running', attempt = o.attempt + 1, claim_token = o.claim_token + 1,
+  expiries = o.expiries + CASE WHEN o.state = 'running' THEN 1 ELSE 0 END,
+  claim_owner = $1::text, claim_expires_at_ms = c.now_ms + $2::bigint,
+  updated_at_ms = c.now_ms
+FROM c, pick
+WHERE o.id = pick.id
+RETURNING o.id, o.start_key, o.kind, o.input, o.version, o.state, o.attempt, o.expiries, o.failures, o.last_error, o.claim_owner, o.claim_token,
+  o.claim_expires_at_ms, o.cancel_requested, o.not_before_ms, o.created_at_ms, o.updated_at_ms
+`
+
+type ClaimDurableOperationParams struct {
+	Owner       string
+	LeaseMs     int64
+	Kinds       []string
+	MaxVersions []int64
+}
+
+// Claims the oldest operation of the kinds, up to the version limit of its
+// kind, that can run now: a pending one
+// whose not_before_ms passed, or a running one whose claim expired without a
+// cancel request. A row that another claim holds is skipped, so of several
+// concurrent claims of one operation at most one gets it. The expiry is the
+// database clock plus the lease. A claim that takes over an expired claim
+// counts one more expiry.
+func (q *Queries) ClaimDurableOperation(ctx context.Context, arg ClaimDurableOperationParams) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, claimDurableOperation,
+		arg.Owner,
+		arg.LeaseMs,
+		arg.Kinds,
+		arg.MaxVersions,
+	)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
 }
 
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
@@ -2046,6 +2139,22 @@ func (q *Queries) DisableInactivePrincipals(ctx context.Context, arg DisableInac
 	return items, nil
 }
 
+const durableStepExists = `-- name: DurableStepExists :one
+SELECT EXISTS (SELECT 1 FROM durable_steps WHERE operation_id = $1 AND name = $2) AS done
+`
+
+type DurableStepExistsParams struct {
+	OperationID string
+	Name        string
+}
+
+func (q *Queries) DurableStepExists(ctx context.Context, arg DurableStepExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, durableStepExists, arg.OperationID, arg.Name)
+	var done bool
+	err := row.Scan(&done)
+	return done, err
+}
+
 const enablePrincipal = `-- name: EnablePrincipal :execrows
 UPDATE principals SET disabled_at_ms = NULL, updated_at_ms = $1::bigint,
   last_active_at_ms = FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
@@ -2065,6 +2174,69 @@ func (q *Queries) EnablePrincipal(ctx context.Context, arg EnablePrincipalParams
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const endDurableClaim = `-- name: EndDurableClaim :exec
+UPDATE durable_operations
+SET state = $1::text, last_error = $2::text,
+  failures = failures + $3::bigint,
+  not_before_ms = $4::bigint, claim_owner = NULL, claim_expires_at_ms = NULL,
+  updated_at_ms = $5::bigint
+WHERE id = $6::text
+`
+
+type EndDurableClaimParams struct {
+	State       string
+	LastError   string
+	AddFailures int64
+	NotBeforeMs int64
+	NowMs       int64
+	ID          string
+}
+
+// Ends the claim of an operation with its next state, and adds add_failures
+// to its failures. The claim token stays, so the next claim gets a larger
+// one.
+func (q *Queries) EndDurableClaim(ctx context.Context, arg EndDurableClaimParams) error {
+	_, err := q.db.Exec(ctx, endDurableClaim,
+		arg.State,
+		arg.LastError,
+		arg.AddFailures,
+		arg.NotBeforeMs,
+		arg.NowMs,
+		arg.ID,
+	)
+	return err
+}
+
+const endExpiredCanceledDurableOperations = `-- name: EndExpiredCanceledDurableOperations :exec
+WITH c AS MATERIALIZED (
+  SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
+), ended AS (
+  SELECT o.id FROM durable_operations o, c
+  WHERE o.kind = ANY($1::text[])
+    AND o.version <= ($2::bigint[])[array_position($1::text[], o.kind)] AND o.state = 'running' AND o.cancel_requested
+    AND o.claim_expires_at_ms <= c.now_ms
+  FOR UPDATE OF o SKIP LOCKED
+)
+UPDATE durable_operations o
+SET state = 'canceled', claim_owner = NULL, claim_expires_at_ms = NULL, updated_at_ms = c.now_ms
+FROM c, ended
+WHERE o.id = ended.id
+`
+
+type EndExpiredCanceledDurableOperationsParams struct {
+	Kinds       []string
+	MaxVersions []int64
+}
+
+// Ends canceled each running operation of the kinds whose claim expired
+// after a cancel request. kinds and max_versions are pairs: a claim takes an
+// operation of a kind only up to its version limit. A row that another claim
+// holds is skipped.
+func (q *Queries) EndExpiredCanceledDurableOperations(ctx context.Context, arg EndExpiredCanceledDurableOperationsParams) error {
+	_, err := q.db.Exec(ctx, endExpiredCanceledDurableOperations, arg.Kinds, arg.MaxVersions)
+	return err
 }
 
 const endMembershipsInGroup = `-- name: EndMembershipsInGroup :exec
@@ -2164,6 +2336,23 @@ func (q *Queries) EndSessionsWithSubjectPrefix(ctx context.Context, arg EndSessi
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const extendDurableClaim = `-- name: ExtendDurableClaim :exec
+UPDATE durable_operations
+SET claim_expires_at_ms = $1::bigint, updated_at_ms = $2::bigint
+WHERE id = $3::text
+`
+
+type ExtendDurableClaimParams struct {
+	ExpiresAtMs int64
+	NowMs       int64
+	ID          string
+}
+
+func (q *Queries) ExtendDurableClaim(ctx context.Context, arg ExtendDurableClaimParams) error {
+	_, err := q.db.Exec(ctx, extendDurableClaim, arg.ExpiresAtMs, arg.NowMs, arg.ID)
+	return err
 }
 
 const failRunningBackups = `-- name: FailRunningBackups :exec
@@ -2579,7 +2768,7 @@ type GetCheckpointByUpdateRow struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -2630,7 +2819,7 @@ type GetCheckpointByVersionRow struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -2797,6 +2986,68 @@ func (q *Queries) GetDeletedWorkspace(ctx context.Context, arg GetDeletedWorkspa
 	var deleted_name pgtype.Text
 	err := row.Scan(&deleted_name)
 	return deleted_name, err
+}
+
+const getDurableOperation = `-- name: GetDurableOperation :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = $1
+`
+
+func (q *Queries) GetDurableOperation(ctx context.Context, id string) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, getDurableOperation, id)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const getDurableOperationByKey = `-- name: GetDurableOperationByKey :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE start_key = $1
+`
+
+func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, getDurableOperationByKey, startKey)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
 }
 
 const getFailoverVersionForShare = `-- name: GetFailoverVersionForShare :one
@@ -2977,7 +3228,7 @@ type GetLatestCheckpointRow struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -4137,6 +4388,89 @@ func (q *Queries) InsertDeletedInventory(ctx context.Context, arg InsertDeletedI
 	return err
 }
 
+const insertDurableOperation = `-- name: InsertDurableOperation :one
+
+INSERT INTO durable_operations (
+  id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+)
+SELECT $1::text, $2::text, $3::text, $4::bytea,
+  $5::bigint, 'pending', 0, 0, 0, '', NULL, 0, NULL, FALSE, c.now_ms, c.now_ms, c.now_ms
+FROM (SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms) c
+ON CONFLICT (start_key) DO NOTHING
+RETURNING id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+`
+
+type InsertDurableOperationParams struct {
+	ID       string
+	StartKey string
+	Kind     string
+	Input    []byte
+	Version  int64
+}
+
+// Durable operations. Every time comes from the database clock, read with
+// clock_timestamp() when the statement runs, so neither the clock of an
+// instance nor the start of a long transaction moves a decision.
+// Creates a pending operation that can run at once. It inserts nothing when
+// the start key names an operation, and then returns no row.
+func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableOperationParams) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, insertDurableOperation,
+		arg.ID,
+		arg.StartKey,
+		arg.Kind,
+		arg.Input,
+		arg.Version,
+	)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
+const insertDurableStep = `-- name: InsertDurableStep :exec
+INSERT INTO durable_steps (operation_id, name, seq, result, done_at_ms)
+SELECT $1::text, $2::text, COALESCE(MAX(seq), 0) + 1,
+  $3::bytea, $4::bigint
+FROM durable_steps WHERE operation_id = $1::text
+`
+
+type InsertDurableStepParams struct {
+	OperationID string
+	Name        string
+	Result      []byte
+	NowMs       int64
+}
+
+// The caller holds the row of the operation, so the next seq is safe.
+func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepParams) error {
+	_, err := q.db.Exec(ctx, insertDurableStep,
+		arg.OperationID,
+		arg.Name,
+		arg.Result,
+		arg.NowMs,
+	)
+	return err
+}
+
 const insertJournal = `-- name: InsertJournal :exec
 INSERT INTO update_journal (
     stack_id, update_id, arrival, blob_key, sha256, md5, size,
@@ -4747,22 +5081,22 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
 SELECT blob_key
 FROM checkpoints
-WHERE stack_id = $1 AND blob_key IS NOT NULL AND blob_key <> ''
+WHERE stack_id = $1
 ORDER BY blob_key
 `
 
-// Every blob key the checkpoints of one stack name, without the empty ones,
-// ordered. A sweeper compares this set against the stored objects to find
-// blobs no checkpoint references.
-func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]pgtype.Text, error) {
+// Every blob key the checkpoints of one stack name, ordered. A sweeper
+// compares this set against the stored objects to find blobs no checkpoint
+// references.
+func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, listCheckpointBlobKeys, stackID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []pgtype.Text
+	var items []string
 	for rows.Next() {
-		var blob_key pgtype.Text
+		var blob_key string
 		if err := rows.Scan(&blob_key); err != nil {
 			return nil, err
 		}
@@ -4838,6 +5172,95 @@ func (q *Queries) ListDeletedInventory(ctx context.Context, namespace string) ([
 			&i.Name,
 			&i.DeletedAtMs,
 			&i.PurgeAfterMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDurableOperations = `-- name: ListDurableOperations :many
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations
+WHERE ($1::text = '' OR kind = $1::text)
+  AND (cardinality($2::text[]) = 0 OR state = ANY($2::text[]))
+ORDER BY created_at_ms, id
+LIMIT NULLIF($3::bigint, 0)
+`
+
+type ListDurableOperationsParams struct {
+	Kind    string
+	States  []string
+	MaxRows int64
+}
+
+// An empty kind or state list matches every operation. A limit of 0 means
+// no limit.
+func (q *Queries) ListDurableOperations(ctx context.Context, arg ListDurableOperationsParams) ([]DurableOperation, error) {
+	rows, err := q.db.Query(ctx, listDurableOperations, arg.Kind, arg.States, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DurableOperation
+	for rows.Next() {
+		var i DurableOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.StartKey,
+			&i.Kind,
+			&i.Input,
+			&i.Version,
+			&i.State,
+			&i.Attempt,
+			&i.Expiries,
+			&i.Failures,
+			&i.LastError,
+			&i.ClaimOwner,
+			&i.ClaimToken,
+			&i.ClaimExpiresAtMs,
+			&i.CancelRequested,
+			&i.NotBeforeMs,
+			&i.CreatedAtMs,
+			&i.UpdatedAtMs,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDurableSteps = `-- name: ListDurableSteps :many
+SELECT operation_id, name, seq, result, done_at_ms
+FROM durable_steps
+WHERE operation_id = ANY($1::text[])
+ORDER BY operation_id, seq
+`
+
+func (q *Queries) ListDurableSteps(ctx context.Context, ids []string) ([]DurableStep, error) {
+	rows, err := q.db.Query(ctx, listDurableSteps, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DurableStep
+	for rows.Next() {
+		var i DurableStep
+		if err := rows.Scan(
+			&i.OperationID,
+			&i.Name,
+			&i.Seq,
+			&i.Result,
+			&i.DoneAtMs,
 		); err != nil {
 			return nil, err
 		}
@@ -6140,6 +6563,40 @@ func (q *Queries) ListWorkspaces(ctx context.Context, namespace string) ([]Works
 	return items, nil
 }
 
+const lockDurableOperation = `-- name: LockDurableOperation :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner, claim_token, claim_expires_at_ms,
+  cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = $1
+FOR UPDATE
+`
+
+// Holds the row of one operation until the transaction ends, so the checks
+// and the write of a holder see one state.
+func (q *Queries) LockDurableOperation(ctx context.Context, id string) (DurableOperation, error) {
+	row := q.db.QueryRow(ctx, lockDurableOperation, id)
+	var i DurableOperation
+	err := row.Scan(
+		&i.ID,
+		&i.StartKey,
+		&i.Kind,
+		&i.Input,
+		&i.Version,
+		&i.State,
+		&i.Attempt,
+		&i.Expiries,
+		&i.Failures,
+		&i.LastError,
+		&i.ClaimOwner,
+		&i.ClaimToken,
+		&i.ClaimExpiresAtMs,
+		&i.CancelRequested,
+		&i.NotBeforeMs,
+		&i.CreatedAtMs,
+		&i.UpdatedAtMs,
+	)
+	return i, err
+}
+
 const lockServerAuditScope = `-- name: LockServerAuditScope :exec
 SELECT pg_advisory_xact_lock(418581342580)
 `
@@ -6502,9 +6959,9 @@ func (q *Queries) PurgeWorkspace(ctx context.Context, arg PurgeWorkspaceParams) 
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features, deployment, saved_at_ms,
+    digest, invalid, features, saved_at_ms,
     blob_key, size, blob_size, blob_md5
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ''::BYTEA, $9, $10, $11, $12, $13)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -6512,7 +6969,6 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     digest = excluded.digest,
     invalid = excluded.invalid,
     features = excluded.features,
-    deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms,
     blob_key = excluded.blob_key,
     size = excluded.size,
@@ -6530,7 +6986,7 @@ type PutCheckpointParams struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -7635,6 +8091,20 @@ func (q *Queries) TouchAccessToken(ctx context.Context, arg TouchAccessTokenPara
 	return err
 }
 
+const touchDurableOperation = `-- name: TouchDurableOperation :exec
+UPDATE durable_operations SET updated_at_ms = $1::bigint WHERE id = $2::text
+`
+
+type TouchDurableOperationParams struct {
+	NowMs int64
+	ID    string
+}
+
+func (q *Queries) TouchDurableOperation(ctx context.Context, arg TouchDurableOperationParams) error {
+	_, err := q.db.Exec(ctx, touchDurableOperation, arg.NowMs, arg.ID)
+	return err
+}
+
 const touchSession = `-- name: TouchSession :exec
 UPDATE sessions SET last_seen_at_ms = $1::bigint
 WHERE id = $2 AND ended_at_ms IS NULL AND last_seen_at_ms <= $3::bigint
@@ -7676,6 +8146,21 @@ type TouchStackParams struct {
 func (q *Queries) TouchStack(ctx context.Context, arg TouchStackParams) error {
 	_, err := q.db.Exec(ctx, touchStack, arg.UpdatedAtMs, arg.ID)
 	return err
+}
+
+const unitCollectionID = `-- name: UnitCollectionID :one
+SELECT c.id
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = $1
+`
+
+// The stable ID of the collection of one unit by its ID.
+func (q *Queries) UnitCollectionID(ctx context.Context, unitID string) (string, error) {
+	row := q.db.QueryRow(ctx, unitCollectionID, unitID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const unitStackID = `-- name: UnitStackID :one
