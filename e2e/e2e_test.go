@@ -11068,6 +11068,15 @@ func TestUpgradeCheck(t *testing.T) {
 	}
 }
 
+// upgradeReleasedClient is the release version stamped into the client
+// binary of the newer-schema case. The newer schema sets upgradeSchemaMinimum
+// above it, so this client answers `cannot start`.
+const upgradeReleasedClient = "v0.1.0"
+
+// upgradeSchemaMinimum is the minimum binary version of the future migration
+// that the newer-schema case records.
+const upgradeSchemaMinimum = "v0.2.0"
+
 // runUpgradeCheckOnStore runs the upgrade check cases on one store through
 // the running binary server: the migrated database is up to date, and the
 // newer, old and fresh states are reached by editing schema_migrations while
@@ -11083,9 +11092,10 @@ func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	ctx := t.Context()
 	env := e2e.NewEnv(ctx, t, cli, store)
+	released := e2e.BuildBinaryWithVersion(ctx, t, t.TempDir(), upgradeReleasedClient)
 
 	checkUpgradeUpToDateServer(ctx, t, env, store)
-	checkUpgradeNewerServer(ctx, t, env, store)
+	checkUpgradeNewerServer(ctx, t, env, store, released)
 	checkUpgradeOldServer(ctx, t, env, store)
 	checkUpgradeFreshServer(ctx, t, env, store)
 }
@@ -11331,7 +11341,7 @@ func snapshotServerDB(ctx context.Context, t *testing.T, env *e2e.Env, store e2e
 // insertServerFuture records one version above the newest in the server
 // database of env on store, so upgrade check sees a newer database. It
 // returns the future version.
-func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) int64 {
+func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, minimum string) int64 {
 	t.Helper()
 
 	switch store {
@@ -11347,8 +11357,8 @@ func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e
 
 		future := newest + 1
 		execServerSQLite(ctx, t, path,
-			`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`,
-			future, fmt.Sprintf("%04d_future.sql", future))
+			`INSERT INTO schema_migrations (version, name, min_binary_version) VALUES (?, ?, ?)`,
+			future, fmt.Sprintf("%04d_future.sql", future), minimum)
 
 		return future
 	case e2e.StorePostgres:
@@ -11374,9 +11384,9 @@ func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e
 		future := newest + 1
 		name := fmt.Sprintf("%04d_future.sql", future)
 
-		const recordFuture = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+		const recordFuture = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES ($1, $2, $3)`
 
-		if _, execErr := conn.Exec(ctx, recordFuture, future, name); execErr != nil {
+		if _, execErr := conn.Exec(ctx, recordFuture, future, name, minimum); execErr != nil {
 			t.Fatalf("record future version: %v", execErr)
 		}
 
@@ -11581,22 +11591,40 @@ func checkUpgradeUpToDateServer(ctx context.Context, t *testing.T, env *e2e.Env,
 	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
 }
 
-// checkUpgradeNewerServer proves upgrade check with one extra version row in
-// the server database: it exits 1 with `cannot start` and writes nothing. It
-// removes the row after the check.
-func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+// checkUpgradeNewerServer proves upgrade check on a schema that records a
+// migration the binaries do not embed, with a minimum binary version. The
+// suite's dev build counts as newer than every release: it answers `up to
+// date` and exits 0. A client stamped below the minimum answers `cannot
+// start`, exits 1 and names both versions. Neither writes anything. The
+// test removes the future row after the check.
+func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, released string) {
 	t.Helper()
 
 	pristine := snapshotServerDB(ctx, t, env, store)
-	future := insertServerFuture(ctx, t, env, store)
+	future := insertServerFuture(ctx, t, env, store, upgradeSchemaMinimum)
 
 	before := snapshotServerDB(ctx, t, env, store)
-	res := runUpgradeCheckServer(ctx, t, env)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: false})
 
-	database, binary := parseUpgradeVersions(t, res.Stdout)
+	dev := runUpgradeCheckServer(ctx, t, env)
+	checkUpgradeResult(t, dev, wantUpgradeResult{verdict: "up to date", exitCode: 0, pending: false})
+
+	if want := "schema minimum binary version: " + upgradeSchemaMinimum; !strings.Contains(dev.Stdout, want) {
+		t.Fatalf("upgrade check output lacks %q:\n%s", want, dev.Stdout)
+	}
+
+	database, binary := parseUpgradeVersions(t, dev.Stdout)
 	if database <= binary {
-		t.Fatalf("newer database %d is not above binary %d:\n%s", database, binary, res.Stdout)
+		t.Fatalf("newer database %d is not above binary %d:\n%s", database, binary, dev.Stdout)
+	}
+
+	below := env.RunBinaryPath(ctx, t, released,
+		"upgrade", "check", "--server", env.URL, "--ca-file", env.CABundle())
+	checkUpgradeResult(t, below, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: false})
+
+	for _, want := range []string{upgradeReleasedClient, upgradeSchemaMinimum} {
+		if !strings.Contains(below.Stderr, want) {
+			t.Fatalf("upgrade check below the minimum does not name %s:\n%s%s", want, below.Stdout, below.Stderr)
+		}
 	}
 
 	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))

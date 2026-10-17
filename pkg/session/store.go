@@ -28,8 +28,9 @@ type Store interface {
 	// GetSession returns the session with the ID id, or ErrNotFound.
 	GetSession(ctx context.Context, id string) (Session, error)
 	// GetSessionByDigest returns the session whose secret has the digest
-	// d, with its owner (its activity time and its break-glass flag too)
-	// and the stored digest. It returns ErrNotFound when
+	// d, with its owner (its activity time and its break-glass flag too),
+	// the stored digest, the session policy and the account part of the
+	// access token policy, all from one read. It returns ErrNotFound when
 	// no session has the digest, or when the owner was deleted. An ended
 	// session comes back as it is, and a disabled owner comes back with
 	// its disable time: the caller decides.

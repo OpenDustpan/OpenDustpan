@@ -1,6 +1,7 @@
 package principal
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -507,14 +508,17 @@ func groupKey(g Group) string { return strings.ToLower(g.Name) }
 // allows a new principal when no principal has the subject.
 type SignInInput struct {
 	Subject string
-	Names   []string
-	Create  bool
+	// Source is the source of a principal that the sign-in makes:
+	// SourceOIDC or SourceOAuth. Empty is SourceOIDC.
+	Source Source
+	Names  []string
+	Create bool
 }
 
 // SignInPrincipal returns the principal of a sign-in through an identity
 // provider: the principal with the subject in.Subject. When none exists
-// and in.Create is true, it makes a person with the source oidc, no grant
-// and no group, with the entry e, and created is true.
+// and in.Create is true, it makes a person with the source in.Source, no
+// grant and no group, with the entry e, and created is true.
 //
 // It returns ErrNotFound when no principal has the subject and in.Create
 // is false, ErrDisabled for a disabled principal, ErrNotSignInTarget for a
@@ -542,7 +546,7 @@ func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInI
 		Subject:     in.Subject,
 		DisplayName: signInDisplayName(in),
 		Kind:        KindPerson,
-		Source:      SourceOIDC,
+		Source:      cmp.Or(in.Source, SourceOIDC),
 		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 

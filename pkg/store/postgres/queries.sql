@@ -1742,7 +1742,9 @@ FROM sessions WHERE id = $1;
 
 -- name: GetSessionByDigest :one
 -- principal_active_at_ms is the latest activity of the owner by the account
--- rule of the inactivity disable, as in GetAccessTokenByDigest.
+-- rule of the inactivity disable, as in GetAccessTokenByDigest. The session
+-- policy and the account part of the token policy come from the same read,
+-- so a policy change applies to the next lookup on every instance.
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
   p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
@@ -1750,10 +1752,15 @@ SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
-  ), 0))::bigint AS principal_active_at_ms
+  ), 0))::bigint AS principal_active_at_ms,
+  sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
+  sp.token_freshness_ms AS policy_token_freshness_ms,
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
-WHERE s.digest = $1 AND p.deleted_at_ms IS NULL;
+CROSS JOIN session_policy sp
+CROSS JOIN access_token_policy ap
+WHERE s.digest = $1 AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1;
 
 -- name: TouchSession :exec
 -- An idle or expired session keeps its last use: seen_after_ms and
@@ -1819,28 +1826,36 @@ ORDER BY wrapper_id;
 -- name: CreateSignInProvider :execrows
 INSERT INTO sign_in_providers (
     provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 ON CONFLICT DO NOTHING;
 
 -- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 WHERE provider_id = $1;
 
 -- name: ListSignInProviders :many
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 ORDER BY provider_id COLLATE "C";
 
 -- name: UpdateSignInProvider :execrows
--- The update applies only to the version that the change read.
+-- The update applies only to the version that the change read. The mode
+-- never changes.
 UPDATE sign_in_providers
 SET issuer = sqlc.arg('issuer'), display_name = sqlc.arg('display_name'), client_id = sqlc.arg('client_id'),
     client_secret = sqlc.arg('client_secret'), scopes = sqlc.arg('scopes'),
     auto_create = sqlc.arg('auto_create'), enabled = sqlc.arg('enabled'),
+    authorization_url = sqlc.arg('authorization_url'), token_url = sqlc.arg('token_url'),
+    userinfo_url = sqlc.arg('userinfo_url'), subject_claim = sqlc.arg('subject_claim'),
+    name_claim = sqlc.arg('name_claim'), username_claim = sqlc.arg('username_claim'),
+    email_claim = sqlc.arg('email_claim'),
     updated_at_ms = sqlc.arg('updated_at_ms'), version = sqlc.arg('version')
 WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version') - 1;
 
