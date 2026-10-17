@@ -234,9 +234,13 @@ type skipSink struct{ inner *memSink }
 func (s skipSink) Write(ctx context.Context, records []logsink.Record) error {
 	var kept []logsink.Record
 
-	for _, r := range records {
+	var indexes []int
+
+	for i, r := range records {
 		if r.Message != "large" {
 			kept = append(kept, r)
+		} else {
+			indexes = append(indexes, i)
 		}
 	}
 
@@ -245,7 +249,7 @@ func (s skipSink) Write(ctx context.Context, records []logsink.Record) error {
 	}
 
 	if skipped := len(records) - len(kept); skipped > 0 {
-		return &logsink.SkipError{Reason: "too large", Skipped: skipped}
+		return &logsink.SkipError{Reason: "too large", Skipped: skipped, Indexes: indexes}
 	}
 
 	return nil
