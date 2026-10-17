@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -141,8 +142,8 @@ func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 		t.Fatalf("approve off as a service principal: %v, want ErrChainNeedsPerson", err)
 	}
 
-	if off.migrating.Load() || len(off.queue) != 0 {
-		t.Fatal("a refused approval holds the migration")
+	if got := migrationOpCount(t, off); got != 0 {
+		t.Fatalf("operations after a refused approval = %d, want none", got)
 	}
 
 	if err := off.Approve(t.Context(), approver()); err != nil {
@@ -171,8 +172,8 @@ func TestApproveOffNeedsTheMFAStep(t *testing.T) {
 		t.Fatalf("approve off without the step: %v, want ErrChainStepRequired", err)
 	}
 
-	if off.migrating.Load() || len(off.queue) != 0 {
-		t.Fatal("a refused approval holds the migration")
+	if got := migrationOpCount(t, off); got != 0 {
+		t.Fatalf("operations after a refused approval = %d, want none", got)
 	}
 
 	on := newTestAuditChain(t, audit.ChainOn)
@@ -182,8 +183,8 @@ func TestApproveOffNeedsTheMFAStep(t *testing.T) {
 		t.Fatalf("approve on: %v, want no MFA step", err)
 	}
 
-	if len(on.queue) != 1 {
-		t.Fatalf("queued changes = %d, want 1", len(on.queue))
+	if got := migrationOpCount(t, on); got != 1 {
+		t.Fatalf("operations after the approval = %d, want 1", got)
 	}
 
 	if err := on.Approve(t.Context(), approver()); !errors.Is(err, audit.ErrChainMigrating) {
@@ -202,9 +203,9 @@ func TestApproveOffWithoutMFAAsksForNoStep(t *testing.T) {
 		t.Fatalf("approve off: %v", err)
 	}
 
-	got := <-off.queue
+	got := migrationChange(t, off)
 	if got.To != audit.ChainStateOff || got.By != "alice" {
-		t.Fatalf("queued change = %+v, want off by alice", got)
+		t.Fatalf("started change = %+v, want off by alice", got)
 	}
 }
 
@@ -225,8 +226,8 @@ func TestApprovalAndRestoreRefuseEachOther(t *testing.T) {
 		t.Fatalf("approve while a restore runs: %v, want ErrRestoreRunning", err)
 	}
 
-	if chain.migrating.Load() {
-		t.Fatal("a refused approval holds the migration")
+	if got := migrationOpCount(t, chain); got != 0 {
+		t.Fatalf("operations after a refused approval = %d, want none", got)
 	}
 }
 
@@ -253,6 +254,194 @@ func TestApproveWithNothingToApprove(t *testing.T) {
 
 	if err := chain.admitRestore(t.Context()); err != nil {
 		t.Fatalf("restore with nothing waiting: %v, want it admitted", err)
+	}
+}
+
+// errApprovalStart is the injected failure of a migration start.
+var errApprovalStart = errors.New("injected approval start failure")
+
+// failOnceApproval wraps the atomic approval of a chain and fails its first
+// call with err, then delegates to the real approval.
+type failOnceApproval struct {
+	real chainApprovalStore
+	err  error
+	fail bool
+}
+
+func (f *failOnceApproval) ApproveChainChange(
+	ctx context.Context, e audit.Entry, fixed durable.StartRequest, retryKey string,
+) (durable.Operation, error) {
+	if f.fail {
+		f.fail = false
+
+		return durable.Operation{}, f.err
+	}
+
+	return f.real.ApproveChainChange(ctx, e, fixed, retryKey)
+}
+
+// approvalEntriesOf answers the approval entries of chain in the server
+// scope: entries with the action that records an approved chain change.
+func approvalEntriesOf(t *testing.T, chain *auditChain) []audit.Entry {
+	t.Helper()
+
+	listing, err := chain.entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list server scope: %v", err)
+	}
+
+	var out []audit.Entry
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Action == audit.ActionSetChain {
+			out = append(out, listing.Entries[i])
+		}
+	}
+
+	return out
+}
+
+// TestFailedApprovalWritesNoEntryAndRetryWritesOne proves that a failed
+// start leaves no entry: the first approval fails, writes no approval entry
+// and starts no operation, and the retry writes exactly one of each.
+func TestFailedApprovalWritesNoEntryAndRetryWritesOne(t *testing.T) {
+	t.Parallel()
+
+	chain := newTestAuditChain(t, audit.ChainOff)
+	chain.approve = &failOnceApproval{real: chain.approve, err: errApprovalStart, fail: true}
+
+	if err := chain.Approve(t.Context(), approver()); !errors.Is(err, errApprovalStart) {
+		t.Fatalf("approve with a failed start: %v, want the injected failure", err)
+	}
+
+	if got := approvalEntriesOf(t, chain); len(got) != 0 {
+		t.Fatalf("approval entries after a failed start = %d, want none", len(got))
+	}
+
+	if got := migrationOpCount(t, chain); got != 0 {
+		t.Fatalf("operations after a failed start = %d, want none", got)
+	}
+
+	if err := chain.Approve(t.Context(), approver()); err != nil {
+		t.Fatalf("retry after a failed start: %v", err)
+	}
+
+	if got := approvalEntriesOf(t, chain); len(got) != 1 {
+		t.Fatalf("approval entries after the retry = %d, want 1", len(got))
+	}
+
+	if got := migrationOpCount(t, chain); got != 1 {
+		t.Fatalf("operations after the retry = %d, want 1", got)
+	}
+}
+
+// newConcurrentApprovalChain answers a chain on st with the migration loop
+// marked running, ready for an approval of a change to off.
+func newConcurrentApprovalChain(t *testing.T, st *sqlite.Store) *auditChain {
+	t.Helper()
+
+	cfg := defaultSettings()
+	cfg.namespaceStore = st
+	cfg.auditChain = audit.ChainOff
+
+	chain, err := newAuditChain(cfg, nil)
+	if err != nil || chain == nil {
+		t.Fatalf("new audit chain = %v, %v", chain, err)
+	}
+
+	chain.migrationsRunning.Store(true)
+
+	return chain
+}
+
+// saveConcurrentWaitingChange stores a waiting change to on in st.
+func saveConcurrentWaitingChange(t *testing.T, st *sqlite.Store) {
+	t.Helper()
+
+	saveErr := st.SaveChainRecord(t.Context(), audit.ChainRecord{
+		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
+	})
+	if saveErr != nil {
+		t.Fatalf("save chain record: %v", saveErr)
+	}
+}
+
+// approvalCounts is the outcome of runConcurrentApprovals.
+type approvalCounts struct {
+	won  int
+	held int
+}
+
+// runConcurrentApprovals approves with every chain at the same time and
+// answers the count of approvals that won and the count refused while a
+// migration runs.
+func runConcurrentApprovals(t *testing.T, chains []*auditChain) approvalCounts {
+	t.Helper()
+
+	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		won, held int
+	)
+
+	for _, chain := range chains {
+		wg.Go(func() {
+			err := chain.Approve(t.Context(), approver())
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil:
+				won++
+			case errors.Is(err, audit.ErrChainMigrating):
+				held++
+			default:
+				t.Errorf("approve: %v, want nil or ErrChainMigrating", err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	return approvalCounts{won: won, held: held}
+}
+
+// TestConcurrentApprovalsLeaveOneEntry proves that two approvals of one
+// waiting change that run at the same time leave exactly one approval entry
+// and one operation: the approval whose start loses writes nothing.
+func TestConcurrentApprovalsLeaveOneEntry(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	first := newConcurrentApprovalChain(t, st)
+	second := newConcurrentApprovalChain(t, st)
+
+	saveConcurrentWaitingChange(t, st)
+
+	counts := runConcurrentApprovals(t, []*auditChain{first, second})
+
+	if counts.won != 1 || counts.held != 1 {
+		t.Fatalf("concurrent approvals: won %d, held %d, want 1 and 1", counts.won, counts.held)
+	}
+
+	if got := approvalEntriesOf(t, first); len(got) != 1 {
+		t.Fatalf("approval entries after concurrent approvals = %d, want 1", len(got))
+	}
+
+	if got := migrationOpCount(t, first); got != 1 {
+		t.Fatalf("operations after concurrent approvals = %d, want 1", got)
 	}
 }
 
@@ -333,7 +522,7 @@ func TestConcurrentApprovalsOnOneStore(t *testing.T) {
 }
 
 // TestApproveWithoutMigrationLoop proves that an approval while the server
-// runs no migration loop stops before it claims anything.
+// runs no migration loop stops before it starts anything.
 func TestApproveWithoutMigrationLoop(t *testing.T) {
 	t.Parallel()
 
@@ -344,12 +533,8 @@ func TestApproveWithoutMigrationLoop(t *testing.T) {
 		t.Fatalf("approve without the migration loop: %v, want ErrChainMigrationsStopped", err)
 	}
 
-	if chain.migrating.Load() {
-		t.Fatal("a refused approval holds the migration")
-	}
-
-	if len(chain.queue) != 0 {
-		t.Fatalf("queued changes = %d, want 0", len(chain.queue))
+	if got := migrationOpCount(t, chain); got != 0 {
+		t.Fatalf("operations after a refused approval = %d, want none", got)
 	}
 
 	rec, err := chain.store.ChainRecord(t.Context())
@@ -357,9 +542,51 @@ func TestApproveWithoutMigrationLoop(t *testing.T) {
 		t.Fatalf("chain record: %v", err)
 	}
 
-	if !rec.Pending || !rec.MigratingAt.IsZero() {
-		t.Fatalf("chain record = %+v, want the waiting change with no claim", rec)
+	if !rec.Pending {
+		t.Fatalf("chain record = %+v, want the waiting change", rec)
 	}
+}
+
+// migrationOpCount answers the count of migration operations of chain.
+func migrationOpCount(t *testing.T, chain *auditChain) int {
+	t.Helper()
+
+	ops, err := chain.durableOps.List(t.Context(), durable.Filter{
+		Kind:   auditChainKind,
+		States: nil,
+		Limit:  0,
+	})
+	if err != nil {
+		t.Fatalf("list migration operations: %v", err)
+	}
+
+	return len(ops)
+}
+
+// migrationChange answers the approved change of the single migration
+// operation of chain.
+func migrationChange(t *testing.T, chain *auditChain) audit.ChainChange {
+	t.Helper()
+
+	ops, err := chain.durableOps.List(t.Context(), durable.Filter{
+		Kind:   auditChainKind,
+		States: nil,
+		Limit:  0,
+	})
+	if err != nil {
+		t.Fatalf("list migration operations: %v", err)
+	}
+
+	if len(ops) != 1 {
+		t.Fatalf("migration operations = %d, want 1", len(ops))
+	}
+
+	change, err := decodeMigrationChange(ops[0])
+	if err != nil {
+		t.Fatalf("decode migration change: %v", err)
+	}
+
+	return change
 }
 
 // newTestCheckpointSigner returns a signer whose seed repeats 7.

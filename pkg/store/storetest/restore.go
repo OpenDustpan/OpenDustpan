@@ -69,6 +69,10 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "apply keeps the audit chain record of the target", test: testRestoreKeepsChainRecord},
 		{name: "apply keeps the installation state of the target", test: testRestoreKeepsInstallationState},
 		{
+			name: "a restore keeps the backups, restores and installation rows of the target",
+			test: testRestoreKeepsControlRows,
+		},
+		{
 			name: "a restored log of another chain state checks valid after the migration",
 			test: testRestoreChainAgreesAfterMigration,
 		},
@@ -77,6 +81,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
 		{name: "export does not tear a concurrent stack write", test: testRestoreExportDoesNotTear},
 		{name: "staging loads a backup without touching live data", test: testRestoreStagingKeepsLive},
+		{name: "staging refuses a backup with an unsealed state version", test: testRestoreStagingRefusesUnsealedState},
 		{name: "a new stage discards the previous staging area", test: testRestoreStagingReplacesPrevious},
 		{name: "staging keeps a checkpoint held in blobs", test: testRestoreStagingKeepsCheckpointBlobs},
 		{name: "a restore keeps the journal rows of a running update", test: testRestoreJournalBlob},
@@ -367,11 +372,10 @@ func testRestoreOneRunning(t *testing.T, newStore RestoreFactory) {
 	mustCreateRestore(t, s, second)
 }
 
-// testRestoreThenBackup restores a snapshot that holds a running backup row
-// and a checking restore row, as the backup that a restore takes before it
-// applies does: the backup sees its own row as running, and the restore that
-// takes it is checking. The staged load accepts both rows, and a new backup
-// starts after the apply: the swap leaves no running backup row behind.
+// testRestoreThenBackup restores a snapshot while the target holds no control
+// rows: a backup leaves the control tables out, so the running backup and
+// the checking restore of the source never reach the target. The target
+// keeps its own control rows, and a new backup starts after the apply.
 func testRestoreThenBackup(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
@@ -393,8 +397,8 @@ func testRestoreThenBackup(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("apply staging area: %v", err)
 	}
 
-	if got := mustGetBackup(t, ps.dst, running.ID); got.State == backup.StateRunning {
-		t.Fatalf("backup row of the snapshot after the swap = %+v, want it not running", got)
+	if _, err := ps.dst.GetBackup(ctx, running.ID); !errors.Is(err, backup.ErrNotFound) {
+		t.Fatalf("get backup of the snapshot after the swap: err = %v, want ErrNotFound", err)
 	}
 
 	next := newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour))
@@ -403,9 +407,10 @@ func testRestoreThenBackup(t *testing.T, newStore RestoreFactory) {
 	}
 }
 
-// testRestoreThenRestore applies a snapshot that holds a restore in checking
-// or in applying, then starts a new restore. The restored row is not
-// running after the swap, so it does not block the new one.
+// testRestoreThenRestore applies a snapshot while the target holds no
+// control rows: a backup leaves the restores table out, so the checking or
+// applying restore of the source never reaches the target. The target keeps
+// its own control rows, and a new restore starts after the apply.
 func testRestoreThenRestore(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
@@ -428,11 +433,8 @@ func testRestoreThenRestore(t *testing.T, newStore RestoreFactory) {
 
 			applySnapshot(t, ps)
 
-			got := mustGetRestore(t, ps.dst, held.ID)
-			if got.State != backup.RestoreFailed || got.Error != backup.RestoredRunningRestoreText ||
-				got.EndedAt.IsZero() {
-				t.Fatalf("restore row of the snapshot after the swap = %+v, want failed with %q and an end time",
-					got, backup.RestoredRunningRestoreText)
+			if _, err := ps.dst.GetRestore(ctx, held.ID); !errors.Is(err, backup.ErrRestoreNotFound) {
+				t.Fatalf("get restore of the snapshot after the swap: err = %v, want ErrRestoreNotFound", err)
 			}
 
 			next := newRestoreRecord(
@@ -448,16 +450,17 @@ func testRestoreThenRestore(t *testing.T, newStore RestoreFactory) {
 }
 
 // testRestoreRecordsEndAfterSwap runs a restore on the target while it
-// applies a snapshot that holds another running restore. The swap replaces
-// the row of the running restore, so the restore stores it again in
-// applying, as the restore service does, and then records its end.
+// applies a snapshot. The control tables stay across the swap, so the
+// running restore row of the target stays applying with its pre-backup ID,
+// with no need to store it again, and then records its end. Any handle
+// reads the row during the swap: it never leaves the registry.
 func testRestoreRecordsEndAfterSwap(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
 	ctx := t.Context()
 	ps := portableRestoreStores(t, newStore(t), newStore(t))
 
-	mustCreateRestore(
+	srcRestore := mustCreateRestore(
 		t, ps.src, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
 	)
 
@@ -472,12 +475,13 @@ func testRestoreRecordsEndAfterSwap(t *testing.T, newStore RestoreFactory) {
 
 	applySnapshot(t, ps)
 
-	recreated := current
-	recreated.State = backup.RestoreApplying
-	recreated.PreBackupID = preBackupID
+	if _, err := ps.dst.GetRestore(ctx, srcRestore.ID); !errors.Is(err, backup.ErrRestoreNotFound) {
+		t.Fatalf("get source restore after the swap: err = %v, want ErrRestoreNotFound", err)
+	}
 
-	if err := ps.dst.CreateRestore(ctx, recreated); err != nil {
-		t.Fatalf("store the running restore again after the swap: %v, want nil", err)
+	kept := mustGetRestore(t, ps.dst, current.ID)
+	if kept.State != backup.RestoreApplying || kept.PreBackupID != preBackupID || kept.BackupID != current.BackupID {
+		t.Fatalf("running restore after the swap = %+v, want applying with pre-backup %s", kept, preBackupID)
 	}
 
 	end := now().Add(time.Hour)
@@ -816,6 +820,136 @@ func setInstallationState(t *testing.T, s maintenance.Store, state maintenance.S
 	}
 }
 
+// testRestoreKeepsControlRows proves that a restore keeps the backups,
+// restores and installation rows of the target on both dialects: a backup
+// leaves the control tables out, so the rows of the source never reach the
+// target, and the swap never renames the control schema. Any handle reads
+// the restore row during the swap: after the apply the running restore is
+// still readable, also through a reopened handle.
+func testRestoreKeepsControlRows(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+
+	target := seedTargetControlRows(t, ps.dst)
+	srcBackup, srcRestore := seedSourceControlRows(t, ps.src)
+
+	applySnapshot(t, ps)
+
+	checkTargetControlRows(t, ps.dst, target, srcBackup, srcRestore)
+
+	// Any handle reads the restore row: a reopened handle to the same
+	// backing storage still reads the running restore.
+	checkReopenedControlRow(t, ps.dst, target.restoreID)
+}
+
+// targetControlRows holds the control rows of the restore target.
+type targetControlRows struct {
+	backup    backup.Record
+	restoreID backup.RestoreID
+	state     maintenance.State
+}
+
+// seedTargetControlRows writes a finished backup, a restore and the
+// maintenance installation state to dst.
+func seedTargetControlRows(t *testing.T, dst RestoreStore) targetControlRows {
+	t.Helper()
+
+	targetBackup := mustCreateBackup(t, dst, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	done := mustFinishBackup(t, dst, backupFinish{
+		ID: targetBackup.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour),
+	})
+	restore := mustCreateRestore(
+		t, dst, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+
+	var state maintenance.State
+
+	if to, ok := dst.(maintenance.Store); ok {
+		setInstallationState(t, to, maintenance.StateMaintenance)
+		state = maintenance.StateMaintenance
+	}
+
+	return targetControlRows{backup: done, restoreID: restore.ID, state: state}
+}
+
+// seedSourceControlRows writes a finished backup and a restore with other IDs
+// and the opposite installation state to src, and returns their IDs.
+func seedSourceControlRows(t *testing.T, src RestoreStore) (backup.ID, backup.RestoreID) {
+	t.Helper()
+
+	srcBackup := mustCreateBackup(t, src, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	mustFinishBackup(t, src, backupFinish{
+		ID: srcBackup.ID, State: backup.StateSucceeded, Error: "", EndedAt: now().Add(time.Hour),
+	})
+	srcRestore := mustCreateRestore(
+		t, src, newRestoreRecord(backup.RestoreID(ident.NewID("rst-")), backup.ID(ident.NewID("bkp-")), now()),
+	)
+
+	if from, ok := src.(maintenance.Store); ok {
+		setInstallationState(t, from, maintenance.StateNormal)
+	}
+
+	return srcBackup.ID, srcRestore.ID
+}
+
+// checkTargetControlRows fails unless dst holds the target control rows and
+// none of the source control rows.
+func checkTargetControlRows(
+	t *testing.T, dst RestoreStore, target targetControlRows, srcBackup backup.ID, srcRestore backup.RestoreID,
+) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	if got := mustGetBackup(t, dst, target.backup.ID); got != target.backup {
+		t.Fatalf("target backup after the swap = %+v, want %+v", got, target.backup)
+	}
+
+	if _, err := dst.GetBackup(ctx, srcBackup); !errors.Is(err, backup.ErrNotFound) {
+		t.Fatalf("get source backup after the swap: err = %v, want ErrNotFound", err)
+	}
+
+	kept := mustGetRestore(t, dst, target.restoreID)
+	if kept.ID != target.restoreID {
+		t.Fatalf("target restore after the swap = %+v, want %s", kept, target.restoreID)
+	}
+
+	if _, err := dst.GetRestore(ctx, srcRestore); !errors.Is(err, backup.ErrRestoreNotFound) {
+		t.Fatalf("get source restore after the swap: err = %v, want ErrRestoreNotFound", err)
+	}
+
+	if to, ok := dst.(maintenance.Store); ok {
+		if got, err := to.GetState(ctx); err != nil || got != target.state {
+			t.Fatalf("installation state after the swap = %q, %v, want %q", got, err, target.state)
+		}
+	}
+}
+
+// checkReopenedControlRow fails unless a reopened handle to the same backing
+// storage still reads the target restore row.
+func checkReopenedControlRow(t *testing.T, dst RestoreStore, id backup.RestoreID) {
+	t.Helper()
+
+	reopenable, ok := dst.(RestoreReopener)
+	if !ok {
+		return
+	}
+
+	if err := reopenable.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	reopened, ok := reopenable.Reopen().(RestoreStore)
+	if !ok {
+		t.Skip("reopened store keeps no restore ports")
+	}
+
+	if got, err := reopened.GetRestore(t.Context(), id); err != nil || got.ID != id {
+		t.Fatalf("get target restore through a reopened handle = %+v, %v, want %s", got, err, id)
+	}
+}
+
 // testRestoreChainAgreesAfterMigration proves that a restored log from an
 // installation with the chain off disagrees with a target that keeps the
 // chain on, and that the migration of the target makes every scope check
@@ -915,25 +1049,11 @@ func saveChainRecord(t *testing.T, s audit.ChainStore, rec audit.ChainRecord) {
 	}
 }
 
-// migrateChain runs the migration of change in s with a held claim, so each
-// renewal after a scope succeeds.
+// migrateChain runs the migration of change in s.
 func migrateChain(t *testing.T, s chainRestoreStore, fences []namespace.Fence, change audit.ChainChange) {
 	t.Helper()
 
-	rec, err := s.ChainRecord(t.Context())
-	if err != nil {
-		t.Fatalf("chain record: %v", err)
-	}
-
-	rec.MigratingAt = change.At
-
-	if err := s.SaveChainRecord(t.Context(), rec); err != nil {
-		t.Fatalf("save chain record: %v", err)
-	}
-
-	clock := func() time.Time { return change.At.Add(time.Minute) }
-
-	if err := audit.MigrateChain(t.Context(), s, fences, change, clock); err != nil {
+	if err := audit.MigrateChain(t.Context(), s, fences, change); err != nil {
 		t.Fatalf("migrate the chain: %v", err)
 	}
 }
@@ -969,13 +1089,11 @@ func wantScopesValid(t *testing.T, s audit.ScopesChecker, scopes ...namespace.Na
 	}
 }
 
-// testRestoreApplyReRecordsBackup proves the swap drops the backup row taken
-// before the apply, and that the row is re-recorded after it: the staged
-// snapshot predates the pre-backup row, so the one-step swap replaces it with
-// the old live data on every dialect. The restore service re-records the row
-// (backup.PreserveAfterRestore), so the undo source stays listed and readable
-// (ADR 30 decision 9). The case mirrors that order: stage, record the
-// pre-backup, apply, prove the row is gone, re-record it, and read it back.
+// testRestoreApplyReRecordsBackup proves the swap keeps the backup row taken
+// before the apply: the control tables stay across the swap with the live
+// rows, so the pre-backup row survives on every dialect with no need to
+// re-record it. The restore service still calls PreserveAfterRestore, which
+// does nothing when the row already exists.
 func testRestoreApplyReRecordsBackup(t *testing.T, newStore RestoreFactory) {
 	t.Helper()
 
@@ -1009,34 +1127,22 @@ func testRestoreApplyReRecordsBackup(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("apply staging area: %v", applyErr)
 	}
 
-	assertPreBackupRerecorded(t, pdst, finished)
+	assertPreBackupKept(t, pdst, finished)
 }
 
-// assertPreBackupRerecorded proves the swap dropped the pre-backup row and
-// that re-recording it keeps it listed and readable: the staged snapshot
-// predates the row, so the one-step swap replaces it with the old live data
-// on every dialect. The restore service re-records the row
-// (backup.PreserveAfterRestore), so the undo source survives (ADR 30 decision
-// 9).
-func assertPreBackupRerecorded(t *testing.T, dst RestoreStore, finished backup.Record) {
+// assertPreBackupKept proves the swap kept the pre-backup row: the control
+// tables stay across the swap, so the row is still listed and readable.
+func assertPreBackupKept(t *testing.T, dst RestoreStore, finished backup.Record) {
 	t.Helper()
 
 	ctx := t.Context()
 
-	if _, getErr := dst.GetBackup(ctx, finished.ID); !errors.Is(getErr, backup.ErrNotFound) {
-		t.Fatalf("get pre-backup after the swap: err = %v, want ErrNotFound", getErr)
-	}
-
-	if createErr := dst.CreateBackup(ctx, finished); createErr != nil {
-		t.Fatalf("re-record pre-backup %s after the swap: %v", finished.ID, createErr)
-	}
-
 	if got, getErr := dst.GetBackup(ctx, finished.ID); getErr != nil || got != finished {
-		t.Fatalf("get re-recorded pre-backup = %+v, %v, want %+v", got, getErr, finished)
+		t.Fatalf("get pre-backup after the swap = %+v, %v, want %+v", got, getErr, finished)
 	}
 
 	if !slices.Contains(mustListBackups(t, dst), finished) {
-		t.Fatalf("backups omit the re-recorded pre-backup %s after the swap", finished.ID)
+		t.Fatalf("backups omit the pre-backup %s after the swap", finished.ID)
 	}
 }
 

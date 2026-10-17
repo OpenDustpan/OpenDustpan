@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
@@ -230,5 +231,53 @@ func TestEmbeddedMigrationNames(t *testing.T) {
 	third, _ := schema.EmbeddedMigrationNames()
 	if third[0] == "changed.sql" {
 		t.Fatal("embedded names share backing storage, want a copy per call")
+	}
+}
+
+// TestBaselineVersionsAgree pins the baseline version of the backup package,
+// which cannot import this package, to the baseline version of the schema.
+func TestBaselineVersionsAgree(t *testing.T) {
+	t.Parallel()
+
+	if int64(backup.BaselineSchemaVersion) != schema.BaselineVersion {
+		t.Fatalf(
+			"backup baseline %d, schema baseline %d, want equal",
+			backup.BaselineSchemaVersion,
+			schema.BaselineVersion,
+		)
+	}
+
+	version, err := schema.ParseMigrationVersion(schema.BaselineName)
+	if err != nil || version != schema.BaselineVersion {
+		t.Fatalf(
+			"baseline name %q has version %d, %v, want %d",
+			schema.BaselineName,
+			version,
+			err,
+			schema.BaselineVersion,
+		)
+	}
+}
+
+func TestCheckBaseline(t *testing.T) {
+	t.Parallel()
+
+	for _, recorded := range [][]int64{nil, {schema.BaselineVersion}, {schema.BaselineVersion, schema.BaselineVersion + 1}} {
+		if err := schema.CheckBaseline(recorded); err != nil {
+			t.Fatalf("check baseline of %v: %v, want nil", recorded, err)
+		}
+	}
+
+	err := schema.CheckBaseline([]int64{1, 75, 76})
+
+	before, ok := errors.AsType[*schema.BeforeBaselineError](err)
+	if !ok || !errors.Is(err, schema.ErrSchemaBeforeBaseline) {
+		t.Fatalf("check baseline of 1, 75, 76 = %v, want a BeforeBaselineError", err)
+	}
+
+	want := "database schema version 76 is older than baseline schema version 100: " +
+		"no binary can upgrade this database. Start the server on an empty database"
+	if before.Error() != want {
+		t.Fatalf("message = %q, want %q", before.Error(), want)
 	}
 }

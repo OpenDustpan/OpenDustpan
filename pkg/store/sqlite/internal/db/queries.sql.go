@@ -129,6 +129,32 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 	return result.RowsAffected()
 }
 
+const addSignInFailure = `-- name: AddSignInFailure :one
+
+INSERT INTO sign_in_failures (source, window_end_ms, count)
+VALUES (?, ?, 1)
+ON CONFLICT (source, window_end_ms) DO UPDATE SET count = sign_in_failures.count + 1
+RETURNING count
+`
+
+type AddSignInFailureParams struct {
+	Source      string
+	WindowEndMs int64
+}
+
+// Sign-in failure budget. The upsert is one atomic write, so concurrent adds
+// each count once. The window comes from DatabaseNowMs, the clock of the
+// store, read in the same transaction as the write, so the clock of an
+// instance never moves the window.
+// Adds one miss of source in the window that ends at window_end_ms, and
+// answers the count of that window after the add.
+func (q *Queries) AddSignInFailure(ctx context.Context, arg AddSignInFailureParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, addSignInFailure, arg.Source, arg.WindowEndMs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const advanceAuditSinkCursor = `-- name: AdvanceAuditSinkCursor :exec
 INSERT INTO audit_sink_cursors (sink, namespace, sequence, updated_at_ms)
 VALUES (?, ?, ?, ?)
@@ -324,27 +350,6 @@ func (q *Queries) CallerGrants(ctx context.Context, arg CallerGrantsParams) ([]C
 		return nil, err
 	}
 	return items, nil
-}
-
-const claimAuditChainMigration = `-- name: ClaimAuditChainMigration :execrows
-UPDATE audit_chain_state
-SET migrating_at_ms = ?
-WHERE id = 1 AND pending = 1 AND (migrating_at_ms = 0 OR migrating_at_ms < ?)
-`
-
-type ClaimAuditChainMigrationParams struct {
-	MigratingAtMs   int64
-	MigratingAtMs_2 int64
-}
-
-// Starts the migration of a waiting change in one write: it stamps the start
-// time only when a change waits and no claim within the lease holds.
-func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditChainMigrationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, claimAuditChainMigration, arg.MigratingAtMs, arg.MigratingAtMs_2)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
 }
 
 const claimDurableScheduleTick = `-- name: ClaimDurableScheduleTick :execrows
@@ -817,6 +822,20 @@ SELECT COUNT(*) FROM grants WHERE role = ? AND object_kind = 'principal' AND rev
 
 func (q *Queries) CountRoleGrantsOnPrincipal(ctx context.Context, role string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countRoleGrantsOnPrincipal, role)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countRunnableDurableOperations = `-- name: CountRunnableDurableOperations :one
+SELECT COUNT(*) FROM durable_operations WHERE kind = ? AND state IN ('pending', 'running')
+`
+
+// The count of operations of one kind that can run now: pending or running.
+// An approval of an audit chain change reads it in the transaction of its
+// own start, so a second approval waits for the first and refuses.
+func (q *Queries) CountRunnableDurableOperations(ctx context.Context, kind string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRunnableDurableOperations, kind)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -2529,25 +2548,9 @@ type GetCheckpointByUpdateParams struct {
 	UpdateID string
 }
 
-type GetCheckpointByUpdateRow struct {
-	StackID       string
-	UpdateID      string
-	LeaseDigest   []byte
-	SchemaVersion int64
-	Sequence      int64
-	Digest        []byte
-	Invalid       bool
-	FeaturesJson  string
-	SavedAtMs     int64
-	BlobKey       sql.NullString
-	Size          sql.NullInt64
-	BlobSize      sql.NullInt64
-	BlobMd5       []byte
-}
-
-func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (GetCheckpointByUpdateRow, error) {
+func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointByUpdateParams) (Checkpoint, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpointByUpdate, arg.StackID, arg.UpdateID)
-	var i GetCheckpointByUpdateRow
+	var i Checkpoint
 	err := row.Scan(
 		&i.StackID,
 		&i.UpdateID,
@@ -2580,25 +2583,9 @@ type GetCheckpointByVersionParams struct {
 	Version int64
 }
 
-type GetCheckpointByVersionRow struct {
-	StackID       string
-	UpdateID      string
-	LeaseDigest   []byte
-	SchemaVersion int64
-	Sequence      int64
-	Digest        []byte
-	Invalid       bool
-	FeaturesJson  string
-	SavedAtMs     int64
-	BlobKey       sql.NullString
-	Size          sql.NullInt64
-	BlobSize      sql.NullInt64
-	BlobMd5       []byte
-}
-
-func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (GetCheckpointByVersionRow, error) {
+func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointByVersionParams) (Checkpoint, error) {
 	row := q.db.QueryRowContext(ctx, getCheckpointByVersion, arg.StackID, arg.Version)
-	var i GetCheckpointByVersionRow
+	var i Checkpoint
 	err := row.Scan(
 		&i.StackID,
 		&i.UpdateID,
@@ -2989,25 +2976,9 @@ ORDER BY u.version DESC
 LIMIT 1
 `
 
-type GetLatestCheckpointRow struct {
-	StackID       string
-	UpdateID      string
-	LeaseDigest   []byte
-	SchemaVersion int64
-	Sequence      int64
-	Digest        []byte
-	Invalid       bool
-	FeaturesJson  string
-	SavedAtMs     int64
-	BlobKey       sql.NullString
-	Size          sql.NullInt64
-	BlobSize      sql.NullInt64
-	BlobMd5       []byte
-}
-
-func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetLatestCheckpointRow, error) {
+func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (Checkpoint, error) {
 	row := q.db.QueryRowContext(ctx, getLatestCheckpoint, stackID)
-	var i GetLatestCheckpointRow
+	var i Checkpoint
 	err := row.Scan(
 		&i.StackID,
 		&i.UpdateID,
@@ -4907,22 +4878,22 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
 SELECT blob_key
 FROM checkpoints
-WHERE stack_id = ? AND blob_key IS NOT NULL AND blob_key <> ''
+WHERE stack_id = ?
 ORDER BY blob_key
 `
 
-// Every blob key the checkpoints of one stack name, without the empty ones,
-// ordered. A sweeper compares this set against the stored objects to find
-// blobs no checkpoint references.
-func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]sql.NullString, error) {
+// Every blob key the checkpoints of one stack name, ordered. A sweeper
+// compares this set against the stored objects to find blobs no checkpoint
+// references.
+func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listCheckpointBlobKeys, stackID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []sql.NullString
+	var items []string
 	for rows.Next() {
-		var blob_key sql.NullString
+		var blob_key string
 		if err := rows.Scan(&blob_key); err != nil {
 			return nil, err
 		}
@@ -6602,6 +6573,19 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	return count, err
 }
 
+const pruneSignInFailures = `-- name: PruneSignInFailures :execrows
+DELETE FROM sign_in_failures WHERE window_end_ms <= ?
+`
+
+// Deletes every window that ended at or before threshold_ms.
+func (q *Queries) PruneSignInFailures(ctx context.Context, windowEndMs int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneSignInFailures, windowEndMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const pruneSignInRequests = `-- name: PruneSignInRequests :execrows
 DELETE FROM sign_in_requests WHERE expires_at_ms <= ?
 `
@@ -6657,9 +6641,9 @@ func (q *Queries) PurgeWorkspace(ctx context.Context, arg PurgeWorkspaceParams) 
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features_json, deployment, saved_at_ms,
+    digest, invalid, features_json, saved_at_ms,
     blob_key, size, blob_size, blob_md5
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, X'', ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -6667,7 +6651,6 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     digest = excluded.digest,
     invalid = excluded.invalid,
     features_json = excluded.features_json,
-    deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms,
     blob_key = excluded.blob_key,
     size = excluded.size,
@@ -6685,7 +6668,7 @@ type PutCheckpointParams struct {
 	Invalid       bool
 	FeaturesJson  string
 	SavedAtMs     int64
-	BlobKey       sql.NullString
+	BlobKey       string
 	Size          sql.NullInt64
 	BlobSize      sql.NullInt64
 	BlobMd5       []byte
@@ -6707,17 +6690,6 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.BlobSize,
 		arg.BlobMd5,
 	)
-	return err
-}
-
-const releaseAuditChainMigration = `-- name: ReleaseAuditChainMigration :exec
-UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1
-`
-
-// Releases the claim of a migration that stops without storing the new
-// state.
-func (q *Queries) ReleaseAuditChainMigration(ctx context.Context) error {
-	_, err := q.db.ExecContext(ctx, releaseAuditChainMigration)
 	return err
 }
 
@@ -6778,20 +6750,6 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		arg.Project,
 		arg.Name_2,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const renewAuditChainMigration = `-- name: RenewAuditChainMigration :execrows
-UPDATE audit_chain_state SET migrating_at_ms = ? WHERE id = 1 AND migrating_at_ms <> 0
-`
-
-// Moves the start of the held claim to the given time. It writes only
-// when a claim holds, so a renewal without a claim changes no row.
-func (q *Queries) RenewAuditChainMigration(ctx context.Context, migratingAtMs int64) (int64, error) {
-	result, err := q.db.ExecContext(ctx, renewAuditChainMigration, migratingAtMs)
 	if err != nil {
 		return 0, err
 	}
@@ -7905,6 +7863,21 @@ type TouchStackParams struct {
 func (q *Queries) TouchStack(ctx context.Context, arg TouchStackParams) error {
 	_, err := q.db.ExecContext(ctx, touchStack, arg.UpdatedAtMs, arg.ID)
 	return err
+}
+
+const unitCollectionID = `-- name: UnitCollectionID :one
+SELECT c.id
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?
+`
+
+// The stable ID of the collection of one unit by its ID.
+func (q *Queries) UnitCollectionID(ctx context.Context, unitID string) (string, error) {
+	row := q.db.QueryRowContext(ctx, unitCollectionID, unitID)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const unitStackID = `-- name: UnitStackID :one

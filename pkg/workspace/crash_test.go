@@ -146,7 +146,7 @@ func newCrashFixture(
 		States:             wrappedSQL,
 		Blobs:              wrappedBlobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             newMemSealer(t, namespaces),
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,

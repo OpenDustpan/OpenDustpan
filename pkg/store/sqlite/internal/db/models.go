@@ -107,10 +107,8 @@ type Checkpoint struct {
 	Digest        []byte
 	Invalid       bool
 	FeaturesJson  string
-	Deployment    []byte
 	SavedAtMs     int64
-	ResourceCount sql.NullInt64
-	BlobKey       sql.NullString
+	BlobKey       string
 	Size          sql.NullInt64
 	BlobSize      sql.NullInt64
 	BlobMd5       []byte
@@ -329,6 +327,12 @@ type SessionPolicy struct {
 	MaxLengthMs      int64
 	UpdatedAtMs      int64
 	TokenFreshnessMs sql.NullInt64
+}
+
+type SignInFailure struct {
+	Source      string
+	WindowEndMs int64
+	Count       int64
 }
 
 type SignInProvider struct {

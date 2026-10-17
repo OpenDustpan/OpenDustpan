@@ -434,24 +434,35 @@ func (s *Store) DeleteGroup(ctx context.Context, id string, e audit.Entry) error
 }
 
 // AddMember implements principal.Store. It checks the group and the
-// principal in the same transaction as the insert. An empty source or state
+// principal, and runs more, in the same transaction as the insert. An empty source or state
 // defaults to local and active.
-func (s *Store) AddMember(ctx context.Context, m principal.Membership, e audit.Entry) error {
+func (s *Store) AddMember(
+	ctx context.Context, m principal.Membership, e audit.Entry, more principal.MemberAudit,
+) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	if err := validServerEntry(e); err != nil {
+		return err
+	}
+
+	return s.inTx(ctx, func(q *db.Queries) error {
 		if err := groupAndPrincipalExist(ctx, q, m.GroupID, m.PrincipalID); err != nil {
 			return err
 		}
 
-		m = m.WithDefaults()
-
-		if err := m.Validate(); err != nil {
-			return err
+		entry, merr := memberChanges(ctx, q, e, more)
+		if merr != nil {
+			return merr
 		}
 
-		n, err := q.AddGroupMember(ctx, db.AddGroupMemberParams{
+		m = m.WithDefaults()
+
+		if verr := m.Validate(); verr != nil {
+			return verr
+		}
+
+		n, ierr := q.AddGroupMember(ctx, db.AddGroupMemberParams{
 			GroupID:       m.GroupID,
 			PrincipalID:   m.PrincipalID,
 			AddedAtMs:     codec.Millis(m.AddedAt),
@@ -461,16 +472,51 @@ func (s *Store) AddMember(ctx context.Context, m principal.Membership, e audit.E
 			SuspendedAtMs: codec.OptionalMillis(m.SuspendedAt),
 			Pinned:        m.Pinned,
 		})
-		if err != nil {
-			return fmt.Errorf("insert group member: %w", err)
+		if ierr != nil {
+			return fmt.Errorf("insert group member: %w", ierr)
 		}
 
 		if n == 0 {
 			return principal.ErrAlreadyExists
 		}
 
-		return nil
+		return appendMemberAudit(ctx, q, entry)
 	})
+}
+
+// memberChanges returns e with the changes of more appended to a copy, so
+// the caller entry keeps its changes. It runs more only when more is not
+// nil.
+func memberChanges(
+	ctx context.Context, q *db.Queries, e audit.Entry, more principal.MemberAudit,
+) (audit.Entry, error) {
+	changes := append([]audit.Change(nil), e.Changes...)
+	if more != nil {
+		extra, err := more(ctx, grantReads{q: q})
+		if err != nil {
+			return audit.Entry{}, err
+		}
+
+		changes = append(changes, extra...)
+	}
+
+	entry := e
+	entry.Changes = changes
+
+	return entry, nil
+}
+
+// appendMemberAudit validates the entry of the insert and appends it.
+func appendMemberAudit(ctx context.Context, q *db.Queries, entry audit.Entry) error {
+	if err := validServerEntry(entry); err != nil {
+		return err
+	}
+
+	if _, err := appendAuditEntry(ctx, q, entry); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // groupAndPrincipalExist returns ErrNotFound when the group or the principal

@@ -18,18 +18,18 @@ import (
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
-// plainContent is a state file that a service without a sealer stores as it
-// is.
-const plainContent = `{"version":4,"serial":1}`
+// sealedContent is a state file that a service with a sealer stores sealed.
+const sealedContent = `{"version":4,"serial":1}`
 
 // TestRunWritesNoWorkspaceBlobAtStartup proves a start writes and deletes no
-// workspace blob: a version that holds plain content keeps its blob, its
-// content key and its flag.
+// workspace blob: a sealed version keeps its blob, its content key and its
+// flag.
 func TestRunWritesNoWorkspaceBlobAtStartup(t *testing.T) {
 	t.Parallel()
 
 	st, blobs, authn := requireServerPorts(t)
-	sv := seedPlainState(t, st, blobs, plainNamespaces(t, st))
+	namespaces := seedNamespaces(t, st)
+	sv := seedSealedState(t, st, blobs, namespaces)
 	before := listBlobs(t, blobs)
 
 	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
@@ -79,8 +79,8 @@ func TestRunWritesNoWorkspaceBlobAtStartup(t *testing.T) {
 		t.Fatalf("get state: %v", err)
 	}
 
-	if stored.Content != sv.Content || stored.Sealed {
-		t.Errorf("state after start names %q, sealed %v; want %q, unsealed", stored.Content, stored.Sealed, sv.Content)
+	if stored.Content != sv.Content || !stored.Sealed {
+		t.Errorf("state after start names %q, sealed %v; want %q, sealed", stored.Content, stored.Sealed, sv.Content)
 	}
 
 	cancel()
@@ -105,8 +105,8 @@ func listBlobs(t *testing.T, blobs *fs.Store) []blob.Object {
 	return listed
 }
 
-// plainNamespaces returns a namespace service holding acme homed here.
-func plainNamespaces(t *testing.T, st *sqlite.Store) *namespace.Service {
+// seedNamespaces returns a namespace service holding acme homed here.
+func seedNamespaces(t *testing.T, st *sqlite.Store) *namespace.Service {
 	t.Helper()
 
 	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
@@ -130,21 +130,28 @@ func plainNamespaces(t *testing.T, st *sqlite.Store) *namespace.Service {
 	return namespaces
 }
 
-// seedPlainState writes one finalized version through a service without a
-// sealer: a plain blob without the sealed flag.
-func seedPlainState(
+// seedSealedState writes one finalized version through a service with a
+// sealer: a sealed blob with the sealed flag.
+func seedSealedState(
 	t *testing.T, st *sqlite.Store, blobs *fs.Store, namespaces *namespace.Service,
 ) workspace.StateVersion {
 	t.Helper()
 
 	ctx := t.Context()
 
-	plain, err := workspace.NewService(workspace.Config{
+	secrets, err := secret.NewService(secret.Config{
+		Keys: st, Wrapper: testWrapper(t), Namespaces: namespaces, Now: nil, MaxBatchBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("secrets: %v", err)
+	}
+
+	sealed, err := workspace.NewService(workspace.Config{
 		Workspaces:         st,
 		States:             st,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             secrets,
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,
@@ -152,7 +159,7 @@ func seedPlainState(
 		Retention:          0,
 	})
 	if err != nil {
-		t.Fatalf("plain service: %v", err)
+		t.Fatalf("sealed service: %v", err)
 	}
 
 	name, err := workspace.ParseName("network")
@@ -160,19 +167,19 @@ func seedPlainState(
 		t.Fatalf("parse name: %v", err)
 	}
 
-	ws, err := plain.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	ws, err := sealed.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
 	}
 
-	_, err = plain.Lock(ctx, ws.ID, "alice", "apply")
+	_, err = sealed.Lock(ctx, ws.ID, "alice", "apply")
 	if err != nil {
 		t.Fatalf("lock: %v", err)
 	}
 
-	sum := md5.Sum([]byte(plainContent)) //nolint:gosec // The TFE protocol names state by MD5.
+	sum := md5.Sum([]byte(sealedContent)) //nolint:gosec // The TFE protocol names state by MD5.
 
-	pending, err := plain.BeginState(ctx, ws.ID, "alice", workspace.NewState{
+	pending, err := sealed.BeginState(ctx, ws.ID, "alice", workspace.NewState{
 		Lineage: "l1",
 		MD5:     hex.EncodeToString(sum[:]),
 		Outputs: nil,
@@ -183,12 +190,12 @@ func seedPlainState(
 		t.Fatalf("begin state: %v", err)
 	}
 
-	sv, err := plain.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader(plainContent))
+	sv, err := sealed.Upload(ctx, pending.Version.ID, pending.Upload, strings.NewReader(sealedContent))
 	if err != nil {
 		t.Fatalf("upload state: %v", err)
 	}
 
-	_, err = plain.Unlock(ctx, ws.ID, "alice")
+	_, err = sealed.Unlock(ctx, ws.ID, "alice")
 	if err != nil {
 		t.Fatalf("unlock: %v", err)
 	}

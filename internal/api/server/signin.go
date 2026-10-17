@@ -60,7 +60,13 @@ const (
 	reasonDisabled      = "principal is disabled"
 	reasonNotTarget     = "principal cannot sign in through an identity provider"
 	reasonSubject       = "subject is not valid"
+	reasonSubjectLength = "subject over 255 bytes"
 )
+
+// maxSubjectLen caps the composed subject of a sign-in, in bytes. It
+// matches the principal subject limit, so a longer subject is refused
+// before the subject reaches the audit entry.
+const maxSubjectLen = 255
 
 // Errors of the sign-in routes.
 var (
@@ -431,7 +437,18 @@ func (h *Handler) startSession(
 	w http.ResponseWriter, r *http.Request, provider SignInProvider, id oauth.Identity, returnPath string,
 ) {
 	ctx := r.Context()
+
 	subject := provider.ID + ":" + id.Subject
+	// Refuse before the subject reaches the audit entry: the entry keeps
+	// the composed subject. The refusal names the provider only.
+	if len(subject) > maxSubjectLen {
+		h.refuseSignIn(w, r, refusal{
+			err: errSignInRefused, providerID: provider.ID, idpSubject: "", reason: reasonSubjectLength,
+		})
+
+		return
+	}
+
 	e := signInEntry(r, subject, id.Subject, session.ActionSignIn)
 
 	p, _, err := h.principals.SignInPrincipal(ctx, e, principal.SignInInput{

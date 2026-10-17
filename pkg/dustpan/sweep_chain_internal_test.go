@@ -46,6 +46,10 @@ func sweepChainServer(
 		signInRequests:   nil,
 		signInPruneEvery: 0,
 		signInProviders:  providerBinding{store: nil, providers: nil},
+		durable:          nil,
+		durableOwner:     "",
+		inactivityEvery:  0,
+		deletedEvery:     0,
 	}
 }
 
@@ -190,7 +194,7 @@ func TestSweepOnceSkipsWhileChainChangeWaits(t *testing.T) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: nil,
+		Store: st, Principals: st, Freshness: nil, Authorizer: nil, Logger: nil, Now: nil,
 		NewID: nil,
 	})
 	if err != nil {

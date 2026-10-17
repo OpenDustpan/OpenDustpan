@@ -96,6 +96,10 @@ _Avoid_: Minimum schema version, compatibility level
 The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot
 
+**Baseline migration**:
+The one migration of each dialect that replaced every migration before it, before the first tag. Its version is 100. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
+_Avoid_: Squash, initial migration
+
 **Portable format**:
 The dialect-neutral format of the SQL part of a backup: one compressed file of JSON rows for each table (ADR 42). It is the only backup format. It replaces the native format of ADR 30.
 _Avoid_: Export format, dump format
@@ -315,6 +319,14 @@ _Avoid_: Delta save, checkpoint delta (except when naming the route `checkpointd
 **Event**:
 One entry in the progress record of an update.
 _Avoid_: Log line, message
+
+**Journal entry**:
+One small record that the Pulumi CLI sends for one resource operation of a journaled update, in batches. The server builds the checkpoint of the update from its journal entries.
+_Avoid_: Entry (alone)
+
+**Journal version**:
+The number that the start of an update agrees on for journaling. It sets the shape of the journal entries that the Pulumi CLI sends. Version 0 means the CLI saves checkpoints instead of journaling.
+_Avoid_: Version (alone)
 
 ### OpenTofu
 

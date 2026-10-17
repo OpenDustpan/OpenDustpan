@@ -36,10 +36,13 @@ var (
 // SkipError reports the count of records that a Write skipped, and why. A
 // Write that answers a SkipError delivered every other record of the batch,
 // so the caller counts the batch as delivered and never sends the skipped
-// records again: a retry cannot deliver them.
+// records again: a retry cannot deliver them. Indexes holds the positions of
+// the skipped records in the written batch, oldest first. It is empty when
+// the sink does not track them.
 type SkipError struct {
 	Reason  string
 	Skipped int
+	Indexes []int
 }
 
 // Error implements error.

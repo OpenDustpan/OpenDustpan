@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"testing"
@@ -8,9 +9,31 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// durableSchema creates a schema with the tables of migrations 0080 and
-// 0081 on conn and holds one operation with key and token in it, with one
-// step, and one schedule called key whose next run is token.
+// connectKeepControl connects to the test database and closes the
+// connection after the test.
+func connectKeepControl(t *testing.T) *pgx.Conn {
+	t.Helper()
+
+	ctx := t.Context()
+
+	conn, err := pgx.Connect(ctx, testPostgresURL(t))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := conn.Close(context.WithoutCancel(ctx)); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	})
+
+	return conn
+}
+
+// durableSchema creates a schema with the baseline tables on conn and holds
+// one operation with key and token in it, with one step, one schedule
+// called key whose next run is token, and one sign-in failure window of key
+// that ends at token with count token.
 func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string {
 	t.Helper()
 
@@ -24,17 +47,17 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 	name := "test_" + hex.EncodeToString(suffix)
 	ident := pgx.Identifier{name}.Sanitize()
 
-	ddl, err := migrations.ReadFile("migrations/0080_durable_operations.sql")
+	ddl, err := migrations.ReadFile("migrations/0100_baseline.sql")
 	if err != nil {
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("read baseline: %v", err)
 	}
 
-	schedules, err := migrations.ReadFile("migrations/0081_durable_schedules.sql")
+	failuresDDL, err := migrations.ReadFile("migrations/0104_sign_in_failures.sql")
 	if err != nil {
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("read sign-in failures migration: %v", err)
 	}
 
-	for _, stmt := range []string{"CREATE SCHEMA " + ident, "SET search_path TO " + ident, string(ddl), string(schedules)} {
+	for _, stmt := range []string{"CREATE SCHEMA " + ident, "SET search_path TO " + ident, string(ddl), string(failuresDDL)} {
 		if _, execErr := conn.Exec(ctx, stmt); execErr != nil {
 			t.Fatalf("create durable schema: %v", execErr)
 		}
@@ -57,6 +80,11 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 		t.Fatalf("insert schedule: %v", execErr)
 	}
 
+	insertFailure := "INSERT INTO sign_in_failures (source, window_end_ms, count) VALUES ($1, $2, $2)"
+	if _, execErr := conn.Exec(ctx, insertFailure, key, token); execErr != nil {
+		t.Fatalf("insert sign-in failure: %v", execErr)
+	}
+
 	if _, execErr := conn.Exec(ctx, "RESET search_path"); execErr != nil {
 		t.Fatalf("reset search path: %v", execErr)
 	}
@@ -73,7 +101,7 @@ func TestKeepControlTablesKeepsTheLiveRows(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	conn := connectKeepInstallation(t)
+	conn := connectKeepControl(t)
 	live := durableSchema(t, conn, "from-backup", 3)
 	previous := durableSchema(t, conn, "live", 5)
 
@@ -113,6 +141,8 @@ func TestKeepControlTablesKeepsTheLiveRows(t *testing.T) {
 	}
 
 	checkKeptSchedules(t, conn, ident)
+
+	checkKeptSignInFailures(t, conn, ident)
 }
 
 // checkKeptSchedules fails t unless the schema ident holds only the live
@@ -135,5 +165,29 @@ func checkKeptSchedules(t *testing.T, conn *pgx.Conn, ident string) {
 	if schedule != "live" || nextRun != 5 || rows != 1 {
 		t.Fatalf("restored schedules = %q next run %d (%d rows), want only the live schedule with next run 5",
 			schedule, nextRun, rows)
+	}
+}
+
+// checkKeptSignInFailures fails t unless the schema ident holds only the live
+// sign-in failure window, with the end and the count that it had before the
+// swap.
+func checkKeptSignInFailures(t *testing.T, conn *pgx.Conn, ident string) {
+	t.Helper()
+
+	var (
+		source string
+		end    int64
+		count  int64
+		rows   int
+	)
+
+	read := "SELECT source, window_end_ms, count, (SELECT count(*) FROM " + ident + ".sign_in_failures) FROM " +
+		ident + ".sign_in_failures"
+	if scanErr := conn.QueryRow(t.Context(), read).Scan(&source, &end, &count, &rows); scanErr != nil {
+		t.Fatalf("read restored sign-in failures: %v", scanErr)
+	}
+
+	if source != "live" || end != 5 || count != 5 || rows != 1 {
+		t.Fatalf("restored sign-in failures: source %q end %d count %d rows %d", source, end, count, rows)
 	}
 }

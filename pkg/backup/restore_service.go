@@ -512,6 +512,8 @@ func sanitizeRestoreError(err error) string {
 		return ErrRestoreAccessMismatch.Error()
 	case errors.Is(err, ErrCorrupt):
 		return ErrCorrupt.Error()
+	case errors.Is(err, ErrSchemaBeforeBaseline):
+		return ErrSchemaBeforeBaseline.Error()
 	case errors.Is(err, ErrSchemaMismatch):
 		return ErrSchemaMismatch.Error()
 	case errors.Is(err, maintenance.ErrActiveWork):
@@ -734,6 +736,7 @@ func isLogSentinel(err error) bool {
 	switch {
 	case errors.Is(err, ErrCorrupt),
 		errors.Is(err, ErrSchemaMismatch),
+		errors.Is(err, ErrSchemaBeforeBaseline),
 		errors.Is(err, ErrNotFound),
 		errors.Is(err, ErrAlreadyExists),
 		errors.Is(err, ErrNotRunning),
@@ -834,11 +837,13 @@ func (s *RestoreService) restore(ctx context.Context, id RestoreID, req RestoreR
 }
 
 // applyPinned stages the pinned backup, copies its blobs, swaps the staged
-// data in one fenced step, fails the running rows the swap resurrected, and
-// preserves the restore row and the pre-backup row across the swap. The
-// manifest is pinned again first, so a target mutated after the checks cannot
-// be applied. When req keeps the access tables, the swap keeps the current
-// rows of the access tables and replaces the other tables.
+// data in one fenced step, and preserves the restore row and the pre-backup
+// row across the swap. The control tables stay across the swap with the live
+// rows, so the running restore stays readable during the swap and the
+// pre-backup row survives it. The manifest is pinned again first, so a
+// target mutated after the checks cannot be applied. When req keeps the
+// access tables, the swap keeps the current rows of the access tables and
+// replaces the other tables.
 func (s *RestoreService) applyPinned(
 	ctx context.Context, id RestoreID, req RestoreRequest, pinned pinnedManifest, pre Record,
 ) error {
@@ -861,27 +866,25 @@ func (s *RestoreService) applyPinned(
 		return fmt.Errorf("copy blobs for restore %s: %w", id, copyErr)
 	}
 
-	// The swap replaces the live data with the staged backup, which predates
-	// the restore row and the pre-backup row: both rows go away with the old
-	// live data. The records below preserve them across the swap, so both
-	// outlive the apply.
+	// The control tables stay across the swap with the live rows, so the
+	// restore row and the pre-backup row survive it. Remember the applying
+	// row before the swap: Get serves the held row while the swap runs, so
+	// any handle reads the same row during the swap.
 	before, err := s.registry.GetRestore(ctx, id)
 	if err != nil {
 		return fmt.Errorf("read restore %s before the swap: %w", id, err)
 	}
 
-	// Hold the row across the swap: the apply below drops the registry row,
-	// and Get serves the held row until recreateAfterSwap stores it again.
 	s.trackRestore(before)
 
 	if err := s.applyStaged(ctx, id, req); err != nil {
 		return err
 	}
 
-	// The swap replaced the live data. A later step that fails still runs
+	// The swap kept the control rows. A later step that fails still runs
 	// the after-apply step, which the restored data needs, and the restore
 	// fails with both errors.
-	if err := s.afterSwap(ctx, id, before, pre); err != nil {
+	if err := s.afterSwap(ctx, before, pre); err != nil {
 		return errors.Join(err, s.runAfterApply(ctx, id))
 	}
 
@@ -895,27 +898,15 @@ func (s *RestoreService) applyPinned(
 	return s.runAfterApply(ctx, id)
 }
 
-// afterSwap fails the running rows that the swap resurrected and preserves
-// the restore row and the pre-backup row across the swap.
-func (s *RestoreService) afterSwap(ctx context.Context, id RestoreID, before RestoreRecord, pre Record) error {
-	// The swapped-in snapshot predates this restore, so it may hold running
-	// rows of restores that finished since: the pre-backup of an undo holds
-	// the running row of the restore it undoes. Those rows will never finish,
-	// and every later start would meet ErrRestoreRunning through them. Fail
-	// them before recording this restore again, while its slot is still held
-	// and its applying row still refuses concurrent starts, so no new running
-	// row can land in between.
-	if failErr := s.registry.FailRunningRestores(ctx, s.now().UTC(), restoreSupersededText(id)); failErr != nil {
-		return fmt.Errorf("supersede running restores for restore %s: %w", id, failErr)
-	}
-
+// afterSwap preserves the restore row and the pre-backup row across the
+// swap. The control tables stay across the swap, so both rows survive it:
+// the recreate does nothing when the row is already there, and the
+// pre-backup preserve does nothing when its row is already listed.
+func (s *RestoreService) afterSwap(ctx context.Context, before RestoreRecord, pre Record) error {
 	if err := s.recreateAfterSwap(ctx, before); err != nil {
 		return err
 	}
 
-	// The pre-backup objects already sit in the target; only its registry row
-	// went away with the old live data. Without it the undo source vanishes
-	// from the backups list (ADR 30 decision 9).
 	if err := s.backups.PreserveAfterRestore(ctx, pre); err != nil {
 		return fmt.Errorf("record pre-backup %s after the swap: %w", pre.ID, err)
 	}
@@ -985,13 +976,6 @@ func (s *RestoreService) appendRestoreAudit(ctx context.Context, id RestoreID, r
 	if _, err := store.AppendServer(ctx, entry); err != nil {
 		s.logger.ErrorContext(ctx, "audit append failed", slog.String("restore_id", id.String()))
 	}
-}
-
-// restoreSupersededText explains a running row the swap resurrected: the row
-// belongs to a restore whose data this restore replaced, so it can never
-// finish. The text holds only the superseding restore ID.
-func restoreSupersededText(id RestoreID) string {
-	return fmt.Sprintf("restore superseded by restore %s", id)
 }
 
 // applyStaged swaps the staged backup live. When req keeps the access
@@ -1070,12 +1054,18 @@ func (s *RestoreService) repinManifest(ctx context.Context, id ID, pinned pinned
 	return nil
 }
 
-// recreateAfterSwap stores the restore row again after the swap replaced the
-// live data with the staged backup, which predates the row. The new row keeps
-// the ID, the start time, the backup, the pre-backup and the requester, back
-// in applying, so FinishRestore can move it to its end state. The backup
-// cannot hold the same ID: IDs are unique per restore.
+// recreateAfterSwap stores the restore row again when the swap replaced it.
+// The control tables stay across the swap, so the row usually survives and
+// the recreate does nothing: a Get that finds the row returns at once. When
+// an older store dropped the row with the old live data, the recreate stores
+// it again in applying with the ID, the start time, the backup, the
+// pre-backup and the requester, so FinishRestore can move it to its end
+// state. The backup cannot hold the same ID: IDs are unique per restore.
 func (s *RestoreService) recreateAfterSwap(ctx context.Context, before RestoreRecord) error {
+	if _, err := s.registry.GetRestore(ctx, before.ID); err == nil {
+		return nil
+	}
+
 	recreated := RestoreRecord{
 		StartedAt:   before.StartedAt,
 		EndedAt:     time.Time{},

@@ -11,10 +11,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 )
 
-// TestDurableConformance runs the durable operations suite. Each handle of a
-// case opens the one database file of the case, as two instances open one
-// database. The store reads every time from the SQLite clock in SQL, so the
-// clock offset of a handle changes nothing.
+// TestDurableConformance runs the durable operations suite. One SQLite file
+// allows one store, so each case runs on the one store of its database file.
+// The store reads every time from the SQLite clock in SQL, so the clock
+// offset of a handle changes nothing.
 func TestDurableConformance(t *testing.T) {
 	t.Parallel()
 
@@ -25,8 +25,9 @@ func TestDurableConformance(t *testing.T) {
 	})
 }
 
-// TestDurableScheduleConformance runs the schedule suite. Each handle of a
-// case opens the one database file of the case.
+// TestDurableScheduleConformance runs the schedule suite. One SQLite file
+// allows one store, so the suite gets that store on every Open call: one
+// database with concurrent callers.
 func TestDurableScheduleConformance(t *testing.T) {
 	t.Parallel()
 
@@ -36,24 +37,35 @@ func TestDurableScheduleConformance(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "dustpan.db")
 		copyTemplate(t, path)
 
+		s := openWith(t, path)
+
 		return durabletest.ScheduleHarness{
 			Open: func(t *testing.T, _ time.Duration) durabletest.ScheduledStore {
 				t.Helper()
 
-				return openWith(t, path).DurableOperations()
+				ops := s.DurableOperations()
+				if ops == nil {
+					t.Fatal("durable operations are nil, want *sqlite.DurableOperations")
+				}
+
+				return ops
 			},
 		}
 	})
 }
 
-// durableHarness returns a harness on a fresh database file.
+// durableHarness returns a harness on a fresh database file. One SQLite file
+// allows one store, so every Open call returns the operations of that one
+// store.
 func durableHarness(t *testing.T, opts ...sqlite.Option) durabletest.Harness {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 	copyTemplate(t, path)
 
-	domain, err := sqlite.DurableDomainForTest(t.Context(), openWith(t, path, opts...))
+	s := openWith(t, path, opts...)
+
+	domain, err := sqlite.DurableDomainForTest(t.Context(), s)
 	if err != nil {
 		t.Fatalf("domain: %v", err)
 	}
@@ -62,7 +74,7 @@ func durableHarness(t *testing.T, opts ...sqlite.Option) durabletest.Harness {
 		Open: func(t *testing.T, _ time.Duration) durable.Store {
 			t.Helper()
 
-			return openWith(t, path, opts...).DurableOperations()
+			return s.DurableOperations()
 		},
 		Domain: domain,
 	}
@@ -89,8 +101,9 @@ func openWith(t *testing.T, path string, opts ...sqlite.Option) *sqlite.Store {
 // TestDurableStalledStepEndsAtBound proves the SQLite rule for a stalled
 // holder: a step transaction that stalls holds the write lock of the
 // database, so it rolls back at the bound of the step transaction. The
-// stalled write records nothing, and another handle writes before the stall
-// ends.
+// stalled write records nothing, and another caller writes before the stall
+// ends. One store serves every caller here: holder and other are the same
+// store.
 func TestDurableStalledStepEndsAtBound(t *testing.T) {
 	t.Parallel()
 
@@ -100,7 +113,8 @@ func TestDurableStalledStepEndsAtBound(t *testing.T) {
 	)
 
 	h := durableHarness(t, sqlite.WithStepTransactionBound(bound))
-	holder, other := h.Open(t, 0), h.Open(t, 0)
+	other := h.Open(t, 0)
+	holder := other
 	held := claimOne(t, holder)
 
 	ns, err := h.Domain.CreateNamespace(t.Context(), "ns-stall")
@@ -131,7 +145,7 @@ func TestDurableStalledStepEndsAtBound(t *testing.T) {
 
 	<-stalled
 
-	// The write of the other handle waits for the write lock, which the
+	// The write of the other caller waits for the write lock, which the
 	// stalled step transaction holds until its bound.
 	_, _, startErr := other.Start(t.Context(), durable.StartRequest{Key: "k2", Kind: stallKind, Version: 0, Input: nil})
 	if startErr != nil {
@@ -198,9 +212,10 @@ func checkNothingRecorded(t *testing.T, h durabletest.Harness, s durable.Store, 
 }
 
 // TestDurableStepWaitsBehindWriteLock proves that a step record reads the
-// clock of the store after it holds the write lock, not before. One handle
-// holds the write lock longer than a short lease; a RecordStep of another
-// handle waits behind it and then finds the claim expired.
+// clock of the store after it holds the write lock, not before. One store
+// serves every caller here: one caller holds the write lock longer than a
+// short lease through that store, and a RecordStep of another caller waits
+// behind it and then finds the claim expired.
 func TestDurableStepWaitsBehindWriteLock(t *testing.T) {
 	t.Parallel()
 
@@ -210,7 +225,8 @@ func TestDurableStepWaitsBehindWriteLock(t *testing.T) {
 	)
 
 	h := durableHarness(t)
-	holder, other := h.Open(t, 0), h.Open(t, 0)
+	other := h.Open(t, 0)
+	holder := other
 
 	ns, err := h.Domain.CreateNamespace(t.Context(), "ns-lock")
 	if err != nil {

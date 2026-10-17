@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -32,6 +33,21 @@ func LagSeconds(oldest, now time.Time) float64 {
 	return max(now.Sub(oldest).Seconds(), 0)
 }
 
+// lastEntryReader reads the entry with the highest sequence of a scope.
+// EntryReader meets it. The shipper counts the delivery lag in entries
+// through this port, so a feed supports it by reading last entries.
+type lastEntryReader interface {
+	// LastEntry answers the entry with the highest sequence of scope, and
+	// false when the scope holds none.
+	LastEntry(ctx context.Context, scope namespace.Name) (Entry, bool, error)
+}
+
+// ErrNoEntryReader reports a feed that cannot read the last entry of a
+// scope, so the shipper cannot count the delivery lag in entries. Both SQL
+// stores read it; a custom feed implements LastEntry to support the entries
+// lag.
+var ErrNoEntryReader = errors.New("audit feed cannot read the last entry")
+
 // Lag answers the delivery lag of the sink named sink in seconds: the age
 // of the oldest entry above its cursors, or 0 when no entry waits.
 func (s *Shipper) Lag(ctx context.Context, sink string, now time.Time) (float64, error) {
@@ -41,6 +57,42 @@ func (s *Shipper) Lag(ctx context.Context, sink string, now time.Time) (float64,
 	}
 
 	return status.LagSeconds, nil
+}
+
+// LagEntries answers the delivery lag of the sink named sink in entries:
+// the count of entries above its cursors over every scope, or 0 when no
+// entry waits. It needs a feed that also reads the last entry of a scope,
+// as lastEntryReader does.
+func (s *Shipper) LagEntries(ctx context.Context, sink string) (int64, error) {
+	reader, ok := s.cfg.Feed.(lastEntryReader)
+	if !ok {
+		return 0, fmt.Errorf("lag of sink %s: %w", sink, ErrNoEntryReader)
+	}
+
+	scopes, err := s.listScopes(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list namespaces for lag of sink %s: %w", sink, err)
+	}
+
+	var lag int64
+
+	for _, ns := range scopes {
+		cursor, err := s.cfg.Feed.SinkCursor(ctx, sink, ns.Name)
+		if err != nil {
+			return 0, fmt.Errorf("read cursor of sink %s: %w", sink, err)
+		}
+
+		last, found, err := reader.LastEntry(ctx, ns.Name)
+		if err != nil {
+			return 0, fmt.Errorf("read last entry of sink %s: %w", sink, err)
+		}
+
+		if found && last.Sequence > cursor {
+			lag += last.Sequence - cursor
+		}
+	}
+
+	return lag, nil
 }
 
 // ListAuditSinks answers the delivery state of every configured sink in

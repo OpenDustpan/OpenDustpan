@@ -106,11 +106,9 @@ type Checkpoint struct {
 	Digest        []byte
 	Invalid       bool
 	Features      []byte
-	Deployment    []byte
 	SavedAtMs     int64
 	StackID       string
-	ResourceCount pgtype.Int8
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -329,6 +327,12 @@ type SessionPolicy struct {
 	MaxLengthMs      int64
 	UpdatedAtMs      int64
 	TokenFreshnessMs pgtype.Int8
+}
+
+type SignInFailure struct {
+	Source      string
+	WindowEndMs int64
+	Count       int64
 }
 
 type SignInProvider struct {

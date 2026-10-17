@@ -58,7 +58,6 @@ import (
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
-	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -117,6 +116,10 @@ const (
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 30 * time.Second
+	// maxHeaderBytes caps the request headers that the server reads. net/http
+	// answers 431 past it, so a client cannot grow an audit entry past it
+	// through headers.
+	maxHeaderBytes = 65536
 )
 
 // backupStoppedText marks a backup that was running when the server stopped.
@@ -202,6 +205,9 @@ type settings struct {
 	beforeServe func(ctx context.Context) error
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
+	// durableStore keeps the durable operations and the job schedules, or
+	// is nil without job schedules. See WithDurableStore.
+	durableStore DurableStore
 }
 
 // ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
@@ -523,6 +529,12 @@ type Server struct {
 	// signInProviders binds each provider of the console sign-in to its
 	// issuer at the start, or is the zero value with no console sign-in.
 	signInProviders providerBinding
+	// durable keeps the job schedules, or is nil without them. inactivityEvery
+	// and deletedEvery are the periods of those schedules.
+	durable         DurableStore
+	durableOwner    string
+	inactivityEvery time.Duration
+	deletedEvery    time.Duration
 }
 
 // services holds the domain services that NewServer wires together.
@@ -541,9 +553,9 @@ type services struct {
 	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
-	// access keeps the roles and grants (ADR 52), or is nil when the store
-	// keeps none. NewServer sets it after newServices. The installation API
-	// and the escalation check of the token service share it.
+	// access keeps the roles and grants, or is nil when the store keeps
+	// none. NewServer sets it after newServices. The installation API and
+	// the token service share it.
 	access *access.Service
 }
 
@@ -597,6 +609,7 @@ func defaultSettings() *settings {
 		instanceID:              "",
 		auditShipper:            nil,
 		auditSigner:             nil,
+		durableStore:            nil,
 	}
 }
 
@@ -773,6 +786,10 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		signInRequests:   adapters.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
 		signInProviders:  bindingOf(cfg, adapters.signIn),
+		durable:          cfg.durableStore,
+		durableOwner:     durableOwner(cfg),
+		inactivityEvery:  sweepEvery,
+		deletedEvery:     deletedSweepEvery,
 	}, nil
 }
 
@@ -1304,12 +1321,14 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	// The first run of the inactivity disable ends before the hook and
-	// before the server serves a request. A slow database delays the start
-	// by firstSweepLimit at most: the hourly runs try again.
-	firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
-	s.sweepOnce(firstCtx)
-	stopFirst()
+	if s.durable == nil {
+		// The first run of the inactivity disable ends before the hook and
+		// before the server serves a request. A slow database delays the start
+		// by firstSweepLimit at most: the hourly runs try again.
+		firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
+		s.sweepOnce(firstCtx)
+		stopFirst()
+	}
 
 	if s.beforeServe != nil {
 		if hookErr := s.beforeServe(ctx); hookErr != nil {
@@ -1322,6 +1341,7 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler:           s.handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 		TLSConfig:         tlsCfg,
 	}
 
@@ -1336,9 +1356,13 @@ func (s *Server) Run(ctx context.Context) error {
 
 	var sweeps sync.WaitGroup
 
-	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
-	sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
-	sweeps.Go(func() { s.pruneSignInRequests(sweepCtx) })
+	if err := s.startSweeps(sweepCtx, &sweeps); err != nil {
+		stopCheck()
+		waitCheck()
+		stopSweeps()
+
+		return errors.Join(err, closeListener(ln))
+	}
 
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
@@ -1365,14 +1389,19 @@ const sweepEvery = time.Hour
 // server serves.
 const firstSweepLimit = time.Minute
 
-// sweepInactive runs the inactivity disable of ADR 53 once each
-// sweepEvery, until ctx is done. Run makes the first run before it serves.
+// sweepInactive runs the inactivity disable once each inactivityEvery,
+// until ctx is done. Run makes the first run before it serves.
 func (s *Server) sweepInactive(ctx context.Context) {
 	if s.tokens == nil {
 		return
 	}
 
-	ticker := time.NewTicker(sweepEvery)
+	every := s.inactivityEvery
+	if every <= 0 {
+		every = sweepEvery
+	}
+
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
 	for {
@@ -2149,9 +2178,9 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 	return svc, nil
 }
 
-// newIdentityServices builds the role and grant service (ADR 52) and the
-// access token service (ADR 53). The token service takes the role and
-// grant service as its escalation check. Either is nil when the store
+// newIdentityServices builds the role and grant service and the access
+// token service. The token service takes the authorizer of the role and
+// grant service for principal:manage-tokens. Either is nil when the store
 // keeps none.
 func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, error) {
 	grants, err := newAccessService(cfg)
@@ -2185,18 +2214,13 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
-	var (
-		check accesstoken.GrantCheck
-		authz identity.Authorizer
-	)
-
+	var authz identity.Authorizer
 	if grants != nil {
-		check = tokengrants.Check{Grants: grants, Principals: principals}
 		authz = grants.Authorizer()
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: check, Authorizer: authz,
+		Store: store, Principals: principals, Freshness: nil, Authorizer: authz,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil,
 	})
 	if err != nil {
@@ -2219,9 +2243,16 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 		return cfg.authenticator, nil
 	}
 
+	// failures shares the failure budget of every instance on one database, or
+	// keeps the budget in the process when the store keeps no counter.
+	var failures authgate.FailureCounter
+	if counter, ok := cfg.namespaceStore.(authgate.FailureCounter); ok {
+		failures = counter
+	}
+
 	gate, err := authgate.New(authgate.Config{
 		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
-		Failures: nil, Window: 0, CounterErrors: nil,
+		Failures: failures, Window: 0, CounterErrors: nil,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {

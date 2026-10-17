@@ -67,6 +67,7 @@ func newAuditShipper(cfg *settings, observed *metrics.ServerMetrics) (*audit.Shi
 		OnFailure:     observed.IncAuditSinkFailure,
 		OnSkipped:     observed.AddAuditSkipped,
 		OnLag:         observed.SetAuditSinkLag,
+		OnLagEntries:  observed.SetAuditSinkLagEntries,
 		Now:           nil,
 		Sinks:         cfg.auditSinks,
 		InstanceID:    holder,
@@ -80,6 +81,7 @@ func newAuditShipper(cfg *settings, observed *metrics.ServerMetrics) (*audit.Shi
 
 	for _, sink := range cfg.auditSinks {
 		observed.SetAuditSinkLag(sink.Name, 0)
+		observed.SetAuditSinkLagEntries(sink.Name, 0)
 	}
 
 	return shipper, nil
