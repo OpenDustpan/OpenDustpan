@@ -11,6 +11,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -39,6 +40,7 @@ func checkCases() []struct {
 		{name: "a revoke that its check refuses changes nothing", test: testRevokeCheckRefuses},
 		{name: "a grant check reads the current grants, roles and subjects", test: testGrantCheckReads},
 		{name: "a role check reads where the role is granted", test: testRoleCheckReads},
+		{name: "a grant check reads the collection of a unit", test: testCheckReadsUnitCollection},
 		{name: "a grant check reads no subject of a disabled principal", test: testCheckReadsNoDisabledSubject},
 	}
 }
@@ -334,6 +336,8 @@ func RunConcurrent(t *testing.T, newPair PairFactory) {
 		{name: "a group delete waits for a grant check", test: testSubjectChangeWaits(deleteGroup)},
 		{name: "an inactivity disable waits for a grant check", test: testSubjectChangeWaits(disableInactive)},
 		{name: "a revoke of the caller's grant waits for a revoke check", test: testRevokeWaitsForRevokeCheck},
+		{name: "a unit move waits for a grant check on the unit", test: testMoveWaitsForGrantCheck},
+		{name: "a grant check sees a unit move that committed first", test: testCheckSeesMove},
 	}
 
 	for _, tc := range cases {
@@ -808,5 +812,164 @@ func testRevokeWaitsForRevokeCheck(t *testing.T, a, b access.Store) {
 
 	if err := awaitRace(t, done); err != nil {
 		t.Fatalf("revoke of the held grant after the checked revoke: %v", err)
+	}
+}
+
+// webUnit is the unit of the stack that seedStack stores.
+func webUnit(t *testing.T) identity.Object {
+	t.Helper()
+
+	obj, err := identity.UnitObject("pulumi", "acme", "web/prod")
+	if err != nil {
+		t.Fatalf("unit object: %v", err)
+	}
+
+	return obj.WithUnitID("stk-web")
+}
+
+// seedCollections stores the stack of seedStack and the collections blue
+// (ID col-1) and green (ID col-2) in acme, and puts the unit in blue.
+func seedCollections(t *testing.T, s access.Store) {
+	t.Helper()
+
+	cs, ok := s.(collection.Store)
+	if !ok {
+		t.Skip("the store keeps no collections")
+	}
+
+	seedStack(t, s)
+
+	fence := fenceOf(t, s, "acme")
+	e := scoped(entry(), "acme")
+
+	for i, name := range []collection.Name{"blue", "green"} {
+		c := collection.Collection{
+			CreatedAt: at(0), ID: fmt.Sprintf("col-%d", i+1), Ref: collection.Ref{Namespace: "acme", Name: name},
+		}
+		if err := cs.CreateCollection(t.Context(), c, fence, e); err != nil {
+			t.Fatalf("create collection %s: %v", name, err)
+		}
+	}
+
+	if err := cs.SetUnitCollection(t.Context(), moveTo("", "blue", "col-1"), fence, e); err != nil {
+		t.Fatalf("put the unit in blue: %v", err)
+	}
+}
+
+// moveTo is the move of the web unit from the collection from to the
+// collection to, whose stable ID is toID.
+func moveTo(from, to collection.Name, toID string) collection.Move {
+	return collection.Move{
+		Unit: collection.UnitRef{Namespace: "acme", Tool: "pulumi", Name: "web/prod"},
+		From: from, To: collection.Ref{Namespace: "acme", Name: to}, ToID: toID,
+	}
+}
+
+// inCollection is a check that refuses the write with
+// access.ErrUnitMoved unless the web unit is in the collection with the
+// stable ID want, as the check of a grant on a unit does.
+func inCollection(want string) access.GrantCheck {
+	return func(ctx context.Context, r access.GrantReads) error {
+		got, found, err := r.UnitCollectionID(ctx, "stk-web")
+		if err != nil {
+			return err
+		}
+
+		if !found || got != want {
+			return fmt.Errorf("%w: in %q (found %t), want %q", access.ErrUnitMoved, got, found, want)
+		}
+
+		return nil
+	}
+}
+
+// testCheckReadsUnitCollection checks that the reads of a grant check
+// answer the collection of a unit, and no collection for a unit that is in
+// none or does not exist.
+func testCheckReadsUnitCollection(t *testing.T, s access.Store) {
+	t.Helper()
+
+	seedCollections(t, s)
+
+	ran := false
+	check := func(ctx context.Context, r access.GrantReads) error {
+		ran = true
+
+		if err := inCollection("col-1")(ctx, r); err != nil {
+			t.Errorf("collection of the web unit in the check: %v", err)
+		}
+
+		if id, found, err := r.UnitCollectionID(ctx, "stk-none"); err != nil || found {
+			t.Errorf("collection of an unknown unit = %q, %t, %v; want none", id, found, err)
+		}
+
+		return nil
+	}
+
+	g := newGrant("grt-unit", principalSubject("prn-a"), access.RoleViewer, webUnit(t))
+	if err := s.CreateGrant(t.Context(), g, fenceOf(t, s, "acme"), scoped(entry(), "acme"), check); err != nil {
+		t.Fatalf("grant on the unit with a check: %v", err)
+	}
+
+	if !ran {
+		t.Fatal("the store did not run the check of the grant")
+	}
+}
+
+// testMoveWaitsForGrantCheck checks that a move of a unit on handle b waits
+// for a grant on that unit on handle a while its check runs: the check
+// reads the collection that the unit was in, and the move commits after
+// the grant.
+func testMoveWaitsForGrantCheck(t *testing.T, a, b access.Store) {
+	t.Helper()
+
+	seedCollections(t, a)
+
+	bs, ok := b.(collection.Store)
+	if !ok {
+		t.Skip("the store keeps no collections")
+	}
+
+	ctx := t.Context()
+	fence := fenceOf(t, a, "acme")
+
+	check, done := blocking(t, func() error {
+		return bs.SetUnitCollection(ctx, moveTo("blue", "green", "col-2"), fence, scoped(entry(), "acme"))
+	}, inCollection("col-1"))
+
+	g := newGrant("grt-unit", principalSubject("prn-a"), access.RoleViewer, webUnit(t))
+	if err := a.CreateGrant(ctx, g, fence, scoped(entry(), "acme"), check); err != nil {
+		t.Fatalf("grant on the unit before its move: %v", err)
+	}
+
+	if err := awaitRace(t, done); err != nil {
+		t.Fatalf("move after the grant: %v", err)
+	}
+}
+
+// testCheckSeesMove checks that a grant check on handle a sees a move of
+// the unit that committed first on handle b.
+func testCheckSeesMove(t *testing.T, a, b access.Store) {
+	t.Helper()
+
+	seedCollections(t, a)
+
+	bs, ok := b.(collection.Store)
+	if !ok {
+		t.Skip("the store keeps no collections")
+	}
+
+	ctx := t.Context()
+	fence := fenceOf(t, a, "acme")
+
+	if err := bs.SetUnitCollection(ctx, moveTo("blue", "green", "col-2"), fence, scoped(entry(), "acme")); err != nil {
+		t.Fatalf("move the unit to green: %v", err)
+	}
+
+	g := newGrant("grt-unit", principalSubject("prn-a"), access.RoleViewer, webUnit(t))
+
+	err := a.CreateGrant(ctx, g, fence, scoped(entry(), "acme"), inCollection("col-1"))
+	if !errors.Is(err, access.ErrUnitMoved) {
+		t.Fatalf("grant after a move of the unit: err = %v, want ErrUnitMoved", err)
 	}
 }
