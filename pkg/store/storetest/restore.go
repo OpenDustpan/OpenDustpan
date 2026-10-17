@@ -1049,25 +1049,11 @@ func saveChainRecord(t *testing.T, s audit.ChainStore, rec audit.ChainRecord) {
 	}
 }
 
-// migrateChain runs the migration of change in s with a held claim, so each
-// renewal after a scope succeeds.
+// migrateChain runs the migration of change in s.
 func migrateChain(t *testing.T, s chainRestoreStore, fences []namespace.Fence, change audit.ChainChange) {
 	t.Helper()
 
-	rec, err := s.ChainRecord(t.Context())
-	if err != nil {
-		t.Fatalf("chain record: %v", err)
-	}
-
-	rec.MigratingAt = change.At
-
-	if err := s.SaveChainRecord(t.Context(), rec); err != nil {
-		t.Fatalf("save chain record: %v", err)
-	}
-
-	clock := func() time.Time { return change.At.Add(time.Minute) }
-
-	if err := audit.MigrateChain(t.Context(), s, fences, change, clock); err != nil {
+	if err := audit.MigrateChain(t.Context(), s, fences, change); err != nil {
 		t.Fatalf("migrate the chain: %v", err)
 	}
 }
