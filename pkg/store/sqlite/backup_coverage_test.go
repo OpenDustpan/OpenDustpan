@@ -47,6 +47,62 @@ func TestBackupCoverageFailsOnAddedColumn(t *testing.T) {
 	}
 }
 
+// TestBackupCoverageFailsOnUnknownTable adds a table in neither the backup
+// nor the control list and proves the coverage check fails with ErrCoverage
+// and names the table.
+func TestBackupCoverageFailsOnUnknownTable(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "dustpan.db")
+
+	copyTemplate(t, path)
+	addSpikeTable(t, path)
+
+	s, err := sqlite.Open(t.Context(), path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := s.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	err = s.CheckCoverage(t.Context())
+	if err == nil {
+		t.Fatal("coverage with an unknown table: err = nil, want ErrCoverage")
+	}
+
+	if !errors.Is(err, backup.ErrCoverage) {
+		t.Fatalf("coverage with an unknown table: err = %v, want ErrCoverage", err)
+	}
+
+	if !strings.Contains(err.Error(), `"spike_table"`) {
+		t.Fatalf("coverage error = %v, want the table %q", err, "spike_table")
+	}
+}
+
+// addSpikeTable adds a table in neither list with no store open.
+func addSpikeTable(t *testing.T, path string) {
+	t.Helper()
+
+	conn, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close database: %v", closeErr)
+		}
+	}()
+
+	if _, execErr := conn.ExecContext(t.Context(), `CREATE TABLE spike_table (id TEXT PRIMARY KEY)`); execErr != nil {
+		t.Fatalf("add table: %v", execErr)
+	}
+}
+
 // TestPortableExportRefusesAddedColumn proves the portable export runs the
 // coverage check first: a column that no list names fails the export before a
 // file is written.

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -74,9 +75,37 @@ var (
 	_ stack.Store     = (*Store)(nil)
 )
 
+// liveSchemaName returns the live schema of a search_path setting: the first
+// schema, or public when the setting is empty. The control schema appends
+// _control to it, so each live schema keeps its own control tables.
+func liveSchemaName(searchPath string) string {
+	for part := range strings.SplitSeq(searchPath, ",") {
+		if name := strings.Trim(strings.TrimSpace(part), `"`); name != "" {
+			return name
+		}
+	}
+
+	return "public"
+}
+
 // Open connects to the database at url and migrates it.
 func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
-	pool, err := pgxpool.New(ctx, url)
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("open postgres pool: %w", err)
+	}
+
+	live := liveSchemaName(cfg.ConnConfig.RuntimeParams["search_path"])
+	ctl := live + "_control"
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if _, execErr := conn.Exec(ctx, "SET search_path TO "+pgIdent(live)+", "+pgIdent(ctl)); execErr != nil {
+			return fmt.Errorf("set postgres search path: %w", execErr)
+		}
+
+		return nil
+	}
+
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
 	}
