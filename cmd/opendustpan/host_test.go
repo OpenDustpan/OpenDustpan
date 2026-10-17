@@ -575,3 +575,108 @@ func requireHostRetry(ctx context.Context, t *testing.T, st store) {
 		t.Fatalf("retry token subject = %q, want alice", got.Subject)
 	}
 }
+
+// errFailPerson reports the injected person-removal failure of the cleanup
+// test.
+var errFailPerson = errors.New("injected person failure")
+
+// failTokenPersonStore fails the token write and the person removal of the
+// store it wraps, so a host run fails at the token step and the person
+// undo fails too.
+type failTokenPersonStore struct {
+	store
+}
+
+// CreateToken implements accesstoken.TokenStore with an injected failure.
+func (f failTokenPersonStore) CreateToken(
+	_ context.Context, _ accesstoken.Token, _ accesstoken.Digest, _ audit.Entry,
+) error {
+	return errFailToken
+}
+
+// DeletePrincipal implements principal.RecordStore with an injected
+// failure.
+func (f failTokenPersonStore) DeletePrincipal(_ context.Context, _ string, _ audit.Entry) error {
+	return errFailPerson
+}
+
+// TestHostCleanupFailureNamesPerson proves a token failure with a failing
+// person undo reports the leftover person: the joined error keeps both the
+// token failure and the person that stays.
+func TestHostCleanupFailureNamesPerson(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(st.close)
+
+	_, err = createTempAdmin(ctx, failTokenPersonStore{store: st}, "alice")
+	if err == nil {
+		t.Fatal("host run with failing token and person cleanup succeeded, want an error")
+	}
+
+	if !errors.Is(err, errFailToken) {
+		t.Fatalf("cleanup failure = %v, want the token failure", err)
+	}
+
+	if !errors.Is(err, errFailPerson) {
+		t.Fatalf("cleanup failure = %v, want the person cleanup failure", err)
+	}
+
+	if !strings.Contains(err.Error(), "alice") || !strings.Contains(err.Error(), "person") {
+		t.Fatalf("cleanup failure = %v, want it to name the leftover person", err)
+	}
+
+	if !strings.Contains(err.Error(), "opendustpan host create-temp-admin <person>") {
+		t.Fatalf("cleanup failure = %v, want it to name the command that cleans it up", err)
+	}
+
+	if _, getErr := st.GetPrincipalBySubject(ctx, "alice"); getErr != nil {
+		t.Fatalf("leftover person alice: read = %v, want the person to stay", getErr)
+	}
+}
+
+// errFailRecord reports the injected record failure of the cleanup test.
+var errFailRecord = errors.New("injected record failure")
+
+// failRecordStore fails the temporary administrator record write of the
+// store it wraps, so a host run fails at the record step after the person
+// and the grant.
+type failRecordStore struct {
+	store
+}
+
+// CreateTempAdmin implements tempadmin.Store with an injected failure.
+func (f failRecordStore) CreateTempAdmin(
+	_ context.Context, _ tempadmin.TempAdmin, _ audit.Entry,
+) error {
+	return errFailRecord
+}
+
+// TestHostRecordFailureCleansUp proves a record failure undoes the earlier
+// steps: no person and no live grant stay, so a retry with the same name
+// succeeds.
+func TestHostRecordFailureCleansUp(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(st.close)
+
+	if _, err := createTempAdmin(ctx, failRecordStore{store: st}, "alice"); err == nil {
+		t.Fatal("host run with a failing record store succeeded, want an error")
+	}
+
+	requireHostCleanup(ctx, t, st)
+	requireHostRetry(ctx, t, st)
+}

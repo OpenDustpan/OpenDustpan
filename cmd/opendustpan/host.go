@@ -219,26 +219,22 @@ func createTempAdmin(ctx context.Context, st store, person string) (hostMade, er
 
 	grantID, grantErr := grantSiteAdmin(ctx, st, p)
 	if grantErr != nil {
-		dropPerson(ctx, st, p)
-
-		return made, grantErr
+		return made, errors.Join(grantErr, dropPerson(ctx, st, p))
 	}
 
 	expires, expiresErr := tempExpires(ctx, temps, p, person, lifetime)
 	if expiresErr != nil {
-		revokeHostGrant(ctx, st, grantID)
-		dropPerson(ctx, st, p)
-
-		return made, expiresErr
+		return made, errors.Join(expiresErr, revokeHostGrant(ctx, st, grantID), dropPerson(ctx, st, p))
 	}
 
 	tok, secret, createErr := issueHostToken(ctx, tokens, p, expires, person)
 	if createErr != nil {
-		endHostRecord(ctx, st, p.ID)
-		revokeHostGrant(ctx, st, grantID)
-		dropPerson(ctx, st, p)
-
-		return made, createErr
+		return made, errors.Join(
+			createErr,
+			endHostRecord(ctx, st, p.ID),
+			revokeHostGrant(ctx, st, grantID),
+			dropPerson(ctx, st, p),
+		)
 	}
 
 	return hostMade{subject: person, secret: secret.Reveal(), expires: tok.ExpiresAt}, nil
@@ -294,9 +290,9 @@ func issueHostToken(
 // revokeHostGrant ends the grant grantID. No ID means the grant exists
 // already and keeps working, so there is nothing to undo. A grant that is
 // already gone stays gone.
-func revokeHostGrant(ctx context.Context, st store, grantID string) {
+func revokeHostGrant(ctx context.Context, st store, grantID string) error {
 	if grantID == "" {
-		return
+		return nil
 	}
 
 	entry := hostCleanupEntry(string(identity.ActionServerManageAccess), access.GrantIDRef(grantID))
@@ -305,29 +301,47 @@ func revokeHostGrant(ctx context.Context, st store, grantID string) {
 
 	if err := st.RevokeGrant(ctx, grantID, fence, entry, nil); err != nil &&
 		!errors.Is(err, access.ErrNotFound) {
-		return
+		return fmt.Errorf(
+			"cleanup grant %q: opendustpan host create-temp-admin <person>: %w",
+			grantID,
+			err,
+		)
 	}
+
+	return nil
 }
 
 // dropPerson deletes the person p. A person that is already gone stays
 // gone: the delete also ends its grants, so no live grant stays.
-func dropPerson(ctx context.Context, st store, p principal.Principal) {
+func dropPerson(ctx context.Context, st store, p principal.Principal) error {
 	entry := hostCleanupEntry(string(identity.ActionServerManagePrincipals), principal.Ref(p.ID))
 
 	if err := st.DeletePrincipal(ctx, p.ID, entry); err != nil && !errors.Is(err, principal.ErrNotFound) {
-		return
+		return fmt.Errorf(
+			"cleanup person %q: opendustpan host create-temp-admin <person>: %w",
+			p.Subject,
+			err,
+		)
 	}
+
+	return nil
 }
 
 // endHostRecord ends the temporary administrator record of the principal
 // principalID. A record that is already ended or gone stays as it is.
-func endHostRecord(ctx context.Context, st store, principalID string) {
+func endHostRecord(ctx context.Context, st store, principalID string) error {
 	entry := hostCleanupEntry(tempadmin.Action, tempadmin.Ref(principalID))
 
 	if err := st.ExpireTempAdmin(ctx, principalID, entry); err != nil &&
 		!errors.Is(err, tempadmin.ErrNotFound) && !errors.Is(err, tempadmin.ErrExpired) {
-		return
+		return fmt.Errorf(
+			"cleanup temporary administrator record %q: opendustpan host create-temp-admin <person>: %w",
+			principalID,
+			err,
+		)
 	}
+
+	return nil
 }
 
 // hostCleanupEntry returns the audit entry of one undo step of the host
