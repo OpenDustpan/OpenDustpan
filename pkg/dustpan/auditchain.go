@@ -80,6 +80,7 @@ type auditChain struct {
 	store      audit.ChainStore
 	entries    audit.Store
 	server     audit.ServerStore
+	approve    chainApprovalStore
 	namespaces namespace.Store
 	principals principalReader
 	logger     *slog.Logger
@@ -125,6 +126,21 @@ const (
 	chainMigratingMessage = "An audit chain migration runs. Requests stop until it is complete."
 )
 
+// chainApprovalStore appends an audit chain approval entry and starts its
+// migration operation in one transaction, so only the approval whose start
+// wins leaves an entry. It answers audit.ErrNoChainChange when no change
+// waits and audit.ErrChainMigrating while a migration can run, both without
+// an entry. When the fixed request names an ended operation, it starts the
+// operation of retryKey instead. A failed start changes nothing.
+type chainApprovalStore interface {
+	// ApproveChainChange appends e and starts fixed, or the operation of
+	// retryKey when fixed names an ended operation, in one transaction. It
+	// returns the started operation.
+	ApproveChainChange(
+		ctx context.Context, e audit.Entry, fixed durable.StartRequest, retryKey string,
+	) (durable.Operation, error)
+}
+
 // principalReader answers the principal with a subject. It returns
 // principal.ErrNotFound when no principal has the subject.
 type principalReader interface {
@@ -164,6 +180,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		store:             store,
 		entries:           entries,
 		server:            server,
+		approve:           nil,
 		namespaces:        cfg.namespaceStore,
 		principals:        principals,
 		logger:            cfg.logger,
@@ -189,6 +206,10 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 
 	if !bindDurableOps(chain, cfg.namespaceStore) {
 		return nil, fmt.Errorf("namespace store keeps no durable operations: %w", ErrMissingOption)
+	}
+
+	if !bindChainApproval(chain, cfg.namespaceStore) {
+		return nil, fmt.Errorf("namespace store keeps no atomic audit chain approval: %w", ErrMissingOption)
 	}
 
 	runner, err := newChainRunner(chain.durableOps, cfg, chain)
@@ -253,6 +274,19 @@ func bindDurableOps(chain *auditChain, s namespace.Store) bool {
 	}
 
 	chain.durableOps = ops
+
+	return true
+}
+
+// bindChainApproval sets the atomic approval of s on chain, and answers
+// true. It answers false when s keeps none.
+func bindChainApproval(chain *auditChain, s namespace.Store) bool {
+	approval, ok := s.(chainApprovalStore)
+	if !ok || approval == nil {
+		return false
+	}
+
+	chain.approve = approval
 
 	return true
 }
@@ -322,9 +356,12 @@ func (c *auditChain) Status(ctx context.Context) (serverapi.AuditChainStatus, er
 
 // Approve implements serverapi.AuditChain: it checks the MFA step of a
 // change to off, refuses while a restore runs, enters maintenance mode,
-// writes the entry of the approval in the server scope and starts one
-// durable operation for the change. Two approvals with one start key give
-// one operation: the second answers ErrChainMigrating.
+// then appends the entry of the approval in the server scope and starts one
+// durable operation for the change in one transaction. Only the approval
+// whose start wins leaves an entry: a second approval while one operation
+// can run answers ErrChainMigrating without an entry. The migration step
+// runs only after the transaction commits, so it never runs before the
+// entry exists.
 func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 	if err := c.checkApprovalGate(ctx, caller); err != nil {
 		return err
@@ -348,11 +385,23 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 		return err
 	}
 
-	if _, err := c.server.AppendServer(ctx, audit.ChainSetEntry(caller, change)); err != nil {
-		return fmt.Errorf("append audit chain approval: %w", err)
+	input, err := json.Marshal(change)
+	if err != nil {
+		return fmt.Errorf("encode audit chain change: %w", err)
 	}
 
-	return c.startApprovalOp(ctx, change)
+	fixed, err := c.runner.StartRequest(auditChainKind, auditChainKey, input)
+	if err != nil {
+		return fmt.Errorf("approve audit chain change: %w", err)
+	}
+
+	if _, err := c.approve.ApproveChainChange(
+		ctx, audit.ChainSetEntry(caller, change), fixed, auditChainRetryKey(),
+	); err != nil {
+		return fmt.Errorf("approve audit chain change: %w", err)
+	}
+
+	return nil
 }
 
 // checkApprovalGate refuses an approval while the migration loop stops,
@@ -412,70 +461,6 @@ func (c *auditChain) refuseWhileMigrating(ctx context.Context) error {
 	return nil
 }
 
-// startApprovalOp starts one migration operation for change. Two approvals
-// with one start key give one operation: the second answers
-// ErrChainMigrating. An approval after a finished operation starts a new
-// one under a new key.
-func (c *auditChain) startApprovalOp(ctx context.Context, change audit.ChainChange) error {
-	op, created, err := c.startMigrationOp(ctx, auditChainKey, change)
-	if err != nil {
-		return err
-	}
-
-	if created {
-		return nil
-	}
-
-	if !terminalMigration(op) {
-		return audit.ErrChainMigrating
-	}
-
-	_, created, err = c.startMigrationOp(ctx, auditChainRetryKey(), change)
-	if err != nil {
-		return err
-	}
-
-	if !created {
-		return audit.ErrChainMigrating
-	}
-
-	return nil
-}
-
-// startMigrationOp starts the migration operation of change under key.
-func (c *auditChain) startMigrationOp(
-	ctx context.Context, key string, change audit.ChainChange,
-) (durable.Operation, bool, error) {
-	input, err := json.Marshal(change)
-	if err != nil {
-		return durable.Operation{}, false, fmt.Errorf("encode audit chain change: %w", err)
-	}
-
-	req, err := c.runner.StartRequest(auditChainKind, key, input)
-	if err != nil {
-		return durable.Operation{}, false, err
-	}
-
-	op, created, err := c.durableOps.Start(ctx, req)
-	if err != nil {
-		return durable.Operation{}, false, fmt.Errorf("start audit chain migration: %w", err)
-	}
-
-	return op, created, nil
-}
-
-// terminalMigration reports whether op already ended. A second approval
-// after such an operation starts a new one under a new key.
-func terminalMigration(op durable.Operation) bool {
-	return op.State.Terminal()
-}
-
-// auditChainRetryKey answers a new start key for an approval after a
-// migration that already ended. The key is unique per call.
-func auditChainRetryKey() string {
-	return auditChainKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-}
-
 // migrationRunning reports whether a migration operation can run now: one
 // operation of the kind is pending or running.
 func (c *auditChain) migrationRunning(ctx context.Context) (bool, error) {
@@ -489,6 +474,12 @@ func (c *auditChain) migrationRunning(ctx context.Context) (bool, error) {
 	}
 
 	return len(ops) > 0, nil
+}
+
+// auditChainRetryKey answers a new start key for an approval after a
+// migration that already ended. The key is unique per call.
+func auditChainRetryKey() string {
+	return auditChainKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 }
 
 // refuseServiceCaller refuses an approval of a change to off when subject

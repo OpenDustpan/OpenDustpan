@@ -1813,6 +1813,12 @@ SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, 
     claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = ?;
 
+-- name: CountRunnableDurableOperations :one
+-- The count of operations of one kind that can run now: pending or running.
+-- An approval of an audit chain change reads it in the transaction of its
+-- own start, so a second approval waits for the first and refuses.
+SELECT COUNT(*) FROM durable_operations WHERE kind = ? AND state IN ('pending', 'running');
+
 -- name: UpdateDurableOperation :exec
 -- Writes every column that changes after the start of an operation.
 UPDATE durable_operations
