@@ -26,7 +26,7 @@ func acquireGuard(abs string) (*processGuard, error) {
 	file, err := lockFile(path)
 	if err != nil {
 		if errors.Is(err, errLocked) {
-			return nil, fmt.Errorf("%w: %s: stop the other server that uses this file", ErrInUse, abs)
+			return nil, fmt.Errorf("%w: %s: stop the other server that uses this database file", ErrInUse, abs)
 		}
 
 		return nil, fmt.Errorf("lock database file %s: %w", abs, err)

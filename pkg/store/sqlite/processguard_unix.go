@@ -20,7 +20,7 @@ const guardFileMode = 0o600
 // A flock belongs to the open file, so two opens in one process conflict
 // as well as two processes.
 func lockFile(path string) (*os.File, error) {
-	file, err := os.OpenFile(filepath.Clean(path), os.O_RDWR|os.O_CREATE, guardFileMode)
+	file, err := os.OpenFile(filepath.Clean(path), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, guardFileMode)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
