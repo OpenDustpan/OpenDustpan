@@ -284,7 +284,8 @@ func startEnv(ctx context.Context, in envInput) *Env {
 }
 
 // NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
-// journaling turned off, so each update answers journalVersion 0.
+// journaling turned off through DUSTPAN_DISABLE_PULUMI_JOURNALING=true, so
+// each update answers journalVersion 0.
 func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
@@ -421,6 +422,8 @@ func startInprocessServer(
 		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), shared)
 	}
 
+	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;
+	// in-process mode uses the equivalent server option.
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),

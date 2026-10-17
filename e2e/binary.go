@@ -62,6 +62,11 @@ const (
 	deltaCutoffFlag = "--checkpoint-delta-cutoff"
 	// disableJournalingFlag names the flag that turns Pulumi journaling off.
 	disableJournalingFlag = "--disable-pulumi-journaling"
+	// disableJournalingEnv names the variable that turns Pulumi journaling
+	// off on the server. The off backend sets it to true, so the run proves
+	// the variable. It never inherits from the test process, so an on
+	// backend stays on.
+	disableJournalingEnv = "DUSTPAN_DISABLE_PULUMI_JOURNALING"
 	// namespaceSubcommand names the namespace subcommand of the server binary.
 	namespaceSubcommand = "namespace"
 	// createSubcommand names the create verb of the namespace subcommand.
@@ -126,8 +131,9 @@ type backendConfig struct {
 	// always passes it explicitly, so an inherited
 	// DUSTPAN_CHECKPOINT_DELTA_CUTOFF never changes a test backend.
 	deltaCutoff int
-	// disableJournaling passes --disable-pulumi-journaling when set, so an
-	// inherited DUSTPAN_DISABLE_PULUMI_JOURNALING never changes a test backend.
+	// disableJournaling passes --disable-pulumi-journaling with
+	// DUSTPAN_DISABLE_PULUMI_JOURNALING=true when set, so an inherited
+	// variable never changes a test backend.
 	disableJournaling bool
 	// ipAllowlists passes --ip-allowlists with
 	// --ip-allowlists-include-bootstrap when set, so the binary server checks
@@ -390,6 +396,7 @@ func backendEnv(tokens string) []string {
 			strings.HasPrefix(kv, "DUSTPAN_DATABASE=") ||
 			strings.HasPrefix(kv, "DUSTPAN_KEY_ENCRYPTION_KEY=") ||
 			strings.HasPrefix(kv, "DUSTPAN_KEY_ENCRYPTION_KEY_FILE=") ||
+			strings.HasPrefix(kv, disableJournalingEnv+"=") ||
 			strings.HasPrefix(kv, "AWS_ACCESS_KEY_ID=") ||
 			strings.HasPrefix(kv, "AWS_SECRET_ACCESS_KEY=") {
 			continue
@@ -408,6 +415,19 @@ func backendEnv(tokens string) []string {
 // the database from the variable, because it refuses a password in the flag.
 func backendServeEnv(tokens, dbURL string) []string {
 	return append(backendEnv(tokens), "DUSTPAN_DATABASE="+dbURL)
+}
+
+// journalingServeEnv returns the journaling environment of a `serve` child
+// process: DUSTPAN_DISABLE_PULUMI_JOURNALING=true when cfg turns journaling
+// off, else nothing. The off backend proves the variable, next to the flag
+// that serveArgs passes. The variable never inherits from the test process,
+// so an on backend stays on.
+func journalingServeEnv(cfg backendConfig) []string {
+	if !cfg.disableJournaling {
+		return nil
+	}
+
+	return []string{disableJournalingEnv + "=true"}
 }
 
 // s3CredentialEnv maps the S3 test credentials into the child environment.
@@ -526,6 +546,7 @@ func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, cfg.bin, serveArgs(cfg, port)...)
 	cmd.Env = append(backendServeEnv(cfg.tokens, cfg.dbURL), cfg.signIn.env()...)
+	cmd.Env = append(cmd.Env, journalingServeEnv(cfg)...)
 
 	var out lockedBuffer
 
