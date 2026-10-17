@@ -50,18 +50,15 @@ func (s *Store) StagePortable(
 }
 
 // loadPortableStaging loads each table file into the staging schema, in the
-// order of the portable spec. Each batch is one transaction. The migration seeds
-// the installation row, so the seeded row goes first.
+// order of the portable spec. Each batch is one transaction. The control
+// tables live in the control schema, which the staging area never loads, so
+// only the seeded policy rows are cleared here.
 func (s *Store) loadPortableStaging(
 	ctx context.Context, schema string, open backup.PortableOpener, index map[string]backup.PortableFile,
 ) error {
 	clearErr := inBackupTx(ctx, s.pool, readWriteTx(), func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, "SET LOCAL search_path TO "+pgIdent(schema)); err != nil {
 			return fmt.Errorf("set staging search path: %w", backup.ErrExportRead)
-		}
-
-		if _, err := tx.Exec(ctx, `DELETE FROM installation`); err != nil {
-			return fmt.Errorf("clear staged installation state: %w", backup.ErrCorrupt)
 		}
 
 		// The migration seeds the token policy row too (ADR 53).

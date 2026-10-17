@@ -540,39 +540,5 @@ func portableSpec() []PortableTable {
 				{Name: "token_freshness_ms", Kind: KindInteger},
 			},
 		},
-		{
-			Table:   "backups",
-			OrderBy: []string{"id"},
-			Columns: []Column{
-				{Name: "id", Kind: KindText},
-				{Name: portColState, Kind: KindText},
-				{Name: portColStartedAtMs, Kind: KindTime},
-				{Name: portColEndedAtMs, Kind: KindTime},
-				{Name: "target", Kind: KindText},
-				{Name: "error", Kind: KindText},
-			},
-		},
-		{
-			Table:   "restores",
-			OrderBy: []string{portColStartedAtMs, "id"},
-			Columns: []Column{
-				{Name: "id", Kind: KindText},
-				{Name: portColState, Kind: KindText},
-				{Name: "backup_id", Kind: KindText},
-				{Name: "pre_backup_id", Kind: KindText},
-				{Name: "requested_by", Kind: KindText},
-				{Name: portColStartedAtMs, Kind: KindTime},
-				{Name: portColEndedAtMs, Kind: KindTime},
-				{Name: "error", Kind: KindText},
-			},
-		},
-		{
-			Table:   "installation",
-			OrderBy: []string{"id"},
-			Columns: []Column{
-				{Name: "id", Kind: KindInteger},
-				{Name: portColState, Kind: KindText},
-			},
-		},
 	}
 }
