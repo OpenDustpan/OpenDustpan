@@ -1,12 +1,6 @@
 {
   "version": 1,
   "skills": {
-    "architectural-decisions": {
-      "source": "repowise-dev/repowise",
-      "sourceType": "github",
-      "skillPath": "plugins/claude-code/skills/architectural-decisions/SKILL.md",
-      "computedHash": "448ddd1b9b9a143b94fe8f1f7ed212dbef193554eb450d652bd6287877a03d56"
-    },
     "asd-ste100": {
       "source": "danyuchn/asd-ste100-skill",
       "sourceType": "github",
@@ -18,12 +12,6 @@
       "sourceType": "github",
       "skillPath": "skills/engineering/ask-matt/SKILL.md",
       "computedHash": "d1c5b4151720e96135154bd593ac4986a1030a2bc81e2aaf129f8b11224af9a9"
-    },
-    "change-review": {
-      "source": "repowise-dev/repowise",
-      "sourceType": "github",
-      "skillPath": "plugins/claude-code/skills/change-review/SKILL.md",
-      "computedHash": "bd2cc6b9424c623b1ce1bf2a2744c880d398709dda098c766f3da85b64577afa"
     },
     "chief-of-staff": {
       "source": "mattpocock/skills",
@@ -37,12 +25,6 @@
       "skillPath": "skills/in-progress/claude-handoff/SKILL.md",
       "computedHash": "43a71462e5ad089e652133fe6f8c3c3835688a143e0ad973d6c5b803d1dbafe7"
     },
-    "code-health": {
-      "source": "repowise-dev/repowise",
-      "sourceType": "github",
-      "skillPath": "plugins/claude-code/skills/code-health/SKILL.md",
-      "computedHash": "81bf26c664d3a5e69ae56606a1403590b39208af87d9297e0f2faa0e6ebeb005"
-    },
     "code-review": {
       "source": "mattpocock/skills",
       "sourceType": "github",
@@ -54,18 +36,6 @@
       "sourceType": "github",
       "skillPath": "skills/engineering/codebase-design/SKILL.md",
       "computedHash": "b2888e4f4e8c0af3bfd557575a64b905c44e6248c3101d72077816882b3a92b9"
-    },
-    "codebase-exploration": {
-      "source": "repowise-dev/repowise",
-      "sourceType": "github",
-      "skillPath": "plugins/claude-code/skills/codebase-exploration/SKILL.md",
-      "computedHash": "a79267586b55513ef77d0ed52ce72e6286d471e1d29abfd7c211e2f3ae15bd25"
-    },
-    "dead-code-cleanup": {
-      "source": "repowise-dev/repowise",
-      "sourceType": "github",
-      "skillPath": "plugins/claude-code/skills/dead-code-cleanup/SKILL.md",
-      "computedHash": "d60617dbb04372a128607d6c1693bab3e55ed6d91f2cae4707412fd9f82197c2"
     },
     "diagnosing-bugs": {
       "source": "mattpocock/skills",
@@ -151,12 +121,6 @@
       "sourceType": "github",
       "skillPath": "skills/engineering/pr/SKILL.md",
       "computedHash": "22a15d4d469344b38e03eb0e95772478393975836289393b1bad3c0febcdc679"
-    },
-    "pre-modification-check": {
-      "source": "repowise-dev/repowise",
-      "sourceType": "github",
-      "skillPath": "plugins/claude-code/skills/pre-modification/SKILL.md",
-      "computedHash": "558ae03ca46041e61c8ef0bc01823f50ec0dc5c16a8347a6be23cf49fcf78bb4"
     },
     "prototype": {
       "source": "mattpocock/skills",
