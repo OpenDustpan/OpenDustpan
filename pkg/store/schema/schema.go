@@ -436,6 +436,7 @@ func ParseMigrationVersion(name string) (int64, error) {
 //nolint:gochecknoglobals // The shared frozen migration list: Go has no constant slices, and both dialects use this one source.
 var embeddedMigrationNames = []string{
 	BaselineName,
+	"0103_control_tables.sql",
 }
 
 // EmbeddedMigrationNames returns the ordered migration file names the binary

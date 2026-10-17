@@ -24,7 +24,8 @@ func TestFrozenMigrations(t *testing.T) {
 	// every migration before it once, before the first release; the hashes
 	// start again from it.
 	wantFrozenHashes := map[string]string{
-		"0100_baseline.sql": "9b4ff3513eed7fd9b9e417e2bf8303de23d9337c4087e3f3776e30e57c612a9e",
+		"0100_baseline.sql":       "9b4ff3513eed7fd9b9e417e2bf8303de23d9337c4087e3f3776e30e57c612a9e",
+		"0103_control_tables.sql": "13d9dcfc1b7085d8cc35fff1aa06dd30b0fe4af4b74b74db33995ef8c24b7a6e",
 	}
 
 	all, err := migrate.Load(frozenMigrations, "migrations")

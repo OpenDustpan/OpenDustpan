@@ -81,7 +81,9 @@ func (s *Store) swapStagingSchemaKeepingAccess(ctx context.Context, staging stri
 }
 
 // swapSchemas moves the live schema aside, moves the staged schema live,
-// drops the old live schema, and fences the restored namespaces, in tx.
+// drops the old live schema and the control schema of the staging area, and
+// fences the restored namespaces, in tx. The installation, backups and
+// restores tables live in the control schema, which the swap never renames.
 func swapSchemas(ctx context.Context, tx pgx.Tx, live, staging string) error {
 	previous := live + "_previous"
 
@@ -99,6 +101,10 @@ func swapSchemas(ctx context.Context, tx pgx.Tx, live, staging string) error {
 
 	if _, err := tx.Exec(ctx, "DROP SCHEMA "+pgIdent(previous)+" CASCADE"); err != nil {
 		return fmt.Errorf("drop previous schema: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging+"_control")+" CASCADE"); err != nil {
+		return fmt.Errorf("drop staging control schema: %w", err)
 	}
 
 	return fenceRestored(ctx, tx, live)
