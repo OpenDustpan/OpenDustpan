@@ -6958,6 +6958,22 @@ func (q *Queries) PruneSignInFailures(ctx context.Context, ageMs int64) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const pruneSignInFailuresAt = `-- name: PruneSignInFailuresAt :execrows
+DELETE FROM sign_in_failures
+WHERE window_end_ms <= $1::bigint
+`
+
+// Deletes every window that ended at or before threshold_ms. The caller
+// passes the threshold instead of the clock of the store, so a test can pin
+// the prune at the boundary of a window.
+func (q *Queries) PruneSignInFailuresAt(ctx context.Context, thresholdMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneSignInFailuresAt, thresholdMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pruneSignInRequests = `-- name: PruneSignInRequests :execrows
 DELETE FROM sign_in_requests WHERE expires_at_ms <= $1
 `

@@ -31,6 +31,10 @@ func (brokenCounter) PruneFailures(context.Context, time.Duration) (int64, error
 	return 0, errCounter
 }
 
+func (brokenCounter) PruneFailuresAt(context.Context, time.Time, time.Duration) (int64, error) {
+	return 0, errCounter
+}
+
 // sharedWindow is the window of newSharedGate: the burst of 3 times the
 // refill of 1 second.
 const sharedWindow = 3 * time.Second

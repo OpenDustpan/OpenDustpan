@@ -73,8 +73,8 @@ var ErrLimited = fmt.Errorf("%w: try again later", identity.ErrRateLimited)
 // every instance on one database shares one budget. The store takes the
 // time of each call from its own clock, never from the clock of the
 // instance: a window of length L holds the times from k*L to (k+1)*L on
-// that clock, in Unix milliseconds. No SQL store implements it yet; the
-// conformance suite storetest.RunSignInFailures checks an implementation.
+// that clock, in Unix milliseconds. The conformance suite
+// storetest.RunSignInFailures checks an implementation.
 type FailureCounter interface {
 	// AddFailure adds one miss of source to the current window of length
 	// length, in one atomic write, and answers the count of that window
@@ -87,6 +87,12 @@ type FailureCounter interface {
 	// answers the count of windows it deleted. It answers an error when the
 	// delete fails.
 	PruneFailures(ctx context.Context, age time.Duration) (int64, error)
+	// PruneFailuresAt deletes every window that ended age or longer ago on
+	// now, and answers the count of windows it deleted. It takes now
+	// instead of reading the clock of the store, so a test can pin the
+	// prune at the boundary of a window. It answers an error when the
+	// delete fails.
+	PruneFailuresAt(ctx context.Context, now time.Time, age time.Duration) (int64, error)
 }
 
 // FailureCount is the answer of FailureCounter.AddFailure: the count of the

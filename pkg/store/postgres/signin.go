@@ -48,3 +48,15 @@ func (s *Store) PruneFailures(ctx context.Context, age time.Duration) (int64, er
 
 	return deleted, nil
 }
+
+// PruneFailuresAt implements authgate.FailureCounter in one atomic write. It
+// deletes every window that ended age or longer ago on now, which the caller
+// passes instead of the clock of the store.
+func (s *Store) PruneFailuresAt(ctx context.Context, now time.Time, age time.Duration) (int64, error) {
+	deleted, err := s.queries.PruneSignInFailuresAt(ctx, now.UnixMilli()-age.Milliseconds())
+	if err != nil {
+		return 0, fmt.Errorf("prune sign-in failures: %w", err)
+	}
+
+	return deleted, nil
+}

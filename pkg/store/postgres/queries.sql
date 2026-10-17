@@ -2053,3 +2053,10 @@ DELETE FROM sign_in_failures
 WHERE window_end_ms <= (
     FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint - sqlc.arg('age_ms')::bigint
 );
+
+-- name: PruneSignInFailuresAt :execrows
+-- Deletes every window that ended at or before threshold_ms. The caller
+-- passes the threshold instead of the clock of the store, so a test can pin
+-- the prune at the boundary of a window.
+DELETE FROM sign_in_failures
+WHERE window_end_ms <= sqlc.arg('threshold_ms')::bigint;
