@@ -30,7 +30,11 @@ decision 6, and the PM session accepted it on 2026-10-17.
    - the tool-neutral APIs, for example the inventory API and the
      installation API,
    - the Go SDK in `pkg/`,
-   - the commands, flags and settings of the `opendustpan` binary,
+   - the commands and flags of the `opendustpan` binary,
+   - the settings of the `opendustpan` binary, with one limit. A setting
+     that a tag shipped keeps working after an upgrade, or the binary
+     refuses to start. The error names the setting and its replacement. The
+     binary never ignores such a setting without an error.
    - the database schema and the backup format, with the limits of decisions 5
      and 6.
 2. **The tool-compatible APIs cannot break.** The Pulumi Cloud-compatible API,
@@ -45,8 +49,9 @@ decision 6, and the PM session accepted it on 2026-10-17.
 4. **No compatibility code for unreleased shapes.** Do not write a shim, an
    alias, a second read path or a data conversion for a shape that no tag
    shipped. Remove such code when you find it.
-5. **Released shapes keep their upgrade path.** A schema shape, a backup
-   format or a setting that a tag shipped follows ADR 72 decisions 10 and 11.
+5. **Released shapes keep their upgrade path.** A schema shape or a backup
+   format that a tag shipped follows ADR 72 decisions 10 and 11. A setting
+   that a tag shipped follows the limit in decision 1.
    An installation of a tagged release upgrades with no manual step.
 6. **Migrations of an unreleased schema.** An unreleased shape is
    a schema shape that no tag shipped.
@@ -63,6 +68,12 @@ decision 6, and the PM session accepted it on 2026-10-17.
      for that tag. Before the first tag, all files collapse into the
      baseline of each dialect. This collapse comes before each tag, not
      only once (ADR 72 decision 7).
+   - The collapsed file gets a version number above the number of each file
+     that it replaces. So a database from an untagged build records versions
+     that the new binary does not embed, and it lacks the collapsed file. The
+     migration check then refuses the database with `ErrSchemaDiverged`. If
+     the collapsed file used a number that the database already records, the
+     check would find no pending migration and accept the wrong schema.
 7. **At 1.0, a new ADR sets the contract rules again** for every API, the
    Go SDK and the schema.
 

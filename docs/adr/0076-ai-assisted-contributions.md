@@ -56,6 +56,8 @@ signs off.
 - `CONTRIBUTING.md` adds the sign-off, the `make check` rule and the bulk
   rule, and drops the sentence that limits the rules to outside
   contributions.
+- `CLAUDE.md` and `CONTRIBUTING.md` tell an agent to paste the output of its
+  checks into each pull request that it opens (decision 7).
 - A DCO check in CI can come later. Until then, reviewers check the
   sign-off.
 - The rule on AI-generated media in `CONTRIBUTING.md` stays.

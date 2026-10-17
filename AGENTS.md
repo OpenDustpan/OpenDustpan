@@ -114,7 +114,9 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`.
   Never edit a migration file that a tag shipped. An applied file that no tag
   shipped stays frozen until the collapse before the next tag, which merges
-  all such files into one (ADR 73). TestFrozenMigrations in each store adapter
+  all such files into one (ADR 73). Give the collapsed file a version number
+  above every file that it replaces, so that the migration check refuses a
+  database from an untagged build with `ErrSchemaDiverged`. TestFrozenMigrations in each store adapter
   holds the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
@@ -189,6 +191,8 @@ skill (ADR 14):
   sign off each commit, understand all of it, and pass `make check`. Until
   the push ends on 2026-10-22, an agent signs off with its own commit author
   identity (`git commit -s`).
+- An agent pastes the output of its checks into the description of each pull
+  request that it opens (ADR 76).
 - Keep changes small and reviewable, with one concern per change.
 - If you are unsure of the intent, ask rather than guess.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,
