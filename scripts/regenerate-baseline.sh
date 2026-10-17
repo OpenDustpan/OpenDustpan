@@ -29,6 +29,12 @@ REF="${1:-origin/main}"
 : "${DUSTPAN_TEST_POSTGRES_URL:?set DUSTPAN_TEST_POSTGRES_URL to a PostgreSQL database}"
 
 ROOT="$(git rev-parse --show-toplevel)"
+
+if [ -n "$(git -C "$ROOT" status --porcelain -- pkg/store/sqlite/migrations pkg/store/postgres/migrations)" ]; then
+	echo "regenerate-baseline: commit or stash the migration changes first" >&2
+	exit 1
+fi
+
 IN="$(mktemp -d)"
 trap 'rm -rf "$IN"' EXIT
 
