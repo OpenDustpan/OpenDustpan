@@ -32,6 +32,7 @@ declare -A DURATION
 
 CONTAINER=""
 STARTED_PG=0
+USED_EXISTING_PG=0
 ABORT=0
 TMP_ROOT="$(mktemp -d)"
 E2E_CACHE="${E2E_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/opendustpan-e2e}"
@@ -49,10 +50,29 @@ cleanup() {
   rc=$?
   trap - EXIT INT TERM
   if [ "$STARTED_PG" = 1 ] && [ -n "${DUSTPAN_TEST_POSTGRES_URL:-}" ]; then
-    schemas="$(psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc "select schema_name from information_schema.schemata where schema_name like 'test_%'" 2>/dev/null || true)"
+    schemas="$(psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc "select schema_name from information_schema.schemata where schema_name like 'test\_%'" 2>/dev/null || true)"
     for schema in $schemas; do
+      case "$schema" in
+        test_*) ;;
+        *) continue ;;
+      esac
       psql "$DUSTPAN_TEST_POSTGRES_URL" -c "drop schema \"$schema\" cascade" >/dev/null 2>&1 || true
     done
+  elif [ "$USED_EXISTING_PG" = 1 ] && [ -n "${DUSTPAN_TEST_POSTGRES_URL:-}" ]; then
+    count="$(psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc "select count(*) from pg_stat_activity where datname = current_database() and pid <> pg_backend_pid()" 2>/dev/null || true)"
+    count="$(printf '%s' "$count" | tr -d '[:space:]')"
+    if [ "$count" = "0" ]; then
+      schemas="$(psql "$DUSTPAN_TEST_POSTGRES_URL" -Atc "select schema_name from information_schema.schemata where schema_name like 'test\_%'" 2>/dev/null || true)"
+      for schema in $schemas; do
+        case "$schema" in
+          test_*) ;;
+          *) continue ;;
+        esac
+        psql "$DUSTPAN_TEST_POSTGRES_URL" -c "drop schema \"$schema\" cascade" >/dev/null 2>&1 || true
+      done
+    else
+      echo "skipped test schema cleanup: $count other clients connected" >&2
+    fi
   fi
   if [ -n "$CONTAINER" ]; then
     docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
@@ -138,6 +158,7 @@ ensure_docker() {
 
 step_postgres() {
   if [ -n "${DUSTPAN_TEST_POSTGRES_URL:-}" ]; then
+    USED_EXISTING_PG=1
     log "postgres: DUSTPAN_TEST_POSTGRES_URL is set, keep it"
     return 0
   fi
