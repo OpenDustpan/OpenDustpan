@@ -55,7 +55,7 @@ These are the project owner's own instructions. They hold until the owner change
 
 - The live session list is the record, not my memory. On every wake and every check-in: list_sessions (mine: true, limit
   100), then run
-  `python3 /tmp/claude-0/-home-user/1af56df4-3646-52a3-8de1-76f258ff07e4/scratchpad/sessions.py <saved result file>`.
+  `python3 docs/agents/lead_sessions.py <saved result file>`.
   Act at once on every BLOCKED or NEEDS line (send_message with priority now). Give every session that is idle for more
   than 30 minutes its next step, or archive it.
 - Unattended workers can wait forever on a permission prompt or an unsent message. The NEEDS line shows these. Give the
@@ -63,7 +63,7 @@ These are the project owner's own instructions. They hold until the owner change
   approval in that session, tell the owner the session URL.
 - Keep each session title as "<role>: PR N (state)" or "<role>: #N (state)". Rename a session when its work changes.
 - Check-in (owner, 2026-10-17): scheduled task trig_0197R4UtyxPRKvTpmfzPAySj fires into this session at :15 every hour.
-  Its steps are in /tmp/claude-0/-home-user/1af56df4-3646-52a3-8de1-76f258ff07e4/scratchpad/checkin-prompt.md: check
+  Its steps are in docs/agents/lead-checkin.md: check
   every session, give work to every open PR and unblocked issue, close issues whose work is merged, merge PRs that meet
   the merge rule, tell the owner in 3 lines or fewer. One reminder only (owner: "one reminder is enough"). Do not add a
   send_later.
