@@ -58,7 +58,6 @@ import (
 	"opendustpan.org/opendustpan/internal/pulumijournal"
 	"opendustpan.org/opendustpan/internal/requestid"
 	"opendustpan.org/opendustpan/internal/sessionauth"
-	"opendustpan.org/opendustpan/internal/tokengrants"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -547,9 +546,9 @@ type services struct {
 	// deleted runs the retention sweep. assemble sets it, because
 	// it counts on the server metrics.
 	deleted *deletedSweeper
-	// access keeps the roles and grants (ADR 52), or is nil when the store
-	// keeps none. NewServer sets it after newServices. The installation API
-	// and the escalation check of the token service share it.
+	// access keeps the roles and grants, or is nil when the store keeps
+	// none. NewServer sets it after newServices. The installation API and
+	// the token service share it.
 	access *access.Service
 	// tempAdmins keeps the temporary administrators, or is nil when the
 	// store keeps none. NewServer sets it after newServices. The expiry
@@ -2268,9 +2267,9 @@ func newAccessService(cfg *settings) (*access.Service, error) {
 	return svc, nil
 }
 
-// newIdentityServices builds the role and grant service (ADR 52) and the
-// access token service (ADR 53). The token service takes the role and
-// grant service as its escalation check. Either is nil when the store
+// newIdentityServices builds the role and grant service and the access
+// token service. The token service takes the authorizer of the role and
+// grant service for principal:manage-tokens. Either is nil when the store
 // keeps none.
 func newIdentityServices(cfg *settings) (*access.Service, *accesstoken.Service, error) {
 	grants, err := newAccessService(cfg)
@@ -2304,18 +2303,13 @@ func newTokenService(cfg *settings, grants *access.Service) (*accesstoken.Servic
 		return nil, nil //nolint:nilnil // Tokens need principals; without them the routes answer 501.
 	}
 
-	var (
-		check accesstoken.GrantCheck
-		authz identity.Authorizer
-	)
-
+	var authz identity.Authorizer
 	if grants != nil {
-		check = tokengrants.Check{Grants: grants, Principals: principals}
 		authz = grants.Authorizer()
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: store, Principals: principals, Freshness: nil, Grants: check, Authorizer: authz,
+		Store: store, Principals: principals, Freshness: nil, Authorizer: authz,
 		Logger: cfg.logger, Now: cfg.now, NewID: nil, TempAdmins: tempReaderOf(cfg.namespaceStore),
 	})
 	if err != nil {

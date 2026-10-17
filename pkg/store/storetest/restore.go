@@ -77,6 +77,7 @@ func RunRestore(t *testing.T, newStore RestoreFactory) {
 		{name: "bump increments every namespace and fences stale writes", test: testRestoreBumpFences},
 		{name: "export does not tear a concurrent stack write", test: testRestoreExportDoesNotTear},
 		{name: "staging loads a backup without touching live data", test: testRestoreStagingKeepsLive},
+		{name: "staging refuses a backup with an unsealed state version", test: testRestoreStagingRefusesUnsealedState},
 		{name: "a new stage discards the previous staging area", test: testRestoreStagingReplacesPrevious},
 		{name: "staging keeps a checkpoint held in blobs", test: testRestoreStagingKeepsCheckpointBlobs},
 		{name: "a restore keeps the journal rows of a running update", test: testRestoreJournalBlob},
@@ -915,25 +916,11 @@ func saveChainRecord(t *testing.T, s audit.ChainStore, rec audit.ChainRecord) {
 	}
 }
 
-// migrateChain runs the migration of change in s with a held claim, so each
-// renewal after a scope succeeds.
+// migrateChain runs the migration of change in s.
 func migrateChain(t *testing.T, s chainRestoreStore, fences []namespace.Fence, change audit.ChainChange) {
 	t.Helper()
 
-	rec, err := s.ChainRecord(t.Context())
-	if err != nil {
-		t.Fatalf("chain record: %v", err)
-	}
-
-	rec.MigratingAt = change.At
-
-	if err := s.SaveChainRecord(t.Context(), rec); err != nil {
-		t.Fatalf("save chain record: %v", err)
-	}
-
-	clock := func() time.Time { return change.At.Add(time.Minute) }
-
-	if err := audit.MigrateChain(t.Context(), s, fences, change, clock); err != nil {
+	if err := audit.MigrateChain(t.Context(), s, fences, change); err != nil {
 		t.Fatalf("migrate the chain: %v", err)
 	}
 }

@@ -583,8 +583,6 @@ func tokenTargets() []string {
 	principalTokens := "/api/server/principals/" + testOtherPrincipalID + "/tokens"
 
 	return []string{
-		"/api/server/tokens",
-		"/api/server/tokens/" + testServiceTokenID + "/rotate",
 		"/api/server/service-tokens",
 		"/api/server/service-tokens/" + testServiceTokenID + "/rotate",
 		"/api/server/caller/tokens",
@@ -1275,17 +1273,16 @@ func sessionChangeHas(entries []audit.Entry, key string) bool {
 	return false
 }
 
-// TestSignInSubjectOverLimitRefused proves a sub claim one byte over 255 is
-// refused with the documented message and an audit entry that holds no long
-// value, while a sub of exactly 255 bytes passes the limit: it reaches the
-// principal check, which refuses the over-long full subject as invalid.
-func TestSignInSubjectOverLimitRefused(t *testing.T) {
-	t.Parallel()
+// checkSubjectOverLimitRefused signs in with the sub and proves the
+// composed subject is refused for length with an audit entry that names
+// the provider only and holds no sub value.
+func checkSubjectOverLimitRefused(t *testing.T, sub, display string) {
+	t.Helper()
 
 	e := newSignInEnv(t, true)
 	e.idp.SetUser(oauthtest.User{
-		Subject:           strings.Repeat("s", 256),
-		Name:              "Long Sub",
+		Subject:           sub,
+		Name:              display,
 		PreferredUsername: "longsub",
 		Email:             "longsub@example.com",
 	})
@@ -1305,26 +1302,90 @@ func TestSignInSubjectOverLimitRefused(t *testing.T) {
 		t.Fatal("refused sign-in set a session cookie")
 	}
 
-	if reason, outcome := e.refusedReason(t); reason != "subject over 255 bytes" || outcome != audit.OutcomeDenied {
-		t.Errorf("audit reason = %q %s, want %q denied", reason, outcome, "subject over 255 bytes")
+	if reason, outcome := e.refusedReason(t); reason != "subject over 255 bytes" ||
+		outcome != audit.OutcomeDenied {
+		t.Fatalf("audit reason = %q %s, want %q denied", reason, outcome, "subject over 255 bytes")
 	}
 
-	for _, en := range e.serverEntries(t) {
-		if strings.Contains(en.Subject+en.IDPSubject, strings.Repeat("s", 256)) {
-			t.Fatalf("audit entry keeps the long subject: %+v", en)
+	checkLengthRefusalEntry(t, e, sub)
+}
+
+// checkLengthRefusalEntry proves the audit entry of the length refusal
+// names the provider only and no entry keeps the sub.
+func checkLengthRefusalEntry(t *testing.T, e signInEnv, sub string) {
+	t.Helper()
+
+	var found bool
+
+	entries := e.serverEntries(t)
+	for i := range entries {
+		if strings.Contains(entries[i].Subject+entries[i].IDPSubject, sub) {
+			t.Fatalf("audit entry keeps the long subject: %+v", entries[i])
 		}
+
+		if entries[i].Action != session.ActionSignIn || len(entries[i].Changes) != 1 ||
+			entries[i].Changes[0].New != "subject over 255 bytes" {
+			continue
+		}
+
+		found = true
+
+		if entries[i].Subject != "sign-in:corp" || entries[i].IDPSubject != "" {
+			t.Fatalf("refused entry names %q with sub value %q, want the provider only",
+				entries[i].Subject, entries[i].IDPSubject)
+		}
+	}
+
+	if !found {
+		t.Fatal("no audit entry records the length refusal")
 	}
 }
 
-// TestSignInSubjectAtLimitPassesTheLengthCheck proves a sub claim of exactly
-// 255 bytes passes the length check: the sign-in reaches the principal
-// check, which refuses the full subject as invalid instead.
+// TestSignInSubjectOverLimitRefused proves a composed subject over 255
+// bytes is refused with the documented message and an audit entry that
+// names the provider only and holds no sub value.
+func TestSignInSubjectOverLimitRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		sub     string
+		display string
+	}{
+		{name: "one byte over the composed limit", sub: strings.Repeat("a", 251), display: "Long Sub"},
+		{
+			name:    "sub of 255 bytes is over the composed limit",
+			sub:     strings.Repeat("a", 255),
+			display: "Capped Sub",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			checkSubjectOverLimitRefused(t, tc.sub, tc.display)
+		})
+	}
+}
+
+// TestSignInSubjectAtLimitPassesTheLengthCheck proves a composed subject of
+// exactly 255 bytes passes the length check: the sub uses letters and
+// digits only, so the principal check accepts it and the sign-in works.
 func TestSignInSubjectAtLimitPassesTheLengthCheck(t *testing.T) {
 	t.Parallel()
 
 	e := newSignInEnv(t, true)
+	sub := strings.Repeat("a", 250)
+	subject := "corp:" + sub
+
+	if len(subject) != 255 {
+		t.Fatalf("composed subject length = %d, want 255", len(subject))
+	}
+
+	if len(sub) == 255 {
+		t.Fatal("test checks the sub length instead of the composed length")
+	}
+
 	e.idp.SetUser(oauthtest.User{
-		Subject:           strings.Repeat("s", 255),
+		Subject:           sub,
 		Name:              "Capped Sub",
 		PreferredUsername: "cappedsub",
 		Email:             "cappedsub@example.com",
@@ -1333,15 +1394,17 @@ func TestSignInSubjectAtLimitPassesTheLengthCheck(t *testing.T) {
 	binding, authURL := e.start(t, "")
 	rec := e.callback(t, e.authorize(t, authURL), binding)
 
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("callback = %d, want %d: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("callback = %d, want %d: %s", rec.Code, http.StatusSeeOther, rec.Body.String())
 	}
 
-	if strings.Contains(rec.Body.String(), "subject over 255 bytes") {
-		t.Fatalf("body refuses a subject at the limit: %s", rec.Body.String())
+	if cookieOf(rec, apiserver.SessionCookie) == nil {
+		t.Fatal("sign-in at the limit set no session cookie")
 	}
 
-	if reason, _ := e.refusedReason(t); reason != "subject is not valid" {
-		t.Errorf("audit reason = %q, want the principal check refusal", reason)
+	if reason, _ := e.refusedReason(t); reason == "subject over 255 bytes" {
+		t.Fatalf("audit reason = %q, want no length refusal", reason)
 	}
+
+	e.checkOIDCPrincipal(t, subject, "Capped Sub")
 }

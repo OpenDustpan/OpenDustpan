@@ -28,7 +28,7 @@ func (memberStore) GetPrincipal(_ context.Context, id string) (principal.Princip
 	}, nil
 }
 
-func (s memberStore) AddMember(context.Context, principal.Membership, audit.Entry) error {
+func (s memberStore) AddMember(context.Context, principal.Membership, audit.Entry, principal.MemberAudit) error {
 	*s.added++
 
 	return nil
@@ -40,6 +40,14 @@ type captureMemberStore struct {
 	principal.Store
 
 	captured *audit.Entry
+	actsAs   []string
+}
+
+// fixedActs answers ActsAs with a fixed list.
+type fixedActs []string
+
+func (f fixedActs) ActsAs(context.Context, string) ([]string, error) {
+	return f, nil
 }
 
 func (captureMemberStore) GetPrincipal(_ context.Context, id string) (principal.Principal, error) {
@@ -50,7 +58,18 @@ func (captureMemberStore) GetPrincipal(_ context.Context, id string) (principal.
 	}, nil
 }
 
-func (s captureMemberStore) AddMember(_ context.Context, _ principal.Membership, e audit.Entry) error {
+func (s captureMemberStore) AddMember(
+	ctx context.Context, _ principal.Membership, e audit.Entry, more principal.MemberAudit,
+) error {
+	if more != nil {
+		changes, err := more(ctx, fixedActs(s.actsAs))
+		if err != nil {
+			return err
+		}
+
+		e.Changes = append(e.Changes, changes...)
+	}
+
 	*s.captured = e
 
 	return nil
@@ -64,8 +83,16 @@ func TestAddMemberRecordsMembershipFields(t *testing.T) {
 	var captured audit.Entry
 
 	svc, err := principal.NewService(principal.Config{
-		Store: captureMemberStore{Store: nil, captured: &captured}, Guard: nil, Namespaces: nil, Tokens: nil,
-		Now: nil, NewID: nil,
+		Store: captureMemberStore{
+			Store:    nil,
+			captured: &captured,
+			actsAs:   nil,
+		},
+		Guard:      nil,
+		Namespaces: nil,
+		Tokens:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)
@@ -119,5 +146,56 @@ func TestAddMemberRefusesNamespacePrincipal(t *testing.T) {
 
 	if added != 0 {
 		t.Fatalf("the store got %d memberships, want none", added)
+	}
+}
+
+// TestAddMemberNamesWhatTheMemberActsAs proves that the entry of a
+// membership add names, in one change "actsAs" with one line each, what
+// the grants of the group let the new member act as, and that a group that
+// gives no act-as right adds no such change.
+func TestAddMemberNamesWhatTheMemberActsAs(t *testing.T) {
+	t.Parallel()
+
+	caller := identity.Principal{
+		Subject: "tester", DisplayName: "", Admin: true, TokenID: "", TokenExpiresAt: time.Time{},
+	}
+
+	for _, tc := range []struct {
+		name   string
+		actsAs []string
+		want   string
+		found  bool
+	}{
+		{
+			name: "every form", actsAs: []string{"@server", "acme", "principal:prn-a", "principal:prn-b"},
+			want: "@server\nacme\nprincipal:prn-a\nprincipal:prn-b", found: true,
+		},
+		{name: "nothing", actsAs: nil, want: "", found: false},
+	} {
+		var captured audit.Entry
+
+		svc, err := principal.NewService(principal.Config{
+			Store: captureMemberStore{Store: nil, captured: &captured, actsAs: tc.actsAs}, Guard: nil,
+			Namespaces: nil, Tokens: nil, Now: nil, NewID: nil,
+		})
+		if err != nil {
+			t.Fatalf("service: %v", err)
+		}
+
+		if _, err := svc.AddMember(t.Context(), testEntry(), caller, "grp-1", "prn-1"); err != nil {
+			t.Fatalf("%s: add member: %v", tc.name, err)
+		}
+
+		got, found := "", false
+
+		for _, c := range captured.Changes {
+			if c.Key == "actsAs" {
+				got, found = c.New, true
+			}
+		}
+
+		if got != tc.want || found != tc.found {
+			t.Fatalf("%s: actsAs = %q (found %t), want %q (found %t)", tc.name, got, found, tc.want, tc.found)
+		}
 	}
 }

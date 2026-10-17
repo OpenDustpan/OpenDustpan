@@ -62,6 +62,11 @@ const (
 	deltaCutoffFlag = "--checkpoint-delta-cutoff"
 	// disableJournalingFlag names the flag that turns Pulumi journaling off.
 	disableJournalingFlag = "--disable-pulumi-journaling"
+	// disableJournalingEnv names the variable that turns Pulumi journaling
+	// off on the server. The off backend sets it to true, so the run proves
+	// the variable. It never inherits from the test process, so an on
+	// backend stays on.
+	disableJournalingEnv = "DUSTPAN_DISABLE_PULUMI_JOURNALING"
 	// namespaceSubcommand names the namespace subcommand of the server binary.
 	namespaceSubcommand = "namespace"
 	// createSubcommand names the create verb of the namespace subcommand.
@@ -105,6 +110,10 @@ type envInput struct {
 	// the server, so the server refuses it and records the refusal. Nil
 	// passes every batch through untouched.
 	journalRefuser *JournalRefuser
+	// journalCap lowers the journal version that start-update answers, so a
+	// test can drive version 1 with a CLI that offers version 2. Nil answers
+	// the negotiated version.
+	journalCap *JournalVersionCap
 }
 
 // backendConfig groups the settings of one backend process.
@@ -122,8 +131,9 @@ type backendConfig struct {
 	// always passes it explicitly, so an inherited
 	// DUSTPAN_CHECKPOINT_DELTA_CUTOFF never changes a test backend.
 	deltaCutoff int
-	// disableJournaling passes --disable-pulumi-journaling when set, so an
-	// inherited DUSTPAN_DISABLE_PULUMI_JOURNALING never changes a test backend.
+	// disableJournaling passes --disable-pulumi-journaling with
+	// DUSTPAN_DISABLE_PULUMI_JOURNALING=true when set, so an inherited
+	// variable never changes a test backend.
 	disableJournaling bool
 	// ipAllowlists passes --ip-allowlists with
 	// --ip-allowlists-include-bootstrap when set, so the binary server checks
@@ -386,6 +396,7 @@ func backendEnv(tokens string) []string {
 			strings.HasPrefix(kv, "DUSTPAN_DATABASE=") ||
 			strings.HasPrefix(kv, "DUSTPAN_KEY_ENCRYPTION_KEY=") ||
 			strings.HasPrefix(kv, "DUSTPAN_KEY_ENCRYPTION_KEY_FILE=") ||
+			strings.HasPrefix(kv, disableJournalingEnv+"=") ||
 			strings.HasPrefix(kv, "AWS_ACCESS_KEY_ID=") ||
 			strings.HasPrefix(kv, "AWS_SECRET_ACCESS_KEY=") {
 			continue
@@ -404,6 +415,19 @@ func backendEnv(tokens string) []string {
 // the database from the variable, because it refuses a password in the flag.
 func backendServeEnv(tokens, dbURL string) []string {
 	return append(backendEnv(tokens), "DUSTPAN_DATABASE="+dbURL)
+}
+
+// journalingServeEnv returns the journaling environment of a `serve` child
+// process: DUSTPAN_DISABLE_PULUMI_JOURNALING=true when cfg turns journaling
+// off, else nothing. The off backend proves the variable, next to the flag
+// that serveArgs passes. The variable never inherits from the test process,
+// so an on backend stays on.
+func journalingServeEnv(cfg backendConfig) []string {
+	if !cfg.disableJournaling {
+		return nil
+	}
+
+	return []string{disableJournalingEnv + "=true"}
 }
 
 // s3CredentialEnv maps the S3 test credentials into the child environment.
@@ -522,6 +546,7 @@ func launchBinaryBackend(ctx context.Context, tb testing.TB, cfg backendConfig, 
 	//nolint:gosec // The binary is built from this repository by the suite itself.
 	cmd := exec.CommandContext(ctx, cfg.bin, serveArgs(cfg, port)...)
 	cmd.Env = append(backendServeEnv(cfg.tokens, cfg.dbURL), cfg.signIn.env()...)
+	cmd.Env = append(cmd.Env, journalingServeEnv(cfg)...)
 
 	var out lockedBuffer
 
@@ -927,7 +952,7 @@ func startRecordingProxy(
 ) *httptest.Server {
 	tb.Helper()
 
-	p := reserveRecordingProxy(tb, rec, refuser)
+	p := reserveRecordingProxy(tb, rec, refuser, nil)
 
 	return p.start(tb, backendURL)
 }
@@ -936,9 +961,8 @@ func startRecordingProxy(
 // backend: the sign-in needs the public URL of the proxy at the start of
 // the backend.
 type recordingProxy struct {
-	server   *httptest.Server
-	target   *url.URL
-	rewrites *answerRewrites
+	server *httptest.Server
+	target *url.URL
 }
 
 // publicURL returns the URL that the proxy serves once it starts.
@@ -964,18 +988,18 @@ func (p *recordingProxy) start(tb testing.TB, backendURL string) *httptest.Serve
 
 // reserveRecordingProxy binds the listener of a recording proxy and
 // returns it, not started.
-func reserveRecordingProxy(tb testing.TB, rec *Recorder, refuser *JournalRefuser) *recordingProxy {
+func reserveRecordingProxy(
+	tb testing.TB, rec *Recorder, refuser *JournalRefuser, versionCap *JournalVersionCap,
+) *recordingProxy {
 	tb.Helper()
 
 	target := &url.URL{}
-	rewrites := &answerRewrites{mu: sync.Mutex{}, byPath: nil}
 
 	//nolint:gosec // The proxy dials the test backend on loopback; there is no other party to impersonate.
 	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}}
 
-	//nolint:exhaustruct_v5 // The test proxy needs only Rewrite, ModifyResponse and Transport; the rest stays zero.
+	//nolint:exhaustruct_v5 // The test proxy needs only Rewrite and Transport; the rest stays zero.
 	proxy := &httputil.ReverseProxy{
-		ModifyResponse: rewrites.modify,
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
 			r.Out.Host = r.In.Host
@@ -986,10 +1010,10 @@ func reserveRecordingProxy(tb testing.TB, rec *Recorder, refuser *JournalRefuser
 		Transport: transport,
 	}
 
-	ts := httptest.NewUnstartedServer(rec.Middleware(faultedHandler(proxy, refuser)))
+	ts := httptest.NewUnstartedServer(rec.Middleware(cappedHandler(faultedHandler(proxy, refuser), versionCap)))
 	tb.Cleanup(ts.Close)
 
-	return &recordingProxy{server: ts, target: target, rewrites: rewrites}
+	return &recordingProxy{server: ts, target: target}
 }
 
 // binaryDatabase returns the --database value of the database the backend
@@ -1099,7 +1123,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	setup := newBlobSetup(ctx, tb, in.dir)
 	cfg := binaryBackendConfig(in, bin, dbURL, setup, writeBackendCert(tb, in.dir))
 
-	reserved := reserveRecordingProxy(tb, in.rec, in.journalRefuser)
+	reserved := reserveRecordingProxy(tb, in.rec, in.journalRefuser, in.journalCap)
 	signIn := binarySignInSetup(tb, in, reserved, &cfg)
 
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
@@ -1139,7 +1163,6 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		dbProxy:       dbProxy,
 		dbURL:         cfg.dbURL,
 		signIn:        signIn,
-		rewrites:      reserved.rewrites,
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)

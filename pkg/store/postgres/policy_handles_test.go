@@ -120,7 +120,7 @@ func tokenService(t *testing.T, s *postgres.Store, now func() time.Time) *access
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
 		TempAdmins: nil,
-		Store:      s, Principals: s, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil, Now: now, NewID: nil,
+		Store:      s, Principals: s, Freshness: nil, Authorizer: nil, Logger: nil, Now: now, NewID: nil,
 	})
 	if err != nil {
 		t.Fatalf("token service: %v", err)

@@ -201,7 +201,7 @@ func checkHostToken(ctx context.Context, t *testing.T, st *sqlite.Store, token, 
 	t.Helper()
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
+		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
 		Now: nil, NewID: nil,
 	})
 	if err != nil {
@@ -316,7 +316,7 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
+		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
 		Now: nil, NewID: nil,
 	})
 	if err != nil {
@@ -351,7 +351,6 @@ func TestHostWorksWhileBreakGlassDisableIsRefused(t *testing.T) {
 		Principals: checkSt,
 		TempAdmins: checkSt,
 		Freshness:  nil,
-		Grants:     nil,
 		Authorizer: nil,
 		Logger:     nil,
 		Now:        nil,
@@ -446,7 +445,7 @@ func setHostMaxLifetime(ctx context.Context, t *testing.T, db string, capped tim
 	defer st.close()
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
+		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
 		Now: nil, NewID: nil,
 	})
 	if err != nil {
@@ -623,7 +622,7 @@ func requireHostRetry(ctx context.Context, t *testing.T, st store) {
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
+		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
 		Now: nil, NewID: nil,
 	})
 	if err != nil {

@@ -197,7 +197,7 @@ func createTempAdmin(ctx context.Context, st store, person string) (hostMade, er
 	}
 
 	tokens, tokensErr := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
+		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
 		Now: nil, NewID: nil,
 	})
 	if tokensErr != nil {

@@ -142,6 +142,11 @@ The command refuses a backup of another schema version. The error names both
 versions. Restore into the same schema version only. To change version, upgrade
 the server instead.
 
+The command also refuses a backup with a schema version below 100, the
+baseline schema version. The baseline migration replaced every migration
+before it, so no binary can restore such a backup. The error names the
+baseline.
+
 Before the server changes anything, it checks the manifest, the
 key-encryption key, each table file against its descriptor, and each blob
 against its size and MD5. It loads the table files into a staging area. The
@@ -173,8 +178,8 @@ The command takes only `--server` and `--ca-file`. Against a local server with n
 ```text
 binary version: dev
 server version: dev
-database schema version: 19
-binary schema version: 19
+database schema version: 100
+binary schema version: 100
 schema minimum binary version: none
 pending migrations: none
 running journaled updates: 0
@@ -186,6 +191,8 @@ verdict: up to date
 The command prints the binary version, the schema version of the database and the schema version that the binary needs. It then prints the minimum binary version of the schema and the names of pending migrations. It ends with one verdict: `up to date`, `upgrade possible`, or `cannot start`. The verdict is `cannot start` only when the binary version is below the minimum binary version of the schema. A schema can record migrations that the binary does not know. The verdict is then `up to date` when the binary is at or above the minimum: the binary starts on it and applies nothing. The exit code is 0 for the first two verdicts and 1 for the third and for errors. When migrations are pending, it says to back up the database first and that no downgrade path exists. When the server runs without a key-encryption key, or is too old to report one, the command also prints a warning. The warning names `--generate-key-encryption-key` (`DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true`), `--key-encryption-key-file` (`DUSTPAN_KEY_ENCRYPTION_KEY_FILE`) and `DUSTPAN_KEY_ENCRYPTION_KEY`. Set one of them before the upgrade.
 
 Back up the database before each upgrade. `serve` applies pending migrations at start.
+
+`serve` refuses a database that records a schema version below 100, the baseline schema version. The baseline migration replaced every migration before it, so no binary can upgrade such a database. The error names both versions. Start the server on an empty database. The upgrade check gives the verdict `cannot start` for such a database and names the baseline.
 
 ### Minimum binary version
 

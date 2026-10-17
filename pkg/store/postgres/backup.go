@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 var (
@@ -131,8 +132,8 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "checkpoints",
 			columns: []string{
 				pgColStackID, pgColUpdateID, "lease_digest", "schema_version", pgColSequence,
-				pgColDigest, "invalid", "features", "deployment", "saved_at_ms",
-				"resource_count", "blob_key", pgColSize, "blob_size", "blob_md5",
+				pgColDigest, "invalid", "features", "saved_at_ms",
+				"blob_key", pgColSize, "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
 		},
@@ -663,6 +664,10 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, loadErr
 	}
 
+	if sealedErr := checkStagedSealedState(ctx, s.pool, in.staging); sealedErr != nil {
+		return backup.Summary{}, sealedErr
+	}
+
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
 	if err != nil {
 		return backup.Summary{}, err
@@ -857,6 +862,24 @@ func stagingTable(staging, table string) string {
 	return pgIdent(staging) + "." + pgIdent(table)
 }
 
+// checkStagedSealedState refuses a staged backup with a state version that
+// is not sealed: every stored version is sealed, so an import with a plain
+// row fails instead of serving plain state.
+func checkStagedSealedState(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	var unsealed bool
+
+	query := "SELECT EXISTS(SELECT 1 FROM " + stagingTable(staging, "state_versions") + " WHERE NOT sealed)"
+	if err := pool.QueryRow(ctx, query).Scan(&unsealed); err != nil {
+		return fmt.Errorf("read staged state versions: %w", backup.ErrExportRead)
+	}
+
+	if unsealed {
+		return fmt.Errorf("import holds an unsealed state version: %w", workspace.ErrUnsealedState)
+	}
+
+	return nil
+}
+
 // stagingWrapperIDs returns the distinct wrapper IDs of the namespace keys and
 // of the installation keys in the staging schema, ordered, never nil.
 func stagingWrapperIDs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]string, error) {
@@ -923,19 +946,19 @@ func stagingCount(ctx context.Context, pool *pgxpool.Pool, staging, table string
 }
 
 // stagingBlobRefs reads the blob references of the staging schema: every blob
-// key the staged state versions, the staged checkpoints and the staged journal
+// key the staged finalized state versions, the staged checkpoints and the staged journal
 // batches name, with the size and MD5 of the plain bytes, ordered by key.
 // Sealed state versions mark their references sealed; checkpoint and journal
-// blobs are never sealed. A pending version names no content, so only
-// finalized versions appear. It matches BackupBlobs, so the staged summary
+// blobs are never sealed. A pending version has no committed content, so the
+// backup leaves pending rows out. It matches BackupBlobs, so the staged summary
 // compares equal with the manifest.
 func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]backup.BlobRef, error) {
 	rows, err := pool.Query(
 		ctx,
 		"SELECT content_key, size, md5, sealed FROM "+stagingTable(staging, "state_versions")+
-			" WHERE content_key <> '' UNION ALL SELECT blob_key AS content_key, blob_size AS size, "+
+			" WHERE content_key <> '' AND status = 'finalized' UNION ALL SELECT blob_key AS content_key, blob_size AS size, "+
 			"blob_md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "checkpoints")+
-			" WHERE blob_key IS NOT NULL AND blob_key <> '' UNION ALL SELECT blob_key AS content_key, size AS size, "+
+			" UNION ALL SELECT blob_key AS content_key, size AS size, "+
 			"md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "update_journal")+
 			" ORDER BY content_key",
 	)

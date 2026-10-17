@@ -60,11 +60,6 @@ type Config struct {
 	// Freshness checks the MFA step before a create or a rotation. Nil
 	// adds no step: MFA does not exist yet (ADR 56, decision 5).
 	Freshness Freshness
-	// Grants runs the escalation check of a personal token for another
-	// person. The server wires the grants of the access model. Nil lets only an
-	// administrator act for another person (fail closed): a store that
-	// keeps no grants.
-	Grants GrantCheck
 	// Authorizer decides principal:manage-tokens on the service principal
 	// of a service token. Nil lets only an administrator act on service
 	// tokens (fail closed).
@@ -94,7 +89,6 @@ type Service struct {
 	store      Store
 	principals PrincipalReader
 	freshness  Freshness
-	grants     GrantCheck
 	authz      identity.Authorizer
 	tempAdmins tempadmin.Reader
 	logger     *slog.Logger
@@ -129,7 +123,7 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	return &Service{
-		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness, grants: cfg.Grants,
+		store: cfg.Store, principals: cfg.Principals, freshness: cfg.Freshness,
 		authz: cfg.Authorizer, tempAdmins: cfg.TempAdmins, logger: logger, now: now, newID: newID,
 	}, nil
 }
@@ -150,8 +144,10 @@ type Input struct {
 
 // Create issues a new token for a principal in scope, with the entry e
 // of caller. For ScopeOwn the principal is the person of caller, and
-// in.PrincipalID is ignored. For the other scopes it is in.PrincipalID, its
-// kind must fit the scope, and the check of mayActFor runs. It returns the
+// in.PrincipalID is ignored. ScopePersonal makes nothing: it returns
+// ErrNotOwnToken, wrapped with identity.ErrDenied. For ScopeService the
+// principal is in.PrincipalID, its kind must fit the scope, and the check of
+// mayActFor runs. It returns the
 // token and its secret: the only time the server shows the secret.
 func (s *Service) Create(
 	ctx context.Context, caller identity.Principal, e audit.Entry, scope Scope, in Input,
@@ -394,9 +390,10 @@ type Rotation struct {
 // Rotate issues a new token for the owner of the token in.ID and sets an end
 // time for the old token (ADR 53, decision 8), with the entry e of caller.
 // The new token keeps the name and the kind. For in.Scope ScopeOwn the token must
-// belong to the person of caller. For the other scopes its kind must fit
-// the scope, and the escalation check runs: the new token acts as its
-// principal. It returns the secret of the new token: the only time the
+// belong to the person of caller. ScopePersonal rotates nothing: it returns
+// ErrNotOwnToken, wrapped with identity.ErrDenied. For ScopeService the token
+// must be a service token, and caller needs principal:manage-tokens on its
+// principal: the new token acts as its principal. It returns the secret of the new token: the only time the
 // server shows it.
 func (s *Service) Rotate(
 	ctx context.Context, caller identity.Principal, e audit.Entry, in RotateInput,

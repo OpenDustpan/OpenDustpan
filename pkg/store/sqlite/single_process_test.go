@@ -1,10 +1,12 @@
 package sqlite_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/store/schema"
@@ -187,6 +189,67 @@ func TestOpenThroughLongSymlinkChainFails(t *testing.T) {
 
 	if errors.Is(err, sqlite.ErrInUse) {
 		t.Fatalf("open through a chain of more than 40 links: err = %v, want a resolve error, not ErrInUse", err)
+	}
+}
+
+// TestOpenRefusesSymlinkAtGuardFile proves that an Open refuses a guard file
+// that is a symbolic link: with a link at dustpan.db-lock, Open of dustpan.db
+// fails without ErrInUse, leaves the link target unchanged, and leaves the
+// link in place.
+func TestOpenRefusesSymlinkAtGuardFile(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("the guard symlink test needs a POSIX open without link following")
+	}
+
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve temp dir: %v", err)
+	}
+
+	db := filepath.Join(dir, "dustpan.db")
+	guard := db + "-lock"
+	target := filepath.Join(dir, "target")
+
+	before := []byte("guard target")
+
+	if writeErr := os.WriteFile(target, before, 0o600); writeErr != nil {
+		t.Fatalf("write target: %v", writeErr)
+	}
+
+	if linkErr := os.Symlink(target, guard); linkErr != nil {
+		t.Skipf("create symbolic link: %v", linkErr)
+	}
+
+	store, err := sqlite.Open(t.Context(), db)
+	if err == nil {
+		_ = store.Close() //nolint:errcheck // The test fails below; the close only frees the handle.
+
+		t.Fatal("open with a guard symlink: err = nil, want an error")
+	}
+
+	if errors.Is(err, sqlite.ErrInUse) {
+		t.Fatalf("open with a guard symlink: err = %v, want a guard error, not ErrInUse", err)
+	}
+
+	after, readErr := os.ReadFile(guard) //nolint:gosec // Test reads its own temp file.
+	if readErr != nil {
+		// Read through the link on purpose: the target must keep its contents.
+		t.Fatalf("read target: %v", readErr)
+	}
+
+	if !bytes.Equal(after, before) {
+		t.Fatalf("target contents = %q, want %q", after, before)
+	}
+
+	info, statErr := os.Lstat(guard)
+	if statErr != nil {
+		t.Fatalf("stat guard link: %v", statErr)
+	}
+
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("guard at %s is not a symbolic link", guard)
 	}
 }
 

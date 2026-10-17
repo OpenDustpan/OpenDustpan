@@ -207,9 +207,6 @@ type Env struct {
 	// environment: the SQLite file, or PostgreSQL through the proxy. A
 	// step runs the host command against it.
 	dbURL string
-	// rewrites holds the answer rewrites of the recording proxy of a binary
-	// environment. It is nil in the in-process mode.
-	rewrites *answerRewrites
 }
 
 // serverStore is every persistence port the server needs.
@@ -272,6 +269,7 @@ func defaultEnvInput(tb testing.TB, cli Install, store Store) envInput {
 		signIn:            false,
 		signInRealTime:    false,
 		journalRefuser:    nil,
+		journalCap:        nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -293,7 +291,8 @@ func startEnv(ctx context.Context, in envInput) *Env {
 }
 
 // NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
-// journaling turned off, so each update answers journalVersion 0.
+// journaling turned off through DUSTPAN_DISABLE_PULUMI_JOURNALING=true, so
+// each update answers journalVersion 0.
 func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
@@ -315,6 +314,30 @@ func NewEnvWithIPAllowlists(ctx context.Context, tb testing.TB, cli Install, sto
 	return startEnv(ctx, in)
 }
 
+// journalTestInput returns the input of an env for cli and store with new
+// tokens, a new directory and journaling on, so the journal fault tests only
+// set their own fault.
+func journalTestInput(tb testing.TB, cli Install, store Store) envInput {
+	tb.Helper()
+
+	return envInput{
+		deltaCutoff:       0,
+		disableJournaling: false,
+		ipAllowlists:      false,
+		signIn:            false,
+		signInRealTime:    false,
+		journalRefuser:    nil,
+		journalCap:        nil,
+		tb:                tb,
+		cli:               cli,
+		store:             store,
+		dir:               tb.TempDir(),
+		token:             newToken(tb),
+		tokenB:            newToken(tb),
+		rec:               &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}},
+	}
+}
+
 // NewEnvWithJournalRefuser starts a server as NewEnv does, with the refuser
 // corrupting the first outputs-only journal batch on the way to the server,
 // so the server refuses it and records the refusal. The test reads how many
@@ -324,31 +347,25 @@ func NewEnvWithJournalRefuser(
 ) *Env {
 	tb.Helper()
 
-	dir := tb.TempDir()
-	token := newToken(tb)
-	tokenB := newToken(tb)
-	rec := &Recorder{step: "", entries: nil, arrived: 0, mu: sync.Mutex{}}
-	in := envInput{
-		deltaCutoff:       0,
-		disableJournaling: false,
-		ipAllowlists:      false,
-		signIn:            false,
-		signInRealTime:    false,
-		journalRefuser:    refuser,
-		tb:                tb,
-		cli:               cli,
-		store:             store,
-		dir:               dir,
-		token:             token,
-		tokenB:            tokenB,
-		rec:               rec,
-	}
+	in := journalTestInput(tb, cli, store)
+	in.journalRefuser = refuser
 
-	if UseBinaryServer() {
-		return newBinaryEnv(ctx, in)
-	}
+	return startEnv(ctx, in)
+}
 
-	return newInprocessEnv(ctx, in)
+// NewEnvWithJournalVersionCap starts a server as NewEnv does, with the cap
+// lowering the journal version that start-update answers, so the CLI journals
+// at an older version than the server supports. The test reads how many
+// answers the cap lowered.
+func NewEnvWithJournalVersionCap(
+	ctx context.Context, tb testing.TB, cli Install, store Store, versionCap *JournalVersionCap,
+) *Env {
+	tb.Helper()
+
+	in := journalTestInput(tb, cli, store)
+	in.journalCap = versionCap
+
+	return startEnv(ctx, in)
 }
 
 // NewEnvWithDeltaCutoff starts a server as NewEnv does, with the delta
@@ -368,6 +385,7 @@ func NewEnvWithDeltaCutoff(ctx context.Context, tb testing.TB, cli Install, stor
 		signIn:            false,
 		signInRealTime:    false,
 		journalRefuser:    nil,
+		journalCap:        nil,
 		tb:                tb,
 		cli:               cli,
 		store:             store,
@@ -411,6 +429,8 @@ func startInprocessServer(
 		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), shared)
 	}
 
+	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;
+	// in-process mode uses the equivalent server option.
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
@@ -421,7 +441,7 @@ func startInprocessServer(
 		signIn:            signIn,
 	})
 
-	handler = faultedHandler(build.handler, in.journalRefuser)
+	handler = cappedHandler(faultedHandler(build.handler, in.journalRefuser), in.journalCap)
 
 	if in.cli.Tool == ToolTofu || in.signIn {
 		ts.StartTLS()
@@ -475,7 +495,6 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		dbURL:         build.dbURL,
 		signIn:        signIn,
 		backupDir:     build.backupDir,
-		rewrites:      nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {

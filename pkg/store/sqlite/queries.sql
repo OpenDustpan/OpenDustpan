@@ -238,9 +238,9 @@ WHERE c.stack_id = ? AND u.version = ?;
 -- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features_json, deployment, saved_at_ms,
+    digest, invalid, features_json, saved_at_ms,
     blob_key, size, blob_size, blob_md5
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, X'', ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -248,7 +248,6 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     digest = excluded.digest,
     invalid = excluded.invalid,
     features_json = excluded.features_json,
-    deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms,
     blob_key = excluded.blob_key,
     size = excluded.size,
@@ -256,12 +255,12 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     blob_md5 = excluded.blob_md5;
 
 -- name: ListCheckpointBlobKeys :many
--- Every blob key the checkpoints of one stack name, without the empty ones,
--- ordered. A sweeper compares this set against the stored objects to find
--- blobs no checkpoint references.
+-- Every blob key the checkpoints of one stack name, ordered. A sweeper
+-- compares this set against the stored objects to find blobs no checkpoint
+-- references.
 SELECT blob_key
 FROM checkpoints
-WHERE stack_id = ? AND blob_key IS NOT NULL AND blob_key <> ''
+WHERE stack_id = ?
 ORDER BY blob_key;
 
 -- name: SoftDeleteStack :execrows
@@ -1330,6 +1329,13 @@ FROM collection_members AS m
 JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 WHERE m.unit_id = ?;
 
+-- name: UnitCollectionID :one
+-- The stable ID of the collection of one unit by its ID.
+SELECT c.id
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?;
+
 -- name: UpsertUnitCollection :exec
 INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
 VALUES (?, ?, ?, ?)
@@ -1379,23 +1385,6 @@ ON CONFLICT (id) DO UPDATE SET state = excluded.state, changed_at_ms = excluded.
     changed_by = excluded.changed_by, pending = excluded.pending,
     entered_maintenance = excluded.entered_maintenance, log_replaced = excluded.log_replaced,
     migrating_at_ms = excluded.migrating_at_ms;
-
--- name: ClaimAuditChainMigration :execrows
--- Starts the migration of a waiting change in one write: it stamps the start
--- time only when a change waits and no claim within the lease holds.
-UPDATE audit_chain_state
-SET migrating_at_ms = ?
-WHERE id = 1 AND pending = 1 AND (migrating_at_ms = 0 OR migrating_at_ms < ?);
-
--- name: ReleaseAuditChainMigration :exec
--- Releases the claim of a migration that stops without storing the new
--- state.
-UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1;
-
--- name: RenewAuditChainMigration :execrows
--- Moves the start of the held claim to the given time. It writes only
--- when a claim holds, so a renewal without a claim changes no row.
-UPDATE audit_chain_state SET migrating_at_ms = ? WHERE id = 1 AND migrating_at_ms <> 0;
 
 -- name: LastAuditChainStartSequence :one
 -- The sequence of the last start entry of the audit chain of a namespace,

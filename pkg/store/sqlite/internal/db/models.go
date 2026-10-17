@@ -107,10 +107,8 @@ type Checkpoint struct {
 	Digest        []byte
 	Invalid       bool
 	FeaturesJson  string
-	Deployment    []byte
 	SavedAtMs     int64
-	ResourceCount sql.NullInt64
-	BlobKey       sql.NullString
+	BlobKey       string
 	Size          sql.NullInt64
 	BlobSize      sql.NullInt64
 	BlobMd5       []byte

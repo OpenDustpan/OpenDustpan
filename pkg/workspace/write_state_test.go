@@ -576,7 +576,7 @@ func ctxAwareService(t *testing.T, f fixture) *workspace.Service {
 		States:             ctxStates{StateStore: f.store},
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,

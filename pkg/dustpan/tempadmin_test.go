@@ -305,7 +305,7 @@ func seedTempAdmin(t *testing.T, st *sqlite.Store, base time.Time, now func() ti
 	}
 
 	tokens, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Grants: nil, Authorizer: nil, Logger: nil,
+		Store: st, Principals: st, TempAdmins: st, Freshness: nil, Authorizer: nil, Logger: nil,
 		Now: now, NewID: nil,
 	})
 	if err != nil {

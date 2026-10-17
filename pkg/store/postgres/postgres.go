@@ -788,6 +788,10 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, binaryVe
 		return err
 	}
 
+	if baselineErr := schema.CheckBaseline(recordedVersions(recorded)); baselineErr != nil {
+		return fmt.Errorf("check schema versions: %w", baselineErr)
+	}
+
 	plan, err := migrate.Check(recorded, all, binaryVersion)
 	if err != nil {
 		return fmt.Errorf("check schema: %w", err)
@@ -833,6 +837,18 @@ func recordedMigrations(ctx context.Context, tx pgx.Tx) ([]schema.AppliedMigrati
 	}
 
 	return out, nil
+}
+
+// recordedVersions returns the versions of the recorded migrations,
+// ordered as recorded, for the baseline check.
+func recordedVersions(recorded []schema.AppliedMigration) []int64 {
+	versions := make([]int64, 0, len(recorded))
+
+	for _, r := range recorded {
+		versions = append(versions, r.Version)
+	}
+
+	return versions
 }
 
 func apply(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {

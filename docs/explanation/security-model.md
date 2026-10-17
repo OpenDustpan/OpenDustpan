@@ -59,16 +59,18 @@ persons and services.
   a stored token can: today the bootstrap admin token (ADR 6), later a
   sign-in (ADR 55). A token that could make tokens would outlive its
   maximum lifetime and a revoke of the token that made it.
-- **A personal token for another person is a grant by proxy.** The caller
-  must hold every action that the grants of that person give, through its
-  groups too. Otherwise the server answers 403. So an administrator can
-  never act as a person who holds more.
+- **Each person makes only its own personal tokens.** A token acts as its
+  principal, so a personal token for another person would be a grant by
+  proxy. No principal makes or rotates a personal token of another person,
+  an administrator included. A person makes and rotates its own tokens after
+  a sign-in, through `/api/server/caller/tokens`. A holder of
+  `server:manage-tokens` can revoke the personal token of any person.
 - **A service token needs `principal:manage-tokens` on its service
   principal.** A holder can make, rotate and revoke the tokens of that
   principal. So it can act as the principal, with every grant that the
   principal has now or gets later. A token acts with the grants of its
   principal at the time of each request. The design wants this: the grant of
-  `principal:manage-tokens` is the decision, and no escalation check runs.
+  `principal:manage-tokens` is the decision.
 - **An account administrator can act as any service principal.** The
   built-in roles `account-administrator` and `site-administrator` hold
   `principal:manage-tokens` on the installation, which holds every
@@ -87,7 +89,12 @@ persons and services.
   `tokenManagers`, with one line per service principal in the form
   `<principal ID>: <holder>, <holder>`. The audit entry of each membership
   add of a service principal names the same holders in the change
-  `tokenManagers`.
+  `tokenManagers`. The audit entry of each membership add to a group that
+  lets its members act as service principals names, in the change
+  `actsAs`, what the new member can act as, one per line, as the access
+  review names it: `principal:<id>` for one service principal, the name of
+  a namespace for the service principals of that namespace, and `@server`
+  for every service principal.
 - **A revoke of `principal:manage-tokens` does not end the tokens that
   its holder already made.** Those tokens act as the service principal
   until they expire. After such a revoke, rotate or revoke the tokens of
