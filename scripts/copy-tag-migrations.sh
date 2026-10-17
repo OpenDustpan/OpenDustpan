@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Copy the migration set of one release tag into the test data.
 # Usage: scripts/copy-tag-migrations.sh <tag>   (for example v0.1.0)
-# For each store dialect it copies pkg/store/<dialect>/migrations/*.sql as
-# they were at the tag into pkg/store/<dialect>/testdata/tag-migrations/<tag>/.
-# It then prints the SHA-256 of each copied file, as frozen_test.go records it.
-# Record each printed hash in frozen_test.go of each adapter in the same change.
+# For each store dialect it copies pkg/store/<dialect>/migrations/*.sql and the
+# matching *.sql.sha256 hash files, as they were at the tag, into
+# pkg/store/<dialect>/testdata/tag-migrations/<tag>/. frozen_test.go checks
+# each copy against its hash file, so the copies need no hash list of their own.
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
@@ -26,17 +26,13 @@ trap 'rm -rf "$staging"' EXIT
 git -C "$root" archive "$tag" pkg/store/sqlite/migrations pkg/store/postgres/migrations | tar -x -C "$staging"
 
 for dialect in sqlite postgres; do
+  src="$staging/pkg/store/$dialect/migrations"
   dest="$root/pkg/store/$dialect/testdata/tag-migrations/$tag"
+  if ! compgen -G "$src/*.sql" > /dev/null; then
+    echo "no migrations for $dialect at $tag" >&2
+    exit 1
+  fi
   mkdir -p "$dest"
-  cp "$staging/pkg/store/$dialect/migrations/"*.sql "$dest/"
-done
-
-for dialect in sqlite postgres; do
-  dest="$root/pkg/store/$dialect/testdata/tag-migrations/$tag"
-  echo "$dialect:"
-  for file in "$dest/"*.sql; do
-    name="$(basename "$file")"
-    sum="$(sha256sum "$file" | cut -d' ' -f1)"
-    echo "  \"$tag/$name\": \"$sum\","
-  done
+  cp "$src/"*.sql "$dest/"
+  cp "$src/"*.sql.sha256 "$dest/"
 done

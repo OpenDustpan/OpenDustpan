@@ -5,10 +5,9 @@ import (
 	"embed"
 	"encoding/hex"
 	"errors"
-	"maps"
 	"os"
-	"path/filepath"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,140 +72,111 @@ func TestFrozenMigrations(t *testing.T) {
 		}
 	}
 
-	// wantTagHashes holds the SHA-256 of each tag migration copy in
-	// testdata/tag-migrations, keyed by tag and file name as tag/file. The
-	// release process copies the migration set of each tag there at tag time
-	// and adds its hashes here in the same change. The check below fails when
-	// a copy changes, when a copy has no hash entry, and when a hash entry
-	// has no copy. Never edit a copy.
-	wantTagHashes := map[string]string{}
-
-	checkTagHashes(t, wantTagHashes)
+	checkTagCopies(t, "testdata/tag-migrations")
 }
 
-// checkTagHashes proves every tag migration copy matches its hash entry.
-func checkTagHashes(t *testing.T, want map[string]string) {
+// checkTagCopies proves every tag migration copy matches the hash file next to
+// it: testdata/tag-migrations/<tag>/NAME.sql.sha256 holds the SHA-256 of
+// NAME.sql as one hex line. The release process copies each tag's migrations
+// and their hash files there at tag time. It fails when a copy changes, when a
+// copy has no hash file, and when a hash file has no copy. It logs the number
+// of tags it checked, which is 0 before the first release.
+func checkTagCopies(t *testing.T, tagDir string) {
 	t.Helper()
 
-	const tagDir = "testdata/tag-migrations"
-
-	got := readTagCopies(t, tagDir, want)
-	checkTagHashesAgainst(t, want, got)
-}
-
-// readTagCopies reads the content of every tag migration copy, keyed by tag
-// and file name as tag/file. It returns nothing when the tag directory is
-// missing.
-func readTagCopies(t *testing.T, tagDir string, want map[string]string) map[string][]byte {
-	t.Helper()
-
-	entries, err := os.ReadDir(tagDir)
+	tags, err := os.ReadDir(tagDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			if len(want) != 0 {
-				t.Errorf("tag migration dir %s is missing, want %d hash entries", tagDir, len(want))
-			}
+			t.Log("tag copy check ran over 0 tags")
 
-			return nil
+			return
 		}
+
 		t.Fatalf("read tag migration dir: %v", err)
 	}
 
-	got := make(map[string][]byte)
+	count := 0
+
+	for _, tag := range tags {
+		if !tag.IsDir() {
+			continue
+		}
+
+		count++
+
+		checkTagDir(t, filepath.Join(tagDir, tag.Name()))
+	}
+
+	t.Logf("tag copy check ran over %d tags", count)
+}
+
+// checkTagDir checks the copies and the hash files of one tag directory.
+func checkTagDir(t *testing.T, dir string) {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read tag migration dir %s: %v", dir, err)
+	}
 
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		name := entry.Name()
+
+		if entry.IsDir() {
 			continue
 		}
 
-		maps.Copy(got, readOneTagDir(t, tagDir, entry.Name()))
-	}
+		if strings.HasSuffix(name, ".sql") {
+			checkTagCopy(t, dir, name)
 
-	return got
+			continue
+		}
+
+		if strings.HasSuffix(name, ".sql.sha256") {
+			copyName := strings.TrimSuffix(name, ".sha256")
+			if _, err := os.Stat(filepath.Join(dir, copyName)); err != nil {
+				t.Errorf(
+					"hash file %s has no tag migration file: never edit a tag copy",
+					filepath.Join(dir, name),
+				)
+			}
+		}
+	}
 }
 
-// readOneTagDir reads the migration copies of one tag, keyed by tag and file
-// name as tag/file.
-func readOneTagDir(t *testing.T, tagDir, tag string) map[string][]byte {
+// checkTagCopy proves one tag migration copy matches the hash file next to it.
+func checkTagCopy(t *testing.T, dir, name string) {
 	t.Helper()
 
-	files, err := os.ReadDir(filepath.Join(tagDir, tag))
+	copyPath := filepath.Join(dir, name)
+
+	//nolint:gosec // The test reads its own tag migration copies.
+	hashData, err := os.ReadFile(copyPath + ".sha256")
 	if err != nil {
-		t.Fatalf("read tag migration dir %s: %v", tag, err)
-	}
-
-	got := make(map[string][]byte)
-
-	for _, file := range files {
-		if skipTagFile(file) {
-			continue
-		}
-
-		key := tag + "/" + file.Name()
-
-		//nolint:gosec // The test reads its own tag migration copies.
-		data, err := os.ReadFile(filepath.Join(tagDir, tag, file.Name()))
-		if err != nil {
-			t.Fatalf("read tag migration %s: %v", key, err)
-		}
-
-		got[key] = data
-	}
-
-	return got
-}
-
-// skipTagFile reports whether a tag directory entry holds no migration.
-func skipTagFile(file os.DirEntry) bool {
-	return file.IsDir() || filepath.Ext(file.Name()) != ".sql"
-}
-
-// checkTagHashesAgainst proves every copy matches its hash entry and every
-// hash entry has a copy.
-func checkTagHashesAgainst(t *testing.T, want map[string]string, got map[string][]byte) {
-	t.Helper()
-
-	seen := make(map[string]bool, len(want))
-
-	for key, data := range got {
-		checkOneTagHash(t, key, data, want)
-		if _, ok := want[key]; ok {
-			seen[key] = true
-		}
-	}
-
-	for key := range want {
-		if !seen[key] {
-			t.Errorf(
-				"hash entry %s has no tag migration file: never edit a tag copy",
-				key,
-			)
-		}
-	}
-}
-
-// checkOneTagHash proves one tag migration copy matches its hash entry.
-func checkOneTagHash(t *testing.T, key string, data []byte, want map[string]string) {
-	t.Helper()
-
-	wantHash, ok := want[key]
-	if !ok {
 		t.Errorf(
-			"tag migration %s has no hash entry: add its hash in TestFrozenMigrations; "+
-				"never edit a tag copy",
-			key,
+			"tag migration %s has no hash file: add %s.sha256 next to it; never edit a tag copy",
+			copyPath,
+			copyPath,
 		)
 
 		return
 	}
 
+	//nolint:gosec // The test reads its own tag migration copies.
+	data, err := os.ReadFile(copyPath)
+	if err != nil {
+		t.Fatalf("read tag migration %s: %v", copyPath, err)
+	}
+
+	want := strings.TrimSpace(string(hashData))
+
 	sum := sha256.Sum256(data)
-	if got := hex.EncodeToString(sum[:]); got != wantHash {
+	if got := hex.EncodeToString(sum[:]); got != want {
 		t.Errorf(
 			"tag migration %s hash = %s, want %s: never edit a tag copy",
-			key,
+			copyPath,
 			got,
-			wantHash,
+			want,
 		)
 	}
 }

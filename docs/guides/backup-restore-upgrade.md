@@ -217,11 +217,11 @@ git. Run for the tag, for example `v0.1.0`:
 ```
 
 The script copies `pkg/store/sqlite/migrations/*.sql` and
-`pkg/store/postgres/migrations/*.sql` of the tag into
-`testdata/tag-migrations/<tag>/` of each store adapter. It then prints the
-SHA-256 of each copied file. Record each hash in `frozen_test.go` of each
-adapter in the same change. Then run the schema upgrade tests and
-`make upgrade-test`.
+`pkg/store/postgres/migrations/*.sql` of the tag, with their `.sql.sha256`
+hash files, into `testdata/tag-migrations/<tag>/` of each store adapter. The
+frozen test checks each copy against its hash file, so no hash is recorded by
+hand. Commit the copies in the same change. Then run the schema upgrade tests
+and `make upgrade-test`.
 
 ## Known limit
 
