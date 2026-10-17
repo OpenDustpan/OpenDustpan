@@ -1,12 +1,14 @@
 package audittest
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/logsink"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -55,6 +57,7 @@ func RunFeed(t *testing.T, newStore FeedFactory) {
 		{name: "a sink lease with an unusable name, holder or ttl is refused", test: testLeaseValidates},
 		{name: "a release by a non-holder fails and changes nothing", test: testLeaseReleaseByNonHolder},
 		{name: "a stale holder cannot advance a cursor", test: testStaleHolderCannotAdvance},
+		{name: "a claim of another sink cannot advance a cursor", test: testClaimOfAnotherSinkCannotAdvance},
 	}
 
 	for _, tc := range cases {
@@ -62,6 +65,40 @@ func RunFeed(t *testing.T, newStore FeedFactory) {
 			t.Parallel()
 			tc.test(t, newStore(t))
 		})
+	}
+}
+
+// discardSink drops every batch it receives.
+type discardSink struct{}
+
+func (discardSink) Write(context.Context, []logsink.Record) error { return nil }
+func (discardSink) Close() error                                  { return nil }
+
+// CheckShipperRefusesLeaselessStore proves that NewShipper refuses a
+// store-backed feed with no lease store: the cursor writes of a real store
+// check the claim, so a shipper with a zero claim would end every round
+// cleanly with nothing shipped.
+func CheckShipperRefusesLeaselessStore(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	_, err := audit.NewShipper(audit.ShipperConfig{
+		Feed:          s,
+		Namespaces:    s,
+		Logger:        nil,
+		OnShipped:     nil,
+		OnFailure:     nil,
+		OnSkipped:     nil,
+		OnLag:         nil,
+		OnLagEntries:  nil,
+		Now:           nil,
+		Sinks:         []audit.ShipSink{{Sink: discardSink{}, Name: "siem", Kind: "test", Interval: 0}},
+		InstanceID:    "",
+		Leases:        nil,
+		LeaseTTL:      0,
+		RenewInterval: 0,
+	})
+	if !errors.Is(err, audit.ErrInvalidShipper) {
+		t.Fatalf("new shipper with a store-backed feed and no leases: got %v, want ErrInvalidShipper", err)
 	}
 }
 
@@ -527,6 +564,37 @@ func testStaleHolderCannotAdvance(t *testing.T, s FeedStore) {
 
 	if got := cursor(t, s, "siem", ns.Name); got != 5 {
 		t.Fatalf("cursor after an advance by the live holder: got %d, want 5", got)
+	}
+}
+
+// testClaimOfAnotherSinkCannotAdvance proves that a cursor write checks the
+// operation of its claim: a claim with the live token of the sink but the
+// operation of another sink fails with durable.ErrClaimLost and changes
+// nothing, while the live claim of the sink still advances the cursor.
+func testClaimOfAnotherSinkCannotAdvance(t *testing.T, s FeedStore) {
+	t.Helper()
+
+	ns := newNamespace(t, s)
+
+	siem := acquireLease(t, s, "siem", "ins-holder-a", 30*time.Second)
+	other := acquireLease(t, s, "archive", "ins-holder-a", 30*time.Second)
+
+	forged := other.claim
+	forged.Token = siem.claim.Token
+
+	err := s.AdvanceSinkCursor(t.Context(), ns.Fence(), forged, "siem", 1)
+	if !errors.Is(err, durable.ErrClaimLost) {
+		t.Fatalf("advance with the claim of another sink: got %v, want ErrClaimLost", err)
+	}
+
+	if got := cursor(t, s, "siem", ns.Name); got != 0 {
+		t.Fatalf("cursor after an advance with the claim of another sink: got %d, want 0", got)
+	}
+
+	advance(t, s, ns.Fence(), siem, 1)
+
+	if got := cursor(t, s, "siem", ns.Name); got != 1 {
+		t.Fatalf("cursor after an advance by the live holder: got %d, want 1", got)
 	}
 }
 

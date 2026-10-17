@@ -212,6 +212,10 @@ func checkSinkClaim(ctx context.Context, q *db.Queries, sink string, claim durab
 		return 0, fmt.Errorf("read sink lease %q: %w", sink, err)
 	}
 
+	if row.ID != string(claim.Operation) {
+		return 0, durable.ErrClaimLost
+	}
+
 	_, now, err := lockLive(ctx, q, durable.ID(row.ID), claim.Token)
 	if err != nil {
 		return 0, err

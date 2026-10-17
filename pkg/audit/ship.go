@@ -127,8 +127,10 @@ type ShipSink struct {
 // receives the sink name and its delivery lag in entries after each round.
 // Now answers the current time for the lag; nil means time.Now. InstanceID
 // names the holder of the sink leases of this shipper: one instance ID per
-// server process. Leases keeps those leases; when it is nil and Feed serves
-// SinkLeaser, the shipper uses Feed. LeaseTTL is how long a taken lease
+// server process. Leases keeps those leases, and is required when Feed keeps
+// sink leases, as both SQL stores do: without it the shipper ships with a
+// zero claim that no store accepts. A feed without leases ships with a zero
+// claim and moves its cursors with no claim check. LeaseTTL is how long a
 // lasts and defaults to SinkLeaseDuration. RenewInterval is how often the
 // holder renews and defaults to SinkLeaseRenewInterval. RenewInterval must
 // stay shorter than LeaseTTL, so a holder renews well before its lease ends.
@@ -159,7 +161,9 @@ type Shipper struct {
 
 // NewShipper checks cfg and returns a shipper. Every sink needs a name of
 // at most 64 bytes of [a-z0-9._-], and no two sinks share a name. When the
-// shipper keeps leases, InstanceID is required and names their holder.
+// shipper keeps leases, InstanceID is required and names their holder. A
+// feed that keeps sink leases needs Leases: NewShipper refuses it without
+// one.
 func NewShipper(cfg ShipperConfig) (*Shipper, error) {
 	if cfg.Feed == nil || cfg.Namespaces == nil {
 		return nil, fmt.Errorf("%w: missing feed or namespace lister", ErrInvalidShipper)
@@ -169,7 +173,9 @@ func NewShipper(cfg ShipperConfig) (*Shipper, error) {
 		return nil, err
 	}
 
-	cfg.setSinkLeaser()
+	if err := checkSinkLeaser(cfg); err != nil {
+		return nil, err
+	}
 
 	if err := applyLeaseDefaults(&cfg); err != nil {
 		return nil, err
@@ -228,14 +234,21 @@ func checkShipSink(s ShipSink, seen map[string]bool) error {
 	return nil
 }
 
-// setSinkLeaser sets the lease store of a shipper config: cfg when set, or
-// the feed when it keeps leases.
-func (cfg *ShipperConfig) setSinkLeaser() {
-	if cfg.Leases == nil {
-		if leaser, ok := cfg.Feed.(SinkLeaser); ok {
-			cfg.Leases = leaser
-		}
+// checkSinkLeaser refuses a config with no lease store whose feed keeps
+// sink leases, as both SQL stores do: their cursor writes check the claim,
+// so a shipper with a zero claim would end every round cleanly with nothing
+// shipped. A feed without leases ships with a zero claim and moves its
+// cursors with no claim check.
+func checkSinkLeaser(cfg ShipperConfig) error {
+	if cfg.Leases != nil {
+		return nil
 	}
+
+	if _, ok := cfg.Feed.(SinkLeaser); ok {
+		return fmt.Errorf("%w: feed keeps sink leases but no lease store was passed", ErrInvalidShipper)
+	}
+
+	return nil
 }
 
 // applyLeaseDefaults checks the lease holder and timing and sets the timing
@@ -331,7 +344,7 @@ func (s *Shipper) ShipOnce(ctx context.Context) error {
 			continue
 		}
 
-		if err := s.round(ctx, sink, claim); err != nil {
+		if err := s.round(ctx, sink, &claim); err != nil {
 			if errors.Is(err, errRoundEnded) {
 				s.setLastError(sink.Name, "")
 			} else {
@@ -469,7 +482,7 @@ func (s *Shipper) handleLeaseError(ctx context.Context, name string, err error, 
 // the wait of the loop and starts the next round with no failure. It
 // answers whether the loop goes on: false when ctx ends.
 func (s *Shipper) shipAndAccount(ctx context.Context, sink ShipSink, interval time.Duration, state *leasedState) bool {
-	if err := s.round(ctx, sink, state.claim); err != nil {
+	if err := s.round(ctx, sink, &state.claim); err != nil {
 		if ctx.Err() != nil {
 			return false
 		}
@@ -523,7 +536,9 @@ func (s *Shipper) loopWithoutLease(ctx context.Context, sink ShipSink, interval 
 		case <-timer.C:
 		}
 
-		if err := s.round(ctx, sink, zeroClaim()); err != nil {
+		claim := zeroClaim()
+
+		if err := s.round(ctx, sink, &claim); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
@@ -547,8 +562,9 @@ func (s *Shipper) loopWithoutLease(ctx context.Context, sink ShipSink, interval 
 // acquire takes or renews the lease of sink for this shipper. It answers
 // the live claim and true while this shipper holds the lease, and a zero
 // claim and false without an error while another instance holds a live
-// lease. Without a lease store it always answers held with a zero claim:
-// the feed then moves its cursors with no claim check.
+// lease. Without a lease store it always answers held with a zero claim,
+// which only a feed that moves its cursors with no claim check accepts:
+// NewShipper refuses a feed that keeps sink leases without one.
 func (s *Shipper) acquire(ctx context.Context, sink string) (durable.Claim, bool, error) {
 	if s.cfg.Leases == nil {
 		return zeroClaim(), true, nil
@@ -805,10 +821,11 @@ func (s *Shipper) withRoundTimeout(ctx context.Context) (context.Context, contex
 // and renews the lease between scopes and between batches: when the
 // deadline passes or another instance holds the lease, the round stops at
 // once without moving a cursor past what the sink acknowledged. Every
-// cursor write carries claim, so a holder that lost its claim cannot move
-// a cursor: the write fails with durable.ErrClaimLost and the round ends
-// cleanly.
-func (s *Shipper) round(ctx context.Context, sink ShipSink, claim durable.Claim) error {
+// cursor write carries the live claim, so a holder that lost its claim
+// cannot move a cursor: the write fails with durable.ErrClaimLost and the
+// round ends cleanly. Each renew writes its claim back through claim, so the
+// caller always holds the live claim, for example to release it.
+func (s *Shipper) round(ctx context.Context, sink ShipSink, claim *durable.Claim) error {
 	outer := ctx
 
 	ctx, cancel := s.withRoundTimeout(ctx)
@@ -891,11 +908,12 @@ func roundEndOnly(roundCtx context.Context, err error) bool {
 
 // shipScopes ships every namespace of one round in order. Before every
 // scope but the first it renews the lease: when another instance holds it,
-// the round stops at once. Every cursor write carries the live claim.
+// the round stops at once. Every cursor write carries the live claim, and
+// each renew writes its claim back through claim.
 func (s *Shipper) shipScopes(
 	ctx context.Context,
 	sink ShipSink,
-	claim durable.Claim,
+	claim *durable.Claim,
 	namespaces []namespace.Namespace,
 ) error {
 	var errs []error
@@ -911,7 +929,7 @@ func (s *Shipper) shipScopes(
 				return errors.Join(append(errs, err)...)
 			}
 
-			claim = renewed
+			*claim = renewed
 		}
 
 		if err := s.shipScope(ctx, sink, claim, ns); err != nil {
@@ -927,7 +945,7 @@ func (s *Shipper) shipScopes(
 }
 
 // shipScope ships one scope. It names the scope in a failure.
-func (s *Shipper) shipScope(ctx context.Context, sink ShipSink, claim durable.Claim, ns namespace.Namespace) error {
+func (s *Shipper) shipScope(ctx context.Context, sink ShipSink, claim *durable.Claim, ns namespace.Namespace) error {
 	if err := s.shipNamespace(ctx, sink, claim, ns); err != nil {
 		return fmt.Errorf("namespace %s: %w", ns.Name, err)
 	}
@@ -964,8 +982,14 @@ func (s *Shipper) renewLease(ctx context.Context, sink string) (durable.Claim, e
 // batch of at most ShipBatchSize entries at a time. Between batches it
 // renews the sink lease when the shipper keeps leases: when another
 // instance holds the lease, it stops the round at once. Every cursor write
-// carries the live claim.
-func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, claim durable.Claim, ns namespace.Namespace) error {
+// carries the live claim, and each renew writes its claim back through
+// claim.
+func (s *Shipper) shipNamespace(
+	ctx context.Context,
+	sink ShipSink,
+	claim *durable.Claim,
+	ns namespace.Namespace,
+) error {
 	cursor, err := s.cfg.Feed.SinkCursor(ctx, sink.Name, ns.Name)
 	if err != nil {
 		return &shipError{step: stepCursor, err: err, seq: 0, hasSeq: false}
@@ -980,7 +1004,7 @@ func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, claim durabl
 				return err
 			}
 
-			claim = renewed
+			*claim = renewed
 		}
 
 		first = false
@@ -994,7 +1018,7 @@ func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, claim durabl
 			return nil
 		}
 
-		if err := s.shipBatch(ctx, sink, claim, ns, entries); err != nil {
+		if err := s.shipBatch(ctx, sink, *claim, ns, entries); err != nil {
 			return err
 		}
 

@@ -4117,8 +4117,9 @@ type InsertDurableOperationParams struct {
 }
 
 // Durable operations. Every time comes from DatabaseNowMs, the clock of the
-// store. Each write runs in an IMMEDIATE transaction, so the read of a row
-// and its write see no other writer between them.
+// store. Each write runs in the write transaction of the store, which begins
+// IMMEDIATE (the store opens its database with _txlock=immediate), so the
+// read of a row and its write see no other writer between them.
 func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableOperationParams) error {
 	_, err := q.db.ExecContext(ctx, insertDurableOperation,
 		arg.ID,
