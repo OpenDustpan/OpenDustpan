@@ -15,17 +15,20 @@
 // This file is derived from pkg/backend/journal.go (JournalReplayer.Add,
 // GenerateDeployment and the manifest of the deployment) and from
 // pkg/resource/deploy/manifest.go (NewMagic) of pulumi/pulumi at commit
-// 128d3f2ec94e147915a6a928fdf7449d561d560e (tag v3.268.0). OpenDustpan changed
-// the replayer in these ways, each marked in the code:
+// 128d3f2ec94e147915a6a928fdf7449d561d560e (tag v3.268.0). The state migration
+// entry is derived from pkg/backend/journal_state_migration.go
+// (applyStateMigration) at the same commit; see migration.go. OpenDustpan
+// changed the replayer in these ways, each marked in the code:
 //
 //   - The replay runs in two passes over the base (ADR 43, decision 7.3) and
 //     writes its output to a writer. Upstream holds the whole base and the whole
 //     output in memory.
 //   - A reference to an entry that is not applied is an error (ErrMissingReference).
 //     Upstream reads index 0 of a missing reference without an error.
-//   - A write entry (kind 5) and a rebuilt base state entry (kind 7) replace the
-//     base in the middle of a replay (issue #430). A kind 10 entry is refused
-//     (ErrUnsupportedKind) until item 12.
+//   - A write entry (kind 5), a rebuilt base state entry (kind 7) and a state
+//     migration entry (kind 10) replace the base in the middle of a replay.
+//     The rebuilt base and the migrated base are held in memory; a later change
+//     moves them to a temporary blob.
 //   - The operations that are pending are written in the order of their operation
 //     IDs. Upstream writes them in the order of a map, which is not stable.
 //   - The manifest time comes from the clock that the caller gives, and the
@@ -60,8 +63,10 @@ var (
 	// ErrNoSnapshot reports a write entry without a snapshot, or a rebuilt document
 	// without a deployment.
 	ErrNoSnapshot = errors.New("pulumijournal: journal entry has no snapshot")
-	// ErrUnsupportedKind reports an entry kind that this replayer does not replay yet.
-	// Kinds 5, 7 and 10 wait for issue #430.
+	// ErrUnsupportedKind reports an entry kind that applyBaseKind does not handle:
+	// any kind other than snippets, extension-parameterize, write,
+	// rebuilt-base-state and state-migration. Apply forwards only those kinds,
+	// so the default guards future kinds.
 	ErrUnsupportedKind = errors.New("pulumijournal: journal entry kind is not replayed yet")
 	// ErrMissingReference reports an entry that refers to an entry no applied entry created (R16).
 	ErrMissingReference = errors.New("pulumijournal: journal entry refers to an entry that is not applied")
@@ -161,8 +166,8 @@ type operationView struct {
 // replayState is the state of one replay. It is built from the entries in the
 // order of arrival and read by the two passes over the base.
 type replayState struct {
-	// base opens the base deployment. A kind 5 entry or a kind 7 entry replaces it
-	// with a source that can also be opened more than once (issue #430).
+	// base opens the base deployment. A kind 5 entry, a kind 7 entry or a kind 10
+	// entry replaces it with a source that can also be opened more than once.
 	base OpenBase
 	// replayer carries the clock and the CLI version of the update, which a kind 7
 	// entry needs to write the deployment it rebuilds.
@@ -461,8 +466,8 @@ func deploymentOf(document []byte) ([]byte, error) {
 }
 
 // applyBaseKind applies the entries that set or replace the base: snippets,
-// extensions, a write (kind 5), a rebuilt base state (kind 7), and a state
-// migration, which is refused until item 12.
+// extensions, a write (kind 5), a rebuilt base state (kind 7) and a state
+// migration (kind 10, see migration.go).
 func (s *replayState) applyBaseKind(ctx context.Context, entry JournalEntry, name string) error {
 	//nolint:exhaustive // apply sends only the base kinds here, and default refuses the rest.
 	switch entry.Kind {
@@ -477,8 +482,9 @@ func (s *replayState) applyBaseKind(ctx context.Context, entry JournalEntry, nam
 		return s.applyWrite(entry, name)
 	case JournalEntryKindRebuiltBaseState:
 		return s.applyRebuild(ctx, name)
+	case JournalEntryKindStateMigration:
+		return s.applyMigration(ctx, entry, name)
 	default:
-		// The state migration of item 12 is not replayed yet.
 		return fmt.Errorf("pulumijournal: entry %s: kind %s: %w", name, entry.Kind, ErrUnsupportedKind)
 	}
 }
