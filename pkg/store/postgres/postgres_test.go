@@ -16,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
@@ -155,6 +156,32 @@ func TestSessionConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t, base)
+	})
+}
+
+// TestSignInFailuresConformance runs the shared failure-budget suite: both
+// handles open one schema, as two servers open one database. The store reads
+// its window from its own clock, so it ignores skew.
+func TestSignInFailuresConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL conformance suite", envURL)
+	}
+
+	storetest.RunSignInFailures(t, func(t *testing.T) storetest.SignInFailureHarness {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		return storetest.SignInFailureHarness{
+			Open: func(t *testing.T, _ time.Duration) authgate.FailureCounter {
+				t.Helper()
+
+				return openURL(t, schemaURL)
+			},
+		}
 	})
 }
 

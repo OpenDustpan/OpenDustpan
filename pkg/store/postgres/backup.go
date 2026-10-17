@@ -285,6 +285,11 @@ func pgControlTables() []pgCopyTable {
 			orderBy: []string{pgColName},
 		},
 		{
+			table:   backup.TableSignInFailures,
+			columns: []string{"source", "window_end_ms", "count"},
+			orderBy: []string{"source", "window_end_ms"},
+		},
+		{
 			table:   backup.TableBackups,
 			columns: []string{"id", pgColState, pgColStartedAtMs, pgColEndedAtMs, "target", "error"},
 			orderBy: []string{"id"},

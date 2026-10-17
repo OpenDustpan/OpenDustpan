@@ -329,6 +329,12 @@ type SessionPolicy struct {
 	TokenFreshnessMs sql.NullInt64
 }
 
+type SignInFailure struct {
+	Source      string
+	WindowEndMs int64
+	Count       int64
+}
+
 type SignInProvider struct {
 	ProviderID       string
 	Issuer           string

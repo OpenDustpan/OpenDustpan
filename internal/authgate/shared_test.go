@@ -31,6 +31,10 @@ func (brokenCounter) PruneFailures(context.Context, time.Duration) (int64, error
 	return 0, errCounter
 }
 
+func (brokenCounter) PruneFailuresAt(context.Context, time.Time, time.Duration) (int64, error) {
+	return 0, errCounter
+}
+
 // sharedWindow is the window of newSharedGate: the burst of 3 times the
 // refill of 1 second.
 const sharedWindow = 3 * time.Second
@@ -490,6 +494,70 @@ func TestStoreClockDecidesTheWindow(t *testing.T) {
 
 	if overBudget(t, other, "192.0.2.1") {
 		t.Fatal("when the window of the store ends: over budget, want within")
+	}
+}
+
+// TestSkewedInstanceClocksKeepTheSharedBudget proves that a skew of Config.Now
+// between instances neither resets nor extends the shared budget: two gates
+// whose clocks stand hours apart on one memory counter stay over the budget
+// until the window of the store ends, and are within it after.
+func TestSkewedInstanceClocksKeepTheSharedBudget(t *testing.T) {
+	t.Parallel()
+
+	const skew = 7*time.Hour + 1500*time.Millisecond
+
+	storeC := newClock()
+	aheadC := newClock()
+	behindC := newClock()
+	aheadC.Advance(skew)
+	behindC.Advance(-skew)
+
+	failures := authgatetest.NewMemory(storeC.Now)
+	ahead := newSharedGate(t, aheadC, failures, &operations{got: nil, mu: sync.Mutex{}})
+	behind := newSharedGate(t, behindC, failures, &operations{got: nil, mu: sync.Mutex{}})
+
+	miss(t, ahead, "192.0.2.1")
+	miss(t, ahead, "192.0.2.1")
+	miss(t, behind, "192.0.2.1")
+
+	// The third miss reaches the burst on behind only, so one more miss on
+	// ahead puts the source over the budget there too.
+	miss(t, ahead, "192.0.2.1")
+
+	if !overBudget(t, ahead, "192.0.2.1") {
+		t.Fatal("ahead gate after the shared burst: within, want over budget")
+	}
+
+	if !overBudget(t, behind, "192.0.2.1") {
+		t.Fatal("behind gate after the shared burst: within, want over budget")
+	}
+
+	left := storeC.Now().Truncate(sharedWindow).Add(sharedWindow).Sub(storeC.Now())
+
+	advance := func(d time.Duration) {
+		storeC.Advance(d)
+		aheadC.Advance(d)
+		behindC.Advance(d)
+	}
+
+	advance(left - time.Millisecond)
+
+	if !overBudget(t, ahead, "192.0.2.1") {
+		t.Fatal("ahead gate 1 ms before the window ends: within, want over budget")
+	}
+
+	if !overBudget(t, behind, "192.0.2.1") {
+		t.Fatal("behind gate 1 ms before the window ends: within, want over budget")
+	}
+
+	advance(time.Millisecond + sharedWindow)
+
+	if overBudget(t, ahead, "192.0.2.1") {
+		t.Fatal("ahead gate after the window ended: over budget, want within")
+	}
+
+	if overBudget(t, behind, "192.0.2.1") {
+		t.Fatal("behind gate after the window ended: over budget, want within")
 	}
 }
 

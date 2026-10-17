@@ -31,6 +31,7 @@ var ControlTables = []string{
 	TableDurableOperations,
 	TableDurableSteps,
 	TableDurableSchedules,
+	TableSignInFailures,
 	TableBackups,
 	TableRestores,
 	TableInstallation,
