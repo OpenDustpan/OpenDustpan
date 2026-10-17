@@ -29,7 +29,7 @@ Dusty and of the MCP server.
    needs with `include=`. With no `include`, the call answers the default
    sections. The routes of ADR 160 for a namespace, a collection and a
    blueprint answer the section `context` only.
-2. **The sections.** `objectcontext.Sections` is the catalog. Each section
+2. **The sections.** `objectcontext.SectionCatalog` is the catalog. Each section
    names its action and the object of that action:
 
    | Section | Answers | Action | Object | Default | Kinds |

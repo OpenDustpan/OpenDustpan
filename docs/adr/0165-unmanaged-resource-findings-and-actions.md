@@ -81,7 +81,7 @@ Facts:
 
 ### Actions
 
-6. **The catalog.** `unmanaged.Actions` holds the actions, the kinds that
+6. **The catalog.** `unmanaged.ActionCatalog` holds the actions, the kinds that
    each one applies to, and the actions of each unit that it changes. Each
    action also needs `namespace:triage-unmanaged` (new) on the namespace.
 
