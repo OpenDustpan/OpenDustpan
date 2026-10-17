@@ -391,13 +391,14 @@ func coverageTofuHTTPRoutes(tb testing.TB, namespaces *namespace.Service) []Rout
 	tb.Helper()
 
 	handler, err := tofuhttpapi.NewHandler(tofuhttpapi.Config{
-		Authenticator: coverageAuthenticator{},
-		Authorizer:    coverageAuthorizer{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Workspaces:    coverageTofuHTTPWorkspaces{},
-		Namespaces:    namespaces,
-		Audit:         nil,
-		Gate:          nil,
+		Authenticator:  coverageAuthenticator{},
+		Authorizer:     coverageAuthorizer{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Workspaces:     coverageTofuHTTPWorkspaces{},
+		Namespaces:     namespaces,
+		Audit:          nil,
+		Gate:           nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		tb.Fatalf("tofu http backend handler: %v", err)

@@ -32,6 +32,11 @@ func (a fakeAuthorizer) Authorize(context.Context, identity.Principal, identity.
 	return a.err
 }
 
+// ListObjects answers an empty scope for every list.
+func (fakeAuthorizer) ListObjects(context.Context, identity.Principal, identity.Action) (identity.Scope, error) {
+	return identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}, nil
+}
+
 // fakeStore keeps the entries that it is given. It fails every append when
 // failWith is set.
 type fakeStore struct {
@@ -67,7 +72,7 @@ func (*fakeStore) List(context.Context, namespace.Name, audit.Page) (audit.Listi
 }
 
 func (*fakeStore) Check(context.Context, namespace.Name) (audit.CheckResult, error) {
-	return audit.CheckResult{Checked: 0, BadSequence: 0, Valid: false}, nil
+	return audit.CheckResult{Checked: 0, BadSequence: 0, Unchained: 0, Valid: false}, nil
 }
 
 // newFakeStore returns an empty store that fails every append with failWith.

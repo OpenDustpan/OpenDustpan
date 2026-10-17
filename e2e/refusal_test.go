@@ -17,8 +17,8 @@ import (
 // refusalNamespace holds the stack and the workspace of the refusal test.
 const refusalNamespace = "refuse"
 
-// refusalProgram is the Pulumi program of the refusal test: no resources.
-const refusalProgram = "name: web\nruntime: yaml\n"
+// refusedProgram is the Pulumi program of the refusal test: no resources.
+const refusedProgram = "name: web\nruntime: yaml\n"
 
 // refusalPerson is one person of the refusal test with its access token.
 type refusalPerson struct {
@@ -87,7 +87,7 @@ func runRefusedActionsOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, stor
 	maintainer := issueRefusalPerson(ctx, t, env, "ann", "maintainer")
 	viewer := issueRefusalPerson(ctx, t, env, "bo", "viewer")
 
-	env.WritePulumiProject(t, refusalProgram)
+	env.WritePulumiProject(t, refusedProgram)
 	runPulumiRefusal(t, env, pulumiCLI, maintainer, viewer)
 
 	writeRefusalTofuProject(t, env)
