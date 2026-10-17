@@ -114,10 +114,6 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`. Never
   edit an applied migration. TestFrozenMigrations in each store adapter holds
   the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
-- One exception to that rule occurred one time, before the first tag. The
-  migrations of each dialect became one baseline migration,
-  `0100_baseline.sql`. `scripts/regenerate-baseline.sh` writes it. A new
-  migration gets a number above 0100. Do not make another baseline.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
