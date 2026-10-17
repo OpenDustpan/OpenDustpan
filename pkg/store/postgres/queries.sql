@@ -267,9 +267,9 @@ WHERE c.stack_id = $1 AND u.version = $2;
 -- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features, deployment, saved_at_ms,
+    digest, invalid, features, saved_at_ms,
     blob_key, size, blob_size, blob_md5
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ''::BYTEA, $9, $10, $11, $12, $13)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -277,7 +277,6 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     digest = excluded.digest,
     invalid = excluded.invalid,
     features = excluded.features,
-    deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms,
     blob_key = excluded.blob_key,
     size = excluded.size,
@@ -285,12 +284,12 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     blob_md5 = excluded.blob_md5;
 
 -- name: ListCheckpointBlobKeys :many
--- Every blob key the checkpoints of one stack name, without the empty ones,
--- ordered. A sweeper compares this set against the stored objects to find
--- blobs no checkpoint references.
+-- Every blob key the checkpoints of one stack name, ordered. A sweeper
+-- compares this set against the stored objects to find blobs no checkpoint
+-- references.
 SELECT blob_key
 FROM checkpoints
-WHERE stack_id = $1 AND blob_key IS NOT NULL AND blob_key <> ''
+WHERE stack_id = $1
 ORDER BY blob_key;
 
 -- name: SoftDeleteStack :execrows
@@ -683,17 +682,17 @@ SELECT wrapper_id FROM installation_secret_keys
 ORDER BY wrapper_id;
 
 -- name: BackupBlobs :many
--- Every blob key the state versions and the checkpoints name, with the size
+-- Every blob key the finalized state versions and the checkpoints name, with the size
 -- and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
 -- state blobs are stored sealed: the backup opens them to check and stores
--- the sealed bytes.
+-- the sealed bytes. A pending version has no committed content, so the backup
+-- leaves pending rows out.
 SELECT content_key, size, md5, sealed
 FROM state_versions
-WHERE content_key <> ''
+WHERE content_key <> '' AND status = 'finalized'
 UNION ALL
 SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
-WHERE blob_key IS NOT NULL AND blob_key <> ''
 UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
@@ -1470,23 +1469,6 @@ ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, changed_at_ms = EXCLUDED.
     entered_maintenance = EXCLUDED.entered_maintenance, log_replaced = EXCLUDED.log_replaced,
     migrating_at_ms = EXCLUDED.migrating_at_ms;
 
--- name: ClaimAuditChainMigration :execrows
--- Starts the migration of a waiting change in one write: it stamps the start
--- time only when a change waits and no claim within the lease holds.
-UPDATE audit_chain_state
-SET migrating_at_ms = $1
-WHERE id = 1 AND pending AND (migrating_at_ms = 0 OR migrating_at_ms < $2);
-
--- name: RenewAuditChainMigration :execrows
--- Moves the start of the held claim to the given time. It writes only
--- when a claim holds, so a renewal without a claim changes no row.
-UPDATE audit_chain_state SET migrating_at_ms = $1 WHERE id = 1 AND migrating_at_ms <> 0;
-
--- name: ReleaseAuditChainMigration :exec
--- Releases the claim of a migration that stops without storing the new
--- state.
-UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1;
-
 -- name: LastAuditChainStartSequence :one
 -- The sequence of the last start entry of the audit chain of a namespace,
 -- or 0 when there is none. The chain check starts there.
@@ -2022,3 +2004,31 @@ UPDATE durable_operations
 SET state = sqlc.arg('state')::text, cancel_requested = sqlc.arg('cancel_requested')::boolean,
   updated_at_ms = sqlc.arg('now_ms')::bigint
 WHERE id = sqlc.arg('id')::text;
+
+-- Durable schedules. Every time comes from the database clock, read with
+-- clock_timestamp() when the statement runs, so neither the clock of an
+-- instance nor the start of a long transaction moves a decision.
+
+-- name: GetDurableSchedule :one
+SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = $1;
+
+-- name: InsertDurableSchedule :exec
+INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms)
+VALUES (sqlc.arg('name')::text, sqlc.arg('interval_ms')::bigint, sqlc.arg('now_ms')::bigint, NULL);
+
+-- name: SetDurableScheduleInterval :exec
+-- Sets the interval, and moves the next run to now plus the interval when
+-- that is earlier.
+UPDATE durable_schedules
+SET interval_ms = sqlc.arg('interval_ms')::bigint,
+  next_run_at_ms = LEAST(next_run_at_ms, sqlc.arg('now_ms')::bigint + sqlc.arg('interval_ms')::bigint)
+WHERE name = sqlc.arg('name')::text;
+
+-- name: ClaimDurableScheduleTick :execrows
+-- The conditional update that claims a due tick: it changes the row only
+-- when next_run_at_ms is the value that the claim read and is due at now.
+UPDATE durable_schedules
+SET next_run_at_ms = sqlc.arg('now_ms')::bigint + interval_ms,
+  last_claimed_at_ms = sqlc.arg('now_ms')::bigint
+WHERE name = sqlc.arg('name')::text AND next_run_at_ms = sqlc.arg('due_at_ms')::bigint
+  AND next_run_at_ms <= sqlc.arg('now_ms')::bigint;

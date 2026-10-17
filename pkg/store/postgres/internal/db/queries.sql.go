@@ -157,11 +157,10 @@ func (q *Queries) AppendEvent(ctx context.Context, arg AppendEventParams) error 
 const backupBlobs = `-- name: BackupBlobs :many
 SELECT content_key, size, md5, sealed
 FROM state_versions
-WHERE content_key <> ''
+WHERE content_key <> '' AND status = 'finalized'
 UNION ALL
 SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
-WHERE blob_key IS NOT NULL AND blob_key <> ''
 UNION ALL
 SELECT blob_key AS content_key, size AS size, md5 AS md5, FALSE AS sealed
 FROM update_journal
@@ -175,10 +174,11 @@ type BackupBlobsRow struct {
 	Sealed     bool
 }
 
-// Every blob key the state versions and the checkpoints name, with the size
+// Every blob key the finalized state versions and the checkpoints name, with the size
 // and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
 // state blobs are stored sealed: the backup opens them to check and stores
-// the sealed bytes.
+// the sealed bytes. A pending version has no committed content, so the backup
+// leaves pending rows out.
 func (q *Queries) BackupBlobs(ctx context.Context) ([]BackupBlobsRow, error) {
 	rows, err := q.db.Query(ctx, backupBlobs)
 	if err != nil {
@@ -422,27 +422,6 @@ func (q *Queries) CancelDurableOperation(ctx context.Context, arg CancelDurableO
 	return err
 }
 
-const claimAuditChainMigration = `-- name: ClaimAuditChainMigration :execrows
-UPDATE audit_chain_state
-SET migrating_at_ms = $1
-WHERE id = 1 AND pending AND (migrating_at_ms = 0 OR migrating_at_ms < $2)
-`
-
-type ClaimAuditChainMigrationParams struct {
-	MigratingAtMs   int64
-	MigratingAtMs_2 int64
-}
-
-// Starts the migration of a waiting change in one write: it stamps the start
-// time only when a change waits and no claim within the lease holds.
-func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditChainMigrationParams) (int64, error) {
-	result, err := q.db.Exec(ctx, claimAuditChainMigration, arg.MigratingAtMs, arg.MigratingAtMs_2)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const claimDurableOperation = `-- name: ClaimDurableOperation :one
 WITH c AS MATERIALIZED (
   SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
@@ -552,6 +531,30 @@ func (q *Queries) ClaimSinkOperation(ctx context.Context, arg ClaimSinkOperation
 	var i ClaimSinkOperationRow
 	err := row.Scan(&i.ClaimToken, &i.ClaimExpiresAtMs)
 	return i, err
+}
+
+const claimDurableScheduleTick = `-- name: ClaimDurableScheduleTick :execrows
+UPDATE durable_schedules
+SET next_run_at_ms = $1::bigint + interval_ms,
+  last_claimed_at_ms = $1::bigint
+WHERE name = $2::text AND next_run_at_ms = $3::bigint
+  AND next_run_at_ms <= $1::bigint
+`
+
+type ClaimDurableScheduleTickParams struct {
+	NowMs   int64
+	Name    string
+	DueAtMs int64
+}
+
+// The conditional update that claims a due tick: it changes the row only
+// when next_run_at_ms is the value that the claim read and is due at now.
+func (q *Queries) ClaimDurableScheduleTick(ctx context.Context, arg ClaimDurableScheduleTickParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimDurableScheduleTick, arg.NowMs, arg.Name, arg.DueAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
@@ -2782,7 +2785,7 @@ type GetCheckpointByUpdateRow struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -2833,7 +2836,7 @@ type GetCheckpointByVersionRow struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -3064,6 +3067,26 @@ func (q *Queries) GetDurableOperationByKey(ctx context.Context, startKey string)
 	return i, err
 }
 
+const getDurableSchedule = `-- name: GetDurableSchedule :one
+
+SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = $1
+`
+
+// Durable schedules. Every time comes from the database clock, read with
+// clock_timestamp() when the statement runs, so neither the clock of an
+// instance nor the start of a long transaction moves a decision.
+func (q *Queries) GetDurableSchedule(ctx context.Context, name string) (DurableSchedule, error) {
+	row := q.db.QueryRow(ctx, getDurableSchedule, name)
+	var i DurableSchedule
+	err := row.Scan(
+		&i.Name,
+		&i.IntervalMs,
+		&i.NextRunAtMs,
+		&i.LastClaimedAtMs,
+	)
+	return i, err
+}
+
 const getFailoverVersionForShare = `-- name: GetFailoverVersionForShare :one
 SELECT failover_version
 FROM namespaces
@@ -3242,7 +3265,7 @@ type GetLatestCheckpointRow struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -4460,6 +4483,22 @@ func (q *Queries) InsertDurableOperation(ctx context.Context, arg InsertDurableO
 	return i, err
 }
 
+const insertDurableSchedule = `-- name: InsertDurableSchedule :exec
+INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms)
+VALUES ($1::text, $2::bigint, $3::bigint, NULL)
+`
+
+type InsertDurableScheduleParams struct {
+	Name       string
+	IntervalMs int64
+	NowMs      int64
+}
+
+func (q *Queries) InsertDurableSchedule(ctx context.Context, arg InsertDurableScheduleParams) error {
+	_, err := q.db.Exec(ctx, insertDurableSchedule, arg.Name, arg.IntervalMs, arg.NowMs)
+	return err
+}
+
 const insertDurableStep = `-- name: InsertDurableStep :exec
 INSERT INTO durable_steps (operation_id, name, seq, result, done_at_ms)
 SELECT $1::text, $2::text, COALESCE(MAX(seq), 0) + 1,
@@ -5095,22 +5134,22 @@ func (q *Queries) ListBlobPurgesAfter(ctx context.Context, arg ListBlobPurgesAft
 const listCheckpointBlobKeys = `-- name: ListCheckpointBlobKeys :many
 SELECT blob_key
 FROM checkpoints
-WHERE stack_id = $1 AND blob_key IS NOT NULL AND blob_key <> ''
+WHERE stack_id = $1
 ORDER BY blob_key
 `
 
-// Every blob key the checkpoints of one stack name, without the empty ones,
-// ordered. A sweeper compares this set against the stored objects to find
-// blobs no checkpoint references.
-func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]pgtype.Text, error) {
+// Every blob key the checkpoints of one stack name, ordered. A sweeper
+// compares this set against the stored objects to find blobs no checkpoint
+// references.
+func (q *Queries) ListCheckpointBlobKeys(ctx context.Context, stackID string) ([]string, error) {
 	rows, err := q.db.Query(ctx, listCheckpointBlobKeys, stackID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []pgtype.Text
+	var items []string
 	for rows.Next() {
-		var blob_key pgtype.Text
+		var blob_key string
 		if err := rows.Scan(&blob_key); err != nil {
 			return nil, err
 		}
@@ -6973,9 +7012,9 @@ func (q *Queries) PurgeWorkspace(ctx context.Context, arg PurgeWorkspaceParams) 
 const putCheckpoint = `-- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features, deployment, saved_at_ms,
+    digest, invalid, features, saved_at_ms,
     blob_key, size, blob_size, blob_md5
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ''::BYTEA, $9, $10, $11, $12, $13)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -6983,7 +7022,6 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     digest = excluded.digest,
     invalid = excluded.invalid,
     features = excluded.features,
-    deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms,
     blob_key = excluded.blob_key,
     size = excluded.size,
@@ -7001,7 +7039,7 @@ type PutCheckpointParams struct {
 	Invalid       bool
 	Features      []byte
 	SavedAtMs     int64
-	BlobKey       pgtype.Text
+	BlobKey       string
 	Size          pgtype.Int8
 	BlobSize      pgtype.Int8
 	BlobMd5       []byte
@@ -7023,17 +7061,6 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.BlobSize,
 		arg.BlobMd5,
 	)
-	return err
-}
-
-const releaseAuditChainMigration = `-- name: ReleaseAuditChainMigration :exec
-UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1
-`
-
-// Releases the claim of a migration that stops without storing the new
-// state.
-func (q *Queries) ReleaseAuditChainMigration(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, releaseAuditChainMigration)
 	return err
 }
 
@@ -7074,20 +7101,6 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		arg.Project,
 		arg.Name_2,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const renewAuditChainMigration = `-- name: RenewAuditChainMigration :execrows
-UPDATE audit_chain_state SET migrating_at_ms = $1 WHERE id = 1 AND migrating_at_ms <> 0
-`
-
-// Moves the start of the held claim to the given time. It writes only
-// when a claim holds, so a renewal without a claim changes no row.
-func (q *Queries) RenewAuditChainMigration(ctx context.Context, migratingAtMs int64) (int64, error) {
-	result, err := q.db.Exec(ctx, renewAuditChainMigration, migratingAtMs)
 	if err != nil {
 		return 0, err
 	}
@@ -7710,6 +7723,26 @@ func (q *Queries) SetAuditChainState(ctx context.Context, arg SetAuditChainState
 		arg.LogReplaced,
 		arg.MigratingAtMs,
 	)
+	return err
+}
+
+const setDurableScheduleInterval = `-- name: SetDurableScheduleInterval :exec
+UPDATE durable_schedules
+SET interval_ms = $1::bigint,
+  next_run_at_ms = LEAST(next_run_at_ms, $2::bigint + $1::bigint)
+WHERE name = $3::text
+`
+
+type SetDurableScheduleIntervalParams struct {
+	IntervalMs int64
+	NowMs      int64
+	Name       string
+}
+
+// Sets the interval, and moves the next run to now plus the interval when
+// that is earlier.
+func (q *Queries) SetDurableScheduleInterval(ctx context.Context, arg SetDurableScheduleIntervalParams) error {
+	_, err := q.db.Exec(ctx, setDurableScheduleInterval, arg.IntervalMs, arg.NowMs, arg.Name)
 	return err
 }
 

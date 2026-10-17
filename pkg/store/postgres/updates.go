@@ -348,7 +348,7 @@ func writeCheckpoint(
 		Invalid:       row.Invalid,
 		Features:      row.Features,
 		SavedAtMs:     row.SavedAtMs,
-		BlobKey:       pgtype.Text{String: row.BlobKey, Valid: true},
+		BlobKey:       row.BlobKey,
 		Size:          pgtype.Int8{Int64: row.Size, Valid: true},
 		BlobSize:      pgtype.Int8{Int64: row.BlobSize, Valid: true},
 		BlobMd5:       row.BlobMD5,
@@ -391,7 +391,7 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
-		BlobKey:       row.BlobKey.String,
+		BlobKey:       row.BlobKey,
 		Size:          row.Size.Int64,
 		BlobSize:      row.BlobSize.Int64,
 		BlobMD5:       row.BlobMd5,
@@ -433,7 +433,7 @@ func (s *Store) CheckpointByVersion(
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
-		BlobKey:       row.BlobKey.String,
+		BlobKey:       row.BlobKey,
 		Size:          row.Size.Int64,
 		BlobSize:      row.BlobSize.Int64,
 		BlobMD5:       row.BlobMd5,
@@ -475,7 +475,7 @@ func (s *Store) CheckpointByUpdate(
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
-		BlobKey:       row.BlobKey.String,
+		BlobKey:       row.BlobKey,
 		Size:          row.Size.Int64,
 		BlobSize:      row.BlobSize.Int64,
 		BlobMD5:       row.BlobMd5,
@@ -501,9 +501,9 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 	out := make([]blob.Key, 0, len(rows))
 
 	for _, row := range rows {
-		key, err := blob.ParseKey(row.String)
+		key, err := blob.ParseKey(row)
 		if err != nil {
-			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row.String, err)
+			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row, err)
 		}
 
 		out = append(out, key)

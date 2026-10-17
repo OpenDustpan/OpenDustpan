@@ -95,15 +95,40 @@ func parseManifestBlobs(manifest Manifest, id ID) ([]BlobRef, error) {
 	return out, nil
 }
 
-// checkRestoreSchema refuses a backup of another schema version. The error
-// names both versions, so the operator knows which release to use.
+// checkRestoreSchema refuses a backup from before the baseline schema, and a
+// backup of another schema version. The error names both versions, so the
+// operator knows which release to use.
 func checkRestoreSchema(manifest Manifest, dst Summary, id ID) error {
+	if manifest.SchemaVersion < BaselineSchemaVersion {
+		return fmt.Errorf("restore backup %s of schema version %d, baseline schema version %d: %w",
+			id, manifest.SchemaVersion, BaselineSchemaVersion, ErrSchemaBeforeBaseline)
+	}
+
 	if manifest.SchemaVersion == dst.SchemaVersion {
 		return nil
 	}
 
 	return fmt.Errorf("restore backup %s of schema version %d into version %d: %w",
 		id, manifest.SchemaVersion, dst.SchemaVersion, ErrSchemaMismatch)
+}
+
+// CheckStageSchema refuses to stage a portable backup of schema version
+// backupVersion into a database of schema version liveVersion. It returns
+// ErrSchemaBeforeBaseline for a backup from before the baseline, and
+// ErrSchemaMismatch for another schema version. Each PortableStager calls it
+// before it stages anything.
+func CheckStageSchema(backupVersion, liveVersion int) error {
+	if backupVersion < BaselineSchemaVersion {
+		return fmt.Errorf("stage portable backup of schema version %d, baseline schema version %d: %w",
+			backupVersion, BaselineSchemaVersion, ErrSchemaBeforeBaseline)
+	}
+
+	if backupVersion != liveVersion {
+		return fmt.Errorf("stage portable backup of schema version %d into version %d: %w",
+			backupVersion, liveVersion, ErrSchemaMismatch)
+	}
+
+	return nil
 }
 
 // verifySQLPart reads each table file of the SQL part and checks its size and
