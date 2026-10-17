@@ -811,14 +811,14 @@ func countRows(ctx context.Context, conn *sql.DB, table string) (int64, error) {
 }
 
 // blobRefs reads the blob references of a snapshot: the content key, size and
-// MD5 of every state version that names content, with the blob key, size and
+// MD5 of every finalized state version that names content, with the blob key, size and
 // MD5 of every checkpoint kept in blobs and every journal batch, ordered by key. Size and MD5 stay
 // those of the plain bytes, as the state version stores them; sealed versions
 // mark their references sealed, so the backup opens them to check and stores
-// the sealed bytes. A pending version names no content, so only finalized
-// versions appear.
+// the sealed bytes. A pending version has no committed content, so the backup
+// leaves pending rows out.
 func blobRefs(ctx context.Context, conn *sql.DB) ([]backup.BlobRef, error) {
-	const query = `SELECT content_key, size, md5, sealed FROM state_versions WHERE content_key <> ''
+	const query = `SELECT content_key, size, md5, sealed FROM state_versions WHERE content_key <> '' AND status = 'finalized'
 		UNION ALL
 		SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, 0 AS sealed FROM checkpoints
 		UNION ALL

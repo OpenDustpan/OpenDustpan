@@ -682,13 +682,14 @@ SELECT wrapper_id FROM installation_secret_keys
 ORDER BY wrapper_id;
 
 -- name: BackupBlobs :many
--- Every blob key the state versions and the checkpoints name, with the size
+-- Every blob key the finalized state versions and the checkpoints name, with the size
 -- and MD5 of the plain bytes and the sealed flag, ordered by key. Sealed
 -- state blobs are stored sealed: the backup opens them to check and stores
--- the sealed bytes.
+-- the sealed bytes. A pending version has no committed content, so the backup
+-- leaves pending rows out.
 SELECT content_key, size, md5, sealed
 FROM state_versions
-WHERE content_key <> ''
+WHERE content_key <> '' AND status = 'finalized'
 UNION ALL
 SELECT blob_key AS content_key, blob_size AS size, blob_md5 AS md5, FALSE AS sealed
 FROM checkpoints
