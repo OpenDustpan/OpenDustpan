@@ -336,6 +336,10 @@ func sqliteControlTables() []sqliteBackupTable {
 			columns: []string{"name", "interval_ms", "next_run_at_ms", "last_claimed_at_ms"},
 		},
 		{
+			table:   backup.TableSignInFailures,
+			columns: []string{"source", "window_end_ms", "count"},
+		},
+		{
 			table: backup.TableBackups,
 			columns: []string{
 				"id",
