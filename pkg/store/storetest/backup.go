@@ -1010,9 +1010,10 @@ func sameBlobRef(a, b backup.BlobRef) bool {
 }
 
 // testBackupTablesCoverSchema checks that the data tables of the migrated
-// schema are exactly the tables of backup.Tables. It reads the schema tables
-// through the Inspector, never through Tables itself, so a migration that
-// adds a table fails here until its author adds the table to Tables.
+// schema are exactly the tables of backup.Tables and backup.ControlTables.
+// It reads the schema tables through the Inspector, never through the lists
+// themselves, so a migration that adds a table fails here until its author
+// adds the table to one of the lists.
 func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
 	t.Helper()
 
@@ -1023,14 +1024,14 @@ func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
 		t.Fatalf("schema tables: %v", err)
 	}
 
-	want := backup.TablesCopy()
+	want := append(backup.TablesCopy(), backup.ControlTables...)
 	slices.Sort(want)
 
 	got := slices.Clone(schema)
 	slices.Sort(got)
 
 	if !slices.Equal(got, want) {
-		t.Fatalf("schema tables = %q, want backup.Tables %q", got, want)
+		t.Fatalf("schema tables = %q, want backup.Tables and backup.ControlTables %q", got, want)
 	}
 }
 

@@ -821,10 +821,8 @@ func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 				return fmt.Errorf("build staging schema at migration %s: %w", m.Name, err)
 			}
 
-			const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-
-			if _, err := tx.Exec(ctx, record, m.Version, m.Name); err != nil {
-				return fmt.Errorf("record staging migration %s: %w", m.Name, err)
+			if err := recordMigration(ctx, tx, m); err != nil {
+				return fmt.Errorf("record staging migration: %w", err)
 			}
 		}
 

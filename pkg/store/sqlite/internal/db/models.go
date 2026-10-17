@@ -131,6 +131,41 @@ type CollectionMember struct {
 	AssignedAtMs  int64
 }
 
+type DurableOperation struct {
+	ID               string
+	StartKey         string
+	Kind             string
+	Input            []byte
+	Version          int64
+	State            string
+	Attempt          int64
+	Expiries         int64
+	Failures         int64
+	LastError        string
+	ClaimOwner       sql.NullString
+	ClaimToken       int64
+	ClaimExpiresAtMs sql.NullInt64
+	CancelRequested  bool
+	NotBeforeMs      int64
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+}
+
+type DurableSchedule struct {
+	Name            string
+	IntervalMs      int64
+	NextRunAtMs     int64
+	LastClaimedAtMs sql.NullInt64
+}
+
+type DurableStep struct {
+	OperationID string
+	Name        string
+	Seq         int64
+	Result      []byte
+	DoneAtMs    int64
+}
+
 type Grant struct {
 	ID          string
 	Subject     string
@@ -258,6 +293,12 @@ type Role struct {
 	CreatedAtMs int64
 	UpdatedAtMs int64
 	DeletedAtMs sql.NullInt64
+}
+
+type SchemaMigration struct {
+	Version          int64
+	Name             string
+	MinBinaryVersion string
 }
 
 type SecretKey struct {

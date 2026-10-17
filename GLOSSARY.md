@@ -88,6 +88,10 @@ _Avoid_: Secret setting, private setting
 The address of the client that sent a request, as the server records it in the request log and in audit entries. Without trusted proxies it is the address of the TCP peer. With `--trusted-proxies` it is the address that a trusted proxy forwarded.
 _Avoid_: Remote address, source IP (except for the audit field name `SourceIP` and the wire name `source`)
 
+**Minimum binary version**:
+The oldest binary version that can use a database schema. A migration that deletes or narrows something sets it, and `schema_migrations` records it with that migration. A binary starts only when its version is at or above the minimum. A build with no release version, for example `dev`, counts as newer than every release.
+_Avoid_: Minimum schema version, compatibility level
+
 **Backup**:
 The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot
@@ -99,6 +103,9 @@ _Avoid_: Export format, dump format
 **Restore**:
 The installation API operation that replaces the SQL data of an installation with a backup (ADR 38). The server checks the backup before it changes live data, applies it in maintenance mode, and takes a backup of the live data first. It is not the restore of one older version of a unit (ADR 28). It is also not the restore of a deleted unit (ADR 47).
 _Avoid_: Recovery, load, import
+
+**Control table**:
+A table that a restore does not replace (ADR 72, decision 5). The live rows stay across the swap. The installation, backups, restores and durable operation tables are control tables. The claim tokens of durable operations only grow, and an older token from a backup would let a stale holder write.
 
 **Deleted unit**:
 A unit after a delete through its tool (ADR 47). It leaves every list and its name is free at once. OpenDustpan keeps its state, history, secrets and grants until a purge. The inventory API lists the deleted units of a namespace, and a restore of a deleted unit brings one back with its stable ID.
