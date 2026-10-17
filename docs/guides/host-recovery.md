@@ -21,7 +21,7 @@ Pass the name of the person. The name must name no principal that exists.
 opendustpan host create-temp-admin --database sqlite:/var/lib/dustpan/dustpan.db alice
 ```
 
-With SQLite, stop the server first; with PostgreSQL, the server can keep running.
+With SQLite, stop the server first. With PostgreSQL, the server can keep running.
 
 The command prints the person, the secret of a new personal access token,
 and its fixed expiry, 24 hours after the create:
