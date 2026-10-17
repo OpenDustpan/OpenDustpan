@@ -234,6 +234,10 @@ type Store struct {
 	// processGuard holds the lock on the guard file next to the database,
 	// so a second store cannot open the same file. Close releases it.
 	processGuard *processGuard
+
+	// stepTxBound is the longest time that a step transaction of a durable
+	// operation stays open before it rolls back.
+	stepTxBound time.Duration
 }
 
 var (
@@ -306,6 +310,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		keepAccessHook:      nil,
 		binaryVersion:       "",
 		processGuard:        guard,
+		stepTxBound:         DefaultStepTransactionBound,
 	}
 	for _, opt := range opts {
 		opt(s)

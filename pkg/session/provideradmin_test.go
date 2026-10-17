@@ -157,9 +157,9 @@ func sessionCallerEntry() audit.Entry {
 
 func corpInput() session.ProviderInput {
 	return session.ProviderInput{
-		ID: "corp", Issuer: "https://idp.example/", DisplayName: "Corp", ClientID: "dustpan",
-		ClientSecret: "client-secret-value", Scopes: []string{"profile", "email", "profile"}, AutoCreate: true,
-		Enabled: true,
+		ID: "corp", Mode: "", Issuer: "https://idp.example/", DisplayName: "Corp", ClientID: "dustpan",
+		ClientSecret: "client-secret-value", Scopes: []string{"profile", "email", "profile"}, OAuth: noOAuth(),
+		AutoCreate: true, Enabled: true,
 	}
 }
 
@@ -272,8 +272,8 @@ func TestProviderAdminUpdate(t *testing.T) {
 	name, secret, disabled := "Corp SSO", "new-secret", false
 
 	p, err := f.admin.Update(ctx, sessionCallerEntry(), "corp", session.ProviderChange{
-		Issuer: nil, DisplayName: &name, ClientID: nil, ClientSecret: &secret, Scopes: nil, AutoCreate: nil,
-		Enabled: &disabled, Version: 1,
+		Mode: nil, Issuer: nil, DisplayName: &name, ClientID: nil, ClientSecret: &secret, Scopes: nil,
+		OAuth: noOAuthChange(), AutoCreate: nil, Enabled: &disabled, Version: 1,
 	})
 	if err != nil || p.Version != 2 || p.DisplayName != name || p.Enabled {
 		t.Fatalf("update = %+v, %v; want version 2, the new name, disabled", p, err)
@@ -286,8 +286,8 @@ func TestProviderAdminUpdate(t *testing.T) {
 	checkUpdateEntry(t, f.store.entries[1], name)
 
 	stale := session.ProviderChange{
-		Issuer: nil, DisplayName: &name, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
-		Enabled: nil, Version: 1,
+		Mode: nil, Issuer: nil, DisplayName: &name, ClientID: nil, ClientSecret: nil, Scopes: nil,
+		OAuth: noOAuthChange(), AutoCreate: nil, Enabled: nil, Version: 1,
 	}
 	if _, err := f.admin.Update(ctx, sessionCallerEntry(), "corp", stale); !errors.Is(err, session.ErrProviderChanged) {
 		t.Fatalf("update of version 1 = %v, want ErrProviderChanged", err)
@@ -301,8 +301,8 @@ func TestProviderAdminUpdate(t *testing.T) {
 	}{{&same, nil}, {&moved, session.ErrIssuerChanged}} {
 		current := f.store.providers["corp"].Version
 		c := session.ProviderChange{
-			Issuer: tc.issuer, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
-			Enabled: nil, Version: current,
+			Mode: nil, Issuer: tc.issuer, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil,
+			OAuth: noOAuthChange(), AutoCreate: nil, Enabled: nil, Version: current,
 		}
 
 		if _, err := f.admin.Update(ctx, sessionCallerEntry(), "corp", c); !errors.Is(err, tc.want) {

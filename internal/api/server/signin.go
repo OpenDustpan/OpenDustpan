@@ -109,6 +109,10 @@ type SignInProvider struct {
 	// Stored reports a provider that the API keeps. Its session is created
 	// in the same write as a check that the provider is still enabled.
 	Stored bool
+	// Source is the source of a principal that the first sign-in of a
+	// person makes: principal.SourceOIDC, or principal.SourceOAuth for a
+	// plain OAuth 2.0 provider. Empty is principal.SourceOIDC.
+	Source principal.Source
 }
 
 // SignIn configures the console sign-in. Sessions is required. A nil
@@ -156,7 +160,14 @@ func (s *signInState) provider(ctx context.Context, id string) (SignInProvider, 
 	}
 
 	if s.stored == nil {
-		return SignInProvider{Client: nil, ID: "", DisplayName: "", AutoCreate: false, Stored: false}, false, nil
+		return SignInProvider{
+			Client:      nil,
+			ID:          "",
+			DisplayName: "",
+			AutoCreate:  false,
+			Stored:      false,
+			Source:      "",
+		}, false, nil
 	}
 
 	p, ok, err := s.stored.Provider(ctx, id)
@@ -424,7 +435,8 @@ func (h *Handler) startSession(
 	e := signInEntry(r, subject, id.Subject, session.ActionSignIn)
 
 	p, _, err := h.principals.SignInPrincipal(ctx, e, principal.SignInInput{
-		Subject: subject, Names: []string{id.Name, id.PreferredUsername, id.Email}, Create: provider.AutoCreate,
+		Subject: subject, Source: provider.Source, Names: []string{id.Name, id.PreferredUsername, id.Email},
+		Create: provider.AutoCreate,
 	})
 	if reason := principalRefusal(err); reason != "" {
 		h.refuseSignIn(

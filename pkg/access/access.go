@@ -370,8 +370,9 @@ type GrantStore interface {
 	// RevokeGrant ends the current grant with the ID id at e.At. fence
 	// names the namespace of the grant (the zero fence for the
 	// installation). It returns ErrNotFound when no such grant exists in
-	// that namespace.
-	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
+	// that namespace. It runs check, when it is not nil, as a GrantCheck
+	// runs, and returns its error.
+	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check GrantCheck) error
 	// ListGrantsOn returns one page of the current grants on obj that
 	// match the filters of q, ordered by subject then role, each with its
 	// holder, and the count of every current grant on obj that matches the

@@ -12,6 +12,7 @@
 package oauthtest
 
 import (
+	"cmp"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -26,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"math/big"
 	"net/http"
@@ -87,6 +89,24 @@ type Faults struct {
 	// IgnoreMaxAge answers an authorization request with max_age with the
 	// last authentication, as a provider that does not honor max_age does.
 	IgnoreMaxAge bool
+	// TokenType sets the token_type of a token answer when it is not
+	// empty.
+	TokenType string
+	// UserinfoStatus answers a user-info request with this status and no
+	// body when it is not zero.
+	UserinfoStatus int
+	// UserinfoBody answers a user-info request with this body, as
+	// application/json, when it is not empty.
+	UserinfoBody string
+	// UserinfoType sets the Content-Type of a user-info answer when it is
+	// not empty.
+	UserinfoType string
+	// UserinfoRedirect answers a user-info request with a redirect to this
+	// URL when it is not empty.
+	UserinfoRedirect string
+	// TokenRedirect answers a token request with a redirect to this URL
+	// when it is not empty.
+	TokenRedirect string
 }
 
 // User is the person whom the provider signs in.
@@ -530,6 +550,10 @@ func hasScope(scopes, want string) bool {
 // token exchanges an authorization code for an access token and, in the
 // OIDC mode, an ID token.
 func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
+	if p.redirectToken(w, r) {
+		return
+	}
+
 	if err := r.ParseForm(); err != nil {
 		tokenError(w, http.StatusBadRequest, "invalid_request")
 
@@ -576,7 +600,7 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 
 	body := map[string]any{
 		"access_token": access,
-		"token_type":   "Bearer",
+		"token_type":   cmp.Or(faults.TokenType, "Bearer"),
 		"expires_in":   int64(tokenLifetime / time.Second),
 	}
 
@@ -592,6 +616,22 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, body)
+}
+
+// redirectToken answers a redirect to the TokenRedirect fault, if one is
+// set, and reports whether it did.
+func (p *Provider) redirectToken(w http.ResponseWriter, r *http.Request) bool {
+	p.mu.Lock()
+	redirect := p.cfg.Faults.TokenRedirect
+	p.mu.Unlock()
+
+	if redirect == "" {
+		return false
+	}
+
+	http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
+
+	return true
 }
 
 // clientAuthenticated reports whether r carries the client credentials,
@@ -764,6 +804,7 @@ func (p *Provider) userinfo(w http.ResponseWriter, r *http.Request) {
 
 	p.mu.Lock()
 	u, known := p.tokens[access]
+	faults := p.cfg.Faults
 	p.mu.Unlock()
 
 	if !ok || !known {
@@ -773,7 +814,37 @@ func (p *Provider) userinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if faults.UserinfoRedirect != "" {
+		http.Redirect(w, r, faults.UserinfoRedirect, http.StatusFound)
+
+		return
+	}
+
+	if faults.UserinfoStatus != 0 {
+		w.WriteHeader(faults.UserinfoStatus)
+
+		return
+	}
+
+	if faults.UserinfoBody != "" || faults.UserinfoType != "" {
+		writeRaw(w, cmp.Or(faults.UserinfoType, "application/json"), faults.UserinfoBody)
+
+		return
+	}
+
 	writeJSON(w, http.StatusOK, u.claims())
+}
+
+// writeRaw writes body with the Content-Type contentType and status 200.
+func writeRaw(w http.ResponseWriter, contentType, body string) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+
+	if _, err := io.WriteString(w, body); err != nil {
+		// The client of the test sees the broken answer.
+		return
+	}
 }
 
 // tokenError writes an OAuth error answer (RFC 6749 section 5.2).

@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/accesstoken"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/session"
 )
 
@@ -233,7 +234,7 @@ func bindingOf(cfg *settings, signIn *serverapi.SignIn) providerBinding {
 
 	providers := make([]session.Provider, 0, len(cfg.oidcProviders))
 	for _, p := range cfg.oidcProviders {
-		providers = append(providers, session.Provider{ID: p.ID, Issuer: p.Issuer})
+		providers = append(providers, session.Provider{ID: p.ID, Issuer: p.Issuer, UserinfoURL: "", SubjectClaim: ""})
 	}
 
 	return providerBinding{store: store, providers: providers}
@@ -372,5 +373,6 @@ func signInProvider(
 
 	return serverapi.SignInProvider{
 		Client: client, ID: p.ID, DisplayName: displayName, AutoCreate: p.AutoCreate, Stored: false,
+		Source: principal.SourceOIDC,
 	}, nil
 }

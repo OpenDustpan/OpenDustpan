@@ -20,6 +20,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken/accesstokentest"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/audit/audittest"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -637,6 +638,7 @@ type backupStore struct {
 var (
 	_ storetest.Reopener       = (*backupStore)(nil)
 	_ storetest.StagingWitness = (*backupStore)(nil)
+	_ storetest.DurableHolder  = (*backupStore)(nil)
 )
 
 // openBackup returns a fresh backup-capable store in a temporary directory,
@@ -700,6 +702,11 @@ func (s *backupStore) Reopen() storetest.BackupStore { //nolint:ireturn // Reope
 	})
 
 	return b
+}
+
+// DurableStore implements storetest.DurableHolder.
+func (s *backupStore) DurableStore() durable.Store { //nolint:ireturn // The capability returns the port.
+	return s.DurableOperations()
 }
 
 // CurrentStagingID implements storetest.StagingWitness: the path of the
@@ -1849,8 +1856,9 @@ func TestOpenBeforeMinimumColumn(t *testing.T) {
 		t.Fatal("applied migrations are empty, want the recorded migrations")
 	}
 
-	if last := applied[len(applied)-1]; last.Name != "0079_schema_minimum.sql" {
-		t.Fatalf("newest applied migration = %+v, want 0079_schema_minimum.sql", last)
+	isMinimum := func(m schema.AppliedMigration) bool { return m.Name == "0079_schema_minimum.sql" }
+	if !slices.ContainsFunc(applied, isMinimum) {
+		t.Fatalf("applied migrations = %+v, want 0079_schema_minimum.sql among them", applied)
 	}
 }
 
