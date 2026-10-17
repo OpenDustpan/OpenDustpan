@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
@@ -26,6 +27,124 @@ func (s *Store) SaveChainRecord(ctx context.Context, rec audit.ChainRecord) erro
 	return s.inTx(ctx, func(q *db.Queries) error {
 		return saveChainRecord(ctx, q, rec)
 	})
+}
+
+// ApproveChainChange appends the approval entry e and starts the migration
+// operation of fixed in one transaction, so only the approval whose start
+// wins leaves an entry. It reads the waiting change and the runnable
+// operations of the kind in the same transaction as the start: a late
+// approval after the migration cleared the wait answers ErrNoChainChange,
+// and a second approval while one operation can run answers
+// ErrChainMigrating, both without an entry. When the fixed key already
+// names an ended operation, it starts the operation of retryKey instead, so
+// an approval after a failed migration writes one entry for its new
+// operation. A failed start changes nothing. The migration step runs only
+// after the transaction commits, so it never runs before the entry exists.
+// The transaction holds the advisory lock of the server audit scope first,
+// as AppendServer does, so concurrent approvals wait for each other.
+func (s *Store) ApproveChainChange(
+	ctx context.Context, e audit.Entry, fixed durable.StartRequest, retryKey string,
+) (durable.Operation, error) {
+	if err := validServerEntry(e); err != nil {
+		return durable.Operation{}, err
+	}
+
+	if err := fixed.Validate(); err != nil {
+		return durable.Operation{}, err
+	}
+
+	retry := fixed
+	retry.Key = retryKey
+
+	if err := retry.Validate(); err != nil {
+		return durable.Operation{}, err
+	}
+
+	var out durable.Operation
+
+	err := s.inTx(ctx, func(q *db.Queries) error {
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock server audit scope: %w", err)
+		}
+
+		if err := checkChainApprovalWait(ctx, q); err != nil {
+			return err
+		}
+
+		op, err := startChainApprovalOp(ctx, q, fixed, retry)
+		if err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, e); err != nil {
+			return err
+		}
+
+		out = op
+
+		return nil
+	})
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	return out, nil
+}
+
+// checkChainApprovalWait answers audit.ErrNoChainChange unless a change of
+// the chain waits for approval in q.
+func checkChainApprovalWait(ctx context.Context, q *db.Queries) error {
+	rec, err := readChainRecord(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	if !rec.Pending {
+		return audit.ErrNoChainChange
+	}
+
+	return nil
+}
+
+// startChainApprovalOp starts the migration operation of fixed in q, or of
+// retry when fixed already names an ended operation. It answers
+// audit.ErrChainMigrating while one operation of the kind can run, or when
+// the fixed operation still runs.
+func startChainApprovalOp(
+	ctx context.Context, q *db.Queries, fixed, retry durable.StartRequest,
+) (durable.Operation, error) {
+	running, err := q.CountRunnableDurableOperations(ctx, string(fixed.Kind))
+	if err != nil {
+		return durable.Operation{}, fmt.Errorf("count runnable durable operations: %w", err)
+	}
+
+	if running > 0 {
+		return durable.Operation{}, audit.ErrChainMigrating
+	}
+
+	op, created, err := startOperation(ctx, q, fixed)
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	if created {
+		return op, nil
+	}
+
+	if !op.State.Terminal() {
+		return durable.Operation{}, audit.ErrChainMigrating
+	}
+
+	op, created, err = startOperation(ctx, q, retry)
+	if err != nil {
+		return durable.Operation{}, err
+	}
+
+	if !created {
+		return durable.Operation{}, audit.ErrChainMigrating
+	}
+
+	return op, nil
 }
 
 // StartChain implements audit.ChainStore: it reads the earlier entries of
