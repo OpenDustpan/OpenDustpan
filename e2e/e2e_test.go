@@ -11029,10 +11029,11 @@ func checkNoSourceWrite(t *testing.T, pair *e2e.Pair, srcWS, step string) {
 
 // TestUpgradeCheck proves `opendustpan upgrade check` with RunBinary against
 // the running binary server: on the migrated database the verdict is
-// `up to date` with exit 0, and on the newer, old and fresh states reached by
-// editing schema_migrations while the server runs the verdicts of ADR 33 and
-// the exit codes match, with the command writing nothing to the server
-// database. It runs only with E2E_SERVER=binary, on every store under test.
+// `up to date` with exit 0, and on the newer, old and fresh states the
+// verdicts and the exit codes match, with the command writing nothing to the
+// server database. On SQLite the test stops the server before it opens the
+// file and starts it again after, so it never opens the file while the
+// server runs. It runs only with E2E_SERVER=binary, on every store under test.
 func TestUpgradeCheck(t *testing.T) {
 	t.Parallel()
 
@@ -11079,10 +11080,11 @@ const upgradeSchemaMinimum = "v0.2.0"
 
 // runUpgradeCheckOnStore runs the upgrade check cases on one store through
 // the running binary server: the migrated database is up to date, and the
-// newer, old and fresh states are reached by editing schema_migrations while
-// the server runs, each through `upgrade check --server` with the environment
-// token. The cases run in order on one server and restore its rows, so they
-// never run in parallel.
+// newer, old and fresh states are reached by editing schema_migrations, each
+// through `upgrade check --server` with the environment token. On SQLite each
+// edit stops the server before it opens the file and starts it again after.
+// The cases run in order on one server and restore its rows, so they never
+// run in parallel.
 func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	t.Helper()
 
@@ -11110,9 +11112,9 @@ func runUpgradeCheckServer(ctx context.Context, t *testing.T, env *e2e.Env) e2e.
 	return env.RunBinary(ctx, t, "upgrade", "check", "--server", env.URL, "--ca-file", env.CABundle())
 }
 
-// serverMigrationRow is one schema_migrations row the test edits while the
-// server runs: the direct database access is the test setup, never the
-// command, which only calls the upgrade check route.
+// serverMigrationRow is one schema_migrations row the test edits: the direct
+// database access is the test setup, never the command, which only calls the
+// upgrade check route. On SQLite the server is stopped during the edit.
 type serverMigrationRow struct {
 	version int64
 	name    string
@@ -11152,8 +11154,9 @@ func sqliteServerPath(t *testing.T, env *e2e.Env) string {
 	return path
 }
 
-// openServerSQLite opens a direct handle on the SQLite file at path, so the
-// test can edit schema_migrations while the server runs.
+// openServerSQLite opens a direct handle on the SQLite file at path. The
+// caller stops the server before it opens the file and starts it again after,
+// so the file is never open while the server runs.
 func openServerSQLite(t *testing.T, path string) *sql.DB {
 	t.Helper()
 
@@ -11166,7 +11169,7 @@ func openServerSQLite(t *testing.T, path string) *sql.DB {
 }
 
 // readServerSQLiteRows returns every schema_migrations row ordered by
-// version.
+// version. The caller stops the server first.
 func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serverMigrationRow {
 	t.Helper()
 
@@ -11208,7 +11211,8 @@ func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serv
 	return out
 }
 
-// execServerSQLite runs one write on the SQLite file at path.
+// execServerSQLite runs one write on the SQLite file at path. The caller
+// stops the server first.
 func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args ...any) {
 	t.Helper()
 
@@ -11226,7 +11230,7 @@ func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args
 }
 
 // snapshotServerSQLite returns the schema_migrations rows with the table
-// names of the SQLite file at path.
+// names of the SQLite file at path. The caller stops the server first.
 func snapshotServerSQLite(ctx context.Context, t *testing.T, path string) serverSchemaSnapshot {
 	t.Helper()
 
@@ -11318,13 +11322,38 @@ func snapshotServerSQLiteVersions(ctx context.Context, t *testing.T, conn *sql.D
 	return versions
 }
 
+// stopServerForSQLiteFile stops the binary server of env when store is
+// SQLite, so the test can open the SQLite file. On other stores it does
+// nothing.
+func stopServerForSQLiteFile(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StoreSQLite {
+		env.StopServer(ctx, t)
+	}
+}
+
+// startServerForSQLiteFile starts the binary server of env again when store
+// is SQLite. On other stores it does nothing.
+func startServerForSQLiteFile(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StoreSQLite {
+		env.StartServer(ctx, t)
+	}
+}
+
 // snapshotServerDB returns the rows and tables of the server database of env
-// on store.
+// on store. On SQLite it stops the server before it opens the file and
+// starts it again after, so the file is never open while the server runs.
 func snapshotServerDB(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) serverSchemaSnapshot {
 	t.Helper()
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		return snapshotServerSQLite(ctx, t, sqliteServerPath(t, env))
 	case e2e.StorePostgres:
 		got := snapshotPostgres(ctx, t, env.DatabaseURL(t))
@@ -11340,12 +11369,16 @@ func snapshotServerDB(ctx context.Context, t *testing.T, env *e2e.Env, store e2e
 
 // insertServerFuture records one version above the newest in the server
 // database of env on store, so upgrade check sees a newer database. It
-// returns the future version.
+// returns the future version. On SQLite it stops the server before it opens
+// the file and starts it again after.
 func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, minimum string) int64 {
 	t.Helper()
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		path := sqliteServerPath(t, env)
 		rows := readServerSQLiteRows(ctx, t, path)
 
@@ -11399,12 +11432,16 @@ func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e
 }
 
 // deleteServerVersion removes one schema_migrations row from the server
-// database of env on store.
+// database of env on store. On SQLite it stops the server before it opens the
+// file and starts it again after.
 func deleteServerVersion(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, version int64) {
 	t.Helper()
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		execServerSQLite(ctx, t, sqliteServerPath(t, env),
 			`DELETE FROM schema_migrations WHERE version = ?`, version)
 	case e2e.StorePostgres:
@@ -11429,7 +11466,8 @@ func deleteServerVersion(ctx context.Context, t *testing.T, env *e2e.Env, store 
 
 // trimServerVersions removes every schema_migrations row above keep from the
 // server database of env on store and returns the removed rows, so the caller
-// restores them after the check.
+// restores them after the check. On SQLite it stops the server before it
+// opens the file and starts it again after.
 func trimServerVersions(
 	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, keep int64,
 ) []serverMigrationRow {
@@ -11437,6 +11475,9 @@ func trimServerVersions(
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		return trimServerSQLiteVersions(ctx, t, env, keep)
 	case e2e.StorePostgres:
 		return trimServerPostgresVersions(ctx, t, env, keep)
@@ -11449,7 +11490,8 @@ func trimServerVersions(
 
 // trimServerSQLiteVersions removes every schema_migrations row above keep
 // from the SQLite file the server of env serves and returns the removed
-// rows.
+// rows. The caller stops the server first, so the file is never open while
+// the server runs.
 func trimServerSQLiteVersions(
 	ctx context.Context, t *testing.T, env *e2e.Env, keep int64,
 ) []serverMigrationRow {
@@ -11524,7 +11566,9 @@ func trimServerPostgresVersions(
 }
 
 // restoreServerVersions inserts rows back into the server database of env on
-// store.
+// store. On SQLite it stops the server before it opens the file and starts it
+// again after. With no rows it does nothing, so it leaves a running server
+// alone.
 func restoreServerVersions(
 	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, rows []serverMigrationRow,
 ) {
@@ -11532,6 +11576,13 @@ func restoreServerVersions(
 
 	switch store {
 	case e2e.StoreSQLite:
+		if len(rows) == 0 {
+			return
+		}
+
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		path := sqliteServerPath(t, env)
 
 		for _, row := range rows {
@@ -11641,6 +11692,43 @@ func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, st
 func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
 	t.Helper()
 
+	if store == e2e.StoreSQLite {
+		// The check needs a running server on a schema behind the binary, and a
+		// server start applies the missing migrations, so the edit keeps the
+		// server running.
+		path := sqliteServerPath(t, env)
+		pristine := snapshotServerSQLite(ctx, t, path)
+		removed := trimServerSQLiteVersions(ctx, t, env, oldFixtureMaxVersion)
+
+		if len(removed) == 0 {
+			t.Fatalf("trim above %d removed nothing, want pending migrations", oldFixtureMaxVersion)
+		}
+
+		before := snapshotServerSQLite(ctx, t, path)
+		res := runUpgradeCheckServer(ctx, t, env)
+		checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+
+		if out := res.Stdout; !strings.Contains(
+			out,
+			"database schema version: "+strconv.FormatInt(oldFixtureMaxVersion, 10),
+		) {
+			t.Fatalf("old output lacks database schema version %d:\n%s", oldFixtureMaxVersion, out)
+		}
+
+		checkServerDBUnchanged(t, before, snapshotServerSQLite(ctx, t, path))
+
+		for _, row := range removed {
+			execServerSQLite(ctx, t, path,
+				`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
+		}
+
+		if got := snapshotServerSQLite(ctx, t, path); !slices.Equal(got.versions, pristine.versions) {
+			t.Fatalf("versions after restore = %v, want %v", got.versions, pristine.versions)
+		}
+
+		return
+	}
+
 	pristine := snapshotServerDB(ctx, t, env, store)
 	removed := trimServerVersions(ctx, t, env, store, oldFixtureMaxVersion)
 
@@ -11670,6 +11758,40 @@ func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env, stor
 // restores the removed rows after the check.
 func checkUpgradeFreshServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
 	t.Helper()
+
+	if store == e2e.StoreSQLite {
+		// The check needs a running server on a schema behind the binary, and a
+		// server start applies the missing migrations, so the edit keeps the
+		// server running.
+		path := sqliteServerPath(t, env)
+		pristine := snapshotServerSQLite(ctx, t, path)
+		removed := trimServerSQLiteVersions(ctx, t, env, 0)
+
+		if len(removed) == 0 {
+			t.Fatal("trim above 0 removed nothing, want every migration pending")
+		}
+
+		before := snapshotServerSQLite(ctx, t, path)
+		res := runUpgradeCheckServer(ctx, t, env)
+		checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+
+		if out := res.Stdout; !strings.Contains(out, "database schema version: 0") {
+			t.Fatalf("fresh output lacks database schema version 0:\n%s", out)
+		}
+
+		checkServerDBUnchanged(t, before, snapshotServerSQLite(ctx, t, path))
+
+		for _, row := range removed {
+			execServerSQLite(ctx, t, path,
+				`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
+		}
+
+		if got := snapshotServerSQLite(ctx, t, path); !slices.Equal(got.versions, pristine.versions) {
+			t.Fatalf("versions after restore = %v, want %v", got.versions, pristine.versions)
+		}
+
+		return
+	}
 
 	pristine := snapshotServerDB(ctx, t, env, store)
 	removed := trimServerVersions(ctx, t, env, store, 0)
