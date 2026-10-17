@@ -231,6 +231,9 @@ type Store struct {
 	// migration check compares it with the minimum binary version of the
 	// schema. Empty counts as a dev build.
 	binaryVersion string
+	// processGuard holds the lock on the guard file next to the database,
+	// so a second store cannot open the same file. Close releases it.
+	processGuard *processGuard
 
 	// stepTxBound is the longest time that a step transaction of a durable
 	// operation stays open before it rolls back.
@@ -241,6 +244,10 @@ var (
 	_ namespace.Store = (*Store)(nil)
 	_ stack.Store     = (*Store)(nil)
 )
+
+// ErrInUse reports that another store holds the database file open. One
+// SQLite file serves one server process only.
+var ErrInUse = errors.New("another process holds the SQLite database file")
 
 // Option tunes Open. Options keep backward compatibility: callers that pass
 // none get the defaults.
@@ -266,6 +273,11 @@ func WithBinaryVersion(version string) Option {
 }
 
 // Open opens (creating if needed) the database file at path and migrates it.
+// It locks the file first: a second Open of the same file, in this process
+// or in another one, fails with ErrInUse until Close of the first store. The
+// guard resolves symbolic links before it names the guard file, so the same
+// file opened through another spelling shares the one guard. A hard link to
+// the database file is not detected.
 //
 // Open leaves running backup rows alone: crash recovery inspects them before
 // the server marks them failed with FailRunningBackups at start, and offline
@@ -276,15 +288,25 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
-	conn, err := openDatabase(ctx, abs)
+	resolved, err := resolveDatabasePath(abs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve database path: %w", err)
+	}
+
+	guard, err := acquireGuard(resolved)
 	if err != nil {
 		return nil, err
+	}
+
+	conn, err := openDatabase(ctx, resolved)
+	if err != nil {
+		return nil, errors.Join(err, guard.release())
 	}
 
 	s := &Store{
 		conn:                conn,
 		queries:             db.New(conn),
-		path:                abs,
+		path:                resolved,
 		mu:                  sync.RWMutex{},
 		stagingMu:           sync.Mutex{},
 		stagingPath:         "",
@@ -295,13 +317,14 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		busyWarned:          false,
 		keepAccessHook:      nil,
 		binaryVersion:       "",
+		processGuard:        guard,
 		stepTxBound:         DefaultStepTransactionBound,
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
 	if err := s.migrate(ctx); err != nil {
-		return nil, errors.Join(err, conn.Close())
+		return nil, errors.Join(err, conn.Close(), guard.release())
 	}
 
 	guardCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -311,6 +334,81 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	go s.guardLoop(guardCtx)
 
 	return s, nil
+}
+
+// maxSymlinkChain caps the links resolveDatabasePath follows at one path:
+// a chain with more links fails with an error.
+const maxSymlinkChain = 40
+
+// errTooManyLinks reports a symbolic link chain with more links than
+// maxSymlinkChain allows.
+var errTooManyLinks = errors.New("too many links")
+
+// resolveDatabasePath returns the canonical path of the database file at abs,
+// with symbolic links resolved, so two spellings of one file share one guard
+// file. When the file exists, it returns EvalSymlinks of abs. When the file
+// does not exist, it follows the chain of links at abs with Lstat and
+// Readlink, resolving each relative target against the directory of its link,
+// up to 40 links, then resolves the directory of the final target and joins
+// the base name of the final target, so a database created through a dangling
+// link still maps to the same guard. A plain missing file with no link
+// resolves its directory and joins the base name. It returns an error when
+// the chain holds more than 40 links. It never names the database file itself
+// for the guard: closing our descriptor would release the POSIX locks SQLite
+// holds on that file.
+func resolveDatabasePath(abs string) (string, error) {
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+
+	final, err := followLinkChain(abs)
+	if err != nil {
+		return "", err
+	}
+
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(final)); err == nil {
+		return filepath.Join(dir, filepath.Base(final)), nil
+	}
+
+	return final, nil
+}
+
+// followLinkChain walks the chain of symbolic links at abs and returns the
+// final target. A relative target resolves against the directory of its link.
+// A path that is no link, or that does not exist, ends the chain. A chain
+// with more than maxSymlinkChain links returns errTooManyLinks.
+func followLinkChain(abs string) (string, error) {
+	current := abs
+
+	for followed := 0; ; followed++ {
+		info, err := os.Lstat(current)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return "", fmt.Errorf("stat database path %s: %w", current, err)
+			}
+
+			return current, nil
+		}
+
+		if info.Mode()&os.ModeSymlink == 0 {
+			return current, nil
+		}
+
+		if followed >= maxSymlinkChain {
+			return "", fmt.Errorf("%w at %s", errTooManyLinks, abs)
+		}
+
+		target, err := os.Readlink(current)
+		if err != nil {
+			return "", fmt.Errorf("read database link %s: %w", current, err)
+		}
+
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(current), target)
+		}
+
+		current = target
+	}
 }
 
 // openDatabase opens the database file at abs with the store pragmas.
@@ -340,7 +438,9 @@ func openDatabase(ctx context.Context, abs string) (*sql.DB, error) {
 
 // Close closes the database. It stops the write-ahead log guard and waits
 // for it first, so no checkpoint runs on a closed handle. It removes a
-// staged restore file first, so no scratch file survives the handle.
+// staged restore file first, so no scratch file survives the handle. It
+// releases the lock on the database file last, so another store can open
+// the file only after this one closed it.
 func (s *Store) Close() error {
 	if s.guardCancel != nil {
 		s.guardCancel()
@@ -361,10 +461,10 @@ func (s *Store) Close() error {
 	}
 
 	if err := s.conn.Close(); err != nil {
-		return fmt.Errorf("close sqlite database: %w", err)
+		return errors.Join(fmt.Errorf("close sqlite database: %w", err), s.processGuard.release())
 	}
 
-	return nil
+	return s.processGuard.release()
 }
 
 // Ping implements namespace.Store. It maps any driver failure to

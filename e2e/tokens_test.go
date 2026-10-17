@@ -158,7 +158,9 @@ func checkTokenRefusals(ctx context.Context, t *testing.T, env *e2e.Env, deploy,
 			http.MethodPost, "/api/server/service-tokens",
 			`{"principalID":"` + deploy.ID + `","name":"x","expiresAt":"` + far + `"}`, http.StatusBadRequest,
 		},
-		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + deploy.ID + `","name":"x"}`, http.StatusBadRequest},
+		// No route makes or rotates a personal token of another person.
+		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + deploy.ID + `","name":"x"}`, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/api/server/tokens/tok-none/rotate", `{}`, http.StatusNotFound},
 		{http.MethodGet, "/api/server/tokens?limit=0", "", http.StatusBadRequest},
 		{http.MethodGet, "/api/server/tokens?status=all", "", http.StatusBadRequest},
 		{http.MethodGet, "/api/server/tokens/tok-none", "", http.StatusNotFound},
@@ -228,9 +230,6 @@ func checkTokenRotation(ctx context.Context, t *testing.T, env *e2e.Env, created
 
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/service-tokens/" + created.ID + "/rotate", `{}`, http.StatusConflict,
-	}, nil)
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens/" + rot.Token.ID + "/rotate", `{}`, http.StatusBadRequest,
 	}, nil)
 
 	// An end time of now ends the old token of a second rotation at once.
@@ -445,8 +444,6 @@ func checkDelegatedTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 	}, &plainTok)
 
 	for _, step := range []principalStep{
-		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + delegate.ID + `","name":"again"}`, http.StatusForbidden},
-		{http.MethodPost, "/api/server/tokens/" + own.ID + "/rotate", `{}`, http.StatusForbidden},
 		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"plain"}`, http.StatusForbidden},
 		{http.MethodPost, "/api/server/service-tokens/" + plainTok.ID + "/rotate", `{}`, http.StatusForbidden},
 	} {

@@ -326,12 +326,6 @@ const (
 	testRoleID               = "rol-routes0000000000001"
 )
 
-// allowGrants passes every escalation check, so the routes that create or
-// rotate a token for another principal answer their success status.
-type allowGrants struct{}
-
-func (allowGrants) RequireHeld(context.Context, identity.Principal, string) error { return nil }
-
 // allowAll allows every action, so the token service passes its own check
 // of principal:manage-tokens and the route alone decides.
 type allowAll struct{}
@@ -408,7 +402,7 @@ func seedRouteTokens(t *testing.T, st *sqlite.Store) *accesstoken.Service {
 	}
 
 	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: st, Principals: st, Freshness: nil, Grants: allowGrants{}, Authorizer: allowAll{}, Logger: nil, Now: nil,
+		Store: st, Principals: st, Freshness: nil, Authorizer: allowAll{}, Logger: nil, Now: nil,
 		NewID: nil,
 	})
 	if err != nil {

@@ -937,8 +937,9 @@ func startRecordingProxy(
 // backend: the sign-in needs the public URL of the proxy at the start of
 // the backend.
 type recordingProxy struct {
-	server *httptest.Server
-	target *url.URL
+	server   *httptest.Server
+	target   *url.URL
+	rewrites *answerRewrites
 }
 
 // publicURL returns the URL that the proxy serves once it starts.
@@ -970,12 +971,14 @@ func reserveRecordingProxy(
 	tb.Helper()
 
 	target := &url.URL{}
+	rewrites := &answerRewrites{mu: sync.Mutex{}, byPath: nil}
 
 	//nolint:gosec // The proxy dials the test backend on loopback; there is no other party to impersonate.
 	transport := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}}
 
-	//nolint:exhaustruct_v5 // The test proxy needs only Rewrite and Transport; the rest stays zero.
+	//nolint:exhaustruct_v5 // The test proxy needs only Rewrite, ModifyResponse and Transport; the rest stays zero.
 	proxy := &httputil.ReverseProxy{
+		ModifyResponse: rewrites.modify,
 		Rewrite: func(r *httputil.ProxyRequest) {
 			r.SetURL(target)
 			r.Out.Host = r.In.Host
@@ -989,7 +992,7 @@ func reserveRecordingProxy(
 	ts := httptest.NewUnstartedServer(rec.Middleware(cappedHandler(faultedHandler(proxy, refuser), versionCap)))
 	tb.Cleanup(ts.Close)
 
-	return &recordingProxy{server: ts, target: target}
+	return &recordingProxy{server: ts, target: target, rewrites: rewrites}
 }
 
 // binaryDatabase returns the --database value of the database the backend
@@ -1138,6 +1141,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 		certBundle:    "",
 		dbProxy:       dbProxy,
 		signIn:        signIn,
+		rewrites:      reserved.rewrites,
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)
