@@ -315,7 +315,7 @@ func writeCheckpoint(
 		Invalid:       row.Invalid,
 		FeaturesJson:  string(row.Features),
 		SavedAtMs:     row.SavedAtMs,
-		BlobKey:       sql.NullString{String: row.BlobKey, Valid: true},
+		BlobKey:       row.BlobKey,
 		Size:          sql.NullInt64{Int64: row.Size, Valid: true},
 		BlobSize:      sql.NullInt64{Int64: row.BlobSize, Valid: true},
 		BlobMd5:       row.BlobMD5,
@@ -351,7 +351,7 @@ func (s *Store) LatestCheckpoint(ctx context.Context, ref stack.Ref) (stack.Chec
 		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
 	}
 
-	return codec.FromCheckpointRow(fromCheckpointRow(db.GetCheckpointByUpdateRow(row)), ref)
+	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
 }
 
 // CheckpointByVersion implements stack.CheckpointStore.
@@ -382,7 +382,7 @@ func (s *Store) CheckpointByVersion(
 		return stack.Checkpoint{}, fmt.Errorf("select checkpoint: %w", err)
 	}
 
-	return codec.FromCheckpointRow(fromCheckpointRow(db.GetCheckpointByUpdateRow(row)), ref)
+	return codec.FromCheckpointRow(fromCheckpointRow(row), ref)
 }
 
 // CheckpointByUpdate implements stack.CheckpointStore.
@@ -438,9 +438,9 @@ func (s *Store) ReferencedCheckpointKeys(ctx context.Context, ref stack.Ref) ([]
 	out := make([]blob.Key, 0, len(rows))
 
 	for _, row := range rows {
-		key, err := blob.ParseKey(row.String)
+		key, err := blob.ParseKey(row)
 		if err != nil {
-			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row.String, err)
+			return nil, fmt.Errorf("%w: checkpoint key %q: %w", codec.ErrCorruptRow, row, err)
 		}
 
 		out = append(out, key)
@@ -766,7 +766,7 @@ func fromListUpdateRow(row db.ListUpdatesRow) codec.UpdateRow {
 	}
 }
 
-func fromCheckpointRow(row db.GetCheckpointByUpdateRow) codec.CheckpointRow {
+func fromCheckpointRow(row db.Checkpoint) codec.CheckpointRow {
 	return codec.CheckpointRow{
 		StackID:       row.StackID,
 		UpdateID:      row.UpdateID,
@@ -777,7 +777,7 @@ func fromCheckpointRow(row db.GetCheckpointByUpdateRow) codec.CheckpointRow {
 		Sequence:      row.Sequence,
 		SavedAtMs:     row.SavedAtMs,
 		Invalid:       row.Invalid,
-		BlobKey:       row.BlobKey.String,
+		BlobKey:       row.BlobKey,
 		Size:          row.Size.Int64,
 		BlobSize:      row.BlobSize.Int64,
 		BlobMD5:       row.BlobMd5,

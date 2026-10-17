@@ -152,7 +152,7 @@ func newCheckSetup(t *testing.T) *checkSetup {
 			WrapperIDs:    nil,
 			RowCounts:     map[string]int64{},
 			Blobs:         nil,
-			SchemaVersion: 10,
+			SchemaVersion: backup.BaselineSchemaVersion,
 		},
 		key:          testWrappedKey(t),
 		keyErr:       nil,
@@ -387,18 +387,39 @@ func TestCheckRestoreAcrossDialects(t *testing.T) {
 	}
 }
 
+// TestCheckRestoreSchemaBeforeBaseline checks that a backup from before the
+// baseline is refused by name, also when the live schema version is the same:
+// no binary can restore it.
+func TestCheckRestoreSchemaBeforeBaseline(t *testing.T) {
+	t.Parallel()
+
+	const old = 76
+
+	s := newCheckSetup(t)
+	s.manifest.SchemaVersion = old
+	s.rewriteCheckManifest(t)
+	s.live.live.SchemaVersion = old
+
+	_, _, err := s.check(t, testWrapper(), "")
+	if !errors.Is(err, backup.ErrSchemaBeforeBaseline) {
+		t.Fatalf("err = %v, want ErrSchemaBeforeBaseline", err)
+	}
+
+	s.assertNoStage(t)
+}
+
 func TestCheckRestoreSchemaMismatch(t *testing.T) {
 	t.Parallel()
 
 	s := newCheckSetup(t)
-	s.live.live.SchemaVersion = 11
+	s.live.live.SchemaVersion = backup.BaselineSchemaVersion + 1
 
 	_, _, err := s.check(t, testWrapper(), "")
 	if !errors.Is(err, backup.ErrSchemaMismatch) {
 		t.Fatalf("err = %v, want ErrSchemaMismatch", err)
 	}
 
-	if !strings.Contains(err.Error(), "11") || !strings.Contains(err.Error(), "10") {
+	if !strings.Contains(err.Error(), "101") || !strings.Contains(err.Error(), "100") {
 		t.Fatalf("error = %q, want it to name both versions", err)
 	}
 

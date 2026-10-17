@@ -8,7 +8,7 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo checks-agent
+.PHONY: regenerate-baseline check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo checks-agent
 
 check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -163,6 +163,11 @@ DEMO_PORT ?= 8080
 
 soak: ## Run concurrent real Pulumi CLI and OpenTofu processes against one server binary for SOAK_DURATION (default 30m; SOAK_DURATION=60s for a smoke check), with SOAK_PULUMI and SOAK_TOFU workers each (default 4) writing CSV and Markdown reports to SOAK_REPORT_DIR (SQLite default; PostgreSQL with DUSTPAN_TEST_POSTGRES_URL). Not part of check; see docs/guides/soak.md.
 	SOAK_DURATION=$(SOAK_DURATION) SOAK_PULUMI=$(SOAK_PULUMI) SOAK_TOFU=$(SOAK_TOFU) SOAK_REPORT_DIR=$(SOAK_REPORT_DIR) E2E_SERVER=binary go test -tags "e2e soak" -race -count=1 -v -timeout 60m ./e2e/ -run TestSoak
+
+BASELINE_REF ?= origin/main
+
+regenerate-baseline: ## Write the baseline migration of each dialect from the migrations of BASELINE_REF (default origin/main); needs DUSTPAN_TEST_POSTGRES_URL and pg_dump. Not part of check.
+	./scripts/regenerate-baseline.sh $(BASELINE_REF)
 
 generate: ## Regenerate sqlc query code after editing queries.sql or migrations, and the settings reference after editing the CLI declarations.
 	sqlc generate

@@ -8,9 +8,9 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// durableSchema creates a schema with the tables of migrations 0080 and
-// 0081 on conn and holds one operation with key and token in it, with one
-// step, and one schedule called key whose next run is token.
+// durableSchema creates a schema with the baseline tables on conn and holds
+// one operation with key and token in it, with one step, and one schedule
+// called key whose next run is token.
 func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string {
 	t.Helper()
 
@@ -24,17 +24,12 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 	name := "test_" + hex.EncodeToString(suffix)
 	ident := pgx.Identifier{name}.Sanitize()
 
-	ddl, err := migrations.ReadFile("migrations/0080_durable_operations.sql")
+	ddl, err := migrations.ReadFile("migrations/0100_baseline.sql")
 	if err != nil {
-		t.Fatalf("read migration: %v", err)
+		t.Fatalf("read baseline: %v", err)
 	}
 
-	schedules, err := migrations.ReadFile("migrations/0081_durable_schedules.sql")
-	if err != nil {
-		t.Fatalf("read migration: %v", err)
-	}
-
-	for _, stmt := range []string{"CREATE SCHEMA " + ident, "SET search_path TO " + ident, string(ddl), string(schedules)} {
+	for _, stmt := range []string{"CREATE SCHEMA " + ident, "SET search_path TO " + ident, string(ddl)} {
 		if _, execErr := conn.Exec(ctx, stmt); execErr != nil {
 			t.Fatalf("create durable schema: %v", execErr)
 		}

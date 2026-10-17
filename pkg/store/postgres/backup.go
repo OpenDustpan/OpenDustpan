@@ -132,8 +132,8 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "checkpoints",
 			columns: []string{
 				pgColStackID, pgColUpdateID, "lease_digest", "schema_version", pgColSequence,
-				pgColDigest, "invalid", "features", "deployment", "saved_at_ms",
-				"resource_count", "blob_key", pgColSize, "blob_size", "blob_md5",
+				pgColDigest, "invalid", "features", "saved_at_ms",
+				"blob_key", pgColSize, "blob_size", "blob_md5",
 			},
 			orderBy: []string{pgColStackID, pgColUpdateID},
 		},
@@ -951,7 +951,7 @@ func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([
 		"SELECT content_key, size, md5, sealed FROM "+stagingTable(staging, "state_versions")+
 			" WHERE content_key <> '' AND status = 'finalized' UNION ALL SELECT blob_key AS content_key, blob_size AS size, "+
 			"blob_md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "checkpoints")+
-			" WHERE blob_key IS NOT NULL AND blob_key <> '' UNION ALL SELECT blob_key AS content_key, size AS size, "+
+			" UNION ALL SELECT blob_key AS content_key, size AS size, "+
 			"md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "update_journal")+
 			" ORDER BY content_key",
 	)

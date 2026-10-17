@@ -225,15 +225,12 @@ func walkScope(ctx context.Context, q *db.Queries, scope namespace.Name, fn func
 	}
 }
 
-// readChainRecord reads the record of the chain in q. A missing row reads
-// as the chain on.
+// readChainRecord reads the record of the chain in q. The schema seeds the
+// row, so a missing row is audit.ErrChainStateMissing.
 func readChainRecord(ctx context.Context, q *db.Queries) (audit.ChainRecord, error) {
 	row, err := q.GetAuditChainState(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
-		return audit.ChainRecord{
-			ChangedAt: codec.FromMillis(0), ChangedBy: "", State: audit.ChainStateOn,
-			Pending: false, EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
-		}, nil
+		return audit.ChainRecord{}, fmt.Errorf("read audit chain state: %w", audit.ErrChainStateMissing)
 	}
 
 	if err != nil {
