@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 var (
@@ -656,6 +657,10 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, loadErr
 	}
 
+	if sealedErr := checkStagedSealedState(ctx, s.pool, in.staging); sealedErr != nil {
+		return backup.Summary{}, sealedErr
+	}
+
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
 	if err != nil {
 		return backup.Summary{}, err
@@ -848,6 +853,24 @@ func stagingSchemaVersion(ctx context.Context, pool *pgxpool.Pool, staging strin
 // queries. Both names come from constants, never from the network.
 func stagingTable(staging, table string) string {
 	return pgIdent(staging) + "." + pgIdent(table)
+}
+
+// checkStagedSealedState refuses a staged backup with a state version that
+// is not sealed: every stored version is sealed, so an import with a plain
+// row fails instead of serving plain state.
+func checkStagedSealedState(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	var unsealed bool
+
+	query := "SELECT EXISTS(SELECT 1 FROM " + stagingTable(staging, "state_versions") + " WHERE NOT sealed)"
+	if err := pool.QueryRow(ctx, query).Scan(&unsealed); err != nil {
+		return fmt.Errorf("read staged state versions: %w", backup.ErrExportRead)
+	}
+
+	if unsealed {
+		return fmt.Errorf("import holds an unsealed state version: %w", workspace.ErrUnsealedState)
+	}
+
+	return nil
 }
 
 // stagingWrapperIDs returns the distinct wrapper IDs of the namespace keys and

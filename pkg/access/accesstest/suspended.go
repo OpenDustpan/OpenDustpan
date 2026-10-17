@@ -52,7 +52,7 @@ func testSuspendedMembershipGivesNoRights(t *testing.T, s access.Store) {
 		Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
 		State: principal.MembershipStateSuspended, Pinned: false,
 	}
-	if err := ps.AddMember(ctx, suspended, entry()); err != nil {
+	if err := ps.AddMember(ctx, suspended, entry(), nil); err != nil {
 		t.Fatalf("add suspended member: %v", err)
 	}
 
@@ -61,7 +61,7 @@ func testSuspendedMembershipGivesNoRights(t *testing.T, s access.Store) {
 		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
 		Pinned: false,
 	}
-	if err := ps.AddMember(ctx, active, entry()); err != nil {
+	if err := ps.AddMember(ctx, active, entry(), nil); err != nil {
 		t.Fatalf("add active member: %v", err)
 	}
 
@@ -114,7 +114,7 @@ func testReviewHidesSuspendedMember(t *testing.T, s access.Store) {
 		Source: principal.MembershipSourceSCIM, SourceID: "scim-token-1",
 		State: principal.MembershipStateSuspended, Pinned: false,
 	}
-	if err := ps.AddMember(ctx, suspended, entry()); err != nil {
+	if err := ps.AddMember(ctx, suspended, entry(), nil); err != nil {
 		t.Fatalf("add suspended member: %v", err)
 	}
 
@@ -123,7 +123,7 @@ func testReviewHidesSuspendedMember(t *testing.T, s access.Store) {
 		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive,
 		Pinned: false,
 	}
-	if err := ps.AddMember(ctx, active, entry()); err != nil {
+	if err := ps.AddMember(ctx, active, entry(), nil); err != nil {
 		t.Fatalf("add active member: %v", err)
 	}
 

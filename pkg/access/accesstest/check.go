@@ -330,6 +330,7 @@ func RunConcurrent(t *testing.T, newPair PairFactory) {
 		{name: "a grant check sees a revoke that committed first", test: testCheckSeesRevoke},
 		{name: "a grant waits for a role check", test: testGrantWaitsForRoleCheck},
 		{name: "a role update waits for a grant check", test: testRoleUpdateWaitsForGrantCheck},
+		{name: "a grant to a group waits for the audit of a membership add", test: testGrantWaitsForMemberAudit},
 		{name: "a membership removal waits for a grant check", test: testSubjectChangeWaits(removeMembership)},
 		{name: "a principal delete waits for a grant check", test: testSubjectChangeWaits(deletePrincipal)},
 		{name: "a group delete waits for a grant check", test: testSubjectChangeWaits(deleteGroup)},
@@ -716,6 +717,69 @@ func testSubjectChangeWaits(change subjectChange) func(t *testing.T, a, b access
 		if err := a.CreateGrant(ctx, later, fence, entry(), aliceInGroup); !errors.Is(err, access.ErrEscalation) {
 			t.Fatalf("grant after the change: err = %v, want ErrEscalation", err)
 		}
+	}
+}
+
+// testGrantWaitsForMemberAudit checks that a grant to a group on handle b
+// waits for a membership add to that group on handle a while its audit
+// runs: the audit reads what the group acts as before the grant, and the
+// grant commits after the membership.
+func testGrantWaitsForMemberAudit(t *testing.T, a, b access.Store) {
+	t.Helper()
+
+	ps, isPrincipals := a.(principal.Store)
+	if !isPrincipals {
+		t.Skip("the store keeps no principals")
+	}
+
+	seedCaller(t, ps)
+
+	ctx := t.Context()
+	newcomer := principal.Principal{
+		CreatedAt: at(0), UpdatedAt: at(0), ID: "prn-new", Subject: "newcomer", DisplayName: "",
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
+		DisabledAt: time.Time{},
+	}
+	if err := ps.CreatePrincipal(ctx, newcomer, entry()); err != nil {
+		t.Fatalf("create principal: %v", err)
+	}
+
+	g := newGrant("grt-tm", opsGroup1(), access.RoleTokenManager, identity.PrincipalObject("prn-svc"))
+	fence := fenceOf(t, b, "")
+	done := make(chan error, 1)
+
+	more := func(ctx context.Context, r principal.GroupReads) ([]audit.Change, error) {
+		go func() { done <- b.CreateGrant(ctx, g, fence, entry(), nil) }()
+
+		select {
+		case err := <-done:
+			t.Errorf("the grant ended while the audit ran (err = %v); it must wait for the lock", err)
+			done <- err
+		case <-time.After(waitWindow):
+		}
+
+		ids, err := r.ActsAs(ctx, "grp-1")
+		if err != nil {
+			return nil, err
+		}
+
+		if len(ids) != 0 {
+			t.Errorf("the audit read %v, want nothing before the grant", ids)
+		}
+
+		return nil, nil
+	}
+
+	m := principal.Membership{
+		AddedAt: at(2), SuspendedAt: time.Time{}, GroupID: "grp-1", PrincipalID: "prn-new",
+		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
+	}
+	if err := ps.AddMember(ctx, m, entry(), more); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+
+	if err := awaitRace(t, done); err != nil {
+		t.Fatalf("grant after the membership add: %v", err)
 	}
 }
 

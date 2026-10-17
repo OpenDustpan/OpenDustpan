@@ -963,6 +963,7 @@ type fixture struct {
 	svc        *workspace.Service
 	store      *memStore
 	namespaces *namespace.Service
+	secrets    *secret.Service
 	blobs      blob.Store
 	now        *time.Time
 	ws         workspace.Workspace
@@ -1016,12 +1017,14 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 		t.Fatalf("namespaces: %v", err)
 	}
 
+	secrets := newMemSealer(t, namespaces)
+
 	svc, err := workspace.NewService(workspace.Config{
 		Workspaces:         store,
 		States:             store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return now },
 		MaxStateBytes:      64,
@@ -1042,7 +1045,7 @@ func newFixtureWithBlobs(t *testing.T, blobs blob.Store) fixture {
 		t.Fatalf("create: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, namespaces: namespaces, blobs: blobs, now: &now, ws: ws}
+	return fixture{svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: blobs, now: &now, ws: ws}
 }
 
 // TestDeleteRecordsRetention proves that a delete records the end of the
@@ -1058,7 +1061,7 @@ func TestDeleteRecordsRetention(t *testing.T) {
 		States:             f.store,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      0,
@@ -1123,7 +1126,7 @@ func (f fixture) cappedService(t *testing.T, limit int) *workspace.Service {
 		States:             f.store,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -2656,7 +2659,7 @@ func newGatedService(t *testing.T, f fixture, gated *gateCounter) *workspace.Ser
 		States:             gated,
 		Blobs:              f.blobs,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -2839,7 +2842,7 @@ func newSecondService(t *testing.T, f fixture, blobs blob.Store) *workspace.Serv
 		States:             f.store,
 		Blobs:              blobs,
 		Namespaces:         f.namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Logger:             nil,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
@@ -3598,13 +3601,24 @@ func TestRestoreFailedCopyKeepsCurrent(t *testing.T) {
 
 	mustUnlock(t, f)
 
-	// Replace the source content with other bytes under the same key, as a
-	// damaged object would read.
+	// Replace the source content with other sealed bytes under the same key,
+	// as a damaged object would read: the open succeeds, and the MD5 check
+	// of the copy fails.
 	if err := blobs.Delete(ctx, first.Content); err != nil {
 		t.Fatalf("delete source blob: %v", err)
 	}
 
-	if err := blobs.Put(ctx, first.Content, strings.NewReader("tampered")); err != nil {
+	sealed, err := f.secrets.SealState(ctx, f.ws.Ref.Namespace, f.ws.ID.String(), strings.NewReader("tampered"))
+	if err != nil {
+		t.Fatalf("seal tampered content: %v", err)
+	}
+
+	tampered, err := io.ReadAll(sealed)
+	if err != nil {
+		t.Fatalf("read tampered content: %v", err)
+	}
+
+	if err = blobs.Put(ctx, first.Content, bytes.NewReader(tampered)); err != nil {
 		t.Fatalf("tamper source blob: %v", err)
 	}
 
@@ -3612,7 +3626,7 @@ func TestRestoreFailedCopyKeepsCurrent(t *testing.T) {
 
 	*f.now = f.now.Add(time.Second)
 
-	_, err := f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
+	_, err = f.svc.Restore(ctx, f.ws.ID, first.ID, "alice")
 	if !errors.Is(err, workspace.ErrChecksumMismatch) {
 		t.Fatalf("restore: %v, want ErrChecksumMismatch", err)
 	}
@@ -3698,7 +3712,7 @@ func TestRestoreStaleFenceWritesNothing(t *testing.T) {
 		States:             fencedStates{memStore: f.store},
 		Blobs:              blobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
 		Logger:             nil,
@@ -3858,7 +3872,7 @@ func TestRestoreLockRaceNamesHolder(t *testing.T) {
 		States:             f.store,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             f.secrets,
 		Now:                func() time.Time { return *f.now },
 		MaxStateBytes:      64,
 		Logger:             nil,
@@ -4053,7 +4067,7 @@ func newSealedFixture(t *testing.T) fixture {
 		t.Fatalf("create: %v", err)
 	}
 
-	return fixture{svc: svc, store: store, namespaces: namespaces, blobs: blobs, now: &now, ws: ws}
+	return fixture{svc: svc, store: store, namespaces: namespaces, secrets: secrets, blobs: blobs, now: &now, ws: ws}
 }
 
 // sealedOutputsDoc is the outputs document of the sealing tests: one
@@ -4085,55 +4099,32 @@ func TestSealedUploadLeavesNoPlaintext(t *testing.T) {
 	assertCurrentOutputsPlain(t, f, outputValue)
 }
 
-// TestSealedReadWithoutSealerFails proves that a service without a sealer
-// never serves sealed bytes as state or outputs: an SDK user who wires the
-// stores without a sealer gets ErrSealerNotConfigured, not ciphertext.
-func TestSealedReadWithoutSealerFails(t *testing.T) {
+// TestNewServiceWithoutSealerFails proves NewService without a Sealer fails:
+// every service seals state, so none runs without one.
+func TestNewServiceWithoutSealerFails(t *testing.T) {
 	t.Parallel()
 
-	f := newSealedFixture(t)
-	sv := uploadSealedState(
-		t,
-		f,
-		`{"version":4,"outputs":{"secret":{"sensitive":true,"value":"s3cr3t-output-value"}}}`,
-		"s3cr3t-output-value",
-	)
-	ctx := t.Context()
+	store := newMemStore()
 
-	plain, err := workspace.NewService(workspace.Config{
-		Workspaces:         f.store,
-		States:             f.store,
-		Blobs:              f.blobs,
-		Namespaces:         f.namespaces,
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespaces: %v", err)
+	}
+
+	_, err = workspace.NewService(workspace.Config{
+		Workspaces:         store,
+		States:             store,
+		Blobs:              openFixtureBlobs(t),
+		Namespaces:         namespaces,
 		Sealer:             nil,
 		Logger:             nil,
-		Now:                func() time.Time { return *f.now },
+		Now:                nil,
 		MaxStateBytes:      0,
 		MaxPendingVersions: 0,
 		Retention:          0,
 	})
-	if err != nil {
-		t.Fatalf("service without a sealer: %v", err)
-	}
-
-	if r, openErr := plain.Open(ctx, sv); !errors.Is(openErr, workspace.ErrSealerNotConfigured) {
-		if r != nil {
-			_ = r.Close() //nolint:errcheck // The test fails on the open result below.
-		}
-
-		t.Fatalf("open sealed state without a sealer: err = %v, want ErrSealerNotConfigured", openErr)
-	}
-
-	if r, blobErr := plain.OpenStateBlob(ctx, sv.Content); !errors.Is(blobErr, workspace.ErrSealerNotConfigured) {
-		if r != nil {
-			_ = r.Close() //nolint:errcheck // The test fails on the open result below.
-		}
-
-		t.Fatalf("open sealed blob without a sealer: err = %v, want ErrSealerNotConfigured", blobErr)
-	}
-
-	if _, currentErr := plain.Current(ctx, f.ws.ID); !errors.Is(currentErr, workspace.ErrSealerNotConfigured) {
-		t.Fatalf("read sealed outputs without a sealer: err = %v, want ErrSealerNotConfigured", currentErr)
+	if !errors.Is(err, workspace.ErrMissingSealer) {
+		t.Fatalf("NewService without a sealer: err = %v, want ErrMissingSealer", err)
 	}
 }
 

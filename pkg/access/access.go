@@ -425,6 +425,7 @@ type GrantLookups interface {
 type GrantReads interface {
 	Callers
 	GrantsOn(ctx context.Context, subjects []Subject, objects []identity.Object) ([]Grant, error)
+	GrantsOf(ctx context.Context, subject Subject) ([]Grant, error)
 	GetRoles(ctx context.Context, ids []string) ([]Role, error)
 	RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error)
 	RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error)
