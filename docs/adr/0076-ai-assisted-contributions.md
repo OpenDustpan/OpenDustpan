@@ -1,6 +1,6 @@
 # 76. AI-assisted contributions
 
-Status: accepted · 2026-10-17 · the sign-off of agent commits is an open question
+Status: accepted · 2026-10-17 · the sign-off of agent commits after the push of October 2026 is an open question
 
 ## Context
 
@@ -34,15 +34,18 @@ the same rules.
    review. The maintainers decide what counts as bulk.
 7. **The project's own agents follow the same rules.** The `Co-Authored-By`
    trailer is the disclosure. Each agent pull request pastes the output of
-   its checks. Agent commits carry no `Signed-off-by:` line until the owner
-   answers the open question below.
+   its checks.
+8. **Agent sign-off during the current push.** The owner decided on
+   2026-10-17: until the push ends on 2026-10-22, each agent commit carries
+   a `Signed-off-by:` line with the commit author identity of the agent. The
+   owner cleans up the history later. Nothing waits for this cleanup.
 
 ## Open question
 
-Who signs off an agent commit? A `Signed-off-by:` line is a personal legal
-statement, and only the person can give it. An agent cannot give it for a
-person. The owner decides. One proposal is that the person who runs the agent
-session signs off.
+Who signs off an agent commit after the current push? A `Signed-off-by:`
+line is a personal legal statement, and only the person can give it. The
+owner decides. One proposal is that the person who runs the agent session
+signs off.
 
 ## Consequences
 
