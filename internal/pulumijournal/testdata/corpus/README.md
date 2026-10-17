@@ -33,9 +33,10 @@ order and the replay lists them in journal order.
 
 The `state-migration-replace` and `state-migration-patch` cases are
 hand-written, not recorded: they cover the state migration entry (kind 10)
-with a layout replacement and with base and new-state patches. A recorded run
-of the state migration e2e step should replace them once its traffic is
-available.
+with a layout replacement and with base and new-state patches. They stay
+hand-written until a recorded case exists. The refused shapes stay out of the
+corpus: they are covered in internal/pulumijournal/replay_test.go and
+internal/pulumijournal/verify_test.go.
 
 ## How to record a new case
 

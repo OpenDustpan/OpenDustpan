@@ -435,9 +435,10 @@ func checkMigrationJournaled(t *testing.T, env *e2e.Env) {
 
 // normalizeMigrationExport returns the canonical form of a stack export for
 // the migration comparison: without the manifest, the metadata, the server
-// address in the secrets providers and the resource times, with the resources
-// sorted by URN. Each mode runs on its own server, so the address differs by
-// design.
+// address in the secrets provider state and the resource times, with the
+// resources sorted by URN. Only the url key of the state goes: the other keys
+// stay in the comparison. Each mode runs on its own server, so the address
+// differs by design.
 func normalizeMigrationExport(t *testing.T, raw string) string {
 	t.Helper()
 
@@ -454,7 +455,9 @@ func normalizeMigrationExport(t *testing.T, raw string) string {
 	delete(doc.Deployment, "metadata")
 
 	if providers, ok := doc.Deployment["secrets_providers"].(map[string]any); ok {
-		delete(providers, "state")
+		if state, ok := providers["state"].(map[string]any); ok {
+			delete(state, "url")
+		}
 	}
 
 	resources, ok := doc.Deployment["resources"].([]any)

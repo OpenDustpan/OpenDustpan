@@ -63,7 +63,10 @@ var (
 	// ErrNoSnapshot reports a write entry without a snapshot, or a rebuilt document
 	// without a deployment.
 	ErrNoSnapshot = errors.New("pulumijournal: journal entry has no snapshot")
-	// ErrUnsupportedKind reports an entry kind that this replayer does not replay yet.
+	// ErrUnsupportedKind reports an entry kind that applyBaseKind does not handle:
+	// any kind other than snippets, extension-parameterize, write,
+	// rebuilt-base-state and state-migration. Apply forwards only those kinds,
+	// so the default guards future kinds.
 	ErrUnsupportedKind = errors.New("pulumijournal: journal entry kind is not replayed yet")
 	// ErrMissingReference reports an entry that refers to an entry no applied entry created (R16).
 	ErrMissingReference = errors.New("pulumijournal: journal entry refers to an entry that is not applied")
