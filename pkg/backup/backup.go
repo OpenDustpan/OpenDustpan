@@ -47,22 +47,27 @@ const (
 	TableDurableSchedules  = "durable_schedules"
 )
 
+// The control tables that a backup leaves out and a restore keeps, besides
+// the durable tables of ControlTables: the installation state and the
+// backup and restore registries. The live rows stay across the swap.
+const (
+	TableBackups      = "backups"
+	TableRestores     = "restores"
+	TableInstallation = "installation"
+)
+
 // Tables lists every table that an export covers, in foreign-key order, so an
 // import can load parents before children. Both dialects share the table
 // names, so both adapters use this list as the single source: they must not
-// keep a copy in their own store package. ADR 30 decision 4 calls this the
-// store constant; the backup package holds it so the shared core stays
-// tool-neutral and both dialects use one source. Treat the list as a constant and
+// keep a copy in their own store package. Treat the list as a constant and
 // never mutate it; call TablesCopy for a copy to read or sort. The list
 // excludes schema_migrations: it is rebuildable bookkeeping, not data. It
-// holds installation last: the migration seeds its one row, and the export
-// carries it like data, so a restore loads the state the backup holds. The
-// empty checks skip it: a fresh database holds the seeded row and still
-// counts as empty. access_token_policy and session_policy are seeded the same
-// way, and the restore stage clears the seeded rows before it loads the
-// backup. A new
-// migration that adds a table must add its name here, and the conformance suite fails while the schema and this list
-// differ.
+// excludes the control tables of ControlTables: a backup leaves them out and
+// a restore keeps the live rows across the swap. access_token_policy and
+// session_policy are seeded, and the restore stage clears the seeded rows
+// before it loads the backup. A new
+// migration that adds a table must add its name to Tables or to ControlTables,
+// and the conformance suite fails while the schema and these lists differ.
 //
 //nolint:gochecknoglobals // The shared frozen table list: Go has no constant slices, and both adapters use this one source.
 var Tables = []string{
@@ -100,9 +105,6 @@ var Tables = []string{
 	"audit_sink_leases",
 	TableAccessTokenPolicy,
 	TableSessionPolicy,
-	"backups",
-	"restores",
-	"installation",
 }
 
 // TablesCopy returns a copy of Tables. Callers that sort or filter the list

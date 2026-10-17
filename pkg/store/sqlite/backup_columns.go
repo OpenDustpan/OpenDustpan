@@ -1,5 +1,11 @@
 package sqlite
 
+import (
+	"slices"
+
+	"opendustpan.org/opendustpan/pkg/backup"
+)
+
 // Column names that more than one table of the list holds. goconst keeps
 // each one a constant.
 const (
@@ -49,7 +55,7 @@ type sqliteBackupTable struct {
 //
 //nolint:funlen // A constant table of column names; its length is the schema.
 func sqliteBackupTables() []sqliteBackupTable {
-	tables := []sqliteBackupTable{
+	base := []sqliteBackupTable{
 		{
 			table: "namespaces",
 			columns: []string{
@@ -304,12 +310,33 @@ func sqliteBackupTables() []sqliteBackupTable {
 		},
 	}
 
-	tables = append(tables, sqliteIdentityBackupTables()...)
-	tables = append(tables, sqliteSessionBackupTables()...)
+	return slices.Concat(base, sqliteIdentityBackupTables(), sqliteSessionBackupTables())
+}
 
-	return append(tables, []sqliteBackupTable{
+// sqliteControlTables lists the column list of every table of
+// backup.ControlTables: the durable tables and the installation, backups and
+// restores tables that a restore keeps. CheckCoverage compares each list with
+// the live schema.
+func sqliteControlTables() []sqliteBackupTable {
+	return []sqliteBackupTable{
 		{
-			table: "backups",
+			table: backup.TableDurableOperations,
+			columns: []string{
+				"id", "start_key", "kind", "input", "version", "state", "attempt", "expiries", "failures",
+				"last_error", "claim_owner", "claim_token", "claim_expires_at_ms", "cancel_requested",
+				"not_before_ms", "created_at_ms", "updated_at_ms",
+			},
+		},
+		{
+			table:   backup.TableDurableSteps,
+			columns: []string{"operation_id", "name", "seq", "result", "done_at_ms"},
+		},
+		{
+			table:   backup.TableDurableSchedules,
+			columns: []string{"name", "interval_ms", "next_run_at_ms", "last_claimed_at_ms"},
+		},
+		{
+			table: backup.TableBackups,
 			columns: []string{
 				"id",
 				backupColState,
@@ -320,7 +347,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table: "restores",
+			table: backup.TableRestores,
 			columns: []string{
 				"id",
 				backupColState,
@@ -333,13 +360,13 @@ func sqliteBackupTables() []sqliteBackupTable {
 			},
 		},
 		{
-			table: "installation",
+			table: backup.TableInstallation,
 			columns: []string{
 				"id",
 				backupColState,
 			},
 		},
-	}...)
+	}
 }
 
 // sqliteSessionBackupTables lists the column lists of the session and

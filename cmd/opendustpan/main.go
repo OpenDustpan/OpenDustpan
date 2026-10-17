@@ -1136,7 +1136,7 @@ func (f *serveFlags) serverOptions(
 		return nil, cpErr
 	}
 
-	return append([]dustpan.Option{
+	opts := append([]dustpan.Option{
 		dustpan.WithRegion(namespace.Region(f.region)),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -1172,7 +1172,24 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
 		dustpan.WithIPAllowlistStore(st),
 		dustpan.WithInstanceID(f.instanceID),
-	}, append(signIn, checkpoints...)...), nil
+	}, append(signIn, checkpoints...)...)
+
+	opts = append(opts, durableStoreOption(st)...)
+
+	return opts, nil
+}
+
+// durableStoreOption returns the durable schedule store option for st, or nil
+// when st keeps no durable schedules.
+func durableStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithDurableStore(s.DurableOperations())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithDurableStore(s.DurableOperations())}
+	default:
+		return nil
+	}
 }
 
 // blobOpenConfig holds the live blob store settings of serve.

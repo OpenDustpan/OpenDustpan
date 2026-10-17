@@ -289,7 +289,12 @@ func (s *Server) pruneSignInRequests(ctx context.Context) {
 		return
 	}
 
-	ticker := time.NewTicker(s.signInPruneEvery)
+	every := s.signInPruneEvery
+	if every <= 0 {
+		every = signInRequestPruneEvery
+	}
+
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
 	for {
