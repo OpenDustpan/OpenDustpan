@@ -256,12 +256,13 @@ func (f *blockingExporter) ExportPortable(
 
 // fakeRegistry is an in-memory backup.Registry.
 type fakeRegistry struct {
-	mu   sync.Mutex
-	rows map[backup.ID]backup.Record
+	mu      sync.Mutex
+	rows    map[backup.ID]backup.Record
+	failGet error
 }
 
 func newFakeRegistry() *fakeRegistry {
-	return &fakeRegistry{mu: sync.Mutex{}, rows: map[backup.ID]backup.Record{}}
+	return &fakeRegistry{mu: sync.Mutex{}, rows: map[backup.ID]backup.Record{}, failGet: nil}
 }
 
 func (f *fakeRegistry) CreateBackup(_ context.Context, r backup.Record) error {
@@ -303,6 +304,10 @@ func (f *fakeRegistry) FinishBackup(
 func (f *fakeRegistry) GetBackup(_ context.Context, id backup.ID) (backup.Record, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+
+	if f.failGet != nil {
+		return backup.Record{}, f.failGet
+	}
 
 	row, ok := f.rows[id]
 	if !ok {

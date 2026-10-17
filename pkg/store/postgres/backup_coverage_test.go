@@ -62,6 +62,55 @@ func TestBackupCoverageFailsOnAddedColumn(t *testing.T) {
 	}
 }
 
+// TestBackupCoverageFailsOnUnknownTable adds a table in neither the backup
+// nor the control list and proves the coverage check fails with ErrCoverage
+// and names the table.
+func TestBackupCoverageFailsOnUnknownTable(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL backup coverage test", envURL)
+	}
+
+	schemaURL := isolatedURL(t, base)
+
+	s, err := postgres.Open(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(s.Close)
+
+	conn, err := pgx.Connect(t.Context(), schemaURL)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(t.Context()); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	}()
+
+	if _, execErr := conn.Exec(t.Context(), `CREATE TABLE spike_table (id text PRIMARY KEY)`); execErr != nil {
+		t.Fatalf("add table: %v", execErr)
+	}
+
+	err = s.CheckCoverage(t.Context())
+	if err == nil {
+		t.Fatal("coverage with an unknown table: err = nil, want ErrCoverage")
+	}
+
+	if !errors.Is(err, backup.ErrCoverage) {
+		t.Fatalf("coverage with an unknown table: err = %v, want ErrCoverage", err)
+	}
+
+	if !strings.Contains(err.Error(), `"spike_table"`) {
+		t.Fatalf("coverage error = %v, want the table %q", err, "spike_table")
+	}
+}
+
 // TestPortableExportRefusesAddedColumn proves the portable export runs the
 // coverage check first: a column that no list names fails the export before a
 // file is written (ADR 42, decision 5).
