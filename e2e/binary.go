@@ -105,6 +105,10 @@ type envInput struct {
 	// the server, so the server refuses it and records the refusal. Nil
 	// passes every batch through untouched.
 	journalRefuser *JournalRefuser
+	// journalCap lowers the journal version that start-update answers, so a
+	// test can drive version 1 with a CLI that offers version 2. Nil answers
+	// the negotiated version.
+	journalCap *JournalVersionCap
 }
 
 // backendConfig groups the settings of one backend process.
@@ -924,7 +928,7 @@ func startRecordingProxy(
 ) *httptest.Server {
 	tb.Helper()
 
-	p := reserveRecordingProxy(tb, rec, refuser)
+	p := reserveRecordingProxy(tb, rec, refuser, nil)
 
 	return p.start(tb, backendURL)
 }
@@ -961,7 +965,9 @@ func (p *recordingProxy) start(tb testing.TB, backendURL string) *httptest.Serve
 
 // reserveRecordingProxy binds the listener of a recording proxy and
 // returns it, not started.
-func reserveRecordingProxy(tb testing.TB, rec *Recorder, refuser *JournalRefuser) *recordingProxy {
+func reserveRecordingProxy(
+	tb testing.TB, rec *Recorder, refuser *JournalRefuser, versionCap *JournalVersionCap,
+) *recordingProxy {
 	tb.Helper()
 
 	target := &url.URL{}
@@ -983,7 +989,7 @@ func reserveRecordingProxy(tb testing.TB, rec *Recorder, refuser *JournalRefuser
 		Transport: transport,
 	}
 
-	ts := httptest.NewUnstartedServer(rec.Middleware(faultedHandler(proxy, refuser)))
+	ts := httptest.NewUnstartedServer(rec.Middleware(cappedHandler(faultedHandler(proxy, refuser), versionCap)))
 	tb.Cleanup(ts.Close)
 
 	return &recordingProxy{server: ts, target: target, rewrites: rewrites}
@@ -1096,7 +1102,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	setup := newBlobSetup(ctx, tb, in.dir)
 	cfg := binaryBackendConfig(in, bin, dbURL, setup, writeBackendCert(tb, in.dir))
 
-	reserved := reserveRecordingProxy(tb, in.rec, in.journalRefuser)
+	reserved := reserveRecordingProxy(tb, in.rec, in.journalRefuser, in.journalCap)
 	signIn := binarySignInSetup(tb, in, reserved, &cfg)
 
 	handle, backendURL := startBinaryBackend(ctx, tb, cfg)
