@@ -916,7 +916,7 @@ func saveChainRecord(t *testing.T, s audit.ChainStore, rec audit.ChainRecord) {
 	}
 }
 
-// migrateChain runs the migration of change in s with a held claim, so each
+// migrateChain runs the migration of change in s with a held claim, so each.
 func migrateChain(t *testing.T, s chainRestoreStore, fences []namespace.Fence, change audit.ChainChange) {
 	t.Helper()
 

@@ -32,8 +32,8 @@ const auditChainCheckInterval = time.Hour
 // the first still runs.
 const (
 	auditChainKind    durable.Kind = "audit-chain-migration"
-	auditChainKey                     = "audit-chain-migration"
-	auditChainVersion                 = 1
+	auditChainKey     string       = "audit-chain-migration"
+	auditChainVersion int          = 1
 )
 
 // auditChainStep is the single step of the migration: it writes the markers
@@ -155,11 +155,6 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		return nil, err
 	}
 
-	ops, ok := durableStoreOf(cfg.namespaceStore)
-	if !ok {
-		return nil, fmt.Errorf("namespace store keeps no durable operations: %w", ErrMissingOption)
-	}
-
 	chain := &auditChain{
 		store:             store,
 		entries:           entries,
@@ -173,7 +168,7 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		maint:             nil,
 		restoreRunning:    nil,
 		freshness:         nil,
-		durableOps:        ops,
+		durableOps:        nil,
 		runner:            nil,
 		migrationsRunning: atomic.Bool{},
 		limit:             maintenance.DefaultCacheLimit,
@@ -187,19 +182,13 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		read:   false,
 	}
 
-	runner, err := durable.NewRunner(durable.RunnerConfig{
-		Store: ops,
-		Owner: auditChainOwner(cfg),
-		Kinds: []durable.KindSpec{{
-			Kind:       auditChainKind,
-			Version:    auditChainVersion,
-			MinVersion: auditChainVersion,
-			Steps:      []durable.Step{{Name: auditChainStep, Run: chain.runMigrationStep}},
-		}},
-		Logger: cfg.logger,
-	})
+	if !bindDurableOps(chain, cfg.namespaceStore) {
+		return nil, fmt.Errorf("namespace store keeps no durable operations: %w", ErrMissingOption)
+	}
+
+	runner, err := newChainRunner(chain.durableOps, cfg, chain)
 	if err != nil {
-		return nil, fmt.Errorf("audit chain migration runner: %w", err)
+		return nil, err
 	}
 
 	chain.runner = runner
@@ -207,21 +196,62 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 	return chain, nil
 }
 
-// durableStoreProvider is implemented by stores that keep durable
-// operations next to their domain rows.
-type durableStoreProvider interface {
-	DurableOperations() durable.Store
-}
-
-// durableStoreOf answers the durable operation store behind s.
-func durableStoreOf(s namespace.Store) (durable.Store, bool) {
-	if p, ok := s.(durableStoreProvider); ok && p != nil {
-		if ops := p.DurableOperations(); ops != nil {
-			return ops, true
-		}
+// newChainRunner answers the runner that claims migration operations on
+// ops for chain.
+func newChainRunner(ops durable.Store, cfg *settings, chain *auditChain) (*durable.Runner, error) {
+	runner, err := durable.NewRunner(durable.RunnerConfig{
+		Store: ops,
+		Owner: auditChainOwner(cfg),
+		Kinds: []durable.KindSpec{
+			{
+				Kind:       auditChainKind,
+				Version:    auditChainVersion,
+				MinVersion: auditChainVersion,
+				Steps:      []durable.Step{{Name: auditChainStep, Run: chain.runMigrationStep}},
+			},
+		},
+		Lease:        0,
+		RenewEvery:   0,
+		PollEvery:    0,
+		MaxAttempts:  0,
+		ExpiryLimit:  0,
+		Backoff:      durable.Backoff{Base: 0, Max: 0},
+		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout: 0,
+		Logger:       cfg.logger,
+		Rand:         nil,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("audit chain migration runner: %w", err)
 	}
 
-	return nil, false
+	return runner, nil
+}
+
+// durableStoreProvider is implemented by stores that keep durable
+// operations next to their domain rows. The port returns any so the
+// discovery stays store agnostic while each adapter returns its concrete
+// operations for direct callers.
+type durableStoreProvider interface {
+	DurableOperationsPort() any
+}
+
+// bindDurableOps sets the durable operation store behind s on chain, and
+// answers true. It answers false when s keeps none.
+func bindDurableOps(chain *auditChain, s namespace.Store) bool {
+	p, ok := s.(durableStoreProvider)
+	if !ok || p == nil {
+		return false
+	}
+
+	ops, ok := p.DurableOperationsPort().(durable.Store)
+	if !ok || ops == nil {
+		return false
+	}
+
+	chain.durableOps = ops
+
+	return true
 }
 
 // auditChainOwner names this instance in the claims of the migration.
@@ -293,22 +323,57 @@ func (c *auditChain) Status(ctx context.Context) (serverapi.AuditChainStatus, er
 // approval in the server scope. Two approvals with one start key give one
 // operation: the second answers ErrChainMigrating.
 func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
+	if err := c.checkApprovalGate(ctx, caller); err != nil {
+		return err
+	}
+
+	if err := c.requirePendingChange(ctx); err != nil {
+		return err
+	}
+
+	if err := c.refuseWhileRestoring(ctx); err != nil {
+		return err
+	}
+
+	change := audit.ChainChange{At: c.chainNow(), By: caller.Subject, To: c.setting.State()}
+
+	op, err := c.startApprovalOp(ctx, change)
+	if err != nil {
+		return err
+	}
+
+	return c.finishApproval(ctx, caller, change, op)
+}
+
+// checkApprovalGate refuses an approval while the migration loop stops,
+// by a service principal for a change to off, or without a fresh MFA step.
+func (c *auditChain) checkApprovalGate(ctx context.Context, caller audit.Entry) error {
 	if !c.migrationsRunning.Load() {
 		return audit.ErrChainMigrationsStopped
 	}
 
-	if c.setting == audit.ChainOff {
-		if err := c.refuseServiceCaller(ctx, caller.Subject); err != nil {
-			return err
-		}
+	if c.setting != audit.ChainOff {
+		return nil
 	}
 
-	if c.setting == audit.ChainOff && c.freshness != nil {
-		if err := c.freshness.RequireFresh(ctx, caller.Subject); err != nil {
-			return fmt.Errorf("%w: %w", audit.ErrChainStepRequired, err)
-		}
+	if err := c.refuseServiceCaller(ctx, caller.Subject); err != nil {
+		return err
 	}
 
+	if c.freshness == nil {
+		return nil
+	}
+
+	if err := c.freshness.RequireFresh(ctx, caller.Subject); err != nil {
+		return fmt.Errorf("%w: %w", audit.ErrChainStepRequired, err)
+	}
+
+	return nil
+}
+
+// requirePendingChange answers nil when a change of the chain waits for
+// approval, else the reason no approval can run.
+func (c *auditChain) requirePendingChange(ctx context.Context) error {
 	rec, err := c.store.ChainRecord(ctx)
 	if err != nil {
 		return fmt.Errorf("read audit chain state: %w", err)
@@ -318,32 +383,44 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 		return audit.ErrNoChainChange
 	}
 
-	if err := c.refuseWhileRestoring(ctx); err != nil {
-		return err
-	}
+	return nil
+}
 
-	change := audit.ChainChange{At: c.chainNow(), By: caller.Subject, To: c.setting.State()}
-
+// startApprovalOp starts one migration operation for change, and answers
+// it. Two approvals with one start key give one operation: the second
+// answers ErrChainMigrating. An approval after a finished operation starts
+// a new one under a new key.
+func (c *auditChain) startApprovalOp(ctx context.Context, change audit.ChainChange) (durable.Operation, error) {
 	op, created, err := c.startMigrationOp(ctx, auditChainKey, change)
 	if err != nil {
-		return err
+		return durable.Operation{}, err
+	}
+
+	if created {
+		return op, nil
+	}
+
+	if !terminalMigration(op) {
+		return durable.Operation{}, audit.ErrChainMigrating
+	}
+
+	next, created, err := c.startMigrationOp(ctx, auditChainRetryKey(), change)
+	if err != nil {
+		return durable.Operation{}, err
 	}
 
 	if !created {
-		if terminalMigration(op) {
-			op, created, err = c.startMigrationOp(ctx, auditChainRetryKey(), change)
-			if err != nil {
-				return err
-			}
-
-			if !created {
-				return audit.ErrChainMigrating
-			}
-		} else {
-			return audit.ErrChainMigrating
-		}
+		return durable.Operation{}, audit.ErrChainMigrating
 	}
 
+	return next, nil
+}
+
+// finishApproval enters maintenance mode for an approved change and writes
+// its entry. A failure cancels the migration operation it started.
+func (c *auditChain) finishApproval(
+	ctx context.Context, caller audit.Entry, change audit.ChainChange, op durable.Operation,
+) error {
 	if err := c.enterForApproval(ctx); err != nil {
 		c.cancelMigrationOp(ctx, op.ID)
 
@@ -867,8 +944,8 @@ func (c *auditChain) runMigrationStep(ctx context.Context, sc durable.StepContex
 		return nil, durable.Permanent(err)
 	}
 
-	if err := c.refuseWhileRestoring(ctx); err != nil {
-		return nil, err
+	if restoreErr := c.refuseWhileRestoring(ctx); restoreErr != nil {
+		return nil, restoreErr
 	}
 
 	fences, err := c.fences(ctx)

@@ -23,8 +23,14 @@ type DurableOperations struct {
 }
 
 // DurableOperations returns the store of durable operations on s.
-func (s *Store) DurableOperations() durable.Store {
+func (s *Store) DurableOperations() *DurableOperations {
 	return &DurableOperations{store: s}
+}
+
+// DurableOperationsPort answers the durable operations as the port, for
+// store agnostic discovery. Direct callers use DurableOperations.
+func (s *Store) DurableOperationsPort() any {
+	return s.DurableOperations()
 }
 
 // DefaultStepTransactionBound is the longest time that a transaction which

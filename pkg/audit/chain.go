@@ -189,9 +189,9 @@ func ServerFence() namespace.Fence {
 // ChainChange is one approved change of the chain: the state it moves to,
 // who approved it and when.
 type ChainChange struct {
-	At time.Time
-	By string
-	To ChainState
+	At time.Time  `json:"at"`
+	By string     `json:"by"`
+	To ChainState `json:"to"`
 }
 
 // MigrateChain runs the migration of an approved change in the scope of

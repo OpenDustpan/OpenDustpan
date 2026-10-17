@@ -76,7 +76,7 @@ func TestTwoStartsWithOneKeyGiveOneOperation(t *testing.T) {
 	st := openChainStore(t)
 	ops := st.DurableOperations()
 
-	req := durable.StartRequest{Key: "audit-chain-migration", Kind: auditChainKind, Version: 1}
+	req := durable.StartRequest{Key: "audit-chain-migration", Kind: auditChainKind, Version: 1, Input: nil}
 
 	first, created, err := ops.Start(t.Context(), req)
 	if err != nil || !created {
@@ -105,19 +105,63 @@ func TestRunnerTakeoverCompletesTheMigration(t *testing.T) {
 
 	const kind durable.Kind = "takeover-kind"
 
-	steps := func(run durable.StepFunc) []durable.KindSpec {
-		return []durable.KindSpec{{
-			Kind:       kind,
-			Version:    1,
-			MinVersion: 1,
-			Steps:      []durable.Step{{Name: "migrate", Run: run}},
-		}}
-	}
+	op := startTakeoverOp(t, store, kind)
+	stopBlocking := runBlockingRunner(t, store, kind)
+	stopBlocking()
 
-	op, _, err := store.Start(t.Context(), durable.StartRequest{Key: "k", Kind: kind, Version: 1})
+	runs := runTakeoverRunner(t, store, kind)
+	waitTakeoverSucceeded(t, store, op.ID)
+
+	if runs() != 1 {
+		t.Fatalf("second runner ran the step %d times, want 1", runs())
+	}
+}
+
+// startTakeoverOp starts the takeover operation of kind.
+func startTakeoverOp(t *testing.T, store durable.Store, kind durable.Kind) durable.Operation {
+	t.Helper()
+
+	op, _, err := store.Start(t.Context(), durable.StartRequest{Key: "k", Kind: kind, Version: 1, Input: nil})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
+
+	return op
+}
+
+// takeoverSteps answers the kind spec of kind with run as its step.
+func takeoverSteps(kind durable.Kind, run durable.StepFunc) []durable.KindSpec {
+	return []durable.KindSpec{{
+		Kind:       kind,
+		Version:    1,
+		MinVersion: 1,
+		Steps:      []durable.Step{{Name: "migrate", Run: run}},
+	}}
+}
+
+// takeoverRunnerConfig answers the runner config of owner with kinds.
+func takeoverRunnerConfig(store durable.Store, owner string, kinds []durable.KindSpec) durable.RunnerConfig {
+	return durable.RunnerConfig{
+		Store:        store,
+		Owner:        owner,
+		Kinds:        kinds,
+		Lease:        300 * time.Millisecond,
+		RenewEvery:   0,
+		PollEvery:    0,
+		MaxAttempts:  0,
+		ExpiryLimit:  0,
+		Backoff:      durable.Backoff{Base: 0, Max: 0},
+		ClaimBackoff: durable.Backoff{Base: 0, Max: 0},
+		WriteTimeout: 0,
+		Logger:       nil,
+		Rand:         nil,
+	}
+}
+
+// runBlockingRunner runs the first runner until its step blocks, and
+// answers the stop function that ends it and waits.
+func runBlockingRunner(t *testing.T, store durable.Store, kind durable.Kind) func() {
+	t.Helper()
 
 	started := make(chan struct{})
 	var once sync.Once
@@ -129,21 +173,16 @@ func TestRunnerTakeoverCompletesTheMigration(t *testing.T) {
 		return nil, ctx.Err()
 	}
 
-	first, err := durable.NewRunner(durable.RunnerConfig{
-		Store: store,
-		Owner: "first",
-		Kinds: steps(block),
-		Lease: 300 * time.Millisecond,
-	})
+	first, err := durable.NewRunner(takeoverRunnerConfig(store, "first", takeoverSteps(kind, block)))
 	if err != nil {
 		t.Fatalf("new runner: %v", err)
 	}
 
-	firstCtx, stopFirst := context.WithCancel(t.Context())
+	ctx, stop := context.WithCancel(t.Context())
 
-	var firstWg sync.WaitGroup
+	var wg sync.WaitGroup
 
-	firstWg.Go(func() { first.Run(firstCtx) })
+	wg.Go(func() { first.Run(ctx) })
 
 	select {
 	case <-started:
@@ -151,21 +190,25 @@ func TestRunnerTakeoverCompletesTheMigration(t *testing.T) {
 		t.Fatal("test context ended")
 	}
 
-	stopFirst()
-	firstWg.Wait()
+	return func() {
+		stop()
+		wg.Wait()
+	}
+}
+
+// runTakeoverRunner runs the second runner once, and answers the count of
+// its step runs.
+func runTakeoverRunner(t *testing.T, store durable.Store, kind durable.Kind) func() int {
+	t.Helper()
 
 	var runs int
 
-	second, err := durable.NewRunner(durable.RunnerConfig{
-		Store: store,
-		Owner: "second",
-		Kinds: steps(func(context.Context, durable.StepContext) ([]byte, error) {
+	second, err := durable.NewRunner(takeoverRunnerConfig(store, "second", takeoverSteps(kind,
+		func(context.Context, durable.StepContext) ([]byte, error) {
 			runs++
 
 			return []byte("done"), nil
-		}),
-		Lease: 300 * time.Millisecond,
-	})
+		})))
 	if err != nil {
 		t.Fatalf("new runner: %v", err)
 	}
@@ -174,16 +217,23 @@ func TestRunnerTakeoverCompletesTheMigration(t *testing.T) {
 		t.Fatalf("RunOnce: %v", err)
 	}
 
+	return func() int { return runs }
+}
+
+// waitTakeoverSucceeded waits until the operation id ends succeeded.
+func waitTakeoverSucceeded(t *testing.T, store durable.Store, id durable.ID) {
+	t.Helper()
+
 	deadline := time.Now().Add(30 * time.Second)
 
 	for {
-		got, err := store.Get(t.Context(), op.ID)
+		got, err := store.Get(t.Context(), id)
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}
 
 		if got.State == durable.StateSucceeded {
-			break
+			return
 		}
 
 		if time.Now().After(deadline) {
@@ -197,9 +247,5 @@ func TestRunnerTakeoverCompletesTheMigration(t *testing.T) {
 			t.Fatal("test context ended")
 		case <-timer.C:
 		}
-	}
-
-	if runs != 1 {
-		t.Fatalf("second runner ran the step %d times, want 1", runs)
 	}
 }
