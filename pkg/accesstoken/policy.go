@@ -93,6 +93,21 @@ func (p Policy) DefaultLifetimeUnder() time.Duration {
 	return min(DefaultLifetime, p.MaxLifetime)
 }
 
+// AccountInactiveAt reports whether p disables the user account o as
+// inactive at now: the account disable is on, the period is not zero, o is
+// a person that is not a break-glass account, and its latest activity is at
+// or before now minus the period. A break-glass account is always exempt.
+// The sweep applies the same rule with the database clock. Another sign-in,
+// such as a console session, applies it too, so that its use does not keep
+// an account alive that the sweep would disable.
+func (p Policy) AccountInactiveAt(o Owner, now time.Time) bool {
+	if p.Inactivity == 0 || !p.DisableAccounts || o.Kind != principal.KindPerson || o.BreakGlass {
+		return false
+	}
+
+	return !o.ActiveAt.After(now.Add(-p.Inactivity))
+}
+
 // inactiveAt reports whether p disables the token t as inactive at now: the
 // token disable is on, the period is not zero, and the last use of t, or
 // its creation when no request used it, is at or before now minus the
@@ -108,19 +123,6 @@ func (p Policy) inactiveAt(t Token, now time.Time) bool {
 	}
 
 	return !last.After(now.Add(-p.Inactivity))
-}
-
-// accountInactiveAt reports whether p disables the user account o as
-// inactive at now: the account disable is on, the period is not zero, o is
-// a person that is not a break-glass account, and its latest activity is at
-// or before now minus the period. A break-glass account is always exempt.
-// The sweep applies the same rule with the database clock.
-func (p Policy) accountInactiveAt(o Owner, now time.Time) bool {
-	if p.Inactivity == 0 || !p.DisableAccounts || o.Kind != principal.KindPerson || o.BreakGlass {
-		return false
-	}
-
-	return !o.ActiveAt.After(now.Add(-p.Inactivity))
 }
 
 // Sweep is one run of the inactivity disable as a store writes it. The
