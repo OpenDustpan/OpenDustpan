@@ -43,7 +43,12 @@ func TestDurableScheduleConformance(t *testing.T) {
 			Open: func(t *testing.T, _ time.Duration) durabletest.ScheduledStore {
 				t.Helper()
 
-				return s.DurableOperations()
+				ops := s.DurableOperations()
+				if ops == nil {
+					t.Fatal("durable operations are nil, want *sqlite.DurableOperations")
+				}
+
+				return ops
 			},
 		}
 	})

@@ -65,6 +65,46 @@ func TestDurableConformance(t *testing.T) {
 	})
 }
 
+// TestDurableScheduleConformance runs the schedule suite. Each case gets a
+// fresh schema, and each handle of a case is a store of its own on that
+// schema, as two instances on one database are.
+func TestDurableScheduleConformance(t *testing.T) {
+	t.Parallel()
+
+	base := os.Getenv(envURL)
+	if base == "" {
+		t.Skipf("set %s to run the PostgreSQL durable schedule suite", envURL)
+	}
+
+	durabletest.RunSchedules(t, func(t *testing.T) durabletest.ScheduleHarness {
+		t.Helper()
+
+		schemaURL := isolatedURL(t, base)
+
+		first, err := postgres.Open(t.Context(), schemaURL)
+		if err != nil {
+			t.Fatalf("open store: %v", err)
+		}
+
+		t.Cleanup(first.Close)
+
+		return durabletest.ScheduleHarness{
+			Open: func(t *testing.T, _ time.Duration) durabletest.ScheduledStore {
+				t.Helper()
+
+				s, openErr := postgres.Open(t.Context(), schemaURL)
+				if openErr != nil {
+					t.Fatalf("open store: %v", openErr)
+				}
+
+				t.Cleanup(s.Close)
+
+				return s.DurableOperations()
+			},
+		}
+	})
+}
+
 // TestDurableClaimSkipsALockedRow proves that a claim skips the row of an
 // operation that another transaction holds, and answers ErrNoWork at once,
 // instead of a wait for that transaction.
@@ -150,7 +190,12 @@ func TestDurableRowsRoundTripThroughAPortableBackup(t *testing.T) {
 
 	t.Cleanup(s.Close)
 
-	seedDurableRows(t, s.DurableOperations())
+	ops := s.DurableOperations()
+	if ops == nil {
+		t.Fatal("durable operations are nil, want *postgres.DurableOperations")
+	}
+
+	seedDurableRows(t, ops)
 
 	ctx := t.Context()
 

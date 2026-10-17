@@ -205,6 +205,9 @@ type settings struct {
 	beforeServe func(ctx context.Context) error
 	// auditSigner signs audit checkpoints. See WithAuditCheckpoints.
 	auditSigner *audit.Signer
+	// durableStore keeps the durable operations and the job schedules, or
+	// is nil without job schedules. See WithDurableStore.
+	durableStore DurableStore
 }
 
 // ipAllowlistSettings holds the IP allowlist feature switch, the bootstrap
@@ -526,6 +529,12 @@ type Server struct {
 	// signInProviders binds each provider of the console sign-in to its
 	// issuer at the start, or is the zero value with no console sign-in.
 	signInProviders providerBinding
+	// durable keeps the job schedules, or is nil without them. inactivityEvery
+	// and deletedEvery are the periods of those schedules.
+	durable         DurableStore
+	durableOwner    string
+	inactivityEvery time.Duration
+	deletedEvery    time.Duration
 }
 
 // services holds the domain services that NewServer wires together.
@@ -600,6 +609,7 @@ func defaultSettings() *settings {
 		instanceID:              "",
 		auditShipper:            nil,
 		auditSigner:             nil,
+		durableStore:            nil,
 	}
 }
 
@@ -776,6 +786,10 @@ func assemble(cfg *settings, base baseurl.Resolver, svc services, backups *backu
 		signInRequests:   adapters.signInSessions(),
 		signInPruneEvery: signInRequestPruneEvery,
 		signInProviders:  bindingOf(cfg, adapters.signIn),
+		durable:          cfg.durableStore,
+		durableOwner:     durableOwner(cfg),
+		inactivityEvery:  sweepEvery,
+		deletedEvery:     deletedSweepEvery,
 	}, nil
 }
 
@@ -1312,12 +1326,14 @@ func (s *Server) Run(ctx context.Context) error {
 		return err
 	}
 
-	// The first run of the inactivity disable ends before the hook and
-	// before the server serves a request. A slow database delays the start
-	// by firstSweepLimit at most: the hourly runs try again.
-	firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
-	s.sweepOnce(firstCtx)
-	stopFirst()
+	if s.durable == nil {
+		// The first run of the inactivity disable ends before the hook and
+		// before the server serves a request. A slow database delays the start
+		// by firstSweepLimit at most: the hourly runs try again.
+		firstCtx, stopFirst := context.WithTimeout(ctx, firstSweepLimit)
+		s.sweepOnce(firstCtx)
+		stopFirst()
+	}
 
 	if s.beforeServe != nil {
 		if hookErr := s.beforeServe(ctx); hookErr != nil {
@@ -1345,9 +1361,13 @@ func (s *Server) Run(ctx context.Context) error {
 
 	var sweeps sync.WaitGroup
 
-	sweeps.Go(func() { s.sweepInactive(sweepCtx) })
-	sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
-	sweeps.Go(func() { s.pruneSignInRequests(sweepCtx) })
+	if err := s.startSweeps(sweepCtx, &sweeps); err != nil {
+		stopCheck()
+		waitCheck()
+		stopSweeps()
+
+		return errors.Join(err, closeListener(ln))
+	}
 
 	// The shipper stops when Run returns, also after a serve error, and Run
 	// returns only after it stopped.
@@ -1374,14 +1394,19 @@ const sweepEvery = time.Hour
 // server serves.
 const firstSweepLimit = time.Minute
 
-// sweepInactive runs the inactivity disable of ADR 53 once each
-// sweepEvery, until ctx is done. Run makes the first run before it serves.
+// sweepInactive runs the inactivity disable once each inactivityEvery,
+// until ctx is done. Run makes the first run before it serves.
 func (s *Server) sweepInactive(ctx context.Context) {
 	if s.tokens == nil {
 		return
 	}
 
-	ticker := time.NewTicker(sweepEvery)
+	every := s.inactivityEvery
+	if every <= 0 {
+		every = sweepEvery
+	}
+
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
 	for {
