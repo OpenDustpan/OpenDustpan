@@ -939,17 +939,17 @@ func stagingCount(ctx context.Context, pool *pgxpool.Pool, staging, table string
 }
 
 // stagingBlobRefs reads the blob references of the staging schema: every blob
-// key the staged state versions, the staged checkpoints and the staged journal
+// key the staged finalized state versions, the staged checkpoints and the staged journal
 // batches name, with the size and MD5 of the plain bytes, ordered by key.
 // Sealed state versions mark their references sealed; checkpoint and journal
-// blobs are never sealed. A pending version names no content, so only
-// finalized versions appear. It matches BackupBlobs, so the staged summary
+// blobs are never sealed. A pending version has no committed content, so the
+// backup leaves pending rows out. It matches BackupBlobs, so the staged summary
 // compares equal with the manifest.
 func stagingBlobRefs(ctx context.Context, pool *pgxpool.Pool, staging string) ([]backup.BlobRef, error) {
 	rows, err := pool.Query(
 		ctx,
 		"SELECT content_key, size, md5, sealed FROM "+stagingTable(staging, "state_versions")+
-			" WHERE content_key <> '' UNION ALL SELECT blob_key AS content_key, blob_size AS size, "+
+			" WHERE content_key <> '' AND status = 'finalized' UNION ALL SELECT blob_key AS content_key, blob_size AS size, "+
 			"blob_md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "checkpoints")+
 			" WHERE blob_key IS NOT NULL AND blob_key <> '' UNION ALL SELECT blob_key AS content_key, size AS size, "+
 			"md5 AS md5, FALSE AS sealed FROM "+stagingTable(staging, "update_journal")+
