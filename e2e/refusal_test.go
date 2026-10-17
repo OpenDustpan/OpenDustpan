@@ -25,7 +25,7 @@ type refusalPerson struct {
 	name      string
 	role      string
 	principal e2ePrincipal
-	token     e2eToken
+	token     e2e.PersonalToken
 }
 
 // TestRefusedActionsAreAudited proves that a refused action writes an audit
@@ -79,7 +79,7 @@ func runRefusedActionsOnStore(t *testing.T, pulumiCLI, tofuCLI e2e.Install, stor
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, tofuCLI, store)
+	env := e2e.NewEnvWithSignIn(ctx, t, tofuCLI, store)
 
 	checkReady(ctx, t, env)
 	env.CreateNamespace(ctx, t, refusalNamespace)
@@ -107,7 +107,7 @@ func issueRefusalPerson(ctx context.Context, t *testing.T, env *e2e.Env, name, r
 
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/principals",
-		fmt.Sprintf(`{"subject":%q,"kind":"person"}`, name+"@example.com"), http.StatusCreated,
+		fmt.Sprintf(`{"subject":%q,"kind":"person"}`, e2e.SignInSubject(name+"@example.com")), http.StatusCreated,
 	}, &p.principal)
 
 	principalCall(ctx, t, env, principalStep{
@@ -115,10 +115,7 @@ func issueRefusalPerson(ctx context.Context, t *testing.T, env *e2e.Env, name, r
 		`{"subject":"principal:` + p.principal.ID + `","role":"` + role + `"}`, http.StatusCreated,
 	}, nil)
 
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens",
-		`{"principalID":"` + p.principal.ID + `","name":"refuse-` + name + `"}`, http.StatusCreated,
-	}, &p.token)
+	p.token = env.PersonalToken(ctx, t, p.principal.ID, "refuse-"+name)
 
 	return p
 }
@@ -238,7 +235,7 @@ func checkRefusalAudit(ctx context.Context, t *testing.T, env *e2e.Env) {
 	seen := map[string]bool{}
 
 	for i := range entries {
-		if entries[i].Subject != "bo@example.com" || entries[i].Outcome != "denied" {
+		if entries[i].Subject != e2e.SignInSubject("bo@example.com") || entries[i].Outcome != "denied" {
 			continue
 		}
 
@@ -270,7 +267,7 @@ func runTofuHTTPRefusal(t *testing.T, env *e2e.Env, cli e2e.Install, maintainer,
 
 	ctx := t.Context()
 
-	before := deniedEntriesOf(ctx, t, env, viewer.name+"@example.com")
+	before := deniedEntriesOf(ctx, t, env, e2e.SignInSubject(viewer.name+"@example.com"))
 
 	dir := filepath.Join(env.Home(), "tofu-refuse-http")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -302,7 +299,7 @@ func runTofuHTTPRefusal(t *testing.T, env *e2e.Env, cli e2e.Install, maintainer,
 		t.Fatalf("tofu http apply as viewer succeeds, want a refusal:\n%s", res.Stdout)
 	}
 
-	after := deniedEntriesOf(ctx, t, env, viewer.name+"@example.com")
+	after := deniedEntriesOf(ctx, t, env, e2e.SignInSubject(viewer.name+"@example.com"))
 	if after <= before {
 		t.Fatalf("audit log holds %d denied entries for the viewer after the HTTP refusal, want more than %d",
 			after, before)
