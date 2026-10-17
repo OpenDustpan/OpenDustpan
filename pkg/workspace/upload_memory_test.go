@@ -446,15 +446,6 @@ func memService(tb testing.TB, base memBase, sealer workspace.Sealer) (*workspac
 	return svc, ws
 }
 
-// newMemPlainFixture builds an unsealed memory fixture.
-func newMemPlainFixture(tb testing.TB) (*workspace.Service, workspace.Workspace) {
-	tb.Helper()
-
-	base := newMemBase(tb)
-
-	return memService(tb, base, nil)
-}
-
 // newMemSealedFixture builds a memory fixture that seals stored blobs.
 func newMemSealedFixture(tb testing.TB) (*workspace.Service, workspace.Workspace) {
 	tb.Helper()
@@ -835,22 +826,12 @@ func TestUploadMemory(t *testing.T) {
 	// No t.Parallel: the heap measurement needs a quiet runtime.
 	variants := []string{"resources", "one-string", "outputs"}
 
-	fixtures := []struct {
-		name string
-		make func(testing.TB) (*workspace.Service, workspace.Workspace)
-	}{
-		{name: "unsealed", make: newMemPlainFixture},
-		{name: "sealed", make: newMemSealedFixture},
-	}
-
 	for _, variant := range variants {
-		for _, fixture := range fixtures {
-			svc, ws := fixture.make(t)
-			runMemTFECase(t, variant, fixture.name, svc, ws)
+		svc, ws := newMemSealedFixture(t)
+		runMemTFECase(t, variant, "sealed", svc, ws)
 
-			httpSvc, httpWs := fixture.make(t)
-			runMemHTTPCase(t, variant, fixture.name, httpSvc, httpWs)
-		}
+		httpSvc, httpWs := newMemSealedFixture(t)
+		runMemHTTPCase(t, variant, "sealed", httpSvc, httpWs)
 	}
 }
 

@@ -2,6 +2,7 @@ package storetest
 
 import (
 	"bytes"
+	"context"
 	"crypto/md5" //nolint:gosec // The TFE protocol names state by MD5 for integrity, not security.
 	"encoding/hex"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
@@ -454,7 +456,7 @@ func newPendingVersion(
 		Serial:          in.serial,
 		Size:            0,
 		Force:           in.force,
-		Sealed:          false,
+		Sealed:          true,
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
@@ -2875,9 +2877,8 @@ func assertReferencedContentKeys(t *testing.T, s WorkspaceStore, id workspace.ID
 	}
 }
 
-// testSealedFlagRoundTrip proves the sealed flag of ADR 41 decision 10 is
-// stored and read back: a sealed version reads sealed by get, current and
-// list, and an unsealed version reads unsealed.
+// testSealedFlagRoundTrip proves the sealed flag is stored and read back:
+// a sealed version reads sealed by get, current and list.
 func testSealedFlagRoundTrip(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
@@ -2886,7 +2887,6 @@ func testSealedFlagRoundTrip(t *testing.T, s WorkspaceStore) {
 	locked := lockTestWorkspace(t, s, ns, w, "alice")
 
 	sealed := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v1", 1))
-	sealed.Sealed = true
 	createPendingVersion(t, s, ns, sealed)
 
 	got, err := s.GetStateVersion(t.Context(), sealed.ID)
@@ -2896,18 +2896,6 @@ func testSealedFlagRoundTrip(t *testing.T, s WorkspaceStore) {
 
 	if !got.Sealed {
 		t.Fatal("sealed state version reads unsealed, want sealed")
-	}
-
-	plain := newPendingVersion(t, locked, locked.Lock.ID, stateInput("l1", "v2", 2))
-	createPendingVersion(t, s, ns, plain)
-
-	gotPlain, err := s.GetStateVersion(t.Context(), plain.ID)
-	if err != nil {
-		t.Fatalf("get unsealed state version: %v", err)
-	}
-
-	if gotPlain.Sealed {
-		t.Fatal("unsealed state version reads sealed, want unsealed")
 	}
 
 	finalized := finalizedVersion(sealed, now().Add(2*time.Hour), "v1")
@@ -3253,7 +3241,7 @@ func newFenceVersion(t *testing.T, w workspace.Workspace, serial int64, at time.
 		Serial:          serial,
 		Size:            int64(len(content)),
 		Force:           false,
-		Sealed:          false,
+		Sealed:          true,
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "admin",
@@ -3979,6 +3967,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 	})
 
 	services := make([]*workspace.Service, n)
+	sealer := testSealer(t, nsSvc)
 
 	for i := range services {
 		svc, err := workspace.NewService(workspace.Config{
@@ -3986,7 +3975,7 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 			States:             s,
 			Blobs:              blobs,
 			Namespaces:         nsSvc,
-			Sealer:             nil,
+			Sealer:             sealer,
 			Logger:             nil,
 			Now:                now,
 			MaxStateBytes:      0,
@@ -4001,6 +3990,91 @@ func servicesOver(t *testing.T, s WorkspaceStore, n int) []*workspace.Service {
 	}
 
 	return services
+}
+
+// testSealer returns a sealer with a fixed key-encryption key, so the
+// workspace services of the conformance suite seal state.
+func testSealer(t *testing.T, namespaces *namespace.Service) *secret.Service {
+	t.Helper()
+
+	wrapper, err := secret.NewBuiltinWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("key wrapper: %v", err)
+	}
+
+	secrets, err := secret.NewService(secret.Config{
+		Keys:          newTestKeys(),
+		Wrapper:       wrapper,
+		Namespaces:    namespaces,
+		Now:           nil,
+		MaxBatchBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("secrets: %v", err)
+	}
+
+	return secrets
+}
+
+// testKeys is a secret.KeyStore in memory for the conformance suite.
+type testKeys struct {
+	mu   sync.Mutex
+	keys map[string]secret.WrappedKey
+}
+
+// newTestKeys returns an empty key store.
+func newTestKeys() *testKeys {
+	return &testKeys{mu: sync.Mutex{}, keys: map[string]secret.WrappedKey{}}
+}
+
+// CreateKey implements secret.KeyStore, keeping the first key of a scope.
+func (m *testKeys) CreateKey(
+	_ context.Context, k secret.WrappedKey, _ namespace.Fence,
+) (secret.WrappedKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if existing, ok := m.keys[k.Scope.String()]; ok {
+		return existing, nil
+	}
+
+	m.keys[k.Scope.String()] = k
+
+	return k, nil
+}
+
+// GetKey implements secret.KeyStore.
+func (m *testKeys) GetKey(_ context.Context, scope secret.Scope) (secret.WrappedKey, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k, ok := m.keys[scope.String()]
+	if !ok {
+		return secret.WrappedKey{}, secret.ErrKeyNotFound
+	}
+
+	return k, nil
+}
+
+// ListWrapperIDs implements secret.KeyStore.
+func (m *testKeys) ListWrapperIDs(_ context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	seen := map[string]bool{}
+
+	for _, k := range m.keys {
+		seen[k.WrapperID] = true
+	}
+
+	out := make([]string, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+
+	slices.Sort(out)
+
+	return out, nil
 }
 
 // testRestoreAcrossServicesWritesOnce proves that concurrent restores of one
