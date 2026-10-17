@@ -1620,15 +1620,14 @@ func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
 	}
 }
 
-// TestAccountInactive proves that AccountInactive applies the account rule
-// of the token lookup: the period, the account switch, persons only, and
-// the break-glass exemption.
-func TestAccountInactive(t *testing.T) {
+// TestAccountInactiveAt proves the account rule of the token lookup, which
+// a console session applies too: the period, the account switch, persons
+// only, and the break-glass exemption.
+func TestAccountInactiveAt(t *testing.T) {
 	t.Parallel()
 
-	f := newFixtureAt(t, nil, sweepStart())
-	ctx := t.Context()
-	now := f.svc.Now()
+	now := sweepStart()
+	policy := accesstoken.DefaultPolicy()
 
 	owner := func(kind principal.Kind, breakGlass bool, activeAt time.Time) accesstoken.Owner {
 		return accesstoken.Owner{
@@ -1650,21 +1649,23 @@ func TestAccountInactive(t *testing.T) {
 		{name: "a break-glass person past the period", o: owner(principal.KindPerson, true, old), want: false},
 		{name: "a service past the period", o: owner(principal.KindService, false, old), want: false},
 	} {
-		got, err := f.svc.AccountInactive(ctx, tc.o)
-		if err != nil || got != tc.want {
-			t.Errorf("%s: AccountInactive = %t, %v; want %t", tc.name, got, err, tc.want)
+		if got := policy.AccountInactiveAt(tc.o, now); got != tc.want {
+			t.Errorf("%s: AccountInactiveAt = %t, want %t", tc.name, got, tc.want)
 		}
 	}
 
-	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
-		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: new(false), DisableBreakGlass: nil,
-	})
-	if err != nil {
-		t.Fatalf("set policy: %v", err)
+	off := policy
+	off.DisableAccounts = false
+
+	if off.AccountInactiveAt(owner(principal.KindPerson, false, old), now) {
+		t.Fatal("AccountInactiveAt with the account disable off = true, want false")
 	}
 
-	if got, err := f.svc.AccountInactive(ctx, owner(principal.KindPerson, false, old)); err != nil || got {
-		t.Fatalf("AccountInactive with the account disable off = %t, %v; want false", got, err)
+	zero := policy
+	zero.Inactivity = 0
+
+	if zero.AccountInactiveAt(owner(principal.KindPerson, false, old), now) {
+		t.Fatal("AccountInactiveAt with a zero period = true, want false")
 	}
 }
 

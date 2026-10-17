@@ -20,6 +20,10 @@ const (
 	// maxStateCreateBytes bounds a state version create body: the base64
 	// outputs document alone may hold 16 MiB.
 	maxStateCreateBytes = 32 << 20
+	// maxOutputNameLen caps one output name of the json-state-outputs
+	// document, in bytes. The version keeps the document, so a longer
+	// name is refused instead of stored.
+	maxOutputNameLen = 256
 	// inlineStateDetail is the 422 detail when a client sends the inline
 	// state attribute, which the server never serves: state always follows
 	// through the upload capability.
@@ -94,7 +98,9 @@ func parseStateVersionCreate(body []byte) (workspace.NewState, error) {
 // decodeStateOutputs decodes the base64 json-state-outputs attribute into
 // the opaque outputs document the state version keeps. A missing attribute
 // means no outputs. Anything else that does not decode, or that is not the
-// outputs shape the read routes render, fails with a 422 error. The CLI
+// outputs shape the read routes render, fails with a 422 error. An output
+// name over maxOutputNameLen bytes fails too: the version keeps the
+// document, so a longer name is refused instead of stored. The CLI
 // sends the flat map of outputs at the top level; the wrapped form stays
 // accepted for versions stored before the flat shape was served.
 func decodeStateOutputs(raw *string) ([]byte, error) {
@@ -107,8 +113,15 @@ func decodeStateOutputs(raw *string) ([]byte, error) {
 		return nil, fmt.Errorf("%w: json-state-outputs is not valid base64", workspace.ErrInvalidState)
 	}
 
-	if _, err := parseStoredOutputs(decoded); err != nil {
+	outputs, err := parseStoredOutputs(decoded)
+	if err != nil {
 		return nil, fmt.Errorf("%w: json-state-outputs is not valid: %w", workspace.ErrInvalidState, err)
+	}
+
+	for name := range outputs {
+		if len(name) > maxOutputNameLen {
+			return nil, fmt.Errorf("%w: output name over %d bytes", workspace.ErrInvalidState, maxOutputNameLen)
+		}
 	}
 
 	return decoded, nil

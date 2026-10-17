@@ -207,6 +207,9 @@ type Env struct {
 	// environment: the SQLite file, or PostgreSQL through the proxy. A
 	// step runs the host command against it.
 	dbURL string
+	// rewrites holds the answer rewrites of the recording proxy of a binary
+	// environment. It is nil in the in-process mode.
+	rewrites *answerRewrites
 }
 
 // serverStore is every persistence port the server needs.
@@ -472,6 +475,7 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		dbURL:         build.dbURL,
 		signIn:        signIn,
 		backupDir:     build.backupDir,
+		rewrites:      nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {

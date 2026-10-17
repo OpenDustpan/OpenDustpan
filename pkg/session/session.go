@@ -183,12 +183,23 @@ type Owner struct {
 	BreakGlass  bool
 }
 
-// Match is the answer of a lookup by digest: the session, its owner and the
-// digest that the store keeps.
+// Match is the answer of a lookup by digest: the session, its owner, the
+// digest that the store keeps, and the policies of the installation at the
+// time of the lookup. The policies come from the same read as the session,
+// so a change applies to the next lookup on every instance.
 type Match struct {
-	Session Session
-	Owner   Owner
-	Digest  Digest
+	Session  Session
+	Owner    Owner
+	Digest   Digest
+	Policy   Policy
+	Accounts AccountPolicy
+}
+
+// AccountPolicy is the part of the access token policy that a console
+// session applies too: the account disable and its inactivity period.
+type AccountPolicy struct {
+	Inactivity      time.Duration
+	DisableAccounts bool
 }
 
 // Request is the state of one sign-in between its start and its callback.

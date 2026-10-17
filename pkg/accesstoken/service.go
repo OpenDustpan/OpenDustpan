@@ -669,7 +669,7 @@ func (s *Service) AccountInactive(ctx context.Context, o Owner) (bool, error) {
 		return false, fmt.Errorf("account inactivity: %w", err)
 	}
 
-	return p.accountInactiveAt(o, now), nil
+	return p.AccountInactiveAt(o, now), nil
 }
 
 // checkPolicyActive refuses the token of m when the policy of m disables
@@ -696,7 +696,7 @@ func (s *Service) checkPolicyActive(ctx context.Context, m Match, now time.Time)
 		}
 	}
 
-	if p.accountInactiveAt(o, now) {
+	if p.AccountInactiveAt(o, now) {
 		if allow, err := s.breakGlassExempt(ctx, o.Subject, now, p); err != nil {
 			return err
 		} else if !allow {

@@ -46,8 +46,9 @@ func TestConformance(t *testing.T) {
 	})
 }
 
-// TestSharedConformance runs the two-handle suite: both handles open one
-// file, as two processes open one database.
+// TestSharedConformance runs the two-handle suite. One SQLite file allows
+// one store, so the suite gets that store twice: one database with two
+// concurrent callers.
 func TestSharedConformance(t *testing.T) {
 	t.Parallel()
 
@@ -58,7 +59,9 @@ func TestSharedConformance(t *testing.T) {
 
 		copyTemplate(t, path)
 
-		return openPath(t, path), openPath(t, path)
+		s := openPath(t, path)
+
+		return s, s
 	})
 }
 
@@ -74,7 +77,7 @@ func TestAccessConformance(t *testing.T) {
 }
 
 // TestAccessConcurrency runs the cases of a grant or role check that races
-// a write on a second handle of the same database file.
+// a write on the same database handle.
 func TestAccessConcurrency(t *testing.T) {
 	t.Parallel()
 
@@ -84,7 +87,9 @@ func TestAccessConcurrency(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "dustpan.db")
 		copyTemplate(t, path)
 
-		return openPath(t, path), openPath(t, path)
+		s := openPath(t, path)
+
+		return s, s
 	})
 }
 
@@ -129,6 +134,21 @@ func TestTempAdminConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t)
+	})
+}
+
+// TestSessionFreshConformance runs the session cases that change a policy
+// on one handle and use a session on the other. One SQLite file allows one
+// store, so the suite gets that store twice.
+func TestSessionFreshConformance(t *testing.T) {
+	t.Parallel()
+
+	sessiontest.RunFresh(t, func(t *testing.T) (sessiontest.Store, sessiontest.Store) {
+		t.Helper()
+
+		s := open(t)
+
+		return s, s
 	})
 }
 
@@ -258,22 +278,9 @@ func TestAuditChainConformance(t *testing.T) {
 					t.Fatalf("change entry %d: %v", seq, err)
 				}
 			},
-			Reopen: func(t *testing.T) audittest.ChainStore {
-				t.Helper()
-
-				second, err := sqlite.Open(t.Context(), path)
-				if err != nil {
-					t.Fatalf("reopen store: %v", err)
-				}
-
-				t.Cleanup(func() {
-					if err := second.Close(); err != nil {
-						t.Errorf("close store: %v", err)
-					}
-				})
-
-				return second
-			},
+			// One SQLite file allows one store, so there is no second
+			// handle to reopen.
+			Reopen: nil,
 		}
 	})
 }
