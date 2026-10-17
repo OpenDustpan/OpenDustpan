@@ -136,7 +136,7 @@ func checkBudgetBounds(t *testing.T, budget *stubBudget, size int64) {
 func testNoBudget(t *testing.T) {
 	t.Helper()
 
-	svc, ws := newMemPlainFixture(t)
+	svc, ws := newMemSealedFixture(t)
 	lockOutputsWorkspace(t, svc, ws)
 
 	const serial = 2
@@ -152,7 +152,7 @@ func testNoBudget(t *testing.T) {
 	}
 }
 
-// testOneRecordingBudget checks one sealed flag with an accepting budget.
+// testOneRecordingBudget checks a sealed upload with an accepting budget.
 func testOneRecordingBudget(t *testing.T, makeFixture func(testing.TB) (*workspace.Service, workspace.Workspace)) {
 	t.Helper()
 
@@ -187,11 +187,10 @@ func testOneRecordingBudget(t *testing.T, makeFixture func(testing.TB) (*workspa
 	checkBudgetBounds(t, budget, size)
 }
 
-// testRecordingBudget checks unsealed and sealed uploads with a budget.
+// testRecordingBudget checks a sealed upload with a budget.
 func testRecordingBudget(t *testing.T) {
 	t.Helper()
 
-	testOneRecordingBudget(t, newMemPlainFixture)
 	testOneRecordingBudget(t, newMemSealedFixture)
 }
 
@@ -199,7 +198,7 @@ func testRecordingBudget(t *testing.T) {
 func testRefusedBusy(t *testing.T) {
 	t.Helper()
 
-	svc, ws := newMemPlainFixture(t)
+	svc, ws := newMemSealedFixture(t)
 	lockOutputsWorkspace(t, svc, ws)
 
 	const serial = 2
@@ -224,7 +223,7 @@ func testRefusedBudgetLeavesNoBlob(t *testing.T) {
 	t.Helper()
 
 	base := newMemBase(t)
-	svc, ws := memService(t, base, nil)
+	svc, ws := memService(t, base, newMemSealer(t, base.namespaces))
 
 	lockOutputsWorkspace(t, svc, ws)
 
@@ -282,7 +281,7 @@ func testTooSmallUpload(t *testing.T) {
 	t.Helper()
 
 	base := newMemBase(t)
-	svc, ws := memService(t, base, nil)
+	svc, ws := memService(t, base, newMemSealer(t, base.namespaces))
 
 	lockOutputsWorkspace(t, svc, ws)
 
@@ -317,7 +316,7 @@ func testTooSmallWriteState(t *testing.T) {
 	t.Helper()
 
 	base := newMemBase(t)
-	svc, ws := memService(t, base, nil)
+	svc, ws := memService(t, base, newMemSealer(t, base.namespaces))
 
 	if _, lockErr := svc.LockWithID(t.Context(), ws.ID, memHolder, memLockReason, memLockID); lockErr != nil {
 		t.Fatalf("lock: %v", lockErr)
@@ -351,7 +350,7 @@ func testRefusedWriteState(t *testing.T) {
 	t.Helper()
 
 	base := newMemBase(t)
-	svc, ws := memService(t, base, nil)
+	svc, ws := memService(t, base, newMemSealer(t, base.namespaces))
 
 	if _, lockErr := svc.LockWithID(t.Context(), ws.ID, memHolder, memLockReason, memLockID); lockErr != nil {
 		t.Fatalf("lock: %v", lockErr)
@@ -384,7 +383,7 @@ func testRefusedWriteState(t *testing.T) {
 func testSmallOutputs(t *testing.T) {
 	t.Helper()
 
-	svc, ws := newMemPlainFixture(t)
+	svc, ws := newMemSealedFixture(t)
 
 	doc := smallOutputsDoc()
 

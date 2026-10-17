@@ -35,6 +35,34 @@ func TestParseState(t *testing.T) {
 	}
 }
 
+// stubSealer is a workspace.Sealer that seals nothing: it passes state and
+// outputs through, so the maintenance tests prove their own behavior.
+type stubSealer struct{}
+
+func (stubSealer) SealState(
+	_ context.Context, _ namespace.Name, _ string, r io.Reader,
+) (io.Reader, error) {
+	return r, nil
+}
+
+func (stubSealer) OpenState(
+	_ context.Context, _ namespace.Name, _ string, r io.Reader,
+) (io.Reader, error) {
+	return r, nil
+}
+
+func (stubSealer) SealOutputs(
+	_ context.Context, _ namespace.Name, _ string, plain []byte,
+) ([]byte, error) {
+	return plain, nil
+}
+
+func (stubSealer) OpenOutputs(
+	_ context.Context, _ namespace.Name, _ string, sealed []byte,
+) ([]byte, error) {
+	return sealed, nil
+}
+
 // fakeStateStore holds the installation state in memory. onSet runs on each
 // write, so race tests seed a start between the enter check and its write.
 // onSetIf runs before the conditional write checks its expectation, so a
@@ -509,7 +537,7 @@ func newFixtureWith(
 		States:             states,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             stubSealer{},
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,
@@ -657,7 +685,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		States:             fakeStates{},
 		Blobs:              fakeBlobs{},
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             stubSealer{},
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,

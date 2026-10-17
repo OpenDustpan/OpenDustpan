@@ -83,15 +83,83 @@ func TestVerifierKnowsEarlierEntriesOfTheBatch(t *testing.T) {
 	}
 }
 
-// TestVerifierRefusesKindsTheReplayerDoesNotApply checks that kind 10 is refused
-// with ErrUnsupportedKind, as the replayer refuses it (item 12).
-func TestVerifierRefusesKindsTheReplayerDoesNotApply(t *testing.T) {
+// migrationState is an inserted resource state for the state migration tests.
+const migrationState = `{"urn":"urn:pulumi:dev::corpus::test:resource::m","custom":true,"type":"test:resource","id":"m"}`
+
+// migrationBatch returns a state migration entry with one new-state patch for
+// operation op, or with no patches when op is negative.
+func migrationBatch(seq, op int64) string {
+	patches := ""
+	if op >= 0 {
+		patches = `,"newStatePatches":[{"operationID":` + strconv.FormatInt(op, 10) +
+			`,"state":` + migrationState + `}]`
+	}
+
+	return `{"version":2,"kind":10,"sequenceID":` + strconv.FormatInt(seq, 10) +
+		`,"operationID":0,"removeOld":null,"removeNew":null,` +
+		`"layout":[{"stateIndex":0}],"states":[` + migrationState + `]` + patches + `}`
+}
+
+// completedEntry returns a success entry with a state for operation op.
+func completedEntry(seq, op int64) string {
+	return `{"version":1,"kind":1,"sequenceID":` + strconv.FormatInt(seq, 10) +
+		`,"operationID":` + strconv.FormatInt(op, 10) +
+		`,"removeOld":null,"removeNew":null,"state":` + migrationState + `}`
+}
+
+// TestVerifierAcceptsStateMigration checks that a kind 10 entry passes with a
+// new-state patch for a held operation, and reports that the batch changes
+// the records.
+func TestVerifierAcceptsStateMigration(t *testing.T) {
 	t.Parallel()
 
-	body := batchOf(`{"version":2,"kind":10,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`)
-	_, err := (pulumijournal.Verifier{}).VerifyBatch(body, 2, nil, false)
-	if !errors.Is(err, pulumijournal.ErrUnsupportedKind) {
-		t.Fatalf("kind 10: err = %v, want ErrUnsupportedKind", err)
+	body := batchOf(completedEntry(1, 5), migrationBatch(2, 5))
+	changed, err := (pulumijournal.Verifier{}).VerifyBatch(body, 2, nil, false)
+	if err != nil {
+		t.Fatalf("migration with a held patch: %v", err)
+	}
+
+	if !changed {
+		t.Fatal("migration with a held patch: changed = false, want true")
+	}
+}
+
+// TestVerifierRefusesBadNewStatePatches checks that a new-state patch for an
+// operation that is not held, or that an earlier entry of the batch removed,
+// is refused with ErrMissingReference.
+func TestVerifierRefusesBadNewStatePatches(t *testing.T) {
+	t.Parallel()
+
+	unknown := batchOf(migrationBatch(1, 5))
+	_, err := (pulumijournal.Verifier{}).VerifyBatch(unknown, 2, nil, false)
+	if !errors.Is(err, pulumijournal.ErrMissingReference) {
+		t.Fatalf("patch of an unknown operation: err = %v, want ErrMissingReference", err)
+	}
+
+	removed := batchOf(
+		completedEntry(1, 5),
+		`{"version":1,"kind":1,"sequenceID":2,"operationID":6,"removeOld":null,"removeNew":5,`+
+			`"state":`+migrationState+`}`,
+		migrationBatch(3, 5),
+	)
+	_, err = (pulumijournal.Verifier{}).VerifyBatch(removed, 2, nil, false)
+	if !errors.Is(err, pulumijournal.ErrMissingReference) {
+		t.Fatalf("patch of a removed operation: err = %v, want ErrMissingReference", err)
+	}
+}
+
+// TestVerifierRefusesWriteAfterMigration checks that a write entry that
+// follows a state migration entry is refused with ErrWriteOrder, as the
+// migration changes the replay records.
+func TestVerifierRefusesWriteAfterMigration(t *testing.T) {
+	t.Parallel()
+
+	write := `{"version":1,"kind":5,"sequenceID":2,"operationID":2,"removeOld":null,"removeNew":null,` +
+		`"newSnapshot":{"manifest":{"time":"2026-01-01T00:00:00Z","magic":"","version":""},"resources":[]}}`
+
+	_, err := (pulumijournal.Verifier{}).VerifyBatch(batchOf(migrationBatch(1, -1), write), 2, nil, false)
+	if !errors.Is(err, pulumijournal.ErrWriteOrder) {
+		t.Fatalf("write after a migration: err = %v, want ErrWriteOrder", err)
 	}
 }
 

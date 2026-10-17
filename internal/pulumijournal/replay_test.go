@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -150,14 +151,264 @@ func TestReplayRefusesMissingReference(t *testing.T) {
 	}
 }
 
-// TestReplayRefusesStateMigration checks that kind 10 answers ErrUnsupportedKind
-// until item 12 replays it.
-func TestReplayRefusesStateMigration(t *testing.T) {
+// migrationBase is a base deployment with a stack resource and one managed
+// resource for the state migration tests.
+const migrationBase = `{"manifest":{"time":"2026-01-01T00:00:00Z","magic":"","version":""},"resources":[` +
+	`{"urn":"urn:pulumi:dev::corpus::pulumi:pulumi:Stack::corpus","custom":false,"type":"pulumi:pulumi:Stack"},` +
+	`{"urn":"urn:pulumi:dev::corpus::test:resource::a","custom":true,"type":"test:resource","id":"a"}]}`
+
+// migrationInserted is the resource state that the migration tests insert.
+const migrationInserted = `{"urn":"urn:pulumi:dev::corpus::test:resource::b","custom":true,"type":"test:resource","id":"b"}`
+
+// migrationInsertedURN is the URN of the inserted resource, so the refusal
+// cases can vary its other members without repeating it.
+const migrationInsertedURN = `urn:pulumi:dev::corpus::test:resource::b`
+
+// insertedVariant returns an inserted resource state with the members of the
+// inserted resource and the extra member.
+func insertedVariant(extra string) string {
+	return `{"urn":"` + migrationInsertedURN +
+		`","custom":true,"type":"test:resource","id":"b"` + extra + `}`
+}
+
+// migrationEntry returns a state migration entry with the layout and states
+// members, and no patches.
+func migrationEntry(seq int, layout, states string) string {
+	return `{"version":2,"kind":10,"sequenceID":` + strconv.Itoa(seq) +
+		`,"operationID":0,"removeOld":null,"removeNew":null,"layout":` + layout +
+		`,"states":` + states + `}`
+}
+
+// TestReplayAppliesStateMigration checks that a kind 10 entry replaces the
+// base with its layout: the retained stack stays and the inserted resource
+// takes the place of the dropped one.
+func TestReplayAppliesStateMigration(t *testing.T) {
 	t.Parallel()
-	entry := `{"version":2,"kind":10,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null}`
+	entries := batch(migrationEntry(
+		1,
+		`[{"baseIndex":0},{"stateIndex":0}]`,
+		`[`+migrationInserted+`]`,
+	))
+	got, err := replay(migrationBase, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectDeployment(t, got,
+		`{"urn":"urn:pulumi:dev::corpus::pulumi:pulumi:Stack::corpus","custom":false,"type":"pulumi:pulumi:Stack"}`+
+			`,`+migrationInserted)
+}
+
+// TestReplayAppliesStateMigrationPatches checks that a kind 10 entry applies
+// its base and new-state patches, and moves the markings of the retained base
+// resources to their new positions.
+func TestReplayAppliesStateMigrationPatches(t *testing.T) {
+	t.Parallel()
+	base := baseJSON(
+		`{"urn":"urn:pulumi:dev::corpus::pulumi:pulumi:Stack::corpus","custom":false,"type":"pulumi:pulumi:Stack"}`,
+		resourceJSON("urn:old-a"),
+		resourceJSON("urn:keep"),
+	)
+	patched := `{"urn":"urn:keep","custom":true,"type":"t:mod:T","id":"x","inputs":{"v":"new"}}`
+	replacement := `{"urn":"urn:pulumi:dev::corpus::test:resource::new","custom":true,"type":"test:resource","id":"n"}`
+	entries := batch(
+		`{"version":1,"kind":1,"sequenceID":1,"operationID":7,"removeOld":null,"removeNew":null,`+
+			`"state":`+resourceJSON("urn:early")+`}`,
+		`{"version":1,"kind":1,"sequenceID":2,"operationID":8,"removeOld":null,"removeNew":null,`+
+			`"state":`+resourceJSON("urn:other")+`,"deleteOld":1}`,
+		`{"version":2,"kind":10,"sequenceID":3,"operationID":0,"removeOld":null,"removeNew":null,`+
+			`"layout":[{"baseIndex":0},{"stateIndex":0},{"baseIndex":2}],`+
+			`"states":[`+replacement+`],`+
+			`"baseStatePatches":[{"index":2,"state":`+patched+`}],`+
+			`"newStatePatches":[{"operationID":7,"state":`+resourceJSON("urn:early-patched")+`}]}`,
+	)
+	got, err := replay(base, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The delete marking of the dropped base index 1 is gone with it. The new
+	// resources come first, then the migrated base in layout order.
+	expectDeployment(t, got,
+		resourceJSON("urn:early-patched")+","+resourceJSON("urn:other")+","+
+			`{"urn":"urn:pulumi:dev::corpus::pulumi:pulumi:Stack::corpus","custom":false,"type":"pulumi:pulumi:Stack"}`+
+			","+replacement+","+patched)
+}
+
+// TestReplayRefusesStateMigrationAtVersionOne checks that a kind 10 entry with
+// version 1 is refused with ErrKindVersion, before the replay runs.
+func TestReplayRefusesStateMigrationAtVersionOne(t *testing.T) {
+	t.Parallel()
+	entry := `{"version":1,"kind":10,"sequenceID":1,"operationID":0,"removeOld":null,"removeNew":null}`
 	_, err := replay(baseJSON(), batch(entry))
-	if !errors.Is(err, pulumijournal.ErrUnsupportedKind) {
-		t.Fatalf("error is %v, want ErrUnsupportedKind", err)
+	if !errors.Is(err, pulumijournal.ErrKindVersion) {
+		t.Fatalf("error is %v, want ErrKindVersion", err)
+	}
+}
+
+// TestReplayRefusesBadStateMigrations checks that a kind 10 entry that does
+// not apply to the checkpoint built so far is refused.
+func TestReplayRefusesBadStateMigrations(t *testing.T) {
+	t.Parallel()
+	goodLayout := `[{"baseIndex":0},{"stateIndex":0}]`
+	goodStates := `[` + migrationInserted + `]`
+	success := func(seq, op int64) string {
+		return `{"version":1,"kind":1,"sequenceID":` + strconv.FormatInt(seq, 10) +
+			`,"operationID":` + strconv.FormatInt(op, 10) +
+			`,"removeOld":null,"removeNew":null,"state":` + resourceJSON("urn:early") + `}`
+	}
+	tests := []struct {
+		name    string
+		base    string
+		entries string
+		want    error
+	}{
+		{
+			name:    "pending base operations",
+			base:    `{"manifest":{},"resources":[],"pending_operations":[{"type":"creating"}]}`,
+			entries: batch(migrationEntry(1, goodLayout, goodStates)),
+			want:    pulumijournal.ErrStateMigration,
+		},
+		{
+			name: "incomplete operation",
+			base: baseJSON(),
+			entries: batch(
+				`{"version":1,"kind":0,"sequenceID":1,"operationID":1,"removeOld":null,"removeNew":null,`+
+					`"operation":{"resource":`+resourceJSON("urn:op")+`}}`,
+				migrationEntry(2, goodLayout, goodStates),
+			),
+			want: pulumijournal.ErrStateMigration,
+		},
+		{
+			name:    "no inserted states",
+			base:    migrationBase,
+			entries: batch(migrationEntry(1, `[{"baseIndex":0}]`, `[]`)),
+			want:    pulumijournal.ErrStateMigration,
+		},
+		{
+			name:    "layout names both",
+			base:    migrationBase,
+			entries: batch(migrationEntry(1, `[{"baseIndex":0,"stateIndex":0}]`, goodStates)),
+			want:    pulumijournal.ErrStateMigration,
+		},
+		{
+			name:    "layout names neither",
+			base:    migrationBase,
+			entries: batch(migrationEntry(1, `[{}]`, goodStates)),
+			want:    pulumijournal.ErrStateMigration,
+		},
+		{
+			name:    "layout base index outside the base",
+			base:    migrationBase,
+			entries: batch(migrationEntry(1, `[{"baseIndex":7},{"stateIndex":0}]`, goodStates)),
+			want:    pulumijournal.ErrStateMigration,
+		},
+		{
+			name:    "layout places base twice",
+			base:    migrationBase,
+			entries: batch(migrationEntry(1, `[{"baseIndex":0},{"baseIndex":0},{"stateIndex":0}]`, goodStates)),
+			want:    pulumijournal.ErrStateMigration,
+		},
+		{
+			name:    "layout misses an inserted state",
+			base:    migrationBase,
+			entries: batch(migrationEntry(1, `[{"baseIndex":0}]`, goodStates)),
+			want:    pulumijournal.ErrStateMigration,
+		},
+		{
+			name: "base patch outside the base",
+			base: migrationBase,
+			entries: batch(`{"version":2,"kind":10,"sequenceID":1,"operationID":0,"removeOld":null,"removeNew":null,` +
+				`"layout":` + goodLayout + `,"states":` + goodStates +
+				`,"baseStatePatches":[{"index":7,"state":` + migrationInserted + `}]}`),
+			want: pulumijournal.ErrStateMigration,
+		},
+		{
+			name: "base patch of a dropped resource",
+			base: migrationBase,
+			entries: batch(`{"version":2,"kind":10,"sequenceID":1,"operationID":0,"removeOld":null,"removeNew":null,` +
+				`"layout":` + goodLayout + `,"states":` + goodStates +
+				`,"baseStatePatches":[{"index":1,"state":` + migrationInserted + `}]}`),
+			want: pulumijournal.ErrStateMigration,
+		},
+		{
+			name: "new-state patch of an unknown operation",
+			base: migrationBase,
+			entries: batch(`{"version":2,"kind":10,"sequenceID":1,"operationID":0,"removeOld":null,"removeNew":null,` +
+				`"layout":` + goodLayout + `,"states":` + goodStates +
+				`,"newStatePatches":[{"operationID":9,"state":` + migrationInserted + `}]}`),
+			want: pulumijournal.ErrMissingReference,
+		},
+		{
+			name: "new-state patch of a removed operation",
+			base: migrationBase,
+			entries: batch(
+				success(1, 5),
+				`{"version":1,"kind":1,"sequenceID":2,"operationID":6,"removeOld":null,"removeNew":5,`+
+					`"state":`+resourceJSON("urn:next")+`}`,
+				`{"version":2,"kind":10,"sequenceID":3,"operationID":0,"removeOld":null,"removeNew":null,`+
+					`"layout":`+goodLayout+`,"states":`+goodStates+
+					`,"newStatePatches":[{"operationID":5,"state":`+migrationInserted+`}]}`,
+			),
+			want: pulumijournal.ErrMissingReference,
+		},
+		{
+			name:    "inserted state with an invalid URN",
+			base:    migrationBase,
+			entries: batch(migrationEntry(1, goodLayout, `[{"urn":"not-a-urn","custom":false,"type":"t"}]`)),
+			want:    pulumijournal.ErrInvalidURN,
+		},
+		{
+			name: "inserted state with a mismatched type",
+			base: migrationBase,
+			entries: batch(migrationEntry(1, goodLayout,
+				`[{"urn":"`+migrationInsertedURN+`","custom":true,"type":"other:resource","id":"b"}]`)),
+			want: pulumijournal.ErrStateMigration,
+		},
+		{
+			name: "inserted state marked for deletion",
+			base: migrationBase,
+			entries: batch(migrationEntry(1, goodLayout,
+				`[`+insertedVariant(`,"delete":true`)+`]`)),
+			want: pulumijournal.ErrStateMigration,
+		},
+		{
+			name: "inserted state that is a view",
+			base: migrationBase,
+			entries: batch(migrationEntry(1, goodLayout,
+				`[`+insertedVariant(`,"viewOf":"urn:x"`)+`]`)),
+			want: pulumijournal.ErrStateMigration,
+		},
+		{
+			name: "inserted custom state without an ID",
+			base: migrationBase,
+			entries: batch(migrationEntry(1, goodLayout,
+				`[{"urn":"`+migrationInsertedURN+`","custom":true,"type":"test:resource"}]`)),
+			want: pulumijournal.ErrStateMigration,
+		},
+		{
+			name: "inserted state with an unknown extension",
+			base: migrationBase,
+			entries: batch(migrationEntry(1, goodLayout,
+				`[`+insertedVariant(`,"extensionRef":"ext-x"`)+`]`)),
+			want: pulumijournal.ErrStateMigration,
+		},
+		{
+			name: "inserted states with a repeated URN",
+			base: migrationBase,
+			entries: batch(migrationEntry(1,
+				`[{"baseIndex":0},{"stateIndex":0},{"stateIndex":1}]`,
+				`[`+migrationInserted+`,`+migrationInserted+`]`,
+			)),
+			want: pulumijournal.ErrStateMigration,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := replay(tt.base, tt.entries)
+			if !errors.Is(err, tt.want) {
+				t.Fatalf("error is %v, want %v", err, tt.want)
+			}
+		})
 	}
 }
 

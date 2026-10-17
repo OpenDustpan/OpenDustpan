@@ -202,8 +202,9 @@ func openBlobSink(spec string, cfg sinkConfig) (logsink.Sink, time.Duration, err
 
 // openSyslogSink opens a syslog+udp://, syslog+tcp:// or syslog+tls://
 // sink. The query takes facility (0 to 23, default from cfg), max-size
-// (the message cap in bytes, 480 to 65507, default 8192) and, for TLS,
-// ca-file: a PEM bundle to trust instead of the system store.
+// (the message cap in bytes, 480 to 65507 over UDP and 480 to 65536 over
+// TCP and TLS, default 8192 over UDP and 65536 over TCP and TLS) and, for
+// TLS, ca-file: a PEM bundle to trust instead of the system store.
 func openSyslogSink(spec string, cfg sinkConfig) (*syslog.Sink, error) {
 	u, err := url.Parse(spec)
 	if err != nil {
