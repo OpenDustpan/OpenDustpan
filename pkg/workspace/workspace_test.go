@@ -3931,7 +3931,9 @@ func TestRestoreFailedCopyKeepsCurrent(t *testing.T) {
 		t.Fatalf("delete source blob: %v", err)
 	}
 
-	sealed, err := f.secrets.SealState(ctx, f.ws.Ref.Namespace, f.ws.ID.String(), string(first.ID), strings.NewReader("tampered"))
+	sealed, err := f.secrets.SealState(
+		ctx, f.ws.Ref.Namespace, f.ws.ID.String(), string(first.ID), strings.NewReader("tampered"),
+	)
 	if err != nil {
 		t.Fatalf("seal tampered content: %v", err)
 	}
