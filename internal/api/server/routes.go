@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 
@@ -80,10 +81,12 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.checkRoutes()...)
 	routes = append(routes, h.restoreRoutes()...)
 	routes = append(routes, h.maintenanceRoutes()...)
+	routes = append(routes, h.auditChainRoutes()...)
 	routes = append(routes, h.deletedUnitRoutes()...)
 	routes = append(routes, h.namespaceOverrideRoutes()...)
 	routes = append(routes, h.ipAllowlistRoutes()...)
 	routes = append(routes, h.principalRoutes()...)
+	routes = append(routes, h.namespacePrincipalRoutes()...)
 	routes = append(routes, h.groupRoutes()...)
 	routes = append(routes, h.roleRoutes()...)
 	routes = append(routes, h.grantRoutes()...)
@@ -91,8 +94,28 @@ func (h *Handler) buildRoutes() []Route {
 	routes = append(routes, h.tokenRoutes()...)
 	routes = append(routes, h.ownTokenRoutes()...)
 	routes = append(routes, h.tokenPolicyRoutes()...)
+	routes = append(routes, h.sessionPolicyRoutes()...)
+	routes = append(routes, h.auditSinkRoutes()...)
+	routes = append(routes, h.checkpointRoutes()...)
+	routes = append(routes, h.signInRoutes()...)
+	routes = append(routes, h.signInProviderRoutes()...)
 
 	return routes
+}
+
+// auditSinkRoutes returns the audit sink rows of the route table: the list
+// of the configured audit sinks with their delivery state.
+func (h *Handler) auditSinkRoutes() []Route {
+	return []Route{
+		{
+			Method:  http.MethodGet,
+			Path:    "/api/server/audit/sinks",
+			Scope:   ScopeAuthorized,
+			Actions: []identity.Action{identity.ActionServerObserve},
+			Resolve: resolveServer, ActionsFor: nil,
+			Serve: h.listAuditSinks,
+		},
+	}
 }
 
 // coreRoutes returns the namespace and metrics rows of the route table.
@@ -323,18 +346,44 @@ func (h *Handler) enforcePublic(route Route) http.HandlerFunc {
 	}
 }
 
+// principalKey carries the authenticated principal for resolvers that
+// need it. Only enforce sets it, before Resolve runs, so a resolver that
+// reads it sees the caller of this request. Resolvers that need no caller
+// ignore it.
+type principalKey struct{}
+
+// withPrincipal returns ctx carrying p for a resolver.
+func withPrincipal(ctx context.Context, p identity.Principal) context.Context {
+	return context.WithValue(ctx, principalKey{}, p)
+}
+
+// principalFromRequest returns the principal that enforce stored on r, and
+// false when r went around enforce.
+func principalFromRequest(r *http.Request) (identity.Principal, bool) {
+	p, ok := r.Context().Value(principalKey{}).(identity.Principal)
+
+	return p, ok
+}
+
 // enforceAuthorized serves a route that needs a signed-in principal and the
 // Authorizer to allow every declared action on the resolved object.
 func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
-		p, err := h.authenticate(r)
+		p, caller, err := h.authenticate(r)
 		if err != nil {
 			h.writeError(ctx, w, err)
 
 			return
 		}
+
+		ctx = withPrincipal(ctx, p)
+		if caller != nil {
+			ctx = context.WithValue(ctx, sessionKey{}, *caller)
+		}
+
+		r = r.WithContext(ctx)
 
 		obj, err := route.Resolve(w, r)
 		if err != nil {

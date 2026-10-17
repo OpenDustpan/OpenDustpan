@@ -17,10 +17,12 @@ import (
 
 // upgradeCheckDoc decodes an upgrade check answer in tests.
 type upgradeCheckDoc struct {
-	Version           string   `json:"version"`
-	SchemaVersion     int64    `json:"schemaVersion"`
-	AppliedMigrations []string `json:"appliedMigrations"`
-	KeyEncryptionKey  bool     `json:"keyEncryptionKey"`
+	Version                 string   `json:"version"`
+	SchemaVersion           int64    `json:"schemaVersion"`
+	MinimumBinaryVersion    string   `json:"minimumBinaryVersion"`
+	AppliedMigrations       []string `json:"appliedMigrations"`
+	KeyEncryptionKey        bool     `json:"keyEncryptionKey"`
+	RunningJournaledUpdates int64    `json:"runningJournaledUpdates"`
 }
 
 // readUpgradeCheck reads the upgrade check and returns its status and
@@ -131,14 +133,17 @@ type stubSchema struct {
 // schemaMigration is one applied migration in tests. The field names match
 // the store package so the test converts without importing it.
 type schemaMigration struct {
-	Version int64
-	Name    string
+	Version          int64
+	Name             string
+	MinBinaryVersion string
 }
 
 func (s stubSchema) AppliedMigrations(_ context.Context) ([]schema.AppliedMigration, error) {
 	out := make([]schema.AppliedMigration, 0, len(s.migrations))
 	for _, migration := range s.migrations {
-		out = append(out, schema.AppliedMigration{Version: migration.Version, Name: migration.Name})
+		out = append(out, schema.AppliedMigration{
+			Version: migration.Version, Name: migration.Name, MinBinaryVersion: migration.MinBinaryVersion,
+		})
 	}
 
 	return out, nil
@@ -160,15 +165,21 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 		Metrics:       stubMetrics{},
 		Version:       "",
 		Schema: stubSchema{migrations: []schemaMigration{
-			{Version: 1, Name: "0001_init.sql"},
+			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
-		DeletedUnits:   nil,
-		IPAllowlists:   nil,
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -186,6 +197,58 @@ func TestUpgradeCheckEmptyVersionDefaultsDev(t *testing.T) {
 	if doc.SchemaVersion != 1 || len(doc.AppliedMigrations) != 1 || doc.AppliedMigrations[0] != "0001_init.sql" {
 		t.Fatalf("upgrade check = %+v, want schema version 1 with one migration", doc)
 	}
+
+	if doc.MinimumBinaryVersion != "" {
+		t.Fatalf("minimum binary version = %q, want none", doc.MinimumBinaryVersion)
+	}
+}
+
+// TestUpgradeCheckAnswersSchemaMinimum proves the upgrade check answers the
+// highest minimum binary version of the applied migrations.
+func TestUpgradeCheckAnswersSchemaMinimum(t *testing.T) {
+	t.Parallel()
+
+	handler, err := apiserver.NewHandler(apiserver.Config{
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Backups:       nil,
+		Restores:      nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "v0.3.0",
+		Schema: stubSchema{migrations: []schemaMigration{
+			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: "v0.1.0"},
+			{Version: 2, Name: "0002_contract.sql", MinBinaryVersion: "v0.10.0"},
+			{Version: 3, Name: "0003_expand.sql", MinBinaryVersion: ""},
+		}},
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
+	})
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	status, doc := readUpgradeCheck(t, handler)
+	if status != http.StatusOK {
+		t.Fatalf("GET upgrade check answers %d, want %d", status, http.StatusOK)
+	}
+
+	if doc.MinimumBinaryVersion != "v0.10.0" {
+		t.Fatalf("minimum binary version = %q, want v0.10.0", doc.MinimumBinaryVersion)
+	}
 }
 
 // TestUpgradeCheckWithoutSchema proves the upgrade check without a schema
@@ -194,23 +257,29 @@ func TestUpgradeCheckWithoutSchema(t *testing.T) {
 	t.Parallel()
 
 	handler, err := apiserver.NewHandler(apiserver.Config{
-		Authenticator:  tokenAuthenticator{},
-		Authorizer:     selectiveAuthorizer{deny: map[identity.Action]bool{}},
-		Logger:         slog.New(slog.DiscardHandler),
-		Namespaces:     newTestNamespaces(t),
-		Backups:        nil,
-		Restores:       nil,
-		Maintenance:    newFakeMaintenance(maintenance.StateNormal),
-		Metrics:        stubMetrics{},
-		Version:        "test",
-		Schema:         nil,
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
-		DeletedUnits:   nil,
-		IPAllowlists:   nil,
+		Authenticator:    tokenAuthenticator{},
+		Authorizer:       selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:           slog.New(slog.DiscardHandler),
+		Namespaces:       newTestNamespaces(t),
+		Backups:          nil,
+		Restores:         nil,
+		Maintenance:      newFakeMaintenance(maintenance.StateNormal),
+		Metrics:          stubMetrics{},
+		Version:          "test",
+		Schema:           nil,
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -271,15 +340,21 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 		Metrics:       stubMetrics{},
 		Version:       "test",
 		Schema: stubSchema{migrations: []schemaMigration{
-			{Version: 1, Name: "0001_init.sql"},
+			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
 		}},
-		Principals:     nil,
-		Access:         nil,
-		Tokens:         nil,
-		Audit:          nil,
-		OnAuditFailure: nil,
-		DeletedUnits:   nil,
-		IPAllowlists:   nil,
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
 	})
 	if err != nil {
 		t.Fatalf("handler: %v", err)
@@ -292,5 +367,90 @@ func TestUpgradeCheckAnswersKeyEncryptionKey(t *testing.T) {
 
 	if !doc.KeyEncryptionKey {
 		t.Fatal("keyEncryptionKey = false, want true")
+	}
+}
+
+// stubJournal answers a fixed count of running journaled updates.
+type stubJournal struct {
+	count int64
+}
+
+func (s stubJournal) CountRunningJournaledUpdates(_ context.Context) (int64, error) {
+	return s.count, nil
+}
+
+// newJournalHandler builds an upgrade check handler with the stub schema of
+// one migration and the given journaled count. A negative count wires no
+// journal reporter, so the check answers 0 as a store without the count does.
+func newJournalHandler(t *testing.T, journaled int64) *apiserver.Handler {
+	t.Helper()
+
+	cfg := apiserver.Config{
+		Authenticator: tokenAuthenticator{},
+		Authorizer:    selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		Logger:        slog.New(slog.DiscardHandler),
+		Namespaces:    newTestNamespaces(t),
+		Backups:       nil,
+		Restores:      nil,
+		Maintenance:   newFakeMaintenance(maintenance.StateNormal),
+		Metrics:       stubMetrics{},
+		Version:       "test",
+		Schema: stubSchema{migrations: []schemaMigration{
+			{Version: 1, Name: "0001_init.sql", MinBinaryVersion: ""},
+		}},
+		Journal:          nil,
+		Principals:       nil,
+		Access:           nil,
+		Tokens:           nil,
+		Audit:            nil,
+		OnAuditFailure:   nil,
+		DeletedUnits:     nil,
+		IPAllowlists:     nil,
+		SessionPolicy:    nil,
+		AuditChain:       nil,
+		AuditSinks:       nil,
+		SignIn:           nil,
+		CheckpointEpochs: nil,
+	}
+
+	if journaled >= 0 {
+		cfg.Journal = stubJournal{count: journaled}
+	}
+
+	handler, err := apiserver.NewHandler(cfg)
+	if err != nil {
+		t.Fatalf("handler: %v", err)
+	}
+
+	return handler
+}
+
+// TestUpgradeCheckAnswersNoJournaledUpdates proves the upgrade check without
+// a journal reporter answers a zero journaled count.
+func TestUpgradeCheckAnswersNoJournaledUpdates(t *testing.T) {
+	t.Parallel()
+
+	status, doc := readUpgradeCheck(t, newJournalHandler(t, -1))
+	if status != http.StatusOK {
+		t.Fatalf("GET upgrade check answers %d, want %d", status, http.StatusOK)
+	}
+
+	if doc.RunningJournaledUpdates != 0 {
+		t.Fatalf("runningJournaledUpdates = %d, want 0", doc.RunningJournaledUpdates)
+	}
+}
+
+// TestUpgradeCheckAnswersTwoJournaledUpdates proves the upgrade check answers
+// the count of running journaled updates from its journal reporter.
+func TestUpgradeCheckAnswersTwoJournaledUpdates(t *testing.T) {
+	t.Parallel()
+
+	status, doc := readUpgradeCheck(t, newJournalHandler(t, 2))
+	if status != http.StatusOK {
+		t.Fatalf("GET upgrade check answers %d, want %d", status, http.StatusOK)
+	}
+
+	if doc.RunningJournaledUpdates != 2 {
+		t.Fatalf("runningJournaledUpdates = %d, want 2", doc.RunningJournaledUpdates)
 	}
 }

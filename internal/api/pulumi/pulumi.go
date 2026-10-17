@@ -34,6 +34,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -85,8 +86,11 @@ type Config struct {
 	Namespaces    *namespace.Service
 	Authenticator identity.Authenticator
 	Authorizer    identity.Authorizer
-	AddressGate   AddressGate
-	Logger        *slog.Logger
+	// Sessions checks the console session cookie of a request with no
+	// Authorization header. Nil accepts access tokens only.
+	Sessions    *sessionauth.Checker
+	AddressGate AddressGate
+	Logger      *slog.Logger
 	// BaseURL reports the external base URL for a request, for absolute
 	// URLs. The zero value derives it from each request.
 	BaseURL baseurl.Resolver
@@ -119,6 +123,7 @@ type Handler struct {
 	secrets        *secret.Service
 	namespaces     *namespace.Service
 	authn          identity.Authenticator
+	sessions       *sessionauth.Checker
 	authz          identity.Authorizer
 	addressGate    AddressGate
 	logger         *slog.Logger
@@ -139,7 +144,7 @@ type Handler struct {
 	supportedJournal int
 }
 
-// NewHandler returns a Handler. Every Config field is required.
+// NewHandler returns a Handler. Every Config field but Sessions is required.
 func NewHandler(cfg Config) (*Handler, error) {
 	switch {
 	case cfg.Stacks == nil:
@@ -166,6 +171,7 @@ func NewHandler(cfg Config) (*Handler, error) {
 		secrets:        cfg.Secrets,
 		namespaces:     cfg.Namespaces,
 		authn:          cfg.Authenticator,
+		sessions:       cfg.Sessions,
 		authz:          cfg.Authorizer,
 		addressGate:    cfg.AddressGate,
 		logger:         cfg.Logger,
@@ -835,13 +841,25 @@ func unitObject(ref stack.Ref) (identity.Object, error) {
 }
 
 // authenticate resolves the "Authorization: token <t>" header to a principal.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), tokenScheme)
-	if !ok || raw == "" {
-		return identity.Principal{}, identity.ErrUnauthenticated
+// A request with no Authorization header uses the console session cookie,
+// and the bool reports that the cookie signed it in. A request with an
+// Authorization header never uses the cookie.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, bool, error) {
+	header := r.Header.Get("Authorization")
+	if header == "" {
+		p, _, err := h.sessions.Authenticate(r)
+
+		return p, err == nil, err
 	}
 
-	return h.authn.AuthenticateToken(r.Context(), raw)
+	raw, ok := strings.CutPrefix(header, tokenScheme)
+	if !ok || raw == "" {
+		return identity.Principal{}, false, identity.ErrUnauthenticated
+	}
+
+	p, err := h.authn.AuthenticateToken(r.Context(), raw)
+
+	return p, false, err
 }
 
 // errorResponse is the error body the Pulumi CLI expects.
@@ -864,6 +882,25 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
 }
 
+// classifyAuth maps the errors of the authentication and the
+// authorization of a request.
+func classifyAuth(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, identity.ErrRateLimited):
+		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later", true
+	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid),
+		errors.Is(err, stack.ErrAccessTokenUnchecked):
+		return http.StatusUnauthorized, "unauthenticated", true
+	case errors.Is(err, sessionauth.ErrCSRF), errors.Is(err, sessionauth.ErrOtherSite),
+		errors.Is(err, errSessionUpdate), errors.Is(err, errSessionSecrets):
+		return http.StatusForbidden, err.Error(), true
+	case errors.Is(err, identity.ErrDenied):
+		return http.StatusForbidden, "forbidden", true
+	default:
+		return 0, "", false
+	}
+}
+
 // classify maps domain errors to an HTTP status and a message safe to show callers.
 // Today only the secret package produces key-encryption key fingerprints
 // (builtin- IDs in its wrapper-mismatch detail), and that detail leaves
@@ -873,16 +910,15 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 // holds no fingerprint; scopes there are the request's own names, not key
 // material.
 func classify(err error) (int, string) {
+	if status, message, ok := classifyAuth(err); ok {
+		return status, message
+	}
+
 	switch {
-	case errors.Is(err, identity.ErrRateLimited):
-		return http.StatusTooManyRequests, "too many failed sign-ins from this address: try again later"
-	case errors.Is(err, identity.ErrUnauthenticated), errors.Is(err, token.ErrInvalid),
-		errors.Is(err, stack.ErrAccessTokenUnchecked):
-		return http.StatusUnauthorized, "unauthenticated"
-	case errors.Is(err, identity.ErrDenied):
-		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, errInvalidBody):
 		return http.StatusBadRequest, invalidBodyMessage
+	case errors.Is(err, errRevealPathTooLong):
+		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrInvalidName), errors.Is(err, stack.ErrInvalidName),
 		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
 		return http.StatusBadRequest, err.Error()
@@ -931,14 +967,26 @@ func classifyUpdate(err error) (int, string) {
 	case errors.Is(err, stack.ErrUpdateConflict), errors.Is(err, stack.ErrWrongUpdateState),
 		errors.Is(err, stack.ErrConcurrentModification), errors.Is(err, stack.ErrInvalidDelta),
 		errors.Is(err, stack.ErrCheckpointConflict), errors.Is(err, stack.ErrStaleCheckpoint),
-		errors.Is(err, stack.ErrJournalConflict):
+		errors.Is(err, stack.ErrJournalConflict), errors.Is(err, stack.ErrJournalIncomplete):
 		return http.StatusConflict, err.Error()
 	case errors.Is(err, stack.ErrJournalBatch):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, stack.ErrLeaseInvalid), errors.Is(err, stack.ErrLeaseExpired):
 		return http.StatusUnauthorized, err.Error()
 	case errors.Is(err, stack.ErrTooLarge):
+		// A replay bound refusal answers its one-sentence message, which
+		// names the bound, its limit and the one command that helps,
+		// without the update wrapper prefixes. Any other oversized
+		// request answers the error text itself.
+		if msg, ok := stack.TooLargeMessage(err); ok {
+			return http.StatusRequestEntityTooLarge, msg
+		}
+
 		return http.StatusRequestEntityTooLarge, err.Error()
+	case errors.Is(err, stack.ErrJournalBuildTimeout):
+		return http.StatusServiceUnavailable, err.Error()
+	case errors.Is(err, namespace.ErrUnavailable):
+		return http.StatusServiceUnavailable, namespace.ErrUnavailable.Error() + ": try again"
 	default:
 		return http.StatusInternalServerError, "internal error"
 	}

@@ -132,7 +132,11 @@ type StateStore interface {
 	//   - the workspace is held by lock sv.LockID, else ErrNotLocked or
 	//     ErrLockedByOther;
 	//   - unless sv.Force, the current state (if any) has sv.Lineage, else
-	//     ErrLineageMismatch, and a lower serial, else ErrStaleSerial.
+	//     ErrLineageMismatch, and a lower serial, else ErrStaleSerial;
+	//   - when sv.RestoredFrom is set, the current state (if any) does not
+	//     restore sv.RestoredFrom for sv.Holder, else ErrAlreadyRestored: two
+	//     concurrent restores of one version write one version, also across
+	//     services.
 	// Those errors, ErrNotFound, ErrStateVersionNotFound,
 	// namespace.ErrNotFound and namespace.ErrFenced mean nothing was
 	// written. Any other error leaves the outcome unknown: the version may
@@ -141,8 +145,12 @@ type StateStore interface {
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// FenceAndUnlock releases the lock of w and makes sv the workspace's current
 	// state, in one fenced transaction. sv is a finalized fence version of w:
-	// it names the content, the new lineage, its serial and FenceBy. The stored
-	// workspace must be locked and hold revision w.Revision-1, else
+	// it names the content, the new lineage, its serial and FenceBy. The
+	// caller stores sv as a pending version with CreateStateVersion before it
+	// writes the content, so a sweep finds the key; FenceAndUnlock finalizes
+	// that row. The stored version must still be pending and name sv.Content,
+	// else ErrUploadDenied. The stored workspace must be locked and hold
+	// revision w.Revision-1, else
 	// ErrNotLocked or ErrConcurrentModification. The current version must be
 	// expect (the empty ID when the workspace has no state), else
 	// ErrConcurrentModification, and sv.Serial must be one more than its serial,
@@ -215,25 +223,6 @@ type StateStore interface {
 	// when fence is stale. A refused streamed write uses it when the finalize
 	// outcome is known, so its placeholder does not fill the pending cap.
 	DiscardStateVersion(ctx context.Context, id StateVersionID, fence namespace.Fence) error
-	// ListUnsealedStateVersions returns the finalized state versions that
-	// still hold plain content, ordered by version ID, so the seal job
-	// seals them. A version without content stays out: a pending row names
-	// no content yet. It returns no sentinel errors.
-	ListUnsealedStateVersions(ctx context.Context) ([]StateVersion, error)
-	// SealStateVersion moves the finalized unsealed version id to the
-	// sealed blob under content with the sealed outputs document, and
-	// marks it sealed, in one fenced transaction. It is idempotent: a
-	// version that is already sealed succeeds and changes nothing, so a
-	// retry after a crash never fails. It returns ErrStateVersionNotFound
-	// when id does not exist, namespace.ErrNotFound when the namespace
-	// does not exist, or namespace.ErrFenced when fence is stale.
-	SealStateVersion(
-		ctx context.Context,
-		id StateVersionID,
-		content blob.Key,
-		outputs []byte,
-		fence namespace.Fence,
-	) error
 }
 
 // Config holds the dependencies of a Service.
@@ -244,8 +233,7 @@ type Config struct {
 	Blobs      blob.Store
 	Namespaces *namespace.Service
 	// Sealer seals state blobs and outputs documents with the data key of
-	// the workspace scope. Nil keeps state as before: plain blobs and
-	// outputs for rows without the sealed flag.
+	// the workspace scope. It is required: every stored version is sealed.
 	Sealer Sealer
 	// Logger receives sweep failures; nil discards them.
 	Logger *slog.Logger
@@ -282,7 +270,8 @@ type Service struct {
 	stripes    [lockStripes]sync.Mutex
 }
 
-// NewService returns a Service. Every port and Namespaces are required.
+// NewService returns a Service. Every port, Namespaces and the Sealer are
+// required.
 func NewService(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Workspaces == nil:
@@ -293,6 +282,8 @@ func NewService(cfg Config) (*Service, error) {
 		return nil, fmt.Errorf("%w: blob store", ErrMissingDependency)
 	case cfg.Namespaces == nil:
 		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Sealer == nil:
+		return nil, fmt.Errorf("%w: workspace service", ErrMissingSealer)
 	}
 
 	s := &Service{
@@ -359,10 +350,14 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 
 // Delete soft-deletes the workspace called ref (ADR 47): the workspace leaves
 // every lookup by name or ID and every list, and its name is free at once,
-// but its state versions and data key stay until the final delete. It
-// returns ErrLocked while the workspace is locked, ErrPendingState while it
-// has a pending state version, and ErrNotFound if no live
-// workspace has ref. The write is fenced on the namespace's failover version
+// but its state versions and data key stay until the final delete. It first
+// sweeps the expired pending versions of the workspace with their attempted
+// content, as a declare does, so only a pending version that has not expired
+// blocks the delete. The sweep runs before the lock check, the pending check
+// and the not-found check, so a refused delete still removes expired pending
+// rows. It returns ErrLocked while the workspace is locked, ErrPendingState
+// while it has a pending state version, and ErrNotFound if no live workspace
+// has ref. The write is fenced on the namespace's failover version
 // and only allowed in its home region. The delete and the audit entry e,
 // stamped with the time of the delete, commit together or not at all (ADR 60,
 // fail closed).
@@ -370,6 +365,17 @@ func (s *Service) Delete(ctx context.Context, ref Ref, e audit.Entry) error {
 	fence, err := s.fence(ctx, ref.Namespace)
 	if err != nil {
 		return err
+	}
+
+	if w, getErr := s.Get(ctx, ref); getErr == nil {
+		if sweepErr := s.sweepExpiredRows(ctx, w); sweepErr != nil {
+			s.logger.WarnContext(
+				ctx,
+				"sweep expired state",
+				slog.String("workspace", w.ID.String()),
+				slog.String("error", sweepErr.Error()),
+			)
+		}
 	}
 
 	e.At = s.clock()
@@ -1071,7 +1077,7 @@ func (s *Service) ReadState(ctx context.Context, id StateVersionID) (StateVersio
 }
 
 // Open returns the content of a finalized state version. The caller closes it.
-// A sealed version opens its sealed blob, so the caller reads the same bytes
+// The version opens its sealed blob, so the caller reads the same bytes
 // the CLI sent. A decryption failure reports the version ID only, never a
 // key, a scope or content.
 func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, error) {
@@ -1079,17 +1085,9 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, fmt.Errorf("%w: state version %s is %s", ErrStateVersionNotFound, sv.ID, sv.Status)
 	}
 
-	if sv.Sealed && s.sealer == nil {
-		return nil, fmt.Errorf("open state %s: %w", sv.ID, ErrSealerNotConfigured)
-	}
-
 	r, err := s.blobs.Get(ctx, sv.Content)
 	if err != nil {
 		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
-	}
-
-	if !sv.Sealed {
-		return r, nil
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
@@ -1107,9 +1105,9 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 
 // OpenStateBlob returns the plain content of the sealed blob under key, for
 // the backup copy check. The key names one state version attempt as
-// "tofu/<workspace id>/<state version id>/<attempt>". An unsealed version
-// reads as before. A failure reports the version ID only, never a key, a
-// scope or content. The caller closes the result.
+// "tofu/<workspace id>/<state version id>/<attempt>". A failure reports the
+// version ID only, never a key, a scope or content. The caller closes the
+// result.
 func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadCloser, error) {
 	parts := blobKeyParts(key)
 	if len(parts) != 4 || parts[0] != "tofu" {
@@ -1128,17 +1126,9 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 		return nil, fmt.Errorf("open state blob %q: %w", key, ErrStateVersionNotFound)
 	}
 
-	if sv.Sealed && s.sealer == nil {
-		return nil, fmt.Errorf("open state %s: %w", sv.ID, ErrSealerNotConfigured)
-	}
-
 	r, err := s.blobs.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("open state %s: %w", sv.ID, err)
-	}
-
-	if !sv.Sealed {
-		return r, nil
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
@@ -1336,6 +1326,10 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	}
 
 	sv, err := s.copyState(ctx, w, src)
+	if errors.Is(err, ErrAlreadyRestored) {
+		sv, err = s.answerDuplicateRestore(ctx, id, from, holder, err)
+	}
+
 	if !release {
 		return sv, err
 	}
@@ -1343,6 +1337,25 @@ func (s *Service) Restore(ctx context.Context, id ID, from StateVersionID, holde
 	_, unlockErr := s.Unlock(ctx, id, holder)
 
 	return sv, errors.Join(err, unlockErr)
+}
+
+// answerDuplicateRestore answers the version that a concurrent restore of from
+// made current, after the store refused this restore as a duplicate with
+// dupErr. The duplicate wrote nothing. When the current state no longer
+// restores from, dupErr stays the answer.
+func (s *Service) answerDuplicateRestore(
+	ctx context.Context, id ID, from StateVersionID, holder string, dupErr error,
+) (StateVersion, error) {
+	retried, found, err := s.restoredCurrent(ctx, id, from, holder)
+	if err != nil {
+		return StateVersion{}, errors.Join(dupErr, err)
+	}
+
+	if !found {
+		return StateVersion{}, dupErr
+	}
+
+	return retried, nil
 }
 
 // followedState returns the current state version of the unit, and whether the
@@ -1626,9 +1639,8 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 		return StateVersion{}, err
 	}
 
-	// createPending returns plain outputs for rendering; the stored row
-	// holds the sealed document. Finalize the stored row, so the commit
-	// keeps the sealed bytes.
+	// The stored row holds no outputs; finalize it, so the commit keeps
+	// what the row holds.
 	stored, err := s.states.GetStateVersion(ctx, pending.Version.ID)
 	if err != nil {
 		return StateVersion{}, fmt.Errorf("restore %s from %s: %w", w.ID, src.ID, err)
@@ -1659,7 +1671,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 		return StateVersion{}, noteErr
 	}
 
-	size, err := s.copyBlob(ctx, w, key, src, stored)
+	size, err := s.copyBlob(ctx, w, key, src, string(stored.ID))
 	if err != nil {
 		return StateVersion{}, err
 	}
@@ -1671,14 +1683,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	sv.Content = key
 
 	if err := s.states.FinalizeStateVersion(ctx, sv, fence); err != nil {
-		err = fmt.Errorf("finalize restored state %s: %w", sv.ID, err)
-		if rejected(err) {
-			// Nothing was written, so this attempt's blob is an orphan.
-			return StateVersion{}, errors.Join(err, s.blobs.Delete(ctx, key))
-		}
-
-		// The outcome is unknown; the version may point at this blob. Keep it.
-		return StateVersion{}, err
+		return StateVersion{}, s.refusedRestore(ctx, sv, fence, err)
 	}
 
 	// The caller renders the new version: carry the plain outputs, while the
@@ -1688,21 +1693,35 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 	return sv, nil
 }
 
+// refusedRestore cleans up after the failed finalize of the restored version
+// sv and returns the error. A rejection wrote nothing, so the blob of the
+// attempt is an orphan and goes. A duplicate restore also discards its pending
+// row, so the row does not fill the pending cap. Any other error leaves the
+// outcome unknown: the version may name the blob, so it stays.
+func (s *Service) refusedRestore(
+	ctx context.Context, sv StateVersion, fence namespace.Fence, finalizeErr error,
+) error {
+	err := fmt.Errorf("finalize restored state %s: %w", sv.ID, finalizeErr)
+
+	switch {
+	case errors.Is(err, ErrAlreadyRestored):
+		return errors.Join(err, s.blobs.Delete(ctx, sv.Content), s.states.DiscardStateVersion(ctx, sv.ID, fence))
+	case rejected(err):
+		return errors.Join(err, s.blobs.Delete(ctx, sv.Content))
+	default:
+		return err
+	}
+}
+
 // openRestoreOutputs opens the stored outputs of src, so the new version
-// seals the plain document again, never the ciphertext. Rows without the
-// sealed flag pass through unchanged. Sealed outputs on a service without a
-// sealer fail with ErrSealerNotConfigured: ciphertext never reads as
-// outputs. A failure reports the version ID only, never a key, a scope or
-// content.
+// seals the plain document again, never the ciphertext. A version without
+// outputs keeps none. A failure reports the version ID only, never a key,
+// a scope or content.
 func (s *Service) openRestoreOutputs(
 	ctx context.Context, w Workspace, src StateVersion,
 ) ([]byte, error) {
-	if !src.Sealed || len(src.Outputs) == 0 {
-		return src.Outputs, nil
-	}
-
-	if s.sealer == nil {
-		return nil, fmt.Errorf("restore %s: %w", src.ID, ErrSealerNotConfigured)
+	if len(src.Outputs) == 0 {
+		return nil, nil
 	}
 
 	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(src.ID), src.Outputs)
@@ -1714,39 +1733,31 @@ func (s *Service) openRestoreOutputs(
 }
 
 // copyBlob copies the content of src under key, checking size and MD5 as it
-// streams. A sealed source opens before the check, so the check runs on the
-// plain bytes; the copy seals again when sealed holds, so a restore of an
-// old unsealed version still lands sealed. On any mismatch the object is
-// deleted.
+// streams. The source opens before the check, so the check runs on the
+// plain bytes, and the copy seals again, bound to the new state version. On
+// any mismatch the object is deleted.
 func (s *Service) copyBlob(
-	ctx context.Context, w Workspace, key blob.Key, src, dst StateVersion,
+	ctx context.Context, w Workspace, key blob.Key, src StateVersion, version string,
 ) (int64, error) {
-	if src.Sealed && s.sealer == nil {
-		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, ErrSealerNotConfigured)
-	}
-
 	r, err := s.blobs.Get(ctx, src.Content)
 	if err != nil {
 		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, err)
 	}
 
-	if src.Sealed {
-		opened, oerr := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), string(src.ID), r)
-		if oerr != nil {
-			return 0, errors.Join(
-				sanitizeOpenError(src.ID, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, oerr)),
-				r.Close(),
-			)
-		}
-
-		r = &closeReader{reader: opened, closer: r, id: src.ID}
+	opened, oerr := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), string(src.ID), r)
+	if oerr != nil {
+		return 0, errors.Join(
+			sanitizeOpenError(src.ID, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, oerr)),
+			r.Close(),
+		)
 	}
+
+	r = &closeReader{reader: opened, closer: r, id: src.ID}
 
 	size, storeErr := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
-		version:   string(dst.ID),
-		seal:      dst.Sealed,
+		version:   version,
 		key:       key,
 		want:      src.MD5,
 		content:   r,
@@ -1790,43 +1801,23 @@ func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion
 
 // sweepExpired deletes the expired pending versions of w with their
 // attempted content, then deletes the blobs under the workspace prefix
-// that no version references, and returns the swept version IDs. A version
-// expires with its upload capability; the sweep keeps it for
-// SweepGracePeriod past expiry, so an upload that started before expiry
-// still finishes. A version that never recorded an attempt sweeps its row
-// with no blob to delete. A blob whose row delete already committed, or
-// whose superseded delete never ran, stays unreferenced: the second pass
-// collects it once it is older than the grace period, so a cleanup failure
-// or a crash between the row delete and the blob delete never leaves an
-// orphan for ever. A cleanup failure fails the sweep, so the caller
-// decides: BeginState treats the sweep as best effort and declares anyway,
-// leaving the rows for the next sweep.
-func (s *Service) sweepExpired(ctx context.Context, w Workspace) ([]StateVersionID, error) {
-	fence, err := s.fence(ctx, w.Ref.Namespace)
+// that no version references. A version expires with its upload capability;
+// the sweep keeps it for SweepGracePeriod past expiry, so an upload that
+// started before expiry still finishes. A version that never recorded an
+// attempt sweeps its row with no blob to delete. A blob whose row delete
+// already committed, or whose superseded delete never ran, stays
+// unreferenced: the second pass collects it once it is older than the grace
+// period, so a cleanup failure or a crash between the row delete and the
+// blob delete never leaves an orphan for ever. A cleanup failure fails the
+// sweep, so the caller decides: BeginState treats the sweep as best effort
+// and declares anyway, leaving the rows for the next sweep.
+func (s *Service) sweepExpired(ctx context.Context, w Workspace) error {
+	expired, err := s.expirePending(ctx, w)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	expired, err := s.states.DeleteExpiredPendingStateVersions(ctx, w.ID, s.clock().Add(-SweepGracePeriod), fence)
-	if err != nil {
-		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, err)
-	}
-
-	ids := make([]StateVersionID, 0, len(expired))
-
-	var cleanupErr error
-
-	for i := range expired {
-		ids = append(ids, expired[i].ID)
-
-		if expired[i].Content == "" {
-			continue
-		}
-
-		if blobErr := s.deleteBlobRetried(ctx, expired[i].Content); blobErr != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete content of %s: %w", expired[i].ID, blobErr))
-		}
-	}
+	cleanupErr := s.deleteExpiredBlobs(ctx, expired)
 
 	// A blob delete above may have failed, or the process may have crashed
 	// between an earlier row delete and its blob delete: the unreferenced
@@ -1836,10 +1827,73 @@ func (s *Service) sweepExpired(ctx context.Context, w Workspace) ([]StateVersion
 	}
 
 	if cleanupErr != nil {
-		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
+		return fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
 	}
 
-	return ids, nil
+	return nil
+}
+
+// sweepExpiredRows deletes the expired pending versions of w with their
+// attempted content, without the unreferenced-blob pass. The workspace
+// delete uses it, so the delete never removes a blob that no version
+// references: those blobs stay for the retention sweep, which runs under
+// the audit chain gate.
+func (s *Service) sweepExpiredRows(ctx context.Context, w Workspace) error {
+	expired, err := s.expirePending(ctx, w)
+	if err != nil {
+		return err
+	}
+
+	if cleanupErr := s.deleteExpiredBlobs(ctx, expired); cleanupErr != nil {
+		return fmt.Errorf("sweep expired state of %s: %w", w.Ref, cleanupErr)
+	}
+
+	return nil
+}
+
+// expirePending deletes the expired pending versions of w and returns them
+// with their attempted content keys, so the caller deletes the blobs. A
+// version that is already gone counts as done, with no error, so two sweeps
+// that overlap on one row do not fail.
+func (s *Service) expirePending(ctx context.Context, w Workspace) ([]StateVersion, error) {
+	fence, err := s.fence(ctx, w.Ref.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	expired, err := s.states.DeleteExpiredPendingStateVersions(ctx, w.ID, s.clock().Add(-SweepGracePeriod), fence)
+	if errors.Is(err, ErrStateVersionNotFound) {
+		return nil, nil
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, err)
+	}
+
+	return expired, nil
+}
+
+// deleteExpiredBlobs deletes the attempted content of the expired versions.
+// A blob that is already gone counts as done, with no error, so two sweeps
+// that overlap on one blob do not fail.
+func (s *Service) deleteExpiredBlobs(ctx context.Context, expired []StateVersion) error {
+	var cleanupErr error
+
+	for i := range expired {
+		if expired[i].Content == "" {
+			continue
+		}
+
+		if blobErr := s.deleteBlobRetried(ctx, expired[i].Content); blobErr != nil {
+			if errors.Is(blobErr, blob.ErrNotFound) {
+				continue
+			}
+
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete content of %s: %w", expired[i].ID, blobErr))
+		}
+	}
+
+	return cleanupErr
 }
 
 // sweepUnreferenced deletes the blobs under the workspace prefix that no
@@ -1959,6 +2013,7 @@ func (s *Service) lockKey(key string) func() {
 func rejected(err error) bool {
 	for _, sentinel := range []error{
 		ErrUploadDenied,
+		ErrAlreadyRestored,
 		ErrNotLocked,
 		ErrLockedByOther,
 		ErrLineageMismatch,
@@ -2000,25 +2055,7 @@ func (s *Service) createPending(
 
 	// The client's JSON rendering of the outputs is never stored: the outputs of a
 	// version come from its body (ADR 49, decision 8).
-	var outputs []byte
-
-	// New rows land sealed when the service seals: the outputs document is
-	// sealed with the data key of the workspace scope. The stored row keeps
-	// the sealed document; the returned version carries the plain outputs,
-	// so the caller renders the create response without opening sealed
-	// bytes.
-	sealed := s.sealer != nil
-	stored := outputs
 	svID := StateVersionID(ident.NewID("sv-"))
-
-	if sealed && len(outputs) > 0 {
-		sealedOutputs, err := s.sealer.SealOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(svID), outputs)
-		if err != nil {
-			return PendingState{}, fmt.Errorf("seal outputs of %s: %w", w.Ref, err)
-		}
-
-		stored = sealedOutputs
-	}
 
 	sv := StateVersion{
 		CreatedAt:       now,
@@ -2032,13 +2069,13 @@ func (s *Service) createPending(
 		Lineage:         in.Lineage,
 		Status:          StatusPending,
 		Content:         "",
-		Outputs:         stored,
+		Outputs:         nil,
 		MD5:             sum,
 		Serial:          in.Serial,
 		Size:            0,
 		Force:           in.Force,
 		UnlockedWrite:   unlocked,
-		Sealed:          sealed,
+		Sealed:          true,
 		RestoredFrom:    restoredFrom,
 		SensitiveMarks:  nil,
 		FenceBy:         "",
@@ -2048,20 +2085,17 @@ func (s *Service) createPending(
 		return PendingState{}, fmt.Errorf("create state version for %s: %w", w.Ref, err)
 	}
 
-	sv.Outputs = outputs
-
 	return PendingState{Upload: tok, Version: sv}, nil
 }
 
 // storeInput carries one content write: the workspace scope, the blob key,
-// the declared MD5 of the plain bytes, the content, and whether the content
-// seals as it streams into the blob store.
+// the declared MD5 of the plain bytes, and the content, which seals as it
+// streams into the blob store.
 type storeInput struct {
 	namespace namespace.Name
 	workspace ID
 	// version is the state version ID that binds a sealed write.
 	version string
-	seal    bool
 	key     blob.Key
 	want    [md5.Size]byte
 	content io.Reader
@@ -2078,11 +2112,9 @@ type storedContent struct {
 }
 
 // store writes content under key, checking size and MD5 as it streams. The
-// MD5 and the size stay those of the plain bytes. When seal holds, the
-// content seals as it streams into the blob with the data key of the
-// workspace scope, so the blob store never holds plain state. A sealed write
-// without a sealer fails closed instead of storing plain bytes under a
-// sealed flag. On any mismatch the object is deleted.
+// MD5 and the size stay those of the plain bytes. The content seals as it
+// streams into the blob with the data key of the workspace scope, so the
+// blob store never holds plain state. On any mismatch the object is deleted.
 func (s *Service) store(ctx context.Context, in storeInput) (int64, error) {
 	stored, err := s.storeContent(ctx, in)
 
@@ -2092,22 +2124,16 @@ func (s *Service) store(ctx context.Context, in storeInput) (int64, error) {
 // storeContent is store, and it also reports the MD5 of the plain bytes. With
 // unchecked set, it checks only the size.
 func (s *Service) storeContent(ctx context.Context, in storeInput) (storedContent, error) {
-	if in.seal && s.sealer == nil {
-		return storedContent{}, fmt.Errorf("store sealed state of %s: %w", in.workspace, ErrSealerNotConfigured)
-	}
-
 	digest := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
 	counted := &countingReader{r: io.LimitReader(in.content, s.maxState+1), n: 0}
 	checked := io.TeeReader(counted, digest)
 
-	if in.seal {
-		sealedReader, err := s.sealer.SealState(ctx, in.namespace, in.workspace.String(), in.version, checked)
-		if err != nil {
-			return storedContent{}, err
-		}
-
-		checked = sealedReader
+	sealedReader, err := s.sealer.SealState(ctx, in.namespace, in.workspace.String(), in.version, checked)
+	if err != nil {
+		return storedContent{}, err
 	}
+
+	checked = sealedReader
 
 	if err := s.blobs.Put(ctx, in.key, checked); err != nil {
 		return storedContent{}, fmt.Errorf("store content: %w", err)
@@ -2130,17 +2156,11 @@ func (s *Service) storeContent(ctx context.Context, in storeInput) (storedConten
 }
 
 // openOutputs opens the sealed outputs of sv in place, so callers read plain
-// outputs. Rows without the sealed flag read as before. Sealed outputs on a
-// service without a sealer fail with ErrSealerNotConfigured: ciphertext
-// never reads as outputs. A failure reports the version ID only, never a
-// key, a scope or content.
+// outputs. A version without outputs keeps none. A failure reports the
+// version ID only, never a key, a scope or content.
 func (s *Service) openOutputs(ctx context.Context, sv *StateVersion) error {
-	if !sv.Sealed || len(sv.Outputs) == 0 {
+	if len(sv.Outputs) == 0 {
 		return nil
-	}
-
-	if s.sealer == nil {
-		return fmt.Errorf("open outputs of %s: %w", sv.ID, ErrSealerNotConfigured)
 	}
 
 	w, err := s.GetByID(ctx, sv.Workspace)
@@ -2330,7 +2350,6 @@ func (s *Service) storeUploadBody(
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
 		version:   string(sv.ID),
-		seal:      sv.Sealed,
 		key:       key,
 		want:      sv.MD5,
 		content:   reader,

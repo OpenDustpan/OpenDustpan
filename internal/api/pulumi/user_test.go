@@ -14,6 +14,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/api/pulumi"
 	"opendustpan.org/opendustpan/internal/baseurl"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/inventory"
@@ -169,8 +170,24 @@ func (denyBeta) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (denyBeta) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 func newUserHandler(
 	t *testing.T, nsStore *memNamespaceStore, stStore *memStackStore, authz identity.Authorizer,
+) *pulumi.Handler {
+	t.Helper()
+
+	return newUserHandlerWithSessions(t, nsStore, stStore, authz, nil)
+}
+
+// newUserHandlerWithSessions is newUserHandler with the session cookie
+// check sessions; nil takes access tokens only.
+func newUserHandlerWithSessions(
+	t *testing.T, nsStore *memNamespaceStore, stStore *memStackStore, authz identity.Authorizer,
+	sessions *sessionauth.Checker,
 ) *pulumi.Handler {
 	t.Helper()
 
@@ -196,6 +213,7 @@ func newUserHandler(
 		Namespaces:              namespaces,
 		Authenticator:           tokenAuthenticator{},
 		Authorizer:              authz,
+		Sessions:                sessions,
 		AddressGate:             nil,
 		Logger:                  slog.New(slog.DiscardHandler),
 		BaseURL:                 baseurl.Resolver{},

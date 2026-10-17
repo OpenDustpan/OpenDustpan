@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -14,7 +15,10 @@ import (
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
 )
 
-var _ session.Store = (*Store)(nil)
+var (
+	_ session.Store       = (*Store)(nil)
+	_ session.PolicyStore = (*Store)(nil)
+)
 
 // CreateSession implements session.Store.
 func (s *Store) CreateSession(ctx context.Context, ss session.Session, d session.Digest, e audit.Entry) error {
@@ -26,31 +30,76 @@ func (s *Store) CreateSession(ctx context.Context, ss session.Session, d session
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		n, err := q.CreateSession(ctx, db.CreateSessionParams{
-			ID:          ss.ID,
-			Digest:      d.String(),
-			Provider:    ss.Provider,
-			CreatedAtMs: codec.Millis(ss.CreatedAt),
-			AuthTimeMs:  codec.Millis(ss.AuthTime),
-			SourceIp:    ss.SourceIP,
-			UserAgent:   ss.UserAgent,
-			PrincipalID: ss.PrincipalID,
-		})
-		if err != nil {
-			return fmt.Errorf("insert session: %w", err)
-		}
-
-		if n != 1 {
-			return refusedSession(ctx, q, ss.PrincipalID)
-		}
-
-		last := db.SetLastSignInParams{AtMs: codec.Millis(ss.CreatedAt), ID: ss.PrincipalID}
-		if err := q.SetLastSignIn(ctx, last); err != nil {
-			return fmt.Errorf("set last sign-in: %w", err)
-		}
-
-		return nil
+		return insertSession(ctx, q, ss, d)
 	})
+}
+
+// CreateProviderSession implements session.ProviderSessionStore.
+func (s *Store) CreateProviderSession(
+	ctx context.Context, ss session.Session, d session.Digest, e audit.Entry,
+) error {
+	if err := ss.Validate(); err != nil {
+		return err
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+		if err := checkProviderEnabled(ctx, q, ss.Provider); err != nil {
+			return err
+		}
+
+		return insertSession(ctx, q, ss, d)
+	})
+}
+
+// checkProviderEnabled returns ErrProviderNotFound when the stored provider
+// id is gone and ErrProviderDisabled when it is disabled.
+func checkProviderEnabled(ctx context.Context, q *db.Queries, id string) error {
+	enabled, err := q.GetSignInProviderEnabled(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("%w: %s", session.ErrProviderNotFound, id)
+	}
+
+	if err != nil {
+		return fmt.Errorf("select sign-in provider: %w", err)
+	}
+
+	if enabled == 0 {
+		return fmt.Errorf("%w: %s", session.ErrProviderDisabled, id)
+	}
+
+	return nil
+}
+
+// insertSession inserts ss with the digest d and sets the last sign-in of
+// its principal, in the transaction of q.
+func insertSession(ctx context.Context, q *db.Queries, ss session.Session, d session.Digest) error {
+	n, err := q.CreateSession(ctx, db.CreateSessionParams{
+		ID:          ss.ID,
+		Digest:      d.String(),
+		Provider:    ss.Provider,
+		CreatedAtMs: codec.Millis(ss.CreatedAt),
+		AuthTimeMs:  codec.Millis(ss.AuthTime),
+		SourceIp:    ss.SourceIP,
+		UserAgent:   ss.UserAgent,
+		PrincipalID: ss.PrincipalID,
+	})
+	if err != nil {
+		return fmt.Errorf("insert session: %w", err)
+	}
+
+	if n != 1 {
+		return refusedSession(ctx, q, ss.PrincipalID)
+	}
+
+	last := db.SetLastSignInParams{AtMs: codec.Millis(ss.CreatedAt), ID: ss.PrincipalID}
+	if err := q.SetLastSignIn(ctx, last); err != nil {
+		return fmt.Errorf("set last sign-in: %w", err)
+	}
+
+	return nil
 }
 
 // refusedSession names why the insert of a session of the principal id
@@ -136,23 +185,35 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 			UserAgent:   row.UserAgent,
 		},
 		Owner: session.Owner{
+			ActiveAt:    codec.FromMillis(row.PrincipalActiveAtMs),
 			DisabledAt:  codec.FromOptionalMillis(row.PrincipalDisabledAtMs.Int64),
 			ID:          row.PrincipalID,
 			Subject:     row.Subject,
 			DisplayName: row.DisplayName,
 			Kind:        principal.Kind(row.PrincipalKind),
+			BreakGlass:  row.PrincipalBreakGlass,
 		},
 		Digest: stored,
+		Policy: codec.FromSessionPolicyRow(codec.SessionPolicyRow{
+			IdleMs: row.PolicyIdleMs, MaxLengthMs: row.PolicyMaxLengthMs, UpdatedAtMs: row.PolicyUpdatedAtMs,
+			TokenFreshnessMs: row.PolicyTokenFreshnessMs.Int64, TokenFreshnessSet: row.PolicyTokenFreshnessMs.Valid,
+		}),
+		Accounts: codec.FromSessionAccountsRow(row.AccountsInactivityMs, row.AccountsDisable),
 	}, nil
 }
 
 // TouchSession implements session.Store.
-func (s *Store) TouchSession(ctx context.Context, id string, at time.Time, every time.Duration) error {
+func (s *Store) TouchSession(
+	ctx context.Context, id string, at time.Time, every time.Duration, l session.Limits,
+) error {
+	bounds := l.ActiveAfter(at)
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	err := s.queries.TouchSession(ctx, db.TouchSessionParams{
 		AtMs: codec.Millis(at), ID: id, BeforeMs: codec.Millis(at.Add(-every)),
+		SeenAfterMs: boundMillis(bounds.LastSeen), CreatedAfterMs: boundMillis(bounds.Created),
 	})
 	if err != nil {
 		return fmt.Errorf("touch session: %w", err)
@@ -210,6 +271,7 @@ func (s *Store) CreateRequest(ctx context.Context, r session.Request, d session.
 		ReturnPath:  r.ReturnPath,
 		CreatedAtMs: codec.Millis(r.CreatedAt),
 		ExpiresAtMs: codec.Millis(r.ExpiresAt),
+		MaxAgeMs:    sql.NullInt64{Int64: r.MaxAge.Milliseconds(), Valid: r.HasMaxAge},
 	})
 	if err != nil {
 		return fmt.Errorf("insert sign-in request: %w", err)
@@ -247,6 +309,8 @@ func (s *Store) TakeRequest(ctx context.Context, d session.Digest, at time.Time)
 		Nonce:      row.Nonce,
 		Verifier:   row.Verifier,
 		ReturnPath: row.ReturnPath,
+		MaxAge:     time.Duration(row.MaxAgeMs.Int64) * time.Millisecond,
+		HasMaxAge:  row.MaxAgeMs.Valid,
 	}, nil
 }
 
@@ -261,4 +325,97 @@ func (s *Store) PruneRequests(ctx context.Context, at time.Time) (int64, error) 
 	}
 
 	return n, nil
+}
+
+// GetSessionPolicy implements session.PolicyStore.
+func (s *Store) GetSessionPolicy(ctx context.Context) (session.Policy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	row, err := s.queries.GetSessionPolicy(ctx)
+	if err != nil {
+		return session.Policy{}, fmt.Errorf("select session policy: %w", err)
+	}
+
+	return sessionPolicyOf(row), nil
+}
+
+// UpdateSessionPolicy implements session.PolicyStore. The write lock of the
+// transaction orders it with every other change of @server.
+func (s *Store) UpdateSessionPolicy(ctx context.Context, update session.PolicyUpdate) (session.Policy, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return updateServerSetting(ctx, s, func(q *db.Queries) (session.Policy, error) {
+		row, err := q.GetSessionPolicy(ctx)
+		if err != nil {
+			return session.Policy{}, fmt.Errorf("select session policy: %w", err)
+		}
+
+		return sessionPolicyOf(row), nil
+	}, update, func(q *db.Queries, p session.Policy) error {
+		return setSessionPolicy(ctx, q, p)
+	})
+}
+
+// sessionPolicyOf maps the generated policy row to the policy.
+func sessionPolicyOf(row db.GetSessionPolicyRow) session.Policy {
+	return codec.FromSessionPolicyRow(codec.SessionPolicyRow{
+		IdleMs: row.IdleMs, MaxLengthMs: row.MaxLengthMs, UpdatedAtMs: row.UpdatedAtMs,
+		TokenFreshnessMs: row.TokenFreshnessMs.Int64, TokenFreshnessSet: row.TokenFreshnessMs.Valid,
+	})
+}
+
+// setSessionPolicy writes p in the transaction of q.
+func setSessionPolicy(ctx context.Context, q *db.Queries, p session.Policy) error {
+	row := codec.ToSessionPolicyRow(p)
+
+	n, err := q.SetSessionPolicy(ctx, db.SetSessionPolicyParams{
+		IdleMs: row.IdleMs, MaxLengthMs: row.MaxLengthMs, UpdatedAtMs: row.UpdatedAtMs,
+		TokenFreshnessMs: sql.NullInt64{Int64: row.TokenFreshnessMs, Valid: row.TokenFreshnessSet},
+	})
+	if err != nil {
+		return fmt.Errorf("update session policy: %w", err)
+	}
+
+	if n != 1 {
+		return errNoSessionPolicyRow
+	}
+
+	return nil
+}
+
+// errNoSessionPolicyRow reports a database without the seeded session
+// policy row.
+var errNoSessionPolicyRow = errors.New("session policy row is missing")
+
+// boundMillis returns t in Unix milliseconds, or the lowest value for the
+// zero time: a bound that every stored time passes.
+func boundMillis(t time.Time) int64 {
+	if t.IsZero() {
+		return math.MinInt64
+	}
+
+	return codec.Millis(t)
+}
+
+// BindProvider implements session.ProviderStore. The insert keeps an
+// earlier record, so the read answers the issuer of the first start.
+func (s *Store) BindProvider(ctx context.Context, id, issuer string, at time.Time) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	err := s.queries.InsertOIDCProvider(ctx, db.InsertOIDCProviderParams{
+		ProviderID: id, Issuer: issuer, CreatedAtMs: codec.Millis(at),
+	})
+	if err != nil {
+		return "", fmt.Errorf("insert sign-in provider: %w", err)
+	}
+
+	recorded, err := s.queries.GetOIDCProviderIssuer(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("select sign-in provider: %w", err)
+	}
+
+	return recorded, nil
 }

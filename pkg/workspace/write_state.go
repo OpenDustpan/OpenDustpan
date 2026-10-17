@@ -170,7 +170,6 @@ func (s *Service) streamVersion(ctx context.Context, sw *streamWrite, body io.Re
 		namespace: sw.workspace.Ref.Namespace,
 		workspace: sw.workspace.ID,
 		version:   string(sv.ID),
-		seal:      sv.Sealed,
 		key:       sw.key,
 		want:      sw.want,
 		content:   reader,
@@ -299,7 +298,7 @@ func (s *Service) declarePlaceholder(
 		Size:            0,
 		Force:           false,
 		UnlockedWrite:   unlocked,
-		Sealed:          s.sealer != nil,
+		Sealed:          true,
 		RestoredFrom:    "",
 		SensitiveMarks:  nil,
 		FenceBy:         "",
@@ -324,7 +323,7 @@ func (s *Service) declarePlaceholder(
 func (s *Service) admitDeclare(ctx context.Context, w Workspace) (func(), error) {
 	unlock := s.lockKey("begin/" + w.ID.String())
 
-	if _, sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
+	if sweepErr := s.sweepExpired(ctx, w); sweepErr != nil {
 		s.logger.WarnContext(
 			ctx,
 			"sweep expired state",
@@ -362,7 +361,8 @@ type streamedOutputs struct {
 
 // streamedOutputs returns the outputs to store and the plain outputs to return.
 // A state the client encrypted has no readable outputs, so it stores none. A
-// version of a sealing service stores the outputs sealed (ADR 41).
+// version stores the outputs sealed with the data key of the workspace
+// scope.
 func (s *Service) streamedOutputs(
 	ctx context.Context, w Workspace, versionID string, meta streamedMeta,
 ) (streamedOutputs, error) {
@@ -371,7 +371,7 @@ func (s *Service) streamedOutputs(
 	}
 
 	plain := meta.Outputs
-	if s.sealer == nil || len(plain) == 0 {
+	if len(plain) == 0 {
 		return streamedOutputs{stored: plain, plain: plain}, nil
 	}
 

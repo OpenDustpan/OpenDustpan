@@ -7,6 +7,7 @@ import (
 
 	"opendustpan.org/opendustpan/internal/clientip"
 	"opendustpan.org/opendustpan/internal/requestid"
+	"opendustpan.org/opendustpan/internal/sessionauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
@@ -26,26 +27,27 @@ type changeAudit struct {
 // service stamps the time of the change on it.
 func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
 	return audit.Entry{
-		At:         time.Time{},
-		Namespace:  a.object.Namespace(),
-		Subject:    a.principal.Subject,
-		IDPSubject: "",
-		TokenID:    a.principal.TokenID,
-		Action:     string(a.action),
-		Object:     a.object.String(),
-		Version:    "",
-		ValuePath:  "",
-		ValueCount: nil,
-		Changes:    nil,
-		SourceIP:   clientip.String(a.request),
-		UserAgent:  truncateUserAgent(a.request.UserAgent()),
-		Channel:    audit.NormalizeChannel(a.request.Header.Get(channelHeader)),
-		Kind:       audit.KindChange,
-		Outcome:    audit.OutcomeSuccess,
-		RequestID:  requestid.FromContext(ctx),
-		ObjectID:   a.object.UnitID(),
-		PrevHash:   "",
-		Hash:       "",
-		Sequence:   0,
+		At:           time.Time{},
+		Namespace:    a.object.Namespace(),
+		Subject:      a.principal.Subject,
+		IDPSubject:   "",
+		TokenID:      a.principal.TokenID,
+		Action:       string(a.action),
+		Object:       a.object.String(),
+		Version:      "",
+		ValuePath:    "",
+		ValueCount:   nil,
+		Changes:      nil,
+		SourceIP:     clientip.String(a.request),
+		UserAgent:    truncateUserAgent(a.request.UserAgent()),
+		Channel:      sessionauth.AuditChannel(a.request, channelHeader),
+		Kind:         audit.KindChange,
+		Outcome:      audit.OutcomeSuccess,
+		RequestID:    requestid.FromContext(ctx),
+		ObjectID:     a.object.UnitID(),
+		PrevHash:     "",
+		Hash:         "",
+		Sequence:     0,
+		FenceVersion: 0,
 	}
 }

@@ -111,7 +111,7 @@ func openAuditSinks(items []string, blobs blob.Store, lookup func(string) (strin
 			out.files = append(out.files, f)
 		}
 
-		out.ship = append(out.ship, audit.ShipSink{Sink: sink, Name: name, Interval: interval})
+		out.ship = append(out.ship, audit.ShipSink{Sink: sink, Name: name, Kind: sinkKind(spec), Interval: interval})
 	}
 
 	return out, nil
@@ -184,8 +184,11 @@ func openBlobSink(spec string, cfg sinkConfig) (logsink.Sink, time.Duration, err
 
 	prefix := strings.TrimPrefix(spec, sinkKindBlob+":")
 
-	// The state sweepers delete unknown objects under these prefixes.
-	if first, _, _ := strings.Cut(prefix, "/"); first == "tofu" || first == "pulumi" {
+	// The state sweepers delete unknown objects under tofu and pulumi, and
+	// the checkpoint check reads every object under audit-checkpoints, so an
+	// object there can fail the check.
+	first, _, _ := strings.Cut(prefix, "/")
+	if first == "tofu" || first == "pulumi" || first == audit.CheckpointPrefix {
 		return nil, 0, fmt.Errorf("%w %s: %w", cfg.setting, spec, errReservedPrefix)
 	}
 
@@ -199,8 +202,9 @@ func openBlobSink(spec string, cfg sinkConfig) (logsink.Sink, time.Duration, err
 
 // openSyslogSink opens a syslog+udp://, syslog+tcp:// or syslog+tls://
 // sink. The query takes facility (0 to 23, default from cfg), max-size
-// (the message cap in bytes, 480 to 65507, default 8192) and, for TLS,
-// ca-file: a PEM bundle to trust instead of the system store.
+// (the message cap in bytes, 480 to 65507 over UDP and 480 to 65536 over
+// TCP and TLS, default 8192 over UDP and 65536 over TCP and TLS) and, for
+// TLS, ca-file: a PEM bundle to trust instead of the system store.
 func openSyslogSink(spec string, cfg sinkConfig) (*syslog.Sink, error) {
 	u, err := url.Parse(spec)
 	if err != nil {
@@ -289,8 +293,10 @@ var (
 	errNoCertificates = errors.New("holds no PEM certificate")
 	// errNoBlobSink reports a blob: sink for a setting that has no blob store.
 	errNoBlobSink = errors.New("this setting has no blob store: pick file, syslog or webhook")
-	// errReservedPrefix reports a blob sink prefix that state blobs own.
-	errReservedPrefix = errors.New("the prefixes tofu and pulumi hold state: pick another prefix")
+	// errReservedPrefix reports a blob sink prefix that the server owns.
+	errReservedPrefix = errors.New(
+		"the prefixes tofu, pulumi and audit-checkpoints belong to the server: pick another prefix",
+	)
 	// errSecretFilePermissions reports a secret file that group or others can read.
 	errSecretFilePermissions = errors.New("secret file allows group or other access")
 )
@@ -323,13 +329,20 @@ func webhookSecret(lookup func(string) (string, bool)) ([]byte, error) {
 // the file that the variable fileEnv names. The variable wins when both
 // are set. The file must not be readable by group or others.
 func webhookSecretFrom(lookup func(string) (string, bool), env, fileEnv string) ([]byte, error) {
+	return secretFrom(lookup, env, fileEnv, errNoWebhookSecret)
+}
+
+// secretFrom reads a secret from the variable env, else from the file that
+// the variable fileEnv names. The file must allow no group or other
+// access. A missing or empty secret answers errMissing.
+func secretFrom(lookup func(string) (string, bool), env, fileEnv string, errMissing error) ([]byte, error) {
 	if raw, ok := lookup(env); ok && strings.TrimSpace(raw) != "" {
 		return []byte(strings.TrimSpace(raw)), nil
 	}
 
 	path, ok := lookup(fileEnv)
 	if !ok || strings.TrimSpace(path) == "" {
-		return nil, fmt.Errorf("%w: set %s or %s", errNoWebhookSecret, env, fileEnv)
+		return nil, fmt.Errorf("%w: set %s or %s", errMissing, env, fileEnv)
 	}
 
 	info, err := os.Stat(path)
@@ -349,7 +362,7 @@ func webhookSecretFrom(lookup func(string) (string, bool), env, fileEnv string) 
 
 	secret := strings.TrimSpace(string(raw))
 	if secret == "" {
-		return nil, fmt.Errorf("%w: %s is empty", errNoWebhookSecret, fileEnv)
+		return nil, fmt.Errorf("%w: %s is empty", errMissing, fileEnv)
 	}
 
 	return []byte(secret), nil

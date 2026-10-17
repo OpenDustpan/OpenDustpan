@@ -47,6 +47,26 @@ type Store struct {
 	// stagingMu guards stagingSchema: one staged restore at a time.
 	stagingMu     sync.Mutex
 	stagingSchema string
+	// keepAccessHook, when set, runs between the live access read and the
+	// schema swap of a keep-access restore, inside the swap transaction.
+	// Tests set it to prove the live access tables stay locked across that
+	// window. Nil in production.
+	keepAccessHook func(ctx context.Context, tx pgx.Tx, live string)
+	// binaryVersion is the version of the binary that opens the store. The
+	// migration check compares it with the minimum binary version of the
+	// schema. Empty counts as a dev build.
+	binaryVersion string
+}
+
+// Option tunes Open. Callers that pass none get the defaults.
+type Option func(*Store)
+
+// WithBinaryVersion sets the version of the binary, for example v0.1.0. Open
+// refuses a schema whose minimum binary version is above it with a
+// *schema.MinimumError. Without it, Open counts as a dev build, which no
+// minimum refuses.
+func WithBinaryVersion(version string) Option {
+	return func(s *Store) { s.binaryVersion = version }
 }
 
 var (
@@ -55,7 +75,7 @@ var (
 )
 
 // Open connects to the database at url and migrates it.
-func Open(ctx context.Context, url string) (*Store, error) {
+func Open(ctx context.Context, url string, opts ...Option) (*Store, error) {
 	pool, err := pgxpool.New(ctx, url)
 	if err != nil {
 		return nil, fmt.Errorf("open postgres pool: %w", err)
@@ -67,7 +87,14 @@ func Open(ctx context.Context, url string) (*Store, error) {
 		return nil, fmt.Errorf("connect to postgres: %w", err)
 	}
 
-	s := &Store{pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: ""}
+	s := &Store{
+		pool: pool, queries: db.New(pool), stagingMu: sync.Mutex{}, stagingSchema: "", keepAccessHook: nil,
+		binaryVersion: "",
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+
 	if err := s.migrate(ctx); err != nil {
 		pool.Close()
 
@@ -406,10 +433,9 @@ func rejectTakenName(ctx context.Context, q *db.Queries, oldRef stack.Ref, newNa
 // transaction (ADR 47): it frees the name, keeps the updates, checkpoints,
 // events, tags and wrapped data key, and removes the inventory entry. When
 // the latest checkpoint manages resources, it returns ErrHasResources and
-// changes nothing: rows with a stored count use it, rows with SQL deployment
-// content count it, and rows with a NULL count and blob content use guard,
-// which the service counted outside the transaction. A guard naming another
-// checkpoint returns ErrConcurrentModification so the service recounts once. It returns
+// changes nothing. It answers from guard, which the service counted outside
+// the transaction. A guard naming another checkpoint returns
+// ErrConcurrentModification so the service recounts once. It returns
 // ErrNotFound if no live stack has ref, and ErrUpdateConflict while a
 // mutating update of the stack runs.
 // The stack row is locked before the running check, so a concurrent start
@@ -495,12 +521,10 @@ func refuseRunningStack(ctx context.Context, q *db.Queries, stackID string) erro
 }
 
 // refuseResourcedStack returns ErrHasResources when the latest checkpoint of
-// the stack with stackID manages resources. Rows with a stored count use it;
-// rows with SQL deployment content count it with stack.CountManagedResources;
-// rows with a NULL count and blob content use guard, which the service counted
-// outside the transaction: a guard naming another checkpoint returns
-// ErrConcurrentModification so the service recounts once. It reads only the
-// latest row, never a blob. The caller holds the stack lock.
+// the stack with stackID manages resources. It answers from guard, which the
+// service counted outside the transaction: a guard naming another checkpoint
+// returns ErrConcurrentModification so the service recounts once. It reads
+// only the latest row, never a blob. The caller holds the stack lock.
 func refuseResourcedStack(
 	ctx context.Context, q *db.Queries, stackID string, guard stack.DeleteGuard,
 ) error {
@@ -513,15 +537,7 @@ func refuseResourcedStack(
 		return fmt.Errorf("read latest checkpoint: %w", err)
 	}
 
-	if row.ResourceCount.Valid {
-		return checkStoredCount(row.ResourceCount.Int64)
-	}
-
-	if len(row.Deployment) > 0 || !row.BlobKey.Valid || row.BlobKey.String == "" {
-		return checkDeployment(row.Deployment)
-	}
-
-	return checkBlobGuard(guard, row.UpdateID, row.Digest)
+	return checkGuard(guard, row.UpdateID, row.Digest)
 }
 
 // checkNoCheckpoint answers a delete with no checkpoint row: a guard that
@@ -534,28 +550,10 @@ func checkNoCheckpoint(guard stack.DeleteGuard) error {
 	return nil
 }
 
-// checkStoredCount answers a delete from the stored count of an older binary.
-func checkStoredCount(count int64) error {
-	if count > 0 {
-		return stack.ErrHasResources
-	}
-
-	return nil
-}
-
-// checkDeployment answers a delete by counting the SQL deployment column.
-func checkDeployment(deployment []byte) error {
-	if stack.CountManagedResources(deployment) > 0 {
-		return stack.ErrHasResources
-	}
-
-	return nil
-}
-
-// checkBlobGuard answers a delete of a blob row from the domain count in
+// checkGuard answers a delete of a checkpoint row from the domain count in
 // guard: a guard naming another checkpoint means a save landed after the
 // count, so the caller recounts once.
-func checkBlobGuard(guard stack.DeleteGuard, updateID string, digest []byte) error {
+func checkGuard(guard stack.DeleteGuard, updateID string, digest []byte) error {
 	if !guard.HasCheckpoint || string(guard.UpdateID) != updateID || !equalDigest(guard.Digest, digest) {
 		return stack.ErrConcurrentModification
 	}
@@ -759,7 +757,7 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
-		return migrateTx(ctx, tx, all)
+		return migrateTx(ctx, tx, all, s.binaryVersion)
 	})
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -768,8 +766,10 @@ func (s *Store) migrate(ctx context.Context) error {
 	return nil
 }
 
-// migrateTx applies pending migrations while holding the advisory lock.
-func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration) error {
+// migrateTx checks the schema and applies pending migrations while holding
+// the advisory lock. A binary below the minimum binary version of the schema
+// gets a *schema.MinimumError and applies nothing.
+func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, binaryVersion string) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, migrationLockID); err != nil {
 		return fmt.Errorf("take migration lock: %w", err)
 	}
@@ -783,16 +783,21 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration) error {
 		return fmt.Errorf("create schema_migrations: %w", err)
 	}
 
-	recorded, err := recordedVersions(ctx, tx)
+	recorded, err := recordedMigrations(ctx, tx)
 	if err != nil {
 		return err
 	}
 
-	if unknown := migrate.UnknownRecorded(recorded, all); len(unknown) > 0 {
-		return schema.NewSchemaNewerError(recorded, embeddedVersions(all))
+	if baselineErr := schema.CheckBaseline(recordedVersions(recorded)); baselineErr != nil {
+		return fmt.Errorf("check schema versions: %w", baselineErr)
 	}
 
-	for _, m := range all {
+	plan, err := migrate.Check(recorded, all, binaryVersion)
+	if err != nil {
+		return fmt.Errorf("check schema: %w", err)
+	}
+
+	for _, m := range plan.Pending {
 		if err := apply(ctx, tx, m); err != nil {
 			return err
 		}
@@ -801,36 +806,30 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration) error {
 	return nil
 }
 
-// embeddedVersions returns the versions the binary embeds, for the
-// newer-schema refusal.
-func embeddedVersions(all []migrate.Migration) []int64 {
-	out := make([]int64, 0, len(all))
-	for _, m := range all {
-		out = append(out, m.Version)
+// recordedMigrations returns the rows of schema_migrations, ordered by
+// version. The caller holds the migration lock in the same transaction.
+func recordedMigrations(ctx context.Context, tx pgx.Tx) ([]schema.AppliedMigration, error) {
+	query, err := appliedQuery(ctx, tx)
+	if err != nil {
+		return nil, err
 	}
 
-	return out
-}
-
-// recordedVersions returns the versions schema_migrations records, ordered.
-// The caller holds the migration lock in the same transaction.
-func recordedVersions(ctx context.Context, tx pgx.Tx) ([]int64, error) {
-	rows, err := tx.Query(ctx, `SELECT version FROM schema_migrations ORDER BY version`)
+	rows, err := tx.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("read schema versions: %w", err)
 	}
 
 	defer rows.Close()
 
-	var out []int64
+	var out []schema.AppliedMigration
 
 	for rows.Next() {
-		var version int64
-		if err := rows.Scan(&version); err != nil {
+		var row schema.AppliedMigration
+		if err := rows.Scan(&row.Version, &row.Name, &row.MinBinaryVersion); err != nil {
 			return nil, fmt.Errorf("read schema versions: %w", err)
 		}
 
-		out = append(out, version)
+		out = append(out, row)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -838,6 +837,18 @@ func recordedVersions(ctx context.Context, tx pgx.Tx) ([]int64, error) {
 	}
 
 	return out, nil
+}
+
+// recordedVersions returns the versions of the recorded migrations,
+// ordered as recorded, for the baseline check.
+func recordedVersions(recorded []schema.AppliedMigration) []int64 {
+	versions := make([]int64, 0, len(recorded))
+
+	for _, r := range recorded {
+		versions = append(versions, r.Version)
+	}
+
+	return versions
 }
 
 func apply(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
@@ -858,8 +869,68 @@ func apply(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
 		return fmt.Errorf("apply migration %s: %w", m.Name, err)
 	}
 
-	const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-	if _, err := tx.Exec(ctx, record, m.Version, m.Name); err != nil {
+	return recordMigration(ctx, tx, m)
+}
+
+// hasMinimumColumn reports whether schema_migrations in the current schema
+// has the min_binary_version column. A migration adds it. Before that
+// migration, the schema records no minimum.
+func hasMinimumColumn(ctx context.Context, tx pgx.Tx) (bool, error) {
+	var exists bool
+
+	err := tx.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'schema_migrations'
+			AND column_name = 'min_binary_version'
+	)`).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("check schema_migrations columns: %w", err)
+	}
+
+	return exists, nil
+}
+
+// appliedQuery returns the query that reads the rows of schema_migrations
+// ordered by version: with the minimum binary version when the column
+// exists, and with the empty value before.
+func appliedQuery(ctx context.Context, tx pgx.Tx) (string, error) {
+	exists, err := hasMinimumColumn(ctx, tx)
+	if err != nil {
+		return "", err
+	}
+
+	if exists {
+		return `SELECT version, name, min_binary_version FROM schema_migrations ORDER BY version`, nil
+	}
+
+	return `SELECT version, name, '' FROM schema_migrations ORDER BY version`, nil
+}
+
+// recordMigration records m in schema_migrations in tx, after its SQL ran.
+// It records the minimum binary version of m when the column exists. A
+// migration that sets a minimum before the column exists fails.
+func recordMigration(ctx context.Context, tx pgx.Tx, m migrate.Migration) error {
+	hasMinimum, err := hasMinimumColumn(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	if !hasMinimum {
+		if m.MinBinaryVersion != "" {
+			return fmt.Errorf("record migration %s: %w: schema_migrations has no min_binary_version column",
+				m.Name, schema.ErrBadMinimum)
+		}
+
+		const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+		if _, err := tx.Exec(ctx, record, m.Version, m.Name); err != nil {
+			return fmt.Errorf("record migration %s: %w", m.Name, err)
+		}
+
+		return nil
+	}
+
+	const record = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES ($1, $2, $3)`
+	if _, err := tx.Exec(ctx, record, m.Version, m.Name, m.MinBinaryVersion); err != nil {
 		return fmt.Errorf("record migration %s: %w", m.Name, err)
 	}
 

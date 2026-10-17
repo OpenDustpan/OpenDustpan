@@ -114,6 +114,11 @@ SELECT id
 FROM stacks
 WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 
+-- name: StackRefByID :one
+SELECT namespace, project, name
+FROM stacks
+WHERE id = ?;
+
 -- name: CreateUpdate :exec
 INSERT INTO updates (
     stack_id, id, kind, dry_run, status, version, revision,
@@ -122,14 +127,12 @@ INSERT INTO updates (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetUpdate :one
--- The checkpoint size is the stored uncompressed size, or the byte length of
--- the saved deployment for rows from before blobs, read without loading the
--- document: the checkpoints table holds one row for each update, so the join
--- finds at most one row.
+-- The checkpoint size is the stored uncompressed size: the checkpoints table
+-- holds one row for each update, so the join finds at most one row.
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ? AND u.id = ?;
@@ -151,6 +154,14 @@ FROM updates
 WHERE stack_id = ?
   AND status = 'running' AND dry_run = 0 AND kind <> 'preview';
 
+-- name: CountRunningJournaledUpdates :one
+-- The count of updates that run now with journal version 1 or higher, for
+-- the upgrade check: a downgrade to a binary without the journal route
+-- answers its journal batches with 404, which the Pulumi CLI does not retry.
+SELECT COUNT(*)
+FROM updates
+WHERE status = 'running' AND journal_version > 0;
+
 -- name: HighestUpdateVersion :one
 SELECT CAST(COALESCE(MAX(version), 0) AS INTEGER)
 FROM updates
@@ -171,7 +182,7 @@ WHERE namespace = ? AND project = ? AND name = ? AND deleted_at_ms IS NULL;
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ?
@@ -181,7 +192,7 @@ WHERE u.stack_id = ?
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       CAST(COALESCE(c.size, LENGTH(c.deployment), 0) AS INTEGER) AS checkpoint_bytes
+       CAST(COALESCE(c.size, 0) AS INTEGER) AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = ?
@@ -201,7 +212,7 @@ WHERE stack_id = ? AND id = ?;
 
 -- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count,
+       c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -211,14 +222,14 @@ LIMIT 1;
 
 -- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features_json, deployment, saved_at_ms, resource_count,
+       digest, invalid, features_json, saved_at_ms,
        blob_key, size, blob_size, blob_md5
 FROM checkpoints
 WHERE stack_id = ? AND update_id = ?;
 
 -- name: GetCheckpointByVersion :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features_json, c.deployment, c.saved_at_ms, c.resource_count,
+       c.digest, c.invalid, c.features_json, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -227,9 +238,9 @@ WHERE c.stack_id = ? AND u.version = ?;
 -- name: PutCheckpoint :exec
 INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
-    digest, invalid, features_json, deployment, saved_at_ms, resource_count,
+    digest, invalid, features_json, saved_at_ms,
     blob_key, size, blob_size, blob_md5
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -237,46 +248,20 @@ ON CONFLICT (stack_id, update_id) DO UPDATE SET
     digest = excluded.digest,
     invalid = excluded.invalid,
     features_json = excluded.features_json,
-    deployment = excluded.deployment,
     saved_at_ms = excluded.saved_at_ms,
-    resource_count = excluded.resource_count,
     blob_key = excluded.blob_key,
     size = excluded.size,
     blob_size = excluded.blob_size,
     blob_md5 = excluded.blob_md5;
 
 -- name: ListCheckpointBlobKeys :many
--- Every blob key the checkpoints of one stack name, without the empty ones,
--- ordered. A sweeper compares this set against the stored objects to find
--- blobs no checkpoint references.
+-- Every blob key the checkpoints of one stack name, ordered. A sweeper
+-- compares this set against the stored objects to find blobs no checkpoint
+-- references.
 SELECT blob_key
 FROM checkpoints
-WHERE stack_id = ? AND blob_key IS NOT NULL AND blob_key <> ''
+WHERE stack_id = ?
 ORDER BY blob_key;
-
--- name: LatestResourceCount :one
--- The stored managed resource count of the stack's latest checkpoint. It is
--- NULL when the stack has no checkpoint or when the checkpoint predates the
--- count: the caller then counts that one deployment. It reads only the count
--- column, never the deployment.
-SELECT (
-    SELECT c.resource_count
-    FROM checkpoints AS c
-    JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
-    WHERE c.stack_id = ?
-    ORDER BY u.version DESC
-    LIMIT 1
-);
-
--- name: LatestDeployment :one
--- The deployment of the stack's latest checkpoint, for the delete guard of a
--- checkpoint that predates the stored count. It loads one deployment only.
-SELECT c.deployment
-FROM checkpoints AS c
-JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
-WHERE c.stack_id = ?
-ORDER BY u.version DESC
-LIMIT 1;
 
 -- name: SoftDeleteStack :execrows
 -- Moves the name to deleted_name and frees it (ADR 47). A stack name cannot
@@ -502,25 +487,6 @@ UPDATE state_versions
 SET content_key = ?
 WHERE id = ? AND status = 'pending';
 
--- name: ListUnsealedStateVersions :many
--- Finalized versions that still hold plain content, ordered by ID, so the
--- seal job seals them in a stable order. A version without content stays
--- out: a pending row names no content yet.
-SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
-       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
-FROM state_versions
-WHERE sealed = 0 AND status = 'finalized' AND content_key <> ''
-ORDER BY id ASC;
-
--- name: SealStateVersion :execrows
--- Moves one unsealed version to its sealed blob with its sealed outputs and
--- marks it sealed. The write matches only an unsealed row, so a retry after
--- a crash succeeds and changes nothing.
-UPDATE state_versions
-SET content_key = @content_key, outputs = @outputs, sealed = 1
-WHERE id = @id AND sealed = 0;
-
 -- name: SaveSensitiveMarks :execrows
 -- Stores the secret paths of the json-state rendering of one version. It
 -- works on a pending and on a finalized version: the rendering may land
@@ -587,17 +553,18 @@ SET state = 'failed', error = ?, ended_at_ms = ?
 WHERE state = 'running';
 
 -- name: GetInstallationState :one
--- The installation state (ADR 38 decision 4): normal or maintenance. The
--- migration seeds the one row; a missing row reads normal.
+-- The installation state: normal or maintenance. The migration seeds the
+-- one row; a missing row is a fault.
 SELECT state
 FROM installation
 WHERE id = 1;
 
--- name: UpsertInstallationState :exec
--- Stores the installation state, creating the row when it is missing.
-INSERT INTO installation (id, state)
-VALUES (1, ?)
-ON CONFLICT (id) DO UPDATE SET state = excluded.state;
+-- name: SetInstallationState :execrows
+-- Stores the installation state in the seeded row. It changes nothing when
+-- the row is missing.
+UPDATE installation
+SET state = ?
+WHERE id = 1;
 
 -- name: SetInstallationStateIf :execrows
 -- Stores next only when the stored state is expected: a compare-and-swap, so
@@ -649,11 +616,21 @@ WHERE state IN ('checking', 'applying');
 UPDATE namespaces
 SET failover_version = failover_version + 1;
 
+-- name: GetAuditEntry :one
+-- The entry of a scope at one sequence, for the check of signed
+-- checkpoints. A missing entry matches no row.
+SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
+FROM audit_entries
+WHERE namespace = ? AND sequence = ?;
+
 -- name: LastAuditEntry :one
 -- The entry with the highest sequence of a namespace, for the next append.
 -- A namespace with no entries matches no row.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -662,14 +639,16 @@ LIMIT 1;
 -- name: InsertAuditEntry :exec
 INSERT INTO audit_entries (
     namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+    fence_version
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListAuditEntries :many
 -- One page of the entries of a namespace, newest first. Ties on time break
 -- by sequence, as the port comment promises.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = ?
 ORDER BY sequence DESC
@@ -686,7 +665,8 @@ WHERE namespace = ?;
 -- audit.CheckPageSize entries after the last sequence it saw, so a namespace
 -- with a large log never grows the check without a bound.
 SELECT namespace, sequence, subject, idp_subject, token_id, action, object, version, value_path,
-       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id
+       at_ms, source_ip, user_agent, channel, kind, outcome, request_id, prev_hash, hash, value_count, changes, object_id,
+       fence_version
 FROM audit_entries
 WHERE namespace = ? AND sequence > ?
 ORDER BY sequence ASC
@@ -716,6 +696,13 @@ SELECT operation_ids FROM update_journal
 WHERE stack_id = ? AND update_id = ?
 ORDER BY arrival;
 
+-- name: ClearJournalOperations :exec
+-- A batch that holds a rebuilt base state entry starts the known set again:
+-- earlier batches keep their rows for the replay, but their operation IDs no
+-- longer count.
+UPDATE update_journal SET operation_ids = '[]'
+WHERE stack_id = ? AND update_id = ?;
+
 -- name: JournalBlobKeys :many
 SELECT blob_key FROM update_journal
 WHERE stack_id = ? AND update_id = ?
@@ -729,8 +716,35 @@ WHERE stack_id = ? AND update_id = ?;
 DELETE FROM update_journal
 WHERE stack_id = ? AND update_id = ?;
 
+-- name: NextRefusalArrival :one
+SELECT CAST(COALESCE(MAX(arrival), 0) + 1 AS INTEGER) AS arrival
+FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?;
+
+-- name: InsertJournalRefusal :exec
+INSERT INTO update_journal_refusals (stack_id, update_id, arrival, sequence_ids, status, reason)
+VALUES (?, ?, ?, ?, ?, ?);
+
+-- name: ListJournalRefusals :many
+SELECT sequence_ids, status, reason FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?
+ORDER BY arrival;
+
+-- name: ListJournalSequences :many
+SELECT sequence FROM update_journal_sequences
+WHERE stack_id = ? AND update_id = ?
+ORDER BY sequence;
+
+-- name: DeleteJournalRefusals :exec
+DELETE FROM update_journal_refusals
+WHERE stack_id = ? AND update_id = ?;
+
 -- name: JournalState :one
-SELECT journal_closed, status FROM updates
+SELECT journal_closed, journal_version, journal_records_changed, status FROM updates
+WHERE stack_id = ? AND id = ?;
+
+-- name: SetJournalRecordsChanged :exec
+UPDATE updates SET journal_records_changed = 1
 WHERE stack_id = ? AND id = ?;
 
 -- name: CloseJournal :exec
@@ -738,29 +752,33 @@ UPDATE updates SET journal_closed = 1
 WHERE stack_id = ? AND id = ?;
 
 -- name: CreatePrincipal :execrows
-INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO principals (id, subject, display_name, kind, source, created_at_ms, updated_at_ms, namespace, break_glass)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: GetPrincipal :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p WHERE p.id = ? AND p.deleted_at_ms IS NULL;
 
 -- name: GetPrincipalBySubject :one
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p WHERE p.subject = sqlc.arg('subject') AND p.deleted_at_ms IS NULL;
 
 -- name: ListPrincipals :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL) AS group_count
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
+  (SELECT COUNT(*) FROM group_members m WHERE m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS group_count
 FROM principals p
 WHERE p.deleted_at_ms IS NULL
   AND p.subject > sqlc.arg('after')
   AND p.subject >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR p.subject < sqlc.arg('high'))
   AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR p.kind = sqlc.arg('kind'))
+  AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR p.namespace = sqlc.arg('namespace'))
 ORDER BY p.subject
 LIMIT sqlc.arg('row_limit');
 
@@ -769,15 +787,21 @@ SELECT COUNT(*) FROM principals
 WHERE deleted_at_ms IS NULL
   AND subject >= sqlc.arg('low')
   AND (CAST(sqlc.arg('high') AS TEXT) = '' OR subject < sqlc.arg('high'))
-  AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR kind = sqlc.arg('kind'));
+  AND (CAST(sqlc.arg('kind') AS TEXT) = '' OR kind = sqlc.arg('kind'))
+  AND (CAST(sqlc.arg('namespace') AS TEXT) = '' OR namespace = sqlc.arg('namespace'));
+
+-- name: GetPrincipalNamespace :one
+-- The namespace of a current principal: empty for a principal of the
+-- installation. A grant write reads it in its own transaction.
+SELECT namespace FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: UpdatePrincipal :execrows
 UPDATE principals SET display_name = ?, updated_at_ms = ?
-WHERE id = ? AND deleted_at_ms IS NULL;
+WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL;
 
 -- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = ?
-WHERE id = ? AND deleted_at_ms IS NULL;
+WHERE id = ? AND namespace = ? AND deleted_at_ms IS NULL;
 
 -- name: EndMembershipsOfPrincipal :exec
 UPDATE group_members SET removed_at_ms = ?
@@ -790,7 +814,7 @@ ON CONFLICT DO NOTHING;
 
 -- name: GetGroup :one
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g WHERE g.id = ? AND g.deleted_at_ms IS NULL;
 
 -- name: GroupIDByNameKey :one
@@ -798,7 +822,7 @@ SELECT id FROM principal_groups WHERE name_key = sqlc.arg('name_key') AND delete
 
 -- name: ListGroups :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members m WHERE m.group_id = g.id AND m.removed_at_ms IS NULL AND m.state = 'active') AS member_count
 FROM principal_groups g
 WHERE g.deleted_at_ms IS NULL
   AND g.name_key > sqlc.arg('after')
@@ -832,8 +856,8 @@ SELECT COUNT(*) FROM principals WHERE id = ? AND deleted_at_ms IS NULL;
 SELECT source FROM principal_groups WHERE id = ? AND deleted_at_ms IS NULL;
 
 -- name: AddGroupMember :execrows
-INSERT INTO group_members (group_id, principal_id, added_at_ms)
-VALUES (?, ?, ?)
+INSERT INTO group_members (group_id, principal_id, added_at_ms, source, source_id, state, suspended_at_ms, pinned)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: RemoveGroupMember :execrows
@@ -841,9 +865,11 @@ UPDATE group_members SET removed_at_ms = ?
 WHERE group_id = ? AND principal_id = ? AND removed_at_ms IS NULL;
 
 -- name: ListGroupMembers :many
-SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms,
-  (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL) AS group_count,
-  m.added_at_ms
+SELECT p.id, p.subject, p.display_name, p.kind, p.source, p.created_at_ms, p.updated_at_ms, p.disabled_at_ms, p.namespace,
+  p.break_glass,
+  (SELECT COUNT(*) FROM group_members o WHERE o.principal_id = p.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS group_count,
+  m.added_at_ms, m.source AS member_source, m.source_id AS member_source_id, m.state AS member_state,
+  m.suspended_at_ms AS member_suspended_at_ms, m.pinned AS member_pinned
 FROM group_members m JOIN principals p ON p.id = m.principal_id
 WHERE m.group_id = sqlc.arg('group_id') AND m.removed_at_ms IS NULL
   AND p.subject > sqlc.arg('after')
@@ -861,7 +887,7 @@ WHERE m.group_id = sqlc.arg('group_id') AND m.removed_at_ms IS NULL
 
 -- name: ListGroupsOfPrincipal :many
 SELECT g.id, g.name, g.description, g.source, g.created_at_ms, g.updated_at_ms,
-  (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL) AS member_count
+  (SELECT COUNT(*) FROM group_members o WHERE o.group_id = g.id AND o.removed_at_ms IS NULL AND o.state = 'active') AS member_count
 FROM group_members m JOIN principal_groups g ON g.id = m.group_id
 WHERE m.principal_id = sqlc.arg('principal_id') AND m.removed_at_ms IS NULL
   AND g.name_key > sqlc.arg('after')
@@ -987,8 +1013,16 @@ SELECT (SELECT COUNT(*) FROM principals p WHERE CAST(sqlc.arg('subject_kind') AS
 -- name: SubjectsOfCaller :many
 SELECT p.id AS principal_id, CAST(COALESCE(m.group_id, '') AS TEXT) AS group_id
 FROM principals p
-LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
 WHERE p.subject = ? AND p.deleted_at_ms IS NULL;
+
+-- name: SubjectsOfEnabledCaller :many
+-- The subjects of a caller as the check of a grant write reads them: a
+-- principal that is disabled has none.
+SELECT p.id AS principal_id, CAST(COALESCE(m.group_id, '') AS TEXT) AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
+WHERE p.subject = ? AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL;
 
 -- name: ReviewGrants :many
 -- One page of an access-review export (ADR 52, decision 10). The join on
@@ -1008,13 +1042,15 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
      AND c.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
-     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)) AS member_count
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)
+     AND c.state = 'active') AS member_count
 FROM grants g
 LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
 LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT))
     OR (CAST(sqlc.arg('principal') AS TEXT) = '' AND CAST(sqlc.arg('expand') AS BOOLEAN) = 1))
+  AND m.state = 'active'
   AND CASE WHEN CAST(sqlc.arg('history') AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(sqlc.arg('to_ms') AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
@@ -1028,6 +1064,9 @@ WHERE (CAST(sqlc.arg('all_grants') AS BOOLEAN) = 1
     OR g.target = CAST(sqlc.arg('target') AS TEXT)
     OR (g.target IN (SELECT value FROM json_each(CAST(sqlc.arg('containers') AS TEXT)))
       AND (g.role IN (SELECT value FROM json_each(CAST(sqlc.arg('container_roles') AS TEXT)))
+        OR (CAST(sqlc.arg('history') AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR (CAST(sqlc.arg('token_namespace') AS TEXT) <> '' AND g.target = CAST(sqlc.arg('token_namespace') AS TEXT)
+      AND (g.role IN (SELECT value FROM json_each(CAST(sqlc.arg('token_namespace_roles') AS TEXT)))
         OR (CAST(sqlc.arg('history') AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
   AND (CAST(sqlc.arg('subject') AS TEXT) = '' OR g.subject = CAST(sqlc.arg('subject') AS TEXT)
     OR (CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id IS NOT NULL))
@@ -1051,6 +1090,7 @@ FROM grants g
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND ((CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT))
     OR (CAST(sqlc.arg('principal') AS TEXT) = '' AND CAST(sqlc.arg('expand') AS BOOLEAN) = 1))
+  AND m.state = 'active'
   AND CASE WHEN CAST(sqlc.arg('history') AS BOOLEAN) = 1 THEN
     m.added_at_ms < CAST(sqlc.arg('to_ms') AS INTEGER)
     AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('from_ms') AS INTEGER)
@@ -1063,6 +1103,9 @@ WHERE (CAST(sqlc.arg('all_grants') AS BOOLEAN) = 1
     OR g.target = CAST(sqlc.arg('target') AS TEXT)
     OR (g.target IN (SELECT value FROM json_each(CAST(sqlc.arg('containers') AS TEXT)))
       AND (g.role IN (SELECT value FROM json_each(CAST(sqlc.arg('container_roles') AS TEXT)))
+        OR (CAST(sqlc.arg('history') AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role))))
+    OR (CAST(sqlc.arg('token_namespace') AS TEXT) <> '' AND g.target = CAST(sqlc.arg('token_namespace') AS TEXT)
+      AND (g.role IN (SELECT value FROM json_each(CAST(sqlc.arg('token_namespace_roles') AS TEXT)))
         OR (CAST(sqlc.arg('history') AS BOOLEAN) = 1 AND EXISTS (SELECT 1 FROM roles r WHERE r.id = g.role)))))
   AND (CAST(sqlc.arg('subject') AS TEXT) = '' OR g.subject = CAST(sqlc.arg('subject') AS TEXT)
     OR (CAST(sqlc.arg('principal') AS TEXT) <> '' AND m.principal_id IS NOT NULL))
@@ -1092,13 +1135,15 @@ SELECT g.id, g.subject, g.subject_kind, g.subject_id, g.role, g.object, g.target
   (SELECT COUNT(*) FROM group_members c
    WHERE g.subject_kind = 'group' AND c.group_id = g.subject_id
      AND c.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
-     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)) AS member_count
+     AND COALESCE(c.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)
+     AND c.state = 'active') AS member_count
 FROM holders h
 CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
 LEFT JOIN principals p ON g.subject_kind = 'principal' AND p.id = g.subject_id
 LEFT JOIN principal_groups pg ON g.subject_kind = 'group' AND pg.id = g.subject_id
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT)
+  AND m.state = 'active'
   AND m.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
   AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)
 LEFT JOIN principals mp ON mp.id = m.principal_id
@@ -1124,6 +1169,7 @@ FROM holders h
 CROSS JOIN grants g ON g.subject_kind = h.kind AND g.subject_id = h.id AND g.revoked_at_ms IS NULL
 LEFT JOIN group_members m ON g.subject_kind = 'group' AND m.group_id = g.subject_id
   AND m.principal_id = CAST(sqlc.arg('principal') AS TEXT)
+  AND m.state = 'active'
   AND m.added_at_ms <= CAST(sqlc.arg('as_of_ms') AS INTEGER)
   AND COALESCE(m.removed_at_ms, 9223372036854775807) > CAST(sqlc.arg('as_of_ms') AS INTEGER)
 WHERE (g.subject_kind = 'principal' OR m.principal_id IS NOT NULL)
@@ -1178,15 +1224,23 @@ SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_
 FROM access_tokens WHERE id = ?;
 
 -- name: GetAccessTokenByDigest :one
+-- The token, its owner and the token policy of the installation in one read,
+-- so a policy change applies to the next lookup on every instance.
 SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expires_at_ms, t.last_used_at_ms,
   t.revoked_at_ms, t.replaced_by, t.created_by, t.disabled_at_ms, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms,
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
   CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
     SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
-  ), 0)) AS INTEGER) AS principal_active_at_ms
+  ), 0), COALESCE((
+    SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
+  ), 0)) AS INTEGER) AS principal_active_at_ms,
+  ap.max_lifetime_ms AS policy_max_lifetime_ms, ap.inactivity_ms AS policy_inactivity_ms,
+  ap.disable_tokens AS policy_disable_tokens, ap.disable_accounts AS policy_disable_accounts,
+  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
-WHERE t.digest = ? AND p.deleted_at_ms IS NULL;
+CROSS JOIN access_token_policy ap
+WHERE t.digest = ? AND p.deleted_at_ms IS NULL AND ap.id = 1;
 
 -- name: ListAccessTokens :many
 SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
@@ -1275,6 +1329,13 @@ FROM collection_members AS m
 JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
 WHERE m.unit_id = ?;
 
+-- name: UnitCollectionID :one
+-- The stable ID of the collection of one unit by its ID.
+SELECT c.id
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?;
+
 -- name: UpsertUnitCollection :exec
 INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
 VALUES (?, ?, ?, ?)
@@ -1285,15 +1346,73 @@ ON CONFLICT (unit_id) DO UPDATE SET
 
 
 -- name: LastAccessByPrincipals :many
--- The latest last-use time of the access tokens of each given principal:
--- one row for each principal with a used token. A JSON array carries the
--- IDs, so the query stays fixed. Revoked, replaced and expired tokens
+-- The latest use of each given principal: the last use of its access
+-- tokens and of its console sessions, and its last sign-in. One row for
+-- each principal with a used token, a session or a sign-in. A JSON array carries the IDs, so the query
+-- stays fixed. Revoked, replaced and expired tokens and ended sessions
 -- count: a use is a use.
-SELECT principal_id, CAST(MAX(last_used_at_ms) AS INTEGER) AS last_used_at_ms
-FROM access_tokens
-WHERE principal_id IN (SELECT value FROM json_each(CAST(sqlc.arg('principals') AS TEXT)))
-  AND last_used_at_ms IS NOT NULL
-GROUP BY principal_id;
+SELECT u.principal_id, CAST(MAX(u.used_at_ms) AS INTEGER) AS last_used_at_ms
+FROM (
+  SELECT t.principal_id, t.last_used_at_ms AS used_at_ms
+  FROM access_tokens t
+  WHERE t.principal_id IN (SELECT value FROM json_each(CAST(sqlc.arg('principals') AS TEXT)))
+    AND t.last_used_at_ms IS NOT NULL
+  UNION ALL
+  SELECT s.principal_id, s.last_seen_at_ms AS used_at_ms
+  FROM sessions s
+  WHERE s.principal_id IN (SELECT value FROM json_each(CAST(sqlc.arg('principals') AS TEXT)))
+  UNION ALL
+  SELECT p.id AS principal_id, p.last_sign_in_at_ms AS used_at_ms
+  FROM principals p
+  WHERE p.id IN (SELECT value FROM json_each(CAST(sqlc.arg('principals') AS TEXT)))
+    AND p.last_sign_in_at_ms IS NOT NULL
+) AS u
+GROUP BY u.principal_id;
+
+-- name: GetAuditChainState :one
+-- The audit chain state that this installation keeps: the state, when it
+-- last changed, who changed it, whether a change waits for an approval,
+-- whether the chain entered maintenance mode itself, whether a restore
+-- replaced the log, and when the running migration started, 0 when none
+-- runs. No row means the chain is on.
+SELECT state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms FROM audit_chain_state WHERE id = 1;
+
+-- name: SetAuditChainState :exec
+-- Stores the audit chain state of this installation.
+INSERT INTO audit_chain_state (id, state, changed_at_ms, changed_by, pending, entered_maintenance, log_replaced, migrating_at_ms)
+VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET state = excluded.state, changed_at_ms = excluded.changed_at_ms,
+    changed_by = excluded.changed_by, pending = excluded.pending,
+    entered_maintenance = excluded.entered_maintenance, log_replaced = excluded.log_replaced,
+    migrating_at_ms = excluded.migrating_at_ms;
+
+-- name: ClaimAuditChainMigration :execrows
+-- Starts the migration of a waiting change in one write: it stamps the start
+-- time only when a change waits and no claim within the lease holds.
+UPDATE audit_chain_state
+SET migrating_at_ms = ?
+WHERE id = 1 AND pending = 1 AND (migrating_at_ms = 0 OR migrating_at_ms < ?);
+
+-- name: ReleaseAuditChainMigration :exec
+-- Releases the claim of a migration that stops without storing the new
+-- state.
+UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1;
+
+-- name: RenewAuditChainMigration :execrows
+-- Moves the start of the held claim to the given time. It writes only
+-- when a claim holds, so a renewal without a claim changes no row.
+UPDATE audit_chain_state SET migrating_at_ms = ? WHERE id = 1 AND migrating_at_ms <> 0;
+
+-- name: LastAuditChainStartSequence :one
+-- The sequence of the last start entry of the audit chain of a namespace,
+-- or 0 when there is none. The chain check starts there.
+SELECT CAST(COALESCE(MAX(sequence), 0) AS INTEGER) FROM audit_entries
+WHERE namespace = ? AND action = 'server:start-audit-chain' AND sequence >= 1;
+
+-- name: MinAuditSequence :one
+-- The lowest sequence of a namespace, or 1 when it has no entry. The chain
+-- check fails a namespace with a row below 1, because the walk starts at 1.
+SELECT CAST(COALESCE(MIN(sequence), 1) AS INTEGER) FROM audit_entries WHERE namespace = ?;
 
 -- name: GetDeletedStack :one
 -- A deleted stack of one namespace by its stable ID (ADR 47), for a restore
@@ -1417,6 +1536,25 @@ ON CONFLICT (sink, namespace) DO UPDATE
 SET sequence = excluded.sequence, updated_at_ms = excluded.updated_at_ms
 WHERE excluded.sequence > audit_sink_cursors.sequence;
 
+-- name: AcquireAuditSinkLease :execrows
+-- Takes or renews the lease of one sink in one conditional write. It writes
+-- when no row exists, when the stored lease ended, or when the caller holds
+-- it, and changes nothing while another instance holds a live lease. The
+-- caller reads the changed row count: one means it holds the lease. The
+-- expiry is the database clock plus the TTL, so a wrong clock on one
+-- instance cannot hold every lease.
+INSERT INTO audit_sink_leases (sink, holder, expires_at_ms)
+VALUES (?1, ?2, CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) + CAST(sqlc.arg('ttl_ms') AS INTEGER))
+ON CONFLICT (sink) DO UPDATE
+SET holder = excluded.holder, expires_at_ms = excluded.expires_at_ms
+WHERE audit_sink_leases.holder = excluded.holder OR audit_sink_leases.expires_at_ms <= CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER);
+
+-- name: ReleaseAuditSinkLease :execrows
+-- Releases the lease of one sink only when holder holds it. It changes
+-- nothing when no row exists or another instance holds the lease.
+DELETE FROM audit_sink_leases
+WHERE sink = ? AND holder = ?;
+
 -- Token policy and the inactivity disable (ADR 53).
 
 -- name: GetAccessTokenPolicy :one
@@ -1436,17 +1574,27 @@ WHERE id = 1;
 SELECT CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) AS now_ms;
 
 -- name: DisableInactiveAccessTokens :many
+-- A token of a break-glass account is always exempt from the inactivity
+-- disable.
 UPDATE access_tokens SET disabled_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE revoked_at_ms IS NULL AND disabled_at_ms IS NULL AND expires_at_ms > CAST(sqlc.arg('at_ms') AS INTEGER)
   AND COALESCE(last_used_at_ms, created_at_ms) <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
+  AND NOT EXISTS (
+    SELECT 1 FROM principals p
+    WHERE p.id = access_tokens.principal_id AND p.break_glass = 1
+  )
 RETURNING id, principal_id;
 
 -- name: DisableInactivePrincipals :many
 -- A person is inactive when its creation, its activity baseline, its last
--- sign-in, and the creation and the last use of each of its tokens are all
--- at or before the cutoff.
+-- sign-in, the creation and the last use of each of its tokens, and the
+-- last use of each of its console sessions are all at or before the
+-- cutoff. The session use counts by itself, so the result does not depend
+-- on the maximum length of a session. A break-glass account is always
+-- exempt from the inactivity disable.
 UPDATE principals SET disabled_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
+  AND break_glass = 0
   AND created_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
   AND last_active_at_ms <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
   AND COALESCE(last_sign_in_at_ms, 0) <= CAST(sqlc.arg('cutoff_ms') AS INTEGER)
@@ -1454,6 +1602,10 @@ WHERE kind = 'person' AND deleted_at_ms IS NULL AND disabled_at_ms IS NULL
     SELECT 1 FROM access_tokens t
     WHERE t.principal_id = principals.id
       AND (t.created_at_ms > CAST(sqlc.arg('cutoff_ms') AS INTEGER) OR t.last_used_at_ms > CAST(sqlc.arg('cutoff_ms') AS INTEGER))
+  )
+  AND NOT EXISTS (
+    SELECT 1 FROM sessions s
+    WHERE s.principal_id = principals.id AND s.last_seen_at_ms > CAST(sqlc.arg('cutoff_ms') AS INTEGER)
   )
 RETURNING id;
 
@@ -1511,17 +1663,35 @@ SELECT id, principal_id, provider, created_at_ms, last_seen_at_ms, auth_time_ms,
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByDigest :one
+-- principal_active_at_ms is the latest activity of the owner by the account
+-- rule of the inactivity disable, as in GetAccessTokenByDigest. The session
+-- policy and the account part of the token policy come from the same read,
+-- so a policy change applies to the next lookup on every instance.
 SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_at_ms, s.auth_time_ms, s.ended_at_ms,
   s.end_reason, s.source_ip, s.user_agent, p.subject, p.display_name, p.kind AS principal_kind,
-  p.disabled_at_ms AS principal_disabled_at_ms
+  p.disabled_at_ms AS principal_disabled_at_ms, p.break_glass AS principal_break_glass,
+  CAST(MAX(p.created_at_ms, p.last_active_at_ms, COALESCE(p.last_sign_in_at_ms, 0), COALESCE((
+    SELECT MAX(MAX(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
+  ), 0), COALESCE((
+    SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
+  ), 0)) AS INTEGER) AS principal_active_at_ms,
+  sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
+  sp.token_freshness_ms AS policy_token_freshness_ms,
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
-WHERE s.digest = ? AND p.deleted_at_ms IS NULL;
+CROSS JOIN session_policy sp
+CROSS JOIN access_token_policy ap
+WHERE s.digest = ? AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1;
 
 -- name: TouchSession :exec
+-- An idle or expired session keeps its last use: seen_after_ms and
+-- created_after_ms are the bounds of an active session at at_ms.
 UPDATE sessions SET last_seen_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER)
 WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL
-  AND last_seen_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER);
+  AND last_seen_at_ms <= CAST(sqlc.arg('before_ms') AS INTEGER)
+  AND last_seen_at_ms > CAST(sqlc.arg('seen_after_ms') AS INTEGER)
+  AND created_at_ms > CAST(sqlc.arg('created_after_ms') AS INTEGER);
 
 -- name: EndSession :execrows
 UPDATE sessions SET ended_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER), end_reason = sqlc.arg('end_reason')
@@ -1531,13 +1701,178 @@ WHERE id = sqlc.arg('id') AND ended_at_ms IS NULL;
 SELECT COUNT(*) FROM sessions WHERE id = ?;
 
 -- name: CreateSignInRequest :execrows
-INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+INSERT INTO sign_in_requests (digest, provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT DO NOTHING;
 
 -- name: TakeSignInRequest :one
 DELETE FROM sign_in_requests WHERE digest = ?
-RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms;
+RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms;
 
 -- name: PruneSignInRequests :execrows
 DELETE FROM sign_in_requests WHERE expires_at_ms <= ?;
+
+-- name: GetSessionPolicy :one
+SELECT idle_ms, max_length_ms, updated_at_ms, token_freshness_ms FROM session_policy WHERE id = 1;
+
+-- name: SetSessionPolicy :execrows
+UPDATE session_policy
+SET idle_ms = CAST(sqlc.arg('idle_ms') AS INTEGER), max_length_ms = CAST(sqlc.arg('max_length_ms') AS INTEGER),
+  updated_at_ms = CAST(sqlc.arg('updated_at_ms') AS INTEGER),
+  token_freshness_ms = CAST(sqlc.narg('token_freshness_ms') AS INTEGER)
+WHERE id = 1;
+
+-- name: InsertOIDCProvider :exec
+-- The first start with a provider ID records its issuer. A later start
+-- keeps the record.
+INSERT INTO oidc_providers (provider_id, issuer, created_at_ms) VALUES (?, ?, ?)
+ON CONFLICT (provider_id) DO NOTHING;
+
+-- name: GetOIDCProviderIssuer :one
+SELECT issuer FROM oidc_providers WHERE provider_id = ?;
+
+-- name: CreateInstallationSecretKey :execrows
+-- The first seal in an installation scope stores its key. A concurrent
+-- first seal keeps the stored key.
+INSERT INTO installation_secret_keys (scope_id, wrapper_id, ciphertext, created_at_ms)
+VALUES (?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetInstallationSecretKey :one
+SELECT scope_id, wrapper_id, ciphertext, created_at_ms
+FROM installation_secret_keys
+WHERE scope_id = ?;
+
+-- name: ListInstallationWrapperIDs :many
+SELECT DISTINCT wrapper_id
+FROM installation_secret_keys
+ORDER BY wrapper_id;
+
+-- name: CreateSignInProvider :execrows
+INSERT INTO sign_in_providers (
+    provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT DO NOTHING;
+
+-- name: GetSignInProvider :one
+SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+FROM sign_in_providers
+WHERE provider_id = ?;
+
+-- name: ListSignInProviders :many
+SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+FROM sign_in_providers
+ORDER BY provider_id;
+
+-- name: UpdateSignInProvider :execrows
+-- The update applies only to the version that the change read. The mode
+-- never changes.
+UPDATE sign_in_providers
+SET issuer = sqlc.arg('issuer'), display_name = sqlc.arg('display_name'), client_id = sqlc.arg('client_id'),
+    client_secret = sqlc.arg('client_secret'), scopes = sqlc.arg('scopes'),
+    auto_create = sqlc.arg('auto_create'), enabled = sqlc.arg('enabled'),
+    authorization_url = sqlc.arg('authorization_url'), token_url = sqlc.arg('token_url'),
+    userinfo_url = sqlc.arg('userinfo_url'), subject_claim = sqlc.arg('subject_claim'),
+    name_claim = sqlc.arg('name_claim'), username_claim = sqlc.arg('username_claim'),
+    email_claim = sqlc.arg('email_claim'),
+    updated_at_ms = sqlc.arg('updated_at_ms'), version = sqlc.arg('version')
+WHERE provider_id = sqlc.arg('provider_id') AND version = sqlc.arg('version') - 1;
+
+-- name: CountSignInProvider :one
+SELECT COUNT(*) FROM sign_in_providers WHERE provider_id = ?;
+
+-- name: GetSignInProviderEnabled :one
+-- Reads whether a stored provider is enabled, in the transaction that
+-- inserts a session of it. SQLite has one writer, so no lock is needed.
+SELECT enabled FROM sign_in_providers WHERE provider_id = ?;
+
+-- name: DeleteSignInProvider :execrows
+DELETE FROM sign_in_providers WHERE provider_id = ?;
+
+-- name: EndSessionsWithSubjectPrefix :execrows
+-- Ends every active session of a principal whose subject starts with the
+-- prefix "<provider ID>:". The compare is exact, as in
+-- CountPrincipalsWithSubjectPrefix.
+UPDATE sessions SET ended_at_ms = CAST(sqlc.arg('at_ms') AS INTEGER), end_reason = sqlc.arg('end_reason')
+WHERE ended_at_ms IS NULL
+  AND principal_id IN (
+    SELECT id FROM principals WHERE substr(subject, 1, length(sqlc.arg('prefix'))) = sqlc.arg('prefix')
+  );
+
+-- name: CountPrincipalsWithSubjectPrefix :one
+-- The prefix is "<provider ID>:". The compare is exact, with no pattern
+-- and no case folding. Deleted principals count too.
+SELECT COUNT(*) FROM principals WHERE substr(subject, 1, length(sqlc.arg('prefix'))) = sqlc.arg('prefix');
+
+-- Durable operations. Every time comes from DatabaseNowMs, the clock of the
+-- store. Each write runs in an IMMEDIATE transaction, so the read of a row
+-- and its write see no other writer between them.
+
+-- name: InsertDurableOperation :exec
+INSERT INTO durable_operations (
+    id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+) VALUES (?, ?, ?, ?, ?, 'pending', 0, 0, 0, '', NULL, 0, NULL, 0, ?, ?, ?);
+
+-- name: GetDurableOperation :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE id = ?;
+
+-- name: GetDurableOperationByKey :one
+SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, last_error, claim_owner,
+    claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, updated_at_ms
+FROM durable_operations WHERE start_key = ?;
+
+-- name: UpdateDurableOperation :exec
+-- Writes every column that changes after the start of an operation.
+UPDATE durable_operations
+SET state = ?, attempt = ?, expiries = ?, failures = ?, last_error = ?, claim_owner = ?, claim_token = ?,
+    claim_expires_at_ms = ?, cancel_requested = ?, not_before_ms = ?, updated_at_ms = ?
+WHERE id = ?;
+
+-- name: ListDurableSteps :many
+SELECT name, result, done_at_ms FROM durable_steps WHERE operation_id = ? ORDER BY seq;
+
+-- name: CountDurableStep :one
+SELECT COUNT(*) FROM durable_steps WHERE operation_id = ? AND name = ?;
+
+-- name: InsertDurableStep :exec
+INSERT INTO durable_steps (operation_id, name, seq, result, done_at_ms)
+VALUES (
+    sqlc.arg('operation_id'), sqlc.arg('name'),
+    (SELECT COALESCE(MAX(seq), 0) + 1 FROM durable_steps WHERE operation_id = sqlc.arg('operation_id')),
+    sqlc.arg('result'), sqlc.arg('done_at_ms')
+);
+
+-- Durable schedules. Every time comes from DatabaseNowMs, the clock of the
+-- store, and each write runs in an IMMEDIATE transaction.
+
+-- name: GetDurableSchedule :one
+SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = ?;
+
+-- name: InsertDurableSchedule :exec
+INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms) VALUES (?, ?, ?, NULL);
+
+-- name: SetDurableScheduleInterval :exec
+-- Sets the interval, and moves the next run to now plus the interval when
+-- that is earlier.
+UPDATE durable_schedules
+SET interval_ms = sqlc.arg('interval_ms'),
+    next_run_at_ms = MIN(next_run_at_ms, CAST(sqlc.arg('now_ms') AS INTEGER) + sqlc.arg('interval_ms'))
+WHERE name = sqlc.arg('name');
+
+-- name: ClaimDurableScheduleTick :execrows
+-- The conditional update that claims a due tick: it changes the row only
+-- when next_run_at_ms is the value that the claim read and is due at now.
+UPDATE durable_schedules
+SET next_run_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER) + interval_ms,
+    last_claimed_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER)
+WHERE name = sqlc.arg('name') AND next_run_at_ms = sqlc.arg('due_at_ms')
+    AND next_run_at_ms <= CAST(sqlc.arg('now_ms') AS INTEGER);

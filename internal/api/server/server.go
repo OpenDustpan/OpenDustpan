@@ -24,6 +24,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
+	"opendustpan.org/opendustpan/pkg/session"
 	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
@@ -61,6 +62,10 @@ type Config struct {
 	// means the upgrade check answers 500: every production server wires its
 	// store.
 	Schema SchemaReporter
+	// Journal counts the running journaled updates the upgrade check
+	// answers. Nil means the upgrade check answers 0: a store that predates
+	// the count still serves.
+	Journal JournalReporter
 	// Principals keeps the principals and the groups of the installation
 	// (ADR 52). Nil means the store keeps none: the principal and group
 	// routes answer 501. Both SQL adapters keep them.
@@ -82,13 +87,32 @@ type Config struct {
 	// IPAllowlists keeps the IP allowlist of each namespace. Nil means no
 	// allowlist store is configured: the IP allowlist routes are not mounted.
 	IPAllowlists *ipallow.Service
+	// SessionPolicy keeps the session policy of the installation. Nil
+	// means the store keeps none: the session policy routes are not
+	// mounted. Both SQL adapters keep it.
+	SessionPolicy *session.Policies
+	// CheckpointEpochs starts a new epoch of the signed audit checkpoints.
+	// Nil means signed checkpoints are off: the epoch route answers 409.
+	CheckpointEpochs CheckpointEpochs
 	// OnAuditFailure, when set, runs once for each lost audit entry, so the
 	// wiring can count it on a metric.
 	OnAuditFailure func()
+	// AuditChain reads the state of the audit chain and approves a waiting
+	// change. Nil means the store keeps no audit chain: the audit chain
+	// routes answer 501.
+	AuditChain AuditChain
 	// DeletedUnits runs the retention sweep of the deleted units.
 	// Nil means the store keeps no deleted units: the sweep route answers
 	// 501. Both SQL adapters keep them.
 	DeletedUnits DeletedUnitSweeper
+	// AuditSinks lists the configured audit sinks with their delivery
+	// state. Nil means no sink is configured: the sink list is empty.
+	AuditSinks AuditSinkSource
+	// SignIn is the console sign-in through OpenID Connect providers. Nil
+	// means no sign-in: the sign-in routes are not mounted, and the
+	// session cookie authenticates nothing. With SignIn set, Principals is
+	// required.
+	SignIn *SignIn
 }
 
 // SchemaReporter reports the applied migrations of the database. Both store
@@ -98,6 +122,15 @@ type SchemaReporter interface {
 	// AppliedMigrations returns the rows of schema_migrations ordered by
 	// version, or nothing when the database records none.
 	AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error)
+}
+
+// JournalReporter counts the updates that run now with journal version 1
+// or higher. Both store adapters implement it. It is defined here, in the
+// package that consumes it, so the domain stays free of transport code.
+type JournalReporter interface {
+	// CountRunningJournaledUpdates returns the count of running updates
+	// with journal version above 0.
+	CountRunningJournaledUpdates(ctx context.Context) (int64, error)
 }
 
 // Handler serves the installation API under /api/server/.
@@ -112,13 +145,19 @@ type Handler struct {
 	metrics        MetricsWriter
 	version        string
 	schema         SchemaReporter
+	journal        JournalReporter
 	principals     *principal.Service
 	access         *access.Service
 	tokens         *accesstoken.Service
 	audit          audit.ServerStore
 	ipAllowlists   *ipallow.Service
+	sessions       *session.Policies
+	epochs         CheckpointEpochs
 	onAuditFailure func()
 	deletedUnits   DeletedUnitSweeper
+	auditChain     AuditChain
+	auditSinks     AuditSinkSource
+	signIn         *signInState
 	mux            *patternMux
 	routes         []Route
 }
@@ -127,23 +166,13 @@ type Handler struct {
 // Namespaces, Maintenance and Metrics are required. Backups is optional: nil
 // means no backup target is configured.
 func NewHandler(cfg Config) (*Handler, error) {
-	switch {
-	case cfg.Authenticator == nil:
-		return nil, fmt.Errorf("%w: authenticator", ErrMissingDependency)
-	case cfg.Authorizer == nil:
-		return nil, fmt.Errorf("%w: authorizer", ErrMissingDependency)
-	case cfg.Logger == nil:
-		return nil, fmt.Errorf("%w: logger", ErrMissingDependency)
-	case cfg.Namespaces == nil:
-		return nil, fmt.Errorf("%w: namespace service", ErrMissingDependency)
-	case cfg.Maintenance == nil:
-		return nil, fmt.Errorf("%w: maintenance", ErrMissingDependency)
-	case cfg.Metrics == nil:
-		return nil, fmt.Errorf("%w: metrics", ErrMissingDependency)
-	case cfg.Access != nil && !keepsNamespaceAudit(cfg.Audit):
-		// Each access-review export writes an audit entry, in @server or in
-		// the namespace of the export (ADR 52, decision 13).
-		return nil, fmt.Errorf("%w: an audit store with namespace entries, for the access review", ErrMissingDependency)
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+
+	signIn, err := newSignInState(cfg.SignIn)
+	if err != nil {
+		return nil, err
 	}
 
 	h := &Handler{
@@ -157,13 +186,19 @@ func NewHandler(cfg Config) (*Handler, error) {
 		metrics:        cfg.Metrics,
 		version:        cfg.Version,
 		schema:         cfg.Schema,
+		journal:        cfg.Journal,
 		principals:     cfg.Principals,
 		access:         cfg.Access,
 		tokens:         cfg.Tokens,
 		deletedUnits:   cfg.DeletedUnits,
+		auditChain:     cfg.AuditChain,
 		audit:          cfg.Audit,
 		ipAllowlists:   cfg.IPAllowlists,
+		sessions:       cfg.SessionPolicy,
+		epochs:         cfg.CheckpointEpochs,
 		onAuditFailure: cfg.OnAuditFailure,
+		auditSinks:     cfg.AuditSinks,
+		signIn:         signIn,
 		mux:            newPatternMux(),
 		routes:         nil,
 	}
@@ -174,6 +209,33 @@ func NewHandler(cfg Config) (*Handler, error) {
 	}
 
 	return h, nil
+}
+
+// validate returns ErrMissingDependency when cfg lacks a required
+// dependency.
+func (cfg Config) validate() error {
+	switch {
+	case cfg.Authenticator == nil:
+		return fmt.Errorf("%w: authenticator", ErrMissingDependency)
+	case cfg.Authorizer == nil:
+		return fmt.Errorf("%w: authorizer", ErrMissingDependency)
+	case cfg.Logger == nil:
+		return fmt.Errorf("%w: logger", ErrMissingDependency)
+	case cfg.Namespaces == nil:
+		return fmt.Errorf("%w: namespace service", ErrMissingDependency)
+	case cfg.Maintenance == nil:
+		return fmt.Errorf("%w: maintenance", ErrMissingDependency)
+	case cfg.Metrics == nil:
+		return fmt.Errorf("%w: metrics", ErrMissingDependency)
+	case cfg.Access != nil && !keepsNamespaceAudit(cfg.Audit):
+		// Each access-review export writes an audit entry, in @server or in
+		// the namespace of the export.
+		return fmt.Errorf("%w: an audit store with namespace entries, for the access review", ErrMissingDependency)
+	case cfg.SignIn != nil && cfg.Principals == nil:
+		return fmt.Errorf("%w: principal service, for the sign-in", ErrMissingDependency)
+	}
+
+	return nil
 }
 
 // keepsNamespaceAudit reports whether entries keeps the entries of @server
@@ -255,15 +317,24 @@ func (c *notFoundWriter) Write(p []byte) (int, error) {
 	return c.ResponseWriter.Write(p) //nolint:wrapcheck // Transparent wrapper: callers must see the original error.
 }
 
-// authenticate resolves the "Authorization: Bearer <token>" header to a
-// principal.
-func (h *Handler) authenticate(r *http.Request) (identity.Principal, error) {
-	raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), bearerScheme)
-	if !ok || raw == "" {
-		return identity.Principal{}, identity.ErrUnauthenticated
+// authenticate resolves the caller of r: the "Authorization: Bearer
+// <token>" header, or, for a request with no Authorization header, the
+// console session cookie. A request with both uses the header and ignores
+// the cookie. The session is nil for a caller with a token.
+func (h *Handler) authenticate(r *http.Request) (identity.Principal, *sessionCaller, error) {
+	header := r.Header.Get("Authorization")
+	if header == "" {
+		return h.authenticateSession(r)
 	}
 
-	return h.authn.AuthenticateToken(r.Context(), raw)
+	raw, ok := strings.CutPrefix(header, bearerScheme)
+	if !ok || raw == "" {
+		return identity.Principal{}, nil, identity.ErrUnauthenticated
+	}
+
+	p, err := h.authn.AuthenticateToken(r.Context(), raw)
+
+	return p, nil, err
 }
 
 // errorResponse is the error body the installation API answers.
@@ -278,6 +349,12 @@ func (h *Handler) writeError(ctx context.Context, w http.ResponseWriter, err err
 		// The log names the status only, never the error text: the text
 		// may hold driver detail, a token, or state (ADR 32 decision 7).
 		h.logger.ErrorContext(ctx, "request failed", slog.Int("status", status))
+	}
+
+	if fresh, ok := errors.AsType[reauthenticateError](err); ok {
+		h.writeJSON(ctx, w, status, reauthenticateResponse{Code: status, Message: message, Reauthenticate: fresh.url})
+
+		return
 	}
 
 	h.writeJSON(ctx, w, status, errorResponse{Code: status, Message: message})
@@ -297,27 +374,27 @@ func classifyIdentity(err error) (int, string, bool) {
 // callers. Backup errors map in classifyBackup, namespace errors in
 // classifyNamespace and maintenance errors in classifyMaintenance.
 func classify(err error) (int, string) {
-	if status, message, ok := classifyMaintenance(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyNamespace(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyBackup(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyPrincipal(err); ok {
-		return status, message
-	}
-
-	if status, message, ok := classifyIdentity(err); ok {
-		return status, message
+	for _, try := range []func(error) (int, string, bool){
+		classifyMaintenance, classifyNamespace, classifyBackup, classifyPrincipal, classifyIdentity,
+	} {
+		if status, message, ok := try(err); ok {
+			return status, message
+		}
 	}
 
 	if status, message, ok := classifyIPAllowlist(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifySessionPolicy(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifySignIn(err); ok {
+		return status, message
+	}
+
+	if status, message, ok := classifyProviders(err); ok {
 		return status, message
 	}
 
@@ -343,6 +420,8 @@ func classifyRequest(err error) (int, string, bool) {
 		return http.StatusBadRequest, errInvalidBody.Error(), true
 	case errors.Is(err, errOverrideSwitchesBody):
 		return http.StatusBadRequest, errOverrideSwitchesBody.Error(), true
+	case errors.Is(err, errCheckpointsOff):
+		return http.StatusConflict, errCheckpointsOff.Error(), true
 	default:
 		return 0, "", false
 	}
@@ -416,14 +495,29 @@ func classifyNamespace(err error) (int, string, bool) {
 
 // classifyMaintenance maps the maintenance errors to their status and
 // message: an invalid state value answers 400, active work answers 409
-// naming each update and run, and an unreadable or unknown stored state
-// answers 500 without driver text.
+// naming each update and run, a leave while a change of the audit chain
+// holds maintenance mode answers 409, a refused approval of an audit chain
+// change answers 409 or, without a fresh MFA step or when a service
+// principal approves turning the chain off, 403, an approval while the
+// server runs no migration loop answers 503, and an unreadable or
+// unknown stored state answers 500 without driver text.
 func classifyMaintenance(err error) (int, string, bool) {
 	switch {
 	case errors.Is(err, maintenance.ErrInvalidState):
 		return http.StatusBadRequest, err.Error(), true
 	case errors.Is(err, maintenance.ErrActiveWork):
 		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, maintenance.ErrHeld):
+		return http.StatusConflict, maintenance.ErrHeld.Error(), true
+	case errors.Is(err, audit.ErrNoChainChange), errors.Is(err, audit.ErrChainMigrating),
+		errors.Is(err, audit.ErrChainChangeWaits):
+		return http.StatusConflict, err.Error(), true
+	case errors.Is(err, audit.ErrChainMigrationsStopped):
+		return http.StatusServiceUnavailable, audit.ErrChainMigrationsStopped.Error(), true
+	case errors.Is(err, audit.ErrChainStepRequired):
+		return http.StatusForbidden, audit.ErrChainStepRequired.Error(), true
+	case errors.Is(err, audit.ErrChainNeedsPerson):
+		return http.StatusForbidden, audit.ErrChainNeedsPerson.Error(), true
 	case errors.Is(err, maintenance.ErrUnavailable):
 		return http.StatusInternalServerError, maintenance.ErrUnavailable.Error(), true
 	default:

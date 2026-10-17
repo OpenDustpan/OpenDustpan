@@ -26,13 +26,8 @@ func (s *Store) StagePortable(
 		return backup.Summary{}, err
 	}
 
-	if want.SchemaVersion != version {
-		return backup.Summary{}, fmt.Errorf(
-			"stage portable backup of schema version %d into version %d: %w",
-			want.SchemaVersion,
-			version,
-			backup.ErrSchemaMismatch,
-		)
+	if schemaErr := backup.CheckStageSchema(want.SchemaVersion, version); schemaErr != nil {
+		return backup.Summary{}, fmt.Errorf("stage portable backup: %w", schemaErr)
 	}
 
 	index, err := backup.IndexPortableFiles(files, want.RowCounts)
@@ -72,6 +67,11 @@ func (s *Store) loadPortableStaging(
 		// The migration seeds the token policy row too (ADR 53).
 		if _, err := tx.Exec(ctx, `DELETE FROM access_token_policy`); err != nil {
 			return fmt.Errorf("clear staged token policy: %w", backup.ErrCorrupt)
+		}
+
+		// The migration seeds the session policy row too.
+		if _, err := tx.Exec(ctx, `DELETE FROM session_policy`); err != nil {
+			return fmt.Errorf("clear staged session policy: %w", backup.ErrCorrupt)
 		}
 
 		return nil

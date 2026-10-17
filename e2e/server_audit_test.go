@@ -66,12 +66,28 @@ func runServerAuditOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 		t.Fatalf("create namespace answers %d, want %d (%v, %s)", status, http.StatusCreated, err, body)
 	}
 
-	checkServerAuditList(ctx, t, env)
+	created := checkServerAuditList(ctx, t, env)
+	checkAuditEntryRead(ctx, t, env, "@server", created)
+	checkServerAuditEntryMissing(ctx, t, env)
 	checkServerAuditChain(ctx, t, env)
 }
 
-// checkServerAuditList proves the list of @server holds the namespace create.
-func checkServerAuditList(ctx context.Context, t *testing.T, env *e2e.Env) {
+// checkServerAuditEntryMissing proves that a sequence that @server does not
+// hold answers 404.
+func checkServerAuditEntryMissing(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	const path = "/api/audit/entries/999999999?organization=@server"
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
+	if err != nil || status != http.StatusNotFound {
+		t.Fatalf("GET %s answers %d, want %d (%v, %s)", path, status, http.StatusNotFound, err, body)
+	}
+}
+
+// checkServerAuditList proves the list of @server holds the namespace
+// create, and returns that entry.
+func checkServerAuditList(ctx context.Context, t *testing.T, env *e2e.Env) *auditListItem {
 	t.Helper()
 
 	status, body, err := env.APIStatus(ctx, http.MethodGet, "/api/audit/entries?organization=@server", "")
@@ -94,11 +110,13 @@ func checkServerAuditList(ctx context.Context, t *testing.T, env *e2e.Env) {
 
 	for i := range got.Entries {
 		if got.Entries[i].Action == "server:create-namespace" && got.Entries[i].Object == "namespace:serverscope" {
-			return
+			return &got.Entries[i]
 		}
 	}
 
 	t.Fatalf("@server list holds no server:create-namespace entry for namespace:serverscope: %+v", got.Entries)
+
+	return nil
 }
 
 // checkServerAuditChain proves the chain of @server checks valid.

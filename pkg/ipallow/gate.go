@@ -48,6 +48,41 @@ func (g Gate) Authorize(ctx context.Context, p identity.Principal, action identi
 	return g.checkNamespace(ctx, obj.Namespace())
 }
 
+// ListObjects asks Next, then leaves out each object in a namespace whose
+// list does not contain the client address in ctx, as Authorize refuses
+// them. A scope with All set stays unchanged: the gate cannot name the
+// namespaces that it leaves out of every object, so a caller of such a
+// list must Authorize the namespace of its list through the gate first. A
+// store error fails the whole list.
+func (g Gate) ListObjects(
+	ctx context.Context, p identity.Principal, action identity.Action,
+) (identity.Scope, error) {
+	none := identity.Scope{Namespaces: nil, Collections: nil, Units: nil, Principals: nil, All: false}
+
+	scope, err := g.Next.ListObjects(ctx, p, action)
+	if err != nil {
+		return none, fmt.Errorf("list objects: %w", err)
+	}
+
+	if !g.Enabled || scope.All || g.bootstrapExempt(p) {
+		return scope, nil
+	}
+
+	allowed := map[namespace.Name]bool{}
+	sets := []*[]identity.Object{&scope.Namespaces, &scope.Collections, &scope.Units, &scope.Principals}
+
+	for _, set := range sets {
+		kept, keepErr := g.keepAllowed(ctx, *set, allowed)
+		if keepErr != nil {
+			return none, keepErr
+		}
+
+		*set = kept
+	}
+
+	return scope, nil
+}
+
 // CheckAddress refuses the request when the namespace ns holds a list that
 // does not contain the client address in ctx. It is the address-only check
 // for routes with no principal and no authorization object, such as the
@@ -115,4 +150,34 @@ func checkAddr(ctx context.Context, ns namespace.Name, list List) error {
 	}
 
 	return nil
+}
+
+// keepAllowed returns the objects of objs whose namespace allows the client
+// address in ctx. allowed holds the answer of each namespace already
+// checked.
+func (g Gate) keepAllowed(
+	ctx context.Context, objs []identity.Object, allowed map[namespace.Name]bool,
+) ([]identity.Object, error) {
+	out := make([]identity.Object, 0, len(objs))
+
+	for i := range objs {
+		ns := objs[i].Namespace()
+
+		ok, seen := allowed[ns]
+		if !seen {
+			err := g.checkNamespace(ctx, ns)
+			if err != nil && !errors.Is(err, identity.ErrDenied) {
+				return nil, err
+			}
+
+			ok = err == nil
+			allowed[ns] = ok
+		}
+
+		if ok {
+			out = append(out, objs[i])
+		}
+	}
+
+	return out, nil
 }

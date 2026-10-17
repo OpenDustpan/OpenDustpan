@@ -12,6 +12,7 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -21,29 +22,46 @@ var _ principal.Store = (*Store)(nil)
 
 // CreatePrincipal implements principal.Store.
 func (s *Store) CreatePrincipal(ctx context.Context, p principal.Principal, e audit.Entry) error {
+	if p.Namespace != "" {
+		return fmt.Errorf("%w: a principal of a namespace goes through CreateNamespacePrincipal", principal.ErrInvalid)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		n, err := q.CreatePrincipal(ctx, db.CreatePrincipalParams{
-			ID:          p.ID,
-			Subject:     p.Subject,
-			DisplayName: p.DisplayName,
-			Kind:        string(p.Kind),
-			Source:      string(p.Source),
-			CreatedAtMs: codec.Millis(p.CreatedAt),
-			UpdatedAtMs: codec.Millis(p.UpdatedAt),
-		})
-		if err != nil {
-			return fmt.Errorf("insert principal: %w", err)
-		}
-
-		if n == 0 {
-			return principal.ErrAlreadyExists
-		}
-
-		return nil
+		return insertPrincipal(ctx, q, p)
 	})
+}
+
+// insertPrincipal inserts p with q, and returns ErrAlreadyExists when its
+// ID or its subject is taken. It returns ErrBreakGlassKind when a principal
+// that is not a person is marked as a break-glass account.
+func insertPrincipal(ctx context.Context, q *db.Queries, p principal.Principal) error {
+	if p.BreakGlass && p.Kind != principal.KindPerson {
+		return fmt.Errorf("%w: kind %q", principal.ErrBreakGlassKind, p.Kind)
+	}
+
+	n, err := q.CreatePrincipal(ctx, db.CreatePrincipalParams{
+		ID:          p.ID,
+		Subject:     p.Subject,
+		DisplayName: p.DisplayName,
+		Kind:        string(p.Kind),
+		Source:      string(p.Source),
+		CreatedAtMs: codec.Millis(p.CreatedAt),
+		UpdatedAtMs: codec.Millis(p.UpdatedAt),
+		Namespace:   p.Namespace.String(),
+		BreakGlass:  p.BreakGlass,
+	})
+	if err != nil {
+		return fmt.Errorf("insert principal: %w", err)
+	}
+
+	if n == 0 {
+		return principal.ErrAlreadyExists
+	}
+
+	return nil
 }
 
 // GetPrincipal implements principal.Store.
@@ -90,32 +108,39 @@ func (s *Store) ListPrincipals(
 
 	return listPage(ctx, s, pq, pageReads[db.ListPrincipalsRow, principal.Principal]{
 		list: func(ctx context.Context, q *db.Queries, pq principal.Query) ([]db.ListPrincipalsRow, error) {
-			return listPrincipalRows(ctx, q, pq, kind)
+			return listPrincipalRows(ctx, q, pq, kind, "")
 		},
 		count: func(ctx context.Context, q *db.Queries, pq principal.Query) (int64, error) {
-			return countPrincipalRows(ctx, q, pq, kind)
+			return countPrincipalRows(ctx, q, pq, kind, "")
 		},
 		conv: principalFromList,
 	})
 }
 
+// listPrincipalRows reads one page of principals. An empty ns reads the
+// principals of every namespace and of the installation.
 func listPrincipalRows(
-	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind,
+	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind, ns namespace.Name,
 ) ([]db.ListPrincipalsRow, error) {
 	return q.ListPrincipals(
 		ctx,
 		db.ListPrincipalsParams{
-			After:    pq.After,
-			Low:      pq.Low,
-			High:     pq.High,
-			Kind:     string(kind),
-			RowLimit: int64(pq.Limit),
+			After:     pq.After,
+			Low:       pq.Low,
+			High:      pq.High,
+			Kind:      string(kind),
+			Namespace: ns.String(),
+			RowLimit:  int64(pq.Limit),
 		},
 	)
 }
 
-func countPrincipalRows(ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind) (int64, error) {
-	return q.CountPrincipals(ctx, db.CountPrincipalsParams{Low: pq.Low, High: pq.High, Kind: string(kind)})
+func countPrincipalRows(
+	ctx context.Context, q *db.Queries, pq principal.Query, kind principal.Kind, ns namespace.Name,
+) (int64, error) {
+	return q.CountPrincipals(ctx, db.CountPrincipalsParams{
+		Low: pq.Low, High: pq.High, Kind: string(kind), Namespace: ns.String(),
+	})
 }
 
 func principalFromList(r db.ListPrincipalsRow) principal.Principal {
@@ -165,21 +190,29 @@ func (s *Store) UpdatePrincipal(ctx context.Context, p principal.Principal, e au
 	defer s.mu.RUnlock()
 
 	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
-		n, err := q.UpdatePrincipal(ctx, db.UpdatePrincipalParams{
-			DisplayName: p.DisplayName,
-			UpdatedAtMs: codec.Millis(p.UpdatedAt),
-			ID:          p.ID,
-		})
-		if err != nil {
-			return fmt.Errorf("update principal: %w", err)
-		}
-
-		if n == 0 {
-			return principal.ErrNotFound
-		}
-
-		return nil
+		return updatePrincipalRow(ctx, q, p, "")
 	})
+}
+
+// updatePrincipalRow writes the display name and the update time of p, a
+// principal of the namespace ns ("" for the installation), with q. It
+// returns ErrNotFound when no such principal exists in ns.
+func updatePrincipalRow(ctx context.Context, q *db.Queries, p principal.Principal, ns namespace.Name) error {
+	n, err := q.UpdatePrincipal(ctx, db.UpdatePrincipalParams{
+		DisplayName: p.DisplayName,
+		UpdatedAtMs: codec.Millis(p.UpdatedAt),
+		ID:          p.ID,
+		Namespace:   ns.String(),
+	})
+	if err != nil {
+		return fmt.Errorf("update principal: %w", err)
+	}
+
+	if n == 0 {
+		return principal.ErrNotFound
+	}
+
+	return nil
 }
 
 // DeletePrincipal implements principal.Store. It ends the principal, its
@@ -189,7 +222,7 @@ func (s *Store) DeletePrincipal(ctx context.Context, id string, e audit.Entry) e
 	defer s.mu.RUnlock()
 
 	return s.endRecord(ctx, e, access.Subject{Kind: access.SubjectPrincipal, ID: id}, ending{
-		record:  func(q *db.Queries, at int64) (int64, error) { return endPrincipal(ctx, q, id, at) },
+		record:  func(q *db.Queries, at int64) (int64, error) { return endPrincipal(ctx, q, id, "", at) },
 		members: func(q *db.Queries, at int64) error { return endPrincipalMemberships(ctx, q, id, at) },
 	})
 }
@@ -228,8 +261,10 @@ type ending struct {
 	members func(q *db.Queries, at int64) error
 }
 
-func endPrincipal(ctx context.Context, q *db.Queries, id string, at int64) (int64, error) {
-	return q.DeletePrincipal(ctx, db.DeletePrincipalParams{DeletedAtMs: nullMillis(at), ID: id})
+// endPrincipal ends the principal id of the namespace ns ("" for the
+// installation) at the time at.
+func endPrincipal(ctx context.Context, q *db.Queries, id string, ns namespace.Name, at int64) (int64, error) {
+	return q.DeletePrincipal(ctx, db.DeletePrincipalParams{DeletedAtMs: nullMillis(at), ID: id, Namespace: ns.String()})
 }
 
 func endPrincipalMemberships(ctx context.Context, q *db.Queries, id string, at int64) error {
@@ -250,9 +285,14 @@ func endGroupMemberships(ctx context.Context, q *db.Queries, id string, at int64
 // end.members and the grants of subject, at the time of e and in the
 // transaction of e. It returns ErrNotFound when end.record ends no row.
 func (s *Store) endRecord(ctx context.Context, e audit.Entry, subject access.Subject, end ending) error {
+	return s.inAuditedTx(ctx, e, endRecordTx(ctx, e, subject, end))
+}
+
+// endRecordTx returns the body of the transaction of endRecord.
+func endRecordTx(ctx context.Context, e audit.Entry, subject access.Subject, end ending) func(q *db.Queries) error {
 	at := codec.Millis(e.At)
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	return func(q *db.Queries) error {
 		n, err := end.record(q, at)
 		if err != nil {
 			return fmt.Errorf("end record: %w", err)
@@ -267,7 +307,7 @@ func (s *Store) endRecord(ctx context.Context, e audit.Entry, subject access.Sub
 		}
 
 		return revokeGrantsOf(ctx, q, subject, e)
-	})
+	}
 }
 
 // CreateGroup implements principal.Store.
@@ -394,31 +434,89 @@ func (s *Store) DeleteGroup(ctx context.Context, id string, e audit.Entry) error
 }
 
 // AddMember implements principal.Store. It checks the group and the
-// principal in the same transaction as the insert.
-func (s *Store) AddMember(ctx context.Context, m principal.Membership, e audit.Entry) error {
+// principal, and runs more, in the same transaction as the insert. An empty source or state
+// defaults to local and active.
+func (s *Store) AddMember(
+	ctx context.Context, m principal.Membership, e audit.Entry, more principal.MemberAudit,
+) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	return s.inAuditedTx(ctx, e, func(q *db.Queries) error {
+	if err := validServerEntry(e); err != nil {
+		return err
+	}
+
+	return s.inTx(ctx, func(q *db.Queries) error {
 		if err := groupAndPrincipalExist(ctx, q, m.GroupID, m.PrincipalID); err != nil {
 			return err
 		}
 
-		n, err := q.AddGroupMember(ctx, db.AddGroupMemberParams{
-			GroupID:     m.GroupID,
-			PrincipalID: m.PrincipalID,
-			AddedAtMs:   codec.Millis(m.AddedAt),
+		entry, merr := memberChanges(ctx, q, e, more)
+		if merr != nil {
+			return merr
+		}
+
+		m = m.WithDefaults()
+
+		if verr := m.Validate(); verr != nil {
+			return verr
+		}
+
+		n, ierr := q.AddGroupMember(ctx, db.AddGroupMemberParams{
+			GroupID:       m.GroupID,
+			PrincipalID:   m.PrincipalID,
+			AddedAtMs:     codec.Millis(m.AddedAt),
+			Source:        string(m.Source),
+			SourceID:      m.SourceID,
+			State:         string(m.State),
+			SuspendedAtMs: codec.OptionalMillis(m.SuspendedAt),
+			Pinned:        m.Pinned,
 		})
-		if err != nil {
-			return fmt.Errorf("insert group member: %w", err)
+		if ierr != nil {
+			return fmt.Errorf("insert group member: %w", ierr)
 		}
 
 		if n == 0 {
 			return principal.ErrAlreadyExists
 		}
 
-		return nil
+		return appendMemberAudit(ctx, q, entry)
 	})
+}
+
+// memberChanges returns e with the changes of more appended to a copy, so
+// the caller entry keeps its changes. It runs more only when more is not
+// nil.
+func memberChanges(
+	ctx context.Context, q *db.Queries, e audit.Entry, more principal.MemberAudit,
+) (audit.Entry, error) {
+	changes := append([]audit.Change(nil), e.Changes...)
+	if more != nil {
+		extra, err := more(ctx, grantReads{q: q})
+		if err != nil {
+			return audit.Entry{}, err
+		}
+
+		changes = append(changes, extra...)
+	}
+
+	entry := e
+	entry.Changes = changes
+
+	return entry, nil
+}
+
+// appendMemberAudit validates the entry of the insert and appends it.
+func appendMemberAudit(ctx context.Context, q *db.Queries, entry audit.Entry) error {
+	if err := validServerEntry(entry); err != nil {
+		return err
+	}
+
+	if _, err := appendAuditEntry(ctx, q, entry); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // groupAndPrincipalExist returns ErrNotFound when the group or the principal
@@ -429,13 +527,17 @@ func groupAndPrincipalExist(ctx context.Context, q *db.Queries, groupID, princip
 		return err
 	}
 
-	principals, err := q.PrincipalExists(ctx, principalID)
-	if err != nil {
-		return fmt.Errorf("count principals: %w", err)
+	ns, err := q.GetPrincipalNamespace(ctx, principalID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("principal: %w", principal.ErrNotFound)
 	}
 
-	if principals == 0 {
-		return fmt.Errorf("principal: %w", principal.ErrNotFound)
+	if err != nil {
+		return fmt.Errorf("select principal namespace: %w", err)
+	}
+
+	if ns != "" {
+		return fmt.Errorf("%w: a principal of a namespace cannot be a member of a group", principal.ErrInvalid)
 	}
 
 	return nil
@@ -524,11 +626,18 @@ func (s *Store) ListMembers(
 
 		out = mapRows(rows, func(r db.ListGroupMembersRow) principal.Member {
 			return principal.Member{
-				AddedAt: codec.FromMillis(r.AddedAtMs),
+				AddedAt:     codec.FromMillis(r.AddedAtMs),
+				SuspendedAt: codec.FromOptionalMillis(r.MemberSuspendedAtMs),
+				GroupID:     groupID,
+				PrincipalID: r.ID,
+				Source:      principal.MembershipSource(r.MemberSource),
+				SourceID:    r.MemberSourceID,
+				State:       principal.MembershipState(r.MemberState),
+				Pinned:      r.MemberPinned,
 				Principal: principalOf(principalFields{
 					id: r.ID, subject: r.Subject, displayName: r.DisplayName, kind: r.Kind, source: r.Source,
 					createdAtMs: r.CreatedAtMs, updatedAtMs: r.UpdatedAtMs, groupCount: r.GroupCount,
-					disabledAtMs: r.DisabledAtMs.Int64,
+					disabledAtMs: r.DisabledAtMs.Int64, namespace: r.Namespace, breakGlass: r.BreakGlass,
 				}),
 			}
 		})
@@ -603,6 +712,8 @@ type principalFields struct {
 	createdAtMs, updatedAtMs, groupCount   int64
 	// disabledAtMs is 0 when the column is NULL.
 	disabledAtMs int64
+	namespace    string
+	breakGlass   bool
 }
 
 // principalRow maps any generated principal row to its fields. The reads
@@ -613,7 +724,7 @@ func principalRow[T db.GetPrincipalRow | db.GetPrincipalBySubjectRow | db.ListPr
 	return principalFields{
 		id: r.ID, subject: r.Subject, displayName: r.DisplayName, kind: r.Kind, source: r.Source,
 		createdAtMs: r.CreatedAtMs, updatedAtMs: r.UpdatedAtMs, groupCount: r.GroupCount,
-		disabledAtMs: r.DisabledAtMs.Int64,
+		disabledAtMs: r.DisabledAtMs.Int64, namespace: r.Namespace, breakGlass: r.BreakGlass,
 	}
 }
 
@@ -628,7 +739,9 @@ func principalOf(f principalFields) principal.Principal {
 		DisplayName: f.displayName,
 		Kind:        principal.Kind(f.kind),
 		Source:      principal.Source(f.source),
+		Namespace:   namespace.Name(f.namespace),
 		GroupCount:  f.groupCount,
+		BreakGlass:  f.breakGlass,
 	}
 }
 

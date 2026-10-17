@@ -1,6 +1,9 @@
 package access
 
 import (
+	"context"
+	"fmt"
+	"slices"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -36,7 +39,7 @@ const (
 	RoleInstallationOperator = "installation-operator"
 	// RoleAccountAdministrator holds the administration, data and
 	// delegation actions: the tenant side of a hosted installation. It holds
-	// no operator action. On the installation, the delegation actions let it
+	// no operator action, and no action of siteOnlyActions. On the installation, the delegation actions let it
 	// make a token for any service principal and so act as that principal,
 	// with every grant that the principal has now or gets later.
 	RoleAccountAdministrator = "account-administrator"
@@ -113,6 +116,26 @@ func maintainerActions() []identity.Action {
 	)
 }
 
+// siteOnlyActions are the administration actions that, of the built-in
+// roles, only RoleSiteAdministrator holds. The sign-in settings decide who
+// can sign in to the whole installation, and a restore with the access
+// tables replaces who has access, so the tenant side of a hosted
+// installation holds neither of them.
+func siteOnlyActions() []identity.Action {
+	return []identity.Action{identity.ActionServerManageSignIn, identity.ActionServerRestoreAccess}
+}
+
+// accountAdministratorActions are the actions of RoleAccountAdministrator.
+func accountAdministratorActions() []identity.Action {
+	site := siteOnlyActions()
+	out := slices.DeleteFunc(Actions(FamilyAdministration), func(a identity.Action) bool {
+		return slices.Contains(site, a)
+	})
+	out = append(out, Actions(FamilyData)...)
+
+	return append(out, Actions(FamilyDelegation)...)
+}
+
 // builtInActions returns the actions of the built-in role id.
 func builtInActions(id string) []identity.Action {
 	switch id {
@@ -136,9 +159,7 @@ func builtInActions(id string) []identity.Action {
 	case RoleInstallationOperator:
 		return Actions(FamilyOperator)
 	case RoleAccountAdministrator:
-		out := append(Actions(FamilyAdministration), Actions(FamilyData)...)
-
-		return append(out, Actions(FamilyDelegation)...)
+		return accountAdministratorActions()
 	case RoleSiteAdministrator:
 		out := append(Actions(FamilyOperator), Actions(FamilyAdministration)...)
 		out = append(out, Actions(FamilyData)...)
@@ -188,4 +209,59 @@ func BuiltInRole(id string) (Role, bool) {
 // epoch is the creation time of every built-in role: the Unix epoch, UTC.
 func epoch() time.Time {
 	return time.Unix(0, 0).UTC()
+}
+
+// rolesByID returns the roles that grants name, by ID: the built-in roles
+// from code and the custom roles in one query of store. cached answers the
+// roles read before, and keep keeps each role read now. A role that no
+// longer exists is left out, so its grants give nothing.
+func rolesByID(
+	ctx context.Context,
+	grants []Grant,
+	cached func(string) (Role, bool),
+	keep func(Role),
+	store RoleStore,
+) (map[string]Role, error) {
+	out := make(map[string]Role, len(grants))
+
+	var missing []string
+
+	for i := range grants {
+		id := grants[i].Role
+		if _, done := out[id]; done {
+			continue
+		}
+
+		if r, ok := BuiltInRole(id); ok {
+			out[id] = r
+
+			continue
+		}
+
+		if r, ok := cached(id); ok {
+			out[id] = r
+
+			continue
+		}
+
+		if !slices.Contains(missing, id) {
+			missing = append(missing, id)
+		}
+	}
+
+	if len(missing) == 0 {
+		return out, nil
+	}
+
+	custom, err := store.GetRoles(ctx, missing)
+	if err != nil {
+		return nil, fmt.Errorf("read roles: %w", err)
+	}
+
+	for i := range custom {
+		out[custom[i].ID] = custom[i]
+		keep(custom[i])
+	}
+
+	return out, nil
 }

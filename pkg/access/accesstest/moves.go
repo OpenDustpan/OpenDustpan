@@ -72,7 +72,7 @@ func authorizerOver(t *testing.T, s moveStore, port access.UnitCollections) (*ac
 	t.Helper()
 
 	authz, err := access.NewAuthorizer(access.AuthorizerConfig{
-		Store: s, Callers: s, Collections: port, Units: s,
+		Store: s, Callers: s, Collections: port, Units: s, Principals: nil,
 	})
 	if err != nil {
 		t.Fatalf("authorizer: %v", err)
@@ -125,7 +125,7 @@ func seedPrincipal(t *testing.T, s moveStore, id, subject string) identity.Princ
 
 	p := principal.Principal{
 		CreatedAt: at(0), UpdatedAt: at(0), ID: id, Subject: subject, DisplayName: "",
-		Kind: principal.KindPerson, Source: principal.SourceLocal, GroupCount: 0,
+		Kind: principal.KindPerson, Source: principal.SourceLocal, Namespace: "", GroupCount: 0, BreakGlass: false,
 		DisabledAt: time.Time{},
 	}
 	if err := s.CreatePrincipal(t.Context(), p, entry()); err != nil {

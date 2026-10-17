@@ -12,6 +12,7 @@
 package oauthtest
 
 import (
+	"cmp"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -21,10 +22,12 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"math/big"
 	"net/http"
@@ -74,6 +77,36 @@ type Faults struct {
 	UnknownKey bool
 	// SkipPKCE accepts a token request with a wrong code verifier.
 	SkipPKCE bool
+	// ExtraAudience signs an ID token for the client and for another
+	// client, so the aud claim is a list of two.
+	ExtraAudience bool
+	// AuthorizedParty sets the azp claim of an ID token when it is not
+	// empty.
+	AuthorizedParty string
+	// IssuedIn moves the iat claim of an ID token by this duration from
+	// now, and its exp claim with it, when it is not zero.
+	IssuedIn time.Duration
+	// IgnoreMaxAge answers an authorization request with max_age with the
+	// last authentication, as a provider that does not honor max_age does.
+	IgnoreMaxAge bool
+	// TokenType sets the token_type of a token answer when it is not
+	// empty.
+	TokenType string
+	// UserinfoStatus answers a user-info request with this status and no
+	// body when it is not zero.
+	UserinfoStatus int
+	// UserinfoBody answers a user-info request with this body, as
+	// application/json, when it is not empty.
+	UserinfoBody string
+	// UserinfoType sets the Content-Type of a user-info answer when it is
+	// not empty.
+	UserinfoType string
+	// UserinfoRedirect answers a user-info request with a redirect to this
+	// URL when it is not empty.
+	UserinfoRedirect string
+	// TokenRedirect answers a token request with a redirect to this URL
+	// when it is not empty.
+	TokenRedirect string
 }
 
 // User is the person whom the provider signs in.
@@ -254,6 +287,12 @@ func newKey(alg string) (crypto.Signer, error) {
 // Issuer returns the issuer URL: the base URL of the provider.
 func (p *Provider) Issuer() string {
 	return p.server.URL
+}
+
+// Certificate returns the certificate of the provider, so another process
+// can trust it, or nil when the provider serves HTTP.
+func (p *Provider) Certificate() *x509.Certificate {
+	return p.server.Certificate()
 }
 
 // Client returns an HTTP client that trusts the provider.
@@ -485,7 +524,7 @@ func (p *Provider) mustSignIn(q url.Values, now time.Time) bool {
 	}
 
 	raw := q.Get("max_age")
-	if raw == "" {
+	if raw == "" || p.cfg.Faults.IgnoreMaxAge {
 		return false
 	}
 
@@ -511,6 +550,10 @@ func hasScope(scopes, want string) bool {
 // token exchanges an authorization code for an access token and, in the
 // OIDC mode, an ID token.
 func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
+	if p.redirectToken(w, r) {
+		return
+	}
+
 	if err := r.ParseForm(); err != nil {
 		tokenError(w, http.StatusBadRequest, "invalid_request")
 
@@ -557,7 +600,7 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 
 	body := map[string]any{
 		"access_token": access,
-		"token_type":   "Bearer",
+		"token_type":   cmp.Or(faults.TokenType, "Bearer"),
 		"expires_in":   int64(tokenLifetime / time.Second),
 	}
 
@@ -573,6 +616,22 @@ func (p *Provider) token(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, body)
+}
+
+// redirectToken answers a redirect to the TokenRedirect fault, if one is
+// set, and reports whether it did.
+func (p *Provider) redirectToken(w http.ResponseWriter, r *http.Request) bool {
+	p.mu.Lock()
+	redirect := p.cfg.Faults.TokenRedirect
+	p.mu.Unlock()
+
+	if redirect == "" {
+		return false
+	}
+
+	http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
+
+	return true
 }
 
 // clientAuthenticated reports whether r carries the client credentials,
@@ -633,6 +692,19 @@ func applyClaimFaults(claims map[string]any, f Faults, now time.Time) {
 
 	if f.WrongNonce {
 		claims["nonce"] = "another-nonce"
+	}
+
+	if f.ExtraAudience {
+		claims["aud"] = []any{claims["aud"], "another-client"}
+	}
+
+	if f.AuthorizedParty != "" {
+		claims["azp"] = f.AuthorizedParty
+	}
+
+	if f.IssuedIn != 0 {
+		claims["iat"] = now.Add(f.IssuedIn).Unix()
+		claims["exp"] = now.Add(f.IssuedIn + tokenLifetime).Unix()
 	}
 
 	if f.Expired {
@@ -732,6 +804,7 @@ func (p *Provider) userinfo(w http.ResponseWriter, r *http.Request) {
 
 	p.mu.Lock()
 	u, known := p.tokens[access]
+	faults := p.cfg.Faults
 	p.mu.Unlock()
 
 	if !ok || !known {
@@ -741,7 +814,37 @@ func (p *Provider) userinfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if faults.UserinfoRedirect != "" {
+		http.Redirect(w, r, faults.UserinfoRedirect, http.StatusFound)
+
+		return
+	}
+
+	if faults.UserinfoStatus != 0 {
+		w.WriteHeader(faults.UserinfoStatus)
+
+		return
+	}
+
+	if faults.UserinfoBody != "" || faults.UserinfoType != "" {
+		writeRaw(w, cmp.Or(faults.UserinfoType, "application/json"), faults.UserinfoBody)
+
+		return
+	}
+
 	writeJSON(w, http.StatusOK, u.claims())
+}
+
+// writeRaw writes body with the Content-Type contentType and status 200.
+func writeRaw(w http.ResponseWriter, contentType, body string) {
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+
+	if _, err := io.WriteString(w, body); err != nil {
+		// The client of the test sees the broken answer.
+		return
+	}
 }
 
 // tokenError writes an OAuth error answer (RFC 6749 section 5.2).

@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -117,6 +118,9 @@ func TestNewRejectsBadConfig(t *testing.T) {
 		{name: "negative facility", cfg: withFacility(config(syslog.UDP, "127.0.0.1:514"), -1)},
 		{name: "message cap too low", cfg: withMaxBytes(config(syslog.UDP, "127.0.0.1:514"), 100)},
 		{name: "message cap too high", cfg: withMaxBytes(config(syslog.UDP, "127.0.0.1:514"), 70000)},
+		{name: "udp cap above the datagram limit", cfg: withMaxBytes(config(syslog.UDP, "127.0.0.1:514"), 65536)},
+		{name: "tcp cap above 64 kibibytes", cfg: withMaxBytes(config(syslog.TCP, "127.0.0.1:514"), 65537)},
+		{name: "tls cap above 64 kibibytes", cfg: withMaxBytes(config(syslog.TLS, "127.0.0.1:514"), 65537)},
 	}
 
 	for _, tc := range cases {
@@ -130,7 +134,110 @@ func TestNewRejectsBadConfig(t *testing.T) {
 	}
 }
 
-func TestARecordAboveTheCapIsSkippedAndTheRestArrive(t *testing.T) {
+// TestStreamCapsReach64KiB proves that an explicit cap of 64 KiB is valid
+// over TCP and TLS and at the datagram limit over UDP.
+func TestStreamCapsReach64KiB(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		network syslog.Network
+		cap     int
+	}{
+		{name: "tcp 64 kibibytes", network: syslog.TCP, cap: syslog.MaxStreamMessageBytes},
+		{name: "tls 64 kibibytes", network: syslog.TLS, cap: syslog.MaxStreamMessageBytes},
+		{name: "udp datagram limit", network: syslog.UDP, cap: syslog.MaxMaxMessageBytes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			s, err := syslog.New(withMaxBytes(config(tc.network, "127.0.0.1:514"), tc.cap))
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+
+			closeOnCleanup(t, s)
+		})
+	}
+}
+
+// TestStreamDefaultHoldsLargeRecords proves that a TCP sink without an
+// explicit cap delivers a 20 KiB record whole: the old 8192-byte default
+// would have refused it.
+func TestStreamDefaultHoldsLargeRecords(t *testing.T) {
+	t.Parallel()
+
+	r := listenStream(t, nil)
+
+	s, err := syslog.New(config(syslog.TCP, r.addr))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	closeOnCleanup(t, s)
+
+	rec := logsink.Record{
+		Time:    time.Unix(0, 0),
+		Level:   logsink.LevelInfo,
+		Message: strings.Repeat("m", 20000),
+		Attrs:   nil,
+	}
+
+	if err := s.Write(t.Context(), []logsink.Record{rec}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
+	if len(msgs) != 1 {
+		t.Fatalf("received %d messages, want 1", len(msgs))
+	}
+
+	if bytes.Contains(body(t, msgs[0]), []byte(`"truncated"`)) {
+		t.Fatalf("message carries a truncated mark under the stream default: %q", msgs[0][:200])
+	}
+}
+
+// TestUDPDefaultStillTrimsAt8192 proves that a UDP sink without an explicit
+// cap keeps the 8192-byte default: a 20 KiB record is refused and never
+// sent, never as a datagram above the common receiver limit.
+func TestUDPDefaultStillTrimsAt8192(t *testing.T) {
+	t.Parallel()
+
+	r := listenUDP(t)
+
+	s, err := syslog.New(config(syslog.UDP, r.addr))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	closeOnCleanup(t, s)
+
+	rec := logsink.Record{
+		Time:    time.Unix(0, 0),
+		Level:   logsink.LevelInfo,
+		Message: strings.Repeat("m", 20000),
+		Attrs:   nil,
+	}
+
+	err = s.Write(t.Context(), []logsink.Record{rec})
+
+	skip, ok := errors.AsType[*logsink.SkipError](err)
+	if !ok || skip.Skipped != 1 || !errors.Is(err, logsink.ErrSkipped) {
+		t.Fatalf("write: got %v, want a skip of 1 record", err)
+	}
+
+	pause(t)
+
+	msgs := r.waitFor(t, func([][]byte) bool { return true })
+	if len(msgs) != 0 {
+		t.Fatalf("received %d messages, want 0", len(msgs))
+	}
+}
+
+// TestSkippedBatchReportsIndexes proves that the skip error of a batch with
+// a skipped record holds the position of that record, so the caller can name
+// it without reading the others.
+func TestSkippedBatchReportsIndexes(t *testing.T) {
 	t.Parallel()
 
 	r := listenStream(t, nil)
@@ -143,7 +250,159 @@ func TestARecordAboveTheCapIsSkippedAndTheRestArrive(t *testing.T) {
 	closeOnCleanup(t, s)
 
 	large := logsink.Record{
-		Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: strings.Repeat("x", 600), Attrs: nil,
+		Time:    time.Unix(0, 0),
+		Level:   logsink.LevelInfo,
+		Message: "audit entry",
+		Attrs: []logsink.Attr{
+			logsink.String("scope", "acme"),
+			logsink.Int64("sequence", 7),
+			logsink.String("action", strings.Repeat("a", 2000)),
+			logsink.String("kind", "reveal"),
+			logsink.String("outcome", "success"),
+		},
+	}
+	small := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "small", Attrs: nil}
+
+	err = s.Write(t.Context(), []logsink.Record{large, small})
+
+	skip, ok := errors.AsType[*logsink.SkipError](err)
+	if !ok || skip.Skipped != 1 || !errors.Is(err, logsink.ErrSkipped) {
+		t.Fatalf("write: got %v, want a skip of 1 record", err)
+	}
+
+	if fmt.Sprint(skip.Indexes) != "[0]" {
+		t.Fatalf("skip indexes: got %v, want [0]", skip.Indexes)
+	}
+
+	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
+	if len(msgs) != 1 || !bytes.Contains(msgs[0], []byte(`"msg":"small"`)) {
+		t.Fatalf("received %q, want only the small record", msgs)
+	}
+}
+
+func TestLargeRecordIsTrimmedAndDelivered(t *testing.T) {
+	t.Parallel()
+
+	r := listenStream(t, nil)
+
+	s, err := syslog.New(withMaxBytes(config(syslog.TCP, r.addr), syslog.MinMaxMessageBytes))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	closeOnCleanup(t, s)
+
+	rec := logsink.Record{
+		Time:    time.Date(2026, time.October, 13, 12, 0, 0, 0, time.UTC),
+		Level:   logsink.LevelInfo,
+		Message: "audit entry",
+		Attrs: []logsink.Attr{
+			logsink.String("scope", "acme"),
+			logsink.Int64("sequence", 7),
+			logsink.String("action", "unit:read-secrets"),
+			logsink.String("object", "pulumi:acme/web/prod"),
+			logsink.String("kind", "reveal"),
+			logsink.String("outcome", "success"),
+			logsink.String("prevHash", "abc"),
+			logsink.String("hash", "def"),
+			logsink.String("detail", strings.Repeat("d", 600)),
+			logsink.String("note", strings.Repeat("n", 600)),
+			logsink.String("extra", strings.Repeat("e", 600)),
+		},
+	}
+
+	small := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "small", Attrs: nil}
+
+	err = s.Write(t.Context(), []logsink.Record{rec, small})
+
+	skip, ok := errors.AsType[*logsink.SkipError](err)
+	if !ok || skip.Skipped != 1 || !errors.Is(err, logsink.ErrSkipped) {
+		t.Fatalf("write: got %v, want a skip of 1 record", err)
+	}
+
+	if fmt.Sprint(skip.Indexes) != "[0]" {
+		t.Fatalf("skip indexes: got %v, want [0]", skip.Indexes)
+	}
+
+	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
+	if len(msgs) != 1 || !bytes.Contains(msgs[0], []byte(`"msg":"small"`)) {
+		t.Fatalf("received %q, want only the small record", msgs)
+	}
+
+	if bytes.Contains(body(t, msgs[0]), []byte(`"truncated"`)) {
+		t.Fatalf("small message carries a truncated mark: %q", msgs[0])
+	}
+}
+
+func TestRecordWithLongProtectedFieldIsSkippedAndTheRestArrive(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"subject", "object", "userAgent", "requestID"} {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+
+			r := listenStream(t, nil)
+
+			s, err := syslog.New(withMaxBytes(config(syslog.TCP, r.addr), syslog.MinMaxMessageBytes))
+			if err != nil {
+				t.Fatalf("new: %v", err)
+			}
+
+			closeOnCleanup(t, s)
+
+			large := logsink.Record{
+				Time:    time.Unix(0, 0),
+				Level:   logsink.LevelInfo,
+				Message: "audit entry",
+				Attrs: []logsink.Attr{
+					logsink.String("scope", "acme"),
+					logsink.Int64("sequence", 7),
+					logsink.String("action", "unit:read-secrets"),
+					logsink.String("kind", "reveal"),
+					logsink.String("outcome", "success"),
+					logsink.String(key, strings.Repeat("x", 2000)),
+				},
+			}
+			small := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "small", Attrs: nil}
+
+			err = s.Write(t.Context(), []logsink.Record{large, small})
+
+			skip, ok := errors.AsType[*logsink.SkipError](err)
+			if !ok || skip.Skipped != 1 || !errors.Is(err, logsink.ErrSkipped) {
+				t.Fatalf("write with a long %q: got %v, want a skip of 1 record", key, err)
+			}
+
+			msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
+			if len(msgs) != 1 || !bytes.Contains(msgs[0], []byte(`"msg":"small"`)) {
+				t.Fatalf("received %q, want only the small record", msgs)
+			}
+		})
+	}
+}
+
+func TestRecordThatCannotFitIsSkippedAndTheRestArrive(t *testing.T) {
+	t.Parallel()
+
+	r := listenStream(t, nil)
+
+	s, err := syslog.New(withMaxBytes(config(syslog.TCP, r.addr), syslog.MinMaxMessageBytes))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	closeOnCleanup(t, s)
+
+	large := logsink.Record{
+		Time:    time.Unix(0, 0),
+		Level:   logsink.LevelInfo,
+		Message: "audit entry",
+		Attrs: []logsink.Attr{
+			logsink.String("scope", "acme"),
+			logsink.Int64("sequence", 7),
+			logsink.String("action", strings.Repeat("a", 2000)),
+			logsink.String("kind", "reveal"),
+			logsink.String("outcome", "success"),
+		},
 	}
 	small := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "small", Attrs: nil}
 
@@ -157,6 +416,34 @@ func TestARecordAboveTheCapIsSkippedAndTheRestArrive(t *testing.T) {
 	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
 	if len(msgs) != 1 || !bytes.Contains(msgs[0], []byte(`"msg":"small"`)) {
 		t.Fatalf("received %q, want only the small record", msgs)
+	}
+}
+
+func TestSmallRecordHasNoTruncatedMark(t *testing.T) {
+	t.Parallel()
+
+	r := listenStream(t, nil)
+
+	s, err := syslog.New(withMaxBytes(config(syslog.TCP, r.addr), syslog.MinMaxMessageBytes))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	closeOnCleanup(t, s)
+
+	rec := logsink.Record{Time: time.Unix(0, 0), Level: logsink.LevelInfo, Message: "small", Attrs: nil}
+
+	if err := s.Write(t.Context(), []logsink.Record{rec}); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	msgs := r.waitFor(t, func(msgs [][]byte) bool { return len(msgs) > 0 })
+	if len(msgs) != 1 {
+		t.Fatalf("received %d messages, want 1", len(msgs))
+	}
+
+	if bytes.Contains(body(t, msgs[0]), []byte(`"truncated"`)) {
+		t.Fatalf("small message carries a truncated mark: %q", msgs[0])
 	}
 }
 

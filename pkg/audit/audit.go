@@ -114,6 +114,8 @@ var (
 	ErrInvalidEntry = errors.New("invalid audit entry")
 	// ErrNotFound reports that a namespace in a fence does not exist.
 	ErrNotFound = errors.New("audit namespace not found")
+	// ErrEntryNotFound reports that a scope holds no entry at a sequence.
+	ErrEntryNotFound = errors.New("audit entry not found")
 )
 
 // Entry is one append-only record of an action in a namespace. Namespace and
@@ -139,28 +141,33 @@ var (
 // when the object is not a unit or the ID is not known. PrevHash holds the
 // hash of the previous entry of the namespace and is empty for the first
 // entry. Hash holds the SHA-256 of this entry (see ComputeHash).
+// FenceVersion is the failover version of the namespace when the store
+// appended the entry, and 0 in ServerScope. The store sets it in the
+// transaction of the append, and the hash covers it, so a verifier can see
+// where a forced failover forked the chain of a namespace.
 type Entry struct {
-	At         time.Time
-	Namespace  namespace.Name
-	Subject    string
-	IDPSubject string
-	TokenID    string
-	Action     string
-	Object     string
-	Version    string
-	ValuePath  string
-	ValueCount *int64
-	Changes    []Change
-	SourceIP   string
-	UserAgent  string
-	Channel    Channel
-	Kind       Kind
-	Outcome    Outcome
-	RequestID  string
-	ObjectID   string
-	PrevHash   string
-	Hash       string
-	Sequence   int64
+	At           time.Time
+	Namespace    namespace.Name
+	Subject      string
+	IDPSubject   string
+	TokenID      string
+	Action       string
+	Object       string
+	Version      string
+	ValuePath    string
+	ValueCount   *int64
+	Changes      []Change
+	SourceIP     string
+	UserAgent    string
+	Channel      Channel
+	Kind         Kind
+	Outcome      Outcome
+	RequestID    string
+	ObjectID     string
+	PrevHash     string
+	Hash         string
+	Sequence     int64
+	FenceVersion int64
 }
 
 // AtMs returns the time of the entry in Unix milliseconds, as stored.
@@ -250,25 +257,29 @@ func NormalizeChannel(raw string) Channel {
 	return ChannelAPI
 }
 
-// hashFieldSeparator splits the fields of the hash encoding. It is a fixed
-// part of the documented encoding, not a magic number.
-const hashFieldSeparator = 0x1F
+// hashLengthEnd ends the decimal byte length of each field in the hash
+// encoding. It is a fixed part of the documented encoding, not a magic
+// number.
+const hashLengthEnd = ':'
+
+// hashNoCount stands for a value count that is not set. It cannot start a
+// field, because every field starts with a decimal digit.
+const hashNoCount = '-'
 
 // ComputeHash returns the hex-encoded SHA-256 over the fixed encoding of the
-// fields of e and prevHash. The encoding joins every field below with a
-// unit separator (0x1F), in this order: namespace, sequence (decimal),
-// subject, identity provider subject, token ID, action, object, version,
-// value path, time (Unix milliseconds, decimal), source IP, user agent,
-// channel, kind, outcome, request ID, previous hash. Numeric fields use
-// decimal text. After the previous hash, the encoding appends the optional
-// fields that e sets, each as "<name>=<value>" with the same separator, in
-// this fixed order: value_count (the decimal count), then object_id (ADR 47,
-// which its own change adds), then changes (the canonical JSON of
-// EncodeChanges). An optional field that e does not set adds nothing, so an
-// entry written before the field keeps its hash. The separator never
-// appears in a validated field except the user agent and free-form names,
-// where it is kept as is: the encoding is fixed and documented, not
-// ambiguous-free, and its only use is the chain check of the same code.
+// fields of e and prevHash. The encoding writes each field as its byte
+// length in decimal, a colon, and its bytes, with nothing between fields,
+// in this order: namespace, sequence, subject, identity provider subject,
+// token ID, action, object, version, value path, time (Unix milliseconds),
+// source IP, user agent, channel, kind, outcome, request ID, previous hash,
+// value count, object ID, changes (the canonical JSON of EncodeChanges, empty
+// when e has no changes) and fence version. Numeric fields use decimal text.
+// A value count that is not set writes one "-" in place of the field, so no
+// count and the count 0 ("1:0") differ. No field is optional: a field that e
+// does not set writes "0:". The length prefix makes the encoding injective:
+// two different lists of field values never give the same bytes, whatever
+// bytes a field holds. The hash takes no key: any installation can compute
+// it again from the stored fields.
 func ComputeHash(e Entry, prevHash string) string {
 	return hashWithChanges(e, prevHash, EncodeChanges(e.Changes))
 }
@@ -283,13 +294,14 @@ func ComputeStoredHash(e Entry, prevHash, changesText string) string {
 }
 
 // hashWithChanges answers the hash of e and prevHash with changesText as
-// the value of the optional field changes.
+// the value of the field changes.
 func hashWithChanges(e Entry, prevHash, changesText string) string {
 	var sb strings.Builder
 
 	write := func(s string) {
+		sb.WriteString(strconv.Itoa(len(s)))
+		sb.WriteByte(hashLengthEnd)
 		sb.WriteString(s)
-		sb.WriteByte(hashFieldSeparator)
 	}
 
 	write(e.Namespace.String())
@@ -310,17 +322,15 @@ func hashWithChanges(e Entry, prevHash, changesText string) string {
 	write(e.RequestID)
 	write(prevHash)
 
-	if e.ValueCount != nil {
-		write("value_count=" + strconv.FormatInt(*e.ValueCount, 10))
+	if e.ValueCount == nil {
+		sb.WriteByte(hashNoCount)
+	} else {
+		write(strconv.FormatInt(*e.ValueCount, 10))
 	}
 
-	if e.ObjectID != "" {
-		write("object_id=" + e.ObjectID)
-	}
-
-	if changesText != "" {
-		write("changes=" + changesText)
-	}
+	write(e.ObjectID)
+	write(changesText)
+	write(strconv.FormatInt(e.FenceVersion, 10))
 
 	sum := sha256.Sum256([]byte(sb.String()))
 
@@ -367,13 +377,17 @@ type Listing struct {
 }
 
 // CheckResult reports the chain check of a namespace. Valid is true when
-// every entry matches its stored hash and links to its predecessor. When
-// Valid is false, BadSequence holds the sequence of the first entry that
-// does not match: a changed field, a broken link or a gap after a deleted
-// entry. Checked counts the entries the check read.
+// every chained entry matches its stored hash and links to its
+// predecessor. When Valid is false, BadSequence holds the sequence of the
+// first entry that does not match: a changed field, a broken link or a gap
+// after a deleted entry. Checked counts the entries the check read.
+// Unchained counts the entries without a hash: the chain was off when they
+// were appended. The check cannot prove such an entry
+// unchanged.
 type CheckResult struct {
 	Checked     int64
 	BadSequence int64
+	Unchained   int64
 	Valid       bool
 }
 
@@ -398,6 +412,20 @@ type Store interface {
 	// entries and reports the first entry that does not match. A namespace
 	// with no entries checks as valid. ns can be ServerScope.
 	Check(ctx context.Context, ns namespace.Name) (CheckResult, error)
+}
+
+// EntryReader reads one entry of a scope without a count and an offset, for
+// the check of signed checkpoints and for the audit API route that reads one
+// entry by its scope and sequence. The SQL stores implement it next to
+// Store.
+type EntryReader interface {
+	// EntryAt answers the entry of scope ns at sequence seq. It returns
+	// ErrEntryNotFound when ns holds no entry at seq. ns can be ServerScope.
+	EntryAt(ctx context.Context, ns namespace.Name, seq int64) (Entry, error)
+	// LastEntry answers the entry with the highest sequence of scope, and
+	// false when the scope holds none. It is the same method as
+	// ChainStore.LastEntry.
+	LastEntry(ctx context.Context, scope namespace.Name) (Entry, bool, error)
 }
 
 // ServerStore appends the entries of ServerScope. It is a port of its own,

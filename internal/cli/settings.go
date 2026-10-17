@@ -191,6 +191,12 @@ var Settings = []*Setting{
 		"blob store fs with --blob-dir, or s3://<bucket>[/<prefix>] (DUSTPAN_BLOB_STORE)",
 		"`fs` (the directory in `--blob-dir`), or `s3://<bucket>[/<prefix>]`",
 	).WithFile("blob-store").WithURL(),
+	intSetting(
+		"blob-cache-bytes", "DUSTPAN_BLOB_CACHE_BYTES", "0",
+		"bytes of OpenTofu state blobs to keep in memory, 0 means no cache (DUSTPAN_BLOB_CACHE_BYTES)",
+		"`0`: no cache. The cache keeps only blobs that are written once: OpenTofu state versions. "+
+			"One blob takes at most one eighth of the cache",
+	).WithFile("blob-cache-bytes"),
 	stringSetting(
 		"s3-endpoint", "DUSTPAN_S3_ENDPOINT", "",
 		"S3 endpoint URL, empty means AWS (DUSTPAN_S3_ENDPOINT)",
@@ -266,6 +272,25 @@ var Settings = []*Setting{
 		"(none: journaling on). Set `true` to make the Pulumi CLI save checkpoints",
 	).WithFile("disable-pulumi-journaling"),
 	stringSetting(
+		"audit-chain", "DUSTPAN_AUDIT_CHAIN", "on",
+		"hash chain of the audit log: on or off. A change starts the server in maintenance mode "+
+			"until a person approves it (DUSTPAN_AUDIT_CHAIN)",
+		"`on`. `off` turns the chain off. A change starts the server in maintenance mode until a person "+
+			"runs `opendustpan audit-chain approve`",
+	).WithFile("audit-chain"),
+	boolSetting(
+		"audit-checkpoints", "DUSTPAN_AUDIT_CHECKPOINTS",
+		"sign a checkpoint of the audit chain of each scope every hour and store it in the blob store; "+
+			"needs --audit-chain=on and --audit-signing-key-file (DUSTPAN_AUDIT_CHECKPOINTS=true)",
+		"(none: off). Set `true` to sign checkpoints. Needs `--audit-chain=on` and a signing key file",
+	).WithFile("audit-checkpoints"),
+	stringSetting(
+		"audit-signing-key-file", "DUSTPAN_AUDIT_SIGNING_KEY_FILE", "",
+		"file holding the base64 32-byte Ed25519 seed that signs audit checkpoints "+
+			"(DUSTPAN_AUDIT_SIGNING_KEY_FILE)",
+		referenceNone,
+	).WithFile("audit-signing-key-file").WithDoc("A file that holds the base64 32-byte Ed25519 seed. Only its owner can read it."),
+	stringSetting(
 		"log-sink", "DUSTPAN_LOG_SINK", "",
 		"a target of the application log instead of stderr; repeat the flag for more targets. Each is "+
 			"[<name>=]stderr, stdout, file:<path>, syslog+udp://, syslog+tcp:// or syslog+tls://<host>:<port>, "+
@@ -279,6 +304,51 @@ var Settings = []*Setting{
 			"webhook:<https URL> or blob:<prefix> (DUSTPAN_AUDIT_SINK, sinks separated by white space)",
 		"(none: no sink). For example `siem=syslog+tls://logs.example:6514 blob:audit`",
 	).WithFile("audit-sink").WithSensitive(),
+	stringSetting(
+		"audit-verify-keys-file", "DUSTPAN_AUDIT_VERIFY_KEYS_FILE", "",
+		"file of base64 Ed25519 public keys, one on each line, that may verify audit checkpoints "+
+			"but never sign them, for example the key before a key change (DUSTPAN_AUDIT_VERIFY_KEYS_FILE)",
+		referenceNone,
+	).WithFile("audit-verify-keys-file"),
+	stringSetting(
+		"oidc-issuer", "DUSTPAN_OIDC_ISSUER", "",
+		"issuer URL of the OpenID Connect provider of the console sign-in, with https; the sign-in also needs "+
+			"--oidc-provider, --oidc-client-id, the client secret and --public-url. To use another issuer, "+
+			"also set a new --oidc-provider (DUSTPAN_OIDC_ISSUER)",
+		"(none: no console sign-in). The identity of a person does not hold the issuer. To use another "+
+			"issuer, also set a new `--oidc-provider`. Else a person of the new issuer gets the principal of a "+
+			"person of the old issuer with the same `sub`.",
+	).WithFile("oidc-issuer").WithURL().WithSensitive(),
+	stringSetting(
+		"oidc-provider", "DUSTPAN_OIDC_PROVIDER", "",
+		"ID of the OpenID Connect provider: 1 to 32 lower-case letters, digits and hyphens. It is part of the "+
+			"identity of each person who signs in: the subject <provider ID>:<sub>. Never change the ID after "+
+			"the first sign-in, and never use it for another issuer (DUSTPAN_OIDC_PROVIDER)",
+		"(none). The ID is part of the identity of each person who signs in: the subject "+
+			"`<provider ID>:<sub>`. A principal with that subject, a local one too, is the principal of that "+
+			"person. Never change the ID after the first sign-in. A new issuer needs a new ID.",
+	).WithFile("oidc-provider"),
+	stringSetting(
+		"oidc-display-name", "DUSTPAN_OIDC_DISPLAY_NAME", "",
+		"name of the OpenID Connect provider that the console shows (DUSTPAN_OIDC_DISPLAY_NAME)",
+		"(the provider ID)",
+	).WithFile("oidc-display-name"),
+	stringSetting(
+		"oidc-client-id", "DUSTPAN_OIDC_CLIENT_ID", "",
+		"client ID of the server at the OpenID Connect provider (DUSTPAN_OIDC_CLIENT_ID)",
+		referenceNone,
+	).WithFile("oidc-client-id"),
+	stringSetting(
+		"oidc-scopes", "DUSTPAN_OIDC_SCOPES", "profile,email",
+		"comma-separated scopes to ask in addition to openid (DUSTPAN_OIDC_SCOPES)",
+		"`profile,email`",
+	).WithFile("oidc-scopes"),
+	boolSetting(
+		"oidc-no-auto-create", "DUSTPAN_OIDC_NO_AUTO_CREATE",
+		"refuse the sign-in of a person who has no principal yet, instead of making one with no grant "+
+			"(DUSTPAN_OIDC_NO_AUTO_CREATE)",
+		"false",
+	).WithFile("oidc-no-auto-create"),
 	stringSetting(
 		"server", "DUSTPAN_SERVER", "",
 		"base URL of the server, for example https://dustpan.example (DUSTPAN_SERVER)",
@@ -317,6 +387,16 @@ var Settings = []*Setting{
 		"A file that holds the tokens, one per line or comma-separated. Only its owner can read it. "+
 			"When you set both, `DUSTPAN_ADMIN_TOKEN` wins.",
 	).WithFile("admin-token-file"),
+	envSetting(
+		"DUSTPAN_OIDC_CLIENT_SECRET",
+		"The client secret of the server at the OpenID Connect provider. Required when you set "+
+			"`--oidc-issuer` and no secret file.",
+	).WithSensitive(),
+	envSetting(
+		"DUSTPAN_OIDC_CLIENT_SECRET_FILE",
+		"A file that holds the OpenID Connect client secret. Only its owner can read it. "+
+			"When you set both, `DUSTPAN_OIDC_CLIENT_SECRET` wins.",
+	),
 	envSetting(
 		"DUSTPAN_AUDIT_WEBHOOK_SECRET",
 		"The key of the HMAC-SHA256 signature of each request of a `webhook:` audit sink. "+

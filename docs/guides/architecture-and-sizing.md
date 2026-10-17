@@ -1,93 +1,129 @@
 # Architecture and sizing
 
-This guide shows the layout of an installation, what each part needs, and
-how to measure the size that your installation needs. It follows ADR 40,
-decision 8.
+This guide shows one supported layout and one target design. It shows what runs where, what the parts share, and what stops when one part stops. It also holds the sizing tables. No measured numbers exist yet.
 
-## Release numbers
+## One instance with SQLite and a local blob directory
 
-No release exists yet, so this guide has no sizing tables yet. ADR 40 says
-that the tables come from a load run on each release. Each table will name
-the release, the hardware and the date. Until then, measure your own
-installation with the load harness (see below).
+One `opendustpan serve` process forms the whole installation. It uses a SQLite file for the SQL store. It uses a local directory for the blob store. It uses one key-encryption key. It can write backups to a backup target.
 
-## Architectures
+### What runs where
 
-### One instance with SQLite
+- The server process runs on one machine. It serves the Pulumi Cloud-compatible API, the TFE-compatible API, the inventory API, and the installation API.
+- The SQL store is a SQLite file on the same machine. The default path is `dustpan.db` in the working directory. Set another path with `--database` (`DUSTPAN_DATABASE`).
+- The blob store is a directory on the same machine. The default path is `blobs` next to the SQLite file. It holds Pulumi checkpoints and OpenTofu state versions. Set another path with `--blob-dir` (`DUSTPAN_BLOB_DIR`).
+- The key-encryption key comes from `DUSTPAN_KEY_ENCRYPTION_KEY` or from a key file. The default key file is `dustpan.key` next to the SQLite file.
+- The backup target is optional. Set a directory or an S3-compatible bucket with `--backup-target` (`DUSTPAN_BACKUP_TARGET`). An empty target means the server takes no backup.
 
-This is the default. One `opendustpan serve` process uses:
+### What the parts share
 
-- **The SQL store:** a SQLite file. The default is `dustpan.db` in the
-  working directory.
-- **The blob store:** a directory. The default is `blobs` next to the SQLite
-  file. It holds the Pulumi checkpoints and the OpenTofu state.
-- **The key-encryption key:** `DUSTPAN_KEY_ENCRYPTION_KEY`, or a key file.
-  The default key file is `dustpan.key` next to the SQLite file.
-- **A backup target** (optional): a directory or an S3-compatible bucket.
+One process holds every part. It alone owns the database file and the blob directory. No other process may open the SQLite file while the server runs.
 
-SQLite runs in write-ahead log (WAL) mode. Next to `dustpan.db`, it keeps
-the files `dustpan.db-wal` and `dustpan.db-shm`. Keep the three files on a
-local file system: SQLite WAL mode does not work on a network file system.
+SQLite runs in write-ahead log mode. It keeps `dustpan.db-wal` and `dustpan.db-shm` next to `dustpan.db`. Keep all three files on a local file system. SQLite write-ahead log mode does not work on a network file system.
 
-### One instance with PostgreSQL and S3-compatible storage
+### What stops when one part stops
 
-One `opendustpan serve` process uses:
+- When the server process stops, every API stops. The Pulumi CLI, OpenTofu, and the console cannot reach any state.
+- When the disk that holds the database file fails, all reads and writes fail.
+- When the disk that holds the blob directory fails, checkpoint and state reads and writes fail.
+- When you lose the key-encryption key, the server cannot open secret values or OpenTofu state. Nobody can recover them.
 
-- **The SQL store:** a PostgreSQL database, set with
-  `--database postgres://...`.
-- **The blob store:** a bucket, set with `--blob-store s3://<bucket>`. The
-  [S3 guide](s3-blobs.md) shows the settings.
-- **The key-encryption key:** as above. With PostgreSQL, the default key
-  file is `dustpan.key` in the working directory.
-- **A backup target** (optional): as above.
+### How to back it up
 
-The server sets no limit on its PostgreSQL connections. It uses the default
-of the Go `database/sql` package, which has no limit.
+Back up this layout the same way as any installation. The [backup guide](backup-restore-upgrade.md) shows the commands. Keep the key-encryption key apart from the backup target. A backup never holds the key.
 
-### Several instances
+## Several instances behind a load balancer with PostgreSQL and S3-compatible storage
 
-The server supports one node today. High availability is an open proposal
-(RFC 36). The load harness runs two instances on one PostgreSQL database to
-measure the database latency, but this is not a supported layout yet.
+This layout is the target design. It is not supported yet. The README gives the current status: the server runs on one node. Do not use this layout in an installation yet. The plan is that several `opendustpan serve` processes form one installation. A load balancer receives each request. It passes each request to one healthy instance. All instances share one PostgreSQL database, one S3-compatible bucket, one key-encryption key, and one backup target.
+
+### What runs where
+
+In the target design:
+
+- Each instance would run the same server binary with the same flags. Each instance would serve every API.
+- The load balancer would receive each request. It would pass each request to one healthy instance.
+- The SQL store would be one PostgreSQL database. Set it with `--database postgres://...` (`DUSTPAN_DATABASE`). When the URL holds a password, set it only in `DUSTPAN_DATABASE`, because `serve` refuses a password in the flag.
+- The blob store would be one S3-compatible bucket. Set it with `--blob-store s3://<bucket>` (`DUSTPAN_BLOB_STORE`). The [S3 guide](s3-blobs.md) shows the endpoint, region, and credential settings.
+- The key-encryption key would have the same value on each instance. Set it with `DUSTPAN_KEY_ENCRYPTION_KEY`. Keep it outside the database and the backup target.
+- The backup target would have the same value on each instance. Set a directory or an S3-compatible bucket with `--backup-target` (`DUSTPAN_BACKUP_TARGET`).
+
+### What the parts share
+
+In the target design, each instance would share the SQL store, the blob store, the key-encryption key, and the backup target. Each instance would see the same namespaces, units, and history. No two instances would share a SQLite file. This layout would always use PostgreSQL.
+
+### What stops when one part stops
+
+In the target design:
+
+- If one instance stopped, the load balancer would pass requests to the healthy instances. Requests in flight to the stopped instance would fail.
+- If PostgreSQL stopped, all reads and writes would fail on each instance.
+- If the S3-compatible store stopped, checkpoint and state reads and writes would fail on each instance.
+- If the load balancer stopped, no request would reach any instance.
+- If you lost the key-encryption key, the server could not open secret values or OpenTofu state. Nobody could recover them.
+
+### How to back it up
+
+In the target design, you would back up this layout the same way as any installation. The [backup guide](backup-restore-upgrade.md) shows the commands. A backup would cover the whole installation. It would hold the SQL data with the blob content that the data names. Keep the key-encryption key apart from the backup target. A backup never holds the key.
+
+## Sizing
+
+No measured numbers exist yet. Size each installation from a load run, not from guesses. The [load harness guide](load.md) shows how to run the harness and how to read its report. Each table below gains one row per release, with the hardware and the date of the run.
+
+### Memory per instance
+
+| Release | Hardware | Date | Peak memory per instance |
+| --- | --- | --- | --- |
+| No measurement yet. The first release load run fills this table. | | | |
+
+### CPU per instance
+
+| Release | Hardware | Date | CPU per instance |
+| --- | --- | --- | --- |
+| No measurement yet. The first release load run fills this table. | | | |
+
+### Database size
+
+| Release | Hardware | Date | Database size |
+| --- | --- | --- | --- |
+| No measurement yet. The first release load run fills this table. | | | |
+
+### Database connections
+
+| Release | Hardware | Date | Database connections |
+| --- | --- | --- | --- |
+| No measurement yet. The first release load run fills this table. | | | |
+
+### Blob storage per update
+
+| Release | Hardware | Date | Blob bytes per update |
+| --- | --- | --- | --- |
+| No measurement yet. The first release load run fills this table. | | | |
+
+### Largest checkpoint
+
+| Release | Hardware | Date | Largest checkpoint tested |
+| --- | --- | --- | --- |
+| No measurement yet. The first release load run fills this table. | | | |
+
+### Units per size
+
+| Release | Hardware | Date | Units tested |
+| --- | --- | --- | --- |
+| No measurement yet. The first release load run fills this table. | | | |
 
 ## Measure your own installation
 
-The [load harness](load.md) starts its own server, replays recorded CLI
-requests and writes a JSON report. Run it on the machine and the database
-that you plan to use.
+Use the [load harness guide](load.md) to measure your own installation. It shows how to run the harness and how to read its report.
 
-With SQLite:
+Run it with SQLite:
 
 ```sh
 make load
 ```
 
-With PostgreSQL, point the URL at an empty database:
+Run it with PostgreSQL:
 
 ```sh
-DUSTPAN_TEST_POSTGRES_URL='postgres://user:pass@localhost:5432/dustpan_load' make load
+DUSTPAN_TEST_POSTGRES_URL='postgres://<user>:<password>@localhost:5432/dustpan_load' make load
 ```
 
-The report answers these sizing questions:
-
-| Question | Report field | Notes |
-| --- | --- | --- |
-| Memory to save a Pulumi checkpoint | `checkpoints[].fullPeakAllocBytes`, `deltaPeakAllocBytes` | Peak heap of the server and the harness client together, at 256 KiB, 1 MiB and 4 MiB |
-| Memory to import a Pulumi stack | `imports[].peakAllocBytes` | Same sizes and same limit as above |
-| Time to save a checkpoint | `checkpoints[].fullMs`, `deltaMs` | Same sizes |
-| Lock contention on one OpenTofu workspace | `workspaceLocks` | 16 workers, 8 rounds each |
-| Many Pulumi updates in one namespace | `namespaceUpdates` | 64 updates at the same time |
-| List latency with many units | `lists` | 10,000 units by default, half stacks and half workspaces |
-| Database latency with two instances | `database` | PostgreSQL only |
-
-The harness does not measure these items. Their values are unknown until a
-run measures them:
-
-- CPU for each instance.
-- The database size and the blob storage that each update adds.
-- The number of database connections.
-- A Pulumi checkpoint larger than 4 MiB. The server accepts up to 32 MiB by
-  default (`--max-checkpoint-bytes`).
-- OpenTofu state larger than 32 MiB. The server accepts up to 32 MiB by default
-  (`--max-state-bytes`). A higher value raises the memory of the call that reads the state. An upload with large outputs asks for more budget as the outputs grow. It answers 503 with a Retry-After of 1 to 3 seconds when the budget has no room. It answers 413 when the upload can never fit the budget. Raise `--max-body-bytes-in-flight` to fit such an upload.
-- More than one namespace, or more units than the run seeds (`-units`).
+The placeholders `<user>` and `<password>` stand for your database user and password. Never use a real password in a shared command.

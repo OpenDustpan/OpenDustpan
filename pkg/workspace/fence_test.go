@@ -1,11 +1,15 @@
 package workspace_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -15,7 +19,7 @@ import (
 // resources and changes only the lineage and the serial.
 const stateDoc = `{"version":4,"lineage":"lin-old","serial":1,"resources":[{"type":"null_resource","name":"a"}]}`
 
-// smallDoc is a state document that fits the plain fixture, which caps state
+// smallDoc is a state document that fits the fixture, which caps state
 // at 64 bytes.
 const smallDoc = `{"lineage":"lin-old","serial":1,"resources":[]}`
 
@@ -52,11 +56,7 @@ func TestForceUnlockFencesSealedState(t *testing.T) {
 	f := newSealFixture(t)
 	ctx := t.Context()
 
-	f.pushPlain(t, stateDoc, nil, 1)
-
-	if _, err := f.sealed.SealUnsealedStates(ctx); err != nil {
-		t.Fatalf("seal v1: %v", err)
-	}
+	f.pushSealed(t, stateDoc, nil, 1)
 
 	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
 		t.Fatalf("lock: %v", err)
@@ -115,43 +115,6 @@ func assertBlobHidesState(t *testing.T, f sealFixture, cur workspace.StateVersio
 	}
 }
 
-// A force-unlock of a state that is not sealed writes a plain fence, with
-// the same posture as the state before it.
-func TestForceUnlockFencesPlainState(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t)
-	ctx := t.Context()
-
-	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
-		t.Fatalf("lock: %v", err)
-	}
-
-	if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
-		t.Fatalf("push v1: %v", err)
-	}
-
-	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
-		t.Fatalf("force unlock: %v", err)
-	}
-
-	cur, err := f.svc.Current(ctx, f.ws.ID)
-	if err != nil {
-		t.Fatalf("current: %v", err)
-	}
-
-	if cur.Sealed || cur.FenceBy != "admin" || cur.Serial != 2 || cur.Lineage == "lin-old" {
-		t.Fatalf("fence sealed=%t by %q serial %d lineage %q, want a plain admin fence at serial 2",
-			cur.Sealed, cur.FenceBy, cur.Serial, cur.Lineage)
-	}
-
-	doc := readFenced(t, f.svc, cur)
-
-	if string(doc["lineage"]) != `"`+cur.Lineage+`"` || string(doc["serial"]) != "2" {
-		t.Fatalf("fence lineage %s serial %s, want the stored lineage and serial 2", doc["lineage"], doc["serial"])
-	}
-}
-
 // A force-unlock of a workspace with no state only releases its lock: no
 // version is written.
 func TestForceUnlockWithoutStateOnlyReleases(t *testing.T) {
@@ -178,39 +141,6 @@ func TestForceUnlockWithoutStateOnlyReleases(t *testing.T) {
 	}
 }
 
-// A sealed state needs the sealer to write its fence. Without it the
-// force-unlock is refused and the lock stays.
-func TestForceUnlockSealedNeedsSealer(t *testing.T) {
-	t.Parallel()
-
-	f := newSealFixture(t)
-	ctx := t.Context()
-
-	f.pushPlain(t, stateDoc, nil, 1)
-
-	if _, err := f.sealed.SealUnsealedStates(ctx); err != nil {
-		t.Fatalf("seal v1: %v", err)
-	}
-
-	if _, err := f.sealed.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
-		t.Fatalf("lock: %v", err)
-	}
-
-	_, _, err := f.plain.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil)
-	if !errors.Is(err, workspace.ErrSealerNotConfigured) {
-		t.Fatalf("force unlock without a sealer: err = %v, want ErrSealerNotConfigured", err)
-	}
-
-	held, err := f.plain.GetByID(ctx, f.ws.ID)
-	if err != nil {
-		t.Fatalf("get workspace: %v", err)
-	}
-
-	if !held.Lock.Locked() {
-		t.Fatal("the lock was released without a fence")
-	}
-}
-
 // A finalize that lands between the read of the current state and the fence
 // refuses the fence with ErrConcurrentModification, leaves the lock held, and
 // deletes the blob of the refused fence.
@@ -232,8 +162,10 @@ func TestForceUnlockRefusedByAConcurrentFinalizeDeletesItsBlob(t *testing.T) {
 
 	var fenceKey blob.Key
 
+	var fenceID workspace.StateVersionID
+
 	f.store.beforeFence = func(sv workspace.StateVersion) {
-		fenceKey = sv.Content
+		fenceKey, fenceID = sv.Content, sv.ID
 
 		// A holder finalizes a newer version before the fence takes the store lock.
 		if err := f.push(t, newState("lin-old", 2, next), next); err != nil {
@@ -265,6 +197,105 @@ func TestForceUnlockRefusedByAConcurrentFinalizeDeletesItsBlob(t *testing.T) {
 		}
 
 		t.Fatal("the blob of the refused fence was kept")
+	}
+
+	if _, getErr := f.store.GetStateVersion(ctx, fenceID); !errors.Is(getErr, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("pending row of the refused fence: err = %v, want ErrStateVersionNotFound", getErr)
+	}
+}
+
+// failPutBlobs fails every Put with errPutFailed and records the attempted
+// key, so tests prove a force-unlock whose content never lands leaves nothing.
+type failPutBlobs struct {
+	blob.Store
+
+	mu   sync.Mutex
+	keys []blob.Key
+}
+
+// errPutFailed is a blob failure during a force-unlock: the content never lands.
+var errPutFailed = errors.New("put failed")
+
+// Put records key and fails without writing.
+func (b *failPutBlobs) Put(_ context.Context, key blob.Key, _ io.Reader) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.keys = append(b.keys, key)
+
+	return errPutFailed
+}
+
+// attempted returns every key Put saw.
+func (b *failPutBlobs) attempted() []blob.Key {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return append([]blob.Key(nil), b.keys...)
+}
+
+// A force-unlock whose content write fails leaves neither a version row nor a
+// blob: the staged fence row is discarded.
+func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
+		t.Fatalf("push v1: %v", err)
+	}
+
+	failing := &failPutBlobs{Store: f.blobs, mu: sync.Mutex{}, keys: nil}
+
+	failingSvc, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             f.store,
+		Blobs:              failing,
+		Namespaces:         f.namespaces,
+		Sealer:             f.secrets,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 0,
+		Retention:          0,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	if _, _, err := failingSvc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); !errors.Is(err, errPutFailed) {
+		t.Fatalf("force unlock with a failed content write: err = %v, want the failed write", err)
+	}
+
+	keys := failing.attempted()
+	if len(keys) != 1 {
+		t.Fatalf("attempted content writes = %d, want 1", len(keys))
+	}
+
+	parts := strings.Split(keys[0].String(), "/")
+	if len(parts) != 4 {
+		t.Fatalf("fence content key %q has %d parts, want 4", keys[0], len(parts))
+	}
+
+	fenceID := workspace.StateVersionID(parts[2])
+
+	if _, err := f.store.GetStateVersion(ctx, fenceID); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("fence row %s: err = %v, want ErrStateVersionNotFound", fenceID, err)
+	}
+
+	if r, err := f.blobs.Get(ctx, keys[0]); err == nil {
+		if closeErr := r.Close(); closeErr != nil {
+			t.Errorf("close the blob: %v", closeErr)
+		}
+
+		t.Fatal("the blob of the failed fence exists")
+	} else if !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("blob of the failed fence: err = %v, want ErrNotFound", err)
 	}
 }
 
@@ -302,5 +333,110 @@ func TestForceUnlockClientEncryptedNamesTheWayOut(t *testing.T) {
 
 	if !held.Lock.Locked() {
 		t.Fatal("the lock was released although the state cannot be fenced")
+	}
+}
+
+// A sweep between the blob write of a force-unlock and the commit that makes
+// the fence current keeps the fence blob: a version names the key before the
+// bytes land. The sweep runs right after the write and waits for no grace
+// period, so only the row protects the blob.
+func TestForceUnlockFenceBlobSurvivesASweepBeforeTheCommit(t *testing.T) {
+	t.Parallel()
+
+	inner := openFixtureBlobs(t)
+	blobs := &sweepAfterPutBlobs{Store: inner, sweep: nil}
+	f := newFixtureWithBlobs(t, blobs)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
+		t.Fatalf("push v1: %v", err)
+	}
+
+	swept := 0
+	blobs.sweep = func() {
+		swept++
+
+		sweepUnnamedBlobs(t, f, inner)
+	}
+
+	if _, _, err := f.svc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); err != nil {
+		t.Fatalf("force unlock: %v", err)
+	}
+
+	if swept != 1 {
+		t.Fatalf("sweeps after the fence write = %d, want 1", swept)
+	}
+
+	cur, err := f.svc.Current(ctx, f.ws.ID)
+	if err != nil {
+		t.Fatalf("current: %v", err)
+	}
+
+	if cur.FenceBy != "admin" {
+		t.Fatalf("current version fenced by %q, want admin", cur.FenceBy)
+	}
+
+	doc := readFenced(t, f.svc, cur)
+
+	if string(doc["serial"]) != "2" {
+		t.Fatalf("fence serial %s, want 2", doc["serial"])
+	}
+}
+
+// sweepAfterPutBlobs runs sweep once after the next Put while sweep is set,
+// so a sweep lands between a blob write and the commit that follows it.
+type sweepAfterPutBlobs struct {
+	blob.Store
+
+	sweep func()
+}
+
+func (b *sweepAfterPutBlobs) Put(ctx context.Context, key blob.Key, r io.Reader) error {
+	if err := b.Store.Put(ctx, key, r); err != nil {
+		return err
+	}
+
+	if sweep := b.sweep; sweep != nil {
+		b.sweep = nil
+		sweep()
+	}
+
+	return nil
+}
+
+// sweepUnnamedBlobs deletes every blob in blobs under the fixture workspace
+// that no version names, at once: the listing comes before the reference
+// read, as in the sweeps of the service.
+func sweepUnnamedBlobs(t *testing.T, f fixture, blobs blob.Store) {
+	t.Helper()
+
+	ctx := t.Context()
+
+	listed, err := blobs.List(ctx, "tofu/"+f.ws.ID.String()+"/")
+	if err != nil {
+		t.Errorf("list blobs: %v", err)
+
+		return
+	}
+
+	refs, err := f.store.ReferencedContentKeys(ctx, f.ws.ID)
+	if err != nil {
+		t.Errorf("referenced keys: %v", err)
+
+		return
+	}
+
+	for i := range listed {
+		if slices.Contains(refs, listed[i].Key) {
+			continue
+		}
+
+		if err := blobs.Delete(ctx, listed[i].Key); err != nil {
+			t.Errorf("delete %s: %v", listed[i].Key, err)
+		}
 	}
 }

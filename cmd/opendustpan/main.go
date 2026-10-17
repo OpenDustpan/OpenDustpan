@@ -8,6 +8,8 @@
 //	opendustpan backup check [flags]
 //	opendustpan backup [flags]
 //	opendustpan restore [flags]
+//	opendustpan audit-chain status [flags]
+//	opendustpan audit-chain approve [flags]
 //
 // Every flag can also be set through the environment variable shown in its
 // help text. The bootstrap admin token is read from DUSTPAN_ADMIN_TOKEN or
@@ -79,7 +81,7 @@ var (
 	)
 	// errSizeLimit reports a negative size limit.
 	errSizeLimit = errors.New(
-		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
+		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes, --max-body-bytes-in-flight or --blob-cache-bytes to 0 or more",
 	)
 	// errRetention reports a soft-delete retention that is not a duration of
 	// at least one hour.
@@ -243,9 +245,6 @@ type serveFlags struct {
 	// for the start log (ADR 63 decision 7).
 	file     cli.ConfigFile
 	resolved []cli.Resolved
-	// passwordFlags holds the flags that carry a password in a URL, for the
-	// warning that a flag holds a password, so the password can be moved to the variable.
-	passwordFlags []*cli.Setting
 
 	// args and lookup are the command line and the environment snapshot
 	// of the start. A reload of the configuration file resolves against
@@ -269,6 +268,12 @@ type serveFlags struct {
 	tlsCert                      string
 	tlsKey                       string
 	publicURL                    string
+	oidcIssuer                   string
+	oidcProvider                 string
+	oidcDisplayName              string
+	oidcClientID                 string
+	oidcScopes                   string
+	oidcNoAutoCreate             bool
 	trustedProxies               string
 	trustedProxyHeader           string
 	ipAllowlists                 bool
@@ -285,16 +290,21 @@ type serveFlags struct {
 	maxCheckpointBytes           int64
 	maxSecretBatchBytes          int64
 	maxStateBytes                int64
+	blobCacheBytes               int64
 	maxBodyBytesInFlight         int64
 	checkpointDeltaCutoff        int64
 	disablePulumiJournaling      bool
+	auditChain                   string
 	softDeleteRetention          string
 	// retention is softDeleteRetention after the check.
 	retention  time.Duration
 	auditSinks []string
 	logSinks   []string
 	// app is the application logger and its sinks, set by run.
-	app appLog
+	app                 appLog
+	auditSigningKeyFile string
+	auditVerifyKeysFile string
+	auditCheckpoints    bool
 }
 
 // check refuses settings that are wrong together or out of range: the TLS
@@ -316,6 +326,7 @@ func (f *serveFlags) check() error {
 		f.maxSecretBatchBytes,
 		f.maxStateBytes,
 		f.maxBodyBytesInFlight,
+		f.blobCacheBytes,
 	}
 
 	if err := checkSizeFlags(sizeLimits); err != nil {
@@ -326,12 +337,20 @@ func (f *serveFlags) check() error {
 		return errDeltaCutoff
 	}
 
+	if _, err := audit.ParseChainSetting(f.auditChain); err != nil {
+		return fmt.Errorf("--audit-chain: %w", err)
+	}
+
 	retention, err := parseRetention(f.softDeleteRetention)
 	if err != nil {
 		return err
 	}
 
 	f.retention = retention
+
+	if err := f.checkCheckpointFlags(); err != nil {
+		return err
+	}
 
 	return checkProxyFlags(f.trustedProxies, f.trustedProxyHeader)
 }
@@ -391,9 +410,8 @@ func (f *serveFlags) resolveLayers(fs *flag.FlagSet, lookup cli.LookupFunc) erro
 	}
 
 	f.resolved = resolved
-	f.passwordFlags = cli.FlagsHoldingPassword(fs, resolved)
 
-	return nil
+	return cli.RefuseFlagPassword(fs, resolved)
 }
 
 // registerKey registers the key-encryption key file flags. The key itself
@@ -409,10 +427,15 @@ func (f *serveFlags) registerKey(fs *flag.FlagSet) {
 // AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN only.
 func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("blob-store").String(fs, &f.blobStore)
+	cli.ByFlag("blob-cache-bytes").Int64(fs, &f.blobCacheBytes)
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
+	cli.ByFlag("audit-chain").String(fs, &f.auditChain)
 	cli.ByFlag("audit-sink").List(fs, &f.auditSinks)
+	cli.ByFlag("audit-checkpoints").Bool(fs, &f.auditCheckpoints)
+	cli.ByFlag("audit-signing-key-file").String(fs, &f.auditSigningKeyFile)
+	cli.ByFlag("audit-verify-keys-file").String(fs, &f.auditVerifyKeysFile)
 }
 
 // registerNet registers the network and console flags.
@@ -427,6 +450,12 @@ func (f *serveFlags) registerNet(fs *flag.FlagSet) {
 	cli.ByFlag("trusted-proxy-header").String(fs, &f.trustedProxyHeader)
 	cli.ByFlag("ip-allowlists").Bool(fs, &f.ipAllowlists)
 	cli.ByFlag("ip-allowlists-include-bootstrap").Bool(fs, &f.ipAllowlistsIncludeBootstrap)
+	cli.ByFlag("oidc-issuer").String(fs, &f.oidcIssuer)
+	cli.ByFlag("oidc-provider").String(fs, &f.oidcProvider)
+	cli.ByFlag("oidc-display-name").String(fs, &f.oidcDisplayName)
+	cli.ByFlag("oidc-client-id").String(fs, &f.oidcClientID)
+	cli.ByFlag("oidc-scopes").String(fs, &f.oidcScopes)
+	cli.ByFlag("oidc-no-auto-create").Bool(fs, &f.oidcNoAutoCreate)
 	cli.ByFlag("blob-dir").String(fs, &f.blobDir)
 	cli.ByFlag("log-level").String(fs, &f.logLevel)
 	cli.ByFlag("log-format").String(fs, &f.logFormat)
@@ -442,19 +471,6 @@ func (f *serveFlags) registerLimits(fs *flag.FlagSet) {
 	cli.ByFlag("checkpoint-delta-cutoff").Int64(fs, &f.checkpointDeltaCutoff)
 	cli.ByFlag("disable-pulumi-journaling").Bool(fs, &f.disablePulumiJournaling)
 	cli.ByFlag("soft-delete-retention").String(fs, &f.softDeleteRetention)
-}
-
-// warnPasswordFlags writes one WARN line for each flag that holds a URL with a
-// password. The line names the flag and the variable to use, and it never
-// shows the value, because a flag shows in a process list.
-func warnPasswordFlags(ctx context.Context, logger *slog.Logger, settings []*cli.Setting) {
-	for _, s := range settings {
-		logger.LogAttrs(ctx, slog.LevelWarn,
-			"a flag holds a password, and a process list can show it; set the URL in the variable instead",
-			slog.String("flag", "--"+s.Flag),
-			slog.String("use", s.Env),
-		)
-	}
 }
 
 // run opens the store, runs the start-up checks and serves until ctx is done.
@@ -475,8 +491,6 @@ func (f *serveFlags) run(ctx context.Context, stdin io.Reader, stderr io.Writer,
 	defer closeAppLog(ctx, &app, stderr)
 
 	cli.LogResolved(ctx, logger, f.resolved)
-
-	warnPasswordFlags(ctx, logger, f.passwordFlags)
 
 	f.instanceID = instance.NewID()
 	logger.LogAttrs(ctx, slog.LevelInfo, "instance", slog.String("instance_id", f.instanceID))
@@ -1088,7 +1102,8 @@ func closeTargetStore(ctx context.Context, logger *slog.Logger, s blob.Store) {
 }
 
 // serverOptions returns the NewServer options for the opened store, blob
-// store, authenticator, key wrapper and logger.
+// store, authenticator, key wrapper and logger, with the audit chain
+// setting and the signed audit checkpoints.
 func (f *serveFlags) serverOptions(
 	st store,
 	blobs blob.Store,
@@ -1101,7 +1116,23 @@ func (f *serveFlags) serverOptions(
 		return nil, fmt.Errorf("invalid --trusted-proxies %q: %w", f.trustedProxies, parseErr)
 	}
 
-	return []dustpan.Option{
+	signIn, signInErr := f.signInOptions()
+	if signInErr != nil {
+		return nil, signInErr
+	}
+
+	// check refused a bad value, so the parse fails only on a bug.
+	chain, chainErr := audit.ParseChainSetting(f.auditChain)
+	if chainErr != nil {
+		return nil, fmt.Errorf("--audit-chain: %w", chainErr)
+	}
+
+	checkpoints, cpErr := f.checkpointOptions()
+	if cpErr != nil {
+		return nil, cpErr
+	}
+
+	return append([]dustpan.Option{
 		dustpan.WithRegion(namespace.Region(f.region)),
 		dustpan.WithNamespaceStore(st),
 		dustpan.WithStackStore(st),
@@ -1128,13 +1159,16 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxSecretBatchBytes(int(f.maxSecretBatchBytes)),
 		dustpan.WithMaxStateBytes(f.maxStateBytes),
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
+		dustpan.WithBlobCache(f.blobCacheBytes),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
+		dustpan.WithAuditChain(chain),
 		dustpan.WithSoftDeleteRetention(f.retention),
 		dustpan.WithIPAllowlists(f.ipAllowlists),
 		dustpan.WithIPAllowlistsIncludeBootstrap(f.ipAllowlistsIncludeBootstrap),
 		dustpan.WithIPAllowlistStore(st),
-	}, nil
+		dustpan.WithInstanceID(f.instanceID),
+	}, append(signIn, checkpoints...)...), nil
 }
 
 // blobOpenConfig holds the live blob store settings of serve.
@@ -1507,17 +1541,22 @@ func (s postgresStore) close() { s.Close() }
 var openStore = func(ctx context.Context, database string, logger *slog.Logger) (store, error) {
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
-		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"), sqlite.WithLogger(logger))
+		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"),
+			sqlite.WithLogger(logger), sqlite.WithBinaryVersion(version))
 		if err != nil {
-			return nil, fmt.Errorf("open sqlite store: %w", withBinaryVersion(err))
+			return nil, fmt.Errorf("open sqlite store: %w", err)
 		}
+
+		warnDevBuild(ctx, logger, s)
 
 		return sqliteStore{s}, nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
-		s, err := postgres.Open(ctx, database)
+		s, err := postgres.Open(ctx, database, postgres.WithBinaryVersion(version))
 		if err != nil {
-			return nil, fmt.Errorf("open postgres store: %w", withBinaryVersion(err))
+			return nil, fmt.Errorf("open postgres store: %w", err)
 		}
+
+		warnDevBuild(ctx, logger, s)
 
 		return postgresStore{s}, nil
 	default:
@@ -1525,17 +1564,39 @@ var openStore = func(ctx context.Context, database string, logger *slog.Logger) 
 	}
 }
 
-// withBinaryVersion adds the version of the binary to a newer-schema refusal,
-// so the message names the schema version of the database, the schema version
-// of the binary and the version of the binary. The adapters do not know the
-// binary version, so only this command adds it.
-func withBinaryVersion(err error) error {
-	newer, ok := errors.AsType[*schema.NewerError](err)
-	if !ok {
-		return err
+// appliedMigrationsReader reads the applied migrations of an open store.
+type appliedMigrationsReader interface {
+	AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error)
+}
+
+// warnDevBuild logs a warning when a dev build opens a schema that records a
+// minimum binary version. A dev build counts as newer than every release, so
+// the minimum never refuses it.
+func warnDevBuild(ctx context.Context, logger *slog.Logger, s appliedMigrationsReader) {
+	if !schema.IsDevBuild(version) {
+		return
 	}
 
-	return fmt.Errorf("binary version is %s. %w", version, newer)
+	applied, err := s.AppliedMigrations(ctx)
+	if err != nil {
+		logger.WarnContext(ctx, "read the minimum binary version of the database schema",
+			slog.String("error", err.Error()))
+
+		return
+	}
+
+	minimums := make([]string, 0, len(applied))
+	for _, m := range applied {
+		minimums = append(minimums, m.MinBinaryVersion)
+	}
+
+	minimum, err := schema.HighestMinimum(minimums)
+	if err != nil || minimum == "" {
+		return
+	}
+
+	logger.WarnContext(ctx, "dev build ignores the minimum binary version of the database schema",
+		slog.String("binary_version", version), slog.String("schema_minimum", minimum))
 }
 
 // minRetention is the shortest soft-delete retention the server accepts.

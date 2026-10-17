@@ -58,6 +58,10 @@ var (
 	// than expected: another instance entered or left first. The caller
 	// re-reads the state instead of overwriting it.
 	ErrStateChanged = errors.New("installation state changed")
+	// ErrHeld reports a leave while the hold of the service keeps
+	// maintenance mode: a change of the audit chain waits for its approval
+	// or its migration.
+	ErrHeld = errors.New("maintenance mode is held until the audit chain change ends")
 	// ErrUnavailable reports that the installation state cannot be read or
 	// stored. Store adapters translate driver failures to it, so callers
 	// never see driver text.
@@ -89,12 +93,14 @@ func ParseState(s string) (State, error) {
 // backup registry. Every SQL adapter serves it from one database connection.
 type Store interface {
 	// GetState returns the installation state. A fresh database reads
-	// normal: the migration seeds it. It reports ErrUnavailable when the
-	// state cannot be read, and when the stored value is outside the known
-	// set: an unknown stored value is a server fault, never a bad request.
+	// normal: the migration seeds the one row. It reports ErrUnavailable
+	// when the state cannot be read, when the row is missing, and when the
+	// stored value is outside the known set: an unknown stored value is a
+	// server fault, never a bad request.
 	GetState(ctx context.Context) (State, error)
-	// SetState stores state. It reports ErrInvalidState for any other value
-	// and ErrUnavailable when the state cannot be stored.
+	// SetState stores state in the seeded row. It reports ErrInvalidState
+	// for any other value and ErrUnavailable when the state cannot be
+	// stored, also when the row is missing: it never creates the row.
 	SetState(ctx context.Context, state State) error
 	// SetStateIf stores next only when the stored state is expected: one
 	// compare-and-set, so enters on several instances of one database stay
@@ -120,6 +126,7 @@ type Service struct {
 	stacks     *stack.Service
 	updates    *stack.Updates
 	workspaces *workspace.Service
+	hold       func(ctx context.Context) (bool, error)
 	mu         sync.Mutex
 }
 
@@ -130,9 +137,12 @@ type Config struct {
 	Stacks     *stack.Service
 	Updates    *stack.Updates
 	Workspaces *workspace.Service
+	// Hold, when it is not nil, reports whether maintenance mode must stay:
+	// Leave refuses with ErrHeld while it reports true. Nil holds nothing.
+	Hold func(ctx context.Context) (bool, error)
 }
 
-// NewService returns a Service. Every dependency is required.
+// NewService returns a Service. Every dependency is required, except Hold.
 func NewService(cfg Config) (*Service, error) {
 	switch {
 	case cfg.Store == nil:
@@ -154,6 +164,7 @@ func NewService(cfg Config) (*Service, error) {
 		stacks:     cfg.Stacks,
 		updates:    cfg.Updates,
 		workspaces: cfg.Workspaces,
+		hold:       cfg.Hold,
 	}, nil
 }
 
@@ -208,7 +219,8 @@ func (s *Service) Enter(ctx context.Context, force bool) (EnterResult, error) {
 // Leave moves the installation back to normal operation. Leaving twice keeps
 // normal operation. It holds the service mutex, the same critical section as
 // Enter, so an overlapping enter and leave run one after another: the final
-// state is the one the last call wrote, and each caller reports it.
+// state is the one the last call wrote, and each caller reports it. While
+// the hold reports true, Leave reports ErrHeld and keeps maintenance mode.
 func (s *Service) Leave(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -220,6 +232,17 @@ func (s *Service) Leave(ctx context.Context) error {
 
 	if state == StateNormal {
 		return nil
+	}
+
+	if s.hold != nil {
+		held, holdErr := s.hold(ctx)
+		if holdErr != nil {
+			return fmt.Errorf("read the maintenance hold: %w", holdErr)
+		}
+
+		if held {
+			return ErrHeld
+		}
 	}
 
 	return s.setState(ctx, StateNormal)
@@ -607,9 +630,10 @@ func NewWatcher(store Store, now func() time.Time, limit time.Duration) *Watcher
 }
 
 // State returns the installation state, reading the database at most once
-// per cache limit. A read failure keeps the last state it read, or normal
-// when no read ever passed: the request then meets the adapter, which
-// answers the database failure itself.
+// per cache limit. A read failure keeps the last state it read. Before the
+// first good read, a read failure answers maintenance: the watcher does not
+// know the state, so it refuses the request instead of letting it write
+// during maintenance mode.
 func (w *Watcher) State(ctx context.Context) State {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -621,7 +645,7 @@ func (w *Watcher) State(ctx context.Context) State {
 	state, err := w.store.GetState(ctx)
 	if err != nil {
 		if !w.read {
-			return StateNormal
+			return StateMaintenance
 		}
 
 		return w.state

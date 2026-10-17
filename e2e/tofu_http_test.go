@@ -152,6 +152,8 @@ func runTofuHTTPOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	runTofuHTTPMigration(t, env, address, backendEnv)
 
 	runTofuHTTPForceUnlock(t, env, backendEnv)
+
+	tofuNotHomeScenario(t, env, backendEnv)
 }
 
 // runTofuHTTPMigration moves the state of the workspace from the http backend

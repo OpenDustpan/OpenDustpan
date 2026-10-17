@@ -1,9 +1,11 @@
 package principal
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -11,6 +13,15 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
 )
+
+// Tokens reports the holders of principal:manage-tokens on a service
+// principal, for the audit entry of a membership add. access.Service meets
+// it.
+type Tokens interface {
+	// TokenManagers returns the current holders of principal:manage-tokens
+	// on the service principal with the ID id, sorted and each once.
+	TokenManagers(ctx context.Context, id string) ([]string, error)
+}
 
 // Config holds the dependencies of a Service.
 type Config struct {
@@ -20,6 +31,13 @@ type Config struct {
 	// no check: only an installation that grants nothing, where every
 	// caller is an administrator, leaves it nil.
 	Guard Guard
+	// Namespaces reads the fence of the namespace of a principal of a
+	// namespace. Nil means the Service keeps no principal of a namespace.
+	Namespaces Namespaces
+	// Tokens reports the token managers of a service principal for the
+	// audit entry of a membership add. Nil means the Service writes no
+	// such change.
+	Tokens Tokens
 	// Now returns the current time. Nil means time.Now.
 	Now func() time.Time
 	// NewID returns a new opaque ID with the prefix it takes. Nil means
@@ -34,10 +52,12 @@ type Config struct {
 // own clock, the scope, the kind change, the outcome success and the record,
 // and the store appends the entry in the transaction of the change.
 type Service struct {
-	store Store
-	guard Guard
-	now   func() time.Time
-	newID func(prefix string) string
+	store      Store
+	guard      Guard
+	namespaces Namespaces
+	tokens     Tokens
+	now        func() time.Time
+	newID      func(prefix string) string
 }
 
 // NewService returns a Service. Store is required.
@@ -56,7 +76,14 @@ func NewService(cfg Config) (*Service, error) {
 		newID = ident.NewID
 	}
 
-	return &Service{store: cfg.Store, guard: cfg.Guard, now: now, newID: newID}, nil
+	return &Service{
+		store:      cfg.Store,
+		guard:      cfg.Guard,
+		namespaces: cfg.Namespaces,
+		tokens:     cfg.Tokens,
+		now:        now,
+		newID:      newID,
+	}, nil
 }
 
 // Now returns the time of the Service clock, in UTC to the millisecond:
@@ -90,7 +117,7 @@ func (s *Service) CreatePrincipal(ctx context.Context, e audit.Entry, in Input) 
 		DisplayName: displayName,
 		Kind:        in.Kind,
 		Source:      SourceLocal,
-		GroupCount:  0,
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
 	}
 
 	if err := p.Validate(); err != nil {
@@ -168,7 +195,7 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 		return Principal{}, err
 	}
 
-	if err := s.store.UpdatePrincipal(ctx, p, change(e, p.UpdatedAt, Ref(id))); err != nil {
+	if err := s.storeUpdate(ctx, e, p); err != nil {
 		return Principal{}, fmt.Errorf("update principal %q: %w", id, err)
 	}
 
@@ -177,13 +204,26 @@ func (s *Service) UpdatePrincipal(ctx context.Context, e audit.Entry, id string,
 
 // DeletePrincipal ends the principal with the ID id and its memberships,
 // with the entry e. The store revokes its grants in the same transaction, so
-// the Guard checks that caller holds every action that they give.
+// the Guard checks that caller holds every action that they give. The
+// delete of a principal of a namespace goes to the audit log of the
+// namespace, with its fence.
 func (s *Service) DeletePrincipal(ctx context.Context, e audit.Entry, caller identity.Principal, id string) error {
 	if err := s.checkPrincipal(ctx, caller, id); err != nil {
 		return fmt.Errorf("delete principal %q: %w", id, err)
 	}
 
-	if err := s.store.DeletePrincipal(ctx, id, change(e, s.Now(), Ref(id))); err != nil {
+	p, err := s.store.GetPrincipal(ctx, id)
+	if err != nil {
+		return fmt.Errorf("delete principal %q: %w", id, err)
+	}
+
+	if p.Namespace == "" {
+		err = s.store.DeletePrincipal(ctx, id, change(e, s.Now(), Ref(id)))
+	} else {
+		err = s.endNamespacePrincipal(ctx, e, p)
+	}
+
+	if err != nil {
 		return fmt.Errorf("delete principal %q: %w", id, err)
 	}
 
@@ -317,6 +357,19 @@ func (s *Service) DeleteGroup(ctx context.Context, e audit.Entry, caller identit
 // AddMember puts the principal principalID in the group groupID, with the
 // entry e. A membership gives the grants of the group, so it is a grant by
 // proxy: the Guard checks that caller holds every action that they give.
+//
+// The audit entry of a membership add of a service principal names, in the
+// change "tokenManagers", every holder of principal:manage-tokens on that
+// principal: each of them can act as the principal, with the grants of the
+// group too. The entry of a person or a workload names none.
+//
+// When the grants of the group let its members act as service principals,
+// the entry names them in the change "actsAs", one per line, as the access
+// review names them: "principal:<id>" for one service principal, the name
+// of a namespace for each service principal of that namespace, and
+// "@server" for every service principal. The store
+// reads them in the transaction of the write, so a grant or a revoke that
+// commits first is in the list.
 func (s *Service) AddMember(
 	ctx context.Context, e audit.Entry, caller identity.Principal, groupID, principalID string,
 ) (Membership, error) {
@@ -324,9 +377,49 @@ func (s *Service) AddMember(
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
 	}
 
-	m := Membership{AddedAt: s.Now(), GroupID: groupID, PrincipalID: principalID}
+	kind := Kind("")
+	if p, err := s.store.GetPrincipal(ctx, principalID); err != nil {
+		if !errors.Is(err, ErrNotFound) {
+			return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+		}
+	} else {
+		if p.Namespace != "" {
+			return Membership{}, fmt.Errorf("add principal %q to group %q: %w: a principal of a namespace cannot be "+
+				"a member of a group, because a group belongs to the whole installation", principalID, groupID, ErrInvalid)
+		}
 
-	err := s.store.AddMember(ctx, m, change(e, m.AddedAt, MemberRef(groupID, principalID)))
+		kind = p.Kind
+	}
+
+	m := Membership{
+		AddedAt: s.Now(), SuspendedAt: time.Time{}, GroupID: groupID, PrincipalID: principalID,
+		Source: MembershipSourceLocal, SourceID: "", State: MembershipStateActive, Pinned: false,
+	}
+
+	if err := m.Validate(); err != nil {
+		return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+	}
+
+	entry := change(e, m.AddedAt, MemberRef(groupID, principalID))
+	entry.Changes = append(entry.Changes,
+		audit.Change{Key: "source", Old: nil, New: string(m.Source), Layer: "", TakesEffect: ""},
+		audit.Change{Key: "sourceID", Old: nil, New: m.SourceID, Layer: "", TakesEffect: ""},
+		audit.Change{Key: "state", Old: nil, New: string(m.State), Layer: "", TakesEffect: ""},
+		audit.Change{Key: "pinned", Old: nil, New: strconv.FormatBool(m.Pinned), Layer: "", TakesEffect: ""},
+	)
+
+	if kind == KindService && s.tokens != nil {
+		holders, err := s.tokens.TokenManagers(ctx, principalID)
+		if err != nil {
+			return Membership{}, fmt.Errorf("add principal %q to group %q: %w", principalID, groupID, err)
+		}
+
+		entry.Changes = append(entry.Changes, audit.Change{
+			Key: "tokenManagers", Old: nil, New: strings.Join(holders, ", "), Layer: "", TakesEffect: "",
+		})
+	}
+
+	err := s.store.AddMember(ctx, m, entry, actsAsChange(groupID))
 	if errors.Is(err, ErrAlreadyExists) {
 		return Membership{}, fmt.Errorf("add principal %q to group %q: %w: the principal is a member of the group, "+
 			"or it left the group in this millisecond. If it is not a member, try again", principalID, groupID, err)
@@ -408,6 +501,72 @@ func exactKey(s string) string { return s }
 // groupKey is the sort key of a group: its name in lower case.
 func groupKey(g Group) string { return strings.ToLower(g.Name) }
 
+// SignInInput names the person of a sign-in through an identity provider.
+// Subject is the subject of the principal: "<provider>:<sub>". Names are
+// the display name candidates in order of preference; the first one that
+// is a valid display name wins, and the subject wins when none is. Create
+// allows a new principal when no principal has the subject.
+type SignInInput struct {
+	Subject string
+	// Source is the source of a principal that the sign-in makes:
+	// SourceOIDC or SourceOAuth. Empty is SourceOIDC.
+	Source Source
+	Names  []string
+	Create bool
+}
+
+// SignInPrincipal returns the principal of a sign-in through an identity
+// provider: the principal with the subject in.Subject. When none exists
+// and in.Create is true, it makes a person with the source in.Source, no
+// grant and no group, with the entry e, and created is true.
+//
+// It returns ErrNotFound when no principal has the subject and in.Create
+// is false, ErrDisabled for a disabled principal, ErrNotSignInTarget for a
+// principal that is not a person, a principal of a namespace or a
+// break-glass account, and ErrInvalid or ErrReservedSubject for a subject
+// that is not valid.
+func (s *Service) SignInPrincipal(ctx context.Context, e audit.Entry, in SignInInput) (Principal, bool, error) {
+	p, err := s.store.GetPrincipalBySubject(ctx, in.Subject)
+
+	switch {
+	case err == nil:
+		return p, false, signInTarget(p)
+	case !errors.Is(err, ErrNotFound):
+		return Principal{}, false, fmt.Errorf("get principal %q: %w", in.Subject, err)
+	case !in.Create:
+		return Principal{}, false, fmt.Errorf("principal %q: %w", in.Subject, ErrNotFound)
+	}
+
+	at := s.Now()
+	p = Principal{
+		CreatedAt:   at,
+		UpdatedAt:   at,
+		DisabledAt:  time.Time{},
+		ID:          s.newID(principalIDPrefix),
+		Subject:     in.Subject,
+		DisplayName: signInDisplayName(in),
+		Kind:        KindPerson,
+		Source:      cmp.Or(in.Source, SourceOIDC),
+		Namespace:   "", GroupCount: 0, BreakGlass: false,
+	}
+
+	if validErr := p.Validate(); validErr != nil {
+		return Principal{}, false, validErr
+	}
+
+	err = s.store.CreatePrincipal(ctx, p, change(e, at, Ref(p.ID)))
+	if errors.Is(err, ErrAlreadyExists) {
+		// A parallel first sign-in of the same person made it.
+		return s.existingSignIn(ctx, in.Subject)
+	}
+
+	if err != nil {
+		return Principal{}, false, fmt.Errorf("create principal %q: %w", in.Subject, err)
+	}
+
+	return p, true, nil
+}
+
 // checkGroup asks the Guard whether caller may change who holds the grants
 // of the group groupID.
 func (s *Service) checkGroup(ctx context.Context, caller identity.Principal, groupID string) error {
@@ -426,4 +585,59 @@ func (s *Service) checkPrincipal(ctx context.Context, caller identity.Principal,
 	}
 
 	return s.guard.CheckPrincipalGrants(ctx, caller, principalID)
+}
+
+// existingSignIn returns the principal with the subject for a sign-in,
+// after a create found it taken.
+func (s *Service) existingSignIn(ctx context.Context, subject string) (Principal, bool, error) {
+	p, err := s.store.GetPrincipalBySubject(ctx, subject)
+	if err != nil {
+		return Principal{}, false, fmt.Errorf("get principal %q: %w", subject, err)
+	}
+
+	return p, false, signInTarget(p)
+}
+
+// signInTarget returns why a sign-in through an identity provider cannot
+// name p, or nil.
+func signInTarget(p Principal) error {
+	switch {
+	case p.Kind != KindPerson || p.Namespace != "" || p.BreakGlass:
+		return fmt.Errorf("%w: %s", ErrNotSignInTarget, Ref(p.ID))
+	case !p.DisabledAt.IsZero():
+		return fmt.Errorf("%w: %s", ErrDisabled, Ref(p.ID))
+	default:
+		return nil
+	}
+}
+
+// signInDisplayName returns the first name of in.Names that is a valid,
+// non-empty display name, or the subject.
+func signInDisplayName(in SignInInput) string {
+	for _, name := range in.Names {
+		if name != "" && validateText("display name", name, maxDisplayNameLength) == nil {
+			return name
+		}
+	}
+
+	return in.Subject
+}
+
+// actsAsChange returns the audit of a membership add that the store runs in
+// the transaction of the write: when the grants of the group groupID let
+// its members act as service principals, the change "actsAs" names each,
+// one per line, so the entry records what the new member can now act as.
+func actsAsChange(groupID string) MemberAudit {
+	return func(ctx context.Context, r GroupReads) ([]audit.Change, error) {
+		ids, err := r.ActsAs(ctx, groupID)
+		if err != nil {
+			return nil, fmt.Errorf("read what the members of group %q act as: %w", groupID, err)
+		}
+
+		if len(ids) == 0 {
+			return nil, nil
+		}
+
+		return []audit.Change{{Key: "actsAs", Old: nil, New: strings.Join(ids, "\n"), Layer: "", TakesEffect: ""}}, nil
+	}
 }

@@ -79,7 +79,7 @@ func runTokensOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, cli, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
 
 	checkReady(ctx, t, env)
 
@@ -158,7 +158,9 @@ func checkTokenRefusals(ctx context.Context, t *testing.T, env *e2e.Env, deploy,
 			http.MethodPost, "/api/server/service-tokens",
 			`{"principalID":"` + deploy.ID + `","name":"x","expiresAt":"` + far + `"}`, http.StatusBadRequest,
 		},
-		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + deploy.ID + `","name":"x"}`, http.StatusBadRequest},
+		// No route makes or rotates a personal token of another person.
+		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + deploy.ID + `","name":"x"}`, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/api/server/tokens/tok-none/rotate", `{}`, http.StatusNotFound},
 		{http.MethodGet, "/api/server/tokens?limit=0", "", http.StatusBadRequest},
 		{http.MethodGet, "/api/server/tokens?status=all", "", http.StatusBadRequest},
 		{http.MethodGet, "/api/server/tokens/tok-none", "", http.StatusNotFound},
@@ -228,9 +230,6 @@ func checkTokenRotation(ctx context.Context, t *testing.T, env *e2e.Env, created
 
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/service-tokens/" + created.ID + "/rotate", `{}`, http.StatusConflict,
-	}, nil)
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens/" + rot.Token.ID + "/rotate", `{}`, http.StatusBadRequest,
 	}, nil)
 
 	// An end time of now ends the old token of a second rotation at once.
@@ -317,31 +316,35 @@ func checkTokenRevoke(ctx context.Context, t *testing.T, env *e2e.Env, tok e2eTo
 	}
 }
 
-// checkPersonalTokens makes two personal tokens of a person through the
-// administrator route, and drives the own-token routes. Every authenticated
+// checkPersonalTokens signs a person in twice, and makes a personal token
+// with each session, and drives the own-token routes. Every authenticated
 // person holds token:manage-own. The bootstrap admin token has no person
 // record, so it owns no personal token (403). The person lists its own
 // tokens with a token and revokes one, and it cannot create or rotate one
-// with a token: that needs a sign-in (403), which does not exist yet.
+// with a token: that needs a sign-in (403).
 func checkPersonalTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 	t.Helper()
 
 	var person e2ePrincipal
 	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/principals", `{"subject":"bob@example.com","kind":"person"}`, http.StatusCreated,
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("bob@example.com") + `","kind":"person"}`,
+		http.StatusCreated,
 	}, &person)
 
-	var personal, spare e2eToken
-	for _, out := range []*e2eToken{&personal, &spare} {
-		principalCall(ctx, t, env, principalStep{
-			http.MethodPost, "/api/server/tokens", `{"principalID":"` + person.ID + `","name":"laptop"}`,
-			http.StatusCreated,
-		}, out)
-	}
+	personal := env.PersonalToken(ctx, t, person.ID, "laptop")
+	spare := env.PersonalToken(ctx, t, person.ID, "laptop")
 
-	if personal.Kind != "personal" || personal.PrincipalID != person.ID || personal.CreatedBy != "admin" ||
-		personal.ExpiresInDays == nil {
-		t.Fatalf("personal token = %+v, want a personal token of the person, made by admin, with days left", personal)
+	var read e2eToken
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/tokens/" + personal.ID, "", http.StatusOK,
+	}, &read)
+
+	if read.Kind != "personal" || read.PrincipalID != person.ID ||
+		read.CreatedBy != e2e.SignInSubject("bob@example.com") ||
+		read.ExpiresInDays == nil {
+		t.Fatalf("personal token = %+v, want a personal token of the person, made by the person, with days left", read)
 	}
 
 	principalCall(ctx, t, env, principalStep{
@@ -413,7 +416,7 @@ func checkDelegatedTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 		dst  *e2ePrincipal
 		body string
 	}{
-		{&delegate, `{"subject":"delegate@example.com","kind":"person"}`},
+		{&delegate, `{"subject":"` + e2e.SignInSubject("delegate@example.com") + `","kind":"person"}`},
 		{&plain, `{"subject":"ci-plain","kind":"service"}`},
 	} {
 		principalCall(
@@ -432,19 +435,15 @@ func checkDelegatedTokens(ctx context.Context, t *testing.T, env *e2e.Env) {
 		http.StatusCreated,
 	}, nil)
 
-	var own, plainTok e2eToken
-	principalCall(ctx, t, env, principalStep{
-		http.MethodPost, "/api/server/tokens", `{"principalID":"` + delegate.ID + `","name":"delegate"}`,
-		http.StatusCreated,
-	}, &own)
+	own := env.PersonalToken(ctx, t, delegate.ID, "delegate")
+
+	var plainTok e2eToken
 	principalCall(ctx, t, env, principalStep{
 		http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"plain"}`,
 		http.StatusCreated,
 	}, &plainTok)
 
 	for _, step := range []principalStep{
-		{http.MethodPost, "/api/server/tokens", `{"principalID":"` + delegate.ID + `","name":"again"}`, http.StatusForbidden},
-		{http.MethodPost, "/api/server/tokens/" + own.ID + "/rotate", `{}`, http.StatusForbidden},
 		{http.MethodPost, "/api/server/service-tokens", `{"principalID":"` + plain.ID + `","name":"plain"}`, http.StatusForbidden},
 		{http.MethodPost, "/api/server/service-tokens/" + plainTok.ID + "/rotate", `{}`, http.StatusForbidden},
 	} {

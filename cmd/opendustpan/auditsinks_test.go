@@ -132,6 +132,7 @@ func TestAuditSinksRefuseBadItems(t *testing.T) {
 		{name: "file with an empty path", raw: "file:"},
 		{name: "blob under the OpenTofu state prefix", raw: "blob:tofu/audit"},
 		{name: "blob under the Pulumi state prefix", raw: "blob:pulumi"},
+		{name: "blob under the audit checkpoint prefix", raw: "blob:audit-checkpoints/audit"},
 	}
 
 	for _, tc := range cases {

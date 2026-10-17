@@ -70,6 +70,8 @@ func checkAppliedMigrated(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
+	copyTemplate(t, path)
+
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -135,6 +137,8 @@ func checkAppliedMissingTable(t *testing.T) {
 
 	path := filepath.Join(t.TempDir(), "dustpan.db")
 
+	copyTemplate(t, path)
+
 	s, err := sqlite.Open(t.Context(), path)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -177,7 +181,8 @@ func checkAppliedMissingTable(t *testing.T) {
 
 // TestEmbeddedMigrationsMatchSchema proves the adapter embeds exactly the
 // shared schema list: the upgrade check verdict never depends on the
-// dialect. Add a migration to both dialects and to the schema list together.
+// dialect. Add a migration file to both dialects and to the schema directory
+// together, with the hash file of each dialect next to its SQL file.
 func TestEmbeddedMigrationsMatchSchema(t *testing.T) {
 	t.Parallel()
 

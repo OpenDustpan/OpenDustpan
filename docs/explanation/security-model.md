@@ -59,16 +59,18 @@ persons and services.
   a stored token can: today the bootstrap admin token (ADR 6), later a
   sign-in (ADR 55). A token that could make tokens would outlive its
   maximum lifetime and a revoke of the token that made it.
-- **A personal token for another person is a grant by proxy.** The caller
-  must hold every action that the grants of that person give, through its
-  groups too. Otherwise the server answers 403. So an administrator can
-  never act as a person who holds more.
+- **Each person makes only its own personal tokens.** A token acts as its
+  principal, so a personal token for another person would be a grant by
+  proxy. No principal makes or rotates a personal token of another person,
+  an administrator included. A person makes and rotates its own tokens after
+  a sign-in, through `/api/server/caller/tokens`. A holder of
+  `server:manage-tokens` can revoke the personal token of any person.
 - **A service token needs `principal:manage-tokens` on its service
   principal.** A holder can make, rotate and revoke the tokens of that
   principal. So it can act as the principal, with every grant that the
   principal has now or gets later. A token acts with the grants of its
   principal at the time of each request. The design wants this: the grant of
-  `principal:manage-tokens` is the decision, and no escalation check runs.
+  `principal:manage-tokens` is the decision.
 - **An account administrator can act as any service principal.** The
   built-in roles `account-administrator` and `site-administrator` hold
   `principal:manage-tokens` on the installation, which holds every
@@ -82,11 +84,43 @@ persons and services.
   `GET /api/server/principals/{id}/access-review` lists the holders of
   `principal:manage-tokens` on the principal. The audit entry of each grant
   to a service principal names the same holders in the change
-  `tokenManagers`.
+  `tokenManagers`. The audit entry of each grant to a group names the same
+  holders for each service principal in the group in one change
+  `tokenManagers`, with one line per service principal in the form
+  `<principal ID>: <holder>, <holder>`. The audit entry of each membership
+  add of a service principal names the same holders in the change
+  `tokenManagers`. The audit entry of each membership add to a group that
+  lets its members act as service principals names, in the change
+  `actsAs`, what the new member can act as, one per line, as the access
+  review names it: `principal:<id>` for one service principal, the name of
+  a namespace for the service principals of that namespace, and `@server`
+  for every service principal.
 - **A revoke of `principal:manage-tokens` does not end the tokens that
   its holder already made.** Those tokens act as the service principal
   until they expire. After such a revoke, rotate or revoke the tokens of
   the principal.
+- **A namespace can have its own service principals.** A holder of
+  `namespace:manage-principals` on the namespace makes them, and
+  `namespace:read-access` reads them. A principal of a namespace can only
+  hold grants on its namespace or on an object inside it: the server
+  refuses any other grant with 400, and checks it again in the transaction
+  of the grant. It cannot be a member of a group. A holder of
+  `namespace:manage-principal-tokens` on the namespace makes, rotates,
+  lists and revokes the tokens of the principals of that namespace, through
+  `principal:manage-tokens` on each of them. It reaches no other principal.
+  A grant of a role with it needs every data action on that namespace, or
+  `server:manage-access` on the installation. The access-review export of
+  such a principal lists the holders of `namespace:manage-principal-tokens`
+  on its namespace.
+- **Only a site administrator can change the sign-in settings.** The
+  action `server:manage-sign-in` changes the session policy with
+  `PATCH /api/server/session-policy`: the idle limit (15 minutes by
+  default) and the maximum length (12 hours by default) of a console
+  session. Of the built-in roles, only `site-administrator` holds it.
+  `account-administrator` does not, so the tenant side of a hosted
+  installation cannot change the sign-in settings of the whole
+  installation. No sign-in method issues a session yet, so the policy has
+  no effect until one is available.
 
 ## Pulumi secrets
 
@@ -120,13 +154,6 @@ The server seals each new OpenTofu state version before it stores it:
 - **The server also seals the outputs document in the database.**
 - **A download answers the same bytes that the CLI sent.** The MD5 and the
   size of a state version stay those of the plain bytes.
-
-The server also seals the state versions that an older server wrote
-(ADR 41, decision 11). At each start, and after each restore, it seals
-each version that still holds plain content. It writes the sealed content
-to a new blob key, moves the version to that key in a fenced transaction,
-and then deletes the plain blob. It seals only the versions of namespaces
-whose home region is this region.
 
 ## The key-encryption key
 
@@ -164,7 +191,7 @@ disk encryption and with access rules on the S3 bucket.
 
 | Data | Where | Encrypted by the server |
 | --- | --- | --- |
-| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. The server seals the versions of an older server at start and after a restore |
+| OpenTofu state, with every sensitive value | Blob store, and the outputs in the database | Yes. Versions that a server older than the seal change wrote stay plain: the server does not seal them later |
 | Pulumi checkpoints | Blob store, compressed | No. The secret values in them are ciphertext from the Pulumi CLI |
 | Pulumi secret config values | Your stack configuration | Yes, as above |
 | Wrapped data keys | Database | Yes, by the key-encryption key |
@@ -317,10 +344,11 @@ entry and how to read them.
   `tofu state pull` makes a `tool-operation` entry. The server records a
   reveal from the Pulumi CLI only when the CLI calls a `log-decryption`
   route.
-- **Who can read the log.** `GET /api/audit/entries` lists the entries and
-  `GET /api/audit/check` checks the chain. Both need the action
+- **Who can read the log.** `GET /api/audit/entries` lists the entries,
+  `GET /api/audit/entries/{sequence}` reads one entry and
+  `GET /api/audit/check` checks the chain. Each needs the action
   `namespace:read-audit` on the namespace. For the installation scope
-  `@server`, both need `server:read-audit` on the installation instead.
+  `@server`, each needs `server:read-audit` on the installation instead.
 - **A hash chain for each namespace.** Each entry holds the SHA-256 of its
   own fields and of the previous entry. The check finds a changed or a
   deleted entry. It does not stop a person who can write to the database:

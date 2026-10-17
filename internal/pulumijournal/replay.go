@@ -15,21 +15,28 @@
 // This file is derived from pkg/backend/journal.go (JournalReplayer.Add,
 // GenerateDeployment and the manifest of the deployment) and from
 // pkg/resource/deploy/manifest.go (NewMagic) of pulumi/pulumi at commit
-// 128d3f2ec94e147915a6a928fdf7449d561d560e (tag v3.268.0). OpenDustpan changed
-// the replayer in these ways, each marked in the code:
+// 128d3f2ec94e147915a6a928fdf7449d561d560e (tag v3.268.0). The state migration
+// entry is derived from pkg/backend/journal_state_migration.go
+// (applyStateMigration) at the same commit; see migration.go. OpenDustpan
+// changed the replayer in these ways, each marked in the code:
 //
 //   - The replay runs in two passes over the base (ADR 43, decision 7.3) and
 //     writes its output to a writer. Upstream holds the whole base and the whole
 //     output in memory.
 //   - A reference to an entry that is not applied is an error (ErrMissingReference).
 //     Upstream reads index 0 of a missing reference without an error.
-//   - A write entry (kind 5) and a rebuilt base state entry (kind 7) replace the
-//     base in the middle of a replay (issue #430). A kind 10 entry is refused
-//     (ErrUnsupportedKind) until item 12.
+//   - A write entry (kind 5), a rebuilt base state entry (kind 7) and a state
+//     migration entry (kind 10) replace the base in the middle of a replay.
+//     The rebuilt base and the migrated base are held in memory; a later change
+//     moves them to a temporary blob.
 //   - The operations that are pending are written in the order of their operation
 //     IDs. Upstream writes them in the order of a map, which is not stable.
 //   - The manifest time comes from the clock that the caller gives, and the
 //     manifest version is the CLI version of the update, as upstream writes it.
+//   - The replayer runs the integrity check on the output (integrity.go) instead of
+//     copying the base metadata unchanged. It drops the integrity_error member when
+//     the check passes, and sets it with the schema version and the error text when
+//     the check fails. The server writes no command and no environment variables.
 
 package pulumijournal
 
@@ -45,6 +52,7 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"strconv"
 	"time"
 )
 
@@ -55,8 +63,10 @@ var (
 	// ErrNoSnapshot reports a write entry without a snapshot, or a rebuilt document
 	// without a deployment.
 	ErrNoSnapshot = errors.New("pulumijournal: journal entry has no snapshot")
-	// ErrUnsupportedKind reports an entry kind that this replayer does not replay yet.
-	// Kinds 5, 7 and 10 wait for issue #430.
+	// ErrUnsupportedKind reports an entry kind that applyBaseKind does not handle:
+	// any kind other than snippets, extension-parameterize, write,
+	// rebuilt-base-state and state-migration. Apply forwards only those kinds,
+	// so the default guards future kinds.
 	ErrUnsupportedKind = errors.New("pulumijournal: journal entry kind is not replayed yet")
 	// ErrMissingReference reports an entry that refers to an entry no applied entry created (R16).
 	ErrMissingReference = errors.New("pulumijournal: journal entry refers to an entry that is not applied")
@@ -98,15 +108,27 @@ func NewReplayer(now func() time.Time, cliVersion string) *Replayer {
 func (r *Replayer) Replay(ctx context.Context, openBase OpenBase, entries io.Reader, out io.Writer) error {
 	state := newReplayState(openBase, r)
 	decode := func(entry JournalEntry) error {
+		if err := state.countEntry(entry); err != nil {
+			return err
+		}
 		return state.apply(ctx, entry)
 	}
 
 	if err := DecodeEntries(entries, journalVersion, decode); err != nil {
+		// A bound error already names its counts and its limit, so it passes
+		// through without a second prefix.
+		if errors.Is(err, ErrTooManyEntries) || errors.Is(err, ErrNewStateTooLarge) {
+			return err
+		}
 		return fmt.Errorf("pulumijournal: replay entries: %w", err)
 	}
 
 	scan, err := state.scanBase(ctx, state.base)
 	if err != nil {
+		return err
+	}
+
+	if err := state.checkIndex(scan); err != nil {
 		return err
 	}
 
@@ -144,8 +166,8 @@ type operationView struct {
 // replayState is the state of one replay. It is built from the entries in the
 // order of arrival and read by the two passes over the base.
 type replayState struct {
-	// base opens the base deployment. A kind 5 entry or a kind 7 entry replaces it
-	// with a source that can also be opened more than once (issue #430).
+	// base opens the base deployment. A kind 5 entry, a kind 7 entry or a kind 10
+	// entry replaces it with a source that can also be opened more than once.
 	base OpenBase
 	// replayer carries the clock and the CLI version of the update, which a kind 7
 	// entry needs to write the deployment it rebuilds.
@@ -163,6 +185,10 @@ type replayState struct {
 	newRecords []stateRecord
 	hasRefresh bool
 	byteString bool
+	// entryCount holds the entries applied so far. newStateBytes holds the
+	// bytes of the resource states they carry.
+	entryCount    int64
+	newStateBytes int64
 	// secrets, snippets and extensions replace the base values when set.
 	secrets     jsontext.Value
 	snippets    []jsontext.Value
@@ -186,6 +212,8 @@ func newReplayState(base OpenBase, replayer *Replayer) *replayState {
 		newRecords:          nil,
 		hasRefresh:          false,
 		byteString:          false,
+		entryCount:          0,
+		newStateBytes:       0,
 		secrets:             nil,
 		snippets:            nil,
 		snippetsSet:         false,
@@ -216,9 +244,109 @@ func (s *replayState) lookup(op int64, name, field string) (int64, error) {
 	return idx, nil
 }
 
+// countEntry counts one entry toward the per-update bounds before it is
+// applied. It refuses an update with more entries or more new state bytes
+// than the bounds allow, with a BoundError that names the count and the limit.
+func (s *replayState) countEntry(entry JournalEntry) error {
+	s.entryCount++
+	if s.entryCount > int64(MaxEntriesPerUpdate) {
+		return &BoundError{
+			Bound: "journal entries",
+			Count: s.entryCount,
+			Limit: int64(MaxEntriesPerUpdate),
+			Cause: ErrTooManyEntries,
+		}
+	}
+	s.newStateBytes += int64(EntryStateBytes(entry))
+	if s.newStateBytes > int64(MaxNewStateBytesPerUpdate) {
+		return &BoundError{
+			Bound: "new state bytes",
+			Count: s.newStateBytes,
+			Limit: int64(MaxNewStateBytesPerUpdate),
+			Cause: ErrNewStateTooLarge,
+		}
+	}
+	return nil
+}
+
+// EntryStateBytes returns the bytes of the resource states one entry carries:
+// its own state and every state of a migration entry.
+func EntryStateBytes(entry JournalEntry) int {
+	n := len(entry.State)
+	for _, state := range entry.States {
+		n += len(state)
+	}
+	for _, patch := range entry.BaseStatePatches {
+		n += len(patch.State)
+	}
+	for _, patch := range entry.NewStatePatches {
+		n += len(patch.State)
+	}
+	return n
+}
+
+// checkIndex checks the added links of the first pass against the bounds. It
+// refuses an update that adds more links than the bound allows, and a build
+// with more new-state plus added-link bytes than the bound allows. Both counts
+// cover only what the update adds, so neither grows with the base resources,
+// which the build streams one at a time.
+func (s *replayState) checkIndex(scan *baseScan) error {
+	if int64(scan.added) > int64(MaxLinkIndexEntriesPerUpdate) {
+		return &BoundError{
+			Bound: "added links",
+			Count: int64(scan.added),
+			Limit: int64(MaxLinkIndexEntriesPerUpdate),
+			Cause: ErrLinkIndexTooLarge,
+		}
+	}
+	counted := s.newStateBytes + scan.addedLinkBytes
+	if counted > int64(MaxNewStatePlusLinkBytesPerUpdate) {
+		return &BoundError{
+			Bound: "new-state plus added-link bytes",
+			Count: counted,
+			Limit: int64(MaxNewStatePlusLinkBytesPerUpdate),
+			Cause: ErrAddedBytesTooLarge,
+		}
+	}
+	return nil
+}
+
+// linkSize returns the bytes of the link fields of one resource.
+func linkSize(fields linkFields) int64 {
+	n := int64(len(fields.URN) + len(fields.Parent) + len(fields.Provider) +
+		len(fields.ViewOf) + len(fields.DeletedWith))
+	for _, urn := range fields.Dependencies {
+		n += int64(len(urn))
+	}
+	for _, urn := range fields.Aliases {
+		n += int64(len(urn))
+	}
+	for _, urn := range fields.ReplaceWith {
+		n += int64(len(urn))
+	}
+	for _, urns := range fields.PropertyDependencies {
+		for _, urn := range urns {
+			n += int64(len(urn))
+		}
+	}
+	return n
+}
+
+// linkBytes returns the bytes of the link fields of the indexed resources.
+func linkBytes(index []linkFields) int64 {
+	var n int64
+	for _, fields := range index { //nolint:gocritic // The struct holds only string headers, so the copy stays small.
+		n += linkSize(fields)
+	}
+	return n
+}
+
 // apply applies one entry. It is the callback of DecodeEntries, so it runs for
 // each entry before the later entries of the batch are checked.
 func (s *replayState) apply(ctx context.Context, entry JournalEntry) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("pulumijournal: replay canceled: %w", err)
+	}
 	name := entryLabel(entry)
 	if entry.RequiresByteString {
 		s.byteString = true
@@ -338,8 +466,8 @@ func deploymentOf(document []byte) ([]byte, error) {
 }
 
 // applyBaseKind applies the entries that set or replace the base: snippets,
-// extensions, a write (kind 5), a rebuilt base state (kind 7), and a state
-// migration, which is refused until item 12.
+// extensions, a write (kind 5), a rebuilt base state (kind 7) and a state
+// migration (kind 10, see migration.go).
 func (s *replayState) applyBaseKind(ctx context.Context, entry JournalEntry, name string) error {
 	//nolint:exhaustive // apply sends only the base kinds here, and default refuses the rest.
 	switch entry.Kind {
@@ -354,8 +482,9 @@ func (s *replayState) applyBaseKind(ctx context.Context, entry JournalEntry, nam
 		return s.applyWrite(entry, name)
 	case JournalEntryKindRebuiltBaseState:
 		return s.applyRebuild(ctx, name)
+	case JournalEntryKindStateMigration:
+		return s.applyMigration(ctx, entry, name)
 	default:
-		// The state migration of item 12 is not replayed yet.
 		return fmt.Errorf("pulumijournal: entry %s: kind %s: %w", name, entry.Kind, ErrUnsupportedKind)
 	}
 }
@@ -530,9 +659,62 @@ type baseScan struct {
 	// output. The second pass reads the base again and takes the normalized links
 	// from it (ADR 43, decision 7.3).
 	index []linkFields
+	// added counts the links the update adds: the kept new resources and the
+	// base resources a refresh or outputs entry replaces. addedLinkBytes holds
+	// their link bytes. Kept base resources without a replacement add nothing.
+	added          int
+	addedLinkBytes int64
+	// extras holds the integrity members of the resources of the output, in the
+	// same order as index. The integrity check reads the links from index and the
+	// other members from extras.
+	extras []integrityExtra
+	// integrityErr is the result of the integrity check on the output. The tail
+	// of the deployment writes the integrity_error metadata from it.
+	integrityErr error
+	// integrityVersion is the schema version written into the integrity_error
+	// metadata on failure, as decimal text.
+	integrityVersion string
 	// norm normalizes the URN references of the output. Its zero value changes
 	// nothing.
 	norm normalizer
+}
+
+// integrityExtra holds the members of a resource state that the integrity check
+// reads besides the links: the type, the custom flag, the provider ID and the
+// delete and pending marks of the output.
+type integrityExtra struct {
+	resourceType string
+	custom       bool
+	id           string
+	deleted      bool
+	pending      bool
+}
+
+// integrityStateView is the part of a resource state that the integrity check
+// reads besides the links.
+type integrityStateView struct {
+	Type               string `json:"type"`
+	Custom             bool   `json:"custom"`
+	ID                 string `json:"id,omitempty"`
+	Delete             bool   `json:"delete,omitempty"`
+	PendingReplacement bool   `json:"pendingReplacement,omitempty"`
+}
+
+// integrityExtraOf reads the integrity members of one resource state. deleted and
+// pending are the marks that the entries set besides the state itself.
+func integrityExtraOf(raw jsontext.Value, deleted, pending bool) (integrityExtra, error) {
+	var view integrityStateView
+	if err := json.Unmarshal(raw, &view); err != nil {
+		return integrityExtra{}, fmt.Errorf("pulumijournal: read resource integrity fields: %w", err)
+	}
+
+	return integrityExtra{
+		resourceType: view.Type,
+		custom:       view.Custom,
+		id:           view.ID,
+		deleted:      view.Delete || deleted,
+		pending:      view.PendingReplacement || pending,
+	}, nil
 }
 
 // addFeatures applies the rules of one resource to the feature set (upstream
@@ -560,17 +742,30 @@ func (s *replayState) removedIndices() map[int64]struct{} {
 // final URNs, and it keeps the base members that the output needs.
 func (s *replayState) scanBase(ctx context.Context, openBase OpenBase) (*baseScan, error) {
 	scan := &baseScan{
-		features: make(map[string]bool),
-		final:    make(map[string]bool),
-		members:  make(map[string]jsontext.Value),
-		pending:  nil,
-		index:    nil,
-		norm:     normalizer{aliased: nil},
+		features:         make(map[string]bool),
+		final:            make(map[string]bool),
+		members:          make(map[string]jsontext.Value),
+		pending:          nil,
+		index:            nil,
+		added:            0,
+		addedLinkBytes:   0,
+		extras:           nil,
+		integrityErr:     nil,
+		integrityVersion: "",
+		norm:             normalizer{aliased: nil},
 	}
-	s.scanNewResources(scan)
+	if err := s.scanNewResources(scan); err != nil {
+		return nil, err
+	}
 	err := walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("pulumijournal: replay canceled: %w", cerr)
+		}
 		return s.scanBaseResource(scan, i, raw)
 	}, func(key string, raw jsontext.Value) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("pulumijournal: replay canceled: %w", cerr)
+		}
 		if key == "pending_operations" {
 			return s.addBasePending(scan, raw)
 		}
@@ -598,8 +793,9 @@ func (s *replayState) scanBase(ctx context.Context, openBase OpenBase) (*baseSca
 }
 
 // scanNewResources adds the features and the URNs of the new resources that the
-// update keeps.
-func (s *replayState) scanNewResources(scan *baseScan) {
+// update keeps, with their integrity members. Each kept new resource counts as
+// an added link.
+func (s *replayState) scanNewResources(scan *baseScan) error {
 	removed := s.removedIndices()
 	for i := range s.newRecords {
 		if _, gone := removed[int64(i)]; gone {
@@ -608,7 +804,15 @@ func (s *replayState) scanNewResources(scan *baseScan) {
 		s.addFeatures(scan.features, s.newRecords[i].view)
 		scan.final[s.newRecords[i].links.URN] = true
 		scan.index = append(scan.index, s.newRecords[i].links.clone())
+		scan.added++
+		scan.addedLinkBytes += linkSize(s.newRecords[i].links)
+		extra, err := integrityExtraOf(s.newRecords[i].raw, s.newRecords[i].deleted, s.newRecords[i].pending)
+		if err != nil {
+			return err
+		}
+		scan.extras = append(scan.extras, extra)
 	}
+	return nil
 }
 
 // scanBaseResource adds the features and the URN of one base resource that the
@@ -628,6 +832,22 @@ func (s *replayState) scanBaseResource(scan *baseScan, i int, raw jsontext.Value
 	s.addFeatures(scan.features, rec.view)
 	scan.final[rec.links.URN] = true
 	scan.index = append(scan.index, rec.links.clone())
+	if _, replaced := s.toReplaceInSnapshot[idx]; replaced {
+		scan.added++
+		scan.addedLinkBytes += linkSize(rec.links)
+	}
+	// A replaced resource counts as its replacement alone: the markings of the
+	// base index do not apply to it.
+	deleted, pending := false, false
+	if _, ok := s.toReplaceInSnapshot[idx]; !ok {
+		_, deleted = s.markAsDeletion[idx]
+		_, pending = s.markAsPending[idx]
+	}
+	extra, xerr := integrityExtraOf(rec.raw, deleted, pending)
+	if xerr != nil {
+		return xerr
+	}
+	scan.extras = append(scan.extras, extra)
 	return nil
 }
 
@@ -793,6 +1013,9 @@ func newManifest(now time.Time, version string) manifestJSON {
 // the normalization runs over the link index of the first pass. A failure
 // therefore writes nothing.
 func (s *replayState) write(ctx context.Context, openBase OpenBase, out io.Writer, scan *baseScan, r *Replayer) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("pulumijournal: replay canceled: %w", err)
+	}
 	if s.hasRefresh {
 		rebuildIndex(scan.index, scan.final)
 	}
@@ -801,6 +1024,12 @@ func (s *replayState) write(ctx context.Context, openBase OpenBase, out io.Write
 		return err
 	}
 	scan.norm = norm
+	snap, err := s.integritySnapshot(scan, r)
+	if err != nil {
+		return err
+	}
+	scan.integrityErr = VerifyIntegrity(snap)
+	scan.integrityVersion = strconv.Itoa(schemaVersion(scan.features))
 	enc := jsontext.NewEncoder(out)
 	if err := enc.WriteToken(jsontext.BeginObject); err != nil {
 		return fmt.Errorf("pulumijournal: write deployment: %w", err)
@@ -856,6 +1085,63 @@ func (s *replayState) writeDeployment(
 	return nil
 }
 
+// integritySnapshot builds the deployment that the integrity check reads from the
+// link index of the first pass, which already has the rebuild and the URN
+// normalization applied. The manifest is the manifest of the output.
+func (s *replayState) integritySnapshot(scan *baseScan, r *Replayer) (*IntegrityDeployment, error) {
+	if len(scan.index) != len(scan.extras) {
+		return nil, errLinkIndex
+	}
+	manifest := newManifest(r.now(), r.cliVersion)
+	resources := make([]IntegrityResource, len(scan.index))
+	for i := range scan.index {
+		links := scan.index[i]
+		extra := scan.extras[i]
+		resources[i] = IntegrityResource{
+			URN:                  links.URN,
+			ResourceType:         extra.resourceType,
+			Custom:               extra.custom,
+			ID:                   extra.id,
+			Provider:             links.Provider,
+			Parent:               links.Parent,
+			Dependencies:         links.Dependencies,
+			PropertyDependencies: links.PropertyDependencies,
+			DeletedWith:          links.DeletedWith,
+			Delete:               extra.deleted,
+			PendingReplacement:   extra.pending,
+		}
+	}
+	snippets, err := s.integritySnippets(scan)
+	if err != nil {
+		return nil, err
+	}
+	return &IntegrityDeployment{
+		Manifest:  IntegrityManifest{Magic: manifest.Magic, Version: manifest.Version},
+		Resources: resources,
+		Snippets:  snippets,
+		Metadata:  nil,
+	}, nil
+}
+
+// integritySnippets returns the UUIDs of the snippets of the output.
+func (s *replayState) integritySnippets(scan *baseScan) ([]IntegritySnippet, error) {
+	raws, err := s.snippetsOut(scan)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]IntegritySnippet, len(raws))
+	for i, raw := range raws {
+		var view struct {
+			UUID string `json:"uuid"`
+		}
+		if err := json.Unmarshal(raw, &view); err != nil {
+			return nil, fmt.Errorf("pulumijournal: read snippet uuid: %w", err)
+		}
+		out[i] = IntegritySnippet{UUID: view.UUID}
+	}
+	return out, nil
+}
+
 // writeTail writes the members of the deployment that follow the resources:
 // the pending operations, the metadata, the snippets and the extensions.
 func (s *replayState) writeTail(enc *jsontext.Encoder, scan *baseScan) error {
@@ -864,8 +1150,12 @@ func (s *replayState) writeTail(enc *jsontext.Encoder, scan *baseScan) error {
 			return err
 		}
 	}
-	if raw := scan.members["metadata"]; present(raw) {
-		if err := writeKeyRaw(enc, "metadata", raw); err != nil {
+	metadata, merr := s.metadataOut(scan)
+	if merr != nil {
+		return merr
+	}
+	if present(metadata) {
+		if err := writeKeyRaw(enc, "metadata", metadata); err != nil {
 			return err
 		}
 	}
@@ -886,6 +1176,42 @@ func (s *replayState) writeTail(enc *jsontext.Encoder, scan *baseScan) error {
 		return writeKeyValue(enc, "extensions", ext)
 	}
 	return nil
+}
+
+// metadataOut returns the metadata member of the output. The other members of the
+// base metadata are kept. The integrity_error member is dropped when the integrity
+// check passed, and set with the schema version and the error text when it failed.
+// An empty metadata is omitted.
+func (s *replayState) metadataOut(scan *baseScan) (jsontext.Value, error) {
+	var members map[string]jsontext.Value
+	if raw := scan.members["metadata"]; present(raw) {
+		if err := json.Unmarshal(raw, &members); err != nil {
+			return nil, fmt.Errorf("pulumijournal: read base metadata: %w", err)
+		}
+	}
+	if scan.integrityErr == nil {
+		delete(members, "integrity_error")
+	} else {
+		if members == nil {
+			members = make(map[string]jsontext.Value)
+		}
+		encoded, err := marshalDeterministic(IntegrityErrorMetadata{
+			Version: scan.integrityVersion,
+			Error:   scan.integrityErr.Error(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		members["integrity_error"] = encoded
+	}
+	if len(members) == 0 {
+		return nil, nil
+	}
+	out, err := marshalDeterministic(members)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // writeResources writes the resources array: the new resources the update keeps,
@@ -937,6 +1263,9 @@ func (s *replayState) writeNewRecords(w *resourceWriter) error {
 // writeBaseRecords writes the base resources that the update keeps, in the order of the base.
 func (s *replayState) writeBaseRecords(ctx context.Context, openBase OpenBase, w *resourceWriter) error {
 	return walkBase(ctx, openBase, func(i int, raw jsontext.Value) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return fmt.Errorf("pulumijournal: replay canceled: %w", cerr)
+		}
 		idx := int64(i)
 		if _, gone := s.toDeleteInSnapshot[idx]; gone {
 			return nil

@@ -97,8 +97,14 @@ func (s *Store) GetTokenByDigest(ctx context.Context, d accesstoken.Digest) (acc
 		Owner: codec.FromAccessTokenOwnerRow(codec.AccessTokenOwnerRow{
 			ID: row.PrincipalID, Subject: row.Subject, DisplayName: row.DisplayName, Kind: row.PrincipalKind,
 			DisabledAtMs: row.PrincipalDisabledAtMs.Int64, ActiveAtMs: row.PrincipalActiveAtMs,
+			BreakGlass: row.PrincipalBreakGlass,
 		}),
 		Digest: stored,
+		Policy: policyOf(db.GetAccessTokenPolicyRow{
+			MaxLifetimeMs: row.PolicyMaxLifetimeMs, InactivityMs: row.PolicyInactivityMs,
+			DisableTokens: row.PolicyDisableTokens, DisableAccounts: row.PolicyDisableAccounts,
+			DisableBreakGlass: row.PolicyDisableBreakGlass, UpdatedAtMs: row.PolicyUpdatedAtMs,
+		}),
 	}, nil
 }
 
@@ -221,44 +227,16 @@ func (s *Store) GetPolicy(ctx context.Context) (accesstoken.Policy, error) {
 // UpdatePolicy implements accesstoken.Store. The transaction takes the advisory lock of @server first, as every audited
 // change does.
 func (s *Store) UpdatePolicy(ctx context.Context, update accesstoken.PolicyUpdate) (accesstoken.Policy, error) {
-	var stored accesstoken.Policy
-
-	err := s.inTx(ctx, func(q *db.Queries) error {
-		if err := q.LockServerAuditScope(ctx); err != nil {
-			return fmt.Errorf("lock server audit scope: %w", err)
-		}
-
+	return updateServerSetting(ctx, s, func(q *db.Queries) (accesstoken.Policy, error) {
 		row, err := q.GetAccessTokenPolicy(ctx)
 		if err != nil {
-			return fmt.Errorf("select access token policy: %w", err)
+			return accesstoken.Policy{}, fmt.Errorf("select access token policy: %w", err)
 		}
 
-		p, e, err := update(policyOf(row))
-		if err != nil {
-			return err
-		}
-
-		if err := validServerEntry(e); err != nil {
-			return err
-		}
-
-		if err := setPolicy(ctx, q, p); err != nil {
-			return err
-		}
-
-		if _, err := appendAuditEntry(ctx, q, e); err != nil {
-			return fmt.Errorf("append audit entry: %w", err)
-		}
-
-		stored = p
-
-		return nil
+		return policyOf(row), nil
+	}, update, func(q *db.Queries, p accesstoken.Policy) error {
+		return setPolicy(ctx, q, p)
 	})
-	if err != nil {
-		return accesstoken.Policy{}, err
-	}
-
-	return stored, nil
 }
 
 // policyOf maps the generated policy row to the policy.
@@ -322,7 +300,7 @@ func (s *Store) SweepInactive(
 			return err
 		}
 
-		return appendSweepEntries(ctx, q, res, entry)
+		return s.appendSweepEntries(ctx, q, res, entry)
 	})
 	if err != nil {
 		return accesstoken.SweepResult{}, err
@@ -369,7 +347,7 @@ func sweepInactive(ctx context.Context, q *db.Queries, sw accesstoken.Sweep) (ac
 
 // appendSweepEntries appends one entry for each record of res, in the
 // transaction of q.
-func appendSweepEntries(
+func (s *Store) appendSweepEntries(
 	ctx context.Context, q *db.Queries, res accesstoken.SweepResult, entry accesstoken.SweepEntryFunc,
 ) error {
 	objects := make([]string, 0, len(res.Tokens)+len(res.Principals))

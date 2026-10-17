@@ -28,16 +28,20 @@ type Store interface {
 	// GetSession returns the session with the ID id, or ErrNotFound.
 	GetSession(ctx context.Context, id string) (Session, error)
 	// GetSessionByDigest returns the session whose secret has the digest
-	// d, with its owner and the stored digest. It returns ErrNotFound when
+	// d, with its owner (its activity time and its break-glass flag too),
+	// the stored digest, the session policy and the account part of the
+	// access token policy, all from one read. It returns ErrNotFound when
 	// no session has the digest, or when the owner was deleted. An ended
 	// session comes back as it is, and a disabled owner comes back with
 	// its disable time: the caller decides.
 	GetSessionByDigest(ctx context.Context, d Digest) (Match, error)
 	// TouchSession sets the last use of the session id to at, when the
-	// session has not ended and its last use is at or before at minus
-	// every. A touch writes no audit entry. It returns nil when the session
-	// does not exist, ended, or was used recently.
-	TouchSession(ctx context.Context, id string, at time.Time, every time.Duration) error
+	// session has not ended, is not idle or expired under l at that time
+	// (see Limits.ActiveAfter), and its last use is at or before at minus
+	// every.
+	// A touch writes no audit entry. It returns nil when the session does
+	// not exist, ended, is idle or expired, or was used recently.
+	TouchSession(ctx context.Context, id string, at time.Time, every time.Duration, l Limits) error
 	// EndSession sets the end time of the session id to e.At and its end
 	// reason to reason, and appends e, in one transaction. It returns
 	// ErrInvalid for a reason that ValidEndReason refuses, ErrNotFound when

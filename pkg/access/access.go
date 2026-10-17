@@ -62,6 +62,10 @@ var (
 	// ErrEscalation reports a grant that gives more than the granter holds
 	// on its object.
 	ErrEscalation = errors.New("grant gives more than the granter holds")
+	// ErrUnitMoved reports a grant or a revoke on a unit that moved to
+	// another collection after the Service read the collection of the unit.
+	// The request can be sent again.
+	ErrUnitMoved = errors.New("the unit moved to another collection")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
 )
@@ -99,14 +103,18 @@ var families = map[identity.Action]Family{
 	identity.ActionServerReadAudit:   FamilyOperator,
 	// The installation settings (ADR 63); RFC 68 decides their API.
 	identity.ActionServerManageSettings: FamilyOperator,
+	// A change of the audit chain. Off also needs the administration
+	// action below.
+	identity.ActionServerSetAuditChain: FamilyOperator,
 
-	identity.ActionServerReadPrincipals:   FamilyAdministration,
-	identity.ActionServerManagePrincipals: FamilyAdministration,
-	identity.ActionServerManageGroups:     FamilyAdministration,
-	identity.ActionServerManageRoles:      FamilyAdministration,
-	identity.ActionServerManageAccess:     FamilyAdministration,
-	identity.ActionServerCreateNamespace:  FamilyAdministration,
-	identity.ActionServerReadAccess:       FamilyAdministration,
+	identity.ActionServerReadPrincipals:    FamilyAdministration,
+	identity.ActionServerManagePrincipals:  FamilyAdministration,
+	identity.ActionServerManageGroups:      FamilyAdministration,
+	identity.ActionServerManageRoles:       FamilyAdministration,
+	identity.ActionServerManageAccess:      FamilyAdministration,
+	identity.ActionServerCreateNamespace:   FamilyAdministration,
+	identity.ActionServerReadAccess:        FamilyAdministration,
+	identity.ActionServerDisableAuditChain: FamilyAdministration,
 	// The access tokens of other principals (ADR 53, decision 3).
 	identity.ActionServerReadTokens:   FamilyAdministration,
 	identity.ActionServerManageTokens: FamilyAdministration,
@@ -114,37 +122,41 @@ var families = map[identity.Action]Family{
 	// family. No route declares it.
 	identity.ActionServerManageServiceTokens:  FamilyAdministration, //nolint:staticcheck // Kept classified for stored roles.
 	identity.ActionServerManageTokenPolicy:    FamilyAdministration,
+	identity.ActionServerManageSignIn:         FamilyAdministration,
+	identity.ActionServerRestoreAccess:        FamilyAdministration,
 	identity.ActionNamespaceManageIPAllowlist: FamilyAdministration,
 
 	identity.ActionPrincipalManageTokens: FamilyDelegation,
 
-	identity.ActionNamespaceRead:          FamilyData,
-	identity.ActionNamespaceAdmin:         FamilyData,
-	identity.ActionNamespaceReadAudit:     FamilyData,
-	identity.ActionNamespaceSetOverrides:  FamilyData,
-	identity.ActionNamespaceManageAccess:  FamilyData,
-	identity.ActionNamespaceReadAccess:    FamilyData,
-	identity.ActionCollectionRead:         FamilyData,
-	identity.ActionCollectionCreate:       FamilyData,
-	identity.ActionCollectionUpdate:       FamilyData,
-	identity.ActionCollectionDelete:       FamilyData,
-	identity.ActionCollectionCreateUnit:   FamilyData,
-	identity.ActionCollectionManageAccess: FamilyData,
-	identity.ActionCollectionReadAccess:   FamilyData,
-	identity.ActionUnitRead:               FamilyData,
-	identity.ActionUnitWrite:              FamilyData,
-	identity.ActionUnitManage:             FamilyData,
-	identity.ActionUnitEncrypt:            FamilyData,
-	identity.ActionUnitDecrypt:            FamilyData,
-	identity.ActionUnitWriteForced:        FamilyData,
-	identity.ActionUnitWriteUnlocked:      FamilyData,
-	identity.ActionUnitSetOverrides:       FamilyData,
-	identity.ActionUnitReadSecrets:        FamilyData,
-	identity.ActionUnitMove:               FamilyData,
-	identity.ActionUnitManageAccess:       FamilyData,
-	identity.ActionUnitRestore:            FamilyData,
-	identity.ActionUnitPurge:              FamilyData,
-	identity.ActionUnitReadAccess:         FamilyData,
+	identity.ActionNamespaceRead:                  FamilyData,
+	identity.ActionNamespaceAdmin:                 FamilyData,
+	identity.ActionNamespaceReadAudit:             FamilyData,
+	identity.ActionNamespaceSetOverrides:          FamilyData,
+	identity.ActionNamespaceManageAccess:          FamilyData,
+	identity.ActionNamespaceReadAccess:            FamilyData,
+	identity.ActionNamespaceManagePrincipals:      FamilyData,
+	identity.ActionNamespaceManagePrincipalTokens: FamilyData,
+	identity.ActionCollectionRead:                 FamilyData,
+	identity.ActionCollectionCreate:               FamilyData,
+	identity.ActionCollectionUpdate:               FamilyData,
+	identity.ActionCollectionDelete:               FamilyData,
+	identity.ActionCollectionCreateUnit:           FamilyData,
+	identity.ActionCollectionManageAccess:         FamilyData,
+	identity.ActionCollectionReadAccess:           FamilyData,
+	identity.ActionUnitRead:                       FamilyData,
+	identity.ActionUnitWrite:                      FamilyData,
+	identity.ActionUnitManage:                     FamilyData,
+	identity.ActionUnitEncrypt:                    FamilyData,
+	identity.ActionUnitDecrypt:                    FamilyData,
+	identity.ActionUnitWriteForced:                FamilyData,
+	identity.ActionUnitWriteUnlocked:              FamilyData,
+	identity.ActionUnitSetOverrides:               FamilyData,
+	identity.ActionUnitReadSecrets:                FamilyData,
+	identity.ActionUnitMove:                       FamilyData,
+	identity.ActionUnitManageAccess:               FamilyData,
+	identity.ActionUnitRestore:                    FamilyData,
+	identity.ActionUnitPurge:                      FamilyData,
+	identity.ActionUnitReadAccess:                 FamilyData,
 
 	identity.ActionCallerRead:     FamilySelf,
 	identity.ActionRoleRead:       FamilySelf,
@@ -348,19 +360,23 @@ type ListedGrant struct {
 type GrantStore interface {
 	// CreateGrant persists g. It returns ErrAlreadyExists when a current
 	// grant of the same subject, role and object exists, or when the ID is
-	// taken, and ErrInvalid for an object that takes no grant or a unit with
-	// no stable ID. It returns ErrNotFound when the record of the subject,
+	// taken, and ErrInvalid for an object that takes no grant, a unit with
+	// no stable ID, or a subject that is a principal of a namespace and an
+	// object outside that namespace. It reads the namespace of the subject
+	// in its own transaction. It returns ErrNotFound when the record of the subject,
 	// or the custom role, has ended: the write reads them in its own
 	// transaction, so a delete that commits first wins. A subject or a role
-	// with no record at all is the Service's to check.
-	CreateGrant(ctx context.Context, g Grant, fence namespace.Fence, e audit.Entry) error
+	// with no record at all is the Service's to check. It runs check, when
+	// it is not nil, as a GrantCheck runs, and returns its error.
+	CreateGrant(ctx context.Context, g Grant, fence namespace.Fence, e audit.Entry, check GrantCheck) error
 	// GetGrant returns the current grant with the ID id, or ErrNotFound.
 	GetGrant(ctx context.Context, id string) (Grant, error)
 	// RevokeGrant ends the current grant with the ID id at e.At. fence
 	// names the namespace of the grant (the zero fence for the
 	// installation). It returns ErrNotFound when no such grant exists in
-	// that namespace.
-	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
+	// that namespace. It runs check, when it is not nil, as a GrantCheck
+	// runs, and returns its error.
+	RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check GrantCheck) error
 	// ListGrantsOn returns one page of the current grants on obj that
 	// match the filters of q, ordered by subject then role, each with its
 	// holder, and the count of every current grant on obj that matches the
@@ -379,7 +395,10 @@ type GrantStore interface {
 	// CreateNamespaceWithGrant persists ns, g and e in one transaction: the
 	// creator of a namespace holds the namespace-admin role on it from the
 	// start. A grant with no ID stores the namespace and the entry alone. It
-	// returns namespace.ErrAlreadyExists when the name is taken.
+	// returns namespace.ErrAlreadyExists when the name is taken. With a grant
+	// it keeps the entry e in the scope audit.ServerScope and appends the same
+	// grant entry in the chain of the new namespace, so the chain starts with
+	// the grant of its creator.
 	CreateNamespaceWithGrant(ctx context.Context, ns namespace.Namespace, g Grant, e audit.Entry) error
 }
 
@@ -398,6 +417,36 @@ type GrantLookups interface {
 	// role with the ID role on a principal.
 	RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error)
 }
+
+// GrantReads reads what decides the actions that a principal holds, and
+// where a role is granted, in the transaction of a write. A store gives it
+// to a GrantCheck. Each method reads as the method of the same name of
+// Callers, GrantStore, RoleStore or GrantLookups does.
+type GrantReads interface {
+	Callers
+	GrantsOn(ctx context.Context, subjects []Subject, objects []identity.Object) ([]Grant, error)
+	GrantsOf(ctx context.Context, subject Subject) ([]Grant, error)
+	GetRoles(ctx context.Context, ids []string) ([]Role, error)
+	RoleGrantedBelowInstallation(ctx context.Context, role string) (bool, error)
+	RoleGrantedOnPrincipal(ctx context.Context, role string) (bool, error)
+	// UnitCollectionID returns the stable ID of the collection that the
+	// unit with the stable ID unitID is in now, and false when the unit is
+	// in no collection or does not exist. A store that keeps the
+	// collections of units in another place must answer it from the same
+	// source as the UnitCollections port of the Authorizer.
+	UnitCollectionID(ctx context.Context, unitID string) (string, bool, error)
+}
+
+// GrantCheck is a rule that a write of a grant or of a role runs in its own
+// transaction, before the write changes anything. The store runs it after
+// the write holds its locks, after the fence check: each write that can
+// change the result of the check (a grant, a revoke, a role, a membership
+// or a principal) takes one of those locks too. r reads in that
+// transaction: a change that committed before the check is visible to it,
+// and a change that starts after the check waits until the write ends. An
+// error refuses the write: the write changes nothing and returns that
+// error.
+type GrantCheck func(ctx context.Context, r GrantReads) error
 
 // RoleStore keeps the custom roles. The built-in roles live in code. The
 // writes take an audit entry as the writes of GrantStore do. A delete ends
@@ -418,8 +467,9 @@ type RoleStore interface {
 	// UpdateRole replaces the name, the description, the actions and the
 	// update time of the custom role with the ID r.ID. It returns
 	// ErrNotFound when no such role exists, and ErrAlreadyExists when
-	// another role has the name without regard to case.
-	UpdateRole(ctx context.Context, r Role, e audit.Entry) error
+	// another role has the name without regard to case. It runs check,
+	// when it is not nil, as a GrantCheck runs, and returns its error.
+	UpdateRole(ctx context.Context, r Role, e audit.Entry, check GrantCheck) error
 	// DeleteRole ends the custom role with the ID id at e.At. It returns
 	// ErrNotFound when no such role exists, and ErrInUse when a current
 	// grant holds it.

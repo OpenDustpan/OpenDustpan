@@ -251,8 +251,8 @@ func checkDeltaCheckpoints(t *testing.T, cli e2e.Install, store e2e.Store) {
 	off.Label += "-delta-off"
 	offEnv := e2e.NewEnvWithDeltaCutoff(ctx, t, off, store, 0)
 
-	onExport := deltaUp(ctx, t, onEnv)
-	offExport := deltaUp(ctx, t, offEnv)
+	onExport := pairedUp(ctx, t, onEnv)
+	offExport := pairedUp(ctx, t, offEnv)
 
 	onCanonical, offCanonical := canonicalExport(t, onExport), canonicalExport(t, offExport)
 	if onCanonical != offCanonical {
@@ -285,10 +285,10 @@ func checkDeltaCheckpoints(t *testing.T, cli e2e.Install, store e2e.Store) {
 	writeReport(t, e2e.NewRun(offEnv))
 }
 
-// deltaUp logs in, creates the stack and the other stack its program
+// pairedUp logs in, creates the stack and the other stack its program
 // references, runs up and returns the stack export. It carries no secrets,
-// so both delta runs hold the same state.
-func deltaUp(ctx context.Context, t *testing.T, env *e2e.Env) string {
+// so both runs of a pair hold the same state.
+func pairedUp(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	t.Helper()
 
 	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName)
@@ -302,13 +302,12 @@ func deltaUp(ctx context.Context, t *testing.T, env *e2e.Env) string {
 	return env.Step(ctx, t, step("stack export", nil, "stack", "export")).Stdout
 }
 
-// providerIDPattern matches the random IDs the engine assigns to the
-// default provider on every up. Each delta run mints its own, so the
-// export comparison ignores them.
+// providerIDPattern matches the random ID the engine assigns to the
+// default provider on every up.
 var providerIDPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}`)
 
 // canonicalExport returns the stack export with the volatile fields
-// removed: the two delta runs finish at different times on different
+// normalized: the paired runs finish at different times on different
 // servers, so the manifest time, the service URL and the resource
 // timestamps always differ, and each up mints a new default provider ID.
 // What must match is the state itself.
@@ -324,11 +323,17 @@ func canonicalExport(t *testing.T, raw string) string {
 		t.Fatalf("decode stack export: %v", err)
 	}
 
-	delete(doc.Deployment, "manifest")
+	if manifest, ok := doc.Deployment["manifest"].(map[string]any); ok {
+		delete(manifest, "time")
+	}
 
 	if providers, ok := doc.Deployment["secrets_providers"].(map[string]any); ok {
-		delete(providers, "state")
+		if state, ok := providers["state"].(map[string]any); ok {
+			delete(state, "url")
+		}
 	}
+
+	providerIDs := canonicalProviderIDs(t, doc.Deployment)
 
 	if resources, ok := doc.Deployment["resources"].([]any); ok {
 		for _, res := range resources {
@@ -344,7 +349,62 @@ func canonicalExport(t *testing.T, raw string) string {
 		t.Fatalf("encode stack export: %v", err)
 	}
 
-	return providerIDPattern.ReplaceAllString(string(canonical), "provider-id")
+	out := string(canonical)
+
+	for _, id := range providerIDs {
+		out = strings.ReplaceAll(out, id, "provider-id")
+	}
+
+	return out
+}
+
+// canonicalProviderIDs returns the IDs of the default provider resources in
+// the deployment. Each up mints a new one, so the export comparison replaces
+// only these IDs and keeps every other ID. It fails the test when the
+// deployment holds no default provider ID, so a missing provider cannot
+// pass silently.
+func canonicalProviderIDs(t *testing.T, deployment map[string]any) []string {
+	t.Helper()
+
+	resources, ok := deployment["resources"].([]any)
+	if !ok {
+		t.Fatal("canonical export holds no resources")
+	}
+
+	var ids []string
+
+	for _, res := range resources {
+		r, ok := res.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		typ, ok := r["type"].(string)
+		if !ok {
+			continue
+		}
+
+		if !strings.HasPrefix(typ, "pulumi:providers:") {
+			continue
+		}
+
+		id, ok := r["id"].(string)
+		if !ok {
+			continue
+		}
+
+		if !providerIDPattern.MatchString(id) {
+			continue
+		}
+
+		ids = append(ids, id)
+	}
+
+	if len(ids) == 0 {
+		t.Fatal("canonical export holds no default provider ID")
+	}
+
+	return ids
 }
 
 // clipCanonical shortens a canonical export for the failure report.
@@ -1313,8 +1373,8 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 		env.Step(ctx, t, s)
 	}
 
-	// The server cannot record resources through routes that later issues
-	// own, so the test seeds a checkpoint with one managed resource.
+	// The scenario has no provider that makes real resources, so the test
+	// seeds a checkpoint with one managed resource through the update routes.
 	env.SeedResources(ctx, t, "resourced")
 
 	for _, s := range pulumiResourcedRemoveSteps(env, resourced, resourcedPath) {
@@ -3435,6 +3495,7 @@ func exportHidesSecrets(r e2e.Result) error {
 // auditListItem is one entry of GET /api/audit/entries, with the fields
 // the check below needs.
 type auditListItem struct {
+	Sequence   int64  `json:"sequence"`
 	Subject    string `json:"subject"`
 	Action     string `json:"action"`
 	Object     string `json:"object"`
@@ -3566,7 +3627,9 @@ func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string, 
 	entries := readAuditEntries(ctx, t, env, org)
 	t.Logf("audit entries of %q: %d", org, len(entries))
 
-	checkRevealFields(t, findRevealEntry(t, entries))
+	reveal := findRevealEntry(t, entries)
+	checkRevealFields(t, reveal)
+	checkAuditEntryRead(ctx, t, env, org, reveal)
 	checkUnitObjectIDs(t, entries)
 
 	// Each decrypt audit call writes exactly one reveal entry, and nothing
@@ -3586,6 +3649,30 @@ func checkAuditLog(ctx context.Context, t *testing.T, env *e2e.Env, org string, 
 	}
 
 	checkAuditChain(ctx, t, env, org)
+}
+
+// checkAuditEntryRead proves that GET /api/audit/entries/{sequence} reads
+// want, an entry of the list of org, by its sequence: the same action,
+// object and hash.
+func checkAuditEntryRead(ctx context.Context, t *testing.T, env *e2e.Env, org string, want *auditListItem) {
+	t.Helper()
+
+	path := "/api/audit/entries/" + strconv.FormatInt(want.Sequence, 10) + "?organization=" + url.QueryEscape(org)
+
+	status, body, err := env.APIStatus(ctx, http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("GET %s answers %d, want %d (%v, %s)", path, status, http.StatusOK, err, body)
+	}
+
+	var got auditListItem
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("decode %s: %v (%s)", path, err, body)
+	}
+
+	if got.Sequence != want.Sequence || got.Action != want.Action || got.Object != want.Object ||
+		got.Hash != want.Hash {
+		t.Fatalf("entry %d of %q = %+v, want %+v", want.Sequence, org, got, *want)
+	}
 }
 
 // findRevealEntry returns the first entry of the kind reveal with the action
@@ -5819,7 +5906,7 @@ func checkPlanLockedByAnother(_ context.Context, env *e2e.Env) func(e2e.Result) 
 
 // checkTofuInit proves that init got past service discovery and created the
 // workspace: the CLI called discovery, ping and the entitlement set in order,
-// and a direct store call sees one inventory entry for the workspace.
+// and the inventory API lists one unit for the workspace.
 func checkTofuInit(ctx context.Context, env *e2e.Env) func(e2e.Result) error {
 	return func(r e2e.Result) error {
 		if err := checkTofuDiscovery(env)(r); err != nil {
@@ -5838,12 +5925,8 @@ func checkTofuInit(ctx context.Context, env *e2e.Env) func(e2e.Result) error {
 		entry := entries[0]
 		want := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace
 
-		if entry.Reference() != want || entry.Tool != "opentofu" || entry.Name != e2e.Workspace {
+		if entry.Reference != want || entry.Tool != "OpenTofu" || entry.Name != e2e.Workspace {
 			return fmt.Errorf("%w: inventory entry %+v, want reference %q", errUnexpected, entry, want)
-		}
-
-		if entry.UnitID == "" || !strings.HasPrefix(entry.UnitID, "ws-") {
-			return fmt.Errorf("%w: inventory unit id %q, want the ws- workspace id", errUnexpected, entry.UnitID)
 		}
 
 		return nil
@@ -6449,7 +6532,7 @@ func tofuRestoreScenario(t *testing.T, env *e2e.Env) {
 		t.Fatalf("inventory holds %d entries, want one for the workspace", len(entries))
 	}
 
-	if want := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace; entries[0].Reference() != want {
+	if want := "opentofu:" + e2e.Namespace + "/" + e2e.Workspace; entries[0].Reference != want {
 		t.Fatalf("inventory entry %+v, want reference %q", entries[0], want)
 	}
 
@@ -8626,6 +8709,38 @@ func tofuStatePushScenario(t *testing.T, env *e2e.Env) {
 		),
 	)
 	logPushSide(t, env, "state push other lineage")
+
+	// A forced push of another lineage reaches the server: the CLI locks,
+	// the create answers 422, and the CLI leaves the lock behind. The 422
+	// names the force-unlock command with the lock ID, the CLI shows it,
+	// and force-unlock clears the lock so the next apply works.
+	forcedOtherPath := writePushFile(
+		t,
+		"other-force.tfstate",
+		editedState(t, pulled.Stdout, current.Serial+100, "00000000-0000-0000-0000-000000000000"),
+	)
+	lockID := e2e.Namespace + "/" + e2e.Workspace
+
+	env.Step(
+		ctx,
+		t,
+		failStep(
+			"state push other lineage forced",
+			checkForcedPushNamesUnlock(env, "state push other lineage forced", lineageMismatchDetail, lockID),
+			"state",
+			"push",
+			"-force",
+			forcedOtherPath,
+		),
+	)
+	logPushSide(t, env, "state push other lineage forced")
+
+	env.Step(ctx, t, step("force-unlock after refused push", nil, "force-unlock", "-force", lockID))
+	env.Step(
+		ctx,
+		t,
+		step("apply after force-unlock", nil, "apply", "-input=false", "-auto-approve", "-no-color"),
+	)
 }
 
 // pulledStateDoc decodes the serial and lineage of a pulled state document.
@@ -8739,6 +8854,66 @@ func checkPushRejected(env *e2e.Env, step, serverDetail string) func(e2e.Result)
 
 		return checkServerRefusal(env, step, out, serverDetail)
 	}
+}
+
+// checkForcedPushNamesUnlock proves a forced push of another lineage reached
+// the server and names the way out: the CLI output holds the lineage detail
+// and the force-unlock command with the lock ID, and the recorded create
+// answers 422 with both in its JSON:API error document.
+func checkForcedPushNamesUnlock(
+	env *e2e.Env, step, serverDetail, lockID string,
+) func(e2e.Result) error {
+	return func(r e2e.Result) error {
+		out := flatDiagnostics(r.Stdout + r.Stderr)
+		wantUnlock := "tofu force-unlock " + lockID
+
+		if err := checkServerRefusal(env, step, out, serverDetail); err != nil {
+			return err
+		}
+
+		if !strings.Contains(out, wantUnlock) {
+			return fmt.Errorf("%w: %s output lacks %q: %s", errUnexpected, step, wantUnlock, out)
+		}
+
+		return checkForcedCreateHasUnlock(env, step, wantUnlock)
+	}
+}
+
+// diagnosticDecoration matches the color codes and the box characters that
+// newer OpenTofu versions put around an error message.
+var diagnosticDecoration = regexp.MustCompile("\x1b\\[[0-9;]*m|[│╷╵]")
+
+// flatDiagnostics removes the color codes and the box characters from CLI
+// output and joins the words with one space. Newer OpenTofu versions wrap a
+// long error message across lines, so a phrase can hold a line break.
+func flatDiagnostics(out string) string {
+	return strings.Join(strings.Fields(diagnosticDecoration.ReplaceAllString(out, " ")), " ")
+}
+
+// checkForcedCreateHasUnlock proves the recorded create of step holds the
+// force-unlock command with the lock ID in its 422 error document.
+func checkForcedCreateHasUnlock(env *e2e.Env, step, wantUnlock string) error {
+	entries := env.Recorder.Entries()
+	for i := range entries {
+		e := &entries[i]
+		if e.Step != step || e.Method != http.MethodPost || !strings.HasSuffix(e.Path, "/state-versions") {
+			continue
+		}
+
+		if !strings.Contains(e.ResponseBody, wantUnlock) {
+			return fmt.Errorf(
+				"%w: POST state-versions during %q lacks %q: %s",
+				errUnexpected,
+				step,
+				wantUnlock,
+				e.ResponseBody,
+			)
+		}
+
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s reached no state-versions route", errUnexpected, step)
 }
 
 // checkClientRefusal proves the CLI stopped the push itself with its own
@@ -10914,10 +11089,13 @@ func checkNoSourceWrite(t *testing.T, pair *e2e.Pair, srcWS, step string) {
 
 // TestUpgradeCheck proves `opendustpan upgrade check` with RunBinary against
 // the running binary server: on the migrated database the verdict is
-// `up to date` with exit 0, and on the newer, old and fresh states reached by
-// editing schema_migrations while the server runs the verdicts of ADR 33 and
-// the exit codes match, with the command writing nothing to the server
-// database. It runs only with E2E_SERVER=binary, on every store under test.
+// `up to date` with exit 0, and on the newer, before-baseline and fresh states the
+// verdicts and the exit codes match, with the command writing nothing to the
+// server database. On SQLite the newer-schema case and the restore edits stop
+// the server before they open the file and start it again after. The old
+// and fresh cases edit the file while the server runs, because the check
+// needs a running server on a schema behind the binary. It runs only with
+// E2E_SERVER=binary, on every store under test.
 func TestUpgradeCheck(t *testing.T) {
 	t.Parallel()
 
@@ -10953,12 +11131,22 @@ func TestUpgradeCheck(t *testing.T) {
 	}
 }
 
+// upgradeReleasedClient is the release version stamped into the client
+// binary of the newer-schema case. The newer schema sets upgradeSchemaMinimum
+// above it, so this client answers `cannot start`.
+const upgradeReleasedClient = "v0.1.0"
+
+// upgradeSchemaMinimum is the minimum binary version of the future migration
+// that the newer-schema case records.
+const upgradeSchemaMinimum = "v0.2.0"
+
 // runUpgradeCheckOnStore runs the upgrade check cases on one store through
 // the running binary server: the migrated database is up to date, and the
-// newer, old and fresh states are reached by editing schema_migrations while
-// the server runs, each through `upgrade check --server` with the environment
-// token. The cases run in order on one server and restore its rows, so they
-// never run in parallel.
+// newer, before-baseline and fresh states are reached by editing schema_migrations, each
+// through `upgrade check --server` with the environment token. On SQLite each
+// edit stops the server before it opens the file and starts it again after.
+// The cases run in order on one server and restore its rows, so they never
+// run in parallel.
 func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	t.Helper()
 
@@ -10968,10 +11156,11 @@ func runUpgradeCheckOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	ctx := t.Context()
 	env := e2e.NewEnv(ctx, t, cli, store)
+	released := e2e.BuildBinaryWithVersion(ctx, t, t.TempDir(), upgradeReleasedClient)
 
 	checkUpgradeUpToDateServer(ctx, t, env, store)
-	checkUpgradeNewerServer(ctx, t, env, store)
-	checkUpgradeOldServer(ctx, t, env, store)
+	checkUpgradeNewerServer(ctx, t, env, store, released)
+	checkUpgradeBeforeBaselineServer(ctx, t, env, store)
 	checkUpgradeFreshServer(ctx, t, env, store)
 }
 
@@ -10985,9 +11174,9 @@ func runUpgradeCheckServer(ctx context.Context, t *testing.T, env *e2e.Env) e2e.
 	return env.RunBinary(ctx, t, "upgrade", "check", "--server", env.URL, "--ca-file", env.CABundle())
 }
 
-// serverMigrationRow is one schema_migrations row the test edits while the
-// server runs: the direct database access is the test setup, never the
-// command, which only calls the upgrade check route.
+// serverMigrationRow is one schema_migrations row the test edits: the direct
+// database access is the test setup, never the command, which only calls the
+// upgrade check route. On SQLite the server is stopped during the edit.
 type serverMigrationRow struct {
 	version int64
 	name    string
@@ -11027,8 +11216,9 @@ func sqliteServerPath(t *testing.T, env *e2e.Env) string {
 	return path
 }
 
-// openServerSQLite opens a direct handle on the SQLite file at path, so the
-// test can edit schema_migrations while the server runs.
+// openServerSQLite opens a direct handle on the SQLite file at path. The
+// caller stops the server before it opens the file, except in the old and
+// fresh cases, which edit the file while the server runs.
 func openServerSQLite(t *testing.T, path string) *sql.DB {
 	t.Helper()
 
@@ -11041,7 +11231,7 @@ func openServerSQLite(t *testing.T, path string) *sql.DB {
 }
 
 // readServerSQLiteRows returns every schema_migrations row ordered by
-// version.
+// version. The caller stops the server first.
 func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serverMigrationRow {
 	t.Helper()
 
@@ -11083,7 +11273,8 @@ func readServerSQLiteRows(ctx context.Context, t *testing.T, path string) []serv
 	return out
 }
 
-// execServerSQLite runs one write on the SQLite file at path.
+// execServerSQLite runs one write on the SQLite file at path. The caller
+// stops the server first.
 func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args ...any) {
 	t.Helper()
 
@@ -11101,7 +11292,7 @@ func execServerSQLite(ctx context.Context, t *testing.T, path, stmt string, args
 }
 
 // snapshotServerSQLite returns the schema_migrations rows with the table
-// names of the SQLite file at path.
+// names of the SQLite file at path. The caller stops the server first.
 func snapshotServerSQLite(ctx context.Context, t *testing.T, path string) serverSchemaSnapshot {
 	t.Helper()
 
@@ -11193,13 +11384,38 @@ func snapshotServerSQLiteVersions(ctx context.Context, t *testing.T, conn *sql.D
 	return versions
 }
 
+// stopServerForSQLiteFile stops the binary server of env when store is
+// SQLite, so the test can open the SQLite file. On other stores it does
+// nothing.
+func stopServerForSQLiteFile(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StoreSQLite {
+		env.StopServer(ctx, t)
+	}
+}
+
+// startServerForSQLiteFile starts the binary server of env again when store
+// is SQLite. On other stores it does nothing.
+func startServerForSQLiteFile(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StoreSQLite {
+		env.StartServer(ctx, t)
+	}
+}
+
 // snapshotServerDB returns the rows and tables of the server database of env
-// on store.
+// on store. On SQLite it stops the server before it opens the file and
+// starts it again after, so the file is never open while the server runs.
 func snapshotServerDB(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) serverSchemaSnapshot {
 	t.Helper()
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		return snapshotServerSQLite(ctx, t, sqliteServerPath(t, env))
 	case e2e.StorePostgres:
 		got := snapshotPostgres(ctx, t, env.DatabaseURL(t))
@@ -11215,12 +11431,16 @@ func snapshotServerDB(ctx context.Context, t *testing.T, env *e2e.Env, store e2e
 
 // insertServerFuture records one version above the newest in the server
 // database of env on store, so upgrade check sees a newer database. It
-// returns the future version.
-func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) int64 {
+// returns the future version. On SQLite it stops the server before it opens
+// the file and starts it again after.
+func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, minimum string) int64 {
 	t.Helper()
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		path := sqliteServerPath(t, env)
 		rows := readServerSQLiteRows(ctx, t, path)
 
@@ -11232,8 +11452,8 @@ func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e
 
 		future := newest + 1
 		execServerSQLite(ctx, t, path,
-			`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`,
-			future, fmt.Sprintf("%04d_future.sql", future))
+			`INSERT INTO schema_migrations (version, name, min_binary_version) VALUES (?, ?, ?)`,
+			future, fmt.Sprintf("%04d_future.sql", future), minimum)
 
 		return future
 	case e2e.StorePostgres:
@@ -11259,9 +11479,9 @@ func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e
 		future := newest + 1
 		name := fmt.Sprintf("%04d_future.sql", future)
 
-		const recordFuture = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
+		const recordFuture = `INSERT INTO schema_migrations (version, name, min_binary_version) VALUES ($1, $2, $3)`
 
-		if _, execErr := conn.Exec(ctx, recordFuture, future, name); execErr != nil {
+		if _, execErr := conn.Exec(ctx, recordFuture, future, name, minimum); execErr != nil {
 			t.Fatalf("record future version: %v", execErr)
 		}
 
@@ -11274,12 +11494,16 @@ func insertServerFuture(ctx context.Context, t *testing.T, env *e2e.Env, store e
 }
 
 // deleteServerVersion removes one schema_migrations row from the server
-// database of env on store.
+// database of env on store. On SQLite it stops the server before it opens the
+// file and starts it again after.
 func deleteServerVersion(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, version int64) {
 	t.Helper()
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		execServerSQLite(ctx, t, sqliteServerPath(t, env),
 			`DELETE FROM schema_migrations WHERE version = ?`, version)
 	case e2e.StorePostgres:
@@ -11304,7 +11528,8 @@ func deleteServerVersion(ctx context.Context, t *testing.T, env *e2e.Env, store 
 
 // trimServerVersions removes every schema_migrations row above keep from the
 // server database of env on store and returns the removed rows, so the caller
-// restores them after the check.
+// restores them after the check. On SQLite it stops the server before it
+// opens the file and starts it again after.
 func trimServerVersions(
 	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, keep int64,
 ) []serverMigrationRow {
@@ -11312,6 +11537,9 @@ func trimServerVersions(
 
 	switch store {
 	case e2e.StoreSQLite:
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		return trimServerSQLiteVersions(ctx, t, env, keep)
 	case e2e.StorePostgres:
 		return trimServerPostgresVersions(ctx, t, env, keep)
@@ -11324,7 +11552,8 @@ func trimServerVersions(
 
 // trimServerSQLiteVersions removes every schema_migrations row above keep
 // from the SQLite file the server of env serves and returns the removed
-// rows.
+// rows. The caller stops the server first, except in the old and fresh
+// cases, which edit the file while the server runs.
 func trimServerSQLiteVersions(
 	ctx context.Context, t *testing.T, env *e2e.Env, keep int64,
 ) []serverMigrationRow {
@@ -11399,7 +11628,9 @@ func trimServerPostgresVersions(
 }
 
 // restoreServerVersions inserts rows back into the server database of env on
-// store.
+// store. On SQLite it stops the server before it opens the file and starts it
+// again after. With no rows it does nothing, so it leaves a running server
+// alone.
 func restoreServerVersions(
 	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, rows []serverMigrationRow,
 ) {
@@ -11407,6 +11638,13 @@ func restoreServerVersions(
 
 	switch store {
 	case e2e.StoreSQLite:
+		if len(rows) == 0 {
+			return
+		}
+
+		stopServerForSQLiteFile(ctx, t, env, store)
+		defer startServerForSQLiteFile(ctx, t, env, store)
+
 		path := sqliteServerPath(t, env)
 
 		for _, row := range rows {
@@ -11466,22 +11704,40 @@ func checkUpgradeUpToDateServer(ctx context.Context, t *testing.T, env *e2e.Env,
 	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
 }
 
-// checkUpgradeNewerServer proves upgrade check with one extra version row in
-// the server database: it exits 1 with `cannot start` and writes nothing. It
-// removes the row after the check.
-func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+// checkUpgradeNewerServer proves upgrade check on a schema that records a
+// migration the binaries do not embed, with a minimum binary version. The
+// suite's dev build counts as newer than every release: it answers `up to
+// date` and exits 0. A client stamped below the minimum answers `cannot
+// start`, exits 1 and names both versions. Neither writes anything. The
+// test removes the future row after the check.
+func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store, released string) {
 	t.Helper()
 
 	pristine := snapshotServerDB(ctx, t, env, store)
-	future := insertServerFuture(ctx, t, env, store)
+	future := insertServerFuture(ctx, t, env, store, upgradeSchemaMinimum)
 
 	before := snapshotServerDB(ctx, t, env, store)
-	res := runUpgradeCheckServer(ctx, t, env)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: false})
 
-	database, binary := parseUpgradeVersions(t, res.Stdout)
+	dev := runUpgradeCheckServer(ctx, t, env)
+	checkUpgradeResult(t, dev, wantUpgradeResult{verdict: "up to date", exitCode: 0, pending: false})
+
+	if want := "schema minimum binary version: " + upgradeSchemaMinimum; !strings.Contains(dev.Stdout, want) {
+		t.Fatalf("upgrade check output lacks %q:\n%s", want, dev.Stdout)
+	}
+
+	database, binary := parseUpgradeVersions(t, dev.Stdout)
 	if database <= binary {
-		t.Fatalf("newer database %d is not above binary %d:\n%s", database, binary, res.Stdout)
+		t.Fatalf("newer database %d is not above binary %d:\n%s", database, binary, dev.Stdout)
+	}
+
+	below := env.RunBinaryPath(ctx, t, released,
+		"upgrade", "check", "--server", env.URL, "--ca-file", env.CABundle())
+	checkUpgradeResult(t, below, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: false})
+
+	for _, want := range []string{upgradeReleasedClient, upgradeSchemaMinimum} {
+		if !strings.Contains(below.Stderr, want) {
+			t.Fatalf("upgrade check below the minimum does not name %s:\n%s%s", want, below.Stdout, below.Stderr)
+		}
 	}
 
 	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
@@ -11491,35 +11747,103 @@ func checkUpgradeNewerServer(ctx context.Context, t *testing.T, env *e2e.Env, st
 	checkRestoredServerDB(ctx, t, env, store, pristine)
 }
 
-// checkUpgradeOldServer proves upgrade check with only versions 1 through
-// oldFixtureMaxVersion in the server database: it exits 0 with `upgrade
-// possible` and writes nothing. It restores the removed rows after the
-// check.
-func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
+// checkUpgradeBeforeBaselineServer proves upgrade check with only a version
+// from before the baseline in the server database: it exits 1 with `cannot
+// start`, names the baseline and writes nothing. It restores the removed rows
+// after the check.
+func checkUpgradeBeforeBaselineServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
 	t.Helper()
 
+	if store == e2e.StoreSQLite {
+		checkUpgradeBeforeBaselineSQLite(ctx, t, env)
+
+		return
+	}
+
 	pristine := snapshotServerDB(ctx, t, env, store)
-	removed := trimServerVersions(ctx, t, env, store, oldFixtureMaxVersion)
+	removed := trimServerVersions(ctx, t, env, store, 0)
 
 	if len(removed) == 0 {
-		t.Fatalf("trim above %d removed nothing, want pending migrations", oldFixtureMaxVersion)
+		t.Fatal("trim above 0 removed nothing, want the baseline row")
 	}
+
+	restoreServerVersions(
+		ctx,
+		t,
+		env,
+		store,
+		[]serverMigrationRow{{version: beforeBaselineVersion, name: beforeBaselineName}},
+	)
 
 	before := snapshotServerDB(ctx, t, env, store)
 	res := runUpgradeCheckServer(ctx, t, env)
-	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: true})
 
 	if out := res.Stdout; !strings.Contains(
 		out,
-		"database schema version: "+strconv.FormatInt(oldFixtureMaxVersion, 10),
+		"database schema version: "+strconv.FormatInt(beforeBaselineVersion, 10),
 	) {
-		t.Fatalf("old output lacks database schema version %d:\n%s", oldFixtureMaxVersion, out)
+		t.Fatalf("output lacks database schema version %d:\n%s", beforeBaselineVersion, out)
+	}
+
+	if !strings.Contains(res.Stderr, "older than baseline schema version") {
+		t.Fatalf("error lacks the baseline refusal:\n%s%s", res.Stdout, res.Stderr)
 	}
 
 	checkServerDBUnchanged(t, before, snapshotServerDB(ctx, t, env, store))
 
+	deleteServerVersion(ctx, t, env, store, beforeBaselineVersion)
 	restoreServerVersions(ctx, t, env, store, removed)
 	checkRestoredServerDB(ctx, t, env, store, pristine)
+}
+
+// checkUpgradeBeforeBaselineSQLite is checkUpgradeBeforeBaselineServer on
+// SQLite. The edits run while the server runs, because the check needs a
+// running server on a schema behind the binary.
+func checkUpgradeBeforeBaselineSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	// The check needs a running server on a schema behind the binary, and a
+	// server start applies the missing migrations, so the edit keeps the
+	// server running.
+	path := sqliteServerPath(t, env)
+	pristine := snapshotServerSQLite(ctx, t, path)
+	removed := trimServerSQLiteVersions(ctx, t, env, 0)
+
+	if len(removed) == 0 {
+		t.Fatal("trim above 0 removed nothing, want the baseline row")
+	}
+
+	execServerSQLite(ctx, t, path,
+		`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, beforeBaselineVersion, beforeBaselineName)
+
+	before := snapshotServerSQLite(ctx, t, path)
+	res := runUpgradeCheckServer(ctx, t, env)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: true})
+
+	if out := res.Stdout; !strings.Contains(
+		out,
+		"database schema version: "+strconv.FormatInt(beforeBaselineVersion, 10),
+	) {
+		t.Fatalf("output lacks database schema version %d:\n%s", beforeBaselineVersion, out)
+	}
+
+	if !strings.Contains(res.Stderr, "older than baseline schema version") {
+		t.Fatalf("error lacks the baseline refusal:\n%s%s", res.Stdout, res.Stderr)
+	}
+
+	checkServerDBUnchanged(t, before, snapshotServerSQLite(ctx, t, path))
+
+	execServerSQLite(ctx, t, path, `DELETE FROM schema_migrations WHERE version = ?`, beforeBaselineVersion)
+
+	for _, row := range removed {
+		execServerSQLite(ctx, t, path,
+			`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
+	}
+
+	if got := snapshotServerSQLite(ctx, t, path); !slices.Equal(got.versions, pristine.versions) {
+		t.Fatalf("versions after restore = %v, want %v", got.versions, pristine.versions)
+	}
 }
 
 // checkUpgradeFreshServer proves upgrade check with no version row in the
@@ -11527,6 +11851,40 @@ func checkUpgradeOldServer(ctx context.Context, t *testing.T, env *e2e.Env, stor
 // restores the removed rows after the check.
 func checkUpgradeFreshServer(ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store) {
 	t.Helper()
+
+	if store == e2e.StoreSQLite {
+		// The check needs a running server on a schema behind the binary, and a
+		// server start applies the missing migrations, so the edit keeps the
+		// server running.
+		path := sqliteServerPath(t, env)
+		pristine := snapshotServerSQLite(ctx, t, path)
+		removed := trimServerSQLiteVersions(ctx, t, env, 0)
+
+		if len(removed) == 0 {
+			t.Fatal("trim above 0 removed nothing, want every migration pending")
+		}
+
+		before := snapshotServerSQLite(ctx, t, path)
+		res := runUpgradeCheckServer(ctx, t, env)
+		checkUpgradeResult(t, res, wantUpgradeResult{verdict: "upgrade possible", exitCode: 0, pending: true})
+
+		if out := res.Stdout; !strings.Contains(out, "database schema version: 0") {
+			t.Fatalf("fresh output lacks database schema version 0:\n%s", out)
+		}
+
+		checkServerDBUnchanged(t, before, snapshotServerSQLite(ctx, t, path))
+
+		for _, row := range removed {
+			execServerSQLite(ctx, t, path,
+				`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
+		}
+
+		if got := snapshotServerSQLite(ctx, t, path); !slices.Equal(got.versions, pristine.versions) {
+			t.Fatalf("versions after restore = %v, want %v", got.versions, pristine.versions)
+		}
+
+		return
+	}
 
 	pristine := snapshotServerDB(ctx, t, env, store)
 	removed := trimServerVersions(ctx, t, env, store, 0)
@@ -11651,10 +12009,12 @@ func parseUpgradeVersions(t *testing.T, out string) (database, binary int64) {
 	return database, binary
 }
 
-// oldFixtureMaxVersion is the newest version in the fixed old-database
-// fixture. The fixture stays below the binary version, so the check reports
-// pending migrations. Bump it only with the fixture name and assertions.
-const oldFixtureMaxVersion = 8
+// beforeBaselineVersion and beforeBaselineName name a migration from before
+// the baseline, which the baseline replaced.
+const (
+	beforeBaselineVersion = 76
+	beforeBaselineName    = "0076_sign_in_providers.sql"
+)
 
 // postgresSnapshot holds the table list and schema_migrations rows of one
 // PostgreSQL schema, so the test proves upgrade check wrote nothing.
@@ -12279,8 +12639,7 @@ func checkPortableFiles(t *testing.T, files []backupSQLFileDoc) {
 }
 
 // checkPortableObjects proves each table file of a backup is in the target with
-// the size its descriptor names, and that the native db object of format 1 is
-// gone.
+// the size its descriptor names.
 func checkPortableObjects(t *testing.T, env *e2e.Env, id string, files []backupSQLFileDoc) {
 	t.Helper()
 
@@ -12295,10 +12654,6 @@ func checkPortableObjects(t *testing.T, env *e2e.Env, id string, files []backupS
 		if info.Size() != file.Size {
 			t.Fatalf("table file %q holds %d bytes, the descriptor says %d", file.Path, info.Size(), file.Size)
 		}
-	}
-
-	if _, err := os.Stat(filepath.Join(dir, "backups", id, "db")); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("backup %s still holds the native db object: stat err = %v", id, err)
 	}
 }
 
@@ -12618,7 +12973,7 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	}
 
 	ctx := t.Context()
-	env := e2e.NewEnv(ctx, t, tools.pulumi, store)
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, tools.pulumi, store)
 
 	target := env.BackupTarget(t)
 	if !validBackupTarget(target) {
@@ -12632,7 +12987,7 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	after := captureExitState(ctx, t, env, tools, "after backup")
 	checkExitStateStable(t, before, after)
 	runBackupCheck(ctx, t, env, id)
-	backupVersions := readFailoverVersions(ctx, t, env, store)
+	backupVersions := readFailoverVersions(ctx, t, env)
 
 	// Restore into an empty installation through the API: stop A, wipe the
 	// destination, start the server on the empty database, and restore
@@ -12645,7 +13000,7 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 
 	restored := captureExitState(ctx, t, env, tools, "after restore")
 	checkExitStateMatches(t, after, restored)
-	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env, store))
+	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env))
 
 	// Restore over live data: back up the restored state, restore the
 	// first backup over it, and prove the state matches the first backup.
@@ -12674,7 +13029,7 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	runRestoreRefused(ctx, t, env, id, "active")
 	runRestoreCommandForced(ctx, t, env, id)
 	checkHeldLeaseFenced(ctx, t, env, held)
-	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env, store))
+	checkRestoreFenced(t, backupVersions, readFailoverVersions(ctx, t, env))
 	env.NoteStep(t, "lease fenced after restore", "old lease from before the restore no longer writes")
 
 	// Undo with the backup taken before the restore: the restore names its
@@ -12704,6 +13059,15 @@ func runBackupRestoreOnStore(t *testing.T, tools backupPair, store e2e.Store) {
 	schemaUnchanged := captureExitState(ctx, t, env, tools, "after schema-mismatch restore")
 	checkExitStateMatches(t, undone, schemaUnchanged)
 	writeTargetManifest(t, target, id, saved)
+
+	// An installation-operator restore keeps the access tables: it cannot
+	// bring back a revoked token.
+	checkOperatorRestoreKeepsRevokedToken(ctx, t, env)
+	env.NoteStep(
+		t,
+		"operator restore keeps a revoked token revoked",
+		"installation-operator restore kept the access tables",
+	)
 }
 
 // writeExitTestState writes the checked state with both CLIs: a Pulumi stack
@@ -13501,132 +13865,59 @@ func checkHeldLeaseFenced(ctx context.Context, t *testing.T, env *e2e.Env, held 
 	env.EndHeldUpdate(ctx, t, fresh, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
 }
 
-// readFailoverVersions returns the failover version of every namespace in the
-// live database, read directly: the server API exposes no namespace read, and
-// the fencing proof needs the stored versions before and after the restore.
-func readFailoverVersions(
-	ctx context.Context, t *testing.T, env *e2e.Env, store e2e.Store,
-) map[string]int64 {
-	t.Helper()
-
-	switch store {
-	case e2e.StoreSQLite:
-		return readSQLiteFailoverVersions(ctx, t, env)
-	case e2e.StorePostgres:
-		return readPostgresFailoverVersions(ctx, t, env)
-	default:
-		t.Fatalf("unknown store: %s", store)
-	}
-
-	return nil
+// failoverNamespace is one namespace of GET /api/server/namespaces: its name
+// and failover version.
+type failoverNamespace struct {
+	Name            string `json:"name"`
+	FailoverVersion int64  `json:"failoverVersion"`
 }
 
-// readSQLiteFailoverVersions reads the failover version of every namespace
-// from the live SQLite file while the server runs: a single ordered select,
-// so a concurrent write only waits out the read.
-func readSQLiteFailoverVersions(ctx context.Context, t *testing.T, env *e2e.Env) map[string]int64 {
-	t.Helper()
-
-	path, ok := strings.CutPrefix(env.DatabaseURL(t), "sqlite:")
-	if !ok {
-		t.Fatalf("database URL %q is not a SQLite URL", env.DatabaseURL(t))
-	}
-
-	conn, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(10000)")
-	if err != nil {
-		t.Fatalf("open database for failover versions: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(); closeErr != nil {
-			t.Errorf("close database: %v", closeErr)
-		}
-	}()
-
-	return queryFailoverVersions(ctx, t, conn)
+// failoverNamespacePage is one page of GET /api/server/namespaces.
+type failoverNamespacePage struct {
+	Namespaces []failoverNamespace `json:"namespaces"`
+	NextCursor string              `json:"nextCursor"`
 }
 
-// queryFailoverVersions returns the failover version of every namespace
-// through conn, which reads the live database of the running server.
-func queryFailoverVersions(ctx context.Context, t *testing.T, conn *sql.DB) map[string]int64 {
+// readFailoverVersions returns the failover version of every namespace
+// through the installation API as the bootstrap admin, page by page. The
+// fencing proof needs the versions before and after the restore. The test
+// reads no database file of the running server.
+func readFailoverVersions(ctx context.Context, t *testing.T, env *e2e.Env) map[string]int64 {
 	t.Helper()
-
-	rows, err := conn.QueryContext(ctx, `SELECT name, failover_version FROM namespaces ORDER BY name`)
-	if err != nil {
-		t.Fatalf("read failover versions: %v", err)
-	}
-
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			t.Errorf("close failover versions: %v", closeErr)
-		}
-	}()
 
 	out := map[string]int64{}
+	cursor := ""
 
-	for rows.Next() {
-		var (
-			name    string
-			version int64
-		)
-
-		if scanErr := rows.Scan(&name, &version); scanErr != nil {
-			t.Fatalf("scan failover version: %v", scanErr)
+	for {
+		path := "/api/server/namespaces"
+		if cursor != "" {
+			path += "?cursor=" + url.QueryEscape(cursor)
 		}
 
-		out[name] = version
-	}
-
-	if iterErr := rows.Err(); iterErr != nil {
-		t.Fatalf("read failover versions: %v", iterErr)
-	}
-
-	return out
-}
-
-// readPostgresFailoverVersions reads the failover version of every namespace
-// from the live PostgreSQL schema of the running server.
-func readPostgresFailoverVersions(ctx context.Context, t *testing.T, env *e2e.Env) map[string]int64 {
-	t.Helper()
-
-	conn, err := pgx.Connect(ctx, env.DatabaseURL(t))
-	if err != nil {
-		t.Fatalf("connect to postgres for failover versions: %v", err)
-	}
-
-	defer func() {
-		if closeErr := conn.Close(ctx); closeErr != nil {
-			t.Errorf("close postgres connection: %v", closeErr)
-		}
-	}()
-
-	rows, err := conn.Query(ctx, `SELECT name, failover_version FROM namespaces ORDER BY name`)
-	if err != nil {
-		t.Fatalf("read failover versions: %v", err)
-	}
-
-	defer rows.Close()
-
-	out := map[string]int64{}
-
-	for rows.Next() {
-		var (
-			name    string
-			version int64
-		)
-
-		if scanErr := rows.Scan(&name, &version); scanErr != nil {
-			t.Fatalf("scan failover version: %v", scanErr)
+		status, body, err := env.ServerAPIStatus(ctx, http.MethodGet, path, "")
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
 		}
 
-		out[name] = version
-	}
+		if status != http.StatusOK {
+			t.Fatalf("GET %s answers %d, want %d (%s)", path, status, http.StatusOK, body)
+		}
 
-	if iterErr := rows.Err(); iterErr != nil {
-		t.Fatalf("read failover versions: %v", iterErr)
-	}
+		var page failoverNamespacePage
+		if err := json.Unmarshal([]byte(body), &page); err != nil {
+			t.Fatalf("decode namespaces %q: %v", body, err)
+		}
 
-	return out
+		for _, ns := range page.Namespaces {
+			out[ns.Name] = ns.FailoverVersion
+		}
+
+		if page.NextCursor == "" {
+			return out
+		}
+
+		cursor = page.NextCursor
+	}
 }
 
 // checkRestoreFenced proves the restore fenced every namespace the backup

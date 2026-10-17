@@ -35,6 +35,34 @@ func TestParseState(t *testing.T) {
 	}
 }
 
+// stubSealer is a workspace.Sealer that seals nothing: it passes state and
+// outputs through, so the maintenance tests prove their own behavior.
+type stubSealer struct{}
+
+func (stubSealer) SealState(
+	_ context.Context, _ namespace.Name, _, _ string, r io.Reader,
+) (io.Reader, error) {
+	return r, nil
+}
+
+func (stubSealer) OpenState(
+	_ context.Context, _ namespace.Name, _, _ string, r io.Reader,
+) (io.Reader, error) {
+	return r, nil
+}
+
+func (stubSealer) SealOutputs(
+	_ context.Context, _ namespace.Name, _, _ string, plain []byte,
+) ([]byte, error) {
+	return plain, nil
+}
+
+func (stubSealer) OpenOutputs(
+	_ context.Context, _ namespace.Name, _, _ string, sealed []byte,
+) ([]byte, error) {
+	return sealed, nil
+}
+
 // fakeStateStore holds the installation state in memory. onSet runs on each
 // write, so race tests seed a start between the enter check and its write.
 // onSetIf runs before the conditional write checks its expectation, so a
@@ -406,18 +434,6 @@ func (fakeStates) DeleteExpiredPendingStateVersions(
 	return nil, nil
 }
 
-func (fakeStates) ListUnsealedStateVersions(
-	context.Context,
-) ([]workspace.StateVersion, error) {
-	return nil, nil
-}
-
-func (fakeStates) SealStateVersion(
-	context.Context, workspace.StateVersionID, blob.Key, []byte, namespace.Fence,
-) error {
-	return nil
-}
-
 // fakeBlobs answers no content. The force-unlock path reads none.
 type fakeBlobs struct{}
 
@@ -510,6 +526,7 @@ func newFixtureWith(
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -520,7 +537,7 @@ func newFixtureWith(
 		States:             states,
 		Blobs:              blobs,
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             stubSealer{},
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,
@@ -541,6 +558,7 @@ func newFixtureWith(
 		Stacks:     stacks,
 		Updates:    updates,
 		Workspaces: workspaces,
+		Hold:       nil,
 	})
 	if err != nil {
 		t.Fatalf("maintenance service: %v", err)
@@ -656,6 +674,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Logger:             nil,
 		MaxCheckpointBytes: 0,
 		Journal:            nil,
+		Replayer:           nil,
 	})
 	if err != nil {
 		t.Fatalf("update service: %v", err)
@@ -666,7 +685,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		States:             fakeStates{},
 		Blobs:              fakeBlobs{},
 		Namespaces:         namespaces,
-		Sealer:             nil,
+		Sealer:             stubSealer{},
 		Logger:             nil,
 		Now:                nil,
 		MaxStateBytes:      0,
@@ -683,6 +702,7 @@ func TestNewServiceRequiresDependencies(t *testing.T) {
 		Stacks:     stacks,
 		Updates:    updates,
 		Workspaces: workspaces,
+		Hold:       nil,
 	}
 
 	cases := []struct {
@@ -744,6 +764,71 @@ func TestEnterAndLeave(t *testing.T) {
 		t.Fatalf("leave again: %v", err)
 	}
 }
+
+func TestLeaveRefusedWhileHeld(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	var (
+		mu      sync.Mutex
+		held    = true
+		holdErr error
+	)
+
+	svc, err := maintenance.NewService(maintenance.Config{
+		Store:      f.state,
+		Namespaces: f.namespaces,
+		Stacks:     f.stackSvc,
+		Updates:    f.updateSvc,
+		Workspaces: f.workspaceSvc,
+		Hold: func(context.Context) (bool, error) {
+			mu.Lock()
+			defer mu.Unlock()
+
+			return held, holdErr
+		},
+	})
+	if err != nil {
+		t.Fatalf("maintenance service: %v", err)
+	}
+
+	if err := svc.Leave(ctx); err != nil {
+		t.Fatalf("leave in normal operation: %v, want nil: a hold keeps only maintenance mode", err)
+	}
+
+	if _, err := svc.Enter(ctx, false); err != nil {
+		t.Fatalf("enter: %v", err)
+	}
+
+	if err := svc.Leave(ctx); !errors.Is(err, maintenance.ErrHeld) {
+		t.Fatalf("leave while held: %v, want ErrHeld", err)
+	}
+
+	mu.Lock()
+	held, holdErr = false, errTestHold
+	mu.Unlock()
+
+	if err := svc.Leave(ctx); !errors.Is(err, errTestHold) {
+		t.Fatalf("leave with a failed hold: %v, want the hold error", err)
+	}
+
+	if got, err := svc.Get(ctx); err != nil || got != maintenance.StateMaintenance {
+		t.Fatalf("state after refused leaves = %q, %v, want maintenance", got, err)
+	}
+
+	mu.Lock()
+	holdErr = nil
+	mu.Unlock()
+
+	if err := svc.Leave(ctx); err != nil {
+		t.Fatalf("leave after the hold ends: %v", err)
+	}
+}
+
+// errTestHold is the failure of the hold in TestLeaveRefusedWhileHeld.
+var errTestHold = errors.New("hold unavailable")
 
 func TestEnterRefusesRunningUpdate(t *testing.T) {
 	t.Parallel()
@@ -859,15 +944,20 @@ func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
 			Status:          workspace.StatusFinalized,
 			Content:         "tofu/ws-1/sv-1/a1",
 			Outputs:         nil,
-			MD5:             [16]byte{},
-			Serial:          1,
-			Size:            0,
-			Force:           false,
-			Sealed:          false,
-			RestoredFrom:    "",
-			SensitiveMarks:  nil,
-			FenceBy:         "",
-			UnlockedWrite:   false,
+			// The size and MD5 of the document encryptedBlobs serves,
+			// as a stored row names them.
+			MD5: [16]byte{
+				0x32, 0xdd, 0x0c, 0x61, 0x5e, 0xc2, 0x98, 0xbc,
+				0x44, 0x68, 0xd1, 0xbd, 0xb8, 0x10, 0xd6, 0xc0,
+			},
+			Serial:         1,
+			Size:           29,
+			Force:          false,
+			Sealed:         false,
+			RestoredFrom:   "",
+			SensitiveMarks: nil,
+			FenceBy:        "",
+			UnlockedWrite:  false,
 		},
 	}
 
@@ -988,19 +1078,64 @@ func TestWatcherCachesWithinLimit(t *testing.T) {
 	}
 }
 
-func TestWatcherFallsBackOnError(t *testing.T) {
+// flakyStore answers state, or errTestUnavailable while fail is set.
+type flakyStore struct {
+	state maintenance.State
+	fail  bool
+}
+
+func (s *flakyStore) GetState(context.Context) (maintenance.State, error) {
+	if s.fail {
+		return "", errTestUnavailable
+	}
+
+	return s.state, nil
+}
+
+func (s *flakyStore) SetState(_ context.Context, state maintenance.State) error {
+	s.state = state
+
+	return nil
+}
+
+func (s *flakyStore) SetStateIf(_ context.Context, _, next maintenance.State) error {
+	s.state = next
+
+	return nil
+}
+
+// TestWatcherFailsClosedBeforeTheFirstRead proves that a watcher whose
+// reads all failed answers maintenance, and that after a good read a
+// failed read keeps the last state it read.
+func TestWatcherFailsClosedBeforeTheFirstRead(t *testing.T) {
 	t.Parallel()
 
 	watcher := maintenance.NewWatcher(errStore{}, nil, 0)
-	if got := watcher.State(t.Context()); got != maintenance.StateNormal {
-		t.Fatalf("watcher state with no good read = %q, want normal", got)
+	if got := watcher.State(t.Context()); got != maintenance.StateMaintenance {
+		t.Fatalf("watcher state with no good read = %q, want maintenance", got)
 	}
 
-	store := &countStore{state: maintenance.StateMaintenance, reads: 0}
-	flaky := maintenance.NewWatcher(store, nil, time.Minute)
+	for _, last := range []maintenance.State{maintenance.StateNormal, maintenance.StateMaintenance} {
+		now := time.Unix(0, 0)
+		store := &flakyStore{state: last, fail: true}
+		flaky := maintenance.NewWatcher(store, func() time.Time { return now }, time.Minute)
 
-	if got := flaky.State(t.Context()); got != maintenance.StateMaintenance {
-		t.Fatalf("flaky watcher state = %q, want maintenance", got)
+		if got := flaky.State(t.Context()); got != maintenance.StateMaintenance {
+			t.Fatalf("flaky watcher state before a good read = %q, want maintenance", got)
+		}
+
+		store.fail = false
+
+		if got := flaky.State(t.Context()); got != last {
+			t.Fatalf("flaky watcher state after a good read = %q, want %q", got, last)
+		}
+
+		store.fail = true
+		now = now.Add(2 * time.Minute)
+
+		if got := flaky.State(t.Context()); got != last {
+			t.Fatalf("flaky watcher state after a failed read = %q, want the last read %q", got, last)
+		}
 	}
 }
 
@@ -1268,6 +1403,7 @@ func TestTwoInstancesKeepForceEnter(t *testing.T) {
 		Stacks:     f.stackSvc,
 		Updates:    f.updateSvc,
 		Workspaces: f.workspaceSvc,
+		Hold:       nil,
 	})
 	if err != nil {
 		t.Fatalf("second maintenance service: %v", err)

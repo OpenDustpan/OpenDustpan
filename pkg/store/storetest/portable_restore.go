@@ -2,10 +2,15 @@ package storetest
 
 import (
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -13,7 +18,9 @@ import (
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
+	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/stack"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // discardStaging removes the staging area of dst, failing on error.
@@ -193,6 +200,130 @@ func requireNoStagingLeft(t *testing.T, witness StagingWitness, secondID string)
 	}
 }
 
+// testRestoreStagingRefusesUnsealedState stages a portable backup whose
+// state versions file names an unsealed row: the stage fails with
+// ErrUnsealedState, so plain state never enters through an import.
+func testRestoreStagingRefusesUnsealedState(t *testing.T, newStore RestoreFactory) {
+	t.Helper()
+
+	ps := portableRestoreStores(t, newStore(t), newStore(t))
+	ctx := t.Context()
+
+	ns := newWorkspaceNamespace(t, ps.src, "acme")
+	w := createTestWorkspace(t, ps.src, ns, "network")
+	svc := serviceOver(t, ps.src)
+
+	if _, err := svc.Lock(ctx, w.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pushThrough(t, svc, w.ID, 1, `{"version":4,"serial":1}`)
+
+	sink, sum, files := exportPortable(t, ps.src)
+
+	edited, descs := unsealStateVersionsFile(t, sink, files)
+
+	if _, err := ps.dst.StagePortable(ctx, PortableOpener(edited), sum, descs); !errors.Is(
+		err, workspace.ErrUnsealedState,
+	) {
+		t.Fatalf("stage backup with an unsealed state version: err = %v, want ErrUnsealedState", err)
+	}
+
+	discardStaging(t, ps.dst)
+}
+
+// unsealStateVersionsFile returns a copy of the export with every sealed flag
+// of the state versions file cleared, with its descriptor fixed: the size and
+// the SHA-256 of the rewritten file, with the row count unchanged. The
+// summary still counts the rows, so only the sealed check of the stage can
+// refuse it. No port writes an unsealed row, so the test edits the export by
+// hand.
+func unsealStateVersionsFile(
+	t *testing.T, sink *portableSink, descs []backup.PortableFile,
+) (map[string][]byte, []backup.PortableFile) {
+	t.Helper()
+
+	const sealedTrue = `"sealed":true`
+
+	path := backup.PortablePath("state_versions")
+
+	lines := readPortableLines(t, path, sink.files[path].Bytes())
+	if len(lines) == 0 {
+		t.Fatal("state versions file holds no rows, want the pushed version")
+	}
+
+	for i, row := range lines {
+		sealed, ok := row["sealed"].(bool)
+		if !ok || !sealed {
+			t.Fatalf("state versions row %d sealed = %v, want true", i, row["sealed"])
+		}
+	}
+
+	var rewritten bytes.Buffer
+
+	zw := gzip.NewWriter(&rewritten)
+
+	for _, row := range readPortableRawLines(t, path, sink.files[path].Bytes()) {
+		edited := strings.ReplaceAll(row, sealedTrue, `"sealed":false`)
+		if edited == row {
+			t.Fatalf("state versions row lacks %s: %s", sealedTrue, row)
+		}
+
+		if _, err := zw.Write([]byte(edited + "\n")); err != nil {
+			t.Fatalf("write unsealed row: %v", err)
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		t.Fatalf("finish unsealed file: %v", err)
+	}
+
+	data := rewritten.Bytes()
+	digest := sha256.Sum256(data)
+
+	out := sinkFiles(sink)
+	out[path] = data
+
+	outDescs := make([]backup.PortableFile, 0, len(descs))
+
+	for _, d := range descs {
+		if d.Table == "state_versions" {
+			d.Size = int64(len(data))
+			d.SHA256 = hex.EncodeToString(digest[:])
+		}
+
+		outDescs = append(outDescs, d)
+	}
+
+	return out, outDescs
+}
+
+// readPortableRawLines returns the raw lines of one gzipped table file.
+func readPortableRawLines(t *testing.T, path string, data []byte) []string {
+	t.Helper()
+
+	zr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("open gzip of %q: %v", path, err)
+	}
+
+	raw, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatalf("read %q: %v", path, err)
+	}
+
+	if err := zr.Close(); err != nil {
+		t.Fatalf("close gzip of %q: %v", path, err)
+	}
+
+	lines := strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return nil
+	}
+
+	return lines
+}
+
 // testRestoreStagingKeepsCheckpointBlobs stages a portable backup that holds a
 // checkpoint kept in blobs: the staged summary names the blob, like the export
 // does.
@@ -245,7 +376,7 @@ func testRestoreJournalBlob(t *testing.T, newStore RestoreFactory) {
 	ctx := t.Context()
 
 	f := newFixture(t, ps.src)
-	u := f.run(t, f.ref, "u1", mutating())
+	u := f.runJournaled(t, f.ref, "u1")
 
 	row := journalRow(t, ps.src, u, 7, 1)
 	row.Size = 33
@@ -295,6 +426,8 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 		t.Fatalf("apply staged backup: %v", err)
 	}
 
+	checkRestoredSuspendedMember(t, ps.dst)
+
 	again, sum2, _ := exportPortable(t, ps.dst)
 
 	wantRows := maps.Clone(sum.RowCounts)
@@ -321,6 +454,44 @@ func testRestoreRoundTrip(t *testing.T, newStore RestoreFactory) {
 				table, len(got), len(want))
 		}
 	}
+}
+
+// checkRestoredSuspendedMember proves that the suspended member of the seed
+// keeps its source, source ID, state, suspend time and pin after the restore.
+// A store with no principal port skips it.
+func checkRestoredSuspendedMember(t *testing.T, dst RestoreStore) {
+	t.Helper()
+
+	ps, ok := dst.(principal.Store)
+	if !ok {
+		return
+	}
+
+	members, _, err := ps.ListMembers(
+		t.Context(), "grp-ops", principal.Query{After: "", Low: "", High: "", Limit: principal.MaxLimit + 1},
+	)
+	if err != nil {
+		t.Fatalf("list restored members: %v", err)
+	}
+
+	for i := range members {
+		m := members[i]
+		if m.PrincipalID != "prn-suspended" {
+			continue
+		}
+
+		if m.Source != principal.MembershipSourceSCIM || m.SourceID != "scim-token-1" ||
+			m.State != principal.MembershipStateSuspended || m.SuspendedAt.IsZero() || !m.Pinned {
+			t.Fatalf(
+				"restored suspended member = %+v, want scim with its source ID, suspended, pinned",
+				m,
+			)
+		}
+
+		return
+	}
+
+	t.Fatal("restored members hold no suspended member, want prn-suspended")
 }
 
 // sinkCursorTable is the table of the audit sink cursors, which the apply

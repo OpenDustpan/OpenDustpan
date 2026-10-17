@@ -77,7 +77,7 @@ func (m *memRevealAudit) List(
 }
 
 func (m *memRevealAudit) Check(_ context.Context, _ namespace.Name) (audit.CheckResult, error) {
-	return audit.CheckResult{Checked: 0, BadSequence: 0, Valid: true}, nil
+	return audit.CheckResult{Checked: 0, BadSequence: 0, Unchained: 0, Valid: true}, nil
 }
 
 // errRevealAuditBoom is the injected store failure of the failure test.
@@ -786,4 +786,56 @@ func TestRevealDisjointLargeInstanceAnswers(t *testing.T) {
 	}
 
 	checkRevealAudit(t, entries, "sv-disjoint-large123", path)
+}
+
+// TestRevealPathOverLimitAnswers422 proves a value path one byte over 1024
+// answers 422 with the documented message, no value and no audit entry,
+// while a path of exactly 1024 bytes passes the limit and answers 404 as an
+// unknown path.
+func TestRevealPathOverLimitAnswers422(t *testing.T) {
+	t.Parallel()
+
+	entries := &memRevealAudit{entries: nil, err: nil, mu: sync.Mutex{}}
+
+	handler := newRevealHandler(
+		t,
+		selectiveAuthorizer{deny: map[identity.Action]bool{}},
+		entries,
+		nil,
+		slog.New(slog.DiscardHandler),
+	)
+
+	target := "/api/v2/state-versions/sv-test123/actions/reveal"
+
+	status, header, body := sendReveal(t, handler, target, revealBody(t, strings.Repeat("x", 1025)))
+
+	if status != http.StatusUnprocessableEntity {
+		t.Fatalf("over-long path answers %d, want %d (%s)", status, http.StatusUnprocessableEntity, body)
+	}
+
+	if !strings.Contains(body, "reveal path over 1024 bytes") {
+		t.Fatalf("422 body misses the limit message: %s", body)
+	}
+
+	if strings.Contains(body, "pw-s3cr3t") {
+		t.Fatalf("422 body holds the secret value: %s", body)
+	}
+
+	if got := header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+
+	entries.mu.Lock()
+	overEntries := len(entries.entries)
+	entries.mu.Unlock()
+
+	if overEntries != 0 {
+		t.Fatalf("entries = %d, want none for a refused path", overEntries)
+	}
+
+	status, _, body = sendReveal(t, handler, target, revealBody(t, strings.Repeat("x", 1024)))
+
+	if status != http.StatusNotFound {
+		t.Fatalf("path at the limit answers %d, want %d (%s)", status, http.StatusNotFound, body)
+	}
 }

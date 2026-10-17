@@ -132,6 +132,139 @@ func runAccessOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 	checkMemberSignsIn(ctx, t, env)
 }
 
+// TestRevokeGrantByID revokes a namespace grant and a unit grant through
+// DELETE /api/server/grants/{id} with the bootstrap admin token, and checks
+// that each grant is gone from the grants of its object. It also checks
+// that a person with only a viewer grant on another namespace gets 404 for
+// a grant ID on this namespace.
+func TestRevokeGrantByID(t *testing.T) {
+	t.Parallel()
+
+	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
+
+	databases, err := e2e.Databases()
+	if err != nil {
+		t.Fatalf("stores: %v", err)
+	}
+
+	versions := e2e.Pulumi().Versions()
+	if len(versions) == 0 {
+		t.Fatal("the Pulumi tool needs at least one version in its matrix")
+	}
+
+	installCtx, cancel := context.WithTimeout(t.Context(), installLimit)
+	t.Cleanup(cancel)
+
+	cli, err := fetcher.Install(installCtx, e2e.Pulumi(), versions[0])
+	if err != nil {
+		t.Fatalf("install %s %s: %v", e2e.Pulumi().Name, versions[0], err)
+	}
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			runRevokeByIDOnStore(t, cli, db)
+		})
+	}
+}
+
+// runRevokeByIDOnStore runs the revoke-by-ID steps on one store.
+func runRevokeByIDOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
+	t.Helper()
+
+	if store == e2e.StorePostgres && e2e.PostgresURL() == "" {
+		t.Skip("set DUSTPAN_TEST_POSTGRES_URL to run the PostgreSQL suite")
+	}
+
+	ctx := t.Context()
+	env := e2e.NewEnvWithRealTimeSignIn(ctx, t, cli, store)
+
+	checkReady(ctx, t, env)
+
+	for _, ns := range []string{"byid", "other"} {
+		principalCall(ctx, t, env, principalStep{
+			http.MethodPost, "/api/server/namespaces", `{"name":"` + ns + `"}`, http.StatusCreated,
+		}, nil)
+	}
+
+	var bob, carol e2ePrincipal
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/principals", `{"subject":"byid-bob","kind":"person"}`, http.StatusCreated,
+	}, &bob)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost,
+		"/api/server/principals",
+		`{"subject":"` + e2e.SignInSubject("byid-carol") + `","kind":"person"}`,
+		http.StatusCreated,
+	}, &carol)
+
+	// A grant names a unit that exists.
+	createStack(ctx, t, env, "byid/web/prod")
+
+	var nsGrant, unitGrant e2eGrant
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/byid/grants",
+		`{"subject":"principal:` + bob.ID + `","role":"viewer"}`, http.StatusCreated,
+	}, &nsGrant)
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/byid/unit-grants?tool=pulumi&unit=web%2Fprod",
+		`{"subject":"principal:` + bob.ID + `","role":"viewer"}`, http.StatusCreated,
+	}, &unitGrant)
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodDelete, "/api/server/grants/" + nsGrant.ID, "", http.StatusNoContent,
+	}, nil)
+
+	var nsList e2eGrantList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/namespaces/byid/grants", "", http.StatusOK,
+	}, &nsList)
+
+	for i := range nsList.Grants {
+		if nsList.Grants[i].ID == nsGrant.ID {
+			t.Fatalf("grants on byid still hold %s after the revoke by ID", nsGrant.ID)
+		}
+	}
+
+	principalCall(ctx, t, env, principalStep{
+		http.MethodDelete, "/api/server/grants/" + unitGrant.ID, "", http.StatusNoContent,
+	}, nil)
+
+	var unitList e2eGrantList
+	principalCall(ctx, t, env, principalStep{
+		http.MethodGet, "/api/server/namespaces/byid/unit-grants?tool=pulumi&unit=web%2Fprod", "",
+		http.StatusOK,
+	}, &unitList)
+
+	for i := range unitList.Grants {
+		if unitList.Grants[i].ID == unitGrant.ID {
+			t.Fatalf("grants on the unit still hold %s after the revoke by ID", unitGrant.ID)
+		}
+	}
+
+	// Carol sees only the other namespace, so a grant on byid is unknown
+	// to her.
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/other/grants",
+		`{"subject":"principal:` + carol.ID + `","role":"viewer"}`, http.StatusCreated,
+	}, nil)
+
+	carolToken := env.PersonalToken(ctx, t, carol.ID, "revoke-check")
+
+	var target e2eGrant
+	principalCall(ctx, t, env, principalStep{
+		http.MethodPost, "/api/server/namespaces/byid/grants",
+		`{"subject":"principal:` + bob.ID + `","role":"viewer"}`, http.StatusCreated,
+	}, &target)
+
+	status, body, err := env.ServerAPIStatusAs(
+		ctx, carolToken.Secret, http.MethodDelete, "/api/server/grants/"+target.ID, "",
+	)
+	if err != nil || status != http.StatusNotFound {
+		t.Fatalf("viewer DELETE grant by ID = %d, %v (%s), want %d", status, err, body, http.StatusNotFound)
+	}
+}
+
 // checkMemberSignsIn gives a principal that is not an administrator a writer
 // grant on one namespace. It logs in with the Pulumi CLI and sees that
 // namespace only: the routes whose object is the caller need only
