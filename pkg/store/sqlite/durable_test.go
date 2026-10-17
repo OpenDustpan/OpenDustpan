@@ -96,8 +96,9 @@ func openWith(t *testing.T, path string, opts ...sqlite.Option) *sqlite.Store {
 // TestDurableStalledStepEndsAtBound proves the SQLite rule for a stalled
 // holder: a step transaction that stalls holds the write lock of the
 // database, so it rolls back at the bound of the step transaction. The
-// stalled write records nothing, and another handle writes before the stall
-// ends.
+// stalled write records nothing, and another caller writes before the stall
+// ends. One store serves every caller here: holder and other are the same
+// store.
 func TestDurableStalledStepEndsAtBound(t *testing.T) {
 	t.Parallel()
 
@@ -139,7 +140,7 @@ func TestDurableStalledStepEndsAtBound(t *testing.T) {
 
 	<-stalled
 
-	// The write of the other handle waits for the write lock, which the
+	// The write of the other caller waits for the write lock, which the
 	// stalled step transaction holds until its bound.
 	_, _, startErr := other.Start(t.Context(), durable.StartRequest{Key: "k2", Kind: stallKind, Version: 0, Input: nil})
 	if startErr != nil {
@@ -206,9 +207,10 @@ func checkNothingRecorded(t *testing.T, h durabletest.Harness, s durable.Store, 
 }
 
 // TestDurableStepWaitsBehindWriteLock proves that a step record reads the
-// clock of the store after it holds the write lock, not before. One handle
-// holds the write lock longer than a short lease; a RecordStep of another
-// handle waits behind it and then finds the claim expired.
+// clock of the store after it holds the write lock, not before. One store
+// serves every caller here: one caller holds the write lock longer than a
+// short lease through that store, and a RecordStep of another caller waits
+// behind it and then finds the claim expired.
 func TestDurableStepWaitsBehindWriteLock(t *testing.T) {
 	t.Parallel()
 

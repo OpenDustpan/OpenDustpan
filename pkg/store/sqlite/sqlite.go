@@ -274,7 +274,10 @@ func WithBinaryVersion(version string) Option {
 
 // Open opens (creating if needed) the database file at path and migrates it.
 // It locks the file first: a second Open of the same file, in this process
-// or in another one, fails with ErrInUse until Close of the first store.
+// or in another one, fails with ErrInUse until Close of the first store. The
+// guard resolves symbolic links before it names the guard file, so the same
+// file opened through another spelling shares the one guard. A hard link to
+// the database file is not detected.
 //
 // Open leaves running backup rows alone: crash recovery inspects them before
 // the server marks them failed with FailRunningBackups at start, and offline
@@ -285,12 +288,14 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
-	guard, err := acquireGuard(abs)
+	resolved := resolveDatabasePath(abs)
+
+	guard, err := acquireGuard(resolved)
 	if err != nil {
 		return nil, err
 	}
 
-	conn, err := openDatabase(ctx, abs)
+	conn, err := openDatabase(ctx, resolved)
 	if err != nil {
 		return nil, errors.Join(err, guard.release())
 	}
@@ -298,7 +303,7 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	s := &Store{
 		conn:                conn,
 		queries:             db.New(conn),
-		path:                abs,
+		path:                resolved,
 		mu:                  sync.RWMutex{},
 		stagingMu:           sync.Mutex{},
 		stagingPath:         "",
@@ -326,6 +331,25 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	go s.guardLoop(guardCtx)
 
 	return s, nil
+}
+
+// resolveDatabasePath returns the canonical path of the database file at abs,
+// with symbolic links resolved, so two spellings of one file share one guard
+// file. When the file does not exist yet, it resolves the directory and joins
+// the base name, so a database created through a linked directory still maps
+// to the same guard. It never names the database file itself for the guard:
+// closing our descriptor would release the POSIX locks SQLite holds on that
+// file.
+func resolveDatabasePath(abs string) string {
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved
+	}
+
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
+		return filepath.Join(dir, filepath.Base(abs))
+	}
+
+	return abs
 }
 
 // openDatabase opens the database file at abs with the store pragmas.
