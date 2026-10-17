@@ -86,7 +86,20 @@ func runHostTempAdminOnStore(t *testing.T, cli e2e.Install, store e2e.Store) {
 
 	const person = "recovery-alice"
 
+	if store == e2e.StoreSQLite && !e2e.UseBinaryServer() {
+		t.Skip("needs E2E_SERVER=binary: the host command runs only while the server is stopped")
+	}
+
+	if store == e2e.StoreSQLite {
+		env.StopServer(ctx, t)
+	}
+
 	token, expires := runHostBinary(ctx, t, env, person)
+
+	if store == e2e.StoreSQLite {
+		env.StartServer(ctx, t)
+	}
+
 	session := hostSession{token: token, person: person, expires: expires}
 
 	checkHostUser(ctx, t, env, session)
