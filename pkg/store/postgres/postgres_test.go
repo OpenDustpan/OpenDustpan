@@ -1196,6 +1196,19 @@ func TestUnknownStoredStateIsUnavailable(t *testing.T) {
 		}
 	}()
 
+	parsed, parseErr := url.Parse(schemaURL)
+	if parseErr != nil {
+		t.Fatalf("parse schema URL: %v", parseErr)
+	}
+
+	live := parsed.Query().Get("search_path")
+	control := live + "_control"
+	setPath := "SET search_path TO " + pgx.Identifier{live}.Sanitize() + ", " + pgx.Identifier{control}.Sanitize()
+
+	if _, execErr := conn.Exec(ctx, setPath); execErr != nil {
+		t.Fatalf("set search path: %v", execErr)
+	}
+
 	const dropStateCheck = `ALTER TABLE installation DROP CONSTRAINT installation_state_check`
 
 	if _, execErr := conn.Exec(ctx, dropStateCheck); execErr != nil {
@@ -1253,6 +1266,19 @@ func TestMissingStateRowIsUnavailable(t *testing.T) {
 			t.Errorf("close: %v", closeErr)
 		}
 	}()
+
+	parsed, parseErr := url.Parse(schemaURL)
+	if parseErr != nil {
+		t.Fatalf("parse schema URL: %v", parseErr)
+	}
+
+	live := parsed.Query().Get("search_path")
+	control := live + "_control"
+	setPath := "SET search_path TO " + pgx.Identifier{live}.Sanitize() + ", " + pgx.Identifier{control}.Sanitize()
+
+	if _, execErr := conn.Exec(ctx, setPath); execErr != nil {
+		t.Fatalf("set search path: %v", execErr)
+	}
 
 	if _, execErr := conn.Exec(ctx, `DELETE FROM installation`); execErr != nil {
 		t.Fatalf("delete installation row: %v", execErr)

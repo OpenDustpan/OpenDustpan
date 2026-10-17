@@ -17,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/backup"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
@@ -141,8 +142,8 @@ func TestApproveOffRefusesServicePrincipal(t *testing.T) {
 		t.Fatalf("approve off as a service principal: %v, want ErrChainNeedsPerson", err)
 	}
 
-	if off.migrating.Load() || len(off.queue) != 0 {
-		t.Fatal("a refused approval holds the migration")
+	if got := migrationOpCount(t, off); got != 0 {
+		t.Fatalf("operations after a refused approval = %d, want none", got)
 	}
 
 	if err := off.Approve(t.Context(), approver()); err != nil {
@@ -171,8 +172,8 @@ func TestApproveOffNeedsTheMFAStep(t *testing.T) {
 		t.Fatalf("approve off without the step: %v, want ErrChainStepRequired", err)
 	}
 
-	if off.migrating.Load() || len(off.queue) != 0 {
-		t.Fatal("a refused approval holds the migration")
+	if got := migrationOpCount(t, off); got != 0 {
+		t.Fatalf("operations after a refused approval = %d, want none", got)
 	}
 
 	on := newTestAuditChain(t, audit.ChainOn)
@@ -182,8 +183,8 @@ func TestApproveOffNeedsTheMFAStep(t *testing.T) {
 		t.Fatalf("approve on: %v, want no MFA step", err)
 	}
 
-	if len(on.queue) != 1 {
-		t.Fatalf("queued changes = %d, want 1", len(on.queue))
+	if got := migrationOpCount(t, on); got != 1 {
+		t.Fatalf("operations after the approval = %d, want 1", got)
 	}
 
 	if err := on.Approve(t.Context(), approver()); !errors.Is(err, audit.ErrChainMigrating) {
@@ -202,9 +203,9 @@ func TestApproveOffWithoutMFAAsksForNoStep(t *testing.T) {
 		t.Fatalf("approve off: %v", err)
 	}
 
-	got := <-off.queue
+	got := migrationChange(t, off)
 	if got.To != audit.ChainStateOff || got.By != "alice" {
-		t.Fatalf("queued change = %+v, want off by alice", got)
+		t.Fatalf("started change = %+v, want off by alice", got)
 	}
 }
 
@@ -225,8 +226,8 @@ func TestApprovalAndRestoreRefuseEachOther(t *testing.T) {
 		t.Fatalf("approve while a restore runs: %v, want ErrRestoreRunning", err)
 	}
 
-	if chain.migrating.Load() {
-		t.Fatal("a refused approval holds the migration")
+	if got := migrationOpCount(t, chain); got != 0 {
+		t.Fatalf("operations after a refused approval = %d, want none", got)
 	}
 }
 
@@ -333,7 +334,7 @@ func TestConcurrentApprovalsOnOneStore(t *testing.T) {
 }
 
 // TestApproveWithoutMigrationLoop proves that an approval while the server
-// runs no migration loop stops before it claims anything.
+// runs no migration loop stops before it starts anything.
 func TestApproveWithoutMigrationLoop(t *testing.T) {
 	t.Parallel()
 
@@ -344,12 +345,8 @@ func TestApproveWithoutMigrationLoop(t *testing.T) {
 		t.Fatalf("approve without the migration loop: %v, want ErrChainMigrationsStopped", err)
 	}
 
-	if chain.migrating.Load() {
-		t.Fatal("a refused approval holds the migration")
-	}
-
-	if len(chain.queue) != 0 {
-		t.Fatalf("queued changes = %d, want 0", len(chain.queue))
+	if got := migrationOpCount(t, chain); got != 0 {
+		t.Fatalf("operations after a refused approval = %d, want none", got)
 	}
 
 	rec, err := chain.store.ChainRecord(t.Context())
@@ -357,9 +354,51 @@ func TestApproveWithoutMigrationLoop(t *testing.T) {
 		t.Fatalf("chain record: %v", err)
 	}
 
-	if !rec.Pending || !rec.MigratingAt.IsZero() {
-		t.Fatalf("chain record = %+v, want the waiting change with no claim", rec)
+	if !rec.Pending {
+		t.Fatalf("chain record = %+v, want the waiting change", rec)
 	}
+}
+
+// migrationOpCount answers the count of migration operations of chain.
+func migrationOpCount(t *testing.T, chain *auditChain) int {
+	t.Helper()
+
+	ops, err := chain.durableOps.List(t.Context(), durable.Filter{
+		Kind:   auditChainKind,
+		States: nil,
+		Limit:  0,
+	})
+	if err != nil {
+		t.Fatalf("list migration operations: %v", err)
+	}
+
+	return len(ops)
+}
+
+// migrationChange answers the approved change of the single migration
+// operation of chain.
+func migrationChange(t *testing.T, chain *auditChain) audit.ChainChange {
+	t.Helper()
+
+	ops, err := chain.durableOps.List(t.Context(), durable.Filter{
+		Kind:   auditChainKind,
+		States: nil,
+		Limit:  0,
+	})
+	if err != nil {
+		t.Fatalf("list migration operations: %v", err)
+	}
+
+	if len(ops) != 1 {
+		t.Fatalf("migration operations = %d, want 1", len(ops))
+	}
+
+	change, err := decodeMigrationChange(ops[0])
+	if err != nil {
+		t.Fatalf("decode migration change: %v", err)
+	}
+
+	return change
 }
 
 // newTestCheckpointSigner returns a signer whose seed repeats 7.

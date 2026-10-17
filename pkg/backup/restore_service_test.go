@@ -91,11 +91,6 @@ type restoreServiceLive struct {
 	kept       int
 	bumped     int
 	keepingErr error
-	resurrect  *backup.RestoreRecord
-	// wipeBackups, when non-nil, emulates the shared store: the swap drops
-	// the backup rows with the old live data, so only a preserved pre-backup
-	// survives.
-	wipeBackups *fakeRegistry
 }
 
 func (l *restoreServiceLive) ExportPortable(
@@ -143,23 +138,12 @@ func (l *restoreServiceLive) DiscardStaging(ctx context.Context) error {
 	return l.checks.DiscardStaging(ctx)
 }
 
-func (l *restoreServiceLive) ApplyStaging(ctx context.Context) error {
+func (l *restoreServiceLive) ApplyStaging(_ context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	l.applied++
 	l.bumped++
-	l.registry.dropAll()
-
-	if l.wipeBackups != nil {
-		l.wipeBackups.dropAll()
-	}
-
-	if l.resurrect != nil {
-		if err := l.registry.CreateRestore(ctx, *l.resurrect); err != nil {
-			return fmt.Errorf("resurrect stale restore: %w", err)
-		}
-	}
 
 	return nil
 }
@@ -227,15 +211,6 @@ func (l *restoreServiceLive) stageCallCount() int {
 	defer l.mu.Unlock()
 
 	return l.stageCalls
-}
-
-// setResurrect sets the row that ApplyStaging stores after the drop, under
-// the lock: ApplyStaging reads it on the restore goroutine.
-func (l *restoreServiceLive) setResurrect(row *backup.RestoreRecord) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	l.resurrect = row
 }
 
 // restoreServiceRegistry is an in-memory backup.RestoreRegistry. finishBlock,
@@ -530,18 +505,16 @@ func newRestoreServiceSetup(t *testing.T) *restoreServiceSetup {
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
 	blobs := newMemStore()
 	live := &restoreServiceLive{
-		checks:      setup.live,
-		registry:    regs,
-		mu:          sync.Mutex{},
-		stageBlock:  nil,
-		applyGate:   nil,
-		stageCalls:  0,
-		applied:     0,
-		kept:        0,
-		bumped:      0,
-		keepingErr:  nil,
-		resurrect:   nil,
-		wipeBackups: nil,
+		checks:     setup.live,
+		registry:   regs,
+		mu:         sync.Mutex{},
+		stageBlock: nil,
+		applyGate:  nil,
+		stageCalls: 0,
+		applied:    0,
+		kept:       0,
+		bumped:     0,
+		keepingErr: nil,
 	}
 
 	backups, err := backup.NewService(backup.Config{
@@ -1223,87 +1196,10 @@ func waitLogLine(t *testing.T, buf *syncBuffer) string {
 	return ""
 }
 
-// TestRestoreSwapSupersedesResurrectedRows proves the swap cannot resurrect a
-// stuck running row: the staged snapshot predates a still-running restore,
-// so the apply stores its row again, and the service fails it before
-// recording its own row. Without the supersede, the resurrected row stays
-// checking and every later start answers ErrRestoreRunning.
-func TestRestoreSwapSupersedesResurrectedRows(t *testing.T) {
-	t.Parallel()
-
-	setup := newRestoreServiceSetup(t)
-
-	stale := backup.RestoreRecord{
-		StartedAt:   time.Now().UTC(),
-		EndedAt:     time.Time{},
-		ID:          backup.RestoreID("rst-stale00000000001"),
-		BackupID:    setup.id,
-		PreBackupID: "",
-		RequestedBy: "tester",
-		Error:       "",
-		State:       backup.RestoreChecking,
-	}
-	setup.live.setResurrect(&stale)
-
-	id := backup.RestoreID("rst-supersede00000001")
-
-	startErr := setup.service.Start(t.Context(), id, backup.RestoreRequest{
-		BackupID:         setup.id,
-		PreBackupID:      "",
-		CheckOnly:        false,
-		Force:            false,
-		RequestedBy:      "tester",
-		KeepAccessTables: false,
-	})
-	if startErr != nil {
-		t.Fatalf("start restore: %v", startErr)
-	}
-
-	if row := waitRestoreEnd(t, setup.regs, id); row.State != backup.RestoreSucceeded {
-		t.Fatalf("restore state = %q, want succeeded (%q)", row.State, row.Error)
-	}
-
-	ghost, err := setup.regs.GetRestore(t.Context(), stale.ID)
-	if err != nil {
-		t.Fatalf("get resurrected restore: %v", err)
-	}
-
-	if ghost.State != backup.RestoreFailed || ghost.Error == "" {
-		t.Fatalf("resurrected restore = %+v, want failed with the supersede text", ghost)
-	}
-
-	next := backup.RestoreID("rst-supersede00000002")
-
-	nextErr := setup.service.Start(t.Context(), next, backup.RestoreRequest{
-		BackupID:         setup.id,
-		PreBackupID:      "",
-		CheckOnly:        false,
-		Force:            false,
-		RequestedBy:      "tester",
-		KeepAccessTables: false,
-	})
-	if nextErr != nil {
-		t.Fatalf("start after a superseded row: %v", nextErr)
-	}
-
-	if row := waitRestoreEnd(t, setup.regs, next); row.State != backup.RestoreSucceeded {
-		t.Fatalf("next restore state = %q, want succeeded (%q)", row.State, row.Error)
-	}
-}
-
-// dropAll removes every backup row, emulating the swap that replaces the
-// live data with staged data predating the pre-backup row.
-func (f *fakeRegistry) dropAll() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.rows = map[backup.ID]backup.Record{}
-}
-
 // TestRestorePreservesPreBackupAcrossSwap proves the backup taken before the
-// apply survives the swap: the swap drops the backup rows with the old live
-// data, and the service re-records the pre-backup after it, so the undo
-// source stays listed and readable.
+// apply survives the swap: the control tables stay across the swap with the
+// live rows, so the pre-backup row survives and the preserve after the swap
+// does nothing. The undo source stays listed and readable.
 func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 	t.Parallel()
 
@@ -1313,18 +1209,16 @@ func TestRestorePreservesPreBackupAcrossSwap(t *testing.T) {
 	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: nil}
 	blobs := newMemStore()
 	live := &restoreServiceLive{
-		checks:      check.live,
-		registry:    regs,
-		mu:          sync.Mutex{},
-		stageBlock:  nil,
-		applyGate:   nil,
-		stageCalls:  0,
-		applied:     0,
-		kept:        0,
-		bumped:      0,
-		keepingErr:  nil,
-		resurrect:   nil,
-		wipeBackups: backupRegs,
+		checks:     check.live,
+		registry:   regs,
+		mu:         sync.Mutex{},
+		stageBlock: nil,
+		applyGate:  nil,
+		stageCalls: 0,
+		applied:    0,
+		kept:       0,
+		bumped:     0,
+		keepingErr: nil,
 	}
 
 	backups, err := backup.NewService(backup.Config{
@@ -1756,14 +1650,76 @@ func TestRestoreRunsAfterApplyAfterTheSwap(t *testing.T) {
 
 // TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails proves that a step
 // after the swap that fails still runs the after-apply step, which the
-// restored data needs.
+// restored data needs. The control tables stay across the swap, so the
+// failing step is the pre-backup preserve: its Get fails with a driver
+// error.
 func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 	t.Parallel()
 
-	setup := newRestoreServiceSetup(t)
-	setup.regs.mu.Lock()
-	setup.regs.failErr = errFakeDriver
-	setup.regs.mu.Unlock()
+	check := newCheckSetup(t)
+	regs := newRestoreServiceRegistry()
+	backupRegs := newFakeRegistry()
+	backupRegs.failGet = errFakeDriver
+	order := &orderLog{mu: sync.Mutex{}, events: nil}
+	maint := &restoreServiceMaintenance{mu: sync.Mutex{}, enterErr: nil, enters: 0, leaves: 0, order: order}
+	blobs := newMemStore()
+	live := &restoreServiceLive{
+		checks:     check.live,
+		registry:   regs,
+		mu:         sync.Mutex{},
+		stageBlock: nil,
+		applyGate:  nil,
+		stageCalls: 0,
+		applied:    0,
+		kept:       0,
+		bumped:     0,
+		keepingErr: nil,
+	}
+
+	backups, err := backup.NewService(backup.Config{
+		Exporter:    &stubBackupExporter{sum: testSummary(), data: []byte("pre-backup-sql"), order: order},
+		Registry:    backupRegs,
+		Blobs:       newMemStore(),
+		StateOpener: nil,
+		Target:      check.target,
+		TargetName:  "mem:target",
+		Now:         nil,
+		Version:     "test-1.0",
+		MaxSQLBytes: 0,
+	})
+	if err != nil {
+		t.Fatalf("new backup service: %v", err)
+	}
+
+	service, err := backup.NewRestoreService(backup.RestoreConfig{
+		Live:        live,
+		Registry:    regs,
+		Backups:     backups,
+		Maintenance: maint,
+		Blobs:       blobs,
+		Target:      check.target,
+		Key:         testWrapper(),
+		Region:      "eu-west",
+		AfterApply:  nil,
+		Admit:       nil,
+		Now:         nil,
+		Logger:      nil,
+	})
+	if err != nil {
+		t.Fatalf("new restore service: %v", err)
+	}
+
+	setup := &restoreServiceSetup{
+		service: service,
+		target:  check.target,
+		live:    live,
+		blobs:   blobs,
+		backups: backups,
+		regs:    regs,
+		maint:   maint,
+		order:   nil,
+		id:      check.id,
+	}
 
 	var (
 		mu    sync.Mutex
@@ -1781,7 +1737,7 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 		}
 	}
 
-	service := restoreServiceWithHook(t, setup, step("after"))
+	service = restoreServiceWithHook(t, setup, step("after"))
 
 	id := backup.RestoreID("rst-afterswapfail0001")
 	req := backup.RestoreRequest{
