@@ -124,7 +124,7 @@ func checkUpgradeSchemaFromTag(t *testing.T, base, tag string) {
 func loadTagMigrations(t *testing.T, tag string) []migrate.Migration {
 	t.Helper()
 
-	all, err := migrate.Load(os.DirFS(filepath.Join("testdata/tag-migrations", tag)), ".")
+	all, err := migrate.Load(os.DirFS(filepath.Join("testdata", "tag-migrations", tag)), ".")
 	if err != nil {
 		t.Fatalf("load tag migrations %s: %v", tag, err)
 	}

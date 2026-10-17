@@ -70,6 +70,21 @@ func TestUpgrade(t *testing.T) {
 		t.Fatalf("stores: %v", err)
 	}
 
+	tools := installUpgradeTools(t, fetcher)
+
+	if len(tags) == 0 {
+		runEmptyUpgrades(t, databases, tools)
+
+		return
+	}
+
+	runTagUpgrades(t, tags, databases, tools)
+}
+
+// installUpgradeTools installs the newest CLI of each tool and groups them.
+func installUpgradeTools(t *testing.T, fetcher *e2e.Fetcher) upgradeTools {
+	t.Helper()
+
 	pulumiVersions := e2e.Pulumi().Versions()
 	tofuVersions := e2e.OpenTofu().Versions()
 
@@ -92,16 +107,24 @@ func TestUpgrade(t *testing.T) {
 
 	t.Logf("pulumi %s with tofu %s", pulumiCLI.Version, tofuCLI.Version)
 
-	if len(tags) == 0 {
-		for _, db := range databases {
-			t.Run(string(db), func(t *testing.T) {
-				t.Parallel()
-				upgradeOnStore(t, pulumiCLI, tofuCLI, db)
-			})
-		}
+	return upgradeTools{pulumi: pulumiCLI, tofu: tofuCLI}
+}
 
-		return
+// runEmptyUpgrades writes state with the current binary and restarts it.
+func runEmptyUpgrades(t *testing.T, databases []e2e.Store, tools upgradeTools) {
+	t.Helper()
+
+	for _, db := range databases {
+		t.Run(string(db), func(t *testing.T) {
+			t.Parallel()
+			upgradeOnStore(t, tools.pulumi, tools.tofu, db)
+		})
 	}
+}
+
+// runTagUpgrades upgrades each supported tag straight to the current binary.
+func runTagUpgrades(t *testing.T, tags []string, databases []e2e.Store, tools upgradeTools) {
+	t.Helper()
 
 	newBin := e2e.BuildCurrentBinary(t.Context(), t, t.TempDir())
 
@@ -111,13 +134,17 @@ func TestUpgrade(t *testing.T) {
 		t.Logf("built tag %s at %s and the current binary at %s", tag, oldBins[tag], newBin)
 	}
 
-	tools := upgradeTools{pulumi: pulumiCLI, tofu: tofuCLI}
-
 	for _, tag := range tags {
 		for _, db := range databases {
 			t.Run(tag+"/"+string(db), func(t *testing.T) {
 				t.Parallel()
-				upgradeFromTagOnStore(t, upgradeRun{tag: tag, oldBin: oldBins[tag], newBin: newBin, tools: tools, store: db})
+				upgradeFromTagOnStore(t, upgradeRun{
+					tag:    tag,
+					oldBin: oldBins[tag],
+					newBin: newBin,
+					tools:  tools,
+					store:  db,
+				})
 			})
 		}
 	}

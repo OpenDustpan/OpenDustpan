@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,6 +97,16 @@ func checkTagHashes(t *testing.T, want map[string]string) {
 
 	const tagDir = "testdata/tag-migrations"
 
+	got := readTagCopies(t, tagDir, want)
+	checkTagHashesAgainst(t, want, got)
+}
+
+// readTagCopies reads the content of every tag migration copy, keyed by tag
+// and file name as tag/file. It returns nothing when the tag directory is
+// missing.
+func readTagCopies(t *testing.T, tagDir string, want map[string]string) map[string][]byte {
+	t.Helper()
+
 	entries, err := os.ReadDir(tagDir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -103,59 +114,70 @@ func checkTagHashes(t *testing.T, want map[string]string) {
 				t.Errorf("tag migration dir %s is missing, want %d hash entries", tagDir, len(want))
 			}
 
-			return
+			return nil
 		}
 		t.Fatalf("read tag migration dir: %v", err)
 	}
 
-	seen := make(map[string]bool, len(want))
+	got := make(map[string][]byte)
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 
-		tag := entry.Name()
+		maps.Copy(got, readOneTagDir(t, tagDir, entry.Name()))
+	}
 
-		files, err := os.ReadDir(filepath.Join(tagDir, tag))
-		if err != nil {
-			t.Fatalf("read tag migration dir %s: %v", tag, err)
+	return got
+}
+
+// readOneTagDir reads the migration copies of one tag, keyed by tag and file
+// name as tag/file.
+func readOneTagDir(t *testing.T, tagDir, tag string) map[string][]byte {
+	t.Helper()
+
+	files, err := os.ReadDir(filepath.Join(tagDir, tag))
+	if err != nil {
+		t.Fatalf("read tag migration dir %s: %v", tag, err)
+	}
+
+	got := make(map[string][]byte)
+
+	for _, file := range files {
+		if skipTagFile(file) {
+			continue
 		}
 
-		for _, file := range files {
-			if file.IsDir() || filepath.Ext(file.Name()) != ".sql" {
-				continue
-			}
+		key := tag + "/" + file.Name()
 
-			key := tag + "/" + file.Name()
+		//nolint:gosec // The test reads its own tag migration copies.
+		data, err := os.ReadFile(filepath.Join(tagDir, tag, file.Name()))
+		if err != nil {
+			t.Fatalf("read tag migration %s: %v", key, err)
+		}
 
-			//nolint:gosec // The test reads its own tag migration copies.
-			data, err := os.ReadFile(filepath.Join(tagDir, tag, file.Name()))
-			if err != nil {
-				t.Fatalf("read tag migration %s: %v", key, err)
-			}
+		got[key] = data
+	}
 
-			wantHash, ok := want[key]
-			if !ok {
-				t.Errorf(
-					"tag migration %s has no hash entry: add its hash in TestFrozenMigrations; "+
-						"never edit a tag copy",
-					key,
-				)
+	return got
+}
 
-				continue
-			}
+// skipTagFile reports whether a tag directory entry holds no migration.
+func skipTagFile(file os.DirEntry) bool {
+	return file.IsDir() || filepath.Ext(file.Name()) != ".sql"
+}
 
-			sum := sha256.Sum256(data)
-			if got := hex.EncodeToString(sum[:]); got != wantHash {
-				t.Errorf(
-					"tag migration %s hash = %s, want %s: never edit a tag copy",
-					key,
-					got,
-					wantHash,
-				)
-			}
+// checkTagHashesAgainst proves every copy matches its hash entry and every
+// hash entry has a copy.
+func checkTagHashesAgainst(t *testing.T, want map[string]string, got map[string][]byte) {
+	t.Helper()
 
+	seen := make(map[string]bool, len(want))
+
+	for key, data := range got {
+		checkOneTagHash(t, key, data, want)
+		if _, ok := want[key]; ok {
 			seen[key] = true
 		}
 	}
@@ -167,5 +189,31 @@ func checkTagHashes(t *testing.T, want map[string]string) {
 				key,
 			)
 		}
+	}
+}
+
+// checkOneTagHash proves one tag migration copy matches its hash entry.
+func checkOneTagHash(t *testing.T, key string, data []byte, want map[string]string) {
+	t.Helper()
+
+	wantHash, ok := want[key]
+	if !ok {
+		t.Errorf(
+			"tag migration %s has no hash entry: add its hash in TestFrozenMigrations; "+
+				"never edit a tag copy",
+			key,
+		)
+
+		return
+	}
+
+	sum := sha256.Sum256(data)
+	if got := hex.EncodeToString(sum[:]); got != wantHash {
+		t.Errorf(
+			"tag migration %s hash = %s, want %s: never edit a tag copy",
+			key,
+			got,
+			wantHash,
+		)
 	}
 }

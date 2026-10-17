@@ -100,8 +100,8 @@ func checkUpgradeSchemaFromTag(t *testing.T, tag string) {
 		t.Fatalf("open upgraded store from tag %s: %v", tag, err)
 	}
 
-	if err := upgraded.Close(); err != nil {
-		t.Fatalf("close upgraded store from tag %s: %v", tag, err)
+	if closeErr := upgraded.Close(); closeErr != nil {
+		t.Fatalf("close upgraded store from tag %s: %v", tag, closeErr)
 	}
 
 	fresh, err := sqlite.Open(ctx, freshPath)
@@ -109,8 +109,8 @@ func checkUpgradeSchemaFromTag(t *testing.T, tag string) {
 		t.Fatalf("open fresh store: %v", err)
 	}
 
-	if err := fresh.Close(); err != nil {
-		t.Fatalf("close fresh store: %v", err)
+	if closeErr := fresh.Close(); closeErr != nil {
+		t.Fatalf("close fresh store: %v", closeErr)
 	}
 
 	want := readSchemaSnapshot(t, freshPath)
@@ -123,7 +123,7 @@ func checkUpgradeSchemaFromTag(t *testing.T, tag string) {
 func loadTagMigrations(t *testing.T, tag string) []migrate.Migration {
 	t.Helper()
 
-	all, err := migrate.Load(os.DirFS(filepath.Join("testdata/tag-migrations", tag)), ".")
+	all, err := migrate.Load(os.DirFS(filepath.Join("testdata", "tag-migrations", tag)), ".")
 	if err != nil {
 		t.Fatalf("load tag migrations %s: %v", tag, err)
 	}
@@ -314,52 +314,57 @@ func readSnapshotColumns(ctx context.Context, t *testing.T, conn *sql.DB) map[st
 	out := make(map[string][]string, len(tables))
 
 	for _, table := range tables {
-		//nolint:gosec // The table name comes from the schema of a database the test made.
-		rows, err := conn.QueryContext(ctx,
-			`SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info("`+
-				strings.ReplaceAll(table, `"`, `""`)+`") ORDER BY cid`,
-		)
-		if err != nil {
-			t.Fatalf("read columns of %s: %v", table, err)
-		}
-
-		var columns []string
-
-		for rows.Next() {
-			var cid, notnull, pk int64
-
-			var name, colType string
-
-			var dflt sql.NullString
-
-			if err := rows.Scan(&cid, &name, &colType, &notnull, &dflt, &pk); err != nil {
-				_ = rows.Close() //nolint:errcheck // The test fails on the scan error.
-
-				t.Fatalf("scan column of %s: %v", table, err)
-			}
-
-			def := "NULL"
-			if dflt.Valid {
-				def = dflt.String
-			}
-
-			columns = append(columns, fmt.Sprintf("%d|%s|%s|%d|%s|%d", cid, name, colType, notnull, def, pk))
-		}
-
-		if err := rows.Err(); err != nil {
-			_ = rows.Close() //nolint:errcheck // The test fails on the read error.
-
-			t.Fatalf("read columns of %s: %v", table, err)
-		}
-
-		if err := rows.Close(); err != nil {
-			t.Fatalf("close columns of %s: %v", table, err)
-		}
-
-		out[table] = columns
+		out[table] = readTableColumns(ctx, t, conn, table)
 	}
 
 	return out
+}
+
+// readTableColumns reads the columns of one table, ordered by column id.
+func readTableColumns(ctx context.Context, t *testing.T, conn *sql.DB, table string) []string {
+	t.Helper()
+
+	//nolint:gosec // The table name comes from the schema of a database the test made.
+	rows, err := conn.QueryContext(ctx,
+		`SELECT cid, name, type, "notnull", dflt_value, pk FROM pragma_table_info("`+
+			strings.ReplaceAll(table, `"`, `""`)+`") ORDER BY cid`,
+	)
+	if err != nil {
+		t.Fatalf("read columns of %s: %v", table, err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close columns of %s: %v", table, closeErr)
+		}
+	}()
+
+	var columns []string
+
+	for rows.Next() {
+		var cid, notnull, pk int64
+
+		var name, colType string
+
+		var dflt sql.NullString
+
+		if err := rows.Scan(&cid, &name, &colType, &notnull, &dflt, &pk); err != nil {
+			t.Fatalf("scan column of %s: %v", table, err)
+		}
+
+		def := "NULL"
+		if dflt.Valid {
+			def = dflt.String
+		}
+
+		columns = append(columns, fmt.Sprintf("%d|%s|%s|%d|%s|%d", cid, name, colType, notnull, def, pk))
+	}
+
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read columns of %s: %v", table, err)
+	}
+
+	return columns
 }
 
 // readSnapshotIndexes reads the index definitions, ordered by name, without
