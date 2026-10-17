@@ -1,6 +1,6 @@
 # 73. Until 1.0, a change can break everything except the tool-compatible APIs
 
-Status: accepted · 2026-10-17 · supersedes ADR 21 in part · decision 6 is a proposal that waits for confirmation
+Status: accepted · 2026-10-17 · supersedes ADR 21 in part
 
 ## Context
 
@@ -20,8 +20,8 @@ CLI and the real OpenTofu CLI do not change for us. So the APIs that they
 call must still match what they send and expect.
 
 The owner asked for less effort on migrations, not for broken installs of a
-tagged release. The owner did not set the migration rule. Decision 6 is the
-proposal of the integrator session, and it waits for confirmation.
+tagged release. The owner did not set the migration rule. The integrator session proposed
+decision 6, and the PM session accepted it on 2026-10-17.
 
 ## Decision
 
@@ -48,13 +48,14 @@ proposal of the integrator session, and it waits for confirmation.
 5. **Released shapes keep their upgrade path.** A schema shape, a backup
    format or a setting that a tag shipped follows ADR 72 decisions 10 and 11.
    An installation of a tagged release upgrades with no manual step.
-6. **Migrations of an unreleased schema (proposal).** An unreleased shape is
+6. **Migrations of an unreleased schema.** An unreleased shape is
    a schema shape that no tag shipped.
    - A change to an unreleased shape is a new numbered migration file. The
      file can drop, rename or make again a table or a column. It does not
      convert the data that an untagged build wrote.
    - Applied migration files stay frozen. Developer databases, CI databases
-     and `TestFrozenMigrations` depend on them.
+     and `TestFrozenMigrations` depend on them. The hashes of
+     `TestFrozenMigrations` change only in the collapse below.
    - A database or a backup that an untagged build wrote has no support. When
      a migration fails on such a database, the operator makes a new database.
    - Before each tag, the files that no tag shipped can collapse into one

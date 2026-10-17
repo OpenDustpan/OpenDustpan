@@ -183,7 +183,9 @@ skill (ADR 14):
 - Ask before adding a dependency. Prefer the standard library.
 - Never add telemetry code, also not code that is off by default (ADR 74).
 - AI-assisted changes follow `CONTRIBUTING.md` (ADR 76): disclose the tool,
-  sign off each commit, understand all of it, and pass `make check`.
+  sign off each commit, understand all of it, and pass `make check`. An
+  agent does not add a `Signed-off-by:` line until the owner decides who
+  signs off agent commits.
 - Keep changes small and reviewable, with one concern per change.
 - If you are unsure of the intent, ask rather than guess.
 - Manage agent skills with `npx skills@1.7.0` and `DISABLE_TELEMETRY=1`,

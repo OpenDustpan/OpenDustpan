@@ -12,13 +12,18 @@ supported old release.
 The project owner decided: a minor release every 8 weeks, patch releases at
 any time, and security fixes for the latest three minor versions.
 
+The owner did not decide two rules of this ADR. The PM session added them on
+2026-10-17: the rule "fixes only" in decision 2, and the rule on a missed date
+in the consequences. Each one has the mark "(PM addition)".
+
 ## Decision
 
 1. **A minor release every 8 weeks.** The project tags a minor release from
    `main` every 8 weeks. Before 1.0, a minor release is `v0.N.0`. The first
    one is `v0.1.0` (ADR 21), and its tag starts the 8-week count.
 2. **Patch releases at any time.** A patch release `v0.N.P` comes from the
-   release branch of its minor version. It holds fixes only, no new feature.
+   release branch of its minor version. It holds fixes only, no new feature
+   (PM addition).
 3. **Security fixes for the latest three minor versions.** When the project
    fixes a security problem, it releases a patch for each of the latest three
    minor versions. An older minor version gets no fix.
@@ -34,6 +39,7 @@ any time, and security fixes for the latest three minor versions.
 - `SECURITY.md` names the supported versions when the first tag exists.
 - Each patch release needs a release branch and the release workflow of
   ADR 21 for that branch.
-- A minor release that misses its date does not move the next date.
+- A minor release that misses its date does not move the next date (PM
+  addition).
 - Breaking changes before 1.0 (ADR 73) still pass through these releases. The
   release notes of each minor release list them.
