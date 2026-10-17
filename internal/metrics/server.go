@@ -31,6 +31,12 @@ const (
 	// maxSinkSeries caps the series of the audit sink families: one per
 	// configured sink.
 	maxSinkSeries = MaxSinkSeries
+	// maxSinkFailureReasons counts the reasons of
+	// dustpan_audit_sink_failures_total: size, unreachable, write, read and
+	// lease. The failure family holds one series per sink and reason, so
+	// its cap is maxSinkSeries times this count: a failure on any sink is
+	// never dropped.
+	maxSinkFailureReasons = 5
 	// maxReloadSeries holds one series for each reload result.
 	maxReloadSeries = 2
 	// maxSweepResults holds one series for each result of the inactivity
@@ -317,12 +323,12 @@ func (m *ServerMetrics) IncAuditRestoreCheckFailure() {
 // sinkFamilies holds the audit and log sink families: counters labeled by sink,
 // with one series for each configured sink.
 type sinkFamilies struct {
-	shipped   *Counter
-	sinkFail  *Counter
-	sinkSkip  *Counter
-	logDrop   *Counter
-	sinkLag   *Gauge
-	sinkLagCt *Gauge
+	shipped        *Counter
+	sinkFail       *Counter
+	sinkSkip       *Counter
+	logDrop        *Counter
+	sinkLag        *Gauge
+	sinkLagEntries *Gauge
 }
 
 // newSinkFamilies registers the audit sink families in reg.
@@ -337,7 +343,7 @@ func newSinkFamilies(reg *Registry) sinkFamilies {
 			"dustpan_audit_sink_failures_total",
 			"Failed audit sink deliveries by sink and reason: size for a refused entry, else the failed step.",
 			[]string{labelSink, labelReason},
-			maxSinkSeries,
+			maxSinkSeries*maxSinkFailureReasons,
 		),
 		sinkSkip: family(
 			"dustpan_audit_sink_skipped_total",
@@ -350,7 +356,7 @@ func newSinkFamilies(reg *Registry) sinkFamilies {
 			[]string{labelSink},
 			maxSinkSeries,
 		),
-		sinkLagCt: reg.NewGauge(
+		sinkLagEntries: reg.NewGauge(
 			"dustpan_audit_sink_lag_entries",
 			"Delivery lag of an audit sink in entries, by sink.",
 			[]string{labelSink},
@@ -409,7 +415,7 @@ func (m *ServerMetrics) SetAuditSinkLagEntries(sink string, entries int64) {
 		entries = 0
 	}
 
-	m.sinks.sinkLagCt.Set(float64(entries), sink)
+	m.sinks.sinkLagEntries.Set(float64(entries), sink)
 }
 
 // newSweepCounter creates dustpan_inactivity_sweeps_total in reg.

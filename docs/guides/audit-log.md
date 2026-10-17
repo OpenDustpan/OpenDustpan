@@ -400,8 +400,8 @@ The chain shows a change or a deletion of an entry.
 Each entry holds the hash of its own fields and of the previous entry of
 its namespace, so a changed field breaks the hash of that entry and a
 deleted entry breaks the link of the next one.
-A sink copy with `"truncated": true` keeps `scope`, `sequence`, `prevHash` and `hash`, so a receiver can still follow the links and find gaps and duplicates.
-The receiver cannot recompute the `hash` of such a copy from the shipped fields.
+A sink copy is a whole entry: the sink never cuts a field and never sends a changed entry.
+Each copy keeps `scope`, `sequence`, `prevHash` and `hash`, so a receiver can follow the links and find gaps and duplicates.
 The full entry stays in the server audit log, and the chain check on the server covers it.
 A backup carries the `audit_entries` table, so a restore keeps the entries
 and a valid chain.
@@ -474,8 +474,8 @@ Each entry is one JSON object with `time`, `level` (`info`), `msg` (`audit entry
 `valueCount`, `objectID` and `changes` are present only when the entry has them.
 `changes` holds the canonical JSON that the hash covers: a list sorted by `key`.
 `prevHash` and `hash` hold the chain of the entry.
-`scope`, `sequence`, `prevHash` and `hash` are never trimmed. A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
-A record with `"truncated": true` has a `hash` that the receiver cannot recompute from the shipped fields.
+The server never cuts a field: each copy is a whole entry with `scope`, `sequence`, `prevHash` and `hash`.
+A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
 The full entry stays in the server audit log, and the chain check on the server covers it.
 
 ```json
@@ -485,7 +485,7 @@ The full entry stays in the server audit log, and the chain check on the server 
 The server reads the new entries of each scope in order and writes them to the sink in one batch.
 It moves the cursor of the sink only after the sink accepted the batch.
 A failed batch stays, and the server sends it again with a longer wait each time, up to 5 minutes.
-While its lease holds, one instance ships a sink. After a lease is lost or a round fails, a sink can receive an entry twice. Delivery is at least once.
+While its lease holds, one instance ships a sink. After the server loses the lease or a round fails, a sink can receive an entry twice. Delivery is at least once.
 Drop duplicates by `scope` and `sequence`.
 A batch in one scope that fails does not stop the other scopes.
 The server sends a batch every 5 seconds to a file, syslog or a webhook, and every minute to object storage.
@@ -503,16 +503,14 @@ Use `tls` for an audit log.
 `?max-size=<bytes>` sets the largest message: from 480 to 65507 bytes over UDP, and from 480 to 65536 bytes over TCP and TLS.
 The default is 8192 over UDP and 65536 (64 KiB) over TCP and TLS, which holds the largest entry the server writes.
 Raise the matching limit of the receiver to at least the same size, or the receiver drops the longer messages.
-With rsyslog set `$MaxMessageSize` (default 8k). On a TCP input also set `MaxFrameSize`.
-With syslog-ng set `log-msg-size()`. Older releases default below 64 KiB.
-An entry above that size arrives trimmed to fit, with the long fields shortened and `"truncated": true` in the record.
-Trim never shortens `truncated`, `scope`, `sequence`, `time`, `action`, `kind`, `outcome`, `prevHash` and `hash`.
-`scope`, `sequence`, `prevHash` and `hash` stay whole. A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
-A record with `"truncated": true` has a `hash` that the receiver cannot recompute from the shipped fields.
+With rsyslog set `$MaxMessageSize`. On a TCP input also set `MaxFrameSize`.
+The defaults of both may be below 64 KiB. Check the receiver's limit.
+With syslog-ng set `log-msg-size()`. Its default may be below 64 KiB. Check the receiver's limit.
+The sink never shortens a field and never sends a changed entry.
+The sink refuses an entry above that size and never sends it.
+The server counts it in `dustpan_audit_sink_skipped_total` and in `dustpan_audit_sink_failures_total{reason="size"}`, logs one error line with its scope and sequence, and goes on with the next entry.
+Read the refused entry by its `scope` and `sequence`, for example `GET /api/audit/entries/7?organization=acme`.
 The full entry stays in the server audit log, and the chain check on the server covers it.
-Read the full entry by its `scope` and `sequence`, for example `GET /api/audit/entries/7?organization=acme`.
-Only an entry that cannot fit even with every trimmable field empty is skipped.
-The server counts it in `dustpan_audit_sink_skipped_total` and in `dustpan_audit_sink_failures_total{reason="size"}`, logs an error with its scope and sequence, and goes on with the next entry.
 
 ### Webhook
 
@@ -553,15 +551,19 @@ A rotation tool moves the file away and sends `SIGHUP` to the server.
 
 `dustpan_audit_sink_entries_total{sink="<name>"}` counts the entries that a sink accepted.
 `dustpan_audit_sink_failures_total{sink="<name>",reason="<reason>"}` counts the failed deliveries.
-The reason is `size` for an entry that the sink refused because it cannot hold it. An example is a syslog record that cannot fit below `max-size` even trimmed.
+The reason is `size` for an entry that the sink refused because it cannot hold it. An example is a syslog record that cannot fit below `max-size`.
 The reason is `unreachable` when the sink never reached its receiver.
 The reason is `write` for any other failed write.
 The reason is `read` for a failed entry, cursor or namespace read.
 The reason is `lease` for a failed sink lease take.
-Each failed delivery also writes one error log line with the sink name and, for a refused entry, its scope and sequence.
+A refused entry logs one error line per entry with the sink name, its scope and its sequence.
+Any other failure logs one error line per round.
+The line has the sink name, the reason, and the sequence of the first entry of the failed batch.
+A round that knows no sequence leaves it out.
+A round that never read a batch, for example a failed lease take or a failed entry, cursor or namespace read, carries no sequence.
 A failed batch loses no entry, but a count that keeps growing means the sink falls behind.
 A refused entry never arrives: alert when the `size` series grows.
-`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog record that cannot fit below `max-size` even trimmed.
+`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog record that cannot fit below `max-size`.
 A skipped entry is not in the sink: alert when that count is above zero.
 `dustpan_audit_sink_lag_seconds{sink="<name>"}` holds the age in seconds of the oldest entry the sink has not delivered yet, or 0 when the sink is up to date.
 `dustpan_audit_sink_lag_entries{sink="<name>"}` holds the count of entries the sink has not delivered yet, or 0 when the sink is up to date.

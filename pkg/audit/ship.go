@@ -545,7 +545,7 @@ func (s *Shipper) acquire(ctx context.Context, sink string) (bool, error) {
 
 	held, err := s.cfg.Leases.AcquireSinkLease(ctx, sink, s.cfg.InstanceID, s.cfg.LeaseTTL)
 	if err != nil {
-		return false, &shipError{step: stepLease, err: err}
+		return false, &shipError{step: stepLease, err: err, seq: 0, hasSeq: false}
 	}
 
 	return held, nil
@@ -667,22 +667,55 @@ func isDialError(err error) bool {
 }
 
 // fail logs a failed round and calls the failure hook. The log line holds
-// the sink name, the count of scopes that failed, the reason and a fixed
-// error class, never an entry and never the text of a store, driver or
-// transport error: the line can go to a remote sink. A refused entry is a
-// delivery failure too: skipSize logs it separately with its sequence.
+// the sink name, the count of scopes that failed, the reason, the sequence
+// of the first entry of the failed batch when the round knows it, and a
+// fixed error class, never an entry and never the text of a store, driver
+// or transport error: the line can go to a remote sink. A round that never
+// read a batch, for example a failed lease take or a failed entry, cursor
+// or namespace read, carries no sequence. A refused entry is a delivery
+// failure too: skipSize logs it separately with its sequence.
 func (s *Shipper) fail(ctx context.Context, name string, err error) {
 	reason := failureReason(err)
 
-	s.cfg.Logger.ErrorContext(ctx, "audit sink delivery failed",
+	attrs := []any{
 		slog.String("sink", name),
 		slog.Int("scopes", failedScopes(err)),
 		slog.String("reason", reason),
-		slog.String("error", ErrorClass(err)))
+	}
+
+	if seq, ok := failureSequence(err); ok {
+		attrs = append(attrs, slog.Int64("sequence", seq))
+	}
+
+	attrs = append(attrs, slog.String("error", ErrorClass(err)))
+
+	s.cfg.Logger.ErrorContext(ctx, "audit sink delivery failed", attrs...)
 
 	if s.cfg.OnFailure != nil {
 		s.cfg.OnFailure(name, reason)
 	}
+}
+
+// failureSequence answers the sequence of the first entry of the failed
+// batch when the round knows it: the sequence that the failed write or
+// cursor advance carried. It answers false for a round that never read a
+// batch, for example a failed lease take or a failed entry, cursor or
+// namespace read.
+func failureSequence(err error) (int64, bool) {
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, part := range joined.Unwrap() {
+			if seq, ok := failureSequence(part); ok {
+				return seq, true
+			}
+		}
+	}
+
+	var shipErr *shipError
+	if errors.As(err, &shipErr) && shipErr.hasSeq {
+		return shipErr.seq, true
+	}
+
+	return 0, false
 }
 
 // skipSize logs the records that sink refused because it cannot hold them
@@ -764,7 +797,7 @@ func (s *Shipper) round(ctx context.Context, sink ShipSink) error {
 
 	namespaces, err := s.cfg.Namespaces.ListNamespaces(ctx)
 	if err != nil {
-		return markRoundEnded(outer, ctx, &shipError{step: stepList, err: err})
+		return markRoundEnded(outer, ctx, &shipError{step: stepList, err: err, seq: 0, hasSeq: false})
 	}
 
 	namespaces = append(namespaces, serverScope())
@@ -883,7 +916,12 @@ func (s *Shipper) renewLease(ctx context.Context, sink string) error {
 	}
 
 	if !held {
-		return &shipError{step: stepLease, err: fmt.Errorf("%w: %w", errRoundEnded, errLeaseLost)}
+		return &shipError{
+			step:   stepLease,
+			err:    fmt.Errorf("%w: %w", errRoundEnded, errLeaseLost),
+			seq:    0,
+			hasSeq: false,
+		}
 	}
 
 	return nil
@@ -896,7 +934,7 @@ func (s *Shipper) renewLease(ctx context.Context, sink string) error {
 func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, ns namespace.Namespace) error {
 	cursor, err := s.cfg.Feed.SinkCursor(ctx, sink.Name, ns.Name)
 	if err != nil {
-		return &shipError{step: stepCursor, err: err}
+		return &shipError{step: stepCursor, err: err, seq: 0, hasSeq: false}
 	}
 
 	first := true
@@ -936,12 +974,17 @@ func (s *Shipper) shipNamespace(ctx context.Context, sink ShipSink, ns namespace
 // round deadline passed, so the cursor stays where the sink acknowledged.
 func (s *Shipper) nextBatch(ctx context.Context, ns namespace.Namespace, cursor int64) ([]Entry, error) {
 	if ctx.Err() != nil {
-		return nil, &shipError{step: stepRead, err: fmt.Errorf("%w: round deadline: %w", errRoundEnded, ctx.Err())}
+		return nil, &shipError{
+			step:   stepRead,
+			err:    fmt.Errorf("%w: round deadline: %w", errRoundEnded, ctx.Err()),
+			seq:    0,
+			hasSeq: false,
+		}
 	}
 
 	entries, err := s.cfg.Feed.After(ctx, ns.Name, cursor, ShipBatchSize)
 	if err != nil {
-		return nil, &shipError{step: stepRead, err: err}
+		return nil, &shipError{step: stepRead, err: err, seq: 0, hasSeq: false}
 	}
 
 	return entries, nil
@@ -960,7 +1003,7 @@ func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Nam
 	if err := sink.Sink.Write(ctx, records); err != nil {
 		skip, ok := errors.AsType[*logsink.SkipError](err)
 		if !ok {
-			return &shipError{step: stepWrite, err: err}
+			return &shipError{step: stepWrite, err: err, seq: entries[0].Sequence, hasSeq: true}
 		}
 
 		s.skipSize(ctx, sink.Name, skip, entries)
@@ -971,7 +1014,7 @@ func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Nam
 	last := entries[len(entries)-1].Sequence
 
 	if err := s.cfg.Feed.AdvanceSinkCursor(ctx, ns.Fence(), sink.Name, last); err != nil {
-		return &shipError{step: stepAdvance, err: err}
+		return &shipError{step: stepAdvance, err: err, seq: entries[0].Sequence, hasSeq: true}
 	}
 
 	if s.cfg.OnShipped != nil && delivered > 0 {
@@ -1052,10 +1095,15 @@ const (
 )
 
 // shipError is a failure of one step of a round. Its text holds the text of
-// the cause, so the log never prints it: it prints ErrorClass instead.
+// the cause, so the log never prints it: it prints ErrorClass instead. A
+// failure of a batch write or a cursor advance carries the sequence of the
+// first entry of that batch; a failure before the round read a batch
+// carries none.
 type shipError struct {
-	err  error
-	step string
+	err    error
+	step   string
+	seq    int64
+	hasSeq bool
 }
 
 // Error implements error.

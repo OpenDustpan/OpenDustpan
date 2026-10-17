@@ -119,11 +119,10 @@ type Config struct {
 	Facility int
 	// Timeout bounds one dial and one batch write. Zero means 10 seconds.
 	Timeout time.Duration
-	// MaxMessageBytes caps one message, header included. Write trims the
-	// long string fields of a record above the cap and marks it truncated,
-	// so a record that the receiver cannot hold never blocks the records
-	// after it. It skips only a record that cannot fit even with every
-	// trimmable field empty, and answers a *logsink.SkipError for it. Zero
+	// MaxMessageBytes caps one message, header included. Write refuses a
+	// record above the cap and answers a *logsink.SkipError for it, so a
+	// record that the receiver cannot hold never blocks the records after
+	// it. It never cuts a field and never sends a changed entry. Zero
 	// means 8192 over UDP and 65536 over TCP and TLS. The value must be
 	// from 480 to 65507 over UDP and from 480 to 65536 over TCP and TLS.
 	MaxMessageBytes int
@@ -247,10 +246,8 @@ func headerField(s string, limit int) string {
 }
 
 // Format returns the RFC 5424 message for r, without transport framing.
-// A record above the message cap arrives trimmed to fit, with the long
-// string fields shortened and a truncated mark. It answers a
-// *logsink.SkipError only for a record that cannot fit even with every
-// trimmable field empty.
+// A record above the message cap is refused with a *logsink.SkipError.
+// It never cuts a field and never sends a changed entry.
 func (s *Sink) Format(r logsink.Record) ([]byte, error) {
 	var prefix bytes.Buffer
 
@@ -262,24 +259,17 @@ func (s *Sink) Format(r logsink.Record) ([]byte, error) {
 	prefix.WriteString(s.header)
 	prefix.WriteString(" - - ")
 
-	budget := s.cfg.MaxMessageBytes - prefix.Len()
-
-	trimmed, ok, err := logsink.TrimToFit(r, budget)
+	msg, err := logsink.MarshalJSON(r)
 	if err != nil {
 		return nil, err
 	}
 
-	if !ok {
+	if prefix.Len()+len(msg) > s.cfg.MaxMessageBytes {
 		return nil, &logsink.SkipError{
 			Reason:  fmt.Sprintf("syslog message above %d bytes", s.cfg.MaxMessageBytes),
 			Skipped: 1,
 			Indexes: nil,
 		}
-	}
-
-	msg, err := logsink.MarshalJSON(trimmed)
-	if err != nil {
-		return nil, err
 	}
 
 	return append(prefix.Bytes(), msg...), nil
