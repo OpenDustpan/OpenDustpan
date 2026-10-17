@@ -288,7 +288,10 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("resolve database path: %w", err)
 	}
 
-	resolved := resolveDatabasePath(abs)
+	resolved, err := resolveDatabasePath(abs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve database path: %w", err)
+	}
 
 	guard, err := acquireGuard(resolved)
 	if err != nil {
@@ -333,23 +336,79 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	return s, nil
 }
 
+// maxSymlinkChain caps the links resolveDatabasePath follows at one path:
+// a chain with more links fails with an error.
+const maxSymlinkChain = 40
+
+// errTooManyLinks reports a symbolic link chain with more links than
+// maxSymlinkChain allows.
+var errTooManyLinks = errors.New("too many links")
+
 // resolveDatabasePath returns the canonical path of the database file at abs,
 // with symbolic links resolved, so two spellings of one file share one guard
-// file. When the file does not exist yet, it resolves the directory and joins
-// the base name, so a database created through a linked directory still maps
-// to the same guard. It never names the database file itself for the guard:
-// closing our descriptor would release the POSIX locks SQLite holds on that
-// file.
-func resolveDatabasePath(abs string) string {
+// file. When the file exists, it returns EvalSymlinks of abs. When the file
+// does not exist, it follows the chain of links at abs with Lstat and
+// Readlink, resolving each relative target against the directory of its link,
+// up to 40 links, then resolves the directory of the final target and joins
+// the base name of the final target, so a database created through a dangling
+// link still maps to the same guard. A plain missing file with no link
+// resolves its directory and joins the base name. It returns an error when
+// the chain holds more than 40 links. It never names the database file itself
+// for the guard: closing our descriptor would release the POSIX locks SQLite
+// holds on that file.
+func resolveDatabasePath(abs string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		return resolved
+		return resolved, nil
 	}
 
-	if dir, err := filepath.EvalSymlinks(filepath.Dir(abs)); err == nil {
-		return filepath.Join(dir, filepath.Base(abs))
+	final, err := followLinkChain(abs)
+	if err != nil {
+		return "", err
 	}
 
-	return abs
+	if dir, err := filepath.EvalSymlinks(filepath.Dir(final)); err == nil {
+		return filepath.Join(dir, filepath.Base(final)), nil
+	}
+
+	return final, nil
+}
+
+// followLinkChain walks the chain of symbolic links at abs and returns the
+// final target. A relative target resolves against the directory of its link.
+// A path that is no link, or that does not exist, ends the chain. A chain
+// with more than maxSymlinkChain links returns errTooManyLinks.
+func followLinkChain(abs string) (string, error) {
+	current := abs
+
+	for followed := 0; ; followed++ {
+		info, err := os.Lstat(current)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return "", fmt.Errorf("stat database path %s: %w", current, err)
+			}
+
+			return current, nil
+		}
+
+		if info.Mode()&os.ModeSymlink == 0 {
+			return current, nil
+		}
+
+		if followed >= maxSymlinkChain {
+			return "", fmt.Errorf("%w at %s", errTooManyLinks, abs)
+		}
+
+		target, err := os.Readlink(current)
+		if err != nil {
+			return "", fmt.Errorf("read database link %s: %w", current, err)
+		}
+
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(filepath.Dir(current), target)
+		}
+
+		current = target
+	}
 }
 
 // openDatabase opens the database file at abs with the store pragmas.

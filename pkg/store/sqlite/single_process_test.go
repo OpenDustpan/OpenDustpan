@@ -2,6 +2,7 @@ package sqlite_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -120,6 +121,72 @@ func TestSecondOpenThroughSymlinkFails(t *testing.T) {
 
 	if closeErr := third.Close(); closeErr != nil {
 		t.Fatalf("close third: %v", closeErr)
+	}
+}
+
+// TestSecondOpenThroughDanglingSymlinkFails proves that the guard holds
+// through a dangling symbolic link: link.db points at real.db before real.db
+// exists. An Open of link.db succeeds, and an Open of real.db while the first
+// store is open fails with ErrInUse, because both spell the same file.
+func TestSecondOpenThroughDanglingSymlinkFails(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.db")
+	link := filepath.Join(dir, "link.db")
+
+	if linkErr := os.Symlink(target, link); linkErr != nil {
+		t.Skipf("create symbolic link: %v", linkErr)
+	}
+
+	first, err := sqlite.Open(t.Context(), link)
+	if err != nil {
+		t.Fatalf("first open through the dangling link: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := first.Close(); closeErr != nil {
+			t.Errorf("close first: %v", closeErr)
+		}
+	})
+
+	second, err := sqlite.Open(t.Context(), target)
+	if !errors.Is(err, sqlite.ErrInUse) {
+		if second != nil {
+			_ = second.Close() //nolint:errcheck // The test fails below; the close only frees the handle.
+		}
+
+		t.Fatalf("second open of %s: err = %v, want ErrInUse", target, err)
+	}
+}
+
+// TestOpenThroughLongSymlinkChainFails proves that an Open through a chain of
+// more than 40 symbolic links fails with an error instead of looping.
+func TestOpenThroughLongSymlinkChainFails(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	next := filepath.Join(dir, "final.db")
+
+	for i := 40; i >= 0; i-- {
+		path := filepath.Join(dir, fmt.Sprintf("link-%02d.db", i))
+
+		if linkErr := os.Symlink(next, path); linkErr != nil {
+			t.Skipf("create symbolic link: %v", linkErr)
+		}
+
+		next = path
+	}
+
+	store, err := sqlite.Open(t.Context(), next)
+	if err == nil {
+		_ = store.Close() //nolint:errcheck // The test fails below; the close only frees the handle.
+
+		t.Fatal("open through a chain of more than 40 links: err = nil, want an error")
+	}
+
+	if errors.Is(err, sqlite.ErrInUse) {
+		t.Fatalf("open through a chain of more than 40 links: err = %v, want a resolve error, not ErrInUse", err)
 	}
 }
 
