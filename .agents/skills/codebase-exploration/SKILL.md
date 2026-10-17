@@ -1,66 +1,52 @@
 ---
 name: codebase-exploration
 description: >
-  Use when exploring, understanding, or answering questions about a codebase that has Repowise
-  indexed (a .repowise/ directory in the project root). Activates for "how does X work",
-  "explain the architecture", "where is Y implemented", "what does this module do", or any task
-  that needs an understanding of structure before diving into source files.
+  Use to explore or understand the codebase: "how does X work", "explain the architecture",
+  "where is Y implemented", "what does this module do", or any task that needs structure
+  before you read source. Uses the Repowise MCP tools.
 user-invocable: false
 ---
 
-# Codebase Exploration with Repowise
+# Codebase exploration with Repowise
 
-This project has a Repowise intelligence layer. Before grepping and reading raw
-source to understand the codebase, reach for the Repowise MCP tools — they
-return documentation, ownership, history, decisions, and graph structure that
-plain file reads don't, usually in one round-trip instead of many.
+Before you search and read raw source, use the Repowise MCP tools. They return
+documentation, ownership, history, decisions and graph structure, often in one call.
 
-## Which tool for which question
+The workspace has two repositories: `opendustpan-opendustpan` (the backend) and
+`opendustpan-console` (the web console). Pass `repo` to limit a call to one. Without it,
+results come from both. `get_symbol` always needs `repo`.
 
-| You want… | Call |
+## Which tool
+
+| You want | Call |
 |---|---|
-| First orientation in an unfamiliar repo | `get_overview()` — architecture summary, key modules, entry points, git health, knowledge map. Skip it once you have the map. |
-| A direct answer to "how/where/why does X work" | `get_answer(question="…")`: synthesised answer with citations + one `confidence` trust signal. Collapses the search → read → reason loop. |
-| Find a symbol, file, or fuzzy concept | `search_codebase(query="…")` — hybrid search. `mode="auto"` routes an identifier to indexed symbol hits (`symbol_id`/line bounds → pipe into `get_symbol`), a path to file pages (→ `get_context`), and prose to semantic wiki search (each hit reports `search_method`: `embedding` vs `bm25`). Force a branch with `mode=symbol\|path\|concept\|hybrid`; narrow symbols with `symbol_kind`. |
-| A triage card for specific files/symbols | `get_context(targets=[…])` — title, summary, signatures, hotspot bit, top callers, decision titles, symbol_ids (a row without one is `path::name`). Batch many targets in one call. |
-| The actual source of one symbol | `get_symbol("path/to/file.py::Name")` — exact bytes with line bounds. Cheaper than Read + offset math. Use a `symbol_id` from `get_context`. |
+| First orientation | `get_overview(repo=…)`. Call it once. |
+| An answer to "how, where or why does X work" | `get_answer(question="…")`. It returns a cited answer and a `confidence` value. |
+| To find a symbol, file or concept | `search_codebase(query="…")`. An identifier gives symbol hits (`symbol_id`, line range). A path gives file pages. Prose gives semantic search. |
+| A summary card for files or modules | `get_context(targets=[…])`. Batch up to 25 targets. |
+| Signature, location, callers and callees of one symbol | `get_symbol(repo=…, symbol_id="path::Name")` |
 
-## Recommended flow
+`get_symbol` does not return source code. The hosted index does not store source. Take
+`file_path` and the line range from the result, then read that range of the file in the
+checkout.
 
-1. New area you don't know → `get_overview()` once.
-2. A specific question → `get_answer(question=…)` first.
-   - High confidence → answer it, cite the paths.
-   - `medium`/`low` confidence → follow `best_guesses[0].file` or
-     `fallback_targets[0]` into `get_context`, then `get_symbol` for bytes.
-3. A named symbol or a path → `search_codebase(query="Name")` /
-   `search_codebase(query="path/to/file.py")`; symbol hits pipe straight into
-   `get_symbol`, file hits into `get_context`.
-4. More files around a concept → `search_codebase`, then `get_context` on the
-   hits (batched), then `get_symbol` only for the bodies you actually need.
+## Flow
 
-Fall back to your own file-reading and searching tools only when the indexed
-context doesn't cover the specific detail the user asked about.
+1. For an unknown area, call `get_overview` once.
+2. For a question, call `get_answer` first. If `confidence` is high, answer and cite the
+   paths. If it is `medium` or `low`, follow `best_guesses[0].file` or
+   `fallback_targets[0]` into `get_context`, then read the source.
+3. For a named symbol or path, call `search_codebase`. Send symbol hits to `get_symbol`
+   and file hits to `get_context`.
+4. Read the source in the checkout for the details you need. The checkout is the truth.
 
-## Trust signals — verify when
+## When to verify
 
-- `_meta.stale_warning` is present (the index has diverged from HEAD), or
-- `confidence` is `medium`/`low`, or
-- a result's `search_method` is `bm25`.
+Verify against the checkout when `_meta.stale_warning` is present, when `confidence` is
+`medium` or `low`, or when a hit has `search_method: bm25`. The index is built from pushed
+commits. It does not show uncommitted or unpushed changes.
 
-Otherwise the response is current — act on it.
+## Errors
 
-## Error handling
-
-- "No repositories found. Run 'repowise init' first." → suggest `/repowise:init`.
-  Add `--no-editor-setup` if this repo is a scratch clone, a fixture, or a
-  worktree: `init` otherwise repoints the user's single global `repowise` MCP
-  entry at it.
-- MCP tools unavailable → prefer the matching CLI slash commands when the
-  plugin is installed (`/repowise:ask`, `/repowise:context`, `/repowise:symbol`,
-  `/repowise:search`) rather than grepping blind.
-- `get_answer`/`search_codebase` come back empty → the repo may have a
-  template-rendered wiki. Fall back to `get_context` with explicit paths, and note
-  that model-written pages (`repowise generate`, or `/repowise:init` with an LLM
-  provider) unlock richer docs + semantic search.
-- Tools fail to connect at all → the `repowise` binary may not be installed;
-  suggest `/repowise:init`.
+If a search returns nothing, call `get_context` with explicit paths. If the tools do not
+connect, use the normal search and read tools, and say that Repowise was not available.
