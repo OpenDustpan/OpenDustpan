@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 
@@ -110,12 +111,15 @@ type ShipSink struct {
 	Interval time.Duration
 }
 
-// ShipperConfig configures a Shipper. OnShipped, OnFailure, OnSkipped and
-// OnLag are hooks for metrics and may be nil. OnShipped receives the sink
-// name and the count of entries of one accepted batch. OnFailure receives
-// the sink name after a failed round. OnSkipped receives the sink name and
-// the count of entries that the sink skipped (logsink.ErrSkipped). OnLag
-// receives the sink name and its delivery lag in seconds after each round.
+// ShipperConfig configures a Shipper. OnShipped, OnFailure, OnSkipped,
+// OnLag and OnLagEntries are hooks for metrics and may be nil. OnShipped
+// receives the sink name and the count of entries of one accepted batch.
+// OnFailure receives the sink name and the reason after a failed round, and
+// once for each entry that the sink refused as too large
+// (logsink.ErrSkipped). OnSkipped receives the sink name and the count of
+// entries that the sink skipped (logsink.ErrSkipped). OnLag receives the
+// sink name and its delivery lag in seconds after each round. OnLagEntries
+// receives the sink name and its delivery lag in entries after each round.
 // Now answers the current time for the lag; nil means time.Now. InstanceID
 // names the holder of the sink leases of this shipper: one instance ID per
 // server process. Leases keeps those leases; when it is nil and Feed serves
@@ -128,9 +132,10 @@ type ShipperConfig struct {
 	Namespaces    NamespaceLister
 	Logger        *slog.Logger
 	OnShipped     func(sink string, entries int)
-	OnFailure     func(sink string)
+	OnFailure     func(sink, reason string)
 	OnSkipped     func(sink string, entries int)
 	OnLag         func(sink string, seconds float64)
+	OnLagEntries  func(sink string, entries int64)
 	Now           func() time.Time
 	Sinks         []ShipSink
 	InstanceID    string
@@ -309,6 +314,9 @@ func (s *Shipper) ShipOnce(ctx context.Context) error {
 	for _, sink := range s.cfg.Sinks {
 		held, err := s.acquire(ctx, sink.Name)
 		if err != nil {
+			s.fail(ctx, sink.Name, err)
+			s.setLastError(sink.Name, ErrorClass(err))
+			s.observeLag(ctx, sink.Name)
 			errs = append(errs, fmt.Errorf("sink %s: %w", sink.Name, err))
 
 			continue
@@ -322,6 +330,7 @@ func (s *Shipper) ShipOnce(ctx context.Context) error {
 			if errors.Is(err, errRoundEnded) {
 				s.setLastError(sink.Name, "")
 			} else {
+				s.fail(ctx, sink.Name, err)
 				s.setLastError(sink.Name, ErrorClass(err))
 			}
 
@@ -585,39 +594,132 @@ func (s *Shipper) lastErrorOf(sink string) string {
 	return s.lastErr[sink]
 }
 
-// observeLag reads the delivery lag of sink and calls the lag hook. A lag
+// observeLag reads the delivery lags of sink and calls the lag hooks. A lag
 // read that fails keeps the last gauge value: the next round tries again.
 func (s *Shipper) observeLag(ctx context.Context, sink string) {
-	if s.cfg.OnLag == nil {
-		return
+	if s.cfg.OnLag != nil {
+		lag, err := s.Lag(ctx, sink, s.cfg.Now())
+		if err == nil {
+			s.cfg.OnLag(sink, lag)
+		}
 	}
 
-	lag, err := s.Lag(ctx, sink, s.cfg.Now())
-	if err != nil {
-		return
+	if s.cfg.OnLagEntries != nil {
+		entries, err := s.LagEntries(ctx, sink)
+		if err == nil {
+			s.cfg.OnLagEntries(sink, entries)
+		}
+	}
+}
+
+// Failure reasons of an audit sink delivery, for the reason label of the
+// failure metric. The set is fixed, so the label values never grow with the
+// entries.
+const (
+	// FailureReasonSize reports an entry that the sink refused because it
+	// cannot hold it, for example a syslog record above the message cap.
+	FailureReasonSize = "size"
+	// FailureReasonUnreachable reports a batch that never reached the sink
+	// because the dial failed.
+	FailureReasonUnreachable = "unreachable"
+	// FailureReasonWrite reports a batch whose write or cursor advance
+	// failed.
+	FailureReasonWrite = "write"
+	// FailureReasonRead reports a round that could not read its entries, its
+	// cursors or its namespaces.
+	FailureReasonRead = "read"
+	// FailureReasonLease reports a round that could not take its sink lease.
+	FailureReasonLease = "lease"
+)
+
+// failureReason reduces a failure of a round to a reason for the failure
+// metric: size for a refused entry, unreachable for a failed dial, lease for
+// a failed lease take, read for a failed entry, cursor or namespace read,
+// and write for every other failure.
+func failureReason(err error) string {
+	switch {
+	case errors.Is(err, logsink.ErrSkipped):
+		return FailureReasonSize
+	case isDialError(err):
+		return FailureReasonUnreachable
 	}
 
-	s.cfg.OnLag(sink, lag)
+	if shipErr, ok := errors.AsType[*shipError](err); ok {
+		switch shipErr.step {
+		case stepLease:
+			return FailureReasonLease
+		case stepRead, stepList, stepCursor:
+			return FailureReasonRead
+		default:
+			return FailureReasonWrite
+		}
+	}
+
+	return FailureReasonWrite
+}
+
+// isDialError reports whether err wraps a failed network dial, as a sink
+// whose receiver is down answers on its first write.
+func isDialError(err error) bool {
+	var opErr *net.OpError
+
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 // fail logs a failed round and calls the failure hook. The log line holds
-// the sink name, the count of scopes that failed and a fixed error class,
-// never an entry and never the text of a store, driver or transport error:
-// the line can go to a remote sink (ADR 32 decision 7).
+// the sink name, the count of scopes that failed, the reason and a fixed
+// error class, never an entry and never the text of a store, driver or
+// transport error: the line can go to a remote sink. A refused entry is a
+// delivery failure too: skipSize logs it separately with its sequence.
 func (s *Shipper) fail(ctx context.Context, name string, err error) {
-	s.cfg.Logger.WarnContext(ctx, "audit sink delivery failed",
-		slog.String("sink", name), slog.Int("scopes", failedScopes(err)), slog.String("error", ErrorClass(err)))
+	reason := failureReason(err)
+
+	s.cfg.Logger.ErrorContext(ctx, "audit sink delivery failed",
+		slog.String("sink", name),
+		slog.Int("scopes", failedScopes(err)),
+		slog.String("reason", reason),
+		slog.String("error", ErrorClass(err)))
 
 	if s.cfg.OnFailure != nil {
-		s.cfg.OnFailure(name)
+		s.cfg.OnFailure(name, reason)
 	}
 }
 
-// skip logs the records that sink skipped and calls the skip hook. The log
-// line holds the sink name, the count and the reason, never an entry.
-func (s *Shipper) skip(ctx context.Context, name string, skip *logsink.SkipError) {
-	s.cfg.Logger.ErrorContext(ctx, "audit sink skipped entries that it cannot hold",
-		slog.String("sink", name), slog.Int("entries", skip.Skipped), slog.String("reason", skip.Reason))
+// skipSize logs the records that sink refused because it cannot hold them
+// and calls the skip and failure hooks. It logs one line at error level for
+// each refused entry with its scope, its sequence and the reason, never the
+// entry itself. Each refused entry is a delivery failure, so it also calls
+// the failure hook with the size reason. The shipper still moves the cursor
+// past the batch: a retry cannot deliver a refused entry.
+func (s *Shipper) skipSize(ctx context.Context, name string, skip *logsink.SkipError, entries []Entry) {
+	for _, index := range skip.Indexes {
+		if index < 0 || index >= len(entries) {
+			continue
+		}
+
+		entry := entries[index]
+
+		s.cfg.Logger.ErrorContext(ctx, "audit sink refused entry that it cannot hold",
+			slog.String("sink", name),
+			slog.String("scope", entry.Namespace.String()),
+			slog.Int64("sequence", entry.Sequence),
+			slog.String("reason", skip.Reason))
+
+		if s.cfg.OnFailure != nil {
+			s.cfg.OnFailure(name, FailureReasonSize)
+		}
+	}
+
+	if len(skip.Indexes) == 0 {
+		s.cfg.Logger.ErrorContext(ctx, "audit sink skipped entries that it cannot hold",
+			slog.String("sink", name), slog.Int("entries", skip.Skipped), slog.String("reason", skip.Reason))
+
+		if s.cfg.OnFailure != nil {
+			for range skip.Skipped {
+				s.cfg.OnFailure(name, FailureReasonSize)
+			}
+		}
+	}
 
 	if s.cfg.OnSkipped != nil {
 		s.cfg.OnSkipped(name, skip.Skipped)
@@ -861,7 +963,7 @@ func (s *Shipper) shipBatch(ctx context.Context, sink ShipSink, ns namespace.Nam
 			return &shipError{step: stepWrite, err: err}
 		}
 
-		s.skip(ctx, sink.Name, skip)
+		s.skipSize(ctx, sink.Name, skip, entries)
 
 		delivered -= skip.Skipped
 	}

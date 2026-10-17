@@ -496,12 +496,15 @@ Each message has the facility `log audit` (13) and the severity `info`.
 Set another facility with `?facility=<0 to 23>`, for example `syslog+udp://logs.example:514?facility=16`.
 The message part is the JSON object above.
 STRUCTURED-DATA and MSGID are `-`.
-Over `tcp` and `tls` each message starts with its length in bytes (RFC 5425).
+Over `tcp` and `tls` each message starts with its length in bytes (octet-counting framing: RFC 6587 section 3.4.1 over TCP, RFC 5425 section 4.3 over TLS).
 UDP has no acknowledgment, so a message can get lost without an error.
 Use `tls` for an audit log.
 `?ca-file=<path>` names a PEM bundle to trust instead of the system store.
-`?max-size=<bytes>` sets the largest message, from 480 to 65507 bytes.
-The default is 8192.
+`?max-size=<bytes>` sets the largest message: from 480 to 65507 bytes over UDP, and from 480 to 65536 bytes over TCP and TLS.
+The default is 8192 over UDP and 65536 (64 KiB) over TCP and TLS, which holds the largest entry the server writes.
+Raise the matching limit of the receiver to at least the same size, or the receiver drops the longer messages.
+With rsyslog set `$MaxMessageSize` (default 8k). On a TCP input also set `MaxFrameSize`.
+With syslog-ng set `log-msg-size()`. Older releases default below 64 KiB.
 An entry above that size arrives trimmed to fit, with the long fields shortened and `"truncated": true` in the record.
 Trim never shortens `truncated`, `scope`, `sequence`, `time`, `action`, `kind`, `outcome`, `prevHash` and `hash`.
 `scope`, `sequence`, `prevHash` and `hash` stay whole. A receiver can check the link to the record before it, and can find gaps and duplicates by `scope` and `sequence`.
@@ -509,7 +512,7 @@ A record with `"truncated": true` has a `hash` that the receiver cannot recomput
 The full entry stays in the server audit log, and the chain check on the server covers it.
 Read the full entry by its `scope` and `sequence`, for example `GET /api/audit/entries/7?organization=acme`.
 Only an entry that cannot fit even with every trimmable field empty is skipped.
-The server counts it in `dustpan_audit_sink_skipped_total`, logs an error and goes on with the next entry.
+The server counts it in `dustpan_audit_sink_skipped_total` and in `dustpan_audit_sink_failures_total{reason="size"}`, logs an error with its scope and sequence, and goes on with the next entry.
 
 ### Webhook
 
@@ -549,10 +552,20 @@ A rotation tool moves the file away and sends `SIGHUP` to the server.
 ### Alert on a sink that falls behind
 
 `dustpan_audit_sink_entries_total{sink="<name>"}` counts the entries that a sink accepted.
-`dustpan_audit_sink_failures_total{sink="<name>"}` counts the failed batches.
-`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog record that cannot fit below `max-size` even trimmed.
+`dustpan_audit_sink_failures_total{sink="<name>",reason="<reason>"}` counts the failed deliveries.
+The reason is `size` for an entry that the sink refused because it cannot hold it. An example is a syslog record that cannot fit below `max-size` even trimmed.
+The reason is `unreachable` when the sink never reached its receiver.
+The reason is `write` for any other failed write.
+The reason is `read` for a failed entry, cursor or namespace read.
+The reason is `lease` for a failed sink lease take.
+Each failed delivery also writes one error log line with the sink name and, for a refused entry, its scope and sequence.
 A failed batch loses no entry, but a count that keeps growing means the sink falls behind.
+A refused entry never arrives: alert when the `size` series grows.
+`dustpan_audit_sink_skipped_total{sink="<name>"}` counts the entries that a sink cannot hold, for example a syslog record that cannot fit below `max-size` even trimmed.
 A skipped entry is not in the sink: alert when that count is above zero.
+`dustpan_audit_sink_lag_seconds{sink="<name>"}` holds the age in seconds of the oldest entry the sink has not delivered yet, or 0 when the sink is up to date.
+`dustpan_audit_sink_lag_entries{sink="<name>"}` holds the count of entries the sink has not delivered yet, or 0 when the sink is up to date.
+Alert when either lag keeps growing: the sink falls behind.
 The metrics count 16 sinks at most. With more sinks, the server logs a warning at start.
 
 ### After a restore
@@ -572,6 +585,18 @@ groups:
           severity: warning
         annotations:
           summary: An OpenDustpan audit sink refuses entries
+      - alert: DustpanAuditSinkRefusedEntry
+        expr: increase(dustpan_audit_sink_failures_total{reason="size"}[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: An OpenDustpan audit sink refused an entry it cannot hold
+      - alert: DustpanAuditSinkLagging
+        expr: dustpan_audit_sink_lag_entries > 50
+        labels:
+          severity: warning
+        annotations:
+          summary: An OpenDustpan audit sink falls behind
 ```
 
 OpenTelemetry logs are not a sink yet.

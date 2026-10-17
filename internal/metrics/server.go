@@ -55,6 +55,7 @@ const (
 	// labelSink names a configured audit sink, for example "siem". The
 	// operator sets the name; it never holds an address or a secret.
 	labelSink      = "sink"
+	labelReason    = "reason"
 	labelResult    = "result"
 	labelOperation = "operation"
 )
@@ -316,11 +317,12 @@ func (m *ServerMetrics) IncAuditRestoreCheckFailure() {
 // sinkFamilies holds the audit and log sink families: counters labeled by sink,
 // with one series for each configured sink.
 type sinkFamilies struct {
-	shipped  *Counter
-	sinkFail *Counter
-	sinkSkip *Counter
-	logDrop  *Counter
-	sinkLag  *Gauge
+	shipped   *Counter
+	sinkFail  *Counter
+	sinkSkip  *Counter
+	logDrop   *Counter
+	sinkLag   *Gauge
+	sinkLagCt *Gauge
 }
 
 // newSinkFamilies registers the audit sink families in reg.
@@ -330,8 +332,13 @@ func newSinkFamilies(reg *Registry) sinkFamilies {
 	}
 
 	return sinkFamilies{
-		shipped:  family("dustpan_audit_sink_entries_total", "Audit entries that a sink accepted, by sink."),
-		sinkFail: family("dustpan_audit_sink_failures_total", "Failed delivery rounds of an audit sink, by sink."),
+		shipped: family("dustpan_audit_sink_entries_total", "Audit entries that a sink accepted, by sink."),
+		sinkFail: reg.NewCounter(
+			"dustpan_audit_sink_failures_total",
+			"Failed audit sink deliveries by sink and reason: size for a refused entry, else the failed step.",
+			[]string{labelSink, labelReason},
+			maxSinkSeries,
+		),
 		sinkSkip: family(
 			"dustpan_audit_sink_skipped_total",
 			"Audit entries that a sink skipped because it cannot hold them, by sink.",
@@ -340,6 +347,12 @@ func newSinkFamilies(reg *Registry) sinkFamilies {
 		sinkLag: reg.NewGauge(
 			"dustpan_audit_sink_lag_seconds",
 			"Delivery lag of an audit sink in seconds, by sink.",
+			[]string{labelSink},
+			maxSinkSeries,
+		),
+		sinkLagCt: reg.NewGauge(
+			"dustpan_audit_sink_lag_entries",
+			"Delivery lag of an audit sink in entries, by sink.",
 			[]string{labelSink},
 			maxSinkSeries,
 		),
@@ -354,11 +367,17 @@ func (m *ServerMetrics) AddAuditShipped(sink string, entries int) {
 	}
 }
 
-// IncAuditSinkFailure adds one to the failed delivery rounds of the sink
-// named sink. The shipper retries, so a failure loses no entry, but a count
-// that keeps growing means the sink falls behind. Operators alert on it.
-func (m *ServerMetrics) IncAuditSinkFailure(sink string) {
-	m.sinks.sinkFail.Inc(sink)
+// IncAuditSinkFailure adds one to the failed deliveries of the sink named
+// sink for reason: size for an entry the sink refused, else the failed step
+// (unreachable, write, read or lease). The shipper retries a failed batch,
+// so a failure loses no entry, but a count that keeps growing means the sink
+// falls behind. A refused entry never arrives: operators alert on it.
+func (m *ServerMetrics) IncAuditSinkFailure(sink, reason string) {
+	if reason == "" {
+		reason = "write"
+	}
+
+	m.sinks.sinkFail.Inc(sink, reason)
 }
 
 // AddAuditSkipped adds entries to the count of audit entries that the sink
@@ -380,6 +399,17 @@ func (m *ServerMetrics) SetAuditSinkLag(sink string, seconds float64) {
 	}
 
 	m.sinks.sinkLag.Set(seconds, sink)
+}
+
+// SetAuditSinkLagEntries sets the delivery lag of the sink named sink in
+// entries: the count of entries above its cursors, or 0 when it is up to
+// date. Operators alert when it keeps growing.
+func (m *ServerMetrics) SetAuditSinkLagEntries(sink string, entries int64) {
+	if entries < 0 {
+		entries = 0
+	}
+
+	m.sinks.sinkLagCt.Set(float64(entries), sink)
 }
 
 // newSweepCounter creates dustpan_inactivity_sweeps_total in reg.
