@@ -310,7 +310,8 @@ func pgCopySessionTables() []pgCopyTable {
 			table: "sign_in_providers",
 			columns: []string{
 				pgColProviderID, "issuer", pgColDisplayName, "client_id", "client_secret", "scopes", "auto_create",
-				"enabled", pgColCreatedAtMs, pgColUpdatedAtMs, "version",
+				"enabled", pgColCreatedAtMs, pgColUpdatedAtMs, "version", "mode", "authorization_url", "token_url",
+				"userinfo_url", "subject_claim", "name_claim", "username_claim", "email_claim",
 			},
 			orderBy: []string{pgColProviderID},
 		},
@@ -820,10 +821,8 @@ func (s *Store) createStagingSchema(ctx context.Context, staging string) error {
 				return fmt.Errorf("build staging schema at migration %s: %w", m.Name, err)
 			}
 
-			const record = `INSERT INTO schema_migrations (version, name) VALUES ($1, $2)`
-
-			if _, err := tx.Exec(ctx, record, m.Version, m.Name); err != nil {
-				return fmt.Errorf("record staging migration %s: %w", m.Name, err)
+			if err := recordMigration(ctx, tx, m); err != nil {
+				return fmt.Errorf("record staging migration: %w", err)
 			}
 		}
 
@@ -1070,7 +1069,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 	}
 
 	if n == 0 {
-		return backup.ErrAlreadyExists
+		return s.createBackupConflict(ctx, r.ID)
 	}
 
 	return nil
@@ -1220,4 +1219,36 @@ func (s *Store) SchemaTables(ctx context.Context) ([]string, error) {
 	}
 
 	return out, nil
+}
+
+// createBackupConflict answers why CreateBackup inserted no row: the ID is
+// taken (ErrAlreadyExists), or the unique index on running backups refused a
+// second running backup (ErrAlreadyRunning).
+func (s *Store) createBackupConflict(ctx context.Context, id backup.ID) error {
+	_, err := s.GetBackup(ctx, id)
+	if err == nil {
+		return backup.ErrAlreadyExists
+	}
+
+	if errors.Is(err, backup.ErrNotFound) {
+		return backup.ErrAlreadyRunning
+	}
+
+	return err
+}
+
+// createRestoreConflict answers why CreateRestore inserted no row: the ID is
+// taken (ErrRestoreExists), or the unique index on running restores refused a
+// second running restore (ErrRestoreRunning).
+func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) error {
+	_, err := s.GetRestore(ctx, id)
+	if err == nil {
+		return backup.ErrRestoreExists
+	}
+
+	if errors.Is(err, backup.ErrRestoreNotFound) {
+		return backup.ErrRestoreRunning
+	}
+
+	return err
 }

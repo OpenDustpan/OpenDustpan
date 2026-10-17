@@ -924,6 +924,15 @@ func (a *recordAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // newCheckedService returns a token service over the store of f with the
 // authorizer authz.
 func newCheckedService(t *testing.T, f *fixture, authz identity.Authorizer) *accesstoken.Service {
@@ -1391,7 +1400,11 @@ func TestInactiveTokenIsRefusedBeforeTheSweep(t *testing.T) {
 	}
 }
 
-func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
+// TestPolicyChangeOfAnotherInstanceAppliesAtOnce proves that a policy change
+// that another instance writes applies to the next token lookup of this
+// instance: the lookup reads the policy with the token, so no instance keeps
+// an old policy for a while.
+func TestPolicyChangeOfAnotherInstanceAppliesAtOnce(t *testing.T) {
 	t.Parallel()
 
 	f := newFixtureAt(t, nil, sweepStart())
@@ -1399,7 +1412,6 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 
 	_, first := f.createLong(t, f.service, "first")
 	_, second := f.createLong(t, f.service, "second")
-	_, third := f.createLong(t, f.service, "third")
 
 	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
 		MaxLifetime: nil, Inactivity: nil, DisableTokens: new(false), DisableAccounts: nil, DisableBreakGlass: nil,
@@ -1410,13 +1422,11 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 
 	f.clock.Advance(accesstoken.DefaultInactivity + time.Minute)
 
-	// The first token reads the policy, and the cache keeps it.
 	if _, authErr := f.svc.AuthenticateToken(ctx, first.Reveal()); authErr != nil {
 		t.Fatalf("token with the disable off: %v", authErr)
 	}
 
-	// Another instance turns the disable on: this one sees it after the
-	// cache time at most.
+	// Another instance turns the disable on.
 	_, err = f.store.UpdatePolicy(ctx, func(old accesstoken.Policy) (accesstoken.Policy, audit.Entry, error) {
 		old.DisableTokens = true
 		e := caller()
@@ -1429,45 +1439,8 @@ func TestPolicyCacheLivesAFewSeconds(t *testing.T) {
 		t.Fatalf("update policy in the store: %v", err)
 	}
 
-	if _, err := f.svc.AuthenticateToken(ctx, second.Reveal()); err != nil {
-		t.Fatalf("inactive token inside the cache time: %v, want the cached policy", err)
-	}
-
-	f.clock.Advance(10 * time.Second)
-
-	if _, err := f.svc.AuthenticateToken(ctx, third.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
-		t.Fatalf("inactive token after the cache time: err = %v, want ErrUnauthenticated", err)
-	}
-}
-
-// failingPolicy is a store whose policy read fails.
-type failingPolicy struct {
-	*sqlite.Store
-}
-
-var errPolicyRead = errors.New("policy read failed")
-
-func (failingPolicy) GetPolicy(context.Context) (accesstoken.Policy, error) {
-	return accesstoken.Policy{}, errPolicyRead
-}
-
-func TestPolicyReadErrorFailsClosed(t *testing.T) {
-	t.Parallel()
-
-	f := newFixture(t, nil)
-	_, secret := f.createLong(t, f.service, "deploy")
-
-	svc, err := accesstoken.NewService(accesstoken.Config{
-		Store: failingPolicy{f.store}, Principals: f.store, Freshness: nil, Authorizer: nil,
-		Logger: nil,
-		Now:    f.clock.Now, NewID: nil,
-	})
-	if err != nil {
-		t.Fatalf("token service: %v", err)
-	}
-
-	if _, err := svc.AuthenticateToken(t.Context(), secret.Reveal()); !errors.Is(err, errPolicyRead) {
-		t.Fatalf("authenticate with a failed policy read: err = %v, want the read error", err)
+	if _, err := f.svc.AuthenticateToken(ctx, second.Reveal()); !errors.Is(err, identity.ErrUnauthenticated) {
+		t.Fatalf("inactive token right after the change of another instance: err = %v, want ErrUnauthenticated", err)
 	}
 }
 
@@ -1508,15 +1481,14 @@ func TestInactiveAccountIsRefusedBeforeTheSweep(t *testing.T) {
 	}
 }
 
-// TestAccountInactive proves that AccountInactive applies the account rule
-// of the token lookup: the period, the account switch, persons only, and
-// the break-glass exemption.
-func TestAccountInactive(t *testing.T) {
+// TestAccountInactiveAt proves the account rule of the token lookup, which
+// a console session applies too: the period, the account switch, persons
+// only, and the break-glass exemption.
+func TestAccountInactiveAt(t *testing.T) {
 	t.Parallel()
 
-	f := newFixtureAt(t, nil, sweepStart())
-	ctx := t.Context()
-	now := f.svc.Now()
+	now := sweepStart()
+	policy := accesstoken.DefaultPolicy()
 
 	owner := func(kind principal.Kind, breakGlass bool, activeAt time.Time) accesstoken.Owner {
 		return accesstoken.Owner{
@@ -1538,21 +1510,23 @@ func TestAccountInactive(t *testing.T) {
 		{name: "a break-glass person past the period", o: owner(principal.KindPerson, true, old), want: false},
 		{name: "a service past the period", o: owner(principal.KindService, false, old), want: false},
 	} {
-		got, err := f.svc.AccountInactive(ctx, tc.o)
-		if err != nil || got != tc.want {
-			t.Errorf("%s: AccountInactive = %t, %v; want %t", tc.name, got, err, tc.want)
+		if got := policy.AccountInactiveAt(tc.o, now); got != tc.want {
+			t.Errorf("%s: AccountInactiveAt = %t, want %t", tc.name, got, tc.want)
 		}
 	}
 
-	_, err := f.svc.SetPolicy(ctx, caller(), accesstoken.PolicyChange{
-		MaxLifetime: nil, Inactivity: nil, DisableTokens: nil, DisableAccounts: new(false), DisableBreakGlass: nil,
-	})
-	if err != nil {
-		t.Fatalf("set policy: %v", err)
+	off := policy
+	off.DisableAccounts = false
+
+	if off.AccountInactiveAt(owner(principal.KindPerson, false, old), now) {
+		t.Fatal("AccountInactiveAt with the account disable off = true, want false")
 	}
 
-	if got, err := f.svc.AccountInactive(ctx, owner(principal.KindPerson, false, old)); err != nil || got {
-		t.Fatalf("AccountInactive with the account disable off = %t, %v; want false", got, err)
+	zero := policy
+	zero.Inactivity = 0
+
+	if zero.AccountInactiveAt(owner(principal.KindPerson, false, old), now) {
+		t.Fatal("AccountInactiveAt with a zero period = true, want false")
 	}
 }
 

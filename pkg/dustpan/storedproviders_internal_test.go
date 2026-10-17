@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/oauth"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/session"
@@ -72,8 +73,12 @@ func TestStoredProvidersFollowTheStore(t *testing.T) {
 	f := newStoredFixture(t)
 
 	_, err := f.admin.Create(ctx, adminEntry(), session.ProviderInput{
-		ID: "beta", Issuer: "https://beta.example", DisplayName: "Beta", ClientID: "dustpan", ClientSecret: "secret",
-		Scopes: nil, AutoCreate: true, Enabled: true,
+		ID: "beta", Mode: session.ModeOIDC, Issuer: "https://beta.example", DisplayName: "Beta", ClientID: "dustpan",
+		ClientSecret: "secret", Scopes: nil, AutoCreate: true, Enabled: true,
+		OAuth: session.OAuthSettings{
+			AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+			EmailClaim: "",
+		},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -91,7 +96,11 @@ func TestStoredProvidersFollowTheStore(t *testing.T) {
 
 	name := "Beta SSO"
 	f.update(t, session.ProviderChange{
-		Issuer: nil, DisplayName: &name, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
+		Mode: nil, Issuer: nil, DisplayName: &name, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
+		OAuth: session.OAuthChange{
+			AuthorizationURL: nil, TokenURL: nil, UserinfoURL: nil, SubjectClaim: nil, NameClaim: nil,
+			UsernameClaim: nil, EmailClaim: nil,
+		},
 		Enabled: nil, Version: 1,
 	})
 
@@ -102,7 +111,11 @@ func TestStoredProvidersFollowTheStore(t *testing.T) {
 
 	disabled := false
 	f.update(t, session.ProviderChange{
-		Issuer: nil, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
+		Mode: nil, Issuer: nil, DisplayName: nil, ClientID: nil, ClientSecret: nil, Scopes: nil, AutoCreate: nil,
+		OAuth: session.OAuthChange{
+			AuthorizationURL: nil, TokenURL: nil, UserinfoURL: nil, SubjectClaim: nil, NameClaim: nil,
+			UsernameClaim: nil, EmailClaim: nil,
+		},
 		Enabled: &disabled, Version: 2,
 	})
 
@@ -126,5 +139,80 @@ func (f storedFixture) checkNoProvider(t *testing.T, ids ...string) {
 		if _, ok, err := f.lookup.Provider(t.Context(), id); ok || err != nil {
 			t.Errorf("lookup of %q = %t, %v; want no provider", id, ok, err)
 		}
+	}
+}
+
+// TestStoredProvidersPlainOAuth proves that the lookup of the sign-in
+// routes makes a plain OAuth 2.0 client for a stored provider in the
+// oauth mode.
+func TestStoredProvidersPlainOAuth(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	f := newStoredFixture(t)
+
+	_, err := f.admin.Create(ctx, adminEntry(), session.ProviderInput{
+		ID: "hub", Mode: session.ModeOAuth, Issuer: "", DisplayName: "Hub", ClientID: "dustpan",
+		ClientSecret: "secret", Scopes: []string{"read:user"}, AutoCreate: true, Enabled: true,
+		OAuth: session.OAuthSettings{ //nolint:gosec // Test fixture: the URLs of a provider, no credential.
+			AuthorizationURL: "https://hub.example/login/oauth/authorize",
+			TokenURL:         "https://hub.example/login/oauth/access_token",
+			UserinfoURL:      "https://api.hub.example/user", SubjectClaim: "id", NameClaim: "",
+			UsernameClaim: "login", EmailClaim: "",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, ok, err := f.lookup.Provider(ctx, "hub")
+	if err != nil || !ok || !got.Stored {
+		t.Fatalf("lookup = %+v, %t, %v; want the stored provider hub", got, ok, err)
+	}
+
+	if _, plain := got.Client.(*oauth.PlainClient); !plain {
+		t.Fatalf("client of hub = %T, want *oauth.PlainClient", got.Client)
+	}
+}
+
+// TestStoredProvidersRecreatedID proves that a provider that a delete and
+// a create gave the same ID and version gets a new client: the lookup
+// answers the settings of the new record, not of the old one.
+func TestStoredProvidersRecreatedID(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	f := newStoredFixture(t)
+	in := session.ProviderInput{
+		ID: "beta", Mode: session.ModeOIDC, Issuer: "https://beta.example", DisplayName: "Beta", ClientID: "dustpan",
+		ClientSecret: "secret", Scopes: nil, AutoCreate: true, Enabled: true,
+		OAuth: session.OAuthSettings{
+			AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+			EmailClaim: "",
+		},
+	}
+
+	if _, err := f.admin.Create(ctx, adminEntry(), in); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	first, ok, err := f.lookup.Provider(ctx, "beta")
+	if err != nil || !ok || !first.AutoCreate {
+		t.Fatalf("lookup = %+v, %t, %v; want beta with autoCreate", first, ok, err)
+	}
+
+	if deleteErr := f.admin.Delete(ctx, adminEntry(), "beta"); deleteErr != nil {
+		t.Fatalf("delete: %v", deleteErr)
+	}
+
+	in.AutoCreate, in.ClientSecret = false, "another-secret"
+	if _, createErr := f.admin.Create(ctx, adminEntry(), in); createErr != nil {
+		t.Fatalf("create again: %v", createErr)
+	}
+
+	again, ok, err := f.lookup.Provider(ctx, "beta")
+	if err != nil || !ok || again.AutoCreate || again.Client == first.Client {
+		t.Fatalf("lookup after a delete and a create = %+v, %t, %v; want a new client with no autoCreate",
+			again, ok, err)
 	}
 }

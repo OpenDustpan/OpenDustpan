@@ -29,6 +29,53 @@ func TestMemStore(t *testing.T) {
 	})
 }
 
+func TestMemSchedules(t *testing.T) {
+	t.Parallel()
+
+	durabletest.RunSchedules(t, func(t *testing.T) durabletest.ScheduleHarness {
+		t.Helper()
+
+		return durabletest.NewMem().ScheduleHarness()
+	})
+}
+
+// TestScheduleSuiteSensitivity runs, for each broken store, the schedule
+// case that must catch it, and checks that this case fails.
+func TestScheduleSuiteSensitivity(t *testing.T) {
+	t.Parallel()
+
+	if rule := os.Getenv(durabletestFake); rule != "" {
+		durabletest.RunSchedules(t, func(t *testing.T) durabletest.ScheduleHarness {
+			t.Helper()
+
+			return durabletest.BrokenScheduleHarness(rule)
+		})
+
+		return
+	}
+
+	cases := []struct {
+		rule, catcher string
+	}{
+		{durabletest.BreakTickBacklog, "missed_ticks_collapse_into_one_run"},
+		{durabletest.BreakClock, "an_instance_clock_ahead_cannot_claim_a_tick_early"},
+		{durabletest.BreakNoSchedule, "an_instance_clock_ahead_cannot_claim_a_tick_early"},
+		{durabletest.BreakNoSchedule, "a_new_schedule_is_due_at_once_and_ensure_keeps_its_next_run"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.rule+"/"+tc.catcher, func(t *testing.T) {
+			t.Parallel()
+
+			out := runSuiteCaseAgainstFake(t, "TestScheduleSuiteSensitivity", tc.rule, tc.catcher)
+
+			if !strings.Contains(out, "--- FAIL: TestScheduleSuiteSensitivity/"+tc.catcher+" ") {
+				t.Fatalf("the case %s did not fail against the store that breaks %q:\n%s", tc.catcher, tc.rule, out)
+			}
+		})
+	}
+}
+
 // TestSuiteSensitivity runs, for each broken store, the case that must
 // catch it, and checks that this case fails.
 func TestSuiteSensitivity(t *testing.T) {
@@ -63,7 +110,7 @@ func TestSuiteSensitivity(t *testing.T) {
 		t.Run(tc.rule, func(t *testing.T) {
 			t.Parallel()
 
-			out := runCaseAgainstFake(t, tc.rule, tc.catcher)
+			out := runSuiteCaseAgainstFake(t, "TestSuiteSensitivity", tc.rule, tc.catcher)
 
 			if !strings.Contains(out, "--- FAIL: TestSuiteSensitivity/"+tc.catcher+" ") {
 				t.Fatalf("the case %s did not fail against the store that breaks %q:\n%s", tc.catcher, tc.rule, out)
@@ -72,13 +119,14 @@ func TestSuiteSensitivity(t *testing.T) {
 	}
 }
 
-// runCaseAgainstFake runs the suite case catcher in a child process against
-// the store that breaks rule, and returns the output of the child.
-func runCaseAgainstFake(t *testing.T, rule, catcher string) string {
+// runSuiteCaseAgainstFake runs the case catcher of the test top in a child
+// process against the store that breaks rule, and returns the output of the
+// child.
+func runSuiteCaseAgainstFake(t *testing.T, top, rule, catcher string) string {
 	t.Helper()
 
 	//nolint:gosec // The child is this test binary with a fixed filter; both come from the test itself.
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestSuiteSensitivity$/^"+catcher+"$",
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^"+top+"$/^"+catcher+"$",
 		"-test.v", "-test.count=1")
 	cmd.Env = append(os.Environ(), durabletestFake+"="+rule)
 

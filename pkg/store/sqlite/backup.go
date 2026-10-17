@@ -46,7 +46,7 @@ func (s *Store) CreateBackup(ctx context.Context, r backup.Record) error {
 	}
 
 	if n == 0 {
-		return backup.ErrAlreadyExists
+		return s.createBackupConflict(ctx, r.ID)
 	}
 
 	return nil
@@ -392,6 +392,12 @@ func (s *Store) swapDatabase(ctx context.Context, temp string) error {
 // keep-access apply holds the write lock from the live snapshot through the
 // swap, so it swaps without taking the lock again.
 func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
+	// The lock holds every durable operation write out, so the copy has
+	// the last committed rows of the control tables.
+	if err := keepControlTables(ctx, temp, s.path); err != nil {
+		return err
+	}
+
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close database for restore: %w", err)
 	}
@@ -897,4 +903,36 @@ func quoteLiteral(s string) string {
 // corrupt wraps a staged-backup failure as ErrCorrupt, keeping the cause.
 func corrupt(err error) error {
 	return errors.Join(err, backup.ErrCorrupt)
+}
+
+// createBackupConflict answers why CreateBackup inserted no row: the ID is
+// taken (ErrAlreadyExists), or the unique index on running backups refused a
+// second running backup (ErrAlreadyRunning).
+func (s *Store) createBackupConflict(ctx context.Context, id backup.ID) error {
+	_, err := s.fetchBackup(ctx, id)
+	if err == nil {
+		return backup.ErrAlreadyExists
+	}
+
+	if errors.Is(err, backup.ErrNotFound) {
+		return backup.ErrAlreadyRunning
+	}
+
+	return err
+}
+
+// createRestoreConflict answers why CreateRestore inserted no row: the ID is
+// taken (ErrRestoreExists), or the unique index on running restores refused a
+// second running restore (ErrRestoreRunning).
+func (s *Store) createRestoreConflict(ctx context.Context, id backup.RestoreID) error {
+	_, err := s.fetchRestore(ctx, id)
+	if err == nil {
+		return backup.ErrRestoreExists
+	}
+
+	if errors.Is(err, backup.ErrRestoreNotFound) {
+		return backup.ErrRestoreRunning
+	}
+
+	return err
 }

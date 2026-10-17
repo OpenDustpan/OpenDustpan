@@ -43,7 +43,7 @@ const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
+       COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = $1
@@ -1329,23 +1329,32 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (i
 const createSignInProvider = `-- name: CreateSignInProvider :execrows
 INSERT INTO sign_in_providers (
     provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 ON CONFLICT DO NOTHING
 `
 
 type CreateSignInProviderParams struct {
-	ProviderID   string
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   bool
-	Enabled      bool
-	CreatedAtMs  int64
-	UpdatedAtMs  int64
-	Version      int64
+	ProviderID       string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       bool
+	Enabled          bool
+	CreatedAtMs      int64
+	UpdatedAtMs      int64
+	Version          int64
+	Mode             string
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
 }
 
 func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProviderParams) (int64, error) {
@@ -1361,6 +1370,14 @@ func (q *Queries) CreateSignInProvider(ctx context.Context, arg CreateSignInProv
 		arg.CreatedAtMs,
 		arg.UpdatedAtMs,
 		arg.Version,
+		arg.Mode,
+		arg.AuthorizationUrl,
+		arg.TokenUrl,
+		arg.UserinfoUrl,
+		arg.SubjectClaim,
+		arg.NameClaim,
+		arg.UsernameClaim,
+		arg.EmailClaim,
 	)
 	if err != nil {
 		return 0, err
@@ -2320,33 +2337,45 @@ SELECT t.id, t.principal_id, t.name, t.kind, t.digest, t.created_at_ms, t.expire
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(s.last_seen_at_ms) FROM sessions s WHERE s.principal_id = p.id
-  ), 0))::bigint AS principal_active_at_ms
+  ), 0))::bigint AS principal_active_at_ms,
+  ap.max_lifetime_ms AS policy_max_lifetime_ms, ap.inactivity_ms AS policy_inactivity_ms,
+  ap.disable_tokens AS policy_disable_tokens, ap.disable_accounts AS policy_disable_accounts,
+  ap.disable_break_glass AS policy_disable_break_glass, ap.updated_at_ms AS policy_updated_at_ms
 FROM access_tokens t
 JOIN principals p ON p.id = t.principal_id
-WHERE t.digest = $1 AND p.deleted_at_ms IS NULL
+CROSS JOIN access_token_policy ap
+WHERE t.digest = $1 AND p.deleted_at_ms IS NULL AND ap.id = 1
 `
 
 type GetAccessTokenByDigestRow struct {
-	ID                    string
-	PrincipalID           string
-	Name                  string
-	Kind                  string
-	Digest                string
-	CreatedAtMs           int64
-	ExpiresAtMs           int64
-	LastUsedAtMs          pgtype.Int8
-	RevokedAtMs           pgtype.Int8
-	ReplacedBy            pgtype.Text
-	CreatedBy             string
-	DisabledAtMs          pgtype.Int8
-	Subject               string
-	DisplayName           string
-	PrincipalKind         string
-	PrincipalDisabledAtMs pgtype.Int8
-	PrincipalBreakGlass   bool
-	PrincipalActiveAtMs   int64
+	ID                      string
+	PrincipalID             string
+	Name                    string
+	Kind                    string
+	Digest                  string
+	CreatedAtMs             int64
+	ExpiresAtMs             int64
+	LastUsedAtMs            pgtype.Int8
+	RevokedAtMs             pgtype.Int8
+	ReplacedBy              pgtype.Text
+	CreatedBy               string
+	DisabledAtMs            pgtype.Int8
+	Subject                 string
+	DisplayName             string
+	PrincipalKind           string
+	PrincipalDisabledAtMs   pgtype.Int8
+	PrincipalBreakGlass     bool
+	PrincipalActiveAtMs     int64
+	PolicyMaxLifetimeMs     int64
+	PolicyInactivityMs      int64
+	PolicyDisableTokens     bool
+	PolicyDisableAccounts   bool
+	PolicyDisableBreakGlass bool
+	PolicyUpdatedAtMs       int64
 }
 
+// The token, its owner and the token policy of the installation in one read,
+// so a policy change applies to the next lookup on every instance.
 func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (GetAccessTokenByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getAccessTokenByDigest, digest)
 	var i GetAccessTokenByDigestRow
@@ -2369,6 +2398,12 @@ func (q *Queries) GetAccessTokenByDigest(ctx context.Context, digest string) (Ge
 		&i.PrincipalDisabledAtMs,
 		&i.PrincipalBreakGlass,
 		&i.PrincipalActiveAtMs,
+		&i.PolicyMaxLifetimeMs,
+		&i.PolicyInactivityMs,
+		&i.PolicyDisableTokens,
+		&i.PolicyDisableAccounts,
+		&i.PolicyDisableBreakGlass,
+		&i.PolicyUpdatedAtMs,
 	)
 	return i, err
 }
@@ -2523,7 +2558,7 @@ func (q *Queries) GetBackup(ctx context.Context, id string) (Backup, error) {
 
 const getCheckpointByUpdate = `-- name: GetCheckpointByUpdate :one
 SELECT stack_id, update_id, lease_digest, schema_version, sequence,
-       digest, invalid, features, deployment, saved_at_ms,
+       digest, invalid, features, saved_at_ms,
        blob_key, size, blob_size, blob_md5
 FROM checkpoints
 WHERE stack_id = $1 AND update_id = $2
@@ -2543,7 +2578,6 @@ type GetCheckpointByUpdateRow struct {
 	Digest        []byte
 	Invalid       bool
 	Features      []byte
-	Deployment    []byte
 	SavedAtMs     int64
 	BlobKey       pgtype.Text
 	Size          pgtype.Int8
@@ -2563,7 +2597,6 @@ func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointBy
 		&i.Digest,
 		&i.Invalid,
 		&i.Features,
-		&i.Deployment,
 		&i.SavedAtMs,
 		&i.BlobKey,
 		&i.Size,
@@ -2575,7 +2608,7 @@ func (q *Queries) GetCheckpointByUpdate(ctx context.Context, arg GetCheckpointBy
 
 const getCheckpointByVersion = `-- name: GetCheckpointByVersion :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms,
+       c.digest, c.invalid, c.features, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -2596,7 +2629,6 @@ type GetCheckpointByVersionRow struct {
 	Digest        []byte
 	Invalid       bool
 	Features      []byte
-	Deployment    []byte
 	SavedAtMs     int64
 	BlobKey       pgtype.Text
 	Size          pgtype.Int8
@@ -2616,7 +2648,6 @@ func (q *Queries) GetCheckpointByVersion(ctx context.Context, arg GetCheckpointB
 		&i.Digest,
 		&i.Invalid,
 		&i.Features,
-		&i.Deployment,
 		&i.SavedAtMs,
 		&i.BlobKey,
 		&i.Size,
@@ -2927,7 +2958,7 @@ func (q *Queries) GetInventoryUnit(ctx context.Context, arg GetInventoryUnitPara
 
 const getLatestCheckpoint = `-- name: GetLatestCheckpoint :one
 SELECT c.stack_id, c.update_id, c.lease_digest, c.schema_version, c.sequence,
-       c.digest, c.invalid, c.features, c.deployment, c.saved_at_ms,
+       c.digest, c.invalid, c.features, c.saved_at_ms,
        c.blob_key, c.size, c.blob_size, c.blob_md5
 FROM checkpoints AS c
 JOIN updates AS u ON c.stack_id = u.stack_id AND c.update_id = u.id
@@ -2945,7 +2976,6 @@ type GetLatestCheckpointRow struct {
 	Digest        []byte
 	Invalid       bool
 	Features      []byte
-	Deployment    []byte
 	SavedAtMs     int64
 	BlobKey       pgtype.Text
 	Size          pgtype.Int8
@@ -2965,7 +2995,6 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetL
 		&i.Digest,
 		&i.Invalid,
 		&i.Features,
-		&i.Deployment,
 		&i.SavedAtMs,
 		&i.BlobKey,
 		&i.Size,
@@ -3271,34 +3300,47 @@ SELECT s.id, s.principal_id, s.digest, s.provider, s.created_at_ms, s.last_seen_
     SELECT MAX(GREATEST(o.created_at_ms, COALESCE(o.last_used_at_ms, 0))) FROM access_tokens o WHERE o.principal_id = p.id
   ), 0), COALESCE((
     SELECT MAX(x.last_seen_at_ms) FROM sessions x WHERE x.principal_id = p.id
-  ), 0))::bigint AS principal_active_at_ms
+  ), 0))::bigint AS principal_active_at_ms,
+  sp.idle_ms AS policy_idle_ms, sp.max_length_ms AS policy_max_length_ms, sp.updated_at_ms AS policy_updated_at_ms,
+  sp.token_freshness_ms AS policy_token_freshness_ms,
+  ap.inactivity_ms AS accounts_inactivity_ms, ap.disable_accounts AS accounts_disable
 FROM sessions s
 JOIN principals p ON p.id = s.principal_id
-WHERE s.digest = $1 AND p.deleted_at_ms IS NULL
+CROSS JOIN session_policy sp
+CROSS JOIN access_token_policy ap
+WHERE s.digest = $1 AND p.deleted_at_ms IS NULL AND sp.id = 1 AND ap.id = 1
 `
 
 type GetSessionByDigestRow struct {
-	ID                    string
-	PrincipalID           string
-	Digest                string
-	Provider              string
-	CreatedAtMs           int64
-	LastSeenAtMs          int64
-	AuthTimeMs            int64
-	EndedAtMs             pgtype.Int8
-	EndReason             string
-	SourceIp              string
-	UserAgent             string
-	Subject               string
-	DisplayName           string
-	PrincipalKind         string
-	PrincipalDisabledAtMs pgtype.Int8
-	PrincipalBreakGlass   bool
-	PrincipalActiveAtMs   int64
+	ID                     string
+	PrincipalID            string
+	Digest                 string
+	Provider               string
+	CreatedAtMs            int64
+	LastSeenAtMs           int64
+	AuthTimeMs             int64
+	EndedAtMs              pgtype.Int8
+	EndReason              string
+	SourceIp               string
+	UserAgent              string
+	Subject                string
+	DisplayName            string
+	PrincipalKind          string
+	PrincipalDisabledAtMs  pgtype.Int8
+	PrincipalBreakGlass    bool
+	PrincipalActiveAtMs    int64
+	PolicyIdleMs           int64
+	PolicyMaxLengthMs      int64
+	PolicyUpdatedAtMs      int64
+	PolicyTokenFreshnessMs pgtype.Int8
+	AccountsInactivityMs   int64
+	AccountsDisable        bool
 }
 
 // principal_active_at_ms is the latest activity of the owner by the account
-// rule of the inactivity disable, as in GetAccessTokenByDigest.
+// rule of the inactivity disable, as in GetAccessTokenByDigest. The session
+// policy and the account part of the token policy come from the same read,
+// so a policy change applies to the next lookup on every instance.
 func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSessionByDigestRow, error) {
 	row := q.db.QueryRow(ctx, getSessionByDigest, digest)
 	var i GetSessionByDigestRow
@@ -3320,6 +3362,12 @@ func (q *Queries) GetSessionByDigest(ctx context.Context, digest string) (GetSes
 		&i.PrincipalDisabledAtMs,
 		&i.PrincipalBreakGlass,
 		&i.PrincipalActiveAtMs,
+		&i.PolicyIdleMs,
+		&i.PolicyMaxLengthMs,
+		&i.PolicyUpdatedAtMs,
+		&i.PolicyTokenFreshnessMs,
+		&i.AccountsInactivityMs,
+		&i.AccountsDisable,
 	)
 	return i, err
 }
@@ -3367,7 +3415,8 @@ func (q *Queries) GetSessionPrincipal(ctx context.Context, id string) (GetSessio
 
 const getSignInProvider = `-- name: GetSignInProvider :one
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 WHERE provider_id = $1
 `
@@ -3387,6 +3436,14 @@ func (q *Queries) GetSignInProvider(ctx context.Context, providerID string) (Sig
 		&i.CreatedAtMs,
 		&i.UpdatedAtMs,
 		&i.Version,
+		&i.Mode,
+		&i.AuthorizationUrl,
+		&i.TokenUrl,
+		&i.UserinfoUrl,
+		&i.SubjectClaim,
+		&i.NameClaim,
+		&i.UsernameClaim,
+		&i.EmailClaim,
 	)
 	return i, err
 }
@@ -3549,7 +3606,7 @@ const getUpdate = `-- name: GetUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
+       COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = $1 AND u.id = $2
@@ -5705,7 +5762,8 @@ func (q *Queries) ListSecretWrapperIDs(ctx context.Context) ([]string, error) {
 
 const listSignInProviders = `-- name: ListSignInProviders :many
 SELECT provider_id, issuer, display_name, client_id, client_secret, scopes, auto_create, enabled,
-    created_at_ms, updated_at_ms, version
+    created_at_ms, updated_at_ms, version, mode, authorization_url, token_url, userinfo_url, subject_claim,
+    name_claim, username_claim, email_claim
 FROM sign_in_providers
 ORDER BY provider_id COLLATE "C"
 `
@@ -5731,6 +5789,14 @@ func (q *Queries) ListSignInProviders(ctx context.Context) ([]SignInProvider, er
 			&i.CreatedAtMs,
 			&i.UpdatedAtMs,
 			&i.Version,
+			&i.Mode,
+			&i.AuthorizationUrl,
+			&i.TokenUrl,
+			&i.UserinfoUrl,
+			&i.SubjectClaim,
+			&i.NameClaim,
+			&i.UsernameClaim,
+			&i.EmailClaim,
 		); err != nil {
 			return nil, err
 		}
@@ -5952,65 +6018,11 @@ func (q *Queries) ListStateVersions(ctx context.Context, arg ListStateVersionsPa
 	return items, nil
 }
 
-const listUnsealedStateVersions = `-- name: ListUnsealedStateVersions :many
-SELECT id, workspace_id, status, serial, lineage, md5, size, content_key, outputs,
-       force, upload_digest, upload_expires_at_ms, holder, lock_id, created_at_ms, finalized_at_ms,
-       restored_from, sealed, sensitive_marks, fenced_by, unlocked_write
-FROM state_versions
-WHERE NOT sealed AND status = 'finalized' AND content_key <> ''
-ORDER BY id ASC
-`
-
-// Finalized versions that still hold plain content, ordered by ID, so the
-// seal job seals them in a stable order. A version without content stays
-// out: a pending row names no content yet.
-func (q *Queries) ListUnsealedStateVersions(ctx context.Context) ([]StateVersion, error) {
-	rows, err := q.db.Query(ctx, listUnsealedStateVersions)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []StateVersion
-	for rows.Next() {
-		var i StateVersion
-		if err := rows.Scan(
-			&i.ID,
-			&i.WorkspaceID,
-			&i.Status,
-			&i.Serial,
-			&i.Lineage,
-			&i.Md5,
-			&i.Size,
-			&i.ContentKey,
-			&i.Outputs,
-			&i.Force,
-			&i.UploadDigest,
-			&i.UploadExpiresAtMs,
-			&i.Holder,
-			&i.LockID,
-			&i.CreatedAtMs,
-			&i.FinalizedAtMs,
-			&i.RestoredFrom,
-			&i.Sealed,
-			&i.SensitiveMarks,
-			&i.FencedBy,
-			&i.UnlockedWrite,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listUpdates = `-- name: ListUpdates :many
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
        u.created_by, u.restored_from, u.journal_version, u.token_id,
-       COALESCE(c.size, octet_length(c.deployment), 0)::BIGINT AS checkpoint_bytes
+       COALESCE(c.size, 0)::BIGINT AS checkpoint_bytes
 FROM updates AS u
 LEFT JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
 WHERE u.stack_id = $1
@@ -6492,7 +6504,7 @@ INSERT INTO checkpoints (
     stack_id, update_id, lease_digest, schema_version, sequence,
     digest, invalid, features, deployment, saved_at_ms,
     blob_key, size, blob_size, blob_md5
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, ''::BYTEA, $9, $10, $11, $12, $13)
 ON CONFLICT (stack_id, update_id) DO UPDATE SET
     lease_digest = excluded.lease_digest,
     schema_version = excluded.schema_version,
@@ -6517,7 +6529,6 @@ type PutCheckpointParams struct {
 	Digest        []byte
 	Invalid       bool
 	Features      []byte
-	Deployment    []byte
 	SavedAtMs     int64
 	BlobKey       pgtype.Text
 	Size          pgtype.Int8
@@ -6535,7 +6546,6 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.Digest,
 		arg.Invalid,
 		arg.Features,
-		arg.Deployment,
 		arg.SavedAtMs,
 		arg.BlobKey,
 		arg.Size,
@@ -7187,29 +7197,6 @@ func (q *Queries) SaveWorkspace(ctx context.Context, arg SaveWorkspaceParams) (i
 	return result.RowsAffected(), nil
 }
 
-const sealStateVersion = `-- name: SealStateVersion :execrows
-UPDATE state_versions
-SET content_key = $1, outputs = $2, sealed = TRUE
-WHERE id = $3 AND NOT sealed
-`
-
-type SealStateVersionParams struct {
-	ContentKey string
-	Outputs    []byte
-	ID         string
-}
-
-// Moves one unsealed version to its sealed blob with its sealed outputs and
-// marks it sealed. The write matches only an unsealed row, so a retry after
-// a crash succeeds and changes nothing.
-func (q *Queries) SealStateVersion(ctx context.Context, arg SealStateVersionParams) (int64, error) {
-	result, err := q.db.Exec(ctx, sealStateVersion, arg.ContentKey, arg.Outputs, arg.ID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const setAccessTokenPolicy = `-- name: SetAccessTokenPolicy :execrows
 UPDATE access_token_policy
 SET max_lifetime_ms = $1::bigint, inactivity_ms = $2::bigint,
@@ -7568,6 +7555,40 @@ func (q *Queries) SubjectsOfCaller(ctx context.Context, subject string) ([]Subje
 	return items, nil
 }
 
+const subjectsOfEnabledCaller = `-- name: SubjectsOfEnabledCaller :many
+SELECT p.id AS principal_id, COALESCE(m.group_id, '')::text AS group_id
+FROM principals p
+LEFT JOIN group_members m ON m.principal_id = p.id AND m.removed_at_ms IS NULL AND m.state = 'active'
+WHERE p.subject COLLATE "C" = $1::text AND p.deleted_at_ms IS NULL AND p.disabled_at_ms IS NULL
+`
+
+type SubjectsOfEnabledCallerRow struct {
+	PrincipalID string
+	GroupID     string
+}
+
+// The subjects of a caller as the check of a grant write reads them: a
+// principal that is disabled has none.
+func (q *Queries) SubjectsOfEnabledCaller(ctx context.Context, subject string) ([]SubjectsOfEnabledCallerRow, error) {
+	rows, err := q.db.Query(ctx, subjectsOfEnabledCaller, subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SubjectsOfEnabledCallerRow
+	for rows.Next() {
+		var i SubjectsOfEnabledCallerRow
+		if err := rows.Scan(&i.PrincipalID, &i.GroupID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const takeSignInRequest = `-- name: TakeSignInRequest :one
 DELETE FROM sign_in_requests WHERE digest = $1
 RETURNING provider, nonce, verifier, return_path, created_at_ms, expires_at_ms, max_age_ms
@@ -7896,24 +7917,36 @@ UPDATE sign_in_providers
 SET issuer = $1, display_name = $2, client_id = $3,
     client_secret = $4, scopes = $5,
     auto_create = $6, enabled = $7,
-    updated_at_ms = $8, version = $9
-WHERE provider_id = $10 AND version = $9 - 1
+    authorization_url = $8, token_url = $9,
+    userinfo_url = $10, subject_claim = $11,
+    name_claim = $12, username_claim = $13,
+    email_claim = $14,
+    updated_at_ms = $15, version = $16
+WHERE provider_id = $17 AND version = $16 - 1
 `
 
 type UpdateSignInProviderParams struct {
-	Issuer       string
-	DisplayName  string
-	ClientID     string
-	ClientSecret []byte
-	Scopes       string
-	AutoCreate   bool
-	Enabled      bool
-	UpdatedAtMs  int64
-	Version      int64
-	ProviderID   string
+	Issuer           string
+	DisplayName      string
+	ClientID         string
+	ClientSecret     []byte
+	Scopes           string
+	AutoCreate       bool
+	Enabled          bool
+	AuthorizationUrl string
+	TokenUrl         string
+	UserinfoUrl      string
+	SubjectClaim     string
+	NameClaim        string
+	UsernameClaim    string
+	EmailClaim       string
+	UpdatedAtMs      int64
+	Version          int64
+	ProviderID       string
 }
 
-// The update applies only to the version that the change read.
+// The update applies only to the version that the change read. The mode
+// never changes.
 func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProviderParams) (int64, error) {
 	result, err := q.db.Exec(ctx, updateSignInProvider,
 		arg.Issuer,
@@ -7923,6 +7956,13 @@ func (q *Queries) UpdateSignInProvider(ctx context.Context, arg UpdateSignInProv
 		arg.Scopes,
 		arg.AutoCreate,
 		arg.Enabled,
+		arg.AuthorizationUrl,
+		arg.TokenUrl,
+		arg.UserinfoUrl,
+		arg.SubjectClaim,
+		arg.NameClaim,
+		arg.UsernameClaim,
+		arg.EmailClaim,
 		arg.UpdatedAtMs,
 		arg.Version,
 		arg.ProviderID,

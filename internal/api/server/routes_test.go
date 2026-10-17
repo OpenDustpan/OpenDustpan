@@ -113,6 +113,11 @@ func (stubAuthorizer) Authorize(
 	return fmt.Errorf("%w: %s may not %s on %q", identity.ErrDenied, p.Subject, action, obj.String())
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (stubAuthorizer) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // selectiveAuthorizer denies exactly the actions in deny and allows the rest.
 type selectiveAuthorizer struct {
 	deny map[identity.Action]bool
@@ -129,6 +134,15 @@ func (s selectiveAuthorizer) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (selectiveAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // stubMetrics writes a fixed exposition. Tests that check the body use
@@ -160,7 +174,7 @@ func (stubNamespaceStore) Ping(_ context.Context) error { return nil }
 func newTestHandler(t *testing.T) *apiserver.Handler {
 	t.Helper()
 
-	return newServiceBackedHandler(t, stubAuthenticator{}, stubAuthorizer{}, runningSeed())
+	return newServiceBackedHandler(t, stubAuthenticator{}, stubAuthorizer{}, failedSeed())
 }
 
 // newEnforcingHandler builds a Handler whose authorization the caller
@@ -169,7 +183,7 @@ func newTestHandler(t *testing.T) *apiserver.Handler {
 func newEnforcingHandler(t *testing.T, authz identity.Authorizer) *apiserver.Handler {
 	t.Helper()
 
-	return newServiceBackedHandler(t, tokenAuthenticator{}, authz, runningSeed())
+	return newServiceBackedHandler(t, tokenAuthenticator{}, authz, failedSeed())
 }
 
 // testBackupID is the running backup the handler builders seed, so the
@@ -187,16 +201,18 @@ const testNamespace = "routes"
 // manifest read that only succeeded rows need.
 const testRestoreID = backup.RestoreID("rst-test00000000000001")
 
-// runningSeed returns a running backup row: the state a killed backup leaves,
-// which the next server start marks failed.
-func runningSeed() backup.Record {
+// failedSeed returns a failed backup row, so the GET-by-id route answers 200
+// in the generic enforcement tests. The seed is failed, never running, so the
+// POST route answers 202 in the same tests instead of 409: one backup runs at
+// a time. GET skips the manifest read that only succeeded rows need.
+func failedSeed() backup.Record {
 	return backup.Record{
 		StartedAt: time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
-		EndedAt:   time.Time{},
+		EndedAt:   time.Date(2026, time.October, 11, 12, 5, 0, 0, time.UTC),
 		ID:        testBackupID,
 		Target:    "dir:test",
-		Error:     "",
-		State:     backup.StateRunning,
+		Error:     "server stopped during backup",
+		State:     backup.StateFailed,
 	}
 }
 
@@ -239,7 +255,7 @@ func newServiceBackedHandler(
 	}
 
 	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Providers: nil, Policies: sessionPolicies, Inactivity: nil, Now: nil},
+		session.SessionsConfig{Store: st, Providers: nil, Inactivity: nil, Now: nil},
 	)
 	if err != nil {
 		t.Fatalf("session service: %v", err)
@@ -270,7 +286,14 @@ func newServiceBackedHandler(
 		SignIn: &apiserver.SignIn{
 			Sessions: sessions, Limiter: nil, Stored: nil, Admin: nil, Origins: nil,
 			Providers: []apiserver.SignInProvider{
-				{Client: stubOIDC{}, ID: testProvider, DisplayName: "Corp", AutoCreate: true, Stored: false},
+				{
+					Client:      stubOIDC{},
+					ID:          testProvider,
+					DisplayName: "Corp",
+					AutoCreate:  true,
+					Stored:      false,
+					Source:      principal.SourceOIDC,
+				},
 			},
 		},
 		CheckpointEpochs: fakeEpochs{},
@@ -309,6 +332,11 @@ type allowAll struct{}
 
 func (allowAll) Authorize(context.Context, identity.Principal, identity.Action, identity.Object) error {
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (allowAll) ListObjects(_ context.Context, p identity.Principal, _ identity.Action) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // seedRouteTokens writes the person record of the test caller and one
@@ -476,7 +504,7 @@ func seedRouteAccess(t *testing.T, st *sqlite.Store) *access.Service {
 	for i := range grants {
 		fence, e := storetest.GrantWrite(t, st, grants[i].Object, at, "grant:"+grants[i].ID)
 
-		seedErr := st.CreateGrant(ctx, grants[i], fence, e)
+		seedErr := st.CreateGrant(ctx, grants[i], fence, e, nil)
 		if seedErr != nil {
 			t.Fatalf("seed grant %q: %v", grants[i].ID, seedErr)
 		}
@@ -1133,6 +1161,15 @@ func (r *recordingAuthorizer) Authorize(
 	return nil
 }
 
+// ListObjects gives an administrator every object and any other principal none.
+func (*recordingAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
+}
+
 // denyRouteAuthorizer denies exactly the actions in deny on the object wire
 // form in object and allows everything else, so tests prove a route
 // authorizes the resolved object: denying its declared actions answers 403.
@@ -1151,6 +1188,15 @@ func (d denyRouteAuthorizer) Authorize(
 	}
 
 	return nil
+}
+
+// ListObjects gives an administrator every object and any other principal none.
+func (denyRouteAuthorizer) ListObjects(
+	_ context.Context,
+	p identity.Principal,
+	_ identity.Action,
+) (identity.Scope, error) {
+	return identity.AdminScope(p), nil
 }
 
 // TestRoutesAuthorizeDeclaredObject proves every authorized route asks for

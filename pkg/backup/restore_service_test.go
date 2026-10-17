@@ -1711,8 +1711,8 @@ func TestRestoreAdmitRefusesAStart(t *testing.T) {
 }
 
 // TestRestoreRunsAfterApplyAfterTheSwap proves the after-apply step runs
-// after a restore applies: the server seals rows the backup holds unsealed
-// through it.
+// after a restore applies: the server runs its audit chain steps through
+// it.
 func TestRestoreRunsAfterApplyAfterTheSwap(t *testing.T) {
 	t.Parallel()
 
@@ -1811,7 +1811,7 @@ func TestRestoreRunsAfterApplyWhenAStepAfterTheSwapFails(t *testing.T) {
 }
 
 // TestRestoreFailsWhenAfterApplyFails proves a failing after-apply step
-// fails the restore: unsealed rows never pass silently.
+// fails the restore: a failed audit chain step never passes silently.
 func TestRestoreFailsWhenAfterApplyFails(t *testing.T) {
 	t.Parallel()
 

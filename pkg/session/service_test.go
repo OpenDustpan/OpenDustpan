@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,10 +39,9 @@ func (c *clock) Add(d time.Duration) {
 // sessionsFixture is a Sessions service over a SQLite store, with one
 // person principal.
 type sessionsFixture struct {
-	store    *sqlite.Store
-	policies *memoryPolicies
-	svc      *session.Sessions
-	clock    *clock
+	store *sqlite.Store
+	svc   *session.Sessions
+	clock *clock
 }
 
 const personID = "prn-alice"
@@ -77,21 +77,14 @@ func newSessionsFixture(t *testing.T) sessionsFixture {
 		t.Fatalf("create principal: %v", createErr)
 	}
 
-	policies := &memoryPolicies{policy: session.DefaultPolicy(), entries: nil}
-
-	pol, err := session.NewPolicies(session.PolicyConfig{Store: policies, Now: c.Now})
-	if err != nil {
-		t.Fatalf("policies: %v", err)
-	}
-
 	svc, err := session.NewSessions(session.SessionsConfig{
-		Store: st, Providers: nil, Policies: pol, Inactivity: nil, Now: c.Now,
+		Store: st, Providers: nil, Inactivity: nil, Now: c.Now,
 	})
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
 	}
 
-	return sessionsFixture{store: st, policies: policies, svc: svc, clock: c}
+	return sessionsFixture{store: st, svc: svc, clock: c}
 }
 
 // signInEntry is the entry of the caller of a sign-in.
@@ -247,7 +240,7 @@ func TestSessionsPolicyApplies(t *testing.T) {
 	f := newSessionsFixture(t)
 	_, secret := f.start(t)
 
-	f.policies.policy.Limits = session.Limits{Idle: session.MinIdle, MaxLength: time.Hour}
+	f.setLimits(t, session.Limits{Idle: session.MinIdle, MaxLength: time.Hour})
 	f.clock.Add(session.MinIdle)
 
 	if _, err := f.svc.Authenticate(t.Context(), secret); !errors.Is(err, session.ErrUnauthenticated) {
@@ -281,6 +274,62 @@ func TestSessionsTouchEvery(t *testing.T) {
 	got, err = f.store.GetSession(t.Context(), sess.ID)
 	if err != nil || !got.LastSeenAt.Equal(f.svc.Now()) {
 		t.Fatalf("last use after 90 seconds = %v, %v; want %v", got.LastSeenAt, err, f.svc.Now())
+	}
+}
+
+// countingTouches is a session store that counts the TouchSession calls.
+type countingTouches struct {
+	*sqlite.Store
+
+	touches atomic.Int64
+}
+
+func (c *countingTouches) TouchSession(
+	ctx context.Context, id string, at time.Time, every time.Duration, l session.Limits,
+) error {
+	c.touches.Add(1)
+
+	return c.Store.TouchSession(ctx, id, at, every, l)
+}
+
+// TestSessionsSkipRecentTouch proves that a session used inside TouchEvery
+// of its last use sends no touch to the store, and that a later use does.
+func TestSessionsSkipRecentTouch(t *testing.T) {
+	t.Parallel()
+
+	f := newSessionsFixture(t)
+	counting := &countingTouches{Store: f.store, touches: atomic.Int64{}}
+
+	svc, err := session.NewSessions(session.SessionsConfig{
+		Store: counting, Providers: nil, Inactivity: nil, Now: f.clock.Now,
+	})
+	if err != nil {
+		t.Fatalf("sessions: %v", err)
+	}
+
+	_, secret, err := svc.Start(t.Context(), signInEntry(), startInput(f.clock.Now()))
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	f.clock.Add(30 * time.Second)
+
+	if _, err := svc.Authenticate(t.Context(), secret); err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	if n := counting.touches.Load(); n != 0 {
+		t.Fatalf("touches 30 seconds after the last use = %d, want 0", n)
+	}
+
+	f.clock.Add(time.Minute)
+
+	if _, err := svc.Authenticate(t.Context(), secret); err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+
+	if n := counting.touches.Load(); n != 1 {
+		t.Fatalf("touches 90 seconds after the last use = %d, want 1", n)
 	}
 }
 
@@ -324,14 +373,9 @@ func TestSessionsRefuseDisabledOwner(t *testing.T) {
 	f := newSessionsFixture(t)
 	_, secret := f.start(t)
 
-	pol, err := session.NewPolicies(session.PolicyConfig{Store: f.policies, Now: f.clock.Now})
-	if err != nil {
-		t.Fatalf("policies: %v", err)
-	}
-
 	svc, err := session.NewSessions(
 		session.SessionsConfig{
-			Store: disabledOwner{f.store}, Providers: nil, Policies: pol, Inactivity: nil, Now: f.clock.Now,
+			Store: disabledOwner{f.store}, Providers: nil, Inactivity: nil, Now: f.clock.Now,
 		},
 	)
 	if err != nil {
@@ -343,38 +387,30 @@ func TestSessionsRefuseDisabledOwner(t *testing.T) {
 	}
 }
 
-// errRuleDown is the failure of an inactivity rule in the tests.
-var errRuleDown = errors.New("inactivity rule down")
-
 // fixedInactivity answers a fixed result for every owner, and keeps the
-// owner of the last call.
+// owner and the policy of the last call.
 type fixedInactivity struct {
-	err      error
 	inactive bool
 	mu       sync.Mutex
 	last     session.Owner
+	policy   session.AccountPolicy
 }
 
-func (f *fixedInactivity) AccountInactive(_ context.Context, o session.Owner) (bool, error) {
+func (f *fixedInactivity) AccountInactive(o session.Owner, p session.AccountPolicy, _ time.Time) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.last = o
+	f.last, f.policy = o, p
 
-	return f.inactive, f.err
+	return f.inactive
 }
 
 // withInactivity returns the service of f with the inactivity rule rule.
 func (f sessionsFixture) withInactivity(t *testing.T, rule session.InactivityRule) *session.Sessions {
 	t.Helper()
 
-	pol, err := session.NewPolicies(session.PolicyConfig{Store: f.policies, Now: f.clock.Now})
-	if err != nil {
-		t.Fatalf("policies: %v", err)
-	}
-
 	svc, err := session.NewSessions(
-		session.SessionsConfig{Store: f.store, Providers: nil, Policies: pol, Inactivity: rule, Now: f.clock.Now},
+		session.SessionsConfig{Store: f.store, Providers: nil, Inactivity: rule, Now: f.clock.Now},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
@@ -403,9 +439,12 @@ func TestSessionsRefuseInactiveAccount(t *testing.T) {
 
 	f.clock.Add(5 * time.Minute)
 
-	var nobody session.Owner
+	var (
+		nobody   session.Owner
+		noPolicy session.AccountPolicy
+	)
 
-	rule := &fixedInactivity{err: nil, inactive: true, mu: sync.Mutex{}, last: nobody}
+	rule := &fixedInactivity{inactive: true, mu: sync.Mutex{}, last: nobody, policy: noPolicy}
 	svc := f.withInactivity(t, rule)
 
 	if _, err := svc.Authenticate(t.Context(), secret); !errors.Is(err, session.ErrUnauthenticated) {
@@ -416,18 +455,73 @@ func TestSessionsRefuseInactiveAccount(t *testing.T) {
 		t.Fatalf("rule saw owner %+v, want %s with its activity time", rule.last, personID)
 	}
 
+	stored, err := f.store.GetPolicy(t.Context())
+	if err != nil {
+		t.Fatalf("get access token policy: %v", err)
+	}
+
+	if rule.policy.DisableAccounts != stored.DisableAccounts || rule.policy.Inactivity != stored.Inactivity {
+		t.Fatalf("rule saw policy %+v, want the stored account policy %+v", rule.policy, stored)
+	}
+
 	if got := f.lastSeen(t, sess.ID); !got.Equal(sess.LastSeenAt) {
 		t.Fatalf("last use after a refused request = %s, want %s", got, sess.LastSeenAt)
 	}
 
+	rule.mu.Lock()
 	rule.inactive = false
+	rule.mu.Unlock()
+
 	if _, err := svc.Authenticate(t.Context(), secret); err != nil {
 		t.Fatalf("authenticate with an active account: %v", err)
 	}
+}
 
-	rule.err = errRuleDown
-	if _, err := svc.Authenticate(t.Context(), secret); !errors.Is(err, errRuleDown) {
-		t.Fatalf("authenticate when the rule fails = %v, want the rule error", err)
+// TestSessionsUseNearTheIdleLimitMovesIt proves that the touch skip never
+// lets a session in use go idle: a use 30 seconds before the idle limit is
+// recorded, so a use 30 seconds after the first limit still succeeds.
+func TestSessionsUseNearTheIdleLimitMovesIt(t *testing.T) {
+	t.Parallel()
+
+	f := newSessionsFixture(t)
+	sess, secret := f.start(t)
+
+	f.clock.Add(session.DefaultIdle - 30*time.Second)
+
+	if _, err := f.svc.Authenticate(t.Context(), secret); err != nil {
+		t.Fatalf("authenticate 30 seconds before the idle limit: %v", err)
+	}
+
+	if got := f.lastSeen(t, sess.ID); !got.Equal(f.svc.Now()) {
+		t.Fatalf("last use after the use before the idle limit = %s, want %s", got, f.svc.Now())
+	}
+
+	f.clock.Add(time.Minute)
+
+	if _, err := f.svc.Authenticate(t.Context(), secret); err != nil {
+		t.Fatalf("authenticate 30 seconds after the first idle limit: %v", err)
+	}
+
+	if got := f.lastSeen(t, sess.ID); !got.Equal(f.svc.Now()) {
+		t.Fatalf("last use after the second use = %s, want %s", got, f.svc.Now())
+	}
+}
+
+// setLimits stores the session limits l in the store of f.
+func (f sessionsFixture) setLimits(t *testing.T, l session.Limits) {
+	t.Helper()
+
+	_, err := f.store.UpdateSessionPolicy(t.Context(), func(old session.Policy) (session.Policy, audit.Entry, error) {
+		old.Limits, old.UpdatedAt = l, f.clock.Now()
+
+		e := signInEntry()
+		e.Action, e.At, e.Namespace, e.Kind, e.Outcome, e.Object = "server:manage-sessions", f.clock.Now(),
+			audit.ServerScope, audit.KindChange, audit.OutcomeSuccess, session.PolicyRef
+
+		return old, e, nil
+	})
+	if err != nil {
+		t.Fatalf("set session limits: %v", err)
 	}
 }
 
@@ -562,20 +656,9 @@ func TestSessionsRequestRefusesReturnPath(t *testing.T) {
 func TestNewSessionsNeedsDependencies(t *testing.T) {
 	t.Parallel()
 
-	pol, err := session.NewPolicies(
-		session.PolicyConfig{Store: &memoryPolicies{policy: session.DefaultPolicy(), entries: nil}, Now: nil},
-	)
-	if err != nil {
-		t.Fatalf("policies: %v", err)
-	}
-
-	for _, cfg := range []session.SessionsConfig{
-		{Store: nil, Providers: nil, Policies: pol, Inactivity: nil, Now: nil},
-		{Store: disabledOwner{Store: nil}, Providers: nil, Policies: nil, Inactivity: nil, Now: nil},
-	} {
-		if _, err := session.NewSessions(cfg); !errors.Is(err, session.ErrMissingDependency) {
-			t.Errorf("NewSessions(%+v) = %v, want ErrMissingDependency", cfg, err)
-		}
+	cfg := session.SessionsConfig{Store: nil, Providers: nil, Inactivity: nil, Now: nil}
+	if _, err := session.NewSessions(cfg); !errors.Is(err, session.ErrMissingDependency) {
+		t.Errorf("NewSessions(%+v) = %v, want ErrMissingDependency", cfg, err)
 	}
 }
 

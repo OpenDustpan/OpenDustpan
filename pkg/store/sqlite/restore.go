@@ -47,7 +47,7 @@ func (s *Store) CreateRestore(ctx context.Context, r backup.RestoreRecord) error
 	}
 
 	if n == 0 {
-		return backup.ErrRestoreExists
+		return s.createRestoreConflict(ctx, r.ID)
 	}
 
 	return nil
@@ -290,21 +290,55 @@ func fenceStagedFile(ctx context.Context, path string, keep bookkeeping) error {
 		return errors.Join(err, tx.Rollback())
 	}
 
+	if err := resetStagedRuntimeRows(ctx, tx); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("fence staged namespaces: %w", err)
+	}
+
+	return nil
+}
+
+// resetStagedRuntimeRows clears the rows of the staged file that describe
+// work of the installation the backup came from, in tx: the audit sink
+// cursors and leases, and the running backup and restore rows.
+func resetStagedRuntimeRows(ctx context.Context, tx *sql.Tx) error {
 	// The restored log can reuse sequences that a sink already holds, and
 	// a restored cursor can point past the restored entries. A reset makes
 	// every sink receive the restored log again from its first entry. A
 	// restored lease could block that reship, so the reset releases every
 	// lease too.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM audit_sink_cursors`); err != nil {
-		return errors.Join(fmt.Errorf("reset staged audit sink cursors: %w", err), tx.Rollback())
+		return fmt.Errorf("reset staged audit sink cursors: %w", err)
 	}
 
 	if _, err := tx.ExecContext(ctx, `DELETE FROM audit_sink_leases`); err != nil {
-		return errors.Join(fmt.Errorf("reset staged audit sink leases: %w", err), tx.Rollback())
+		return fmt.Errorf("reset staged audit sink leases: %w", err)
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("fence staged namespaces: %w", err)
+	// A backup sees its own row as running when it takes its snapshot, so
+	// the staged data holds that row as running. No process runs it in
+	// this installation, and the one running backup it would hold blocks
+	// every later backup.
+	const failRunning = `UPDATE backups SET state = 'failed', error = ?, ended_at_ms = ? WHERE state = 'running'`
+
+	end := codec.Millis(time.Now())
+
+	if _, err := tx.ExecContext(ctx, failRunning, backup.RestoredRunningText, end); err != nil {
+		return fmt.Errorf("fail staged running backups: %w", err)
+	}
+
+	// The same holds for a restore row: the backup that a restore takes
+	// before it applies holds that restore as running. The restore that
+	// runs now stores its row again after the swap, and the one running
+	// restore the data would hold blocks that row.
+	const failRestores = `UPDATE restores SET state = 'failed', error = ?, ended_at_ms = ?
+    WHERE state IN ('checking', 'applying')`
+
+	if _, err := tx.ExecContext(ctx, failRestores, backup.RestoredRunningRestoreText, end); err != nil {
+		return fmt.Errorf("fail staged running restores: %w", err)
 	}
 
 	return nil
@@ -378,4 +412,94 @@ func (s *Store) liveBookkeeping(ctx context.Context) (bookkeeping, error) {
 	}
 
 	return bookkeeping{chain: chain, state: state}, nil
+}
+
+// keepControlTables replaces the rows of each table of backup.ControlTables
+// in the staged file at staged with the rows of the live database at live,
+// in one transaction. A restore keeps the control tables of the live
+// database: the claim tokens of durable operations only grow, and an older
+// token from a backup would let a stale holder write. The staged file and
+// the live database have one schema: the stage checks the schema version.
+func keepControlTables(ctx context.Context, staged, live string) error {
+	abs, err := filepath.Abs(staged)
+	if err != nil {
+		return fmt.Errorf("keep control tables: %w", err)
+	}
+
+	query := url.Values{}
+	query.Set("_txlock", "immediate")
+	query.Add("_pragma", "busy_timeout(10000)")
+	query.Add("_pragma", "journal_mode(delete)")
+	query.Add("_pragma", "foreign_keys(on)")
+
+	dsn := (&url.URL{Scheme: fileScheme, Path: abs, RawQuery: query.Encode()}).String()
+
+	conn, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return fmt.Errorf("keep control tables: %w", err)
+	}
+
+	// ATTACH holds for one connection, so the pool keeps one.
+	conn.SetMaxOpenConns(1)
+
+	defer func() {
+		_ = conn.Close() //nolint:errcheck // The commit below reports a failed write; a close error adds nothing.
+	}()
+
+	if _, attachErr := conn.ExecContext(ctx, `ATTACH DATABASE ? AS live`, live); attachErr != nil {
+		return fmt.Errorf("keep control tables: attach the live database: %w", attachErr)
+	}
+
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("keep control tables: %w", err)
+	}
+
+	if err := copyControlTables(ctx, tx); err != nil {
+		return errors.Join(err, tx.Rollback())
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("keep control tables: %w", err)
+	}
+
+	return nil
+}
+
+// durableOperationColumns lists the columns of durable_operations.
+const durableOperationColumns = `id, start_key, kind, input, version, state, attempt, expiries, failures, ` +
+	`last_error, claim_owner, claim_token, claim_expires_at_ms, cancel_requested, not_before_ms, created_at_ms, ` +
+	`updated_at_ms`
+
+// keepControlStatements replace the rows of each table of
+// backup.ControlTables in the staged file (main) with the rows of the live
+// database (live): the deletes run children first, the copies parents
+// first.
+//
+//nolint:gochecknoglobals // A fixed list of SQL statements: Go has no constant slices.
+var keepControlStatements = []string{
+	`DELETE FROM main.durable_steps`,
+	`DELETE FROM main.durable_operations`,
+	`DELETE FROM main.durable_schedules`,
+	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
+		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
+	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
+		`SELECT operation_id, name, seq, result, done_at_ms FROM live.durable_steps`,
+	`INSERT INTO main.durable_schedules (` + durableScheduleColumns + `) ` +
+		`SELECT ` + durableScheduleColumns + ` FROM live.durable_schedules`,
+}
+
+// durableScheduleColumns lists every column of durable_schedules, for the
+// copy of the control tables.
+const durableScheduleColumns = `name, interval_ms, next_run_at_ms, last_claimed_at_ms`
+
+// copyControlTables runs keepControlStatements in tx.
+func copyControlTables(ctx context.Context, tx *sql.Tx) error {
+	for _, stmt := range keepControlStatements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("keep control tables: %w", err)
+		}
+	}
+
+	return nil
 }

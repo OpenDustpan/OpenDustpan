@@ -32,7 +32,6 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
-	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 const (
@@ -187,21 +186,35 @@ type backendCert struct {
 func serverBinary(ctx context.Context, tb testing.TB, dir string) string {
 	tb.Helper()
 
-	out := filepath.Join(dir, "opendustpan")
+	return buildBinary(ctx, tb, filepath.Join(dir, "opendustpan"), "")
+}
+
+// BuildBinaryWithVersion builds cmd/opendustpan into dir with its version
+// stamped as version, for example v0.1.0, and returns its path. A test runs it
+// as a client with RunBinaryPath to prove the rules that depend on a release
+// version: the suite's own server binary is a dev build.
+func BuildBinaryWithVersion(ctx context.Context, tb testing.TB, dir, version string) string {
+	tb.Helper()
+
+	return buildBinary(ctx, tb, filepath.Join(dir, "opendustpan-"+version), version)
+}
+
+// buildBinary builds cmd/opendustpan to out. A non-empty version is stamped
+// into main.version.
+func buildBinary(ctx context.Context, tb testing.TB, out, version string) string {
+	tb.Helper()
+
+	args := []string{"build", "-tags=" + serverBuildTags}
+	if version != "" {
+		args = append(args, "-ldflags", "-X main.version="+version)
+	}
+
+	args = append(args, "-o", out, "opendustpan.org/opendustpan/cmd/opendustpan")
 
 	buildCtx, cancel := context.WithTimeout(ctx, binaryBuildTimeout)
 	defer cancel()
 
-	//nolint:gosec // The suite builds its own server from this repository.
-	cmd := exec.CommandContext(
-		buildCtx,
-		"go",
-		"build",
-		"-tags="+serverBuildTags,
-		"-o",
-		out,
-		"opendustpan.org/opendustpan/cmd/opendustpan",
-	)
+	cmd := exec.CommandContext(buildCtx, "go", args...)
 
 	var buildOut bytes.Buffer
 
@@ -719,8 +732,28 @@ func (e *Env) RunBinaryWithEnv(
 		tb.Fatalf("RunBinary needs E2E_SERVER=binary")
 	}
 
+	return e.runBinaryAt(ctx, tb, e.binPath, extra, args...)
+}
+
+// RunBinaryPath runs `<bin> <args>` with the environment of RunBinary: bin
+// is another build of the binary, for example one from
+// BuildBinaryWithVersion. It needs E2E_SERVER=binary.
+func (e *Env) RunBinaryPath(ctx context.Context, tb testing.TB, bin string, args ...string) BinaryResult {
+	tb.Helper()
+
+	if e.binPath == "" {
+		tb.Fatalf("RunBinaryPath needs E2E_SERVER=binary")
+	}
+
+	return e.runBinaryAt(ctx, tb, bin, nil, args...)
+}
+
+// runBinaryAt runs bin with args and the backend environment plus extra.
+func (e *Env) runBinaryAt(ctx context.Context, tb testing.TB, bin string, extra []string, args ...string) BinaryResult {
+	tb.Helper()
+
 	//nolint:gosec // The binary is built from this repository by the suite itself.
-	cmd := exec.CommandContext(ctx, e.binPath, args...)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = backendEnvWith(e.backendCfg.tokens, extra)
 
 	var stdout, stderr bytes.Buffer
@@ -953,36 +986,25 @@ func reserveRecordingProxy(tb testing.TB, rec *Recorder, refuser *JournalRefuser
 	return &recordingProxy{server: ts, target: target}
 }
 
-// openBinaryStore opens a direct store handle on the database the backend
-// serves, so seed helpers keep working. It returns the --database value for
-// the backend, which reaches PostgreSQL through a TCP proxy, with the handle
-// and the proxy. On SQLite the proxy is nil.
-//
-//nolint:ireturn // SQLite and PostgreSQL stores share no concrete type;
-func openBinaryStore(
-	ctx context.Context, tb testing.TB, store Store, dir string,
-) (string, serverStore, *DBProxy) {
+// binaryDatabase returns the --database value of the database the backend
+// serves, with the PostgreSQL proxy. The test process opens no store on it:
+// the binary owns the database and migrates it, and the seed helpers write
+// through the API. On SQLite the proxy is nil and the binary creates the
+// file. On PostgreSQL the backend reaches a fresh schema through a TCP proxy.
+func binaryDatabase(ctx context.Context, tb testing.TB, store Store, dir string) (string, *DBProxy) {
 	tb.Helper()
 
 	switch store {
 	case StoreSQLite:
-		dbPath := filepath.Join(dir, "dustpan.db")
-
-		return "sqlite:" + dbPath, openSQLiteStore(ctx, tb, dbPath), nil
+		return "sqlite:" + filepath.Join(dir, "dustpan.db"), nil
 	case StorePostgres:
-		base := PostgresURL()
-		if base == "" {
-			tb.Fatalf("set %s to run the PostgreSQL suite", postgresURLEnv)
-		}
+		proxy, proxiedURL := startDBProxy(ctx, tb, newPostgresSchema(ctx, tb, PostgresURL()))
 
-		st, schemaURL := openPostgresStoreWithURL(ctx, tb, base)
-		proxy, proxiedURL := startDBProxy(ctx, tb, schemaURL)
-
-		return proxiedURL, st, proxy
+		return proxiedURL, proxy
 	default:
 		tb.Fatalf("unknown store: %s", store)
 
-		return "", nil, nil
+		return "", nil
 	}
 }
 
@@ -1067,7 +1089,7 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	tb.Helper()
 
 	bin := serverBinary(ctx, tb, in.dir)
-	dbURL, st, dbProxy := openBinaryStore(ctx, tb, in.store, in.dir)
+	dbURL, dbProxy := binaryDatabase(ctx, tb, in.store, in.dir)
 	setup := newBlobSetup(ctx, tb, in.dir)
 	cfg := binaryBackendConfig(in, bin, dbURL, setup, writeBackendCert(tb, in.dir))
 
@@ -1083,19 +1105,13 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	client := proxy.Client()
 	client.Timeout = commandTimeout
 
-	namespaces, err := namespace.NewService(namespace.Config{Store: st, Now: nil, Region: region})
-	if err != nil {
-		tb.Fatalf("namespace service: %v", err)
-	}
-
 	env := &Env{
 		URL:           proxy.URL,
 		Recorder:      in.rec,
 		cli:           in.cli,
 		store:         in.store,
-		server:        st,
 		client:        client,
-		workspaces:    newWorkspaceService(tb, st, setup.blobs, namespaces),
+		inprocess:     nil,
 		blobs:         setup.blobs,
 		blobName:      setup.blobName,
 		s3Endpoint:    setup.s3Endpoint,
@@ -1119,6 +1135,14 @@ func newBinaryEnv(ctx context.Context, in envInput) *Env {
 	}
 
 	prepareBinaryEnvDirs(tb, env, proxy)
+
+	if in.store == StoreSQLite {
+		dbPath := strings.TrimPrefix(dbURL, "sqlite:")
+		checkNoOwnSQLiteHandle(tb, dbPath)
+		// Cleanups run last in, first out, so this one runs while the
+		// binary still serves: it catches a handle that a step opened.
+		tb.Cleanup(func() { checkNoOwnSQLiteHandle(tb, dbPath) })
+	}
 
 	return env
 }

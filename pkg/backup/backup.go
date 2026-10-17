@@ -39,6 +39,14 @@ const (
 	DialectPostgres Dialect = "postgres"
 )
 
+// The tables of durable operations: one row for each operation, one row for
+// each recorded step, and one row for each schedule.
+const (
+	TableDurableOperations = "durable_operations"
+	TableDurableSteps      = "durable_steps"
+	TableDurableSchedules  = "durable_schedules"
+)
+
 // Tables lists every table that an export covers, in foreign-key order, so an
 // import can load parents before children. Both dialects share the table
 // names, so both adapters use this list as the single source: they must not
@@ -184,6 +192,17 @@ type Summary struct {
 	SchemaVersion int
 }
 
+// RestoredRunningText is the error text of a backup row that a restore
+// brought back as running: the backup was running when it took the
+// snapshot that the restore applied, so no process runs it here.
+const RestoredRunningText = "the backup was running in the restored data"
+
+// RestoredRunningRestoreText is the error text of a restore row that a
+// restore brought back as checking or applying: a restore takes a backup of
+// the live data before it applies, and that backup holds the restore row as
+// running, so no process runs it here.
+const RestoredRunningRestoreText = "the restore was running in the restored data"
+
 // Sentinel errors returned by this package and by its ports.
 var (
 	// ErrNotFound reports that a backup row does not exist.
@@ -210,7 +229,9 @@ var (
 // not one namespace. A server that starts marks every running row failed.
 type Registry interface {
 	// CreateBackup stores r as a running backup. It returns ErrAlreadyExists
-	// if the ID is taken.
+	// if the ID is taken, and ErrAlreadyRunning when another backup of the
+	// installation is running: one backup runs at a time, across every
+	// instance on the database.
 	CreateBackup(ctx context.Context, r Record) error
 	// FinishBackup moves the running backup id to state, which is
 	// StateSucceeded or StateFailed, with the error text and the end time.

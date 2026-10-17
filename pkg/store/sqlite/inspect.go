@@ -26,7 +26,12 @@ func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigratio
 		return nil, nil
 	}
 
-	rows, err := s.conn.QueryContext(ctx, `SELECT version, name FROM schema_migrations ORDER BY version`)
+	query, err := appliedQuery(ctx, s.conn)
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("read schema migrations: %w", err)
 	}
@@ -42,7 +47,7 @@ func (s *Store) AppliedMigrations(ctx context.Context) ([]schema.AppliedMigratio
 	for rows.Next() {
 		var applied schema.AppliedMigration
 
-		if scanErr := rows.Scan(&applied.Version, &applied.Name); scanErr != nil {
+		if scanErr := rows.Scan(&applied.Version, &applied.Name, &applied.MinBinaryVersion); scanErr != nil {
 			return nil, fmt.Errorf("read schema migrations: %w", scanErr)
 		}
 

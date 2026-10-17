@@ -81,7 +81,7 @@ var (
 	)
 	// errSizeLimit reports a negative size limit.
 	errSizeLimit = errors.New(
-		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes or --max-body-bytes-in-flight to 0 or more",
+		"size limits must not be negative: set --max-checkpoint-bytes, --max-secret-batch-bytes, --max-state-bytes, --max-body-bytes-in-flight or --blob-cache-bytes to 0 or more",
 	)
 	// errRetention reports a soft-delete retention that is not a duration of
 	// at least one hour.
@@ -290,6 +290,7 @@ type serveFlags struct {
 	maxCheckpointBytes           int64
 	maxSecretBatchBytes          int64
 	maxStateBytes                int64
+	blobCacheBytes               int64
 	maxBodyBytesInFlight         int64
 	checkpointDeltaCutoff        int64
 	disablePulumiJournaling      bool
@@ -325,6 +326,7 @@ func (f *serveFlags) check() error {
 		f.maxSecretBatchBytes,
 		f.maxStateBytes,
 		f.maxBodyBytesInFlight,
+		f.blobCacheBytes,
 	}
 
 	if err := checkSizeFlags(sizeLimits); err != nil {
@@ -425,6 +427,7 @@ func (f *serveFlags) registerKey(fs *flag.FlagSet) {
 // AWS_SECRET_ACCESS_KEY and AWS_SESSION_TOKEN only.
 func (f *serveFlags) registerStorage(fs *flag.FlagSet) {
 	cli.ByFlag("blob-store").String(fs, &f.blobStore)
+	cli.ByFlag("blob-cache-bytes").Int64(fs, &f.blobCacheBytes)
 	cli.ByFlag("s3-endpoint").String(fs, &f.s3Endpoint)
 	cli.ByFlag("s3-region").String(fs, &f.s3Region)
 	cli.ByFlag("backup-target").String(fs, &f.backupTarget)
@@ -1156,6 +1159,7 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithMaxSecretBatchBytes(int(f.maxSecretBatchBytes)),
 		dustpan.WithMaxStateBytes(f.maxStateBytes),
 		dustpan.WithMaxBodyBytesInFlight(f.maxBodyBytesInFlight),
+		dustpan.WithBlobCache(f.blobCacheBytes),
 		dustpan.WithCheckpointDeltaCutoff(int(f.checkpointDeltaCutoff)),
 		dustpan.WithDisablePulumiJournaling(f.disablePulumiJournaling),
 		dustpan.WithAuditChain(chain),
@@ -1537,17 +1541,22 @@ func (s postgresStore) close() { s.Close() }
 var openStore = func(ctx context.Context, database string, logger *slog.Logger) (store, error) {
 	switch {
 	case strings.HasPrefix(database, "sqlite:"):
-		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"), sqlite.WithLogger(logger))
+		s, err := sqlite.Open(ctx, strings.TrimPrefix(database, "sqlite:"),
+			sqlite.WithLogger(logger), sqlite.WithBinaryVersion(version))
 		if err != nil {
-			return nil, fmt.Errorf("open sqlite store: %w", withBinaryVersion(err))
+			return nil, fmt.Errorf("open sqlite store: %w", err)
 		}
+
+		warnDevBuild(ctx, logger, s)
 
 		return sqliteStore{s}, nil
 	case strings.HasPrefix(database, "postgres://"), strings.HasPrefix(database, "postgresql://"):
-		s, err := postgres.Open(ctx, database)
+		s, err := postgres.Open(ctx, database, postgres.WithBinaryVersion(version))
 		if err != nil {
-			return nil, fmt.Errorf("open postgres store: %w", withBinaryVersion(err))
+			return nil, fmt.Errorf("open postgres store: %w", err)
 		}
+
+		warnDevBuild(ctx, logger, s)
 
 		return postgresStore{s}, nil
 	default:
@@ -1555,17 +1564,39 @@ var openStore = func(ctx context.Context, database string, logger *slog.Logger) 
 	}
 }
 
-// withBinaryVersion adds the version of the binary to a newer-schema refusal,
-// so the message names the schema version of the database, the schema version
-// of the binary and the version of the binary. The adapters do not know the
-// binary version, so only this command adds it.
-func withBinaryVersion(err error) error {
-	newer, ok := errors.AsType[*schema.NewerError](err)
-	if !ok {
-		return err
+// appliedMigrationsReader reads the applied migrations of an open store.
+type appliedMigrationsReader interface {
+	AppliedMigrations(ctx context.Context) ([]schema.AppliedMigration, error)
+}
+
+// warnDevBuild logs a warning when a dev build opens a schema that records a
+// minimum binary version. A dev build counts as newer than every release, so
+// the minimum never refuses it.
+func warnDevBuild(ctx context.Context, logger *slog.Logger, s appliedMigrationsReader) {
+	if !schema.IsDevBuild(version) {
+		return
 	}
 
-	return fmt.Errorf("binary version is %s. %w", version, newer)
+	applied, err := s.AppliedMigrations(ctx)
+	if err != nil {
+		logger.WarnContext(ctx, "read the minimum binary version of the database schema",
+			slog.String("error", err.Error()))
+
+		return
+	}
+
+	minimums := make([]string, 0, len(applied))
+	for _, m := range applied {
+		minimums = append(minimums, m.MinBinaryVersion)
+	}
+
+	minimum, err := schema.HighestMinimum(minimums)
+	if err != nil || minimum == "" {
+		return
+	}
+
+	logger.WarnContext(ctx, "dev build ignores the minimum binary version of the database schema",
+		slog.String("binary_version", version), slog.String("schema_minimum", minimum))
 }
 
 // minRetention is the shortest soft-delete retention the server accepts.

@@ -55,11 +55,13 @@ func ToSessionPolicyRow(p session.Policy) SessionPolicyRow {
 // Scopes is a JSON list.
 type ProviderConfigRow struct {
 	ProviderID   string
+	Mode         string
 	Issuer       string
 	DisplayName  string
 	ClientID     string
 	Scopes       string
 	ClientSecret []byte
+	OAuth        session.OAuthSettings
 	CreatedAtMs  int64
 	UpdatedAtMs  int64
 	Version      int64
@@ -80,8 +82,8 @@ func ToProviderConfigRow(p session.ProviderConfig) (ProviderConfigRow, error) {
 	}
 
 	return ProviderConfigRow{
-		ProviderID: p.ID, Issuer: p.Issuer, DisplayName: p.DisplayName, ClientID: p.ClientID,
-		Scopes: string(data), ClientSecret: p.SealedSecret, CreatedAtMs: Millis(p.CreatedAt),
+		ProviderID: p.ID, Mode: string(p.Mode), Issuer: p.Issuer, DisplayName: p.DisplayName, ClientID: p.ClientID,
+		Scopes: string(data), ClientSecret: p.SealedSecret, OAuth: p.OAuth, CreatedAtMs: Millis(p.CreatedAt),
 		UpdatedAtMs: Millis(p.UpdatedAt), Version: p.Version, AutoCreate: p.AutoCreate, Enabled: p.Enabled,
 	}, nil
 }
@@ -95,8 +97,17 @@ func FromProviderConfigRow(row ProviderConfigRow) (session.ProviderConfig, error
 
 	return session.ProviderConfig{
 		CreatedAt: FromMillis(row.CreatedAtMs), UpdatedAt: FromMillis(row.UpdatedAtMs), ID: row.ProviderID,
-		Issuer: row.Issuer, DisplayName: row.DisplayName, ClientID: row.ClientID,
-		SealedSecret: bytes.Clone(row.ClientSecret), Scopes: scopes, Version: row.Version,
+		Mode: session.ProviderMode(row.Mode), Issuer: row.Issuer, DisplayName: row.DisplayName, ClientID: row.ClientID,
+		SealedSecret: bytes.Clone(row.ClientSecret), Scopes: scopes, OAuth: row.OAuth, Version: row.Version,
 		AutoCreate: row.AutoCreate, Enabled: row.Enabled,
 	}, nil
+}
+
+// FromSessionAccountsRow converts the account columns of the access token
+// policy that a session lookup joins into the account policy of a session.
+func FromSessionAccountsRow(inactivityMs int64, disable bool) session.AccountPolicy {
+	return session.AccountPolicy{
+		Inactivity:      time.Duration(inactivityMs) * time.Millisecond,
+		DisableAccounts: disable,
+	}
 }

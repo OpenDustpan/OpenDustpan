@@ -95,6 +95,7 @@ func RunBackup(t *testing.T, newStore BackupFactory) {
 		{name: "column lists cover every column of the schema", test: testBackupColumnsCoverSchema},
 		{name: "backups table creates, finishes, gets and lists", test: testBackupRegistry},
 		{name: "restart marks every running backup failed", test: testBackupRestartFailsRunning},
+		{name: "one backup runs at a time", test: testBackupOneRunning},
 		{name: "a backup row survives close and reopen", test: testBackupRowSurvivesReopen},
 	}
 
@@ -464,12 +465,29 @@ func seedBackupProviders(t *testing.T, s BackupStore) {
 
 	if pc, ok := s.(session.ProviderConfigStore); ok {
 		p := session.ProviderConfig{
-			CreatedAt: now(), UpdatedAt: now(), ID: "corp", Issuer: "https://idp.example", DisplayName: "Corp",
-			ClientID: "dustpan", SealedSecret: []byte("sealed secret"), Scopes: []string{"profile"}, Version: 1,
-			AutoCreate: true, Enabled: false,
+			CreatedAt: now(), UpdatedAt: now(), ID: "corp", Mode: session.ModeOIDC, Issuer: "https://idp.example",
+			DisplayName: "Corp", ClientID: "dustpan", SealedSecret: []byte("sealed secret"),
+			Scopes: []string{"profile"}, OAuth: session.OAuthSettings{
+				AuthorizationURL: "", TokenURL: "", UserinfoURL: "", SubjectClaim: "", NameClaim: "", UsernameClaim: "",
+				EmailClaim: "",
+			}, Version: 1, AutoCreate: true, Enabled: false,
 		}
 		if err := pc.CreateProviderConfig(ctx, p, ServerChange(now(), "sign-in-provider:corp")); err != nil {
 			t.Fatalf("create sign-in provider: %v", err)
+		}
+
+		plain := session.ProviderConfig{
+			CreatedAt: now(), UpdatedAt: now(), ID: "hub", Mode: session.ModeOAuth, Issuer: "", DisplayName: "Hub",
+			ClientID: "dustpan", SealedSecret: []byte("sealed secret of hub"), Scopes: []string{"read:user"},
+			OAuth: session.OAuthSettings{ //nolint:gosec // Test fixture: the URLs of a provider, no credential.
+				AuthorizationURL: "https://hub.example/login/oauth/authorize",
+				TokenURL:         "https://hub.example/login/oauth/access_token",
+				UserinfoURL:      "https://api.hub.example/user", SubjectClaim: "id", NameClaim: "name",
+				UsernameClaim: "login", EmailClaim: "email",
+			}, Version: 1, AutoCreate: false, Enabled: true,
+		}
+		if err := pc.CreateProviderConfig(ctx, plain, ServerChange(now(), "sign-in-provider:hub")); err != nil {
+			t.Fatalf("create plain OAuth sign-in provider: %v", err)
 		}
 	}
 }
@@ -642,14 +660,14 @@ func seedBackupAccess(t *testing.T, s BackupStore) {
 	}
 	for i := range grants {
 		fence, e := GrantWrite(t, s, grants[i].Object, now(), "grant:"+grants[i].ID)
-		if err := as.CreateGrant(ctx, grants[i], fence, e); err != nil {
+		if err := as.CreateGrant(ctx, grants[i], fence, e, nil); err != nil {
 			t.Fatalf("create grant %q: %v", grants[i].ID, err)
 		}
 	}
 
 	fence, revoked := GrantWrite(t, s, identity.NamespaceObject("acme"), now().Add(2*time.Hour), "grant:grt-revoked")
 
-	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked)
+	err := as.RevokeGrant(ctx, "grt-revoked", fence, revoked, nil)
 	if err != nil {
 		t.Fatalf("revoke grant: %v", err)
 	}
@@ -992,9 +1010,10 @@ func sameBlobRef(a, b backup.BlobRef) bool {
 }
 
 // testBackupTablesCoverSchema checks that the data tables of the migrated
-// schema are exactly the tables of backup.Tables. It reads the schema tables
-// through the Inspector, never through Tables itself, so a migration that
-// adds a table fails here until its author adds the table to Tables.
+// schema are exactly the tables of backup.Tables and backup.ControlTables.
+// It reads the schema tables through the Inspector, never through the lists
+// themselves, so a migration that adds a table fails here until its author
+// adds the table to one of the lists.
 func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
 	t.Helper()
 
@@ -1005,14 +1024,14 @@ func testBackupTablesCoverSchema(t *testing.T, newStore BackupFactory) {
 		t.Fatalf("schema tables: %v", err)
 	}
 
-	want := backup.TablesCopy()
+	want := append(backup.TablesCopy(), backup.ControlTables...)
 	slices.Sort(want)
 
 	got := slices.Clone(schema)
 	slices.Sort(got)
 
 	if !slices.Equal(got, want) {
-		t.Fatalf("schema tables = %q, want backup.Tables %q", got, want)
+		t.Fatalf("schema tables = %q, want backup.Tables and backup.ControlTables %q", got, want)
 	}
 }
 
@@ -1156,6 +1175,32 @@ func backupIDs(rows []backup.Record) []backup.ID {
 	return ids
 }
 
+// testBackupOneRunning refuses a second running backup with
+// ErrAlreadyRunning, keeps ErrAlreadyExists for a taken ID, and allows the
+// next backup once the running one finished.
+func testBackupOneRunning(t *testing.T, newStore BackupFactory) {
+	t.Helper()
+
+	s := newStore(t)
+	first := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+
+	second := newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Minute))
+	if err := s.CreateBackup(t.Context(), second); !errors.Is(err, backup.ErrAlreadyRunning) {
+		t.Fatalf("second running backup: err = %v, want ErrAlreadyRunning", err)
+	}
+
+	if _, err := s.GetBackup(t.Context(), second.ID); !errors.Is(err, backup.ErrNotFound) {
+		t.Fatalf("refused backup row: err = %v, want ErrNotFound", err)
+	}
+
+	if err := s.CreateBackup(t.Context(), first); !errors.Is(err, backup.ErrAlreadyExists) {
+		t.Fatalf("taken backup ID: err = %v, want ErrAlreadyExists", err)
+	}
+
+	mustFinishBackup(t, s, backupFinish{ID: first.ID, State: backup.StateSucceeded, Error: "", EndedAt: now()})
+	mustCreateBackup(t, s, second)
+}
+
 // testBackupRestartFailsRunning marks a running row failed at the next start,
 // with the error text, and leaves finished rows alone.
 func testBackupRestartFailsRunning(t *testing.T, newStore BackupFactory) {
@@ -1165,7 +1210,7 @@ func testBackupRestartFailsRunning(t *testing.T, newStore BackupFactory) {
 
 	mustFailRunningBackups(t, s, now(), "no backup is running")
 
-	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	// One backup runs at a time: the finished row runs and ends first.
 	done := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)))
 	endedAt := now().Add(2 * time.Hour)
 	finished := mustFinishBackup(t, s, backupFinish{
@@ -1174,6 +1219,7 @@ func testBackupRestartFailsRunning(t *testing.T, newStore BackupFactory) {
 		Error:   "",
 		EndedAt: endedAt,
 	})
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
 
 	restartedAt := now().Add(3 * time.Hour)
 	mustFailRunningBackups(t, s, restartedAt, "server stopped during backup")
@@ -1211,7 +1257,7 @@ func testBackupRowSurvivesReopen(t *testing.T, newStore BackupFactory) {
 		t.Skip("store does not support close and reopen")
 	}
 
-	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
+	// One backup runs at a time: the finished row runs and ends first.
 	done := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now().Add(time.Hour)))
 	finished := mustFinishBackup(t, s, backupFinish{
 		ID:      done.ID,
@@ -1219,6 +1265,7 @@ func testBackupRowSurvivesReopen(t *testing.T, newStore BackupFactory) {
 		Error:   "",
 		EndedAt: now().Add(2 * time.Hour),
 	})
+	running := mustCreateBackup(t, s, newBackupRecord(backup.ID(ident.NewID("bkp-")), now()))
 
 	if err := reopenable.Close(); err != nil {
 		t.Fatalf("close store: %v", err)

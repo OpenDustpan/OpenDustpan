@@ -248,9 +248,8 @@ func newBinaryEnvWithBin(ctx context.Context, in envInput, binPath string) *Env 
 		Recorder:   in.rec,
 		cli:        in.cli,
 		store:      in.store,
-		server:     nil,
 		client:     client,
-		workspaces: nil,
+		inprocess:  nil,
 		blobs:      openBlobStoreAt(tb, blobDir),
 		blobName:   blobFS,
 		s3Endpoint: "",
@@ -415,10 +414,15 @@ func probeHealth(ctx context.Context, port string) bool {
 	return resp.StatusCode == http.StatusNoContent
 }
 
-// HasSchemaRefusal reports whether combined server output holds the
-// newer-schema refusal: the database and binary schema versions the
-// NewerError text names.
+// HasSchemaRefusal reports whether combined server output holds a schema
+// refusal: the minimum binary version refusal, which names the binary version
+// and the schema minimum, or the newer-schema refusal of binaries from before
+// the minimum, which names the database and binary schema versions.
 func HasSchemaRefusal(output string) bool {
-	return strings.Contains(output, "database schema version") &&
+	minimum := strings.Contains(output, "is below") &&
+		strings.Contains(output, "the minimum binary version of the database schema")
+	newer := strings.Contains(output, "database schema version") &&
 		strings.Contains(output, "is newer than binary schema version")
+
+	return minimum || newer
 }

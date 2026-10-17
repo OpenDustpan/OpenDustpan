@@ -144,8 +144,12 @@ type StateStore interface {
 	FinalizeStateVersion(ctx context.Context, sv StateVersion, fence namespace.Fence) error
 	// FenceAndUnlock releases the lock of w and makes sv the workspace's current
 	// state, in one fenced transaction. sv is a finalized fence version of w:
-	// it names the content, the new lineage, its serial and FenceBy. The stored
-	// workspace must be locked and hold revision w.Revision-1, else
+	// it names the content, the new lineage, its serial and FenceBy. The
+	// caller stores sv as a pending version with CreateStateVersion before it
+	// writes the content, so a sweep finds the key; FenceAndUnlock finalizes
+	// that row. The stored version must still be pending and name sv.Content,
+	// else ErrUploadDenied. The stored workspace must be locked and hold
+	// revision w.Revision-1, else
 	// ErrNotLocked or ErrConcurrentModification. The current version must be
 	// expect (the empty ID when the workspace has no state), else
 	// ErrConcurrentModification, and sv.Serial must be one more than its serial,
@@ -218,25 +222,6 @@ type StateStore interface {
 	// when fence is stale. A refused streamed write uses it when the finalize
 	// outcome is known, so its placeholder does not fill the pending cap.
 	DiscardStateVersion(ctx context.Context, id StateVersionID, fence namespace.Fence) error
-	// ListUnsealedStateVersions returns the finalized state versions that
-	// still hold plain content, ordered by version ID, so the seal job
-	// seals them. A version without content stays out: a pending row names
-	// no content yet. It returns no sentinel errors.
-	ListUnsealedStateVersions(ctx context.Context) ([]StateVersion, error)
-	// SealStateVersion moves the finalized unsealed version id to the
-	// sealed blob under content with the sealed outputs document, and
-	// marks it sealed, in one fenced transaction. It is idempotent: a
-	// version that is already sealed succeeds and changes nothing, so a
-	// retry after a crash never fails. It returns ErrStateVersionNotFound
-	// when id does not exist, namespace.ErrNotFound when the namespace
-	// does not exist, or namespace.ErrFenced when fence is stale.
-	SealStateVersion(
-		ctx context.Context,
-		id StateVersionID,
-		content blob.Key,
-		outputs []byte,
-		fence namespace.Fence,
-	) error
 }
 
 // Config holds the dependencies of a Service.
