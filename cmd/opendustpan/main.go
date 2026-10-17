@@ -1170,14 +1170,22 @@ func (f *serveFlags) serverOptions(
 		dustpan.WithInstanceID(f.instanceID),
 	}, append(signIn, checkpoints...)...)
 
-	switch s := st.(type) {
-	case sqliteStore:
-		opts = append(opts, dustpan.WithDurableStore(s.DurableOperations()))
-	case postgresStore:
-		opts = append(opts, dustpan.WithDurableStore(s.DurableOperations()))
-	}
+	opts = append(opts, durableStoreOption(st)...)
 
 	return opts, nil
+}
+
+// durableStoreOption returns the durable schedule store option for st, or nil
+// when st keeps no durable schedules.
+func durableStoreOption(st store) []dustpan.Option {
+	switch s := st.(type) {
+	case sqliteStore:
+		return []dustpan.Option{dustpan.WithDurableStore(s.DurableOperations())}
+	case postgresStore:
+		return []dustpan.Option{dustpan.WithDurableStore(s.DurableOperations())}
+	default:
+		return nil
+	}
 }
 
 // blobOpenConfig holds the live blob store settings of serve.

@@ -609,6 +609,7 @@ func defaultSettings() *settings {
 		instanceID:              "",
 		auditShipper:            nil,
 		auditSigner:             nil,
+		durableStore:            nil,
 	}
 }
 
@@ -1355,28 +1356,12 @@ func (s *Server) Run(ctx context.Context) error {
 
 	var sweeps sync.WaitGroup
 
-	if s.durable != nil {
-		if s.deleted != nil {
-			s.deleted.logDue(ctx)
-		}
+	if err := s.startSweeps(sweepCtx, &sweeps); err != nil {
+		stopCheck()
+		waitCheck()
+		stopSweeps()
 
-		scheduler, runner, jobErr := s.newJobRunner()
-		if jobErr != nil {
-			stopCheck()
-			waitCheck()
-			stopSweeps()
-
-			return errors.Join(jobErr, closeListener(ln))
-		}
-
-		if scheduler != nil {
-			sweeps.Go(func() { scheduler.Run(sweepCtx) })
-			sweeps.Go(func() { runner.Run(sweepCtx) })
-		}
-	} else {
-		sweeps.Go(func() { s.sweepInactive(sweepCtx) })
-		sweeps.Go(func() { s.sweepDeleted(sweepCtx) })
-		sweeps.Go(func() { s.pruneSignInRequests(sweepCtx) })
+		return errors.Join(err, closeListener(ln))
 	}
 
 	// The shipper stops when Run returns, also after a serve error, and Run
