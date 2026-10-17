@@ -8,7 +8,7 @@
 #   python3       any 3.x, standard library only (for docs-lint)
 # nilaway and govulncheck need no install: go run builds the pinned versions below.
 
-.PHONY: check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint test test-nocache test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo
+.PHONY: check fmt lint nilaway vuln semgrep trivy trivy-canary trufflehog licenses docs-lint test test-nocache cover test-postgres test-s3 bench load e2e upgrade-test crash-test soak faults generate build image-smoke demo
 
 check: lint lint-journal-build nilaway vuln semgrep trivy trufflehog licenses docs-lint test bench journal-guard journal-test ## Everything CI checks.
 
@@ -28,6 +28,7 @@ lint-journal-build: ## Lint the journal recording build: some files are left out
 ANALYSIS_TAGS := e2e,upgrade,soak
 NILAWAY       := go run go.uber.org/nilaway/cmd/nilaway@v0.0.0-20260918162853-acb8859b9031
 GOVULNCHECK   := go run golang.org/x/vuln/cmd/govulncheck@v1.8.0
+GOCOVER_COBERTURA := go run github.com/boumenot/gocover-cobertura@v1.5.0
 
 nilaway: ## Nil-panic analysis of our packages; dependencies are read but not reported.
 	GOFLAGS=-tags=$(ANALYSIS_TAGS) $(NILAWAY) -include-pkgs=opendustpan.org/opendustpan ./...
@@ -116,6 +117,10 @@ test: ## Go tests; the PostgreSQL suite is skipped unless DUSTPAN_TEST_POSTGRES_
 
 test-nocache: ## Go tests as in test, but every package runs again. CI runs this on main every 2 hours to find flaky tests.
 	go test -race -count=1 ./...
+
+cover: ## Go tests as in test, with a Cobertura report in coverage.xml. Generated code (internal/db) is left out.
+	go test -race -covermode=atomic -coverprofile=coverage.out ./...
+	grep -v '/internal/db/' coverage.out | $(GOCOVER_COBERTURA) > coverage.xml
 
 test-postgres: ## Go tests including PostgreSQL (needs DUSTPAN_TEST_POSTGRES_URL).
 	@test -n "$$DUSTPAN_TEST_POSTGRES_URL" || (echo "set DUSTPAN_TEST_POSTGRES_URL" && exit 1)

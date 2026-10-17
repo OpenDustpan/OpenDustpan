@@ -43,6 +43,10 @@ jobs:
   go:
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '"ubuntu-latest"') }}
+    # Uploading a coverage report needs code-quality: write.
+    permissions:
+      contents: read
+      code-quality: write
     services:
       postgres:
         # The Go test cache does not see the image. The digest makes sure that
@@ -108,12 +112,23 @@ jobs:
         run: make licenses
       - name: Docs follow ASD-STE100 (ADR 14)
         run: make docs-lint
-      # Pushes and pull requests use the test cache (make test). The schedule
-      # runs every package again (make test-nocache).
+      # Pushes and pull requests use the test cache and write the coverage
+      # report (make cover). The schedule runs every package again
+      # (make test-nocache) and writes no report.
       - name: Test
         env:
           DUSTPAN_TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:${{ job.services.postgres.ports['5432'] }}/postgres?sslmode=disable
-        run: make ${{ github.event_name == 'schedule' && 'test-nocache' || 'test' }}
+        run: make ${{ github.event_name == 'schedule' && 'test-nocache' || 'cover' }}
+      # Code Quality compares the report of a pull request with the report of
+      # main, so main must upload too. A pull request from a fork has no
+      # write access to code-quality, so it uploads nothing.
+      - name: Upload coverage report
+        if: ${{ github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: actions/upload-code-coverage@2b21a77928be8d5168c2b9581a67f2adbebacc52 # v1.4.4
+        with:
+          file: coverage.xml
+          language: Go
+          label: code-coverage/go-test
       - name: Build
         run: go build ./cmd/opendustpan
 

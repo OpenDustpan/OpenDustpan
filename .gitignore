@@ -21,3 +21,7 @@ load-report.json
 
 # Soak run reports (make soak writes CSV and Markdown here)
 soak-reports/
+
+# Coverage reports (make cover)
+coverage.out
+coverage.xml
