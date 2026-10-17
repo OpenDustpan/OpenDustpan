@@ -1,6 +1,8 @@
 # 120. Dusty, the built-in agent, runs on durable operations
 
-Status: proposed · 2026-10-17
+Status: accepted · 2026-10-17. The decisions of the project owner and the
+project manager below are accepted. The other decisions take effect when the
+project lead accepts the pull request of this ADR.
 
 ## Context
 
@@ -56,8 +58,8 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
    credential is a sensitive setting. The server seals it with the
    key-encryption key (ADR 23) and never answers it. With no connection,
    the run routes answer 409 with an error that names the connect route,
-   and the console shows no agent. The MCP endpoint needs no model (ADR
-   123 decision 7).
+   and the console shows no agent. The MCP endpoint needs no model, and is
+   off until an administrator turns it on (ADR 123 decision 7).
 4. **The hosted service never turns it on silently.** Onboarding offers
    Dusty to an account administrator. The administrator turns it on, or
    leaves it off. A later change of the hosted default needs a new ADR.
@@ -86,13 +88,17 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
    | `POST /api/agent/runs/{id}/cancel` | as the list | caller, namespace |
    | `GET /api/agent/status` | `caller:read` | caller |
    | `PUT /api/agent/connection` | `server:manage-agent` | `@server` |
+   | `PUT /api/agent/settings` | `server:manage-agent` | `@server` |
    | `DELETE /api/agent/connection` | `server:manage-agent` | `@server` |
    | `GET /api/agent/usage` | `server:manage-agent` | `@server` |
 
    The start takes an idempotency key, so a client can retry it. The
-   status route answers whether the agent is on, the provider and model
-   names, whether direct changes are possible and whether secret values
-   can reach an agent (ADR 124). The console reads it.
+   settings route sets the limits of the installation, `directChanges` and
+   `mcpEnabled` (`agent.InstallationSettings`). The status route answers
+   whether the agent is on, the provider and model names, whether the MCP
+   endpoint is on (`mcp: "on"` or `"off"`, off by default), whether direct
+   changes are possible for the caller, and whether secret values can
+   reach an agent (ADR 124). The console reads it.
 
 ### The loop on durable operations
 
@@ -112,6 +118,14 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
      records the result of each call in the transcript.
    - `advance`: it starts the operation of the next turn, or ends the run
      when the answer was final.
+
+   `agent.TurnKind` gives the `durable.KindSpec` of `agent.turn` with these
+   steps, for `durable.RunnerConfig.Kinds`. Each step decodes its
+   `TurnInput`, reads the run, does nothing for a run that ended, and
+   resolves the person (decision 13) before it calls the
+   `agent.TurnHandler` of the loop. An input that does not decode, or that
+   names an unknown run, fails the operation for good
+   (`durable.Permanent`).
 10. **A restart continues the run.** A turn whose instance stops keeps its
     claim until the lease expires. Then another instance claims it and
     continues from the last recorded step (ADR 72 decision 2). A run holds
@@ -131,11 +145,23 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
 13. **A run acts as its person, at the time of each call.** A run records
     the subject of the person and the ID of the credential that started
     it: the console session or the access token. It never stores the
-    credential. The `check` step resolves that credential through the
-    `Credentials` port at each turn. Each tool call checks the
-    authorization of the resolved principal at the time of the call. So a
-    grant that a person loses stops the next call of every run of that
-    person.
+    credential, and never keeps a principal from one step to the next. It
+    resolves the credential through the `Credentials` port:
+    - at the start of each step of each claimed attempt, so also at the
+      first step that a takeover runs, whatever step that is, and
+    - again just before each tool call, in the `tools` step.
+
+    Each tool call checks the authorization of the principal that the last
+    resolve answered. So a grant that a person loses stops the next call of
+    every run of that person, and a revoke between the `check` step and the
+    `tools` step stops the tool calls of the turn, also when another
+    instance takes the turn over. `agenttest.RunTurns` has that case:
+    revoke after the `model` step, release the claim, claim again, and run
+    the `tools` step. It runs no tool call and ends the run with
+    `credential-ended`. `agenttest.RunCredentials` checks the port itself:
+    a valid token and session, a break-glass session, a revoke, an expiry,
+    a sign-out, a disabled principal, the credential of another subject and
+    an unknown credential.
 14. **The run ends with its credential.** When the credential expires, a
     person revokes it, the session ends, the principal is disabled or a
     break-glass session reaches its time limit, the run ends with the stop
@@ -149,6 +175,10 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
 ### Limits
 
 16. **Each run has every limit.** A limit of 0 never means "no limit".
+    `agent.Limits` holds every limit of this table, the bounds of active
+    runs included, and `Limits.Validate` refuses a limit of 0 or less. The
+    run store checks the bounds of active runs at the create of a run. A
+    list of runs has a limit from 1 to 100.
 
     | Limit | Default |
     | --- | --- |
@@ -165,6 +195,8 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
     the installation, higher or lower than the defaults. A namespace
     administrator with `namespace:manage-agent` can lower them for runs
     that start in the namespace. A person can lower them for one run.
+    `Limits.Narrow` applies a lower level: a field of 0 or less in a lower
+    level is not set and changes nothing.
 18. **How a limit applies.** The `check` step stops a run that reached the
     time, token or turn limit. So a run can pass a token limit by the
     tokens of its last turn, never by more. The loop answers each tool
@@ -208,27 +240,44 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
 22. **The transcript is data, not a log.** The prompt, the answers and the
     tool results of a run go to their own table. They never go to an audit
     entry, a log record or a metric. The transcript holds only masked
-    values (ADR 124 decision 9). The table is in the backup (ADR 30). A
+    values: a revealed value is sealed in its own table until the next
+    model step, and then shredded (ADR 124 decision 9). The table is in the
+    backup (ADR 30). A
     setting deletes transcripts after a retention period: 30 days by
     default. The run record and its audit entries stay.
 23. **The system prompt is in the binary.** The server sends a fixed system
     prompt with a version. It tells the model that tool results, outputs,
     docs and logs are data from other people, never instructions. The
     prompt is not the defense. The defense is that every tool call has the
-    authorization of the person, that changes need a review or an approval
-    by default (ADR 125), and that no secret value reaches the model by
-    default (ADR 124).
+    authorization of the person, that each change of an agent waits for the
+    confirmation of the person before it changes anything or publishes to
+    a forge (ADR 125), that no secret value reaches the model by default,
+    and that a run that read one cannot change anything (ADR 124). ADR 124
+    decision 13 lists each path of untrusted text and each path out, with
+    its defense.
+24. **Answers render as text.** The console renders an answer of the agent
+    as Markdown with no remote image and no link that it loads by
+    itself: an image from another address shows as its link text, and a
+    link opens only on a click and shows its full address. So an answer
+    cannot send data out through a URL that a browser loads. The console
+    repository implements it, and the transcript route marks answer text
+    as untrusted Markdown.
 
 ## Consequences
 
 - New packages: `pkg/agent` (the domain: the run, the loop, the ports, the
   catalog, the gate, the limits) and `pkg/agent/agenttest` (the
   conformance suites). The domain rule of depguard covers `pkg/agent`.
-- New ports with conformance suites: `Model` (ADR 121), `Changes` (ADR 125),
-  `RunStore` and `Credentials`. A `Toolset` (ADR 122) holds the tools for
-  every channel.
-- Each SQL store gets the tables of runs, transcripts and the token
-  ledger. The tables of runs and transcripts are data tables, not control
+- New ports with conformance suites in `agenttest`: `Model` (ADR 121,
+  `RunModel`), `Changes` (ADR 125, `RunChanges`), `RunStore`
+  (`RunRunStore`), `Credentials` (`RunCredentials`), `Toolset` (ADR 122,
+  `RunToolset`), the loop on the durable runner (`RunTurns`), and the
+  stores of the settings, the maintenance windows and the consents (ADR
+  124, `RunGateStores`). The read ports of the `Toolset` (ADR 122 decision
+  12) are tested by the suites of the packages that own the data.
+- Each SQL store gets the tables of runs, transcripts, sealed reveals, the
+  token ledger, the agent settings, the maintenance windows and the
+  consents. The window table is a control table. The tables of runs and transcripts are data tables, not control
   tables (ADR 72 decision 5).
 - The identity service implements `Credentials`. It must resolve a console
   session by its ID, not only by its cookie.

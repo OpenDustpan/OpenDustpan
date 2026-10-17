@@ -1,6 +1,8 @@
 # 123. An MCP endpoint and a stdio proxy offer the same tools
 
-Status: proposed · 2026-10-17
+Status: accepted · 2026-10-17. The decisions of the project owner and the
+project manager below are accepted. The other decisions take effect when the
+project lead accepts the pull request of this ADR.
 
 ## Context
 
@@ -16,6 +18,10 @@ server at an address. Many agent clients support only stdio.
 
 ADR 72 makes the instances stateless. Any instance must answer any request.
 
+The project manager decided on 2026-10-17, for the owner: the MCP endpoint is
+off by default and an administrator turns it on, and the official MCP Go SDK
+is approved, pinned to a release that is at least two weeks old.
+
 ## Decision
 
 1. **The MCP endpoint is part of the binary.** The server serves MCP over
@@ -24,7 +30,7 @@ ADR 72 makes the instances stateless. Any instance must answer any request.
    process and no new role.
 2. **Tools only.** The endpoint offers the `tools` capability: `tools/list`
    answers the catalog of ADR 122, and `tools/call` runs a tool through the
-   one `Toolset` (ADR 122 decision 10). It offers no resources, no prompts
+   one `Toolset` (ADR 122 decision 13). It offers no resources, no prompts
    and no sampling. Resources can come later, for example for docs.
 3. **The same credentials as the API.** A client sends an access token in
    the `Authorization` header: a personal token or a service token (ADR
@@ -46,11 +52,17 @@ ADR 72 makes the instances stateless. Any instance must answer any request.
    of a tool result (ADR 120 decision 16). Each token has a rate limit of
    60 tool calls in each minute by default, which an administrator can set.
    A call above it answers the JSON-RPC error of a rate limit.
-7. **On by default, with an off switch.** The endpoint does not need a
-   model connection: an outside agent can do only what its token can do
-   through the API. The installation setting `agentMcp` turns it off. It is
-   on by default. With the audit log off, the endpoint answers 404 (ADR 120
-   decision 5).
+7. **Off by default. An administrator turns it on.** The endpoint and the
+   stdio proxy are off until an administrator with `server:manage-agent`
+   sets `mcpEnabled: true` with `PUT /api/agent/settings`
+   (`agent.InstallationSettings.MCPEnabled`). The change writes an audit
+   entry (ADR 126 decision 7). While it is off, the endpoint answers 404,
+   and the proxy writes to stderr that the endpoint is off and which
+   setting turns it on. The status route (ADR 120 decision 7) answers
+   `mcp: "on"` or `mcp: "off"`. The endpoint does not need a model
+   connection: an outside agent can do only what its token can do through
+   the API. With the audit log off, the endpoint answers 404 whatever the
+   setting (ADR 120 decision 5).
 8. **The stdio proxy is a client command.** `opendustpan agent mcp` reads
    JSON-RPC messages on stdin and writes the answers on stdout. It forwards
    each message to `/api/agent/mcp` of the server that `--server` names,
@@ -78,8 +90,11 @@ ADR 72 makes the instances stateless. Any instance must answer any request.
       So an agent that holds the token of its person cannot approve its
       own consent.
     - The approval holds for one call of that tool on that unit with the
-      same token, for 5 minutes. The agent sends the call again, and the
-      server uses the consent.
+      same token, in the same MCP session, for 5 minutes. The agent sends
+      the call again, and the server uses the consent once
+      (`agent.ConsentStore.Use`).
+    - A session that used a consent cannot propose a change for the rest of
+      its life (ADR 124 decision 12).
 
     The route `POST /api/agent/secret-consents/{id}/approve` checks
     `unit:read-secrets` on the unit and needs a console session.
@@ -92,17 +107,12 @@ ADR 72 makes the instances stateless. Any instance must answer any request.
   (ADR 17). Each `tools/call` declares the action of its tool. The route
   test needs a case for the MCP route, because one route answers many
   actions.
-- **A dependency to decide.** The endpoint needs a JSON-RPC and MCP
-  implementation. Two options:
-  - The official MCP Go SDK, `github.com/modelcontextprotocol/go-sdk`. It
-    follows the specification and its revisions. It is a new dependency,
-    and its license must pass `make trivy` and `make licenses`.
-  - Our own subset over `net/http`: `initialize`, `tools/list`,
-    `tools/call` and `ping`. It needs no dependency, but each new revision
-    of the specification is our work.
-
-  This ADR proposes the SDK, and the project owner decides before the
-  implementation adds it.
+- **The dependency is approved, and not added here.** The endpoint uses
+  the official MCP Go SDK, `github.com/modelcontextprotocol/go-sdk`. The
+  implementation pins it to a release that is at least two weeks old (as
+  ADR 7 asks for skills), and adds it in its own pull request. Its license
+  must pass `make trivy` and `make licenses`. This pull request adds no
+  dependency.
 - The e2e suite gets a step that drives the proxy with a scripted MCP
   client.
 

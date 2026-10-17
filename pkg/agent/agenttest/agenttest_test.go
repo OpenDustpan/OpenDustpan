@@ -29,31 +29,6 @@ func TestModelSuite(t *testing.T) {
 	})
 }
 
-func TestChangesSuite(t *testing.T) {
-	t.Parallel()
-
-	agenttest.RunChanges(t, func(t *testing.T) agenttest.ChangesHarness {
-		t.Helper()
-
-		unit, err := identity.UnitObject("pulumi", "acme", "web")
-		if err != nil {
-			t.Fatalf("UnitObject() = %v", err)
-		}
-
-		f := &fakeChanges{mu: sync.Mutex{}, byKey: map[string]agent.Change{}, specs: map[string]string{}, frozen: false}
-
-		return agenttest.ChangesHarness{
-			Changes:       f,
-			Actor:         actor("ana"),
-			Outsider:      actor("eve"),
-			Unit:          unit,
-			WriteBackKind: "config",
-			RunKind:       "apply",
-			Freeze:        func(*testing.T) { f.freeze() },
-		}
-	})
-}
-
 func TestRunStoreSuite(t *testing.T) {
 	t.Parallel()
 
@@ -63,31 +38,27 @@ func TestRunStoreSuite(t *testing.T) {
 		ops := durabletest.NewMem().Store()
 
 		return agenttest.RunHarness{
-			Runs: &fakeRuns{
-				mu:         sync.Mutex{},
-				ops:        ops,
-				runs:       nil,
-				transcript: map[agent.RunID][]agent.TranscriptEntry{},
-				ledger:     map[string]bool{},
-			},
-			Ops: ops,
+			Runs: newFakeRuns(ops),
+			Ops:  ops,
 		}
 	})
 }
 
 func actor(subject string) agent.Actor {
 	return agent.Actor{
-		Principal: identity.Principal{
-			Subject:        subject,
-			DisplayName:    subject,
-			Admin:          false,
-			TokenID:        "",
-			TokenExpiresAt: time.Time{},
-		},
-		Channel:    agent.ChannelAgent,
-		RunID:      "run-1",
-		SessionID:  "run-1",
-		BreakGlass: false,
+		Principal:         principal(subject),
+		Agent:             agent.Ref{Channel: agent.ChannelAgent, RunID: "run-1", SessionID: ""},
+		BreakGlassSession: false,
+	}
+}
+
+func principal(subject string) identity.Principal {
+	return identity.Principal{
+		Subject:        subject,
+		DisplayName:    subject,
+		Admin:          false,
+		TokenID:        "",
+		TokenExpiresAt: time.Time{},
 	}
 }
 
@@ -148,113 +119,6 @@ func (m fakeModel) Complete(ctx context.Context, req agent.ModelRequest) (agent.
 	}
 }
 
-// fakeChanges is a job model in memory. Only "ana" holds the actions.
-type fakeChanges struct {
-	mu     sync.Mutex
-	byKey  map[string]agent.Change
-	specs  map[string]string
-	frozen bool
-}
-
-func (*fakeChanges) Support(_ context.Context, _ identity.Object, kind string) (agent.KindSupport, error) {
-	switch kind {
-	case "config":
-		return agent.KindSupport{WriteBack: true}, nil
-	case "apply":
-		return agent.KindSupport{WriteBack: false}, nil
-	default:
-		return agent.KindSupport{WriteBack: false}, agent.ErrUnknownChangeKind
-	}
-}
-
-func (f *fakeChanges) Propose(ctx context.Context, req agent.ChangeRequest) (agent.Change, error) {
-	var zero agent.Change
-
-	support, err := f.Support(ctx, req.Unit, req.Kind)
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	sig := fmt.Sprintf("%s|%s|%s|%s", req.Unit, req.Kind, req.Mode, req.Spec)
-
-	switch {
-	case req.Key == "":
-		return zero, agent.ErrInvalid
-	case err != nil:
-		return zero, err
-	case req.Mode == agent.ModeReviewRequest && !support.WriteBack:
-		return zero, agent.ErrModeNotSupported
-	case req.Actor.Principal.Subject != "ana":
-		return zero, fmt.Errorf("propose: %w", identity.ErrDenied)
-	case f.frozen:
-		return zero, agent.ErrChangeFrozen
-	case f.specs[req.Key] != "" && f.specs[req.Key] != sig:
-		return zero, agent.ErrChangeKeyConflict
-	default:
-	}
-
-	if c, ok := f.byKey[req.Key]; ok {
-		return c, nil
-	}
-
-	c := agent.Change{
-		ID:        agent.ChangeID("change-" + req.Key),
-		Key:       req.Key,
-		Unit:      req.Unit,
-		Kind:      req.Kind,
-		Mode:      req.Mode,
-		State:     agent.ChangeWaiting,
-		ReviewURL: "https://review.example/" + req.Key,
-		Proposer:  req.Actor.Principal.Subject,
-		RunID:     req.Actor.RunID,
-		CreatedAt: time.Now(),
-	}
-	f.byKey[req.Key], f.specs[req.Key] = c, sig
-
-	return c, nil
-}
-
-func (f *fakeChanges) Get(_ context.Context, a agent.Actor, id agent.ChangeID) (agent.Change, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	return f.find(a, id)
-}
-
-func (f *fakeChanges) Cancel(_ context.Context, a agent.Actor, id agent.ChangeID) (agent.Change, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	c, err := f.find(a, id)
-	if err != nil {
-		return c, err
-	}
-
-	c.State = agent.ChangeCanceled
-	f.byKey[c.Key] = c
-
-	return c, nil
-}
-
-func (f *fakeChanges) freeze() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.frozen = true
-}
-
-func (f *fakeChanges) find(a agent.Actor, id agent.ChangeID) (agent.Change, error) {
-	for key := range f.byKey {
-		if c := f.byKey[key]; c.ID == id && a.Principal.Subject == "ana" {
-			return c, nil
-		}
-	}
-
-	var zero agent.Change
-
-	return zero, agent.ErrChangeNotFound
-}
-
 // fakeRuns is a run store in memory on a durable store in memory. A fenced
 // write records its step first and then writes, which is enough for tests
 // in one process.
@@ -264,6 +128,18 @@ type fakeRuns struct {
 	runs       []agent.Run
 	transcript map[agent.RunID][]agent.TranscriptEntry
 	ledger     map[string]bool
+	reveals    map[agent.RunID][]agent.SealedReveal
+}
+
+func newFakeRuns(ops durable.Store) *fakeRuns {
+	return &fakeRuns{
+		mu:         sync.Mutex{},
+		ops:        ops,
+		runs:       nil,
+		transcript: map[agent.RunID][]agent.TranscriptEntry{},
+		ledger:     map[string]bool{},
+		reveals:    map[agent.RunID][]agent.SealedReveal{},
+	}
 }
 
 func (f *fakeRuns) Create(ctx context.Context, req agent.NewRun) (agent.Run, bool, error) {
@@ -283,7 +159,7 @@ func (f *fakeRuns) Create(ctx context.Context, req agent.NewRun) (agent.Run, boo
 		return zero, false, agent.ErrKeyConflict
 	case i >= 0:
 		return f.runs[i], false, nil
-	case req.MaxActiveForSubject > 0 && active >= req.MaxActiveForSubject:
+	case active >= req.Limits.MaxActiveForSubject || f.activeOf("") >= req.Limits.MaxActive:
 		return zero, false, agent.ErrConcurrencyLimit
 	default:
 	}
@@ -293,10 +169,26 @@ func (f *fakeRuns) Create(ctx context.Context, req agent.NewRun) (agent.Run, boo
 	}
 
 	run := agent.Run{
-		ID: req.ID, Key: req.Key, Subject: req.Subject, CredentialID: req.CredentialID, Namespace: req.Namespace,
-		Parent: req.Parent, Model: req.Model, State: agent.StatePending, Stop: "", LastError: "", Limits: req.Limits,
-		Progress: agent.Progress{Turns: 0, ToolCalls: 0, Usage: zero.Ledger, Elapsed: 0}, Ledger: zero.Ledger,
-		CancelRequested: false, CanceledBy: "", CreatedAt: time.Now(), EndedAt: time.Time{},
+		ID:           req.ID,
+		Key:          req.Key,
+		Subject:      req.Subject,
+		CredentialID: req.CredentialID,
+		Namespace:    req.Namespace,
+		Parent:       req.Parent,
+		Model:        req.Model,
+		State:        agent.StatePending,
+		Stop:         "",
+		LastError:    "",
+		Limits:       req.Limits,
+		Progress:     agent.Progress{Turns: 0, ToolCalls: 0, Usage: zero.Ledger, Elapsed: 0},
+		Ledger:       zero.Ledger,
+		ReadPlainSecrets: f.parentRevealed(
+			req.Parent,
+		),
+		CancelRequested: false,
+		CanceledBy:      "",
+		CreatedAt:       time.Now(),
+		EndedAt:         time.Time{},
 	}
 	f.runs = append(f.runs, run)
 	f.transcript[run.ID] = []agent.TranscriptEntry{{
@@ -325,6 +217,10 @@ func (f *fakeRuns) List(_ context.Context, filter agent.RunFilter) ([]agent.Run,
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	if filter.Limit < 1 || filter.Limit > agent.MaxRunList {
+		return nil, agent.ErrInvalid
+	}
+
 	var out []agent.Run
 
 	for i := range slices.Backward(f.runs) {
@@ -333,7 +229,7 @@ func (f *fakeRuns) List(_ context.Context, filter agent.RunFilter) ([]agent.Run,
 		}
 
 		out = append(out, f.runs[i])
-		if filter.Limit > 0 && len(out) == filter.Limit {
+		if len(out) == filter.Limit {
 			break
 		}
 	}
@@ -379,6 +275,15 @@ func (f *fakeRuns) RecordTurn(
 	f.runs[i].Progress = rec.Progress
 	f.runs[i].State = agent.StateRunning
 
+	if len(rec.Reveals) > 0 {
+		f.reveals[rec.Run] = append(f.reveals[rec.Run], rec.Reveals...)
+		f.runs[i].ReadPlainSecrets = true
+	}
+
+	if rec.Shred {
+		delete(f.reveals, rec.Run)
+	}
+
 	if next.Key == "" {
 		return nil
 	}
@@ -388,6 +293,17 @@ func (f *fakeRuns) RecordTurn(
 	}
 
 	return nil
+}
+
+func (f *fakeRuns) Reveals(_ context.Context, id agent.RunID) ([]agent.SealedReveal, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.index(id) < 0 {
+		return nil, agent.ErrNotFound
+	}
+
+	return slices.Clone(f.reveals[id]), nil
 }
 
 func (f *fakeRuns) RecordUsage(_ context.Context, rec agent.UsageRecord) error {
@@ -452,6 +368,7 @@ func (f *fakeRuns) Finish(ctx context.Context, fence durable.StepFence, end agen
 	}
 
 	f.runs[i].State, f.runs[i].Stop, f.runs[i].LastError, f.runs[i].EndedAt = end.State, end.Stop, end.LastError, time.Now()
+	delete(f.reveals, end.Run)
 
 	return nil
 }
@@ -460,17 +377,25 @@ func (f *fakeRuns) index(id agent.RunID) int {
 	return slices.IndexFunc(f.runs, func(r agent.Run) bool { return r.ID == id })
 }
 
-// activeOf returns the number of runs of subject that did not end.
+// activeOf returns the number of runs of subject that did not end, or of
+// every subject for "".
 func (f *fakeRuns) activeOf(subject string) int {
 	active := 0
 
 	for i := range f.runs {
-		if f.runs[i].Subject == subject && !f.runs[i].State.Terminal() {
+		if (subject == "" || f.runs[i].Subject == subject) && !f.runs[i].State.Terminal() {
 			active++
 		}
 	}
 
 	return active
+}
+
+// parentRevealed reports whether the run parent read secret values.
+func (f *fakeRuns) parentRevealed(parent agent.RunID) bool {
+	i := f.index(parent)
+
+	return i >= 0 && f.runs[i].ReadPlainSecrets
 }
 
 // keyIndex returns the index of the run that key names, or -1.

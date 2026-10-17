@@ -33,13 +33,17 @@ const (
 	DefaultMaxDuration         = 20 * time.Minute
 	DefaultMaxToolCallsPerTurn = 8
 	DefaultMaxToolResultBytes  = 64 << 10
+	DefaultMaxActiveForSubject = 3
+	DefaultMaxActive           = 20
 )
 
 // Limits bound one run. A turn is one model call and the tool calls of its
 // answer. Input tokens count every input token that the provider reports,
 // cached or not. MaxToolResultBytes bounds the result of one tool call that
 // the loop sends to the model. The loop cuts a longer result and tells the
-// model that it did.
+// model that it did. MaxActiveForSubject and MaxActive bound the runs that
+// are not terminal, of the person and of the installation, at the create of
+// a run. No limit is ever 0: Validate refuses it.
 type Limits struct {
 	MaxTurns            int
 	MaxInputTokens      int64
@@ -47,6 +51,8 @@ type Limits struct {
 	MaxDuration         time.Duration
 	MaxToolCallsPerTurn int
 	MaxToolResultBytes  int
+	MaxActiveForSubject int
+	MaxActive           int
 }
 
 // DefaultLimits returns the limits of an installation that sets none.
@@ -58,6 +64,8 @@ func DefaultLimits() Limits {
 		MaxDuration:         DefaultMaxDuration,
 		MaxToolCallsPerTurn: DefaultMaxToolCallsPerTurn,
 		MaxToolResultBytes:  DefaultMaxToolResultBytes,
+		MaxActiveForSubject: DefaultMaxActiveForSubject,
+		MaxActive:           DefaultMaxActive,
 	}
 }
 
@@ -65,7 +73,7 @@ func DefaultLimits() Limits {
 // every limit: no value means "no limit".
 func (l Limits) Validate() error {
 	if l.MaxTurns <= 0 || l.MaxInputTokens <= 0 || l.MaxOutputTokens <= 0 || l.MaxDuration <= 0 ||
-		l.MaxToolCallsPerTurn <= 0 || l.MaxToolResultBytes <= 0 {
+		l.MaxToolCallsPerTurn <= 0 || l.MaxToolResultBytes <= 0 || l.MaxActiveForSubject <= 0 || l.MaxActive <= 0 {
 		return fmt.Errorf("%w: every limit must be above 0", ErrInvalid)
 	}
 
@@ -73,8 +81,9 @@ func (l Limits) Validate() error {
 }
 
 // Narrow returns l with each limit lowered to the limit of lower, where
-// lower sets one. A zero field of lower changes nothing. So a namespace or a
-// person can lower a limit of the installation, and never raise it.
+// lower sets one. A field of lower that is 0 or less is not set and changes
+// nothing: it never means "no limit". So a namespace or a person can lower a
+// limit of the installation, and never raise or remove it.
 func (l Limits) Narrow(lower Limits) Limits {
 	return Limits{
 		MaxTurns:            narrow(l.MaxTurns, lower.MaxTurns),
@@ -83,6 +92,8 @@ func (l Limits) Narrow(lower Limits) Limits {
 		MaxDuration:         narrow(l.MaxDuration, lower.MaxDuration),
 		MaxToolCallsPerTurn: narrow(l.MaxToolCallsPerTurn, lower.MaxToolCallsPerTurn),
 		MaxToolResultBytes:  narrow(l.MaxToolResultBytes, lower.MaxToolResultBytes),
+		MaxActiveForSubject: narrow(l.MaxActiveForSubject, lower.MaxActiveForSubject),
+		MaxActive:           narrow(l.MaxActive, lower.MaxActive),
 	}
 }
 

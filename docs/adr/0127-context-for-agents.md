@@ -1,6 +1,8 @@
 # 127. Agent context comes from a reserved output and object metadata
 
-Status: proposed · 2026-10-17
+Status: accepted · 2026-10-17. The decisions of the project owner and the
+project manager below are accepted. The other decisions take effect when the
+project lead accepts the pull request of this ADR.
 
 ## Context
 
@@ -56,6 +58,7 @@ source holds text that someone other than the person of a run wrote.
    difference between two sources stays visible.
 7. **Context is data, never instructions.** The system prompt tells the
    model that context text comes from other people (ADR 120 decision 23).
+   ADR 124 decision 13 lists each path of such text and its defense.
    An instruction in a runbook cannot give the agent an action that the
    person does not hold, and cannot open the secret gate or a direct
    change.

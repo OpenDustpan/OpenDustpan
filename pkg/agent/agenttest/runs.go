@@ -3,6 +3,7 @@ package agenttest
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -49,18 +50,16 @@ func NewRunFor(subject, key string) agent.NewRun {
 	id := agent.RunID("run-" + key)
 
 	return agent.NewRun{
-		ID:                  id,
-		Key:                 key,
-		Subject:             subject,
-		CredentialID:        "token-" + subject,
-		Namespace:           namespace.Name("acme"),
-		Parent:              "",
-		Model:               "test-model",
-		Limits:              agent.DefaultLimits(),
-		Prompt:              "Why did the last update of pulumi:acme/web fail?",
-		MaxActiveForSubject: 0,
-		MaxActive:           0,
-		First:               turnStart(id, 1),
+		ID:           id,
+		Key:          key,
+		Subject:      subject,
+		CredentialID: "token-" + subject,
+		Namespace:    namespace.Name("acme"),
+		Parent:       "",
+		Model:        "test-model",
+		Limits:       agent.DefaultLimits(),
+		Prompt:       "Why did the last update of pulumi:acme/web fail?",
+		First:        turnStart(id, 1),
 	}
 }
 
@@ -68,7 +67,7 @@ func turnStart(id agent.RunID, n int) durable.StartRequest {
 	return durable.StartRequest{
 		Key:     agent.TurnKey(id, n),
 		Kind:    agent.KindTurn,
-		Version: 0,
+		Version: agent.TurnKindVersion,
 		Input:   fmt.Appendf(nil, `{"run":%q,"turn":%d}`, id, n),
 	}
 }
@@ -80,6 +79,7 @@ func runCases() []runCase {
 		{name: "one key for two subjects", run: caseCreateKeyConflict},
 		{name: "create with bad fields", run: caseCreateInvalid},
 		{name: "active runs of a subject", run: caseConcurrency},
+		{name: "active runs of the installation", run: caseConcurrencyInstallation},
 		{name: "record a turn", run: caseRecordTurn},
 		{name: "record a turn with a lost claim", run: caseRecordTurnLost},
 		{name: "record a step twice", run: caseRecordTurnTwice},
@@ -88,6 +88,11 @@ func runCases() []runCase {
 		{name: "finish", run: caseFinish},
 		{name: "finish after a cancel", run: caseFinishAfterCancel},
 		{name: "list", run: caseList},
+		{name: "list with a limit out of range", run: caseListLimit},
+		{name: "reveal is sealed until the next model step", run: caseReveal},
+		{name: "reveal survives a takeover", run: caseRevealTakeover},
+		{name: "finish shreds the reveals", run: caseRevealFinish},
+		{name: "a follow-up of a reveal keeps the mark", run: caseRevealParent},
 	}
 }
 
@@ -194,19 +199,43 @@ func caseConcurrency(t *testing.T, h RunHarness) {
 	t.Helper()
 
 	req := NewRunFor("ana", "k1")
-	req.MaxActiveForSubject = 1
+	req.Limits.MaxActiveForSubject = 1
 	mustCreate(t, h, req)
 
 	req = NewRunFor("ana", "k2")
-	req.MaxActiveForSubject = 1
+	req.Limits.MaxActiveForSubject = 1
 
 	if _, _, err := h.Runs.Create(t.Context(), req); !errors.Is(err, agent.ErrConcurrencyLimit) {
 		t.Fatalf("second active run = %v, want ErrConcurrencyLimit", err)
 	}
 
 	req = NewRunFor("ben", "k3")
-	req.MaxActiveForSubject = 1
+	req.Limits.MaxActiveForSubject = 1
 	mustCreate(t, h, req)
+}
+
+func caseConcurrencyInstallation(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	req := NewRunFor("ana", "k1")
+	req.Limits.MaxActive = 2
+	mustCreate(t, h, req)
+
+	req = NewRunFor("ben", "k2")
+	req.Limits.MaxActive = 2
+	mustCreate(t, h, req)
+
+	req = NewRunFor("cleo", "k3")
+	req.Limits.MaxActive = 2
+
+	if _, _, err := h.Runs.Create(t.Context(), req); !errors.Is(err, agent.ErrConcurrencyLimit) {
+		t.Fatalf("third active run of the installation = %v, want ErrConcurrencyLimit", err)
+	}
+
+	req.Limits.MaxActive = 0
+	if _, _, err := h.Runs.Create(t.Context(), req); !errors.Is(err, agent.ErrInvalid) {
+		t.Fatalf("Create() with MaxActive 0 = %v, want ErrInvalid: 0 is never \"no limit\"", err)
+	}
 }
 
 // noNext is the zero start request: a record that starts no operation.
@@ -232,6 +261,8 @@ func turnRecord(id agent.RunID, texts ...string) agent.TurnRecord {
 			Usage:     agent.Usage{InputTokens: 0, OutputTokens: 0, CacheReadTokens: 0, CacheWriteTokens: 0},
 			Elapsed:   0,
 		},
+		Reveals: nil,
+		Shred:   false,
 	}
 }
 
@@ -418,7 +449,7 @@ func caseList(t *testing.T, h RunHarness) {
 	mustCreate(t, h, NewRunFor("ben", "k2"))
 	last := mustCreate(t, h, NewRunFor("ana", "k3"))
 
-	got, err := h.Runs.List(t.Context(), agent.RunFilter{Subject: "ana", Namespace: "", States: nil, Limit: 0})
+	got, err := h.Runs.List(t.Context(), agent.RunFilter{Subject: "ana", Namespace: "", States: nil, Limit: 10})
 	if err != nil || len(got) != 2 || got[0].ID != last.ID || got[1].ID != first.ID {
 		t.Fatalf("List() = %+v, %v, want the runs of ana, newest first", got, err)
 	}
@@ -426,5 +457,176 @@ func caseList(t *testing.T, h RunHarness) {
 	got, err = h.Runs.List(t.Context(), agent.RunFilter{Subject: "", Namespace: "", States: nil, Limit: 1})
 	if err != nil || len(got) != 1 {
 		t.Fatalf("List() with limit 1 = %+v, %v, want one run", got, err)
+	}
+}
+
+func caseListLimit(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	mustCreate(t, h, NewRunFor("ana", "k1"))
+
+	for _, limit := range []int{0, -1, agent.MaxRunList + 1} {
+		_, err := h.Runs.List(t.Context(), agent.RunFilter{Subject: "", Namespace: "", States: nil, Limit: limit})
+		if !errors.Is(err, agent.ErrInvalid) {
+			t.Fatalf("List() with limit %d = %v, want ErrInvalid", limit, err)
+		}
+	}
+}
+
+// sealed returns a sealed reveal of turn 1 of run. The suite never reads
+// the bytes: the store keeps them as they are.
+func sealed(run agent.RunID) agent.SealedReveal {
+	return agent.SealedReveal{
+		Run: run, Turn: 1, CallID: "call-1",
+		WrappedKey: []byte("wrapped"), Content: []byte("sealed"), Values: []byte("sealed values"), At: time.Now(),
+	}
+}
+
+// recordReveal records the tools step of turn 1 of run with one sealed
+// reveal.
+func recordReveal(t *testing.T, h RunHarness, op durable.Operation, run agent.RunID) {
+	t.Helper()
+
+	rec := turnRecord(run, "masked result")
+	rec.Reveals = []agent.SealedReveal{sealed(run)}
+
+	if err := h.Runs.RecordTurn(t.Context(), op.Claim.Step(agent.StepTools), rec, noNext()); err != nil {
+		t.Fatalf("RecordTurn() with a reveal = %v", err)
+	}
+}
+
+// wantReveals fails t unless the run has n sealed reveals.
+func wantReveals(t *testing.T, h RunHarness, run agent.RunID, n int) {
+	t.Helper()
+
+	got, err := h.Runs.Reveals(t.Context(), run)
+	if err != nil || len(got) != n {
+		t.Fatalf("Reveals() = %d reveals, %v, want %d", len(got), err, n)
+	}
+
+	if n > 0 && (got[0].CallID != "call-1" || string(got[0].Content) != "sealed") {
+		t.Fatalf("Reveals() = %+v, want the sealed reveal as recorded", got[0])
+	}
+}
+
+func caseReveal(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	run := mustCreate(t, h, NewRunFor("ana", "k1"))
+	op := claimTurn(t, h)
+	recordReveal(t, h, op, run.ID)
+	wantReveals(t, h, run.ID, 1)
+
+	got, err := h.Runs.Get(t.Context(), run.ID)
+	if err != nil || !got.ReadPlainSecrets {
+		t.Fatalf("Get() = %+v, %v, want ReadPlainSecrets after a reveal", got, err)
+	}
+
+	entries := mustTranscript(t, h, run.ID)
+	for i := range entries {
+		if slices.ContainsFunc(entries[i].Message.Parts, func(p agent.Part) bool { return p.Text == "sealed" }) {
+			t.Fatal("the transcript holds the sealed content")
+		}
+	}
+
+	rec := turnRecord(run.ID, "answer")
+	rec.Shred = true
+
+	if err := h.Runs.RecordTurn(t.Context(), op.Claim.Step(agent.StepAdvance), rec, noNext()); err != nil {
+		t.Fatalf("RecordTurn() that shreds = %v", err)
+	}
+
+	wantReveals(t, h, run.ID, 0)
+
+	if got, err := h.Runs.Get(t.Context(), run.ID); err != nil || !got.ReadPlainSecrets {
+		t.Fatalf("Get() = %+v, %v, want ReadPlainSecrets to stay after the shred", got, err)
+	}
+
+	if _, err := h.Runs.Reveals(t.Context(), "no-such-run"); !errors.Is(err, agent.ErrNotFound) {
+		t.Fatalf("Reveals() of an unknown run = %v, want ErrNotFound", err)
+	}
+}
+
+func caseRevealTakeover(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	run := mustCreate(t, h, NewRunFor("ana", "k1"))
+	op := claimTurn(t, h)
+	recordReveal(t, h, op, run.ID)
+
+	// Another instance takes the turn over with a new claim. It reads the
+	// sealed reveal again, and a stale claim cannot shred it.
+	if err := h.Ops.Release(t.Context(), op.Claim); err != nil {
+		t.Fatalf("Release() = %v", err)
+	}
+
+	next := claimTurn(t, h)
+	wantReveals(t, h, run.ID, 1)
+
+	rec := turnRecord(run.ID, "answer")
+	rec.Shred = true
+
+	if err := h.Runs.RecordTurn(t.Context(), op.Claim.Step(agent.StepAdvance), rec, noNext()); !errors.Is(
+		err, durable.ErrClaimLost,
+	) {
+		t.Fatalf("RecordTurn() of the old claim = %v, want ErrClaimLost", err)
+	}
+
+	wantReveals(t, h, run.ID, 1)
+
+	if err := h.Runs.RecordTurn(t.Context(), next.Claim.Step(agent.StepAdvance), rec, noNext()); err != nil {
+		t.Fatalf("RecordTurn() of the new claim = %v", err)
+	}
+
+	wantReveals(t, h, run.ID, 0)
+}
+
+func caseRevealFinish(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	run := mustCreate(t, h, NewRunFor("ana", "k1"))
+	op := claimTurn(t, h)
+	recordReveal(t, h, op, run.ID)
+
+	end := runEnd(run.ID, agent.StateFailed, agent.StopCredentialEnded)
+	if err := h.Runs.Finish(t.Context(), op.Claim.Step(agent.StepAdvance), end); err != nil {
+		t.Fatalf("Finish() = %v", err)
+	}
+
+	wantReveals(t, h, run.ID, 0)
+}
+
+func mustTranscript(t *testing.T, h RunHarness, run agent.RunID) []agent.TranscriptEntry {
+	t.Helper()
+
+	entries, err := h.Runs.Transcript(t.Context(), run)
+	if err != nil {
+		t.Fatalf("Transcript() = %v", err)
+	}
+
+	return entries
+}
+
+func caseRevealParent(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	parent := mustCreate(t, h, NewRunFor("ana", "k1"))
+	op := claimTurn(t, h)
+	recordReveal(t, h, op, parent.ID)
+
+	end := runEnd(parent.ID, agent.StateSucceeded, agent.StopAnswered)
+	if err := h.Runs.Finish(t.Context(), op.Claim.Step(agent.StepAdvance), end); err != nil {
+		t.Fatalf("Finish() = %v", err)
+	}
+
+	req := NewRunFor("ana", "k2")
+	req.Parent = parent.ID
+
+	if child := mustCreate(t, h, req); !child.ReadPlainSecrets {
+		t.Fatalf("Create() = %+v, want ReadPlainSecrets from the parent", child)
+	}
+
+	if other := mustCreate(t, h, NewRunFor("ana", "k3")); other.ReadPlainSecrets {
+		t.Fatalf("Create() = %+v, want no ReadPlainSecrets for a run with no parent", other)
 	}
 }

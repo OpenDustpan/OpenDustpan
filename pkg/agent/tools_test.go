@@ -50,13 +50,24 @@ func checkSpec(t *testing.T, spec agent.ToolSpec) {
 		t.Errorf("name %q does not match %s", spec.Name, toolNameRE)
 	}
 
-	if spec.Description == "" || spec.Action == "" {
-		t.Errorf("tool %q needs a description and an action", spec.Name)
+	if spec.Description == "" || (spec.Action == "") != spec.StartActions {
+		t.Errorf("tool %q needs a description, and an action unless the job model gives it", spec.Name)
 	}
 
-	if !strings.Contains(string(spec.Action), ":") {
+	if spec.StartActions && spec.Effect != agent.EffectPropose {
+		t.Errorf("tool %q takes the actions of a start but does not propose", spec.Name)
+	}
+
+	if spec.Action != "" && !strings.Contains(string(spec.Action), ":") {
 		t.Errorf("action %q is not in the form <family>:<verb>", spec.Action)
 	}
+
+	checkEffect(t, spec)
+	checkParams(t, spec)
+}
+
+func checkEffect(t *testing.T, spec agent.ToolSpec) {
+	t.Helper()
 
 	if spec.Effect != agent.EffectRead && spec.Object != agent.ObjectUnit && spec.Object != agent.ObjectChangeUnit {
 		t.Errorf("tool %q has an effect on %q: a change applies to one unit", spec.Name, spec.Object)
@@ -65,8 +76,6 @@ func checkSpec(t *testing.T, spec agent.ToolSpec) {
 	if spec.SecretAction != "" && spec.SecretAction != identity.ActionUnitReadSecrets {
 		t.Errorf("tool %q has secret action %q, want %q", spec.Name, spec.SecretAction, identity.ActionUnitReadSecrets)
 	}
-
-	checkParams(t, spec)
 }
 
 func checkParams(t *testing.T, spec agent.ToolSpec) {
@@ -75,9 +84,7 @@ func checkParams(t *testing.T, spec agent.ToolSpec) {
 	names := map[string]bool{}
 
 	for _, p := range spec.Params {
-		if p.Name == "" || p.Type == "" || p.Description == "" {
-			t.Errorf("tool %q has a parameter with no name, type or description: %+v", spec.Name, p)
-		}
+		checkParam(t, spec.Name, p)
 
 		if names[p.Name] {
 			t.Errorf("tool %q has the parameter %q twice", spec.Name, p.Name)
@@ -104,6 +111,20 @@ func checkParams(t *testing.T, spec agent.ToolSpec) {
 	}
 
 	t.Errorf("tool %q acts on %q but has no required parameter %q", spec.Name, spec.Object, want)
+}
+
+func checkParam(t *testing.T, tool agent.ToolName, p agent.Param) {
+	t.Helper()
+
+	if p.Name == "" || p.Type == "" || p.Description == "" {
+		t.Errorf("tool %q has a parameter with no name, type or description: %+v", tool, p)
+	}
+
+	// Every parameter but a boolean has a maximum, and only a string has an
+	// enum.
+	if (p.Max > 0) == (p.Type == agent.ParamBoolean) || (len(p.Enum) > 0 && p.Type != agent.ParamString) {
+		t.Errorf("tool %q parameter %q: type %q with max %d and enum %v", tool, p.Name, p.Type, p.Max, p.Enum)
+	}
 }
 
 func TestCatalogHasNoCommandTool(t *testing.T) {
@@ -136,6 +157,31 @@ func TestCatalogOnlyReadStateAnswersSecrets(t *testing.T) {
 		if (spec.SecretAction != "") != wantSecret {
 			t.Errorf("tool %q: secret action %q", spec.Name, spec.SecretAction)
 		}
+	}
+}
+
+func TestCatalogActions(t *testing.T) {
+	t.Parallel()
+
+	// The tools check the actions of the job model, so an agent never does
+	// more through a tool than the person can do through the API.
+	want := map[agent.ToolName]identity.Action{
+		agent.ToolReadRunOutput: agent.ActionJobReadLogs,
+		agent.ToolGetChange:     agent.ActionJobRead,
+		agent.ToolCancelChange:  agent.ActionJobCancel,
+		agent.ToolObserveUnit:   agent.ActionUnitObserve,
+		agent.ToolProposeChange: "",
+	}
+
+	for name, action := range want {
+		spec, ok := agent.SpecFor(name)
+		if !ok || spec.Action != action {
+			t.Errorf("SpecFor(%q) = %q, %v, want action %q", name, spec.Action, ok, action)
+		}
+	}
+
+	if _, ok := agent.SpecFor("compare_states"); ok {
+		t.Error("compare_states is in the catalog: read_state with compareTo replaces it")
 	}
 }
 

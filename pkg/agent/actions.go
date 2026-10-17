@@ -39,3 +39,29 @@ const (
 	// signed-in person holds it with no grant.
 	ActionCallerManageAgentOptIns identity.Action = "caller:manage-agent-opt-ins"
 )
+
+// The actions of jobs that the tools check. They have the same strings as
+// the actions of package job, which owns them. This package declares them
+// until the action list of package identity holds them.
+const (
+	// ActionJobRead allows reading the jobs of a unit. Its object is a unit.
+	ActionJobRead identity.Action = "job:read"
+	// ActionJobReadLogs allows reading the content of job logs and of the
+	// events of an update. Its object is a unit.
+	ActionJobReadLogs identity.Action = "job:read-logs"
+	// ActionJobCancel allows canceling a job. Its object is a unit.
+	ActionJobCancel identity.Action = "job:cancel"
+	// ActionUnitRunPlan, ActionUnitRunApply, ActionUnitRunDestroy and
+	// ActionUnitWriteBack start jobs. The job model returns the ones that a
+	// start needs. Their object is a unit.
+	ActionUnitRunPlan    identity.Action = "unit:run-plan"
+	ActionUnitRunApply   identity.Action = "unit:run-apply"
+	ActionUnitRunDestroy identity.Action = "unit:run-destroy"
+	ActionUnitWriteBack  identity.Action = "unit:write-back"
+)
+
+// ActionUnitObserve allows reading the live status of the resources of a
+// unit from its cloud: events of workloads and the health of targets. Its
+// object is a unit. It is a read, but it reaches the cloud account of the
+// unit with short-lived read-only credentials, so it has its own action.
+const ActionUnitObserve identity.Action = "unit:observe"

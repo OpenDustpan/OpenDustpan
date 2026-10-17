@@ -29,6 +29,8 @@ func TestLimitsValidate(t *testing.T) {
 		{name: "no duration", change: func(l *agent.Limits) { l.MaxDuration = 0 }},
 		{name: "no tool calls", change: func(l *agent.Limits) { l.MaxToolCallsPerTurn = 0 }},
 		{name: "no result bytes", change: func(l *agent.Limits) { l.MaxToolResultBytes = 0 }},
+		{name: "no active runs for a person", change: func(l *agent.Limits) { l.MaxActiveForSubject = 0 }},
+		{name: "no active runs", change: func(l *agent.Limits) { l.MaxActive = 0 }},
 	}
 
 	for _, tt := range tests {
@@ -57,11 +59,14 @@ func TestLimitsNarrow(t *testing.T) {
 		MaxDuration:         time.Minute,
 		MaxToolCallsPerTurn: -3,
 		MaxToolResultBytes:  0,
+		MaxActiveForSubject: 1,
+		MaxActive:           0,
 	})
 
 	want := base
 	want.MaxTurns = 5
 	want.MaxDuration = time.Minute
+	want.MaxActiveForSubject = 1
 
 	if got != want {
 		t.Fatalf("Narrow() = %+v, want %+v: a lower limit applies, a higher, zero or negative one does not", got, want)
@@ -78,6 +83,8 @@ func TestLimitsCheck(t *testing.T) {
 		MaxDuration:         time.Minute,
 		MaxToolCallsPerTurn: 2,
 		MaxToolResultBytes:  1024,
+		MaxActiveForSubject: 1,
+		MaxActive:           1,
 	}
 
 	tests := []struct {

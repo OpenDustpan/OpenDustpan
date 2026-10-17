@@ -20,6 +20,7 @@ package agent
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -117,18 +118,46 @@ func (c Channel) Valid() bool {
 	return c == ChannelAgent || c == ChannelMCP || c == ChannelProxy
 }
 
-// Actor is who makes a tool call: always a person or a service principal,
-// never the agent itself. Principal is the caller as the server resolved it
-// for this call. RunID names the run of a ChannelAgent call and is empty for
-// the other channels. SessionID names the MCP session of a ChannelMCP or
-// ChannelProxy call, and is the run ID for a ChannelAgent call. BreakGlass is
-// true when the credential of the call belongs to a break-glass session.
+// Ref names the agent that acts for a person: the channel of the call,
+// and the run (ChannelAgent) or the MCP session (ChannelMCP, ChannelProxy).
+// The job model records it on each job, approval and policy input that an
+// agent causes, and the audit log records it on each entry.
+type Ref struct {
+	Channel Channel
+	// RunID names the run of a ChannelAgent call. It is empty for the other
+	// channels.
+	RunID RunID
+	// SessionID names the MCP session of a ChannelMCP or ChannelProxy call.
+	// It is empty for a ChannelAgent call.
+	SessionID string
+}
+
+// Validate returns ErrInvalid unless r names a known channel and exactly the
+// ID that its channel needs.
+func (r Ref) Validate() error {
+	switch {
+	case !r.Channel.Valid():
+		return fmt.Errorf("%w: unknown channel %q", ErrInvalid, r.Channel)
+	case r.Channel == ChannelAgent && (r.RunID == "" || r.SessionID != ""):
+		return fmt.Errorf("%w: a call of the built-in agent names its run and no session", ErrInvalid)
+	case r.Channel != ChannelAgent && (r.SessionID == "" || r.RunID != ""):
+		return fmt.Errorf("%w: a call of an outside agent names its session and no run", ErrInvalid)
+	default:
+		return nil
+	}
+}
+
+// Actor is who makes a tool call. Principal is the person (or service
+// principal) that asked, as the server resolved it for this call: every
+// check uses its authorization. Agent is the agent that acts for it. The
+// agent is never a principal: it holds no grant, no role and no token.
+// BreakGlassSession is true when the credential of the call belongs to a
+// break-glass session. It is not the break-glass of a change freeze: an
+// agent never asks for that.
 type Actor struct {
-	Principal  identity.Principal
-	Channel    Channel
-	RunID      RunID
-	SessionID  string
-	BreakGlass bool
+	Principal         identity.Principal
+	Agent             Ref
+	BreakGlassSession bool
 }
 
 // Run is what any instance can read about a run.
@@ -165,6 +194,9 @@ type Run struct {
 	// also an attempt whose claim was lost before its record. It is the
 	// number for the cost of the run, and it can be above Progress.Usage.
 	Ledger Usage
+	// ReadPlainSecrets is true after a tool call of the run answered secret
+	// values in plain text. From then on the run cannot propose a change.
+	ReadPlainSecrets bool
 	// CancelRequested is true after a cancel of an active run.
 	CancelRequested bool
 	// CanceledBy is the subject that requested the cancel, or empty.

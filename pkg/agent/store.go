@@ -12,26 +12,28 @@ import (
 // from a random source before the create, so First can name it. Prompt is
 // the first message of the person. First is the start of the operation of
 // turn 1: the store starts it in the transaction of the create, with the
-// rules of durable.Store.Start.
-// MaxActiveForSubject and MaxActive bound the runs that are not terminal, for
-// the subject and for the installation. A bound of 0 means no bound.
+// rules of durable.Store.Start. Limits.MaxActiveForSubject and
+// Limits.MaxActive bound the runs that are not terminal, for the subject and
+// for the installation, at the create.
 type NewRun struct {
-	ID                  RunID
-	Key                 string
-	Subject             string
-	CredentialID        string
-	Namespace           namespace.Name
-	Parent              RunID
-	Model               string
-	Limits              Limits
-	Prompt              string
-	MaxActiveForSubject int
-	MaxActive           int
-	First               durable.StartRequest
+	ID           RunID
+	Key          string
+	Subject      string
+	CredentialID string
+	Namespace    namespace.Name
+	Parent       RunID
+	Model        string
+	Limits       Limits
+	Prompt       string
+	First        durable.StartRequest
 }
 
-// RunFilter selects runs for List. A zero field matches every run. Limit 0
-// means no limit.
+// MaxRunList bounds the runs of one List.
+const MaxRunList = 100
+
+// RunFilter selects runs for List. An empty Subject, Namespace or States
+// matches every run. Limit is between 1 and MaxRunList: 0 is not valid and
+// never means "no limit".
 type RunFilter struct {
 	Subject   string
 	Namespace namespace.Name
@@ -50,12 +52,19 @@ type TranscriptEntry struct {
 }
 
 // TurnRecord is what a step of a turn records: the messages of the step, in
-// order, and the progress of the run after the step.
+// order, and the progress of the run after the step. Every message is
+// masked (MaskMessage) before the record. Reveals are the sealed results of
+// the tool calls of a tools step that read secret values in plain text. A
+// record with Reveals also marks the run with ReadPlainSecrets. Shred is
+// true for the record of a model step: the store then deletes every sealed
+// reveal of the run in the transaction of the record.
 type TurnRecord struct {
 	Run      RunID
 	Turn     int
 	Messages []Message
 	Progress Progress
+	Reveals  []SealedReveal
+	Shred    bool
 }
 
 // RunEnd is how a run ends. LastError is the message of a failed run, in
@@ -87,6 +96,8 @@ type UsageRecord struct {
 //
 // A method that takes a durable.StepFence checks and records the step with
 // the rules of durable.Store.RecordStep, in the transaction of its own write.
+//
+//nolint:interfacebloat // One contract for the rows of a run: the run, its transcript, its ledger and its reveals.
 type RunStore interface {
 	// Create makes a pending run for req and starts the operation of its
 	// first turn, or returns the run that req.Key already names for
@@ -94,22 +105,31 @@ type RunStore interface {
 	// new run. It returns ErrInvalid for an empty ID, key, subject or
 	// prompt, or for limits that fail Limits.Validate, ErrKeyConflict when
 	// the key names a run of another subject, and ErrConcurrencyLimit when
-	// a bound of req is reached.
+	// the subject has req.Limits.MaxActiveForSubject runs that did not end,
+	// or the installation has req.Limits.MaxActive. A run whose parent read
+	// secret values in plain text starts with ReadPlainSecrets set.
 	Create(ctx context.Context, req NewRun) (run Run, created bool, err error)
 
 	// Get returns the run id, or ErrNotFound.
 	Get(ctx context.Context, id RunID) (Run, error)
 
-	// List returns the runs that f selects, newest first: in the reverse
-	// order of their create, also for runs with one creation time.
+	// List returns at most f.Limit runs that f selects, newest first: in the
+	// reverse order of their create, also for runs with one creation time.
+	// It returns ErrInvalid for a limit outside 1 to MaxRunList.
 	List(ctx context.Context, f RunFilter) ([]Run, error)
 
 	// Transcript returns the messages of the run id, in the order of turn
 	// and index. It returns ErrNotFound for an unknown run.
 	Transcript(ctx context.Context, id RunID) ([]TranscriptEntry, error)
 
+	// Reveals returns the sealed reveals of the run id that no model step
+	// shredded yet, in the order of turn and call. It returns ErrNotFound
+	// for an unknown run.
+	Reveals(ctx context.Context, id RunID) ([]SealedReveal, error)
+
 	// RecordTurn appends rec.Messages after the last message of rec.Turn,
-	// sets the progress of the run and records the step f. When next is
+	// writes rec.Reveals, shreds the reveals of the run when rec.Shred is
+	// set, sets the progress of the run and records the step f. When next is
 	// not the zero StartRequest, it also starts the operation next. It
 	// returns ErrInvalid, ErrNotFound, and the errors of
 	// durable.Store.RecordStep. On an error it changes nothing.
@@ -128,7 +148,7 @@ type RunStore interface {
 	RequestCancel(ctx context.Context, id RunID, by string) (Run, error)
 
 	// Finish ends the run end.Run with end.State, end.Stop and
-	// end.LastError, and records the step f. It returns ErrInvalid for a
+	// end.LastError, shreds its sealed reveals, and records the step f. It returns ErrInvalid for a
 	// state that is not terminal, ErrNotFound, and the errors of
 	// durable.Store.RecordStep. A run whose cancel was requested ends
 	// canceled whatever end asks for.

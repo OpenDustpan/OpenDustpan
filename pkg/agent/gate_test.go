@@ -13,7 +13,7 @@ func openSelfHosted() agent.SecretAccess {
 	return agent.SecretAccess{
 		Hosted:         false,
 		StartFlag:      true,
-		Accepted:       true,
+		WindowAccepted: true,
 		AccountOptIn:   false,
 		NamespaceOptIn: true,
 		UserOptIn:      true,
@@ -37,18 +37,18 @@ func TestSecretAccessCheck(t *testing.T) {
 			want:   agent.ErrSecretsNoFlag,
 		},
 		{
-			name:   "flag but no acceptance",
-			change: func(s *agent.SecretAccess) { s.Accepted = false },
+			name:   "flag but no window acceptance",
+			change: func(s *agent.SecretAccess) { s.WindowAccepted = false },
 			want:   agent.ErrSecretsNotAccepted,
 		},
 		{
-			name:   "acceptance without the flag is no flag",
+			name:   "window acceptance without the flag is no flag",
 			change: func(s *agent.SecretAccess) { s.StartFlag = false },
 			want:   agent.ErrSecretsNoFlag,
 		},
 		{
 			name:   "account opt-in does not replace the flag on a self-hosted server",
-			change: func(s *agent.SecretAccess) { s.StartFlag, s.Accepted, s.AccountOptIn = false, false, true },
+			change: func(s *agent.SecretAccess) { s.StartFlag, s.WindowAccepted, s.AccountOptIn = false, false, true },
 			want:   agent.ErrSecretsNoFlag,
 		},
 		{
@@ -63,7 +63,7 @@ func TestSecretAccessCheck(t *testing.T) {
 		},
 		{
 			name:   "first closed stage wins",
-			change: func(s *agent.SecretAccess) { s.Accepted, s.UserOptIn = false, false },
+			change: func(s *agent.SecretAccess) { s.WindowAccepted, s.UserOptIn = false, false },
 			want:   agent.ErrSecretsNotAccepted,
 		},
 		{
@@ -84,7 +84,7 @@ func TestSecretAccessCheck(t *testing.T) {
 		{
 			name: "hosted with account opt-in needs no flag",
 			change: func(s *agent.SecretAccess) {
-				s.Hosted, s.StartFlag, s.Accepted, s.AccountOptIn = true, false, false, true
+				s.Hosted, s.StartFlag, s.WindowAccepted, s.AccountOptIn = true, false, false, true
 			},
 			want: nil,
 		},
@@ -136,8 +136,8 @@ func TestSecretAccessExposed(t *testing.T) {
 		change func(s *agent.SecretAccess)
 		want   bool
 	}{
-		{name: "flag and acceptance", change: func(*agent.SecretAccess) {}, want: true},
-		{name: "flag only", change: func(s *agent.SecretAccess) { s.Accepted = false }, want: false},
+		{name: "flag and window acceptance", change: func(*agent.SecretAccess) {}, want: true},
+		{name: "flag only", change: func(s *agent.SecretAccess) { s.WindowAccepted = false }, want: false},
 		{
 			name:   "opt-ins of the namespace and the person do not matter",
 			change: func(s *agent.SecretAccess) { s.NamespaceOptIn, s.UserOptIn = false, false },
@@ -162,5 +162,31 @@ func TestSecretAccessExposed(t *testing.T) {
 				t.Fatalf("Exposed() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSecretStage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		change func(s *agent.SecretAccess)
+		want   string
+	}{
+		{func(s *agent.SecretAccess) { s.StartFlag = false }, agent.StageFlag},
+		{func(s *agent.SecretAccess) { s.WindowAccepted = false }, agent.StageWindow},
+		{func(s *agent.SecretAccess) { s.Hosted = true }, agent.StageAccount},
+		{func(s *agent.SecretAccess) { s.NamespaceOptIn = false }, agent.StageNamespace},
+		{func(s *agent.SecretAccess) { s.UserOptIn = false }, agent.StagePerson},
+		{func(s *agent.SecretAccess) { s.Channel = agent.ChannelProxy }, agent.StageConsent},
+		{func(*agent.SecretAccess) {}, ""},
+	}
+
+	for _, tt := range tests {
+		s := openSelfHosted()
+		tt.change(&s)
+
+		if got := agent.SecretStage(s.Check()); got != tt.want {
+			t.Fatalf("SecretStage() = %q, want %q", got, tt.want)
+		}
 	}
 }
