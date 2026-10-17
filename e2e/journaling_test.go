@@ -5,7 +5,6 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -77,8 +76,8 @@ func runPulumiJournalingBothModes(t *testing.T, pulumiCLI e2e.Install, store e2e
 	onEnv := e2e.NewEnv(ctx, t, onCLI, store)
 	offEnv := e2e.NewEnvWithJournalingOff(ctx, t, offCLI, store)
 
-	onExport := journalingUp(ctx, t, onEnv)
-	offExport := journalingUp(ctx, t, offEnv)
+	onExport := pairedUp(ctx, t, onEnv)
+	offExport := pairedUp(ctx, t, offEnv)
 
 	onCanonical, offCanonical := canonicalExport(t, onExport), canonicalExport(t, offExport)
 	if onCanonical != offCanonical {
@@ -89,25 +88,54 @@ func runPulumiJournalingBothModes(t *testing.T, pulumiCLI e2e.Install, store e2e
 		)
 	}
 
+	checkJournalingOn(t, onEnv)
 	checkJournalingOffAnswersZero(t, offEnv)
 	checkNoJournalBatches(t, offEnv)
 }
 
-// journalingUp logs in, creates the stack and the other stack its program
-// references, runs up and returns the stack export. It carries no secrets,
-// so both journaling runs hold the same state.
-func journalingUp(ctx context.Context, t *testing.T, env *e2e.Env) string {
+// checkJournalingOn proves the on run negotiated journaling: at least one
+// update start answered the journalVersion field. In a build that answers a
+// nonzero version the starts must answer nonzero or the server must accept
+// journal batches; the release build answers 0 by design, so there the
+// check proves the negotiation ran.
+func checkJournalingOn(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	qualified := fmt.Sprintf("%s/%s/%s", e2e.Namespace, e2e.Project, stackName)
+	entries := env.Recorder.Entries()
 
-	env.Step(ctx, t, step("login", contains(env.URL), "login"))
-	env.Step(ctx, t, step("stack init", nil, "stack", "init", qualified))
-	env.Step(ctx, t, step("stack init other", nil, "stack", "init", "other"))
-	env.Step(ctx, t, step("stack select", nil, "stack", "select", qualified))
-	env.Step(ctx, t, step("up", nil, "up", "--yes", "--non-interactive"))
+	starts := 0
 
-	return env.Step(ctx, t, step("stack export", nil, "stack", "export")).Stdout
+	nonzero := false
+
+	batches := 0
+
+	for i := range entries {
+		if isJournalVersionStart(&entries[i]) {
+			starts++
+
+			if journalVersionOf(t, entries[i].ResponseBody) != 0 {
+				nonzero = true
+			}
+		}
+
+		if isAcceptedJournalBatch(&entries[i]) {
+			batches++
+		}
+	}
+
+	if starts == 0 {
+		t.Fatal("no update start answered journalVersion")
+	}
+
+	if !journalingBuildAnswersNonzero() {
+		t.Logf("release build answers journalVersion 0 with journaling on; %d update starts negotiated", starts)
+
+		return
+	}
+
+	if !nonzero && batches == 0 {
+		t.Fatal("update starts answer journalVersion 0 and no journal batch was accepted, want journaling on")
+	}
 }
 
 // checkJournalingOffAnswersZero proves the off run answered journalVersion 0

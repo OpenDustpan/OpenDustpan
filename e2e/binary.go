@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -413,6 +414,19 @@ func backendServeEnv(tokens, dbURL string) []string {
 	return append(backendEnv(tokens), "DUSTPAN_DATABASE="+dbURL)
 }
 
+// journalingOffEnv returns the server environment that turns Pulumi
+// journaling off. Both server modes read it: the binary mode passes it to
+// the serve child, and the in-process mode derives its option from it, so
+// the off run in each mode proves the same variable.
+func journalingOffEnv() []string {
+	return []string{disableJournalingEnv + "=true"}
+}
+
+// journalingDisabled reports whether env turns Pulumi journaling off.
+func journalingDisabled(env []string) bool {
+	return slices.Contains(env, disableJournalingEnv+"=true")
+}
+
 // journalingServeEnv returns the journaling environment of a `serve` child
 // process: DUSTPAN_DISABLE_PULUMI_JOURNALING=true when cfg turns journaling
 // off, else nothing. The off backend proves the variable, next to the flag
@@ -423,7 +437,7 @@ func journalingServeEnv(cfg backendConfig) []string {
 		return nil
 	}
 
-	return []string{disableJournalingEnv + "=true"}
+	return journalingOffEnv()
 }
 
 // s3CredentialEnv maps the S3 test credentials into the child environment.
