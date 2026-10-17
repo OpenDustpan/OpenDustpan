@@ -598,7 +598,7 @@ func seedRoutePrincipals(t *testing.T, st *sqlite.Store) *principal.Service {
 		Source: principal.MembershipSourceLocal, SourceID: "", State: principal.MembershipStateActive, Pinned: false,
 	}
 	joined := storetest.ServerChange(at, "group:"+testGroupID+"#member:"+testPrincipalID)
-	if err := st.AddMember(ctx, member, joined); err != nil {
+	if err := st.AddMember(ctx, member, joined, nil); err != nil {
 		t.Fatalf("seed member: %v", err)
 	}
 

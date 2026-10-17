@@ -502,7 +502,7 @@ func seedOpsGrants(t *testing.T, f accessFixture) {
 	}
 	joined := storetest.ServerChange(at, "group:grp-ops#member:prn-bob")
 
-	if err := f.store.AddMember(t.Context(), member, joined); err != nil {
+	if err := f.store.AddMember(t.Context(), member, joined, nil); err != nil {
 		t.Fatalf("seed member: %v", err)
 	}
 
