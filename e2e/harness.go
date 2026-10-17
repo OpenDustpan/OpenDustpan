@@ -203,9 +203,6 @@ type Env struct {
 	// dbProxy fronts PostgreSQL for the server, so closing it stops the
 	// database for this environment only. It is nil on SQLite.
 	dbProxy *DBProxy
-	// rewrites holds the answer rewrites of the recording proxy of a binary
-	// environment. It is nil in the in-process mode.
-	rewrites *answerRewrites
 }
 
 // serverStore is every persistence port the server needs.
@@ -467,7 +464,6 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		dbProxy:       build.dbProxy,
 		signIn:        signIn,
 		backupDir:     build.backupDir,
-		rewrites:      nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {
