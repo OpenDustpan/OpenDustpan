@@ -233,6 +233,26 @@ func TestAuditEntryReaderConformance(t *testing.T) {
 	})
 }
 
+// chainApprovalStore wraps a Store with its path, so the approval cases can
+// break audit appends with direct SQL. It embeds the store, so the suite
+// also reads its chain state, list and durable operations.
+type chainApprovalStore struct {
+	*sqlite.Store
+
+	path string
+}
+
+var (
+	_ audittest.ChainApprover   = (*chainApprovalStore)(nil)
+	_ audittest.ChainBreaker    = (*chainApprovalStore)(nil)
+	_ audittest.ChainOperations = (*chainApprovalStore)(nil)
+)
+
+// BreakAuditAppends implements audittest.ChainBreaker.
+func (s *chainApprovalStore) BreakAuditAppends(ctx context.Context) error {
+	return breakAuditAppends(ctx, s.path)
+}
+
 // TestAuditChainConformance runs the chain switch cases: entries without a
 // hash, runs of chained entries, and the recorded chain state.
 func TestAuditChainConformance(t *testing.T) {
@@ -255,7 +275,7 @@ func TestAuditChainConformance(t *testing.T) {
 		})
 
 		return audittest.ChainTestStore{
-			Store: s,
+			Store: &chainApprovalStore{Store: s, path: path},
 			TamperEntry: func(t *testing.T, ns namespace.Name, seq int64, field, value string) {
 				t.Helper()
 
