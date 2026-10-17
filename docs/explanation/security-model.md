@@ -89,7 +89,12 @@ persons and services.
   `tokenManagers`, with one line per service principal in the form
   `<principal ID>: <holder>, <holder>`. The audit entry of each membership
   add of a service principal names the same holders in the change
-  `tokenManagers`.
+  `tokenManagers`. The audit entry of each membership add to a group that
+  lets its members act as service principals names, in the change
+  `actsAs`, what the new member can act as, one per line, as the access
+  review names it: `principal:<id>` for one service principal, the name of
+  a namespace for the service principals of that namespace, and `@server`
+  for every service principal.
 - **A revoke of `principal:manage-tokens` does not end the tokens that
   its holder already made.** Those tokens act as the service principal
   until they expire. After such a revoke, rotate or revoke the tokens of

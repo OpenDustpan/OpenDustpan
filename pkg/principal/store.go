@@ -109,6 +109,22 @@ type GroupStore interface {
 	DeleteGroup(ctx context.Context, id string, e audit.Entry) error
 }
 
+// GroupReads reads, in the transaction of a membership write, what the
+// members of a group can do through the grants of the group. A store gives
+// it to a MemberAudit.
+type GroupReads interface {
+	// ActsAs returns, sorted and each once, what the members of the group
+	// groupID can act as through its current grants, as the access review
+	// names it: "principal:<id>" for one service principal, the name of a
+	// namespace for each service principal of that namespace, and
+	// "@server" for every service principal.
+	ActsAs(ctx context.Context, groupID string) ([]string, error)
+}
+
+// MemberAudit returns the changes that a membership write adds to its
+// audit entry, from the reads of the transaction of the write.
+type MemberAudit func(ctx context.Context, r GroupReads) ([]audit.Change, error)
+
 // MemberStore keeps the memberships of principals in groups. A membership
 // starts at AddedAt and ends at a removal. An ended membership stays for
 // the history, and the principal can join the group again.
@@ -116,8 +132,12 @@ type MemberStore interface {
 	// AddMember persists m. It returns ErrNotFound when the group or the
 	// principal does not exist, ErrAlreadyExists when the principal is a
 	// member of the group, and ErrManagedByDirectory when the source of the
-	// group is not SourceLocal.
-	AddMember(ctx context.Context, m Membership, e audit.Entry) error
+	// group is not SourceLocal. When more is not nil, it runs more in the
+	// transaction of the write, after the write holds the lock that the
+	// writes of grants and roles take, and adds the changes that more
+	// returns to e before it appends e. An error from more refuses the
+	// write.
+	AddMember(ctx context.Context, m Membership, e audit.Entry, more MemberAudit) error
 	// RemoveMember ends the membership of the principal principalID in the
 	// group groupID, at e.At. It returns ErrNotFound when no such
 	// membership exists, and ErrManagedByDirectory when the source of the
