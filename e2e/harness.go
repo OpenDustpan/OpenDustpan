@@ -405,22 +405,14 @@ func startInprocessServer(
 		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), shared)
 	}
 
-	// The option derives from the same off variable the binary mode passes
-	// to its serve child, so both modes prove
-	// DUSTPAN_DISABLE_PULUMI_JOURNALING. The variable never reads from the
-	// test process, so an on backend stays on.
-	var journalingEnv []string
-
-	if in.disableJournaling {
-		journalingEnv = journalingOffEnv()
-	}
-
+	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;
+	// in-process mode uses the equivalent server option.
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
 		tokens:            serverTokens{tokenA: in.token, tokenB: in.tokenB, member: member},
 		deltaCutoff:       in.deltaCutoff,
-		disableJournaling: journalingDisabled(journalingEnv),
+		disableJournaling: in.disableJournaling,
 		ipAllowlists:      in.ipAllowlists,
 		signIn:            signIn,
 	})
@@ -567,8 +559,6 @@ type serverArgs struct {
 	tokens      serverTokens
 	deltaCutoff int
 	// disableJournaling turns Pulumi journaling off on the in-process server.
-	// startInprocessServer derives it from the same off variable the binary
-	// mode passes, so both modes prove DUSTPAN_DISABLE_PULUMI_JOURNALING.
 	disableJournaling bool
 	// ipAllowlists turns IP allowlists on for the in-process server and
 	// applies them to the bootstrap admin token too.
