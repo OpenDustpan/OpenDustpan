@@ -338,6 +338,10 @@ _Avoid_: Environment, stack
 A group of workspaces in the TFE-compatible API. It has no effect on names or state.
 _Avoid_: Project (without a qualifier), folder
 
+**Plan**:
+The OpenTofu record of the changes that an apply will make to a workspace. OpenDustpan stores a plan and shows it. The Pulumi CLI calls its record of planned changes a preview.
+_Avoid_: Preview (for OpenTofu), dry run, diff (a diff compares two state versions)
+
 **Workspace lock**:
 The lock that one principal holds on a workspace while it changes the state of the workspace. The lock stays until the principal or an administrator releases it.
 _Avoid_: Lease
@@ -467,10 +471,6 @@ _Avoid_: Agent, worker, executor
 **Job**:
 One piece of work for a runner: a tool, a unit reference, an operation and the source to run it on. It produces one Pulumi update or one OpenTofu run.
 _Avoid_: Task, deployment, run (without a tool), operation (that is a durable operation in the server)
-
-**Plan**:
-The OpenTofu record of the changes that an apply will make to a workspace. OpenDustpan stores a plan and shows it. The Pulumi CLI calls its record of planned changes a preview.
-_Avoid_: Preview (for OpenTofu), dry run, diff (a diff compares two state versions)
 
 **Dusty**:
 The built-in AI agent of OpenDustpan. It is off until an administrator connects a model.

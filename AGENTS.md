@@ -111,9 +111,11 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
   the same transaction. Never add a write path that skips the fence.
 - SQL: hand-written per dialect. Put fixed queries in `pkg/store/<dialect>/queries.sql`
   and generate them with sqlc. Dynamic queries are hand-written in the adapter.
-  Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`. Never
-  edit an applied migration. TestFrozenMigrations in each store adapter holds
-  the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
+  Schema changes are new numbered files in `pkg/store/<dialect>/migrations/`.
+  Never edit a migration file that a tag shipped. An applied file that no tag
+  shipped stays frozen until the collapse before the next tag, which merges
+  all such files into one (ADR 73). TestFrozenMigrations in each store adapter
+  holds the SHA-256 of each file. Timestamps are Unix milliseconds in `BIGINT`.
 - HTTP: `net/http` and `ServeMux` only. No web frameworks, no ORMs, no
   testify (depguard bans them). Logging is `log/slog` with an injected logger.
 - Tests: standard `testing` only, black-box `_test` packages, `t.Parallel()`,
@@ -135,7 +137,8 @@ CLIs. Until 1.0, everything else can break (ADR 73).
   TFE-compatible API: JSON:API documents and errors.
 - Before 1.0, the console and the tool-neutral APIs can change and break.
   Do not deprecate first. When a change breaks an API that the console uses,
-  change the console in the same push window.
+  merge the console change before the next server tag. Between the two
+  merges, `main` of either repository can be broken.
 - Do not write compatibility code, aliases or data conversions for a shape
   that no tag shipped. A shape that a tag shipped keeps its upgrade path
   (ADR 72).

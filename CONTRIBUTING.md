@@ -95,7 +95,9 @@ Agent sessions do most of the maintainer work on OpenDustpan. Every commit
 that an agent writes carries a `Co-Authored-By` trailer that names it. Every
 change passes CI, a security review and a review by a second session before
 a merge. The rules above also apply to these agents. The `Co-Authored-By`
-trailer is their disclosure.
+trailer is their disclosure. Until 2026-10-22, an agent signs off each commit
+with its own commit author identity. The project owner decides the rule for
+agent sign-off after that date.
 
 ## Conduct and security
 

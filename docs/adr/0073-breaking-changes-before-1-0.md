@@ -1,6 +1,6 @@
 # 73. Until 1.0, a change can break everything except the tool-compatible APIs
 
-Status: accepted · 2026-10-17 · supersedes ADR 21 in part
+Status: accepted · 2026-10-17 · supersedes ADR 21 and ADR 72 in part (see "Superseded decisions")
 
 ## Context
 
@@ -27,21 +27,21 @@ decision 6, and the PM session accepted it on 2026-10-17.
 
 1. **Until 1.0, a change can break what is ours.** These can change in a way
    that breaks a caller, with no deprecation period:
-   - the tool-neutral APIs, for example the inventory API, the installation
-     API and the Catalog API,
-   - the routes of the Pulumi Cloud-compatible API that only the console
-     calls,
+   - the tool-neutral APIs, for example the inventory API and the
+     installation API,
    - the Go SDK in `pkg/`,
    - the commands, flags and settings of the `opendustpan` binary,
-   - the database schema and the backup format, with the limits of decision 6.
+   - the database schema and the backup format, with the limits of decisions 5
+     and 6.
 2. **The tool-compatible APIs cannot break.** The Pulumi Cloud-compatible API,
    the TFE-compatible API and the OpenTofu HTTP backend must match what each
    supported version of the real CLI sends and expects. This rule has no end
    date. A change to these APIs passes `make e2e` against the real CLIs.
-3. **The console changes in the same push window.** A server change that
-   breaks an API that the console calls has a matching console change. The
-   two changes merge in the same push window. A server tag pins a console tag
-   that works with it (ADR 21).
+3. **The console change merges before the next server tag.** A server change
+   that breaks an API that the console calls has a matching console change.
+   The console change merges before the next server tag. Between the two
+   merges, `main` of either repository can be broken. A server tag pins a
+   console tag that works with it (ADR 21).
 4. **No compatibility code for unreleased shapes.** Do not write a shim, an
    alias, a second read path or a data conversion for a shape that no tag
    shipped. Remove such code when you find it.
@@ -53,14 +53,16 @@ decision 6, and the PM session accepted it on 2026-10-17.
    - A change to an unreleased shape is a new numbered migration file. The
      file can drop, rename or make again a table or a column. It does not
      convert the data that an untagged build wrote.
-   - Applied migration files stay frozen. Developer databases, CI databases
-     and `TestFrozenMigrations` depend on them. The hashes of
-     `TestFrozenMigrations` change only in the collapse below.
+   - An applied migration file stays frozen until the collapse below.
+     Developer databases, CI databases and `TestFrozenMigrations` depend on
+     it. The hashes of `TestFrozenMigrations` change only in the collapse.
+   - A migration file that a tag shipped never changes.
    - A database or a backup that an untagged build wrote has no support. When
      a migration fails on such a database, the operator makes a new database.
-   - Before each tag, the files that no tag shipped can collapse into one
-     file for that tag. Before the first tag, all files collapse into the
-     baseline of each dialect (ADR 72 decision 7).
+   - Before each tag, the files that no tag shipped collapse into one file
+     for that tag. Before the first tag, all files collapse into the
+     baseline of each dialect. This collapse comes before each tag, not
+     only once (ADR 72 decision 7).
 7. **At 1.0, a new ADR sets the contract rules again** for every API, the
    Go SDK and the schema.
 
@@ -69,13 +71,14 @@ decision 6, and the PM session accepted it on 2026-10-17.
 | ADR | Decision | Superseded by | What changes |
 | --- | --- | --- | --- |
 | 21 | "Version", first sentences on the API rules | Decisions 1 to 3 | Before 1.0, only the tool-compatible APIs keep the contract rules. The console and the tool-neutral APIs can change. |
+| 72 | 7, "one-time exception" | Decision 6 | The migration files that no tag shipped collapse into one file before each tag, not only before the first tag. |
 
 ## Consequences
 
 - `CLAUDE.md` replaces the section "The APIs are contracts" with the rules
   of decisions 1 to 3.
 - An API change that the console needs no longer waits for a server release.
-  The console and the server change together.
+  The console change merges before the next server tag.
 - Reviews refuse compatibility code for unreleased shapes.
 - An operator who runs an untagged build can lose the data of that build.
   The release notes and the install docs say to run tagged releases only.

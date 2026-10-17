@@ -17,6 +17,9 @@ disclosure, the DCO sign-off, full understanding, and `make check` passing.
 The project closes bulk AI pull requests. The project's own agents follow
 the same rules.
 
+The owner did not decide some details of decisions 6 and 7. The PM session
+added them on 2026-10-17. Each one has the mark "(PM addition)".
+
 ## Decision
 
 1. **AI-assisted contributions are welcome**, under the rules below.
@@ -31,10 +34,11 @@ the same rules.
 5. **`make check` passes** before the pull request asks for a review.
 6. **The project closes bulk AI pull requests** with no review. An example
    is many pull requests that a tool opened with no issue and no human
-   review. The maintainers decide what counts as bulk.
+   review (PM addition). The maintainers decide what counts as bulk (PM
+   addition).
 7. **The project's own agents follow the same rules.** The `Co-Authored-By`
-   trailer is the disclosure. Each agent pull request pastes the output of
-   its checks.
+   trailer is the disclosure (PM addition). Each agent pull request pastes
+   the output of its checks (PM addition).
 8. **Agent sign-off during the current push.** The owner decided on
    2026-10-17: until the push ends on 2026-10-22, each agent commit carries
    a `Signed-off-by:` line with the commit author identity of the agent. The
