@@ -83,8 +83,16 @@ func TestAddMemberRecordsMembershipFields(t *testing.T) {
 	var captured audit.Entry
 
 	svc, err := principal.NewService(principal.Config{
-		Store: captureMemberStore{Store: nil, captured: &captured, actsAs: nil}, Guard: nil, Namespaces: nil, Tokens: nil,
-		Now: nil, NewID: nil,
+		Store: captureMemberStore{
+			Store:    nil,
+			captured: &captured,
+			actsAs:   nil,
+		},
+		Guard:      nil,
+		Namespaces: nil,
+		Tokens:     nil,
+		Now:        nil,
+		NewID:      nil,
 	})
 	if err != nil {
 		t.Fatalf("service: %v", err)

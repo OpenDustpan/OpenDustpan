@@ -451,23 +451,18 @@ func (s *Store) AddMember(
 			return err
 		}
 
-		changes := append([]audit.Change(nil), e.Changes...)
-		if more != nil {
-			extra, err := more(ctx, grantReads{q: q})
-			if err != nil {
-				return err
-			}
-
-			changes = append(changes, extra...)
+		entry, merr := memberChanges(ctx, q, e, more)
+		if merr != nil {
+			return merr
 		}
 
 		m = m.WithDefaults()
 
-		if err := m.Validate(); err != nil {
-			return err
+		if verr := m.Validate(); verr != nil {
+			return verr
 		}
 
-		n, err := q.AddGroupMember(ctx, db.AddGroupMemberParams{
+		n, ierr := q.AddGroupMember(ctx, db.AddGroupMemberParams{
 			GroupID:       m.GroupID,
 			PrincipalID:   m.PrincipalID,
 			AddedAtMs:     codec.Millis(m.AddedAt),
@@ -477,27 +472,51 @@ func (s *Store) AddMember(
 			SuspendedAtMs: codec.OptionalMillis(m.SuspendedAt),
 			Pinned:        m.Pinned,
 		})
-		if err != nil {
-			return fmt.Errorf("insert group member: %w", err)
+		if ierr != nil {
+			return fmt.Errorf("insert group member: %w", ierr)
 		}
 
 		if n == 0 {
 			return principal.ErrAlreadyExists
 		}
 
-		entry := e
-		entry.Changes = changes
-
-		if err := validServerEntry(entry); err != nil {
-			return err
-		}
-
-		if _, err := appendAuditEntry(ctx, q, entry); err != nil {
-			return fmt.Errorf("append audit entry: %w", err)
-		}
-
-		return nil
+		return appendMemberAudit(ctx, q, entry)
 	})
+}
+
+// memberChanges returns e with the changes of more appended to a copy, so
+// the caller entry keeps its changes. It runs more only when more is not
+// nil.
+func memberChanges(
+	ctx context.Context, q *db.Queries, e audit.Entry, more principal.MemberAudit,
+) (audit.Entry, error) {
+	changes := append([]audit.Change(nil), e.Changes...)
+	if more != nil {
+		extra, err := more(ctx, grantReads{q: q})
+		if err != nil {
+			return audit.Entry{}, err
+		}
+
+		changes = append(changes, extra...)
+	}
+
+	entry := e
+	entry.Changes = changes
+
+	return entry, nil
+}
+
+// appendMemberAudit validates the entry of the insert and appends it.
+func appendMemberAudit(ctx context.Context, q *db.Queries, entry audit.Entry) error {
+	if err := validServerEntry(entry); err != nil {
+		return err
+	}
+
+	if _, err := appendAuditEntry(ctx, q, entry); err != nil {
+		return fmt.Errorf("append audit entry: %w", err)
+	}
+
+	return nil
 }
 
 // groupAndPrincipalExist returns ErrNotFound when the group or the principal
