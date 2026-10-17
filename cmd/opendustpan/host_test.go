@@ -14,6 +14,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/principal"
 	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/tempadmin"
@@ -632,12 +633,80 @@ func TestHostCleanupFailureNamesPerson(t *testing.T) {
 		t.Fatalf("cleanup failure = %v, want it to name the leftover person", err)
 	}
 
-	if !strings.Contains(err.Error(), "opendustpan host create-temp-admin <person>") {
-		t.Fatalf("cleanup failure = %v, want it to name the command that cleans it up", err)
+	leftover, getErr := st.GetPrincipalBySubject(ctx, "alice")
+	if getErr != nil {
+		t.Fatalf("leftover person alice: read = %v, want the person to stay", getErr)
 	}
 
-	if _, getErr := st.GetPrincipalBySubject(ctx, "alice"); getErr != nil {
-		t.Fatalf("leftover person alice: read = %v, want the person to stay", getErr)
+	if !strings.Contains(err.Error(), "DELETE /api/server/principals/"+leftover.ID) {
+		t.Fatalf("cleanup failure = %v, want it to name the principal delete route", err)
+	}
+
+	if strings.Contains(err.Error(), "host create-temp-admin") {
+		t.Fatalf("cleanup failure = %v, want no hint at host create-temp-admin", err)
+	}
+}
+
+// errFailGrant reports the injected grant-removal failure of the cleanup
+// test.
+var errFailGrant = errors.New("injected grant failure")
+
+// failTokenGrantStore fails the token write and the grant removal of the
+// store it wraps, so a host run fails at the token step and the grant
+// undo fails too.
+type failTokenGrantStore struct {
+	store
+}
+
+// CreateToken implements accesstoken.TokenStore with an injected failure.
+func (f failTokenGrantStore) CreateToken(
+	_ context.Context, _ accesstoken.Token, _ accesstoken.Digest, _ audit.Entry,
+) error {
+	return errFailToken
+}
+
+// RevokeGrant implements access.Store with an injected failure.
+func (f failTokenGrantStore) RevokeGrant(
+	_ context.Context, _ string, _ namespace.Fence, _ audit.Entry, _ access.GrantCheck,
+) error {
+	return errFailGrant
+}
+
+// TestHostCleanupFailureNamesGrant proves a token failure with a failing
+// grant undo reports the leftover grant: the joined error keeps both the
+// token failure and the grant that stays, and names the grant removal
+// route.
+func TestHostCleanupFailureNamesGrant(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	st, err := openStore(ctx, hostTestDB(t), slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(st.close)
+
+	_, err = createTempAdmin(ctx, failTokenGrantStore{store: st}, "alice")
+	if err == nil {
+		t.Fatal("host run with failing token and grant cleanup succeeded, want an error")
+	}
+
+	if !errors.Is(err, errFailToken) {
+		t.Fatalf("cleanup failure = %v, want the token failure", err)
+	}
+
+	if !errors.Is(err, errFailGrant) {
+		t.Fatalf("cleanup failure = %v, want the grant cleanup failure", err)
+	}
+
+	if !strings.Contains(err.Error(), "DELETE /api/server/grants/") {
+		t.Fatalf("cleanup failure = %v, want it to name the grant removal route", err)
+	}
+
+	if strings.Contains(err.Error(), "host create-temp-admin") {
+		t.Fatalf("cleanup failure = %v, want no hint at host create-temp-admin", err)
 	}
 }
 

@@ -302,7 +302,7 @@ func revokeHostGrant(ctx context.Context, st store, grantID string) error {
 	if err := st.RevokeGrant(ctx, grantID, fence, entry, nil); err != nil &&
 		!errors.Is(err, access.ErrNotFound) {
 		return fmt.Errorf(
-			"cleanup grant %q: opendustpan host create-temp-admin <person>: %w",
+			"cleanup grant %q: DELETE /api/server/grants/{id} removes it: %w",
 			grantID,
 			err,
 		)
@@ -318,8 +318,9 @@ func dropPerson(ctx context.Context, st store, p principal.Principal) error {
 
 	if err := st.DeletePrincipal(ctx, p.ID, entry); err != nil && !errors.Is(err, principal.ErrNotFound) {
 		return fmt.Errorf(
-			"cleanup person %q: opendustpan host create-temp-admin <person>: %w",
+			"cleanup person %q: DELETE /api/server/principals/%s with a site administrator token: %w",
 			p.Subject,
+			p.ID,
 			err,
 		)
 	}
@@ -335,7 +336,7 @@ func endHostRecord(ctx context.Context, st store, principalID string) error {
 	if err := st.ExpireTempAdmin(ctx, principalID, entry); err != nil &&
 		!errors.Is(err, tempadmin.ErrNotFound) && !errors.Is(err, tempadmin.ErrExpired) {
 		return fmt.Errorf(
-			"cleanup temporary administrator record %q: opendustpan host create-temp-admin <person>: %w",
+			"cleanup temporary administrator record for principal %q: it remains and expires at its expiry time: %w",
 			principalID,
 			err,
 		)
