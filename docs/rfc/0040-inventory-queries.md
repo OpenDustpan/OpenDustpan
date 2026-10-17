@@ -31,8 +31,8 @@ Context API. OpenDustpan is not affiliated with Pulumi.
   ADR 41). ~~No state reading needed.~~ This line is out of date. Resource
   nodes need reading state.
 - The same graph may feed the AI agent RFCs ([RFC 41](0041-agent-interface.md)
-  and [RFC 73](0073-ai-agent-for-infrastructure.md)) and the "managed two
-  times" case of [RFC 47](0047-discovery-and-codification.md).
+  and [RFC 73](0073-ai-agent-for-infrastructure.md)) and the "managed
+  twice" kind of unmanaged resource in [RFC 47](0047-discovery-and-codification.md).
 - Every answer obeys the access rules. Its completeness metadata says when the
   access rules trimmed the answer.
 - An anchor, traverse, return query shape, with completeness metadata on every
