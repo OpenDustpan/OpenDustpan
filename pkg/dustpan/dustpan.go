@@ -117,6 +117,10 @@ const (
 	readHeaderTimeout = 10 * time.Second
 	idleTimeout       = 120 * time.Second
 	shutdownTimeout   = 30 * time.Second
+	// maxHeaderBytes caps the request headers that the server reads. net/http
+	// answers 431 past it, so a client cannot grow an audit entry past it
+	// through headers.
+	maxHeaderBytes = 65536
 )
 
 // backupStoppedText marks a backup that was running when the server stopped.
@@ -1322,6 +1326,7 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler:           s.handler,
 		ReadHeaderTimeout: readHeaderTimeout,
 		IdleTimeout:       idleTimeout,
+		MaxHeaderBytes:    maxHeaderBytes,
 		TLSConfig:         tlsCfg,
 	}
 

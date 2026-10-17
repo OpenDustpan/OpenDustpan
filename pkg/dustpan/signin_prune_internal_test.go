@@ -33,13 +33,8 @@ func TestPruneSignInRequestsOnce(t *testing.T) {
 	start := time.Date(2026, time.October, 16, 9, 0, 0, 0, time.UTC)
 	now := func() time.Time { return start.Add(time.Duration(offset.Load())) }
 
-	policies, err := session.NewPolicies(session.PolicyConfig{Store: st, Now: now})
-	if err != nil {
-		t.Fatalf("policies: %v", err)
-	}
-
 	sessions, err := session.NewSessions(
-		session.SessionsConfig{Store: st, Providers: nil, Policies: policies, Inactivity: nil, Now: now},
+		session.SessionsConfig{Store: st, Providers: nil, Inactivity: nil, Now: now},
 	)
 	if err != nil {
 		t.Fatalf("sessions: %v", err)
