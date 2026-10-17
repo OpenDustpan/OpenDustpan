@@ -491,6 +491,30 @@ func (q *Queries) ClaimDurableOperation(ctx context.Context, arg ClaimDurableOpe
 	return i, err
 }
 
+const claimDurableScheduleTick = `-- name: ClaimDurableScheduleTick :execrows
+UPDATE durable_schedules
+SET next_run_at_ms = $1::bigint + interval_ms,
+  last_claimed_at_ms = $1::bigint
+WHERE name = $2::text AND next_run_at_ms = $3::bigint
+  AND next_run_at_ms <= $1::bigint
+`
+
+type ClaimDurableScheduleTickParams struct {
+	NowMs   int64
+	Name    string
+	DueAtMs int64
+}
+
+// The conditional update that claims a due tick: it changes the row only
+// when next_run_at_ms is the value that the claim read and is due at now.
+func (q *Queries) ClaimDurableScheduleTick(ctx context.Context, arg ClaimDurableScheduleTickParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimDurableScheduleTick, arg.NowMs, arg.Name, arg.DueAtMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimSinkOperation = `-- name: ClaimSinkOperation :one
 UPDATE durable_operations
 SET state = 'running', attempt = attempt + 1, expiries = expiries + $1::bigint,
@@ -531,30 +555,6 @@ func (q *Queries) ClaimSinkOperation(ctx context.Context, arg ClaimSinkOperation
 	var i ClaimSinkOperationRow
 	err := row.Scan(&i.ClaimToken, &i.ClaimExpiresAtMs)
 	return i, err
-}
-
-const claimDurableScheduleTick = `-- name: ClaimDurableScheduleTick :execrows
-UPDATE durable_schedules
-SET next_run_at_ms = $1::bigint + interval_ms,
-  last_claimed_at_ms = $1::bigint
-WHERE name = $2::text AND next_run_at_ms = $3::bigint
-  AND next_run_at_ms <= $1::bigint
-`
-
-type ClaimDurableScheduleTickParams struct {
-	NowMs   int64
-	Name    string
-	DueAtMs int64
-}
-
-// The conditional update that claims a due tick: it changes the row only
-// when next_run_at_ms is the value that the claim read and is due at now.
-func (q *Queries) ClaimDurableScheduleTick(ctx context.Context, arg ClaimDurableScheduleTickParams) (int64, error) {
-	result, err := q.db.Exec(ctx, claimDurableScheduleTick, arg.NowMs, arg.Name, arg.DueAtMs)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
