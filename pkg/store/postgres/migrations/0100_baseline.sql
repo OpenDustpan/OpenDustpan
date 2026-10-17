@@ -1,10 +1,17 @@
 -- minimum-binary-version: v0.1.0
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the postgres migrations of origin/main (df02452a3dc2).
+-- from the postgres migrations of origin/main (a1410e51b882).
 -- This baseline replaced every migration before it, as a one-time exception
 -- to the rule that an applied migration never changes. No binary opens a
 -- database or restores a backup from before it.
 -- pg_dump major version: 18
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version BIGINT NOT NULL PRIMARY KEY,
+    name    TEXT   NOT NULL
+);
+
+ALTER TABLE schema_migrations ADD COLUMN min_binary_version TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE access_token_policy (
     id bigint NOT NULL,
@@ -129,6 +136,43 @@ CREATE TABLE collections (
     name_key text NOT NULL,
     name text NOT NULL,
     created_at_ms bigint NOT NULL
+);
+
+CREATE TABLE durable_operations (
+    id text NOT NULL,
+    start_key text NOT NULL,
+    kind text NOT NULL,
+    input bytea NOT NULL,
+    version bigint NOT NULL,
+    state text NOT NULL,
+    attempt bigint NOT NULL,
+    expiries bigint DEFAULT 0 NOT NULL,
+    failures bigint DEFAULT 0 NOT NULL,
+    last_error text NOT NULL,
+    claim_owner text,
+    claim_token bigint NOT NULL,
+    claim_expires_at_ms bigint,
+    cancel_requested boolean NOT NULL,
+    not_before_ms bigint NOT NULL,
+    created_at_ms bigint NOT NULL,
+    updated_at_ms bigint NOT NULL,
+    CONSTRAINT durable_operations_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'canceled'::text])))
+);
+
+CREATE TABLE durable_schedules (
+    name text NOT NULL,
+    interval_ms bigint NOT NULL,
+    next_run_at_ms bigint NOT NULL,
+    last_claimed_at_ms bigint,
+    CONSTRAINT durable_schedules_interval_ms_check CHECK ((interval_ms > 0))
+);
+
+CREATE TABLE durable_steps (
+    operation_id text NOT NULL,
+    name text NOT NULL,
+    seq bigint NOT NULL,
+    result bytea NOT NULL,
+    done_at_ms bigint NOT NULL
 );
 
 CREATE TABLE grants (
@@ -304,7 +348,16 @@ CREATE TABLE sign_in_providers (
     enabled boolean NOT NULL,
     created_at_ms bigint NOT NULL,
     updated_at_ms bigint NOT NULL,
-    version bigint NOT NULL
+    version bigint NOT NULL,
+    mode text DEFAULT 'oidc'::text NOT NULL,
+    authorization_url text DEFAULT ''::text NOT NULL,
+    token_url text DEFAULT ''::text NOT NULL,
+    userinfo_url text DEFAULT ''::text NOT NULL,
+    subject_claim text DEFAULT ''::text NOT NULL,
+    name_claim text DEFAULT ''::text NOT NULL,
+    username_claim text DEFAULT ''::text NOT NULL,
+    email_claim text DEFAULT ''::text NOT NULL,
+    CONSTRAINT sign_in_providers_mode_check CHECK ((mode = ANY (ARRAY['oidc'::text, 'oauth'::text])))
 );
 
 CREATE TABLE sign_in_requests (
@@ -481,6 +534,21 @@ ALTER TABLE ONLY collections
 ALTER TABLE ONLY collections
     ADD CONSTRAINT collections_pkey PRIMARY KEY (namespace, name_key);
 
+ALTER TABLE ONLY durable_operations
+    ADD CONSTRAINT durable_operations_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY durable_operations
+    ADD CONSTRAINT durable_operations_start_key_key UNIQUE (start_key);
+
+ALTER TABLE ONLY durable_schedules
+    ADD CONSTRAINT durable_schedules_pkey PRIMARY KEY (name);
+
+ALTER TABLE ONLY durable_steps
+    ADD CONSTRAINT durable_steps_operation_id_seq_key UNIQUE (operation_id, seq);
+
+ALTER TABLE ONLY durable_steps
+    ADD CONSTRAINT durable_steps_pkey PRIMARY KEY (operation_id, name);
+
 ALTER TABLE ONLY grants
     ADD CONSTRAINT grants_pkey PRIMARY KEY (id);
 
@@ -578,6 +646,10 @@ CREATE INDEX blob_purges_age ON blob_purges USING btree (purged_at_ms, tool COLL
 
 CREATE INDEX collection_members_collection ON collection_members USING btree (namespace, collection_key);
 
+CREATE INDEX durable_operations_created ON durable_operations USING btree (created_at_ms, id);
+
+CREATE INDEX durable_operations_open ON durable_operations USING btree (created_at_ms, id) WHERE (state = ANY (ARRAY['pending'::text, 'running'::text]));
+
 CREATE UNIQUE INDEX grants_current ON grants USING btree (subject, role, target) WHERE (revoked_at_ms IS NULL);
 
 CREATE INDEX grants_holder ON grants USING btree (subject_kind, subject_id) WHERE (revoked_at_ms IS NULL);
@@ -638,6 +710,9 @@ ALTER TABLE ONLY collection_members
 
 ALTER TABLE ONLY collections
     ADD CONSTRAINT collections_namespace_fkey FOREIGN KEY (namespace) REFERENCES namespaces(name);
+
+ALTER TABLE ONLY durable_steps
+    ADD CONSTRAINT durable_steps_operation_id_fkey FOREIGN KEY (operation_id) REFERENCES durable_operations(id) ON DELETE CASCADE;
 
 ALTER TABLE ONLY group_members
     ADD CONSTRAINT group_members_group_id_fkey FOREIGN KEY (group_id) REFERENCES principal_groups(id);

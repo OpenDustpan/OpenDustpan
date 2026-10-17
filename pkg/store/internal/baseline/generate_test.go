@@ -6,10 +6,11 @@
 // pkg/store/<dialect>/migrations/. scripts/regenerate-baseline.sh sets it up
 // and runs them. For each dialect a write test applies every old migration
 // in order to an empty database, then the statements of
-// testdata/after-<dialect>.sql, and writes the schema and the rows of that
-// database as one baseline file. It then applies the baseline to a second
-// empty database and fails when the schema or the rows of the two databases
-// differ.
+// testdata/after-<dialect>.sql, and writes one baseline file: the
+// version-table statements below, then the schema and the rows of that
+// database without the version table. It then applies the baseline to a
+// second empty database and fails when the schema or the rows of the two
+// databases differ.
 //
 // The round-trip tests run in every test run. Each one applies the committed
 // baseline to an empty database and fails when the dump of that database
@@ -57,6 +58,36 @@ const minimumLine = "-- minimum-binary-version: v0.1.0"
 // pgDumpLine starts the header line of the PostgreSQL baseline that records
 // the major version of the pg_dump that wrote it.
 const pgDumpLine = "-- pg_dump major version: "
+
+// versionTable is the table that records the applied migrations. The dumps
+// leave it out, and each baseline starts with its own statements for it
+// instead: the migration runner creates the table before it applies the
+// baseline, so a dumped CREATE TABLE would fail there.
+const versionTable = "schema_migrations"
+
+// sqliteSchemaPrefix holds the statements that start the SQLite baseline
+// body: the version-table statements of the folded migration that added the
+// minimum binary version column.
+const sqliteSchemaPrefix = `CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER NOT NULL PRIMARY KEY,
+    name    TEXT    NOT NULL
+) STRICT;
+
+ALTER TABLE schema_migrations ADD COLUMN min_binary_version TEXT NOT NULL DEFAULT '';
+
+`
+
+// postgresSchemaPrefix holds the statements that start the PostgreSQL
+// baseline body: the version-table statements of the folded migration that
+// added the minimum binary version column.
+const postgresSchemaPrefix = `CREATE TABLE IF NOT EXISTS schema_migrations (
+    version BIGINT NOT NULL PRIMARY KEY,
+    name    TEXT   NOT NULL
+);
+
+ALTER TABLE schema_migrations ADD COLUMN min_binary_version TEXT NOT NULL DEFAULT '';
+
+`
 
 // header returns the comment block that starts the baseline file of dialect,
 // written from the migrations of ref. extra holds more comment lines, each
@@ -183,14 +214,17 @@ func TestWriteSQLiteBaseline(t *testing.T) {
 
 	execSQLite(ctx, t, old, "after-sqlite.sql", after(t, "sqlite"))
 
-	body := dumpSQLite(ctx, t, old)
+	dumped := dumpSQLite(ctx, t, old)
+	body := sqliteSchemaPrefix + dumped
 
 	fresh := openSQLite(t)
 	execSQLite(ctx, t, fresh, schema.BaselineName, body)
 
-	if got := dumpSQLite(ctx, t, fresh); got != body {
-		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(body, got))
+	if got := dumpSQLite(ctx, t, fresh); got != dumped {
+		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(dumped, got))
 	}
+
+	checkSQLiteVersionTable(t, old, fresh)
 
 	writeBaseline(t, dir.out, "sqlite", "", body)
 }
@@ -225,15 +259,18 @@ func TestWritePostgresBaseline(t *testing.T) {
 
 	execPostgres(ctx, t, old, "after-postgres.sql", after(t, "postgres"))
 
-	body := dumpPostgres(t, base, oldSchema.name)
+	dumped := dumpPostgres(t, base, oldSchema.name)
+	body := postgresSchemaPrefix + dumped
 
 	freshSchema := newPostgresSchema(t, base)
 	fresh := connectPostgres(t, freshSchema.url)
 	execPostgres(ctx, t, fresh, schema.BaselineName, body)
 
-	if got := dumpPostgres(t, base, freshSchema.name); got != body {
-		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(body, got))
+	if got := dumpPostgres(t, base, freshSchema.name); got != dumped {
+		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(dumped, got))
 	}
+
+	checkPostgresVersionTable(ctx, t, old, fresh)
 
 	writeBaseline(t, dir.out, "postgres", pgDumpLine+strconv.Itoa(dumpMajor)+"\n", body)
 }
@@ -378,6 +415,10 @@ func dumpSQLite(ctx context.Context, t *testing.T, db *sql.DB) string {
 	var tables []string
 
 	for _, o := range objects {
+		if o.table == versionTable {
+			continue // The baseline starts with its own version-table statements.
+		}
+
 		b.WriteString(strings.TrimSpace(o.sql))
 		b.WriteString(";\n\n")
 
@@ -482,6 +523,59 @@ func sqliteRows(ctx context.Context, t *testing.T, db *sql.DB, table string) str
 	}
 
 	return b.String()
+}
+
+// sqliteVersionShape returns one line per column of the version table of
+// db: the position, name, type, nullability, default and key position.
+func sqliteVersionShape(ctx context.Context, t *testing.T, db *sql.DB) []string {
+	t.Helper()
+
+	rows, err := db.QueryContext(ctx, `SELECT cid, name, type, "notnull", dflt_value, pk
+		FROM pragma_table_info('schema_migrations') ORDER BY cid`)
+	if err != nil {
+		t.Fatalf("read the version table shape: %v", err)
+	}
+
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil {
+			t.Errorf("close rows: %v", closeErr)
+		}
+	}()
+
+	var out []string
+
+	for rows.Next() {
+		var cid, notnull, pk int64
+
+		var name, colType string
+
+		var dflt any
+
+		if scanErr := rows.Scan(&cid, &name, &colType, &notnull, &dflt, &pk); scanErr != nil {
+			t.Fatalf("read the version table shape: %v", scanErr)
+		}
+
+		out = append(out, fmt.Sprintf("%d|%s|%s|%d|%v|%d", cid, name, colType, notnull, dflt, pk))
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		t.Fatalf("read the version table shape: %v", rowsErr)
+	}
+
+	return out
+}
+
+// checkSQLiteVersionTable fails t unless the baseline prefix builds the same
+// version table that the old migrations built.
+func checkSQLiteVersionTable(t *testing.T, old, fresh *sql.DB) {
+	t.Helper()
+
+	ctx := t.Context()
+	want := sqliteVersionShape(ctx, t, old)
+
+	if got := sqliteVersionShape(ctx, t, fresh); !slices.Equal(got, want) {
+		t.Fatalf("the version table is %v, want the table of the old migrations %v", got, want)
+	}
 }
 
 // sqliteIdent quotes name as a SQLite identifier.
@@ -651,6 +745,7 @@ func dumpPostgres(t *testing.T, base, name string) string {
 	//nolint:gosec // pg_dump runs with the URL of the test database and a schema name the test made.
 	cmd := exec.CommandContext(t.Context(), "pg_dump",
 		"--no-owner", "--no-privileges", "--no-comments", "--inserts", "--column-inserts",
+		"--exclude-table=*."+versionTable,
 		"--schema="+name, "--dbname="+dbURL.String())
 
 	output, err := cmd.Output()
@@ -694,4 +789,50 @@ func cleanPostgresDump(dump, name string) string {
 	}
 
 	return strings.TrimRight(strings.Join(out, "\n"), "\n") + "\n"
+}
+
+// postgresVersionShape returns one line per column of the version table
+// visible to conn: the name, type, nullability and default, in column order.
+func postgresVersionShape(ctx context.Context, t *testing.T, conn *pgx.Conn) []string {
+	t.Helper()
+
+	rows, err := conn.Query(ctx, `SELECT column_name, data_type, is_nullable, COALESCE(column_default, '')
+		FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'schema_migrations'
+		ORDER BY ordinal_position`)
+	if err != nil {
+		t.Fatalf("read the version table shape: %v", err)
+	}
+
+	defer rows.Close()
+
+	var out []string
+
+	for rows.Next() {
+		var name, dataType, nullable, dflt string
+
+		if scanErr := rows.Scan(&name, &dataType, &nullable, &dflt); scanErr != nil {
+			t.Fatalf("read the version table shape: %v", scanErr)
+		}
+
+		out = append(out, name+"|"+dataType+"|"+nullable+"|"+dflt)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		t.Fatalf("read the version table shape: %v", rowsErr)
+	}
+
+	return out
+}
+
+// checkPostgresVersionTable fails t unless the baseline prefix builds the
+// same version table that the old migrations built.
+func checkPostgresVersionTable(ctx context.Context, t *testing.T, old, fresh *pgx.Conn) {
+	t.Helper()
+
+	want := postgresVersionShape(ctx, t, old)
+
+	if got := postgresVersionShape(ctx, t, fresh); !slices.Equal(got, want) {
+		t.Fatalf("the version table is %v, want the table of the old migrations %v", got, want)
+	}
 }

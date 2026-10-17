@@ -1,9 +1,16 @@
 -- minimum-binary-version: v0.1.0
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
--- from the sqlite migrations of origin/main (df02452a3dc2).
+-- from the sqlite migrations of origin/main (a1410e51b882).
 -- This baseline replaced every migration before it, as a one-time exception
 -- to the rule that an applied migration never changes. No binary opens a
 -- database or restores a backup from before it.
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER NOT NULL PRIMARY KEY,
+    name    TEXT    NOT NULL
+) STRICT;
+
+ALTER TABLE schema_migrations ADD COLUMN min_binary_version TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE namespaces (
     name             TEXT    NOT NULL PRIMARY KEY,
@@ -394,6 +401,44 @@ CREATE TABLE sign_in_providers (
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
     version       INTEGER NOT NULL
+, mode TEXT NOT NULL DEFAULT 'oidc' CHECK (mode IN ('oidc', 'oauth')), authorization_url TEXT NOT NULL DEFAULT '', token_url TEXT NOT NULL DEFAULT '', userinfo_url TEXT NOT NULL DEFAULT '', subject_claim TEXT NOT NULL DEFAULT '', name_claim TEXT NOT NULL DEFAULT '', username_claim TEXT NOT NULL DEFAULT '', email_claim TEXT NOT NULL DEFAULT '') STRICT;
+
+CREATE TABLE durable_operations (
+    id                  TEXT    NOT NULL PRIMARY KEY,
+    start_key           TEXT    NOT NULL UNIQUE,
+    kind                TEXT    NOT NULL,
+    input               BLOB    NOT NULL,
+    version             INTEGER NOT NULL,
+    state               TEXT    NOT NULL
+        CHECK (state IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
+    attempt             INTEGER NOT NULL,
+    expiries            INTEGER NOT NULL DEFAULT 0,
+    failures            INTEGER NOT NULL DEFAULT 0,
+    last_error          TEXT    NOT NULL,
+    claim_owner         TEXT,
+    claim_token         INTEGER NOT NULL,
+    claim_expires_at_ms INTEGER,
+    cancel_requested    INTEGER NOT NULL,
+    not_before_ms       INTEGER NOT NULL,
+    created_at_ms       INTEGER NOT NULL,
+    updated_at_ms       INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE durable_steps (
+    operation_id TEXT    NOT NULL REFERENCES durable_operations (id) ON DELETE CASCADE,
+    name         TEXT    NOT NULL,
+    seq          INTEGER NOT NULL,
+    result       BLOB    NOT NULL,
+    done_at_ms   INTEGER NOT NULL,
+    PRIMARY KEY (operation_id, name),
+    UNIQUE (operation_id, seq)
+) STRICT;
+
+CREATE TABLE durable_schedules (
+    name               TEXT    NOT NULL PRIMARY KEY,
+    interval_ms        INTEGER NOT NULL CHECK (interval_ms > 0),
+    next_run_at_ms     INTEGER NOT NULL,
+    last_claimed_at_ms INTEGER
 ) STRICT;
 
 CREATE TABLE "checkpoints" (
@@ -476,6 +521,11 @@ CREATE UNIQUE INDEX backups_one_running ON backups ((state = 'running'))
 
 CREATE UNIQUE INDEX restores_one_running ON restores ((state IN ('checking', 'applying')))
     WHERE state IN ('checking', 'applying');
+
+CREATE INDEX durable_operations_open ON durable_operations (created_at_ms, id)
+    WHERE state IN ('pending', 'running');
+
+CREATE INDEX durable_operations_created ON durable_operations (created_at_ms, id);
 
 INSERT INTO installation (id, state) VALUES (1, 'normal');
 

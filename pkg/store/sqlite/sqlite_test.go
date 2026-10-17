@@ -1120,9 +1120,9 @@ func openNewerSchemaAt(t *testing.T, binary string) {
 	}
 }
 
-// TestOpenBeforeMinimumColumn proves that a database from before the
-// migration that adds the minimum column opens with no minimum, applies that
-// migration and then records minimums.
+// TestOpenBeforeMinimumColumn proves that a database whose version table
+// lacks the minimum column opens with no minimum, applies the pending
+// baseline, which builds the column again, and then records minimums.
 func TestOpenBeforeMinimumColumn(t *testing.T) {
 	t.Parallel()
 
@@ -1137,7 +1137,7 @@ func TestOpenBeforeMinimumColumn(t *testing.T) {
 
 	for _, stmt := range []string{
 		`ALTER TABLE schema_migrations DROP COLUMN min_binary_version`,
-		`DELETE FROM schema_migrations WHERE name = '0079_schema_minimum.sql'`,
+		`DELETE FROM schema_migrations WHERE name = '0100_baseline.sql'`,
 	} {
 		if _, execErr := conn.ExecContext(t.Context(), stmt); execErr != nil {
 			t.Fatalf("%s: %v", stmt, execErr)
@@ -1166,9 +1166,46 @@ func TestOpenBeforeMinimumColumn(t *testing.T) {
 		t.Fatal("applied migrations are empty, want the recorded migrations")
 	}
 
-	isMinimum := func(m schema.AppliedMigration) bool { return m.Name == "0079_schema_minimum.sql" }
-	if !slices.ContainsFunc(applied, isMinimum) {
-		t.Fatalf("applied migrations = %+v, want 0079_schema_minimum.sql among them", applied)
+	isBaseline := func(m schema.AppliedMigration) bool { return m.Name == schema.BaselineName }
+	if !slices.ContainsFunc(applied, isBaseline) {
+		t.Fatalf("applied migrations = %+v, want 0100_baseline.sql among them", applied)
+	}
+
+	if last := applied[len(applied)-1]; last.MinBinaryVersion != "v0.1.0" {
+		t.Fatalf("newest applied migration %+v, want minimum v0.1.0", last)
+	}
+
+	checkMinimumColumnBack(t, path)
+}
+
+// checkMinimumColumnBack fails t unless the version table of the database at
+// path holds the minimum column again.
+func checkMinimumColumnBack(t *testing.T, path string) {
+	t.Helper()
+
+	conn, err := openRawDB(path)
+	if err != nil {
+		t.Fatalf("open raw database: %v", err)
+	}
+
+	defer func() {
+		if closeErr := conn.Close(); closeErr != nil {
+			t.Errorf("close raw database: %v", closeErr)
+		}
+	}()
+
+	var count int64
+
+	err = conn.QueryRowContext(
+		t.Context(),
+		`SELECT COUNT(*) FROM pragma_table_info('schema_migrations') WHERE name = 'min_binary_version'`,
+	).Scan(&count)
+	if err != nil {
+		t.Fatalf("read the version table columns: %v", err)
+	}
+
+	if count != 1 {
+		t.Fatalf("the version table holds the minimum column %d times, want once", count)
 	}
 }
 
