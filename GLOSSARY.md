@@ -316,6 +316,14 @@ _Avoid_: Delta save, checkpoint delta (except when naming the route `checkpointd
 One entry in the progress record of an update.
 _Avoid_: Log line, message
 
+**Journal entry**:
+One small record that the Pulumi CLI sends for one resource operation of a journaled update, in batches. The server builds the checkpoint of the update from its journal entries.
+_Avoid_: Entry (alone)
+
+**Journal version**:
+The number that the start of an update agrees on for journaling. It sets the shape of the journal entries that the Pulumi CLI sends. Version 0 means the CLI saves checkpoints instead of journaling.
+_Avoid_: Version (alone)
+
 ### OpenTofu
 
 **Workspace**:
