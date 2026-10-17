@@ -19,8 +19,8 @@ import (
 // fast test, long enough for the store clock to tell ticks apart.
 const scheduleTestEvery = 50 * time.Millisecond
 
-// scheduleTestRun is how long each schedule test runs its two instances.
-const scheduleTestRun = 600 * time.Millisecond
+// scheduleTestDeadline is how long each schedule test waits for two runs.
+const scheduleTestDeadline = 10 * time.Second
 
 // durableRunnerPair holds the scheduler and the runner of one instance.
 type durableRunnerPair struct {
@@ -44,8 +44,8 @@ func newPair(t *testing.T, srv *Server) durableRunnerPair {
 	return durableRunnerPair{Sched: sched, Run: runner}
 }
 
-// countOps returns how many operations of kind the store holds.
-func countOps(t *testing.T, srv *Server, kind durable.Kind) int {
+// listOps returns the operations of kind that the store holds.
+func listOps(t *testing.T, srv *Server, kind durable.Kind) []durable.Operation {
 	t.Helper()
 
 	ops, err := srv.durable.List(t.Context(), durable.Filter{Kind: kind, States: nil, Limit: 0})
@@ -53,20 +53,71 @@ func countOps(t *testing.T, srv *Server, kind durable.Kind) int {
 		t.Fatalf("list operations of %s: %v", kind, err)
 	}
 
-	return len(ops)
+	return ops
 }
 
-// checkOneRunPerTick fails unless kind ran about once per tick: at least four
-// times, and at most one more than the ticks in scheduleTestRun. Two
-// instances that each ran each tick would hold about twice as many.
-func checkOneRunPerTick(t *testing.T, srv *Server, kind durable.Kind) {
+// waitForTwoRuns polls until at least two operations of kind reached a
+// terminal state, or fails after scheduleTestDeadline. Ticks collapse when
+// no instance runs them, so the count is load dependent: two ended runs
+// prove progress without a fixed window. Ended runs also prove the job body
+// ran, not only that the tick was claimed.
+func waitForTwoRuns(t *testing.T, srv *Server, kind durable.Kind) {
 	t.Helper()
 
-	got := countOps(t, srv, kind)
-	most := int(scheduleTestRun/scheduleTestEvery) + 2
+	deadline := time.Now().Add(scheduleTestDeadline)
 
-	if got < 4 || got > most {
-		t.Fatalf("operations of %s = %d, want 4 to %d: one per tick", kind, got, most)
+	for {
+		ops := listOps(t, srv, kind)
+		ended := 0
+
+		for i := range ops {
+			if ops[i].State.Terminal() {
+				ended++
+			}
+		}
+
+		if ended >= 2 {
+			return
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("ended operations of %s = %d, want at least 2: two runs prove progress", kind, ended)
+		}
+
+		select {
+		case <-t.Context().Done():
+			t.Fatalf("test context done while waiting for two runs of %s: %v", kind, t.Context().Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+// checkTickKeysOnce fails when two operations of kind share one tick key.
+// Each operation key is the tick key of its tick, so a duplicate key means
+// one tick ran twice. Unique keys bound the runs above without a fixed
+// window.
+func checkTickKeysOnce(t *testing.T, srv *Server, kind durable.Kind) {
+	t.Helper()
+
+	ops := listOps(t, srv, kind)
+
+	if len(ops) < 2 {
+		t.Fatalf("operations of %s = %d, want at least 2: two runs prove progress", kind, len(ops))
+	}
+
+	seen := make(map[string]struct{}, len(ops))
+
+	for i := range ops {
+		key := ops[i].Key
+		if key == "" {
+			t.Fatalf("operation of %s has an empty key: each run records its tick key", kind)
+		}
+
+		if _, dup := seen[key]; dup {
+			t.Fatalf("tick key %q of %s ran twice: one instance runs each tick", key, kind)
+		}
+
+		seen[key] = struct{}{}
 	}
 }
 
@@ -126,7 +177,7 @@ func TestJobSchedulesRunDeletedSweepOncePerTick(t *testing.T) {
 
 	aPair, bPair := newPair(t, a), newPair(t, b)
 
-	ctx, cancel := context.WithTimeout(t.Context(), scheduleTestRun)
+	ctx, cancel := context.WithTimeout(t.Context(), scheduleTestDeadline)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -135,10 +186,11 @@ func TestJobSchedulesRunDeletedSweepOncePerTick(t *testing.T) {
 		wg.Go(func() { r(ctx) })
 	}
 
-	<-ctx.Done()
+	waitForTwoRuns(t, a, kindDeleted)
+	cancel()
 	wg.Wait()
 
-	checkOneRunPerTick(t, a, kindDeleted)
+	checkTickKeysOnce(t, a, kindDeleted)
 
 	for _, u := range units {
 		if n := f.blobCount(t, u.prefix); n != 0 {
@@ -194,7 +246,7 @@ func TestJobSchedulesRunSignInPruneOncePerTick(t *testing.T) {
 
 	aPair, bPair := newPair(t, a), newPair(t, b)
 
-	ctx, cancel := context.WithTimeout(t.Context(), scheduleTestRun)
+	ctx, cancel := context.WithTimeout(t.Context(), scheduleTestDeadline)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -203,10 +255,11 @@ func TestJobSchedulesRunSignInPruneOncePerTick(t *testing.T) {
 		wg.Go(func() { r(ctx) })
 	}
 
-	<-ctx.Done()
+	waitForTwoRuns(t, a, kindSignInPrune)
+	cancel()
 	wg.Wait()
 
-	checkOneRunPerTick(t, a, kindSignInPrune)
+	checkTickKeysOnce(t, a, kindSignInPrune)
 }
 
 // TestJobSchedulesRunInactivityDisableOncePerTick proves that two instances on
@@ -246,7 +299,7 @@ func TestJobSchedulesRunInactivityDisableOncePerTick(t *testing.T) {
 
 	aPair, bPair := newPair(t, a), newPair(t, b)
 
-	ctx, cancel := context.WithTimeout(t.Context(), scheduleTestRun)
+	ctx, cancel := context.WithTimeout(t.Context(), scheduleTestDeadline)
 	defer cancel()
 
 	var wg sync.WaitGroup
@@ -255,8 +308,9 @@ func TestJobSchedulesRunInactivityDisableOncePerTick(t *testing.T) {
 		wg.Go(func() { r(ctx) })
 	}
 
-	<-ctx.Done()
+	waitForTwoRuns(t, a, kindInactivity)
+	cancel()
 	wg.Wait()
 
-	checkOneRunPerTick(t, a, kindInactivity)
+	checkTickKeysOnce(t, a, kindInactivity)
 }
