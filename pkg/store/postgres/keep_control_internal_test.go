@@ -1,12 +1,34 @@
 package postgres
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 )
+
+// connectKeepControl connects to the test database and closes the
+// connection after the test.
+func connectKeepControl(t *testing.T) *pgx.Conn {
+	t.Helper()
+
+	ctx := t.Context()
+
+	conn, err := pgx.Connect(ctx, testPostgresURL(t))
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := conn.Close(context.WithoutCancel(ctx)); closeErr != nil {
+			t.Errorf("close: %v", closeErr)
+		}
+	})
+
+	return conn
+}
 
 // durableSchema creates a schema with the baseline tables on conn and holds
 // one operation with key and token in it, with one step, one schedule
@@ -79,7 +101,7 @@ func TestKeepControlTablesKeepsTheLiveRows(t *testing.T) {
 	t.Parallel()
 
 	ctx := t.Context()
-	conn := connectKeepInstallation(t)
+	conn := connectKeepControl(t)
 	live := durableSchema(t, conn, "from-backup", 3)
 	previous := durableSchema(t, conn, "live", 5)
 

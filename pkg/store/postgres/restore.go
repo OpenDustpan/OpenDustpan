@@ -11,7 +11,6 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
-	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/postgres/internal/db"
 )
@@ -256,19 +255,18 @@ func (s *Store) swapStagingSchema(ctx context.Context, staging string) error {
 			return fmt.Errorf("move staged schema live: %w", err)
 		}
 
-		return finishSwap(ctx, tx, live, previous)
+		return finishSwap(ctx, tx, live, previous, staging)
 	})
 }
 
-// finishSwap ends the swap in tx: it keeps the audit chain state and the
-// installation state of this installation, drops the schema previous, and
-// fences the restored schema live (see fenceRestored).
-func finishSwap(ctx context.Context, tx pgx.Tx, live, previous string) error {
+// finishSwap ends the swap in tx: it keeps the audit chain state of this
+// installation, keeps the durable control tables of the live installation,
+// drops the schema previous and the control schema of the staging area, and
+// fences the restored schema live (see fenceRestored). The installation,
+// backups and restores tables live in the control schema, which the swap
+// never renames, so they stay across the swap with no copy.
+func finishSwap(ctx context.Context, tx pgx.Tx, live, previous, staging string) error {
 	if err := keepChainState(ctx, tx, live, previous); err != nil {
-		return err
-	}
-
-	if err := keepInstallationState(ctx, tx, live, previous); err != nil {
 		return err
 	}
 
@@ -280,12 +278,18 @@ func finishSwap(ctx context.Context, tx pgx.Tx, live, previous string) error {
 		return fmt.Errorf("drop previous schema: %w", err)
 	}
 
+	if _, err := tx.Exec(ctx, "DROP SCHEMA IF EXISTS "+pgIdent(staging+"_control")+" CASCADE"); err != nil {
+		return fmt.Errorf("drop staging control schema: %w", err)
+	}
+
 	return fenceRestored(ctx, tx, live)
 }
 
 // fenceRestored increments the failover version of every namespace of the
-// restored schema live, resets the audit sink cursors and leases, and fails
-// the running backup and restore rows of the restored data, in tx.
+// restored schema live and resets the audit sink cursors and leases, in tx.
+// The control tables stay across the swap, so the running restore row of
+// this installation stays readable during the swap and no restored running
+// row needs failing.
 func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 	fenceNamespaces := "UPDATE " + pgIdent(live) + ".namespaces SET failover_version = failover_version + 1"
 
@@ -306,56 +310,6 @@ func fenceRestored(ctx context.Context, tx pgx.Tx, live string) error {
 		return fmt.Errorf("reset audit sink leases after restore: %w", err)
 	}
 
-	// A backup sees its own row as running when it takes its snapshot, so
-	// the restored data holds that row as running. No process runs it in
-	// this installation, and the one running backup it would hold blocks
-	// every later backup.
-	failRunning := "UPDATE " + pgIdent(live) + ".backups SET state = 'failed', error = $1," +
-		" ended_at_ms = (extract(epoch from clock_timestamp()) * 1000)::bigint WHERE state = 'running'"
-
-	if _, err := tx.Exec(ctx, failRunning, backup.RestoredRunningText); err != nil {
-		return fmt.Errorf("fail restored running backups: %w", err)
-	}
-
-	// The same holds for a restore row: the backup that a restore takes
-	// before it applies holds that restore as running. The restore that
-	// runs now stores its row again after the swap, and the one running
-	// restore the data would hold blocks that row.
-	failRestores := "UPDATE " + pgIdent(live) + ".restores SET state = 'failed', error = $1," +
-		" ended_at_ms = (extract(epoch from clock_timestamp()) * 1000)::bigint" +
-		" WHERE state IN ('checking', 'applying')"
-
-	if _, err := tx.Exec(ctx, failRestores, backup.RestoredRunningRestoreText); err != nil {
-		return fmt.Errorf("fail restored running restores: %w", err)
-	}
-
-	return nil
-}
-
-// keepInstallationState replaces the installation row of the restored schema
-// live with the row of the schema previous, in tx. The installation state is
-// bookkeeping of this installation: a restore runs in maintenance mode, and
-// the row from the backup would end maintenance mode when the swap commits,
-// before the restore has finished. The migration seeds the row, so previous
-// holds it: without a row in previous, the copy reports
-// maintenance.ErrUnavailable and the swap fails, so live never lacks the row.
-func keepInstallationState(ctx context.Context, tx pgx.Tx, live, previous string) error {
-	if _, err := tx.Exec(ctx, "DELETE FROM "+pgIdent(live)+".installation"); err != nil {
-		return fmt.Errorf("keep installation state: %w", err)
-	}
-
-	keep := "INSERT INTO " + pgIdent(live) + ".installation (id, state) SELECT id, state FROM " +
-		pgIdent(previous) + ".installation"
-
-	tag, err := tx.Exec(ctx, keep)
-	if err != nil {
-		return fmt.Errorf("keep installation state: %w", err)
-	}
-
-	if tag.RowsAffected() == 0 {
-		return fmt.Errorf("keep installation state: row is missing: %w", maintenance.ErrUnavailable)
-	}
-
 	return nil
 }
 
@@ -372,13 +326,15 @@ const durableScheduleColumns = "name, interval_ms, next_run_at_ms, last_claimed_
 // of the control tables.
 const signInFailureColumns = "source, window_end_ms, count"
 
-// keepControlTables replaces the rows of each table of backup.ControlTables
-// in the restored schema live with the rows of the schema previous, in tx. A
+// keepControlTables replaces the rows of the durable control tables in the
+// restored schema live with the rows of the schema previous, in tx. A
 // restore keeps the control tables of the live installation: the claim
 // tokens of durable operations only grow, and an older token from a backup
-// would let a stale holder write. The lock holds every durable operation
-// write of another instance out until the swap commits, so the copy has the
-// last committed rows.
+// would let a stale holder write. The installation, backups and restores
+// control tables live in the control schema, which the swap never renames,
+// so they stay with no copy. The lock holds every durable operation write
+// of another instance out until the swap commits, so the copy has the last
+// committed rows.
 func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) error {
 	stmts := []string{
 		"LOCK TABLE " + pgIdent(previous) + ".durable_operations, " + pgIdent(previous) +
