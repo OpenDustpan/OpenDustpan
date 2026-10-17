@@ -322,6 +322,10 @@ const durableOperationColumns = "id, start_key, kind, input, version, state, att
 // copy of the control tables.
 const durableScheduleColumns = "name, interval_ms, next_run_at_ms, last_claimed_at_ms"
 
+// signInFailureColumns lists every column of sign_in_failures, for the copy
+// of the control tables.
+const signInFailureColumns = "source, window_end_ms, count"
+
 // keepControlTables replaces the rows of the durable control tables in the
 // restored schema live with the rows of the schema previous, in tx. A
 // restore keeps the control tables of the live installation: the claim
@@ -334,16 +338,20 @@ const durableScheduleColumns = "name, interval_ms, next_run_at_ms, last_claimed_
 func keepControlTables(ctx context.Context, tx pgx.Tx, live, previous string) error {
 	stmts := []string{
 		"LOCK TABLE " + pgIdent(previous) + ".durable_operations, " + pgIdent(previous) +
-			".durable_steps, " + pgIdent(previous) + ".durable_schedules IN EXCLUSIVE MODE",
+			".durable_steps, " + pgIdent(previous) + ".durable_schedules, " + pgIdent(previous) +
+			".sign_in_failures IN EXCLUSIVE MODE",
 		"DELETE FROM " + pgIdent(live) + ".durable_steps",
 		"DELETE FROM " + pgIdent(live) + ".durable_operations",
 		"DELETE FROM " + pgIdent(live) + ".durable_schedules",
+		"DELETE FROM " + pgIdent(live) + ".sign_in_failures",
 		"INSERT INTO " + pgIdent(live) + ".durable_operations (" + durableOperationColumns + ") SELECT " +
 			durableOperationColumns + " FROM " + pgIdent(previous) + ".durable_operations",
 		"INSERT INTO " + pgIdent(live) + ".durable_steps (operation_id, name, seq, result, done_at_ms)" +
 			" SELECT operation_id, name, seq, result, done_at_ms FROM " + pgIdent(previous) + ".durable_steps",
 		"INSERT INTO " + pgIdent(live) + ".durable_schedules (" + durableScheduleColumns + ") SELECT " +
 			durableScheduleColumns + " FROM " + pgIdent(previous) + ".durable_schedules",
+		"INSERT INTO " + pgIdent(live) + ".sign_in_failures (" + signInFailureColumns + ") SELECT " +
+			signInFailureColumns + " FROM " + pgIdent(previous) + ".sign_in_failures",
 	}
 
 	for _, stmt := range stmts {

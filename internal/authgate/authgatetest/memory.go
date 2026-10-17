@@ -72,6 +72,11 @@ func (m *Memory) AddFailure(ctx context.Context, source string, length time.Dura
 
 // PruneFailures implements authgate.FailureCounter.
 func (m *Memory) PruneFailures(ctx context.Context, age time.Duration) (int64, error) {
+	return m.PruneFailuresAt(ctx, m.now(), age)
+}
+
+// PruneFailuresAt implements authgate.FailureCounter.
+func (m *Memory) PruneFailuresAt(ctx context.Context, now time.Time, age time.Duration) (int64, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, fmt.Errorf("prune failures: %w", err)
 	}
@@ -79,7 +84,7 @@ func (m *Memory) PruneFailures(ctx context.Context, age time.Duration) (int64, e
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	before := m.now().UnixMilli() - age.Milliseconds()
+	before := now.UnixMilli() - age.Milliseconds()
 
 	var deleted int64
 

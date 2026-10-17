@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/authgate"
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/pkg/access"
 	"opendustpan.org/opendustpan/pkg/access/accesstest"
@@ -120,6 +121,23 @@ func TestSessionConformance(t *testing.T) {
 		t.Helper()
 
 		return open(t)
+	})
+}
+
+// TestSignInFailuresConformance runs the shared failure-budget suite: one
+// SQLite file allows one store, so the suite gets that store for every
+// handle. The store reads its window from its own clock, so it ignores skew.
+func TestSignInFailuresConformance(t *testing.T) {
+	t.Parallel()
+
+	storetest.RunSignInFailures(t, func(t *testing.T) storetest.SignInFailureHarness {
+		t.Helper()
+
+		s := open(t)
+
+		return storetest.SignInFailureHarness{
+			Open: func(*testing.T, time.Duration) authgate.FailureCounter { return s },
+		}
 	})
 }
 

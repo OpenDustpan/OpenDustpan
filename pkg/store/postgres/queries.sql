@@ -2018,6 +2018,41 @@ SET state = sqlc.arg('state')::text, cancel_requested = sqlc.arg('cancel_request
   updated_at_ms = sqlc.arg('now_ms')::bigint
 WHERE id = sqlc.arg('id')::text;
 
+-- Sign-in failure budget. Every time comes from DatabaseNowMs, the clock of
+-- the store, read in the same transaction as the write.
+
+-- name: AddSignInFailure :one
+-- Adds one miss of source in the current window of length_ms, in one atomic
+-- write, and answers the count of that window after the add with the time of
+-- the add and the end of the window. Every time comes from the clock of the
+-- store, read once in the statement, so the clock of an instance never moves
+-- the window. Concurrent adds each count once.
+WITH now_ms AS (
+    SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now
+)
+INSERT INTO sign_in_failures (source, window_end_ms, count)
+SELECT sqlc.arg('source')::text, (now / sqlc.arg('length_ms')::bigint + 1) * sqlc.arg('length_ms')::bigint, 1
+FROM now_ms
+ON CONFLICT (source, window_end_ms) DO UPDATE SET count = sign_in_failures.count + 1
+RETURNING window_end_ms, count, (SELECT now FROM now_ms) AS now_ms;
+
+-- name: PruneSignInFailures :execrows
+-- Deletes every window that ended age_ms or longer ago on the clock of the
+-- store, read in the statement.
+DELETE FROM sign_in_failures
+WHERE window_end_ms <= (
+    FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint - sqlc.arg('age_ms')::bigint
+);
+
+-- name: PruneSignInFailuresAt :execrows
+-- Deletes every window that ended at or before threshold_ms. The caller
+-- passes the threshold instead of the clock of the store, so a test can pin
+-- the prune at the boundary of a window.
+DELETE FROM sign_in_failures
+WHERE window_end_ms <= sqlc.arg('threshold_ms')::bigint;
+
+
+
 -- Durable schedules. Every time comes from the database clock, read with
 -- clock_timestamp() when the statement runs, so neither the clock of an
 -- instance nor the start of a long transaction moves a decision.
@@ -2045,3 +2080,4 @@ SET next_run_at_ms = sqlc.arg('now_ms')::bigint + interval_ms,
   last_claimed_at_ms = sqlc.arg('now_ms')::bigint
 WHERE name = sqlc.arg('name')::text AND next_run_at_ms = sqlc.arg('due_at_ms')::bigint
   AND next_run_at_ms <= sqlc.arg('now_ms')::bigint;
+
