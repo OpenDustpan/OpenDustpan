@@ -450,27 +450,6 @@ func (q *Queries) CancelDurableOperation(ctx context.Context, arg CancelDurableO
 	return err
 }
 
-const claimAuditChainMigration = `-- name: ClaimAuditChainMigration :execrows
-UPDATE audit_chain_state
-SET migrating_at_ms = $1
-WHERE id = 1 AND pending AND (migrating_at_ms = 0 OR migrating_at_ms < $2)
-`
-
-type ClaimAuditChainMigrationParams struct {
-	MigratingAtMs   int64
-	MigratingAtMs_2 int64
-}
-
-// Starts the migration of a waiting change in one write: it stamps the start
-// time only when a change waits and no claim within the lease holds.
-func (q *Queries) ClaimAuditChainMigration(ctx context.Context, arg ClaimAuditChainMigrationParams) (int64, error) {
-	result, err := q.db.Exec(ctx, claimAuditChainMigration, arg.MigratingAtMs, arg.MigratingAtMs_2)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const claimDurableOperation = `-- name: ClaimDurableOperation :one
 WITH c AS MATERIALIZED (
   SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now_ms
@@ -7071,17 +7050,6 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 	return err
 }
 
-const releaseAuditChainMigration = `-- name: ReleaseAuditChainMigration :exec
-UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1
-`
-
-// Releases the claim of a migration that stops without storing the new
-// state.
-func (q *Queries) ReleaseAuditChainMigration(ctx context.Context) error {
-	_, err := q.db.Exec(ctx, releaseAuditChainMigration)
-	return err
-}
-
 const releaseAuditSinkLease = `-- name: ReleaseAuditSinkLease :execrows
 DELETE FROM audit_sink_leases
 WHERE sink = $1 AND holder = $2
@@ -7139,20 +7107,6 @@ func (q *Queries) RenameStack(ctx context.Context, arg RenameStackParams) (int64
 		arg.Project,
 		arg.Name_2,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const renewAuditChainMigration = `-- name: RenewAuditChainMigration :execrows
-UPDATE audit_chain_state SET migrating_at_ms = $1 WHERE id = 1 AND migrating_at_ms <> 0
-`
-
-// Moves the start of the held claim to the given time. It writes only
-// when a claim holds, so a renewal without a claim changes no row.
-func (q *Queries) RenewAuditChainMigration(ctx context.Context, migratingAtMs int64) (int64, error) {
-	result, err := q.db.Exec(ctx, renewAuditChainMigration, migratingAtMs)
 	if err != nil {
 		return 0, err
 	}

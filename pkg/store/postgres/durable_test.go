@@ -190,7 +190,12 @@ func TestDurableRowsRoundTripThroughAPortableBackup(t *testing.T) {
 
 	t.Cleanup(s.Close)
 
-	seedDurableRows(t, s.DurableOperations())
+	ops := s.DurableOperations()
+	if ops == nil {
+		t.Fatal("durable operations are nil, want *postgres.DurableOperations")
+	}
+
+	seedDurableRows(t, ops)
 
 	ctx := t.Context()
 

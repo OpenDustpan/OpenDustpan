@@ -41,6 +41,14 @@ func (s *Store) DurableOperations() *DurableOperations {
 	return &DurableOperations{store: s}
 }
 
+// DurableOperationsPort answers the durable operations as the port, for
+// store agnostic discovery. Direct callers use DurableOperations.
+//
+//nolint:ireturn // Store-agnostic discovery takes the port.
+func (s *Store) DurableOperationsPort() durable.Store {
+	return s.DurableOperations()
+}
+
 // Start implements durable.Store.
 func (d *DurableOperations) Start(ctx context.Context, req durable.StartRequest) (durable.Operation, bool, error) {
 	if err := req.Validate(); err != nil {
