@@ -229,11 +229,9 @@ func newChainRunner(ops durable.Store, cfg *settings, chain *auditChain) (*durab
 }
 
 // durableStoreProvider is implemented by stores that keep durable
-// operations next to their domain rows. The port returns any so the
-// discovery stays store agnostic while each adapter returns its concrete
-// operations for direct callers.
+// operations next to their domain rows.
 type durableStoreProvider interface {
-	DurableOperationsPort() any
+	DurableOperationsPort() durable.Store
 }
 
 // bindDurableOps sets the durable operation store behind s on chain, and
@@ -244,8 +242,8 @@ func bindDurableOps(chain *auditChain, s namespace.Store) bool {
 		return false
 	}
 
-	ops, ok := p.DurableOperationsPort().(durable.Store)
-	if !ok || ops == nil {
+	ops := p.DurableOperationsPort()
+	if ops == nil {
 		return false
 	}
 
@@ -549,9 +547,9 @@ func (c *auditChain) startUp(ctx context.Context) error {
 		return ErrCheckpointsNeedChain
 	}
 
-	rec, err := c.store.ChainRecord(ctx)
+	rec, err := c.startUpRecord(ctx)
 	if err != nil {
-		return fmt.Errorf("audit chain: %w", err)
+		return err
 	}
 
 	if rec.LogReplaced {
@@ -591,6 +589,46 @@ func (c *auditChain) startUp(ctx context.Context) error {
 		slog.String("setting", c.setting.String()), slog.String("state", string(rec.State)))
 
 	return c.enterMaintenance(ctx)
+}
+
+// startUpRecord runs the migration operations that an earlier instance
+// left before they ended, and answers the stored state for this start. A
+// left operation may have stored the new state already: without the drain,
+// this start would set the wait of its own change, and the left operation
+// would then clear it, or an approval would meet a migration that still
+// runs.
+func (c *auditChain) startUpRecord(ctx context.Context) (audit.ChainRecord, error) {
+	if err := c.drainMigrations(ctx); err != nil {
+		return audit.ChainRecord{}, fmt.Errorf("audit chain: %w", err)
+	}
+
+	rec, err := c.store.ChainRecord(ctx)
+	if err != nil {
+		return audit.ChainRecord{}, fmt.Errorf("audit chain: %w", err)
+	}
+
+	return rec, nil
+}
+
+// drainMigrations runs the migration operations that an earlier instance
+// left before they ended, before this start reads the stored state. A left
+// operation may have stored the new state already: without the drain, this
+// start would set the wait of its own change, and the left operation would
+// then clear it, or an approval would meet a migration that still runs. It
+// stops at the first claim that finds no work, or at an operation of a
+// newer binary, which stays for a newer instance.
+func (c *auditChain) drainMigrations(ctx context.Context) error {
+	for {
+		err := c.runner.RunOnce(ctx)
+
+		if errors.Is(err, durable.ErrNoWork) || errors.Is(err, durable.ErrNewerVersion) {
+			return nil
+		}
+
+		if err != nil {
+			return fmt.Errorf("run pending audit chain migration: %w", err)
+		}
+	}
 }
 
 // cancelWaitingChange clears a waiting change when the setting matches the

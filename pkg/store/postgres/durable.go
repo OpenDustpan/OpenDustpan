@@ -43,7 +43,9 @@ func (s *Store) DurableOperations() *DurableOperations {
 
 // DurableOperationsPort answers the durable operations as the port, for
 // store agnostic discovery. Direct callers use DurableOperations.
-func (s *Store) DurableOperationsPort() any {
+//
+//nolint:ireturn // Store-agnostic discovery takes the port.
+func (s *Store) DurableOperationsPort() durable.Store {
 	return s.DurableOperations()
 }
 
