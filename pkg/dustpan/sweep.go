@@ -127,8 +127,8 @@ func scheduledSweepEntry() audit.Entry {
 	return e
 }
 
-// sweepDeleted runs the retention sweep once each deletedSweepEvery, until
-// ctx is done. It does not purge at the start: after an upgrade or an
+// sweepDeleted runs the retention sweep once each deletedEvery, until ctx
+// is done. It does not purge at the start: after an upgrade or an
 // installation restore, an operator gets one period to see and restore the
 // units that are due. At the start it logs their count.
 func (s *Server) sweepDeleted(ctx context.Context) {
@@ -138,7 +138,12 @@ func (s *Server) sweepDeleted(ctx context.Context) {
 
 	s.deleted.logDue(ctx)
 
-	ticker := time.NewTicker(deletedSweepEvery)
+	every := s.deletedEvery
+	if every <= 0 {
+		every = deletedSweepEvery
+	}
+
+	ticker := time.NewTicker(every)
 	defer ticker.Stop()
 
 	for {

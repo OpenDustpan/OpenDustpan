@@ -2010,3 +2010,31 @@ UPDATE durable_operations
 SET state = sqlc.arg('state')::text, cancel_requested = sqlc.arg('cancel_requested')::boolean,
   updated_at_ms = sqlc.arg('now_ms')::bigint
 WHERE id = sqlc.arg('id')::text;
+
+-- Durable schedules. Every time comes from the database clock, read with
+-- clock_timestamp() when the statement runs, so neither the clock of an
+-- instance nor the start of a long transaction moves a decision.
+
+-- name: GetDurableSchedule :one
+SELECT name, interval_ms, next_run_at_ms, last_claimed_at_ms FROM durable_schedules WHERE name = $1;
+
+-- name: InsertDurableSchedule :exec
+INSERT INTO durable_schedules (name, interval_ms, next_run_at_ms, last_claimed_at_ms)
+VALUES (sqlc.arg('name')::text, sqlc.arg('interval_ms')::bigint, sqlc.arg('now_ms')::bigint, NULL);
+
+-- name: SetDurableScheduleInterval :exec
+-- Sets the interval, and moves the next run to now plus the interval when
+-- that is earlier.
+UPDATE durable_schedules
+SET interval_ms = sqlc.arg('interval_ms')::bigint,
+  next_run_at_ms = LEAST(next_run_at_ms, sqlc.arg('now_ms')::bigint + sqlc.arg('interval_ms')::bigint)
+WHERE name = sqlc.arg('name')::text;
+
+-- name: ClaimDurableScheduleTick :execrows
+-- The conditional update that claims a due tick: it changes the row only
+-- when next_run_at_ms is the value that the claim read and is due at now.
+UPDATE durable_schedules
+SET next_run_at_ms = sqlc.arg('now_ms')::bigint + interval_ms,
+  last_claimed_at_ms = sqlc.arg('now_ms')::bigint
+WHERE name = sqlc.arg('name')::text AND next_run_at_ms = sqlc.arg('due_at_ms')::bigint
+  AND next_run_at_ms <= sqlc.arg('now_ms')::bigint;
