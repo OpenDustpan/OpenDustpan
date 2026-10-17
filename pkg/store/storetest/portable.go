@@ -634,12 +634,12 @@ func testPortableStageRefusesMissing(t *testing.T, newStore PortableFactory) {
 	var kept []backup.PortableFile
 
 	for _, file := range files {
-		if file.Table != "installation" {
+		if file.Table != "namespaces" {
 			kept = append(kept, file)
 		}
 	}
 
-	assertStageRefused(t, s, sink, portableExport{sum: sum, files: kept}, "installation")
+	assertStageRefused(t, s, sink, portableExport{sum: sum, files: kept}, "namespaces")
 }
 
 // portableExport holds a summary and its files, as an export returns them.

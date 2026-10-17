@@ -19,16 +19,21 @@ var ErrCoverage = errors.New("backup column list and schema differ")
 // brought back older tokens would give a new claim the token of a live
 // holder, and the writes of that holder would pass the fence. A restore
 // that brought back an older next run of a schedule would fire a tick
-// again. The schema holds every table of Tables and of ControlTables, and
-// no other table (schema_migrations and audit_chain_state aside, which the
-// adapters keep as bookkeeping). Treat the list as a constant and never
-// mutate it.
+// again. The installation, backups and restores tables hold the state of
+// this installation: a restore keeps the live rows, so the running restore
+// stays readable during the swap and the pre-backup row survives it. The
+// schema holds every table of Tables and of ControlTables, and no other
+// table (schema_migrations and audit_chain_state aside, which the adapters
+// keep as bookkeeping). Treat the list as a constant and never mutate it.
 //
 //nolint:gochecknoglobals // A shared frozen table list, as Tables is.
 var ControlTables = []string{
 	TableDurableOperations,
 	TableDurableSteps,
 	TableDurableSchedules,
+	TableBackups,
+	TableRestores,
+	TableInstallation,
 }
 
 // ErrSchemaRead reports that the store could not read its live schema to

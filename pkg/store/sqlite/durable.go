@@ -27,6 +27,14 @@ func (s *Store) DurableOperations() *DurableOperations {
 	return &DurableOperations{store: s}
 }
 
+// DurableOperationsPort answers the durable operations as the port, for
+// store agnostic discovery. Direct callers use DurableOperations.
+//
+//nolint:ireturn // Store-agnostic discovery takes the port.
+func (s *Store) DurableOperationsPort() durable.Store {
+	return s.DurableOperations()
+}
+
 // DefaultStepTransactionBound is the longest time that a transaction which
 // records a step of a durable operation can stay open. SQLite allows one
 // writer at a time, so a step transaction that stalls blocks every writer of
