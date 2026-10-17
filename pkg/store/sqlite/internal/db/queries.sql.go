@@ -129,6 +129,35 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 	return result.RowsAffected()
 }
 
+const addSignInFailure = `-- name: AddSignInFailure :one
+
+
+INSERT INTO sign_in_failures (source, window_end_ms, count)
+VALUES (?, ?, 1)
+ON CONFLICT (source, window_end_ms) DO UPDATE SET count = sign_in_failures.count + 1
+RETURNING count
+`
+
+type AddSignInFailureParams struct {
+	Source      string
+	WindowEndMs int64
+}
+
+// Sign-in failure budget. Every time comes from DatabaseNowMs, the clock of
+// the store, read in the same transaction as the write.
+// Sign-in failure budget. The upsert is one atomic write, so concurrent adds
+// each count once. The window comes from DatabaseNowMs, the clock of the
+// store, read in the same transaction as the write, so the clock of an
+// instance never moves the window.
+// Adds one miss of source in the window that ends at window_end_ms, and
+// answers the count of that window after the add.
+func (q *Queries) AddSignInFailure(ctx context.Context, arg AddSignInFailureParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, addSignInFailure, arg.Source, arg.WindowEndMs)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const advanceAuditSinkCursor = `-- name: AdvanceAuditSinkCursor :exec
 INSERT INTO audit_sink_cursors (sink, namespace, sequence, updated_at_ms)
 VALUES (?, ?, ?, ?)
@@ -6552,6 +6581,19 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const pruneSignInFailures = `-- name: PruneSignInFailures :execrows
+DELETE FROM sign_in_failures WHERE window_end_ms <= ?
+`
+
+// Deletes every window that ended at or before threshold_ms.
+func (q *Queries) PruneSignInFailures(ctx context.Context, windowEndMs int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, pruneSignInFailures, windowEndMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const pruneSignInRequests = `-- name: PruneSignInRequests :execrows

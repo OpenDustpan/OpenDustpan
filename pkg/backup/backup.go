@@ -40,11 +40,14 @@ const (
 )
 
 // The tables of durable operations: one row for each operation, one row for
-// each recorded step, and one row for each schedule.
+// each recorded step, and one row for each schedule. The sign-in failure
+// budget is a windowed count in the database: the live rows stay across the
+// swap of a restore, as the claim tokens and the next runs do.
 const (
 	TableDurableOperations = "durable_operations"
 	TableDurableSteps      = "durable_steps"
 	TableDurableSchedules  = "durable_schedules"
+	TableSignInFailures    = "sign_in_failures"
 )
 
 // Tables lists every table that an export covers, in foreign-key order, so an

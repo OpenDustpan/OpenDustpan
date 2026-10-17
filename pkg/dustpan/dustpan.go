@@ -2218,9 +2218,16 @@ func gatedAuthenticator(cfg *settings, tokens *accesstoken.Service) (identity.Au
 		return cfg.authenticator, nil
 	}
 
+	// failures shares the failure budget of every instance on one database, or
+	// keeps the budget in the process when the store keeps no counter.
+	var failures authgate.FailureCounter
+	if counter, ok := cfg.namespaceStore.(authgate.FailureCounter); ok {
+		failures = counter
+	}
+
 	gate, err := authgate.New(authgate.Config{
 		Next: tokens, Charge: accesstoken.LooksLikeSecret, Logger: cfg.logger, Now: cfg.now,
-		Failures: nil, Window: 0, CounterErrors: nil,
+		Failures: failures, Window: 0, CounterErrors: nil,
 		Burst: 0, Refill: 0, Penalty: 0, MaxWaiting: 0, MaxSources: 0,
 	})
 	if err != nil {

@@ -1876,3 +1876,23 @@ SET next_run_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER) + interval_ms,
     last_claimed_at_ms = CAST(sqlc.arg('now_ms') AS INTEGER)
 WHERE name = sqlc.arg('name') AND next_run_at_ms = sqlc.arg('due_at_ms')
     AND next_run_at_ms <= CAST(sqlc.arg('now_ms') AS INTEGER);
+
+-- Sign-in failure budget. Every time comes from DatabaseNowMs, the clock of
+-- the store, read in the same transaction as the write.
+
+-- Sign-in failure budget. The upsert is one atomic write, so concurrent adds
+-- each count once. The window comes from DatabaseNowMs, the clock of the
+-- store, read in the same transaction as the write, so the clock of an
+-- instance never moves the window.
+
+-- name: AddSignInFailure :one
+-- Adds one miss of source in the window that ends at window_end_ms, and
+-- answers the count of that window after the add.
+INSERT INTO sign_in_failures (source, window_end_ms, count)
+VALUES (?, ?, 1)
+ON CONFLICT (source, window_end_ms) DO UPDATE SET count = sign_in_failures.count + 1
+RETURNING count;
+
+-- name: PruneSignInFailures :execrows
+-- Deletes every window that ended at or before threshold_ms.
+DELETE FROM sign_in_failures WHERE window_end_ms <= ?;

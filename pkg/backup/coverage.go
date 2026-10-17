@@ -29,6 +29,7 @@ var ControlTables = []string{
 	TableDurableOperations,
 	TableDurableSteps,
 	TableDurableSchedules,
+	TableSignInFailures,
 }
 
 // ErrSchemaRead reports that the store could not read its live schema to

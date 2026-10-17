@@ -129,6 +129,43 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 	return result.RowsAffected(), nil
 }
 
+const addSignInFailure = `-- name: AddSignInFailure :one
+
+WITH now_ms AS (
+    SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now
+)
+INSERT INTO sign_in_failures (source, window_end_ms, count)
+SELECT $1::text, (now / $2::bigint + 1) * $2::bigint, 1
+FROM now_ms
+ON CONFLICT (source, window_end_ms) DO UPDATE SET count = sign_in_failures.count + 1
+RETURNING window_end_ms, count, (SELECT now FROM now_ms) AS now_ms
+`
+
+type AddSignInFailureParams struct {
+	Source   string
+	LengthMs int64
+}
+
+type AddSignInFailureRow struct {
+	WindowEndMs int64
+	Count       int64
+	NowMs       int64
+}
+
+// Sign-in failure budget. Every time comes from DatabaseNowMs, the clock of
+// the store, read in the same transaction as the write.
+// Adds one miss of source in the current window of length_ms, in one atomic
+// write, and answers the count of that window after the add with the time of
+// the add and the end of the window. Every time comes from the clock of the
+// store, read once in the statement, so the clock of an instance never moves
+// the window. Concurrent adds each count once.
+func (q *Queries) AddSignInFailure(ctx context.Context, arg AddSignInFailureParams) (AddSignInFailureRow, error) {
+	row := q.db.QueryRow(ctx, addSignInFailure, arg.Source, arg.LengthMs)
+	var i AddSignInFailureRow
+	err := row.Scan(&i.WindowEndMs, &i.Count, &i.NowMs)
+	return i, err
+}
+
 const advanceAuditSinkCursor = `-- name: AdvanceAuditSinkCursor :exec
 INSERT INTO audit_sink_cursors (sink, namespace, sequence, updated_at_ms)
 VALUES ($1, $2, $3, $4)
@@ -6902,6 +6939,23 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const pruneSignInFailures = `-- name: PruneSignInFailures :execrows
+DELETE FROM sign_in_failures
+WHERE window_end_ms <= (
+    FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint - $1::bigint
+)
+`
+
+// Deletes every window that ended age_ms or longer ago on the clock of the
+// store, read in the statement.
+func (q *Queries) PruneSignInFailures(ctx context.Context, ageMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneSignInFailures, ageMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const pruneSignInRequests = `-- name: PruneSignInRequests :execrows

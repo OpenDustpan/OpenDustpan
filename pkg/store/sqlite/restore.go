@@ -484,13 +484,20 @@ var keepControlStatements = []string{
 	`DELETE FROM main.durable_steps`,
 	`DELETE FROM main.durable_operations`,
 	`DELETE FROM main.durable_schedules`,
+	`DELETE FROM main.sign_in_failures`,
 	`INSERT INTO main.durable_operations (` + durableOperationColumns + `) ` +
 		`SELECT ` + durableOperationColumns + ` FROM live.durable_operations`,
 	`INSERT INTO main.durable_steps (operation_id, name, seq, result, done_at_ms) ` +
 		`SELECT operation_id, name, seq, result, done_at_ms FROM live.durable_steps`,
 	`INSERT INTO main.durable_schedules (` + durableScheduleColumns + `) ` +
 		`SELECT ` + durableScheduleColumns + ` FROM live.durable_schedules`,
+	`INSERT INTO main.sign_in_failures (` + signInFailureColumns + `) ` +
+		`SELECT ` + signInFailureColumns + ` FROM live.sign_in_failures`,
 }
+
+// signInFailureColumns lists every column of sign_in_failures, for the copy
+// of the control tables.
+const signInFailureColumns = `source, window_end_ms, count`
 
 // durableScheduleColumns lists every column of durable_schedules, for the
 // copy of the control tables.
