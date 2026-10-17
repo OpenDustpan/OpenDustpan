@@ -48,6 +48,9 @@ var (
 	ErrInvalidLockID = errors.New("invalid lock ID")
 	// ErrMissingDependency reports a Config without a required port.
 	ErrMissingDependency = errors.New("missing dependency")
+	// ErrMissingSealer reports a Config without a Sealer. Every service
+	// seals state, so none runs without one.
+	ErrMissingSealer = errors.New("missing sealer")
 )
 
 const maxNameLength = 90
