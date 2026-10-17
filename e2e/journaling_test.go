@@ -116,36 +116,17 @@ func journalingUp(ctx context.Context, t *testing.T, env *e2e.Env) string {
 func checkJournalingOffAnswersZero(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
+	entries := env.Recorder.Entries()
+
 	starts := 0
 
-	for _, entry := range env.Recorder.Entries() {
-		if entry.Method != http.MethodPost || entry.Status != http.StatusOK {
+	for i := range entries {
+		if !isJournalVersionStart(&entries[i]) {
 			continue
 		}
 
-		_, after, ok := strings.Cut(entry.Path, "/update/")
-		if !ok || after == "" || strings.Contains(after, "/") {
-			continue
-		}
-
-		if !strings.Contains(entry.ResponseBody, "journalVersion") {
-			continue
-		}
-
-		var started struct {
-			JournalVersion *int `json:"journalVersion"`
-		}
-
-		if err := json.Unmarshal([]byte(entry.ResponseBody), &started); err != nil {
-			t.Fatalf("decode update start: %v", err)
-		}
-
-		if started.JournalVersion == nil {
-			t.Fatal("update start answers no journalVersion")
-		}
-
-		if *started.JournalVersion != 0 {
-			t.Fatalf("update start answers journalVersion %d, want 0", *started.JournalVersion)
+		if version := journalVersionOf(t, entries[i].ResponseBody); version != 0 {
+			t.Fatalf("update start answers journalVersion %d, want 0", version)
 		}
 
 		starts++
@@ -156,15 +137,58 @@ func checkJournalingOffAnswersZero(t *testing.T, env *e2e.Env) {
 	}
 }
 
+// isJournalVersionStart answers whether entry is an update start that names
+// a journal version.
+func isJournalVersionStart(entry *e2e.Entry) bool {
+	if entry.Method != http.MethodPost || entry.Status != http.StatusOK {
+		return false
+	}
+
+	_, after, ok := strings.Cut(entry.Path, "/update/")
+	if !ok || after == "" || strings.Contains(after, "/") {
+		return false
+	}
+
+	return strings.Contains(entry.ResponseBody, "journalVersion")
+}
+
+// journalVersionOf answers the journal version in an update start body.
+func journalVersionOf(t *testing.T, body string) int {
+	t.Helper()
+
+	var started struct {
+		JournalVersion *int `json:"journalVersion"`
+	}
+
+	if err := json.Unmarshal([]byte(body), &started); err != nil {
+		t.Fatalf("decode update start: %v", err)
+	}
+
+	if started.JournalVersion == nil {
+		t.Fatal("update start answers no journalVersion")
+	}
+
+	return *started.JournalVersion
+}
+
 // checkNoJournalBatches proves the off run sent no journal batch that the
 // server accepted. With journaling off the CLI saves checkpoints.
 func checkNoJournalBatches(t *testing.T, env *e2e.Env) {
 	t.Helper()
 
-	for _, entry := range env.Recorder.Entries() {
-		if entry.Method == http.MethodPatch && strings.HasSuffix(entry.Path, "/journalentries") &&
-			entry.Status == http.StatusOK {
+	entries := env.Recorder.Entries()
+
+	for i := range entries {
+		if isAcceptedJournalBatch(&entries[i]) {
 			t.Fatal("journal batch answered 200 with journaling off, want checkpoints")
 		}
 	}
+}
+
+// isAcceptedJournalBatch answers whether entry is a journal batch the server
+// accepted.
+func isAcceptedJournalBatch(entry *e2e.Entry) bool {
+	return entry.Method == http.MethodPatch &&
+		strings.HasSuffix(entry.Path, "/journalentries") &&
+		entry.Status == http.StatusOK
 }
