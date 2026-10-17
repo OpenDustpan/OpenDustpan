@@ -27,6 +27,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
+	"opendustpan.org/opendustpan/pkg/store/sqlite"
 	"opendustpan.org/opendustpan/pkg/store/storetest"
 	"opendustpan.org/opendustpan/pkg/workspace"
 )
@@ -1112,6 +1113,226 @@ func TestDeleteSweepsExpiredPending(t *testing.T) {
 		t.Fatalf("get swept version: %v, want ErrStateVersionNotFound", err)
 	}
 }
+
+// TestDeleteSweepTreatsGoneRowAsDone proves a delete whose sweep finds the
+// pending row already deleted does not fail: a gone row counts as done.
+func TestDeleteSweepTreatsGoneRowAsDone(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending := unknownUpload(t, f, newState("l1", 1, "{\"v\":1}"))
+
+	if _, err := f.svc.Unlock(ctx, f.ws.ID, "alice"); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+
+	*f.now = f.now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	stored, err := f.store.GetStateVersion(ctx, pending.Version.ID)
+	if err != nil {
+		t.Fatalf("get pending version: %v", err)
+	}
+
+	writable, err := f.namespaces.WritableHere(ctx, "acme")
+	if err != nil {
+		t.Fatalf("writable namespace: %v", err)
+	}
+
+	if err := f.store.DiscardStateVersion(ctx, pending.Version.ID, writable.Fence()); err != nil {
+		t.Fatalf("discard pending version: %v", err)
+	}
+
+	if stored.Content != "" {
+		if err := f.blobs.Delete(ctx, stored.Content); err != nil {
+			t.Fatalf("delete pending blob: %v", err)
+		}
+	}
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             goneStates{StateStore: f.store},
+		Blobs:              f.blobs,
+		Namespaces:         f.namespaces,
+		Sealer:             nil,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 0,
+		Retention:          0,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	if err := svc.Delete(ctx, f.ws.Ref, retentionEntry()); err != nil {
+		t.Fatalf("delete with a gone pending row: %v", err)
+	}
+
+	if _, err := svc.Get(ctx, f.ws.Ref); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get after delete: err = %v, want ErrNotFound", err)
+	}
+}
+
+// goneStates reports the expired pending row as already gone, as an
+// overlapping sweep would after the first sweep deletes it.
+type goneStates struct {
+	workspace.StateStore
+}
+
+// DeleteExpiredPendingStateVersions implements workspace.StateStore: it
+// reports the row as already gone, with no error for the caller to join.
+func (g goneStates) DeleteExpiredPendingStateVersions(
+	_ context.Context, _ workspace.ID, _ time.Time, _ namespace.Fence,
+) ([]workspace.StateVersion, error) {
+	return nil, workspace.ErrStateVersionNotFound
+}
+
+// TestDeleteSweepsStuckPendingAfterBackup proves a stuck pending version
+// with a content key stays out of the backup and does not fail it, and past
+// the upload window plus the sweep grace period the workspace delete sweeps
+// it and succeeds.
+func TestDeleteSweepsStuckPendingAfterBackup(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+
+	blobs, err := fs.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("blob store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := blobs.Close(); closeErr != nil {
+			t.Errorf("close blob store: %v", closeErr)
+		}
+	})
+
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	now := time.Date(2026, time.October, 9, 12, 0, 0, 0, time.UTC)
+
+	namespaces, err := namespace.NewService(namespace.Config{Store: store, Now: nil, Region: "local"})
+	if err != nil {
+		t.Fatalf("namespaces: %v", err)
+	}
+
+	if _, err := namespaces.Create(ctx, "acme"); err != nil {
+		t.Fatalf("create namespace: %v", err)
+	}
+
+	svc, err := workspace.NewService(workspace.Config{
+		Workspaces:         store,
+		States:             store,
+		Blobs:              blobs,
+		Namespaces:         namespaces,
+		Sealer:             nil,
+		Logger:             nil,
+		Now:                func() time.Time { return now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 0,
+		Retention:          0,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	name, err := workspace.ParseName("e2e-workspace")
+	if err != nil {
+		t.Fatalf("name: %v", err)
+	}
+
+	ws, err := svc.Create(ctx, workspace.Ref{Namespace: "acme", Name: name})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if _, err := svc.Lock(ctx, ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	pending, err := svc.BeginState(ctx, ws.ID, "alice", newState("l1", 1, "{\"v\":1}"), authority(forcedOnly(), nil))
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+
+	stuckKey := blob.Key("tofu/" + ws.ID.String() + "/" + pending.Version.ID.String() + "/a1")
+
+	writable, err := namespaces.WritableHere(ctx, "acme")
+	if err != nil {
+		t.Fatalf("writable namespace: %v", err)
+	}
+
+	if _, err := store.RecordUploadAttempt(ctx, pending.Version.ID, stuckKey, writable.Fence()); err != nil {
+		t.Fatalf("record upload attempt: %v", err)
+	}
+
+	if err := blobs.Put(ctx, stuckKey, strings.NewReader("{\"v\":1}")); err != nil {
+		t.Fatalf("put stuck blob: %v", err)
+	}
+
+	sink := func(string) (io.WriteCloser, error) {
+		return nopWriteCloser{Writer: io.Discard}, nil
+	}
+
+	sum, _, err := store.ExportPortable(ctx, sink)
+	if err != nil {
+		t.Fatalf("export portable: %v", err)
+	}
+
+	for _, ref := range sum.Blobs {
+		if ref.Key == stuckKey.String() {
+			t.Fatalf("export names stuck key %q, want only finalized content", stuckKey)
+		}
+	}
+
+	if _, err := svc.Unlock(ctx, ws.ID, "alice"); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+
+	if err := svc.Delete(ctx, ws.Ref, retentionEntry()); !errors.Is(err, workspace.ErrPendingState) {
+		t.Fatalf("delete before expiry: err = %v, want ErrPendingState", err)
+	}
+
+	now = now.Add(workspace.UploadWindow + workspace.SweepGracePeriod + time.Second)
+
+	if err := svc.Delete(ctx, ws.Ref, retentionEntry()); err != nil {
+		t.Fatalf("delete after expiry: %v", err)
+	}
+
+	if _, err := svc.Get(ctx, ws.Ref); !errors.Is(err, workspace.ErrNotFound) {
+		t.Fatalf("get after delete: err = %v, want ErrNotFound", err)
+	}
+
+	if _, err := store.GetStateVersion(ctx, pending.Version.ID); !errors.Is(
+		err, workspace.ErrStateVersionNotFound,
+	) {
+		t.Fatalf("get swept version: %v, want ErrStateVersionNotFound", err)
+	}
+}
+
+// nopWriteCloser discards one portable file: the test checks the summary,
+// not the bytes.
+type nopWriteCloser struct {
+	io.Writer
+}
+
+// Close does nothing: the bytes stay discarded.
+func (nopWriteCloser) Close() error { return nil }
 
 // retentionEntry returns a valid audit entry for a delete of acme's workspace.
 // The service sets its time.

@@ -350,10 +350,11 @@ func (s *Service) Create(ctx context.Context, ref Ref) (Workspace, error) {
 // but its state versions and data key stay until the final delete. It first
 // sweeps the expired pending versions of the workspace with their attempted
 // content, as a declare does, so only a pending version that has not expired
-// blocks the delete. It
-// returns ErrLocked while the workspace is locked, ErrPendingState while it
-// has a pending state version, and ErrNotFound if no live
-// workspace has ref. The write is fenced on the namespace's failover version
+// blocks the delete. The sweep runs before the lock check, the pending check
+// and the not-found check, so a refused delete still removes expired pending
+// rows. It returns ErrLocked while the workspace is locked, ErrPendingState
+// while it has a pending state version, and ErrNotFound if no live workspace
+// has ref. The write is fenced on the namespace's failover version
 // and only allowed in its home region. The delete and the audit entry e,
 // stamped with the time of the delete, commit together or not at all (ADR 60,
 // fail closed).
@@ -1827,17 +1828,16 @@ func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion
 
 // sweepExpired deletes the expired pending versions of w with their
 // attempted content, then deletes the blobs under the workspace prefix
-// that no version references. A version
-// expires with its upload capability; the sweep keeps it for
-// SweepGracePeriod past expiry, so an upload that started before expiry
-// still finishes. A version that never recorded an attempt sweeps its row
-// with no blob to delete. A blob whose row delete already committed, or
-// whose superseded delete never ran, stays unreferenced: the second pass
-// collects it once it is older than the grace period, so a cleanup failure
-// or a crash between the row delete and the blob delete never leaves an
-// orphan for ever. A cleanup failure fails the sweep, so the caller
-// decides: BeginState treats the sweep as best effort and declares anyway,
-// leaving the rows for the next sweep.
+// that no version references. A version expires with its upload capability;
+// the sweep keeps it for SweepGracePeriod past expiry, so an upload that
+// started before expiry still finishes. A version that never recorded an
+// attempt sweeps its row with no blob to delete. A blob whose row delete
+// already committed, or whose superseded delete never ran, stays
+// unreferenced: the second pass collects it once it is older than the grace
+// period, so a cleanup failure or a crash between the row delete and the
+// blob delete never leaves an orphan for ever. A cleanup failure fails the
+// sweep, so the caller decides: BeginState treats the sweep as best effort
+// and declares anyway, leaving the rows for the next sweep.
 func (s *Service) sweepExpired(ctx context.Context, w Workspace) error {
 	expired, err := s.expirePending(ctx, w)
 	if err != nil {
@@ -1879,7 +1879,9 @@ func (s *Service) sweepExpiredRows(ctx context.Context, w Workspace) error {
 }
 
 // expirePending deletes the expired pending versions of w and returns them
-// with their attempted content keys, so the caller deletes the blobs.
+// with their attempted content keys, so the caller deletes the blobs. A
+// version that is already gone counts as done, with no error, so two sweeps
+// that overlap on one row do not fail.
 func (s *Service) expirePending(ctx context.Context, w Workspace) ([]StateVersion, error) {
 	fence, err := s.fence(ctx, w.Ref.Namespace)
 	if err != nil {
@@ -1887,6 +1889,10 @@ func (s *Service) expirePending(ctx context.Context, w Workspace) ([]StateVersio
 	}
 
 	expired, err := s.states.DeleteExpiredPendingStateVersions(ctx, w.ID, s.clock().Add(-SweepGracePeriod), fence)
+	if errors.Is(err, ErrStateVersionNotFound) {
+		return nil, nil
+	}
+
 	if err != nil {
 		return nil, fmt.Errorf("sweep expired state of %s: %w", w.Ref, err)
 	}
@@ -1895,6 +1901,8 @@ func (s *Service) expirePending(ctx context.Context, w Workspace) ([]StateVersio
 }
 
 // deleteExpiredBlobs deletes the attempted content of the expired versions.
+// A blob that is already gone counts as done, with no error, so two sweeps
+// that overlap on one blob do not fail.
 func (s *Service) deleteExpiredBlobs(ctx context.Context, expired []StateVersion) error {
 	var cleanupErr error
 
@@ -1904,6 +1912,10 @@ func (s *Service) deleteExpiredBlobs(ctx context.Context, expired []StateVersion
 		}
 
 		if blobErr := s.deleteBlobRetried(ctx, expired[i].Content); blobErr != nil {
+			if errors.Is(blobErr, blob.ErrNotFound) {
+				continue
+			}
+
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("delete content of %s: %w", expired[i].ID, blobErr))
 		}
 	}
