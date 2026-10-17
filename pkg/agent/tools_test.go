@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -156,6 +157,12 @@ func TestCatalogOnlyReadStateAnswersSecrets(t *testing.T) {
 		wantSecret := spec.Name == agent.ToolReadState
 		if (spec.SecretAction != "") != wantSecret {
 			t.Errorf("tool %q: secret action %q", spec.Name, spec.SecretAction)
+		}
+
+		hasConsent := slices.ContainsFunc(spec.Params, func(p agent.Param) bool { return p.Name == agent.ConsentParam })
+		if hasConsent != (spec.SecretAction != "") {
+			t.Errorf("tool %q: parameter %q is %v, want it on each tool that can reveal and on no other",
+				spec.Name, agent.ConsentParam, hasConsent)
 		}
 	}
 }

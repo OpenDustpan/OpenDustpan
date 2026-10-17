@@ -81,6 +81,7 @@ func unitTools() []ToolSpec {
 		boolParam("secretValues",
 			"Ask for secret values in plain text. The server refuses unless every opt-in is set, "+
 				"and refuses it with compareTo."),
+		consentParam(),
 	)
 	readState.SecretAction = identity.ActionUnitReadSecrets
 
@@ -230,6 +231,15 @@ func limitParam(what string, def, maximum int) Param {
 		fmt.Sprintf("The maximum number of %s. The default is %d, the maximum %d.", what, def, maximum),
 		maximum,
 	)
+}
+
+// ConsentParam is the parameter that names the consent for one use of a
+// secret read. Each tool with a SecretAction has it.
+const ConsentParam = "consentID"
+
+func consentParam() Param {
+	return stringParam(ConsentParam, false,
+		"The consentID of an earlier answer, after the person approved it in the console.", MaxNameBytes)
 }
 
 func changeParam() Param {

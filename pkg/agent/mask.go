@@ -3,7 +3,9 @@ package agent
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -116,13 +118,20 @@ func longestFirst(revealed []string) []string {
 
 // SealedReveal holds the result of one tool call with secret values in
 // plain text, from the tools step that read them until the next model step
-// has sent them to the model. The server seals Content with a data key of
-// its own, and wraps the data key with the key-encryption key. The store
-// keeps it in its own table, never in the transcript. The model step of the
-// next turn unwraps it, also on another instance after a takeover. The
-// record of that model step shreds it: the store deletes the wrapped key and
-// the content in the transaction of the record. Values holds the plain
-// values, sealed in the same way, so the model step can mask its answer.
+// has sent them to the model. A RevealSealer seals Content and Values with a
+// data key of their own, and wraps the data key with the key-encryption
+// key. The store keeps it in its own table, never in the transcript. The
+// model step of the next turn opens it, also on another instance after a
+// takeover. The record of that model step shreds it: the store deletes the
+// wrapped key and the content in the transaction of the record. Values holds
+// the plain values, sealed in the same way, so the model step can mask its
+// answer.
+//
+// ExpiresAt is the hard end of the reveal: At plus the time limit of the run
+// (RevealExpiry). A run never lives longer than its time limit, so a reveal
+// never outlives its run, also when no step of the run ever shreds it.
+// Reveals answers no reveal after its ExpiresAt, and SweepReveals deletes
+// it.
 type SealedReveal struct {
 	Run        RunID
 	Turn       int
@@ -131,4 +140,45 @@ type SealedReveal struct {
 	Content    []byte
 	Values     []byte
 	At         time.Time
+	ExpiresAt  time.Time
+}
+
+// RevealExpiry returns the hard end of a reveal made at the time at by a
+// run with limits l: at plus l.MaxDuration.
+func RevealExpiry(at time.Time, l Limits) time.Time {
+	return at.Add(l.MaxDuration)
+}
+
+// PlainReveal is a reveal before its seal and after its open. Content is the
+// tool result with the plain values, and Values lists them.
+type PlainReveal struct {
+	Run       RunID
+	Turn      int
+	CallID    string
+	Content   []byte
+	Values    []string
+	At        time.Time
+	ExpiresAt time.Time
+}
+
+// ErrRevealOpen reports a sealed reveal that its sealer cannot open: its
+// key, its content or the run, turn or call that it names changed after the
+// seal.
+var ErrRevealOpen = errors.New("the sealed reveal cannot be opened")
+
+// RevealSealer seals and opens reveals. Package secret implements it: Seal
+// makes a fresh data key for each reveal, seals Content and Values with it,
+// and wraps the data key with the Wrapper of the key-encryption key. The run,
+// the turn and the call are the additional data of each seal, so a sealed
+// reveal opens only for the call that made it. The sealer keeps no key and
+// no plain value after a call returns. Each implementation runs the
+// conformance suite in package agenttest.
+type RevealSealer interface {
+	// Seal returns p sealed. It returns ErrInvalid for a reveal with no run,
+	// call, content or value, or with ExpiresAt not after At.
+	Seal(ctx context.Context, p PlainReveal) (SealedReveal, error)
+	// Open returns the plain reveal of s. It returns ErrRevealOpen for a
+	// reveal that changed after its seal, and never a part of the content
+	// in an error.
+	Open(ctx context.Context, s SealedReveal) (PlainReveal, error)
 }

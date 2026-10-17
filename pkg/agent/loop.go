@@ -66,16 +66,21 @@ type Credentials interface {
 	// credentialID: an access token ID or a console session ID. It returns
 	// ErrCredentialEnded when the credential expired, a person revoked it,
 	// the session ended, the break-glass session reached its time limit, or
-	// the principal is disabled.
+	// the principal is disabled. It sets Resolved.ServicePrincipal for the
+	// principal of a service token.
 	Resolve(ctx context.Context, subject, credentialID string) (Resolved, error)
 }
 
 // Resolved is a credential as Credentials resolved it. BreakGlass is true
 // when the credential belongs to a break-glass session. Then the audit entry
 // of each tool call says so, and the run ends with the session.
+// ServicePrincipal is true for a principal that cannot sign in to the
+// console, for example the principal of a service token. The loop copies
+// both into the Actor of each tool call.
 type Resolved struct {
-	Principal  identity.Principal
-	BreakGlass bool
+	Principal        identity.Principal
+	BreakGlass       bool
+	ServicePrincipal bool
 }
 
 // TurnContext is what a step of a turn gets: the step of the durable

@@ -21,6 +21,9 @@ type ChangesHarness struct {
 	// Outsider is an agent that acts for a person who holds no action on
 	// either unit.
 	Outsider agent.Actor
+	// Service is an agent that acts for a service principal (one that
+	// cannot sign in to the console) that holds the actions of Actor.
+	Service agent.Actor
 	// Unit has a code location on a connected forge and a runner pool.
 	Unit identity.Object
 	// RunnerOnly has a runner pool and no code location.
@@ -97,6 +100,7 @@ func changesCases() []changesCase {
 		{name: "direct is off by default", run: caseDirectOff},
 		{name: "change freeze", run: caseFrozen},
 		{name: "person without the action", run: caseDenied},
+		{name: "service principal cannot start a change", run: caseServicePrincipal},
 		{name: "request that is not valid", run: caseInvalid},
 		{name: "get", run: caseGet},
 		{name: "cancel", run: caseCancel},
@@ -281,6 +285,15 @@ func caseDenied(t *testing.T, h *ChangesHarness) {
 	req.Actor = h.Outsider
 	c, err := h.Changes.Start(t.Context(), req)
 	wantChangeErr(t, "Start() for the outsider", c, err, identity.ErrDenied)
+}
+
+func caseServicePrincipal(t *testing.T, h *ChangesHarness) {
+	t.Helper()
+
+	req := ChangeRequestFor(h, "k1", h.RunnerOnly, agent.OperationApply, agent.ModeApproveFirst)
+	req.Actor = h.Service
+	c, err := h.Changes.Start(t.Context(), req)
+	wantChangeErr(t, "Start() for a service principal", c, err, agent.ErrServicePrincipal)
 }
 
 func caseInvalid(t *testing.T, h *ChangesHarness) {

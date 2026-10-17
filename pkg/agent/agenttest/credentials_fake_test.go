@@ -19,14 +19,15 @@ func TestCredentialsSuite(t *testing.T) {
 		f := newFakeCredentials()
 
 		return agenttest.CredentialsHarness{
-			Credentials: f,
-			Token:       f.harnessCredential(false),
-			Session:     f.harnessCredential(false),
-			BreakGlass:  f.harnessCredential(true),
-			Revoke:      func(_ *testing.T, id string) { f.end(id) },
-			Expire:      func(_ *testing.T, id string) { f.end(id) },
-			EndSession:  func(_ *testing.T, id string) { f.end(id) },
-			Disable:     func(_ *testing.T, subject string) { f.disable(subject) },
+			Credentials:  f,
+			Token:        f.harnessCredential(false, false),
+			ServiceToken: f.harnessCredential(false, true),
+			Session:      f.harnessCredential(false, false),
+			BreakGlass:   f.harnessCredential(true, false),
+			Revoke:       func(_ *testing.T, id string) { f.end(id) },
+			Expire:       func(_ *testing.T, id string) { f.end(id) },
+			EndSession:   func(_ *testing.T, id string) { f.end(id) },
+			Disable:      func(_ *testing.T, subject string) { f.disable(subject) },
 		}
 	})
 }
@@ -35,6 +36,7 @@ func TestCredentialsSuite(t *testing.T) {
 type fakeCredential struct {
 	subject    string
 	breakGlass bool
+	service    bool
 	ended      bool
 }
 
@@ -56,20 +58,26 @@ func (f *fakeCredentials) Resolve(_ context.Context, subject, credentialID strin
 
 	c, ok := f.creds[credentialID]
 	if !ok || c.ended || c.subject != subject || f.disabled[subject] {
-		return agent.Resolved{Principal: principal(""), BreakGlass: false}, agent.ErrCredentialEnded
+		return agent.Resolved{
+			Principal:        principal(""),
+			BreakGlass:       false,
+			ServicePrincipal: false,
+		}, agent.ErrCredentialEnded
 	}
 
-	return agent.Resolved{Principal: principal(subject), BreakGlass: c.breakGlass}, nil
+	return agent.Resolved{Principal: principal(subject), BreakGlass: c.breakGlass, ServicePrincipal: c.service}, nil
 }
 
 // add makes a principal and one credential of it, and returns the subject.
 // The ID of the credential is credentialOf(subject).
-func (f *fakeCredentials) add(breakGlass bool) string {
+func (f *fakeCredentials) add(breakGlass, service bool) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	subject := fmt.Sprintf("person-%d", len(f.creds)+1)
-	f.creds[credentialOf(subject)] = fakeCredential{subject: subject, breakGlass: breakGlass, ended: false}
+	f.creds[credentialOf(subject)] = fakeCredential{
+		subject: subject, breakGlass: breakGlass, service: service, ended: false,
+	}
 
 	return subject
 }
@@ -77,9 +85,9 @@ func (f *fakeCredentials) add(breakGlass bool) string {
 func credentialOf(subject string) string { return "cred-of-" + subject }
 
 // harnessCredential makes a credential for the harness.
-func (f *fakeCredentials) harnessCredential(breakGlass bool) func(*testing.T) (string, string) {
+func (f *fakeCredentials) harnessCredential(breakGlass, service bool) func(*testing.T) (string, string) {
 	return func(*testing.T) (string, string) {
-		subject := f.add(breakGlass)
+		subject := f.add(breakGlass, service)
 
 		return subject, credentialOf(subject)
 	}

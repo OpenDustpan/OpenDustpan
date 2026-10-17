@@ -93,6 +93,12 @@ func runCases() []runCase {
 		{name: "reveal survives a takeover", run: caseRevealTakeover},
 		{name: "finish shreds the reveals", run: caseRevealFinish},
 		{name: "a follow-up of a reveal keeps the mark", run: caseRevealParent},
+		{name: "a reveal expires and the sweep deletes it", run: caseRevealExpired},
+		{name: "a reveal needs an expiry after its time", run: caseRevealNoExpiry},
+		{name: "a run whose turn failed for good is reaped", run: caseReapFailed},
+		{name: "a run whose turn was canceled is reaped", run: caseReapCanceled},
+		{name: "a run with a live turn is no orphan", run: caseReapActive},
+		{name: "orphans with a limit out of range", run: caseOrphansLimit},
 	}
 }
 
@@ -476,9 +482,12 @@ func caseListLimit(t *testing.T, h RunHarness) {
 // sealed returns a sealed reveal of turn 1 of run. The suite never reads
 // the bytes: the store keeps them as they are.
 func sealed(run agent.RunID) agent.SealedReveal {
+	now := time.Now()
+
 	return agent.SealedReveal{
 		Run: run, Turn: 1, CallID: "call-1",
-		WrappedKey: []byte("wrapped"), Content: []byte("sealed"), Values: []byte("sealed values"), At: time.Now(),
+		WrappedKey: []byte("wrapped"), Content: []byte("sealed"), Values: []byte("sealed values"), At: now,
+		ExpiresAt: agent.RevealExpiry(now, agent.DefaultLimits()),
 	}
 }
 
@@ -628,5 +637,182 @@ func caseRevealParent(t *testing.T, h RunHarness) {
 
 	if other := mustCreate(t, h, NewRunFor("ana", "k3")); other.ReadPlainSecrets {
 		t.Fatalf("Create() = %+v, want no ReadPlainSecrets for a run with no parent", other)
+	}
+}
+
+func caseRevealExpired(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	run := mustCreate(t, h, NewRunFor("ana", "k1"))
+	op := claimTurn(t, h)
+
+	// A reveal of a run that no step shredded, past the time limit of the
+	// run: Reveals hides it at once, and the sweep deletes it.
+	expired := sealed(run.ID)
+	expired.CallID = "call-0"
+	expired.At = time.Now().Add(-2 * run.Limits.MaxDuration)
+	expired.ExpiresAt = agent.RevealExpiry(expired.At, run.Limits)
+
+	rec := turnRecord(run.ID, "masked result")
+	rec.Reveals = []agent.SealedReveal{expired, sealed(run.ID)}
+
+	if err := h.Runs.RecordTurn(t.Context(), op.Claim.Step(agent.StepTools), rec, noNext()); err != nil {
+		t.Fatalf("RecordTurn() with two reveals = %v", err)
+	}
+
+	wantReveals(t, h, run.ID, 1)
+
+	swept, err := h.Runs.SweepReveals(t.Context())
+	if err != nil || swept != 1 {
+		t.Fatalf("SweepReveals() = %d, %v, want 1: only the expired reveal", swept, err)
+	}
+
+	wantReveals(t, h, run.ID, 1)
+
+	if swept, err := h.Runs.SweepReveals(t.Context()); err != nil || swept != 0 {
+		t.Fatalf("second SweepReveals() = %d, %v, want 0", swept, err)
+	}
+}
+
+func caseRevealNoExpiry(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	run := mustCreate(t, h, NewRunFor("ana", "k1"))
+	op := claimTurn(t, h)
+
+	for name, change := range map[string]func(r *agent.SealedReveal){
+		"no expiry":                    func(r *agent.SealedReveal) { r.ExpiresAt = time.Time{} },
+		"an expiry at the reveal time": func(r *agent.SealedReveal) { r.ExpiresAt = r.At },
+	} {
+		r := sealed(run.ID)
+		change(&r)
+
+		rec := turnRecord(run.ID, "masked result")
+		rec.Reveals = []agent.SealedReveal{r}
+
+		err := h.Runs.RecordTurn(t.Context(), op.Claim.Step(agent.StepTools), rec, noNext())
+		if !errors.Is(err, agent.ErrInvalid) {
+			t.Fatalf("RecordTurn() with a reveal with %s = %v, want ErrInvalid", name, err)
+		}
+	}
+
+	wantReveals(t, h, run.ID, 0)
+}
+
+// wantOrphans fails t unless Orphans answers the runs ids, in order.
+func wantOrphans(t *testing.T, h RunHarness, ids ...agent.RunID) {
+	t.Helper()
+
+	got, err := h.Runs.Orphans(t.Context(), orphanLimit)
+	if err != nil {
+		t.Fatalf("Orphans() = %v", err)
+	}
+
+	gotIDs := make([]agent.RunID, 0, len(got))
+	for i := range got {
+		gotIDs = append(gotIDs, got[i].ID)
+	}
+
+	if !slices.Equal(gotIDs, ids) {
+		t.Fatalf("Orphans() = %v, want %v", gotIDs, ids)
+	}
+}
+
+// orphanLimit is the limit of the Orphans calls of the suite.
+const orphanLimit = 10
+
+func caseReapFailed(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	req := NewRunFor("ana", "k1")
+	req.Limits.MaxActiveForSubject = 1
+	run := mustCreate(t, h, req)
+	op := claimTurn(t, h)
+	recordReveal(t, h, op, run.ID)
+
+	// The durable runner fails the turn for good: at its failure limit or
+	// its expiry limit, both end with a final failure. No step ends the run.
+	failure := durable.Failure{Message: "the model step failed", Final: true, RetryAfter: 0}
+	if err := h.Ops.Fail(t.Context(), op.Claim, failure); err != nil {
+		t.Fatalf("Fail() = %v", err)
+	}
+
+	wantOrphans(t, h, run.ID)
+
+	got, err := h.Runs.Reap(t.Context(), run.ID)
+	if err != nil || got.State != agent.StateFailed || got.Stop != agent.StopTurnFailed ||
+		got.LastError != agent.ErrTurnFailed.Error() {
+		t.Fatalf("Reap() = %+v, %v, want a failed run with the stop turn-failed", got, err)
+	}
+
+	wantReveals(t, h, run.ID, 0)
+	wantOrphans(t, h)
+
+	if _, err := h.Runs.Reap(t.Context(), run.ID); !errors.Is(err, agent.ErrFinished) {
+		t.Fatalf("second Reap() = %v, want ErrFinished", err)
+	}
+
+	// The run freed its place in the limit of active runs.
+	next := NewRunFor("ana", "k2")
+	next.Limits.MaxActiveForSubject = 1
+	mustCreate(t, h, next)
+}
+
+func caseReapCanceled(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	run := mustCreate(t, h, NewRunFor("ana", "k1"))
+
+	if _, err := h.Runs.RequestCancel(t.Context(), run.ID, "ana"); err != nil {
+		t.Fatalf("RequestCancel() = %v", err)
+	}
+
+	// The turn operation is still pending, so its cancel ends it at once,
+	// and no step of the turn runs to end the run.
+	op, _, err := h.Ops.Start(t.Context(), turnStart(run.ID, 1))
+	if err != nil {
+		t.Fatalf("Start() of the existing turn = %v", err)
+	}
+
+	if cerr := h.Ops.Cancel(t.Context(), op.ID); cerr != nil {
+		t.Fatalf("Cancel() of the turn = %v", cerr)
+	}
+
+	wantOrphans(t, h, run.ID)
+
+	got, err := h.Runs.Reap(t.Context(), run.ID)
+	if err != nil || got.State != agent.StateCanceled || got.Stop != agent.StopCanceled {
+		t.Fatalf("Reap() = %+v, %v, want a canceled run", got, err)
+	}
+}
+
+func caseReapActive(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	run := mustCreate(t, h, NewRunFor("ana", "k1"))
+	wantOrphans(t, h)
+
+	if _, err := h.Runs.Reap(t.Context(), run.ID); !errors.Is(err, agent.ErrTurnActive) {
+		t.Fatalf("Reap() of a run with a pending turn = %v, want ErrTurnActive", err)
+	}
+
+	claimTurn(t, h)
+
+	if _, err := h.Runs.Reap(t.Context(), run.ID); !errors.Is(err, agent.ErrTurnActive) {
+		t.Fatalf("Reap() of a run with a running turn = %v, want ErrTurnActive", err)
+	}
+
+	if _, err := h.Runs.Reap(t.Context(), "no-such-run"); !errors.Is(err, agent.ErrNotFound) {
+		t.Fatalf("Reap() of an unknown run = %v, want ErrNotFound", err)
+	}
+}
+
+func caseOrphansLimit(t *testing.T, h RunHarness) {
+	t.Helper()
+
+	for _, limit := range []int{0, agent.MaxRunList + 1} {
+		if _, err := h.Runs.Orphans(t.Context(), limit); !errors.Is(err, agent.ErrInvalid) {
+			t.Fatalf("Orphans(%d) = %v, want ErrInvalid", limit, err)
+		}
 	}
 }

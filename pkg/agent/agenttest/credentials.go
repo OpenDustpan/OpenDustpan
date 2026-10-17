@@ -13,8 +13,11 @@ import (
 // of the credential.
 type CredentialsHarness struct {
 	Credentials agent.Credentials
-	// Token makes an access token that is valid now.
+	// Token makes a personal access token that is valid now.
 	Token func(t *testing.T) (subject, credentialID string)
+	// ServiceToken makes a service token that is valid now: its principal
+	// cannot sign in to the console.
+	ServiceToken func(t *testing.T) (subject, credentialID string)
 	// Session makes a console session that is valid now.
 	Session func(t *testing.T) (subject, credentialID string)
 	// BreakGlass makes a break-glass session that is valid now.
@@ -44,6 +47,7 @@ func RunCredentials(t *testing.T, f CredentialsFactory) {
 	}{
 		{name: "valid token and session", run: caseCredentialsValid},
 		{name: "break-glass session", run: caseCredentialsBreakGlass},
+		{name: "service token", run: caseCredentialsService},
 		{name: "revoked token", run: caseCredentialsRevoked},
 		{name: "expired credentials", run: caseCredentialsExpired},
 		{name: "ended session", run: caseCredentialsSessionEnded},
@@ -77,8 +81,8 @@ func caseCredentialsValid(t *testing.T, h CredentialsHarness) {
 		subject, id := mk(t)
 
 		got, err := h.Credentials.Resolve(t.Context(), subject, id)
-		if err != nil || got.Principal.Subject != subject || got.BreakGlass {
-			t.Fatalf("Resolve() of a %s = %+v, %v, want the principal %q, not break-glass", what, got, err, subject)
+		if err != nil || got.Principal.Subject != subject || got.BreakGlass || got.ServicePrincipal {
+			t.Fatalf("Resolve() of a %s = %+v, %v, want the person %q, not break-glass", what, got, err, subject)
 		}
 	}
 }
@@ -95,6 +99,17 @@ func caseCredentialsBreakGlass(t *testing.T, h CredentialsHarness) {
 
 	h.Expire(t, id)
 	wantEnded(t, h, "a break-glass session past its time limit", subject, id)
+}
+
+func caseCredentialsService(t *testing.T, h CredentialsHarness) {
+	t.Helper()
+
+	subject, id := h.ServiceToken(t)
+
+	got, err := h.Credentials.Resolve(t.Context(), subject, id)
+	if err != nil || got.Principal.Subject != subject || !got.ServicePrincipal {
+		t.Fatalf("Resolve() of a service token = %+v, %v, want ServicePrincipal", got, err)
+	}
 }
 
 func caseCredentialsRevoked(t *testing.T, h CredentialsHarness) {

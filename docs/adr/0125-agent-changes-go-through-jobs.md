@@ -1,8 +1,6 @@
 # 125. Agent changes go through the job model as review requests or approve-first
 
-Status: accepted · 2026-10-17. The decisions of the project owner and the
-project manager below are accepted. The other decisions take effect when the
-project lead accepts the pull request of this ADR.
+Status: accepted · 2026-10-17
 
 ## Context
 
@@ -22,7 +20,8 @@ change fits the job model:
 - The methods of `job.Service` take that actor.
 - The job model records the agent on the job, on each approval, on the
   input of the policy decision and in each audit entry.
-- An agent never approves a job and never uses break-glass.
+- An agent never records an approve verdict and never uses break-glass. An
+  agent may record a rejection.
 - In approve-first mode, a job of an agent gets a "confirmation" gate that
   only the requesting person can pass: a request of that person, with a
   fresh MFA step. The gate holds also when no policy is installed.
@@ -101,13 +100,21 @@ that pull request decides the final names.
    started the job passes it: a request of a console session of that
    person, with a fresh MFA step (ADR 56, ADR 71). An access token cannot
    pass it, so an agent that holds the token of its person cannot pass
-   the gate of its own change. The console page shows the plan, the diff of the edits
+   the gate of its own change. A principal that cannot sign in to the
+   console, for example the principal of a service token, has nobody who
+   can pass the gate, so `Changes.Start` refuses its request at once with
+   `ErrServicePrincipal`, and the `Toolset` refuses its `propose_change`
+   before it calls the port (ADR 122 decision 4). The console page shows the plan, the diff of the edits
    or the stored plan of the job, the reason of the agent and the agent
    (run or MCP session).
 6. **The other gates stay.** A gate from a policy (ADR 103) adds to the
    confirmation gate. Its approvers need `job:approve` as for every job. An
-   agent never approves: the port has no approve method, and the job model
-   refuses an approval whose request carries an agent.
+   agent may not record an approve verdict: the job model refuses a verdict
+   `approve` whose actor carries an agent (`job.ErrAgentDenied`), on every
+   gate, and no approve counts toward a gate. An agent may record a
+   rejection: a reject only stops a change, so it cannot widen what the
+   agent does. `agent.Changes` offers neither verdict today: a tool that
+   rejects is a change of the catalog (ADR 122 decision 14).
 
 ### The port to the job model
 
@@ -122,7 +129,7 @@ that pull request decides the final names.
    | `Start(ctx, req)` | `Start(ctx, actor, StartRequest)` | the person as the principal, the agent on the job |
    | `Get(ctx, actor, id)` | `Get(ctx, actor, id)` | `job:read`. `ErrChangeNotFound` also for a job that the person cannot read. |
    | `Cancel(ctx, actor, id, reason)` | `Cancel(ctx, actor, id, reason)` | `job:cancel` |
-   | none | `Approve` | an agent never approves |
+   | none | `Approve` | the job model refuses an approve verdict of an agent and accepts a reject. The port has no method for either today. |
 
    A `ChangeID` is the job ID. A `ChangeState` is the job state, with the 11
    states of ADR 100: `queued`, `awaiting-approval`, `dispatched`,
@@ -159,20 +166,37 @@ that pull request decides the final names.
 ### What the job model records
 
 13. **The shape that the agent needs from the job model.** The pull request
-    of the job model decides the final names. The agent needs:
-    - a `job.Actor` with the principal and an optional agent reference
-      (channel, run ID, MCP session ID), taken by `Start`, `Get`, `Cancel`
-      and `Approve`,
+    of the job model decides the final names. **This ADR depends on it**:
+    the agent cannot start a change until the job model carries these, and
+    the draft of the job model does not carry all of them yet. Its draft
+    has `Agent string` on `job.Actor`, `job.Job`, `job.Approval` and
+    `job.DecisionInput`, refuses an approve verdict of an agent and accepts
+    a reject, and has no confirmation gate kind. The agent needs:
+    - **the full agent reference.** A `job.Actor` with the principal and
+      an optional agent reference with the same fields as `agent.Ref`: the
+      channel (`agent`, `mcp` or `mcp-proxy`), and the run ID or the MCP
+      session ID, taken by `Start`, `Get`, `Cancel` and `Approve`. One
+      string is not enough: the audit entries, the console page of the gate
+      and a policy need the channel and the ID apart, and `Ref.Validate`
+      needs to refuse a reference with no ID or with the ID of the other
+      channel.
     - the agent reference on `job.Job`, on each `job.Approval` (the agent
-      of the job that the approval decides), and on `job.DecisionInput`, so
-      a policy can treat a change of an agent in its own way,
-    - a gate kind "confirmation" on `job.Gate` that only `Job.StartedBy`
-      passes, with a human request and a fresh MFA step, set from
-      `ChangePlan.Confirm`,
+      that recorded the verdict), and on `job.DecisionInput`, so a policy
+      can treat a change of an agent in its own way,
+    - **a gate kind "confirmation"** on `job.Gate` that only
+      `Job.StartedBy` passes, with a human request (a console session, not
+      an access token) and a fresh MFA step, set from `ChangePlan.Confirm`,
+      which holds also when no policy is installed and is not an approval:
+      `Gate.Approvals`, `Groups` and `AllowSelf` do not apply to it,
     - the fields `agentRun`, `agentSession` and `breakGlass` (the session
       flag) in each audit entry of the job (ADR 126 decision 4),
-    - an approval that carries an agent fails, also on a gate from a
-      policy.
+    - an approve verdict that carries an agent fails, also on a gate from a
+      policy. A reject verdict of an agent is allowed,
+    - a start for a principal that cannot sign in to the console, through
+      an agent, fails with an error that the port maps to
+      `ErrServicePrincipal`,
+    - the job routes refuse a start with an access token that used a
+      consent (`agent.ConsentStore.Revealed`, ADR 124 decision 12).
 
 ### Change freezes and break-glass
 
@@ -200,15 +224,18 @@ that pull request decides the final names.
     confirmation by another person (denied) and by the person who asked, a
     start twice with one key, one key with another request, a review
     request with no code location, direct mode with no switch, a change
-    freeze, a person without the action, a request that is not valid (no
-    key, unknown operation, no reason, no agent), a get and a cancel. A
+    freeze, a person without the action, a service principal (refused with
+    `ErrServicePrincipal`), a request that is not valid (no key, unknown
+    operation, no reason, no agent), a get and a cancel. A
     test in the suite package runs the suite against a fake job model, so
     the cases run on each change.
 
 ## Consequences
 
 - The job model must implement `agent.Changes`, run its suite, and give
-  each job the agent fields of decision 13. If its design needs another
+  each job the agent fields of decision 13: the full agent reference in
+  place of one string, and the confirmation gate kind. Until it does,
+  `propose_change` has no implementation. If its design needs another
   shape, that design wins and this port follows it.
 - A review request needs a code location for the unit (RFC 12). A unit
   with no code location gets a runner job with approve-first by default.

@@ -21,7 +21,8 @@ func TestGateStoresSuite(t *testing.T) {
 		t.Helper()
 
 		f := &fakeGateStores{
-			mu: sync.Mutex{}, windows: nil, maintenance: false, consents: map[string]agent.Consent{},
+			mu: sync.Mutex{}, windows: nil, latest: map[string]string{}, maintenance: false,
+			consents:     map[string]agent.Consent{},
 			installation: nil, optIns: map[string]agent.PersonOptIns{},
 		}
 
@@ -38,9 +39,12 @@ func TestGateStoresSuite(t *testing.T) {
 
 // fakeGateStores holds the rows of the three gate stores in memory, under
 // one lock, as one database does. It ignores fences and audit entries.
+// latest maps an instance to the window of its latest join, or to "" after
+// a Leave.
 type fakeGateStores struct {
 	mu           sync.Mutex
 	windows      []agent.SecretWindow
+	latest       map[string]string
 	maintenance  bool
 	consents     map[string]agent.Consent
 	installation *agent.InstallationSettings
@@ -68,6 +72,8 @@ func (s fakeWindows) JoinOrOpen(_ context.Context, instance string, at time.Time
 			w.Instances = append(w.Instances, instance)
 		}
 
+		s.f.latest[instance] = w.ID
+
 		return *w, false, nil
 	}
 
@@ -76,6 +82,7 @@ func (s fakeWindows) JoinOrOpen(_ context.Context, instance string, at time.Time
 		Acceptance: nil, ClosedAt: time.Time{},
 	}
 	s.f.windows = append(s.f.windows, w)
+	s.f.latest[instance] = w.ID
 	s.f.maintenance = true
 
 	return w, true, nil
@@ -104,7 +111,7 @@ func (s fakeWindows) Accept(_ context.Context, id string, a agent.Acceptance, _ 
 	return *w, nil
 }
 
-func (s fakeWindows) Close(_ context.Context, id string, at time.Time) (agent.SecretWindow, error) {
+func (s fakeWindows) Close(_ context.Context, id string, at time.Time, _ audit.Entry) (agent.SecretWindow, error) {
 	s.f.mu.Lock()
 	defer s.f.mu.Unlock()
 
@@ -121,19 +128,52 @@ func (s fakeWindows) Close(_ context.Context, id string, at time.Time) (agent.Se
 	return *w, nil
 }
 
+func (s fakeWindows) Leave(_ context.Context, instance string, _ time.Time, _ audit.Entry) error {
+	s.f.mu.Lock()
+	defer s.f.mu.Unlock()
+
+	if _, ok := s.f.latest[instance]; ok {
+		s.f.latest[instance] = ""
+	}
+
+	return nil
+}
+
 func (s fakeWindows) ForInstance(_ context.Context, instance string) (agent.SecretWindow, bool, error) {
 	s.f.mu.Lock()
 	defer s.f.mu.Unlock()
 
-	for i := range slices.Backward(s.f.windows) {
-		if slices.Contains(s.f.windows[i].Instances, instance) {
-			return s.f.windows[i], true, nil
-		}
+	if w := s.byID(s.f.latest[instance]); w != nil {
+		return *w, true, nil
 	}
 
 	var none agent.SecretWindow
 
 	return none, false, nil
+}
+
+func (s fakeWindows) Exposed(context.Context) (bool, error) {
+	s.f.mu.Lock()
+	defer s.f.mu.Unlock()
+
+	for instance, id := range s.f.latest {
+		if w := s.byID(id); w != nil && w.Covers(instance) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// byID returns the window id, or nil. The caller holds the lock.
+func (s fakeWindows) byID(id string) *agent.SecretWindow {
+	for i := range s.f.windows {
+		if id != "" && s.f.windows[i].ID == id {
+			return &s.f.windows[i]
+		}
+	}
+
+	return nil
 }
 
 // open returns the open window id. The caller holds the lock.
@@ -218,12 +258,29 @@ func (s fakeConsents) Use(_ context.Context, u agent.ConsentUse) error {
 	return nil
 }
 
-func (s fakeConsents) SessionRevealed(_ context.Context, sessionID string) (bool, error) {
+func (s fakeConsents) Lookup(_ context.Context, u agent.ConsentUse) (agent.Consent, error) {
+	s.f.mu.Lock()
+	defer s.f.mu.Unlock()
+
+	c, ok := s.f.consents[u.ID]
+	if !ok || c.Subject != u.Subject || c.TokenID != u.TokenID || c.SessionID != u.SessionID || c.Tool != u.Tool ||
+		c.Unit != u.Unit {
+		var zero agent.Consent
+
+		return zero, agent.ErrConsentNotFound
+	}
+
+	return c, nil
+}
+
+func (s fakeConsents) Revealed(_ context.Context, tokenID, sessionID string) (bool, error) {
 	s.f.mu.Lock()
 	defer s.f.mu.Unlock()
 
 	for id := range s.f.consents {
-		if c := s.f.consents[id]; c.SessionID == sessionID && !c.UsedAt.IsZero() {
+		c := s.f.consents[id]
+		if !c.UsedAt.IsZero() &&
+			((tokenID != "" && c.TokenID == tokenID) || (sessionID != "" && c.SessionID == sessionID)) {
 			return true, nil
 		}
 	}
@@ -250,14 +307,14 @@ func (s fakeSettings) Installation(context.Context) (agent.InstallationSettings,
 	defer s.f.mu.Unlock()
 
 	if s.f.installation == nil {
-		return agent.InstallationSettings{Limits: agent.DefaultLimits(), DirectChanges: false, MCPEnabled: false}, nil
+		return agent.DefaultInstallationSettings(), nil
 	}
 
 	return *s.f.installation, nil
 }
 
 func (s fakeSettings) PutInstallation(_ context.Context, in agent.InstallationSettings, _ audit.Entry) error {
-	if err := in.Limits.Validate(); err != nil {
+	if err := in.Validate(); err != nil {
 		return fmt.Errorf("installation settings: %w", err)
 	}
 

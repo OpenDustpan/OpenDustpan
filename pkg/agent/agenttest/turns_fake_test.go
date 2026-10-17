@@ -30,7 +30,7 @@ func TestTurnsSuite(t *testing.T) {
 			Start: func(t *testing.T) agent.Run {
 				t.Helper()
 
-				subject := creds.add(false)
+				subject := creds.add(false, false)
 				req := agenttest.NewRunFor(subject, "k1")
 				req.CredentialID = credentialOf(subject)
 

@@ -1,8 +1,6 @@
 # 120. Dusty, the built-in agent, runs on durable operations
 
-Status: accepted · 2026-10-17. The decisions of the project owner and the
-project manager below are accepted. The other decisions take effect when the
-project lead accepts the pull request of this ADR.
+Status: accepted · 2026-10-17
 
 ## Context
 
@@ -131,6 +129,22 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
     continues from the last recorded step (ADR 72 decision 2). A run holds
     no claim between turns, and a run waits for no person: a change that
     waits for approval does not keep a run open (ADR 125).
+
+    A turn can also end with no step that ends its run: the durable runner
+    fails it for good at its failure limit (`MaxAttempts`) or its expiry
+    limit (`ExpiryLimit`), or a cancel ends it while it is pending. A
+    reaper ends such a run. The reap operation (`agent.KindReap`, from
+    `agent.ReapKind`) runs on the durable scheduler every minute
+    (`agent.ReapSchedule`), on one instance. It deletes each sealed reveal
+    past its hard expiry (`RunStore.SweepReveals`, decision 22), then ends
+    each run that `RunStore.Orphans` lists through `RunStore.Reap`: canceled
+    when a cancel was requested or the turn ended canceled, and otherwise
+    failed with the stop reason `turn-failed`. `Reap` checks in its own
+    transaction that the latest turn operation of the run ended, shreds the
+    sealed reveals of the run, and frees its place in the limits of active
+    runs (decision 16). `agenttest.RunRunStore` has a case for a turn that
+    failed for good, a turn that a cancel ended, and a run with a live
+    turn.
 11. **Effects happen once.** A step that proposes or cancels a change
     passes a key that it makes from the run, the turn and the index of the
     call. The job model gives one change for one key. So a turn that runs
@@ -159,9 +173,16 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
     revoke after the `model` step, release the claim, claim again, and run
     the `tools` step. It runs no tool call and ends the run with
     `credential-ended`. `agenttest.RunCredentials` checks the port itself:
-    a valid token and session, a break-glass session, a revoke, an expiry,
-    a sign-out, a disabled principal, the credential of another subject and
-    an unknown credential.
+    a valid token and session, a break-glass session, a service token, a
+    revoke, an expiry, a sign-out, a disabled principal, the credential of
+    another subject and an unknown credential.
+
+    The resolve also tells whether the principal can sign in to the
+    console (`Resolved.ServicePrincipal`, `Actor.ServicePrincipal`). The
+    principal of a service token (ADR 53 decision 7) cannot. Nobody can
+    pass the confirmation gate of its change or approve its consent, so a
+    `propose_change` and a secret read of a service principal fail at once
+    with `ErrServicePrincipal` (ADR 122 decision 4).
 14. **The run ends with its credential.** When the credential expires, a
     person revokes it, the session ends, the principal is disabled or a
     break-glass session reaches its time limit, the run ends with the stop
@@ -241,8 +262,13 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
     tool results of a run go to their own table. They never go to an audit
     entry, a log record or a metric. The transcript holds only masked
     values: a revealed value is sealed in its own table until the next
-    model step, and then shredded (ADR 124 decision 9). The table is in the
-    backup (ADR 30). A
+    model step, and then shredded (ADR 124 decision 9). Each sealed reveal
+    also has a hard expiry, `SealedReveal.ExpiresAt`: its time plus the
+    time limit of the run (`agent.RevealExpiry`). A run never lives longer
+    than its time limit, so no sealed reveal outlives its run, also when no
+    step of the run shreds it. `RunStore.Reveals` answers no reveal after
+    its expiry, and the reaper deletes it (decision 10). The transcript
+    table is in the backup (ADR 30). The table of sealed reveals is not. A
     setting deletes transcripts after a retention period: 30 days by
     default. The run record and its audit entries stay.
 23. **The system prompt is in the binary.** The server sends a fixed system
@@ -271,9 +297,10 @@ cancel and the cost record. ADRs 121 to 127 record the other parts.
 - New ports with conformance suites in `agenttest`: `Model` (ADR 121,
   `RunModel`), `Changes` (ADR 125, `RunChanges`), `RunStore`
   (`RunRunStore`), `Credentials` (`RunCredentials`), `Toolset` (ADR 122,
-  `RunToolset`), the loop on the durable runner (`RunTurns`), and the
-  stores of the settings, the maintenance windows and the consents (ADR
-  124, `RunGateStores`). The read ports of the `Toolset` (ADR 122 decision
+  `RunToolset`), the loop on the durable runner (`RunTurns`), the stores
+  of the settings, the maintenance windows and the consents (ADR 124,
+  `RunGateStores`), and the sealer of reveals (ADR 124,
+  `RunRevealSealer`). The read ports of the `Toolset` (ADR 122 decision
   12) are tested by the suites of the packages that own the data.
 - Each SQL store gets the tables of runs, transcripts, sealed reveals, the
   token ledger, the agent settings, the maintenance windows and the

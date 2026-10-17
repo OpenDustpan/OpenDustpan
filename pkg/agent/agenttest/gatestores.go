@@ -41,11 +41,15 @@ func RunGateStores(t *testing.T, f GateStoresFactory) {
 		{name: "a start after the acceptance opens a new window", run: caseWindowReopen},
 		{name: "acceptance needs the text and a fresh MFA step", run: caseWindowAcceptInvalid},
 		{name: "window closed with no acceptance", run: caseWindowClose},
+		{name: "exposed while an accepted window covers an instance", run: caseWindowExposed},
 		{name: "consent is used once", run: caseConsentOnce},
 		{name: "consent needs an approval", run: caseConsentApproval},
 		{name: "consent of another call", run: caseConsentOther},
+		{name: "lookup is bound to the call", run: caseConsentLookup},
+		{name: "a used consent marks the token", run: caseConsentRevealedToken},
 		{name: "settings defaults", run: caseSettingsDefaults},
 		{name: "settings refuse a zero limit", run: caseSettingsZeroLimit},
+		{name: "settings refuse a zero MCP rate limit", run: caseSettingsZeroRate},
 		{name: "opt-in needs a valid acceptance", run: caseSettingsOptIn},
 	}
 
@@ -178,18 +182,89 @@ func caseWindowAcceptInvalid(t *testing.T, h GateStoresHarness) {
 	}
 }
 
+// closeEntry returns the audit entry of a window closed with no acceptance.
+func closeEntry() audit.Entry {
+	return TestEntry(audit.ServerScope, "admin", "server:end-maintenance")
+}
+
 func caseWindowClose(t *testing.T, h GateStoresHarness) {
 	t.Helper()
 
 	w, _ := join(t, h, "i1")
 
-	got, err := h.Windows.Close(t.Context(), w.ID, time.Now())
+	got, err := h.Windows.Close(t.Context(), w.ID, time.Now(), closeEntry())
 	if err != nil || got.Open() || got.Covers("i1") {
 		t.Fatalf("Close() = %+v, %v, want a closed window that covers no instance", got, err)
 	}
 
-	if _, err := h.Windows.Close(t.Context(), w.ID, time.Now()); !errors.Is(err, agent.ErrWindowClosed) {
+	if _, err := h.Windows.Close(t.Context(), w.ID, time.Now(), closeEntry()); !errors.Is(err, agent.ErrWindowClosed) {
 		t.Fatalf("second Close() = %v, want ErrWindowClosed", err)
+	}
+
+	if _, err := h.Windows.Close(t.Context(), "no-such-window", time.Now(), closeEntry()); !errors.Is(
+		err, agent.ErrWindowNotFound,
+	) {
+		t.Fatalf("Close() of an unknown ID = %v, want ErrWindowNotFound", err)
+	}
+}
+
+// exposed returns the answer of Exposed, and fails t on an error.
+func exposed(t *testing.T, h GateStoresHarness) bool {
+	t.Helper()
+
+	got, err := h.Windows.Exposed(t.Context())
+	if err != nil {
+		t.Fatalf("Exposed() = %v", err)
+	}
+
+	return got
+}
+
+func caseWindowExposed(t *testing.T, h GateStoresHarness) {
+	t.Helper()
+
+	if exposed(t, h) {
+		t.Fatal("Exposed() with no window = true, want false")
+	}
+
+	w, _ := join(t, h, "i1")
+	join(t, h, "i2")
+	if exposed(t, h) {
+		t.Fatal("Exposed() before the acceptance = true, want false")
+	}
+
+	if _, err := acceptWindow(t, h, w.ID); err != nil {
+		t.Fatalf("Accept() = %v", err)
+	}
+
+	if !exposed(t, h) {
+		t.Fatal("Exposed() after the acceptance = false, want true")
+	}
+
+	leave := func(instance string) {
+		t.Helper()
+
+		err := h.Windows.Leave(t.Context(), instance, time.Now(),
+			TestEntry(audit.ServerScope, "startup", "server:start"))
+		if err != nil {
+			t.Fatalf("Leave(%q) = %v", instance, err)
+		}
+	}
+
+	// One instance starts without the flag: the other still has the hatch
+	// open, so the whole installation stays exposed.
+	leave("i1")
+	if !exposed(t, h) {
+		t.Fatal("Exposed() while i2 is covered = false, want true")
+	}
+
+	if _, ok, err := h.Windows.ForInstance(t.Context(), "i1"); err != nil || ok {
+		t.Fatalf("ForInstance() after Leave() = %v, %v, want no window", ok, err)
+	}
+
+	leave("i2")
+	if exposed(t, h) {
+		t.Fatal("Exposed() after every instance left = true, want false")
 	}
 }
 
@@ -219,10 +294,7 @@ func approve(t *testing.T, h GateStoresHarness, c agent.Consent, subject string)
 func useConsent(t *testing.T, h GateStoresHarness, c agent.Consent) error {
 	t.Helper()
 
-	return h.Consents.Use(t.Context(), agent.ConsentUse{
-		ID: c.ID, Subject: c.Subject, TokenID: c.TokenID, SessionID: c.SessionID, Tool: c.Tool, Unit: c.Unit,
-		At: time.Now(),
-	})
+	return h.Consents.Use(t.Context(), useOf(c))
 }
 
 func caseConsentOnce(t *testing.T, h GateStoresHarness) {
@@ -260,8 +332,8 @@ func caseConsentOnce(t *testing.T, h GateStoresHarness) {
 	}
 
 	for session, want := range map[string]bool{c.SessionID: true, "mcp-other": false} {
-		if got, err := h.Consents.SessionRevealed(t.Context(), session); err != nil || got != want {
-			t.Fatalf("SessionRevealed(%q) = %v, %v, want %v", session, got, err, want)
+		if got, err := h.Consents.Revealed(t.Context(), "t-other", session); err != nil || got != want {
+			t.Fatalf("Revealed(session %q) = %v, %v, want %v", session, got, err, want)
 		}
 	}
 }
@@ -274,8 +346,8 @@ func caseConsentApproval(t *testing.T, h GateStoresHarness) {
 		t.Fatalf("Use() before the approval = %v, want ErrConsentNotUsable", err)
 	}
 
-	if got, err := h.Consents.SessionRevealed(t.Context(), c.SessionID); err != nil || got {
-		t.Fatalf("SessionRevealed() = %v, %v, want false: a refused use reveals nothing", got, err)
+	if got, err := h.Consents.Revealed(t.Context(), c.TokenID, c.SessionID); err != nil || got {
+		t.Fatalf("Revealed() = %v, %v, want false: a refused use reveals nothing", got, err)
 	}
 
 	if err := approve(t, h, c, "eve"); !errors.Is(err, agent.ErrConsentNotUsable) {
@@ -307,6 +379,71 @@ func caseConsentOther(t *testing.T, h GateStoresHarness) {
 	}
 }
 
+// useOf returns the use of c by its own call, now.
+func useOf(c agent.Consent) agent.ConsentUse {
+	return agent.ConsentUse{
+		ID: c.ID, Subject: c.Subject, TokenID: c.TokenID, SessionID: c.SessionID, Tool: c.Tool, Unit: c.Unit,
+		At: time.Now(),
+	}
+}
+
+func caseConsentLookup(t *testing.T, h GateStoresHarness) {
+	t.Helper()
+
+	c := newConsent(t, h)
+
+	got, err := h.Consents.Lookup(t.Context(), useOf(c))
+	if err != nil || got.ID != c.ID {
+		t.Fatalf("Lookup() by the call of the consent = %+v, %v, want consent %q", got, err, c.ID)
+	}
+
+	for name, change := range map[string]func(u *agent.ConsentUse){
+		"another session": func(u *agent.ConsentUse) { u.SessionID = "mcp-other" },
+		"another tool":    func(u *agent.ConsentUse) { u.Tool = agent.ToolDescribeUnit },
+		"another unit":    func(u *agent.ConsentUse) { u.Unit = "pulumi:acme/db" },
+		"another token":   func(u *agent.ConsentUse) { u.TokenID = "t-other" },
+		"another subject": func(u *agent.ConsentUse) { u.Subject = "eve" },
+		"an unknown ID":   func(u *agent.ConsentUse) { u.ID = "no-such-consent" },
+	} {
+		u := useOf(c)
+		change(&u)
+
+		if _, err := h.Consents.Lookup(t.Context(), u); !errors.Is(err, agent.ErrConsentNotFound) {
+			t.Fatalf("Lookup() from %s = %v, want ErrConsentNotFound", name, err)
+		}
+	}
+}
+
+func caseConsentRevealedToken(t *testing.T, h GateStoresHarness) {
+	t.Helper()
+
+	c := newConsent(t, h)
+	if err := approve(t, h, c, "ana"); err != nil {
+		t.Fatalf("Approve() = %v", err)
+	}
+
+	if err := useConsent(t, h, c); err != nil {
+		t.Fatalf("Use() = %v", err)
+	}
+
+	tests := []struct {
+		what           string
+		token, session string
+		want           bool
+	}{
+		{"the token in a new session", c.TokenID, "mcp-new", true},
+		{"the token with no session (the job routes)", c.TokenID, "", true},
+		{"another token in another session", "t-other", "mcp-new", false},
+		{"no token and no session", "", "", false},
+	}
+
+	for _, tt := range tests {
+		if got, err := h.Consents.Revealed(t.Context(), tt.token, tt.session); err != nil || got != tt.want {
+			t.Fatalf("Revealed() for %s = %v, %v, want %v", tt.what, got, err, tt.want)
+		}
+	}
+}
+
 func caseSettingsDefaults(t *testing.T, h GateStoresHarness) {
 	t.Helper()
 
@@ -315,8 +452,10 @@ func caseSettingsDefaults(t *testing.T, h GateStoresHarness) {
 	}
 
 	got, err := h.Settings.Installation(t.Context())
-	if err != nil || got.MCPEnabled || got.DirectChanges || got.Limits != agent.DefaultLimits() {
-		t.Fatalf("Installation() = %+v, %v, want the defaults: MCP off, no direct changes", got, err)
+	if err != nil || got != agent.DefaultInstallationSettings() ||
+		got.MCPCallsPerMinute != agent.DefaultMCPCallsPerMinute {
+		t.Fatalf("Installation() = %+v, %v, want the defaults: MCP off, no direct changes, 60 MCP calls a minute",
+			got, err)
 	}
 
 	if o, ok, err := h.Settings.AccountSecretOptIn(t.Context()); err != nil || ok || o.Active() {
@@ -327,12 +466,34 @@ func caseSettingsDefaults(t *testing.T, h GateStoresHarness) {
 func caseSettingsZeroLimit(t *testing.T, h GateStoresHarness) {
 	t.Helper()
 
-	s := agent.InstallationSettings{Limits: agent.DefaultLimits(), DirectChanges: false, MCPEnabled: true}
+	s := agent.DefaultInstallationSettings()
+	s.MCPEnabled = true
 	s.Limits.MaxActive = 0
 
 	err := h.Settings.PutInstallation(t.Context(), s, TestEntry(audit.ServerScope, "admin", "server:manage-agent"))
 	if !errors.Is(err, agent.ErrInvalid) {
 		t.Fatalf("PutInstallation() with a zero limit = %v, want ErrInvalid", err)
+	}
+}
+
+func caseSettingsZeroRate(t *testing.T, h GateStoresHarness) {
+	t.Helper()
+
+	s := agent.DefaultInstallationSettings()
+	s.MCPEnabled, s.MCPCallsPerMinute = true, 0
+	entry := TestEntry(audit.ServerScope, "admin", "server:manage-agent")
+
+	if err := h.Settings.PutInstallation(t.Context(), s, entry); !errors.Is(err, agent.ErrInvalid) {
+		t.Fatalf("PutInstallation() with an MCP rate limit of 0 = %v, want ErrInvalid: 0 is never \"no limit\"", err)
+	}
+
+	s.MCPCallsPerMinute = 120
+	if err := h.Settings.PutInstallation(t.Context(), s, entry); err != nil {
+		t.Fatalf("PutInstallation() = %v", err)
+	}
+
+	if got, err := h.Settings.Installation(t.Context()); err != nil || got.MCPCallsPerMinute != 120 {
+		t.Fatalf("Installation() = %+v, %v, want 120 MCP calls a minute", got, err)
 	}
 }
 

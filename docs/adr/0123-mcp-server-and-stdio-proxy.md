@@ -1,8 +1,6 @@
 # 123. An MCP endpoint and a stdio proxy offer the same tools
 
-Status: accepted · 2026-10-17. The decisions of the project owner and the
-project manager below are accepted. The other decisions take effect when the
-project lead accepts the pull request of this ADR.
+Status: accepted · 2026-10-17
 
 ## Context
 
@@ -36,7 +34,10 @@ is approved, pinned to a release that is at least two weeks old.
    the `Authorization` header: a personal token or a service token (ADR
    53). The server authenticates it as it authenticates an API request. The
    actor of each call is the principal of the token, with the channel
-   `mcp`. The authorization flow of the MCP specification (OAuth) can come
+   `mcp`. The principal of a service token cannot sign in to the console,
+   so it cannot pass a confirmation gate or approve a consent: its
+   `propose_change` and its secret reads fail at once with
+   `ErrServicePrincipal` (ADR 122 decision 4). Its masked reads work. The authorization flow of the MCP specification (OAuth) can come
    later, with the sign-in methods of ADR 55.
 4. **No state in an instance.** The endpoint answers each request on its
    own. It makes an `Mcp-Session-Id` at `initialize` and keeps no session
@@ -49,9 +50,13 @@ is approved, pinned to a release that is at least two weeks old.
    gets one change (ADR 120 decision 11).
 6. **Limits.** A call through MCP uses no model of the installation, so
    the outside agent pays for its own tokens. Each call has the byte limit
-   of a tool result (ADR 120 decision 16). Each token has a rate limit of
-   60 tool calls in each minute by default, which an administrator can set.
-   A call above it answers the JSON-RPC error of a rate limit.
+   of a tool result (ADR 120 decision 16). Each access token has a rate
+   limit of tool calls in each minute, through all its MCP sessions and on
+   every instance: `agent.InstallationSettings.MCPCallsPerMinute`, 60 by
+   default (`agent.DefaultMCPCallsPerMinute`). An administrator with
+   `server:manage-agent` sets it with `PUT /api/agent/settings`. It is
+   above 0: `InstallationSettings.Validate` refuses 0, which never means
+   "no limit". A call above it answers the JSON-RPC error of a rate limit.
 7. **Off by default. An administrator turns it on.** The endpoint and the
    stdio proxy are off until an administrator with `server:manage-agent`
    sets `mcpEnabled: true` with `PUT /api/agent/settings`
@@ -80,24 +85,29 @@ is approved, pinned to a release that is at least two weeks old.
 10. **Per-use consent for secret values.** An outside agent that asks for
     secret values passes the secret gate (ADR 124) and also needs a
     consent for that one use. The person gives it in the console, never
-    through MCP:
-    - The call answers an error result with the URL of a consent page and
-      the ID of the consent. The proxy also writes the URL to stderr, so
-      the person sees it in the terminal.
+    through MCP. The shape is the one of ADR 122 decision 7:
+    - The call succeeds. Its result holds the masked values,
+      `closedStage: "use-consent"`, the ID of a new pending consent in
+      `consentID`, and the URL of its consent page in `consentURL`. The
+      proxy also writes the URL to stderr, so the person sees it in the
+      terminal. A call while an earlier stage is closed makes no consent.
     - The person opens the URL in the console. The page shows the tool,
       the unit and the client. The approval route accepts a console session
       with a fresh MFA step (ADR 56, ADR 71) and refuses an access token.
       So an agent that holds the token of its person cannot approve its
-      own consent.
-    - The approval holds for one call of that tool on that unit with the
-      same token, in the same MCP session, for 5 minutes. The agent sends
-      the call again, and the server uses the consent once
-      (`agent.ConsentStore.Use`).
-    - A session that used a consent cannot propose a change for the rest of
-      its life (ADR 124 decision 12).
+      own consent, and a service principal has nobody who can.
+    - The agent calls `read_state` again with `consentID`. The server finds
+      the consent with `agent.ConsentStore.Lookup`, bound to the person,
+      the token, the MCP session, the tool and the unit, and uses it once
+      (`ConsentStore.Use`). The approval holds for one call, for 5 minutes
+      from the create of the consent. A second call with the same ID gets
+      the refusal again, with a new consent.
+    - A token or a session that used a consent cannot propose a change for
+      the rest of the life of the token (ADR 124 decision 12).
 
     The route `POST /api/agent/secret-consents/{id}/approve` checks
-    `unit:read-secrets` on the unit and needs a console session.
+    `unit:read-secrets` on the unit and needs a console session of the
+    person of the consent.
 
 ## Consequences
 

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -24,8 +25,13 @@ type Connection struct {
 	ConnectedAt     time.Time
 }
 
-// InstallationSettings are the agent settings of an installation. The zero
-// value is the default: no direct changes and no MCP endpoint.
+// DefaultMCPCallsPerMinute is the default rate limit of the tool calls of
+// one access token on the MCP endpoint.
+const DefaultMCPCallsPerMinute = 60
+
+// InstallationSettings are the agent settings of an installation.
+// DefaultInstallationSettings gives the defaults: the default limits, no
+// direct changes and no MCP endpoint.
 type InstallationSettings struct {
 	// Limits are the limits of the installation. Every field is above 0.
 	Limits Limits
@@ -34,6 +40,36 @@ type InstallationSettings struct {
 	// MCPEnabled turns on the MCP endpoint and the stdio proxy. An
 	// administrator with ActionServerManageAgent turns it on.
 	MCPEnabled bool
+	// MCPCallsPerMinute bounds the tool calls of one access token on the
+	// MCP endpoint, through every session and instance, in each minute. A
+	// call above it answers the JSON-RPC error of a rate limit. It is above
+	// 0: 0 is never "no limit".
+	MCPCallsPerMinute int
+}
+
+// DefaultInstallationSettings returns the settings of an installation that
+// sets none.
+func DefaultInstallationSettings() InstallationSettings {
+	return InstallationSettings{
+		Limits:            DefaultLimits(),
+		DirectChanges:     false,
+		MCPEnabled:        false,
+		MCPCallsPerMinute: DefaultMCPCallsPerMinute,
+	}
+}
+
+// Validate returns ErrInvalid for limits that fail Limits.Validate and for
+// an MCP rate limit of 0 or less.
+func (s InstallationSettings) Validate() error {
+	if err := s.Limits.Validate(); err != nil {
+		return err
+	}
+
+	if s.MCPCallsPerMinute <= 0 {
+		return fmt.Errorf("%w: the MCP rate limit must be above 0", ErrInvalid)
+	}
+
+	return nil
 }
 
 // NamespaceSettings are the agent settings of a namespace. Lower holds the
@@ -82,11 +118,11 @@ type SettingsStore interface {
 	// connection is set.
 	DeleteConnection(ctx context.Context, e audit.Entry) error
 
-	// Installation returns the settings of the installation, or the
-	// defaults when none are set.
+	// Installation returns the settings of the installation, or
+	// DefaultInstallationSettings when none are set.
 	Installation(ctx context.Context) (InstallationSettings, error)
 	// PutInstallation sets the settings of the installation. It returns
-	// ErrInvalid for limits that fail Limits.Validate.
+	// ErrInvalid for settings that fail InstallationSettings.Validate.
 	PutInstallation(ctx context.Context, s InstallationSettings, e audit.Entry) error
 
 	// Namespace returns the settings of ns, or the zero settings.
@@ -134,12 +170,25 @@ type WindowStore interface {
 	// for an unknown ID.
 	Accept(ctx context.Context, id string, a Acceptance, e audit.Entry) (SecretWindow, error)
 	// Close closes the open window id with no acceptance, when an
-	// administrator ends the maintenance mode another way. It returns
-	// ErrWindowClosed and ErrWindowNotFound.
-	Close(ctx context.Context, id string, at time.Time) (SecretWindow, error)
-	// ForInstance returns the latest window that instance joined, and false
-	// when it joined none.
+	// administrator ends the maintenance mode another way, and appends e
+	// (the window closed with no acceptance) in the same transaction. It
+	// returns ErrWindowClosed and ErrWindowNotFound.
+	Close(ctx context.Context, id string, at time.Time, e audit.Entry) (SecretWindow, error)
+	// Leave records that instance no longer runs with the flag: it started
+	// without the flag, or an administrator removed an instance that stopped
+	// for good. It appends e in the same transaction. A Leave of an instance
+	// that is not in a window changes nothing.
+	Leave(ctx context.Context, instance string, at time.Time, e audit.Entry) error
+	// ForInstance returns the latest window that instance joined since its
+	// last Leave, and false when there is none.
 	ForInstance(ctx context.Context, instance string) (SecretWindow, bool, error)
+	// Exposed reports whether the hatch is open on any instance of the
+	// installation: an accepted window covers an instance whose latest
+	// record is its join of that window. The status route answers it for
+	// the whole installation, whatever instance answers the route. An
+	// instance that stops for good stays counted until a Leave, so the
+	// console warns longer than necessary, never shorter.
+	Exposed(ctx context.Context) (bool, error)
 }
 
 // ConsentStore is the persistence port for the consents of one use. Each
@@ -149,8 +198,16 @@ type ConsentStore interface {
 	// Create persists c, not approved and not used, and returns it with
 	// its ID.
 	Create(ctx context.Context, c Consent) (Consent, error)
-	// Get returns the consent id, or ErrConsentNotFound.
+	// Get returns the consent id, or ErrConsentNotFound. The console reads
+	// a consent with it for its approval page, for the person of the
+	// consent only.
 	Get(ctx context.Context, id string) (Consent, error)
+	// Lookup returns the consent u.ID when it was made for u.Subject,
+	// u.TokenID, u.SessionID, u.Tool and u.Unit, and ErrConsentNotFound
+	// otherwise, also for an ID of another session, tool or unit. So an
+	// MCP call can name only a consent of its own call. Lookup changes
+	// nothing: Use marks the use.
+	Lookup(ctx context.Context, u ConsentUse) (Consent, error)
 	// Approve records the approval of the consent id by a, and appends e.
 	// It returns ErrConsentNotFound, the error of a.Validate, and
 	// ErrConsentNotUsable for a consent of another subject, an approved,
@@ -161,7 +218,10 @@ type ConsentStore interface {
 	// refused use changes nothing. It returns ErrConsentNotFound and
 	// ErrConsentNotUsable.
 	Use(ctx context.Context, u ConsentUse) error
-	// SessionRevealed reports whether a consent was used in the MCP session
-	// sessionID. The Toolset then refuses propose_change in that session.
-	SessionRevealed(ctx context.Context, sessionID string) (bool, error)
+	// Revealed reports whether a consent was used with the access token
+	// tokenID, or in the MCP session sessionID. An empty argument matches
+	// nothing. The Toolset then refuses propose_change, also in another
+	// MCP session of the same token, and the job routes refuse a start
+	// with that token. The mark lasts as long as the token.
+	Revealed(ctx context.Context, tokenID, sessionID string) (bool, error)
 }

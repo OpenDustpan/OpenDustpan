@@ -1,8 +1,6 @@
 # 124. Agents never see decrypted secrets, with one gated escape hatch
 
-Status: accepted · 2026-10-17. The decisions of the project owner and the
-project manager below are accepted. The other decisions take effect when the
-project lead accepts the pull request of this ADR.
+Status: accepted · 2026-10-17
 
 ## Context
 
@@ -67,8 +65,12 @@ window.
    The tool APIs answer 503 while the installation is in maintenance mode.
    An instance with the flag keeps the hatch shut until its window has an
    acceptance (`SecretWindow.Covers`). An administrator can end the
-   maintenance mode another way: the window then closes with no acceptance,
-   and the hatch of its instances stays shut until they start again.
+   maintenance mode another way: the window then closes with no acceptance
+   (`WindowStore.Close`, which appends its audit entry in the same
+   transaction), and the hatch of its instances stays shut until they start
+   again. An instance that starts without the flag records it with
+   `WindowStore.Leave`, so its earlier window no longer counts for it. An
+   administrator also calls `Leave` for an instance that stopped for good.
 5. **"I accept" once for each window.** The route
    `POST /api/server/agent-secret-access/accept` takes the typed text
    `I accept`. It needs `server:accept-agent-secret-access` (only the site
@@ -117,8 +119,17 @@ window.
    no effect until it opens again. Each opt-in and each opt-out writes an
    audit entry (ADR 126). `agent.SettingsStore` refuses an opt-in whose
    acceptance fails `Acceptance.Validate`.
-8. **The console shows the risk to every person.** When the installation
-   stage is open, the status route (ADR 120 decision 7) answers
+8. **The console shows the risk to every person.** The exposure is
+   installation-wide: the installation is exposed while any instance is
+   covered by an accepted window (`WindowStore.Exposed`: an accepted window
+   covers an instance whose latest record is its join of that window), or,
+   on the hosted service, while the account opt-in is active.
+   `agent.Exposure.Exposed` combines the two. It does not depend on the
+   instance that answers, on a namespace or on a person: an instance without
+   the flag answers "exposed" too while another instance has the hatch
+   open. An instance that stops for good stays counted until a `Leave`, so
+   the console warns longer than necessary, never shorter. While the
+   installation is exposed, the status route (ADR 120 decision 7) answers
    `secretAccess: "exposed"`. The console then uses a muted red theme and
    shows a banner on every page, for every person: "Agents can read secret
    values on this installation." The console repository implements the
@@ -129,6 +140,23 @@ window.
      (ADR 23), and stores it as an `agent.SealedReveal` in its own table.
      The store writes it in the transaction of the record of the step. The
      transcript gets the result masked.
+   - The port `agent.RevealSealer` does the seal and the open. Package
+     `secret` implements it: `Seal` makes a fresh data key for each reveal,
+     seals the content and the values with it, and wraps it with the
+     `secret.Wrapper` of the key-encryption key. The run, the turn and the
+     call are the additional data of each seal, so a sealed reveal opens
+     only for the call that made it. `Open` answers `ErrRevealOpen` for a
+     reveal that changed, with no part of the content in the error.
+     `agenttest.RunRevealSealer` checks a seal and an open, no plain value
+     in a seal, a fresh key for each seal, a changed reveal, and a reveal
+     that is not valid.
+   - Each sealed reveal has a hard expiry: its time plus the time limit of
+     the run (`SealedReveal.ExpiresAt`, `agent.RevealExpiry`). After it,
+     the store answers no reveal, and the reaper deletes it (ADR 120
+     decision 10). So a plain value never outlives its run, also when the
+     durable runner fails the turn for good and no step shreds it. The
+     reaper also ends that run, which shreds its reveals and frees its
+     place in the limits of active runs.
    - The model step of the next turn unwraps the sealed result and puts
      the plain values into that one tool result of its request. When
      another instance takes the turn over before that step records its
@@ -138,7 +166,9 @@ window.
      value in the text of the answer and in the arguments of its tool calls
      (`agent.MaskMessage`). Its record shreds every sealed reveal of the
      run, in the same transaction: the store deletes the wrapped key and
-     the content. The end of the run shreds them too.
+     the content. The end of the run shreds them too, also an end by the
+     reaper. The table of sealed reveals is not in the backup, so a restore
+     brings no reveal back.
    - The loop builds each later turn from the transcript, so the model sees
      a value in one model call. A tool call that the model wrote with a
      value runs with the masked arguments.
@@ -150,8 +180,17 @@ window.
     The person approves it in the console with the typed text `I accept`
     and a fresh MFA step. A consent holds for one call, one tool, one unit,
     one token and one MCP session, for 5 minutes (`Consent.Usable`).
-    `agent.ConsentStore.Use` marks it used in one transaction, so of two
-    concurrent uses at most one succeeds.
+    - A refused read is a successful result with the masked values, the
+      closed stage, and the `consentID` and `consentURL` of a pending
+      consent (ADR 122 decision 7).
+    - The retry passes `consentID`. `agent.ConsentStore.Lookup` finds the
+      consent only for the person, the token, the session, the tool and the
+      unit that it was made for. `ConsentStore.Use` marks it used in one
+      transaction, so of two concurrent uses at most one succeeds, and a
+      second use is refused.
+    - A principal that cannot sign in to the console has nobody who can
+      approve a consent: its secret read fails at once with
+      `ErrServicePrincipal`.
 11. **Each value read is a `reveal` entry.** Each read of secret values in
     plain text writes an audit entry of the kind `reveal` (ADR 41), with
     the channel, the run or the MCP session, and the count of values. A
@@ -159,11 +198,23 @@ window.
     and the name of the closed stage.
 12. **No change after a reveal.** A run that read plain values gets
     `Run.ReadPlainSecrets`, and so does each follow-up run of its
-    conversation. An MCP session that used a consent is in the same state
-    (`ConsentStore.SessionRevealed`). In that state, `propose_change` fails
+    conversation. For an outside agent, the mark is on the access token, not
+    only on the MCP session: `ConsentStore.Revealed(tokenID, sessionID)` is
+    true after a consent was used with the token or in the session. So a
+    new MCP session after an `initialize` with the same token is in the
+    same state, and the job routes refuse a start with that token too. The
+    mark lasts as long as the token. In that state, `propose_change` fails
     with `ErrProposeAfterReveal`. Masking matches values exactly, so it
     misses a value that the model encodes or splits. A run that knew a
     value never writes to a forge or a unit.
+
+    This mark is defense in depth, not the guarantee. An outside agent that
+    read a value can still use another token of its person, another client,
+    or text outside OpenDustpan, and no server can see the memory of a
+    model. What holds in every case is the confirmation gate: no change of
+    an agent applies or reaches a forge before the person who asked reads it
+    and passes its confirmation gate in the console with a fresh MFA step
+    (ADR 125 decision 5), and a service principal cannot start one at all.
 
 ### Untrusted text and exfiltration
 
@@ -194,6 +245,8 @@ window.
 
 ## Consequences
 
+- The status route reads `WindowStore.Exposed` on each call, so the banner
+  shows on every instance while one instance has the hatch open.
 - To read one secret value through an agent on a self-hosted server, an
   operator restarts with the flag, a site administrator accepts with MFA,
   a namespace administrator opts in with MFA, and the person opts in with

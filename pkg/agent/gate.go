@@ -3,6 +3,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"time"
 )
@@ -32,6 +33,13 @@ var (
 	// ErrSecretsNoUseConsent reports an outside agent call with no consent
 	// for this one use. The person gives the consent in the console.
 	ErrSecretsNoUseConsent = errors.New("the person did not give consent for this use")
+	// ErrServicePrincipal reports a propose_change or a secret read by a
+	// principal that cannot sign in to the console, for example a service
+	// token. Nobody can pass the confirmation gate of its change or approve
+	// its consent, so the call fails at once, before any read or change.
+	ErrServicePrincipal = errors.New(
+		"a principal that cannot sign in to the console cannot propose a change or read secret values",
+	)
 )
 
 // SecretAccess holds the state of each stage of the secret gate for one tool
@@ -80,16 +88,29 @@ func (s SecretAccess) Check() error {
 	return nil
 }
 
-// Exposed reports whether secret values can reach an agent on the
-// installation or account at all: the first stage is open. The status API
-// answers it, and the console then shows the warning theme and banner to
-// every person, not only to the persons who opted in.
-func (s SecretAccess) Exposed() bool {
-	if s.Hosted {
-		return s.AccountOptIn
+// Exposure is what decides whether secret values can reach an agent
+// anywhere on the installation or account. Hosted is true on the hosted
+// service. Account is the opt-in of the hosted account. Windows is the
+// answer of WindowStore.Exposed on a self-hosted server.
+type Exposure struct {
+	Hosted  bool
+	Account AccountSecretOptIn
+	Windows bool
+}
+
+// Exposed reports whether secret values can reach an agent anywhere on the
+// installation or account: on the hosted service, the account opt-in is
+// active; on a self-hosted server, an accepted window covers an instance
+// that runs with the flag. It does not depend on the instance that asks, on
+// a namespace or on a person. The status route answers it, and the console
+// then shows the warning theme and banner to every person, not only to the
+// persons who opted in.
+func (e Exposure) Exposed() bool {
+	if e.Hosted {
+		return e.Account.Active()
 	}
 
-	return s.StartFlag && s.WindowAccepted
+	return e.Windows
 }
 
 func (s SecretAccess) firstClosed() error {
@@ -231,9 +252,12 @@ func (w SecretWindow) Covers(instance string) bool {
 
 // Consent is the consent of a person for one use of secret values by an
 // outside agent: one call of one tool on one unit, with one token, in one
-// MCP session. The person approves it in the console with a fresh MFA step.
-// The store marks it used at its first use. A session that used a consent
-// cannot propose a change.
+// MCP session. A secret read of an outside agent with no usable consent
+// makes one and answers its ID and ConsentPath in the result. The person
+// approves it in the console with a fresh MFA step. The agent then calls
+// again with the ID in the parameter consentID. The store marks it used at
+// that use. A token or a session that used a consent cannot propose a
+// change.
 type Consent struct {
 	ID         string
 	Subject    string
@@ -244,6 +268,13 @@ type Consent struct {
 	CreatedAt  time.Time
 	ApprovedAt time.Time
 	UsedAt     time.Time
+}
+
+// ConsentPath returns the path of the console page that approves the
+// consent id. The Toolset puts the console URL of the installation in
+// front of it.
+func ConsentPath(id string) string {
+	return "/agent/secret-consents/" + url.PathEscape(id)
 }
 
 // ConsentUse is one use of a consent: the call of Tool on Unit by Subject

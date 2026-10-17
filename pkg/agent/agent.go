@@ -50,6 +50,13 @@ var (
 	// ErrKeyConflict reports a start whose key names a run of another
 	// person.
 	ErrKeyConflict = errors.New("start key names an agent run of another person")
+	// ErrTurnFailed is the LastError of a run that the reaper ended: the
+	// durable runner failed its turn operation for good, and no step ended
+	// the run.
+	ErrTurnFailed = errors.New("the turn of the agent run failed too often")
+	// ErrTurnActive reports a reap of a run whose latest turn operation did
+	// not end.
+	ErrTurnActive = errors.New("the turn of the agent run did not end")
 )
 
 // RunID identifies a run. The server makes it from a random source at the
@@ -95,6 +102,10 @@ const (
 	// StopModelError: the model failed with a final error, or failed more
 	// often than the retry limit allows.
 	StopModelError StopReason = "model-error"
+	// StopTurnFailed: the durable runner failed the turn operation for good,
+	// at its failure limit or its expiry limit, and the reaper ended the
+	// run.
+	StopTurnFailed StopReason = "turn-failed"
 )
 
 // Channel names how a tool call reached the server. The audit log records
@@ -153,11 +164,14 @@ func (r Ref) Validate() error {
 // agent is never a principal: it holds no grant, no role and no token.
 // BreakGlassSession is true when the credential of the call belongs to a
 // break-glass session. It is not the break-glass of a change freeze: an
-// agent never asks for that.
+// agent never asks for that. ServicePrincipal is true for a principal that
+// cannot sign in to the console, for example the principal of a service
+// token: it can never pass a confirmation gate or approve a consent.
 type Actor struct {
 	Principal         identity.Principal
 	Agent             Ref
 	BreakGlassSession bool
+	ServicePrincipal  bool
 }
 
 // Run is what any instance can read about a run.

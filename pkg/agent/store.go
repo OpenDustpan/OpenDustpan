@@ -54,8 +54,9 @@ type TranscriptEntry struct {
 // TurnRecord is what a step of a turn records: the messages of the step, in
 // order, and the progress of the run after the step. Every message is
 // masked (MaskMessage) before the record. Reveals are the sealed results of
-// the tool calls of a tools step that read secret values in plain text. A
-// record with Reveals also marks the run with ReadPlainSecrets. Shred is
+// the tool calls of a tools step that read secret values in plain text, each
+// with its ExpiresAt from RevealExpiry. A record with Reveals also marks the
+// run with ReadPlainSecrets. Shred is
 // true for the record of a model step: the store then deletes every sealed
 // reveal of the run in the transaction of the record.
 type TurnRecord struct {
@@ -123,12 +124,35 @@ type RunStore interface {
 	Transcript(ctx context.Context, id RunID) ([]TranscriptEntry, error)
 
 	// Reveals returns the sealed reveals of the run id that no model step
-	// shredded yet, in the order of turn and call. It returns ErrNotFound
-	// for an unknown run.
+	// shredded yet and whose ExpiresAt is after the clock of the store, in
+	// the order of turn and call. It returns ErrNotFound for an unknown run.
 	Reveals(ctx context.Context, id RunID) ([]SealedReveal, error)
 
+	// SweepReveals deletes each sealed reveal of every run whose ExpiresAt
+	// is not after the clock of the store, and returns how many it deleted.
+	// It deletes the wrapped key with the content, as a shred does.
+	SweepReveals(ctx context.Context) (int, error)
+
+	// Orphans returns at most limit runs that did not end and whose latest
+	// turn operation ended: the durable runner failed it for good (its
+	// failure limit or its expiry limit) or canceled it, with no step that
+	// ended the run. Oldest first. It returns ErrInvalid for a limit outside
+	// 1 to MaxRunList.
+	Orphans(ctx context.Context, limit int) ([]Run, error)
+
+	// Reap ends the orphan run id, shreds its sealed reveals, and returns
+	// it. The run ends canceled when a cancel was requested or its turn
+	// operation ended canceled, and otherwise failed with StopTurnFailed and
+	// the LastError ErrTurnFailed. So the run frees its place in the limits
+	// of active runs. It checks in its own transaction that the latest turn
+	// operation of the run ended. It returns ErrNotFound, ErrFinished for a
+	// run that ended, and ErrTurnActive for a run whose latest turn
+	// operation did not end.
+	Reap(ctx context.Context, id RunID) (Run, error)
+
 	// RecordTurn appends rec.Messages after the last message of rec.Turn,
-	// writes rec.Reveals, shreds the reveals of the run when rec.Shred is
+	// writes rec.Reveals (ErrInvalid for a reveal whose ExpiresAt is not
+	// after its At), shreds the reveals of the run when rec.Shred is
 	// set, sets the progress of the run and records the step f. When next is
 	// not the zero StartRequest, it also starts the operation next. It
 	// returns ErrInvalid, ErrNotFound, and the errors of

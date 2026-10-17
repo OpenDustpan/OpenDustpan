@@ -332,8 +332,9 @@ type Change struct {
 // the same names, with the person of the actor as the principal and the
 // agent of the actor recorded on the job. An agent calls it for every
 // change: it never writes a unit, a code location or a setting another way.
-// The port has no approve and no break-glass: an agent never approves a job
-// and never passes a change freeze. Each implementation runs the
+// The port has no approve and no break-glass: an agent never records an
+// approve verdict and never passes a change freeze. The job model refuses an
+// approve verdict that carries an agent, and accepts a reject verdict. Each implementation runs the
 // conformance suite in package agenttest.
 type Changes interface {
 	// Support returns the executors of unit, for the actor. It returns an
@@ -352,10 +353,11 @@ type Changes interface {
 	// req.Key already names when the request is the same. The confirmation
 	// gate holds even when no policy is installed, and only the person who
 	// asked passes it, in the console, with a fresh MFA step. It returns
-	// ErrInvalid, ErrModeNotSupported, ErrDirectNotAllowed,
-	// ErrChangeFrozen, ErrChangePolicyDenied, ErrChangeKeyConflict, and an
-	// error that wraps identity.ErrDenied when the person does not hold an
-	// action of the start.
+	// ErrInvalid, ErrServicePrincipal for an actor with ServicePrincipal
+	// (nobody could pass its confirmation gate), ErrModeNotSupported,
+	// ErrDirectNotAllowed, ErrChangeFrozen, ErrChangePolicyDenied,
+	// ErrChangeKeyConflict, and an error that wraps identity.ErrDenied when
+	// the person does not hold an action of the start.
 	Start(ctx context.Context, req ChangeRequest) (Change, error)
 	// Get returns the change id. It returns ErrChangeNotFound, also for a
 	// change that the person of the actor cannot read.

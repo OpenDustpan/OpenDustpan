@@ -3,7 +3,12 @@
 //
 //   - RunModel for each agent.Model adapter,
 //   - RunChanges for the adapter of the shared job model,
-//   - RunRunStore for each agent.RunStore adapter.
+//   - RunRunStore for each agent.RunStore adapter,
+//   - RunToolset for each agent.Toolset,
+//   - RunCredentials for the identity service,
+//   - RunTurns for the turn steps on the durable runner,
+//   - RunGateStores for the window, consent and settings stores,
+//   - RunRevealSealer for each agent.RevealSealer.
 //
 // An adapter calls the suite from its own tests with a factory that gives
 // it a fresh harness for each case.

@@ -87,7 +87,10 @@ type ResourceChange struct {
 // tool read. Resources is set for a read and Changes for a call with
 // compareTo. SecretValues is true only when the result holds secret values
 // in plain text. ClosedStage names why a secret read answered masked
-// values, or is empty.
+// values, or is empty. A refused secret read is a result like any other: it
+// is no tool error. When only the consent for one use is missing,
+// ConsentID names the consent that the person approves at ConsentURL, and
+// the agent then calls again with consentID. Both are empty otherwise.
 type StateResult struct {
 	Ref          string           `json:"ref"`
 	Version      string           `json:"version"`
@@ -97,6 +100,8 @@ type StateResult struct {
 	Truncated    bool             `json:"truncated"`
 	SecretValues bool             `json:"secretValues"`
 	ClosedStage  string           `json:"closedStage"`
+	ConsentID    string           `json:"consentID"`
+	ConsentURL   string           `json:"consentURL"`
 }
 
 // ObserveItem is one live fact about a resource. Kind is "event" or

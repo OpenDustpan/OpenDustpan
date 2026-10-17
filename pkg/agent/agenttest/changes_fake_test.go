@@ -30,6 +30,7 @@ func TestChangesSuite(t *testing.T) {
 			Changes:    f,
 			Actor:      actor("ana"),
 			Outsider:   actor("eve"),
+			Service:    serviceActor("ana"),
 			Unit:       unit,
 			RunnerOnly: runnerOnly,
 			Freeze:     func(*testing.T) { f.freeze() },
@@ -94,6 +95,10 @@ func (f *fakeChanges) Start(ctx context.Context, req agent.ChangeRequest) (agent
 
 	if req.Key == "" || req.Reason == "" || req.Actor.Agent.Validate() != nil {
 		return zero, agent.ErrInvalid
+	}
+
+	if req.Actor.ServicePrincipal {
+		return zero, agent.ErrServicePrincipal
 	}
 
 	support, err := f.Support(ctx, req.Actor, req.Unit)

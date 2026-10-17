@@ -1,8 +1,6 @@
 # 126. Every agent tool call writes an audit entry
 
-Status: accepted · 2026-10-17. The decisions of the project owner and the
-project manager below are accepted. The other decisions take effect when the
-project lead accepts the pull request of this ADR.
+Status: accepted · 2026-10-17
 
 ## Context
 
@@ -13,8 +11,9 @@ secret value or reads the audit log. A plain read writes no entry. Most
 agent tools only read.
 
 ADR 72 decision 6 makes the hash encoding of an entry a fixed list of every
-field, so a new field changes the hash of every entry once, before the first
-release.
+field, with no optional field. A new field in that list would change the
+hash of every stored entry, so the audit chains that exist would fail the
+chain check.
 
 ## Decision
 
@@ -62,15 +61,18 @@ release.
      `changes`,
    - the cancel (`agent:start-run` or `namespace:manage-agent-runs`), by
      the person who cancels,
-   - the end, with the subject of the run, the stop reason, the turns, the
+   - the end, also an end by the reaper (stop reason `turn-failed`), with
+     the subject of the run, the stop reason, the turns, the
      tool calls and the four token counts of the ledger in `changes`.
 7. **Setting entries.** Each of these writes an entry of the kind `change`:
    - a model connect or disconnect (`@server`),
    - a change of the installation settings: the limits, `directChanges`,
-     and `mcpEnabled`, which turns the MCP endpoint on or off (`@server`),
+     `mcpEnabled`, which turns the MCP endpoint on or off, and
+     `mcpCallsPerMinute` (`@server`),
    - the open of a maintenance window by a start with the secret flag, the
-     acceptance of a window with the instances that it covers, and the
-     close of a window with no acceptance (`@server`),
+     acceptance of a window with the instances that it covers, the close
+     of a window with no acceptance (`WindowStore.Close` takes the entry),
+     and each `WindowStore.Leave` (`@server`),
    - each opt-in and each opt-out of a hosted account (`@server` of the
      account),
    - a namespace opt-in or opt-out (the namespace),
@@ -81,10 +83,33 @@ release.
    filters `channel`, `agentRun` and `tool`. A person reads the entries of
    the runs of a namespace with `namespace:read-audit`, as for every entry.
 9. **The audit package changes.** `pkg/audit` gets the kind, the three
-   channels and the six fields. The fields go into the fixed hash encoding
-   of ADR 72 decision 6. Each SQL store gets the columns. The CEF mapping of
-   ADR 60 decision 9 maps `tool` and `agentRun` to custom string keys with
-   labels.
+   channels and the six fields. Each SQL store gets the columns. The CEF
+   mapping of ADR 60 decision 9 maps `tool` and `agentRun` to custom string
+   keys with labels.
+10. **Old entries hash exactly as before.** The six fields go into the hash
+    encoding as one agent block, after the last field of the encoding of
+    ADR 72 decision 6:
+    - An entry with all six fields empty (and `breakGlass` false) writes no
+      block. Its encoding is the same bytes as today, so its hash does not
+      change, and every audit chain that exists still passes the chain check with no
+      migration.
+    - An entry with any of the six fields set writes the block: the
+      length-prefixed text `agent/1`, then the six fields in a fixed order
+      (`agentRun`, `agentSession`, `tool`, `argsDigest`, `breakGlass` as
+      `true` or `false`, `secretStage`), each length-prefixed, with an empty
+      value when it is not set. Inside the block no field is optional.
+    - The encoding stays injective: an entry without the block has a fixed
+      count of length-prefixed fields, and an entry with it has that count
+      plus seven. `agent/1` is the version of the block. A later field of
+      agents gets `agent/2`, and the chain check reads the version of each
+      entry.
+
+    This is a limited exception to "no field is optional" of ADR 72 decision
+    6: the block is optional as a whole, never field by field. An
+    `agent-tool` entry always has the block, because it always names its
+    tool and its session. A test of `pkg/audit` keeps a stored chain from
+    before this change and checks that it still passes the chain check, and that
+    two entries that differ only in one agent field have different hashes.
 
 ## Consequences
 

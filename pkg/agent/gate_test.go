@@ -3,6 +3,7 @@ package agent_test
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/agent"
 )
@@ -128,40 +129,47 @@ func TestSecretAccessCheck(t *testing.T) {
 	}
 }
 
-func TestSecretAccessExposed(t *testing.T) {
+func TestExposed(t *testing.T) {
 	t.Parallel()
 
+	now := time.Now()
+	active := agent.AccountSecretOptIn{
+		Acceptance: agent.Acceptance{Subject: "admin", Text: agent.AcceptanceText, MFAAt: now, At: now},
+		EndedAt:    time.Time{},
+	}
+	ended := active
+	ended.EndedAt = now
+
+	var none agent.AccountSecretOptIn
+
 	tests := []struct {
-		name   string
-		change func(s *agent.SecretAccess)
-		want   bool
+		name    string
+		hosted  bool
+		account agent.AccountSecretOptIn
+		windows bool
+		want    bool
 	}{
-		{name: "flag and window acceptance", change: func(*agent.SecretAccess) {}, want: true},
-		{name: "flag only", change: func(s *agent.SecretAccess) { s.WindowAccepted = false }, want: false},
-		{
-			name:   "opt-ins of the namespace and the person do not matter",
-			change: func(s *agent.SecretAccess) { s.NamespaceOptIn, s.UserOptIn = false, false },
-			want:   true,
-		},
-		{
-			name:   "hosted opt-in",
-			change: func(s *agent.SecretAccess) { s.Hosted, s.AccountOptIn = true, true },
-			want:   true,
-		},
-		{name: "hosted ignores the flag", change: func(s *agent.SecretAccess) { s.Hosted = true }, want: false},
+		{name: "an accepted window covers a live instance", hosted: false, account: none, windows: true, want: true},
+		{name: "no window covers an instance", hosted: false, account: none, windows: false, want: false},
+		{name: "self-hosted ignores the account", hosted: false, account: active, windows: false, want: false},
+		{name: "hosted opt-in", hosted: true, account: active, windows: false, want: true},
+		{name: "hosted opt-out", hosted: true, account: ended, windows: false, want: false},
+		{name: "hosted ignores the windows", hosted: true, account: none, windows: true, want: false},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+		e := agent.Exposure{Hosted: tt.hosted, Account: tt.account, Windows: tt.windows}
+		if got := e.Exposed(); got != tt.want {
+			t.Fatalf("%s: Exposed() = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}
 
-			s := openSelfHosted()
-			tt.change(&s)
+func TestConsentPath(t *testing.T) {
+	t.Parallel()
 
-			if got := s.Exposed(); got != tt.want {
-				t.Fatalf("Exposed() = %v, want %v", got, tt.want)
-			}
-		})
+	if got := agent.ConsentPath("c/1"); got != "/agent/secret-consents/c%2F1" {
+		t.Fatalf("ConsentPath() = %q, want the ID escaped in one path segment", got)
 	}
 }
 

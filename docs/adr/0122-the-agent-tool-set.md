@@ -1,8 +1,6 @@
 # 122. Twelve task-shaped tools, each with its action and object
 
-Status: accepted · 2026-10-17. The decisions of the project owner and the
-project manager below are accepted. The other decisions take effect when the
-project lead accepts the pull request of this ADR.
+Status: accepted · 2026-10-17
 
 ## Context
 
@@ -66,11 +64,25 @@ The project manager decided on 2026-10-17, for the owner:
    without it. A list tool filters with the scope of `agent:use` and of
    its own action.
 4. **The server checks before it acts.** The `Toolset` checks, in this
-   order: the arguments (`agent.ValidateArguments`), `agent:use`, the
-   action of the tool, then the secret action and the secret gate for a
-   secret read. It resolves the person again just before each call (ADR 120
-   decision 13). A denied call answers an error result to the model and
+   order:
+   1. the arguments (`agent.ValidateArguments`),
+   2. for `propose_change` and a secret read, that the principal can sign
+      in to the console,
+   3. `agent:use`,
+   4. the action of the tool,
+   5. for a secret read, the secret action, the secret gate and, for an
+      outside agent, the consent (decision 7).
+
+   It resolves the person again just before each call (ADR 120 decision
+   13). A denied call answers an error result to the model and
    writes an audit entry with the outcome `denied` (ADR 126).
+
+   A principal that cannot sign in to the console, for example the
+   principal of a service token (ADR 53 decision 7), can never pass the
+   confirmation gate of a change (ADR 125 decision 5) or approve a consent
+   (ADR 123 decision 10). So its `propose_change` and its secret read fail
+   at once with their own error, `agent.ErrServicePrincipal`, before any
+   read, consent or job. Its masked reads work as for a person.
 5. **Parameters have bounds.** Each `agent.Param` has a type (`string`,
    `integer`, `boolean` or `array`), and a maximum: the bytes of a string,
    the value of an integer, the items of an array. A string can have an
@@ -96,17 +108,46 @@ The project manager decided on 2026-10-17, for the owner:
    | `operation` of `propose_change` | `plan`, `apply`, `destroy`, `refresh` |
    | `via` of `propose_change` | `write-back`, `runner` |
    | `mode` of `propose_change` | `review-request`, `approve-first`, `direct` |
+   | `consentID` of `read_state` | 512 bytes |
 
    `read_state` refuses `secretValues` with `compareTo`.
 6. **Lists filter in the query.** `search_units` filters with
    `Authorizer.ListObjects`, never with one check for each object. It says
    when it left objects out, as a list route does (ADR 17).
-7. **Secret values only through `read_state`.** All tools answer masked
-   values (ADR 41). `read_state` takes `secretValues: true`. A call with it
-   also checks `unit:read-secrets` on the unit and then the secret gate
-   (ADR 124). When either one refuses, the call answers the masked values
-   and the name of the closed stage. A test fails for any other tool that
-   names a secret action.
+7. **Secret values only through `read_state`, with one shape for a
+   refusal.** All tools answer masked values (ADR 41). `read_state` takes
+   `secretValues: true`. A call with it also checks `unit:read-secrets` on
+   the unit, then the stages of the secret gate (`agent.SecretGate`, ADR
+   124), then, for an outside agent, the consent for this one use. A test
+   fails for any other tool that names a secret action.
+   - **A refusal is a result, not an error.** When a check refuses, the
+     call succeeds with a `StateResult` that holds the masked values and
+     the closed stage in `closedStage`. The audit entry has the outcome
+     `denied` and the stage.
+   - **The consent fields.** When only the consent is missing, the
+     `Toolset` makes a pending consent (`ConsentStore.Create`) and the
+     result also holds `consentID` and `consentURL`: the console page
+     (`agent.ConsentPath`) where the person approves it. A consent that
+     still waits for approval is answered again, not made again. When an
+     earlier stage is closed, the call makes no consent, because the
+     person could not use it.
+   - **The retry.** After the approval, the agent calls `read_state` again
+     with the parameter `consentID`. Each tool that can reveal has this
+     parameter, and a test fails for a tool with a secret action and no
+     `consentID`. The `Toolset` finds the consent with
+     `ConsentStore.Lookup`, bound to the person, the token, the MCP
+     session, the tool and the unit of the call: an ID of another call
+     answers as not found. It then uses the consent once
+     (`ConsentStore.Use`). A used, expired or other consent gives the
+     refusal with a new consent.
+   - **After a reveal.** A token or an MCP session that used a consent
+     cannot propose a change (`ConsentStore.Revealed`, ADR 124 decision
+     12).
+
+   The `Toolset` takes the `ConsentStore` as a dependency
+   (`agent.ToolsetDeps`), with the read ports of decision 12, the
+   `SecretGate`, the `RunStore` (for `Run.ReadPlainSecrets`) and the
+   `ToolAuditor`.
 8. **Live status with read-only, short-lived credentials.** `observe_unit`
    reads the cloud of the unit through `agent.LiveObserver`. For each call,
    the observer gets short-lived, federated, read-only credentials through
@@ -159,6 +200,8 @@ The project manager decided on 2026-10-17, for the owner:
     | `AccessExplainer` | the authorizer | `explain_access` |
     | `DocsIndex` | the docs in the binary | `search_docs` |
     | `Changes` | the job model (ADR 125) | `describe_unit` (executors), `propose_change`, `get_change`, `cancel_change` |
+    | `SecretGate` | the server, from its flag, its window and the opt-ins (ADR 124) | `read_state` (secret reads) |
+    | `ConsentStore` | each SQL store (ADR 124) | `read_state` (consents of outside agents), `propose_change` (the reveal mark) |
 
 13. **One `Toolset` for every channel.** The loop of Dusty, the MCP
     endpoint and the stdio proxy call one `agent.Toolset`. So every
@@ -167,11 +210,16 @@ The project manager decided on 2026-10-17, for the owner:
     person, the agent (`agent.Ref`: the channel, and the run or the MCP
     session) and the break-glass session flag. It answers an
     `agent.ToolOutput`: the content, the revealed values of a secret read,
-    and the closed stage of a refused one. `agenttest.RunToolset` checks
-    the specs, the record of a read, a call without `agent:use` (denied, with
-    a record), a failed audit write (the call fails), an unknown tool, the
-    bounds of the arguments, the gate closed and open, the consent of an
-    outside agent, and the refusal of a propose after a reveal.
+    and the closed stage and consent of a refused one. `agenttest.RunToolset`
+    checks the specs, the record of a read, a call without `agent:use`
+    (denied, with a record), a failed audit write (the call fails), an
+    unknown tool, the bounds of the arguments, the gate closed and open, the
+    consent of an outside agent (no consent while an earlier stage is
+    closed), an approved consent that reveals once and refuses a second
+    use, a consent bound to its session, the refusal of a propose after a
+    consent reveal (in the same session and in a new session with the same
+    token), the refusal of a propose after a reveal of a run, and the
+    service principal that cannot propose or read secret values.
 14. **The catalog is a contract.** Outside agents depend on the tool names
     and parameters (ADR 123). A tool or a required parameter is never
     renamed or deleted without a deprecation. A new tool, an optional

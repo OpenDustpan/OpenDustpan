@@ -49,7 +49,16 @@ func actor(subject string) agent.Actor {
 		Principal:         principal(subject),
 		Agent:             agent.Ref{Channel: agent.ChannelAgent, RunID: "run-1", SessionID: ""},
 		BreakGlassSession: false,
+		ServicePrincipal:  false,
 	}
+}
+
+// serviceActor is actor(subject) as a service principal.
+func serviceActor(subject string) agent.Actor {
+	a := actor(subject)
+	a.ServicePrincipal = true
+
+	return a
 }
 
 func principal(subject string) identity.Principal {
@@ -129,6 +138,8 @@ type fakeRuns struct {
 	transcript map[agent.RunID][]agent.TranscriptEntry
 	ledger     map[string]bool
 	reveals    map[agent.RunID][]agent.SealedReveal
+	// turns maps a run to the start of its latest turn operation.
+	turns map[agent.RunID]durable.StartRequest
 }
 
 func newFakeRuns(ops durable.Store) *fakeRuns {
@@ -139,6 +150,7 @@ func newFakeRuns(ops durable.Store) *fakeRuns {
 		transcript: map[agent.RunID][]agent.TranscriptEntry{},
 		ledger:     map[string]bool{},
 		reveals:    map[agent.RunID][]agent.SealedReveal{},
+		turns:      map[agent.RunID]durable.StartRequest{},
 	}
 }
 
@@ -191,6 +203,7 @@ func (f *fakeRuns) Create(ctx context.Context, req agent.NewRun) (agent.Run, boo
 		EndedAt:         time.Time{},
 	}
 	f.runs = append(f.runs, run)
+	f.turns[run.ID] = req.First
 	f.transcript[run.ID] = []agent.TranscriptEntry{{
 		Run: run.ID, Turn: 0, Index: 0, At: run.CreatedAt,
 		Message: agent.Message{Role: agent.RoleUser, Parts: []agent.Part{agenttest.TextPart(req.Prompt)}},
@@ -262,6 +275,12 @@ func (f *fakeRuns) RecordTurn(
 		return agent.ErrNotFound
 	}
 
+	for j := range rec.Reveals {
+		if !rec.Reveals[j].ExpiresAt.After(rec.Reveals[j].At) {
+			return agent.ErrInvalid
+		}
+	}
+
 	if err := f.ops.RecordStep(ctx, fence, nil); err != nil {
 		return fmt.Errorf("record the turn: %w", err)
 	}
@@ -292,6 +311,8 @@ func (f *fakeRuns) RecordTurn(
 		return fmt.Errorf("start the next turn: %w", err)
 	}
 
+	f.turns[rec.Run] = next
+
 	return nil
 }
 
@@ -303,7 +324,96 @@ func (f *fakeRuns) Reveals(_ context.Context, id agent.RunID) ([]agent.SealedRev
 		return nil, agent.ErrNotFound
 	}
 
-	return slices.Clone(f.reveals[id]), nil
+	now := time.Now()
+
+	return slices.DeleteFunc(slices.Clone(f.reveals[id]), func(r agent.SealedReveal) bool {
+		return !r.ExpiresAt.After(now)
+	}), nil
+}
+
+func (f *fakeRuns) SweepReveals(context.Context) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	now, swept := time.Now(), 0
+
+	for id, reveals := range f.reveals {
+		kept := slices.DeleteFunc(reveals, func(r agent.SealedReveal) bool { return !r.ExpiresAt.After(now) })
+		swept += len(reveals) - len(kept)
+		f.reveals[id] = kept
+	}
+
+	return swept, nil
+}
+
+func (f *fakeRuns) Orphans(ctx context.Context, limit int) ([]agent.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if limit < 1 || limit > agent.MaxRunList {
+		return nil, agent.ErrInvalid
+	}
+
+	var out []agent.Run
+
+	for i := range f.runs {
+		if len(out) == limit {
+			break
+		}
+
+		if f.runs[i].State.Terminal() {
+			continue
+		}
+
+		op, err := f.turnOf(ctx, f.runs[i].ID)
+		if err != nil {
+			return nil, err
+		}
+
+		if op.State.Terminal() {
+			out = append(out, f.runs[i])
+		}
+	}
+
+	return out, nil
+}
+
+func (f *fakeRuns) Reap(ctx context.Context, id agent.RunID) (agent.Run, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	var zero agent.Run
+
+	i := f.index(id)
+
+	switch {
+	case i < 0:
+		return zero, agent.ErrNotFound
+	case f.runs[i].State.Terminal():
+		return zero, agent.ErrFinished
+	default:
+	}
+
+	op, err := f.turnOf(ctx, id)
+	if err != nil {
+		return zero, err
+	}
+
+	r := &f.runs[i]
+
+	switch {
+	case !op.State.Terminal():
+		return zero, agent.ErrTurnActive
+	case r.CancelRequested || op.State == durable.StateCanceled:
+		r.State, r.Stop = agent.StateCanceled, agent.StopCanceled
+	default:
+		r.State, r.Stop, r.LastError = agent.StateFailed, agent.StopTurnFailed, agent.ErrTurnFailed.Error()
+	}
+
+	r.EndedAt = time.Now()
+	delete(f.reveals, id)
+
+	return *r, nil
 }
 
 func (f *fakeRuns) RecordUsage(_ context.Context, rec agent.UsageRecord) error {
@@ -373,6 +483,17 @@ func (f *fakeRuns) Finish(ctx context.Context, fence durable.StepFence, end agen
 	return nil
 }
 
+// turnOf returns the latest turn operation of the run id. The caller holds
+// the lock. A second start with one key returns the operation.
+func (f *fakeRuns) turnOf(ctx context.Context, id agent.RunID) (durable.Operation, error) {
+	op, _, err := f.ops.Start(ctx, f.turns[id])
+	if err != nil {
+		return op, fmt.Errorf("read the turn of run %s: %w", id, err)
+	}
+
+	return op, nil
+}
+
 func (f *fakeRuns) index(id agent.RunID) int {
 	return slices.IndexFunc(f.runs, func(r agent.Run) bool { return r.ID == id })
 }
@@ -405,4 +526,78 @@ func (f *fakeRuns) keyIndex(key string) int {
 
 func validNewRun(req agent.NewRun) bool {
 	return req.ID != "" && req.Key != "" && req.Subject != "" && req.Prompt != "" && req.Limits.Validate() == nil
+}
+
+func TestReap(t *testing.T) {
+	t.Parallel()
+
+	ops := durabletest.NewMem().Store()
+	runs := newFakeRuns(ops)
+	run := orphanWithExpiredReveal(t, ops, runs)
+
+	spec := agent.ReapKind(runs)
+	if spec.Kind != agent.KindReap || len(spec.Steps) != 1 || agent.ReapSchedule().Kind != agent.KindReap {
+		t.Fatalf("ReapKind() = %+v, want one step of the kind of the reap schedule", spec)
+	}
+
+	var sc durable.StepContext
+
+	out, err := spec.Steps[0].Run(t.Context(), sc)
+	if err != nil || string(out) != `{"swept":1,"reaped":1}` {
+		t.Fatalf("reap step = %s, %v, want one reveal swept and one run reaped", out, err)
+	}
+
+	got, err := runs.Get(t.Context(), run)
+	if err != nil || got.State != agent.StateFailed || got.Stop != agent.StopTurnFailed {
+		t.Fatalf("Get() = %+v, %v, want the run failed with turn-failed", got, err)
+	}
+
+	if res, err := agent.Reap(t.Context(), runs); err != nil || res != (agent.ReapResult{Swept: 0, Reaped: 0}) {
+		t.Fatalf("second Reap() = %+v, %v, want nothing to do", res, err)
+	}
+}
+
+// orphanWithExpiredReveal makes a run with an expired reveal whose turn
+// operation failed for good, and returns its ID.
+func orphanWithExpiredReveal(t *testing.T, ops durable.Store, runs *fakeRuns) agent.RunID {
+	t.Helper()
+
+	run, _, err := runs.Create(t.Context(), agenttest.NewRunFor("ana", "k1"))
+	if err != nil {
+		t.Fatalf("Create() = %v", err)
+	}
+
+	op, err := ops.Claim(t.Context(), durable.ClaimRequest{
+		Owner: "test", Kinds: []durable.Kind{agent.KindTurn}, MaxVersions: nil, Lease: time.Minute,
+	})
+	if err != nil {
+		t.Fatalf("Claim() = %v", err)
+	}
+
+	at := time.Now().Add(-time.Hour)
+	expired := agent.SealedReveal{
+		Run: run.ID, Turn: 1, CallID: "call-1", WrappedKey: []byte("k"), Content: []byte("c"), Values: []byte("v"),
+		At: at, ExpiresAt: at.Add(time.Minute),
+	}
+	rec := agent.TurnRecord{
+		Run:      run.ID,
+		Turn:     1,
+		Messages: nil,
+		Progress: run.Progress,
+		Reveals:  []agent.SealedReveal{expired},
+		Shred:    false,
+	}
+	none := durable.StartRequest{Key: "", Kind: "", Version: 0, Input: nil}
+
+	err = runs.RecordTurn(t.Context(), op.Claim.Step(agent.StepTools), rec, none)
+	if err != nil {
+		t.Fatalf("RecordTurn() = %v", err)
+	}
+
+	err = ops.Fail(t.Context(), op.Claim, durable.Failure{Message: "failed", Final: true, RetryAfter: 0})
+	if err != nil {
+		t.Fatalf("Fail() = %v", err)
+	}
+
+	return run.ID
 }
