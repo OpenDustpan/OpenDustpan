@@ -78,7 +78,7 @@ func (h *Handler) appendOverrideAudit(
 
 	ctx := r.Context()
 
-	entry := audit.Bound(audit.Entry{
+	entry := audit.Entry{
 		At:           time.Now().UTC(),
 		Namespace:    obj.Namespace(),
 		Subject:      p.Subject,
@@ -91,7 +91,7 @@ func (h *Handler) appendOverrideAudit(
 		ValueCount:   nil,
 		Changes:      nil,
 		SourceIP:     clientip.String(r),
-		UserAgent:    audit.TruncateUserAgent(r.UserAgent()),
+		UserAgent:    truncateUserAgent(r.UserAgent()),
 		Channel:      audit.NormalizeChannel(r.Header.Get(channelHeader)),
 		Kind:         audit.KindOverride,
 		Outcome:      audit.OutcomeSuccess,
@@ -101,7 +101,7 @@ func (h *Handler) appendOverrideAudit(
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
-	})
+	}
 
 	ns, err := h.namespaces.Get(ctx, entry.Namespace)
 	if err != nil {
@@ -111,4 +111,19 @@ func (h *Handler) appendOverrideAudit(
 	_, err = h.audit.Append(ctx, ns.Fence(), entry)
 
 	return err
+}
+
+// truncateUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8 rune
+// boundary, so a multi-byte rune is never split.
+func truncateUserAgent(s string) string {
+	if len(s) <= audit.MaxUserAgentLen {
+		return s
+	}
+
+	cut := audit.MaxUserAgentLen
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+
+	return s[:cut]
 }

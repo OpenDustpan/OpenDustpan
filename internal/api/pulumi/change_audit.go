@@ -26,7 +26,7 @@ type changeAudit struct {
 // change and its entry commit together or not at all (fail closed). The
 // service stamps the time of the change on it.
 func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
-	return audit.Bound(audit.Entry{
+	return audit.Entry{
 		At:           time.Time{},
 		Namespace:    a.object.Namespace(),
 		Subject:      a.principal.Subject,
@@ -39,7 +39,7 @@ func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
 		ValueCount:   nil,
 		Changes:      nil,
 		SourceIP:     clientip.String(a.request),
-		UserAgent:    audit.TruncateUserAgent(a.request.UserAgent()),
+		UserAgent:    truncateUserAgent(a.request.UserAgent()),
 		Channel:      sessionauth.AuditChannel(a.request, channelHeader),
 		Kind:         audit.KindChange,
 		Outcome:      audit.OutcomeSuccess,
@@ -49,5 +49,5 @@ func changeEntry(ctx context.Context, a changeAudit) audit.Entry {
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
-	})
+	}
 }

@@ -427,7 +427,7 @@ func (h *Handler) newAuditEntry(
 ) audit.Entry {
 	ctx := r.Context()
 
-	return audit.Bound(audit.Entry{
+	return audit.Entry{
 		At:           time.Now().UTC(),
 		Namespace:    obj.Namespace(),
 		Subject:      p.Subject,
@@ -440,7 +440,7 @@ func (h *Handler) newAuditEntry(
 		ValueCount:   detail.valueCount,
 		Changes:      nil,
 		SourceIP:     clientip.String(r),
-		UserAgent:    audit.TruncateUserAgent(r.UserAgent()),
+		UserAgent:    truncateUserAgent(r.UserAgent()),
 		Channel:      sessionauth.AuditChannel(r, channelHeader),
 		Kind:         detail.kind,
 		Outcome:      audit.OutcomeSuccess,
@@ -450,7 +450,7 @@ func (h *Handler) newAuditEntry(
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
-	})
+	}
 }
 
 // appendEntry writes e in its namespace with the fence check of the
@@ -464,6 +464,21 @@ func (h *Handler) appendEntry(ctx context.Context, e audit.Entry) error {
 	_, err = h.audit.Append(ctx, ns.Fence(), e)
 
 	return err
+}
+
+// truncateUserAgent caps s at audit.MaxUserAgentLen bytes on a UTF-8 rune
+// boundary, so a multi-byte rune is never split.
+func truncateUserAgent(s string) string {
+	if len(s) <= audit.MaxUserAgentLen {
+		return s
+	}
+
+	cut := audit.MaxUserAgentLen
+	for cut > 0 && s[cut]&0xC0 == 0x80 {
+		cut--
+	}
+
+	return s[:cut]
 }
 
 // failAudit records a lost audit entry: one log line with no secret and no

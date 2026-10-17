@@ -218,18 +218,6 @@ func headerField(s string, limit int) string {
 	return string(out)
 }
 
-// SkippedKey marks a record that stands in for one the sink could not
-// hold, with the reason it was skipped.
-const SkippedKey = "skipped"
-
-// SkippedSize is the skipped reason of a record above the message cap: the
-// record did not fit even with every trimmable field empty.
-const SkippedSize = "size"
-
-// markerAttrCount is the capacity of a skip marker: scope, sequence, hash
-// and the skipped reason.
-const markerAttrCount = 4
-
 // Format returns the RFC 5424 message for r, without transport framing.
 // A record above the message cap arrives trimmed to fit, with the long
 // string fields shortened and a truncated mark. It answers a
@@ -298,8 +286,6 @@ func (s *Sink) Write(ctx context.Context, records []logsink.Record) error {
 		if err != nil {
 			skip, ok := errors.AsType[*logsink.SkipError](err)
 			if ok {
-				s.skippedMarker(&msgs, records[i])
-
 				skipped += skip.Skipped
 
 				continue
@@ -309,7 +295,6 @@ func (s *Sink) Write(ctx context.Context, records []logsink.Record) error {
 		}
 
 		if len(m) > s.cfg.MaxMessageBytes {
-			s.skippedMarker(&msgs, records[i])
 			skipped++
 
 			continue
@@ -351,48 +336,6 @@ func (s *Sink) Close() error {
 	}
 
 	return nil
-}
-
-// skippedMarker appends the marker message for r to msgs: the scope,
-// sequence and hash of r with SkippedKey set to SkippedSize, so the receiver
-// still sees that the entry exists. When the marker itself cannot fit, it
-// appends nothing: the skip count still reports the loss.
-func (s *Sink) skippedMarker(msgs *[][]byte, r logsink.Record) {
-	marker := logsink.Record{
-		Time:    r.Time,
-		Level:   r.Level,
-		Message: r.Message,
-		Attrs:   markerAttrs(r),
-	}
-
-	m, err := s.Format(marker)
-	if err != nil {
-		return
-	}
-
-	if len(m) > s.cfg.MaxMessageBytes {
-		return
-	}
-
-	*msgs = append(*msgs, m)
-}
-
-// markerAttrs answers the attributes of the marker for r: its scope,
-// sequence and hash when it holds them, with SkippedKey set to SkippedSize.
-// The keys match the attribute names of a shipped audit entry, so the
-// receiver reads the marker with the same field names.
-func markerAttrs(r logsink.Record) []logsink.Attr {
-	attrs := make([]logsink.Attr, 0, markerAttrCount)
-
-	for _, a := range r.Attrs {
-		switch a.Key {
-		case "scope", "sequence", "hash":
-			attrs = append(attrs, a)
-		default:
-		}
-	}
-
-	return append(attrs, logsink.String(SkippedKey, SkippedSize))
 }
 
 // deliver sends msgs over the connection, and dials first when it has

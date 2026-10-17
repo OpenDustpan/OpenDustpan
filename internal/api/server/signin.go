@@ -60,7 +60,13 @@ const (
 	reasonDisabled      = "principal is disabled"
 	reasonNotTarget     = "principal cannot sign in through an identity provider"
 	reasonSubject       = "subject is not valid"
+	reasonSubjectLength = "subject over 255 bytes"
 )
+
+// maxIDPSubjectLen caps the sub claim of a sign-in, in bytes. The audit
+// entry keeps the subject, so a longer subject is refused instead of
+// stored.
+const maxIDPSubjectLen = 255
 
 // Errors of the sign-in routes.
 var (
@@ -431,6 +437,18 @@ func (h *Handler) startSession(
 	w http.ResponseWriter, r *http.Request, provider SignInProvider, id oauth.Identity, returnPath string,
 ) {
 	ctx := r.Context()
+
+	// Refuse before the subject reaches the audit entry: the entry keeps
+	// the subject, so a longer one would be stored. The refusal names the
+	// provider only, which has a fixed form.
+	if len(id.Subject) > maxIDPSubjectLen {
+		h.refuseSignIn(w, r, refusal{
+			err: errSignInRefused, providerID: provider.ID, idpSubject: "", reason: reasonSubjectLength,
+		})
+
+		return
+	}
+
 	subject := provider.ID + ":" + id.Subject
 	e := signInEntry(r, subject, id.Subject, session.ActionSignIn)
 
@@ -564,7 +582,6 @@ func (h *Handler) refuseSignIn(w http.ResponseWriter, r *http.Request, rf refusa
 		e.Outcome = outcome
 		e.Object = "sign-in-provider:" + providerID
 		e.Changes = []audit.Change{{Key: "reason", Old: nil, New: reason, Layer: "", TakesEffect: ""}}
-		e = audit.Bound(e)
 
 		if _, appendErr := h.audit.AppendServer(ctx, e); appendErr != nil {
 			h.failAudit(ctx)
@@ -582,13 +599,13 @@ func (h *Handler) refuseSignIn(w http.ResponseWriter, r *http.Request, rf refusa
 // signInEntry is the audit entry of a sign-in or a sign-out from the
 // console.
 func signInEntry(r *http.Request, subject, idpSubject, action string) audit.Entry {
-	return audit.Bound(audit.Entry{
+	return audit.Entry{
 		At: time.Time{}, Namespace: "", Subject: subject, IDPSubject: idpSubject, TokenID: "", Action: action,
 		Object: "", Version: "", ValuePath: "", ValueCount: nil, Changes: nil, SourceIP: clientip.String(r),
-		UserAgent: audit.TruncateUserAgent(r.UserAgent()), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
+		UserAgent: truncateUserAgent(r.UserAgent()), Channel: audit.ChannelConsole, Kind: "", Outcome: "",
 		RequestID: requestid.FromContext(r.Context()), ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
 		FenceVersion: 0,
-	})
+	}
 }
 
 // sessionResponse is the console session of the caller on the wire.

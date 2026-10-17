@@ -430,7 +430,7 @@ func (h *Handler) purgeUnit(
 // purge of the unit obj (ADR 60, decision 4). The tool appends it in the
 // transaction of the change and stamps the time.
 func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, action identity.Action) audit.Entry {
-	return audit.Bound(audit.Entry{
+	return audit.Entry{
 		At:           time.Time{},
 		Namespace:    obj.Namespace(),
 		Subject:      p.Subject,
@@ -443,7 +443,7 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		ValueCount:   nil,
 		Changes:      nil,
 		SourceIP:     clientip.String(r),
-		UserAgent:    audit.TruncateUserAgent(r.UserAgent()),
+		UserAgent:    truncateUserAgent(r.UserAgent()),
 		Channel:      sessionauth.AuditChannel(r, channelHeader),
 		Kind:         audit.KindChange,
 		Outcome:      audit.OutcomeSuccess,
@@ -453,5 +453,27 @@ func changeEntry(r *http.Request, p identity.Principal, obj identity.Object, act
 		Hash:         "",
 		Sequence:     0,
 		FenceVersion: 0,
-	})
+	}
+}
+
+// truncateUserAgent caps s at audit.MaxUserAgentLen bytes, at a rune
+// boundary.
+func truncateUserAgent(s string) string {
+	if len(s) <= audit.MaxUserAgentLen {
+		return s
+	}
+
+	cut := audit.MaxUserAgentLen
+	for cut > 0 && !utf8RuneStart(s[cut]) {
+		cut--
+	}
+
+	return s[:cut]
+}
+
+// utf8RuneStart reports whether b starts a UTF-8 sequence.
+func utf8RuneStart(b byte) bool {
+	const continuationMask, continuationBits = 0xC0, 0x80
+
+	return b&continuationMask != continuationBits
 }
