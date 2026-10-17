@@ -26,6 +26,9 @@ var (
 	ErrHasDependents = errors.New("unit has dependents")
 	// ErrInvalidEdge reports an edge that fails validation.
 	ErrInvalidEdge = errors.New("invalid dependency edge")
+	// ErrInvalidWindow reports a dependents window that is shorter than the
+	// soft-delete retention.
+	ErrInvalidWindow = errors.New("invalid dependents window")
 )
 
 // RecordInterval is the shortest time between two writes of one edge. A
@@ -35,6 +38,21 @@ const RecordInterval = time.Hour
 // DefaultWindow is how long an edge blocks a delete after the last time
 // seen. The setting --dependents-window changes it.
 const DefaultWindow = 90 * 24 * time.Hour
+
+// ValidateWindow reports whether window is at least softDeleteRetention,
+// the time that the server keeps a soft-deleted unit before its purge, so
+// that an edge does not leave the window while its source can still be
+// restored. It returns ErrInvalidWindow otherwise.
+func ValidateWindow(window, softDeleteRetention time.Duration) error {
+	if window < softDeleteRetention {
+		return fmt.Errorf(
+			"%w: the window %v is shorter than the soft-delete retention %v",
+			ErrInvalidWindow, window, softDeleteRetention,
+		)
+	}
+
+	return nil
+}
 
 // Kind is what an edge records.
 type Kind string
@@ -54,7 +72,8 @@ const (
 	// EvidenceJob is a read with the token of a job that names its unit.
 	EvidenceJob Evidence = "job"
 	// EvidenceLock is a read by a principal that held the update lease or
-	// the lock of another unit at the time. It is an inference.
+	// the lock of another unit at the time. It is an inference. An ambiguous
+	// lock edge is only listed and never blocks a delete.
 	EvidenceLock Evidence = "lock"
 	// EvidencePrincipal is a read by a principal that held nothing. The edge
 	// names the principal only. It never blocks a delete.
@@ -66,7 +85,8 @@ const (
 
 // Edge says that a dependent reads the outputs of the source unit.
 // Dependent is nil when the evidence is EvidencePrincipal. Ambiguous is true
-// for a lock edge when the principal held more than one unit at the time.
+// for a lock edge when the principal held more than one unit at the time:
+// such an edge is only listed and never blocks a delete.
 // Reads counts the reads that the edge records, at most one for each
 // RecordInterval.
 type Edge struct {
@@ -146,10 +166,10 @@ func Due(stored Edge, now time.Time) bool {
 }
 
 // Blocks reports whether e blocks a delete that is not forced at now, with
-// the dependents window window: its evidence is a job, a lock or a
-// declaration, and its last time seen is within the window.
+// the dependents window window: its evidence is a job, a lock that is not
+// ambiguous, or a declaration, and its last time seen is within the window.
 func Blocks(e Edge, now time.Time, window time.Duration) bool {
-	if e.Evidence == EvidencePrincipal {
+	if e.Evidence == EvidencePrincipal || (e.Evidence == EvidenceLock && e.Ambiguous) {
 		return false
 	}
 

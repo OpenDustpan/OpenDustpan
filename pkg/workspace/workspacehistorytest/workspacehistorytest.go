@@ -44,6 +44,7 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a new workspace has the cursor 0 and an empty blame", test: testEmpty},
 		{name: "rows of a state version read back ordered by address", test: testItemChanges},
 		{name: "an opaque state version keeps its mark and has no row", test: testOpaque},
+		{name: "a lineage change keeps its mark", test: testLineageChanged},
 		{name: "a record at or below the cursor changes nothing", test: testRepeat},
 		{name: "resource history answers newest first in pages", test: testResourceHistory},
 		{name: "a stale fence refuses a record", test: testFenced},
@@ -88,16 +89,17 @@ func svOf(ordinal int64) workspace.StateVersionID {
 // row returns a resource change of the workspace id.
 func row(id workspace.ID, ordinal int64, address string, kind workspace.ResourceChangeKind) workspace.ResourceChange {
 	return workspace.ResourceChange{
-		At:           suiteTime().Add(time.Duration(ordinal) * time.Minute),
-		Workspace:    id,
-		StateVersion: svOf(ordinal),
-		Address:      address,
-		Kind:         kind,
-		By:           history.Actor{Subject: "ana", TokenID: "tok-1", JobID: ""},
-		Ordinal:      ordinal,
-		ChangedPaths: 2,
-		Restored:     false,
-		Forced:       false,
+		At:             suiteTime().Add(time.Duration(ordinal) * time.Minute),
+		Workspace:      id,
+		StateVersion:   svOf(ordinal),
+		Address:        address,
+		Kind:           kind,
+		By:             history.Actor{Subject: "ana", TokenID: "tok-1", JobID: ""},
+		Ordinal:        ordinal,
+		ChangedPaths:   2,
+		Restored:       false,
+		Forced:         false,
+		LineageChanged: false,
 	}
 }
 
@@ -114,11 +116,12 @@ func mustRecord(t *testing.T, s Store, f namespace.Fence, b workspace.ItemBlame)
 // workspace id, with rows.
 func blame(id workspace.ID, ordinal int64, rows ...workspace.ResourceChange) workspace.ItemBlame {
 	return workspace.ItemBlame{
-		Workspace:    id,
-		StateVersion: svOf(ordinal),
-		Changes:      rows,
-		Ordinal:      ordinal,
-		Opaque:       false,
+		Workspace:      id,
+		StateVersion:   svOf(ordinal),
+		Changes:        rows,
+		Ordinal:        ordinal,
+		Opaque:         false,
+		LineageChanged: false,
 	}
 }
 
@@ -183,7 +186,9 @@ func testOpaque(t *testing.T, s Store) {
 		t,
 		s,
 		f,
-		workspace.ItemBlame{Workspace: "ws-one", StateVersion: svOf(1), Changes: nil, Ordinal: 1, Opaque: true},
+		workspace.ItemBlame{
+			Workspace: "ws-one", StateVersion: svOf(1), Changes: nil, Ordinal: 1, Opaque: true, LineageChanged: false,
+		},
 	)
 
 	b, err := s.ItemChanges(t.Context(), "ws-one", svOf(1))
@@ -193,6 +198,31 @@ func testOpaque(t *testing.T, s Store) {
 
 	if cursor, err := s.BlameCursor(t.Context(), "ws-one"); err != nil || cursor != 1 {
 		t.Errorf("cursor = %d, %v, want 1", cursor, err)
+	}
+}
+
+func testLineageChanged(t *testing.T, s Store) {
+	t.Helper()
+	f := makeNamespace(t, s)
+	mustRecord(t, s, f, blame("ws-one", 1, row("ws-one", 1, addrVPC, workspace.ResourceCreated)))
+
+	changed := row("ws-one", 2, addrVPC, workspace.ResourceReplaced)
+	changed.LineageChanged = true
+	b := blame("ws-one", 2, changed)
+	b.LineageChanged = true
+	mustRecord(t, s, f, b)
+
+	got, err := s.ItemChanges(t.Context(), "ws-one", svOf(2))
+	if err != nil {
+		t.Fatalf("item changes: %v", err)
+	}
+
+	if !got.LineageChanged || len(got.Changes) != 1 || !got.Changes[0].LineageChanged {
+		t.Errorf("blame = %+v, want the lineage change on the blame and on its row", got)
+	}
+
+	if before, err := s.ItemChanges(t.Context(), "ws-one", svOf(1)); err != nil || before.LineageChanged {
+		t.Errorf("blame of ordinal 1 = %+v, %v, want no lineage change", before, err)
 	}
 }
 

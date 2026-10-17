@@ -33,9 +33,13 @@ const (
 // a unit just after one inventory write. Each tool appends one row in the
 // same transaction as each inventory write that it makes. A row holds names
 // and counts, never state, and no foreign key to the unit, so a purge keeps
-// it. At is the time of the write.
+// it. At is the time of the write. Seq is a sequence that the store assigns
+// in the transaction of the write: it increases in commit order across the
+// installation, so it orders two rows that have the same time, or a time
+// out of commit order.
 type Change struct {
 	At            time.Time
+	Seq           int64
 	Namespace     namespace.Name
 	Tool          string
 	UnitID        string
@@ -65,18 +69,16 @@ func (c Change) Entry() Entry {
 }
 
 // ChangeCursor is the position after which a page of change log rows
-// starts: the order key of the last row of the page before.
+// starts: the sequence of the last row of the page before.
 type ChangeCursor struct {
-	At     time.Time
-	Tool   string
-	UnitID string
+	Seq int64
 }
 
 // HistoryReader is the read port of the inventory change log.
 type HistoryReader interface {
 	// ListChanges returns at most limit rows of ns with a time at or
-	// before until, ordered by time, then tool, then unit ID. With a cursor,
-	// it returns only the rows after the cursor in that order. A store that
+	// before until, ordered by sequence. With a cursor, it returns only the
+	// rows with a sequence above the cursor. A store that
 	// holds its rows in memory can answer UnitsAt with ReplayAt over them.
 	ListChanges(
 		ctx context.Context,
@@ -92,27 +94,28 @@ type HistoryReader interface {
 }
 
 // ReplayAt returns the inventory at the time at from the change log rows
-// changes of one namespace, in any order: for each unit, the entry of its
-// last row at or before at. A unit whose last such row is ChangeDeleted or
-// ChangePurged is not in the answer. Two rows of one unit at the same time
-// keep the order of changes. The answer is ordered by tool, then name, as
-// Reader.ListUnits orders the live inventory. It defines what
-// HistoryReader.UnitsAt answers.
+// changes of one namespace, in any order: for each unit, the entry of the
+// row with the highest sequence among its rows with a time at or before at.
+// The order of the sequences decides, not the order of the times, so rows
+// with equal times, or with times out of commit order, replay in commit
+// order. A unit whose row is ChangeDeleted or ChangePurged is not in the
+// answer. The answer is ordered by tool, then name, as Reader.ListUnits
+// orders the live inventory. It defines what HistoryReader.UnitsAt answers.
 func ReplayAt(changes []Change, at time.Time) []Entry {
 	type unitKey struct{ tool, id string }
 
-	ordered := slices.Clone(changes)
-	slices.SortStableFunc(ordered, func(a, b Change) int { return a.At.Compare(b.At) })
-
 	last := map[unitKey]Change{}
 
-	for n := range ordered {
-		c := ordered[n]
+	for n := range changes {
+		c := changes[n]
 		if c.At.After(at) {
-			break
+			continue
 		}
 
-		last[unitKey{tool: c.Tool, id: c.UnitID}] = c
+		key := unitKey{tool: c.Tool, id: c.UnitID}
+		if stored, ok := last[key]; !ok || c.Seq > stored.Seq {
+			last[key] = c
+		}
 	}
 
 	entries := []Entry{}

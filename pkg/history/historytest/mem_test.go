@@ -3,7 +3,9 @@ package historytest_test
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -22,43 +24,75 @@ func TestSuites(t *testing.T) {
 
 	t.Run("redactions", func(t *testing.T) {
 		t.Parallel()
-		historytest.RunRedactions(t, func(*testing.T) historytest.RedactionStore { return newMem() })
+		historytest.RunRedactions(t, func(*testing.T) historytest.RedactionStore {
+			return newMem("opentofu", secret.ItemKindState)
+		})
 	})
-	t.Run("plans", func(t *testing.T) {
-		t.Parallel()
-		historytest.RunPlans(t, func(*testing.T) historytest.PlanSuiteStore { return newMem() })
-	})
-	t.Run("job logs", func(t *testing.T) {
-		t.Parallel()
-		historytest.RunJobLogs(t, func(*testing.T) historytest.JobLogSuiteStore { return newMem() })
-	})
+
+	tools := []struct {
+		name       string
+		tool       string
+		kind       secret.ItemKind
+		situations []historytest.Situation
+	}{
+		{
+			name:       "pulumi redactor",
+			tool:       "pulumi",
+			kind:       secret.ItemKindState,
+			situations: historytest.PulumiSituations(),
+		},
+		{
+			name:       "opentofu redactor",
+			tool:       "opentofu",
+			kind:       secret.ItemKindState,
+			situations: historytest.OpenTofuSituations(),
+		},
+		{
+			name:       "job artifact redactor",
+			tool:       "opentofu",
+			kind:       secret.ItemKindPlan,
+			situations: historytest.JobArtifactSituations(),
+		},
+	}
+
+	for _, tc := range tools {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			historytest.RunRedactor(t, tc.situations, func(*testing.T) historytest.RedactorFixture {
+				return newMem(tc.tool, tc.kind)
+			})
+		})
+	}
 }
 
-// memLog is one job log with its chunks.
-type memLog struct {
-	log    history.JobLog
-	chunks []history.Chunk
+// memItem is one row of the tool table of the in-memory store.
+type memItem struct {
+	situation historytest.Situation
+	mark      history.RedactionID
 }
 
 // mem keeps every port of the suites in memory, under one lock, as one SQL
-// transaction would.
+// transaction would. It plays one tool table: the items of one tool and one
+// kind.
 type mem struct {
 	namespaces map[namespace.Name]namespace.Namespace
-	keys       map[secret.ContentRef]secret.ContentKey
+	keys       map[secret.ItemRef]secret.ItemKey
 	redactions map[history.RedactionID]history.Redaction
-	plans      map[history.PlanID]history.Plan
-	logs       map[string]*memLog
+	items      map[history.ItemRef]*memItem
+	tool       string
+	kind       secret.ItemKind
 	entries    []audit.Entry
 	mu         sync.Mutex
 }
 
-func newMem() *mem {
+func newMem(tool string, kind secret.ItemKind) *mem {
 	return &mem{
 		namespaces: map[namespace.Name]namespace.Namespace{},
-		keys:       map[secret.ContentRef]secret.ContentKey{},
+		keys:       map[secret.ItemRef]secret.ItemKey{},
 		redactions: map[history.RedactionID]history.Redaction{},
-		plans:      map[history.PlanID]history.Plan{},
-		logs:       map[string]*memLog{},
+		items:      map[history.ItemRef]*memItem{},
+		tool:       tool,
+		kind:       kind,
 		entries:    nil,
 		mu:         sync.Mutex{},
 	}
@@ -97,14 +131,12 @@ func (m *mem) ListNamespaces(context.Context) ([]namespace.Namespace, error) { r
 
 func (m *mem) Ping(context.Context) error { return nil }
 
-// fenced answers namespace.ErrFenced for a stale fence. The caller holds the
-// lock.
-func (m *mem) CreateContentKey(_ context.Context, k secret.ContentKey, f namespace.Fence) (secret.ContentKey, error) {
+func (m *mem) CreateItemKey(_ context.Context, k secret.ItemKey, f namespace.Fence) (secret.ItemKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := m.fenced(f); err != nil {
-		return secret.ContentKey{}, err
+		return secret.ItemKey{}, err
 	}
 
 	if stored, ok := m.keys[k.Ref]; ok {
@@ -120,14 +152,14 @@ func (m *mem) CreateContentKey(_ context.Context, k secret.ContentKey, f namespa
 	return k, nil
 }
 
-func (m *mem) GetContentKey(_ context.Context, ref secret.ContentRef) (secret.ContentKey, error) {
+func (m *mem) GetItemKey(_ context.Context, ref secret.ItemRef) (secret.ItemKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	k, ok := m.keys[ref]
 	switch {
 	case !ok:
-		return secret.ContentKey{}, secret.ErrKeyNotFound
+		return secret.ItemKey{}, secret.ErrKeyNotFound
 	case k.Shredded():
 		return k, secret.ErrShredded
 	default:
@@ -135,25 +167,24 @@ func (m *mem) GetContentKey(_ context.Context, ref secret.ContentRef) (secret.Co
 	}
 }
 
-func (m *mem) ShredContentKey(
-	_ context.Context, ref secret.ContentRef, at time.Time, f namespace.Fence,
-) (secret.ContentKey, error) {
+func (m *mem) ShredItemKey(
+	_ context.Context, ref secret.ItemRef, at time.Time, f namespace.Fence,
+) (secret.ItemKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if err := m.fenced(f); err != nil {
-		return secret.ContentKey{}, err
+		return secret.ItemKey{}, err
 	}
 
 	return m.shredLocked(ref, at)
 }
 
-// shredLocked marks the key of ref shredded. The caller holds the lock.
-func (m *mem) ListContentKeys(context.Context, secret.Scope, secret.ContentKeyID, int) ([]secret.ContentKey, error) {
+func (m *mem) ListItemKeys(context.Context, secret.Scope, secret.ItemKeyID, int) ([]secret.ItemKey, error) {
 	return nil, nil
 }
 
-func (m *mem) ListContentWrapperIDs(context.Context) ([]string, error) { return nil, nil }
+func (m *mem) ListItemKeyWrapperIDs(context.Context) ([]string, error) { return nil, nil }
 
 func (m *mem) AppendRedaction(
 	_ context.Context, r history.Redaction, targets []string, f namespace.Fence,
@@ -168,7 +199,6 @@ func (m *mem) AppendRedaction(
 	return m.appendLocked(r, targets)
 }
 
-// appendLocked appends r. The caller holds the lock.
 func (m *mem) GetRedaction(_ context.Context, ns namespace.Name, id history.RedactionID) (history.Redaction, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -185,14 +215,7 @@ func (m *mem) RedactionOf(_ context.Context, item history.ItemRef) (history.Reda
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for n := range m.redactions {
-		r := m.redactions[n]
-		if r.Item == item {
-			return r, nil
-		}
-	}
-
-	return history.Redaction{}, history.ErrRedactionNotFound
+	return m.redactionOfLocked(item)
 }
 
 // newestFirstAt orders r against the cursor c, newest first.
@@ -202,15 +225,6 @@ func newestFirstAt(r history.Redaction, c history.RedactionCursor) int {
 	}
 
 	return cmp.Compare(c.ID, r.ID)
-}
-
-// planAfter orders p against the cursor c, newest first.
-func planAfter(p history.Plan, c history.PlanCursor) int {
-	if n := c.CreatedAt.Compare(p.CreatedAt); n != 0 {
-		return n
-	}
-
-	return cmp.Compare(c.ID, p.ID)
 }
 
 // newestFirst orders redactions newest first by time, then by ID.
@@ -266,8 +280,6 @@ func (m *mem) ListPendingShreds(_ context.Context, after history.RedactionID, li
 	return out[:min(limit, len(out))], nil
 }
 
-// target returns the index of the target name of the record id. The caller
-// holds the lock.
 func (m *mem) FinishShred(
 	_ context.Context,
 	id history.RedactionID,
@@ -311,7 +323,9 @@ func (m *mem) NoteShredFailure(_ context.Context, sf history.ShredFailure, f nam
 	return nil
 }
 
-// Redact redacts a plan or a job log in one step under the lock.
+// Redact redacts an item of the tool table in one step under the lock: it
+// checks everything first, then changes the table, the key, the log and the
+// audit entries together.
 func (m *mem) Redact(
 	_ context.Context, r history.Redaction, targets []string, e audit.Entry, f namespace.Fence,
 ) (history.Redaction, error) {
@@ -322,263 +336,126 @@ func (m *mem) Redact(
 		return history.Redaction{}, err
 	}
 
-	mark, err := m.markable(r.Item)
+	item, ok := m.items[r.Item]
+	if !ok {
+		return history.Redaction{}, history.ErrItemNotFound
+	}
+
+	if stored, findErr := m.redactionOfLocked(r.Item); findErr == nil {
+		return stored, history.ErrRedacted
+	}
+
+	if err := refusal(item.situation); err != nil {
+		return history.Redaction{}, err
+	}
+
+	if err := r.Validate(); err != nil {
+		return history.Redaction{}, err
+	}
+
+	e.At = r.At
+	if err := e.Validate(); err != nil {
+		return history.Redaction{}, fmt.Errorf("audit entry: %w", err)
+	}
+
+	ref, err := r.Item.KeyRef()
 	if err != nil {
 		return history.Redaction{}, err
 	}
+
+	if _, shredErr := m.shredLocked(ref, r.At); shredErr != nil {
+		return history.Redaction{}, shredErr
+	}
+
+	e.Hash = m.appendEntryLocked(e, f)
+	r.AuditHash = e.Hash
 
 	stored, err := m.appendLocked(r, targets)
 	if err != nil {
-		return stored, err
-	}
-
-	ref, err := r.Item.ContentRef()
-	if err != nil {
 		return history.Redaction{}, err
 	}
 
-	if _, err := m.shredLocked(ref, r.At); err != nil {
-		return history.Redaction{}, err
-	}
-
-	mark(r.ID)
-
-	e.At = r.At
-	m.entries = append(m.entries, e)
+	item.mark = r.ID
 
 	return stored, nil
 }
 
-// markable checks that item can be redacted and returns the step that marks
-// it. The caller holds the lock.
-func (m *mem) CreatePlan(_ context.Context, p history.Plan, f namespace.Fence) error {
+// Seed creates an item of the tool table in the situation s, with its item
+// key record.
+func (m *mem) Seed(
+	t *testing.T, unit history.Unit, s historytest.Situation, f namespace.Fence,
+) history.ItemRef {
+	t.Helper()
+
+	unit.Tool = m.tool
+
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	item := history.ItemRef{Unit: unit, Kind: m.kind, Item: "item-" + strconv.Itoa(len(m.items)+1)}
+	m.items[item] = &memItem{situation: s, mark: ""}
+	m.mu.Unlock()
 
-	if err := m.fenced(f); err != nil {
-		return err
-	}
-
-	if _, ok := m.plans[p.ID]; ok {
-		return history.ErrPlanExists
-	}
-
-	p.Parts = slices.Clone(p.Parts)
-	m.plans[p.ID] = p
-
-	return nil
-}
-
-func (m *mem) GetPlan(_ context.Context, ns namespace.Name, id history.PlanID) (history.Plan, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	p, ok := m.plans[id]
-	if !ok || p.Unit.Namespace != ns {
-		return history.Plan{}, history.ErrPlanNotFound
-	}
-
-	return p, nil
-}
-
-// planNewestFirst orders plans newest first by creation time, then by ID.
-func planNewestFirst(a, b history.Plan) int {
-	if c := b.CreatedAt.Compare(a.CreatedAt); c != 0 {
-		return c
-	}
-
-	return cmp.Compare(b.ID, a.ID)
-}
-
-func (m *mem) ListPlans(
-	_ context.Context,
-	unit history.Unit,
-	after *history.PlanCursor,
-	limit int,
-) ([]history.Plan, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var out []history.Plan
-
-	for n := range m.plans {
-		p := m.plans[n]
-		if p.Unit != unit {
-			continue
-		}
-
-		if after != nil && planAfter(p, *after) <= 0 {
-			continue
-		}
-
-		out = append(out, p)
-	}
-
-	slices.SortFunc(out, planNewestFirst)
-
-	return out[:min(limit, len(out))], nil
-}
-
-func (m *mem) ListExpiredPlans(_ context.Context, now time.Time, limit int) ([]history.Plan, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var out []history.Plan
-
-	for i := range m.plans {
-		p := m.plans[i]
-		if p.Redaction == "" && !p.ExpiresAt.After(now) {
-			out = append(out, p)
-		}
-	}
-
-	slices.SortFunc(out, func(a, b history.Plan) int {
-		if c := a.ExpiresAt.Compare(b.ExpiresAt); c != 0 {
-			return c
-		}
-
-		return cmp.Compare(a.ID, b.ID)
-	})
-
-	return out[:min(limit, len(out))], nil
-}
-
-func (m *mem) CreateJobLog(_ context.Context, l history.JobLog, f namespace.Fence) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if err := m.fenced(f); err != nil {
-		return err
-	}
-
-	if _, ok := m.logs[l.JobID]; ok {
-		return history.ErrJobLogExists
-	}
-
-	m.logs[l.JobID] = &memLog{log: l, chunks: nil}
-
-	return nil
-}
-
-// logOf returns the log of jobID in ns. The caller holds the lock.
-func (m *mem) AppendChunk(
-	_ context.Context,
-	ns namespace.Name,
-	jobID string,
-	c history.Chunk,
-	f namespace.Fence,
-) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if err := m.fenced(f); err != nil {
-		return err
-	}
-
-	l, err := m.logOf(ns, jobID)
+	ref, err := item.KeyRef()
 	if err != nil {
-		return err
+		t.Fatalf("key ref: %v", err)
 	}
 
-	switch {
-	case c.Seq < int64(len(l.chunks)):
-		if l.chunks[c.Seq].SHA256 != c.SHA256 {
-			return history.ErrChunkConflict
-		}
+	_, err = m.CreateItemKey(t.Context(), secret.ItemKey{
+		CreatedAt: time.Time{}, ShreddedAt: time.Time{}, Ref: ref, ID: secret.NewItemKeyID(), WrapperID: "builtin-1",
+	}, f)
+	if err != nil {
+		t.Fatalf("create item key: %v", err)
+	}
 
+	return item
+}
+
+func (m *mem) Mark(_ context.Context, item history.ItemRef) (history.RedactionID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	stored, ok := m.items[item]
+	if !ok {
+		return "", history.ErrItemNotFound
+	}
+
+	return stored.mark, nil
+}
+
+func (m *mem) AuditEntries(_ context.Context, ns namespace.Name) ([]audit.Entry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []audit.Entry
+
+	for i := range m.entries {
+		e := m.entries[i]
+		if e.Namespace == ns {
+			out = append(out, e)
+		}
+	}
+
+	return out, nil
+}
+
+// refusal returns the error of a redaction of an item in the situation s,
+// or nil when the item can be redacted.
+func refusal(s historytest.Situation) error {
+	switch s {
+	case historytest.SituationOld:
 		return nil
-	case l.log.Closed():
-		return history.ErrJobLogClosed
-	case c.Seq != int64(len(l.chunks)):
-		return history.ErrChunkOutOfOrder
+	case historytest.SituationLatest, historytest.SituationReplayBase:
+		return history.ErrLatest
+	case historytest.SituationRunning, historytest.SituationUpdateActive:
+		return history.ErrInProgress
+	case historytest.SituationBlamePending:
+		return history.ErrBlamePending
 	default:
-		l.chunks = append(l.chunks, c)
-
-		return nil
+		return fmt.Errorf("%w: situation %q", history.ErrInvalidItem, s)
 	}
 }
 
-func (m *mem) CloseJobLog(
-	_ context.Context, ns namespace.Name, jobID string, totals history.JobLogTotals, f namespace.Fence,
-) (history.JobLog, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if err := m.fenced(f); err != nil {
-		return history.JobLog{}, err
-	}
-
-	l, err := m.logOf(ns, jobID)
-	if err != nil {
-		return history.JobLog{}, err
-	}
-
-	if !l.log.Closed() {
-		l.log.ClosedAt = totals.ClosedAt
-		l.log.Size = totals.Size
-		l.log.SHA256 = totals.SHA256
-		l.log.Chunks = int64(len(l.chunks))
-	}
-
-	return l.log, nil
-}
-
-func (m *mem) GetJobLog(_ context.Context, ns namespace.Name, jobID string) (history.JobLog, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	l, err := m.logOf(ns, jobID)
-	if err != nil {
-		return history.JobLog{}, err
-	}
-
-	return l.log, nil
-}
-
-func (m *mem) ListChunks(
-	_ context.Context,
-	ns namespace.Name,
-	jobID string,
-	after int64,
-	limit int,
-) ([]history.Chunk, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	l, err := m.logOf(ns, jobID)
-	if err != nil {
-		return nil, err
-	}
-
-	start := min(after+1, int64(len(l.chunks)))
-	out := slices.Clone(l.chunks[start:])
-
-	return out[:min(limit, len(out))], nil
-}
-
-func (m *mem) ListExpiredJobLogs(_ context.Context, now time.Time, limit int) ([]history.JobLog, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	var out []history.JobLog
-
-	for _, l := range m.logs {
-		if l.log.Closed() && l.log.Redaction == "" && !l.log.ExpiresAt.After(now) {
-			out = append(out, l.log)
-		}
-	}
-
-	slices.SortFunc(out, func(a, b history.JobLog) int {
-		if c := a.ExpiresAt.Compare(b.ExpiresAt); c != 0 {
-			return c
-		}
-
-		return cmp.Compare(a.JobID, b.JobID)
-	})
-
-	return out[:min(limit, len(out))], nil
-}
-
+// fenced answers namespace.ErrFenced for a stale fence. The caller holds the
+// lock.
 func (m *mem) fenced(f namespace.Fence) error {
 	ns, ok := m.namespaces[f.Namespace]
 	if !ok {
@@ -592,10 +469,11 @@ func (m *mem) fenced(f namespace.Fence) error {
 	return nil
 }
 
-func (m *mem) shredLocked(ref secret.ContentRef, at time.Time) (secret.ContentKey, error) {
+// shredLocked marks the key of ref shredded. The caller holds the lock.
+func (m *mem) shredLocked(ref secret.ItemRef, at time.Time) (secret.ItemKey, error) {
 	k, ok := m.keys[ref]
 	if !ok {
-		return secret.ContentKey{}, secret.ErrKeyNotFound
+		return secret.ItemKey{}, secret.ErrKeyNotFound
 	}
 
 	if !k.Shredded() {
@@ -606,16 +484,49 @@ func (m *mem) shredLocked(ref secret.ContentRef, at time.Time) (secret.ContentKe
 	return k, nil
 }
 
+// redactionOfLocked returns the record of item, or ErrRedactionNotFound.
+// The caller holds the lock.
+func (m *mem) redactionOfLocked(item history.ItemRef) (history.Redaction, error) {
+	for n := range m.redactions {
+		r := m.redactions[n]
+		if r.Item == item {
+			return r, nil
+		}
+	}
+
+	return history.Redaction{}, history.ErrRedactionNotFound
+}
+
+// appendEntryLocked stores e as the next entry of its namespace and returns
+// its hash. The caller holds the lock and has validated e.
+func (m *mem) appendEntryLocked(e audit.Entry, f namespace.Fence) string {
+	prev := ""
+
+	for i := range m.entries {
+		stored := m.entries[i]
+		if stored.Namespace == e.Namespace {
+			prev = stored.Hash
+			e.Sequence = stored.Sequence
+		}
+	}
+
+	e.Sequence++
+	e.PrevHash = prev
+	e.FenceVersion = f.FailoverVersion
+	e.Hash = audit.ComputeHash(e, prev)
+	m.entries = append(m.entries, e)
+
+	return e.Hash
+}
+
+// appendLocked appends r. The caller holds the lock.
 func (m *mem) appendLocked(r history.Redaction, targets []string) (history.Redaction, error) {
 	if err := r.Validate(); err != nil {
 		return history.Redaction{}, err
 	}
 
-	for i := range m.redactions {
-		stored := m.redactions[i]
-		if stored.Item == r.Item {
-			return stored, history.ErrRedacted
-		}
+	if stored, err := m.redactionOfLocked(r.Item); err == nil {
+		return stored, history.ErrRedacted
 	}
 
 	r.Targets = nil
@@ -635,6 +546,8 @@ func (m *mem) appendLocked(r history.Redaction, targets []string) (history.Redac
 	return r, nil
 }
 
+// target returns the record id and the index of its target name. The
+// caller holds the lock.
 func (m *mem) target(id history.RedactionID, name string, f namespace.Fence) (history.Redaction, int, error) {
 	if err := m.fenced(f); err != nil {
 		return history.Redaction{}, 0, err
@@ -653,50 +566,4 @@ func (m *mem) target(id history.RedactionID, name string, f namespace.Fence) (hi
 	r.Targets = slices.Clone(r.Targets)
 
 	return r, i, nil
-}
-
-func (m *mem) markable(item history.ItemRef) (func(history.RedactionID), error) {
-	switch item.Kind {
-	case secret.ContentKindPlan:
-		p, ok := m.plans[history.PlanID(item.Item)]
-		if !ok || p.Unit != item.Unit {
-			return nil, history.ErrItemNotFound
-		}
-
-		return func(id history.RedactionID) {
-			if p.Redaction == "" {
-				p.Redaction = id
-				m.plans[p.ID] = p
-			}
-		}, nil
-	case secret.ContentKindState:
-		// State items belong to the tool stores, not to this store.
-		return nil, history.ErrInvalidItem
-	case secret.ContentKindJobLog:
-		l, ok := m.logs[item.Item]
-		if !ok || l.log.Unit != item.Unit {
-			return nil, history.ErrItemNotFound
-		}
-
-		if !l.log.Closed() {
-			return nil, history.ErrInProgress
-		}
-
-		return func(id history.RedactionID) {
-			if l.log.Redaction == "" {
-				l.log.Redaction = id
-			}
-		}, nil
-	default:
-		return nil, history.ErrItemNotFound
-	}
-}
-
-func (m *mem) logOf(ns namespace.Name, jobID string) (*memLog, error) {
-	l, ok := m.logs[jobID]
-	if !ok || l.log.Unit.Namespace != ns {
-		return nil, history.ErrJobLogNotFound
-	}
-
-	return l, nil
 }

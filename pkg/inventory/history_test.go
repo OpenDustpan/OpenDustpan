@@ -7,10 +7,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/inventory"
 )
 
-// change returns a change log row of the unit id of tool at minute min.
+// change returns a change log row of the unit id of tool at minute, with
+// the sequence minute.
 func change(tool, id, name string, kind inventory.ChangeKind, minute int) inventory.Change {
 	return inventory.Change{
 		At:            time.Date(2026, time.October, 17, 9, minute, 0, 0, time.UTC),
+		Seq:           int64(minute),
 		Namespace:     "acme",
 		Tool:          tool,
 		UnitID:        id,
@@ -104,4 +106,59 @@ func TestReplayAtTakesAnyOrder(t *testing.T) {
 	if got := inventory.ReplayAt(log, time.Date(2026, time.October, 17, 9, 3, 0, 0, time.UTC)); len(got) != 1 {
 		t.Errorf("ReplayAt between create and delete = %v, want the unit", got)
 	}
+}
+
+func TestReplayAtOrdersBySequence(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, time.October, 17, 9, 10, 0, 0, time.UTC)
+
+	cases := []struct {
+		name string
+		log  []inventory.Change
+		want int
+	}{
+		{
+			name: "rows with the same time",
+			log: []inventory.Change{
+				withSeq(change("pulumi", "stk-a", "web/prod", inventory.ChangeDeleted, 5), 2),
+				withSeq(change("pulumi", "stk-a", "web/prod", inventory.ChangeCreated, 5), 1),
+			},
+			want: 0,
+		},
+		{
+			name: "a later commit with an earlier time",
+			log: []inventory.Change{
+				withSeq(change("pulumi", "stk-a", "web/prod", inventory.ChangeCreated, 6), 1),
+				withSeq(change("pulumi", "stk-a", "web/prod", inventory.ChangeDeleted, 5), 2),
+			},
+			want: 0,
+		},
+		{
+			name: "a restore with the same time as the delete",
+			log: []inventory.Change{
+				withSeq(change("pulumi", "stk-a", "web/prod", inventory.ChangeRestored, 5), 3),
+				withSeq(change("pulumi", "stk-a", "web/prod", inventory.ChangeDeleted, 5), 2),
+				withSeq(change("pulumi", "stk-a", "web/prod", inventory.ChangeCreated, 1), 1),
+			},
+			want: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := inventory.ReplayAt(tc.log, at); len(got) != tc.want {
+				t.Errorf("ReplayAt = %v, want %d units", got, tc.want)
+			}
+		})
+	}
+}
+
+// withSeq returns c with the sequence seq.
+func withSeq(c inventory.Change, seq int64) inventory.Change {
+	c.Seq = seq
+
+	return c
 }

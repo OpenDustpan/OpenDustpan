@@ -41,7 +41,10 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "a principal edge and a unit edge are two edges", test: testPrincipalAndUnit},
 		{name: "dependents answer newest first and leave out old edges", test: testDependentsSince},
 		{name: "sources answer the edges of a dependent unit", test: testSources},
-		{name: "drop deletes the edges of a purged unit in its namespace", test: testDropUnit},
+		{
+			name: "drop deletes the edges of a purged unit in its namespace and keeps those of another namespace",
+			test: testDropUnit,
+		},
 		{name: "an invalid edge is refused", test: testInvalidEdge},
 		{name: "a stale fence refuses record and drop", test: testFenced},
 	}
@@ -253,7 +256,7 @@ func testDropUnit(t *testing.T, s Store) {
 	}
 
 	if got := dependents(t, s, far); len(got) != 1 {
-		t.Errorf("edges of another namespace = %d, want 1 kept", len(got))
+		t.Errorf("edges of another namespace to the purged unit = %d, want 1 kept", len(got))
 	}
 
 	if err := s.DropUnit(t.Context(), gone, fence); err != nil {

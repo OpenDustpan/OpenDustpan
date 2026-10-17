@@ -31,9 +31,12 @@ const (
 
 // ResourceChange is one row of the blame of a stack: what the update Version
 // did to the resource URN. ChangedPaths counts the value paths that changed,
-// from the masked diff. A row holds no value and no path of a secret value,
-// so a redaction of the update keeps it. At is the end time of the update.
-// By is the actor of the update.
+// from the masked diff. A secret value counts as changed when the SHA-256 of
+// its plaintext differs: the blame operation decrypts the value with the
+// data key of the stack inside the server to compute that digest, and never
+// stores or returns the digest or the plaintext. A row holds no value and no
+// path of a secret value, so a redaction of the update keeps it. At is the
+// end time of the update. By is the actor of the update.
 type ResourceChange struct {
 	At           time.Time
 	Stack        ID

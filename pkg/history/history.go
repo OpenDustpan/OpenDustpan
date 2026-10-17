@@ -1,16 +1,18 @@
-// Package history holds the tool-neutral parts of the history of a unit:
-// who made a history item, the redaction of old items, stored plans, job
-// logs, and how long the server keeps plans and job logs.
+// Package history holds the tool-neutral parts of the history of a unit: the
+// actor of an item, the redaction of any item kind (state, plan, job log)
+// through one Redactor port and one RedactionLog, and the retention rule: the
+// expiry of an item is a redaction with the cause CauseRetention. The job
+// model stores plans and job logs and implements Redactor for them.
 //
 // A history item is one entry in the history of a unit that has content:
-// the checkpoints of one Pulumi update, one OpenTofu state version, one
-// stored plan or one job log. Each tool keeps its own state items in its own
+// one Pulumi update, one OpenTofu state version, one stored plan or one
+// version of a job log. Each tool keeps its own state items in its own
 // tables. Shared code names an item by its unit, its kind and the ID that
 // the tool gives it, and never parses that ID.
 //
-// Each item has its own content key. A redaction shreds that key and
-// deletes the content, in the live blob store and in every backup target,
-// and keeps the metadata and the hashes of the item.
+// Each item has its own item key. A redaction shreds that key and deletes
+// the content, in the live blob store and in every backup target, and keeps
+// the metadata and the hashes of the item.
 package history
 
 import (
@@ -29,12 +31,15 @@ var (
 	ErrInvalidItem = errors.New("invalid history item")
 	// ErrItemNotFound reports a history item that does not exist.
 	ErrItemNotFound = errors.New("history item not found")
-	// ErrLatest reports a redaction of the latest state item of a unit. The
-	// latest state cannot be redacted.
+	// ErrLatest reports a redaction of the latest state item of a unit,
+	// which includes the replay base of an update that has not ended or
+	// whose journal is not replayed yet. The latest state cannot be
+	// redacted.
 	ErrLatest = errors.New("the latest state cannot be redacted")
 	// ErrInProgress reports a redaction of an item that is not finished: an
-	// update that runs, a state version that is pending, or the log of a
-	// job that runs.
+	// update that runs, a state version that is pending, the log of a job
+	// step that runs, or any item of a stack while an update on that stack
+	// is active.
 	ErrInProgress = errors.New("the history item is not finished")
 	// ErrBlamePending reports a redaction of a state item before blame
 	// compared the item and the next state item. The client can try again.
@@ -89,10 +94,10 @@ func (u Unit) Validate() error {
 
 // ItemRef names one history item: its unit, its kind and the ID that the
 // tool gives it, for example an update ID, a state version ID, a plan ID
-// or a job ID.
+// or the ID of a job log version.
 type ItemRef struct {
 	Unit Unit
-	Kind secret.ContentKind
+	Kind secret.ItemKind
 	Item string
 }
 
@@ -114,16 +119,16 @@ func (r ItemRef) Validate() error {
 	return nil
 }
 
-// ContentRef returns the content reference of the item: the scope of its
-// unit, its kind and its ID. The scope of a unit is its namespace and its
-// stable ID, as for its data key.
-func (r ItemRef) ContentRef() (secret.ContentRef, error) {
+// KeyRef returns the reference of the item key of the item: the scope of
+// its unit, its kind and its ID. The scope of a unit is its namespace and
+// its stable ID, as for its data key.
+func (r ItemRef) KeyRef() (secret.ItemRef, error) {
 	scope, err := secret.NewScope(r.Unit.Namespace, r.Unit.ID)
 	if err != nil {
-		return secret.ContentRef{}, err
+		return secret.ItemRef{}, err
 	}
 
-	return secret.NewContentRef(scope, r.Kind, r.Item)
+	return secret.NewItemRef(scope, r.Kind, r.Item)
 }
 
 // Actor is who made a history item or a redaction: the subject of the

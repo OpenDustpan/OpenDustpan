@@ -19,11 +19,12 @@ func TestSuite(t *testing.T) {
 	workspacehistorytest.Run(t, func(*testing.T) workspacehistorytest.Store { return newMem() })
 }
 
-// mem keeps namespaces, rows, opaque marks and cursors in memory.
+// mem keeps namespaces, rows, opaque and lineage marks and cursors in memory.
 type mem struct {
 	namespaces map[namespace.Name]namespace.Namespace
 	cursors    map[workspace.ID]int64
 	opaque     map[workspace.StateVersionID]bool
+	lineage    map[workspace.StateVersionID]bool
 	ordinals   map[workspace.StateVersionID]int64
 	rows       []workspace.ResourceChange
 	mu         sync.Mutex
@@ -31,9 +32,13 @@ type mem struct {
 
 func newMem() *mem {
 	return &mem{
-		namespaces: map[namespace.Name]namespace.Namespace{}, cursors: map[workspace.ID]int64{},
-		opaque: map[workspace.StateVersionID]bool{}, ordinals: map[workspace.StateVersionID]int64{}, rows: nil,
-		mu: sync.Mutex{},
+		namespaces: map[namespace.Name]namespace.Namespace{},
+		cursors:    map[workspace.ID]int64{},
+		opaque:     map[workspace.StateVersionID]bool{},
+		lineage:    map[workspace.StateVersionID]bool{},
+		ordinals:   map[workspace.StateVersionID]int64{},
+		rows:       nil,
+		mu:         sync.Mutex{},
 	}
 }
 
@@ -91,6 +96,7 @@ func (m *mem) RecordResourceChanges(
 	m.rows = append(m.rows, b.Changes...)
 	m.ordinals[b.StateVersion] = b.Ordinal
 	m.opaque[b.StateVersion] = b.Opaque
+	m.lineage[b.StateVersion] = b.LineageChanged
 	m.cursors[b.Workspace] = b.Ordinal
 
 	return nil
@@ -132,11 +138,12 @@ func (m *mem) ItemChanges(
 	defer m.mu.Unlock()
 
 	b := workspace.ItemBlame{
-		Workspace:    id,
-		StateVersion: sv,
-		Changes:      []workspace.ResourceChange{},
-		Ordinal:      m.ordinals[sv],
-		Opaque:       m.opaque[sv],
+		Workspace:      id,
+		StateVersion:   sv,
+		Changes:        []workspace.ResourceChange{},
+		Ordinal:        m.ordinals[sv],
+		Opaque:         m.opaque[sv],
+		LineageChanged: m.lineage[sv],
 	}
 
 	for i := range m.rows {

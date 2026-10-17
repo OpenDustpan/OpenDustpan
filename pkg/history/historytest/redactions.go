@@ -53,7 +53,7 @@ func RunRedactions(t *testing.T, newStore RedactionFactory) {
 // stateItem returns the reference of a state item of the unit unitID in
 // the namespace "acme".
 func stateItem(unitID, item string) history.ItemRef {
-	return history.ItemRef{Unit: unitOf(unitID), Kind: secret.ContentKindState, Item: item}
+	return history.ItemRef{Unit: unitOf(unitID), Kind: secret.ItemKindState, Item: item}
 }
 
 // mustAppend appends r with targets and returns the stored record.
@@ -81,7 +81,7 @@ func testAppendGet(t *testing.T, s RedactionStore) {
 		t.Fatalf("get: %v", err)
 	}
 
-	if byID.ID != r.ID || byID.Reason != r.Reason || byID.Item != r.Item || byID.ContentKey != r.ContentKey ||
+	if byID.ID != r.ID || byID.Reason != r.Reason || byID.Item != r.Item || byID.ItemKey != r.ItemKey ||
 		!byID.At.Equal(r.At) || byID.By != r.By || byID.Cause != r.Cause {
 		t.Errorf("get = %+v, want %+v", byID, r)
 	}

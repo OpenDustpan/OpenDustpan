@@ -1,12 +1,13 @@
 // Package historytest is the conformance suite for the ports of the history
-// package: the redaction log, the plan store and the job log store. Every
-// built-in store runs it, and a custom store should too:
+// package: the redaction log, and the Redactor of each kind of history item.
+// Every built-in store runs it, and a custom store should too:
 //
 //	func TestHistoryConformance(t *testing.T) {
 //		t.Parallel()
 //		historytest.RunRedactions(t, func(t *testing.T) historytest.RedactionStore { return newMyStore(t) })
-//		historytest.RunPlans(t, func(t *testing.T) historytest.PlanSuiteStore { return newMyStore(t) })
-//		historytest.RunJobLogs(t, func(t *testing.T) historytest.JobLogSuiteStore { return newMyStore(t) })
+//		historytest.RunRedactor(t, historytest.PulumiSituations(), func(t *testing.T) historytest.RedactorFixture {
+//			return newMyPulumiFixture(t)
+//		})
 //	}
 package historytest
 
@@ -71,15 +72,16 @@ func actor() history.Actor {
 // newRedaction returns a valid record for item, made at at.
 func newRedaction(item history.ItemRef, at time.Time) history.Redaction {
 	return history.Redaction{
-		At:         at,
-		Item:       item,
-		ID:         history.NewRedactionID(),
-		By:         actor(),
-		Reason:     "a password in a plain attribute",
-		Cause:      history.CauseRequest,
-		ContentKey: secret.NewContentKeyID(),
-		Blobs:      nil,
-		Targets:    nil,
+		At:        at,
+		Item:      item,
+		ID:        history.NewRedactionID(),
+		By:        actor(),
+		Reason:    "a password in a plain attribute",
+		Cause:     history.CauseRequest,
+		ItemKey:   secret.NewItemKeyID(),
+		AuditHash: "",
+		Blobs:     nil,
+		Targets:   nil,
 	}
 }
 
@@ -113,23 +115,14 @@ func changeEntry(item history.ItemRef) audit.Entry {
 	}
 }
 
-// contentKeyFor stores the content key record of item and returns its ID.
-func contentKeyFor(
-	t *testing.T, keys secret.ContentKeyIndex, item history.ItemRef, fence namespace.Fence,
-) secret.ContentKeyID {
+// itemKeyOf returns the item key record of item.
+func itemKeyOf(t *testing.T, keys secret.ItemKeyIndex, item history.ItemRef) (secret.ItemKey, error) {
 	t.Helper()
 
-	ref, err := item.ContentRef()
+	ref, err := item.KeyRef()
 	if err != nil {
-		t.Fatalf("content ref of %+v: %v", item, err)
+		t.Fatalf("key ref of %+v: %v", item, err)
 	}
 
-	k, err := keys.CreateContentKey(t.Context(), secret.ContentKey{
-		CreatedAt: suiteTime(), ShreddedAt: time.Time{}, Ref: ref, ID: secret.NewContentKeyID(), WrapperID: "builtin-1",
-	}, fence)
-	if err != nil {
-		t.Fatalf("create content key: %v", err)
-	}
-
-	return k.ID
+	return keys.GetItemKey(t.Context(), ref)
 }

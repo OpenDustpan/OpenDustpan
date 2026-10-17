@@ -16,18 +16,31 @@ What exists:
   `unit:purge` ends it before the period ends.
 - **The Pulumi delete guard.** `pulumi stack rm` without `--force` sends
   `DELETE /api/stacks/{namespace}/{project}/{stack}`. The server answers 400
-  when the stack still holds resources, and the Pulumi CLI then tells the
-  user to use `--force`. With `--force`, the CLI sends `?force=true`, and the
-  server deletes.
+  with the message `Bad Request: Stack still contains resources.` when the
+  stack still holds resources, and the Pulumi CLI then tells the user to use
+  `--force`. With `--force`, the CLI sends `?force=true`, and the server
+  deletes. `pulumi destroy --remove` and the `RemoveStack` call of the
+  Automation API without its force option send the same `DELETE` without
+  `force`.
 - **The OpenTofu delete.** `tofu workspace delete` through the cloud backend
   reads the workspace. When the workspace permissions hold
   `can-force-delete`, and the user did not give `-force`, OpenTofu calls the
   TFE safe-delete action:
   `POST /api/v2/organizations/{organization}/workspaces/{workspace}/actions/safe-delete`
-  (`internal/cloud/state.go` at commit `52ade2f`, `State.Delete`). Without
-  that permission, or with `-force`, it sends `DELETE`. The server serves
-  only `DELETE` today, and it does not answer `can-force-delete`. So every
-  `tofu workspace delete` is a forced delete now.
+  (`internal/cloud/state.go` at commit `52ade2f`, `State.Delete`). OpenTofu
+  tests only that the attribute is present (`CanForceDelete != nil`), not
+  its value. Without the attribute, or with `-force`, it sends `DELETE`. The
+  server serves only `DELETE` today, and it does not answer
+  `can-force-delete`. So every `tofu workspace delete` is a forced delete
+  now.
+- **go-tfe and a 409 of safe-delete.** go-tfe v1.112.0 (`tfe.go`,
+  `checkResponseCode`) turns each 409 of safe-delete into a fixed error. It
+  reads the detail of the JSON:API error only to find the word `locked` or
+  the words `being processed`. With `locked`, the error is
+  `ErrWorkspaceLockedCannotDelete`. Otherwise it is
+  `ErrWorkspaceNotSafeToDelete`, with the text `workspace cannot be safely
+  deleted because it is still managing resources`. OpenTofu prints that
+  text. So the detail of the server never reaches the user.
 - **What the server sees of dependencies.** A Pulumi stack reference reads
   the outputs of another stack through the Pulumi Cloud-compatible API. An
   OpenTofu `terraform_remote_state` data source with the `remote` or `cloud`
@@ -40,6 +53,9 @@ What exists:
   decision 3). The tool deletes resources, for example with `pulumi destroy`,
   `pulumi state delete`, `tofu destroy` or `tofu state rm`. The server then
   receives a new state item.
+
+The owner approved every decision of this ADR on 2026-10-17, after review
+round 1 of the pull request that adds it.
 
 ## Decision
 
@@ -60,7 +76,10 @@ What exists:
    - `lock`: at the time of the read, the reading principal held a Pulumi
      update lease or an OpenTofu workspace lock on another unit. The server
      records one edge for each unit that the principal held. When it held
-     more than one, each edge is `ambiguous`.
+     more than one, each edge is `ambiguous`. The unit that the principal
+     held can be in another namespace than the source. The edge is then a
+     cross-namespace edge: it is in the namespace of the source, and it
+     names a dependent in another namespace.
    - `principal`: the principal held nothing. The edge names the principal
      only, for example a CI account.
    - `declared`: decision 2.
@@ -79,49 +98,99 @@ What exists:
      unit itself records no edge. The tool then reads its own state.
 5. **Which edges block a delete.** An edge with the evidence `job`, `lock`
    or `declared`, last seen within the dependents window, blocks a delete
-   that is not forced. The window is 90 days by default, with the setting
-   `--dependents-window` (`DUSTPAN_DEPENDENTS_WINDOW`). An edge with the
-   evidence `principal` never blocks, but the check lists it.
-   `dependency.Blocking` defines this rule.
-6. **The edges after a delete.** A soft delete keeps the edges of the unit,
+   that is not forced. An ambiguous `lock` edge never blocks: the check only
+   lists it. An edge with the evidence `principal` never blocks, but the
+   check lists it. `dependency.Blocking` defines this rule.
+6. **The dependents window.** The window is 90 days by default, with the
+   setting `--dependents-window` (`DUSTPAN_DEPENDENTS_WINDOW`). The window
+   must be at least the soft-delete retention (`--soft-delete-retention`,
+   ADR 47). The server refuses to start with a shorter window, and the error
+   names both settings. So an edge of a dependent that a team deleted stays
+   in the window for as long as the team can restore that dependent.
+   `dependency.ValidateWindow` defines this rule.
+7. **The edges after a delete.** A soft delete keeps the edges of the unit,
    so a restore brings them back. A purge deletes every edge where the unit is
-   the source or the dependent.
+   the source, and every edge of the same namespace where the unit is the
+   dependent. A cross-namespace edge where the unit is the dependent stays,
+   because the fence of the purged unit does not cover the namespace of the
+   source. That edge is not seen again, so it leaves the window in time.
+   `dependency.Store.DropUnit` keeps this behavior.
 
 ### The delete check
 
-7. **A check before the delete.** The inventory API answers the dependents
+8. **A check before the delete.** The inventory API answers the dependents
    of a unit:
    `GET /api/inventory/units/{tool}/{unit_id}/dependents`. The answer lists
    each edge with its kind, its evidence, its times and the dependent, and
-   says which edges block a delete. It also answers the resource count of
-   the latest state item. It needs `unit:read` on the unit. It names only
-   the dependent units that the caller can read (`unit:read`), and it counts
-   the others (ADR 17). A principal-only edge names the principal subject.
-8. **Pulumi.** `DELETE` without `force` keeps the delete guard for resources
-   (400). When the stack holds no resources and a blocking edge exists, the
-   answer is 409 as `{"code": 409, "message": "..."}`. The message names the
-   count of dependent units, names up to three that the caller can read, and
-   tells the user to use `pulumi stack rm --force`. The status differs from
-   400, so the CLI shows the message and does not report resources. With
+   says which edges block a delete. It marks each ambiguous edge as
+   inferred and not blocking. It also answers the resource count of the
+   latest state item. It needs `unit:read` on the unit. The rules for what it
+   names:
+   - It names only the dependent units that the caller can read
+     (`unit:read`). It counts the others (ADR 17), also the dependents in
+     other namespaces. For a cross-namespace dependent that the caller
+     cannot read, the answer gives only the count.
+   - A principal-only edge names the principal subject only to a caller
+     with `namespace:admin` on the namespace of the source, or with
+     `server:read-principals`. Other callers see the edge without its
+     subject.
+9. **Pulumi.** `DELETE` without `force` keeps the delete guard for resources:
+   400 with the message `Bad Request: Stack still contains resources.`,
+   exactly as now, because the CLI reads that text. When the stack holds no
+   resources and a blocking edge exists, the answer is 409 as
+   `{"code": 409, "message": "..."}`. The message names the count of
+   dependent units, names up to three that the caller can read, and tells
+   the user to use `pulumi stack rm --force`. The status differs from 400,
+   so the CLI shows the message and does not report resources. With
    `force=true`, the server deletes as it does now.
-9. **OpenTofu.** The workspace resource answers the permission
-   `can-force-delete`, true when the caller has `unit:manage`. OpenTofu then
-   calls safe-delete when the user gives no `-force`. The TFE-compatible API
-   serves:
-   - `POST /api/v2/organizations/{organization}/workspaces/{workspace}/actions/safe-delete`,
-   - `POST /api/v2/workspaces/{workspace_id}/actions/safe-delete`.
+   - `pulumi destroy --remove` destroys the resources, then sends the
+     `DELETE` without `force`. With a blocking edge, that delete gets the 409,
+     and the stack stays with no resources.
+   - `RemoveStack` of the Automation API without its force option gets the
+     same 409.
 
-   Safe-delete answers 409 as a JSON:API error when the workspace holds
-   resources, when it is locked, or when a blocking edge exists. The detail
-   names the cause, and for dependents it names the count and up to three
-   names. Otherwise it is the soft delete of `DELETE`. `DELETE` stays a
-   forced delete. The e2e step shows the text that OpenTofu prints for the
-   409 on each supported version.
-10. **The audit entry.** The audit entry of each delete holds the count of
+   An e2e step covers `stack rm`, `destroy --remove` and `RemoveStack` with
+   a blocking edge, and checks the text that the CLI prints.
+10. **OpenTofu.** The TFE-compatible API serves:
+    - `POST /api/v2/organizations/{organization}/workspaces/{workspace}/actions/safe-delete`,
+    - `POST /api/v2/workspaces/{workspace_id}/actions/safe-delete`.
+
+    The rules:
+    - **`can-force-delete` for every caller.** The workspace resource always
+      has the permission `can-force-delete`, for every caller. Its value is
+      true when the caller has `unit:manage`, else false. OpenTofu tests only
+      that the attribute is present, so every `tofu workspace delete` with no
+      `-force` calls safe-delete.
+    - **409 with no unit names.** Safe-delete answers 409 as a JSON:API error
+      when the workspace holds resources, when it is locked, or when a
+      blocking edge exists. The detail never names a unit. For a lock, the
+      detail holds the word `locked`, so go-tfe gives the lock error. For
+      resources and for dependents, the detail says which of the two it is,
+      and names the dependents route and the console page of the workspace.
+    - **The fixed text of go-tfe stays.** OpenTofu prints the fixed text of
+      go-tfe (see "Context"), also for dependents. The server cannot change
+      that text, and this ADR accepts it. The release notes and the OpenTofu
+      guide say that the text `still managing resources` can also mean
+      dependents, and tell the user to read the dependents route or the
+      console, then to delete with `-force` when the dependents are not
+      needed.
+    - **Client-encrypted state.** The server cannot count the resources of a
+      client-encrypted state (ADR 41 decision 8). Safe-delete of a workspace
+      whose current state version is opaque answers 409 as if the state held
+      resources, unless the workspace has no state version. The detail says
+      that the server cannot read the state. The user deletes with `-force`.
+    - **Otherwise** safe-delete is the soft delete of `DELETE`. `DELETE`
+      stays a forced delete.
+
+    An e2e step on each supported OpenTofu version runs `tofu workspace
+    delete` for a workspace with resources, a locked workspace, and a
+    workspace with a blocking edge, and asserts the text that OpenTofu
+    prints for each 409.
+11. **The audit entry.** The audit entry of each delete holds the count of
     blocking edges at the time of the delete, as a change with the key
     `dependents`. So a reader of the audit log sees that a forced delete went
     past dependents.
-11. **Purge.** A purge before the end of the retention period
+12. **Purge.** A purge before the end of the retention period
     (`unit:purge`) runs the same check. With a blocking edge, it needs the
     request field `confirmDependents: true`, else it answers 409. The
     retention sweep purges without the check, because the retention period is
@@ -129,12 +198,12 @@ What exists:
 
 ### The recovery window
 
-12. **The recovery window of a unit is its retention period.** The recovery
+13. **The recovery window of a unit is its retention period.** The recovery
     window is the time from the delete to the purge: the retention period of
     ADR 47. In this window, `unit:restore` brings the unit back with its ID,
     state, history, secrets, grants and edges. This ADR adds no second
     period.
-13. **Reads of a deleted unit.** In the recovery window, a read of the
+14. **Reads of a deleted unit.** In the recovery window, a read of the
     outputs of the deleted unit through its old name answers 404, as now. When
     no live unit holds the name, the server counts the read on the deleted
     unit, with the time and the principal. The deleted units list of the
@@ -143,10 +212,10 @@ What exists:
 
 ### Resources
 
-14. **The server does not delete resources.** The tool deletes a resource.
+15. **The server does not delete resources.** The tool deletes a resource.
     The server keeps the record. A safe delete of a resource is a check
     before the tool runs, and a record after it.
-15. **Dependents of a resource in its unit.** A masked read answers the
+16. **Dependents of a resource in its unit.** A masked read answers the
     resources of the same state item that depend on one resource:
     - Pulumi: the resources whose `dependencies`, `propertyDependencies`,
       `parent` or `deletedWith` name its URN.
@@ -157,18 +226,18 @@ What exists:
     `GET /api/stacks/{namespace}/{project}/{stack}/state/{version}/resources/{urn}/dependents`
     and `GET /api/v2/state-versions/{state_version_id}/resources/{address}/dependents`.
     Both need `unit:read`. The answer also lists the dependent units of the
-    whole unit (decision 7), because the server cannot map an output to a
+    whole unit (decision 8), because the server cannot map an output to a
     resource.
-16. **The record after a delete.** Blame (ADR 150) records each resource that
+17. **The record after a delete.** Blame (ADR 150) records each resource that
     a state item deletes, with the actor and the job. The previous state item
     still holds the record of the resource. A restore of that item (ADR 28)
     brings back the record, never the infrastructure. A plan of a job
-    (ADR 152) that deletes resources can show the dependents of decision 15 to
-    the policy check (RFC 13). RFC 13 decides how.
+    (ADR 102) that deletes resources can show the dependents of decision 16
+    to the policy check (RFC 13). RFC 13 decides how.
 
 ### Actions
 
-17. The actions of this ADR, with the object of each:
+18. The actions of this ADR, with the object of each:
 
     | Operation | Action | Object |
     | --- | --- | --- |
@@ -178,7 +247,8 @@ What exists:
     | Restore in the recovery window | `unit:restore` | unit |
     | Purge, with or without `confirmDependents` | `unit:purge` | unit |
 
-    These actions exist. This ADR adds no action (question 1).
+    These actions exist. This ADR adds no action. A forced delete needs
+    `unit:manage`, as a delete does, and has no separate action now.
 
 ## Relation to the RFCs
 
@@ -187,11 +257,11 @@ What exists:
   says. This ADR adds the dependents check to the delete, the safe-delete
   routes and the purge confirmation.
 - **RFC 66** lists "References between units" as an item that an export and
-  an import can break. The dependents route of decision 7 answers that item
+  an import can break. The dependents route of decision 8 answers that item
   for a unit, so the check mode of RFC 66 can read it.
 - **RFC 15 and RFC 24** add declared edges when they land (decision 2).
 - **RFC 18 and ADR 28:** the record of a deleted resource comes back through
-  the restore of ADR 28 (decision 16).
+  the restore of ADR 28 (decision 17).
 
 This ADR supersedes no decision. It adds to ADR 47, ADR 25 and ADR 28.
 
@@ -199,38 +269,49 @@ This ADR supersedes no decision. It adds to ADR 47, ADR 25 and ADR 28.
 
 - `tofu workspace delete` without `-force` becomes a safe delete. A user
   who deletes a workspace that holds resources now gets an error, as with
-  TFE. The release notes say this.
+  TFE. A user who deletes a workspace with dependents gets the same fixed
+  text of go-tfe. The release notes say this.
+- `pulumi destroy --remove` can now leave an empty stack, when the stack has
+  dependents. The release notes say this.
 - Each output read can write one row for each hour and edge. On a namespace
   with many readers, this is a write load on the read path. The release load
   run (ADR 40) measures it.
 - The `lock` evidence is an inference. A principal that holds a lock on one
   unit and reads another unit for another reason makes a false edge. The
   check says that such an edge is inferred, and a forced delete still works.
+  An ambiguous edge never blocks. A way to mark an inferred edge as wrong
+  waits for a later change.
+- A cross-namespace edge of a purged dependent stays in the namespace of
+  the source until it leaves the window. Until then, it can block a delete
+  of the source. The user deletes with the forced form.
 - An edge from a workstation that holds no lock names only the principal. A
   team that wants exact edges runs its tools in jobs (RFC 6).
 - Open work. Each route lands with its e2e step first (ADR 12) and its action
   in the route table (ADR 17):
   1. The `dependency` ports and their conformance suite
-     (`dependencytest.Run`), then the SQL adapters and migrations.
+     (`dependencytest.Run`), then the SQL adapters and migrations, and the
+     check of the window setting at start.
   2. Edge recording in the output read paths of both tools.
   3. The dependents route of the inventory API.
-  4. The Pulumi 409 for dependents, with its e2e step.
-  5. `can-force-delete`, the two safe-delete routes, and the e2e step on each
-     OpenTofu version.
+  4. The Pulumi 409 for dependents, with its e2e step for `stack rm`,
+     `destroy --remove` and `RemoveStack`.
+  5. `can-force-delete` for every caller, the two safe-delete routes, and
+     the e2e step on each OpenTofu version that asserts the printed text.
   6. `confirmDependents` on the purge.
   7. The read count of a deleted unit.
   8. The routes for the dependents of a resource.
 
-## Open questions
+## Answered questions
 
-1. **A separate action for a forced delete.** A forced delete goes past
-   resources and dependents with `unit:manage`, as the CLIs expect. Should a
-   role be able to give a delete without the forced form, for example with
-   `unit:delete-forced`? The Pulumi CLI sends both forms to the same route.
-2. **Dependents in other namespaces.** A reader in another namespace can read
-   the outputs of a unit. The edge is in the namespace of the source. The
-   check names the dependent only when the caller can read it. Is a count
-   enough for dependents that the caller cannot see?
-3. **Edges from the `lock` evidence.** Should the check let a person mark an
-   inferred edge as wrong, so that it stops blocking?
-4. **The dependents window.** Is 90 days the right default?
+The owner approved these answers on 2026-10-17. The decisions above apply
+them.
+
+1. **A separate action for a forced delete.** No separate action now
+   (decision 18).
+2. **Dependents in other namespaces.** A count is enough for the dependents
+   that the caller cannot read (decision 8).
+3. **Edges from the `lock` evidence.** A way to mark an inferred edge as
+   wrong waits for a later change. An ambiguous edge never blocks
+   (decision 5).
+4. **The dependents window.** 90 days by default, and at least the
+   soft-delete retention (decision 6).

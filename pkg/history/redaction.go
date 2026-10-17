@@ -41,8 +41,8 @@ type Cause string
 const (
 	// CauseRequest is a redaction that a principal asked for.
 	CauseRequest Cause = "request"
-	// CauseRetention is the end of the retention period of a plan or a job
-	// log. Its actor is ServerSubject and its reason is RetentionReason.
+	// CauseRetention is the end of the retention period of an item. Its
+	// actor is ServerSubject and its reason is RetentionReason.
 	CauseRetention Cause = "retention"
 	// CauseRestore is a redaction that a restore found in the ledger of a
 	// backup target. It has no reason, because the ledger holds none.
@@ -91,19 +91,22 @@ type ShredTarget struct {
 }
 
 // Redaction is the record of one redaction. It keeps who redacted which
-// item, when and why, the content key that it shredded, the content blobs
-// that it deletes, and the state of each shred target. It never holds
-// content.
+// item, when and why, the item key that it shredded, the content blobs that
+// it deletes, and the state of each shred target. AuditHash is the hash of
+// the audit entry that the redaction wrote: the Redactor sets it on the
+// stored record, and a restore copies it from the ledger. A record never
+// holds content.
 type Redaction struct {
-	At         time.Time
-	Item       ItemRef
-	ID         RedactionID
-	By         Actor
-	Reason     string
-	Cause      Cause
-	ContentKey secret.ContentKeyID
-	Blobs      []blob.Key
-	Targets    []ShredTarget
+	At        time.Time
+	Item      ItemRef
+	ID        RedactionID
+	By        Actor
+	Reason    string
+	Cause     Cause
+	ItemKey   secret.ItemKeyID
+	AuditHash string
+	Blobs     []blob.Key
+	Targets   []ShredTarget
 }
 
 // Pending reports whether a target of r is still pending.
@@ -138,7 +141,7 @@ func (r Redaction) Validate() error {
 		return fmt.Errorf("%w: actor and time are required", ErrInvalidRedaction)
 	}
 
-	if _, err := secret.ParseContentKeyID(string(r.ContentKey)); err != nil {
+	if _, err := secret.ParseItemKeyID(string(r.ItemKey)); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalidRedaction, err)
 	}
 
@@ -227,19 +230,22 @@ type RedactionLog interface {
 }
 
 // Redactor redacts one kind of history item. Each tool implements it for its
-// own state items with its own tables, and the plan and job log stores
-// implement it for their items, so shared code redacts an item by its
-// reference only.
+// own state items with its own tables, and the job model implements it for
+// plans and job logs, so shared code redacts an item by its reference only.
 type Redactor interface {
 	// Redact checks the item of r and, in one fenced transaction, marks the
-	// item redacted with r.ID, marks its content key shredded, appends r to
-	// the redaction log with a pending shred row for LiveTarget and for each
+	// item redacted with r.ID, marks its item key shredded, appends r to the
+	// redaction log with a pending shred row for LiveTarget and for each
 	// name in targets, and writes the audit entry e. The tool stamps the
-	// time of e. A failed audit write makes the redaction fail. It returns
-	// the stored record, and:
+	// time of e. A failed audit write makes the redaction fail and changes
+	// nothing. It returns the stored record with AuditHash set to the hash
+	// of the stored audit entry, and:
 	//   - ErrItemNotFound when the item does not exist,
-	//   - ErrLatest for the latest state item of the unit,
-	//   - ErrInProgress for an item that is not finished,
+	//   - ErrLatest for the latest state item of the unit, which includes
+	//     the replay base of an update that has not ended or whose journal
+	//     is not replayed yet,
+	//   - ErrInProgress for an item that is not finished, and for any item
+	//     of a stack while an update on that stack is active,
 	//   - ErrBlamePending for a state item before blame compared it and the
 	//     next state item,
 	//   - ErrRedacted with the earlier record for an item that is redacted,
@@ -256,30 +262,33 @@ func LedgerObject(id RedactionID) blob.Key {
 
 // LedgerRecord is the content of a ledger object. Restore and the backup
 // check read it, so they treat a blob that it names as redacted, not
-// missing. It holds no reason and no name.
+// missing. It holds the hash of the audit entry of the redaction, never the
+// reason or a name.
 type LedgerRecord struct {
-	ID         RedactionID         `json:"id"`
-	Namespace  namespace.Name      `json:"namespace"`
-	Tool       string              `json:"tool"`
-	UnitID     string              `json:"unitID"`
-	Kind       secret.ContentKind  `json:"kind"`
-	Item       string              `json:"item"`
-	ContentKey secret.ContentKeyID `json:"contentKey"`
-	Blobs      []blob.Key          `json:"blobs"`
-	AtMs       int64               `json:"atMs"`
+	ID        RedactionID      `json:"id"`
+	Namespace namespace.Name   `json:"namespace"`
+	Tool      string           `json:"tool"`
+	UnitID    string           `json:"unitID"`
+	Kind      secret.ItemKind  `json:"kind"`
+	Item      string           `json:"item"`
+	ItemKey   secret.ItemKeyID `json:"itemKey"`
+	AuditHash string           `json:"auditHash"`
+	Blobs     []blob.Key       `json:"blobs"`
+	AtMs      int64            `json:"atMs"`
 }
 
 // Ledger returns the ledger record of r.
 func (r Redaction) Ledger() LedgerRecord {
 	return LedgerRecord{
-		ID:         r.ID,
-		Namespace:  r.Item.Unit.Namespace,
-		Tool:       r.Item.Unit.Tool,
-		UnitID:     r.Item.Unit.ID,
-		Kind:       r.Item.Kind,
-		Item:       r.Item.Item,
-		ContentKey: r.ContentKey,
-		Blobs:      r.Blobs,
-		AtMs:       r.At.UnixMilli(),
+		ID:        r.ID,
+		Namespace: r.Item.Unit.Namespace,
+		Tool:      r.Item.Unit.Tool,
+		UnitID:    r.Item.Unit.ID,
+		Kind:      r.Item.Kind,
+		Item:      r.Item.Item,
+		ItemKey:   r.ItemKey,
+		AuditHash: r.AuditHash,
+		Blobs:     r.Blobs,
+		AtMs:      r.At.UnixMilli(),
 	}
 }

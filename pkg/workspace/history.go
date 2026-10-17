@@ -39,32 +39,39 @@ const (
 // value paths that changed, from the masked diff. A row holds no value and
 // no path of a secret value, so a redaction of the state version keeps it.
 // Restored is true when the state version is a restore, Forced when it is a
-// forced write. At is the finalize time. By is the actor of the state
-// version.
+// forced write. LineageChanged is true when the state version has another
+// lineage than the state version that it compares with: blame still
+// compares across lineages. At is the finalize time. By is the actor of the
+// state version.
 type ResourceChange struct {
-	At           time.Time
-	Workspace    ID
-	StateVersion StateVersionID
-	Address      string
-	Kind         ResourceChangeKind
-	By           history.Actor
-	Ordinal      int64
-	ChangedPaths int
-	Restored     bool
-	Forced       bool
+	At             time.Time
+	Workspace      ID
+	StateVersion   StateVersionID
+	Address        string
+	Kind           ResourceChangeKind
+	By             history.Actor
+	Ordinal        int64
+	ChangedPaths   int
+	Restored       bool
+	Forced         bool
+	LineageChanged bool
 }
 
 // ItemBlame is the blame of the state version StateVersion of the
 // workspace Workspace, whose place in the order of finalizes is Ordinal.
 // Opaque is true when the client encrypted the state, so the server could
 // not read it and wrote no row. The next readable state version compares
-// with the last readable one before it.
+// with the last readable one before it. LineageChanged is true when the
+// state version has another lineage than the state version that it
+// compares with. Blame still compares across lineages, and the mark stays
+// also when the blame has no row.
 type ItemBlame struct {
-	Workspace    ID
-	StateVersion StateVersionID
-	Changes      []ResourceChange
-	Ordinal      int64
-	Opaque       bool
+	Workspace      ID
+	StateVersion   StateVersionID
+	Changes        []ResourceChange
+	Ordinal        int64
+	Opaque         bool
+	LineageChanged bool
 }
 
 // BlameStore is the persistence port of the blame of workspaces. The blame

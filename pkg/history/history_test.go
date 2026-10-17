@@ -48,16 +48,17 @@ func validRedaction() history.Redaction {
 		At: time.Date(2026, time.October, 17, 9, 0, 0, 0, time.UTC),
 		Item: history.ItemRef{
 			Unit: history.Unit{Namespace: "acme", Tool: "pulumi", ID: "stk-one"},
-			Kind: secret.ContentKindState,
+			Kind: secret.ItemKindState,
 			Item: "upd-1",
 		},
-		ID:         history.NewRedactionID(),
-		By:         history.Actor{Subject: "ana", TokenID: "", JobID: ""},
-		Reason:     "a token in a plain output",
-		Cause:      history.CauseRequest,
-		ContentKey: secret.NewContentKeyID(),
-		Blobs:      nil,
-		Targets:    nil,
+		ID:        history.NewRedactionID(),
+		By:        history.Actor{Subject: "ana", TokenID: "", JobID: ""},
+		Reason:    "a token in a plain output",
+		Cause:     history.CauseRequest,
+		ItemKey:   secret.NewItemKeyID(),
+		AuditHash: "",
+		Blobs:     nil,
+		Targets:   nil,
 	}
 }
 
@@ -97,8 +98,8 @@ func TestRedactionValidate(t *testing.T) {
 		},
 		{name: "no time", edit: func(r *history.Redaction) { r.At = time.Time{} }, want: history.ErrInvalidRedaction},
 		{
-			name: "a bad content key",
-			edit: func(r *history.Redaction) { r.ContentKey = "key" },
+			name: "a bad item key",
+			edit: func(r *history.Redaction) { r.ItemKey = "key" },
 			want: history.ErrInvalidRedaction,
 		},
 		{
@@ -132,38 +133,15 @@ func TestLedgerHoldsNoReason(t *testing.T) {
 	t.Parallel()
 
 	r := validRedaction()
+	r.AuditHash = "4f2a"
 	l := r.Ledger()
 
-	if l.ID != r.ID || l.UnitID != "stk-one" || l.Item != "upd-1" || l.ContentKey != r.ContentKey ||
-		l.AtMs != r.At.UnixMilli() {
+	if l.ID != r.ID || l.UnitID != "stk-one" || l.Item != "upd-1" || l.ItemKey != r.ItemKey ||
+		l.AuditHash != r.AuditHash || l.AtMs != r.At.UnixMilli() {
 		t.Errorf("ledger = %+v, want the fields of %+v", l, r)
 	}
 
 	if got := history.LedgerObject(r.ID).String(); got != "redactions/"+string(r.ID)+".json" {
 		t.Errorf("ledger object = %q", got)
-	}
-}
-
-func TestRetention(t *testing.T) {
-	t.Parallel()
-
-	created := time.Date(2026, time.October, 17, 0, 0, 0, 0, time.UTC)
-	r := history.DefaultRetention()
-
-	if err := r.Validate(); err != nil {
-		t.Fatalf("default retention: %v", err)
-	}
-
-	if got, want := r.PlanExpiry(created), created.AddDate(0, 0, 400); !got.Equal(want) {
-		t.Errorf("plan expiry = %v, want %v", got, want)
-	}
-
-	if got, want := r.JobLogExpiry(created), created.AddDate(0, 0, 400); !got.Equal(want) {
-		t.Errorf("job log expiry = %v, want %v", got, want)
-	}
-
-	short := history.Retention{Plans: time.Hour, JobLogs: history.MinRetention}
-	if err := short.Validate(); !errors.Is(err, history.ErrInvalidRetention) {
-		t.Errorf("an hour of plan retention err = %v, want ErrInvalidRetention", err)
 	}
 }
