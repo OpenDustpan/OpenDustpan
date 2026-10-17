@@ -320,9 +320,22 @@ func writeMigrationProgram(t *testing.T, env *e2e.Env, program string) {
 	}
 }
 
-// migrationNotSupported is the error a CLI at journal version 1 shows for a
-// resource registration that carries a state migration.
-const migrationNotSupported = "state migrations are not supported"
+// migrationNotSupportedEngine is the error the engine shows for a resource
+// registration that carries a state migration at journal version 1.
+// migrationNotSupportedSDK is the error the Python SDK shows for the same
+// registration: it checks the monitor feature before the registration reaches
+// the engine.
+const (
+	migrationNotSupportedEngine = "state migrations are not supported"
+	migrationNotSupportedSDK    = "does not support state migrations"
+)
+
+// migrationRefused reports whether the CLI output shows the version 1
+// refusal of a state migration, either from the engine or from the SDK.
+func migrationRefused(output string) bool {
+	return strings.Contains(output, migrationNotSupportedEngine) ||
+		strings.Contains(output, migrationNotSupportedSDK)
+}
 
 // checkMigrationV1Refused proves the version 1 mode refused the migration:
 // the update failed with the migration error, the cap lowered at least one
@@ -334,10 +347,14 @@ func checkMigrationV1Refused(t *testing.T, mode migrationOutcome) {
 		t.Fatal("up with migration at version 1 succeeded, want the refusal of the migration")
 	}
 
-	for _, want := range []string{migrationNotSupported} {
-		if !strings.Contains(mode.up.Stdout, want) && !strings.Contains(mode.up.Stderr, want) {
-			t.Fatalf("failed up lacks %q:\nstdout:\n%s\nstderr:\n%s", want, mode.up.Stdout, mode.up.Stderr)
-		}
+	if !migrationRefused(mode.up.Stdout) && !migrationRefused(mode.up.Stderr) {
+		t.Fatalf(
+			"failed up lacks %q or %q:\nstdout:\n%s\nstderr:\n%s",
+			migrationNotSupportedEngine,
+			migrationNotSupportedSDK,
+			mode.up.Stdout,
+			mode.up.Stderr,
+		)
 	}
 
 	if got := mode.versionCap.Capped(); got == 0 {
@@ -417,8 +434,10 @@ func checkMigrationJournaled(t *testing.T, env *e2e.Env) {
 }
 
 // normalizeMigrationExport returns the canonical form of a stack export for
-// the migration comparison: without the manifest, the metadata and the
-// resource times, with the resources sorted by URN.
+// the migration comparison: without the manifest, the metadata, the server
+// address in the secrets providers and the resource times, with the resources
+// sorted by URN. Each mode runs on its own server, so the address differs by
+// design.
 func normalizeMigrationExport(t *testing.T, raw string) string {
 	t.Helper()
 
@@ -433,6 +452,10 @@ func normalizeMigrationExport(t *testing.T, raw string) string {
 
 	delete(doc.Deployment, "manifest")
 	delete(doc.Deployment, "metadata")
+
+	if providers, ok := doc.Deployment["secrets_providers"].(map[string]any); ok {
+		delete(providers, "state")
+	}
 
 	resources, ok := doc.Deployment["resources"].([]any)
 	if !ok {
