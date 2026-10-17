@@ -1901,6 +1901,13 @@ SELECT id, start_key, kind, input, version, state, attempt, expiries, failures, 
   cancel_requested, not_before_ms, created_at_ms, updated_at_ms
 FROM durable_operations WHERE start_key = $1;
 
+-- name: CountRunnableDurableOperations :one
+-- The count of operations of one kind that can run now: pending or running.
+-- An approval of an audit chain change reads it in the transaction of its
+-- own start, while it holds the advisory lock of the server audit scope, so
+-- a second approval waits for the first and refuses.
+SELECT COUNT(*) FROM durable_operations WHERE kind = $1 AND state IN ('pending', 'running');
+
 -- name: LockDurableOperation :one
 -- Holds the row of one operation until the transaction ends, so the checks
 -- and the write of a holder see one state.
