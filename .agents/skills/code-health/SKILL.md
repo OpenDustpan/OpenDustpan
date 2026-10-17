@@ -1,67 +1,42 @@
 ---
 name: code-health
 description: >
-  Use when the user asks about code health, code quality, complexity, technical debt, which files
-  are risky or hard to maintain, what to refactor next, untested hotspots, or coverage gaps in a
-  Repowise-indexed codebase (.repowise/ directory exists). Also use to get a before/after health
-  read when planning or finishing a refactor.
+  Use when the user asks about code health, quality, complexity, technical debt, risky or
+  hard-to-maintain files, what to refactor next, or coverage gaps. Also use to compare
+  health before and after a refactor. Uses the Repowise MCP tools.
 user-invocable: false
 ---
 
-# Code Health with Repowise
+# Code health with Repowise
 
-Repowise scores **every file 1–10** from deterministic markers — McCabe
-complexity, deep nesting, brain methods, class cohesion (LCOM4), god classes,
-clone detection, untested hotspots, function-level churn, ownership dispersion,
-and more. Zero LLM calls; pure local analysis. The weights are calibrated
-against a real defect corpus, so a low score means *more likely to harbour bugs*,
-not just *bigger*.
+Repowise scores each file from 1 to 10 with fixed rules (complexity, nesting, cohesion,
+duplication, untested hotspots, churn, ownership). A low score means the file is more
+likely to contain defects. It does not only mean the file is big.
 
-## Pick the mode by what you pass
+## Modes
 
-- **Dashboard**: `get_health()` (no targets): `fix_first`, the ranked list of
-  what to fix first, then repo-level KPIs and the lowest-scoring files. Start here for "how
-  healthy is this codebase?" or "what should we clean up?".
-- **Targeted** — `get_health(targets=["src/x.py", "src/y.py"])`: per-file score
-  and the specific marker findings driving it. Use before/after a refactor,
-  or to explain *why* a file is flagged.
+- `get_health()`: dashboard. `fix_first` lists what to fix first. Use it for "how healthy
+  is this code?" and "what do we clean up?".
+- `get_health(targets=["path/a.go", "path/b.go"])`: score and findings for those files.
+- `get_health(fix_id="…")`: the steps and the tests to run for one `fix_first` item.
 
-## Useful `include` flags
+`include` adds blocks: `biomarkers` (findings), `refactoring` (ranked plans), `coverage`
+(only if coverage was ingested), `trend` (recent snapshots).
 
-`get_health(targets=[...], include=[...])`:
-- `"biomarkers"` — always return the findings list (what's wrong, where).
-- `"refactoring"` — deterministic, ranked refactoring suggestions (by impact/effort).
-- `"coverage"` — surface coverage data when it's been ingested.
-- `"trend"` — recent health snapshots + declining / predicted-decline signal.
+Pass `repo` (an alias from `list_repos`) to limit the answer to one repository.
 
-`include` adds blocks; `only=[...]` subtracts them.
+## Use the results
 
-## How to use the results
+1. For "what do we refactor?": start with `fix_first`. Open an item with `fix_id`. Give
+   the plan, not only the scores.
+2. Rank by `weighted_deficit`, not `score`. The score has a floor of 1.0.
+3. For one file: give the score and the top two or three findings. Say in plain words
+   what each finding means. Do not copy the raw payload.
+4. A target in `unresolved` matched nothing. Do not call it clean. A target in
+   `not_indexed` is not in the hosted index yet.
+5. Before you edit a low-health file, call `get_risk(targets=[...])`. A file that is low
+   health and a churn hotspot needs the most care.
+6. The index can be behind the branch. Compare against the files in the checkout before
+   you act on a score.
 
-1. For "what should I refactor?" → dashboard mode, lead with `fix_first`; open
-   an item with `get_health(fix_id=...)` for its steps and the tests to run,
-   and present the plan, not just the scores.
-2. Rank by `weighted_deficit`, not `score` — the score floors at 1.0.
-3. For a specific file → report the score, the top 2–3 marker findings, and
-   what each one means in plain language. Avoid dumping the raw payload.
-4. Check `unresolved` before calling a file clean: a target listed there matched
-   nothing, and `not_indexed` means run `repowise update`.
-5. Before editing a flagged file → cross-check `get_risk(targets=[...])`; a file
-   that is both low-health *and* a churn hotspot deserves the most care.
-6. Untested-hotspot / coverage questions → tell the user coverage markers
-   light up once they ingest a report: `repowise coverage add cov.lcov`
-   (LCOV / Cobertura / Clover; a coverage.py `.coverage` also builds the
-   per-test map), then `repowise health --recompute` to fold it into the scores.
-
-## CLI equivalents
-
-- `repowise health` — KPIs + lowest-scoring files
-- `repowise health --refactoring-targets` — ranked by impact / effort
-- `repowise health --trend` — snapshots + declining alerts
-- `repowise coverage add <file>` — ingest coverage, light up untested-hotspot
-
-## Error handling
-
-If `get_health` reports no repository, suggest `/repowise:init`. Code health is
-computed even with a template-rendered wiki (no LLM needed), so it should be available
-whenever the repo is indexed.
+This project requires `make check` to pass. Repowise scores do not replace it.

@@ -1,56 +1,52 @@
 ---
 name: pre-modification-check
 description: >
-  Use before modifying, refactoring, or deleting files in a codebase that has Repowise indexed
-  (indicated by a .repowise/ directory). Activates when Claude is about to edit code, especially
-  shared utilities, core modules, or files the user didn't explicitly mention. Helps assess
-  impact and avoid breaking things.
+  Use before you modify, refactor, move or delete files, in particular shared packages,
+  core modules, or files the user did not name. It shows the impact before you edit.
+  Uses the Repowise MCP tools.
 user-invocable: false
 ---
 
-# Pre-Modification Check with Repowise
+# Pre-modification check with Repowise
 
-Before modifying files in a Repowise-indexed codebase, assess the impact.
+## Before you edit a file
 
-## Before editing a file
+Call `get_risk(targets=["path/to/file.go"])`. Batch all files in one call (maximum 25).
+Pass `repo` (an alias from `list_repos`) to limit the answer to one repository. Read:
 
-Call `get_risk(targets=["path/to/file.py"])`. Per file it returns
-`hotspot_score`, `trend`, `risk_type`, `impact_surface` (top 3),
-`dependents_count`, `co_change_partners`, `primary_owner`,
-`test_gap`, and `security_signals`. Read it for:
-- **Bug-fix history** (`defect_profile`) — present only on files with counted
-  fixes: `fix_count` over the trailing 6 months, `last_fix_days_ago`, a
-  `bug_magnet` flag for sustained recent fix pressure, and `top_symbols` (the
-  per-symbol counts are approximate — read them as "mostly here"). A file that
-  keeps getting fixed is the strongest single signal that the next edit breaks
-  something; lead with it.
-- **Hotspot status** (`hotspot_score`, `trend`) — high-churn × complex? Extra care needed.
-- **Dependents** (`dependents_count`, `impact_surface`) — how wide is the blast radius?
-- **Co-change partners** — files that change together with this one (often without an import link); you may need to update them too.
-- **Ownership / bus factor** — who owns it, and whether a single author maintains it.
-- **Test gap & security signals** — flag untested or security-sensitive files before touching them.
+- `defect_profile`: present only for files with bug fixes. `bug_magnet` means repeated
+  recent fixes. This is the strongest sign that an edit can break something. Say it first.
+- `hotspot_score` and `trend`: a file with high churn and high complexity needs care.
+- `dependents_count` and `impact_surface`: how many files depend on this one.
+- `co_change_partners`: files that usually change together with this one. You may need to
+  update them.
+- `primary_owner` and bus factor.
+- `test_gap` and `security_signals`: say so before you edit an untested or sensitive file.
 
-## When modifying multiple files
+`include` adds blocks: `graph`, `churn`, `owners`, `tests`, `blast`.
 
-Batch all targets into one call: `get_risk(targets=["file1.py", "file2.py", "module/"])`.
+## Tell the user when
 
-## When to warn the user
+- `bug_magnet` is set.
+- The hotspot score is above the 90th percentile.
+- A file has more than 10 dependents. List the top ones.
+- The bus factor is 1.
+- `risk_type` is `bug-prone` or `high-coupling`.
 
-If `get_risk` shows:
-- A `defect_profile` with `bug_magnet` set — say so plainly: this file has been fixed repeatedly and recently
-- Hotspot score above 90th percentile — mention this is a frequently-changed, high-risk file
-- More than 10 dependents — list the top dependents; API changes here will break consumers
-- Bus factor of 1 — note that a single person maintains this code
-- Risk type is "bug-prone" or "high-coupling" — flag explicitly before making changes
+## Public contracts
 
-## Before refactoring or moving code
+Files in `pkg/` and `internal/api/` define the SDK and the HTTP APIs. The console uses
+these APIs. Before you change them, call `get_blast_radius(targets=["<symbol id>"])` to
+see the consumers in the other repository. Do not remove or rename a field, endpoint or
+status code that a released console or a supported CLI uses.
 
-Call `get_context(targets=["file.py"])` first to understand the full context: what uses this file, what decisions govern it, and why it's structured this way. This prevents accidentally violating architectural decisions.
+## Before a refactor or a move
 
-For a heavy refactor, also call `get_health(targets=["file.py"])` — the
-marker findings (complexity, deep nesting, low cohesion, duplication) tell
-you *what* to improve while you're in there, and give you a before/after score.
+Call `get_context(targets=["file.go"])` to see what uses the file and which decisions
+apply. Then call `get_why(query="file.go")`. For a large refactor, also call
+`get_health(targets=["file.go"])` for a before and after score.
 
-## Error handling
+## Errors
 
-If `get_risk` returns a tool error, the MCP server may not be running. Proceed with the modification but note that risk assessment was unavailable.
+If `get_risk` returns an error, continue with the change and say that the risk check was
+not available. The index can be behind the branch. Use the checkout as the truth.
