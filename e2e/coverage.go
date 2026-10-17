@@ -1211,11 +1211,9 @@ func tokenAllowEntries() []AllowEntry {
 	)
 
 	routes := []struct{ method, path string }{
-		{http.MethodPost, list},
 		{http.MethodGet, list},
 		{http.MethodGet, one},
 		{http.MethodDelete, one},
-		{http.MethodPost, one + "/rotate"},
 		{http.MethodPost, "/api/server/service-tokens"},
 		{http.MethodPost, "/api/server/service-tokens/{id}/rotate"},
 		{http.MethodGet, "/api/server/caller/tokens"},
