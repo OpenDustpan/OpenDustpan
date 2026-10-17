@@ -114,19 +114,35 @@ func cutString(s string, excess int) string {
 }
 
 // isProtected answers whether key is an attribute that TrimToFit never
-// shortens: the truncated mark, or a field the receiver needs to remove
-// duplicates and check the hash chain.
+// shortens: the truncated mark, or a field that the audit entry hash covers.
+// The receiver needs every hashed field unchanged to check the hash chain,
+// so trimming shortens only other fields and the message.
 func isProtected(key string) bool {
 	switch key {
 	case TruncatedKey,
 		"scope",
 		"sequence",
-		"time",
+		"subject",
+		"idpSubject",
+		"tokenID",
 		"action",
+		"object",
+		"version",
+		"valuePath",
+		"atMs",
+		"time",
+		"sourceIP",
+		"userAgent",
+		"channel",
 		"kind",
 		"outcome",
+		"requestID",
 		"prevHash",
-		"hash":
+		"hash",
+		"valueCount",
+		"objectID",
+		"changes",
+		"fenceVersion":
 		return true
 	default:
 		return false

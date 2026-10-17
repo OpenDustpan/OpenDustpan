@@ -102,3 +102,12 @@ func FromProviderConfigRow(row ProviderConfigRow) (session.ProviderConfig, error
 		AutoCreate: row.AutoCreate, Enabled: row.Enabled,
 	}, nil
 }
+
+// FromSessionAccountsRow converts the account columns of the access token
+// policy that a session lookup joins into the account policy of a session.
+func FromSessionAccountsRow(inactivityMs int64, disable bool) session.AccountPolicy {
+	return session.AccountPolicy{
+		Inactivity:      time.Duration(inactivityMs) * time.Millisecond,
+		DisableAccounts: disable,
+	}
+}
