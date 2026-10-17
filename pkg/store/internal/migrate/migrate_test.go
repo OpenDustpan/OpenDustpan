@@ -333,7 +333,8 @@ func TestCheckRefusesStoredMinimumWithPendingMigrations(t *testing.T) {
 
 	recorded := applied(map[int64]string{1: "v0.3.0"}, 1)
 
-	if _, err := migrate.Check(recorded, embedded, "v0.2.0"); !errors.Is(err, schema.ErrBinaryBelowMinimum) {
+	_, err = migrate.Check(recorded, embedded, "v0.2.0")
+	if !errors.Is(err, schema.ErrBinaryBelowMinimum) {
 		t.Fatalf("Check below the stored minimum with a pending migration = %v, want ErrBinaryBelowMinimum", err)
 	}
 

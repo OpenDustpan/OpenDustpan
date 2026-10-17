@@ -793,7 +793,6 @@ func migrateTx(ctx context.Context, tx pgx.Tx, all []migrate.Migration, binaryVe
 	}
 
 	plan, err := migrate.Check(recorded, all, binaryVersion)
-
 	if err != nil {
 		return fmt.Errorf("check schema: %w", err)
 	}
