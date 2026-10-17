@@ -120,3 +120,5 @@ both together.
 | [69](0069-community-channels.md) | Community channels: announce list, Discussions, and a later chat | discussing |
 | [70](0070-authorization-model-findings.md) | Authorization model findings: act-as reach, restores, trust rules and a model checker | accepted |
 | [71](0071-signed-audit-log-segments.md) | Export signed audit log segments to the blob store for offline verification | draft |
+| [72](0072-programmatic-runs-api-and-sdk.md) | Programmatic plans and applies through the API and an SDK | draft |
+| [73](0073-ai-agent-for-infrastructure.md) | An AI agent for infrastructure across both tools | draft |
