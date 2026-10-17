@@ -124,6 +124,9 @@ linters:
             - "**/pkg/collection/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/durable/**"
+            - "**/pkg/graph/**"
+            - "**/pkg/objectcontext/**"
+            - "**/pkg/unmanaged/**"
             - "**/pkg/blob/*.go"
             - "**/pkg/logsink/*.go"
             - "!**/*_test.go"
@@ -389,7 +392,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^pkg/unmanaged/unmanagedtest/)
         linters:
           - mnd
           - funlen
