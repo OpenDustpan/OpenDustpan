@@ -129,7 +129,7 @@ func checkApprovalStartsOnePostgres(t *testing.T) {
 	ns := createPostgresNamespace(t, st)
 	appendPostgresEntry(t, st, ns, "req-1")
 
-	srv := runPostgresChainServer(t, st, audit.ChainOff)
+	srv := runPostgresChainServer(t, st)
 	waitForPostgresRecord(t, st, func(rec audit.ChainRecord) bool { return rec.Pending })
 
 	if status, body := srv.do(t, http.MethodPost, "/api/server/audit/chain"); status != http.StatusAccepted {
@@ -332,9 +332,9 @@ func appendPostgresEntry(t *testing.T, st *postgres.Store, ns namespace.Namespac
 	return stored
 }
 
-// runPostgresChainServer starts a server on st with setting, waits until it
-// serves, and answers it. The test stops it at its end.
-func runPostgresChainServer(t *testing.T, st *postgres.Store, setting audit.ChainSetting) chainServer {
+// runPostgresChainServer starts a server on st with the chain off, waits
+// until it serves, and answers it. The test stops it at its end.
+func runPostgresChainServer(t *testing.T, st *postgres.Store) chainServer {
 	t.Helper()
 
 	authn, err := identity.NewStaticToken("admin", adminToken)
@@ -371,7 +371,7 @@ func runPostgresChainServer(t *testing.T, st *postgres.Store, setting audit.Chai
 		dustpan.WithInventoryReader(st),
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithListener(ln),
-		dustpan.WithAuditChain(setting),
+		dustpan.WithAuditChain(audit.ChainOff),
 	)
 	if err != nil {
 		t.Fatalf("new server: %v", err)

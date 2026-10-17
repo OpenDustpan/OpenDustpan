@@ -257,6 +257,194 @@ func TestApproveWithNothingToApprove(t *testing.T) {
 	}
 }
 
+// errApprovalStart is the injected failure of a migration start.
+var errApprovalStart = errors.New("injected approval start failure")
+
+// failOnceApproval wraps the atomic approval of a chain and fails its first
+// call with err, then delegates to the real approval.
+type failOnceApproval struct {
+	real chainApprovalStore
+	err  error
+	fail bool
+}
+
+func (f *failOnceApproval) ApproveChainChange(
+	ctx context.Context, e audit.Entry, fixed durable.StartRequest, retryKey string,
+) (durable.Operation, error) {
+	if f.fail {
+		f.fail = false
+
+		return durable.Operation{}, f.err
+	}
+
+	return f.real.ApproveChainChange(ctx, e, fixed, retryKey)
+}
+
+// approvalEntriesOf answers the approval entries of chain in the server
+// scope: entries with the action that records an approved chain change.
+func approvalEntriesOf(t *testing.T, chain *auditChain) []audit.Entry {
+	t.Helper()
+
+	listing, err := chain.entries.List(t.Context(), audit.ServerScope, audit.Page{Number: 1, Size: audit.MaxPageSize})
+	if err != nil {
+		t.Fatalf("list server scope: %v", err)
+	}
+
+	var out []audit.Entry
+
+	for i := range listing.Entries {
+		if listing.Entries[i].Action == audit.ActionSetChain {
+			out = append(out, listing.Entries[i])
+		}
+	}
+
+	return out
+}
+
+// TestFailedApprovalWritesNoEntryAndRetryWritesOne proves that a failed
+// start leaves no entry: the first approval fails, writes no approval entry
+// and starts no operation, and the retry writes exactly one of each.
+func TestFailedApprovalWritesNoEntryAndRetryWritesOne(t *testing.T) {
+	t.Parallel()
+
+	chain := newTestAuditChain(t, audit.ChainOff)
+	chain.approve = &failOnceApproval{real: chain.approve, err: errApprovalStart, fail: true}
+
+	if err := chain.Approve(t.Context(), approver()); !errors.Is(err, errApprovalStart) {
+		t.Fatalf("approve with a failed start: %v, want the injected failure", err)
+	}
+
+	if got := approvalEntriesOf(t, chain); len(got) != 0 {
+		t.Fatalf("approval entries after a failed start = %d, want none", len(got))
+	}
+
+	if got := migrationOpCount(t, chain); got != 0 {
+		t.Fatalf("operations after a failed start = %d, want none", got)
+	}
+
+	if err := chain.Approve(t.Context(), approver()); err != nil {
+		t.Fatalf("retry after a failed start: %v", err)
+	}
+
+	if got := approvalEntriesOf(t, chain); len(got) != 1 {
+		t.Fatalf("approval entries after the retry = %d, want 1", len(got))
+	}
+
+	if got := migrationOpCount(t, chain); got != 1 {
+		t.Fatalf("operations after the retry = %d, want 1", got)
+	}
+}
+
+// newConcurrentApprovalChain answers a chain on st with the migration loop
+// marked running, ready for an approval of a change to off.
+func newConcurrentApprovalChain(t *testing.T, st *sqlite.Store) *auditChain {
+	t.Helper()
+
+	cfg := defaultSettings()
+	cfg.namespaceStore = st
+	cfg.auditChain = audit.ChainOff
+
+	chain, err := newAuditChain(cfg, nil)
+	if err != nil || chain == nil {
+		t.Fatalf("new audit chain = %v, %v", chain, err)
+	}
+
+	chain.migrationsRunning.Store(true)
+
+	return chain
+}
+
+// saveConcurrentWaitingChange stores a waiting change to on in st.
+func saveConcurrentWaitingChange(t *testing.T, st *sqlite.Store) {
+	t.Helper()
+
+	saveErr := st.SaveChainRecord(t.Context(), audit.ChainRecord{
+		ChangedAt: time.Now(), ChangedBy: "", State: audit.ChainStateOn, Pending: true,
+		EnteredMaintenance: false, MigratingAt: time.Time{}, LogReplaced: false,
+	})
+	if saveErr != nil {
+		t.Fatalf("save chain record: %v", saveErr)
+	}
+}
+
+// approvalCounts is the outcome of runConcurrentApprovals.
+type approvalCounts struct {
+	won  int
+	held int
+}
+
+// runConcurrentApprovals approves with every chain at the same time and
+// answers the count of approvals that won and the count refused while a
+// migration runs.
+func runConcurrentApprovals(t *testing.T, chains []*auditChain) approvalCounts {
+	t.Helper()
+
+	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		won, held int
+	)
+
+	for _, chain := range chains {
+		wg.Go(func() {
+			err := chain.Approve(t.Context(), approver())
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			switch {
+			case err == nil:
+				won++
+			case errors.Is(err, audit.ErrChainMigrating):
+				held++
+			default:
+				t.Errorf("approve: %v, want nil or ErrChainMigrating", err)
+			}
+		})
+	}
+
+	wg.Wait()
+
+	return approvalCounts{won: won, held: held}
+}
+
+// TestConcurrentApprovalsLeaveOneEntry proves that two approvals of one
+// waiting change that run at the same time leave exactly one approval entry
+// and one operation: the approval whose start loses writes nothing.
+func TestConcurrentApprovalsLeaveOneEntry(t *testing.T) {
+	t.Parallel()
+
+	st, err := sqlite.Open(t.Context(), filepath.Join(t.TempDir(), "dustpan.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if closeErr := st.Close(); closeErr != nil {
+			t.Errorf("close store: %v", closeErr)
+		}
+	})
+
+	first := newConcurrentApprovalChain(t, st)
+	second := newConcurrentApprovalChain(t, st)
+
+	saveConcurrentWaitingChange(t, st)
+
+	counts := runConcurrentApprovals(t, []*auditChain{first, second})
+
+	if counts.won != 1 || counts.held != 1 {
+		t.Fatalf("concurrent approvals: won %d, held %d, want 1 and 1", counts.won, counts.held)
+	}
+
+	if got := approvalEntriesOf(t, first); len(got) != 1 {
+		t.Fatalf("approval entries after concurrent approvals = %d, want 1", len(got))
+	}
+
+	if got := migrationOpCount(t, first); got != 1 {
+		t.Fatalf("operations after concurrent approvals = %d, want 1", got)
+	}
+}
+
 // TestConcurrentApprovalsOnOneStore proves that two instances on the same
 // store approve at the same time, and exactly one wins: the other answers
 // ErrChainMigrating.
