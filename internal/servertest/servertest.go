@@ -339,6 +339,7 @@ func serverOptions(
 		dustpan.WithAuthenticator(authn),
 		dustpan.WithLogger(logger),
 		dustpan.WithListener(ln),
+		dustpan.WithDurableStore(store.DurableOperations()),
 	}
 }
 
