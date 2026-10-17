@@ -203,9 +203,6 @@ type Env struct {
 	// dbProxy fronts PostgreSQL for the server, so closing it stops the
 	// database for this environment only. It is nil on SQLite.
 	dbProxy *DBProxy
-	// rewrites holds the answer rewrites of the recording proxy of a binary
-	// environment. It is nil in the in-process mode.
-	rewrites *answerRewrites
 }
 
 // serverStore is every persistence port the server needs.
@@ -287,7 +284,8 @@ func startEnv(ctx context.Context, in envInput) *Env {
 }
 
 // NewEnvWithJournalingOff starts a server as NewEnv does, with Pulumi
-// journaling turned off, so each update answers journalVersion 0.
+// journaling turned off through DUSTPAN_DISABLE_PULUMI_JOURNALING=true, so
+// each update answers journalVersion 0.
 func NewEnvWithJournalingOff(ctx context.Context, tb testing.TB, cli Install, store Store) *Env {
 	tb.Helper()
 
@@ -424,6 +422,8 @@ func startInprocessServer(
 		signIn = newSignInSetup(tb, "https://"+ts.Listener.Addr().String(), shared)
 	}
 
+	// Binary mode proves the DUSTPAN_DISABLE_PULUMI_JOURNALING variable;
+	// in-process mode uses the equivalent server option.
 	build := newServer(ctx, tb, serverArgs{
 		store:             in.store,
 		dbPath:            filepath.Join(in.dir, "dustpan.db"),
@@ -487,7 +487,6 @@ func newInprocessEnv(ctx context.Context, in envInput) *Env {
 		dbProxy:       build.dbProxy,
 		signIn:        signIn,
 		backupDir:     build.backupDir,
-		rewrites:      nil,
 	}
 
 	for _, d := range []string{env.home, env.project} {
