@@ -542,7 +542,7 @@ func operationFromRow(row db.DurableOperation, steps []db.DurableStep) durable.O
 // holds the operation.
 func claimFromRow(row db.DurableOperation) durable.Claim {
 	if !row.ClaimExpiresAtMs.Valid {
-		return durable.Claim{Operation: "", Owner: "", Token: 0, ExpiresAt: time.Time{}}
+		return durable.Claim{}
 	}
 
 	return durable.Claim{
