@@ -96,6 +96,18 @@ func TestValidateSteps(t *testing.T) {
 			func(s []job.Step) []job.Step { s[0].Env = map[string]string{"A": "\x00"}; return s },
 			false,
 		},
+		{"credential variable", func(s []job.Step) []job.Step {
+			s[0].Env = map[string]string{"PULUMI_ACCESS_TOKEN": "pul-1"}
+			return s
+		}, false},
+		{"credential variable prefix", func(s []job.Step) []job.Step {
+			s[0].Env = map[string]string{"TF_TOKEN_app_example_com": "t"}
+			return s
+		}, false},
+		{"credential variable suffix", func(s []job.Step) []job.Step {
+			s[0].Env = map[string]string{"db_password": "p"}
+			return s
+		}, false},
 		{"absolute directory", func(s []job.Step) []job.Step { s[0].Dir = "/etc"; return s }, false},
 		{"directory leaves source", func(s []job.Step) []job.Step { s[0].Dir = "../other"; return s }, false},
 		{"unclean directory", func(s []job.Step) []job.Step { s[0].Dir = "a/../b"; return s }, false},
@@ -126,6 +138,109 @@ func TestValidateSteps(t *testing.T) {
 
 			if !tt.ok && !errors.Is(err, job.ErrInvalid) {
 				t.Fatalf("ValidateSteps() = %v, want ErrInvalid", err)
+			}
+		})
+	}
+}
+
+func TestIsCredentialEnv(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"PULUMI_ACCESS_TOKEN", true},
+		{"pulumi_access_token", true},
+		{"TF_TOKEN_app_terraform_io", true},
+		{"TF_HTTP_PASSWORD", true},
+		{"AWS_SECRET_ACCESS_KEY", true},
+		{"AWS_SESSION_TOKEN", true},
+		{"ARM_CLIENT_SECRET", true},
+		{"TF_VAR_db_password", true},
+		{"MY_API_KEY", true},
+		{"TF_IN_AUTOMATION", false},
+		{"AWS_REGION", false},
+		{"PULUMI_SKIP_UPDATE_CHECK", false},
+		{"TOKENIZER_MODE", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := job.IsCredentialEnv(tt.name); got != tt.want {
+				t.Fatalf("IsCredentialEnv(%q) = %t, want %t", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMarkCustomSteps(t *testing.T) {
+	t.Parallel()
+
+	in := []job.Step{planStep("plan"), planStep("apply"), planStep("notify")}
+	in[0].ChangesResources = true
+	in[1].Phase = job.PhaseApply
+	in[2].Phase = job.PhaseApply
+
+	got := job.MarkCustomSteps(in)
+	want := []bool{false, true, true}
+
+	for i := range got {
+		if got[i].ChangesResources != want[i] {
+			t.Errorf("step %q ChangesResources = %t, want %t", got[i].Name, got[i].ChangesResources, want[i])
+		}
+	}
+
+	if !in[0].ChangesResources {
+		t.Fatal("MarkCustomSteps changed its input")
+	}
+}
+
+func TestValidateEdits(t *testing.T) {
+	t.Parallel()
+
+	editable := func(p string) bool {
+		return strings.HasSuffix(p, ".tfvars.json") || strings.HasSuffix(p, ".yml")
+	}
+	edit := func(p string) job.FileEdit {
+		return job.FileEdit{Path: p, Keys: map[string][]byte{"size": []byte(`"large"`)}}
+	}
+
+	tests := []struct {
+		name  string
+		dir   string
+		edits []job.FileEdit
+		ok    bool
+	}{
+		{"valid", "network", []job.FileEdit{edit("prod.tfvars.json")}, true},
+		{"no edit", "network", nil, false},
+		{"not a config file", "network", []job.FileEdit{edit("main.tf")}, false},
+		{"leaves the directory", "network", []job.FileEdit{edit("../dns/prod.tfvars.json")}, false},
+		{"absolute path", "network", []job.FileEdit{edit("/prod.tfvars.json")}, false},
+		{"unclean path", "network", []job.FileEdit{edit("a/../prod.tfvars.json")}, false},
+		{"CI workflow", "", []job.FileEdit{edit(".github/workflows/apply.yml")}, false},
+		{"GitLab CI file", "", []job.FileEdit{edit(".gitlab-ci.yml")}, false},
+		{"code directory in CI configuration", ".github", []job.FileEdit{edit("x.yml")}, false},
+		{"same file twice", "network", []job.FileEdit{edit("a.tfvars.json"), edit("a.tfvars.json")}, false},
+		{"no key", "network", []job.FileEdit{{Path: "a.tfvars.json", Keys: nil}}, false},
+		{"empty key path", "network", []job.FileEdit{{
+			Path: "a.tfvars.json", Keys: map[string][]byte{"": []byte("1")},
+		}}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := job.ValidateEdits(tt.dir, tt.edits, editable)
+			if tt.ok && err != nil {
+				t.Fatalf("ValidateEdits() = %v, want nil", err)
+			}
+
+			if !tt.ok && !errors.Is(err, job.ErrInvalid) {
+				t.Fatalf("ValidateEdits() = %v, want ErrInvalid", err)
 			}
 		})
 	}

@@ -12,7 +12,9 @@ func TestGateStatus(t *testing.T) {
 	t.Parallel()
 
 	approve := func(subject string) job.Approval {
-		return job.Approval{Subject: subject, Verdict: job.VerdictApprove, Comment: "", PlanSHA256: "", At: time.Time{}}
+		return job.Approval{
+			Subject: subject, Agent: "", Verdict: job.VerdictApprove, Comment: "", Plan: nil, At: time.Time{},
+		}
 	}
 	reject := func(subject string) job.Approval {
 		a := approve(subject)
@@ -38,6 +40,18 @@ func TestGateStatus(t *testing.T) {
 		{"one rejection rejects", 1, false, []job.Approval{approve("bo"), reject("cy")}, job.GateRejected},
 		{"rejection by the starter rejects", 1, false, []job.Approval{reject("al")}, job.GateRejected},
 		{"rejection with no gate rejects", 0, false, []job.Approval{reject("bo")}, job.GateRejected},
+		{
+			"an approval through an agent does not count",
+			1, false,
+			[]job.Approval{viaAgent(approve("bo"))},
+			job.GateWaiting,
+		},
+		{
+			"a rejection through an agent rejects",
+			1, false,
+			[]job.Approval{viaAgent(reject("bo"))},
+			job.GateRejected,
+		},
 	}
 
 	for _, tt := range tests {
@@ -49,6 +63,60 @@ func TestGateStatus(t *testing.T) {
 				t.Fatalf("Status() = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+// viaAgent returns a with the agent dusty.
+func viaAgent(a job.Approval) job.Approval {
+	a.Agent = "dusty"
+
+	return a
+}
+
+func TestCheckPlan(t *testing.T) {
+	t.Parallel()
+
+	made := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+	plan := func(kind job.OutputKind, sha string) *job.PlanRef {
+		return &job.PlanRef{
+			ID: "pln-" + sha, Kind: kind, SHA256: sha, StateVersion: "sv-7", Size: 10, CreatedAt: made,
+			ShreddedAt: time.Time{},
+		}
+	}
+	set := job.PlanSet{Display: plan(job.OutputPlanDisplay, "d1"), Apply: plan(job.OutputPlanApply, "a1")}
+	bound := set.Binding()
+	other := bound
+	other.ApplySHA256 = "a2"
+
+	tests := []struct {
+		name      string
+		set       job.PlanSet
+		bound     *job.PlanBinding
+		current   string
+		notBefore time.Time
+		want      error
+	}{
+		{"no plan", job.PlanSet{Display: nil, Apply: nil}, nil, "sv-9", made, nil},
+		{"fresh and bound", set, &bound, "sv-7", made.Add(-time.Hour), nil},
+		{"fresh with no gate", set, nil, "sv-7", made.Add(-time.Hour), nil},
+		{"another plan to apply", set, &other, "sv-7", made.Add(-time.Hour), job.ErrPlanChanged},
+		{"state changed", set, &bound, "sv-8", made.Add(-time.Hour), job.ErrPlanStale},
+		{"too old", set, &bound, "sv-7", made.Add(time.Second), job.ErrPlanStale},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := job.CheckPlan(tt.set, tt.bound, tt.current, tt.notBefore)
+			if (tt.want == nil && err != nil) || (tt.want != nil && !errors.Is(err, tt.want)) {
+				t.Fatalf("CheckPlan() = %v, want %v", err, tt.want)
+			}
+		})
+	}
+
+	if bound.DisplaySHA256 != "d1" || bound.ApplySHA256 != "a1" || bound.StateVersion != "sv-7" {
+		t.Fatalf("Binding() = %+v, want both hashes and the state version", bound)
 	}
 }
 

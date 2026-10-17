@@ -80,6 +80,7 @@ func newSpec(unit identity.Object, op job.Operation, k job.ExecutorKind) job.Spe
 		Executor:  k,
 		Location:  job.Location{Connection: "", Repository: "", Ref: "", Directory: "", Revision: ""},
 		Steps:     nil,
+		Profile:   "",
 		Pool:      "",
 		Edits:     nil,
 		Delivery:  "",

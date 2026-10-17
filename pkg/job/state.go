@@ -28,7 +28,8 @@ const (
 	// state version that closes it.
 	StateSucceeded State = "succeeded"
 	// StateFailed: a phase failed, or its executor stopped during a step
-	// that changes resources.
+	// that changes resources. A failure during a cancel also ends here, so
+	// the job never hides that a change began.
 	StateFailed State = "failed"
 	// StateCanceled: a principal canceled the job.
 	StateCanceled State = "canceled"
@@ -90,12 +91,19 @@ const (
 	// EventRejected: an approver rejected the job, or a person closed its
 	// review request without a merge.
 	EventRejected Event = "rejected"
-	// EventClaim: an executor took the claim of the current phase.
+	// EventClaim: an executor took the claim of the current phase. On a
+	// running job it is a takeover: the same durable operation with a new
+	// claim token. The phase then runs again from its first step.
 	EventClaim Event = "claim"
 	// EventRelease: the executor gave the phase back before it started a
-	// step that changes resources, or its claim expired before such a step.
-	// The phase dispatches again.
+	// step that changes resources. The operation waits for the next claim.
 	EventRelease Event = "release"
+	// EventReplan: the plan of the next apply phase is stale. The job goes
+	// back to the plan phase, which plans again and asks for approval again.
+	EventReplan Event = "replan"
+	// EventMerged: the forge reported the merge of the review request of a
+	// write-back job.
+	EventMerged Event = "merged"
 	// EventPhaseDone: the current phase succeeded, and more phases follow.
 	EventPhaseDone Event = "phase-done"
 	// EventLastPhaseDone: the last phase of a runner job succeeded.
@@ -117,8 +125,9 @@ const (
 // Events lists every event, in the order of the table above.
 func Events() []Event {
 	return []Event{
-		EventDispatch, EventNeedApproval, EventApproved, EventRejected, EventClaim, EventRelease, EventPhaseDone,
-		EventLastPhaseDone, EventDelivered, EventPhaseFailed, EventCancel, EventStateObserved, EventExpire,
+		EventDispatch, EventNeedApproval, EventApproved, EventRejected, EventClaim, EventRelease, EventReplan,
+		EventPhaseDone, EventLastPhaseDone, EventDelivered, EventPhaseFailed, EventCancel, EventMerged,
+		EventStateObserved, EventExpire,
 	}
 }
 
@@ -132,6 +141,9 @@ var transitions = map[State]map[Event]State{
 		EventNeedApproval: StateAwaitingApproval,
 		EventCancel:       StateCanceled,
 		EventExpire:       StateExpired,
+		// The plan of the next phase is stale: the job moves back to the
+		// plan phase and stays queued.
+		EventReplan: StateQueued,
 	},
 	StateAwaitingApproval: {
 		// An approval goes back to queued, so that the freeze and the
@@ -150,6 +162,8 @@ var transitions = map[State]map[Event]State{
 		EventPhaseFailed: StateFailed,
 	},
 	StateRunning: {
+		// A takeover after a lost claim: the same operation, a new token.
+		EventClaim:         StateRunning,
 		EventRelease:       StateDispatched,
 		EventPhaseDone:     StateQueued,
 		EventLastPhaseDone: StateSucceeded,
@@ -158,10 +172,13 @@ var transitions = map[State]map[Event]State{
 		EventCancel:        StateCanceling,
 	},
 	StateCanceling: {
-		// The executor stopped, or gave the phase back: the cancel wins.
-		EventRelease:     StateCanceled,
-		EventPhaseFailed: StateCanceled,
-		EventPhaseDone:   StateCanceled,
+		// The executor gave the phase back before a change began, or ended a
+		// phase that is not the last: the cancel wins.
+		EventRelease:   StateCanceled,
+		EventPhaseDone: StateCanceled,
+		// A failure is never hidden behind the cancel: a step can have
+		// changed resources before it stopped.
+		EventPhaseFailed: StateFailed,
 		// The last phase finished before the executor saw the cancel. The
 		// change happened, so the job tells the truth.
 		EventLastPhaseDone: StateSucceeded,
@@ -172,6 +189,7 @@ var transitions = map[State]map[Event]State{
 		EventCancel: StateCanceling,
 	},
 	StateAwaitingState: {
+		EventMerged:        StateAwaitingState,
 		EventStateObserved: StateSucceeded,
 		EventRejected:      StateRejected,
 		EventCancel:        StateCanceled,

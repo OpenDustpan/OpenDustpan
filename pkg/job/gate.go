@@ -18,6 +18,25 @@ const DefaultApprovalTimeout = 7 * 24 * time.Hour
 // version that closes it before it expires.
 const DefaultStateTimeout = 14 * 24 * time.Hour
 
+// Limits of open jobs. Installation settings can change them later. A start
+// above a count limit fails with ErrLimit. A job above a time limit
+// expires.
+const (
+	// MaxOpenPerUnit is the most jobs of one unit that are not terminal.
+	// The start of one more fails with ErrLimit.
+	MaxOpenPerUnit = 16
+	// MaxOpenPerNamespace is the most jobs of one namespace that are not
+	// terminal.
+	MaxOpenPerNamespace = 1000
+	// DefaultQueueTimeout is the time that a job stays queued, for example
+	// behind a busy unit or a freeze, before it expires.
+	DefaultQueueTimeout = 7 * 24 * time.Hour
+	// DefaultDispatchTimeout is the time that a phase stays dispatched with
+	// no claim, for example while no runner of its pool is online, before
+	// its job expires.
+	DefaultDispatchTimeout = 24 * time.Hour
+)
+
 // Gate is what the dispatch of a phase needs, from the decision at start.
 // The zero Gate needs nothing.
 type Gate struct {
@@ -49,12 +68,16 @@ const (
 // Approval is one principal's verdict on the gate of one phase.
 type Approval struct {
 	Subject string
+	// Agent names the agent that recorded the verdict for Subject, or is
+	// empty. An agent can record a rejection, never an approval.
+	Agent   string
 	Verdict Verdict
 	Comment string
-	// PlanSHA256 is the hash of the plan that the approver saw, when the
-	// gate binds to a plan.
-	PlanSHA256 string
-	At         time.Time
+	// Plan is what the approver saw, when the gate binds to a plan: the
+	// hashes of the readable plan and of the plan to apply, and the state
+	// version that they read.
+	Plan *PlanBinding
+	At   time.Time
 }
 
 // GateStatus is the result of the approvals of a gate so far.
@@ -72,7 +95,8 @@ const (
 
 // Status returns the result of approvals for g, for a job that startedBy
 // started. One rejection rejects. Each subject counts once. An approval by
-// startedBy counts only when g allows it. Status does not check groups: the
+// startedBy counts only when g allows it. A user who started the job
+// through an agent is the starter too. Status does not check groups: the
 // service checks the groups of each approver when it records the approval.
 func (g Gate) Status(approvals []Approval, startedBy string) GateStatus {
 	seen := make(map[string]bool, len(approvals))
@@ -82,7 +106,7 @@ func (g Gate) Status(approvals []Approval, startedBy string) GateStatus {
 			return GateRejected
 		}
 
-		if a.Subject == startedBy && !g.AllowSelf {
+		if a.Agent != "" || (a.Subject == startedBy && !g.AllowSelf) {
 			continue
 		}
 
@@ -97,9 +121,11 @@ func (g Gate) Status(approvals []Approval, startedBy string) GateStatus {
 }
 
 // DecisionInput is what the policy sees at the start of a job. It holds no
-// secret value.
+// secret value. Agent names the agent that acts for Principal, or is
+// empty, so a policy can allow or gate a start by agent.
 type DecisionInput struct {
 	Principal identity.Principal
+	Agent     string
 	Spec      Spec
 	// Keys are the key paths that the edits of a write-back job change.
 	Keys []string

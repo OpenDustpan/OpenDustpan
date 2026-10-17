@@ -1,0 +1,754 @@
+package jobtest_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"slices"
+	"sync"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/durable/durabletest"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/job/jobtest"
+	"opendustpan.org/opendustpan/pkg/namespace"
+)
+
+// TestMemConformance runs the suite against the reference adapter in
+// memory, so that the cases of the suite run before the first SQL adapter.
+func TestMemConformance(t *testing.T) {
+	t.Parallel()
+
+	jobtest.Run(t, func(*testing.T) jobtest.Harness {
+		db := newMemDB()
+
+		return jobtest.Harness{Jobs: db, Durable: db.durable, Freezes: db, Domain: db}
+	})
+}
+
+// errUnitBusyIndex is the error of the partial unique index on the unit
+// of the jobs that hold it, as a SQL adapter gets it from its driver.
+var errUnitBusyIndex = errors.New("unique index on the unit of the jobs that hold it")
+
+// memDB is the reference adapter of job.Store, job.FreezeStore and the
+// domain of the suite, in memory. One mutex stands for the transaction of
+// each write. It checks every rule before it changes anything, so a write
+// that fails changes nothing, its audit entries included. The durable
+// operations live in the durable store in memory of package durabletest.
+type memDB struct {
+	mu      sync.Mutex
+	durable durable.Store
+	fences  map[namespace.Name]int64
+	// states maps a unit ID to its current state version.
+	states  map[string]string
+	jobs    map[job.ID]*job.Job
+	order   []job.ID
+	keys    map[string]job.ID
+	freezes map[string]*job.Freeze
+	audit   map[namespace.Name][]audit.Entry
+}
+
+func newMemDB() *memDB {
+	return &memDB{
+		mu:      sync.Mutex{},
+		durable: durabletest.NewMem().Store(),
+		fences:  map[namespace.Name]int64{},
+		states:  map[string]string{},
+		jobs:    map[job.ID]*job.Job{},
+		order:   nil,
+		keys:    map[string]job.ID{},
+		freezes: map[string]*job.Freeze{},
+		audit:   map[namespace.Name][]audit.Entry{},
+	}
+}
+
+// CreateNamespace implements jobtest.Domain.
+func (m *memDB) CreateNamespace(_ context.Context, name namespace.Name) (namespace.Fence, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.fences[name] = 1
+
+	return namespace.Fence{Namespace: name, FailoverVersion: 1}, nil
+}
+
+// CreateUnit implements jobtest.Domain.
+func (m *memDB) CreateUnit(_ context.Context, fence namespace.Fence, tool, name string) (identity.Object, error) {
+	o, err := identity.UnitObject(tool, fence.Namespace, name)
+	if err != nil {
+		return o, fmt.Errorf("unit object: %w", err)
+	}
+
+	return o.WithUnitID(ident.NewID("unt-")), nil
+}
+
+// BumpFence implements jobtest.Domain.
+func (m *memDB) BumpFence(_ context.Context, fence namespace.Fence) (namespace.Fence, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.fences[fence.Namespace]++
+
+	return namespace.Fence{Namespace: fence.Namespace, FailoverVersion: m.fences[fence.Namespace]}, nil
+}
+
+// SetStateVersion implements jobtest.Domain.
+func (m *memDB) SetStateVersion(_ context.Context, fence namespace.Fence, unit identity.Object, v string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	m.states[unit.UnitID()] = v
+
+	return nil
+}
+
+// AuditEntries implements jobtest.Domain.
+func (m *memDB) AuditEntries(_ context.Context, ns namespace.Name) ([]audit.Entry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return slices.Clone(m.audit[ns]), nil
+}
+
+// Create implements job.Store.
+//
+//nolint:gocritic // hugeParam: the signature of job.Store takes the job by value.
+func (m *memDB) Create(ctx context.Context, j job.Job, d *durable.StartRequest, fence namespace.Fence,
+	e []audit.Entry,
+) (job.Job, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return job.Job{}, false, err
+	}
+
+	ns := j.Spec.Unit.Namespace()
+	key := string(ns) + "/" + j.IdempotencyKey
+
+	if first, ok := m.byKey(key, &j); ok {
+		if !reflect.DeepEqual(first.Spec, j.Spec) {
+			return job.Job{}, false, job.ErrKeyConflict
+		}
+
+		return copyJob(first), false, nil
+	}
+
+	if m.open(ns, j.Spec.Unit.UnitID()) >= job.MaxOpenPerUnit || m.open(ns, "") >= job.MaxOpenPerNamespace {
+		return job.Job{}, false, job.ErrLimit
+	}
+
+	now := time.Now().UTC()
+	stored := copyJob(&j)
+	stored.State, stored.Version, stored.CreatedAt, stored.UpdatedAt = job.StateQueued, 1, now, now
+
+	if d != nil {
+		if err := m.checkDispatch(&stored, time.Time{}, now); err != nil {
+			return job.Job{}, false, err
+		}
+
+		op, err := m.startOp(ctx, d)
+		if err != nil {
+			return job.Job{}, false, err
+		}
+
+		stored.State = job.StateDispatched
+		stored.Phases[stored.Current].Operation = op
+	}
+
+	m.jobs[stored.ID] = &stored
+	m.order = append(m.order, stored.ID)
+
+	if j.IdempotencyKey != "" {
+		m.keys[key] = stored.ID
+	}
+
+	m.audit[ns] = append(m.audit[ns], e...)
+
+	return copyJob(&stored), true, nil
+}
+
+// Get implements job.Store.
+func (m *memDB) Get(_ context.Context, id job.ID) (job.Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	j, ok := m.lookup(id)
+	if !ok {
+		return job.Job{}, job.ErrNotFound
+	}
+
+	return copyJob(j), nil
+}
+
+// List implements job.Store.
+func (m *memDB) List(_ context.Context, f job.Filter) ([]job.Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []job.Job
+
+	for _, id := range slices.Backward(m.order) {
+		j, ok := m.lookup(id)
+		if !ok {
+			continue
+		}
+
+		if (f.Namespace != "" && j.Spec.Unit.Namespace() != f.Namespace) ||
+			(f.UnitID != "" && j.Spec.Unit.UnitID() != f.UnitID) ||
+			(len(f.States) > 0 && !slices.Contains(f.States, j.State)) {
+			continue
+		}
+
+		out = append(out, copyJob(j))
+		if f.Limit > 0 && len(out) == f.Limit {
+			break
+		}
+	}
+
+	return out, nil
+}
+
+// Apply implements job.Store.
+func (m *memDB) Apply(ctx context.Context, c job.Change, fence namespace.Fence, e []audit.Entry) (job.Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return job.Job{}, err
+	}
+
+	cur, ok := m.lookup(c.Job)
+	if !ok {
+		return job.Job{}, job.ErrNotFound
+	}
+
+	if cur.Version != c.Version {
+		return job.Job{}, job.ErrConflict
+	}
+
+	to, err := job.Next(cur.State, c.Event)
+	if err != nil {
+		return job.Job{}, err
+	}
+
+	next := copyJob(cur)
+	now := time.Now().UTC()
+
+	if err := m.change(ctx, &next, &c, now); err != nil {
+		return job.Job{}, err
+	}
+
+	next.State, next.Version, next.UpdatedAt = to, cur.Version+1, now
+
+	next.Wait = job.WaitNone
+	if to == job.StateQueued {
+		next.Wait = c.Wait
+	}
+
+	if to.Terminal() {
+		next.Reason = c.Reason
+	}
+
+	if err := m.afterChange(ctx, cur, &next, c.Event); err != nil {
+		return job.Job{}, err
+	}
+
+	m.jobs[next.ID] = &next
+	m.audit[next.Spec.Unit.Namespace()] = append(m.audit[next.Spec.Unit.Namespace()], e...)
+
+	return copyJob(&next), nil
+}
+
+// ObserveStateVersion implements job.Store.
+func (m *memDB) ObserveStateVersion(ctx context.Context, v job.StateVersion, fence namespace.Fence) ([]job.Job,
+	error,
+) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return nil, err
+	}
+
+	if !v.Final {
+		return nil, nil
+	}
+
+	var closed []job.Job
+
+	for _, id := range m.order {
+		j, ok := m.lookup(id)
+		if !ok {
+			continue
+		}
+
+		if !closes(j, v) {
+			continue
+		}
+
+		next := copyJob(j)
+		closing := v
+		next.State, next.Closed, next.Verification = job.StateSucceeded, &closing, job.VerificationPending
+		next.Version++
+		next.UpdatedAt = time.Now().UTC()
+
+		if err := m.followUp(ctx, next.ID, job.KindVerify); err != nil {
+			return nil, err
+		}
+
+		m.jobs[id] = &next
+		closed = append(closed, copyJob(&next))
+	}
+
+	return closed, nil
+}
+
+// SetVerification implements job.Store.
+func (m *memDB) SetVerification(_ context.Context, id job.ID, v job.Verification, fence namespace.Fence,
+	e []audit.Entry,
+) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	j, ok := m.lookup(id)
+	if !ok {
+		return job.ErrNotFound
+	}
+
+	if j.Closed == nil || (v != job.VerificationVerified && v != job.VerificationUnverified) {
+		return fmt.Errorf("%w: verification %q of job %s", job.ErrInvalid, v, id)
+	}
+
+	if j.Verification == v {
+		return nil
+	}
+
+	next := copyJob(j)
+	next.Verification = v
+	next.Version++
+	m.jobs[id] = &next
+	m.audit[next.Spec.Unit.Namespace()] = append(m.audit[next.Spec.Unit.Namespace()], e...)
+
+	return nil
+}
+
+// Orphans implements job.Store.
+func (m *memDB) Orphans(ctx context.Context, limit int) ([]job.Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []job.Job
+
+	for _, id := range m.order {
+		j, ok := m.lookup(id)
+		if !ok {
+			continue
+		}
+
+		if !j.State.HoldsUnit() || j.Current >= len(j.Phases) {
+			continue
+		}
+
+		op, err := m.durable.Get(ctx, durable.ID(j.Phases[j.Current].Operation))
+		if err != nil && !errors.Is(err, durable.ErrNotFound) {
+			return nil, fmt.Errorf("get operation: %w", err)
+		}
+
+		if err == nil && !op.State.Terminal() {
+			continue
+		}
+
+		out = append(out, copyJob(j))
+		if len(out) == limit {
+			break
+		}
+	}
+
+	return out, nil
+}
+
+// CreateFreeze implements job.FreezeStore.
+func (m *memDB) CreateFreeze(_ context.Context, f job.Freeze, fence namespace.Fence, e audit.Entry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	if err := f.Validate(); err != nil {
+		return err
+	}
+
+	m.freezes[f.ID] = &f
+	m.audit[f.Namespace] = append(m.audit[f.Namespace], e)
+
+	return nil
+}
+
+// EndFreeze implements job.FreezeStore.
+func (m *memDB) EndFreeze(_ context.Context, id, by string, fence namespace.Fence, e audit.Entry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	f, ok := m.freezes[id]
+	if !ok {
+		return job.ErrNotFound
+	}
+
+	now := time.Now()
+	if !f.ActiveAt(now) && !f.EndsAt.IsZero() {
+		return job.ErrFinished
+	}
+
+	f.EndsAt, f.EndedBy = now, by
+	m.audit[f.Namespace] = append(m.audit[f.Namespace], e)
+
+	return nil
+}
+
+// ListFreezes implements job.FreezeStore.
+func (m *memDB) ListFreezes(_ context.Context, ns namespace.Name, since time.Time) ([]job.Freeze, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var out []job.Freeze
+
+	for _, f := range m.freezes {
+		if f.Namespace == ns && (f.EndsAt.IsZero() || f.EndsAt.After(since)) {
+			out = append(out, *f)
+		}
+	}
+
+	slices.SortFunc(out, func(a, b job.Freeze) int { return a.StartsAt.Compare(b.StartsAt) })
+
+	return out, nil
+}
+
+// lookup returns the job id, and false when the store does not know it.
+func (m *memDB) lookup(id job.ID) (*job.Job, bool) {
+	j, ok := m.jobs[id]
+	if !ok || j == nil {
+		return nil, false
+	}
+
+	return j, true
+}
+
+// byKey returns the job that the idempotency key of j already names, as
+// key, and false when j has no key or the key names no job.
+func (m *memDB) byKey(key string, j *job.Job) (*job.Job, bool) {
+	if j.IdempotencyKey == "" {
+		return nil, false
+	}
+
+	id, ok := m.keys[key]
+	if !ok {
+		return nil, false
+	}
+
+	return m.lookup(id)
+}
+
+// checkFence returns namespace.ErrFenced when f is stale.
+func (m *memDB) checkFence(f namespace.Fence) error {
+	if v, ok := m.fences[f.Namespace]; !ok || v != f.FailoverVersion {
+		return namespace.ErrFenced
+	}
+
+	return nil
+}
+
+// open counts the jobs that are not terminal, of the unit unitID, or of the
+// namespace ns when unitID is empty.
+func (m *memDB) open(ns namespace.Name, unitID string) int {
+	n := 0
+
+	for _, j := range m.jobs {
+		if j.State.Terminal() || j.Spec.Unit.Namespace() != ns {
+			continue
+		}
+
+		if unitID == "" || j.Spec.Unit.UnitID() == unitID {
+			n++
+		}
+	}
+
+	return n
+}
+
+// checkDispatch checks the rules of the dispatch of the current phase of j
+// at now: the unit index, the freeze and the plans.
+func (m *memDB) checkDispatch(j *job.Job, notBefore, now time.Time) error {
+	if j.Current >= len(j.Phases) || !j.Phases[j.Current].Kind.Changes() {
+		return nil
+	}
+
+	if err := m.checkUnit(j); err != nil {
+		return err
+	}
+
+	if err := m.checkFreeze(j, now); err != nil {
+		return err
+	}
+
+	return m.checkPlans(j, notBefore)
+}
+
+// checkUnit stands for the partial unique index on the unit of the jobs
+// that hold it.
+func (m *memDB) checkUnit(j *job.Job) error {
+	for _, other := range m.jobs {
+		if other.ID != j.ID && other.Spec.Unit.UnitID() == j.Spec.Unit.UnitID() && holds(other) {
+			return fmt.Errorf("%w: %w", job.ErrUnitBusy, errUnitBusyIndex)
+		}
+	}
+
+	return nil
+}
+
+// checkFreeze returns ErrFrozen when a freeze of the namespace of j is
+// active at now and j has no break-glass.
+func (m *memDB) checkFreeze(j *job.Job, now time.Time) error {
+	if j.BreakGlass != nil {
+		return nil
+	}
+
+	for _, f := range m.freezes {
+		if f.Namespace == j.Spec.Unit.Namespace() && f.ActiveAt(now) {
+			return fmt.Errorf("%w: %s", job.ErrFrozen, f.ID)
+		}
+	}
+
+	return nil
+}
+
+// checkPlans checks the plans of the plan phase before the current phase
+// of j, and the binding of each approval of the current phase.
+func (m *memDB) checkPlans(j *job.Job, notBefore time.Time) error {
+	if j.Current == 0 || j.Phases[j.Current-1].Kind != job.PhasePlan {
+		return nil
+	}
+
+	plans := j.Phases[j.Current-1].Plans
+	current := m.states[j.Spec.Unit.UnitID()]
+	bindings := []*job.PlanBinding{nil}
+
+	for _, a := range j.Phases[j.Current].Approvals {
+		if a.Plan != nil {
+			bindings = append(bindings, a.Plan)
+		}
+	}
+
+	for _, b := range bindings {
+		if err := job.CheckPlan(plans, b, current, notBefore); err != nil {
+			return fmt.Errorf("dispatch of phase %d: %w", j.Current, err)
+		}
+	}
+
+	return nil
+}
+
+// startOp starts the operation of req and returns its ID.
+func (m *memDB) startOp(ctx context.Context, req *durable.StartRequest) (string, error) {
+	op, _, err := m.durable.Start(ctx, *req)
+	if err != nil {
+		return "", fmt.Errorf("start %s: %w", req.Kind, err)
+	}
+
+	return string(op.ID), nil
+}
+
+// followUp starts the follow-up operation of kind k of the job id.
+func (m *memDB) followUp(ctx context.Context, id job.ID, k durable.Kind) error {
+	_, err := m.startOp(ctx, &durable.StartRequest{Key: job.FollowUpKey(id, k), Kind: k, Version: 1, Input: nil})
+
+	return err
+}
+
+// change makes the fields of c on next, and checks the rules of its event.
+// It keeps nothing on an error.
+func (m *memDB) change(ctx context.Context, next *job.Job, c *job.Change, now time.Time) error {
+	if c.Approval != nil && next.Current < len(next.Phases) {
+		next.Phases[next.Current].Approvals = append(next.Phases[next.Current].Approvals, *c.Approval)
+	}
+
+	if c.Event == job.EventDispatch {
+		return m.dispatch(ctx, next, c, now)
+	}
+
+	if f, ok := changes[c.Event]; ok {
+		return f(next, c, now)
+	}
+
+	return nil
+}
+
+// dispatch checks the rules of a dispatch and starts its operation.
+func (m *memDB) dispatch(ctx context.Context, next *job.Job, c *job.Change, now time.Time) error {
+	if c.Dispatch == nil {
+		return fmt.Errorf("%w: a dispatch needs a start request", job.ErrInvalid)
+	}
+
+	if err := m.checkDispatch(next, c.PlanNotBefore, now); err != nil {
+		return err
+	}
+
+	op, err := m.startOp(ctx, c.Dispatch)
+	if err != nil {
+		return err
+	}
+
+	next.Phases[next.Current].Operation = op
+
+	return nil
+}
+
+// afterChange starts or cancels the operations that the change of cur to
+// next needs.
+func (m *memDB) afterChange(ctx context.Context, cur, next *job.Job, ev job.Event) error {
+	if ev == job.EventCancel && cur.State.HoldsUnit() && cur.Current < len(cur.Phases) {
+		id := durable.ID(cur.Phases[cur.Current].Operation)
+		if err := m.durable.Cancel(ctx, id); err != nil && !errors.Is(err, durable.ErrFinished) {
+			return fmt.Errorf("cancel %s: %w", id, err)
+		}
+	}
+
+	if k, ok := followUpOf(next, ev); ok {
+		return m.followUp(ctx, next.ID, k)
+	}
+
+	return nil
+}
+
+// followUpOf returns the kind of the follow-up operation that the event ev
+// to next starts, and false when it starts none.
+func followUpOf(next *job.Job, ev job.Event) (durable.Kind, bool) {
+	switch {
+	case next.Delivery == nil:
+		return "", false
+	case ev == job.EventDelivered && next.Delivery.Delivery == job.DeliveryReviewRequest:
+		return job.KindReviewWatch, true
+	case ev == job.EventCancel || ev == job.EventRejected || ev == job.EventExpire:
+		return job.KindAbandon, true
+	default:
+		return "", false
+	}
+}
+
+// changes maps an event to the change of the job record that it makes,
+// apart from its state. An event with no entry changes only the state.
+//
+//nolint:gochecknoglobals // A fixed table, read only.
+var changes = map[job.Event]func(next *job.Job, c *job.Change, now time.Time) error{
+	job.EventClaim:         claimChange,
+	job.EventReplan:        replanChange,
+	job.EventPhaseDone:     finishChange,
+	job.EventLastPhaseDone: finishChange,
+	job.EventDelivered:     finishChange,
+	job.EventMerged:        mergeChange,
+}
+
+// claimChange records a claim or a takeover of the current phase.
+func claimChange(next *job.Job, c *job.Change, now time.Time) error {
+	p := &next.Phases[next.Current]
+	p.Claims++
+	p.Executor = c.Executor
+
+	if p.StartedAt.IsZero() {
+		p.StartedAt = now
+	}
+
+	return nil
+}
+
+// replanChange moves the job back to the plan phase before the current
+// phase.
+func replanChange(next *job.Job, _ *job.Change, _ time.Time) error {
+	if next.Current == 0 || next.Phases[next.Current-1].Kind != job.PhasePlan {
+		return fmt.Errorf("%w: no plan phase before phase %d", job.ErrInvalid, next.Current)
+	}
+
+	next.Phases[next.Current].Approvals = nil
+	next.Current--
+	next.Phases[next.Current].Plans = job.PlanSet{Display: nil, Apply: nil}
+	next.Phases[next.Current].Operation = ""
+
+	return nil
+}
+
+// finishChange ends the current phase, and keeps the delivery of a
+// deliver phase.
+func finishChange(next *job.Job, c *job.Change, now time.Time) error {
+	next.Phases[next.Current].FinishedAt = now
+	next.Current++
+
+	if c.Delivery != nil {
+		d := *c.Delivery
+		next.Delivery = &d
+	}
+
+	return nil
+}
+
+// mergeChange records the merge of the review request.
+func mergeChange(next *job.Job, c *job.Change, _ time.Time) error {
+	if next.Delivery == nil || next.Delivery.Delivery != job.DeliveryReviewRequest || c.MergedAt.IsZero() {
+		return fmt.Errorf("%w: a merge needs a review request and a time", job.ErrInvalid)
+	}
+
+	next.Delivery.MergedAt = c.MergedAt
+
+	return nil
+}
+
+// copyJob returns a deep enough copy of j for a caller: the phases and
+// their records are new slices.
+func copyJob(j *job.Job) job.Job {
+	out := *j
+	out.Phases = slices.Clone(j.Phases)
+
+	for i := range out.Phases {
+		out.Phases[i].Steps = slices.Clone(out.Phases[i].Steps)
+		out.Phases[i].Approvals = slices.Clone(out.Phases[i].Approvals)
+	}
+
+	return out
+}
+
+// holds reports whether j holds its unit for a change.
+func holds(j *job.Job) bool {
+	return j.State.HoldsUnit() && j.Current < len(j.Phases) && j.Phases[j.Current].Kind.Changes()
+}
+
+// closes reports whether the final state version v closes j.
+func closes(j *job.Job, v job.StateVersion) bool {
+	if j.State != job.StateAwaitingState || j.Delivery == nil || j.Spec.Unit.UnitID() != v.Unit.UnitID() {
+		return false
+	}
+
+	if j.Delivery.Delivery == job.DeliveryReviewRequest {
+		return !j.Delivery.MergedAt.IsZero() && j.Delivery.MergedAt.Before(v.At)
+	}
+
+	return j.Delivery.DeliveredAt.Before(v.At)
+}

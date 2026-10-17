@@ -21,9 +21,7 @@ bound to a plan hash. The `blob` port stores large content, and the
 `secret` package seals content with a data key for each scope
 ([ADR 23](0023-secrets-and-the-built-in-key-encryption-key.md)).
 
-This ADR records the design for review. The owner decisions above are the
-owner's. The other decisions take effect when the project lead accepts the
-pull request that adds this ADR.
+The owner approved the decisions of this ADR on 17 October 2026.
 
 ## Decision
 
@@ -48,11 +46,40 @@ pull request that adds this ADR.
    readable plan, with the values that the tool marks as sensitive masked.
    An unmasked read also needs `unit:read-secrets`, and writes an audit
    entry of the kind `reveal`.
-5. **A plan binds approvals.** `PlanRef.SHA256` is the hash of the plan
-   plaintext. A gate with `BindPlan` records the hash with each approval.
-   The apply phase gets the plan with its hash, and the runner refuses a plan
-   with another hash. An approval of a plan that changed fails with
-   `ErrPlanChanged`.
+5. **A plan binds approvals, and a stale plan never applies.**
+   - `PlanRef.SHA256` is the hash of the plan plaintext. `PlanRef.StateVersion`
+     is the state version of the unit that the plan read. The job stores
+     both plans of the phase, `plan-display` and `plan-apply`, as a
+     `job.PlanSet`.
+   - A gate with `BindPlan` binds each approval to both plans: the two
+     hashes and the state version (`job.PlanBinding`). An approval of plans
+     that changed fails with `ErrPlanChanged`.
+   - At the dispatch of the apply phase, the job store checks the plans in
+     the transaction of the dispatch with `job.CheckPlan`. When the current
+     state version of the unit is not the version that the plans read, or
+     the plans are older than the maximum plan age, the dispatch fails with
+     `ErrPlanStale`. The job then goes back to its plan phase (`replan`),
+     plans again, and asks for approval again. The old plans stay for the
+     retention.
+   - The maximum plan age is an installation setting. The default is 24
+     hours (`job.DefaultMaxPlanAge`).
+   - The apply phase gets the plans with their hashes, and the runner
+     refuses a plan with another hash.
+
+   For OpenTofu, the apply step applies the saved plan file. OpenTofu itself
+   refuses a saved plan when the state changed after the plan.
+
+   For Pulumi, the binding means two things. First, the apply fails when the
+   state version of the stack changed after the preview: the server checks
+   it at the dispatch, and again when the Pulumi CLI starts the update of
+   the job. Second, the resource changes of the apply must match the
+   approved preview: the plan step runs `pulumi preview --save-plan`, and
+   the apply step runs `pulumi up --plan` with that file. When a resource
+   change is not in that plan, the Pulumi CLI stops the update, and the job
+   fails. The Pulumi CLI checks the plan while the update runs, not before
+   it starts. So the changes before the stop stay, and the reason of the
+   failure tells the operator to read the state of the stack. OpenDustpan
+   never lets an update make a change that no person approved.
 6. **Logs stream in chunks.** A runner sends each chunk with
    `Recorder.AppendLog`, with a number that starts at 0. A retry of a chunk
    with the same hash changes nothing. A known number with another hash
@@ -65,13 +92,15 @@ pull request that adds this ADR.
    ([ADR 63](0063-installation-settings-file-and-change-log.md)). The lowest
    value is 1 day, so a typing error cannot shred every plan at the next
    sweep. The `job.retention` schedule shreds the content after the
-   retention, and then deletes the blobs. The metadata and the hash stay.
+   retention with `ArtifactStore.ShredExpired`, and then deletes the blobs.
+   That method shreds every version of a log, the current one too. The
+   metadata and the hash stay.
 8. **Redaction writes a new version and shreds the old one.** A principal
    with `job:redact-logs` gives text to replace. The server reads the current
    version, replaces each match with `[redacted]`, and writes the next
    version with a new data key. Then it shreds the older version and deletes
-   its blobs. The current version cannot be shredded
-   (`ErrCurrentVersion`). A log of a step that runs cannot be redacted
+   its blobs. A redaction cannot shred the current version
+   (`ErrCurrentVersion`). This error is for redaction only. A log of a step that runs cannot be redacted
    (`ErrLogOpen`). The audit entry holds the number of matches and the
    hashes of the two versions. It never holds the text that the principal
    gave.

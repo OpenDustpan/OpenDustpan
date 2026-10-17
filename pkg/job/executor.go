@@ -8,15 +8,31 @@ import (
 
 	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
-// Durable kinds of the phases. A phase dispatches as one durable operation
-// of one of these kinds, so the claim, its expiry and the cancel of a phase
-// are the rules of package durable. No other queue holds jobs.
+// Durable kinds of jobs. A phase dispatches as one durable operation of
+// KindWriteBack or a runner kind, so the claim, its expiry and the cancel
+// of a phase are the rules of package durable. The other kinds are the
+// follow-up work of a job, which the server instances claim with a
+// durable.Runner. No other queue holds jobs.
 const (
 	// KindWriteBack is the kind of a deliver phase. The server instances
 	// claim it with a durable.Runner.
 	KindWriteBack durable.Kind = "job.write-back"
+	// KindAbandon calls Executor.Abandon for a job that ended canceled,
+	// rejected or expired after a delivery. The store starts it in the
+	// transaction of that change.
+	KindAbandon durable.Kind = "job.abandon"
+	// KindVerify asks the forge whether the commit of the closing state
+	// version contains the delivered commit, and records the
+	// Verification. The store starts it in the transaction of the close.
+	KindVerify durable.Kind = "job.verify"
+	// KindReviewWatch is the polling fallback of the review watcher: it
+	// asks the forge for the merge or the close of the review request of a
+	// job in awaiting-state, for the case that a forge webhook did not
+	// arrive. The store starts it in the transaction of the delivery.
+	KindReviewWatch durable.Kind = "job.review-watch"
 	// KindRunnerPrefix starts the kind of a runner phase. The kind of a
 	// phase for the pool with the ID p is KindRunnerPrefix + p, so a runner
 	// claims only the phases of its own pool.
@@ -29,16 +45,23 @@ func RunnerKind(pool string) durable.Kind {
 	return durable.Kind(KindRunnerPrefix + pool)
 }
 
-// DispatchKey returns the durable start key of dispatch n of the phase at
-// index phase of the job id. Two dispatches of one phase never share a key.
-// A retry of one dispatch after a lost answer gives the same key, so it
-// gives the same operation.
-func DispatchKey(id ID, phase, n int) string {
-	return string(id) + "/" + strconv.Itoa(phase) + "/" + strconv.Itoa(n)
+// PhaseKey returns the durable start key of the phase at index phase of the
+// job id. A phase has one operation, so a retry of the dispatch after a
+// lost answer gives the same operation, and a takeover is a new claim on
+// it.
+func PhaseKey(id ID, phase int) string {
+	return string(id) + "/" + strconv.Itoa(phase)
+}
+
+// FollowUpKey returns the durable start key of the follow-up operation of
+// kind k of the job id: one for each job and kind.
+func FollowUpKey(id ID, k durable.Kind) string {
+	return string(id) + "/" + string(k)
 }
 
 // Executor is the port that each way of running a job implements. The job
-// service calls it at start and when a job leaves the awaiting-state state.
+// service calls Phases at start. A durable operation of KindAbandon calls
+// Abandon after the job ends.
 // The work itself goes through durable operations: an executor takes a
 // phase with Claimer.Claim, and reports through Claimer and Recorder.
 //
@@ -51,25 +74,31 @@ type Executor interface {
 	// Phases checks spec and returns its phases in order. It returns
 	// ErrUnsupported for an operation that the executor cannot do, and
 	// ErrInvalid, wrapped with the reason, for a spec that it cannot run:
-	// for write-back, no edit or a forge connection without push access;
-	// for a runner, steps that fail ValidateSteps or an unknown pool.
+	// for write-back, edits that fail ValidateEdits or a forge connection
+	// without push access; for a runner, steps that fail ValidateSteps, an
+	// unknown pool, a pool of another namespace than the unit, or no
+	// profile.
 	Phases(ctx context.Context, spec Spec) ([]PhaseKind, error)
 	// Abandon undoes what the job left open, after a cancel, a rejection or
 	// an expiry of a job that delivered. Write-back closes the review
 	// request that it opened when no merge happened. A direct push stays.
-	// A runner has nothing to undo and returns nil. It is safe to call more
-	// than once.
+	// A runner has nothing to undo and returns nil. It runs in a durable
+	// operation of KindAbandon, so it is safe to call more than once, and
+	// an error retries with the backoff of the durable runner.
 	Abandon(ctx context.Context, j Job) error
 }
 
-// PhaseClaim is the hold of one executor on one dispatch of one phase.
-// Claim is the durable claim of the dispatch, with its token and its
-// expiry. Every write of the executor carries the phase claim, and the
-// store checks its token in the transaction of the write.
+// PhaseClaim is the hold of one executor on one phase. Claim is the
+// durable claim of the operation of the phase, with its token and its
+// expiry. Fence is the namespace fence of the unit, taken at the claim.
+// Every write of the executor carries the phase claim, and the store
+// checks the token and the fence in the transaction of the write. So an
+// executor of a namespace that failed over writes nothing.
 type PhaseClaim struct {
 	Job   ID
 	Phase int
 	Claim durable.Claim
+	Fence namespace.Fence
 }
 
 // ClaimRequest asks for one phase to run. Kinds are the durable kinds that
@@ -81,18 +110,15 @@ type ClaimRequest struct {
 	Lease time.Duration
 }
 
-// Assignment is a claimed phase: the phase claim, the job as it was at the
-// claim, and the steps of the phase that an earlier dispatch already
-// recorded. It holds no secret. A runner gets the credentials of the
-// claim through the runner protocol.
+// Assignment is a claimed phase: the phase claim and the job as it was at
+// the claim. The executor runs every step of the phase, from the first, on
+// a fresh checkout. It holds no secret. A runner gets the credentials of
+// the claim through the runner protocol.
 type Assignment struct {
 	Claim PhaseClaim
 	Job   Job
-	// Done are the names of the steps that an earlier dispatch of the
-	// phase recorded. The executor does not run them again.
-	Done []string
-	// Plan is the plan that an apply phase applies, with its hash.
-	Plan *PlanRef
+	// Plans are the plans that an apply phase applies, with their hashes.
+	Plans PlanSet
 }
 
 // Outcome is how an executor ends a phase.
@@ -107,43 +133,49 @@ type Outcome struct {
 // phase. The job service implements it on the durable store and the job
 // store. Every method that takes a PhaseClaim returns ErrClaimLost when the
 // claim is not live: another claim replaced it, it expired, or the phase
-// ended. Both executors use this port: the write-back executor
-// in the server, and the runner protocol for each runner.
+// ended. It returns namespace.ErrFenced when the fence of the claim is
+// stale. Both executors use this port: the write-back executor in the
+// server, and the runner protocol for each runner.
 type Claimer interface {
-	// Claim takes one dispatched phase of req.Kinds, moves its job to
-	// running, and returns the assignment. A takeover of a phase whose last
-	// executor recorded the start of a step that changes resources, and no
-	// end, fails the phase instead and looks for another one. It returns
-	// durable.ErrNoWork when no phase can run now, and ErrInvalid for a
-	// request with no owner, no kind or a lease that is not positive.
+	// Claim takes one phase of req.Kinds that can run, moves its job to
+	// running, and returns the assignment with the namespace fence of the
+	// unit. A takeover is a new claim on the same operation, with a new
+	// token: the phase runs again from its first step. When the last
+	// executor recorded the start of a step that changes resources, and
+	// no end, the takeover fails the phase instead (AfterLostClaim) and
+	// Claim looks for another one. It returns durable.ErrNoWork when no
+	// phase can run now, and ErrInvalid for a request with no owner, no
+	// kind or a lease that is not positive.
 	Claim(ctx context.Context, req ClaimRequest) (Assignment, error)
 	// Renew moves the expiry of c to now plus d on the clock of the store,
 	// and returns the new claim. It returns ErrCanceled when a cancel
 	// arrived: the executor then stops the phase and calls Finish.
 	Renew(ctx context.Context, c PhaseClaim, d time.Duration) (PhaseClaim, error)
 	// Release gives the phase back before it ends. With no recorded start
-	// of a step that changes resources, the phase dispatches again. Else
-	// the phase fails. During a cancel, the job ends canceled.
+	// of a step that changes resources, the operation waits for the next
+	// claim. Else the phase fails. During a cancel, the job ends canceled
+	// when no change began, and failed when one began.
 	Release(ctx context.Context, c PhaseClaim) error
 	// Finish ends the phase with o, and moves the job by the state machine:
-	// to the next phase, to succeeded, to failed, or to canceled during a
-	// cancel. Finish of a deliver phase needs a Recorder.Delivered first. It
-	// returns ErrCanceled only when the phase did not succeed and a cancel
-	// arrived. The job then ends canceled, and the error is for the log.
+	// to the next phase, to succeeded or to failed. A phase that fails
+	// during a cancel ends the job failed, never canceled. Finish of a
+	// deliver phase needs a Recorder.Delivered first.
 	Finish(ctx context.Context, c PhaseClaim, o Outcome) error
 }
 
 // Recorder is the port through which an executor records the progress of a
-// phase. Every method checks the claim in the transaction of its write and
-// returns ErrClaimLost when it is not live. During a cancel, BeginStep
-// returns ErrCanceled, and the other methods still accept writes, so that
-// the executor can record how the phase stopped.
+// phase. Every method checks the claim and its namespace fence in the
+// transaction of its write. It returns ErrClaimLost when the claim is not
+// live, and namespace.ErrFenced when the fence is stale. During a cancel,
+// BeginStep returns ErrCanceled, and the other methods still accept
+// writes, so that the executor can record how the phase stopped.
 type Recorder interface {
-	// BeginStep records that the step called name starts. For a step that
-	// changes resources, the executor calls it before it starts the
-	// process. It returns ErrCanceled during a cancel, and
-	// durable.ErrStepDone when the phase already recorded the end of the
-	// step.
+	// BeginStep records that the step called name starts under the claim
+	// c. For a step that changes resources, the executor calls it before
+	// it starts the process. The write-back executor calls it before its
+	// forge commit (WriteBackStepCommit). It returns ErrCanceled during a
+	// cancel, and durable.ErrStepDone when the claim already recorded the
+	// end of the step.
 	BeginStep(ctx context.Context, c PhaseClaim, name string) error
 	// EndStep records the outcome of a step that BeginStep started. It
 	// returns ErrInvalid for a step with no begin record.
@@ -161,14 +193,35 @@ type Recorder interface {
 	Delivered(ctx context.Context, c PhaseClaim, d DeliveryResult) error
 }
 
+// The steps of a deliver phase, as the write-back executor records them.
+// They have no Step in the spec: the executor runs them in the server.
+const (
+	// WriteBackStepCommit is the commit through the forge. The executor
+	// records its begin before the forge call. A takeover that finds the
+	// begin and no end looks for a commit with the TrailerJob trailer of
+	// the job on the target ref, or for the branch of the review request,
+	// and records that commit with no second commit.
+	WriteBackStepCommit = "commit"
+	// WriteBackStepReview opens the review request of the commit.
+	WriteBackStepReview = "review-request"
+)
+
 // StepPlanner gives the default steps of an operation for the units of one
-// tool. Each tool package implements it, so that the job core never knows
-// a command of a tool. A blueprint or the settings of a unit can replace
-// the defaults.
+// tool, so that the job core never knows a command of a tool. The adapter
+// of each tool lives in the internal wiring of the server, next to the
+// tool package, so a tool package never imports job. The adapter sets
+// ChangesResources on its own steps. A blueprint or the settings of a unit
+// can replace the defaults, through MarkCustomSteps. A caller of Service
+// never gives steps.
 type StepPlanner interface {
 	// Tool is the lowercase code of the tool, as in a unit reference.
 	Tool() string
 	// Steps returns the default steps of op for unit at loc. It returns
 	// ErrUnsupported for an operation that the tool has no command for.
 	Steps(ctx context.Context, unit identity.Object, op Operation, loc Location) ([]Step, error)
+	// Editable reports whether a write-back job may edit the file at p,
+	// relative to the directory of the code location: a config or variable
+	// file of the unit, for example an OpenTofu .tfvars.json file or a
+	// Pulumi stack settings file. ValidateEdits uses it.
+	Editable(p string) bool
 }

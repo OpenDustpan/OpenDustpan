@@ -21,6 +21,11 @@ const (
 	// ActionUnitWriteBack allows starting a write-back job: a commit to the
 	// code location of a unit. Its object is a unit.
 	ActionUnitWriteBack identity.Action = "unit:write-back"
+	// ActionUnitDefineSteps allows changing the custom steps of a unit in
+	// its settings, or of a blueprint. Custom steps run on the runners of
+	// the namespace, so their change is its own action, apart from the
+	// start of a job. Its object is a unit, or the blueprint.
+	ActionUnitDefineSteps identity.Action = "unit:define-steps"
 	// ActionJobRead allows reading the jobs of a unit: the spec, the state,
 	// the phases, the steps, the approvals and the metadata of plans and
 	// logs. Its object is a unit, or the namespace for a list.

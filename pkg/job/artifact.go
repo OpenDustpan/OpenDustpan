@@ -21,13 +21,19 @@ const DefaultRetention = 400 * 24 * time.Hour
 // sweep.
 const MinRetention = 24 * time.Hour
 
+// DefaultMaxPlanAge is the oldest plan that an apply phase applies. An
+// installation setting changes it. An older plan is stale: the job plans
+// again and asks for approval again.
+const DefaultMaxPlanAge = 24 * time.Hour
+
 var (
 	// ErrShredded reports a read of a plan or a log version whose data key
 	// the server destroyed. The metadata and the hash stay.
 	ErrShredded = errors.New("content was shredded")
-	// ErrCurrentVersion reports a shred of the current version of a log.
-	// Only an older version can be shredded: a redaction writes a new
-	// version first.
+	// ErrCurrentVersion reports a redaction shred of the current version of
+	// a log. A redaction writes a new version first, and then shreds only
+	// the older one. The retention sweep shreds every version through
+	// ArtifactStore.ShredExpired, and never gets this error.
 	ErrCurrentVersion = errors.New("the current log version cannot be shredded")
 	// ErrLogOpen reports a redaction of the log of a step that still runs.
 	ErrLogOpen = errors.New("the log is still open")
@@ -38,14 +44,82 @@ var (
 // the plan. SHA256 is the hash of the plaintext. An approval binds to it,
 // and the apply phase refuses a plan with another hash.
 type PlanRef struct {
-	ID        string
-	Kind      OutputKind
-	SHA256    string
-	Size      int64
-	CreatedAt time.Time
+	ID     string
+	Kind   OutputKind
+	SHA256 string
+	// StateVersion is the state version of the unit that the plan read. An
+	// apply phase dispatches only while it is still the current version.
+	StateVersion string
+	Size         int64
+	CreatedAt    time.Time
 	// ShreddedAt is the time that the server destroyed the data key, or the
 	// zero time.
 	ShreddedAt time.Time
+}
+
+// PlanSet is the two stored outputs of one plan phase: the readable plan
+// that people approve, and the plan that the apply phase applies. An
+// approval binds to both.
+type PlanSet struct {
+	Display *PlanRef
+	Apply   *PlanRef
+}
+
+// Binding returns what an approval of s binds to, or the zero binding for
+// a set with no plan.
+func (s PlanSet) Binding() PlanBinding {
+	var b PlanBinding
+
+	if s.Display != nil {
+		b.DisplaySHA256 = s.Display.SHA256
+		b.StateVersion = s.Display.StateVersion
+	}
+
+	if s.Apply != nil {
+		b.ApplySHA256 = s.Apply.SHA256
+		b.StateVersion = s.Apply.StateVersion
+	}
+
+	return b
+}
+
+// PlanBinding is what an approval binds to: the hashes of both plans and
+// the state version that they read.
+type PlanBinding struct {
+	DisplaySHA256 string
+	ApplySHA256   string
+	StateVersion  string
+}
+
+// CheckPlan returns the error of the dispatch of an apply phase with the
+// plans s, approved with bound, while current is the current state version
+// of the unit. It returns ErrPlanChanged when bound is not the binding of
+// s, and ErrPlanStale when the plans read another state version than
+// current or were made before notBefore (now minus the maximum plan age).
+// A set with no plan passes: an apply phase with no plan phase before it,
+// such as a refresh, has nothing to bind.
+func CheckPlan(s PlanSet, bound *PlanBinding, current string, notBefore time.Time) error {
+	if s.Display == nil && s.Apply == nil {
+		return nil
+	}
+
+	b := s.Binding()
+	if bound != nil && *bound != b {
+		return fmt.Errorf("%w: the approval binds to other plans", ErrPlanChanged)
+	}
+
+	if b.StateVersion != current {
+		return fmt.Errorf("%w: the plan read state version %q, the current one is %q", ErrPlanStale,
+			b.StateVersion, current)
+	}
+
+	for _, p := range []*PlanRef{s.Display, s.Apply} {
+		if p != nil && p.CreatedAt.Before(notBefore) {
+			return fmt.Errorf("%w: plan %s is older than the maximum plan age", ErrPlanStale, p.ID)
+		}
+	}
+
+	return nil
 }
 
 // LogRef names one version of the log of one step. ID has the prefix jlv-,
@@ -93,18 +167,24 @@ type Redaction struct {
 // Every write in a namespace checks fence in its transaction, and returns
 // namespace.ErrFenced when it is stale.
 type ArtifactStore interface {
-	// Shred destroys the data key of the plan or the log version with the ID
-	// id and sets its ShreddedAt, with e in the same transaction. A second
-	// shred changes nothing. It returns ErrNotFound for an unknown ID, and
-	// ErrCurrentVersion for the current version of a log.
+	// Shred destroys the data key of the plan or the older log version with
+	// the ID id, for a redaction, and sets its ShreddedAt, with e in the
+	// same transaction. A second shred changes nothing. It returns
+	// ErrNotFound for an unknown ID, and ErrCurrentVersion for the current
+	// version of a log.
 	Shred(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
+	// ShredExpired destroys the data key of a plan or of any log version,
+	// the current one too, for the retention sweep. It has the rules of
+	// Shred, except that it never returns ErrCurrentVersion.
+	ShredExpired(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
 	// Expired returns at most limit plans and log versions whose job ended
 	// before cutoff and whose key is not shredded yet, oldest first. The
 	// retention schedule shreds them, then deletes their blobs.
 	Expired(ctx context.Context, cutoff time.Time, limit int) ([]Expired, error)
 }
 
-// Expired is one plan or log version that the retention sweep shreds. Keys
+// Expired is one plan or log version that the retention sweep shreds with
+// ArtifactStore.ShredExpired. Keys
 // are its blobs. The sweep deletes them after the shred commits.
 type Expired struct {
 	Namespace namespace.Name

@@ -9,9 +9,9 @@
 // rule of Store.ObserveStateVersion.
 //
 // A job is a list of phases. An executor runs one phase at a time. Each
-// dispatch of a phase is one durable operation, so the claim, its expiry,
-// the fencing token, the retry and the cancel of a phase are the rules of
-// package durable. The job record holds what a person reads: the state of
+// phase is one durable operation, so the claim, its expiry, the fencing
+// token, the takeover and the cancel of a phase are the rules of package
+// durable. The job record holds what a person reads: the state of
 // the job, its phases, its steps, its plans and its logs. Gates between
 // phases (approvals, change freezes, one change at a time on a unit) are
 // rules of this package.
@@ -23,7 +23,9 @@
 // as argument lists, with no shell.
 //
 // The package is tool-neutral. It never imports a store adapter, a forge
-// adapter or a transport.
+// adapter or a transport, and no tool package imports it: the adapters of
+// StepPlanner and the report of state versions live in the internal wiring
+// of the server.
 package job
 
 import (
@@ -65,9 +67,23 @@ var (
 	// ErrSelfApproval reports an approval by the principal that started the
 	// job, when the decision does not allow it.
 	ErrSelfApproval = errors.New("the principal that started the job cannot approve it")
-	// ErrPlanChanged reports an approval or an apply for a plan hash that is
-	// not the hash of the stored plan.
+	// ErrPlanChanged reports an approval or an apply for plan hashes that are
+	// not the hashes of the stored plans.
 	ErrPlanChanged = errors.New("plan changed since the approval")
+	// ErrPlanStale reports the dispatch of an apply phase whose plan read
+	// another state version than the current one, or is older than the
+	// maximum plan age. The job then plans again and asks for approval
+	// again.
+	ErrPlanStale = errors.New("plan is stale")
+	// ErrDelivered reports a cancel of a write-back job whose change is in
+	// git for good: a direct push, or a review request that merged. The job
+	// stays and waits for its state version.
+	ErrDelivered = errors.New("the change of the job is already in git")
+	// ErrAgentDenied reports an approval or a break-glass that an agent
+	// asks for. Only a person can approve or break a freeze.
+	ErrAgentDenied = errors.New("an agent cannot do this")
+	// ErrLimit reports a start above a limit of open jobs.
+	ErrLimit = errors.New("too many open jobs")
 	// ErrClaimLost reports a write by an executor whose claim on the phase is
 	// no longer live. It wraps durable.ErrClaimLost.
 	ErrClaimLost = errors.New("claim on the job phase is lost")
@@ -206,16 +222,34 @@ type Spec struct {
 	Operation Operation
 	Executor  ExecutorKind
 	Location  Location
-	// Steps are the steps of a runner job, resolved at start from the
-	// settings of the unit, its blueprint or the defaults of its tool.
-	// A write-back job has no steps.
+	// Steps are the steps of a runner job, resolved by the server at start
+	// from the settings of the unit, its blueprint or the defaults of its
+	// tool. The server sets Step.ChangesResources (see MarkCustomSteps). A
+	// caller never gives steps. A write-back job has no steps.
 	Steps []Step
-	// Pool names the runner pool of a runner job.
+	// Pool names the runner pool of a runner job. The pool belongs to the
+	// namespace of the unit.
 	Pool string
+	// Profile names the profile that supplies the secrets of a runner job.
+	// The server fixes it at start, so a later change of the unit settings
+	// cannot point a job at other secrets.
+	Profile string
 	// Edits are the file edits of a write-back job.
 	Edits []FileEdit
 	// Delivery is the delivery of a write-back job.
 	Delivery Delivery
+}
+
+// Actor is who asks for a change to a job: the principal of the request,
+// and the agent that acts for it, if any. An agent such as Dusty runs in the
+// server and acts as the user who asked, through an act-as edge. The
+// actions of the user decide. The job, its approvals, its decision input and its audit
+// entries record both.
+type Actor struct {
+	Principal identity.Principal
+	// Agent names the agent that acts for Principal, or is empty when the
+	// principal acts itself.
+	Agent string
 }
 
 // BreakGlass records a start through an active change freeze. Reason is
@@ -242,14 +276,22 @@ type Job struct {
 	// Current is the index in Phases of the phase that runs or runs next.
 	// It equals len(Phases) after the last phase.
 	Current int
-	// StartedBy is the subject of the principal that started the job.
+	// StartedBy is the subject of the principal that started the job. A
+	// user who starts a job through an agent is the starter.
 	StartedBy string
+	// Agent names the agent that started the job for StartedBy, or is
+	// empty.
+	Agent string
 	// BreakGlass is set when the job started through an active freeze.
 	BreakGlass *BreakGlass
 	// Delivery is the result of the deliver phase of a write-back job.
 	Delivery *DeliveryResult
 	// Closed is the state version that ended a write-back job.
 	Closed *StateVersion
+	// Verification tells whether the closing state version came from the
+	// delivered commit. A durable operation of KindVerify sets it after the
+	// state write, through the forge.
+	Verification Verification
 	// IdempotencyKey is the key of the start. Two starts with one key give
 	// one job.
 	IdempotencyKey string
@@ -264,20 +306,22 @@ type Job struct {
 // Phase is one phase of a job and its record.
 type Phase struct {
 	Kind PhaseKind
-	// Operation is the durable operation of the last dispatch of the phase,
-	// or empty before the first dispatch.
+	// Operation is the durable operation of the phase, or empty before its
+	// dispatch. A phase has one operation: a takeover is a new claim on the
+	// same operation, never a new operation.
 	Operation string
-	// Dispatches counts the dispatches of the phase. A release of an
-	// executor that did not start a step that changes resources dispatches
-	// the phase again.
-	Dispatches int
+	// Claims counts the claims of the operation, as a record. The first
+	// claim sets 1, and each takeover adds 1.
+	Claims int
 	// Executor names the runner or the instance that holds or held the
-	// claim of the last dispatch.
+	// last claim.
 	Executor string
-	// Steps are the recorded steps of the phase, in order.
+	// Steps are the recorded steps of the phase, in order. After a takeover
+	// the phase runs again from its first step, and the records of the
+	// earlier claims stay.
 	Steps []StepRecord
-	// Plan is the stored plan of a plan phase.
-	Plan *PlanRef
+	// Plans are the stored plans of a plan phase.
+	Plans PlanSet
 	// Gate is the gate in front of the phase, evaluated before its
 	// dispatch.
 	Gate Gate
@@ -303,15 +347,51 @@ type DeliveryResult struct {
 	DeliveredAt time.Time
 }
 
-// StateVersion is a new state version of a unit, as the tool package that
-// wrote it reports it. Commit is the commit that the tool reported with the
-// write, or empty when the tool reported none.
+// Settled reports whether the change of d is in git for good: a direct
+// push, or a review request that merged. A cancel of such a job fails with
+// ErrDelivered.
+func (d *DeliveryResult) Settled() bool {
+	return d != nil && (d.Delivery == DeliveryDirectPush || !d.MergedAt.IsZero())
+}
+
+// TrailerJob is the git trailer that the write-back executor writes in each
+// commit, with the job ID as its value. After a takeover, the executor
+// looks for a commit with the trailer on the target ref before it commits,
+// so a direct push never lands twice.
+const TrailerJob = "Dustpan-Job"
+
+// Verification tells whether the state version that closed a write-back
+// job came from the delivered commit.
+type Verification string
+
+// The results of a verification.
+const (
+	// VerificationNone: the job is not closed yet.
+	VerificationNone Verification = ""
+	// VerificationPending: the job closed, and the verify operation has not
+	// asked the forge yet.
+	VerificationPending Verification = "pending"
+	// VerificationVerified: the commit of the state version contains the
+	// delivered commit.
+	VerificationVerified Verification = "verified"
+	// VerificationUnverified: the state version reported no commit, or a
+	// commit that does not contain the delivered commit. The console shows
+	// it.
+	VerificationUnverified Verification = "unverified"
+)
+
+// StateVersion is a new state version of a unit, as the internal wiring
+// of the server reports it for the tool package that wrote it. Commit is
+// the commit that the tool reported with the write, or empty when the tool
+// reported none.
 type StateVersion struct {
 	Unit      identity.Object
 	VersionID string
 	Commit    string
 	At        time.Time
-	// Verified is true when Commit contains the commit of the delivery. A
-	// write without a commit closes the job unverified.
-	Verified bool
+	// Final is true for the last state version of a run: the release of
+	// the OpenTofu state lock, or the end of a Pulumi update. Only a final
+	// version closes a write-back job. An intermediate write of a run
+	// never does.
+	Final bool
 }

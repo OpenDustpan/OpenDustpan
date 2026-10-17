@@ -19,25 +19,28 @@ The project owner decided:
   break-glass.
 - Plans have a `read plans` action (ADR 102).
 
-This ADR records the design for review. The owner decisions above are the
-owner's. The other decisions take effect when the project lead accepts the
-pull request that adds this ADR.
+- Dusty runs inside the server and acts as the user who asked it. The audit
+  log records both the user and the agent.
+
+The owner approved the decisions of this ADR on 17 October 2026.
 
 ## Decision
 
 1. **A policy decision at start.** `job.Service.Start` asks the
-   `job.Decider` port for a decision. The input is the principal, the spec
-   and the key paths of the edits. It holds no secret value. The decision
+   `job.Decider` port for a decision. The input is the principal, the agent
+   that acts for it, if any, the spec and the key paths of the edits. It
+   holds no secret value. So a policy can deny or gate a start by agent. The decision
    allows or denies the start, and gives a gate for each kind of phase. With
    no policy installed, the adapter allows every start and adds no gate. A
    denied start fails with `ErrPolicyDenied` and creates no job. A policy
    that fails is not a denial: the start fails and nothing changes.
 2. **A gate in front of a phase.** A gate names the number of approvals, the
    groups of the approvers, whether the starter can approve, a timeout and
-   whether the approvals bind to the plan. Before the dispatch of a phase
-   with a gate, the job waits in `awaiting-approval`. Each subject counts
+   whether the approvals bind to the plans (ADR 102 decision 5). Before the
+   dispatch of a phase with a gate, the job waits in `awaiting-approval`. Each subject counts
    once. One rejection rejects the job. The starter does not count unless
-   the gate allows it. `Gate.Status` holds these rules, and a table-driven
+   the gate allows it. A user who started the job through an agent is the
+   starter too. `Gate.Status` holds these rules, and a table-driven
    test checks them. A job that waits longer than the timeout expires. The
    default timeout is 7 days.
 3. **OpenDustpan approvals add to the forge.** For a write-back job, a gate
@@ -63,7 +66,13 @@ pull request that adds this ADR.
    the kind `override`. `namespace:break-freeze` is in another family than
    `namespace:manage-freezes`. So a principal that can end a freeze does not
    also get break-glass, and the reverse.
-7. **Actions for each operation.** Each route of the job API declares these
+7. **Agents never approve and never break a freeze.** An agent such as
+   Dusty acts as the user who asked it (ADR 100 decision 17). The job, each
+   approval and the decision input record the agent. An agent cannot record
+   an approval, and cannot ask for break-glass: both fail with
+   `ErrAgentDenied`. An agent can record a rejection, because a rejection
+   only stops a change.
+8. **Actions for each operation.** Each route of the job API declares these
    actions. The object of a job action is the unit of the job.
 
    | Action | Object | Allows |
@@ -72,6 +81,7 @@ pull request that adds this ADR.
    | `unit:run-apply` | unit | Start a runner job that applies or refreshes. |
    | `unit:run-destroy` | unit | Start a runner job that destroys. |
    | `unit:write-back` | unit | Start a write-back job. |
+   | `unit:define-steps` | unit, or blueprint | Change the custom steps of a unit or a blueprint. |
    | `job:read` | unit, or namespace for a list | Read jobs, phases, steps, approvals and the metadata of plans and logs. |
    | `job:read-logs` | unit | Read the content of logs. |
    | `job:read-plans` | unit | Read the readable plan, masked. |
@@ -87,14 +97,15 @@ pull request that adds this ADR.
    maps a spec to its start actions, and a table-driven test checks the
    map. `runner:claim` needs a new object kind, the runner pool, in the
    `identity` package.
-8. **Audit entries.** Each of these writes one audit entry in the
+9. **Audit entries.** Each of these writes one audit entry in the
    transaction of the change:
 
    | Event | Subject | Action | Kind |
    | --- | --- | --- | --- |
-   | Start | the principal | the start action | `change`, or `override` with break-glass |
-   | Approval or rejection | the approver | `job:approve` | `change` |
-   | Cancel | the principal | `job:cancel` | `change` |
+   | Start | the principal, and the agent | the start action | `change`, or `override` with break-glass |
+   | Approval or rejection | the approver, and the agent of a rejection | `job:approve` | `change` |
+   | Cancel | the principal, and the agent | `job:cancel` | `change` |
+   | Change of custom steps | the principal, and the agent | `unit:define-steps` | `change` |
    | Claim of a phase that changes resources | the runner or the instance | `runner:claim` | `change` |
    | Delivery of a write-back | the instance | `unit:write-back` | `change` |
    | Redaction, and each shred | the principal, or the instance for retention | `job:redact-logs` | `change` |
@@ -105,13 +116,24 @@ pull request that adds this ADR.
    job ID, the reason and, for a delivery, the commit and the review
    request. They never hold a secret value or redacted text. The end of a
    job by an executor writes no entry. The job record holds it.
-9. **What a caller sees.** `job.Service.Get` returns `ErrNotFound` also when
-   the caller may not read the job, so that a caller cannot learn that a job
-   exists.
+10. **The audit entry records the agent.** `audit.Entry` gets a field
+    `Agent`: the agent that acted for the subject, or empty. The entry hash
+    covers it. The hash encoding adds the field after the fence version
+    only when it is not empty, so the hash of every entry with no agent
+    stays the same, and existing chains stay valid. This supersedes the
+    list of entry fields in decision 13 of
+    [ADR 41](0041-the-server-reads-state-and-masks-secrets.md), and the
+    field list of the hash encoding of the `audit` package. An agent needs
+    no audit channel of its own: the channel stays where the request came
+    from.
+11. **What a caller sees.** Each method of `job.Service` that takes a job
+    ID returns `ErrNotFound` when the caller lacks `job:read` on the unit of
+    the job, so that a caller cannot learn that a job exists. With
+    `job:read`, a missing action of the method returns `identity.ErrDenied`.
 
 ## Consequences
 
-- Fourteen actions join the action list of the `identity` package, and the
+- Fifteen actions join the action list of the `identity` package, and the
   built-in roles need them. The integrator adds them to the list and to the
   route test.
 - A gate makes a runner job wait without a runner. A runner is busy only
@@ -131,7 +153,5 @@ pull request that adds this ADR.
   unit?
 - Can a queued job get break-glass after its start, or does a person cancel
   it and start a new one with break-glass?
-- Does the audit log need a channel for agents such as Dusty, or is `api`
-  enough?
 - Does a freeze also hold the approvals that end during it, or only the
   dispatch?

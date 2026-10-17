@@ -23,6 +23,7 @@ var allowed = []edge{
 	{job.StateQueued, job.EventNeedApproval, job.StateAwaitingApproval},
 	{job.StateQueued, job.EventCancel, job.StateCanceled},
 	{job.StateQueued, job.EventExpire, job.StateExpired},
+	{job.StateQueued, job.EventReplan, job.StateQueued},
 
 	{job.StateAwaitingApproval, job.EventApproved, job.StateQueued},
 	{job.StateAwaitingApproval, job.EventRejected, job.StateRejected},
@@ -34,6 +35,7 @@ var allowed = []edge{
 	{job.StateDispatched, job.EventExpire, job.StateExpired},
 	{job.StateDispatched, job.EventPhaseFailed, job.StateFailed},
 
+	{job.StateRunning, job.EventClaim, job.StateRunning},
 	{job.StateRunning, job.EventRelease, job.StateDispatched},
 	{job.StateRunning, job.EventPhaseDone, job.StateQueued},
 	{job.StateRunning, job.EventLastPhaseDone, job.StateSucceeded},
@@ -42,12 +44,13 @@ var allowed = []edge{
 	{job.StateRunning, job.EventCancel, job.StateCanceling},
 
 	{job.StateCanceling, job.EventRelease, job.StateCanceled},
-	{job.StateCanceling, job.EventPhaseFailed, job.StateCanceled},
+	{job.StateCanceling, job.EventPhaseFailed, job.StateFailed},
 	{job.StateCanceling, job.EventPhaseDone, job.StateCanceled},
 	{job.StateCanceling, job.EventLastPhaseDone, job.StateSucceeded},
 	{job.StateCanceling, job.EventDelivered, job.StateAwaitingState},
 	{job.StateCanceling, job.EventCancel, job.StateCanceling},
 
+	{job.StateAwaitingState, job.EventMerged, job.StateAwaitingState},
 	{job.StateAwaitingState, job.EventStateObserved, job.StateSucceeded},
 	{job.StateAwaitingState, job.EventRejected, job.StateRejected},
 	{job.StateAwaitingState, job.EventCancel, job.StateCanceled},
