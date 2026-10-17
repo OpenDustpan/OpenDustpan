@@ -414,6 +414,14 @@ server. It downloads them first, as `e2e/doc.go` describes. `E2E_BLOBS=s3`
 with the four S3 variables drives the runs with the live blobs on the
 S3-compatible server.
 
+`make checks-agent` syncs the current branch with `main`, then runs
+`make generate`, `make check`, `make e2e`, and a TruffleHog scan of the branch
+commits. It starts a PostgreSQL container when `DUSTPAN_TEST_POSTGRES_URL` is
+not set, and it deletes the container and the temporary files it made.
+`SYNC` selects how the branch takes in `main`: `merge` (default), `rebase`,
+or `none`. `SKIP` lists steps to skip, for example `SKIP="e2e trufflehog"`.
+`CLEAN_CACHE=1` also deletes the e2e CLI download cache.
+
 Start with [CONTRIBUTING.md](CONTRIBUTING.md), then `CLAUDE.md` (rules for
 agents and contributors) and `docs/adr/` (why things are the way they are).
 

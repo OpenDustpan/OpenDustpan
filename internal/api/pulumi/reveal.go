@@ -25,6 +25,10 @@ const (
 	// holds one value path, so 8 KiB leaves ample room while a large body
 	// cannot grow memory without bound.
 	revealBodyLimit = 8 << 10
+	// maxRevealPathLen caps the value path of one reveal request, in bytes.
+	// The audit entry keeps the path, so a longer path is refused instead
+	// of stored.
+	maxRevealPathLen = 1024
 	// noStoreValue is the Cache-Control of every reveal answer: a revealed
 	// value never lands in a cache.
 	noStoreValue = "no-store"
@@ -174,6 +178,10 @@ func serviceSecretsProviderName() string {
 // open. It carries no value, no key and no scope.
 var errRevealDecrypt = errors.New("cannot reveal the value")
 
+// errRevealPathTooLong reports a reveal value path over maxRevealPathLen
+// bytes. The audit entry keeps the path, so the call is refused.
+var errRevealPathTooLong = errors.New("reveal path over 1024 bytes")
+
 // errAuditFailed reports a failed audit append before a reveal answer. It
 // carries no value and no path detail beyond the status.
 var errAuditFailed = errors.New("audit entry failed")
@@ -229,6 +237,12 @@ func (h *Handler) revealPath(w http.ResponseWriter, r *http.Request) (string, bo
 
 	if req.Path == "" {
 		h.writeInvalidBody(ctx, w)
+
+		return "", false
+	}
+
+	if len(req.Path) > maxRevealPathLen {
+		h.writeError(ctx, w, errRevealPathTooLong)
 
 		return "", false
 	}

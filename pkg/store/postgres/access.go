@@ -153,11 +153,17 @@ func (s *Store) GetGrant(ctx context.Context, id string) (access.Grant, error) {
 	return fromGrantRow(grantRow(row))
 }
 
-// RevokeGrant implements access.GrantStore. It ends the grant in the
+// RevokeGrant implements access.GrantStore. It runs check, then ends the grant in the
 // transaction of the entry, after it checks that the grant is in the
 // namespace of fence.
-func (s *Store) RevokeGrant(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error {
+func (s *Store) RevokeGrant(
+	ctx context.Context, id string, fence namespace.Fence, e audit.Entry, check access.GrantCheck,
+) error {
 	return s.inGrantTx(ctx, fence.Namespace, fence, e, func(q *db.Queries) error {
+		if err := runCheck(ctx, q, check); err != nil {
+			return err
+		}
+
 		if err := grantInNamespace(ctx, q, id, fence.Namespace); err != nil {
 			return err
 		}

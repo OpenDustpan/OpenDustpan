@@ -37,7 +37,17 @@ const (
 	StoredClientID = "dustpan-beta"
 	// StoredClientSecret is the client secret at the second test provider.
 	StoredClientSecret = "client-secret-of-beta-for-e2e"
+	// PlainClientID is the client of the server at the plain OAuth 2.0
+	// test provider.
+	PlainClientID = "dustpan-hub"
+	// PlainClientSecret is the client secret at the plain OAuth 2.0 test
+	// provider.
+	PlainClientSecret = "client-secret-of-hub-for-e2e"
 )
+
+// PlainSignInProvider is the ID of the plain OAuth 2.0 provider that a
+// test creates through the API.
+const PlainSignInProvider = "hub"
 
 // TestClock is a clock that a test moves. The server and the test provider
 // of an env from NewEnvWithSignIn share it.
@@ -74,6 +84,7 @@ type signInSetup struct {
 	publicURL string
 	idp       *oauthtest.Provider
 	beta      *oauthtest.Provider
+	hub       *oauthtest.Provider
 	clock     *TestClock
 	shared    bool
 	// mu makes the sign-ins of PersonalToken take turns: the test
@@ -120,14 +131,8 @@ func newSignInSetup(tb testing.TB, publicURL string, shared *TestClock) *signInS
 	idp := oauthtest.New(tb, oauthtest.Config{
 		Now: now, ClientID: signInClientID, ClientSecret: signInClientSecret,
 		RedirectURI: publicURL + "/api/server/sign-in/" + SignInProvider + "/callback", Algorithm: oauthtest.RS256,
-		User: oauthtest.User{
-			Subject: "248289761001", Name: "Alice Doe", PreferredUsername: "alice", Email: "alice@example.com",
-		},
-		Mode: oauthtest.ModeOIDC, Faults: oauthtest.Faults{
-			WrongIssuer: false, WrongAudience: false, WrongNonce: false, Expired: false, BadSignature: false,
-			AlgNone: false, UnknownKey: false, SkipPKCE: false, ExtraAudience: false, AuthorizedParty: "",
-			IssuedIn: 0, IgnoreMaxAge: false,
-		},
+		User: testUser(),
+		Mode: oauthtest.ModeOIDC, Faults: noFaults(),
 		TLS: true,
 	})
 
@@ -135,19 +140,41 @@ func newSignInSetup(tb testing.TB, publicURL string, shared *TestClock) *signInS
 		Now: now, ClientID: StoredClientID, ClientSecret: StoredClientSecret,
 		RedirectURI: publicURL + "/api/server/sign-in/" + StoredSignInProvider + "/callback",
 		Algorithm:   oauthtest.RS256,
-		User: oauthtest.User{
-			Subject: "248289761001", Name: "Alice Doe", PreferredUsername: "alice", Email: "alice@example.com",
-		},
-		Mode: oauthtest.ModeOIDC, Faults: oauthtest.Faults{
-			WrongIssuer: false, WrongAudience: false, WrongNonce: false, Expired: false, BadSignature: false,
-			AlgNone: false, UnknownKey: false, SkipPKCE: false, ExtraAudience: false, AuthorizedParty: "",
-			IssuedIn: 0, IgnoreMaxAge: false,
-		},
+		User:        testUser(),
+		Mode:        oauthtest.ModeOIDC, Faults: noFaults(),
 		TLS: true,
 	})
 
+	// The plain OAuth 2.0 provider serves HTTP on a loopback host, which a
+	// provider in the oauth mode may use, so the binary server needs no
+	// certificate for it.
+	hub := oauthtest.New(tb, oauthtest.Config{
+		Now: now, ClientID: PlainClientID, ClientSecret: PlainClientSecret,
+		RedirectURI: publicURL + "/api/server/sign-in/" + PlainSignInProvider + "/callback",
+		Algorithm:   oauthtest.RS256,
+		User:        testUser(),
+		Mode:        oauthtest.ModeOAuth, Faults: noFaults(), TLS: false,
+	})
+
 	return &signInSetup{
-		publicURL: publicURL, idp: idp, beta: beta, clock: clock, shared: shared != nil, mu: sync.Mutex{},
+		publicURL: publicURL, idp: idp, beta: beta, hub: hub, clock: clock, shared: shared != nil, mu: sync.Mutex{},
+	}
+}
+
+// testUser returns the person whom each test provider signs in.
+func testUser() oauthtest.User {
+	return oauthtest.User{
+		Subject: "248289761001", Name: "Alice Doe", PreferredUsername: "alice", Email: "alice@example.com",
+	}
+}
+
+// noFaults returns the faults of a test provider that breaks no rule.
+func noFaults() oauthtest.Faults {
+	return oauthtest.Faults{
+		WrongIssuer: false, WrongAudience: false, WrongNonce: false, Expired: false, BadSignature: false,
+		AlgNone: false, UnknownKey: false, SkipPKCE: false, ExtraAudience: false, AuthorizedParty: "",
+		IssuedIn: 0, IgnoreMaxAge: false, TokenType: "", UserinfoStatus: 0, UserinfoBody: "", UserinfoType: "",
+		UserinfoRedirect: "", TokenRedirect: "",
 	}
 }
 
@@ -237,6 +264,19 @@ func (e *Env) IdentityProvider(tb testing.TB) *oauthtest.Provider {
 	}
 
 	return e.signIn.idp
+}
+
+// PlainIdentityProvider returns the plain OAuth 2.0 test provider of an
+// env from NewEnvWithSignIn, which a test creates through the API as the
+// provider PlainSignInProvider. It fails the test for any other env.
+func (e *Env) PlainIdentityProvider(tb testing.TB) *oauthtest.Provider {
+	tb.Helper()
+
+	if e.signIn == nil || e.signIn.hub == nil {
+		tb.Fatal("the env has no plain OAuth 2.0 test provider: use NewEnvWithSignIn")
+	}
+
+	return e.signIn.hub
 }
 
 // StoredIdentityProvider returns the second test provider of an env from

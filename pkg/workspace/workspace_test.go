@@ -573,7 +573,18 @@ func (m *memStore) FenceAndUnlock(
 		return err
 	}
 
-	m.versions[sv.ID] = sv
+	// The write sets only the finalize columns of the staged row, as the SQL
+	// stores do: the staged sealed flag stays, so a staged plain row never
+	// finalizes as sealed.
+	staged := m.versions[sv.ID]
+	staged.Serial = sv.Serial
+	staged.Lineage = sv.Lineage
+	staged.MD5 = sv.MD5
+	staged.Outputs = sv.Outputs
+	staged.Status = sv.Status
+	staged.FinalizedAt = sv.FinalizedAt
+	staged.Size = sv.Size
+	m.versions[sv.ID] = staged
 	m.current[w.ID] = sv.ID
 	m.workspaces[w.ID] = w
 	m.publish(w)

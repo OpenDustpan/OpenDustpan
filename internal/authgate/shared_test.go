@@ -579,7 +579,7 @@ func TestPanicInTheStoreGivesBackTheUnit(t *testing.T) {
 	c := newClock()
 
 	g, err := authgate.New(authgate.Config{
-		Next:   &panicAuthenticator{lookups: atomic.Int64{}},
+		Next:   &panicAuthenticator{countingAuthenticator{lookups: atomic.Int64{}}},
 		Charge: chargeBad, Logger: nil, Now: c.Now, Failures: nil, Window: 0, CounterErrors: nil,
 		Burst: 3, Refill: time.Second, Penalty: time.Hour, MaxWaiting: 0, MaxSources: 0,
 	})

@@ -392,6 +392,12 @@ func (s *Store) swapDatabase(ctx context.Context, temp string) error {
 // keep-access apply holds the write lock from the live snapshot through the
 // swap, so it swaps without taking the lock again.
 func (s *Store) swapDatabaseLocked(ctx context.Context, temp string) error {
+	// The lock holds every durable operation write out, so the copy has
+	// the last committed rows of the control tables.
+	if err := keepControlTables(ctx, temp, s.path); err != nil {
+		return err
+	}
+
 	if err := s.conn.Close(); err != nil {
 		return fmt.Errorf("close database for restore: %w", err)
 	}

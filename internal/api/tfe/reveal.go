@@ -28,6 +28,10 @@ const (
 	// holds one value path, so 8 KiB leaves ample room while a large body
 	// cannot grow memory without bound.
 	revealBodyLimit = 8 << 10
+	// maxRevealPathLen caps the value path of one reveal request, in bytes.
+	// The audit entry keeps the path, so a longer path is refused instead
+	// of stored.
+	maxRevealPathLen = 1024
 	// revealChannelHeader declares where a request comes from: "api" or
 	// "console". The audit entry records it as declared; unknown values
 	// are "api".
@@ -183,6 +187,10 @@ func (r *logCloseReader) Close() error {
 // It carries no value and no path detail beyond the status.
 var errRevealAuditFailed = errors.New("audit entry failed")
 
+// errRevealPathTooLong reports a reveal value path over maxRevealPathLen
+// bytes. The audit entry keeps the path, so the call is refused.
+var errRevealPathTooLong = errors.New("reveal path over 1024 bytes")
+
 // revealPath reads the value path of one reveal body: a JSON:API document
 // that holds the path. An empty path and an unreadable body answer 422; an
 // oversized body answers 413. Every answer carries Cache-Control: no-store,
@@ -218,6 +226,12 @@ func (h *Handler) revealPath(w http.ResponseWriter, r *http.Request) (string, bo
 
 	if doc.Data.Attributes.Path == "" {
 		h.writeNoStore(ctx, w, errInvalidBody)
+
+		return "", false
+	}
+
+	if len(doc.Data.Attributes.Path) > maxRevealPathLen {
+		h.writeNoStore(ctx, w, errRevealPathTooLong)
 
 		return "", false
 	}

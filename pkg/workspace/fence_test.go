@@ -7,7 +7,9 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/workspace"
@@ -320,6 +322,101 @@ func TestForceUnlockRefusedByAConcurrentFinalizeDeletesItsBlob(t *testing.T) {
 
 	if _, getErr := f.store.GetStateVersion(ctx, fenceID); !errors.Is(getErr, workspace.ErrStateVersionNotFound) {
 		t.Fatalf("pending row of the refused fence: err = %v, want ErrStateVersionNotFound", getErr)
+	}
+}
+
+// failPutBlobs fails every Put with errPutFailed and records the attempted
+// key, so tests prove a force-unlock whose content never lands leaves nothing.
+type failPutBlobs struct {
+	blob.Store
+
+	mu   sync.Mutex
+	keys []blob.Key
+}
+
+// errPutFailed is a blob failure during a force-unlock: the content never lands.
+var errPutFailed = errors.New("put failed")
+
+// Put records key and fails without writing.
+func (b *failPutBlobs) Put(_ context.Context, key blob.Key, _ io.Reader) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	b.keys = append(b.keys, key)
+
+	return errPutFailed
+}
+
+// attempted returns every key Put saw.
+func (b *failPutBlobs) attempted() []blob.Key {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return append([]blob.Key(nil), b.keys...)
+}
+
+// A force-unlock whose content write fails leaves neither a version row nor a
+// blob: the staged fence row is discarded.
+func TestForceUnlockWithFailedPutLeavesNoFence(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	ctx := t.Context()
+
+	if _, err := f.svc.Lock(ctx, f.ws.ID, "alice", "apply"); err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+
+	if err := f.push(t, newState("lin-old", 1, smallDoc), smallDoc); err != nil {
+		t.Fatalf("push v1: %v", err)
+	}
+
+	failing := &failPutBlobs{Store: f.blobs, mu: sync.Mutex{}, keys: nil}
+
+	failingSvc, err := workspace.NewService(workspace.Config{
+		Workspaces:         f.store,
+		States:             f.store,
+		Blobs:              failing,
+		Namespaces:         f.namespaces,
+		Sealer:             nil,
+		Logger:             nil,
+		Now:                func() time.Time { return *f.now },
+		MaxStateBytes:      64,
+		MaxPendingVersions: 0,
+		Retention:          0,
+	})
+	if err != nil {
+		t.Fatalf("service: %v", err)
+	}
+
+	if _, _, err := failingSvc.ForceUnlock(ctx, f.ws.ID, "admin", noOverrides(), nil); !errors.Is(err, errPutFailed) {
+		t.Fatalf("force unlock with a failed content write: err = %v, want the failed write", err)
+	}
+
+	keys := failing.attempted()
+	if len(keys) != 1 {
+		t.Fatalf("attempted content writes = %d, want 1", len(keys))
+	}
+
+	parts := strings.Split(keys[0].String(), "/")
+	if len(parts) != 4 {
+		t.Fatalf("fence content key %q has %d parts, want 4", keys[0], len(parts))
+	}
+
+	fenceID := workspace.StateVersionID(parts[2])
+
+	if _, err := f.store.GetStateVersion(ctx, fenceID); !errors.Is(err, workspace.ErrStateVersionNotFound) {
+		t.Fatalf("fence row %s: err = %v, want ErrStateVersionNotFound", fenceID, err)
+	}
+
+	if r, err := f.blobs.Get(ctx, keys[0]); err == nil {
+		if closeErr := r.Close(); closeErr != nil {
+			t.Errorf("close the blob: %v", closeErr)
+		}
+
+		t.Fatal("the blob of the failed fence exists")
+	} else if !errors.Is(err, blob.ErrNotFound) {
+		t.Fatalf("blob of the failed fence: err = %v, want ErrNotFound", err)
 	}
 }
 

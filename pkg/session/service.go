@@ -30,21 +30,20 @@ const TouchEvery = time.Minute
 var ErrUnauthenticated = errors.New("session is not valid")
 
 // InactivityRule answers whether the user account of the owner o of a
-// session is past the inactivity period, by the rule that also refuses an
-// access token of that account: the account disable is on, the period is
-// not zero, o is a person that is not a break-glass account, and o.ActiveAt
-// is at or before now minus the period. It returns an error when it cannot
-// decide.
+// session is past the inactivity period of p at now, by the rule that also
+// refuses an access token of that account: the account disable is on, the
+// period is not zero, o is a person that is not a break-glass account, and
+// o.ActiveAt is at or before now minus the period. The policy p comes from
+// the session lookup.
 type InactivityRule interface {
-	AccountInactive(ctx context.Context, o Owner) (bool, error)
+	AccountInactive(o Owner, p AccountPolicy, now time.Time) bool
 }
 
-// SessionsConfig holds the dependencies of a Sessions service. Store and
-// Policies are required. A nil Inactivity applies no inactivity rule. A
-// nil Now uses time.Now.
+// SessionsConfig holds the dependencies of a Sessions service. Store is
+// required. A nil Inactivity applies no inactivity rule. A nil Now uses
+// time.Now.
 type SessionsConfig struct {
-	Store    Store
-	Policies *Policies
+	Store Store
 	// Providers creates the sessions of the stored sign-in providers. It
 	// may be nil when no provider is stored; a Start with Stored then
 	// fails with ErrMissingDependency.
@@ -58,19 +57,15 @@ type SessionsConfig struct {
 type Sessions struct {
 	store      Store
 	providers  ProviderSessionStore
-	policies   *Policies
 	inactivity InactivityRule
 	now        func() time.Time
 }
 
 // NewSessions returns a Sessions service. It returns ErrMissingDependency
-// when cfg has no store or no policies.
+// when cfg has no store.
 func NewSessions(cfg SessionsConfig) (*Sessions, error) {
-	switch {
-	case cfg.Store == nil:
+	if cfg.Store == nil {
 		return nil, fmt.Errorf("%w: session store", ErrMissingDependency)
-	case cfg.Policies == nil:
-		return nil, fmt.Errorf("%w: session policies", ErrMissingDependency)
 	}
 
 	now := cfg.Now
@@ -79,7 +74,7 @@ func NewSessions(cfg SessionsConfig) (*Sessions, error) {
 	}
 
 	return &Sessions{
-		store: cfg.Store, providers: cfg.Providers, policies: cfg.Policies, inactivity: cfg.Inactivity, now: now,
+		store: cfg.Store, providers: cfg.Providers, inactivity: cfg.Inactivity, now: now,
 	}, nil
 }
 
@@ -149,8 +144,9 @@ func (s *Sessions) Start(ctx context.Context, e audit.Entry, in Start) (Session,
 // session can authenticate at the time of the clock: it has not ended, is
 // not idle or expired under the current policy, and its owner is a person
 // who is not disabled and whose account is not past the inactivity period.
-// It records the use at most once in TouchEvery. It returns
-// ErrUnauthenticated otherwise, and then records no use.
+// The policies come from the same read as the session. It records the use
+// at most once in TouchEvery. It returns ErrUnauthenticated otherwise, and
+// then records no use.
 func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, error) {
 	m, err := s.store.GetSessionByDigest(ctx, DigestOf(secret))
 	if errors.Is(err, ErrNotFound) {
@@ -161,14 +157,10 @@ func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, erro
 		return Match{}, fmt.Errorf("read session: %w", err)
 	}
 
-	policy, err := s.policies.Policy(ctx)
-	if err != nil {
-		return Match{}, err
-	}
-
 	now := s.Now()
+	limits := m.Policy.Limits
 
-	if status := m.Session.StatusAt(now, policy.Limits); status != StatusActive {
+	if status := m.Session.StatusAt(now, limits); status != StatusActive {
 		return Match{}, fmt.Errorf("%w: %s", ErrUnauthenticated, status)
 	}
 
@@ -176,18 +168,11 @@ func (s *Sessions) Authenticate(ctx context.Context, secret Secret) (Match, erro
 		return Match{}, fmt.Errorf("%w: the principal cannot sign in", ErrUnauthenticated)
 	}
 
-	if s.inactivity != nil {
-		inactive, err := s.inactivity.AccountInactive(ctx, m.Owner)
-		if err != nil {
-			return Match{}, fmt.Errorf("check account inactivity: %w", err)
-		}
-
-		if inactive {
-			return Match{}, fmt.Errorf("%w: the user account is inactive", ErrUnauthenticated)
-		}
+	if s.inactivity != nil && s.inactivity.AccountInactive(m.Owner, m.Accounts, now) {
+		return Match{}, fmt.Errorf("%w: the user account is inactive", ErrUnauthenticated)
 	}
 
-	if err := s.touch(ctx, m.Session, now, policy.Limits); err != nil {
+	if err := s.touch(ctx, m.Session, now, limits); err != nil {
 		return Match{}, err
 	}
 

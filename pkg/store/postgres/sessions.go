@@ -184,6 +184,11 @@ func (s *Store) GetSessionByDigest(ctx context.Context, d session.Digest) (sessi
 			BreakGlass:  row.PrincipalBreakGlass,
 		},
 		Digest: stored,
+		Policy: codec.FromSessionPolicyRow(codec.SessionPolicyRow{
+			IdleMs: row.PolicyIdleMs, MaxLengthMs: row.PolicyMaxLengthMs, UpdatedAtMs: row.PolicyUpdatedAtMs,
+			TokenFreshnessMs: row.PolicyTokenFreshnessMs.Int64, TokenFreshnessSet: row.PolicyTokenFreshnessMs.Valid,
+		}),
+		Accounts: codec.FromSessionAccountsRow(row.AccountsInactivityMs, row.AccountsDisable),
 	}, nil
 }
 

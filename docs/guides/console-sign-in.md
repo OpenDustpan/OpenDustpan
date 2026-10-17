@@ -101,6 +101,78 @@ The rules:
 - A change from a console session needs a sign-in inside the token
   freshness window, as a new token does.
 
+## Plain OAuth 2.0 providers
+
+A provider with no OpenID Connect, for example GitHub, signs persons in
+through plain OAuth 2.0. Such a provider has no discovery document and no
+ID token. So the server calls its user-info endpoint with the access
+token, and a claim of the answer identifies the person.
+
+Create such a provider through the API with `"mode": "oauth"`. It needs
+the authorization URL, the token URL and the user-info URL, and no
+issuer:
+
+```sh
+curl -X POST https://dustpan.example/api/server/sign-in-providers \
+  -H "Authorization: Bearer $DUSTPAN_TOKEN" \
+  -d '{"id":"github","mode":"oauth","displayName":"GitHub",
+       "clientID":"...","clientSecret":"...","scopes":["read:user"],
+       "authorizationURL":"https://github.com/login/oauth/authorize",
+       "tokenURL":"https://github.com/login/oauth/access_token",
+       "userinfoURL":"https://api.github.com/user",
+       "claims":{"subject":"id","name":"name","username":"login","email":"email"},
+       "autoCreate":false}'
+```
+
+The rules:
+
+- Each URL must be an `https` URL. The server accepts an `http` URL only
+  on a loopback host, for tests.
+- `claims.subject` names the claim that identifies the person. Its value
+  must be a string or a whole number, and it must never change for a
+  person. Use an ID, not a name or an email address. The defaults are
+  `sub`, `name`, `preferred_username` and `email`.
+- The subject of a person is `<provider ID>:<value of the subject claim>`.
+- `autoCreate` is false when absent: any account at such a provider, for
+  example any GitHub user, can complete a sign-in. So an administrator
+  makes the principal of each person first, with that subject. Set
+  `"autoCreate": true` only for a provider whose accounts are all your
+  people.
+- The server records the user-info URL and the subject claim of each
+  provider ID. A change of either one answers 409, as a change of the
+  issuer of an OpenID provider does. A change of the mode answers 400.
+  Make a new provider ID for another identity provider.
+- The server sends a PKCE challenge and a state, as for an OpenID
+  provider.
+
+### A fresh sign-in through a plain OAuth 2.0 provider
+
+A plain OAuth 2.0 provider has no `max_age` and no `auth_time`. So the
+server cannot make the provider ask the person for a password or a second
+factor again. The server also cannot read when the person last gave them.
+The server takes the time of the sign-in as the time of the
+authentication.
+
+This gives less protection than an OpenID provider. A new sign-in with
+`fresh=1` proves only that the person has a live session at the provider.
+Many providers sign the person in again from that session, with no
+password and no second factor. Thus a person or a process with access to
+a browser that has a live session at the provider can start a fresh
+console session. Then it can create access tokens for that person.
+
+OpenDustpan has no second factor of its own. For people who sign in
+through a plain OAuth 2.0 provider, do these steps:
+
+- Make the provider require a second factor for each of these people, for
+  example in the settings of your GitHub organization.
+- Give these people only the roles that they need.
+- Use an OpenID provider for people with administration roles, if you
+  can.
+
+If you do not do these steps, you accept this risk: a person or a process
+with access to a live session at the provider can create access tokens in
+the name of that person.
+
 ## Keep the provider ID
 
 The server makes the subject of each person from the provider ID and the
@@ -127,8 +199,10 @@ The server never links a person by email address.
 
 ## The first sign-in of a person
 
-By default, the first sign-in of a person makes a principal with the
-source `oidc`, no grant and no group. The person can sign in, but can do
+By default, the first sign-in of a person through an OpenID provider
+makes a principal with the source `oidc`, no grant and no group. A plain
+OAuth 2.0 provider does so only with `"autoCreate": true`, and the
+principal has the source `oauth`. The person can sign in, but can do
 nothing until an administrator gives a role. Give the first roles with the
 bootstrap admin token, through the grants API.
 
@@ -197,7 +271,8 @@ When the sign-in is older than the window, a create or a rotation answers
 path, with its own `return` parameter. With `fresh=1`, the server asks the
 identity provider for a new authentication (`max_age=0`), and the callback
 refuses an authentication that is older. The new session then creates the
-token.
+token. For a plain OAuth 2.0 provider, see "Plain OAuth 2.0 providers":
+the window then counts from the last sign-in round trip.
 
 Set the window with `PATCH /api/server/session-policy` and the field
 `tokenFreshnessSeconds` (action `server:manage-sign-in`): 0, or 60 to
