@@ -1386,23 +1386,6 @@ ON CONFLICT (id) DO UPDATE SET state = excluded.state, changed_at_ms = excluded.
     entered_maintenance = excluded.entered_maintenance, log_replaced = excluded.log_replaced,
     migrating_at_ms = excluded.migrating_at_ms;
 
--- name: ClaimAuditChainMigration :execrows
--- Starts the migration of a waiting change in one write: it stamps the start
--- time only when a change waits and no claim within the lease holds.
-UPDATE audit_chain_state
-SET migrating_at_ms = ?
-WHERE id = 1 AND pending = 1 AND (migrating_at_ms = 0 OR migrating_at_ms < ?);
-
--- name: ReleaseAuditChainMigration :exec
--- Releases the claim of a migration that stops without storing the new
--- state.
-UPDATE audit_chain_state SET migrating_at_ms = 0 WHERE id = 1;
-
--- name: RenewAuditChainMigration :execrows
--- Moves the start of the held claim to the given time. It writes only
--- when a claim holds, so a renewal without a claim changes no row.
-UPDATE audit_chain_state SET migrating_at_ms = ? WHERE id = 1 AND migrating_at_ms <> 0;
-
 -- name: LastAuditChainStartSequence :one
 -- The sequence of the last start entry of the audit chain of a namespace,
 -- or 0 when there is none. The chain check starts there.
