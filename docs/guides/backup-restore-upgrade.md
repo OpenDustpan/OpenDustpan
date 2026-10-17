@@ -206,6 +206,23 @@ For several nodes, start one new node first. The first new node migrates the dat
 
 The project supports no downgrade. There are no down migrations. To go back, restore the backup made before the upgrade through the API. Then start the older binary. When the older binary is below the minimum binary version of the schema, it refuses to start. The error names the binary version and the minimum.
 
+## Release checklist
+
+Before a tag goes out, copy the migration set of the tag into the test
+data. The schema upgrade test then covers upgrades from that tag without
+git. Run for the tag, for example `v0.1.0`:
+
+```sh
+./scripts/copy-tag-migrations.sh v0.1.0
+```
+
+The script copies `pkg/store/sqlite/migrations/*.sql` and
+`pkg/store/postgres/migrations/*.sql` of the tag into
+`testdata/tag-migrations/<tag>/` of each store adapter. It then prints the
+SHA-256 of each copied file. Record each hash in `frozen_test.go` of each
+adapter in the same change. Then run the schema upgrade tests and
+`make upgrade-test`.
+
 ## Known limit
 
 Restore reads each backup file through gzip with no size bound. The server

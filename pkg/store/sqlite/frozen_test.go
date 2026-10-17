@@ -4,6 +4,9 @@ import (
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
+	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
@@ -72,6 +75,96 @@ func TestFrozenMigrations(t *testing.T) {
 				"hash entry %s has no migration file: "+
 					"never edit an applied migration; add a new numbered file and its hash",
 				name,
+			)
+		}
+	}
+
+	// wantTagHashes holds the SHA-256 of each tag migration copy in
+	// testdata/tag-migrations, keyed by tag and file name as tag/file. The
+	// release process copies the migration set of each tag there at tag time
+	// and adds its hashes here in the same change. The check below fails when
+	// a copy changes, when a copy has no hash entry, and when a hash entry
+	// has no copy. Never edit a copy.
+	wantTagHashes := map[string]string{}
+
+	checkTagHashes(t, wantTagHashes)
+}
+
+// checkTagHashes proves every tag migration copy matches its hash entry.
+func checkTagHashes(t *testing.T, want map[string]string) {
+	t.Helper()
+
+	const tagDir = "testdata/tag-migrations"
+
+	entries, err := os.ReadDir(tagDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if len(want) != 0 {
+				t.Errorf("tag migration dir %s is missing, want %d hash entries", tagDir, len(want))
+			}
+
+			return
+		}
+		t.Fatalf("read tag migration dir: %v", err)
+	}
+
+	seen := make(map[string]bool, len(want))
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		tag := entry.Name()
+
+		files, err := os.ReadDir(filepath.Join(tagDir, tag))
+		if err != nil {
+			t.Fatalf("read tag migration dir %s: %v", tag, err)
+		}
+
+		for _, file := range files {
+			if file.IsDir() || filepath.Ext(file.Name()) != ".sql" {
+				continue
+			}
+
+			key := tag + "/" + file.Name()
+
+			//nolint:gosec // The test reads its own tag migration copies.
+			data, err := os.ReadFile(filepath.Join(tagDir, tag, file.Name()))
+			if err != nil {
+				t.Fatalf("read tag migration %s: %v", key, err)
+			}
+
+			wantHash, ok := want[key]
+			if !ok {
+				t.Errorf(
+					"tag migration %s has no hash entry: add its hash in TestFrozenMigrations; "+
+						"never edit a tag copy",
+					key,
+				)
+
+				continue
+			}
+
+			sum := sha256.Sum256(data)
+			if got := hex.EncodeToString(sum[:]); got != wantHash {
+				t.Errorf(
+					"tag migration %s hash = %s, want %s: never edit a tag copy",
+					key,
+					got,
+					wantHash,
+				)
+			}
+
+			seen[key] = true
+		}
+	}
+
+	for key := range want {
+		if !seen[key] {
+			t.Errorf(
+				"hash entry %s has no tag migration file: never edit a tag copy",
+				key,
 			)
 		}
 	}
