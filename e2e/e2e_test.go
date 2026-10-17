@@ -11695,47 +11695,7 @@ func checkUpgradeBeforeBaselineServer(ctx context.Context, t *testing.T, env *e2
 	t.Helper()
 
 	if store == e2e.StoreSQLite {
-		// The check needs a running server on a schema behind the binary, and a
-		// server start applies the missing migrations, so the edit keeps the
-		// server running.
-		path := sqliteServerPath(t, env)
-		pristine := snapshotServerSQLite(ctx, t, path)
-		removed := trimServerSQLiteVersions(ctx, t, env, 0)
-
-		if len(removed) == 0 {
-			t.Fatal("trim above 0 removed nothing, want the baseline row")
-		}
-
-		execServerSQLite(ctx, t, path,
-			`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, beforeBaselineVersion, beforeBaselineName)
-
-		before := snapshotServerSQLite(ctx, t, path)
-		res := runUpgradeCheckServer(ctx, t, env)
-		checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: true})
-
-		if out := res.Stdout; !strings.Contains(
-			out,
-			"database schema version: "+strconv.FormatInt(beforeBaselineVersion, 10),
-		) {
-			t.Fatalf("output lacks database schema version %d:\n%s", beforeBaselineVersion, out)
-		}
-
-		if !strings.Contains(res.Stderr, "older than baseline schema version") {
-			t.Fatalf("error lacks the baseline refusal:\n%s%s", res.Stdout, res.Stderr)
-		}
-
-		checkServerDBUnchanged(t, before, snapshotServerSQLite(ctx, t, path))
-
-		execServerSQLite(ctx, t, path, `DELETE FROM schema_migrations WHERE version = ?`, beforeBaselineVersion)
-
-		for _, row := range removed {
-			execServerSQLite(ctx, t, path,
-				`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
-		}
-
-		if got := snapshotServerSQLite(ctx, t, path); !slices.Equal(got.versions, pristine.versions) {
-			t.Fatalf("versions after restore = %v, want %v", got.versions, pristine.versions)
-		}
+		checkUpgradeBeforeBaselineSQLite(ctx, t, env)
 
 		return
 	}
@@ -11775,6 +11735,55 @@ func checkUpgradeBeforeBaselineServer(ctx context.Context, t *testing.T, env *e2
 	deleteServerVersion(ctx, t, env, store, beforeBaselineVersion)
 	restoreServerVersions(ctx, t, env, store, removed)
 	checkRestoredServerDB(ctx, t, env, store, pristine)
+}
+
+// checkUpgradeBeforeBaselineSQLite is checkUpgradeBeforeBaselineServer on
+// SQLite. The edits run while the server runs, because the check needs a
+// running server on a schema behind the binary.
+func checkUpgradeBeforeBaselineSQLite(ctx context.Context, t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	// The check needs a running server on a schema behind the binary, and a
+	// server start applies the missing migrations, so the edit keeps the
+	// server running.
+	path := sqliteServerPath(t, env)
+	pristine := snapshotServerSQLite(ctx, t, path)
+	removed := trimServerSQLiteVersions(ctx, t, env, 0)
+
+	if len(removed) == 0 {
+		t.Fatal("trim above 0 removed nothing, want the baseline row")
+	}
+
+	execServerSQLite(ctx, t, path,
+		`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, beforeBaselineVersion, beforeBaselineName)
+
+	before := snapshotServerSQLite(ctx, t, path)
+	res := runUpgradeCheckServer(ctx, t, env)
+	checkUpgradeResult(t, res, wantUpgradeResult{verdict: "cannot start", exitCode: 1, pending: true})
+
+	if out := res.Stdout; !strings.Contains(
+		out,
+		"database schema version: "+strconv.FormatInt(beforeBaselineVersion, 10),
+	) {
+		t.Fatalf("output lacks database schema version %d:\n%s", beforeBaselineVersion, out)
+	}
+
+	if !strings.Contains(res.Stderr, "older than baseline schema version") {
+		t.Fatalf("error lacks the baseline refusal:\n%s%s", res.Stdout, res.Stderr)
+	}
+
+	checkServerDBUnchanged(t, before, snapshotServerSQLite(ctx, t, path))
+
+	execServerSQLite(ctx, t, path, `DELETE FROM schema_migrations WHERE version = ?`, beforeBaselineVersion)
+
+	for _, row := range removed {
+		execServerSQLite(ctx, t, path,
+			`INSERT INTO schema_migrations (version, name) VALUES (?, ?)`, row.version, row.name)
+	}
+
+	if got := snapshotServerSQLite(ctx, t, path); !slices.Equal(got.versions, pristine.versions) {
+		t.Fatalf("versions after restore = %v, want %v", got.versions, pristine.versions)
+	}
 }
 
 // checkUpgradeFreshServer proves upgrade check with no version row in the
