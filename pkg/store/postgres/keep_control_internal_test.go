@@ -166,7 +166,6 @@ func checkKeptSignInFailures(t *testing.T, conn *pgx.Conn, ident string) {
 	}
 
 	if source != "live" || end != 5 || count != 5 || rows != 1 {
-		t.Fatalf("restored sign-in failures = %q end %d count %d (%d rows), want only the live window ending at 5 with count 5",
-			source, end, count, rows)
+		t.Fatalf("restored sign-in failures: source %q end %d count %d rows %d", source, end, count, rows)
 	}
 }
