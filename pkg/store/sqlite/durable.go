@@ -23,7 +23,7 @@ type DurableOperations struct {
 }
 
 // DurableOperations returns the store of durable operations on s.
-func (s *Store) DurableOperations() *DurableOperations {
+func (s *Store) DurableOperations() durable.Store {
 	return &DurableOperations{store: s}
 }
 

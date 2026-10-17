@@ -3,6 +3,7 @@ package dustpan
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/accesstoken"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/maintenance"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -25,10 +27,21 @@ import (
 // auditChainCheckInterval is the time between two scheduled chain checks.
 const auditChainCheckInterval = time.Hour
 
-// migrationWaits is the count of cache limits that a migration waits after
-// the enter of maintenance mode, and again after it stores the new state:
-// every instance reads the state again within one cache limit.
-const migrationWaits = 2
+// The durable operation that migrates the audit chain after an approval. One
+// start key gives one operation, so two approvals give one operation while
+// the first still runs.
+const (
+	auditChainKind    durable.Kind = "audit-chain-migration"
+	auditChainKey                     = "audit-chain-migration"
+	auditChainVersion                 = 1
+)
+
+// auditChainStep is the single step of the migration: it writes the markers
+// of every scope, stores the new state and leaves maintenance mode. The
+// marker writes skip scopes that already agree, and a retry that finds the
+// stored state already at the change does nothing, so the step is safe to
+// run again after a stop.
+const auditChainStep = "migrate"
 
 // WithAuditChain sets the hash chain of the audit log of this instance:
 // audit.ChainOn, the default, or audit.ChainOff. The server reads it once at
@@ -76,10 +89,12 @@ type auditChain struct {
 	maint          *maintenance.Service
 	restoreRunning func(ctx context.Context) (bool, error)
 	freshness      accesstoken.Freshness
-	// queue carries an approved change to the migration loop of Run.
-	queue     chan audit.ChainChange
-	migrating atomic.Bool
-	// migrationsRunning reports whether startMigrations runs its loop.
+	// durableOps starts the migration operation of an approval. The runner
+	// of every instance claims it.
+	durableOps durable.Store
+	// runner claims migration operations of this instance.
+	runner *durable.Runner
+	// migrationsRunning reports whether the runner loop runs.
 	migrationsRunning atomic.Bool
 	limit             time.Duration
 	setting           audit.ChainSetting
@@ -140,7 +155,12 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		return nil, err
 	}
 
-	return &auditChain{
+	ops, ok := durableStoreOf(cfg.namespaceStore)
+	if !ok {
+		return nil, fmt.Errorf("namespace store keeps no durable operations: %w", ErrMissingOption)
+	}
+
+	chain := &auditChain{
 		store:             store,
 		entries:           entries,
 		server:            server,
@@ -153,8 +173,8 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		maint:             nil,
 		restoreRunning:    nil,
 		freshness:         nil,
-		queue:             make(chan audit.ChainChange, 1),
-		migrating:         atomic.Bool{},
+		durableOps:        ops,
+		runner:            nil,
 		migrationsRunning: atomic.Bool{},
 		limit:             maintenance.DefaultCacheLimit,
 		setting:           cfg.auditChain,
@@ -165,7 +185,53 @@ func newAuditChain(cfg *settings, observed *metrics.ServerMetrics) (*auditChain,
 		},
 		readAt: time.Time{},
 		read:   false,
-	}, nil
+	}
+
+	runner, err := durable.NewRunner(durable.RunnerConfig{
+		Store: ops,
+		Owner: auditChainOwner(cfg),
+		Kinds: []durable.KindSpec{{
+			Kind:       auditChainKind,
+			Version:    auditChainVersion,
+			MinVersion: auditChainVersion,
+			Steps:      []durable.Step{{Name: auditChainStep, Run: chain.runMigrationStep}},
+		}},
+		Logger: cfg.logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("audit chain migration runner: %w", err)
+	}
+
+	chain.runner = runner
+
+	return chain, nil
+}
+
+// durableStoreProvider is implemented by stores that keep durable
+// operations next to their domain rows.
+type durableStoreProvider interface {
+	DurableOperations() durable.Store
+}
+
+// durableStoreOf answers the durable operation store behind s.
+func durableStoreOf(s namespace.Store) (durable.Store, bool) {
+	if p, ok := s.(durableStoreProvider); ok && p != nil {
+		if ops := p.DurableOperations(); ops != nil {
+			return ops, true
+		}
+	}
+
+	return nil, false
+}
+
+// auditChainOwner names this instance in the claims of the migration.
+// The owner is for status only.
+func auditChainOwner(cfg *settings) string {
+	if cfg.instanceID != "" {
+		return cfg.instanceID
+	}
+
+	return "audit-chain"
 }
 
 // newCheckpoints answers the signed checkpoints of cfg, or nil while they
@@ -206,20 +272,26 @@ func (c *auditChain) Status(ctx context.Context) (serverapi.AuditChainStatus, er
 		return serverapi.AuditChainStatus{}, fmt.Errorf("read audit chain state: %w", err)
 	}
 
+	migrating, err := c.migrationRunning(ctx)
+	if err != nil {
+		return serverapi.AuditChainStatus{}, err
+	}
+
 	return serverapi.AuditChainStatus{
 		ChangedAt: rec.ChangedAt,
 		ChangedBy: rec.ChangedBy,
 		State:     rec.State,
 		Setting:   c.setting,
 		Pending:   rec.Pending,
-		Migrating: c.migrating.Load() || chainClaimHolds(rec, c.chainNow()),
+		Migrating: migrating,
 	}, nil
 }
 
 // Approve implements serverapi.AuditChain: it checks the MFA step of a
-// change to off, refuses while a restore runs, enters maintenance mode,
-// writes the entry of the approval in the server scope and hands the change
-// to the migration loop.
+// change to off, refuses while a restore runs, starts one durable operation
+// for the change, enters maintenance mode and writes the entry of the
+// approval in the server scope. Two approvals with one start key give one
+// operation: the second answers ErrChainMigrating.
 func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 	if !c.migrationsRunning.Load() {
 		return audit.ErrChainMigrationsStopped
@@ -237,26 +309,113 @@ func (c *auditChain) Approve(ctx context.Context, caller audit.Entry) error {
 		}
 	}
 
-	if !c.migrating.CompareAndSwap(false, true) {
-		return audit.ErrChainMigrating
+	rec, err := c.store.ChainRecord(ctx)
+	if err != nil {
+		return fmt.Errorf("read audit chain state: %w", err)
 	}
 
-	change, err := c.recordApproval(ctx, caller)
+	if !rec.Pending {
+		return audit.ErrNoChainChange
+	}
+
+	if err := c.refuseWhileRestoring(ctx); err != nil {
+		return err
+	}
+
+	change := audit.ChainChange{At: c.chainNow(), By: caller.Subject, To: c.setting.State()}
+
+	op, created, err := c.startMigrationOp(ctx, auditChainKey, change)
 	if err != nil {
-		c.migrating.Store(false)
+		return err
+	}
+
+	if !created {
+		if terminalMigration(op) {
+			op, created, err = c.startMigrationOp(ctx, auditChainRetryKey(), change)
+			if err != nil {
+				return err
+			}
+
+			if !created {
+				return audit.ErrChainMigrating
+			}
+		} else {
+			return audit.ErrChainMigrating
+		}
+	}
+
+	if err := c.enterForApproval(ctx); err != nil {
+		c.cancelMigrationOp(ctx, op.ID)
 
 		return err
 	}
 
-	select {
-	case c.queue <- change:
-		return nil
-	default:
-		c.releaseClaim(ctx)
-		c.migrating.Store(false)
+	if _, err := c.server.AppendServer(ctx, audit.ChainSetEntry(caller, change)); err != nil {
+		c.cancelMigrationOp(ctx, op.ID)
 
-		return audit.ErrChainMigrating
+		return fmt.Errorf("append audit chain approval: %w", err)
 	}
+
+	return nil
+}
+
+// startMigrationOp starts the migration operation of change under key.
+func (c *auditChain) startMigrationOp(
+	ctx context.Context, key string, change audit.ChainChange,
+) (durable.Operation, bool, error) {
+	input, err := json.Marshal(change)
+	if err != nil {
+		return durable.Operation{}, false, fmt.Errorf("encode audit chain change: %w", err)
+	}
+
+	req, err := c.runner.StartRequest(auditChainKind, key, input)
+	if err != nil {
+		return durable.Operation{}, false, err
+	}
+
+	op, created, err := c.durableOps.Start(ctx, req)
+	if err != nil {
+		return durable.Operation{}, false, fmt.Errorf("start audit chain migration: %w", err)
+	}
+
+	return op, created, nil
+}
+
+// terminalMigration reports whether op already ended. A second approval
+// after such an operation starts a new one under a new key.
+func terminalMigration(op durable.Operation) bool {
+	return op.State.Terminal()
+}
+
+// auditChainRetryKey answers a new start key for an approval after a
+// migration that already ended. The key is unique per call.
+func auditChainRetryKey() string {
+	return auditChainKey + "-" + strconv.FormatInt(time.Now().UnixNano(), 10)
+}
+
+// cancelMigrationOp cancels the migration operation id after an approval
+// that started it stops. A failed cancel only logs: the operation stays to
+// run or to end.
+func (c *auditChain) cancelMigrationOp(ctx context.Context, id durable.ID) {
+	if err := c.durableOps.Cancel(ctx, id); err != nil {
+		c.logger.WarnContext(ctx, "cancel audit chain migration",
+			slog.String("error", err.Error()))
+	}
+}
+
+// migrationRunning reports whether a migration operation can run now: one
+// operation of the kind is pending or running.
+func (c *auditChain) migrationRunning(ctx context.Context) (bool, error) {
+	ops, err := c.durableOps.List(ctx, durable.Filter{
+		Kind:   auditChainKind,
+		States: []durable.State{durable.StatePending, durable.StateRunning},
+		Limit:  1,
+	})
+	if err != nil {
+		return false, fmt.Errorf("list audit chain migrations: %w", err)
+	}
+
+	return len(ops) > 0, nil
 }
 
 // refuseServiceCaller refuses an approval of a change to off when subject
@@ -290,15 +449,6 @@ func (c *auditChain) chainNow() time.Time {
 	}
 
 	return time.Now()
-}
-
-// chainClaimHolds reports whether rec holds a claim within the lease at now.
-func chainClaimHolds(rec audit.ChainRecord, now time.Time) bool {
-	if rec.MigratingAt.IsZero() {
-		return false
-	}
-
-	return now.Sub(rec.MigratingAt) < audit.ChainMigrationLease
 }
 
 // held reports whether a change of the chain waits: the maintenance service
@@ -367,12 +517,21 @@ func (c *auditChain) startUp(ctx context.Context) error {
 }
 
 // cancelWaitingChange clears a waiting change when the setting matches the
-// stored state, the log agrees with it and no migration holds a claim. A log
-// that does not agree keeps the wait. It saves the cleared record and logs
-// the end. It leaves maintenance mode only when the chain entered it itself
-// and no restore runs, else it keeps maintenance mode.
+// stored state, the log agrees with it and no migration runs. A log that
+// does not agree keeps the wait. It saves the cleared record and logs the
+// end. It leaves maintenance mode only when the chain entered it itself and
+// no restore runs, else it keeps maintenance mode.
 func (c *auditChain) cancelWaitingChange(ctx context.Context, rec audit.ChainRecord) (audit.ChainRecord, error) {
-	if !rec.Pending || c.setting.State() != rec.State || chainClaimHolds(rec, c.chainNow()) {
+	if !rec.Pending || c.setting.State() != rec.State {
+		return rec, nil
+	}
+
+	running, err := c.migrationRunning(ctx)
+	if err != nil {
+		return rec, err
+	}
+
+	if running {
 		return rec, nil
 	}
 
@@ -635,7 +794,12 @@ func epochEntry(epoch int64, at time.Time) audit.Entry {
 // admitRestore refuses a restore while a change of the chain waits or
 // migrates.
 func (c *auditChain) admitRestore(ctx context.Context) error {
-	if c.migrating.Load() {
+	running, err := c.migrationRunning(ctx)
+	if err != nil {
+		return err
+	}
+
+	if running {
 		return audit.ErrChainMigrating
 	}
 
@@ -680,39 +844,82 @@ func (c *auditChain) current(ctx context.Context) audit.ChainRecord {
 	return rec
 }
 
-// recordApproval runs the checks and the writes of an approval while this
-// instance holds the migration flag, and answers the change to migrate. The
-// claim in the store orders approvals on every instance: exactly one wins.
-// It notes in the stored record when the chain entered maintenance mode
-// itself.
-func (c *auditChain) recordApproval(ctx context.Context, caller audit.Entry) (audit.ChainChange, error) {
-	none := audit.ChainChange{At: time.Time{}, By: "", To: ""}
+// decodeMigrationChange answers the approved change that op carries.
+func decodeMigrationChange(op durable.Operation) (audit.ChainChange, error) {
+	var change audit.ChainChange
 
-	if err := c.store.ClaimChainMigration(ctx, c.chainNow(), audit.ChainMigrationLease); err != nil {
-		return none, err
-	}
-
-	if err := c.refuseWhileRestoring(ctx); err != nil {
-		c.releaseClaim(ctx)
-
-		return none, err
-	}
-
-	if err := c.enterForApproval(ctx); err != nil {
-		c.releaseClaim(ctx)
-
-		return none, err
-	}
-
-	change := audit.ChainChange{At: c.now(), By: caller.Subject, To: c.setting.State()}
-
-	if _, err := c.server.AppendServer(ctx, audit.ChainSetEntry(caller, change)); err != nil {
-		c.releaseClaim(ctx)
-
-		return none, fmt.Errorf("append audit chain approval: %w", err)
+	if err := json.Unmarshal(op.Input, &change); err != nil {
+		return audit.ChainChange{}, fmt.Errorf("decode audit chain change: %w", err)
 	}
 
 	return change, nil
+}
+
+// runMigrationStep runs the single step of a migration operation: it writes
+// the start or end entry in each scope, stores the new state and leaves
+// maintenance mode. A failure keeps the change waiting, so a person can
+// approve it again. The step is safe to run again: the marker writes skip
+// scopes that already agree, and a retry that finds the stored state
+// already at the change does nothing.
+func (c *auditChain) runMigrationStep(ctx context.Context, sc durable.StepContext) ([]byte, error) {
+	change, err := decodeMigrationChange(sc.Operation)
+	if err != nil {
+		return nil, durable.Permanent(err)
+	}
+
+	if err := c.refuseWhileRestoring(ctx); err != nil {
+		return nil, err
+	}
+
+	fences, err := c.fences(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := audit.MigrateChain(ctx, c.store, fences, change); err != nil {
+		return nil, fmt.Errorf("migrate audit chain: %w", err)
+	}
+
+	c.forget()
+
+	if err := c.leaveAfterMigration(ctx); err != nil {
+		return nil, err
+	}
+
+	c.logger.InfoContext(ctx, "audit chain migration is complete",
+		slog.String("state", string(change.To)), slog.String("approved_by", change.By))
+
+	return nil, nil
+}
+
+// leaveAfterMigration leaves maintenance mode after a migration. It leaves
+// only when the chain entered maintenance mode itself, else it keeps the
+// maintenance mode of the operator.
+func (c *auditChain) leaveAfterMigration(ctx context.Context) error {
+	if c.maint == nil {
+		return nil
+	}
+
+	rec, err := c.store.ChainRecord(ctx)
+	if err != nil {
+		return fmt.Errorf("read audit chain state: %w", err)
+	}
+
+	if !rec.EnteredMaintenance {
+		return nil
+	}
+
+	if err := c.maint.Leave(ctx); err != nil {
+		return fmt.Errorf("leave maintenance mode: %w", err)
+	}
+
+	rec.EnteredMaintenance = false
+
+	if err := c.store.SaveChainRecord(ctx, rec); err != nil {
+		return fmt.Errorf("save audit chain state: %w", err)
+	}
+
+	return nil
 }
 
 // enterForApproval enters maintenance mode for an approval. It notes in the
@@ -738,14 +945,6 @@ func (c *auditChain) enterForApproval(ctx context.Context) error {
 	return c.markEnteredMaintenance(ctx)
 }
 
-// releaseClaim releases the claim of a migration that stops before it runs.
-// A failed release only logs: the lease bounds the block.
-func (c *auditChain) releaseClaim(ctx context.Context) {
-	if err := c.store.ReleaseChainMigration(ctx); err != nil {
-		c.logger.WarnContext(ctx, "release audit chain migration", slog.String("error", err.Error()))
-	}
-}
-
 // refuseWhileRestoring reports backup.ErrRestoreRunning while a restore
 // runs.
 func (c *auditChain) refuseWhileRestoring(ctx context.Context) error {
@@ -765,8 +964,8 @@ func (c *auditChain) refuseWhileRestoring(ctx context.Context) error {
 	return nil
 }
 
-// startMigrations runs each approved change until ctx is done. The returned
-// function waits until the loop stopped.
+// startMigrations claims and runs migration operations until ctx is done.
+// The returned function waits until the loop stopped.
 func (c *auditChain) startMigrations(ctx context.Context) func() {
 	var wg sync.WaitGroup
 
@@ -775,98 +974,10 @@ func (c *auditChain) startMigrations(ctx context.Context) func() {
 	wg.Go(func() {
 		defer c.migrationsRunning.Store(false)
 
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case change := <-c.queue:
-				c.migrate(ctx, change)
-			}
-		}
+		c.runner.Run(ctx)
 	})
 
 	return wg.Wait
-}
-
-// migrate runs the migration of change: it waits two cache limits so every
-// instance refuses writes, writes the start or end entry in each scope,
-// stores the new state, waits two cache limits so every instance sees it,
-// and leaves maintenance mode. A failure releases the claim and logs an
-// error, and keeps the change waiting, so a person can approve it again.
-func (c *auditChain) migrate(ctx context.Context, change audit.ChainChange) {
-	defer c.migrating.Store(false)
-
-	if err := c.migrateSteps(ctx, change); err != nil {
-		c.releaseClaim(context.WithoutCancel(ctx))
-
-		if ctx.Err() == nil {
-			c.logger.ErrorContext(ctx, "audit chain migration failed", slog.String("error", err.Error()))
-		}
-
-		return
-	}
-
-	c.logger.InfoContext(ctx, "audit chain migration is complete",
-		slog.String("state", string(change.To)), slog.String("approved_by", change.By))
-}
-
-// migrateSteps runs the steps of migrate and answers the first failure. It
-// leaves maintenance mode only when the chain entered it itself, else it
-// keeps the maintenance mode of the operator.
-func (c *auditChain) migrateSteps(ctx context.Context, change audit.ChainChange) error {
-	if err := sleepContext(ctx, migrationWaits*c.limit); err != nil {
-		return err
-	}
-
-	if err := c.refuseWhileRestoring(ctx); err != nil {
-		return err
-	}
-
-	fences, err := c.fences(ctx)
-	if err != nil {
-		return err
-	}
-
-	err = audit.MigrateChain(ctx, c.store, fences, change, c.chainNow)
-	if err != nil {
-		return fmt.Errorf("migrate audit chain: %w", err)
-	}
-
-	c.forget()
-
-	err = sleepContext(ctx, migrationWaits*c.limit)
-	if err != nil {
-		return err
-	}
-
-	if c.maint == nil {
-		return nil
-	}
-
-	var rec audit.ChainRecord
-
-	rec, err = c.store.ChainRecord(ctx)
-	if err != nil {
-		return fmt.Errorf("read audit chain state: %w", err)
-	}
-
-	if !rec.EnteredMaintenance {
-		return nil
-	}
-
-	err = c.maint.Leave(ctx)
-	if err != nil {
-		return fmt.Errorf("leave maintenance mode: %w", err)
-	}
-
-	rec.EnteredMaintenance = false
-
-	err = c.store.SaveChainRecord(ctx, rec)
-	if err != nil {
-		return fmt.Errorf("save audit chain state: %w", err)
-	}
-
-	return nil
 }
 
 // forget drops the cached state, so the next request reads it again.
@@ -875,19 +986,6 @@ func (c *auditChain) forget() {
 	defer c.mu.Unlock()
 
 	c.read = false
-}
-
-// sleepContext waits d, or answers the error of ctx when it ends first.
-func sleepContext(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("audit chain migration: %w", ctx.Err())
-	case <-timer.C:
-		return nil
-	}
 }
 
 // fences answers the fence of every namespace and of the server scope: the
