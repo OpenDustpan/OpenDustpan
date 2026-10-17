@@ -85,19 +85,19 @@ func TestSecondOpenThroughSymlinkFails(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	real := filepath.Join(dir, "real.db")
+	target := filepath.Join(dir, "real.db")
 
-	first, err := sqlite.Open(t.Context(), real)
+	first, err := sqlite.Open(t.Context(), target)
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
 
 	link := filepath.Join(dir, "link.db")
 
-	if err := os.Symlink(real, link); err != nil {
+	if linkErr := os.Symlink(target, link); linkErr != nil {
 		_ = first.Close() //nolint:errcheck // The test skips below; the close only frees the handle.
 
-		t.Skipf("create symbolic link: %v", err)
+		t.Skipf("create symbolic link: %v", linkErr)
 	}
 
 	second, err := sqlite.Open(t.Context(), link)
@@ -177,7 +177,8 @@ func divergeSchema(t *testing.T, path string) {
 		t.Fatalf("read newest version: %v", rowErr)
 	}
 
-	if _, execErr := conn.ExecContext(t.Context(), `DELETE FROM schema_migrations WHERE version = ?`, newest); execErr != nil {
+	_, execErr := conn.ExecContext(t.Context(), `DELETE FROM schema_migrations WHERE version = ?`, newest)
+	if execErr != nil {
 		_ = conn.Close() //nolint:errcheck // The test fails below; the close only frees the handle.
 
 		t.Fatalf("drop recorded migration: %v", execErr)
