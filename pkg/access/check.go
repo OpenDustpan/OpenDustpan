@@ -180,8 +180,9 @@ var manageAccessActions = map[ObjectKind]identity.Action{
 // principal:manage-tokens, the name of a namespace whose grant gives
 // namespace:manage-principal-tokens, so each service principal of that
 // namespace, and "@server" for a grant on the installation that gives
-// principal:manage-tokens, so every service principal. A store calls it
-// with the reads of a membership write.
+// principal:manage-tokens, so every service principal. It covers grants
+// only: the trust rules are a second source of act-as rights that ActsAs
+// does not cover. A store calls it with the reads of a membership write.
 func ActsAs(ctx context.Context, r GrantReads, subject Subject) ([]string, error) {
 	grants, err := r.GrantsOf(ctx, subject)
 	if err != nil {

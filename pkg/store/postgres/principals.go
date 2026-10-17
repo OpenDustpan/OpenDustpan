@@ -404,18 +404,27 @@ func (s *Store) DeleteGroup(ctx context.Context, id string, e audit.Entry) error
 func (s *Store) AddMember(
 	ctx context.Context, m principal.Membership, e audit.Entry, more principal.MemberAudit,
 ) error {
-	return s.inAuditedTxOf(ctx, &e, func(q *db.Queries) error {
+	if err := validServerEntry(e); err != nil {
+		return err
+	}
+
+	return s.inTx(ctx, func(q *db.Queries) error {
+		if err := q.LockServerAuditScope(ctx); err != nil {
+			return fmt.Errorf("lock server audit scope: %w", err)
+		}
+
 		if err := groupAndPrincipalExist(ctx, q, m.GroupID, m.PrincipalID); err != nil {
 			return err
 		}
 
+		changes := append([]audit.Change(nil), e.Changes...)
 		if more != nil {
-			changes, err := more(ctx, grantReads{q: q})
+			extra, err := more(ctx, grantReads{q: q})
 			if err != nil {
 				return err
 			}
 
-			e.Changes = append(e.Changes, changes...)
+			changes = append(changes, extra...)
 		}
 
 		m = m.WithDefaults()
@@ -440,6 +449,17 @@ func (s *Store) AddMember(
 
 		if n == 0 {
 			return principal.ErrAlreadyExists
+		}
+
+		entry := e
+		entry.Changes = changes
+
+		if err := validServerEntry(entry); err != nil {
+			return err
+		}
+
+		if _, err := appendAuditEntry(ctx, q, entry); err != nil {
+			return fmt.Errorf("append audit entry: %w", err)
 		}
 
 		return nil

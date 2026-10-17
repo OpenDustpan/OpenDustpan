@@ -916,7 +916,8 @@ func (d *delegation) grantRoleToGroup(t *testing.T, g principal.Group, role stri
 // names it: "principal:<id>" for a grant on a service principal, the
 // namespace for a grant on it with namespace:manage-principal-tokens, and
 // "@server" for a grant on the installation with principal:manage-tokens. A
-// revoked grant and a grant of another role name nothing, and a group with
+// revoked grant, a grant of another role, and a grant of the admin role on
+// the installation name nothing, and a group with
 // no such grant adds no change.
 func testMembershipNamesActsAs(t *testing.T, d *delegation) {
 	t.Helper()
@@ -925,6 +926,7 @@ func testMembershipNamesActsAs(t *testing.T, d *delegation) {
 	bob := d.principalOf(t, "bob@example.com", principal.KindPerson)
 	carol := d.principalOf(t, "carol@example.com", principal.KindPerson)
 	dave := d.principalOf(t, "dave@example.com", principal.KindPerson)
+	erin := d.principalOf(t, "erin@example.com", principal.KindPerson)
 	deploy := d.principalOf(t, "ci-deploy", principal.KindService)
 	build := d.principalOf(t, "ci-build", principal.KindService)
 	release := d.principalOf(t, "ci-release", principal.KindService)
@@ -947,6 +949,9 @@ func testMembershipNamesActsAs(t *testing.T, d *delegation) {
 	nsAdmins := d.groupOf(t, "ns-admins")
 	d.grantRoleToGroup(t, nsAdmins, access.RoleAdmin, identity.NamespaceObject("acme"))
 
+	serverAdmins := d.groupOf(t, "server-admins")
+	d.grantRoleToGroup(t, serverAdmins, access.RoleAdmin, identity.ServerObject())
+
 	readers := d.groupOf(t, "readers")
 	d.grantToGroup(t, readers, identity.NamespaceObject("acme"))
 
@@ -954,6 +959,7 @@ func testMembershipNamesActsAs(t *testing.T, d *delegation) {
 	d.addMemberOf(t, admins, bob)
 	d.addMemberOf(t, readers, carol)
 	d.addMemberOf(t, nsAdmins, dave)
+	d.addMemberOf(t, serverAdmins, erin)
 
 	lines := []string{
 		identity.PrincipalObject(deploy.ID).String(), identity.PrincipalObject(build.ID).String(),
@@ -968,6 +974,7 @@ func testMembershipNamesActsAs(t *testing.T, d *delegation) {
 		{group: deployers, p: alice, want: strings.Join(lines, "\n")},
 		{group: admins, p: bob, want: "@server"},
 		{group: nsAdmins, p: dave, want: "acme"},
+		{group: serverAdmins, p: erin, want: ""},
 		{group: readers, p: carol, want: ""},
 	}
 
