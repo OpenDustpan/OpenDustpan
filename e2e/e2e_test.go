@@ -11034,7 +11034,8 @@ func checkNoSourceWrite(t *testing.T, pair *e2e.Pair, srcWS, step string) {
 // server database. On SQLite the newer-schema case and the restore edits stop
 // the server before they open the file and start it again after. The old
 // and fresh cases edit the file while the server runs, because the check
-// needs a running server on a schema behind the binary. It runs only with E2E_SERVER=binary, on every store under test.
+// needs a running server on a schema behind the binary. It runs only with
+// E2E_SERVER=binary, on every store under test.
 func TestUpgradeCheck(t *testing.T) {
 	t.Parallel()
 
