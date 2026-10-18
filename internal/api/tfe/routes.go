@@ -584,7 +584,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		}
 
 		for _, action := range route.Actions {
-			if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
+			if err := h.guard.Authorize(ctx, r, p, action, obj); err != nil {
 				h.writeDenied(ctx, w, p, obj, fmt.Errorf("authorize %s: %w", action, err))
 
 				return

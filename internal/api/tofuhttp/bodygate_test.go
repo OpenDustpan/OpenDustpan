@@ -23,13 +23,14 @@ func newGateHandler(t *testing.T, units tofuhttp.WorkspaceService, gate *bodygat
 	t.Helper()
 
 	h, err := tofuhttp.NewHandler(tofuhttp.Config{
-		Authenticator: tokenAuth{},
-		Authorizer:    userAuthz{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Workspaces:    units,
-		Namespaces:    fakeNamespaces{},
-		Audit:         nil,
-		Gate:          gate,
+		Authenticator:  tokenAuth{},
+		Authorizer:     userAuthz{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Workspaces:     units,
+		Namespaces:     fakeNamespaces{},
+		Audit:          nil,
+		Gate:           gate,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)
