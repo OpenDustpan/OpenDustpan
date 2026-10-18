@@ -185,6 +185,14 @@ document. A policy decides at the start of a job and can gate a phase (ADR
     | `POST`, `PUT`, `DELETE /api/namespaces/{ns}/budgets[/{id}]` | `namespace:manage-budgets` | namespace |
     | `GET /api/namespaces/{ns}/spend?month=` | `namespace:read-cost` | namespace |
 
+    A by-ID route answers 404 when the namespace of the row is not
+    `{ns}`: a budget, and its status, of another namespace is not found,
+    also for a person who holds the action in both namespaces. Each read
+    by ID of the store takes the scope of the row: `GetEstimate` takes the
+    namespace of the unit of the job, or the server scope for a blueprint
+    of the installation, and `LastStatus` takes the namespace of the
+    budget. Each returns `ErrNotFound` for a row of another scope.
+
     The first route answers the sums, the delta, the currency, the source
     and the unpriced count, which are metadata of the plan, as `job:read`
     allows (ADR 102). It answers one estimate of each origin that exists. The cost of each resource names the keys and the

@@ -62,6 +62,8 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a write refuses an audit entry of another namespace", testEntryNamespace},
 		{"an estimate of a blueprint of the installation takes a zero fence", testServerEstimate},
 		{"a subject keeps the namespace of its estimate", testEstimateNamespace},
+		{"a read of an estimate of another scope is ErrNotFound", testEstimateReadScope},
+		{"a read of a status of a budget of another namespace is ErrNotFound", testStatusReadScope},
 		{"every write refuses a wrong or stale fence", testFences},
 		{"budgets create, update once and list", testBudgets},
 		{"an update keeps the namespace of a budget", testBudgetNamespace},
@@ -156,12 +158,12 @@ func testEstimateReplace(t *testing.T, h Harness) {
 	put(t, h, fence, estimate(t, "est-1", "job-1", 10))
 	put(t, h, fence, estimate(t, "est-2", "job-1", 31))
 
-	got, err := h.Estimates.GetEstimate(t.Context(), subject("job-1"), cost.OriginEstimator)
+	got, err := h.Estimates.GetEstimate(t.Context(), shop, subject("job-1"), cost.OriginEstimator)
 	if err != nil || got.ID != "est-2" || got.After != eur(31) {
 		t.Fatalf("GetEstimate = %+v (%v), want est-2 with +31", got, err)
 	}
 
-	_, err = h.Estimates.GetEstimate(t.Context(), subject("job-none"), cost.OriginEstimator)
+	_, err = h.Estimates.GetEstimate(t.Context(), shop, subject("job-none"), cost.OriginEstimator)
 	if !errors.Is(err, cost.ErrNotFound) {
 		t.Fatalf("GetEstimate unknown: err = %v, want ErrNotFound", err)
 	}
@@ -221,12 +223,12 @@ func testEstimateOrigins(t *testing.T, h Harness) {
 	put(t, h, fence, pushed)
 	put(t, h, fence, estimate(t, "est-3", "job-1", 12))
 
-	got, err := h.Estimates.GetEstimate(t.Context(), subject("job-1"), cost.OriginEstimator)
+	got, err := h.Estimates.GetEstimate(t.Context(), shop, subject("job-1"), cost.OriginEstimator)
 	if err != nil || got.ID != "est-3" {
 		t.Fatalf("GetEstimate of the adapter = %+v (%v), want est-3", got, err)
 	}
 
-	got, err = h.Estimates.GetEstimate(t.Context(), subject("job-1"), cost.OriginAPI)
+	got, err = h.Estimates.GetEstimate(t.Context(), shop, subject("job-1"), cost.OriginAPI)
 	if err != nil || got.ID != "est-2" || got.After != eur(31) {
 		t.Fatalf("GetEstimate of the client = %+v (%v), want est-2 with +31", got, err)
 	}
@@ -339,7 +341,7 @@ func testServerEstimate(t *testing.T, h Harness) {
 
 	put(t, h, namespace.Fence{Namespace: "", FailoverVersion: 0}, e)
 
-	got, err := h.Estimates.GetEstimate(t.Context(), e.Subject, cost.OriginEstimator)
+	got, err := h.Estimates.GetEstimate(t.Context(), audit.ServerScope, e.Subject, cost.OriginEstimator)
 	if err != nil || got.ID != "est-b" {
 		t.Fatalf("GetEstimate = %+v (%v), want est-b", got, err)
 	}
@@ -359,9 +361,69 @@ func testEstimateNamespace(t *testing.T, h Harness) {
 		t.Fatalf("PutEstimate of a subject of shop in other: err = %v, want ErrInvalid", err)
 	}
 
-	got, err := h.Estimates.GetEstimate(t.Context(), subject("job-1"), cost.OriginEstimator)
+	got, err := h.Estimates.GetEstimate(t.Context(), shop, subject("job-1"), cost.OriginEstimator)
 	if err != nil || got.ID != "est-1" {
 		t.Fatalf("GetEstimate = %+v (%v), want est-1", got, err)
+	}
+}
+
+func testEstimateReadScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	createOther(t, h)
+	put(t, h, fence, estimate(t, "est-1", "job-1", 10))
+
+	b := blueprintEstimate(t)
+	put(t, h, namespace.Fence{Namespace: "", FailoverVersion: 0}, b)
+
+	for _, tc := range []struct {
+		name  string
+		scope namespace.Name
+		s     cost.Subject
+	}{
+		{"a plan of shop read in other", other, subject("job-1")},
+		{"a plan of shop read in the server scope", audit.ServerScope, subject("job-1")},
+		{"a blueprint of the installation read in shop", shop, b.Subject},
+	} {
+		_, err := h.Estimates.GetEstimate(t.Context(), tc.scope, tc.s, cost.OriginEstimator)
+		if !errors.Is(err, cost.ErrNotFound) {
+			t.Fatalf("GetEstimate of %s: err = %v, want ErrNotFound", tc.name, err)
+		}
+	}
+
+	got, err := h.Estimates.GetEstimate(t.Context(), shop, subject("job-1"), cost.OriginEstimator)
+	if err != nil || got.ID != "est-1" {
+		t.Fatalf("GetEstimate in shop = %+v (%v), want est-1", got, err)
+	}
+}
+
+func testStatusReadScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	createOther(t, h)
+
+	if err := h.Budgets.CreateBudget(t.Context(), budget(), fence, entry("namespace:manage-budgets")); err != nil {
+		t.Fatalf("CreateBudget: %v", err)
+	}
+
+	p := cost.PeriodOf(now())
+	st := cost.Status{
+		Budget: "bgt-1", Period: p, Actual: eur(100), Forecast: eur(100), Pending: eur(0), Projected: eur(100),
+		Percent: 2, Crossed: nil, Warned: nil, Skipped: 0, SkippedNegative: 0, Level: cost.LevelOK, AsOf: now(),
+	}
+
+	if err := h.Budgets.SaveStatus(t.Context(), st, 0, fence); err != nil {
+		t.Fatalf("SaveStatus: %v", err)
+	}
+
+	if _, _, err := h.Budgets.LastStatus(t.Context(), other, "bgt-1", p); !errors.Is(err, cost.ErrNotFound) {
+		t.Fatalf("LastStatus in other: err = %v, want ErrNotFound", err)
+	}
+
+	if _, version, err := h.Budgets.LastStatus(t.Context(), shop, "bgt-1", p); err != nil || version != 1 {
+		t.Fatalf("LastStatus in shop = version %d (%v), want 1", version, err)
 	}
 }
 
@@ -498,12 +560,12 @@ func assertUnchanged(t *testing.T, h Harness) {
 		t.Fatalf("Budgets = %+v (%v), want bgt-1 at version 1 only", got, err)
 	}
 
-	_, err = h.Estimates.GetEstimate(t.Context(), subject("job-9"), cost.OriginEstimator)
+	_, err = h.Estimates.GetEstimate(t.Context(), shop, subject("job-9"), cost.OriginEstimator)
 	if !errors.Is(err, cost.ErrNotFound) {
 		t.Fatalf("GetEstimate after refused writes: err = %v, want ErrNotFound", err)
 	}
 
-	_, _, err = h.Budgets.LastStatus(t.Context(), "bgt-1", cost.PeriodOf(now()))
+	_, _, err = h.Budgets.LastStatus(t.Context(), shop, "bgt-1", cost.PeriodOf(now()))
 	if !errors.Is(err, cost.ErrNotFound) {
 		t.Fatalf("LastStatus after refused writes: err = %v, want ErrNotFound", err)
 	}
@@ -609,14 +671,14 @@ func testStatus(t *testing.T, h Harness) {
 		t.Fatalf("SaveStatus on version 0 again: err = %v, want ErrConflict", err)
 	}
 
-	got, version, err := h.Budgets.LastStatus(t.Context(), "bgt-1", p)
+	got, version, err := h.Budgets.LastStatus(t.Context(), shop, "bgt-1", p)
 	if err != nil || version != 1 || got.Percent != 82 {
 		t.Fatalf("LastStatus = %+v, %d (%v); want 82%% at version 1", got, version, err)
 	}
 
 	november := cost.Period{Year: 2026, Month: time.November}
 
-	_, _, err = h.Budgets.LastStatus(t.Context(), "bgt-1", november)
+	_, _, err = h.Budgets.LastStatus(t.Context(), shop, "bgt-1", november)
 	if !errors.Is(err, cost.ErrNotFound) {
 		t.Fatalf("LastStatus of another month: err = %v, want ErrNotFound", err)
 	}
@@ -689,7 +751,7 @@ func testWarned(t *testing.T, h Harness) {
 	low := high
 	low.Percent, low.Crossed, low.Level = 70, nil, cost.LevelOK
 
-	prev, version, err := h.Budgets.LastStatus(t.Context(), "bgt-1", p)
+	prev, version, err := h.Budgets.LastStatus(t.Context(), shop, "bgt-1", p)
 	if err != nil {
 		t.Fatalf("LastStatus: %v", err)
 	}
@@ -699,7 +761,7 @@ func testWarned(t *testing.T, h Harness) {
 		t.Fatalf("SaveStatus 70%%: %v", err)
 	}
 
-	prev, _, err = h.Budgets.LastStatus(t.Context(), "bgt-1", p)
+	prev, _, err = h.Budgets.LastStatus(t.Context(), shop, "bgt-1", p)
 	if err != nil || len(prev.Warned) != 1 || prev.Warned[0] != 80 || prev.Percent != 70 {
 		t.Fatalf("LastStatus = %+v (%v), want 70%% with 80 warned", prev, err)
 	}

@@ -86,7 +86,7 @@ func (m *memStore) Open(
 	return out, nil
 }
 
-func (m *memStore) Get(_ context.Context, id string) (breakglass.Review, error) {
+func (m *memStore) Get(_ context.Context, scope namespace.Name, id string) (breakglass.Review, error) {
 	var (
 		r  breakglass.Review
 		ok bool
@@ -94,8 +94,11 @@ func (m *memStore) Get(_ context.Context, id string) (breakglass.Review, error) 
 
 	m.Read(func() { r, ok = m.reviews[id] })
 
-	if !ok {
-		return r, fmt.Errorf("get %s: %w", id, breakglass.ErrNotFound)
+	// A review of another scope answers as an unknown ID.
+	if !ok || r.Use.Scope != scope {
+		var none breakglass.Review
+
+		return none, fmt.Errorf("get %s in %s: %w", id, scope, breakglass.ErrNotFound)
 	}
 
 	return r, nil

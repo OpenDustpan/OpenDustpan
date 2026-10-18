@@ -158,6 +158,11 @@ the docs must never say that it does.
     | `POST /api/namespaces/{ns}/incidents/{id}/classifications`, `POST .../reports` | `namespace:classify-incidents` | namespace |
     | `GET /api/namespaces/{ns}/change-records` | `namespace:read-audit` | namespace |
 
+    A route with an incident ID answers 404 when the namespace of the
+    incident is not `{ns}`. `Store.Get` and `Store.Notes` take the
+    namespace of the route and answer `ErrNotFound` for an incident of
+    another namespace, so the answer does not tell whether the incident
+    exists in another namespace.
     The classification and the report routes append, so they are `POST`.
     The built-in role `writer` and the roles above it get
     `namespace:respond-incidents`. The role `admin` gets
@@ -179,7 +184,8 @@ the docs must never say that it does.
     the three fences. The store also refuses a write whose audit entry
     names another namespace, with the error of a fence of another
     namespace, so a write cannot append to the audit log of another
-    namespace.
+    namespace. A read of an incident or of its notes in
+    another namespace fails with `ErrNotFound`.
 
 ### The actions of the operations ADRs
 

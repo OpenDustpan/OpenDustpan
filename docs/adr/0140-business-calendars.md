@@ -34,7 +34,8 @@ gives durable operations and schedules.
    `cal-`, an owner, a name, an IANA time zone, a set of working days,
    working hours (`DayStart` to `DayEnd`) and holidays. A holiday takes out
    a whole day. The functions on a calendar are pure. They read the
-   calendar and a time, and never the clock or a store.
+   calendar and a time, and never the clock or a store. The server makes
+   the ID of each calendar. A request cannot set it.
 2. **One default.** Each installation has the calendar `cal-default`: UTC,
    Monday to Friday, 09:00 to 17:00, with no holidays. An administrator can
    change it. Nobody can delete it.
@@ -210,6 +211,13 @@ gives durable operations and schedules.
     of the groups, with masked feed URLs (decision 17). An administrator
     creates a calendar of a group through `/api/calendars`, with the group
     as its owner.
+    A route with a calendar ID under `/api/namespaces/{ns}` answers 404
+    when the calendar is not a calendar of `{ns}`. A route with a calendar
+    ID under `/api/calendars` answers 404 for a calendar of a namespace.
+    `Store.Get` takes the scope of the route (the namespace, or `@server`
+    for a group or the installation) and answers `ErrNotFound` for a
+    calendar of another scope, so the answer does not tell whether the
+    calendar exists in another scope.
     A test of a feed runs one read now, with the egress rules, and answers
     the status of that read. It does not store holidays. The last route
     answers the deadline of a time, with the calendar and the scope that
