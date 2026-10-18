@@ -1,6 +1,6 @@
 # 154. History: seven gaps found before the implementation
 
-Status: proposed · 2026-10-18 · supersedes part of ADRs 150 and 151 (see "What this ADR replaces")
+Status: accepted · 2026-10-18 · supersedes part of ADRs 150 and 151 (see "What this ADR replaces")
 
 ## Context
 
@@ -45,14 +45,14 @@ The facts on `main` that the decisions build on:
 ### G1. The sequence of the inventory change log
 
 1. **One counter row for each namespace.** The store keeps one row for each
-   namespace in the table `inventory_change_heads` (namespace, last
+   namespace in the table `inventory_change_heads` (namespace ID, last
    sequence). Each transaction that appends a change log row takes the next
    sequence with one statement on that row, in the same fenced transaction
    as the inventory write:
 
    ```sql
-   INSERT INTO inventory_change_heads (namespace, last_seq) VALUES ($1, 1)
-   ON CONFLICT (namespace) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
+   INSERT INTO inventory_change_heads (namespace_id, last_seq) VALUES ($1, 1)
+   ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
    RETURNING last_seq;
    ```
 
@@ -64,11 +64,16 @@ The facts on `main` that the decisions build on:
    the words "across the installation" of the `inventory.Change` doc.
    `ListChanges`, `UnitsAt` and `ReplayAt` read one namespace, so no reader
    needs an order across namespaces. The primary key of a change log row is
-   (namespace, sequence). The counter row is never deleted, also not by the
-   final delete of the namespace. So a namespace that a team creates again
-   with the same name never gets a sequence number a second time.
-3. **Take the number last.** Each write takes the number as the last
-   statement before the commit, after the item rows and the inventory row.
+   (namespace ID, sequence). The change log rows, the counter row and the
+   rows of the redaction log hold the stable ID of the namespace, never its
+   name, as the links of ADR 163 do. A reader names the namespace by its
+   name, and the store resolves the name to the ID of the namespace that has
+   the name now. A namespace that a team creates again under the name of a
+   purged namespace has a new ID. So it reads no change log row, no counter
+   and no redaction record of the purged one.
+3. **Take the number after every other row lock.** Each write takes the
+   number as the last statement before the commit, after every other row
+   lock of the transaction: the item rows and the inventory row.
    So the counter row lock holds only for the commit. The benchmark below
    shows that the place of the statement halves the cost.
 4. **SQLite.** The SQLite adapter uses the same table and the same
@@ -105,10 +110,11 @@ The facts on `main` that the decisions build on:
    approximately 1,170 each second on this machine, and adds approximately
    0.14 ms to a write with no wait. Writes in different namespaces do not
    wait for each other (4,928 tps against 5,641). An inventory write occurs
-   at the start and the end of an update, at the finalize of a state version,
-   and at a create, rename, delete, restore or purge. A namespace with 100
-   updates that run at the same time makes fewer than 200 such writes each
-   second. Audited writes (create, rename, delete, restore, purge) already
+   at the end of an update, at the finalize of a state version, and at a
+   create, rename, delete, restore or purge. The start of an update changes
+   only the lock of the stack, so it appends no change log row. A namespace
+   with 100 updates that run at the same time makes fewer than 100 such
+   writes each second. Audited writes (create, rename, delete, restore, purge) already
    hold the namespace row `FOR UPDATE`, so they already wait for each other.
    A write that changes only the lock of a unit appends no change log row,
    because the lock is not history (`Change.Entry`). The release load run
@@ -124,14 +130,21 @@ The facts on `main` that the decisions build on:
    It reads `RedactionLog.GetRedaction(ctx, ns, id)` with the namespace of
    the path. A record of another namespace answers 404, the same 404 as an
    unknown ID, as ADR 149 decision 4 says for every read by ID.
-9. **The action.** The route needs `namespace:read` on the namespace of the
-   path. Then the handler checks the read action on the owner of the item
-   of the record (decision 18): `unit:read` on the unit with its stable ID.
-   A caller without that action gets the same 404, so the answer does not
-   tell that the record exists. A record of a purged unit answers 404,
-   because the purge ends every grant on the unit (ADR 47). The history
-   responses of each tool give the redaction ID, and the caller knows the
-   namespace of the unit, so a client has both parts of the path.
+9. **The action, and one 404 rule for reads by ID.** The route needs
+   `namespace:read` on the namespace of the path. Then the handler finds
+   the owner of the item of the record (decision 18). For a unit, it finds
+   the unit by its tool and stable ID in the namespace of the path: the
+   live unit, or the soft-deleted unit. When no such unit exists, the
+   handler answers 404. Then it checks `unit:read` on that unit with its
+   stable ID. The routes of this decision and of decision 20 use the same
+   rule, as ADR 149 decision 4 says: an unknown unit, a unit of another
+   namespace, a purged unit, and a unit on which the caller does not have
+   the action all answer the same 404. So the answer never tells that the
+   object exists. These routes do not use the resolver of the deleted-units
+   routes as it is: that resolver finds only deleted units, and it answers
+   403 to a caller without the action. The history responses of each tool
+   give the redaction ID, and the caller knows the namespace of the unit,
+   so a client has both parts of the path.
 
 ### G3. The item key record in the transaction of the item
 
@@ -149,6 +162,25 @@ The facts on `main` that the decisions build on:
     It takes no fence: it writes only a blob, as the upload of a checkpoint
     blob comes before its row (ADR 37). A blob with no record is an orphan,
     and the orphan cleanup deletes it after 24 hours (ADR 151 decision 22).
+
+    History writes need a key-encryption key. Encryption at rest
+    is on by default, as the object stores of the large cloud providers do.
+    So a running server never gets `ErrKeyNotConfigured` from
+    `PrepareItemKey`:
+    - `dustpan.NewServer` refuses to build a server without
+      `WithSecretWrapper`, as it does now.
+    - `opendustpan serve` refuses to start without a key, and stops before
+      it opens the database with this error:
+      `no key-encryption key is configured: set --generate-key-encryption-key
+      (DUSTPAN_GENERATE_KEY_ENCRYPTION_KEY=true) to make a key file with no
+      prompt, or set --key-encryption-key-file
+      (DUSTPAN_KEY_ENCRYPTION_KEY_FILE) or DUSTPAN_KEY_ENCRYPTION_KEY`.
+    - The escape hatch for development is
+      `--generate-key-encryption-key`. On the first start, the server makes
+      a local key file. On each start with this setting, the server logs
+      this warning: `the key-encryption key is a local file that this
+      server made: for production, set --key-encryption-key-file or
+      DUSTPAN_KEY_ENCRYPTION_KEY`.
 11. **Each create port takes the record.** Each port method that creates a
     history item takes the prepared record as the parameter
     `key secret.ItemKey`, and writes it in its fenced transaction with the
@@ -204,19 +236,23 @@ The facts on `main` that the decisions build on:
     would block that redaction for ever. The rule of decision 13 lets the
     redaction continue, and it fails closed in each case where the server
     does not know the kind of the item. `historytest.OpenTofuSituations`
-    gets three situations: `SituationOpaqueNext` (a readable item before an
-    opaque item: redaction continues), `SituationOpaqueUncompared` (an
-    opaque item before the cursor passed it: 409), and
+    gets two situations: `SituationOpaqueNext` (a readable item before an
+    opaque item: redaction continues) and `SituationOpaqueUncompared` (an
+    opaque item before the cursor passed it: 409). The blame conformance
+    suite of `workspace.BlameStore` (`workspacehistorytest`) gets the case
     `SituationBaseRedacted` (a readable item after opaque items whose base
-    is redacted: no rows, mark `base-redacted`). Safe delete already
-    treats an opaque state version as a state with resources (ADR 153
-    decision 10).
+    is redacted: no rows, mark `base-redacted`), because the blame writes
+    the rows and the mark. Safe delete already treats an opaque state
+    version as a state with resources (ADR 153 decision 10).
 
 ### G5. Item kinds, item owners and nested wraps
 
 15. **Item kinds are an open set that the server registers.**
     `secret.ItemKind.Valid` checks only the syntax: 1 to 32 characters,
-    lowercase letters, digits and hyphens, with a letter first. The
+    lowercase letters, digits and hyphens, with a letter first. The `secret`
+    package declares no constant for a kind or an owner kind. Each kind and
+    each owner kind is an entry of the registry, and the domain package
+    that owns it declares it. The
     `history` package keeps a registry (`history.Kinds`) that
     `dustpan.NewServer` builds from the kinds of each domain package. Each
     entry names the kind, its owner kind and its `Redactor`:
@@ -255,15 +291,17 @@ The facts on `main` that the decisions build on:
     `history.UnitOwner(u Unit)` makes the owner of a unit. The scope of the
     item key is the namespace and the owner ID. Owner IDs have their own ID
     prefixes (ADR 19), so two owners never share a scope. `OwnerKind` has
-    the same syntax rule as `ItemKind`.
+    the same syntax rule as `ItemKind`. For the kind `comment`, the scope
+    of the item key is the namespace and the ID of the change order that
+    owns the comment. PR #846 aligns ADR 198 decision 3 to this rule.
 18. **Each owner kind names its object, its actions and its end.**
 
     | Owner kind | Object of the read | Redact action | End of its items |
     | --- | --- | --- | --- |
     | `unit` | the unit | `unit:redact` on the unit | the purge of the unit, with a tombstone (ADR 151 decision 8) |
-    | `change-order` | each unit of the change order | `unit:redact` on each unit (ADR 198 decision 3) | the final delete of the namespace |
+    | `change-order` | each unit of the change order | `unit:redact` on each unit (ADR 198 decision 3) | the purge of the namespace |
 
-    A tombstone names an owner, not only a unit, so the final delete of a
+    A tombstone names an owner, not only a unit, so the purge of a
     namespace writes one tombstone for each owner that is not a unit, in the
     same steps.
 19. **Nested wraps for content of more than one item.** ADR 128 decision 19
@@ -275,7 +313,8 @@ The facts on `main` that the decisions build on:
     // SealNested seals the plaintext in r under a fresh data key, and wraps
     // that data key under the item key of each ref in turn. Opening needs
     // every item key. It returns ErrInvalidItemRef for no ref, for more than
-    // MaxNestedItems refs or for a repeated ref, ErrKeyNotFound, and
+    // MaxNestedItems refs, for a repeated ref or for refs of more than one
+    // namespace, ErrKeyNotFound, and
     // ErrShredded when one key is shredded.
     SealNested(ctx context.Context, refs []ItemRef, binding []byte, r io.Reader) (io.Reader, error)
     // OpenNested opens a stream that SealNested sealed for refs and
@@ -322,9 +361,10 @@ The facts on `main` that the decisions build on:
     shape of the tool, with its format (`pulumi-deployment` or
     `opentofu-state`). The inventory API never parses the state, so the tool
     models stay apart (ADR 13).
-22. **The action.** `unit:read` on the unit with its stable ID, resolved as
-    the deleted-units routes resolve a unit: the live unit, or the deleted
-    unit under its name before the delete. Grants stay until the purge
+22. **The action.** `unit:read` on the unit with its stable ID, with the
+    404 rule of decision 9: the handler finds the live or soft-deleted unit
+    in the namespace of the path, and answers 404 when it finds none or
+    when the caller does not have the action. Grants stay until the purge
     (ADR 47), so this check works for a soft-deleted unit.
 23. **The tool routes stay.** The routes of ADR 150 decision 15 stay, by
     name, for live units only. Each tool CLI and each tool shape keep them.
@@ -343,7 +383,7 @@ The facts on `main` that the decisions build on:
     | `AppendAssignsSeq` | The store sets `Seq` and ignores the value of the caller. The sequences of one namespace increase. |
     | `SeqPerNamespace` | Two namespaces have their own sequences. A read of one never returns a row of the other. |
     | `ConcurrentAppends` | 16 goroutines append 20 rows each in one namespace. The 320 sequences are distinct, and `ListChanges` returns all 320 in order. |
-    | `PagingUnderAppends` | A reader pages with the cursor and a limit of 7 while appends run, and reads on after they end. It reads each row one time, and skips none. A database sequence with no read barrier fails this case. |
+    | `PagingUnderAppends` | A reader pages with the cursor and a limit of 7 while appends run, and reads on after they end. It reads each row one time, and skips none. A database sequence with no read barrier can fail this case. |
     | `Until` | A row at `until` is in the answer. A row after it is not. |
     | `CursorAndLimit` | The limit holds. The cursor excludes its own row. The page after the last row is empty. |
     | `UnknownNamespace` | `ListChanges` and `UnitsAt` answer an empty list and no error. |
@@ -351,6 +391,7 @@ The facts on `main` that the decisions build on:
     | `ClockSkew` | A row with an earlier time and a higher sequence wins for its unit. |
     | `DeletedAndPurged` | A deleted or purged unit leaves `UnitsAt`. A restored unit comes back. A renamed unit has its new name. |
     | `PurgeKeepsRows` | After a `purged` row, `ListChanges` still returns every row of the unit. |
+    | `NamespaceRecreated` | Purge, then a new namespace with the same name sees no row. `ListChanges` and `UnitsAt` of the new namespace answer only its own rows. |
     | `StaleFence` | An append with a stale fence answers `namespace.ErrFenced` and writes no row. |
 
     The suite allows gaps in a sequence, so that a custom store can use
