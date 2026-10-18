@@ -31,7 +31,9 @@ type Links interface {
 	// gone.
 	DeleteLink(ctx context.Context, fence namespace.Fence, u ChatUser, e audit.Entry) error
 	// LinkOf returns the link of the chat user u, or ErrNotFound. The IDs
-	// match exactly.
+	// match exactly. Its LinkedAt is the time of the current link: after a
+	// delete and a new link, the time of the new link, so CheckIntent
+	// refuses the intents from before it.
 	LinkOf(ctx context.Context, u ChatUser) (Link, error)
 	// LinksOf returns the links of the principal, so the person can see
 	// and delete them.

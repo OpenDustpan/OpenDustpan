@@ -73,7 +73,7 @@ func (m *memStore) Create(_ context.Context, c calendar.Calendar, fence namespac
 	return scopeErr(err, calendar.ErrInvalid)
 }
 
-func (m *memStore) Get(_ context.Context, id calendar.ID) (calendar.Calendar, error) {
+func (m *memStore) Get(_ context.Context, scope namespace.Name, id calendar.ID) (calendar.Calendar, error) {
 	var (
 		c  calendar.Calendar
 		ok bool
@@ -81,8 +81,9 @@ func (m *memStore) Get(_ context.Context, id calendar.ID) (calendar.Calendar, er
 
 	m.Read(func() { c, ok = m.lookup(id) })
 
-	if !ok {
-		return calendar.Calendar{}, fmt.Errorf("get %s: %w", id, calendar.ErrNotFound)
+	// A calendar of another scope answers as an unknown ID.
+	if !ok || c.Owner.WriteScope() != scope {
+		return calendar.Calendar{}, fmt.Errorf("get %s in %s: %w", id, scope, calendar.ErrNotFound)
 	}
 
 	return c, nil

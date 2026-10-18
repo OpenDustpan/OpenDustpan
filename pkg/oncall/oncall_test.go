@@ -665,3 +665,76 @@ func checkResolution(t *testing.T, got oncall.Resolution, w want) {
 		t.Fatalf("next = %+v, want %s", got.Next, w.next)
 	}
 }
+
+func TestSameOverrides(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 10, 20, 9, 0, 0, 0, time.UTC)
+	o := oncall.Override{
+		ID: "ovr-1", Principal: "bob", Start: at, End: at.Add(time.Hour), Reason: "swap", CreatedBy: "bob",
+		CreatedAt: at.Add(-time.Hour),
+	}
+	p := o
+	p.ID, p.Principal, p.CreatedBy = "ovr-2", "carol", "carol"
+
+	with := func(change func(x *oncall.Override)) oncall.Override {
+		x := o
+		change(&x)
+
+		return x
+	}
+	cest := time.FixedZone("CEST", 2*3600)
+
+	cases := []struct {
+		name string
+		a, b []oncall.Override
+		want bool
+	}{
+		{"two empty lists", nil, []oncall.Override{}, true},
+		{"the same list", []oncall.Override{o, p}, []oncall.Override{o, p}, true},
+		{"the same times in another location", []oncall.Override{o}, []oncall.Override{with(func(x *oncall.Override) {
+			x.Start, x.End, x.CreatedAt = x.Start.In(cest), x.End.In(cest), x.CreatedAt.In(cest)
+		})}, true},
+		{"another order", []oncall.Override{o, p}, []oncall.Override{p, o}, false},
+		{"one more override", []oncall.Override{o}, []oncall.Override{o, p}, false},
+		{"an empty and a full list", nil, []oncall.Override{o}, false},
+		{
+			"another ID",
+			[]oncall.Override{o},
+			[]oncall.Override{with(func(x *oncall.Override) { x.ID = "ovr-9" })},
+			false,
+		},
+		{"another principal", []oncall.Override{o}, []oncall.Override{with(func(x *oncall.Override) {
+			x.Principal = "mallory"
+		})}, false},
+		{"another reason", []oncall.Override{o}, []oncall.Override{with(func(x *oncall.Override) {
+			x.Reason = "other"
+		})}, false},
+		{"another creator", []oncall.Override{o}, []oncall.Override{with(func(x *oncall.Override) {
+			x.CreatedBy = "mallory"
+		})}, false},
+		{"another start", []oncall.Override{o}, []oncall.Override{with(func(x *oncall.Override) {
+			x.Start = x.Start.Add(time.Second)
+		})}, false},
+		{"another end", []oncall.Override{o}, []oncall.Override{with(func(x *oncall.Override) {
+			x.End = x.End.Add(time.Second)
+		})}, false},
+		{"another time of creation", []oncall.Override{o}, []oncall.Override{with(func(x *oncall.Override) {
+			x.CreatedAt = x.CreatedAt.Add(time.Second)
+		})}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := oncall.SameOverrides(tc.a, tc.b); got != tc.want {
+				t.Fatalf("SameOverrides = %t, want %t", got, tc.want)
+			}
+
+			if got := oncall.SameOverrides(tc.b, tc.a); got != tc.want {
+				t.Fatalf("SameOverrides with the lists swapped = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
