@@ -12,13 +12,17 @@ import (
 // BaselineSeed is the SQL that a store test runs on a database just before the
 // migration of the inventory change log: the namespace acme, a live unit
 // stk-live that changed at 1000 ms, and a soft-deleted unit ws-gone that a
-// delete removed at 2000 ms. A second namespace, beta, holds one live unit
+// delete removed at 2000 ms. The collection Web of acme holds stk-live. A second namespace, beta, holds one live unit
 // stk-beta that changed at 1500 ms. The statements hold no placeholder.
 const BaselineSeed = `
 	INSERT INTO inventory (namespace, tool, name, unit_id, display_name, last_changed_ms)
 	VALUES ('acme', 'pulumi', 'web/prod', 'stk-live', 'web/prod', 1000);
 	INSERT INTO inventory_deleted (namespace, tool, unit_id, name, deleted_at_ms, purge_after_ms)
 	VALUES ('acme', 'opentofu', 'ws-gone', 'network', 2000, 9000);
+	INSERT INTO collections (id, namespace, name_key, name, created_at_ms)
+	VALUES ('col-web', 'acme', 'web', 'Web', 500);
+	INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
+	VALUES ('stk-live', 'acme', 'web', 600);
 	INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
 	VALUES ('beta', 'eu-west', 1, 0, 'ns-beta');
 	INSERT INTO inventory (namespace, tool, name, unit_id, display_name, last_changed_ms)
@@ -59,11 +63,21 @@ func checkBaselineRows(t *testing.T, s BaselineStore) {
 		t.Fatalf("list changes: %v", err)
 	}
 
-	if len(rows) != 2 || rows[0].Seq != 1 || rows[0].UnitID != "stk-live" || rows[0].Kind != inventory.ChangeCreated ||
-		!rows[0].At.Equal(time.UnixMilli(1000)) || rows[1].Seq != 2 || rows[1].UnitID != "ws-gone" ||
-		rows[1].Kind != inventory.ChangeDeleted || !rows[1].At.Equal(time.UnixMilli(2000)) {
-		t.Fatalf("baseline rows = %+v, want a created row at 1000 and a deleted row at 2000", rows)
+	if len(rows) != 2 || !baselineCreatedRowOK(rows[0]) || !baselineDeletedRowOK(rows[1]) {
+		t.Fatalf("baseline rows = %+v, want a created row at 1000 in collection Web and a deleted row at 2000", rows)
 	}
+}
+
+// baselineCreatedRowOK reports whether the row is the created row of stk-live.
+func baselineCreatedRowOK(r inventory.Change) bool {
+	return r.Seq == 1 && r.UnitID == "stk-live" && r.Kind == inventory.ChangeCreated &&
+		r.Collection == "Web" && r.At.Equal(time.UnixMilli(1000))
+}
+
+// baselineDeletedRowOK reports whether the row is the deleted row of ws-gone.
+func baselineDeletedRowOK(r inventory.Change) bool {
+	return r.Seq == 2 && r.UnitID == "ws-gone" && r.Kind == inventory.ChangeDeleted &&
+		r.Collection == "" && r.At.Equal(time.UnixMilli(2000))
 }
 
 // checkBaselineSecondNamespace checks that the sequence of a second namespace
