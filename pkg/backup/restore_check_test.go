@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -419,7 +420,8 @@ func TestCheckRestoreSchemaMismatch(t *testing.T) {
 		t.Fatalf("err = %v, want ErrSchemaMismatch", err)
 	}
 
-	if !strings.Contains(err.Error(), "101") || !strings.Contains(err.Error(), "100") {
+	live, baseline := strconv.Itoa(backup.BaselineSchemaVersion+1), strconv.Itoa(backup.BaselineSchemaVersion)
+	if !strings.Contains(err.Error(), live) || !strings.Contains(err.Error(), baseline) {
 		t.Fatalf("error = %q, want it to name both versions", err)
 	}
 
