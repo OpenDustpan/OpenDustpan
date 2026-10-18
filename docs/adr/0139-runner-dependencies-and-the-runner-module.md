@@ -29,7 +29,9 @@ are not in the repository. All sizes are of static binaries built with
 `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w'` for `linux/amd64` with
 Go 1.27.2, unless a row says otherwise. Module counts are the `dep` lines
 of `go version -m` (modules linked into the binary) or the `require`
-lines of `go.mod` (modules that `make trivy` scans).
+lines of `go.mod` (modules that `make trivy` scans). The license column
+counts the license results of Trivy. A module can have more than one
+license result, so this count can be larger than the count of modules.
 
 ### The Kubernetes client
 
@@ -38,7 +40,7 @@ watch the pods of a label selector, stream a pod log, delete a pod, and
 create a TokenReview. Projected service account tokens are part of the
 pod template, so they need no API call.
 
-| Option | Binary | Added | Linked modules | Licenses (Trivy) |
+| Option | Binary | Added | Linked modules | License results (Trivy) |
 | --- | --- | --- | --- | --- |
 | Standard library HTTP and JSON only (baseline) | 6.74 MB | 0 | 0 | none |
 | A client of our own on the standard library (340 lines) | 6.67 MB | 0 | 0 | none |
@@ -91,7 +93,7 @@ pod template, so they need no API call.
 Each program pulls an image by digest and writes the flattened file
 system as a tar stream.
 
-| Option | Binary | Added | Linked modules | `go.mod` requirements | Licenses (Trivy) |
+| Option | Binary | Added | Linked modules | `go.mod` requirements | License results (Trivy) |
 | --- | --- | --- | --- | --- | --- |
 | Standard library HTTP and JSON only (baseline) | 6.74 MB | 0 | 0 | 0 | none |
 | go-containerregistry v0.22.1 (`remote`, `mutate.Extract`, `authn.DefaultKeychain`) | 7.88 MB | 1.13 MB | 9 | 10 | 6 Apache-2.0, 3 MIT, 3 BSD-3-Clause |
@@ -199,25 +201,54 @@ links.
    - It pulls each image only by the digest that the runner protocol
      gives (decision 6). It parses the reference with `name.NewDigest`,
      which refuses a tag.
+   - It selects the image for `linux/<arch>` of its host with the
+     platform option of `remote` (`remote.WithPlatform`), because the
+     digest can name an image index (decision 6). `remote` checks the
+     digest of the index against the reference, and the digest of the
+     image manifest against the entry of the index. An index with no
+     image for the platform fails the phase.
    - `mutate.Extract` makes the flattened tar stream. The coordinator
-     writes it to the bundle directory through an `os.Root`, which refuses
-     each path and link that leaves the directory, also a link with an
-     absolute target. It writes no device node, and it changes the owner
-     of a file only when it runs as root. It applies the unpack limits
-     of decision 7.
+     writes it to a new bundle directory through an `os.Root` that it
+     opens on that directory. The bundle directory has mode `0700`, and
+     the user of the coordinator owns it.
+   - The coordinator writes only regular files, directories, symbolic
+     links and hard links. It skips character devices, block devices,
+     FIFOs and each other entry type. It clears the setuid and setgid
+     bits of each file and directory that it writes.
+   - `os.Root` does not refuse to create a symbolic link with an absolute
+     target or a target that leaves the directory: `Root.Symlink` does
+     not check its target. So the coordinator writes each symbolic link
+     as it is, with `Root.Symlink`, and never follows a link: each access
+     goes through the `os.Root`, and it changes an owner with
+     `Root.Lchown`, not `Root.Chown`. The sandbox resolves the links
+     inside its own root ([ADR 137](0137-the-machine-coordinator.md)
+     decision 4).
+   - The coordinator makes the hard links with `Root.Link` after it wrote
+     all regular files. It skips a hard link whose target is missing.
+   - It changes the owner of a file only when it runs as root. It applies
+     the unpack limits of decision 7.
+   - Any error of the pull or of the stream fails the phase before its
+     first step, not only a limit: for example a read error, a digest
+     that does not match, or a path that leaves the directory. The
+     coordinator then deletes the bundle directory. No sandbox starts
+     from a partial bundle.
    - Credentials come from a Docker config file in the configuration
-     directory of the coordinator, read by `authn.DefaultKeychain`. A
-     cloud registry uses the credential helper of the cloud, installed on
-     the host and named in `credHelpers`. No cloud SDK links into the
-     runner.
+     directory of the coordinator. `authn.DefaultKeychain` reads
+     `$DOCKER_CONFIG/config.json`, or `~/.docker/config.json` when
+     `DOCKER_CONFIG` is not set. So the coordinator sets `DOCKER_CONFIG`
+     to its configuration directory for its own process before its first
+     pull. A cloud registry uses the credential helper of the cloud,
+     installed on the host and named in `credHelpers`. No cloud SDK links
+     into the runner.
 3. **Pinned versions and the `golang.org/x/net` floor.** Each version is
    pinned exactly in `go.mod` and is at least two weeks old (ADR 7). The
    runner module requires `golang.org/x/net` v0.60.0 or later, because
    `client-go` v0.37.1 reaches 5 vulnerabilities in v0.57.0.
-   The Go team released `golang.org/x/net` v0.60.0 on 8 October 2026,
-   so it is two weeks old on 22 October 2026. The runner code lands on
-   that day or later. There is no exception to the two-week rule for this
-   fix: no feature needs the runner before that day.
+   The Go team released `golang.org/x/net` v0.60.0 on 8 October 2026 at
+   17:22 UTC, so it is two weeks old at 17:22 UTC on 22 October 2026. The
+   runner code lands on 23 October 2026 or later. There is no exception
+   to the two-week rule for this fix: no feature needs the runner before
+   that day.
 4. **A nested Go module for the runner (option C).** `cmd/dustpan-runner`
    holds its own `go.mod`, with the module path
    `opendustpan.org/opendustpan/cmd/dustpan-runner`. The runner packages
@@ -225,18 +256,26 @@ links.
    `opendustpan.org/opendustpan` and replaces it with `../..`, so the
    runner always builds from the same commit as the server. The server
    module never requires the runner module.
+   - The coordinator is a separate `dustpan-runner` binary, not a role of
+     the `opendustpan` binary. This answers the first open question of
+     [ADR 136](0136-the-kubernetes-coordinator.md).
    - The release builds `dustpan-runner` from the same tag as the server.
      `go install ...@version` does not work for a module with a
      `replace` directive. The release archives and the image ship the
      runner.
    - The changes to the checks are in the list under "Consequences".
-5. **A depguard rule keeps the imports out of the server.** The rule
-   `runnerdeps` in `.golangci.yml` applies to every file outside
-   `cmd/dustpan-runner/`. It denies `k8s.io`, `sigs.k8s.io`,
+5. **A depguard rule and a module check keep the dependencies out of the
+   server.** The rule `runnerdeps` in `.golangci.yml` applies to every
+   file outside `cmd/dustpan-runner/`. It denies `k8s.io`, `sigs.k8s.io`,
    `github.com/google/go-containerregistry` and the runner module. The
-   nested module stops a server import at build time, and the rule
-   stops it at lint time with the reason. The rule also covers the
-   launcher, which stays on the standard library.
+   nested module stops a server import at build time, and the rule stops
+   it at lint time with the reason. The rule also covers the launcher,
+   which stays on the standard library. depguard checks direct imports
+   only. So `make lint` also runs `scripts/runner-deps-guard.py`, which
+   fails when `go list -m all` in the root module lists a module of
+   `k8s.io`, of `sigs.k8s.io` or of
+   `github.com/google/go-containerregistry`. That check also finds such
+   a module when another dependency of the server brings it in.
 6. **Images are digests in the runner protocol.** The runner protocol
    carries the image of a phase only as a reference with a digest
    (`<repository>@sha256:<hex>`), never as a tag. When a unit or a pool
@@ -250,22 +289,66 @@ links.
      standard library (`HEAD`, and the token challenge of the registry
      protocol). It does not link go-containerregistry: the depguard rule
      of decision 5 still applies to the server.
+   - The tag can name an image index. The server then records the digest
+     of the index. The machine coordinator selects the image for its
+     platform (decision 2), and the Kubernetes node selects the image for
+     its own platform.
+   - The resolution follows the outbound rules of `pkg/egress` and
+     `pkg/egress/egresshttp`, as the senders of
+     [ADR 145](0145-one-event-model-and-sinks.md) decision 20 do:
+     - It accepts `https` only. `egress.CheckURL` with `egress.HTTPSOnly`
+       checks the URL of the registry host and the URL of the token
+       realm before each request. The dial guard of
+       `egresshttp.Client(egress.NoRedirect, egress.HTTPSOnly)` checks
+       the resolved address of each connection. They refuse a private,
+       loopback or link-local address, for example `169.254.169.254`.
+     - An installation administrator can list the hosts of private
+       registries, for example a registry in the network of the
+       installation. Only for a host on that list, the rules accept a
+       private address. Loopback, link-local and other addresses that
+       are not unicast stay refused. With no list, which is the
+       default, the server refuses each private address.
+     - The client follows no redirect. A redirect answer fails the
+       resolution.
+     - The server reads at most `egress.MaxBodyBytes` of a token answer
+       and of a manifest answer, and each request takes at most
+       `egress.Timeout`.
+     - The header `Docker-Content-Digest` must match
+       `sha256:<64 hex digits>`. Else the resolution fails. When the
+       answer has no such header, the server sends a `GET` for the
+       manifest, reads at most `egress.MaxBodyBytes`, and uses the
+       SHA-256 of the body.
+     - A failed resolution fails the plan. The plan error and the job
+       store keep only the class of the error, for example `refused`,
+       `unauthorized`, `not-found`, `permanent` or `temporary`. They
+       never keep the body of the registry answer, the address or the
+       text of the network error.
 7. **Unpack limits with defaults, for each pool.** The machine coordinator
-   counts while it unpacks an image, and stops at the first limit that
-   the image passes. Each pool can change each limit. The defaults give
-   about 1.5 times the largest image of the table above, and more than
-   10 times its largest file:
+   checks the manifest of the image before it downloads a layer, and
+   counts while it unpacks the image. It stops at the first limit that
+   the image passes. `remote` checks the size of each layer against the
+   manifest while it reads, so the sizes of the manifest are a limit
+   too. Each pool can change each limit. The default of the total
+   unpacked bytes is 1.63 times the largest image of the table above
+   (16 GiB is 17.18 GB, which is 1.63 times 10.53 GB). The default of
+   one file is more than 10 times the largest file of that table:
 
-   | Limit | Default | Largest measured |
-   | --- | --- | --- |
-   | Total unpacked bytes | 16 GiB (17,179,869,184 bytes) | 10.53 GB |
-   | Entries (files, directories and links) | 500,000 | 331,804 |
-   | Size of one file | 2 GiB (2,147,483,648 bytes) | 150.28 MB |
+   | Limit | Checked | Default | Largest measured |
+   | --- | --- | --- | --- |
+   | Total compressed bytes (the sum of the layer sizes in the manifest) | before the download | 6 GiB (6,442,450,944 bytes) | 3.38 GB |
+   | Layers in the manifest | before the download | 128 | not measured |
+   | Total unpacked bytes | while it unpacks | 16 GiB (17,179,869,184 bytes) | 10.53 GB |
+   | Entries (files, directories and links) | while it unpacks | 500,000 | 331,804 |
+   | Size of one file | while it unpacks | 2 GiB (2,147,483,648 bytes) | 150.28 MB |
+
+   The spike did not count layers. Docker builds allow at most 127
+   layers in an image, so the default of 128 does not stop an image
+   that Docker built.
 
    An image that passes a limit fails the phase before its first step.
-   The coordinator deletes the files that it unpacked, and the phase
-   reports an error that names the image digest, the limit, its value
-   and the pool setting that changes it, for example: `Image
+   The coordinator deletes the bundle directory (decision 2), and the
+   phase reports an error that names the image digest, the limit, its
+   value and the pool setting that changes it, for example: `Image
    sha256:65801d79252f... has more than 500,000 entries. Set a larger
    unpack.maxEntries on the pool, or use a smaller image.` The setting
    name in this example is a placeholder. The implementation gives the
@@ -275,12 +358,33 @@ links.
    items of a namespace, or of the installation (scope `@server`). The
    server keeps them with the envelope encryption of each scope in
    `pkg/secret`, as it keeps other secret items.
+   - Each credential item names one registry host (a host name and an
+     optional port), and holds a user name and a password or a token.
+   - A credential of a namespace applies only to the images of the units
+     and pools of that namespace. A credential of the scope `@server`
+     applies only to the namespaces that an installation administrator
+     lists for it. The default list is empty, so a new `@server`
+     credential applies to no namespace.
+   - To resolve a tag on host `H` for a unit of namespace `N`, the server
+     uses the credential of `N` for `H`. If `N` has none, it uses the
+     `@server` credential for `H` when that credential lists `N`. Else
+     it sends no credential.
+   - The server sends the Basic credentials only to the token realm of
+     the challenge that host `H` answers, and only when the realm is
+     `https` and passes the outbound rules of decision 6. It sends the
+     bearer token only to host `H`. It never sends a credential after a
+     redirect or to another host.
    - A new action, `namespace:manage-registries` (object: a namespace),
      allows a principal to set, replace and delete the registry
      credentials of a namespace. It is in the namespace administration
      family, and a session or an access token can hold it. For the scope
      `@server`, only the roles that administer the installation set the
-     credentials.
+     credentials and their lists of namespaces.
+   - Each set, replace and delete of a credential, and each change of the
+     list of namespaces of an `@server` credential, writes one audit
+     entry in the transaction of the change. The entry names the
+     principal, the scope, the registry host and the changed fields. It
+     never holds the user name, the password or the token.
    - The API never returns a credential in plain text. The server
      decrypts a credential only to resolve a tag, and keeps no copy
      after the request to the registry.
@@ -300,7 +404,8 @@ links.
   release.
 - `docker/cli` and `logrus` enter the runner through go-containerregistry.
   The runner code itself still logs with `log/slog`. depguard checks
-  direct imports only.
+  direct imports only. For the server module, the module check of
+  decision 5 also finds a module that another module brings in.
 - The Makefile and CI do more work: each Go check runs once for each
   module.
 - A team that uses a tag gets the image of the tag at the time of the
@@ -308,26 +413,43 @@ links.
   again.
 - The server needs network access to the registries of the images to
   resolve a tag, and the credentials of decision 8 for a private
-  registry. A unit that names a digest needs neither.
+  registry. A unit that names a digest needs neither. A self-hosted
+  registry at a private address also needs its host on the list of
+  decision 6.
 - The implementation must make these changes:
   1. `cmd/dustpan-runner/go.mod` with the module path
      `opendustpan.org/opendustpan/cmd/dustpan-runner` and
      `replace opendustpan.org/opendustpan => ../..`.
-  2. `make lint`, `make lint-journal-build`, `make nilaway`, `make vuln`,
-     `make test` and `make licenses` run in both modules. A run from the
-     root does not include the nested module.
+  2. `make fmt` (`golangci-lint fmt`), `make lint` (with
+     `go mod tidy -diff`), `make lint-journal-build`, `make nilaway`,
+     `make vuln`, `make test` and `make licenses` run in both modules. A
+     run from the root does not include the nested module. A Makefile
+     target builds the `dustpan-runner` binary, as `make build` builds
+     the server binary.
   3. `make trivy` runs `go mod download` in both modules, and gives both
      `go.mod` files to `scripts/trivy-license-gate.py`.
   4. The `gomoddirectives` settings in `.golangci.yml` allow the one local
      replacement of `opendustpan.org/opendustpan`, and no other.
   5. `.github/dependabot.yml` watches `/cmd/dustpan-runner` as well as
      `/`.
-  6. The machine coordinator writes each unpacked file through an
-     `os.Root`, because `mutate.Extract` keeps links with absolute
-     targets.
+  6. The machine coordinator writes each unpacked entry through an
+     `os.Root` on a bundle directory with mode `0700`, as decision 2
+     says. `mutate.Extract` keeps links with absolute targets, and
+     `Root.Symlink` does not check a target. So the coordinator writes
+     each symbolic link as it is, never follows a link (each access
+     goes through the `os.Root`, with `Root.Lchown`, not `Root.Chown`),
+     and the sandbox resolves the links inside its own root. It makes
+     the hard links with `Root.Link` after all regular files, and skips
+     a hard link whose target is missing. It writes only regular files,
+     directories, symbolic links and hard links, and clears the setuid
+     and setgid bits.
   7. The release builds `dustpan-runner` from the same tag as the
      server, and ships the license files of the runner modules with the
      runner archive and image.
+  8. `make lint` fails when `go list -m all` in the root module lists
+     `k8s.io/*`, `sigs.k8s.io/*` or
+     `github.com/google/go-containerregistry`. This change already adds
+     the check (`scripts/runner-deps-guard.py`) and its self-test.
 - If the image size of the Kubernetes coordinator becomes a problem, the
   third row of the first table (`k8s.io/api` types and a transport of our
   own, 2.95 MB) is the next option to measure.
@@ -337,4 +459,19 @@ links.
 - **Identity (shared files).** The action `namespace:manage-registries`
   (object: a namespace) of decision 8 joins the action list in
   `pkg/identity` and the namespace administration roles, with its route
-  declarations and the policy check of ADR 17.
+  declarations and the policy check of ADR 17. The audit events of the
+  registry credentials (decision 8) join the audit rules.
+- **The runner protocol ([ADR 131](0131-the-runner-protocol.md)
+  decision 6).** `Work` carries the image only as a reference with a
+  digest. The coordinator refuses work with any other image reference.
+- **The job model ([ADR 100](0100-a-shared-job-model-on-durable-operations.md)
+  decision 5).** The job spec records the image digest that the server
+  resolved, and each phase of the job uses it.
+- **Outbound rules ([ADR 145](0145-one-event-model-and-sinks.md)
+  decision 20).** `pkg/egress` and `pkg/egress/egresshttp` get the list
+  of private registry hosts of decision 6. Only for a host on the list,
+  the check and the dial guard accept a private address.
+- **The Kubernetes coordinator
+  ([ADR 136](0136-the-kubernetes-coordinator.md)).** Decision 4 answers
+  the first open question of ADR 136: the coordinator is a separate
+  `dustpan-runner` binary.
