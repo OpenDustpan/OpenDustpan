@@ -1,6 +1,6 @@
 # 128. Agents in the job model and the history model
 
-Status: accepted · 2026-10-18 · supersedes parts of ADRs 100, 103, 122, 124 and 125 (see "What this ADR replaces")
+Status: accepted · 2026-10-18 · supersedes parts of ADRs 100, 103, 120, 122, 124 and 125 (see "What this ADR replaces")
 
 ## Context
 
@@ -100,14 +100,15 @@ it.
    | `ErrKeyConflict` | `ErrChangeKeyConflict` |
    | `ErrFrozen` | `ErrChangeFrozen` |
    | `ErrPolicyDenied` | `ErrChangePolicyDenied` |
-   | `ErrFinished` (a cancel of a job that ended) | `ErrChangeFinished` |
+   | `ErrFinished` (a cancel of a job that ended, or a comment on a job that is terminal) | `ErrChangeFinished` |
    | `ErrDelivered` (a cancel after a push or a merge) | `ErrChangeDelivered`, a new error |
    | `ErrAgentDenied` for a service principal | `ErrServicePrincipal` |
    | `ErrAgentDenied` for direct mode with a switch off | `ErrDirectNotAllowed` |
    | `ErrAgentDenied` when no confirmation is possible (decision 9) | `ErrConfirmationUnavailable`, a new error |
    | `ErrAgentDenied` for a cancel of a job of another person (decision 10) | `ErrChangeNotOwn`, a new error |
    | `ErrAgentDenied` for a runner job that changes, or a direct push, in review-request mode (ADR 103 decision 12) | `ErrModeNotSupported` |
-   | `ErrAgentDenied` with any other cause | `ErrAgentDenied` |
+   | `ErrAgentDenied` with any other cause | `job.ErrAgentDenied`, not changed |
+   | `ErrStarterThread` (a blocking comment by `Job.StartedBy`, decision 11) | `ErrThreadOnOwnChange`, a new error |
    | `ErrTokenRevealed` (decision 8) | `ErrProposeAfterReveal` |
    | `ErrUnitBusy` | `ErrChangeBusy`, a new error |
    | `ErrLimit` | `ErrChangeLimit`, a new error |
@@ -135,8 +136,9 @@ it.
    mode. The column "apply" of the table of ADR 125 names this phase that
    changes. A runner job that only plans has no confirmation gate.
    `job.CheckAgent` gives these gates. Its table-driven test has one row
-   for each row of the table of ADR 125, and one row each for a destroy
-   and a refresh in the default mode.
+   for each row of the table of ADR 125, and one error row for a destroy
+   in `direct` mode, which fails with `ErrAgentDenied`: a destroy is never
+   direct.
 5. **Only a console session gives a confirmation (N3).** `job.Service.Confirm`
    accepts a confirmation only when all of these are true:
    - the principal is `Job.StartedBy`, else `job.ErrNotRequester`,
@@ -176,14 +178,19 @@ it.
    decision 12). The port gets the token ID from `job.Actor.Credential`
    and the MCP session ID from the agent reference (`SessionID`, empty for
    the channel `agent` and with no agent). The refusal is
-   `job.ErrTokenRevealed`. An error of the port fails the start, and the
+   `job.ErrTokenRevealed`. `Start` refuses an actor with an agent
+   reference whose `Credential` kind is empty or unknown with
+   `ErrInvalid`, so a missing credential never skips the check. An error of the port fails the start, and the
    start creates no job: the check fails closed. It applies to each
    caller of `job.Service`: the REST API, the Catalog and the agent. A run
    with `Run.ReadPlainSecrets` stays refused by the `Toolset` before the
    port (ADR 124 decision 12). A console session is not marked: the mark
    is on the token and on the MCP session, as ADR 124 says. The
    conformance suite `jobtest` gets a case for a marked token, an
-   unmarked one and an error of the port.
+   unmarked one and an error of the port. When the code lands, `jobtest`
+   also gets a case for an actor with an agent reference and an empty or
+   unknown `Credential` kind: `Start` fails with `ErrInvalid` and creates
+   no job.
 9. **A person who cannot give a confirmation gets no change of an agent.** With
    decision 4, every change of an agent waits for a confirmation, also in
    review-request mode. When the server cannot ask the person for a fresh
@@ -209,14 +216,17 @@ object is a job, so the text names the job.
     `job.ErrNotOwnJob`), also when the person holds `job:cancel` on the
     unit. This narrows the row `cancel_change` of ADR 122 decision 1.
 11. **The job model accepts a blocking comment from an agent.**
-    `job.Service.Comment` adds a comment to a job that is not terminal. A comment holds the text (at
-    most 4,000 bytes), the author (the principal and the agent reference,
+    `job.Service.Comment` adds a comment to a job that is not terminal.
+    A comment on a terminal job fails with `ErrFinished`. A comment holds
+    the text (at most 4,000 bytes), the author (the principal and the agent reference,
     if any), the time, and the flag `Blocking`. A comment with
     `Blocking: true` opens a **request-changes thread** on the job. A
     comment needs `job:read` on the unit. A blocking comment also needs
     `job:approve` on the unit, for the person and so for an agent of that
     person. The principal of `Job.StartedBy` cannot open a thread on a job
     that they started: a thread asks the author of the job for a change.
+    A blocking comment by that principal fails with the new error
+    `job.ErrStarterThread`, also through an agent.
     The server treats the text of a comment as untrusted text under the
     rules of ADR 124 decision 13. Each answer to an agent and the console
     label it with its author, as data, never as instructions.
@@ -229,28 +239,32 @@ object is a job, so the text names the job.
     A `reject` verdict by a person, a cancel and the expiry of a gate
     still apply. The thread does not stop the timeout of a gate. While a
     thread is open, `job.GatesStatus` reports each gate of each phase that
-    did not dispatch as closed, with the reason `changes-requested`. The
+    did not dispatch as `waiting`, with the reason `changes-requested`. The
     dispatch check of the store reads the open threads in the same
     transaction as the gates, so a phase never dispatches while a thread is
     open. An approval that a person recorded before the thread opened
-    stays recorded, and counts again when no thread is open. When the gate binds approvals to the plan, a replan
-    still clears them (ADR 102 decision 7).
+    stays recorded, and counts again when no thread is open. When the
+    gate binds approvals to the plan, a replan still clears them (ADR 102
+    decision 7).
 13. **Who resolves a thread.** `job.Service.ResolveThread` closes a
     request-changes thread. It accepts only:
     - the person who opened the thread, in a request with no agent
       reference, or
     - an approver who may dismiss, in a request with no agent reference:
-      a principal who may record an `approve` verdict on an open gate of
-      the job (`job:approve` on the unit and the groups of that gate). That
-      principal is never the author whom the thread asks for a change: never
-      `Job.StartedBy`, never an agent.
+      a principal who may record an `approve` verdict on a gate of the
+      job that is not open yet (`waiting`): `job:approve` on the unit and
+      the groups of that gate. That principal is never the author whom the
+      thread asks for a change: never `Job.StartedBy`, never an agent.
 
     It refuses `Job.StartedBy` with the new error `job.ErrSelfResolve`,
-    also when that person holds `job:approve`. It refuses each actor with an agent reference with `ErrAgentDenied`, also
-    for a thread that an agent of the same person opened. So an agent
+    also when that person holds `job:approve`. It refuses each actor with
+    an agent reference with `ErrAgentDenied`, also for a thread that an
+    agent of the same person opened. So an agent
     cannot clear a block, also not its own. A thread that an agent opened
     has the person of the agent as its author: that person can resolve it
     in a request of their own, unless that person is `Job.StartedBy`.
+    With no approval gate, only the person who opened the thread resolves
+    it, so the job waits until its gate expires or someone cancels it.
 14. **A dismissal needs a reason.** A resolve by anyone other than the
     author of the thread is a **dismissal**. A dismissal needs a reason of
     1 to 1000 characters of plain text with no control characters, as for
@@ -303,8 +317,11 @@ object is a job, so the text names the job.
     job holds the agent reference. So `history.Actor` gets no agent field.
     Blame and the point-in-time views show the agent of a change from the
     job of its item. A state write with no job ID has no agent.
-19. **A transcript copy goes with its history item.** A tool result in a
-    transcript (ADR 120 decision 22) can hold content of a history item:
+19. **A transcript copy goes with its history item.** ADR 120 decision 22
+    stores the masked tool results of a transcript in a plain table, and
+    seals only reveals. Decision 19 changes that table for one kind of
+    result. A tool result in a transcript can hold content of a history
+    item:
     `read_state` holds content of one or two state items, and
     `read_run_output` holds content of a job log or of an update. The store
     records with each such result the item keys of its history items (ADR
@@ -319,8 +336,8 @@ object is a job, so the text names the job.
       key, so the transcript copies of the item cannot be read. The
       transcript route answers such a result as `redacted`, with no part of
       its content.
-    - A result of any other tool holds no content of a history item and
-      keeps the sealing of ADR 120.
+    - A result of any other tool holds no content of a history item. It
+      stays in the plain table, as ADR 120 decision 22 says.
     - The model provider got the content when the run ran. No redaction
       reaches that copy. The redaction page says so for an item that a run
       read.
@@ -358,14 +375,20 @@ object is a job, so the text names the job.
 - **ADR 100, decision 17:** "Each method takes a `job.Actor`: the
   principal of the request, and the agent that acts for it, if any, with
   the mode of the agent." The agent is a `job.AgentRef` (decision 1), and
-  the actor also names its credential (decision 6). `Comment` and
+  the actor also names its credential (decision 6). `Actor.Mode` stays. `Comment` and
   `ResolveThread` join the methods of `job.Service`.
 - **ADR 103, decision 2:** "one confirmation by the starter, in a request
   of their own with no agent, with a fresh authentication". It also needs
   a console session (decision 5). "The authentication is at most 15
   minutes old (`job.ConfirmFreshness`)" becomes the lower of 15 minutes
   and W when W is above 0, else 15 minutes (decision 7).
-  `job.ConfirmFreshness` becomes `job.ConfirmMaxAge`.
+  `job.ConfirmFreshness` becomes `job.ConfirmMaxAge`. "for a job that an
+  agent started in approve-first mode": decision 4 widens it to the
+  deliver phase of a write-back job in every mode. "When the server can
+  ask the person for neither, for example in an installation with static
+  tokens only, approve-first mode is not available for the agent jobs of
+  that person": decision 9 replaces it, and `Start` refuses each change of
+  an agent for that person.
 - **ADR 103, decision 7:** "An agent can record a rejection, because a
   rejection only stops a change." An agent records no verdict, and can
   leave a blocking comment (decisions 10 to 16).
@@ -385,12 +408,17 @@ object is a job, so the text names the job.
   approve-first mode is not available: an agent there works in
   review-request mode". Decision 9 replaces it: an agent there starts no
   change.
+- **ADR 120, decision 22:** "The transcript holds only masked values" in
+  a plain table. A tool result that holds content of a history item is
+  sealed with the item keys of its items (decision 19).
 - **ADR 122, decision 1:** the row `cancel_change`, "cancels a change that
   did not end", with `job:cancel`. An agent cancels only a job that its
   person started (decision 10).
 - **ADR 124, decision 12:** "the job routes refuse a start with that
   token too". The job model refuses it in `job.Service.Start`, for each
-  caller (decision 8).
+  caller (decision 8). "passes its confirmation gate in the console with
+  a fresh MFA step (ADR 125 decision 5)": the fresh authentication is an
+  MFA step or an SSO authentication, with the maximum age of decision 7.
 - **ADR 125, decision 5:** "with a fresh MFA step". The fresh
   authentication is an MFA step or an SSO authentication, as decision 7
   says.
@@ -408,12 +436,14 @@ object is a job, so the text names the job.
 - `pkg/job` changes: `job.AgentRef`, `job.Actor.Credential`,
   `job.ConfirmMaxAge`, the port `job.RevealMarks`, the methods `Comment`
   and `ResolveThread`, and the errors `ErrSessionRequired`,
-  `ErrTokenRevealed`, `ErrChangesRequested`, `ErrSelfResolve`, and the
+  `ErrTokenRevealed`, `ErrChangesRequested`, `ErrSelfResolve`,
+  `ErrStarterThread`, and the
   causes `ErrServicePrincipal`, `ErrDirectSwitchOff`, `ErrNoConfirmation`,
   `ErrNotOwnJob` and `ErrModeRefused`. `jobtest` gets a case for
   each rule of decisions 4 to 15.
 - `pkg/agent` gets the errors `ErrChangeDelivered`, `ErrChangeBusy`,
-  `ErrChangeLimit`, `ErrConfirmationUnavailable` and `ErrChangeNotOwn`, and
+  `ErrChangeLimit`, `ErrConfirmationUnavailable`, `ErrChangeNotOwn` and
+  `ErrThreadOnOwnChange`, and
   the method `Changes.Comment`.
   `agenttest.RunChanges` gets cases for an agent reject (refused), a
   blocking comment, and a confirmation from a token (refused).
