@@ -20,6 +20,7 @@ type NamespaceRow struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	ID                  string
 }
 
 // StackRow is the column representation of a stack. Tags live in the
@@ -83,6 +84,7 @@ func ToStackRow(st stack.Stack) StackRow {
 func FromNamespaceRow(row NamespaceRow) namespace.Namespace {
 	return namespace.Namespace{
 		CreatedAt:       FromMillis(row.CreatedAtMs),
+		ID:              namespace.ID(row.ID),
 		Name:            namespace.Name(row.Name),
 		HomeRegion:      namespace.Region(row.HomeRegion),
 		Overrides:       namespace.Overrides{Forced: row.AllowForcedWrites, Unlocked: row.AllowUnlockedWrites},
@@ -99,6 +101,7 @@ func ToNamespaceRow(ns namespace.Namespace) NamespaceRow {
 		CreatedAtMs:         Millis(ns.CreatedAt),
 		AllowForcedWrites:   ns.Overrides.Forced,
 		AllowUnlockedWrites: ns.Overrides.Unlocked,
+		ID:                  ns.ID.String(),
 	}
 }
 

@@ -34,6 +34,7 @@ func (d *delegation) namespaceNamed(t *testing.T, ns namespace.Name) {
 	t.Helper()
 
 	err := d.st.CreateNamespace(t.Context(), namespace.Namespace{
+		ID:        namespace.NewID(),
 		CreatedAt: time.Unix(0, 0), Name: ns, HomeRegion: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	})

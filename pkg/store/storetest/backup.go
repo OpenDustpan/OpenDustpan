@@ -144,6 +144,7 @@ func seedBackupStore(t *testing.T, s BackupStore) backupSeed {
 	prod := mustGetStack(t, s, f.ref)
 
 	other := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "other",
 		HomeRegion:      "us-east",
@@ -740,9 +741,23 @@ func seedBackupAudit(t *testing.T, s BackupStore, acme namespace.Namespace) []au
 
 	// A store that ships entries to log sinks also keeps a cursor row, so
 	// the round trip carries the cursor table too (ADR 60 decision 13).
+	// The cursor write carries the live claim of the sink.
 	if feed, ok := s.(audit.Feed); ok {
-		if err := feed.AdvanceSinkCursor(t.Context(), acme.Fence(), "siem", out[len(out)-1].Sequence); err != nil {
-			t.Fatalf("advance audit sink cursor: %v", err)
+		leaser, ok := s.(audit.SinkLeaser)
+		if !ok {
+			t.Fatal("store keeps audit sink cursors but no sink leases")
+		}
+
+		claim, err := leaser.AcquireSinkLease(t.Context(), "siem", "backup-seed", time.Hour)
+		if err != nil {
+			t.Fatalf("acquire audit sink lease: %v", err)
+		}
+
+		last := out[len(out)-1].Sequence
+
+		advErr := feed.AdvanceSinkCursor(t.Context(), acme.Fence(), claim, "siem", last)
+		if advErr != nil {
+			t.Fatalf("advance audit sink cursor: %v", advErr)
 		}
 	}
 

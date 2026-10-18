@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/sqlite/internal/db"
@@ -517,6 +518,10 @@ func checkRestoreFile(ctx context.Context, path string, want backup.Summary) (ba
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", sealedErr)
 	}
 
+	if idsErr := checkStagedNamespaceIDs(ctx, conn); idsErr != nil {
+		return backup.Summary{}, fmt.Errorf("check staged backup: %w", idsErr)
+	}
+
 	sum, err := summarizeConn(ctx, conn)
 	if err != nil {
 		return backup.Summary{}, fmt.Errorf("check staged backup: %w", corrupt(err))
@@ -607,6 +612,37 @@ func checkForeignKeys(ctx context.Context, conn *sql.DB) error {
 
 	if len(tables) > 0 {
 		return fmt.Errorf("backup breaks foreign keys of %q: %w", tables, backup.ErrCorrupt)
+	}
+
+	return nil
+}
+
+// checkStagedNamespaceIDs refuses a staged backup with a namespace whose ID is
+// not a valid namespace ID. It returns ErrCorrupt.
+func checkStagedNamespaceIDs(ctx context.Context, conn *sql.DB) error {
+	rows, err := conn.QueryContext(ctx, `SELECT name, id FROM namespaces`)
+	if err != nil {
+		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+	}
+
+	defer func() {
+		_ = rows.Close() //nolint:errcheck // Read-only check handle.
+	}()
+
+	for rows.Next() {
+		var name, id string
+
+		if scanErr := rows.Scan(&name, &id); scanErr != nil {
+			return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+		}
+
+		if _, parseErr := namespace.ParseID(id); parseErr != nil {
+			return fmt.Errorf("staged namespace %q has an invalid ID: %w: %w", name, parseErr, backup.ErrCorrupt)
+		}
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
 	}
 
 	return nil

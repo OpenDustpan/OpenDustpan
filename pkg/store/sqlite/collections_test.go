@@ -54,6 +54,7 @@ func TestCollectionWritesAreAudited(t *testing.T) {
 	ctx := t.Context()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.UnixMilli(1_700_000_000_000).UTC(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",

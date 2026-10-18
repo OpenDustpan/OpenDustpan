@@ -80,6 +80,7 @@ func newIPAllowlistBenchServer(b *testing.B, on bool) (*dustpan.Server, *sqlite.
 	nsName := namespace.Name("acme")
 
 	created := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Date(2026, time.October, 8, 21, 0, 0, 0, time.UTC),
 		Name:            nsName,
 		HomeRegion:      region,

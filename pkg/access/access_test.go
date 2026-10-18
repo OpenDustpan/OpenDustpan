@@ -95,6 +95,7 @@ func (f *fixture) namespace(tb testing.TB, ns namespace.Name) {
 	tb.Helper()
 
 	err := f.store.CreateNamespace(tb.Context(), namespace.Namespace{
+		ID:        namespace.NewID(),
 		CreatedAt: time.Unix(0, 0), Name: ns, HomeRegion: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	})
@@ -397,6 +398,63 @@ func TestUnclassifiedActionIsDenied(t *testing.T) {
 	assertChecks(t, f.authz, admin, []check{{identity.ServerObject(), identity.Action("server:future"), true}})
 }
 
+// TestActionsWithoutRoutesAreUnclassified checks that the actions of the
+// features with no routes yet stay unclassified. So no role holds them, and
+// the policy check denies them to a site administrator on the installation
+// and on a namespace. A feature classifies its actions when its routes land.
+func TestActionsWithoutRoutesAreUnclassified(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	site := f.person(t, "site")
+	f.grant(t, prn("site"), access.RoleSiteAdministrator, identity.ServerObject())
+
+	for _, a := range []identity.Action{
+		identity.ActionUnitRunPlan,
+		identity.ActionUnitRunApply,
+		identity.ActionUnitRunDestroy,
+		identity.ActionUnitWriteBack,
+		identity.ActionUnitDefineSteps,
+		identity.ActionJobRead,
+		identity.ActionJobReadLogs,
+		identity.ActionJobReadPlans,
+		identity.ActionJobCancel,
+		identity.ActionJobApprove,
+		identity.ActionNamespaceManageFreezes,
+		identity.ActionNamespaceBreakFreeze,
+		identity.ActionNamespaceManageRunners,
+		identity.ActionRunnerClaim,
+		identity.ActionAgentUse,
+		identity.ActionAgentStartRun,
+		identity.ActionNamespaceManageAgentRuns,
+		identity.ActionNamespaceManageAgent,
+		identity.ActionServerManageAgent,
+		identity.ActionServerAcceptAgentSecretAccess,
+		identity.ActionCallerManageAgentOptIns,
+		identity.ActionUnitObserve,
+		identity.ActionNamespaceReadRunners,
+		identity.ActionRunnerJoin,
+		identity.ActionNamespaceReadUnmanaged,
+		identity.ActionNamespaceTriageUnmanaged,
+		identity.ActionNamespaceManageSweeps,
+		identity.ActionNamespaceStartSweep,
+		identity.ActionServerLinkNamespaces,
+		identity.ActionCollectionSetContext,
+		identity.ActionBlueprintRead,
+		identity.ActionBlueprintSetContext,
+		identity.ActionUnitRedact,
+	} {
+		if fam, ok := access.FamilyOf(a); ok {
+			t.Errorf("action %q has the family %v, want none until its routes land", a, fam)
+		}
+
+		assertChecks(t, f.authz, site, []check{
+			{identity.ServerObject(), a, false},
+			{identity.NamespaceObject("acme"), a, false},
+		})
+	}
+}
+
 // TestOperatorHoldsNoAdministrationOrData checks the operator refusals that
 // the families exist for: an operator grant on the installation cannot make
 // a principal, cannot grant, and cannot read the state of a unit.
@@ -491,6 +549,39 @@ func TestBuiltInRoleFamilies(t *testing.T) {
 			if !site.Has(a) {
 				t.Errorf("site administrator lacks %s", a)
 			}
+		}
+	}
+}
+
+// TestContextActionRoles proves which built-in roles hold the actions that set
+// context. A viewer never writes. A writer sets the context of units, as it
+// can already change the reserved output of a unit with a state write. Only
+// the roles that administer a namespace set the context of the namespace,
+// because its owners and on-call text are the default of every unit in it.
+func TestContextActionRoles(t *testing.T) {
+	t.Parallel()
+
+	holders := map[identity.Action][]string{
+		identity.ActionUnitSetContext: {
+			access.RoleWriter, access.RoleMaintainer, access.RoleAdmin, access.RoleAccountAdministrator,
+			access.RoleSiteAdministrator,
+		},
+		identity.ActionNamespaceSetContext: {
+			access.RoleAdmin, access.RoleAccountAdministrator, access.RoleSiteAdministrator,
+		},
+	}
+
+	for _, role := range access.BuiltInRoles() {
+		for action, want := range holders {
+			if got := role.Has(action); got != slices.Contains(want, role.ID) {
+				t.Errorf("role %q holds %s = %v, want %v", role.ID, action, got, !got)
+			}
+		}
+	}
+
+	for action := range holders {
+		if fam, ok := access.FamilyOf(action); !ok || fam != access.FamilyData {
+			t.Errorf("family of %s = %v, %v; want the data family", action, fam, ok)
 		}
 	}
 }
@@ -829,6 +920,7 @@ func TestCreateNamespaceGrantsTheCreator(t *testing.T) {
 	}
 
 	ns := namespace.Namespace{
+		ID:        namespace.NewID(),
 		CreatedAt: time.Unix(0, 0), Name: "gamma", HomeRegion: "",
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false}, FailoverVersion: 1,
 	}
@@ -848,6 +940,7 @@ func TestCreateNamespaceGrantsTheCreator(t *testing.T) {
 	})
 
 	ns.Name = "delta"
+	ns.ID = namespace.NewID()
 
 	g, err = f.svc.CreateNamespace(t.Context(), testEntry(), admin, ns)
 	if err != nil || g != nil {

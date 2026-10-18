@@ -1,0 +1,329 @@
+// Package jobtest is the conformance suite for job.Store and
+// job.FreezeStore implementations. Every store adapter runs it:
+//
+//	func TestJobConformance(t *testing.T) {
+//		t.Parallel()
+//		jobtest.Run(t, func(t *testing.T) jobtest.Harness { return newHarness(t) })
+//	}
+//
+// The suite comes before the first SQL adapter. Its cases state the rules
+// of the ports, and a reference adapter in memory, in the tests of this
+// package, runs them. The cases of job.Claimer, job.Recorder and
+// job.ArtifactStore come with their first implementation, because they need
+// the blob store and the item keys.
+package jobtest
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"opendustpan.org/opendustpan/internal/ident"
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/durable"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/namespace"
+)
+
+// Harness is one fresh, empty database for one case. The stores share the
+// database, as the store adapters of one installation do.
+type Harness struct {
+	Jobs    job.Store
+	Durable durable.Store
+	Freezes job.FreezeStore
+	Domain  Domain
+}
+
+// Domain makes the rows that a job needs and that other ports own, and
+// reads the audit entries that the job store appends.
+type Domain interface {
+	// CreateNamespace creates the namespace name and returns its fence.
+	CreateNamespace(ctx context.Context, name namespace.Name) (namespace.Fence, error)
+	// CreateUnit creates a unit of tool in the namespace of fence and
+	// returns its reference, with its stable unit ID set.
+	CreateUnit(ctx context.Context, fence namespace.Fence, tool, name string) (identity.Object, error)
+	// BumpFence increments the failover version of the namespace of fence,
+	// as a failover does, and returns the new fence.
+	BumpFence(ctx context.Context, fence namespace.Fence) (namespace.Fence, error)
+	// SetStateVersion makes version the current state version of unit, as
+	// a state write of its tool does.
+	SetStateVersion(ctx context.Context, fence namespace.Fence, unit identity.Object, version string) error
+	// AuditEntries returns the audit entries of the namespace ns, in the
+	// order of their append.
+	AuditEntries(ctx context.Context, ns namespace.Name) ([]audit.Entry, error)
+}
+
+// Factory returns a fresh harness for one case.
+type Factory func(t *testing.T) Harness
+
+// Run executes the conformance suite against harnesses from newHarness.
+func Run(t *testing.T, newHarness Factory) {
+	t.Helper()
+
+	cases := []struct {
+		name string
+		run  func(t *testing.T, h Harness)
+	}{
+		{"create stores a queued job and get returns it", testCreateGet},
+		{"get of an unknown ID is ErrNotFound", testGetUnknown},
+		{"two creates with one key and one spec give one job", testCreateKeyOnce},
+		{"a key with another spec conflicts", testCreateKeyConflict},
+		{"create with a dispatch starts the durable operation", testCreateDispatch},
+		{"create with a dispatch obeys the one-change rule", testCreateUnitBusy},
+		{"after ErrUnitBusy, a create with no dispatch waits with unit-busy", testCreateWaits},
+		{"create with a dispatch obeys a freeze", testCreateFrozen},
+		{"create above the open jobs of a unit is ErrLimit", testCreateLimit},
+		{"a write on an older version is ErrConflict", testApplyConflict},
+		{"an event that the state does not allow changes nothing", testApplyTransition},
+		{"a second change dispatch on one unit is ErrUnitBusy", testUnitBusy},
+		{"a failed change rolls back its audit entries", testAuditRollback},
+		{"the unit is free after its phase ends", testUnitFrees},
+		{"a plan dispatch does not hold the unit", testPlanDoesNotHold},
+		{"a change dispatch in a freeze is ErrFrozen", testFrozen},
+		{"break-glass passes a freeze", testBreakGlass},
+		{"a dispatch after the freeze ends", testFreezeEnds},
+		{"a cancel of a dispatched job cancels its operation", testCancelDispatched},
+		{"a cancel of a running job requests the cancel of its operation", testCancelRunning},
+		{"a takeover is a new claim on the same operation", testTakeover},
+		{"a failure during a cancel ends failed", testFailDuringCancel},
+		{"a cancel in awaiting-state ends canceled and abandons", testCancelAwaitingState},
+		{"a stale fence changes nothing", testStaleFence},
+		{"a stale fence on a state version closes nothing", testObserveStaleFence},
+		{"only a final state version closes the delivered jobs of its unit", testObserveStateVersion},
+		{"a review request closes after its merge, and then verifies", testMergeAndVerify},
+		{"a lost webhook: a merge that a later poll sees closes on the earlier state version", testLostWebhook},
+		{"a merge after the last final state version waits", testMergeBeforeOldVersion},
+		{"a late trailer: a commit that a takeover finds closes on the earlier state version", testLateTrailer},
+		{"the claim of a plan phase records the state version, and a takeover again", testPlanClaimRecordsVersion},
+		{"an apply dispatch with a stale plan is ErrPlanStale, and replan goes back", testPlanStale},
+		{"after a restore, orphans are the jobs whose operation ended", testOrphans},
+		{"a canceling job whose claim expires ends canceled at the reconcile", testCancelClaimExpires},
+		{"a running job whose operation fails ends failed at the reconcile", testRunningOperationFails},
+		{"the confirmation gate and a confirmation are stored", testConfirmationStored},
+		{"list filters by unit and state, newest first", testList},
+		{"freezes list, end once, and validate", testFreezes},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			tc.run(t, newHarness(t))
+		})
+	}
+}
+
+// Values that several cases share: the ref of the code location, and two
+// state versions of the unit.
+const (
+	mainRef = "main"
+	svOne   = "sv-1"
+	svTwo   = "sv-2"
+)
+
+// fixture is a namespace with one OpenTofu unit.
+type fixture struct {
+	fence namespace.Fence
+	unit  identity.Object
+}
+
+// setUp creates the namespace acme with the unit network.
+func setUp(t *testing.T, h Harness) fixture {
+	t.Helper()
+
+	fence, err := h.Domain.CreateNamespace(t.Context(), "acme")
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	unit, err := h.Domain.CreateUnit(t.Context(), fence, "opentofu", "network")
+	if err != nil {
+		t.Fatalf("CreateUnit: %v", err)
+	}
+
+	return fixture{fence: fence, unit: unit}
+}
+
+// newJob returns a queued runner job of op on unit with the key key.
+func newJob(unit identity.Object, op job.Operation, key string) *job.Job {
+	phases, err := job.DefaultPhases(job.ExecutorRunner, op)
+	if err != nil {
+		panic(err)
+	}
+
+	j := job.Job{
+		ID:             job.ID(ident.NewID(job.IDPrefix)),
+		Spec:           spec(unit, op),
+		State:          job.StateQueued,
+		Wait:           job.WaitNone,
+		Reason:         "",
+		Phases:         make([]job.Phase, len(phases)),
+		Current:        0,
+		StartedBy:      "al",
+		Agent:          "",
+		AgentMode:      "",
+		BreakGlass:     nil,
+		Delivery:       nil,
+		Closed:         nil,
+		Verification:   job.VerificationNone,
+		IdempotencyKey: key,
+		Version:        0,
+		CreatedAt:      time.Time{},
+		UpdatedAt:      time.Time{},
+	}
+
+	for i, k := range phases {
+		j.Phases[i].Kind = k
+	}
+
+	return &j
+}
+
+// spec returns the spec of a runner job of op on unit.
+func spec(unit identity.Object, op job.Operation) job.Spec {
+	return job.Spec{
+		Unit:      unit,
+		Operation: op,
+		Executor:  job.ExecutorRunner,
+		Location: job.Location{
+			Connection: "github", Repository: "acme/infra", Ref: mainRef, Directory: "network", Revision: "abc123",
+		},
+		Steps: []job.Step{{
+			Name: "plan", Role: job.RoleTool, Phase: job.PhasePlan, Args: []string{"tofu", "plan"}, Env: nil,
+			Dir: "", Timeout: 0, AllowFailure: false, ChangesResources: false, Outputs: nil,
+		}},
+		Pool:     "rpl-default",
+		Profile:  "prf-default",
+		Edits:    nil,
+		Delivery: "",
+	}
+}
+
+// entry returns a valid audit entry for action on unit.
+func entry(unit identity.Object, action identity.Action) audit.Entry {
+	return audit.Entry{
+		At: time.Now().UTC(), Namespace: unit.Namespace(), Subject: "al", IDPSubject: "", TokenID: "",
+		Action: string(action), Object: unit.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", ObjectID: "", PrevHash: "", Hash: "", Sequence: 0,
+		FenceVersion: 0,
+	}
+}
+
+// dispatchOf returns the durable start request of the current phase of j.
+func dispatchOf(j *job.Job) *durable.StartRequest {
+	kind := job.RunnerKind(j.Spec.Pool)
+	if j.Spec.Executor == job.ExecutorWriteBack {
+		kind = job.KindWriteBack
+	}
+
+	return &durable.StartRequest{Key: job.PhaseKey(j.ID, j.Current), Kind: kind, Version: 1, Input: nil}
+}
+
+// create stores j and fails t on an error.
+func create(t *testing.T, h Harness, f fixture, j *job.Job, d *durable.StartRequest) job.Job {
+	t.Helper()
+
+	stored, created, err := h.Jobs.Create(t.Context(), *j, d, f.fence,
+		[]audit.Entry{entry(f.unit, job.ActionUnitRunApply)})
+	if err != nil || !created {
+		t.Fatalf("Create = created %v, error %v; want a new job", created, err)
+	}
+
+	return stored
+}
+
+// apply makes the change and fails t on an error.
+func apply(t *testing.T, h Harness, f fixture, c job.Change) job.Job {
+	t.Helper()
+
+	got, err := h.Jobs.Apply(t.Context(), c, f.fence, []audit.Entry{entry(f.unit, job.ActionJobRead)})
+	if err != nil {
+		t.Fatalf("Apply(%s) = %v", c.Event, err)
+	}
+
+	return got
+}
+
+// change returns the change of j by ev.
+func change(j *job.Job, ev job.Event) job.Change {
+	return job.Change{
+		Job: j.ID, Version: j.Version, Event: ev, Wait: job.WaitNone, Reason: "", Dispatch: nil,
+		PlanNotBefore: time.Time{}, Executor: "", Delivery: nil, MergedAt: time.Time{}, Approval: nil,
+	}
+}
+
+// dispatch returns the dispatch change of the current phase of j.
+func dispatch(j *job.Job) job.Change {
+	c := change(j, job.EventDispatch)
+	c.Dispatch = dispatchOf(j)
+
+	return c
+}
+
+// claimOp claims the operation of kind k in the durable store, as an
+// executor does before it applies EventClaim.
+func claimOp(t *testing.T, h Harness, owner string, k durable.Kind, lease time.Duration) durable.Operation {
+	t.Helper()
+
+	op, err := h.Durable.Claim(t.Context(), durable.ClaimRequest{
+		Owner: owner, Kinds: []durable.Kind{k}, MaxVersions: nil, Lease: lease,
+	})
+	if err != nil {
+		t.Fatalf("durable Claim = %v", err)
+	}
+
+	return op
+}
+
+// claimed applies EventClaim for owner to j.
+func claimed(t *testing.T, h Harness, f fixture, j *job.Job, owner string) job.Job {
+	t.Helper()
+
+	c := change(j, job.EventClaim)
+	c.Executor = owner
+
+	return apply(t, h, f, c)
+}
+
+// assertState fails t when the job id is not in state want.
+func assertState(t *testing.T, h Harness, id job.ID, want job.State) {
+	t.Helper()
+
+	got, err := h.Jobs.Get(t.Context(), id)
+	if err != nil || got.State != want {
+		t.Fatalf("job %s = %s, %v; want %s", id, got.State, err, want)
+	}
+}
+
+// ids returns the IDs of jobs, in order.
+func ids(jobs []job.Job) []job.ID {
+	out := make([]job.ID, 0, len(jobs))
+	for i := range jobs {
+		out = append(out, jobs[i].ID)
+	}
+
+	return out
+}
+
+// newFreeze returns an active freeze of the namespace of f, open ended.
+func newFreeze(f fixture) job.Freeze {
+	return job.Freeze{
+		ID: ident.NewID("frz-"), Namespace: f.fence.Namespace, Reason: "release week",
+		StartsAt: time.Now().Add(-time.Hour), EndsAt: time.Time{}, CreatedBy: "al", EndedBy: "",
+	}
+}
+
+// freeze creates an active freeze of the namespace of f and returns it.
+func freeze(t *testing.T, h Harness, f fixture) job.Freeze {
+	t.Helper()
+
+	fr := newFreeze(f)
+
+	err := h.Freezes.CreateFreeze(t.Context(), fr, f.fence, entry(f.unit, job.ActionNamespaceManageFreezes))
+	if err != nil {
+		t.Fatalf("CreateFreeze = %v", err)
+	}
+
+	return fr
+}

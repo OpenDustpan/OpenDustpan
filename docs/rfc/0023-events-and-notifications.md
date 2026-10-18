@@ -1,14 +1,15 @@
 ---
 rfc: 23
 title: Events, notifications and webhooks
-status: draft
+status: accepted
 created: 2026-10-10
+adr: 145
 ---
 
 # RFC 23. Events, notifications and webhooks
 
-Status: draft. A stub opened from the competitor review in the research doc
-"IaC and TACOS landscape". It records the gap and first ideas only.
+Status: accepted (ADR 145). It was a stub opened from the competitor review in
+the research doc "IaC and TACOS landscape".
 
 ## Problem
 
@@ -37,4 +38,6 @@ has `notification-configurations`. RFC 13 sends webhooks for approvals only.
 
 ## Outcome
 
-None yet.
+Accepted as [ADR 145](../adr/0145-one-event-model-and-sinks.md), one event
+model and sinks, on 2026-10-18. A question of this RFC that ADR 145 does not
+decide needs a new RFC.
