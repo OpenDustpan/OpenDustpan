@@ -3,6 +3,7 @@ package schema_test
 import (
 	"errors"
 	"slices"
+	"strconv"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/backup"
@@ -275,7 +276,8 @@ func TestCheckBaseline(t *testing.T) {
 		t.Fatalf("check baseline of 1, 75, 76 = %v, want a BeforeBaselineError", err)
 	}
 
-	want := "database schema version 76 is older than baseline schema version 100: " +
+	want := "database schema version 76 is older than baseline schema version " +
+		strconv.FormatInt(schema.BaselineVersion, 10) + ": " +
 		"no binary can upgrade this database. Start the server on an empty database"
 	if before.Error() != want {
 		t.Fatalf("message = %q, want %q", before.Error(), want)

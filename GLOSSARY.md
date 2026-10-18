@@ -446,9 +446,9 @@ _Avoid_: Secret count
 
 ### Hosted service
 
-**Hosted distribution**:
-The build of the server and the console that the project runs as its hosted service. It uses the public SDK and the console extension points. It adds only shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59).
-_Avoid_: Fork, enterprise edition, cloud edition
+**OpenDustpan Cloud**:
+The hosted service that the project runs. It is the build of the server and the console with shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59, ADR 77).
+_Avoid_: Fork, enterprise edition, hosted distribution, cloud edition (as an edition with its own features)
 
 ### Resources and self-service
 

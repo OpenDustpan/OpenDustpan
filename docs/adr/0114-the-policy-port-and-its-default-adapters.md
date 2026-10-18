@@ -1,0 +1,198 @@
+# 114. The policy port and its four default adapters
+
+Status: accepted · 2026-10-17 · supersedes the "Policy engines" section of RFC 13
+
+## Context
+
+[RFC 13](../rfc/0013-policy-and-approvals.md) proposes a `Policy` port for
+edit policy, and leaves the engines open. ADR 103 decides that
+`job.Service.Start` asks the `job.Decider` port for a decision, and that a
+policy that fails is not a denial.
+
+The owner decided on 17 October 2026: policy and quotas are SDK ports with
+default adapters. The policy adapters are the built-in Expr engine, OPA over
+REST, Cedar and a signed webhook. Expr inside blueprints stays built in.
+
+## Decision
+
+1. **A tool-neutral package `pkg/policy`.** It holds the port
+   `policy.Engine`, the input and decision types, the rule that combines
+   decisions, and the contracts of the four adapters. It imports no transport
+   and no store. depguard holds it to the rules of the domain packages.
+2. **One port, one method.** `policy.Engine.Decide` takes a
+   `policy.Input` and returns a `policy.Decision`:
+   - The input has a kind, a schema version and a JSON document. Version 1
+     has two kinds: `catalog.request` (a revision of a Catalog request at a
+     recheck point) and `job.start` (the start of a job, ADR 103 decision 1).
+     The document of each kind and version is a published JSON shape, because
+     policies depend on it as a client depends on an API.
+   - The decision has an effect (`allow`, `deny` or `approve`), the reasons,
+     the approvals for `approve` (a number and the groups of the approvers),
+     and the name and the version of the policy that decided.
+   - An error is a failure of the policy, never a denial and never an
+     allow. It wraps `policy.ErrUnavailable` for an engine that does not
+     answer in time, `policy.ErrInvalidDecision` for an answer that does not
+     parse, and `policy.ErrRuleFailed` for a rule whose condition fails to
+     run. A rule that fails to run makes the whole decision an error, also
+     when another rule matches: the engine never skips it and decides on
+     the other rules. The caller then changes nothing, and the recheck
+     stops (ADR 113 decision 8).
+   - A kind that an engine does not take gives `policy.ErrUnsupportedKind`.
+     A namespace binds each engine to the kinds that it decides.
+3. **The input of `catalog.request`.** The document holds the recheck point,
+   the requester (subject, groups, agent and agent mode), the namespace, the
+   blueprint name and version, the request name, the home, `ensure`, the
+   operation (`create`, `update` or `destroy`), each answer with its old
+   value, and the usage of each quota rule of the blueprint (ADR 115). It
+   holds no secret value, because no answer is secret (ADR 111 decision 3).
+4. **The strictest decision wins.** A namespace can bind more than one
+   engine, and a blueprint has its own Expr rules. The Catalog asks each one,
+   and `policy.Combine` joins the decisions:
+   - One `deny` gives `deny`, with the reasons of each `deny`.
+   - Else one `approve` gives `approve`, with one requirement for each
+     `approve`: its number of approvals by members of its groups. A change
+     needs each requirement. So an `approve` by `security` and an `approve`
+     by `dba` need one approval by `security` and one by `dba`, never one
+     approval by either group. Two `approve` decisions with the same set of
+     groups give one requirement with the higher number.
+   - Else the result is `allow`.
+
+   `policy.Combine` returns a `policy.Combined`, whose `Approvals` is the
+   list of requirements, sorted by their groups. Each engine still answers
+   one `policy.Decision` with at most one set of approvals.
+
+   `policy.Combine` first checks each decision, and returns an error that
+   wraps `policy.ErrInvalidDecision` for a decision that is not valid: an
+   empty or unknown effect, `approve` with no approvals or with a count
+   outside 1 to 10, or approvals on another effect. So a decision that an
+   engine or a caller built wrong never becomes an `allow`. A table-driven
+   test covers the rule and each error.
+5. **The built-in Expr adapter.** It runs the `policy` rules of a blueprint
+   version (ADR 112 decision 7), and the rules of a namespace policy
+   document in the same shape. The environment is the input document as
+   `input`, with the aliases `inputs`, `request` and `usage` of ADR 112
+   decision 6. A rule whose `when` gives true adds its effect. No rule that
+   matches gives `allow`. A `when` that fails to run gives an error that
+   wraps `policy.ErrRuleFailed` and no decision (ADR 112 decision 7). The
+   limits of ADR 112 decision 12 apply. The decision names the blueprint
+   version or the namespace policy version.
+6. **The OPA adapter.** It calls the Data API of an OPA server that the
+   team runs:
+   - `POST <url>/v1/data/<path>` with the body `{"input": <document>}`, over
+     HTTPS, with a bearer token from a sensitive setting of the namespace,
+     and no redirect. The URL passes the endpoint rule of decision 9.
+   - The adapter asks with `strict-builtin-errors`, so a rule whose built-in
+     function fails gives an error, which the adapter returns as
+     `policy.ErrRuleFailed`, not an undefined rule.
+   - The answer must be `{"result": {"effect": "...", "reasons": [...],
+     "approvals": {"count": n, "groups": [...]}}}`. A missing `result` (an
+     undefined decision) is `policy.ErrInvalidDecision`, not a `deny`, so a
+     wrong path in the settings fails loud.
+   - The `policyVersion` of the decision is the `revision` of the bundle when
+     the server sends one with `?provenance`, else empty.
+
+   The adapter needs only `net/http` in an adapter package, so it adds no
+   dependency.
+7. **The Cedar adapter.** It maps the input to one Cedar request:
+   - principal `OpenDustpan::Principal::"<subject>"`, with the groups as
+     parents `OpenDustpan::Group::"<name>"`,
+   - action `OpenDustpan::Action::"<kind>"`, for example
+     `"catalog.request"`,
+   - resource `OpenDustpan::Blueprint::"<namespace>/<name>"`, or
+     `OpenDustpan::Unit::"<unit reference>"` for `job.start`.
+   - context: the input document.
+
+   Cedar gives allow or deny only. So the adapter asks two requests: the
+   action of the kind, and the same action with the suffix
+   `.without-approval`. Deny on the first gives `deny`. Allow on the first
+   and deny on the second gives `approve`, with the number of approvals and
+   the groups of a setting of the namespace. Allow on both gives `allow`. The
+   reasons are the IDs of the policies that decided. Cedar skips a policy
+   whose evaluation fails, and lists the error in its diagnostics. The
+   adapter returns `policy.ErrRuleFailed` for each such error, so a `forbid`
+   policy that fails never becomes an allow. The adapter needs a
+   Cedar library, `github.com/cedar-policy/cedar-go`, under the Apache-2.0
+   license. It is not in `go.mod`: this design adds no dependency. The pull
+   request of the adapter adds it, and `make trivy` and `make licenses`
+   then check it.
+8. **The signed webhook adapter.** It sends the input to a URL that the
+   team runs:
+   - `POST <url>` with the body `{"kind": ..., "schemaVersion": ...,
+     "document": ...}`, over HTTPS, with no redirect. The URL passes the
+     endpoint rule of decision 9. `document` is the input document as a
+     JSON object (`policy.WebhookCall.Document` is a `json.RawMessage`),
+     never a base64 string.
+   - The header `Dustpan-Signature: t=<unix seconds>,v1=<hex>` signs the
+     body. `<hex>` is the HMAC-SHA256 of `<unix seconds>.<body>` with the
+     shared secret of the hook, in lowercase hex. The header
+     `Dustpan-Delivery` gives a new ID for each call.
+   - The receiver refuses a signature that does not match and a time more
+     than 5 minutes from its clock. `policy.Sign` and `policy.Verify` hold
+     the rule, and a receiver written in Go can use them. A table-driven
+     test covers both.
+   - The answer must be the JSON of a decision: `{"effect": ..., "reasons":
+     [...], "approvals": {...}, "policyVersion": "..."}`.
+   - The secret is a sensitive setting of the namespace. Two secrets can be
+     active during a rotation: the server signs with the newest one and
+     sends one `v1` for each.
+9. **Limits of every adapter.** A call has a time limit of 5 seconds. An
+   answer is at most 64 KiB, with at most 32 reasons of at most 1 KiB each.
+   A decision of `approve` needs from 1 to 10 approvals. An answer outside
+   these limits is `policy.ErrInvalidDecision`. An error never holds a part
+   of the body of an answer, also not an unknown field or an effect that is
+   not valid: it names the size, or the offset of a syntax error, only.
+
+   **Endpoints.** An operator of the installation sets an allowlist of the
+   endpoints of the OPA and the webhook adapters (`policy.Allowlist`). A
+   holder of `namespace:manage-policy` can name only a URL whose host is on
+   it (`Allowlist.CheckURL`): HTTPS, no user info and no fragment. The
+   adapter checks each address that it connects to after the name
+   resolution (`Allowlist.CheckAddr`), and follows no redirect. It refuses
+   a loopback, private, link-local, unspecified or multicast address, and
+   the other special ranges (shared address space, benchmarking, NAT64,
+   documentation), unless a private prefix of the allowlist holds it. So a
+   namespace setting cannot point the server at the metadata service of a
+   cloud or at an internal service, also when a DNS answer changes after
+   the check. A refused URL or address is `policy.ErrEndpoint`.
+10. **The job decision uses the same port.** The `job.Decider` adapter of the
+    server asks the engines that the namespace binds to `job.start`, and
+    joins the result with the decision that the Catalog recorded for the
+    revision of the job (ADR 116 decision 6). So a team writes one policy for
+    both, in the engine of its choice.
+11. **Every decision is in the record.** A revision stores, for each engine
+    that it asked at each recheck point: the engine, the policy version, the
+    effect, the reasons and the SHA-256 of the input document. The audit
+    entry of the submit and of a rejection holds the combined effect and the
+    policy versions (ADR 117 decision 6). The input document is in the
+    revision, so a person can read what the policy saw.
+12. **A conformance suite.** `pkg/policy/policytest` gets a fixture that
+    each adapter implements, with a small set of policies: allow all, deny a
+    blueprint by name, ask for 2 approvals by the group `dba`, a policy
+    that times out, and a deny rule that fails to run next to an approve
+    rule that matches. The last one must give an error that wraps
+    `policy.ErrRuleFailed` or `policy.ErrUnavailable`, not an allow and not
+    the approve. Each adapter runs the suite against a real engine in its
+    own test: an OPA server, the Cedar library, or a webhook receiver in the
+    test.
+
+## Consequences
+
+- A team uses the policy engine that it already runs. The server needs no
+  embedded OPA.
+- A wrong OPA path or a broken webhook fails the submit. It never lets a
+  request through, and it never denies one by mistake.
+- A team that writes Cedar sets the approvers in a namespace setting,
+  because Cedar has no effect other than allow and deny.
+- Two network calls can run at each recheck point. The time limit of each
+  is 5 seconds, so a submit can take 10 seconds when two engines are slow.
+
+## Open questions
+
+- Does the PM accept `github.com/cedar-policy/cedar-go` as a dependency, or
+  does the Cedar adapter call a Cedar service over HTTP that the team runs?
+- Does a namespace bind engines to a collection or to a blueprint, or only
+  to the namespace?
+- Does the server cache an `allow` for the same input digest within one
+  recheck point, so that a retry does not call the engine again?
+- Which defaults does the job decision give with no policy installed
+  (ADR 103 "Open questions")? This ADR gives none.
