@@ -25,7 +25,9 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -149,7 +151,43 @@ func dirs(t *testing.T) paths {
 		t.Fatalf("set %s to the root of the repository", envOut)
 	}
 
+	if tagged := taggedDirs(t, out); len(tagged) > 0 {
+		t.Fatalf("tagged migrations exist (%s); collapse only above the last tag is not implemented",
+			strings.Join(tagged, ", "))
+	}
+
 	return paths{in: in, out: out}
+}
+
+// taggedDirs returns the tag directories under
+// pkg/store/<dialect>/testdata/tag-migrations of the repository at root. A
+// released tag has one, and a collapse of the migrations would break the
+// upgrade from it.
+func taggedDirs(t *testing.T, root string) []string {
+	t.Helper()
+
+	var found []string
+
+	for _, dialect := range dialects {
+		dir := filepath.Join(root, "pkg", "store", dialect, "testdata", "tag-migrations")
+
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+
+		if err != nil {
+			t.Fatalf("read %s: %v", dir, err)
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				found = append(found, filepath.Join(dir, entry.Name()))
+			}
+		}
+	}
+
+	return found
 }
 
 // dialects are the store dialects that each get a baseline.
@@ -898,5 +936,39 @@ func checkPostgresVersionTable(ctx context.Context, t *testing.T, old, fresh *pg
 
 	if got := postgresVersionShape(ctx, t, fresh); !slices.Equal(got, want) {
 		t.Fatalf("the version table is %v, want the table of the old migrations %v", got, want)
+	}
+}
+
+// TestTaggedDirsRefuseTheCollapse proves that the write tests find a tag
+// directory of either dialect, and ignore the README file next to them.
+func TestTaggedDirsRefuseTheCollapse(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	if got := taggedDirs(t, root); len(got) != 0 {
+		t.Fatalf("tag directories of an empty repository = %v, want none", got)
+	}
+
+	base := filepath.Join(root, "pkg", "store", "postgres", "testdata", "tag-migrations")
+	if err := os.MkdirAll(base, 0o750); err != nil {
+		t.Fatalf("make %s: %v", base, err)
+	}
+
+	if err := os.WriteFile(filepath.Join(base, "README.md"), []byte("notes\n"), 0o600); err != nil {
+		t.Fatalf("write the README: %v", err)
+	}
+
+	if got := taggedDirs(t, root); len(got) != 0 {
+		t.Fatalf("tag directories with a README only = %v, want none", got)
+	}
+
+	tag := filepath.Join(base, "v0.1.0")
+	if err := os.Mkdir(tag, 0o750); err != nil {
+		t.Fatalf("make %s: %v", tag, err)
+	}
+
+	if got := taggedDirs(t, root); !slices.Equal(got, []string{tag}) {
+		t.Fatalf("tag directories = %v, want [%s]", got, tag)
 	}
 }
