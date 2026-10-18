@@ -19,6 +19,7 @@ import (
 	"opendustpan.org/opendustpan/internal/ident"
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -179,6 +180,7 @@ type Updates struct {
 	journal        *JournalEntries
 	replayer       JournalReplayer
 	stateAt        StateAtReader
+	names          inventory.HistoryReader
 }
 
 // TokenChecker answers whether an access token still works. It is the port of
@@ -220,11 +222,18 @@ func NewUpdates(cfg UpdatesConfig) (*Updates, error) {
 		journal:        cfg.Journal,
 		replayer:       cfg.Replayer,
 		stateAt:        nil,
+		names:          nil,
 	}
 
 	// An update store that also finds the state at a time enables ExportAt.
 	if reader, ok := cfg.Updates.(StateAtReader); ok {
 		s.stateAt = reader
+	}
+
+	// An update store that also keeps the inventory change log lets ExportAt
+	// name the stack at the time.
+	if reader, ok := cfg.Updates.(inventory.HistoryReader); ok {
+		s.names = reader
 	}
 
 	if s.now == nil {

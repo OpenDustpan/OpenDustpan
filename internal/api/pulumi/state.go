@@ -355,7 +355,9 @@ func (h *Handler) listStateResources(
 // time in Unix milliseconds. Running is the version of an update that ran at
 // the time, or 0: the state is then the one before that update. RequestedBy
 // is the subject that asked for the update of Version, as in the update
-// history.
+// history. NameAtTime is the name of the stack at the time, as project/stack,
+// and CurrentName is its name now. Each is omitted when the inventory change
+// log does not know it. For a stack that was never renamed they are equal.
 type stateAtResourcesResponse struct {
 	Resources   []stateResourceItem `json:"resources"`
 	NextCursor  string              `json:"nextCursor"`
@@ -365,6 +367,8 @@ type stateAtResourcesResponse struct {
 	Running     int                 `json:"running"`
 	RequestedBy string              `json:"requestedBy"`
 	Incomplete  bool                `json:"incomplete"`
+	NameAtTime  string              `json:"nameAtTime,omitempty"`
+	CurrentName string              `json:"currentName,omitempty"`
 }
 
 // parseStateAt reads the time of a state-at request: Unix milliseconds.
@@ -443,6 +447,8 @@ func (h *Handler) listStateAtResources(
 		Running:     found.Running,
 		RequestedBy: found.CreatedBy,
 		Incomplete:  page.Incomplete,
+		NameAtTime:  found.Names.AtTime,
+		CurrentName: found.Names.Current,
 	})
 }
 

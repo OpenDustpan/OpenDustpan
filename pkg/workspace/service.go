@@ -273,7 +273,22 @@ type Service struct {
 	maxPending int
 	retention  time.Duration
 	stateAt    StateAtReader
+	names      inventory.HistoryReader
 	stripes    [lockStripes]sync.Mutex
+}
+
+// attachOptionalReaders sets the optional reads of the state store. A store
+// that also finds the state at a time enables ReadStateAt. A store that also
+// keeps the inventory change log lets ReadStateAt name the workspace at the
+// time.
+func attachOptionalReaders(s *Service, states StateStore) {
+	if reader, ok := states.(StateAtReader); ok {
+		s.stateAt = reader
+	}
+
+	if reader, ok := states.(inventory.HistoryReader); ok {
+		s.names = reader
+	}
 }
 
 // NewService returns a Service. Every port, Namespaces and the Sealer are
@@ -304,13 +319,11 @@ func NewService(cfg Config) (*Service, error) {
 		maxPending: cfg.MaxPendingVersions,
 		retention:  cfg.Retention,
 		stateAt:    nil,
+		names:      nil,
 		stripes:    [lockStripes]sync.Mutex{},
 	}
 
-	// A state store that also finds the state at a time enables ReadStateAt.
-	if reader, ok := cfg.States.(StateAtReader); ok {
-		s.stateAt = reader
-	}
+	attachOptionalReaders(s, cfg.States)
 
 	if s.now == nil {
 		s.now = time.Now

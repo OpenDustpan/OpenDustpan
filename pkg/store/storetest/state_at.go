@@ -116,7 +116,13 @@ func stateAtID(t *testing.T, f stateAtFixture) stack.ID {
 // stateAtOf returns the expected answer of a case. Update "u<n>" has version
 // n and the creator "by-u<n>".
 func stateAtOf(ended time.Time, version, running int) stack.StateAt {
-	return stack.StateAt{EndedAt: ended, CreatedBy: fmt.Sprintf("by-u%d", version), Version: version, Running: running}
+	return stack.StateAt{
+		EndedAt:   ended,
+		CreatedBy: fmt.Sprintf("by-u%d", version),
+		Version:   version,
+		Running:   running,
+		Names:     inventory.Names{AtTime: "", Current: ""},
+	}
 }
 
 // stateAtCase is one question and its answer. With wantErr ErrNoStateAt, first
@@ -131,7 +137,13 @@ type stateAtCase struct {
 
 // noState is the answer that comes with an error.
 func noState() stack.StateAt {
-	return stack.StateAt{EndedAt: time.Time{}, CreatedBy: "", Version: 0, Running: 0}
+	return stack.StateAt{
+		EndedAt:   time.Time{},
+		CreatedBy: "",
+		Version:   0,
+		Running:   0,
+		Names:     inventory.Names{AtTime: "", Current: ""},
+	}
 }
 
 // answers returns the case with a state and no error.

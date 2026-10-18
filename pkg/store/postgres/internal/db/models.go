@@ -219,6 +219,25 @@ type Inventory struct {
 	LockOperation pgtype.Text
 }
 
+type InventoryChange struct {
+	NamespaceID   string
+	Seq           int64
+	AtMs          int64
+	Tool          string
+	UnitID        string
+	Name          string
+	DisplayName   string
+	Status        string
+	Collection    string
+	Kind          string
+	ResourceCount pgtype.Int8
+}
+
+type InventoryChangeHead struct {
+	NamespaceID string
+	LastSeq     int64
+}
+
 type InventoryDeleted struct {
 	Namespace    string
 	Tool         string
