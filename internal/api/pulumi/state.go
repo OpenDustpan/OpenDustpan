@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/stack"
@@ -147,7 +148,16 @@ func (h *Handler) stateRoutes() []Route {
 		Serve:   h.diffState,
 	}
 
-	return []Route{versioned[0], versioned[1], versioned[2], diff, h.revealRoute()}
+	at := Route{
+		Method:  http.MethodGet,
+		Path:    "/api/stacks/{namespace}/{project}/{stack}/state-at/{at}/resources",
+		Scope:   ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionUnitRead},
+		Resolve: resolveGetStack,
+		Serve:   h.listStateAtResources,
+	}
+
+	return []Route{versioned[0], versioned[1], versioned[2], diff, at, h.revealRoute()}
 }
 
 // stateTargetOf parses the stack reference and the version of a state
@@ -337,6 +347,102 @@ func (h *Handler) listStateResources(
 		NextCursor: page.NextCursor,
 		Incomplete: page.Incomplete,
 		Reason:     page.Reason,
+	})
+}
+
+// stateAtResourcesResponse is one page of the masked resource list of a stack
+// at a time. Version is the update that held the state, and EndedAt is its end
+// time in Unix milliseconds. Running is the version of an update that ran at
+// the time, or 0: the state is then the one before that update. RequestedBy
+// is the subject that asked for the update of Version, as in the update
+// history.
+type stateAtResourcesResponse struct {
+	Resources   []stateResourceItem `json:"resources"`
+	NextCursor  string              `json:"nextCursor"`
+	Reason      string              `json:"reason,omitempty"`
+	Version     int                 `json:"version"`
+	EndedAt     int64               `json:"endedAt"`
+	Running     int                 `json:"running"`
+	RequestedBy string              `json:"requestedBy"`
+	Incomplete  bool                `json:"incomplete"`
+}
+
+// parseStateAt reads the time of a state-at request: Unix milliseconds.
+func parseStateAt(raw string) (time.Time, error) {
+	ms, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || ms < 0 {
+		return time.Time{}, fmt.Errorf("%w: time %q is not Unix milliseconds", stack.ErrInvalidUpdate, raw)
+	}
+
+	return time.UnixMilli(ms).UTC(), nil
+}
+
+// listStateAtResources answers one page of the masked resource list of the
+// state that a stack held at a time. It takes the same paging and filter as
+// the list of one version.
+func (h *Handler) listStateAtResources(
+	w http.ResponseWriter, r *http.Request, _ identity.Principal, _ identity.Object,
+) {
+	ctx := r.Context()
+
+	ref, ok := h.updateRef(w, r)
+	if !ok {
+		return
+	}
+
+	at, err := parseStateAt(r.PathValue("at"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	cursor, limit, ok := h.statePaging(w, r)
+	if !ok {
+		return
+	}
+
+	current, found, err := h.updates.ExportAt(ctx, ref, at)
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	target := stateTarget{ref: ref, version: int64(found.Version), latest: false}
+
+	previous, ok := h.statePrevious(w, r, target, current)
+	if !ok {
+		return
+	}
+
+	page, err := stack.ListStateResources(current.Deployment, previous, cursor, limit, r.URL.Query().Get("filter[q]"))
+	if err != nil {
+		h.writeError(ctx, w, err)
+
+		return
+	}
+
+	items := make([]stateResourceItem, 0, len(page.Resources))
+	for i := range page.Resources {
+		items = append(items, stateResourceItem{
+			URN:      page.Resources[i].URN,
+			Type:     page.Resources[i].Type,
+			Provider: page.Resources[i].Provider,
+			Parent:   page.Resources[i].Parent,
+			Changed:  page.Resources[i].Changed,
+		})
+	}
+
+	h.writeJSON(ctx, w, http.StatusOK, stateAtResourcesResponse{
+		Resources:   items,
+		NextCursor:  page.NextCursor,
+		Reason:      page.Reason,
+		Version:     found.Version,
+		EndedAt:     found.EndedAt.UnixMilli(),
+		Running:     found.Running,
+		RequestedBy: found.CreatedBy,
+		Incomplete:  page.Incomplete,
 	})
 }
 
