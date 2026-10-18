@@ -45,21 +45,36 @@ table.
    `#f5c400`, marks primary actions and focus. Every status has a glyph and
    a word. It follows the color scheme of the operating system, light or
    dark. The opt-in theme is "Terminal". It uses IBM Plex Mono for all
-   text, it is dense and keyboard first, and buttons show their shortcut as
-   `label [key]`. "Terminal" is the only name of this theme. No other
+   text, it is dense and keyboard first. A button shows its shortcut as
+   `label [a]` in plain text, in the person's hint style (decision 3), never
+   as a keycap. "Terminal" is the only name of this theme. No other
    product's name names it.
 2. **Keyboard shortcuts (owner).** The selection of the Terminal theme
    turns keyboard shortcuts on, also single-key shortcuts. The person can
    turn shortcut hints and single-key shortcuts off in settings, for
-   example for a screen reader or speech input.
+   example for a screen reader or speech input. The default theme has no
+   keyboard shortcuts of the console and never shows a shortcut hint.
+   Keyboard navigation of the browser (Tab, Enter, Escape) works in every
+   theme.
 3. **Three independent settings.** A theme sets the font of the interface
    and the default of the keyboard settings. A color mode is `system`,
    `light` or `dark`. A color scheme sets the colors. The console selects
    them with the attributes `data-theme`, `data-mode` and `data-scheme` on
-   the root element. The keyboard settings are `theme`, `on` or `off`.
-   `theme` takes the default of the theme: on in Terminal, off in the
-   default theme. So the selection of Terminal turns shortcuts on, and a
-   setting of `off` stays off in every theme.
+   the root element. The keyboard settings are `shortcutHints`,
+   `singleKeyShortcuts` and `shortcutHintStyle`. They apply only in the
+   Terminal theme. The default theme ignores them: it shows no hints and
+   has no shortcuts, whatever their values. `shortcutHints` and
+   `singleKeyShortcuts` are `theme`, `on` or `off`. In Terminal, `theme`
+   and `on` turn the feature on, and `off` turns it off. So the selection
+   of Terminal turns shortcuts on, and a setting of `off` stays off.
+   `shortcutHintStyle` is a preference of how a hint looks. All three
+   styles are plain text of the terminal kind, never keycaps:
+
+   | Value | A hint of the key `a` |
+   | --- | --- |
+   | `brackets` (the default) | `[a]` |
+   | `angles` | `‹a›`, with the single guillemets U+2039 and U+203A, not `<` and `>` |
+   | `inverse` | `a` in reverse video: the colors of the text and of the surface change places |
 4. **No work only for phones (owner).** The themes get no design for small
    screens of their own. No meaning in the default theme depends on hover.
 
@@ -133,8 +148,8 @@ table.
 
 ### Branding
 
-11. **A preset is not a user scheme (owner).** The palette of the hosted
-    distribution (warm charcoal, with a thin yellow rule at the top) is a
+11. **A preset is not a user scheme (owner).** The palette of
+    OpenDustpan Cloud (warm charcoal, with a thin yellow rule at the top) is a
     preset of the white-label mechanism. An operator sets a preset for the
     installation. A person never selects a preset, and the preferences of a
     person never hold one. The theme and the scheme of a person apply on
@@ -160,7 +175,22 @@ table.
     keeps its value, and `null` sets a field back to its default. The
     answer is 200 with the full document. A request from a service
     principal answers 403, because preferences belong to a person. The
-    document:
+    edges of a patch:
+
+    - `"terminalSchemes": null` sets both slots back to their default. A
+      value of `terminalSchemes` that is not an object or `null` answers
+      400.
+    - `updatedAt` is read-only. A patch that holds it answers 400.
+    - A body that is not a JSON object answers 400.
+    - A patch that changes no value answers 200 with the full document. It
+      does not change `updatedAt` and writes no audit entry.
+    - A `PATCH` with a `Content-Type` other than
+      `application/merge-patch+json` answers 415. A page on another site
+      cannot send this type without a CORS preflight, and only the console
+      origins that ADR 5 allows pass the preflight. The type check and the
+      CORS allowlist of ADR 5 are the guard against a cross-site change.
+
+    The document:
 
     ```json
     {
@@ -169,6 +199,7 @@ table.
       "terminalSchemes": { "light": "solarized-light", "dark": "tokyo-night" },
       "shortcutHints": "theme",
       "singleKeyShortcuts": "theme",
+      "shortcutHintStyle": "brackets",
       "updatedAt": 1760745600000
     }
     ```
@@ -179,21 +210,29 @@ table.
     | `colorMode` | `system`, `light`, `dark` | `system` |
     | `terminalSchemes.light`, `terminalSchemes.dark` | a scheme ID: 1 to 64 characters of `a-z`, `0-9` and `-` | `opendustpan` |
     | `shortcutHints`, `singleKeyShortcuts` | `theme`, `on`, `off` | `theme` |
+    | `shortcutHintStyle` | `brackets`, `angles`, `inverse` | `brackets` |
     | `updatedAt` | Unix milliseconds of the last change, or `null` | `null` |
 
     The server checks the shape of a scheme ID, not a list of schemes. The
     console owns the list, so a new scheme needs no server release. A
     console that gets an ID that it does not know uses `opendustpan` and
     says so in settings. A field that the server does not know answers 400.
-    A body over 4 KiB answers 413.
+    A value that the table does not list for its field answers 400, and the
+    message names the field. A body over 4 KiB answers 413.
 14. **The action.** `caller:manage-preferences` allows a person to change
     its own preferences. Its object is the caller. Every authenticated
     person holds it with no grant, as with `token:manage-own`. The change
     passes the policy check of ADR 17, and with no policy the check allows
-    it.
+    it. A person can change preferences with a session or with an access
+    token of the person. An agent run cannot change them: no agent tool
+    holds `caller:manage-preferences`. A request under act-as acts on its
+    subject, so the routes read and change the preferences of the person,
+    never of the agent.
 15. **Audit and storage.** A change writes one audit entry,
-    `preferences-changed`, with the names of the changed fields. The values
-    are not secret, but they tell nothing to an auditor. The store keeps one
+    `preferences-changed`, with the names of the changed fields and the
+    credential of the request: the session ID or the token ID, never the
+    session or the token. The values are not secret, but they tell nothing
+    to an auditor. The store keeps one
     row for each person, with the document and the time of the change.
     Backups hold the rows. A row goes away with its person. Preferences
     belong to the installation, not to a namespace, so a change needs no
@@ -207,11 +246,16 @@ table.
   console pull requests, each with its design in Claude Design.
 - The integrator adds `caller:manage-preferences` to the `identity`
   package and to the self actions, and the two routes to the route test.
-  The routes land with their e2e step. The console uses the routes only
+  Both routes use `Scope: ScopeAuthorized` and `Resolve: resolveCaller`, as
+  `ownTokenRoutes` in `internal/api/server/tokens.go` does. The 403 for a
+  service principal gets its own row in `routes_test.go`. The routes land
+  with their e2e step. The console uses the routes only
   after a server release has them.
 - The root attribute for light and dark in the console changes from
   `data-theme` to `data-mode`. Before 1.0, this change needs no
   deprecation (ADR 73).
+- Easter eggs are not part of this ADR. If the console adds them, a
+  namespace or an account can turn them off.
 - Each new scheme needs its license checked and recorded. A scheme from
   outside Gogh needs a new decision.
 - The generator of the console imports TypeScript, so it needs Node 22.18
@@ -224,6 +268,3 @@ table.
 - Monokai: is a scheme in the Monokai family with a clear license
   acceptable, for example "Monokai Remastered" or "Monokai Soda" in Gogh,
   each with its upstream license checked?
-- The owner calls the preset of decision 11 "OpenDustpan Cloud". The
-  glossary names the service "hosted distribution" and lists "cloud
-  edition" under _Avoid_. Which name does the preset use?

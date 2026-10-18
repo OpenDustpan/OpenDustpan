@@ -827,11 +827,11 @@ A palette of the Terminal theme, from the Gogh collection, mapped to the color t
 _Avoid_: Theme (for a palette), skin
 
 **Preset**:
-Branding that an operator sets for the whole installation, for example the palette of the hosted distribution. A person never selects a preset, and a theme and a color scheme apply on top of it (ADR 180).
+Branding that an operator sets for the whole installation, for example the palette of OpenDustpan Cloud. A person never selects a preset, and a theme and a color scheme apply on top of it (ADR 180).
 _Avoid_: Scheme, theme (for branding)
 
 **Preferences**:
-The settings of the console that a person keeps on the account, on every device (`/api/server/caller/preferences`, ADR 180). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings.
+The settings of the console that a person keeps on the account, on every device (`/api/server/caller/preferences`, ADR 180). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
 _Avoid_: Profile (a profile holds shared config and secrets, RFC 5), user settings
 
 ## Flagged ambiguities
