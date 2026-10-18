@@ -507,16 +507,16 @@ The work that one executor does with one claim (ADR 100 decision 4). A phase has
 _Avoid_: Step (a step is one argument list that a runner starts in a phase), stage
 
 **Gate**:
-A stored rule at one decision point (ADR 224). Its condition is the body of one Cedar policy over the fact document of the decision point. Its outcome is data: `deny`, `approval:<rule>` or `warn`. Its mode is `enforce` or `evaluate`, and a `final` flag stops a narrower scope from saving a gate with the same ID. A gate has a scope: the installation, a namespace, a collection or a unit. A blueprint version or a profile can also hold gates. Any `deny` wins. Else the change waits for each named approval rule. Else each `warn` gives a warning, and a warning stops auto-apply. Else the change goes on. Any Cedar error of a gate in `enforce` mode stops the change with `gate.ErrRuleFailed`. A gate is stored in the server and configured through the API, never in a repository file. A lock, a freeze, a switch and the agent controls are fixed controls, not gates.
+A stored rule at one decision point (ADR 224). Its condition is the body of one Cedar policy over the fact document of the decision point. Its outcome is data: `deny`, `approval:<rule>` or `warn`. Its mode is `enforce` or `evaluate`. Its `onError` is `fail` (the default) or `skip`, and an error of a gate with `fail` stops the change. A gate ID is unique in its scope, and its Cedar policy ID is `<scope key>/<id>`. A gate can be final (see Final gate). A gate has a scope: the installation, a namespace, a collection or a unit. A blueprint version or a profile can also hold gates. Any `deny` wins. Else the change waits for each named approval rule. Else each `warn` gives a warning, and a warning stops auto-apply. Else the change goes on. Any Cedar error of a gate in `enforce` mode stops the change with `gate.ErrRuleFailed`. A gate is stored in the server and configured through the API, never in a repository file. A lock, a freeze, a switch and the agent controls are fixed controls, not gates.
 _Avoid_: Policy (alone), check, approval gate (the requirements of a change come from approval rules), guardrail
 
 **Approval wait**:
-The state of a change that waits for the approvals of its requirements (ADR 225 decision 8). The change is a job, a change order, a profile draft or an access request. The job state value is `awaiting-approval`. A phase dispatches only when each requirement has its count of signatures. The signatures come from distinct people. One rejection rejects the job. A job that waits longer than 7 days expires. For a write-back job, the wait comes before the commit. The review request then still needs the approvals of the forge (ADR 103 decision 3).
+The state of a change that waits for the approvals of its requirements (ADR 225 decision 8). The change is a job, a change order, a profile draft or an access request. The job state value is `awaiting-approval`. A phase dispatches only when each requirement has its count of signatures. The signatures come from distinct people. A rejection by an eligible approver of any requirement rejects the change. A change that waits longer than 7 days expires, and an approval rule can set its own timeout of 1 hour to 30 days. For a write-back job, the wait comes before the commit. The review request then still needs the approvals of the forge (ADR 103 decision 3).
 _Avoid_: Gate (that is the stored rule), pending approval
 
-**Confirmation gate**:
-A fixed control before each phase that changes, for a job of an agent in approve-first mode or with no mode (ADR 103 decision 2). It is not a gate: no stored rule gives it or takes it away. A write-back job of an agent has it in front of its deliver phase in every mode (ADR 128 decision 4). Only the person who asked the agent can pass it. That person gives one confirmation in a request of their own with no agent. The request comes from an interactive console session, never from an access token (ADR 128 decision 5). It has a fresh authentication. That is a new MFA step where built-in MFA covers the person. Otherwise, it is a new authentication at the SSO identity provider of the person. Its maximum age is the fresh-authentication window (`freshAuthSeconds`, ADR 227). A confirmation with no fresh authentication fails with `ErrAuthStale`. The confirmation binds to the plan when a plan phase comes before. A policy never gives it and never takes it away. `job.Service.Confirm` records it and needs the start action of the job, not `job:approve`. An agent cannot give a confirmation (ADR 103 decision 7).
-_Avoid_: Approval (an approval passes an approval gate), consent
+**Confirmation step**:
+A fixed control before each phase that changes, for a job of an agent in approve-first mode or with no mode (ADR 103 decision 2). It is not a gate: no stored rule gives it or takes it away. A write-back job of an agent has it in front of its deliver phase in every mode (ADR 128 decision 4). Only the person who asked the agent can pass it. That person gives one confirmation in a request of their own with no agent. The request comes from an interactive console session, never from an access token (ADR 128 decision 5). It has a fresh authentication. That is a new MFA step where built-in MFA covers the person. Otherwise, it is a new authentication at the SSO identity provider of the person. Its maximum age is the fresh-authentication window (`freshAuthSeconds`, ADR 227). A confirmation with no fresh authentication fails with `ErrAuthStale`. The confirmation binds to the plan when a plan phase comes before. A gate never gives it and never takes it away. `job.Service.Confirm` records it and needs the start action of the job, not `job:approve`. An agent cannot give a confirmation (ADR 103 decision 7). ADR 222 decision 8 gives the name. ADRs 103 and 128 call it the confirmation gate.
+_Avoid_: Confirmation gate (older name), approval (an approval fills a requirement of an approval rule), consent
 
 **Request-changes thread**:
 A thread on a job that a blocking comment opens (ADR 128 decision 11). A reviewer with `job:approve` opens it, or an agent of such a reviewer. The person who started the job cannot open one on a job that they started. While a thread is open, the job model accepts no approve verdict and no confirmation of the job (`job.ErrChangesRequested`). The person who opened the thread, or an approver who may dismiss, resolves it, each in a request with no agent. An approver who may dismiss can record an approve verdict on a requirement of the job. The state of the requirement does not matter. That needs `job:approve` and the approvers of its approval rule. That approver is never the person who started the job, and never an agent. The person who started the job never resolves it, and an agent never resolves it. An agent never rejects a job: a blocking comment is the way for an agent to stop one. A change order has its own request-changes threads (ADR 193). A job with a change order origin gets no job thread (ADR 190 decision 16).
@@ -527,7 +527,7 @@ The resolve of a request-changes thread by a person other than the person who op
 _Avoid_: Override (that is a break-glass or a forced write)
 
 **Agent mode**:
-The mode that a user sets for the agent that acts for them: approve-first, review-request or direct (ADR 103 decision 12). `job.CheckAgent` holds the rule at start. Approve-first is the default: each phase that changes gets a confirmation gate. In review-request mode, the agent changes a unit only through a write-back job that delivers as a review request. Its deliver phase still has a confirmation gate (ADR 128 decision 4). In direct mode, a runner job of the agent changes a unit with no confirmation. A write-back job pushes after the confirmation of its delivery. Direct mode needs three switches, each off by default: one of the installation, one of the namespace of the unit and one of the user. A runner job that only plans needs no mode, and it starts in every mode.
+The mode that a user sets for the agent that acts for them: approve-first, review-request or direct (ADR 103 decision 12). `job.CheckAgent` holds the rule at start. Approve-first is the default: each phase that changes gets a confirmation step. In review-request mode, the agent changes a unit only through a write-back job that delivers as a review request. Its deliver phase still has a confirmation step (ADR 128 decision 4). In direct mode, a runner job of the agent changes a unit with no confirmation. A write-back job pushes after the confirmation of its delivery. Direct mode needs three switches, each off by default: one of the installation, one of the namespace of the unit and one of the user. A runner job that only plans needs no mode, and it starts in every mode.
 _Avoid_: Autonomy level, agent permission
 
 **Freeze**:
@@ -633,7 +633,7 @@ _Avoid_: Source policy, submodule allowlist
 ### Gates and approvals
 
 **Decision point**:
-A fixed moment where the server evaluates the gates of a change (ADR 224 decision 2). There are five: `change.propose` before a plan, `change.planned` after the plan and its facts, `change.apply` before each phase that changes, `profile.save` and `profile.open`. Each has its own fact schema with a version. The decision point is the Cedar action of each gate policy. A new decision point needs a new ADR.
+A fixed moment where the server evaluates the gates of a change (ADR 224 decision 2). There are six. `change.propose` runs before a plan, `change.planned` after the plan and its facts, and `change.apply` before each phase that changes. `profile.save` and `profile.open` run for a profile. `state.write` runs before a write of state from a person's own CLI or CI, and before a tool-neutral state operation. Each has its own fact schema with a version. The decision point is the Cedar action of each gate policy. A new decision point needs a new ADR.
 _Avoid_: Hook, stage, policy point, recheck point
 
 **Fact**:
@@ -645,15 +645,15 @@ The facts of one decision point for one unit, in the shape of the fact schema of
 _Avoid_: Policy input
 
 **Approval rule**:
-Data that says who may approve and how many people must approve (ADR 225 decision 1). It names approvers (groups, users and `owners`), a count of 1 to 10, `authorMayApprove` (default `false`), `freshAuthSeconds` and `staleOnNewPlan`. A gate names it in its outcome as `approval:<rule>`. One rule gives one requirement. An agent never approves.
+Data that says who may approve and how many people must approve (ADR 225 decision 1). It names approvers (groups, users and `unitOwners`), a count of 1 to 10, `authorMayApprove` (default `false`), `freshAuthSeconds` and `timeoutSeconds`. A gate names it in its outcome as `approval:<rule>`. The server resolves the rule ID at the scope of the gate, then at each wider scope, never at a narrower one. One rule gives one requirement. Only a person in a session approves: never an agent, a service principal or a token.
 _Avoid_: Approval policy, quorum
 
 **Approval default**:
-The approval rule that a namespace, a collection or a unit sets for each change below it, with no gate (ADR 225 decision 4). With none set, the default is off and no change needs an approval. When several hold, the strictest wins: the highest count and the shortest fresh window. A default can carve out its own exemptions with `unless`.
+The approval rule that a namespace, a collection or a unit sets for each change below it, with no gate (ADR 225 decision 4). With none set, the default is off and no change needs an approval. Each default holds on its own, and its `unless` exempts a change from that default only. Defaults that name no approvers merge into one requirement `default`, with the highest count and the shortest fresh window. Any holder of the approve action who is not the author can meet it. A default that names approvers is its own requirement `default/<scope>`.
 _Avoid_: Minimum approvals, `MinApprovals`
 
 **Ownership rule**:
-A rule stored in the server that names who owns a part of a change (ADR 225 decision 9). It has a scope, path globs, a Cedar condition `when` over the facts, groups, users, a count and a fresh window. Each rule that applies gives one requirement `owners/<id>`. It is inspired by a code owners file, but it is never a repository file.
+A rule stored in the server that names who owns a part of a change (ADR 225 decision 9). It has a scope, a mode, path globs, a Cedar condition `when` over the facts, groups, users, a count and a fresh window. The mode is `enforce` or `evaluate`, and a new rule starts in `evaluate`. It needs no gate. Each rule in `enforce` mode that applies gives one requirement `owners/<id>`. It is inspired by a code owners file, but it is never a repository file.
 _Avoid_: Code owners, CODEOWNERS, owner rule
 
 **Access limit**:
@@ -669,8 +669,20 @@ The record of one evaluation of one decision point for one change, with the ID p
 _Avoid_: Decision log, policy result
 
 **Fixed control**:
-A control that refuses on its own, outside the gates (ADR 222 decision 4). The fixed controls are the workspace lock, the manual lock, a freeze with its break-glass and the override switches. They are also the module switches, the quota reservation, the source filter and the agent controls. The decision record shows the state of each fixed control that the server checked.
+A control that refuses on its own, outside the gates (ADR 222 decision 4). The fixed controls are the workspace lock, the manual lock, a freeze with its break-glass and the override switches. They are also the module switches, the quota reservation and the quota counts, the source filter, safe delete and the plan staleness check. The agent controls are fixed controls too: the agent mode, the confirmation step and the secret consent. The decision record shows the state of each fixed control that the server checked.
 _Avoid_: Gate, policy
+
+**Final gate**:
+A gate with `final: true` (ADR 224 decision 12). A narrower scope cannot save a gate with its ID or an approval rule with the ID that it names. It cannot pass the gate with a break-glass. Each of these fails with `gate.ErrFinal`. The owner of the gate's own scope can make it weaker only with a reason, a fresh authentication and an audit entry. No gate, final or not, can be changed from a narrower scope.
+_Avoid_: Locked gate, mandatory gate
+
+**Path set**:
+A stored set of glob patterns of a scope, with an ID (ADR 226 decision 13). Go matches the globs against the changed paths, and gives the facts `paths.touches.<set>` (at least one changed path matches) and `paths.only.<set>` (each changed path matches). Cedar reads the booleans.
+_Avoid_: Path filter, path prefix
+
+**Signature carry-over**:
+The setting that lets a signature of a change order carry over to a new plan revision (ADR 225 decision 12). The plan digest inputs of the new revision must be identical. It is `off` by default, and can be set to `on` or `forbidden` on a namespace, a collection or a unit. A changed policy, a changed approver set, an expired approval or a revoked signer never carries over. A carried signature shows `carriedFrom`.
+_Avoid_: Sticky approval, stale approval
 
 **Fresh authentication**:
 A built-in MFA step or a new authentication at the SSO identity provider, no older than the window `freshAuthSeconds` (ADR 227). The default window is 900 seconds. A window of 0 asks for a fresh authentication at each step. A namespace or an approval rule can only set a shorter window.
@@ -683,7 +695,7 @@ An object above jobs that holds the plan of one or more units of one namespace, 
 _Avoid_: Change request (that is an ITSM record, RFC 51), change set, pull request, merge request, review request (that is of the forge)
 
 **Plan revision**:
-The plan of a change order at one time (ADR 191). It has a number, from 1 and one higher for each attach, and one unit plan for each unit. Only the revision with the highest number is current, and the others are superseded. An attach of a new revision voids every signature of the earlier revisions. A ready revision has a digest.
+The plan of a change order at one time (ADR 191). It has a number, from 1 and one higher for each attach, and one unit plan for each unit. Only the revision with the highest number is current, and the others are superseded. An attach of a new revision voids every signature of the earlier revisions, unless signature carry-over holds. A ready revision has a digest.
 _Avoid_: Plan version, patch set, iteration
 
 **Unit plan**:
@@ -703,7 +715,7 @@ The principal that created a change order, or that attached a plan revision to i
 _Avoid_: Owner (that is a context field), requester (that is of a Catalog request)
 
 **Signature**:
-The record that binds one approval to one plan revision of a change order (ADR 191). It holds the approver, the revision and the digest that the approver saw. It also holds the requirement that it counts for, the time and the kind of the credential. A principal has at most one signature on each revision. A new revision voids it, with the cause `new-plan`. A loss of access voids it, with the cause `access-lost`. The digest is the SHA-256 of the encoding `cho-digest/1` of the revision.
+The record that binds one approval to one plan revision of a change order (ADR 191). It holds the approver, the revision and the digest that the approver saw. It also holds the requirement that it counts for, the time and the kind of the credential. A principal has at most one signature on each revision. A new revision voids it, with the cause `new-plan`, unless signature carry-over holds. A loss of access voids it, with the cause `access-lost`. The digest is the SHA-256 of the encoding `cho-digest/1` of the revision.
 _Avoid_: Sign-off, stamp, approval (alone: an approval is the verdict)
 
 **Approval requirement**:
@@ -939,12 +951,12 @@ The client command `opendustpan agent mcp` (ADR 123 decision 8). It reads JSON-R
 _Avoid_: MCP proxy, CLI proxy, bridge
 
 **Escape hatch**:
-The one gated path by which an agent reads secret values in plain text: `read_state` with `secretValues: true` (ADR 124 decision 1). It needs `unit:read-secrets` and each stage of the secret gate that applies. By default it is shut, and each agent tool answers masked values.
+The one gated path by which an agent reads secret values in plain text: `read_state` with `secretValues: true` (ADR 124 decision 1). It needs `unit:read-secrets` and each stage of the secret consent that applies. By default it is shut, and each agent tool answers masked values.
 _Avoid_: Secret hatch, backdoor, unmask mode
 
-**Secret gate**:
-The list of stages that the server checks before an agent reads secret values (`agent.SecretAccess.Check`, ADR 124 decision 2). The stages, in order: the installation stage, the namespace opt-in, the person opt-in, and the consent for one use (outside agents only). It is in the `Toolset`. No setting of a model, a prompt or a client can open it.
-_Avoid_: Secret switch, secrets toggle
+**Secret consent**:
+The list of stages that the server checks before an agent reads secret values (`agent.SecretAccess.Check`, ADR 124 decision 2). The stages, in order: the installation stage, the namespace opt-in, the person opt-in, and the consent for one use (outside agents only). It is in the `Toolset`. No setting of a model, a prompt or a client can open it. It is a fixed control, not a gate. ADR 222 decision 8 gives the name. ADR 124 calls it the secret gate.
+_Avoid_: Secret gate (older name), secret switch, secrets toggle
 
 **Maintenance window**:
 The record that groups the instances that start with the secret flag, so that one acceptance covers them all (ADR 124 decision 4). The first instance opens it and puts the installation in maintenance mode, in one transaction. Later instances join it. In code it is `agent.SecretWindow`, in `agent.WindowStore`. The window table is a control table. Maintenance mode is a state of the installation, and the window is the record that puts the installation in that state.
@@ -1229,12 +1241,12 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Executor** and **launcher** are different. An executor is the way a job runs: write-back or runners (ADR 100). The launcher runs the steps of one claim (ADR 134).
 - **Plan** has six meanings. They are the operation `plan` of a job, the phase kind `plan` and a stored plan. They are also the OpenTofu plan, a plan revision and a unit plan (ADR 195). Name which one.
 - **Signature** has three meanings. A webhook delivery has one (ADR 145), a signed audit segment has one (RFC 71), and a change order has signatures (ADR 191). Name which one.
-- **Gate** names only the stored rule at a decision point (ADR 224). The confirmation gate and the secret gate of an agent are fixed controls with older names. A CI model check (ADR 70 decision 30) is a check, and "gates" as a verb is "needs".
+- **Gate** names only the stored rule at a decision point (ADR 224). The confirmation step and the secret consent of an agent are fixed controls, which older ADRs call the confirmation gate and the secret gate. A CI model check (ADR 70 decision 30) is a check, and "gates" as a verb is "needs".
 - **Policy** alone names no object. Say gate, access limit, approval rule, source filter, session policy, token policy or resource policy report.
 - **Review** has four meanings: a review request of the forge, a break-glass review, an incident review and a change order review (ADR 192). Name which one.
 - **Group** is a set of principals. A change group is a set of identical changes in a change order (ADR 194). Write "change group" for the second.
 - **Claim** has two meanings. The durable claim of a phase gives one executor the right to run it. The job-ID claim is a field of a principal that a job token authenticates (ADR 100). Name which one.
-- **Approval**, **confirmation** and **consent** are different. An approval fills a requirement of an approval rule (ADR 225). A confirmation passes a confirmation gate. A consent allows one secret read of an outside agent (ADR 124).
+- **Approval**, **confirmation** and **consent** are different. An approval fills a requirement of an approval rule (ADR 225). A confirmation passes a confirmation step. A consent allows one secret read of an outside agent (ADR 124).
 - **Tool** is an infrastructure-as-code CLI. An agent tool is one of the tools of an agent (ADR 122). Write "agent tool" for the second.
 - **Key** has many meanings: a data key, an item key, a resource key, a runner key, a blob key and a tag key. Name which one.
 - **Scope** has three meanings: the namespace and unit of a data key, an audit scope, and an account scope of a sweep target. Write "account scope" for the third.

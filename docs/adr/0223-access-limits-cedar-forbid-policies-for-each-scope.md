@@ -35,8 +35,8 @@ the limit set. A `permit` in a limit set was refused at save.
    with its groups as parents. The action is `OpenDustpan::Action::"<action>"`,
    with the action names of ADR 210. The resource is the object of the
    action. The context holds the facts of the access schema (ADR 226
-   decision 2): the principal kind (`person`, `service` or `agent`), the
-   credential kind (`session` or `token`), the authentication age, the
+   decision 2): the principal kind (`person`, `service` or `agent`), the credential kind (`session`, `access-token`, `job-token` or
+   `trust-token`, owner decision of 2026-10-18), the authentication age, the
    unit labels and the collection.
 5. **Fail closed.** A limit that gives a Cedar error refuses the call with
    `gate.ErrRuleFailed`, never with an allow. The save type-checks each
@@ -47,17 +47,32 @@ the limit set. A `permit` in a limit set was refused at save.
    still decides whether the server issues a token. It never passes a
    limit.
 7. **Break-glass accounts are outside the limits.** A session of a
-   break-glass account (ADR 70) is not subject to an access limit, as it is
-   not subject to a policy (ADR 70 decision 24). The audit entries of such a
-   session say so. So no limit can lock every person out of an
-   installation.
+   break-glass account (ADR 70) is not subject to an access limit, so that
+   no limit can block a working path that ADR 70 decision 24 counts. The
+   audit entries of such a session say so. Gates, approval rules and fixed
+   controls hold for each change of such a session.
 8. **A refusal writes a decision record.** An access limit that refuses a
    call writes a decision record (ADR 229). An allow writes none, because
-   the server checks access on each request.
+   the server checks access on each request. Refusals of the same
+   principal, the same action and the same limit within 60 seconds share
+   one record, with a counter and the time of the last refusal. A record of
+   a refusal lives for the audit retention (ADR 68).
 9. **Changes.** A change of a limit needs the action of its scope (ADR 230
    decision 2), a fresh authentication (ADR 227), and writes an audit
    entry. The console shows the limits of each scope next to the grants
    of the access review (ADR 52).
+10. **No limit locks out the gate configuration.** The server refuses with
+    `gate.ErrInvalid`:
+    - a limit of a namespace, a collection or a unit that can match the
+      action `installation:manage-gates`.
+    - a limit that matches `namespace:manage-gates` for every principal,
+      that is a limit with no condition on the principal.
+
+    A limit that reads a unit label holds only while the label is there. A
+    holder of the label-edit action of the unit can remove the label, and
+    with it the limit. So a limit for a set of units names
+    `unit.collection`, which only a holder of the collection action can
+    change. The console shows this advice when a limit reads a label.
 
 Benchmark: AWS Organizations service control policies and Google Cloud deny
 policies are ceilings that only take away access. They never give it.

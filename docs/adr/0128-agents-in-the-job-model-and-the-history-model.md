@@ -1,6 +1,6 @@
 # 128. Agents in the job model and the history model
 
-Status: accepted · 2026-10-18 · supersedes parts of ADRs 100, 103, 120, 122, 124 and 125 (see "What this ADR replaces"). Decisions 11 to 13 superseded in part by ADR 190. Decision 7 superseded by ADR 227
+Status: accepted · 2026-10-18 · supersedes parts of ADRs 100, 103, 120, 122, 124 and 125 (see "What this ADR replaces"). Decisions 11 to 13 superseded in part by ADR 190. The age of the confirmation of decision 7 superseded by ADR 227
 
 ## Context
 

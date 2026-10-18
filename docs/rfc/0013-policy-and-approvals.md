@@ -8,8 +8,8 @@ adr: 222
 
 # RFC 13. Policy and approvals
 
-Status: accepted. ADRs 222 to 230 record the model that answers it. RFC 77
-holds the points that stay open. The text below is the proposal as it was.
+Status: accepted. ADRs 222 to 230 record the model that answers it. RFC 77 held the points that stayed open, and the owner decided
+each of them on 2026-10-18. The text below is the proposal as it was.
 
 ## Problem
 

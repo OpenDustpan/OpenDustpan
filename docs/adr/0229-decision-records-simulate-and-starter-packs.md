@@ -23,8 +23,11 @@ limit and for an error, and read it through one route.
    - the fact schema version, the fact document and its SHA-256.
    - for each unit: each gate evaluated, with its version, mode, match and
      outcome, and each Cedar diagnostic.
-   - the requirements, with the eligible approvers, the count and the
-     signatures so far.
+      - the requirements, with the eligible approvers, the count and the
+     signatures so far. A carried signature shows `carriedFrom` (ADR 225
+     decision 12).
+   - each gate passed by a break-glass, with the audit entry of the
+     break-glass (ADR 224 decision 13).
    - the warnings and `autoApply` (decision 3).
    - the state of each fixed control (decision 4).
    - the result: `allow`, `warn`, `approval-wait`, `deny` or `error`.
@@ -37,9 +40,11 @@ limit and for an error, and read it through one route.
    not change it.
 4. **Fixed controls in the record (owner).** The record shows the state of
    each fixed control that the server checked for the change: the workspace
-   lock, a manual lock, an active freeze and its break-glass, the override
-   switches, the agent mode, the confirmation gate and the quota
-   reservation. A fixed control does not change the combining of ADR 224
+      lock, a manual lock, an active freeze and its break-glass, the override
+   switches, the agent mode, the confirmation step, the secret consent, the
+   quota reservation and the quota counts, the safe delete check of ADR 153
+   decision 5, and the plan staleness check with the maximum plan age (ADR
+   102, ADR 191 decision 7). A fixed control does not change the combining of ADR 224
    decision 14. It refuses on its own, as its ADR says.
 5. **Storage.** A record is namespace data. The store checks the fence and
    writes it in the same transaction as the step that it explains. A record
@@ -48,8 +53,10 @@ limit and for an error, and read it through one route.
    record ID.
 6. **The simulate route (owner).** `POST .../namespaces/{namespace}/gates/simulate`
    takes draft gates, draft approval rules and a filter of stored records:
-   a decision point, a time range and at most 1,000 records. It evaluates
-   the drafts against the stored fact documents, and gives for each record
+      a decision point, a time range and at most 1,000 records. It replays
+   only the records whose change the caller can read, and skips the others
+   with no trace of them in the answer. It evaluates the drafts against the
+   stored fact documents, and gives for each record
    the stored result and the new result. It stores nothing and changes no
    change. A draft rule is replayed through this route before `enforce`.
 7. **Starter packs (owner).** A starter pack is a set of gates and approval
@@ -69,4 +76,5 @@ test bench that runs a policy set against a request with no effect.
 
 - A person can answer "why was this blocked" from one record.
 - The record can hold large fact documents. Version 1 limits a fact
-  document to 256 KiB and refuses a larger one with `gate.ErrLimit`.
+  document to 256 KiB. Above that, the server empties the largest sets and
+  names them in `document.truncated` (ADR 226 decision 14).

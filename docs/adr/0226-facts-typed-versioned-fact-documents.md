@@ -35,11 +35,16 @@ no quantifier over a set.
    `false` and `cost.deltaMonthly` is 0. A gate that needs the fact names
    `available`. Every built-in gate and starter pack fails closed: it treats
    `available == false` as a match of its `deny` or approval outcome.
+
+   The check at save refuses a `condition` or an `unless`, of a gate, an
+   approval default or an ownership rule, that reads a field of a group
+   with an `available` flag and does not read that flag, with
+   `gate.ErrInvalid`.
 4. **Facts of `change.planned`.** Version 1 holds these groups:
 
    | Group | Fields |
    | --- | --- |
-   | `principal` | `kind` (`person`, `service` or `agent`), `credential` (`session` or `token`) |
+   | `principal` | `kind` (`person`, `service` or `agent`), `credential` (`session`, `access-token`, `job-token` or `trust-token`) |
    | `source` | `kind` (`api`, `cli`, `forge`, `catalog`, `agent` or `schedule`), `ref`, `protected`, `commit`, `upstreamUnit` |
    | `unit` | `tool`, `collection`, `labels` as a set of `key=value` strings |
    | `operation` | `kind` (`apply`, `destroy`, `refresh` or `import`) |
@@ -51,13 +56,25 @@ no quantifier over a set.
    | `resourcePolicy` | `available`, `mandatoryFailed`, `advisoryFailed`, `unreadable` |
    | `externalChecks` | `passed`, `failed`, `pending`, `timedOut` as sets of check names |
    | `quota` | `available`, `maxPercentUsed`, `exceeded` as a set of rule names |
-   | `dependents` | `available`, `count`, `units` as a set of unit references |
+      | `dependents` | `available`, `count`, `units` as a set of unit references |
+   | `paths` | `available`, `touches` and `only`, each a record with one boolean for each path set (decision 13) |
+   | `document` | `truncated` as a set of fact paths (decision 14) |
 
-   `change.propose` holds the groups that exist before a plan: `principal`,
-   `source`, `unit`, `operation`, `change` and `quota`. `change.apply` holds
+   The credential kinds are an owner decision of 2026-10-18. A token that a
+   trust rule issued (ADR 54) is `trust-token`, so a gate can tell CI with
+   workload identity from a person's access token.
+
+      `change.propose` holds the groups that exist before a plan: `principal`,
+   `source`, `unit`, `operation`, `change`, `quota`, `paths` and `document`. `change.apply` holds
    the groups of `change.planned`, with the values of that moment. An agent
-   is a subject of gates through `source.kind == "agent"` and
+      is a subject of gates through `source.kind == "agent"` and
    `principal.kind == "agent"`.
+
+   `state.write` (ADR 224 decision 16) holds `principal`, `source`, `unit`,
+   `operation`, `plan` (always `available == false`), `document` and a group
+   of its own, `state`: `available`, `resources` and `removed`. Its
+   `operation.kind` adds `lock`, `rollback`, `force-write`, `state-import`,
+   `delete` and `unlock` to the kinds above.
 5. **Facts of a profile.** `profile.save` and `profile.open` hold the profile
    name, `access` (`read`, `open` or `write`), `refProtected`, `jobOpen`,
    `routingChange` and `importsAdded`. These are the typed context facts of
@@ -71,9 +88,18 @@ no quantifier over a set.
    installation scope keep the behavior of ADR 194 in `enforce` mode:
    `builtin/plan-readable` denies when `plan.available` is `false` for a
    change that applies, and `builtin/mandatory-resource-policy` denies when
-   `resourcePolicy.mandatoryFailed > 0` or `resourcePolicy.unreadable > 0`.
-   The prefix `builtin/` is reserved for gate IDs. An administrator of the installation can switch each
-   to `evaluate` mode, with a fresh authentication and an audit entry.
+      `resourcePolicy.mandatoryFailed > 0` or `resourcePolicy.unreadable > 0`.
+   The prefix `builtin/` is reserved for gate IDs. An administrator of the
+   installation can switch each to `evaluate` mode, with a fresh
+   authentication and an audit entry.
+
+   **Scope of the built-in gates (owner, 2026-10-18).** Each built-in gate
+   is in `enforce` mode by default, and holds for each change with a plan
+   phase: a job or a change order whose operation is `apply` or `destroy`
+   and that has a plan phase. ADR 194 held the same checks for change
+   orders only. So their scope widens from change orders to all jobs with a
+   plan phase. A job with no plan phase, for example a `refresh`, and a
+   write at `state.write` meet no built-in gate.
 8. **Cost gates (owner).** A cost gate is an ordinary gate at
    `change.planned` on the `cost` and `budget` facts. A budget stays
    notify-only (ADR 144 decision 13 stays). `change.planned` waits for the
@@ -97,11 +123,39 @@ no quantifier over a set.
 12. **Producers.** Each group of facts has one producer port in `pkg/gate`,
     with a conformance suite. A producer that fails gives
     `available == false`, never a guessed value.
+13. **Named path sets (owner, 2026-10-18).** A path set is a stored object
+    of a scope (the installation, a namespace, a collection or a unit) with
+    an ID and 1 to 64 glob patterns. The server matches the globs in Go
+    against `change.paths`. For each path set that holds for the unit:
+    - `paths.touches.<set>` is `true` when at least one changed path
+      matches a glob of the set.
+    - `paths.only.<set>` is `true` when at least one path changed and each
+      changed path matches a glob of the set.
+
+    `paths.available` is `false` when the server does not know the changed
+    paths, for example for a change with no commit. The fact schema of a
+    scope holds one attribute for each path set that holds for it, so the
+    check at save refuses a gate that names an unknown set. The removal of a path set that a stored gate, default or ownership rule reads fails with
+    `gate.ErrInvalid` and names each reader. Cedar compares names, and Go
+    matches the globs.
+
+    Benchmark: GitHub rulesets and GitLab approval rules match file paths
+    with globs outside the rule language. Cedar has no quantifier over a
+    set, so a named set gives a gate a boolean that it can read.
+14. **A large fact document.** A fact document holds at most 256 KiB. Above
+    that, the server empties the largest sets of strings (`change.inputKeys`,
+    `change.secretKeys`, `change.paths`, `plan.resourceTypes` and
+    `dependents.units`), largest first, until the document fits. It keeps
+    each count, and adds the path of each emptied set to
+    `document.truncated`. Each built-in gate and starter pack that reads a
+    set fails closed when the path of the set is in `document.truncated`.
+    The path facts of decision 13 are computed before the truncation. A
+    document that does not fit with each of these sets empty fails with
+    `gate.ErrLimit`.
 
 ## Consequences
 
 - A cost estimate can reach a decision for the first time: a gate at
   `change.planned` reads it.
-- Cedar cannot say "every changed path is under `modules/`". Path globs
-  stay in ownership rules, matched in Go. RFC 77 holds the question of path
-  facts for gates.
+- Cedar cannot say "every changed path is under `modules/`". A gate reads
+  `paths.only.<set>` instead, and Go matches the globs of the set.

@@ -31,11 +31,12 @@ No tag shipped a window setting, so no data conversion is needed (ADR 73).
    ADR names as "fresh MFA", "a fresh MFA step" or "a fresh
    authentication" uses it: token creation and rotation, a secret reveal,
    the changes of ADR 70 decisions 16, 17 and 23, the switches of ADR 125
-   decision 3, a confirmation, a break-glass review, a weaker setting, an
-   approval and a ChatOps approval (ADR 146).
-3. **0 asks every time (owner).** A window of 0 asks for a fresh
-   authentication at each step. No value turns the check off. The other
-   values are 60 to 900 seconds. A window of 0 is the strictest value, so a
+   decision 3, a confirmation, a break-glass review, a weaker setting, an approval when ADR 225 decision 5 or its approval
+   rule asks for one, and a ChatOps approval (ADR 146) on the same terms.
+3. **0 asks every time (owner, 2026-10-18).** A window of 0 asks for a
+   fresh authentication at each step. No value turns the check off. The
+   other values are 60 to 900 seconds. The owner decided one window with this range on 2026-10-18 (RFC 77, point 7).
+   A window of 0 is the strictest value, so a
    change to 0 needs no fresh authentication. A change to a longer window
    needs one, as ADR 212 decision 3 says for a weaker setting.
 4. **Narrower is stricter.** A namespace and an approval rule

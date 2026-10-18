@@ -1,6 +1,6 @@
 # 202. Secrets, revisions, tags, change approvals and rotation of profiles
 
-Status: accepted · 2026-10-18 · part of ADR 200. Decisions 6 and 7 superseded by ADR 225
+Status: accepted · 2026-10-18 · part of ADR 200. Decisions 6 and 7 superseded in part by ADR 225 decision 10
 
 ## Context
 

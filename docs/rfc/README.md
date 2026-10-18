@@ -61,7 +61,7 @@ both together.
 | [10](0010-artifact-registry-and-curated-upstreams.md) | Artifact registry and curated upstreams | draft |
 | [11](0011-languages-and-locales.md) | Languages and locales | draft |
 | [12](0012-api-edits-and-write-back.md) | API edits, and write-back to git | draft; forge connection credentials and defaults accepted (ADR 213) |
-| [13](0013-policy-and-approvals.md) | Policy and approvals | accepted (ADRs 222 to 230); open points in RFC 77 |
+| [13](0013-policy-and-approvals.md) | Policy and approvals | accepted (ADRs 222 to 230); the points of RFC 77 decided |
 | [14](0014-blueprints.md) | Blueprints, self-service units with validated inputs | accepted |
 | [15](0015-output-sharing.md) | Output sharing between units | draft; output reads of a job, on two paths, accepted (ADR 213) |
 | [16](0016-egress-proxy.md) | Egress proxy for jobs, with request rules and credential injection | draft |
@@ -124,5 +124,5 @@ both together.
 | [73](0073-ai-agent-for-infrastructure.md) | An AI agent for infrastructure across both tools | accepted |
 | [74](0074-snapshots-of-files-with-no-git-commit.md) | Snapshots of files that have no git commit | draft |
 | [75](0075-commands-by-intent.md) | Commands by intent: a dev server with no setup, and a serve command that needs decisions | draft |
-| [77](0077-open-points-of-the-gate-model.md) | Open points of the gate model | discussing |
+| [77](0077-open-points-of-the-gate-model.md) | Open points of the gate model | accepted (ADRs 222 to 230) |
 | [78](0078-localization-open-questions.md) | Localization open questions: translated docs, the translation machine, the server formatter and the edges | discussing; translated docs, the translation agent, the formatter, the product name in chat, `resolvedLanguage` and reports of one string accepted (ADRs 232, 234 and 235) |

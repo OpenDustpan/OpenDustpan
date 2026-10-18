@@ -15,23 +15,28 @@ gate.
 ## Decision
 
 1. **In the server, through the API (owner).** Gates, access limits,
-   approval rules, approval defaults and ownership rules are stored in the
-   server. The console, the CLI and the IaC providers configure them through
+   approval rules, approval defaults, ownership rules, path sets and the
+   signature carry-over setting are stored in the server. The console, the CLI and the IaC providers configure them through
    the routes of decision 3. No repository file holds them, and the server
    reads none.
 2. **Actions.**
 
    | Action | Object | Allows |
    | --- | --- | --- |
-   | `installation:manage-gates` | the installation | gates and access limits of the installation |
-   | `namespace:manage-gates` | namespace | gates, access limits, approval rules, approval defaults and ownership rules of the namespace, its collections and its units |
+      | `installation:manage-gates` | the installation | gates, access limits, approval rules, ownership rules and path sets of the installation |
+   | `installation:break-gate-error` | the installation | the break-glass for a gate of the installation in error (ADR 224 decision 13) |
+   | `namespace:manage-gates` | namespace | gates, access limits, approval rules, approval defaults, ownership rules, path sets and the signature carry-over setting of the namespace, its collections and its units |
+   | `namespace:break-gate-error` | namespace | the break-glass for gates in error of a change in the namespace, except a final gate of a wider scope |
    | `namespace:read-gates` | namespace | read them, and read the decision records |
    | `namespace:simulate-gates` | namespace | the simulate route |
 
    `namespace:manage-gates` replaces `namespace:manage-policy`. It is in no
-   built-in role except the namespace administrator. A change of a gate in
-   `enforce` mode, of an access limit or of an approval default needs a
-   fresh authentication (ADR 227). A reader of a decision record also needs
+      built-in role except the namespace administrator. The two break-glass
+   actions are in no built-in role. A change or a delete of a gate in
+   `enforce` mode, of an ownership rule in `enforce` mode, of an access
+   limit or of an approval default needs a fresh authentication (ADR 227).
+   So does a change of a final gate in each mode, and a change of the
+   signature carry-over setting to `on`. A reader of a decision record also needs
    the read action of the change that it explains.
 3. **Routes.** Under the prefix of ADR 210:
 
@@ -41,11 +46,14 @@ gate.
    | `GET`, `PUT`, `DELETE .../namespaces/{namespace}/access-limits/{id}` | read, manage |
    | `GET`, `PUT`, `DELETE .../namespaces/{namespace}/approval-rules/{id}` | read, manage |
    | `GET`, `PUT .../namespaces/{namespace}/approval-defaults/{scope}` | read, manage |
-   | `GET`, `PUT`, `DELETE .../namespaces/{namespace}/ownership-rules/{id}` | read, manage |
+      | `GET`, `PUT`, `DELETE .../namespaces/{namespace}/ownership-rules/{id}` | read, manage |
+   | `GET`, `PUT`, `DELETE .../namespaces/{namespace}/path-sets/{id}` | read, manage |
+   | `GET`, `PUT .../namespaces/{namespace}/signature-carry-over/{scope}` | read, manage |
+   | `POST .../namespaces/{namespace}/decision-records/{id}/break-glass` | `namespace:break-gate-error` or `installation:break-gate-error` |
    | `POST .../namespaces/{namespace}/gates/check` | read |
    | `POST .../namespaces/{namespace}/gates/simulate` | simulate |
    | `GET .../namespaces/{namespace}/decision-records/{id}` | read |
-   | `GET`, `PUT`, `DELETE .../gates/{id}` and `.../access-limits/{id}` | `installation:manage-gates` |
+      | `GET`, `PUT`, `DELETE .../gates/{id}`, `.../access-limits/{id}`, `.../approval-rules/{id}`, `.../ownership-rules/{id}` and `.../path-sets/{id}` | `installation:manage-gates` |
 
    A gate, a limit or a rule of a collection or a unit names its scope in the
    body. `PUT` refuses an unknown field. The `check` route type-checks a
@@ -71,14 +79,18 @@ gate.
    shape of that tool.
 5. **Audit entries.** A create, a change and a delete of a gate, a limit or
    a rule write an audit entry of the kind `change`, with the old and the
-   new version. An evaluation writes no audit entry of its own. The audit
+      new version. A change that makes a final gate weaker also holds the
+   reason (ADR 224 decision 12). A break-glass for gates in error writes an
+   audit entry of the kind `override`, with the reason, the record ID and
+   each gate that it passed. An evaluation writes no audit entry of its own. The audit
    entry of the step that it explains names the record ID. A switch of a
    gate between `enforce` and `evaluate` has its own entry.
 6. **Limits.** A scope holds at most 256 gates, 64 access limits, 64 approval
-   rules and 256 ownership rules. A condition holds at most 4 KiB. Above a
+      rules, 256 ownership rules and 64 path sets. A condition holds at most 4 KiB. Above a
    limit, the save fails with `gate.ErrLimit`.
 7. **Backups.** A backup holds gates, access limits, approval rules,
-   approval defaults, ownership rules and decision records (ADR 42).
+   approval defaults, ownership rules, path sets, the signature carry-over
+   settings and decision records (ADR 42).
 
 Benchmark: AWS Verified Permissions and Google Cloud deny policies store
 their policies in the service and give an API to manage them. The IaC
