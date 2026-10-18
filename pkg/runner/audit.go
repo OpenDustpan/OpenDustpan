@@ -12,10 +12,10 @@ const (
 	// ActionNamespaceReadRunners allows reading the pools, the runners and
 	// the join tokens of a namespace, with no secret. Its object is a
 	// namespace.
-	ActionNamespaceReadRunners identity.Action = "namespace:read-runners"
+	ActionNamespaceReadRunners = identity.ActionNamespaceReadRunners
 	// ActionRunnerJoin allows registering a runner key in a pool. Only a
 	// join token holds it. Its object is a runner pool.
-	ActionRunnerJoin identity.Action = "runner:join"
+	ActionRunnerJoin = identity.ActionRunnerJoin
 )
 
 // Event names one write of this package that appends an audit entry.
