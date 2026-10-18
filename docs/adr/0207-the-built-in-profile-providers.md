@@ -99,7 +99,7 @@ here:
    | `login/github` | An installation token of a GitHub App, from the key of the app | `appId`, `privateKey` (a secret), `owner`, `repositories`, `permissions`, `host` | none |
    | `login/oidc` | No exchange: the token itself | `audience` (required), `tokenLifetime`, `subject` | none |
    | `login/oauth` | A token endpoint of OAuth 2.0 (decision 5) | `tokenUrl`, `grant`, `clientId`, `scope`, `audience` | the issuer of the target |
-   | `login/external` | The external adapter protocol (ADR 208) | `url`, `request` | the `url` |
+   | `login/external` | The external adapter protocol (ADR 208) | `url`, `request` | the full `url`, always |
 
    - `login/snowflake` gives the token. The Snowflake driver of the tool
      does the login, because Snowflake gives a session and not a token
@@ -164,6 +164,7 @@ here:
    | --- | --- | --- |
    | `outputs/opendustpan` | The outputs of a unit of the same namespace, of any tool | `units: {name: {unit: "opentofu:acme/network", outputs: [vpc_id, subnet_ids]}}` |
    | `outputs/opentofu-state` | The outputs of a state that another backend holds | `backend: s3`, `http` or `remote`, with its settings and login |
+   | `outputs/external` | Outputs from the external adapter protocol (ADR 208) | `url`, `request` |
 
    - `outputs/opendustpan` is the bridge between the tools (owner). A
      Pulumi stack reads the outputs of an OpenTofu workspace, and the

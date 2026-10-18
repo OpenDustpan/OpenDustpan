@@ -51,8 +51,9 @@ CircleCI. The facts that shape this ADR:
 
 1. **A flat claim set, version 1 (one-way door).** Each claim name is
    snake_case at the top level of the token, so that Vault and CEL read it
-   with no pointer. Each value is a string, except `profile_revision`, which
-   is a number. A boolean fact is the string `"true"` or `"false"`, so that
+   with no pointer. Each value is a string, with three exceptions:
+   `profile_revision` is a number, `act` is an object (decision 3), and the
+   AWS tags claim is an object (decision 3). A boolean fact is the string `"true"` or `"false"`, so that
    it reads the same in `sub` and in a claim. A claim whose fact the server
    does not know is absent. It is never empty and never `null`.
 
@@ -79,7 +80,7 @@ CircleCI. The facts that shape this ADR:
    | `profile`, `profile_id` | The profile that holds the provider block. | Always. |
    | `profile_revision` | The revision of that profile that the open read. | Always. |
    | `root_profile`, `root_profile_id` | The profile that the caller opened. It differs from `profile` when the block comes from an import. | Always. |
-   | `access` | `read`, `write` or `open` (decision 4). | Always. |
+   | `access` | `read`, `write`, `rotate` or `open` (decision 4). | Always. |
    | `action` | The tool-neutral action (decision 5). | Always. |
    | `tool_action` | The word of the tool for the action, for example `preview`, `up`, `plan` or `apply`. | When a job opens. |
    | `phase` | `plan` or `apply`: the kind of the job phase (ADR 100 decision 4). | When a job opens. |
@@ -100,6 +101,7 @@ CircleCI. The facts that shape this ADR:
    | `ref_protected` | `"true"` when the forge reports a protected ref, else `"false"`. | When the forge answers. |
    | `commit` | The commit of the phase (ADR 100 decision 5). | When the job has a git code location. |
    | `source` | `git`, or `file-set` for a source with no commit (ADR 199). | When a job opens. |
+   | `https://aws.amazon.com/tags` | An object with `principal_tags`: each claim that `sessionTags` of a `login/aws` block names, with its value, as AWS reads session tags (ADR 207 decision 3). The block names the claims. The server sets the values. | When the block sets `sessionTags`. |
 
    The server takes each value from its own records: the job spec, the
    claim, the principal, the unit and the forge. No caller, no profile
@@ -111,15 +113,19 @@ CircleCI. The facts that shape this ADR:
    that it controls:
    - `read`: the plan phase of a job, and an observe of Dusty (ADR 122
      decision 8). The plan phase of a job changes nothing (ADR 100
-     decision 3).
-   - `write`: the apply phase of a job. It runs on a runner after the gates
-     of the job or the approvals of its change order. A rotation (ADR 202
-     decision 8) also has `write`, because it changes a credential.
+     decisions 3 and 4).
+   - `write`: the apply phase of a job of the operation `apply`,
+     `destroy` or `refresh`. It runs on a runner after the gates of the job
+     or the approvals of its change order. A `refresh` has no plan phase, so
+     a trust policy that wants only reviewed changes also matches
+     `action:apply` with a template that holds `action`.
+   - `rotate`: a rotation (ADR 202 decision 8). It changes a credential,
+     has no unit and no job, and so never matches `access:write`.
    - `open`: every other open, for example a person in the console, the
      run command (ADR 209) or a provider on a workstation.
 
    A trust policy that allows a role that writes only for `access:write`
-   then allows it only for the apply phase of a reviewed job. A person who
+   then allows it only for the apply phase of a job. A person who
    applies from a workstation gets `access:open`, and the team decides in
    the cloud whether a role trusts it.
 5. **`action` names what runs.** The tool-neutral values are the job
@@ -148,7 +154,14 @@ CircleCI. The facts that shape this ADR:
 
    - A **subject template** names the keys. The default template is
      `namespace`, `collection`, `tool`, `unit` and `access`, for example
-     `namespace:acme:collection:payments:tool:pulumi:unit:web/prod:access:write`.
+     `namespace:acme:collection:payments@<collection ID>:tool:pulumi:unit:web/prod@<unit ID>:access:write`.
+   - In `sub`, the keys `collection`, `unit`, `profile` and `root_profile`
+     hold the name, `@` and the stable ID, as the immutable subjects of
+     GitHub do. A person reads the name, and a trust policy matches the ID.
+     A unit that a rename gives an old name, or a new collection with the
+     name of a deleted one, has another ID, so it never matches the trust
+     of the old object. The namespace is in the issuer URL by its ID (ADR
+     204 decision 1), so `namespace` holds the name only.
    - A template must start with `namespace` or `namespace_id`, and holds
      only the keys of the list. A per-run value (`job`, `commit`, `jti`,
      `change_order`) is never a key, so one unit has few subjects, and Azure
@@ -173,10 +186,10 @@ CircleCI. The facts that shape this ADR:
 7. **Trust policy shapes.** The docs give one example for each cloud. With
    the default template:
    - AWS, a role for applies of one collection: `StringLike` on `sub`
-     `namespace:acme:collection:payments:*:access:write`, and
+     `namespace:acme:collection:payments@<collection ID>:*:access:write`, and
      `StringEquals` on `aud` `sts.amazonaws.com`.
    - Azure, one federated credential for each subject, for example
-     `namespace:acme:collection:payments:tool:opentofu:unit:network:access:write`.
+     `namespace:acme:collection:payments@<collection ID>:tool:opentofu:unit:network@<unit ID>:access:write`.
      A team with many units uses the template `namespace`, `collection`,
      `access` for Azure. It then needs two credentials for each collection.
    - Google Cloud: `google.subject = assertion.unit_id`, `attribute.access =
@@ -190,10 +203,13 @@ CircleCI. The facts that shape this ADR:
    `actor_id`. The audit entry of an issue records the subject and `jti`,
    never the token (ADR 204 decision 10).
 9. **The context of an expression is the claim set.** An expression of a
-   profile (ADR 201) reads the same facts as `context`, for example
-   `context.access` or `context.unit`. One table in `pkg/profile` holds
-   the claims and their sources (`profile.Claims`). A table-driven test
-   checks each claim of decision 3 against it.
+   profile (ADR 201 decision 5) reads the facts of decision 3 as `context`,
+   with each claim name in camelCase, for example `context.access`,
+   `context.toolAction` or `context.refProtected`. The claim
+   `profile_revision` is `context.revision`. `context.openDuration` is the
+   one fact that is not a claim. One table in `pkg/profile` holds each claim,
+   its name in `context` and its source (`profile.Claims`). A table-driven
+   test checks each claim of decision 3 against it.
 10. **What other products give, and what we do not copy.** We take the
     phase and the scope in `sub` (HCP Terraform, Spacelift), the
     `key:value` pairs that describe themselves (GitHub, Spacelift), and the
@@ -208,9 +224,10 @@ CircleCI. The facts that shape this ADR:
 - `pkg/profile` holds `Claims`, `Subject`, `SubjectTemplate` and the
   escape rule. Table-driven tests cover each key, each absent fact, the
   escape and the length check.
-- A rename of a unit or a collection changes the default subject. A trust
-  policy then refuses the new subject, so the change fails closed. A team
-  that renames often uses the keys with IDs.
+- A rename of a unit or a collection changes the name part of the default
+  subject. A trust policy that matches the name then refuses the new
+  subject, so the change fails closed. A trust policy that matches only the
+  ID part (`unit:*@<unit ID>`) keeps working.
 - The research note holds the comparison table. A later version of a
   product may change its claims. The note has the date of each source.
 

@@ -1132,6 +1132,6 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Provider** has two meanings. A provider of OpenTofu or the Pulumi CLI is a plugin of the tool, for example a provider wrapper (ADR 170). A profile provider is an adapter that an open calls (ADR 206). Write "profile provider" or "provider block" for the second.
 - **Environment** is the word of the Pulumi CLI for a profile, in the paths of the Pulumi Cloud-compatible API (ADR 209). Everywhere else, write "profile". An environment variable is a variable of a process.
 - **Open session** and the other sessions are different: an open session holds the result of one open of a profile (ADR 203).
-- **Access** is also a claim of an issued token: `read`, `write` or `open` (ADR 205). An access token authenticates to OpenDustpan. Name which one.
+- **Access** is also a claim of an issued token: `read`, `write`, `rotate` or `open` (ADR 205). An access token authenticates to OpenDustpan. Name which one.
 - **Tag** has two meanings: a tag that a tool sends for a unit, and a revision tag of a profile. The key and value pairs of a profile are labels. Name which one.
 - **Retention** has three meanings. The first is the retention period of a deleted unit. The second is that of a stored plan or a job log (ADR 152). The third is that of an incident record or a cyber threat record (ADR 148). Name which one.

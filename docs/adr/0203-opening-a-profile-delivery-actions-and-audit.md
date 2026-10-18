@@ -65,26 +65,33 @@ of its environments to webhooks.
    - The store seals the result with the data key of the root profile. A
      schedule deletes each session that ended. A principal has at most 100
      sessions that did not end.
-   - Only the principal that opened a session reads it.
+   - Only the credential that opened a session reads it: the same
+     principal, and for a job token the same job. A person who started a job
+     cannot read a session of the job with a personal token.
    - Sessions are not in a backup, because they hold credentials that end
      within hours.
    - The other consumers get the result in the answer and the server
      stores nothing.
 4. **Who can open.**
-   - **A direct open** (the consumers `api`, `console`, `run`, and
-     `pulumi` or `opentofu` with a token that is not a job token) needs
+   - **A job open** is each open with a job token, whatever the consumer.
+     A direct open is each open with any other credential.
+   - **A direct open** (for example the consumers `api`, `console`, `run`,
+     and `pulumi` or `opentofu` on a workstation) needs
      `profile:open` on the root profile and on each profile that the open
      evaluates, as imports or with `profiles[...]`. The error names the
      first profile that the caller cannot open.
-   - **A job open** (the consumer `launcher`, and `pulumi` or `opentofu`
-     with a job token) opens only the profiles that the spec of the job
+   - **A job open** (the consumer `launcher`, and `pulumi`, `opentofu` or
+     any other consumer with a job token) opens only the profiles that the
+     spec of the job
      fixed, at the revisions that the spec fixed (decision 5). The
      attachments decide, not the actions of the person who started the job.
      So a person who can run a plan of a unit does not need
      `profile:open`, and cannot read the profile outside the job.
    - **An agent** opens with masked values only: each secret answers
-     `[masked]`, and no login block runs. An open of a value in plain text
-     goes through the secret gate of ADR 124. The observe of Dusty (ADR
+     `[masked]`, and no login block runs. No path gives an agent a value of
+     a profile in plain text, also with the secret gate of ADR 124 open,
+     because ADR 124 decision 1 allows only `read_state`. The observe of
+     Dusty (ADR
      122 decision 8) runs login blocks inside the server with the consumer
      `observe` and the access `read`, and the credential never leaves the
      server.
@@ -104,12 +111,16 @@ of its environments to webhooks.
      the unit.
    - At the start of a job, the server resolves the attachments of the
      unit to fixed revisions and stores them in the spec, as ADR 100
-     decision 5 says. A later change of an attachment or of a tag does not
+     decision 5 says. It also fixes the revision of each profile that they
+     import or read with `profiles[...]`, so each phase of the job reads the
+     same set of revisions, also when a tag moves between two phases. A later change of an attachment or of a tag does not
      change the job. The job record names each profile and revision, so a
      reader of the job sees what the job read.
    - An attach and a detach need `profile:attach` on the profile and
      `unit:manage` on the object, which a collection or a namespace widens
-     (ADR 51 decision 8). An attach writes an audit entry.
+     (ADR 51 decision 8). An attach also needs `profile:open` on the
+     profile, because each job of the object then reads its secrets. An
+     attach writes an audit entry.
    - A job of a unit whose profiles have an open rule (ADR 202 decision 7)
      fails at start with `profile.ErrOpenRule`. RFC 5 keeps open how the
      gates of a job and the open rule work together.
@@ -180,11 +191,11 @@ of its environments to webhooks.
     | Action | Object | Allows |
     | --- | --- | --- |
     | `profile:read` | the profile, or the namespace for a list | Read the metadata, the documents with sealed secrets, the revisions, the tags, the labels, the diff with no secret, the referrers and the claims preview. |
-    | `profile:write` | the namespace for a create, else the profile | Create, save a revision or a draft, change tags and labels, roll back, clone. |
+    | `profile:write` | the namespace for a create, else the profile | Create, save a revision or a draft, change tags and labels, roll back, clone. A save that changes a provider or rotator block also needs `profile:open` (ADR 202 decision 2). |
     | `profile:open` | the profile | Open, read the static secrets of a document, a diff with secrets. |
     | `profile:approve` | the profile | Approve a draft or an access request (ADR 202). |
     | `profile:rotate` | the profile | Rotate now, change a schedule. |
-    | `profile:attach` | the profile | Attach and detach, with `unit:manage` on the object. |
+    | `profile:attach` | the profile | Attach and detach, with `unit:manage` on the object, and `profile:open` for an attach. |
     | `profile:manage` | the profile | Change the rules, rename, delete, restore, retract, deletion protection. |
     | `profile:redact` | the profile | Redact a revision (ADR 202 decision 2). |
 
@@ -196,7 +207,13 @@ of its environments to webhooks.
     who deploys is to deploy with a profile and not to read its secrets.
 12. **Routes.** The routes are tool-neutral, under `/api/profiles`. `{ns}` is
     the namespace and `{profile}` the profile name, with one or two
-    segments.
+    segments. The routes of a namespace that are not one profile start with
+    `-`, for example `/api/profiles/{ns}/-/labels`, and no name segment is
+    `-`. No name segment is one of the words that a route of a profile adds:
+    `revisions`, `rollback`, `diff`, `tags`, `labels`, `open`, `check`,
+    `drafts`, `access-requests`, `rules`, `rotate`, `rotations`, `clone`,
+    `rename`, `restore`, `referrers`. The save refuses such a name with
+    `profile.ErrInvalid`. So each path has one meaning.
 
     | Method and path | Action |
     | --- | --- |
@@ -209,9 +226,9 @@ of its environments to webhooks.
     | `GET /api/profiles/{ns}/{profile}/diff` | `profile:read`, and `profile:open` with `showSecrets` |
     | `GET`, `PUT`, `DELETE /api/profiles/{ns}/{profile}/tags/{tag}` | `profile:read`, `profile:write` |
     | `GET`, `PUT /api/profiles/{ns}/{profile}/labels` | `profile:read`, `profile:write` |
-    | `GET /api/profiles/{ns}/labels` | `profile:read` on the namespace |
+    | `GET /api/profiles/{ns}/-/labels` | `profile:read` on the namespace |
     | `POST /api/profiles/{ns}/{profile}/open` | `profile:open`, or a job token (decision 4) |
-    | `GET /api/profiles/{ns}/sessions/{session}` | the principal of the session |
+    | `GET /api/profiles/{ns}/-/sessions/{session}` | the credential that opened the session (decision 3) |
     | `POST /api/profiles/{ns}/{profile}/check` | `profile:read`: check a document with no save |
     | `GET`, `POST /api/profiles/{ns}/{profile}/drafts` | `profile:read`, `profile:write` |
     | `GET`, `PUT /api/profiles/{ns}/{profile}/drafts/{draft}` | `profile:read`, the author |
@@ -223,8 +240,8 @@ of its environments to webhooks.
     | `GET /api/profiles/{ns}/{profile}/rotations` | `profile:read` |
     | `POST /api/profiles/{ns}/{profile}/clone`, `.../rename`, `.../restore` | `profile:write`, `profile:manage`, `profile:manage` |
     | `GET /api/profiles/{ns}/{profile}/referrers` | `profile:read` |
-    | `GET`, `POST`, `DELETE /api/profiles/{ns}/attachments` | `profile:read`, `profile:attach` and `unit:manage` |
-    | `GET /api/profiles/adapters`, `GET /api/profiles/context-schema` | any signed-in principal |
+    | `GET`, `POST`, `DELETE /api/profiles/{ns}/-/attachments` | `profile:read`, and `profile:attach`, `profile:open` and `unit:manage` |
+    | `GET /api/profiles/-/adapters`, `GET /api/profiles/-/context-schema` | any signed-in principal |
     | `POST /api/profiles/{ns}/{profile}/revisions/{rev}/redact` | `profile:redact` |
 
     The paths are proposals for the route table. The route test gets each

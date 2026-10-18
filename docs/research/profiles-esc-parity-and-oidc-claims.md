@@ -177,7 +177,7 @@ Marks: **same** (the feature exists in profiles, in our format), **own**
 | Ownership transfer | OpenAPI `ReassignEnvironmentOwnership` | Profiles have no owner. Grants decide (ADR 52). | not taken |
 | Audit events, including issued OIDC tokens | /docs/esc/administration/audit-logs/ | An entry for each open and each token (ADR 203 decision 9, ADR 204 decision 10) | same |
 | Open sessions with a duration, 2 hours by default | OpenAPI `OpenEnvironment` | Same (ADR 203 decision 3) | same |
-| Check of a document, provider and context schemas | OpenAPI `CheckEnvironment` | `POST .../check`, `GET /api/profiles/adapters`, `GET /api/profiles/context-schema` | same |
+| Check of a document, provider and context schemas | OpenAPI `CheckEnvironment` | `POST .../check`, `GET /api/profiles/-/adapters`, `GET /api/profiles/-/context-schema` | same |
 | Attach to many stacks by collection | none found | Profile attachments on a namespace, a collection or a unit (ADR 203 decision 5) | more |
 
 ## 2. OIDC claims of CI and IaC products

@@ -22,7 +22,7 @@ each call.
 
 1. **One adapter for every kind.** The adapter names `login/external`,
    `secrets/external`, `outputs/external` and the rotator `external` use
-   one protocol. The block gives the URL and the optional audience:
+   one protocol. The block gives the URL:
 
    ```yaml
    providers:
@@ -76,7 +76,7 @@ each call.
    | --- | --- |
    | `iss` | The issuer of the namespace. |
    | `sub` | The subject of the block (ADR 205 decision 6). |
-   | `aud` | The `audience` of the block, else the URL with no path. |
+   | `aud` | The full URL of the block, with its path. No block can set another audience. |
    | `iat`, `nbf` | The time of the call. |
    | `exp` | `iat` plus 60 seconds. |
    | `jti` | A random ID with the prefix `oit-`. |
@@ -84,9 +84,12 @@ each call.
    | `body_sha256` | The SHA-256 of the exact bytes of the body, in base64url with no padding. |
    | the claims of ADR 205 decision 3 | As for a login token. |
 
-   `purpose` is `adapter`, so a cloud that trusts login tokens of the
-   namespace can refuse such a token. The audience of an adapter is
-   different from the audience of a cloud too.
+   The audience is always the full URL of the adapter. So an adapter
+   cannot use the token at a cloud, whose audience is never an `https` URL
+   of an adapter, and it cannot use the token at another adapter of the
+   same host, whose URL differs. AWS does not read `purpose`, so the
+   audience is the guard. `purpose` serves Vault, CEL and the adapters,
+   which can read it.
 4. **What the adapter checks.** The docs give these steps, in this order,
    and the Go package `pkg/profile/external` gives `Verify`, which does
    them:
@@ -151,8 +154,8 @@ each call.
 8. **Versions.** `schemaVersion` names the shape of the body and the
    answer. The server sends version 1. A new optional field is an
    addition. A change of a field needs version 2, and the server then sends
-   the highest version that the block names with `protocolVersion`, 1 by
-   default. **One-way door:** an adapter that a team hosts holds the shape
+   the version that the block names with the key `protocolVersion` (ADR 201
+   decision 7), 1 by default. **One-way door:** an adapter that a team hosts holds the shape
    of version 1.
 9. **The docs.** The reference page of the protocol gives the request, the
    JWT, the checks, the answer and the errors, with one complete exchange.

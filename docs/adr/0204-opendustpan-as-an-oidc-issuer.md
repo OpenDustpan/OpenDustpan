@@ -35,9 +35,14 @@ gives what the relying parties need:
 
 ## Decision
 
-1. **One issuer for each namespace (one-way door).** The issuer of the
-   namespace `acme` is `https://<public host>/oidc/acme`. Each namespace has
-   its own signing keys.
+1. **One issuer for each namespace (one-way door).** The issuer of a
+   namespace is `https://<public host>/oidc/<namespace ID>`, for example
+   `https://dustpan.example.com/oidc/ns-k3v9q2m7x4t8p1w6z5r0`. Each namespace
+   has its own signing keys.
+   - The path holds the stable ID of the namespace, not its name. A rename
+     of the namespace keeps the issuer. A namespace that is purged and made
+     again with the same name gets a new ID, so it never gets the cloud
+     trust of the old namespace.
    - A trust policy that names the issuer of one namespace can never match
      a token of another namespace, also when its `sub` pattern is too wide.
      This matters most on a shared installation, for example OpenDustpan
@@ -51,13 +56,13 @@ gives what the relying parties need:
 
    **One-way door:** clouds hold the issuer URL in their trust
    configuration. A new form of the URL breaks each trust.
-2. **The discovery document.** `GET /oidc/{ns}/.well-known/openid-configuration`
+2. **The discovery document.** `GET /oidc/{nsid}/.well-known/openid-configuration`
    answers:
 
    ```json
    {
-     "issuer": "https://dustpan.example.com/oidc/acme",
-     "jwks_uri": "https://dustpan.example.com/oidc/acme/jwks",
+     "issuer": "https://dustpan.example.com/oidc/ns-k3v9q2m7x4t8p1w6z5r0",
+     "jwks_uri": "https://dustpan.example.com/oidc/ns-k3v9q2m7x4t8p1w6z5r0/jwks",
      "response_types_supported": ["id_token"],
      "subject_types_supported": ["public"],
      "id_token_signing_alg_values_supported": ["RS256"],
@@ -66,11 +71,11 @@ gives what the relying parties need:
    }
    ```
 
-   `claims_supported` lists each claim of ADR 205. `GET /oidc/{ns}/jwks`
+   `claims_supported` lists each claim of ADR 205. `GET /oidc/{nsid}/jwks`
    answers the public keys of decision 4. Both routes need no sign-in, are
    on the public list of the route test, and send `Cache-Control:
-   max-age=300`. A namespace that does not exist answers `404`, with the
-   same body and timing as a namespace with no keys yet.
+   max-age=300`. An unknown namespace ID answers `404`. A namespace with no
+   key yet answers its discovery document and an empty JWKS.
 3. **The issuer can live at another URL.** A homelab server is often not
    reachable from the internet, and AWS and Azure must read the JWKS. So a
    namespace can set `issuerURL` to an `https` URL that it hosts, for
@@ -130,7 +135,8 @@ gives what the relying parties need:
      token of the issuer never authenticates to OpenDustpan,
    - an empty string and a string with a control character.
 
-   The trust rules of ADR 54 also refuse each issuer of this installation.
+   The trust rules of ADR 54 also refuse each issuer of this installation,
+   and each `issuerURL` that a namespace sets (decision 3).
    So a profile token never becomes an access token of OpenDustpan.
 8. **One signer.** `profile.Issuer` is the only code that signs. It has two
    methods:
@@ -186,8 +192,8 @@ gives what the relying parties need:
 
     | Method and path | Action | Answer |
     | --- | --- | --- |
-    | `GET /oidc/{ns}/.well-known/openid-configuration` | none (public) | The discovery document. |
-    | `GET /oidc/{ns}/jwks` | none (public) | The public keys of the states `next`, `active` and `retired`. |
+    | `GET /oidc/{nsid}/.well-known/openid-configuration` | none (public) | The discovery document. |
+    | `GET /oidc/{nsid}/jwks` | none (public) | The public keys of the states `next`, `active` and `retired`. |
     | `GET /api/issuer/{ns}` | `namespace:read` | The settings, the issuer URL and the metadata of each key. |
     | `PUT /api/issuer/{ns}` | `namespace:manage-issuer` | The settings of decision 9. |
     | `POST /api/issuer/{ns}/keys/rotate` | `namespace:manage-issuer` | The keys after the rotation. The body sets `emergency` and requires `reason`. |
@@ -201,8 +207,8 @@ gives what the relying parties need:
 
 - Clouds trust a namespace of OpenDustpan as they trust a CI product: one
   identity provider for each issuer URL, and a role for each subject.
-- A namespace that never opens a login block has no key, and its issuer
-  routes answer an empty JWKS.
+- A namespace that never opens a login block has no key, and its JWKS is
+  empty (decision 2).
 - The store gets a table of keys for each dialect, with the state, the
   times and the wrapped key, and `profiletest` gets its conformance cases:
   the states, the one-active-key rule and the rotation at each boundary.

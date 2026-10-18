@@ -49,8 +49,9 @@ The research note gives what the Pulumi CLI calls, from its source:
 
 1. **Two client programs (owner).** This ADR supersedes the sentence of the
    decision of ADR 12, "OpenDustpan ships no client plugins or wrappers", for
-   two programs only: the OpenDustpan provider of OpenTofu (decision 2)
-   and the run command (decision 8). Each one uses the REST API of
+   two programs only: the OpenDustpan provider (decision 2), in its two
+   builds for OpenTofu and for the Pulumi CLI, and the run command
+   (decision 8). Each one uses the REST API of
    profiles (ADR 17), so no feature exists only in a client. The rest of
    ADR 12 stays: each tool still connects through the protocol that its
    CLI speaks.
@@ -98,9 +99,11 @@ The research note gives what the Pulumi CLI calls, from its source:
      so the Pulumi build of the provider does not serve it.
    - `make e2e` checks which OpenTofu versions have ephemeral resources
      before the provider ships it. The docs name the versions.
-   - The Pulumi CLI reads a value marked never store through the
-     `environment:` path (decision 5), where it gets no copy in state except
-     the ciphertext of the stack config. The docs say so.
+   - The Pulumi CLI encrypts each value of `pulumiConfig` and keeps the
+     ciphertext in the config of the update. That is a stored copy, so a
+     value marked never store in `exports.pulumi` fails the open with
+     `profile.ErrNeverStore` for the consumer `pulumi`. A Pulumi program
+     reads such a value through a file of `exports.files` instead.
 4. **The provider authenticates as OpenTofu does (owner).** The provider
    needs the host and a token. In order, it uses:
    1. the attributes `host` and `token` of the provider block (`token` is
@@ -132,7 +135,8 @@ The research note gives what the Pulumi CLI calls, from its source:
 
    - `{org}` is the namespace. `{project}/{env}` is a profile name of two
      segments, folder and name. A profile name of one segment is the
-     project `default`. `@tag` and `@number` in an import name a revision.
+     project `default`. So no profile folder has the name `default`, and the
+     save refuses it with `profile.ErrInvalid`. `@tag` and `@number` in an import name a revision.
    - A body of `yaml/open` and `yaml/check` holds `imports` only. A body
      with any other key, for example `values` or an `fn::` function, fails
      with `400` and a diagnostic that says that OpenDustpan reads profiles

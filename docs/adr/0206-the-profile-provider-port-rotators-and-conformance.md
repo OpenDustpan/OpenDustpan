@@ -105,11 +105,17 @@ own, as `pkg/blob/s3` does for the blob port.
        Login *Result
    }
 
-   // TokenSource mints one token for one audience, with the subject
-   // template of the block. ErrInvalid for an audience that the issuer
-   // refuses (ADR 204 decision 7).
+   // TokenSource mints tokens of the issuer for one block, with the
+   // subject template of the block. It calls Issuer.Login or
+   // Issuer.Adapter (ADR 204 decision 8).
    type TokenSource interface {
+       // Token mints a login token for audience. ErrInvalid for an
+       // audience that the issuer refuses (ADR 204 decision 7).
        Token(ctx context.Context, audience string) (Token, error)
+       // AdapterToken mints the token of one call of an external adapter,
+       // with the hash of body and the full URL as the audience (ADR 208
+       // decision 3). ErrInvalid.
+       AdapterToken(ctx context.Context, url string, body []byte) (Token, error)
    }
 
    // Result is the outputs of one block.
@@ -135,7 +141,7 @@ own, as `pkg/blob/s3` does for the blob port.
    and a description. The save check compares each block with it, and so
    does the console form. The spec also names the **default exports** of
    the adapter: the variables, the files and the tool config that the
-   setting `export: true` of a block adds (ADR 201 decision 9). For
+   setting `export: true` of a block adds (ADR 201 decision 7). For
    example, the default exports of `login/aws` write a shared credentials
    file and name it in `AWS_SHARED_CREDENTIALS_FILE`.
 5. **The rotator port.**
@@ -197,7 +203,7 @@ own, as `pkg/blob/s3` does for the blob port.
    `RunProvider` and `RunRotator`. Each built-in adapter and the external
    client run them, with a fake of the remote system in the test:
    - `Spec` and `Check`: each required input, each type, a secret input
-     that the block gives as a plain literal (refused, ADR 201 decision 6).
+     that the block gives as a plain literal (refused, ADR 201 decision 7).
    - `Open`: a valid call, each error of decision 7 from the fake, a
      deadline that ends, an answer of `MaxProviderResult` plus one byte,
      and a call with no network for an input that `Check` refuses.

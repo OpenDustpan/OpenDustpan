@@ -120,7 +120,13 @@ external system accepts, with the sources and their dates.
    | `ErrInUse` | A rename or a delete of a profile that another object names. |
    | `ErrIssuerNotConfigured` | A token with no `publicURL`. |
    | `ErrSubjectTooLong` | A subject template whose subject can pass 600 characters. |
+   | `ErrAccessRequired` | An open of a profile with an open rule, with no approved access request. |
+   | `ErrExprVersion` | A revision whose Expr version the server cannot run (ADR 112 decision 11). |
+   | `ErrDraftExpired` | A write, a review or an apply of a draft that expired. |
    | `ErrLimit` | A write or an open above a limit. The error names the limit. |
+
+   A caller without the action of a route gets an error that wraps
+   `identity.ErrDenied`, for example an open without `profile:open`.
 
 4. **The ports.** The ports of ADRs 204 and 206 (`Issuer`, `Provider`,
    `Rotator`, `TokenSource`) and these ports of the store and the wiring
@@ -154,7 +160,9 @@ external system accepts, with the sources and their dates.
        Retract(ctx context.Context, id ID, rev, with int, reason string, f namespace.Fence, e []audit.Entry) error
        // PutDraft, SubmitReview and ApplyDraft hold the drafts of ADR 202
        // decision 6. ApplyDraft checks the approvals of the rule in its
-       // transaction. ErrConflict, ErrInvalid.
+       // transaction. ErrConflict, ErrInvalid, ErrDraftExpired. A draft
+       // write appends no audit entry, as a draft review of a change
+       // order does not. The submit and the apply append theirs.
        PutDraft(ctx context.Context, id ID, d Draft, f namespace.Fence) (Draft, error)
        SubmitReview(ctx context.Context, id ID, d DraftID, v Review, f namespace.Fence, e []audit.Entry) (Draft, error)
        ApplyDraft(ctx context.Context, id ID, d DraftID, f namespace.Fence, e []audit.Entry) (Revision, error)
@@ -173,16 +181,52 @@ external system accepts, with the sources and their dates.
        Delete(ctx context.Context, id ID, f namespace.Fence, e []audit.Entry) error
        Restore(ctx context.Context, id ID, f namespace.Fence, e []audit.Entry) (Profile, error)
        Rename(ctx context.Context, id ID, name Name, f namespace.Fence, e []audit.Entry) (Profile, error)
+       // Clone copies a profile as ADR 202 decision 9 says, with its open
+       // rule. ErrConflict for a name in use, ErrLimit.
+       Clone(ctx context.Context, id ID, name Name, o CloneOptions, f namespace.Fence, e []audit.Entry) (Profile, error)
+       // SetLabels, SetRules and SetSettings replace the labels, the
+       // change rule and the open rule, and the settings such as deletion
+       // protection. ErrInvalid, ErrConflict.
+       SetLabels(ctx context.Context, id ID, l Labels, f namespace.Fence, e []audit.Entry) error
+       SetRules(ctx context.Context, id ID, r Rules, version int64, f namespace.Fence, e []audit.Entry) error
+       SetSettings(ctx context.Context, id ID, s Settings, f namespace.Fence, e []audit.Entry) error
+       // PutAccessRequest and ReviewAccess hold the access requests of
+       // ADR 202 decision 7. UseAccess marks the first use and answers
+       // ErrAccessRequired when no approved request covers the principal.
+       PutAccessRequest(ctx context.Context, r AccessRequest, f namespace.Fence, e []audit.Entry) (AccessRequest, error)
+       ReviewAccess(ctx context.Context, id AccessRequestID, v Review, f namespace.Fence, e []audit.Entry) (AccessRequest, error)
+       UseAccess(ctx context.Context, id ID, principal string, now time.Time, f namespace.Fence) error
+       // RecordOpen appends the audit entry of one open (ADR 203 decision
+       // 9) and the entries of each token that it signed (ADR 204
+       // decision 10), in one transaction.
+       RecordOpen(ctx context.Context, o OpenRecord, f namespace.Fence, e []audit.Entry) error
+   }
+
+   // Keys holds the signing keys of the issuer of each namespace (ADR 204
+   // decisions 4 and 5). Each key is wrapped by the Wrapper of the secret
+   // package.
+   type Keys interface {
+       // Active answers the key that signs now. ErrNotFound when the
+       // namespace has no key.
+       Active(ctx context.Context, ns namespace.ID) (Key, error)
+       // Published answers the keys of the JWKS: next, active, retired.
+       Published(ctx context.Context, ns namespace.ID) ([]PublicKey, error)
+       // Rotate applies one step of the rotation at now, or an emergency
+       // rotation. ErrConflict for a second active key.
+       Rotate(ctx context.Context, ns namespace.ID, now time.Time, emergency bool, f namespace.Fence, e []audit.Entry) ([]PublicKey, error)
    }
 
    // Sessions holds open sessions (ADR 203 decision 3).
    type Sessions interface {
-       // Put stores a sealed result until expires. ErrLimit above 100
-       // live sessions for the principal.
-       Put(ctx context.Context, s Session) (SessionID, error)
-       // Get reads a session of the principal. ErrNotFound for another
-       // principal, an unknown session or a session that ended.
-       Get(ctx context.Context, id SessionID, principal string) (Session, error)
+       // Put stores a sealed result until expires, bound to the principal
+       // and the job of the credential. ErrLimit above 100 live sessions
+       // for the principal. A session holds no audit entry: the open
+       // wrote it (ADR 203 decision 9).
+       Put(ctx context.Context, s Session, f namespace.Fence) (SessionID, error)
+       // Get reads a session for the same principal and job. ErrNotFound
+       // for another credential, an unknown session or a session that
+       // ended.
+       Get(ctx context.Context, id SessionID, c SessionCredential) (Session, error)
        // Sweep deletes each session that ended before now.
        Sweep(ctx context.Context, now time.Time) (int, error)
    }
@@ -205,8 +249,7 @@ external system accepts, with the sources and their dates.
    }
    ```
 
-   `profiletest` holds the suites of `Store`, `Sessions` and the keys of
-   the issuer. A reference adapter in memory, in the tests of the package,
+   `profiletest` holds the suites of `Store`, `Sessions` and `Keys`. A reference adapter in memory, in the tests of the package,
    runs them, so each case runs before a SQL adapter exists.
 5. **How this fits the accepted ADRs.**
 
@@ -218,22 +261,33 @@ external system accepts, with the sources and their dates.
    | 101 decision 10, 133 decision 12, 134 decisions 6 and 7 | Credentials reach the tool step as files on a memory-backed volume. A variable holds a path. The plan phase gets read-only credentials. | ADR 203 decision 6: `exports.files` and the default exports are files. A secret in `exports.variables` fails the job start. The plan phase opens with `access` `read`. |
    | 134 decision 8 | The launcher masks each secret. | Each secret of an open is in the mask set. |
    | 175 decision 3 | The profile names the variable of a credential file of a provider wrapper. | `exports.files`, for example `IPAM_TOKEN_FILE`. |
-   | 110 decision 6, 111 decision 3 | A render holds no secret. A secret comes from the profile of the blueprint at run time. | The blueprint profile becomes a unit attachment (ADR 203 decision 5). |
+   | 110 decision 8, 111 decision 3 | A render holds no secret. A secret comes from the profile of the blueprint at run time. | The blueprint profile becomes a unit attachment (ADR 203 decision 5). |
    | 112 decision 8 | `platform.profile`, and the one-home rule against the keys that the profile sets. | The keys that a profile sets are the keys of `exports.opentofu` and `exports.pulumi`. The render check reads the attachments of the namespace and the collection of the new unit too. |
    | 122 decision 8, 124 | Dusty observes with short-lived read-only credentials of the profile of the unit. An agent sees no decrypted secret by default. | The consumer `observe` runs the login blocks in the server with `access` `read`. The block for an observe is the login block with `observe: true`, else the only login block of the cloud of the unit. An agent open answers masked values. |
    | 164 decision 4 | A sweep names no profile, and the server holds no cloud credential for a sweep. | A sweep reads no profile. The claim set has no action for a sweep. ADR 164 open question 2 stays open. |
-   | 54 | The server trusts external issuers for workload identity. | The trust rules also refuse each issuer of this installation (ADR 204 decision 7). This adds a rule to ADR 54. |
 
 6. **Conflicts with accepted ADRs.**
    - **ADR 12**, "OpenDustpan ships no client plugins or wrappers." The
-     owner decided the provider of OpenTofu and the run command. ADR 209
-     decision 1 supersedes the sentence for these two programs.
+     owner decided the provider (in its builds for OpenTofu and for the
+     Pulumi CLI) and the run command. ADR 209 decision 1 supersedes the
+     sentence for these two programs.
    - **ADR 101 decision 1**: `Executor.Start` answers `ErrInvalid` for a
      spec with "no profile". With attachments, a unit can have no profile,
      for example a homelab unit with no secret. This ADR does not change
      the rule. Until RFC 5 has an answer, a unit needs at least one
      attachment for a runner job. The recommendation in RFC 5 is to allow
      an empty list.
+   - **ADR 54 decision 3** says that the server treats no issuer as a
+     special case. ADR 204 decision 7 makes the trust rules refuse each
+     issuer of this installation, and each `issuerURL` that a namespace
+     sets, so that an issued token never becomes an access token. This
+     changes ADR 54 decision 3 in part.
+   - **ADR 134 decision 6** lists exactly what a tool step gets. Its
+     variables of credential files each hold a path. A plain variable of
+     `exports.variables`, for example `AWS_REGION`, holds a value that is
+     not a path. ADR 203 decision 6 adds these variables to the list. The
+     credential-variable rule of ADR 101 decision 7 still applies to each
+     one, and a secret fails the job start. This extends ADR 134 decision 6.
    - **ESC parity and ADR 101 decision 10.** ESC sets secrets as
      environment variables of a command. On a runner, no credential passes
      through a variable. ADR 201 decision 9 keeps the rule of ADR 101 on a
@@ -291,7 +345,7 @@ lines gives short-lived AWS credentials.
 
 ### A small team
 
-Four people run Pulumi and OpenTofu on AWS, with one runner pool. They make
+Four people run the Pulumi CLI and OpenTofu on AWS, with one runner pool. They make
 one profile and attach it to the collection `prod`:
 
 ```yaml
@@ -320,11 +374,11 @@ collection:
 ```json
 {
   "Effect": "Allow",
-  "Principal": { "Federated": "arn:aws:iam::111122223333:oidc-provider/dustpan.example.com/oidc/acme" },
+  "Principal": { "Federated": "arn:aws:iam::111122223333:oidc-provider/dustpan.example.com/oidc/ns-k3v9q2m7x4t8p1w6z5r0" },
   "Action": "sts:AssumeRoleWithWebIdentity",
   "Condition": {
-    "StringEquals": { "dustpan.example.com/oidc/acme:aud": "sts.amazonaws.com" },
-    "StringLike": { "dustpan.example.com/oidc/acme:sub": "namespace:acme:collection:prod:*:access:write" }
+    "StringEquals": { "dustpan.example.com/oidc/ns-k3v9q2m7x4t8p1w6z5r0:aud": "sts.amazonaws.com" },
+    "StringLike": { "dustpan.example.com/oidc/ns-k3v9q2m7x4t8p1w6z5r0:sub": "namespace:acme:collection:prod@<collection ID>:*:access:write" }
   }
 }
 ```
@@ -379,17 +433,22 @@ values:
 exports:
   pulumi:
     payments:vpcId: ${ values.vpcId }
-    payments:dbPassword: ${ values.dbPassword }
+  files:
+    PAYMENTS_DB_PASSWORD_FILE: ${ values.dbPassword }
 ```
 
 - The Pulumi stacks of the team read the VPC of an OpenTofu workspace with
   no copy of the value.
 - The Vault role binds `collection` and `ref_protected` with
   `bound_claims`. The database password is a dynamic secret, marked never
-  store, so an OpenTofu unit reads it only with the ephemeral resource.
+  store. A Pulumi program reads it from the file that
+  `PAYMENTS_DB_PASSWORD_FILE` names, and an OpenTofu unit reads it only with
+  the ephemeral resource.
 - The profile `payments/prod` has a change rule with two approvals by the
-  group `payments-leads`, and an open rule for people, so a person needs
-  an approved access request to read it outside a job.
+  group `payments-leads`. A separate profile `payments/prod-admin`, which no
+  unit attaches, holds the credentials of the database administrator and
+  has an open rule, so a person needs an approved access request to read
+  it.
 - Azure units use the subject template `namespace`, `collection`, `access`,
   so each collection needs two federated credentials, inside the limit of
   20 for each identity.

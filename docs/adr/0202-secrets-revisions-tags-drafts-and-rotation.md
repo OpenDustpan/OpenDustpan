@@ -41,7 +41,8 @@ rotators. The research note gives the ESC features one by one:
      person copies into another profile fails the save with
      `profile.ErrInvalid`.
    - A read with `showSecrets` answers each static secret in plain text. It
-     needs `profile:open`, as an open does, and writes an audit entry.
+     needs `profile:open`, as an open does, and the open rule of the profile
+     applies to it (decision 7). It writes an audit entry.
    - The final delete of a profile deletes its data key in the same
      transaction (ADR 23 decision 5).
 2. **Revisions.** Each save makes a new revision: the number (1, 2, 3 and
@@ -49,6 +50,15 @@ rotators. The research note gives the ESC features one by one:
    most 500 characters, the Expr version and the SHA-256 of the document.
    A revision never changes. A save names the revision that it read, and a
    save on a stale read fails with `profile.ErrConflict`.
+   - **A save that can send secrets elsewhere needs `profile:open`.** A save
+     that adds, deletes or changes a block of `providers` or `rotators`, or
+     that adds an expression that reads a secret into the inputs of a
+     block, needs `profile:open` on the profile as well as `profile:write`.
+     Without it, the save fails with `identity.ErrDenied`, which names the
+     block. So a person who can write a profile but not open it cannot
+     point an external block at a URL of their own and receive the secrets
+     (ADR 208 decision 2). A save that changes only plain values, tags or
+     labels needs `profile:write` only.
    - Each revision is a history item with its own item key (ADR 151). A
      person with `profile:redact` can redact a revision, for example after
      a secret went into a plain value by mistake. A redacted revision
@@ -68,11 +78,12 @@ rotators. The research note gives the ESC features one by one:
      provider of OpenTofu name a revision as `name@tag` or `name@number`.
 4. **Labels.** A profile has 0 to 32 labels, each a key and a value, for
    views, filters and search (the label of ADR 51 decision 7). A label
-   grants nothing. `GET /api/profiles/{ns}/labels` answers each key with
+   grants nothing. `GET /api/profiles/{ns}/-/labels` answers each key with
    its values.
 5. **Rollback, retract and diff.**
    - **Rollback** saves the document of an earlier revision as a new
-     revision. The state of each rotator stays the current state (decision
+     revision. It is a save, so the rules of decision 2 apply, and under a
+     change rule it is a draft (decision 6). The state of each rotator stays the current state (decision
      8), so a rollback never brings back a retired credential. This is the
      case where ESC cannot roll back.
    - **Retract** marks a revision that nobody can open or import. Its tags
@@ -104,7 +115,8 @@ rotators. The research note gives the ESC features one by one:
    - An approved draft applies as a new revision. A draft that sees no
      write for 30 days expires.
    - A draft can be opened before approval for a plan, as
-     `name@draft:<draft ID>`, by its author and its approvers. Such an open
+     `name@draft:<draft ID>`, by its author and its approvers, each with
+     `profile:open` on the profile. Such an open
      has `access` `read` or `open` and never `write` (ADR 205 decision 4), so
      an apply never runs with a draft.
    - A change of the change rule itself needs `profile:manage` and an
@@ -120,15 +132,17 @@ rotators. The research note gives the ESC features one by one:
      step, and each one gets its own approval.
    - For a job, ADR 203 decision 5 says how the open rule applies.
 8. **Rotation.** A `rotators` block names a rotator (ADR 207 decision 8),
-   its inputs, its login block and a schedule:
+   its inputs, a login block when the rotator needs one, and a schedule:
 
    ```yaml
    rotators:
      db:
        use: postgres
-       login: dbadmin
        with:
          host: db.payments.internal
+         managingUser:
+           username: rotator
+           password: { $secret: "<password of the managing user>" }
          users: [app_blue, app_green]
        schedule: "0 3 * * 1"      # each Monday at 03:00 in the time zone of the namespace
    values:
@@ -155,7 +169,7 @@ rotators. The research note gives the ESC features one by one:
    - `POST .../rotate` rotates now, for all blocks or for named blocks.
      It needs `profile:rotate`.
    - A rotation opens its login block with the action `rotate` and the
-     access `write` (ADR 205). The history of rotations of each block keeps
+     access `rotate` (ADR 205 decision 4). The history of rotations of each block keeps
      the time, the outcome, who or which schedule started it, and the class
      of the error, never a credential.
 9. **Lifecycle.**
@@ -164,12 +178,14 @@ rotators. The research note gives the ESC features one by one:
      `.`, `_` and `-`, joined with `/`, at most 100 characters, for example
      `aws-prod` or `payments/aws-prod`. The first segment of a 2-segment
      name is a **profile folder**, which groups profiles in views. The
-     Pulumi CLI sees the folder as the ESC project (ADR 209 decision 6).
+     Pulumi CLI sees the folder as the ESC project (ADR 209 decision 5).
    - **Rename** keeps the ID. It fails with `profile.ErrInUse` while a
      profile, a blueprint or an attachment names the profile by its name.
      The error names each one.
    - **Clone** copies the newest revision to a new name, and optionally the
-     history, the tags and the labels. It never copies grants or rules.
+     history, the tags and the labels. It needs `profile:open` on the
+     source. It always copies the open rule, so a clone never opens a way
+     around an access request. It never copies grants or the change rule.
    - **Delete** is a soft delete with a recovery window of 30 days, as for a
      unit (ADR 47, ADR 153). It fails with `profile.ErrInUse` while a
      profile imports it, an attachment names it, or a job that is not

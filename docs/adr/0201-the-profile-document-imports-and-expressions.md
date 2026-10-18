@@ -123,14 +123,12 @@ double what a person must learn and what the server must limit.
    - A path that does not exist fails the open with
      `profile.ErrReference`, which names the path and the profile. The save
      checks each path that it can find without a provider call.
-5. **The context.** `context` holds the facts of the open, with the names
-   of the claims of ADR 205: `context.namespace`, `context.profile`,
-   `context.rootProfile`, `context.revision`, `context.access`,
-   `context.action`, `context.phase`, `context.tool`, `context.unit`,
-   `context.collection`, `context.actorType`, `context.actorId`,
-   `context.ref`, `context.refType`, `context.refProtected`,
-   `context.repository`, `context.job` and `context.runnerPool`, and
-   `context.openDuration`. A fact that the open does not have is `nil`.
+5. **The context.** `context` holds the facts of the open: each claim of
+   ADR 205 decision 3, with its name in camelCase (ADR 205 decision 9), for
+   example `context.namespace`, `context.access`, `context.toolAction`,
+   `context.unit`, `context.refProtected`, `context.commit` and
+   `context.trigger`. The claim `profile_revision` is `context.revision`.
+   `context.openDuration` adds the duration of the open. A fact that the open does not have is `nil`.
    The context of the profile that holds an expression is the context of
    that profile, so `context.profile` names it, and `context.rootProfile`
    names the profile that the caller opened.
@@ -183,6 +181,8 @@ double what a person must learn and what the server must limit.
    - `export: true` adds the default exports of the adapter.
    - `neverStore: true` marks each output of the block (decision 12).
    - `timeout` is 1 to 30 seconds, 10 seconds by default.
+   - `protocolVersion` names the version of the external adapter protocol
+     for an external block (ADR 208 decision 8), 1 by default.
    - `observe: true` names the login block that the observe of Dusty uses
      (ADR 200 decision 5).
 
@@ -270,7 +270,9 @@ double what a person must learn and what the server must limit.
     syntax tree, before it runs it. So the mark is never lost, also when
     the result does not look like the input. A value marked never store is
     also a secret. ADR 209 decision 3 gives what each consumer does with
-    the never-store mark.
+    the never-store mark: the data source of OpenTofu refuses it, the
+    ephemeral resource reads it, the consumer `pulumi` refuses it in
+    `exports.pulumi`, and a job start refuses it in `exports.opentofu`.
 13. **Limits.** A document has at most 256 KiB of text, 64 provider blocks,
     16 rotator blocks, 4,096 leaves in `values` and a depth of 32. The
     resolved result of an open has at most 4 MiB. A save or an open above a
