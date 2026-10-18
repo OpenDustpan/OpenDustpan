@@ -1709,25 +1709,6 @@ ON CONFLICT (sink, namespace) DO UPDATE
 SET sequence = excluded.sequence, updated_at_ms = excluded.updated_at_ms
 WHERE excluded.sequence > audit_sink_cursors.sequence;
 
--- name: AcquireAuditSinkLease :execrows
--- Takes or renews the lease of one sink in one conditional write. It writes
--- when no row exists, when the stored lease ended, or when the caller holds
--- it, and changes nothing while another instance holds a live lease. The
--- caller reads the changed row count: one means it holds the lease. The
--- expiry is the database clock plus the TTL, so a wrong clock on one
--- instance cannot hold every lease.
-INSERT INTO audit_sink_leases (sink, holder, expires_at_ms)
-VALUES (?1, ?2, CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) + CAST(sqlc.arg('ttl_ms') AS INTEGER))
-ON CONFLICT (sink) DO UPDATE
-SET holder = excluded.holder, expires_at_ms = excluded.expires_at_ms
-WHERE audit_sink_leases.holder = excluded.holder OR audit_sink_leases.expires_at_ms <= CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER);
-
--- name: ReleaseAuditSinkLease :execrows
--- Releases the lease of one sink only when holder holds it. It changes
--- nothing when no row exists or another instance holds the lease.
-DELETE FROM audit_sink_leases
-WHERE sink = ? AND holder = ?;
-
 -- Token policy and the inactivity disable (ADR 53).
 
 -- name: GetAccessTokenPolicy :one
@@ -1984,8 +1965,9 @@ WHERE ended_at_ms IS NULL
 SELECT COUNT(*) FROM principals WHERE substr(subject, 1, length(sqlc.arg('prefix'))) = sqlc.arg('prefix');
 
 -- Durable operations. Every time comes from DatabaseNowMs, the clock of the
--- store. Each write runs in an IMMEDIATE transaction, so the read of a row
--- and its write see no other writer between them.
+-- store. Each write runs in the write transaction of the store, which begins
+-- IMMEDIATE (the store opens its database with _txlock=immediate), so the
+-- read of a row and its write see no other writer between them.
 
 -- name: InsertDurableOperation :exec
 INSERT INTO durable_operations (

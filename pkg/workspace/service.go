@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"strings"
@@ -1120,12 +1121,12 @@ func (s *Service) Open(ctx context.Context, sv StateVersion) (io.ReadCloser, err
 		return nil, errors.Join(err, r.Close())
 	}
 
-	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), r)
+	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), string(sv.ID), r)
 	if err != nil {
 		return nil, errors.Join(sanitizeOpenError(sv.ID, err), r.Close())
 	}
 
-	return &closeReader{reader: opened, closer: r, id: sv.ID}, nil
+	return &closeReader{reader: newVerifiedReader(opened, sv), closer: r, id: sv.ID}, nil
 }
 
 // OpenStateBlob returns the plain content of the sealed blob under key, for
@@ -1161,12 +1162,12 @@ func (s *Service) OpenStateBlob(ctx context.Context, key blob.Key) (io.ReadClose
 		return nil, errors.Join(err, r.Close())
 	}
 
-	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), r)
+	opened, err := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), string(sv.ID), r)
 	if err != nil {
 		return nil, errors.Join(sanitizeOpenError(sv.ID, err), r.Close())
 	}
 
-	return &closeReader{reader: opened, closer: r, id: sv.ID}, nil
+	return &closeReader{reader: newVerifiedReader(opened, sv), closer: r, id: sv.ID}, nil
 }
 
 // History returns the finalized state versions of the workspace, newest
@@ -1696,7 +1697,7 @@ func (s *Service) copyState(ctx context.Context, w Workspace, src StateVersion) 
 		return StateVersion{}, noteErr
 	}
 
-	size, err := s.copyBlob(ctx, w, key, src)
+	size, err := s.copyBlob(ctx, w, key, src, string(stored.ID))
 	if err != nil {
 		return StateVersion{}, err
 	}
@@ -1749,7 +1750,7 @@ func (s *Service) openRestoreOutputs(
 		return nil, nil
 	}
 
-	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), src.Outputs)
+	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(src.ID), src.Outputs)
 	if err != nil {
 		return nil, sanitizeOpenError(src.ID, fmt.Errorf("restore %s: %w", src.ID, err))
 	}
@@ -1759,17 +1760,17 @@ func (s *Service) openRestoreOutputs(
 
 // copyBlob copies the content of src under key, checking size and MD5 as it
 // streams. The source opens before the check, so the check runs on the
-// plain bytes, and the copy seals again. On any mismatch the object is
-// deleted.
+// plain bytes, and the copy seals again, bound to the new state version. On
+// any mismatch the object is deleted.
 func (s *Service) copyBlob(
-	ctx context.Context, w Workspace, key blob.Key, src StateVersion,
+	ctx context.Context, w Workspace, key blob.Key, src StateVersion, version string,
 ) (int64, error) {
 	r, err := s.blobs.Get(ctx, src.Content)
 	if err != nil {
 		return 0, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, err)
 	}
 
-	opened, oerr := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), r)
+	opened, oerr := s.sealer.OpenState(ctx, w.Ref.Namespace, w.ID.String(), string(src.ID), r)
 	if oerr != nil {
 		return 0, errors.Join(
 			sanitizeOpenError(src.ID, fmt.Errorf("restore %s from %s: %w", src.Workspace, src.ID, oerr)),
@@ -1782,6 +1783,7 @@ func (s *Service) copyBlob(
 	size, storeErr := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
+		version:   version,
 		key:       key,
 		want:      src.MD5,
 		content:   r,
@@ -1805,14 +1807,14 @@ func (s *Service) copyBlob(
 // confirmRetry answers a retried upload of a finalized version: the same
 // content succeeds without being stored again, other content is denied.
 func (s *Service) confirmRetry(sv StateVersion, content io.Reader) (StateVersion, error) {
-	hash := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
+	digest := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
 
-	n, err := io.Copy(hash, io.LimitReader(content, s.maxState+1))
+	n, err := io.Copy(digest, io.LimitReader(content, s.maxState+1))
 	if err != nil {
 		return StateVersion{}, fmt.Errorf("read retried upload of %s: %w", sv.ID, err)
 	}
 
-	if n != sv.Size || [md5.Size]byte(hash.Sum(nil)) != sv.MD5 {
+	if n != sv.Size || [md5.Size]byte(digest.Sum(nil)) != sv.MD5 {
 		return StateVersion{}, fmt.Errorf(
 			"%w: state version %s is finalized with other content",
 			ErrUploadDenied,
@@ -2079,12 +2081,14 @@ func (s *Service) createPending(
 
 	// The client's JSON rendering of the outputs is never stored: the outputs of a
 	// version come from its body (ADR 49, decision 8).
+	svID := StateVersionID(ident.NewID("sv-"))
+
 	sv := StateVersion{
 		CreatedAt:       now,
 		FinalizedAt:     time.Time{},
 		UploadExpiresAt: now.Add(UploadWindow),
 		Upload:          tok.Digest(),
-		ID:              StateVersionID(ident.NewID("sv-")),
+		ID:              svID,
 		Workspace:       w.ID,
 		Holder:          w.Lock.Holder,
 		LockID:          w.Lock.ID,
@@ -2116,9 +2120,11 @@ func (s *Service) createPending(
 type storeInput struct {
 	namespace namespace.Name
 	workspace ID
-	key       blob.Key
-	want      [md5.Size]byte
-	content   io.Reader
+	// version is the state version ID that binds a sealed write.
+	version string
+	key     blob.Key
+	want    [md5.Size]byte
+	content io.Reader
 	// unchecked skips the MD5 comparison: a streamed write with no declared MD5
 	// records the MD5 that the bytes produce.
 	unchecked bool
@@ -2144,11 +2150,11 @@ func (s *Service) store(ctx context.Context, in storeInput) (int64, error) {
 // storeContent is store, and it also reports the MD5 of the plain bytes. With
 // unchecked set, it checks only the size.
 func (s *Service) storeContent(ctx context.Context, in storeInput) (storedContent, error) {
-	hash := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
+	digest := md5.New() //nolint:gosec // Required by the TFE protocol; integrity only.
 	counted := &countingReader{r: io.LimitReader(in.content, s.maxState+1), n: 0}
-	checked := io.TeeReader(counted, hash)
+	checked := io.TeeReader(counted, digest)
 
-	sealedReader, err := s.sealer.SealState(ctx, in.namespace, in.workspace.String(), checked)
+	sealedReader, err := s.sealer.SealState(ctx, in.namespace, in.workspace.String(), in.version, checked)
 	if err != nil {
 		return storedContent{}, err
 	}
@@ -2159,7 +2165,7 @@ func (s *Service) storeContent(ctx context.Context, in storeInput) (storedConten
 		return storedContent{}, fmt.Errorf("store content: %w", err)
 	}
 
-	sum := [md5.Size]byte(hash.Sum(nil))
+	sum := [md5.Size]byte(digest.Sum(nil))
 
 	var problem error
 
@@ -2188,7 +2194,7 @@ func (s *Service) openOutputs(ctx context.Context, sv *StateVersion) error {
 		return err
 	}
 
-	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), sv.Outputs)
+	plain, err := s.sealer.OpenOutputs(ctx, w.Ref.Namespace, w.ID.String(), string(sv.ID), sv.Outputs)
 	if err != nil {
 		return sanitizeOpenError(sv.ID, err)
 	}
@@ -2225,6 +2231,36 @@ func (r *closeReader) Read(p []byte) (int, error) {
 	n, err := r.reader.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) && errors.Is(err, secret.ErrDecrypt) {
 		return n, fmt.Errorf("open state %s: %w", r.id, ErrSealedContent)
+	}
+
+	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see io.EOF unchanged.
+}
+
+// verifiedReader checks the plain bytes of a state version against the size
+// and MD5 of its row as they stream. A mismatch at the end of the stream
+// fails the read with ErrStoredContentMismatch, so the caller never accepts
+// bytes that differ from the row.
+type verifiedReader struct {
+	r    io.Reader
+	hash hash.Hash
+	sv   StateVersion
+	n    int64
+}
+
+// newVerifiedReader wraps r, the plain bytes of sv.
+func newVerifiedReader(r io.Reader, sv StateVersion) *verifiedReader {
+	//nolint:gosec // Required by the TFE protocol; integrity only.
+	return &verifiedReader{r: r, hash: md5.New(), sv: sv, n: 0}
+}
+
+// Read returns the next plain bytes and checks them at the end of the stream.
+func (v *verifiedReader) Read(p []byte) (int, error) {
+	n, err := v.r.Read(p)
+	v.n += int64(n)
+	_, _ = v.hash.Write(p[:n])
+
+	if errors.Is(err, io.EOF) && (v.n != v.sv.Size || [md5.Size]byte(v.hash.Sum(nil)) != v.sv.MD5) {
+		return n, fmt.Errorf("open state %s: %w", v.sv.ID, ErrStoredContentMismatch)
 	}
 
 	return n, err //nolint:wrapcheck // Transparent wrapper: callers must see io.EOF unchanged.
@@ -2339,6 +2375,7 @@ func (s *Service) storeUploadBody(
 	size, storeErr := s.store(ctx, storeInput{
 		namespace: w.Ref.Namespace,
 		workspace: w.ID,
+		version:   string(sv.ID),
 		key:       key,
 		want:      sv.MD5,
 		content:   reader,
@@ -2360,7 +2397,7 @@ func (s *Service) storeUploadBody(
 		return uploadedBody{}, errors.Join(metaErr, deleteOnCleanup(ctx, s.blobs, key))
 	}
 
-	outputs, err := s.streamedOutputs(ctx, w, meta)
+	outputs, err := s.streamedOutputs(ctx, w, string(sv.ID), meta)
 	if err != nil {
 		return uploadedBody{}, errors.Join(err, deleteOnCleanup(ctx, s.blobs, key))
 	}

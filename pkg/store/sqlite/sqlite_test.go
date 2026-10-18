@@ -191,6 +191,14 @@ func TestAuditFeedConformance(t *testing.T) {
 	})
 }
 
+// TestShipperRefusesLeaselessStore proves that a shipper with a store-backed
+// feed and no lease store is refused at construction.
+func TestShipperRefusesLeaselessStore(t *testing.T) {
+	t.Parallel()
+
+	audittest.CheckShipperRefusesLeaselessStore(t, open(t))
+}
+
 // TestAuditConformance runs the audit store suite: append, list order,
 // paging, fencing, isolation, concurrent appends and the chain check. The
 // tamper hooks change or remove a row through SQL: the port has no update
