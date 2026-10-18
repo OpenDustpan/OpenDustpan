@@ -76,6 +76,12 @@ apply:
 - **Edit what the tool writes.** Issues, comments and pull request text that
   a tool helped to write need a human review and edit before you post them.
   Remove the noise.
+- **Sign off each commit.** Use `git commit -s`. The `Signed-off-by:` line
+  certifies the Developer Certificate of Origin 1.1 for the commit.
+- **Pass `make check`** before you ask for a review.
+- **No bulk pull requests.** The project closes bulk AI pull requests with
+  no review, for example many pull requests that a tool opened with no issue
+  and no human review.
 - **No AI-generated media.** Do not submit images, video or audio that an AI
   tool made. Text and code are the only AI-generated content that the
   project accepts, under the rules above.
@@ -88,7 +94,11 @@ These rules follow the
 Agent sessions do most of the maintainer work on OpenDustpan. Every commit
 that an agent writes carries a `Co-Authored-By` trailer that names it. Every
 change passes CI, a security review and a review by a second session before
-a merge. The rules above are for outside contributions.
+a merge. The rules above also apply to these agents. The `Co-Authored-By`
+trailer is their disclosure. Until 2026-10-22, an agent signs off each commit
+with its own commit author identity. The project owner decides the rule for
+agent sign-off after that date. An agent pastes the output of its checks into
+the description of each pull request that it opens.
 
 ## Conduct and security
 
