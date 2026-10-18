@@ -3,6 +3,7 @@ package catalog_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/catalog"
@@ -134,19 +135,35 @@ func TestEditableRequestFile(t *testing.T) {
 func TestGateFor(t *testing.T) {
 	t.Parallel()
 
-	approve := policy.Decision{
-		Effect: policy.EffectApprove, Reasons: nil, Approvals: &policy.Approvals{Groups: []string{"dba"}, Count: 2},
-		Engine: "", PolicyVersion: "",
+	approve := func(groups ...string) policy.Decision {
+		return policy.Decision{
+			Effect: policy.EffectApprove, Reasons: nil, Approvals: &policy.Approvals{Groups: groups, Count: 1},
+			Engine: "", PolicyVersion: "",
+		}
 	}
 
-	g, ok := catalog.GateFor(&approve, true)
-	if !ok || g.Type != job.GateApproval || g.Approvals != 2 || len(g.Groups) != 1 || g.AllowSelf || !g.BindPlan {
-		t.Fatalf("GateFor(approve) = %+v, %v, want 2 approvals by dba, not by the requester", g, ok)
+	// Two engines, two disjoint group sets: two gates, one approval by each.
+	d, err := policy.Combine([]policy.Decision{approve("security"), approve("dba")})
+	if err != nil {
+		t.Fatalf("Combine() = %v", err)
 	}
 
-	allow := policy.Decision{Effect: policy.EffectAllow, Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: ""}
-	if _, ok := catalog.GateFor(&allow, true); ok {
-		t.Fatal("GateFor(allow) gives a gate")
+	gates := catalog.GateFor(&d, true)
+	if len(gates) != 2 {
+		t.Fatalf("GateFor(security and dba) = %+v, want 2 gates", gates)
+	}
+
+	for i, want := range []string{"dba", "security"} {
+		g := gates[i]
+		if g.Type != job.GateApproval || g.Approvals != 1 || !reflect.DeepEqual(g.Groups, []string{want}) ||
+			g.AllowSelf || !g.BindPlan {
+			t.Fatalf("gate %d = %+v, want 1 approval by %s, not by the requester", i, g, want)
+		}
+	}
+
+	allow := policy.Combined{Effect: policy.EffectAllow, Reasons: nil, Approvals: nil}
+	if got := catalog.GateFor(&allow, true); len(got) != 0 {
+		t.Fatalf("GateFor(allow) = %+v, want no gate", got)
 	}
 }
 

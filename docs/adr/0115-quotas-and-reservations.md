@@ -117,10 +117,13 @@ both pass the last free unit of a quota.
      approval gate, 1 day for the dispatch of each of two phases, and 14
      days of state wait), plus a grace of 1 day. So 31 days.
 
-   At the deadline, a revision in flight ends `expired`, and its
-   reservation stops counting at the same time. So a reservation never
-   expires while its revision is in flight, and a lost release cannot hold
-   a slot for longer than the deadline.
+   At the deadline, a revision with no job, or whose job ended, ends, and
+   its reservation stops counting at the same time. For a revision whose
+   job has not ended, the schedule `catalog.expire` moves the deadline and
+   the end time of the reservation by the grace of 1 day, and checks again
+   on its next run (ADR 116 decision 13). So the reservation of a revision
+   whose job has not ended stays open, and a lost release cannot hold a
+   slot for longer than 1 day after the end of the job.
 8. **An update or a destroy reserves nothing.** An update keeps the count. A
    destroy frees its unit when the revision ends `applied`: the counter lowers
    the settled count then, not at submit. A destroy that fails keeps the

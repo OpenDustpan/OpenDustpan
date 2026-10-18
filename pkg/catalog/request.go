@@ -86,16 +86,17 @@ type Revision struct {
 	// git that supersedes a create takes over its reservation, so the ID can
 	// be the key of the superseded revision.
 	Reservation quota.ReservationID
-	// Deadline is the time at which the revision ends StateExpired if it is
-	// still in flight (RevisionDeadline). The reservation of a create ends at
-	// the same time.
+	// Deadline is the time after which the expire schedule applies ExpiryOf
+	// to the revision (RevisionDeadline): it ends a revision with no job or
+	// with a job that ended, and moves the deadline of a revision whose job
+	// has not ended. The reservation of a create ends at the same time.
 	Deadline time.Time
 	// Document is the document of the revision. For a request in git it is
 	// a record of what the revision delivered, never a second home.
 	Document Document
 	// Decision is the combined policy decision at submit, which gives the
 	// gates of the job.
-	Decision  policy.Decision
+	Decision  policy.Combined
 	Decisions []EngineDecision
 	// Failures are the failures of the recheck that rejected the revision.
 	Failures []Failure
@@ -169,6 +170,16 @@ type RevisionChange struct {
 	Version int64
 }
 
+// DeadlineChange moves the deadline of the revision Number of the request
+// Ref, made with the version of the request that the caller read.
+type DeadlineChange struct {
+	Ref RequestRef
+	// Deadline is the new deadline, after the old one: Expiry.Deadline.
+	Deadline time.Time
+	Number   int
+	Version  int64
+}
+
 // ListFilter selects requests for ListRequests. A zero field matches every request.
 // Limit 0 takes the default page size of the adapter.
 type ListFilter struct {
@@ -188,14 +199,21 @@ const KindStart durable.Kind = "catalog.start"
 
 // KindQuota is the durable operation that settles or releases the
 // reservation of a revision, and deletes the empty unit of a create that
-// did not apply, with the start key of QuotaKey. A create that a revision
+// did not apply, with the start key of QuotaKey. It starts only when the
+// revision is terminal, and a revision with a job is terminal only after
+// its job (ExpiryOf), so it never runs under a job that has not ended. A create that a revision
 // from git superseded starts none: its unit and its reservation belong to
 // the new revision.
 const KindQuota durable.Kind = "catalog.quota"
 
-// KindExpire is the schedule that moves each revision in flight past its
-// deadline to StateExpired, cancels its job when the job model allows it,
-// and starts its operation of KindQuota.
+// KindExpire is the schedule that applies ExpiryOf to each revision in
+// flight past its deadline. It ends a revision only when the revision has
+// no job or its job ended, with Store.Change, which starts the operation of
+// KindQuota of a create. For a job that has not ended, it cancels the job
+// when the job model allows it, moves the deadline and the end time of the
+// reservation by quota.ReservationGrace with Store.Extend, and checks the
+// revision again on the next run. So it never releases a reservation or
+// removes a unit under a job that has not ended.
 const KindExpire durable.Kind = "catalog.expire"
 
 // QuotaKey returns the start key of the operation of KindQuota of the
@@ -209,8 +227,9 @@ func QuotaKey(revision string) string {
 // retry of the start gives one job. A request in git gives a write-back job
 // that edits the request file, and a request in OpenDustpan gives a runner
 // job on the pool of the blueprint. The code location of a runner job is
-// the rendered code of the revision, which the job model reads through its
-// Catalog origin. It returns ErrInvalid for an operation with no job.
+// the rendered snapshot of the revision, which the Catalog renders once at
+// the start and the job spec names by its SHA-256, so each phase runs the
+// same bytes. It returns ErrInvalid for an operation with no job.
 func StartRequestFor(req *Request, rev *Revision, v *Version, reason string) (job.StartRequest, error) {
 	out := job.StartRequest{
 		Unit:           req.Unit,
@@ -263,21 +282,29 @@ func StartRequestFor(req *Request, rev *Revision, v *Version, reason string) (jo
 	return out, nil
 }
 
-// GateFor returns the approval gate that the combined Catalog decision d
-// gives to the first phase that changes, and false when d gives no gate.
-// The gate needs the approvals of d by members of its groups, and never
-// counts the requester: AllowSelf is false, so a requester cannot approve
-// its own request, also when it is in a group of the gate. bindPlan binds
-// the approvals to the plan of the phase before, when there is one.
-func GateFor(d *policy.Decision, bindPlan bool) (job.Gate, bool) {
-	if d.Effect != policy.EffectApprove || d.Approvals == nil {
-		return job.Gate{Type: "", Approvals: 0, Groups: nil, AllowSelf: false, Timeout: 0, BindPlan: false}, false
+// GateFor returns the approval gates that the combined Catalog decision d
+// gives to the first phase that changes: one gate for each requirement of
+// d, and none for a decision that is not approve. The job model needs each
+// gate of a phase, so a change needs each requirement. Each gate needs the
+// approvals of its requirement by members of its groups, and never counts
+// the requester: AllowSelf is false, so a requester cannot approve its own
+// request, also when it is in a group of the gate. bindPlan binds the
+// approvals to the plan of the phase before, when there is one.
+func GateFor(d *policy.Combined, bindPlan bool) []job.Gate {
+	if d.Effect != policy.EffectApprove {
+		return nil
 	}
 
-	return job.Gate{
-		Type: job.GateApproval, Approvals: d.Approvals.Count, Groups: slices.Clone(d.Approvals.Groups),
-		AllowSelf: false, Timeout: 0, BindPlan: bindPlan,
-	}, true
+	out := make([]job.Gate, 0, len(d.Approvals))
+
+	for _, a := range d.Approvals {
+		out = append(out, job.Gate{
+			Type: job.GateApproval, Approvals: a.Count, Groups: slices.Clone(a.Groups),
+			AllowSelf: false, Timeout: 0, BindPlan: bindPlan,
+		})
+	}
+
+	return out
 }
 
 // EditableRequestFile returns the predicate that the Catalog gives to

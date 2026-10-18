@@ -13,9 +13,9 @@ import (
 // REST API declares them on its routes.
 const (
 	// ActionBlueprintRead allows reading a blueprint, its draft, its
-	// versions and its form. Its object is a blueprint, or the namespace for
-	// a list.
-	ActionBlueprintRead identity.Action = "blueprint:read"
+	// versions, its form and its context. Its object is a blueprint, or the
+	// namespace for a list.
+	ActionBlueprintRead = identity.ActionBlueprintRead
 	// ActionBlueprintPublish allows writing the draft of a blueprint and
 	// publishing it as a version. A publish that names a source principal
 	// also needs principal:manage-tokens on that principal. Its object is a

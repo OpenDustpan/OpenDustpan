@@ -10,6 +10,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/catalog"
 	"opendustpan.org/opendustpan/pkg/identity"
 	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/quota"
 )
 
 // delivered returns a delivery of d, merged after mergedAfter, or with no
@@ -195,6 +196,79 @@ func TestRevisionDeadline(t *testing.T) {
 	r.State = catalog.StateApplied
 	if r.Expired(r.Deadline.Add(day)) {
 		t.Fatal("Expired() of an ended revision")
+	}
+}
+
+func TestExpiryOf(t *testing.T) {
+	t.Parallel()
+
+	deadline := time.Unix(1_790_000_000, 0).UTC()
+	after := deadline.Add(time.Minute)
+
+	jobIn := func(s job.State) *job.Job {
+		var j job.Job
+
+		j.ID, j.State = "job-1", s
+
+		return &j
+	}
+
+	tests := []struct {
+		name     string
+		job      job.ID
+		j        *job.Job
+		now      time.Time
+		end      catalog.RevisionState
+		deadline time.Time
+		err      error
+	}{
+		{
+			name: "before the deadline", job: "job-1", j: jobIn(job.StateRunning), now: deadline.Add(-time.Minute),
+			end: "", deadline: time.Time{}, err: nil,
+		},
+		{
+			name: "no job expires", job: "", j: nil, now: after,
+			end: catalog.StateExpired, deadline: time.Time{}, err: nil,
+		},
+		{
+			name: "a running job moves the deadline", job: "job-1", j: jobIn(job.StateRunning), now: after,
+			end: "", deadline: after.Add(quota.ReservationGrace), err: nil,
+		},
+		{
+			name: "a job at a gate moves the deadline", job: "job-1", j: jobIn(job.StateAwaitingApproval), now: after,
+			end: "", deadline: after.Add(quota.ReservationGrace), err: nil,
+		},
+		{
+			name: "a job that succeeded applies", job: "job-1", j: jobIn(job.StateSucceeded), now: after,
+			end: catalog.StateApplied, deadline: time.Time{}, err: nil,
+		},
+		{
+			name: "a job that was canceled cancels", job: "job-1", j: jobIn(job.StateCanceled), now: after,
+			end: catalog.StateCanceled, deadline: time.Time{}, err: nil,
+		},
+		{
+			name: "a job that the caller did not read", job: "job-1", j: nil, now: after,
+			end: "", deadline: time.Time{}, err: catalog.ErrInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var r catalog.Revision
+
+			r.State, r.Job, r.Deadline = catalog.StateRunning, tt.job, deadline
+
+			got, err := catalog.ExpiryOf(&r, tt.j, tt.now)
+			if !errors.Is(err, tt.err) {
+				t.Fatalf("ExpiryOf() error = %v, want %v", err, tt.err)
+			}
+
+			if got.End != tt.end || !got.Deadline.Equal(tt.deadline) {
+				t.Fatalf("ExpiryOf() = %+v, want end %q and deadline %v", got, tt.end, tt.deadline)
+			}
+		})
 	}
 }
 

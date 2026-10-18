@@ -188,8 +188,9 @@ decide.
       platform team publishes a new version.
 
     The version 1 pin is `github.com/expr-lang/expr` v1.17.8, released on
-    14 February 2026. This design pull request names it and does not add it
-    to `go.mod`.
+    14 February 2026, under the MIT license. It is not in `go.mod`: this
+    design adds no dependency. The pull request of the adapter adds it, and
+    `make trivy` and `make licenses` then check it.
 12. **Limits of Expr.** An expression is at most 4 KiB of source. The
     adapter compiles it with a type check against the environment of
     decision 6, and runs it with a time limit of 50 ms. The constants of

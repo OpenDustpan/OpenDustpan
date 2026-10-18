@@ -1,5 +1,6 @@
 // Package catalogtest is the conformance suite for catalog.Store and
-// catalog.BlueprintStore implementations. Every store adapter runs it:
+// catalog.BlueprintStore implementations, and, in RunUnitTx, for
+// catalog.UnitTx. Every store adapter runs it:
 //
 //	func TestCatalogConformance(t *testing.T) {
 //		t.Parallel()
@@ -93,6 +94,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a revision from git supersedes a create and takes its unit and reservation", testSupersedeCreate},
 		{"a supersede of a change that is in git is ErrConflict", testSupersedeDelivered},
 		{"a create from git makes its unit in the submit", testSubmitProvisions},
+		{"a revision past its deadline with a running job keeps its unit and its reservation", testExpireRunning},
 		{"a state version applies the revision from git at its commit", testObserve},
 		{"list selects by blueprint and by state", testList},
 		{"a new draft gets version 1, and a stale one is ErrConflict", testDraft},
@@ -195,10 +197,8 @@ func submission(f fixture, req catalog.Request, op catalog.Operation, size strin
 			CreatedAt: time.Time{}, UpdatedAt: time.Time{}, BreakGlass: nil, Request: req.ID,
 			Origin: catalog.OriginAPI, State: catalog.StateAccepted, Operation: op, Job: "", JobVersion: 0,
 			Commit: "", Reason: "", SubmittedBy: "alice", Agent: "", Reservation: "",
-			Document: document(size),
-			Decision: policy.Decision{
-				Effect: policy.EffectAllow, Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: "",
-			},
+			Document:  document(size),
+			Decision:  policy.Combined{Effect: policy.EffectAllow, Reasons: nil, Approvals: nil},
 			Decisions: nil, Failures: nil, Usage: nil, Number: 0, BlueprintVersion: 1,
 			Deadline: catalog.RevisionDeadline(catalog.OriginAPI, time.Now().UTC()),
 		},

@@ -30,9 +30,10 @@ const (
 // Reservation holds one unit of each of its keys for a create in flight.
 // At is the time of the submit: a reserve counts the usage at At. EndsAt is
 // the deadline of the revision that holds the reservation, which the caller
-// knows at the reserve: the revision ends expired at that time if it has not
-// ended before, so a reservation never expires while its revision is in
-// flight. After EndsAt, an open reservation counts in no usage.
+// knows at the reserve. A revision with no job ends expired at that time if
+// it has not ended before. For a revision whose job has not ended, the
+// caller moves EndsAt with Tx.SetEnd, so the reservation stays open while
+// the job runs. After EndsAt, an open reservation counts in no usage.
 type Reservation struct {
 	ID        ReservationID
 	Namespace namespace.Name

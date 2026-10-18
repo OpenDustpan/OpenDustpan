@@ -191,12 +191,26 @@ type Engine interface {
 	Decide(ctx context.Context, in Input) (Decision, error)
 }
 
+// Combined is the join of the decisions of more than one engine (Combine).
+// Each item of Approvals is one requirement, and a change needs each of
+// them: the approvals of two engines never merge into one requirement with
+// the groups of both.
+type Combined struct {
+	Effect    Effect      `json:"effect"`
+	Reasons   []string    `json:"reasons,omitempty"`
+	Approvals []Approvals `json:"approvals,omitempty"`
+}
+
 // Combine joins the decisions of more than one engine: the strictest effect
 // wins. One deny gives deny, with the reasons of each deny. Else one approve
-// gives approve, with the highest count of approvals and the groups of each
-// approve, sorted and with no duplicates. Else the result is allow, also for
-// no decision. Engine and PolicyVersion of the result are empty: the record
-// keeps each decision with its own.
+// gives approve, with one requirement for each approve: its count of
+// approvals by members of its groups, with the groups sorted and with no
+// duplicates. Two approves with the same groups give one requirement with
+// the higher count. So an approve by security and an approve by dba need an
+// approval by security and an approval by dba, never one approval by
+// either. The requirements are sorted by their groups. Else the result is
+// allow, also for no decision. The record keeps each decision with its own
+// Engine and PolicyVersion.
 //
 // Combine first checks each decision with Decision.Validate, and returns an
 // error that wraps ErrInvalidDecision and names the index of the first
@@ -204,21 +218,18 @@ type Engine interface {
 // approvals or with a count outside 1 to MaxApprovals, or approvals on
 // another effect. So a decision that an engine or a caller built wrong never
 // becomes an allow.
-func Combine(ds []Decision) (Decision, error) {
+func Combine(ds []Decision) (Combined, error) {
 	for i := range ds {
 		if err := ds[i].Validate(); err != nil {
-			return Decision{}, fmt.Errorf("decision %d: %w", i, err)
+			return Combined{}, fmt.Errorf("decision %d: %w", i, err)
 		}
 	}
 
-	out := Decision{Effect: EffectAllow, Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: ""}
+	out := Combined{Effect: EffectAllow, Reasons: nil, Approvals: nil}
 
 	for i := range ds {
 		if ds[i].Effect == EffectDeny {
-			if out.Effect != EffectDeny {
-				out = Decision{Effect: EffectDeny, Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: ""}
-			}
-
+			out.Effect = EffectDeny
 			out.Reasons = append(out.Reasons, ds[i].Reasons...)
 		}
 	}
@@ -231,30 +242,34 @@ func Combine(ds []Decision) (Decision, error) {
 }
 
 // combineApprovals joins the decisions of EffectApprove of ds, which
-// Decision.Validate checked: the highest count and every group once. With
-// no approve, the result is allow.
-func combineApprovals(ds []Decision) Decision {
-	out := Decision{Effect: EffectAllow, Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: ""}
+// Decision.Validate checked: one requirement for each set of groups, with
+// the highest count of that set. With no approve, the result is allow.
+func combineApprovals(ds []Decision) Combined {
+	out := Combined{Effect: EffectAllow, Reasons: nil, Approvals: nil}
 
 	for i := range ds {
 		if ds[i].Effect != EffectApprove || ds[i].Approvals == nil {
 			continue
 		}
 
-		if out.Approvals == nil {
-			out.Effect = EffectApprove
-			out.Approvals = &Approvals{Groups: nil, Count: 0}
+		out.Effect = EffectApprove
+		out.Reasons = append(out.Reasons, ds[i].Reasons...)
+
+		groups := slices.Clone(ds[i].Approvals.Groups)
+		slices.Sort(groups)
+		groups = slices.Compact(groups)
+
+		at := slices.IndexFunc(out.Approvals, func(a Approvals) bool { return slices.Equal(a.Groups, groups) })
+		if at >= 0 {
+			out.Approvals[at].Count = max(out.Approvals[at].Count, ds[i].Approvals.Count)
+
+			continue
 		}
 
-		out.Reasons = append(out.Reasons, ds[i].Reasons...)
-		out.Approvals.Count = max(out.Approvals.Count, ds[i].Approvals.Count)
-		out.Approvals.Groups = append(out.Approvals.Groups, ds[i].Approvals.Groups...)
+		out.Approvals = append(out.Approvals, Approvals{Groups: groups, Count: ds[i].Approvals.Count})
 	}
 
-	if out.Approvals != nil {
-		slices.Sort(out.Approvals.Groups)
-		out.Approvals.Groups = slices.Compact(out.Approvals.Groups)
-	}
+	slices.SortFunc(out.Approvals, func(a, b Approvals) int { return slices.Compare(a.Groups, b.Groups) })
 
 	return out
 }

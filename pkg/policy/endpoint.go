@@ -98,8 +98,9 @@ func (a *Allowlist) CheckAddr(addr netip.Addr) error {
 
 // nonPublic are the special ranges that the methods of netip.Addr do not
 // cover: this network, shared address space, IETF protocol assignments,
-// benchmarking, reserved, the IPv4 broadcast, the NAT64 prefixes, which can
-// map to a private IPv4 address, and the documentation ranges.
+// benchmarking, reserved, the IPv4 broadcast, the documentation ranges, and
+// the IPv6 prefixes that carry an IPv4 address, which can be a private one:
+// NAT64, 6to4 and Teredo.
 func nonPublic() []netip.Prefix {
 	return []netip.Prefix{
 		netip.MustParsePrefix("0.0.0.0/8"),
@@ -113,6 +114,8 @@ func nonPublic() []netip.Prefix {
 		netip.MustParsePrefix("64:ff9b::/96"),
 		netip.MustParsePrefix("64:ff9b:1::/48"),
 		netip.MustParsePrefix("2001:db8::/32"),
+		netip.MustParsePrefix("2002::/16"),
+		netip.MustParsePrefix("2001::/32"),
 	}
 }
 

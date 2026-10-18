@@ -43,7 +43,7 @@ const (
 	// StateCanceled: terminal, a person canceled it.
 	StateCanceled RevisionState = "canceled"
 	// StateExpired: terminal, the job expired, or the revision passed its
-	// deadline (RevisionDeadline).
+	// deadline with no job (ExpiryOf).
 	StateExpired RevisionState = "expired"
 	// StateSuperseded: terminal, a revision from git replaced it before its
 	// job delivered (CheckSupersede).
@@ -159,17 +159,24 @@ const (
 		job.DefaultStateTimeout
 )
 
-// RevisionDeadline returns the deadline of a revision of origin that the
-// store takes at the time at: at, plus the longest wait of the origin, plus
-// quota.ReservationGrace. A revision from git waits for its state version
-// for at most GitRevisionWait, so its deadline is 15 days after its render.
-// The reservation of a create ends at the same time (quota.Reservation
-// EndsAt), so the Catalog knows the end time at the reserve.
+// RevisionDeadline returns the first deadline of a revision of origin that
+// the store takes at the time at: at, plus the longest wait of the origin,
+// plus quota.ReservationGrace. A revision from git waits for its state
+// version for at most GitRevisionWait, so its first deadline is 15 days
+// after its render. The reservation of a create ends at the same time
+// (quota.Reservation EndsAt), so the Catalog knows the end time at the
+// reserve.
 //
-// A revision in flight at its deadline ends StateExpired. The Catalog
-// cancels its job when the job model allows it, and releases its
-// reservation. So a reservation never expires while its revision is in
-// flight.
+// The deadline does not end a revision whose job has not ended. A job can
+// live longer than JobRevisionWait: it goes back to the queue after each
+// phase and after each approval, with a new time limit each time, and it
+// can have a gate on each phase that changes. So the expire schedule
+// (KindExpire) applies ExpiryOf to each revision past its deadline. It ends
+// a revision only when it has no job or its job ended. For a job that has
+// not ended, it cancels the job and moves the deadline and the end time of
+// the reservation by quota.ReservationGrace (Store.Extend), and checks the
+// revision again on each run. So the reservation of a revision with a job
+// that has not ended stays open, and its unit stays.
 func RevisionDeadline(origin Origin, at time.Time) time.Time {
 	wait := JobRevisionWait
 	if origin == OriginGit {
@@ -179,11 +186,58 @@ func RevisionDeadline(origin Origin, at time.Time) time.Time {
 	return at.Add(wait + quota.ReservationGrace)
 }
 
-// Expired reports whether r is in flight at now and past its deadline. A
-// read of r treats it as StateExpired, and the expire schedule writes the
-// state.
+// Expired reports whether r is in flight at now and past its deadline. The
+// expire schedule then applies ExpiryOf to r.
 func (r *Revision) Expired(now time.Time) bool {
 	return !r.State.Terminal() && !r.Deadline.IsZero() && !now.Before(r.Deadline)
+}
+
+// Expiry is what the expire schedule does with one revision. A zero Expiry
+// changes nothing.
+type Expiry struct {
+	// Deadline is the new deadline of a revision whose job has not ended:
+	// the schedule cancels the job, when the job model allows it, and moves
+	// the deadline and the end time of the reservation to it with
+	// Store.Extend. The revision stays in its state.
+	Deadline time.Time
+	// End is the terminal state that the schedule writes with Store.Change:
+	// StateExpired for a revision with no job, and the state of the job
+	// (StateOf) for a job that ended. The change starts the operation of
+	// KindQuota of a create.
+	End RevisionState
+}
+
+// ExpiryOf returns what the expire schedule does at now with r, whose job is
+// j, or nil when r has no job. It returns a zero Expiry for a revision that
+// is not Expired at now, ErrInvalid for a revision with a job and a nil j,
+// and the errors of StateOf.
+func ExpiryOf(r *Revision, j *job.Job, now time.Time) (Expiry, error) {
+	var out Expiry
+
+	switch {
+	case !r.Expired(now):
+		return out, nil
+	case r.Job == "":
+		out.End = StateExpired
+
+		return out, nil
+	case j == nil:
+		return out, fmt.Errorf("%w: revision %d has the job %s, and the caller did not read it",
+			ErrInvalid, r.Number, r.Job)
+	case !j.State.Terminal():
+		out.Deadline = now.Add(quota.ReservationGrace)
+
+		return out, nil
+	default:
+		end, err := StateOf(j)
+		if err != nil {
+			return out, err
+		}
+
+		out.End = end
+
+		return out, nil
+	}
 }
 
 // StartFailure returns the state of a revision whose job start failed with

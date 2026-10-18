@@ -21,11 +21,6 @@ func approve(count int, groups ...string) policy.Decision {
 	}
 }
 
-// noDecision is the zero decision of a case that wants an error.
-func noDecision() policy.Decision {
-	return policy.Decision{Effect: "", Reasons: nil, Approvals: nil, Engine: "", PolicyVersion: ""}
-}
-
 func effect(e policy.Effect, reason string) policy.Decision {
 	return policy.Decision{Effect: e, Reasons: []string{reason}, Approvals: nil, Engine: "", PolicyVersion: ""}
 }
@@ -33,35 +28,21 @@ func effect(e policy.Effect, reason string) policy.Decision {
 func TestCombine(t *testing.T) {
 	t.Parallel()
 
+	allow := policy.Combined{Effect: policy.EffectAllow, Reasons: nil, Approvals: nil}
+	none := policy.Combined{Effect: "", Reasons: nil, Approvals: nil}
+
 	cases := []struct {
 		name string
 		in   []policy.Decision
-		want policy.Decision
+		want policy.Combined
 		err  error
 	}{
-		{
-			name: "no decision allows",
-			in:   nil,
-			want: policy.Decision{
-				Effect:        policy.EffectAllow,
-				Reasons:       nil,
-				Approvals:     nil,
-				Engine:        "",
-				PolicyVersion: "",
-			},
-			err: nil,
-		},
+		{name: "no decision allows", in: nil, want: allow, err: nil},
 		{
 			name: "two allows give allow",
 			in:   []policy.Decision{effect(policy.EffectAllow, "a"), effect(policy.EffectAllow, "b")},
-			want: policy.Decision{
-				Effect:        policy.EffectAllow,
-				Reasons:       nil,
-				Approvals:     nil,
-				Engine:        "",
-				PolicyVersion: "",
-			},
-			err: nil,
+			want: allow,
+			err:  nil,
 		},
 		{
 			name: "one deny wins over approve and allow, with each deny reason",
@@ -69,45 +50,69 @@ func TestCombine(t *testing.T) {
 				approve(2, "dba"), effect(policy.EffectDeny, "too large"),
 				effect(policy.EffectAllow, "ok"), effect(policy.EffectDeny, "frozen region"),
 			},
-			want: policy.Decision{
-				Effect: policy.EffectDeny, Reasons: []string{"too large", "frozen region"},
-				Approvals: nil, Engine: "", PolicyVersion: "",
+			want: policy.Combined{
+				Effect: policy.EffectDeny, Reasons: []string{"too large", "frozen region"}, Approvals: nil,
 			},
 			err: nil,
 		},
 		{
-			name: "approve takes the highest count and every group once",
-			in:   []policy.Decision{approve(1, "sre", "dba"), effect(policy.EffectAllow, "ok"), approve(2, "dba")},
-			want: policy.Decision{
+			name: "two disjoint group sets stay two requirements",
+			in:   []policy.Decision{approve(1, "security"), effect(policy.EffectAllow, "ok"), approve(1, "dba")},
+			want: policy.Combined{
+				Effect:  policy.EffectApprove,
+				Reasons: []string{"approve security", "approve dba"},
+				Approvals: []policy.Approvals{
+					{Groups: []string{"dba"}, Count: 1},
+					{Groups: []string{"security"}, Count: 1},
+				},
+			},
+			err: nil,
+		},
+		{
+			name: "overlapping group sets stay two requirements",
+			in:   []policy.Decision{approve(1, "sre", "dba"), approve(2, "dba")},
+			want: policy.Combined{
+				Effect:  policy.EffectApprove,
+				Reasons: []string{"approve sre,dba", "approve dba"},
+				Approvals: []policy.Approvals{
+					{Groups: []string{"dba"}, Count: 2},
+					{Groups: []string{"dba", "sre"}, Count: 1},
+				},
+			},
+			err: nil,
+		},
+		{
+			name: "equal group sets merge with the highest count",
+			in:   []policy.Decision{approve(1, "sre", "dba"), approve(3, "dba", "sre", "dba")},
+			want: policy.Combined{
 				Effect:    policy.EffectApprove,
-				Reasons:   []string{"approve sre,dba", "approve dba"},
-				Approvals: &policy.Approvals{Groups: []string{"dba", "sre"}, Count: 2},
-				Engine:    "", PolicyVersion: "",
+				Reasons:   []string{"approve sre,dba", "approve dba,sre,dba"},
+				Approvals: []policy.Approvals{{Groups: []string{"dba", "sre"}, Count: 3}},
 			},
 			err: nil,
 		},
 		{
 			name: "approve with no approvals is an error, not an allow",
 			in:   []policy.Decision{effect(policy.EffectAllow, "ok"), effect(policy.EffectApprove, "x")},
-			want: noDecision(),
+			want: none,
 			err:  policy.ErrInvalidDecision,
 		},
 		{
 			name: "approve with zero approvals is an error",
 			in:   []policy.Decision{approve(0, "dba")},
-			want: noDecision(),
+			want: none,
 			err:  policy.ErrInvalidDecision,
 		},
 		{
 			name: "an empty effect is an error",
 			in:   []policy.Decision{effect("", "x")},
-			want: noDecision(),
+			want: none,
 			err:  policy.ErrInvalidDecision,
 		},
 		{
 			name: "an unknown effect is an error, also next to a deny",
 			in:   []policy.Decision{effect(policy.EffectDeny, "no"), effect("maybe", "x")},
-			want: noDecision(),
+			want: none,
 			err:  policy.ErrInvalidDecision,
 		},
 		{
@@ -116,7 +121,7 @@ func TestCombine(t *testing.T) {
 				Effect: policy.EffectAllow, Reasons: nil,
 				Approvals: &policy.Approvals{Groups: nil, Count: 1}, Engine: "", PolicyVersion: "",
 			}},
-			want: noDecision(),
+			want: none,
 			err:  policy.ErrInvalidDecision,
 		},
 	}

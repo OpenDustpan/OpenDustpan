@@ -27,9 +27,9 @@ type Store interface {
 	//   - moves the revision s.Supersedes to StateSuperseded, with
 	//     CheckSupersede, and gives its unit and its reservation to the new
 	//     revision when both are creates,
-	//   - makes the empty unit of s.Provision, as UnitProvisioner.Provision
-	//     does, with the code of the tool on the same transaction, and sets
-	//     Request.Unit,
+	//   - makes the empty unit of s.Provision with UnitTx.Provision on the
+	//     same transaction, with Provision.Request set to the ID of the
+	//     request, and sets Request.Unit,
 	//   - writes s.Quota through the quota.Tx of the transaction: Reserve
 	//     first, then Record, and sets Revision.Reservation.
 	//
@@ -42,8 +42,8 @@ type Store interface {
 	// s.Supersedes is 0; ErrInvalid for a revision with no deadline, a
 	// reservation whose end time is not the deadline, or a new reservation
 	// next to a supersede that moves one; ErrUnitName for a unit of
-	// s.Provision that another request owns; and the errors of quota.Tx,
-	// such as an *quota.ExceededError.
+	// s.Provision that another request or no request owns; and the errors
+	// of quota.Tx, such as an *quota.ExceededError.
 	Submit(ctx context.Context, s *Submission, fence namespace.Fence) (Request, Revision, error)
 	// Get returns the request ref, or ErrNotFound.
 	Get(ctx context.Context, ref RequestRef) (Request, error)
@@ -58,12 +58,25 @@ type Store interface {
 	// durable operation of KindQuota, with the start key of QuotaKey. It
 	// returns ErrNotFound, ErrConflict, and the errors of CheckTransition.
 	Change(ctx context.Context, c RevisionChange, fence namespace.Fence, e []audit.Entry) (Revision, error)
+	// Extend applies d to a revision in flight past its deadline whose job
+	// has not ended, at d.Version of the request, in one transaction: it
+	// moves the deadline of the revision to d.Deadline and, for a revision
+	// with a reservation, the end time of the reservation to the same time,
+	// through the quota.Tx of the transaction (SetEnd). It changes no state,
+	// deletes no unit and starts no durable operation. The expire schedule
+	// calls it after ExpiryOf. It returns ErrNotFound, ErrConflict for a
+	// stale version, ErrFinished for a terminal revision, ErrInvalid for a
+	// deadline that is not after the old one, and the errors of quota.Tx.
+	Extend(ctx context.Context, d DeadlineChange, fence namespace.Fence) (Revision, error)
 	// ObserveStateVersion applies a final state version to the revision from
 	// git that waits for it, in the transaction of the state write: the
 	// revision of the unit of v in StateAwaitingState with no job, whose
-	// commit is the commit of v, or, when v has no commit, whose render was
-	// at or before v. That revision becomes StateApplied. It returns the
-	// revision that changed, and false when none did.
+	// commit is exactly the commit of v, or, when v has no commit, whose
+	// render was at or before v. That revision becomes StateApplied. A state
+	// version at another commit applies no revision, also at a commit that
+	// descends from the commit of the revision: the team's CI renders each
+	// commit, so the render of a newer commit supersedes the older revision.
+	// It returns the revision that changed, and false when none did.
 	ObserveStateVersion(ctx context.Context, v job.StateVersion, fence namespace.Fence) (Revision, bool, error)
 }
 
@@ -115,6 +128,26 @@ type Provision struct {
 	Ref       RequestRef
 	Blueprint BlueprintRef
 	Version   int
+}
+
+// UnitTx makes the empty unit of a create inside the open transaction of
+// the store that holds it. Its writes commit or roll back with that
+// transaction, so a submit never keeps a unit without its request, or a
+// request without its unit. A UnitTx is valid only inside the Store.Submit
+// call that the wiring gives it to.
+//
+// The internal wiring implements it with the code of each tool on the
+// transaction of the SQL store. It passes the SQL store adapter a
+// constructor that takes the transaction of the adapter and returns a
+// UnitTx, and the adapter calls the constructor once in each Submit that
+// has a Provision. The suite RunUnitTx in package catalogtest states the
+// rules.
+type UnitTx interface {
+	// Provision is UnitProvisioner.Provision on the transaction: it is
+	// idempotent by p.Request, and returns ErrUnitName for a name that the
+	// tool refuses or a unit that another request or no request owns, and
+	// ErrInvalid for an empty field of p.
+	Provision(ctx context.Context, p Provision) (identity.Object, error)
 }
 
 // UnitProvisioner makes and deletes the unit of a request. The internal

@@ -49,9 +49,17 @@ REST, Cedar and a signed webhook. Expr inside blueprints stays built in.
    engine, and a blueprint has its own Expr rules. The Catalog asks each one,
    and `policy.Combine` joins the decisions:
    - One `deny` gives `deny`, with the reasons of each `deny`.
-   - Else one `approve` gives `approve`, with the highest number of approvals
-     and every group of each `approve`.
+   - Else one `approve` gives `approve`, with one requirement for each
+     `approve`: its number of approvals by members of its groups. A change
+     needs each requirement. So an `approve` by `security` and an `approve`
+     by `dba` need one approval by `security` and one by `dba`, never one
+     approval by either group. Two `approve` decisions with the same set of
+     groups give one requirement with the higher number.
    - Else the result is `allow`.
+
+   `policy.Combine` returns a `policy.Combined`, whose `Approvals` is the
+   list of requirements, sorted by their groups. Each engine still answers
+   one `policy.Decision` with at most one set of approvals.
 
    `policy.Combine` first checks each decision, and returns an error that
    wraps `policy.ErrInvalidDecision` for a decision that is not valid: an
@@ -103,8 +111,10 @@ REST, Cedar and a signed webhook. Expr inside blueprints stays built in.
    whose evaluation fails, and lists the error in its diagnostics. The
    adapter returns `policy.ErrRuleFailed` for each such error, so a `forbid`
    policy that fails never becomes an allow. The adapter needs a
-   Cedar library, `github.com/cedar-policy/cedar-go`, which is a new
-   dependency. The PM decides on it before the adapter pull request.
+   Cedar library, `github.com/cedar-policy/cedar-go`, under the Apache-2.0
+   license. It is not in `go.mod`: this design adds no dependency. The pull
+   request of the adapter adds it, and `make trivy` and `make licenses`
+   then check it.
 8. **The signed webhook adapter.** It sends the input to a URL that the
    team runs:
    - `POST <url>` with the body `{"kind": ..., "schemaVersion": ...,

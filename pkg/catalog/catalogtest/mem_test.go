@@ -32,9 +32,13 @@ type memDB struct {
 	revisions  map[string]catalog.Revision
 	drafts     map[catalog.BlueprintRef]draft
 	versions   map[catalog.BlueprintRef][]catalog.Version
-	units      map[string]identity.Object
+	units      map[string]ownedUnit
 	quota      quotaState
-	nextID     int
+	// newUnitTx is the constructor of catalog.UnitTx that the wiring gives
+	// the store: it takes the transaction, here the copy of the units that
+	// one write changes.
+	newUnitTx func(units map[string]ownedUnit) *memUnitTx
+	nextID    int
 }
 
 // quotaState is the counter that shares the database of the stores. The
@@ -72,13 +76,72 @@ func newMemDB() *memDB {
 		revisions:  map[string]catalog.Revision{},
 		drafts:     map[catalog.BlueprintRef]draft{},
 		versions:   map[catalog.BlueprintRef][]catalog.Version{},
-		units:      map[string]identity.Object{},
+		units:      map[string]ownedUnit{},
 		quota: quotaState{
 			settled: map[quota.Key]int{}, reservations: map[quota.ReservationID]quota.Reservation{},
 			requests: map[quota.Key][]time.Time{},
 		},
-		nextID: 0,
+		nextID:    0,
+		newUnitTx: newMemUnitTx,
 	}
+}
+
+// ownedUnit is a unit that a request made.
+type ownedUnit struct {
+	unit    identity.Object
+	request catalog.RequestID
+}
+
+// memUnitTx is the catalog.UnitTx of the reference wiring, on the copy of
+// the units that one write changes.
+type memUnitTx struct {
+	units map[string]ownedUnit
+}
+
+func newMemUnitTx(units map[string]ownedUnit) *memUnitTx {
+	return &memUnitTx{units: units}
+}
+
+// Provision implements catalog.UnitTx.
+func (tx *memUnitTx) Provision(_ context.Context, p catalog.Provision) (identity.Object, error) {
+	if p.Request == "" || p.Tool == "" || p.Unit == "" || p.Ref.Name == "" || p.Blueprint.Name == "" ||
+		p.Version < 1 {
+		return identity.Object{}, fmt.Errorf("%w: a provision needs each field", catalog.ErrInvalid)
+	}
+
+	key := unitKey(p.Ref.Namespace, p.Tool, p.Unit)
+	if have, ok := tx.units[key]; ok {
+		if have.request != p.Request {
+			return identity.Object{}, fmt.Errorf("%w: %s belongs to another request", catalog.ErrUnitName, p.Unit)
+		}
+
+		return have.unit, nil
+	}
+
+	o, err := identity.UnitObject(p.Tool, p.Ref.Namespace, p.Unit)
+	if err != nil {
+		return identity.Object{}, fmt.Errorf("%w: %w", catalog.ErrUnitName, err)
+	}
+
+	o = o.WithUnitID("ws-" + p.Unit)
+	tx.units[key] = ownedUnit{unit: o, request: p.Request}
+
+	return o, nil
+}
+
+// InTx implements catalogtest.UnitTxHarness.
+func (m *memDB) InTx(_ context.Context, fn func(tx catalog.UnitTx) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	units := maps.Clone(m.units)
+	if err := fn(m.newUnitTx(units)); err != nil {
+		return err
+	}
+
+	m.units = units
+
+	return nil
 }
 
 // CreateNamespace implements catalogtest.Domain.
@@ -146,7 +209,7 @@ func (m *memDB) Unit(_ context.Context, ns namespace.Name, tool, name string) (i
 
 	u, ok := m.units[unitKey(ns, tool, name)]
 
-	return u, ok, nil
+	return u.unit, ok, nil
 }
 
 func unitKey(ns namespace.Name, tool, name string) string {
@@ -181,18 +244,21 @@ func (m *memDB) Submit(ctx context.Context, s *catalog.Submission, fence namespa
 		return catalog.Request{}, catalog.Revision{}, err
 	}
 
-	var made *identity.Object
+	units := maps.Clone(m.units)
 
 	if s.Provision != nil {
-		u, err := m.provision(s.Provision)
+		p := *s.Provision
+		p.Request = m.requestID(&rows.req)
+
+		u, err := m.newUnitTx(units).Provision(ctx, p)
 		if err != nil {
 			return catalog.Request{}, catalog.Revision{}, err
 		}
 
-		rows.req.Unit, made = u, &u
+		rows.req.Unit = u
 	}
 
-	m.commit(&rows, made, tx.state)
+	m.commit(&rows, units, tx.state)
 	m.audit[fence.Namespace] = append(m.audit[fence.Namespace], s.Audit...)
 
 	return rows.req, rows.rev, nil
@@ -431,6 +497,55 @@ func (m *memDB) Change(_ context.Context, c catalog.RevisionChange, fence namesp
 	return rev, nil
 }
 
+// Extend implements catalog.Store.
+func (m *memDB) Extend(ctx context.Context, d catalog.DeadlineChange, fence namespace.Fence) (catalog.Revision,
+	error,
+) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.checkFence(fence); err != nil {
+		return noRevision(), err
+	}
+
+	req, ok := m.requests[d.Ref]
+	if !ok {
+		return noRevision(), fmt.Errorf("%w: %s", catalog.ErrNotFound, d.Ref)
+	}
+
+	rev, ok := m.revisions[catalog.RevisionKey(req.ID, d.Number)]
+
+	switch {
+	case !ok:
+		return noRevision(), fmt.Errorf("%w: revision %d of %s", catalog.ErrNotFound, d.Number, d.Ref)
+	case req.Version != d.Version:
+		return noRevision(), fmt.Errorf("%w: %s at %d", catalog.ErrConflict, d.Ref, req.Version)
+	case rev.State.Terminal():
+		return noRevision(), fmt.Errorf("%w: the revision is %s", catalog.ErrFinished, rev.State)
+	case !d.Deadline.After(rev.Deadline):
+		return noRevision(), fmt.Errorf("%w: the deadline %v is not after %v", catalog.ErrInvalid, d.Deadline,
+			rev.Deadline)
+	default:
+	}
+
+	tx := memQuotaTx{state: m.quota.clone()}
+	if rev.Reservation != "" {
+		if err := tx.SetEnd(ctx, rev.Reservation, d.Deadline); err != nil {
+			return noRevision(), fmt.Errorf("extend: %w", err)
+		}
+	}
+
+	now := time.Now().UTC()
+	rev.Deadline, rev.UpdatedAt = d.Deadline, now
+	req.Version++
+	req.UpdatedAt = now
+	m.quota = tx.state
+	m.requests[req.Ref] = req
+	m.revisions[rev.Key()] = rev
+
+	return rev, nil
+}
+
 // ObserveStateVersion implements catalog.Store.
 func (m *memDB) ObserveStateVersion(_ context.Context, v job.StateVersion, fence namespace.Fence) (catalog.Revision,
 	bool, error,
@@ -632,29 +747,23 @@ func (m *memDB) supersede(ctx context.Context, tx *memQuotaTx, s *catalog.Submis
 	return nil
 }
 
-// provision makes the empty unit of p, or returns ErrUnitName for a unit
-// of that name that exists.
-func (m *memDB) provision(p *catalog.Provision) (identity.Object, error) {
-	if _, ok := m.units[unitKey(p.Ref.Namespace, p.Tool, p.Unit)]; ok {
-		return identity.Object{}, fmt.Errorf("%w: %s", catalog.ErrUnitName, p.Unit)
+// requestID returns the ID of req, or the ID that commit gives a new one.
+func (m *memDB) requestID(req *catalog.Request) catalog.RequestID {
+	if req.ID != "" {
+		return req.ID
 	}
 
-	o, err := identity.UnitObject(p.Tool, p.Ref.Namespace, p.Unit)
-	if err != nil {
-		return identity.Object{}, fmt.Errorf("%w: %w", catalog.ErrUnitName, err)
-	}
-
-	return o.WithUnitID("ws-" + p.Unit), nil
+	return catalog.RequestID(catalog.RequestIDPrefix + strconv.Itoa(m.nextID+1))
 }
 
-// commit writes the rows of a submit that passed each check, and the
-// counter q.
-func (m *memDB) commit(rows *submitRows, made *identity.Object, q quotaState) {
+// commit writes the rows of a submit that passed each check, the units and
+// the counter q.
+func (m *memDB) commit(rows *submitRows, units map[string]ownedUnit, q quotaState) {
 	req, rev := &rows.req, &rows.rev
 
 	if req.ID == "" {
+		req.ID = m.requestID(req)
 		m.nextID++
-		req.ID = catalog.RequestID(catalog.RequestIDPrefix + strconv.Itoa(m.nextID))
 		req.CreatedAt = time.Now().UTC()
 	}
 
@@ -671,10 +780,7 @@ func (m *memDB) commit(rows *submitRows, made *identity.Object, q quotaState) {
 		m.revisions[rows.last.Key()] = *rows.last
 	}
 
-	if made != nil {
-		m.units[unitKey(req.Ref.Namespace, made.Tool(), made.UnitName())] = *made
-	}
-
+	m.units = units
 	m.quota = q
 	m.requests[req.Ref] = *req
 	m.revisions[rev.Key()] = *rev
@@ -778,4 +884,10 @@ func TestMemConformance(t *testing.T) {
 
 		return catalogtest.Harness{Requests: db, Blueprints: db, Domain: db}
 	})
+}
+
+func TestMemUnitTxConformance(t *testing.T) {
+	t.Parallel()
+
+	catalogtest.RunUnitTx(t, func(_ *testing.T) catalogtest.UnitTxHarness { return newMemDB() })
 }

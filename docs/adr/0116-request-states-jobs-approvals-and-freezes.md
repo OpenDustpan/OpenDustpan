@@ -107,12 +107,15 @@ break-glass come from the job model.
    `job.Decider` adapter finds the revision through the Catalog origin of
    the job spec (ADR 110, "Changes requested in the job model", item 1).
    - `deny` cannot reach the job: the submit already failed.
-   - `approve` gives a gate of type `job.GateApproval` on the first phase
-     that changes: `apply` for a runner job, `deliver` for a write-back job.
-     The gate binds the approvals to the plan when a plan phase comes
-     before. The gate sets `AllowSelf` to false (`catalog.GateFor`), so the
-     requester never counts as an approver of its own request, also when it
-     is a member of a group of the gate.
+   - `approve` gives one gate of type `job.GateApproval` for each
+     requirement of the combined decision (ADR 114 decision 4), all on the
+     first phase that changes: `apply` for a runner job, `deliver` for a
+     write-back job. The job model needs each gate of a phase, so the change
+     needs each requirement: an `approve` by `security` and an `approve` by
+     `dba` give two gates. Each gate binds its approvals to the plan when a
+     plan phase comes before. Each gate sets `AllowSelf` to false
+     (`catalog.GateFor`), so the requester never counts as an approver of
+     its own request, also when it is a member of a group of the gate.
    - `allow` gives no gate.
 
    An approver approves through `job.Service.Approve`, as for any job, and
@@ -154,13 +157,23 @@ break-glass come from the job model.
      revision with the origin `git`, the commit, and the state
      `awaiting-state`. It has no job. A `create` from git reserves its unit,
      as a submit does, and the store makes the empty unit in the same
-     transaction (`catalog.Submission.Provision`). So the revision, its
-     reservation and its unit commit together or not at all.
-   - The next final state version of the unit at that commit, or after the
-     render when the tool reports no commit, makes the revision `applied`.
-     The Catalog applies this rule in the transaction of the state write,
-     through the same tool-neutral report as the job model
-     (`job.StateVersion`, ADR 100 decision 15).
+     transaction (`catalog.Submission.Provision`) through `catalog.UnitTx`,
+     the provisioner on the open transaction of the store (ADR 110
+     decision 6). So the revision, its reservation and its unit commit
+     together or not at all.
+   - The next final state version of the unit at exactly that commit, or
+     after the render when the tool reports no commit, makes the revision
+     `applied` (`catalog.Store.ObserveStateVersion`). A state version at
+     another commit applies no revision, also at a commit that descends from
+     the commit of the revision. The Catalog applies this rule in the
+     transaction of the state write, through the same tool-neutral report
+     as the job model (`job.StateVersion`, ADR 100 decision 15).
+   - **The team's CI renders each commit.** A CI that applies a commit with
+     a request file asks for the render of that commit, also when an older
+     commit is not applied yet. The render of a newer commit supersedes the
+     older revision (below), so the state version of the newer commit
+     applies the newer revision. A CI that applies a commit with no render
+     leaves the revision `awaiting-state` until its deadline.
    - **Supersede.** When a revision of the request is in flight, the render
      supersedes it in the same store write (`catalog.Submission.Supersedes`):
      - When the job of that revision did not deliver its change for good,
@@ -213,14 +226,34 @@ break-glass come from the job model.
       gate, the dispatch of a plan and of an apply, and the state wait),
       plus a grace of 1 day.
 
-    A revision in flight at its deadline ends `expired`: a read treats it as
-    `expired` (`Revision.Expired`), and the schedule `catalog.expire` writes
-    the state, cancels the job when the job model allows it, and starts the
-    `catalog.quota` operation. The reservation of a create ends at the same
-    deadline (ADR 115 decision 7). So a reservation never expires while its
-    revision is in flight. The store refuses a revision with no deadline,
-    and a reservation that does not end at the deadline of its revision,
-    with `catalog.ErrInvalid`.
+    A job can live longer than this deadline. It goes back to the queue
+    after each phase and after each approval, with a new time limit each
+    time, a confirmation gate can wait on each phase that changes, the job
+    decision can add a gate to each phase, and the steps of a job can run
+    for many hours. So the deadline ends a revision only when its job
+    ended. The schedule `catalog.expire` applies `catalog.ExpiryOf` to each
+    revision in flight past its deadline:
+    - A revision with no job, for example a revision from git that waits
+      for its state version, ends `expired` (`catalog.Store.Change`). For a
+      create, the change starts the `catalog.quota` operation.
+    - A revision whose job ended takes the state of its job
+      (`catalog.StateOf`). For a create, the change starts the
+      `catalog.quota` operation.
+    - A revision whose job has not ended keeps its state. The schedule
+      cancels the job when the job model allows it, and moves the deadline
+      of the revision and the end time of its reservation by the grace of
+      1 day (`quota.ReservationGrace`), in one transaction
+      (`catalog.Store.Extend`, which calls `quota.Tx.SetEnd`). The schedule
+      checks the revision again on each run, until its job ends.
+
+    So `catalog.quota`, which releases the reservation and deletes the
+    empty unit through `catalog.UnitProvisioner.Remove`, runs only after the
+    job of the revision ended. The reservation of a create ends at the
+    deadline (ADR 115 decision 7), and the deadline moves while the job
+    has not ended. So the reservation of a revision whose job has not ended
+    stays open, and its unit stays. The store refuses a revision with no
+    deadline, and a reservation that does not end at the deadline of its
+    revision, with `catalog.ErrInvalid`.
 
 ## Consequences
 
@@ -242,6 +275,11 @@ break-glass come from the job model.
   delivery fails, so the rule would need an exception.
 - Can a queued Catalog job get break-glass after its start (ADR 103 "Open
   questions")? This ADR follows the job model.
+- Does a state version at a commit that descends from the commit of a
+  revision from git apply the revision? Version 1 matches only the exact
+  commit, and asks the CI to render each commit. A match on a descendant
+  needs the commit graph of the forge in the transaction of the state
+  write.
 - When the team's CI never calls the render for a change in git, the
   Catalog never sees the change. Does a forge webhook on a push to a request
   file need to store a revision too?

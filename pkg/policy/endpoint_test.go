@@ -74,6 +74,8 @@ func TestAllowlistCheckAddr(t *testing.T) {
 		{"224.0.0.1", false},
 		{"::ffff:127.0.0.1", false},
 		{"64:ff9b::a00:1", false},
+		{"2002:a00:1::1", false},
+		{"2001:0:4136:e378:8000:63bf:f5ff:fffe", false},
 		{"198.18.0.1", false},
 	}
 

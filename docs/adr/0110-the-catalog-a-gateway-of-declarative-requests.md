@@ -77,8 +77,9 @@ limits.
      document as a source. The revision keeps the document that it
      delivered as a record only.
    - **`opendustpan`**: the document lives in OpenDustpan only. A submit
-     starts a runner job. The server renders the files of the tool at the
-     claim of each phase, from the revision that the job fixed at start.
+     starts a runner job. The server renders the files of the tool once, at
+     the start of the job, from the revision of the job, and stores them as
+     a rendered snapshot (change 3 below). Each phase runs that snapshot.
 
    A request never has both homes. A move from one home to the other is an
    open question.
@@ -91,8 +92,16 @@ limits.
    make is idempotent by the request ID. A create through the API makes the
    unit in the start operation (ADR 116 decision 5). A create from git has
    no start operation: the render makes the unit in the store transaction
-   that stores the revision, so the revision, its reservation and the empty
-   unit commit together or not at all (ADR 116 decision 9). A create
+   that stores the revision, through the port `catalog.UnitTx`. A `UnitTx`
+   is the provisioner on the open transaction of the store, as `quota.Tx`
+   is the counter on it: the wiring gives the SQL store a constructor that
+   takes the transaction of the store and returns a `UnitTx`, and
+   `Store.Submit` calls `UnitTx.Provision` for the provision of the
+   submission. So the revision, its reservation and the empty unit commit
+   together or not at all (ADR 116 decision 9). The suite
+   `catalogtest.RunUnitTx` states the rules: a rollback keeps no unit, a
+   second call for one request returns the same unit, and a name that
+   another request owns gives `catalog.ErrUnitName`. A create
    revision that ends `rejected`, `canceled`, `failed` or `expired` before
    any state version deletes the empty unit again through the same port. A
    create that a revision from git supersedes keeps its unit, because the
@@ -116,7 +125,9 @@ limits.
      YAML program. The program text names only the keys of the blueprint,
      which the publish checks (ADR 112 decision 5). So no answer can change
      the program that the tool runs.
-   - A runner job gets the files at the claim of each phase.
+   - A runner job gets the files as a rendered snapshot that the server
+     makes at the start of the job (change 3 below), never from a render at
+     the claim of a phase.
    - The team's CI calls the render route (ADR 117) with the repository,
      the commit and the path of the request file. The server reads
      `request.json` at that commit from the forge itself, through the port
@@ -180,10 +191,32 @@ changes none of its rules:
    - The timeout of the gate or of the queue still applies. So a job whose
      check keeps failing to run ends `expired` at that time, as any other
      job that waits.
-3. **Rendered code for a runner job.** A runner job of a request in
-   OpenDustpan has no code location in git. `job.Location` gets the kind
-   `catalog`: the runner protocol then gets the files from
-   `catalog.Renderer` at the claim, from the revision of the spec.
+3. **A rendered snapshot for a runner job.** A runner job of a request in
+   OpenDustpan has no code location in git. ADR 135 lets a runner get code
+   only as a source snapshot that the server made and that the launcher
+   checks by its hash, and never from the forge. The Catalog keeps that
+   rule with a snapshot of its own kind:
+   - At the start of the job, the Catalog renders the files of the revision
+     with `catalog.Renderer`, once, and stores them in the blob store as a
+     **rendered snapshot**. The job spec records the SHA-256 of the
+     snapshot. `job.Location` gets the kind `catalog`, which names the
+     snapshot by that hash.
+   - The launcher reads the rendered snapshot through its session, as it
+     reads a source snapshot, and checks the SHA-256 and the paths of each
+     file (ADR 135 decision 4) before it writes a file. So each phase runs
+     the same bytes, and no claim renders again.
+   - A module in a repository of a forge (`catalog.Module` with a
+     connection, a repository and a revision) gets a `source.fetch`
+     snapshot of its commit, started in the same transaction as the job.
+     The rendered root module references the module by a local path into
+     that snapshot, never by a forge address. So the runner never connects
+     to the forge, also for the module.
+   - A module from a registry and a Pulumi component keep their source
+     address and exact version: the tool gets them from the registry, as
+     for any other job.
+
+   ADR 135 defines one snapshot kind, a git pack. A rendered snapshot is a
+   second kind with no git pack (see "Open questions").
 4. **An edit on a missing file creates it.** A `job.FileEdit` on a file
    that does not exist at the base commit makes the file. The Catalog
    planner gives `job.ValidateEdits` an editable predicate that allows
@@ -220,6 +253,12 @@ and no batch ID in version 1 (ADR 112 "Open questions").
   adapter cannot start a job.
 
 ## Open questions
+
+- ADR 135 defines a source snapshot as a git pack of one commit. A rendered
+  snapshot (change 3 of "Changes requested in the job model") has no git
+  pack, so it needs an RFC or an amendment of ADR 135: its key, its hash,
+  the checks of the launcher on a set of files, its retention, and the
+  local path of a module snapshot in the work directory.
 
 - Can a request move from one home to the other? A move is a write of the
   file and a change of the record in one step, and the forge cannot join
