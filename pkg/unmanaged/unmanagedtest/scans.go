@@ -8,13 +8,13 @@ import (
 	"opendustpan.org/opendustpan/pkg/unmanaged"
 )
 
-// scanCases returns the cases of the scans.
+// scanCases returns the cases of the sweeps.
 func scanCases() []suiteCase {
 	return []suiteCase{
-		{"scans: targets have unique names and a pool of their namespace", testTargets},
-		{"scans: one scan of a target at a time", testScanBusy},
-		{"scans: the state table holds", testScanTable},
-		{"scans: a stale fence refuses each write", testScansFenced},
+		{"sweeps: targets have unique names and a sweep pool of their namespace", testTargets},
+		{"sweeps: one sweep of a target at a time", testScanBusy},
+		{"sweeps: the state table holds", testScanTable},
+		{"sweeps: a stale fence refuses each write", testScansFenced},
 	}
 }
 
@@ -23,7 +23,7 @@ func testTargets(t *testing.T, h Harness) {
 
 	f := h.Namespace(t, "acme")
 	h.Namespace(t, "other")
-	e := auditOf("acme", "namespace:manage-scans")
+	e := auditOf("acme", "namespace:manage-sweeps")
 
 	must(t, "create", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
 	wantErr(
@@ -41,6 +41,14 @@ func testTargets(t *testing.T, h Harness) {
 		h.Scans.CreateTarget(t.Context(), foreign, f, e),
 		unmanaged.ErrInvalidTarget,
 	)
+
+	jobs := targetOf("acme", "on-jobs")
+	jobs.Pool = JobPool
+	wantErr(t, "create on a job pool", h.Scans.CreateTarget(t.Context(), jobs, f, e), unmanaged.ErrInvalidTarget)
+
+	moved := targetOf("acme", "aws")
+	moved.Pool = JobPool
+	wantErr(t, "move to a job pool", h.Scans.UpdateTarget(t.Context(), moved, f, e), unmanaged.ErrInvalidTarget)
 
 	changed := targetOf("acme", "aws")
 	changed.Every = 0
@@ -67,7 +75,7 @@ func testScanBusy(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := h.Namespace(t, "acme")
-	e := auditOf("acme", "namespace:start-scan")
+	e := auditOf("acme", "namespace:start-sweep")
 
 	must(t, "create target", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), f, e))
 
@@ -93,6 +101,7 @@ func testScanBusy(t *testing.T, h Harness) {
 				ManagedTwice: 0,
 				Resolved:     0,
 				Rejected:     0,
+				OutOfScope:   0,
 			},
 		},
 		f,
@@ -101,7 +110,7 @@ func testScanBusy(t *testing.T, h Harness) {
 	must(t, "start", err)
 
 	if first.ID == "" || first.Status != unmanaged.ScanQueued {
-		t.Errorf("scan %+v, want an ID and the status queued", first)
+		t.Errorf("sweep %+v, want an ID and the status queued", first)
 	}
 
 	_, err = h.Scans.StartScan(
@@ -126,12 +135,13 @@ func testScanBusy(t *testing.T, h Harness) {
 				ManagedTwice: 0,
 				Resolved:     0,
 				Rejected:     0,
+				OutOfScope:   0,
 			},
 		},
 		f,
 		e,
 	)
-	wantErr(t, "start a second scan", err, unmanaged.ErrScanBusy)
+	wantErr(t, "start a second sweep", err, unmanaged.ErrScanBusy)
 
 	_, err = h.Scans.StartScan(
 		t.Context(),
@@ -155,12 +165,13 @@ func testScanBusy(t *testing.T, h Harness) {
 				ManagedTwice: 0,
 				Resolved:     0,
 				Rejected:     0,
+				OutOfScope:   0,
 			},
 		},
 		f,
 		e,
 	)
-	wantErr(t, "start a scan of a missing target", err, unmanaged.ErrNotFound)
+	wantErr(t, "start a sweep of a missing target", err, unmanaged.ErrNotFound)
 
 	_, err = h.Scans.AdvanceScan(
 		t.Context(),
@@ -195,6 +206,7 @@ func testScanBusy(t *testing.T, h Harness) {
 				ManagedTwice: 0,
 				Resolved:     0,
 				Rejected:     0,
+				OutOfScope:   0,
 			},
 		},
 		f,
@@ -207,7 +219,7 @@ func testScanTable(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := h.Namespace(t, "acme")
-	e := auditOf("acme", "namespace:start-scan")
+	e := auditOf("acme", "namespace:start-sweep")
 
 	s, err := h.Scans.StartScan(
 		t.Context(),
@@ -231,6 +243,7 @@ func testScanTable(t *testing.T, h Harness) {
 				ManagedTwice: 0,
 				Resolved:     0,
 				Rejected:     0,
+				OutOfScope:   0,
 			},
 		},
 		f,
@@ -258,7 +271,7 @@ func testScanTable(t *testing.T, h Harness) {
 		f,
 		e,
 	)
-	wantErr(t, "advance a missing scan", err, unmanaged.ErrNotFound)
+	wantErr(t, "advance a missing sweep", err, unmanaged.ErrNotFound)
 
 	counts := unmanaged.ScanCounts{
 		Records:      3,
@@ -269,6 +282,7 @@ func testScanTable(t *testing.T, h Harness) {
 		ManagedTwice: 0,
 		Resolved:     0,
 		Rejected:     0,
+		OutOfScope:   0,
 	}
 
 	for _, ev := range []unmanaged.ScanEvent{unmanaged.ScanEventUploaded, unmanaged.ScanEventMatched} {
@@ -285,17 +299,17 @@ func testScanTable(t *testing.T, h Harness) {
 	}
 
 	got, err := h.Scans.Scan(t.Context(), "acme", s.ID)
-	must(t, "scan", err)
+	must(t, "sweep", err)
 
 	if got.Status != unmanaged.ScanSucceeded || got.Counts != counts {
-		t.Errorf("scan %+v, want succeeded with its counts", got)
+		t.Errorf("sweep %+v, want succeeded with its counts", got)
 	}
 
 	list, err := h.Scans.Scans(t.Context(), "acme", "", "", 10)
-	must(t, "scans", err)
+	must(t, "sweeps", err)
 
 	if len(list) != 1 || list[0].ID != s.ID {
-		t.Errorf("scans %+v, want the one scan", list)
+		t.Errorf("sweeps %+v, want the one sweep", list)
 	}
 }
 
@@ -303,7 +317,7 @@ func testScansFenced(t *testing.T, h Harness) {
 	t.Helper()
 
 	old := stale(h.Namespace(t, "acme"))
-	e := auditOf("acme", "namespace:manage-scans")
+	e := auditOf("acme", "namespace:manage-sweeps")
 
 	wantErr(t, "create target", h.Scans.CreateTarget(t.Context(), targetOf("acme", "aws"), old, e), namespace.ErrFenced)
 
@@ -329,6 +343,7 @@ func testScansFenced(t *testing.T, h Harness) {
 				ManagedTwice: 0,
 				Resolved:     0,
 				Rejected:     0,
+				OutOfScope:   0,
 			},
 		},
 		old,

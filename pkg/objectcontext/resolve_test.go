@@ -110,6 +110,7 @@ func resolveCases() []resolveCase {
 			layers: []objectcontext.Layer{
 				{
 					Object: unitRef,
+					Hidden: false,
 					API: api(
 						unitRef,
 						objectcontext.Fields{
@@ -137,9 +138,10 @@ func resolveCases() []resolveCase {
 		{
 			name: "owners and on-call come from the nearest layer, never the blueprint",
 			layers: []objectcontext.Layer{
-				{Object: unitRef, API: nil, Output: nil},
+				{Object: unitRef, API: nil, Output: nil, Hidden: false},
 				{
 					Object: bpRef,
+					Hidden: false,
 					API: api(
 						bpRef,
 						objectcontext.Fields{
@@ -154,6 +156,7 @@ func resolveCases() []resolveCase {
 				},
 				{
 					Object: collRef,
+					Hidden: false,
 					API: api(
 						collRef,
 						objectcontext.Fields{
@@ -168,6 +171,7 @@ func resolveCases() []resolveCase {
 				},
 				{
 					Object: nsRef,
+					Hidden: false,
 					API: api(
 						nsRef,
 						objectcontext.Fields{
@@ -192,9 +196,10 @@ func resolveCases() []resolveCase {
 		{
 			name: "summary does not come from a wider layer",
 			layers: []objectcontext.Layer{
-				{Object: unitRef, API: nil, Output: nil},
+				{Object: unitRef, API: nil, Output: nil, Hidden: false},
 				{
 					Object: collRef,
+					Hidden: false,
 					API: api(
 						collRef,
 						objectcontext.Fields{
@@ -221,6 +226,7 @@ func resolveCases() []resolveCase {
 			layers: []objectcontext.Layer{
 				{
 					Object: resRef,
+					Hidden: false,
 					Output: out(
 						resRef,
 						objectcontext.Fields{
@@ -233,11 +239,12 @@ func resolveCases() []resolveCase {
 					),
 					API: nil,
 				},
-				{Object: unitRef, Output: out(unitRef, objectcontext.Fields{Links: []objectcontext.Link{
+				{Object: unitRef, Hidden: false, Output: out(unitRef, objectcontext.Fields{Links: []objectcontext.Link{
 					link("Dash", "https://dash.example.com"), link("DB again", "https://db.example.com"),
 				}, Summary: "", Runbook: "", Owners: nil, OnCall: ""}), API: nil},
 				{
 					Object: bpRef,
+					Hidden: false,
 					API: api(
 						bpRef,
 						objectcontext.Fields{
@@ -264,6 +271,7 @@ func resolveCases() []resolveCase {
 			layers: []objectcontext.Layer{
 				{
 					Object: resRef,
+					Hidden: false,
 					Output: out(
 						resRef,
 						objectcontext.Fields{
@@ -278,6 +286,7 @@ func resolveCases() []resolveCase {
 				},
 				{
 					Object: unitRef,
+					Hidden: false,
 					Output: out(
 						unitRef,
 						objectcontext.Fields{
@@ -307,6 +316,7 @@ func resolveCases() []resolveCase {
 			layers: []objectcontext.Layer{
 				{
 					Object: unitRef,
+					Hidden: false,
 					Output: &objectcontext.Entry{
 						Object:    unitRef,
 						Source:    objectcontext.SourceOutput,
@@ -328,6 +338,48 @@ func resolveCases() []resolveCase {
 			links:    nil,
 			shadowed: nil,
 		},
+		hiddenLayerCase(),
+	}
+}
+
+// hiddenLayerCase is a caller who reads the unit and the namespace, and does
+// not read the collection. The collection still gives the owners and the
+// on-call, and nothing else.
+func hiddenLayerCase() resolveCase {
+	return resolveCase{
+		name: "a hidden layer gives its owners and on-call only",
+		layers: []objectcontext.Layer{
+			{Object: unitRef, API: nil, Output: nil, Hidden: false},
+			{
+				Object: collRef,
+				Hidden: true,
+				API: api(collRef, objectcontext.Fields{
+					Summary: "", Runbook: "", Owners: []string{"group:web"}, OnCall: "pager:web",
+					Links: []objectcontext.Link{link("Private", "https://wiki.example.com/web")},
+				}),
+				Output: out(collRef, objectcontext.Fields{
+					Summary: "", Runbook: "", Owners: []string{"group:web-code"}, OnCall: "", Links: nil,
+				}),
+			},
+			{
+				Object: nsRef,
+				Hidden: false,
+				API: api(nsRef, objectcontext.Fields{
+					Summary: "", Runbook: "", Owners: []string{"group:all"}, OnCall: "pager:ops",
+					Links: []objectcontext.Link{link("Status", "https://status.example.com")},
+				}),
+				Output: nil,
+			},
+		},
+		owners: objectcontext.Owners{
+			Value: []string{"group:web-code"}, From: from(collRef, objectcontext.SourceOutput),
+		},
+		onCall:   objectcontext.Text{Value: "pager:web", From: from(collRef, objectcontext.SourceAPI)},
+		links:    []string{"https://status.example.com"},
+		summary:  unset[objectcontext.Text](),
+		shadowed: nil,
+		readme:   "",
+		warnings: 0,
 	}
 }
 
@@ -358,17 +410,24 @@ func TestResolveChainErrors(t *testing.T) {
 		{"empty", nil},
 		{
 			"out of order",
-			[]objectcontext.Layer{{Object: collRef, API: nil, Output: nil}, {Object: unitRef, API: nil, Output: nil}},
+			[]objectcontext.Layer{
+				{Object: collRef, API: nil, Output: nil, Hidden: false},
+				{Object: unitRef, API: nil, Output: nil, Hidden: false},
+			},
 		},
 		{
 			"kind twice",
-			[]objectcontext.Layer{{Object: unitRef, API: nil, Output: nil}, {Object: unitRef, API: nil, Output: nil}},
+			[]objectcontext.Layer{
+				{Object: unitRef, API: nil, Output: nil, Hidden: false},
+				{Object: unitRef, API: nil, Output: nil, Hidden: false},
+			},
 		},
 		{
 			"entry of another object",
 			[]objectcontext.Layer{
 				{
 					Object: unitRef,
+					Hidden: false,
 					API: api(
 						collRef,
 						objectcontext.Fields{Summary: "", Runbook: "", Owners: nil, OnCall: "", Links: nil},

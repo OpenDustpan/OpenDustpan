@@ -31,6 +31,12 @@ const (
 	MaxFindingUnits = 20
 	// MaxPage bounds a page of findings.
 	MaxPage = 500
+	// MaxPending is the longest time that a finding waits in StatusPending.
+	// The schedule then applies EventPendingExpired, and the finding opens
+	// again, so an action whose job or whose sweep never came does not hide
+	// the finding for ever. It is longer than the 14 days after which a job
+	// that waits for a state version expires, so a job ends first.
+	MaxPending = 15 * day
 )
 
 // Status is where a finding is in its life.
@@ -45,10 +51,10 @@ const (
 	StatusIgnored Status = "ignored"
 	// StatusPending is a finding with an action that started and did not
 	// end: a job, a choice of owner, or a mark for delete that waits for the
-	// next scan.
+	// next sweep.
 	StatusPending Status = "pending"
 	// StatusResolved is a finding whose resource is now managed by exactly
-	// one unit, or that a complete scan no longer sees.
+	// one unit, or that a complete sweep no longer sees.
 	StatusResolved Status = "resolved"
 )
 
@@ -57,7 +63,7 @@ type Event string
 
 // The events of a finding.
 const (
-	// EventObserve is a scan or an index check that classifies the resource
+	// EventObserve is a sweep or an index check that classifies the resource
 	// as the same kind again.
 	EventObserve Event = "observe"
 	// EventReclassify is a classification with another kind than the
@@ -76,9 +82,16 @@ const (
 	// EventActionEnded is the end of an action that did not resolve the
 	// finding, for example a job that failed or a person who canceled it.
 	EventActionEnded Event = "action-ended"
-	// EventResolve is a classification as managed, or a complete scan of
+	// EventResolve is a classification as managed, or a complete sweep of
 	// the scope of the finding that does not see the resource.
 	EventResolve Event = "resolve"
+	// EventCancel is a person who stops waiting for a pending action. It
+	// needs ActionNamespaceTriageUnmanaged. It does not cancel the job of
+	// the action: a person cancels the job with the actions of the job.
+	EventCancel Event = "cancel"
+	// EventPendingExpired is the end of a wait in StatusPending after
+	// MaxPending.
+	EventPendingExpired Event = "pending-expired"
 )
 
 // transitions returns the state table of a finding. Next is the only place
@@ -95,7 +108,7 @@ func transitions() map[Status]map[Event]Status {
 		},
 		StatusPending: {
 			EventObserve: StatusPending, EventReclassify: StatusOpen, EventActionEnded: StatusOpen,
-			EventResolve: StatusResolved,
+			EventResolve: StatusResolved, EventCancel: StatusOpen, EventPendingExpired: StatusOpen,
 		},
 		StatusResolved: {
 			EventObserve: StatusOpen, EventReclassify: StatusOpen, EventResolve: StatusResolved,
@@ -120,10 +133,10 @@ type Evidence string
 // The evidence of a finding.
 const (
 	// EvidenceState is the resource index alone: the state of a unit holds
-	// the resource. No scan confirmed that the resource exists.
+	// the resource. No sweep confirmed that the resource exists.
 	EvidenceState Evidence = "state"
-	// EvidenceScan is a scan that saw the resource.
-	EvidenceScan Evidence = "scan"
+	// EvidenceScan is a sweep that saw the resource.
+	EvidenceScan Evidence = "sweep"
 )
 
 // Ignore is why and until when a finding is ignored. Until is the zero time
@@ -158,6 +171,8 @@ const (
 	ActionChooseOwner ActionKind = "choose-owner"
 	// ActionIgnore ignores the finding with a reason.
 	ActionIgnore ActionKind = "ignore"
+	// ActionCancel stops the wait of a pending finding, which opens again.
+	ActionCancel ActionKind = "cancel"
 )
 
 // ActionSpec says to which kinds an action applies and which actions of
@@ -190,6 +205,12 @@ func ActionCatalog() []ActionSpec {
 		},
 		{
 			Action:      ActionIgnore,
+			Kinds:       []Kind{KindNotInAnyUnit, KindLeftBehind, KindManagedTwice},
+			UnitActions: nil,
+			StartsJob:   false,
+		},
+		{
+			Action:      ActionCancel,
 			Kinds:       []Kind{KindNotInAnyUnit, KindLeftBehind, KindManagedTwice},
 			UnitActions: nil,
 			StartsJob:   false,
@@ -230,8 +251,13 @@ type Pending struct {
 // one finding for each resource key. Units are the holders of the key that
 // the finding names, in the order of Unit.String: the two or more live units
 // of a resource managed twice, or the deleted units of a resource left
-// behind. Elsewhere is true when a unit of another namespace also holds the
-// key; the finding does not name it.
+// behind. Elsewhere is true when a unit of a linked namespace also holds the
+// key; the finding does not name it. Scope is the account scope of the
+// resource: the scope of its key, or, for a key with no account scope of its
+// own, the scope of the sweep that saw it (RecordScope). It is empty until a
+// sweep sees such a key, and a finding with no scope never resolves by
+// ResolveUnseen. Region is the region of the record, empty for a global
+// resource.
 type Finding struct {
 	FirstSeen time.Time
 	LastSeen  time.Time
@@ -245,6 +271,7 @@ type Finding struct {
 	Status    Status
 	Evidence  Evidence
 	Type      string
+	Scope     string
 	Region    string
 	Name      string
 	Scan      string
@@ -329,7 +356,7 @@ func (r IgnoreRule) Matches(f Finding, now time.Time) bool {
 		return false
 	}
 
-	if r.Provider != f.Key.Provider || (r.Scope != "" && r.Scope != Scope(f.Key)) {
+	if r.Provider != f.Key.Provider || (r.Scope != "" && r.Scope != f.Scope) {
 		return false
 	}
 

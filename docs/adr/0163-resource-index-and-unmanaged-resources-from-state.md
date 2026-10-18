@@ -16,15 +16,17 @@ On 17 October 2026 the project owner decided:
   inventory. Writes in a namespace carry the fence.
 
 RFC 47 says that "left behind" and "managed twice" may need no runner: the
-state of the units holds what they need. "Not in any unit" needs a scan of
+state of the units holds what they need. "Not in any unit" needs a sweep of
 the cloud (ADR 164). RFC 40 says that the managed-twice kind can come from
 the inventory and from reading state.
 
-The owner called the feature "sweep". `GLOSSARY.md` already has the
-**retention sweep**: the task that purges deleted units. One word for two
-things breaks the rule of one word for each concept. This ADR uses
-**scan** for the work that finds unmanaged resources, and keeps "sweep"
-for the retention sweep.
+The owner named the feature **Sweep**. A **sweep** is the work that finds
+unmanaged resources: a cloud sweep on a runner (ADR 164) or a state check
+in the server (decision 10). `GLOSSARY.md` uses "retention sweep" today for
+the task that purges deleted units. One word for two things breaks the rule
+of one word for each concept, so this design asks for that task to become
+the **retention expiry** (see "Requests to other designs"). The Go names of
+`pkg/unmanaged` keep "scan" (`Scan`, `ScanStore`): they are internal.
 
 ## Decision
 
@@ -59,7 +61,14 @@ for the retention sweep.
 5. **When the index changes.** After each new latest state item of a unit,
    the durable operation that also updates the context projection (ADR 160
    decision 8) replaces the entries of the unit (`Index.ReplaceUnit`). The
-   index keeps the entries of the item with the highest order. The soft
+   index keeps the entries of the item with the highest order. The
+   operation has one start key for each unit, so the state items that
+   arrive while it waits or runs **coalesce**: one run reads the latest item
+   and replaces the entries one time. A unit that writes ten state items in
+   a minute costs one read, not ten. The SQL adapter writes the
+   **difference**: it deletes the entries that the new item no longer holds, inserts the new
+   ones and keeps the others. A state item that changes one resource of a
+   unit with 100,000 entries writes one row. The soft
    delete and the restore of a unit mark its entries as deleted or live in
    their own transaction (`Index.SetDeleted`). A purge deletes them
    (`Index.DropUnit`).
@@ -73,36 +82,56 @@ for the retention sweep.
 ### Classification
 
 8. **One rule for each key.** `unmanaged.Classify` gives the class of one
-   resource key in one namespace, from all its **holders** (the units of
-   every namespace whose latest state holds the key) and whether a scan saw
-   it. In order:
+   resource key in one namespace, from its **holders** (the units of the
+   namespace and of the linked namespaces whose latest state holds the
+   key, decision 9) and whether a sweep saw it. It drops a holder of any
+   other namespace. In order:
    1. Two or more distinct live units hold the key, and one of them is in the
       namespace: **managed twice**. Two resources of one unit are one holder.
    2. Exactly one live unit of the namespace holds the key: **managed**.
    3. Live units hold the key, none in the namespace: **elsewhere**.
    4. Only deleted units of the namespace hold the key: **left behind**.
-   5. Only deleted units of other namespaces hold the key: **elsewhere**.
-   6. No unit holds the key, and a scan saw it: **not in any unit**.
+   5. Only deleted units of linked namespaces hold the key: **elsewhere**.
+   6. No unit holds the key, and a sweep saw it: **not in any unit**.
    7. Else: **none**.
 
    Managed, elsewhere and none make no finding. A table-driven test holds
    each case.
-9. **Across namespaces.** Two teams can use one cloud account from two
-   namespaces. So the classification reads the holders of every namespace
-   of the installation. A resource that a unit of another namespace manages
-   is **elsewhere**: it is not a finding of this namespace, and the answer
+9. **Across namespaces, only with a link.** Two teams can use one cloud
+   account from two namespaces. An installation administrator, with
+   `server:link-namespaces` (new), **links** the two namespaces
+   (`unmanaged.Links`). A link goes both ways. Without a link, the
+   classification of a namespace reads the units of that namespace only:
+   `Index.Holders` and `Index.Contested` never answer a holder of another
+   namespace. The reasons:
+   - **No enumeration.** A unit of a namespace cannot learn which keys the
+     units of another namespace hold, for example by a state item that names
+     guessed bucket names, or by a sweep report of guessed keys.
+   - **No silent resolve.** A namespace cannot close the findings of
+     another namespace by a state item that claims their resources. With no
+     link, its unit is not a holder for the other namespace, so the finding
+     stays open.
+   - **No flood.** A namespace cannot open "managed twice" findings in
+     another namespace by a copy of its keys.
+
+   With a link, a resource that a unit of the other namespace manages is
+   **elsewhere**: it is not a finding of this namespace, and the answer
    names no unit of the other namespace. A resource that a unit of each of
-   two namespaces holds is managed twice in both. Each finding names only
-   the unit of its own namespace, and says that a unit of another namespace
-   also holds the key.
+   the two namespaces holds is managed twice in both. Each finding names
+   only the unit of its own namespace, and says that a unit of a linked
+   namespace also holds the key. An unlink takes effect at the next state
+   check of each namespace. A link is installation data: its writes append
+   an audit entry with the two namespaces and the person. The suite holds a
+   case for each of the three reasons above.
 
 ### The state check
 
-10. **Left behind and managed twice need no scan.** A **state check** reads
+10. **Left behind and managed twice need no sweep.** A **state check** reads
     the index of one namespace and classifies two sets of keys:
     - the **contested** keys: the keys that a unit of the namespace holds and
-      that another distinct live unit also holds, or that only deleted units
-      hold (`Index.Contested`),
+      that another distinct live unit of the namespace or of a linked
+      namespace also holds, or that only deleted units hold
+      (`Index.Contested`),
     - the key of each finding of the namespace that is not resolved, so a key
       that one live unit now holds resolves.
 
@@ -110,15 +139,27 @@ for the retention sweep.
     server, as a durable operation (ADR 72). It needs no runner and no
     cloud credential.
 11. **When a state check runs.** One time each day for each namespace with at
-    least one unit, from a schedule row of ADR 72. Also after a soft delete,
-    a restore or a purge of a unit, and on request with
-    `namespace:start-scan`. A state check is a scan of the kind `state` in
-    the records of ADR 164, so the console shows it with the cloud scans.
+    least one unit, from the schedule row of ADR 164 decision 16. Also after
+    a soft delete, a restore or a purge of a unit, and on request with
+    `namespace:start-sweep`. A state check is a sweep of the kind `state` in
+    the records of ADR 164, so the console shows it with the cloud sweeps.
+    - **Spread daily starts.** The daily state check of a namespace
+      starts at a fixed time of the day that a hash of the namespace name
+      gives, in steps of the 15-minute tick (`unmanaged.StateCheckOffset`).
+      So the checks of an installation with 1,000 namespaces spread over
+      the 96 ticks of the day, about 10 at each tick, and do not all start
+      at midnight. A test holds the spread.
+    - **A time target for each page.** The check reads the contested keys in
+      pages of 1,000 (`Index.Contested`). One page, the read and the write of
+      its findings, aims at 2 seconds (`unmanaged.StateCheckPageTarget`). A
+      page above it logs a warning with the namespace and the time, so an
+      operator sees a slow index. A namespace with 100,000 contested keys
+      has 100 pages, about 3 minutes.
 12. **A finding left behind after a purge.** A purge deletes the entries of
     the unit, and then no unit holds the key. A state check does not resolve
-    the finding for that reason: only a scan can tell that the resource is
+    the finding for that reason: only a sweep can tell that the resource is
     gone. The finding keeps the unit ID and the name of the unit at the time
-    of the delete. A later scan that sees the resource reclassifies it as
+    of the delete. A later sweep that sees the resource reclassifies it as
     not in any unit, and one that does not see it, in a complete scope,
     resolves it (ADR 164).
 
@@ -126,15 +167,17 @@ for the retention sweep.
 
 13. **`unmanaged.Index`** holds the index: `ReplaceUnit`, `SetDeleted`,
     `DropUnit`, `Holders` and `Contested`. Each write carries the fence of
-    the namespace of the unit. The suite in `unmanagedtest` states its
-    behavior, and a reference adapter in memory runs it today. The SQL
-    adapters need an index on the normalized key. A lookup takes at most
-    1,000 keys.
+    the namespace of the unit. `Holders` and `Contested` take the namespace
+    of the caller and answer its holders and those of its linked namespaces
+    only. **`unmanaged.Links`** holds the links: `Link`, `Unlink` and
+    `Linked`. The suite in `unmanagedtest` states the behavior of both, and
+    a reference adapter in memory runs it today. The SQL adapters need an
+    index on the normalized key. A lookup takes at most 1,000 keys.
 
 ## Consequences
 
-- The server finds managed-twice resources across both tools and across
-  namespaces with no scan and no cloud credential. A team gets the
+- The server finds managed-twice resources across both tools, and across
+  linked namespaces, with no cloud sweep and no cloud credential. A team gets the
   findings on the day after it adds a second unit that holds the same
   resource.
 - The index adds one row for each managed resource of each unit, and one row
@@ -142,10 +185,23 @@ for the retention sweep.
   about 42,000 entries.
 - The key rules cover AWS, Azure and Google Cloud resources that expose
   their cloud ID as an attribute. A resource with no such attribute has no
-  key, and the index cannot find it managed twice. A scan still sees it as
+  key, and the index cannot find it managed twice. A sweep still sees it as
   not in any unit (ADR 164), and the person can ignore it with a reason.
-- `GLOSSARY.md` gets the terms resource index, resource key, holder, scan,
-  state check, contested key and finding.
+- Two teams that share a cloud account and do not ask for a link each see
+  the resources of the other team as not in any unit. The console says,
+  on a finding of not in any unit, that a link can explain it.
+- `GLOSSARY.md` gets the terms resource index, resource key, holder, sweep,
+  state check, contested key, namespace link and finding.
+
+## Requests to other designs
+
+- **Glossary and retention (shared files).** "Retention sweep" becomes
+  **retention expiry** in `GLOSSARY.md`, in the text of the blob purge, and
+  in the draft history design (ADRs 150 to 153). The route
+  `POST /api/server/deleted-units/sweep` becomes
+  `POST /api/server/deleted-units/expire`. Then "sweep" names one concept.
+- **Identity.** The action `server:link-namespaces`, held only by the roles
+  that administer the installation.
 
 ## Open questions
 
@@ -155,6 +211,8 @@ for the retention sweep.
 2. **Resources with two keys.** A resource can have a second ID form, for
    example an AWS resource whose ARN changes with a rename. Is one key per
    resource enough for the first release?
-3. **The visibility of "elsewhere".** A person learns that a unit of some
-   other namespace holds a key that they already see in their cloud. This
-   ADR thinks that this is acceptable. A security review decides.
+3. **The visibility of "elsewhere".** With a link, a person learns that a
+   unit of the linked namespace holds a key that they already see in their
+   cloud. The administrator who made the link accepted this. Should a link
+   be one-way, so a platform namespace sees the units of a team and not the
+   other way?

@@ -6,11 +6,14 @@ import (
 )
 
 // Layer is the context of one object from both sources. API and Output are
-// nil when the source holds no entry for the object.
+// nil when the source holds no entry for the object. Hidden is true when the
+// caller does not hold the read action of the object (ReadAction): Resolve
+// then takes only the owners and the on-call of the layer.
 type Layer struct {
 	API    *Entry
 	Output *Entry
 	Object Ref
+	Hidden bool
 }
 
 // Provenance names where a resolved value comes from. It is the zero value
@@ -85,6 +88,12 @@ func chainOrder() []Kind {
 //     the units made from it.
 //   - The links come from every layer, the most specific first, with no
 //     second link of the same URL, up to MaxEffectiveLinks.
+//   - A hidden layer gives its owners and its on-call only, with their
+//     provenance. Its summary, runbook, links, readme, warnings and
+//     shadowed values stay out of the answer. Owners and on-call are not
+//     sensitive, and a person who reads a unit during an incident must get
+//     the right people to call, also when a role does not hold the read
+//     action of the collection or of the namespace.
 //
 // It returns ErrInvalidObject for a chain out of order, an empty chain, or a
 // layer whose entries name another object.
@@ -100,7 +109,7 @@ func Resolve(layers []Layer) (Resolved, error) {
 	for i := range layers {
 		eff, from := r.add(&layers[i], seenURL)
 
-		if i == 0 {
+		if i == 0 && !layers[i].Hidden {
 			r.Summary = Text{Value: eff.Summary, From: from[FieldSummary]}
 			r.Runbook = Text{Value: eff.Runbook, From: from[FieldRunbook]}
 		}
@@ -114,6 +123,15 @@ func Resolve(layers []Layer) (Resolved, error) {
 // l sets. seenURL holds the URLs of the links that r holds.
 func (r *Resolved) add(l *Layer, seenURL map[string]bool) (Fields, map[Field]Provenance) {
 	eff, from, shadows := l.merge()
+
+	if l.Hidden {
+		if l.Object.Kind != KindBlueprint {
+			r.addPeople(&eff, from)
+		}
+
+		return eff, from
+	}
+
 	r.Shadowed = append(r.Shadowed, shadows...)
 
 	if l.Output != nil && l.Output.Warning != "" {

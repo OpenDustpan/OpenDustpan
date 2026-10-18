@@ -1,5 +1,5 @@
 // Package unmanagedtest is the conformance suite of the ports of package
-// unmanaged: the resource index, the findings and the scans.
+// unmanaged: the resource index, the findings and the sweeps.
 package unmanagedtest
 
 import (
@@ -14,14 +14,26 @@ import (
 	"opendustpan.org/opendustpan/pkg/unmanaged"
 )
 
-// Pool is the runner pool that Harness.Namespace makes in each namespace.
-const Pool = "scanners"
+// The runner pools that Harness.Namespace makes in each namespace, and their
+// purposes.
+const (
+	// Pool is a pool of the purpose PurposeSweeps.
+	Pool = "sweepers"
+	// JobPool is a pool of the purpose PurposeJobs. A target refuses it.
+	JobPool = "builders"
+	// PurposeSweeps is the purpose of a pool that runs sweeps only.
+	PurposeSweeps = "sweeps"
+	// PurposeJobs is the purpose of a pool that runs jobs only.
+	PurposeJobs = "jobs"
+)
 
-// Harness is one fresh, empty store for one subtest. The three ports share
-// one store, as the SQL adapters do. Namespace makes the namespace name and
-// a runner pool Pool in it, and returns the current fence of the namespace.
+// Harness is one fresh, empty store for one subtest. The four ports share
+// one store, as the SQL adapters do. Namespace makes the namespace name, a
+// runner pool Pool and a runner pool JobPool in it, and returns the current
+// fence of the namespace.
 type Harness struct {
 	Index     unmanaged.Index
+	Links     unmanaged.Links
 	Findings  unmanaged.FindingStore
 	Scans     unmanaged.ScanStore
 	Namespace func(t *testing.T, name string) namespace.Fence
@@ -44,7 +56,7 @@ type suiteCase struct {
 func Run(t *testing.T, newHarness Factory) {
 	t.Helper()
 
-	cases := slices.Concat(indexCases(), findingCases(), scanCases())
+	cases := slices.Concat(indexCases(), linkCases(), findingCases(), scanCases())
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

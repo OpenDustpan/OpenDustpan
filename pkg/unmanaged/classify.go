@@ -1,6 +1,8 @@
 package unmanaged
 
 import (
+	"slices"
+
 	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
@@ -26,11 +28,11 @@ const (
 	// ClassManaged is a resource that exactly one live unit of the
 	// namespace manages, and no live unit of another namespace.
 	ClassManaged Class = "managed"
-	// ClassElsewhere is a resource that units of other namespaces hold and
+	// ClassElsewhere is a resource that units of linked namespaces hold and
 	// no unit of this namespace holds. The namespace of those units owns
 	// the question. The answer to this namespace does not name them.
 	ClassElsewhere Class = "elsewhere"
-	// ClassNone is a resource that no unit holds and that no scan saw.
+	// ClassNone is a resource that no unit holds and that no sweep saw.
 	ClassNone Class = "none"
 )
 
@@ -49,8 +51,11 @@ func (c Class) Finding() (Kind, bool) {
 }
 
 // Classify returns the class of one resource key in namespace ns. observed
-// is true when a scan saw the resource. holders is every unit of every
-// namespace whose latest state holds the key. The rules, in order:
+// is true when a sweep saw the resource. linked holds the namespaces that an
+// installation administrator linked with ns. holders is the holders of the
+// key; Classify drops each holder whose namespace is neither ns nor linked,
+// so a unit of a namespace that is not linked never changes the class. The
+// rules, in order:
 //
 //  1. Two or more distinct live units hold the key, and at least one is in
 //     ns: managed twice. Two resources of one unit are one holder, so a
@@ -58,14 +63,14 @@ func (c Class) Finding() (Kind, bool) {
 //  2. Exactly one live unit of ns holds the key: managed.
 //  3. Live units hold the key, none of them in ns: elsewhere.
 //  4. Only deleted units of ns hold the key: left behind.
-//  5. Only deleted units of other namespaces hold the key: elsewhere.
-//  6. No unit holds the key, and a scan saw it: not in any unit.
+//  5. Only deleted units of linked namespaces hold the key: elsewhere.
+//  6. No unit holds the key, and a sweep saw it: not in any unit.
 //  7. Else: none.
 //
 // A data source, which reads a resource and does not manage it, is never a
 // holder: the resource index leaves it out.
-func Classify(ns namespace.Name, observed bool, holders []Holder) Class {
-	c := countHolders(ns, holders)
+func Classify(ns namespace.Name, linked []namespace.Name, observed bool, holders []Holder) Class {
+	c := countHolders(ns, linked, holders)
 
 	switch {
 	case len(c.live) >= 2 && c.liveHere:
@@ -87,7 +92,7 @@ func Classify(ns namespace.Name, observed bool, holders []Holder) Class {
 
 // holderCount is what Classify needs to know of the holders of a key: the
 // distinct live units, whether one of them is in the namespace, and whether
-// a deleted unit in the namespace or in another namespace holds the key.
+// a deleted unit in the namespace or in a linked namespace holds the key.
 type holderCount struct {
 	live             map[graph.Unit]bool
 	liveHere         bool
@@ -95,11 +100,14 @@ type holderCount struct {
 	deletedElsewhere bool
 }
 
-func countHolders(ns namespace.Name, holders []Holder) holderCount {
+func countHolders(ns namespace.Name, linked []namespace.Name, holders []Holder) holderCount {
 	c := holderCount{live: map[graph.Unit]bool{}, liveHere: false, deletedHere: false, deletedElsewhere: false}
 
 	for _, h := range holders {
 		here := h.Unit.Namespace == ns
+		if !here && !slices.Contains(linked, h.Unit.Namespace) {
+			continue
+		}
 
 		switch {
 		case !h.Deleted:

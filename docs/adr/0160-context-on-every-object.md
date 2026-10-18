@@ -130,6 +130,9 @@ Facts that this ADR builds on:
       does not own the units that people make from it.
     - `links` come from every object of the chain, the most specific first,
       with no second link to the same URL, up to 100 links.
+    - A layer that the caller cannot read gives its owners and its on-call
+      only (ADR 161 decision 5). Owners and on-call are not sensitive, and
+      they must be right during an incident.
     - Each resolved value names its object and its source (its
       **provenance**). The read API also answers each entry of each source
       as it is. So a person and an agent see where each fact comes from, as
@@ -169,6 +172,12 @@ Facts that this ADR builds on:
     | Set or clear the API context of a unit or of a resource | `unit:set-context` (new) | unit |
     | Set or clear the API context of a blueprint | `blueprint:set-context` (new) | blueprint |
     | List the objects of a namespace by owner | `namespace:read`, then `unit:read` and `collection:read` as a filter | namespace |
+
+    The list by owner (`Store.ByOwner`) does not resolve inherited owners.
+    It answers the objects whose own entries name the owner. A unit that
+    gets the owner from its collection or its namespace is not in the
+    answer. The answer holds that collection or namespace, and the console
+    expands a collection to its units.
 
     `objectcontext.ReadAction` and `objectcontext.SetAction` map a kind to
     its action. The built-in roles that write a unit get

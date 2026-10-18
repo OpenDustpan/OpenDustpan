@@ -10,7 +10,7 @@ import (
 // indexCases returns the cases of the resource index.
 func indexCases() []suiteCase {
 	return []suiteCase{
-		{"index: holders across namespaces", testHoldersAcross},
+		{"index: holders of a linked namespace only", testHoldersAcross},
 		{"index: an older state item changes nothing", testIndexOrder},
 		{"index: a soft delete marks the holders", testIndexDeleted},
 		{"index: a purge drops the unit", testIndexDrop},
@@ -32,7 +32,16 @@ func testHoldersAcross(t *testing.T, h Harness) {
 		h.Index.ReplaceUnit(t.Context(), b, 1, []unmanaged.IndexEntry{entry(b, AWSKey("logs"))}, other),
 	)
 
-	got, err := h.Index.Holders(t.Context(), []unmanaged.ResourceKey{AWSKey("logs"), AWSKey("none")})
+	alone, err := h.Index.Holders(t.Context(), "acme", []unmanaged.ResourceKey{AWSKey("logs")})
+	must(t, "holders before the link", err)
+
+	if hs := alone[AWSKey("logs")]; len(hs) != 1 || hs[0].Unit != a {
+		t.Errorf("holders %+v before the link, want a only", hs)
+	}
+
+	must(t, "link", h.Links.Link(t.Context(), "acme", "other", auditOf("", "server:link-namespaces")))
+
+	got, err := h.Index.Holders(t.Context(), "acme", []unmanaged.ResourceKey{AWSKey("logs"), AWSKey("none")})
 	must(t, "holders", err)
 
 	if hs := got[AWSKey("logs")]; len(hs) != 2 || hs[0].Unit != a || hs[1].Unit != b {
@@ -43,7 +52,7 @@ func testHoldersAcross(t *testing.T, h Harness) {
 		t.Error("a key with no holder is in the map")
 	}
 
-	_, err = h.Index.Holders(t.Context(), []unmanaged.ResourceKey{{Provider: "aws", ID: "logs"}})
+	_, err = h.Index.Holders(t.Context(), "acme", []unmanaged.ResourceKey{{Provider: "aws", ID: "logs"}})
 	wantErr(t, "holders of an invalid key", err, unmanaged.ErrInvalidKey)
 }
 
@@ -56,7 +65,7 @@ func testIndexOrder(t *testing.T, h Harness) {
 	must(t, "replace 2", h.Index.ReplaceUnit(t.Context(), a, 2, []unmanaged.IndexEntry{entry(a, AWSKey("new"))}, f))
 	must(t, "replace 1", h.Index.ReplaceUnit(t.Context(), a, 1, []unmanaged.IndexEntry{entry(a, AWSKey("old"))}, f))
 
-	got, err := h.Index.Holders(t.Context(), []unmanaged.ResourceKey{AWSKey("new"), AWSKey("old")})
+	got, err := h.Index.Holders(t.Context(), "acme", []unmanaged.ResourceKey{AWSKey("new"), AWSKey("old")})
 	must(t, "holders", err)
 
 	if len(got[AWSKey("new")]) != 1 || len(got[AWSKey("old")]) != 0 {
@@ -73,7 +82,7 @@ func testIndexDeleted(t *testing.T, h Harness) {
 	must(t, "replace", h.Index.ReplaceUnit(t.Context(), a, 1, []unmanaged.IndexEntry{entry(a, AWSKey("logs"))}, f))
 	must(t, "set deleted", h.Index.SetDeleted(t.Context(), a, true, f))
 
-	got, err := h.Index.Holders(t.Context(), []unmanaged.ResourceKey{AWSKey("logs")})
+	got, err := h.Index.Holders(t.Context(), "acme", []unmanaged.ResourceKey{AWSKey("logs")})
 	must(t, "holders", err)
 
 	if hs := got[AWSKey("logs")]; len(hs) != 1 || !hs[0].Deleted {
@@ -93,7 +102,7 @@ func testIndexDrop(t *testing.T, h Harness) {
 	must(t, "replace", h.Index.ReplaceUnit(t.Context(), a, 1, []unmanaged.IndexEntry{entry(a, AWSKey("logs"))}, f))
 	must(t, "drop", h.Index.DropUnit(t.Context(), a, f))
 
-	got, err := h.Index.Holders(t.Context(), []unmanaged.ResourceKey{AWSKey("logs")})
+	got, err := h.Index.Holders(t.Context(), "acme", []unmanaged.ResourceKey{AWSKey("logs")})
 	must(t, "holders", err)
 
 	if len(got) != 0 {
@@ -106,6 +115,8 @@ func testContested(t *testing.T, h Harness) {
 
 	acme, other := h.Namespace(t, "acme"), h.Namespace(t, "other")
 	c, gone := Unit("acme", "c"), Unit("acme", "gone")
+
+	must(t, "link", h.Links.Link(t.Context(), "acme", "other", auditOf("", "server:link-namespaces")))
 
 	for _, w := range []struct {
 		fence namespace.Fence
@@ -128,7 +139,7 @@ func testContested(t *testing.T, h Harness) {
 	}
 
 	// c holds two keys in two entries. "across" is managed twice across two
-	// namespaces, and "single" is managed once.
+	// linked namespaces, and "single" is managed once.
 	must(t, "replace c", h.Index.ReplaceUnit(t.Context(), c, 2,
 		[]unmanaged.IndexEntry{entry(c, AWSKey("single")), entry(c, AWSKey("across"))}, acme))
 	must(t, "delete gone", h.Index.SetDeleted(t.Context(), gone, true, acme))

@@ -35,7 +35,7 @@ Dusty and of the MCP server.
    | Section | Answers | Action | Object | Default | Kinds |
    | --- | --- | --- | --- | --- | --- |
    | `identity` | For a unit: the reference, the tool, the tool's own name, the display name, the collection and the blueprint. For a resource: its type and key. | `unit:read` | the unit | yes | unit, resource |
-   | `context` | The resolved context with provenance, and the entries of each source. Also the shadowed API values and the output warnings (ADR 160). | the read action of each object of the chain | each object of the chain | yes | all |
+   | `context` | The resolved context with provenance, and the entries of each source. Also the shadowed API values and the output warnings (ADR 160). Owners and on-call resolve over every layer (decision 5). | the read action of each object of the chain | each object of the chain | yes | all |
    | `readme` | the `readme` output | `unit:read` | the unit | yes | unit |
    | `outputs` | the outputs of the latest state item, secret values masked | `unit:read` | the unit | no | unit |
    | `dependencies` | The units one hop upstream and one hop downstream, with the kind, the evidence and the times of each edge. Also the count of readers that are only principals. | `unit:read` | the unit and each unit that it names | yes | unit, resource |
@@ -68,6 +68,14 @@ Dusty and of the MCP server.
    section holds the action and the status of each object of its chain.
    For example, a caller with no `collection:read` gets the context of the
    unit and of the namespace, and a `denied` mark on the collection layer.
+   - **Owners and on-call resolve over every layer.** A denied layer still
+     gives its owners and its on-call, with their provenance. It gives
+     nothing else: no summary, runbook, links, readme, warnings, shadowed
+     values or entries. Owners and on-call are not sensitive, and during an
+     incident a person who reads a unit must get the right people to call,
+     also when their role does not hold `collection:read`.
+     `objectcontext.Resolve` holds the rule (`Layer.Hidden`), and a test
+     covers it. The section counts the denied layers in `hidden`.
 6. **Each tool keeps its words.** The `identity` and `changes` sections of a
    Pulumi stack say "stack", "update" and "preview". Those of an OpenTofu
    workspace say "workspace", "state version" and "plan". The document
@@ -94,27 +102,57 @@ Dusty and of the MCP server.
 11. **Versioned shape.** The document has `schemaVersion: 1`. Before 1.0 the
     shape can change (ADR 73). Each change raises the version, so a client
     can see it.
+12. **The types and the ports.** `pkg/objectcontext` holds them:
+    - **Response types.** `Document` has `schemaVersion`, `object` and
+      `sections`. Each section is an `Answer`, the envelope: `action`,
+      `object`, `status`, `hidden` (the count of objects left out), `data`,
+      and for `context` only, `layers` (`LayerStatus`: the kind, the action
+      and the status of each object of the chain). `data` is one type for
+      each section: `IdentityData`, `ContextData`, `ReadmeData`,
+      `OutputsData`, `DependenciesData`, `ChangesData`, `HealthData` and
+      `AuditData`. A `denied` or `unavailable` section has no `data`.
+    - **The service port.** `Reader.Read(ctx, Request)` answers a
+      `Document`. `NewReader(Sources)` builds the one implementation, so
+      every client gets the same answer.
+    - **The source ports.** `Sources` holds one port for each source of a
+      section: `InventoryReader` (the chain, the identity, the masked
+      outputs and the health), `ContextReader` (the stored entries, which
+      `Store` implements), `DependencyReader` (the edges one hop each way),
+      `HistoryReader` (the history items and the resource changes),
+      `JobReader` (the jobs), `FindingsReader` (the open findings by kind)
+      and `AuditReader` (the audit entries). A nil feature port makes its
+      sections `unavailable`, and a source answers `ErrUnavailable` when
+      it has no data.
+    - **The access port.** `Access` answers, for one caller, which layers of
+      the chain it can read (`Layers`), whether it holds the action of a
+      section (`Holds`), and which units of a list it can read
+      (`Readable`), in one query each.
+    - A table-driven test runs `Read` over fakes of each port: every section
+      with every action, a denied collection layer, no `unit:read`, a denied
+      audit section, features that are not on, a hidden neighbor, cut
+      outputs, a broken source and an object kind with one section.
 
 ## Example
 
 A short answer, for a caller that holds `unit:read` and `namespace:read`
-and does not hold `collection:read`:
+and does not hold `collection:read`. The owners still come from the
+collection (decision 5):
 
 ```json
 {
   "schemaVersion": 1,
-  "object": {"kind": "unit", "tool": "opentofu", "namespace": "acme", "unitId": "ws-9f2"},
+  "object": {"kind": "unit", "tool": "opentofu", "namespace": "acme", "unitID": "ws-9f2"},
   "sections": {
     "identity": {"action": "unit:read", "object": "unit", "status": "ok", "data": {"name": "network-prod", "collection": "network"}},
     "context": {
-      "action": "unit:read", "object": "each-layer", "status": "partial",
+      "action": "unit:read", "object": "each-layer", "status": "partial", "hidden": 1,
       "layers": [
         {"object": "unit", "action": "unit:read", "status": "ok"},
         {"object": "collection", "action": "collection:read", "status": "denied"},
         {"object": "namespace", "action": "namespace:read", "status": "ok"}
       ],
       "data": {
-        "owners": {"value": ["group:network"], "from": {"object": "unit", "source": "output"}},
+        "owners": {"value": ["group:network"], "from": {"object": "collection", "source": "api"}},
         "onCall": {"value": "pager:ops", "from": {"object": "namespace", "source": "api"}}
       }
     },

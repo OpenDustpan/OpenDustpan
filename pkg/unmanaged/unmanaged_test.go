@@ -117,17 +117,17 @@ func TestParseHeader(t *testing.T) {
 	}{
 		{
 			"valid",
-			`{"format":"opendustpan-scan-report","version":1,"scopes":[{"provider":"aws","scope":"123","regions":["eu-west-1"],"complete":true}]}`,
+			`{"format":"opendustpan-sweep-report","version":1,"scopes":[{"provider":"aws","scope":"123","regions":["eu-west-1"],"complete":true}]}`,
 			true,
 		},
 		{
 			"incomplete scope with its error",
-			`{"format":"opendustpan-scan-report","version":1,"scopes":[{"provider":"aws","scope":"123","complete":false,"error":"access denied in us-east-1"}]}`,
+			`{"format":"opendustpan-sweep-report","version":1,"scopes":[{"provider":"aws","scope":"123","complete":false,"error":"access denied in us-east-1"}]}`,
 			true,
 		},
 		{
 			"complete scope with an error",
-			`{"format":"opendustpan-scan-report","version":1,"scopes":[{"provider":"aws","scope":"123","complete":true,"error":"x"}]}`,
+			`{"format":"opendustpan-sweep-report","version":1,"scopes":[{"provider":"aws","scope":"123","complete":true,"error":"x"}]}`,
 			false,
 		},
 		{
@@ -137,13 +137,13 @@ func TestParseHeader(t *testing.T) {
 		},
 		{
 			"newer version",
-			`{"format":"opendustpan-scan-report","version":2,"scopes":[{"provider":"aws","scope":"1","complete":true}]}`,
+			`{"format":"opendustpan-sweep-report","version":2,"scopes":[{"provider":"aws","scope":"1","complete":true}]}`,
 			false,
 		},
-		{"no scope", `{"format":"opendustpan-scan-report","version":1,"scopes":[]}`, false},
+		{"no scope", `{"format":"opendustpan-sweep-report","version":1,"scopes":[]}`, false},
 		{
 			"unknown field",
-			`{"format":"opendustpan-scan-report","version":1,"scopes":[{"provider":"aws","scope":"1","complete":true}],"x":1}`,
+			`{"format":"opendustpan-sweep-report","version":1,"scopes":[{"provider":"aws","scope":"1","complete":true}],"x":1}`,
 			false,
 		},
 	}
@@ -215,33 +215,81 @@ func TestClassify(t *testing.T) {
 	other := holder("other", "x", false)
 	otherGone := holder("other", "y", true)
 
+	linked := []namespace.Name{"other"}
+	stranger := holder("stranger", "z", false)
+	strangerGone := holder("stranger", "w", true)
+
 	cases := []struct {
 		name     string
 		holders  []unmanaged.Holder
+		linked   []namespace.Name
 		want     unmanaged.Class
 		observed bool
 	}{
-		{"one live unit", []unmanaged.Holder{a}, unmanaged.ClassManaged, true},
-		{"two live units", []unmanaged.Holder{a, b}, unmanaged.ClassManagedTwice, true},
-		{"two live units, no scan", []unmanaged.Holder{a, b}, unmanaged.ClassManagedTwice, false},
-		{"one unit with two resources", []unmanaged.Holder{a, aRes2}, unmanaged.ClassManaged, true},
-		{"a live unit here and one elsewhere", []unmanaged.Holder{a, other}, unmanaged.ClassManagedTwice, true},
-		{"a live unit and a deleted unit", []unmanaged.Holder{a, gone}, unmanaged.ClassManaged, true},
-		{"only elsewhere", []unmanaged.Holder{other}, unmanaged.ClassElsewhere, true},
-		{"only a deleted unit", []unmanaged.Holder{gone}, unmanaged.ClassLeftBehind, false},
+		{"one live unit", []unmanaged.Holder{a}, linked, unmanaged.ClassManaged, true},
+		{"two live units", []unmanaged.Holder{a, b}, linked, unmanaged.ClassManagedTwice, true},
+		{"two live units, no sweep", []unmanaged.Holder{a, b}, linked, unmanaged.ClassManagedTwice, false},
+		{"one unit with two resources", []unmanaged.Holder{a, aRes2}, linked, unmanaged.ClassManaged, true},
 		{
-			"a deleted unit here and a live unit elsewhere",
+			"a live unit here and one in a linked namespace",
+			[]unmanaged.Holder{a, other},
+			linked,
+			unmanaged.ClassManagedTwice,
+			true,
+		},
+		{"a live unit and a deleted unit", []unmanaged.Holder{a, gone}, linked, unmanaged.ClassManaged, true},
+		{"only in a linked namespace", []unmanaged.Holder{other}, linked, unmanaged.ClassElsewhere, true},
+		{"only a deleted unit", []unmanaged.Holder{gone}, linked, unmanaged.ClassLeftBehind, false},
+		{
+			"a deleted unit here and a live unit in a linked namespace",
 			[]unmanaged.Holder{gone, other},
+			linked,
 			unmanaged.ClassElsewhere,
 			true,
 		},
-		{"only a deleted unit elsewhere", []unmanaged.Holder{otherGone}, unmanaged.ClassElsewhere, true},
-		{"no holder, seen by a scan", nil, unmanaged.ClassNotInAnyUnit, true},
-		{"no holder, no scan", nil, unmanaged.ClassNone, false},
+		{
+			"only a deleted unit in a linked namespace",
+			[]unmanaged.Holder{otherGone},
+			linked,
+			unmanaged.ClassElsewhere,
+			true,
+		},
+		{"no holder, seen by a sweep", nil, linked, unmanaged.ClassNotInAnyUnit, true},
+		{"no holder, no sweep", nil, linked, unmanaged.ClassNone, false},
+		// A namespace that is not linked never changes the class.
+		{
+			"a live unit here and one in a namespace that is not linked",
+			[]unmanaged.Holder{a, stranger},
+			linked,
+			unmanaged.ClassManaged,
+			true,
+		},
+		{
+			"only in a namespace that is not linked",
+			[]unmanaged.Holder{stranger},
+			linked,
+			unmanaged.ClassNotInAnyUnit,
+			true,
+		},
+		{
+			"a deleted unit here and a live unit in a namespace that is not linked",
+			[]unmanaged.Holder{gone, stranger},
+			linked,
+			unmanaged.ClassLeftBehind,
+			true,
+		},
+		{
+			"only a deleted unit in a namespace that is not linked",
+			[]unmanaged.Holder{strangerGone},
+			linked,
+			unmanaged.ClassNone,
+			false,
+		},
+		{"no link at all", []unmanaged.Holder{a, other}, nil, unmanaged.ClassManaged, true},
 	}
 
 	for _, tc := range cases {
-		if got := unmanaged.Classify("acme", tc.observed, tc.holders); got != tc.want {
+		if got := unmanaged.Classify("acme", tc.linked, tc.observed, tc.holders); got != tc.want {
 			t.Errorf("%s: Classify = %q, want %q", tc.name, got, tc.want)
 		}
 	}

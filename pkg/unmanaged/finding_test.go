@@ -35,7 +35,8 @@ func TestNext(t *testing.T) {
 			"observe": ignored, "reclassify": open, "unignore": open, "ignore-expired": open, "resolve": resolved,
 		},
 		pending: {
-			"observe": pending, "reclassify": open, "action-ended": open, "resolve": resolved,
+			"observe": pending, "reclassify": open, "action-ended": open, "resolve": resolved, "cancel": open,
+			"pending-expired": open,
 		},
 		resolved: {
 			"observe": open, "reclassify": open, "resolve": resolved,
@@ -45,6 +46,7 @@ func TestNext(t *testing.T) {
 	events := []unmanaged.Event{
 		unmanaged.EventObserve, unmanaged.EventReclassify, unmanaged.EventIgnore, unmanaged.EventUnignore,
 		unmanaged.EventIgnoreExpired, unmanaged.EventAct, unmanaged.EventActionEnded, unmanaged.EventResolve,
+		unmanaged.EventCancel, unmanaged.EventPendingExpired,
 	}
 
 	for from, row := range want {
@@ -64,14 +66,14 @@ func TestNext(t *testing.T) {
 	}
 }
 
-// scanStep is one event on a scan of one kind in one status.
+// scanStep is one event on a sweep of one kind in one status.
 type scanStep struct {
 	kind unmanaged.ScanKind
 	from unmanaged.ScanStatus
 	ev   unmanaged.ScanEvent
 }
 
-// scanTable returns the state table of a scan, written out apart from the
+// scanTable returns the state table of a sweep, written out apart from the
 // code. A step that is not in the table fails with ErrTransition.
 func scanTable() map[scanStep]unmanaged.ScanStatus {
 	type key = scanStep
@@ -103,7 +105,7 @@ func scanTable() map[scanStep]unmanaged.ScanStatus {
 	return want
 }
 
-// TestNextScan checks every pair of status and event of a scan of each kind
+// TestNextScan checks every pair of status and event of a sweep of each kind
 // against the table of scanTable.
 func TestNextScan(t *testing.T) {
 	t.Parallel()
@@ -153,6 +155,7 @@ func TestSpecOf(t *testing.T) {
 		{unmanaged.ActionChooseOwner, unmanaged.KindManagedTwice, true},
 		{unmanaged.ActionChooseOwner, unmanaged.KindNotInAnyUnit, false},
 		{unmanaged.ActionIgnore, unmanaged.KindManagedTwice, true},
+		{unmanaged.ActionCancel, unmanaged.KindLeftBehind, true},
 		{"adopt", unmanaged.KindNotInAnyUnit, false},
 	}
 
@@ -235,6 +238,7 @@ func TestIgnoreRule(t *testing.T) {
 		Namespace: "",
 		Status:    "",
 		Evidence:  "",
+		Scope:     "123456789012",
 		Region:    "",
 		Name:      "",
 		Scan:      "",
@@ -481,10 +485,9 @@ func TestTargetValidate(t *testing.T) {
 	t.Parallel()
 
 	good := unmanaged.Target{
-		Namespace: "acme", Name: "aws-prod", Pool: "scanners", Credentials: unmanaged.CredentialsRunner,
+		Namespace: "acme", Name: "aws-prod", Pool: "sweepers",
 		Scopes:  []unmanaged.TargetScope{{Provider: "aws", Scope: "123456789012", Regions: []string{"eu-west-1"}}},
-		Command: []string{"inventory-scan", "--format", "opendustpan"}, Every: 24 * time.Hour,
-		Profile: "",
+		Command: []string{"inventory-sweep", "--format", "opendustpan"}, Every: 24 * time.Hour,
 		Timeout: 0,
 		Enabled: false,
 	}
@@ -496,23 +499,35 @@ func TestTargetValidate(t *testing.T) {
 	}{
 		{"valid", func(*unmanaged.Target) {}, true},
 		{"on request only", func(t *unmanaged.Target) { t.Every = 0 }, true},
-		{"absolute program", func(t *unmanaged.Target) { t.Command = []string{"/usr/local/bin/scan"} }, true},
-		{"relative program", func(t *unmanaged.Target) { t.Command = []string{"./scan"} }, false},
-		{"program path not clean", func(t *unmanaged.Target) { t.Command = []string{"/usr/bin/../bin/scan"} }, false},
+		{"absolute program", func(t *unmanaged.Target) { t.Command = []string{"/usr/local/bin/sweep"} }, true},
+		{"relative program", func(t *unmanaged.Target) { t.Command = []string{"./sweep"} }, false},
+		{"program path not clean", func(t *unmanaged.Target) { t.Command = []string{"/usr/bin/../bin/sweep"} }, false},
 		{"no command", func(t *unmanaged.Target) { t.Command = nil }, false},
-		{"NUL byte", func(t *unmanaged.Target) { t.Command = []string{"scan", "a\x00b"} }, false},
+		{"NUL byte", func(t *unmanaged.Target) { t.Command = []string{"sweep", "a\x00b"} }, false},
 		{"schedule too often", func(t *unmanaged.Target) { t.Every = time.Minute }, false},
 		{"no pool", func(t *unmanaged.Target) { t.Pool = "" }, false},
-		{"profile with runner credentials", func(t *unmanaged.Target) { t.Profile = "aws-read" }, false},
-		{"profile credentials", func(t *unmanaged.Target) {
-			t.Credentials, t.Profile = unmanaged.CredentialsProfile, "aws-read"
-		}, true},
+		{"a password flag", func(t *unmanaged.Target) { t.Command = []string{"sweep", "--password", "x"} }, false},
 		{
-			"profile credentials with no profile",
-			func(t *unmanaged.Target) { t.Credentials = unmanaged.CredentialsProfile },
+			"a token flag with a value",
+			func(t *unmanaged.Target) { t.Command = []string{"sweep", "--api-key=x"} },
 			false,
 		},
-		{"stored credentials", func(t *unmanaged.Target) { t.Credentials = "static" }, false},
+		{
+			"a credential assignment",
+			func(t *unmanaged.Target) { t.Command = []string{"env", "AWS_SECRET_ACCESS_KEY=x", "sweep"} },
+			false,
+		},
+		{
+			"a suffix of the rule",
+			func(t *unmanaged.Target) { t.Command = []string{"sweep", "--github-token", "x"} },
+			false,
+		},
+		{"a plain flag", func(t *unmanaged.Target) { t.Command = []string{"sweep", "--region=eu-west-1"} }, true},
+		{"a path argument", func(t *unmanaged.Target) { t.Command = []string{"sweep", "/etc/sweep/token"} }, true},
+		{"a scope twice", func(t *unmanaged.Target) { t.Scopes = append(t.Scopes, t.Scopes[0]) }, false},
+		{"an empty region", func(t *unmanaged.Target) {
+			t.Scopes = []unmanaged.TargetScope{{Provider: "aws", Scope: "1", Regions: []string{""}}}
+		}, false},
 		{"no scope", func(t *unmanaged.Target) { t.Scopes = nil }, false},
 		{"timeout too long", func(t *unmanaged.Target) { t.Timeout = 25 * time.Hour }, false},
 	}
@@ -520,6 +535,7 @@ func TestTargetValidate(t *testing.T) {
 	for _, tc := range cases {
 		target := good
 		target.Command = append([]string(nil), good.Command...)
+		target.Scopes = append([]unmanaged.TargetScope(nil), good.Scopes...)
 		tc.change(&target)
 
 		err := target.Validate()

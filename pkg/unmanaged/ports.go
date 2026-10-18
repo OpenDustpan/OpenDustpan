@@ -114,15 +114,24 @@ type Contest struct {
 // managed resources in the latest state item of each unit. After each new
 // latest state item, a durable operation reads the masked state (the server
 // never reads plain secret values for it) and replaces the entries of the
-// unit. Every write checks the fence of the namespace of the unit. Every
-// adapter runs the suite in unmanagedtest.
+// unit. The operation has one start key for each unit, so state items that
+// arrive while it waits or runs coalesce: one run reads the latest item and
+// replaces the entries once. Every write checks the fence of the namespace of
+// the unit. Every adapter runs the suite in unmanagedtest.
+//
+// The reads see the units of one namespace and of the namespaces linked with
+// it (Links), never any other. So a namespace cannot learn which keys the
+// units of another namespace hold, and cannot change the findings of a
+// namespace that did not link it.
 type Index interface {
 	// ReplaceUnit replaces the entries of unit with entries, from the state
 	// item with order seq. When the stored entries come from a higher seq,
 	// it changes nothing and returns nil. An empty entries deletes the
-	// entries of the unit. It returns ErrInvalidKey for an invalid key,
-	// graph.ErrInvalidUnit, ErrLimit above MaxIndexEntries, and
-	// namespace.ErrFenced.
+	// entries of the unit. A SQL adapter writes the difference: it deletes
+	// the entries that are gone, inserts the new ones and leaves the others,
+	// so a state item that changes one resource of 100,000 writes one row.
+	// It returns ErrInvalidKey for an invalid key, graph.ErrInvalidUnit,
+	// ErrLimit above MaxIndexEntries, and namespace.ErrFenced.
 	ReplaceUnit(ctx context.Context, unit graph.Unit, seq int64, entries []IndexEntry, fence namespace.Fence) error
 	// SetDeleted marks the entries of unit as deleted or live. The soft
 	// delete and the restore of the unit call it in their own transaction.
@@ -132,23 +141,49 @@ type Index interface {
 	// name the unit stay: they are namespace data. It returns
 	// namespace.ErrFenced.
 	DropUnit(ctx context.Context, unit graph.Unit, fence namespace.Fence) error
-	// Holders returns the holders of each key of keys, in every namespace,
-	// ordered by unit. A key with no holder is not in the map. keys holds 1
-	// to MaxLookup normalized keys. It returns ErrInvalidKey.
-	Holders(ctx context.Context, keys []ResourceKey) (map[ResourceKey][]Holder, error)
+	// Holders returns the holders of each key of keys in namespace ns and in
+	// the namespaces linked with ns, ordered by unit. A holder of any other
+	// namespace is never in the answer. A key with no such holder is not in
+	// the map. keys holds 1 to MaxLookup normalized keys. It returns
+	// ErrInvalidKey.
+	Holders(ctx context.Context, ns namespace.Name, keys []ResourceKey) (map[ResourceKey][]Holder, error)
 	// Contested returns the contests of namespace ns: each key that a unit
-	// of ns holds, and that another distinct live unit of any namespace also
-	// holds, or that only deleted units hold. It orders them by
-	// ResourceKey.String, starts after the key after (the zero key for the
-	// first page), and returns at most limit, from 1 to MaxLookup. It
-	// returns ErrInvalidKey for an invalid after.
+	// of ns holds, and that another distinct live unit of ns or of a
+	// namespace linked with ns also holds, or that only deleted units hold.
+	// Holders of a contest are of ns and of the linked namespaces only. It
+	// orders them by ResourceKey.String, starts after the key after (the zero
+	// key for the first page), and returns at most limit, from 1 to
+	// MaxLookup. It returns ErrInvalidKey for an invalid after.
 	Contested(ctx context.Context, ns namespace.Name, after ResourceKey, limit int) ([]Contest, error)
 }
 
-// Observation is the class of one key in one scan. Record is the record of a
-// cloud scan, nil for a state check. Holders are the holders of the key in
-// every namespace; the store names in the finding only those of the
-// namespace of the scan.
+// Links is the persistence port of the links between namespaces. A link lets
+// the classification of each of two namespaces read the units of the other:
+// a resource that units of both hold is managed twice in both. Two teams that
+// share one cloud account ask an installation administrator for a link, who
+// needs ActionServerLinkNamespaces. A link is installation data: its writes
+// append their audit entry in the same transaction, and carry no namespace
+// fence. Every adapter runs the suite in unmanagedtest.
+type Links interface {
+	// Link links a and b, in both directions, and appends e. A link that
+	// exists is not an error. It returns ErrInvalidLink for a namespace
+	// linked with itself and ErrNotFound for an unknown namespace.
+	Link(ctx context.Context, a, b namespace.Name, e audit.Entry) error
+	// Unlink removes the link of a and b and appends e. The findings that
+	// the link made stay until the next state check, which reads the units
+	// of each namespace alone. It returns ErrNotFound when no link exists.
+	Unlink(ctx context.Context, a, b namespace.Name, e audit.Entry) error
+	// Linked returns the namespaces linked with ns, ordered by name.
+	Linked(ctx context.Context, ns namespace.Name) ([]namespace.Name, error)
+}
+
+// Observation is the class of one key in one sweep. Record is the record of a
+// cloud sweep, nil for a state check; the match sets its Scope to the scope
+// that RecordScope gives, and the finding takes it. A state check gives the
+// scope of the key (Scope). Holders are the holders of the key that
+// Index.Holders gives: of the namespace of the sweep and of the namespaces
+// linked with it. The store names in the finding only those of the namespace
+// of the sweep, and sets Finding.Elsewhere for the others.
 type Observation struct {
 	Record  *Record
 	Key     ResourceKey
@@ -178,12 +213,12 @@ type Change struct {
 // FindingStore is the persistence port of findings and ignore rules. Every
 // write checks the fence of the namespace in the same transaction. A person's
 // action appends its audit entry in the same transaction. The writes of a
-// scan append no entry for each finding: the scan appends one entry with its
+// sweep append no entry for each finding: the sweep appends one entry with its
 // counts when it ends. Every adapter runs the suite in unmanagedtest.
 //
 //nolint:interfacebloat // A persistence port whose methods share one transaction scope: the fence, the state table and the findings of a namespace.
 type FindingStore interface {
-	// Record writes the observations of scan. The scan must exist and have
+	// Record writes the observations of sweep. The sweep must exist and have
 	// the status ScanMatching. For each observation:
 	//   - A class with a finding and no finding for the key: a new open
 	//     finding, then each ignore rule of the namespace that matches it
@@ -194,22 +229,25 @@ type FindingStore interface {
 	//   - ClassElsewhere: EventResolve on the finding of the key, if any.
 	//   - ClassNone: nothing.
 	// The evidence becomes EvidenceScan when the observation has a record.
-	// A second call with the same scan and key changes nothing. Each
+	// A second call with the same sweep and key changes nothing. Each
 	// observation has a transition in the state table. It returns the counts
-	// of the batch, ErrInvalidKey, ErrNotFound for an unknown scan,
-	// ErrTransition for a scan that is not matching, and
+	// of the batch, ErrInvalidKey, ErrNotFound for an unknown sweep,
+	// ErrTransition for a sweep that is not matching, and
 	// namespace.ErrFenced.
 	Record(ctx context.Context, scan Scan, obs []Observation, now time.Time, fence namespace.Fence) (ScanCounts, error)
-	// ResolveUnseen applies EventResolve, at the end of the match of scan,
-	// to each finding of the namespace that the scan did not observe:
-	//   - for a cloud scan, a finding of the kind not in any unit or left
-	//     behind whose scope is a complete scope of the scan;
+	// ResolveUnseen applies EventResolve, at the end of the match of sweep,
+	// to each finding of the namespace that the sweep did not observe:
+	//   - for a cloud sweep, a finding of the kind not in any unit or left
+	//     behind whose scope is a complete scope of the sweep;
 	//   - for a state check, a finding of the kind managed twice. A finding
 	//     left behind does not resolve here: after the purge of its unit no
-	//     unit holds the key, and only a scan can tell that the resource is
+	//     unit holds the key, and only a sweep can tell that the resource is
 	//     gone. The match of a state check observes the key of each open
 	//     finding again through Index.Holders, so a key that one live unit
 	//     now holds resolves through Record.
+	// A cloud sweep resolves a finding only when a complete scope of the
+	// sweep covers it (Covers): the same provider and account scope, and a
+	// region of the scope when the scope lists regions.
 	// It returns the count of resolved findings and namespace.ErrFenced.
 	ResolveUnseen(ctx context.Context, scan Scan, now time.Time, fence namespace.Fence) (int64, error)
 	// Get returns the finding id of namespace ns, or ErrNotFound.
@@ -229,6 +267,10 @@ type FindingStore interface {
 	// ns whose ignore ended at or before now. It returns the count, and
 	// namespace.ErrFenced.
 	ExpireIgnores(ctx context.Context, ns namespace.Name, now time.Time, fence namespace.Fence) (int64, error)
+	// ExpirePending applies EventPendingExpired to each pending finding of
+	// ns whose action started at or before now minus MaxPending. It returns
+	// the count, and namespace.ErrFenced.
+	ExpirePending(ctx context.Context, ns namespace.Name, now time.Time, fence namespace.Fence) (int64, error)
 	// PutRule creates the rule r and appends e. It returns ErrInvalidRule,
 	// ErrInvalidReason, ErrAlreadyExists for a taken ID, ErrLimit above
 	// MaxRules, and namespace.ErrFenced. A rule applies to findings that
@@ -242,47 +284,50 @@ type FindingStore interface {
 	Rules(ctx context.Context, ns namespace.Name) ([]IgnoreRule, error)
 }
 
-// ScanUpdate is what an event of a scan writes beside its status.
+// ScanUpdate is what an event of a sweep writes beside its status.
 type ScanUpdate struct {
 	Scopes []ReportScope
 	Counts *ScanCounts
 	Reason string
 }
 
-// ScanStore is the persistence port of scan targets and scans. Every write
+// ScanStore is the persistence port of sweep targets and sweeps. Every write
 // checks the fence of the namespace in the same transaction. Every adapter
 // runs the suite in unmanagedtest.
 type ScanStore interface {
 	// CreateTarget creates t and appends e. It returns ErrInvalidTarget,
-	// also for a pool of another namespace or a pool that runs jobs, not
-	// scans. It returns ErrAlreadyExists, ErrLimit above MaxTargets, and
+	// also for a pool of another namespace or a pool whose purpose is jobs,
+	// not sweeps. The purpose of a pool is set when the pool is made and
+	// never changes, so a target never ends up on a pool that applies
+	// changes. It returns ErrAlreadyExists, ErrLimit above MaxTargets, and
 	// namespace.ErrFenced.
 	CreateTarget(ctx context.Context, t Target, fence namespace.Fence, e audit.Entry) error
 	// UpdateTarget replaces the target of the same name and appends e. A
-	// scan that runs keeps the command and the scopes that it started with.
-	// It returns ErrInvalidTarget, ErrNotFound and namespace.ErrFenced.
+	// sweep that runs keeps the command and the scopes that it started with.
+	// It returns ErrInvalidTarget, also for a pool as CreateTarget refuses
+	// it, ErrNotFound and namespace.ErrFenced.
 	UpdateTarget(ctx context.Context, t Target, fence namespace.Fence, e audit.Entry) error
-	// DeleteTarget deletes the target name of ns, cancels its scan that did
-	// not end, and appends e. The findings of its scans stay. It returns
+	// DeleteTarget deletes the target name of ns, cancels its sweep that did
+	// not end, and appends e. The findings of its sweeps stay. It returns
 	// ErrNotFound and namespace.ErrFenced.
 	DeleteTarget(ctx context.Context, ns namespace.Name, name string, fence namespace.Fence, e audit.Entry) error
 	// Targets returns the targets of ns ordered by name.
 	Targets(ctx context.Context, ns namespace.Name) ([]Target, error)
 	// StartScan stores s with the status ScanQueued and appends e. For a
-	// cloud scan, it starts the durable operation that a runner of the pool
+	// cloud sweep, it starts the durable operation that a runner of the pool
 	// of the target claims, in the same transaction. It returns
-	// ErrScanBusy when the target has a scan that did not end, ErrNotFound
+	// ErrScanBusy when the target has a sweep that did not end, ErrNotFound
 	// for an unknown target, and namespace.ErrFenced.
 	StartScan(ctx context.Context, s Scan, fence namespace.Fence, e audit.Entry) (Scan, error)
-	// AdvanceScan applies ev with u to the scan id of ns, by NextScan. At
-	// an end status, it appends e with the counts of the scan. It returns
-	// the new scan, ErrNotFound, ErrTransition and namespace.ErrFenced.
+	// AdvanceScan applies ev with u to the sweep id of ns, by NextScan. At
+	// an end status, it appends e with the counts of the sweep. It returns
+	// the new sweep, ErrNotFound, ErrTransition and namespace.ErrFenced.
 	AdvanceScan(ctx context.Context, ns namespace.Name, id string, ev ScanEvent, u ScanUpdate,
 		fence namespace.Fence, e audit.Entry) (Scan, error)
-	// Scan returns the scan id of ns, or ErrNotFound.
+	// Scan returns the sweep id of ns, or ErrNotFound.
 	Scan(ctx context.Context, ns namespace.Name, id string) (Scan, error)
-	// Scans returns the scans of ns for target, newest first, or of every
-	// target when target is empty. It starts after the scan ID after and
+	// Scans returns the sweeps of ns for target, newest first, or of every
+	// target when target is empty. It starts after the sweep ID after and
 	// returns at most limit, from 1 to MaxPage.
 	Scans(ctx context.Context, ns namespace.Name, target, after string, limit int) ([]Scan, error)
 }

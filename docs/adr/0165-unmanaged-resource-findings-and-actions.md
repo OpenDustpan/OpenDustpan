@@ -8,7 +8,8 @@ On 17 October 2026 the project owner listed the actions on a finding:
 import into a unit, ignore with a reason, write code, delete, and choose
 the owner of a resource that is managed twice.
 
-ADR 163 classifies each resource key, and ADR 164 runs the scans. This ADR
+ADR 163 classifies each resource key, and ADR 164 runs the sweeps. The
+owner named the feature **Sweep**. This ADR
 decides the finding: its record, its states, its actions, the ignore rules,
 the audit entries and what the console needs.
 
@@ -28,10 +29,12 @@ Facts:
 
 1. **One finding for each key in a namespace.** A finding
    (`unmanaged.Finding`) holds the kind, the resource key, the cloud type,
-   the region, the name and the tags from the last scan, the units of the
-   namespace that hold the key (at most 20, the others counted), a flag when
-   a unit of another namespace also holds the key, the evidence (`state` or
-   `scan`), the status, the first and the last time seen, and the last scan.
+   the account scope (ADR 164 decision 13), the region, the name and the
+   tags from the last sweep, the units of the namespace that hold the key
+   (at most 20, the others counted), a flag when a unit of a linked
+   namespace also holds the key (ADR 163 decision 9), the evidence (`state`
+   or `sweep`), the status, the first and the last time seen, and the last
+   sweep.
    A finding is namespace data, so its writes carry the fence and a backup
    of the namespace holds it.
 2. **A finding outlives its units.** A purge of a unit deletes its index
@@ -41,7 +44,7 @@ Facts:
 
 3. **Four statuses.** `open` waits for a person. `ignored` has a reason.
    `pending` waits for an action that started. `resolved` has exactly one
-   managing unit now, or a complete scan no longer sees the resource.
+   managing unit now, or a complete sweep no longer sees the resource.
 4. **One table.** `unmanaged.Next` is the only place that decides a
    transition. A test checks each pair of status and event against the
    table below, written out apart from the code. A pair that the table does
@@ -62,6 +65,8 @@ Facts:
    | pending | observe | pending |
    | pending | reclassify | open |
    | pending | action-ended | open |
+   | pending | cancel | open |
+   | pending | pending-expired | open |
    | pending | resolve | resolved |
    | resolved | observe | open |
    | resolved | reclassify | open |
@@ -74,6 +79,17 @@ Facts:
      back.
    - A **resolve** wins over an ignore and over a pending action. The
      question is gone.
+   - A **cancel** is a person with `namespace:triage-unmanaged` who stops
+     the wait of a pending finding, for example after a choice of owner that
+     was a mistake. It does not cancel the job of the action: the person
+     cancels the job with the actions of the job (ADR 103). The end of that
+     job then finds the finding open, and its `action-ended` changes nothing.
+   - A **pending-expired** ends a wait after 15 days
+     (`unmanaged.MaxPending`). The schedule of ADR 164 applies it every 15
+     minutes (`FindingStore.ExpirePending`). So an action whose job or sweep
+     never came does not hide a finding for ever. The time is longer than the
+     14 days after which a job that waits for a state version expires
+     (ADR 101), so the job ends first, with `action-ended`.
 5. **The status that the caller read.** An action names the status that the
    person saw. The store refuses the action when the status changed
    (`ErrStatusChanged`), so two people never act on one finding at the same
@@ -89,24 +105,25 @@ Facts:
    | --- | --- | --- | --- |
    | `import` | not in any unit, left behind | Starts a job on a target unit that brings the resource into its state. The finding is `pending` until the index shows the key in the target unit. | `unit:write` on the target unit |
    | `write-code` | not in any unit, left behind | Starts a job on a target unit that generates the code of the resource and delivers it as a review request. | `unit:write` on the target unit |
-   | `delete` | not in any unit, left behind | Records the decision to delete, with the person. For a unit in its recovery window, it can also start the restore of the unit and a `destroy` job. The finding is `pending` until a complete scan no longer sees the resource. | `unit:restore` and `unit:write` on the deleted unit, for the restore |
+   | `delete` | not in any unit, left behind | Records the decision to delete, with the person. For a unit in its recovery window, it can also start the restore of the unit and a `destroy` job. The finding is `pending` until a complete sweep no longer sees the resource. | `unit:restore` and `unit:write` on the deleted unit, for the restore |
    | `choose-owner` | managed twice | Records the unit that keeps the resource. Starts a job on each other unit that deletes the resource from its state and leaves the cloud resource. | `unit:write` on each unit that gives up the resource |
    | `ignore` | all | Sets the status `ignored` with a reason and an optional end. | nothing |
+   | `cancel` | all | Stops the wait of a pending finding, which opens again. The job of the action, if any, goes on. | nothing |
 
    `unmanaged.SpecOf` refuses an action that does not apply to the kind of
    the finding (`ErrActionKind`). A test fails for an action that starts a
    job and does not check `unit:write`.
 7. **The server never deletes a cloud resource.** `delete` records a decision
    and, for a resource that is not in any unit, shows the command of the
-   cloud that deletes it. A scan pool has read-only credentials (ADR 164), so
-   a delete from the scan pool is not possible, and it must stay so. A
+   cloud that deletes it. A sweep pool uses a read-only identity (ADR 164), so
+   a delete from the sweep pool is not possible, and it must stay so. A
    delete through a tool run is an open question.
 8. **Jobs.** `import`, `write-code` and `choose-owner` start jobs through
    `job.Service.Start` (ADR 100 decision 17) with the person as the actor.
    The job record names the finding. When the job fails or a person cancels
    it, the finding gets `action-ended` and opens again. When the job
    succeeds, the next state item updates the index, and the next state check
-   or scan resolves the finding. These three actions need job operations
+   or sweep resolves the finding. These three actions need job operations
    that ADR 100 does not have yet (see "Requests to other designs"). Until
    they exist, the three actions are not offered. The console shows the
    commands of each tool that do the same work by hand:
@@ -140,10 +157,10 @@ Facts:
 ### Ports
 
 13. **`unmanaged.FindingStore`** holds findings and rules: `Record`,
-    `ResolveUnseen`, `Get`, `List`, `Act`, `ExpireIgnores`, `PutRule`,
-    `DeleteRule` and `Rules`. Each write carries the fence. An action of a
+    `ResolveUnseen`, `Get`, `List`, `Act`, `ExpireIgnores`, `ExpirePending`,
+    `PutRule`, `DeleteRule` and `Rules`. Each write carries the fence. An action of a
     person appends its audit entry in the same transaction. The writes of a
-    scan append no entry for each finding: the end of the scan appends one
+    sweep append no entry for each finding: the end of the sweep appends one
     entry with its counts. The suite in `unmanagedtest` states the
     behavior, and a reference adapter in memory runs it today.
 14. **Bounds.** A page of findings is at most 500. One call to `Record` takes
@@ -156,13 +173,20 @@ Facts:
     | Operation | Action | Object |
     | --- | --- | --- |
     | List and read findings and rules | `namespace:read-unmanaged` (new) | namespace |
-    | Ignore, stop an ignore, choose an owner, delete, import, write code | `namespace:triage-unmanaged` (new) | namespace |
+    | Ignore, stop an ignore, cancel a pending action, choose an owner, delete, import, write code | `namespace:triage-unmanaged` (new) | namespace |
     | Create or delete an ignore rule | `namespace:triage-unmanaged` (new) | namespace |
     | The jobs of an action | the actions of the job (ADR 103) | each unit that the job changes |
 
     A finding names only the units that the caller can read (`unit:read`), and
     counts the others. The `health` section of ADR 161 counts the open
     findings that name a unit, with `unit:read` on that unit only.
+    - **A deliberate exposure.** These counts reach a caller who holds
+      `unit:read` and not `namespace:read-unmanaged`. The caller learns how
+      many open findings of each kind name the unit, and nothing else: no
+      key, no type, no other unit and no finding ID. A person who reads a
+      unit must see that it shares a resource with another unit before a
+      change, and the counts are the smallest answer that says so. To read
+      the findings themselves, the caller needs `namespace:read-unmanaged`.
 16. **Audit entries.** Each action appends one entry: the action, the finding
     ID, the resource key, the old and the new status, the reason of an
     ignore, the chosen unit of `choose-owner`, the target unit of `import` and
@@ -181,17 +205,17 @@ Facts:
 18. The console needs:
     - a page of findings for each namespace, grouped by kind, with filters by
       status, unit, provider, account scope and type, and counts of each,
-    - on each finding: the evidence, the units, the mark "also in another
-      namespace", the first and the last time seen, the last scan and the
+    - on each finding: the evidence, the units, the mark "also in a linked
+      namespace", the first and the last time seen, the last sweep and the
       history of its actions from the audit log,
     - the actions of each kind, with the commands of each tool when the job
       operation does not exist,
     - a choice of owner that shows the two units side by side, with their
       owners and on-call (ADR 160) and their last change,
     - the ignore rules with the count of findings that each one ignored,
-    - the scan targets and their scans, with the counts, the scopes that
+    - the sweep targets and their sweeps, with the counts, the scopes that
       were not complete and their errors (ADR 164),
-    - a warning on each scan target that the server cannot prove its
+    - a warning on each sweep target that the server cannot prove its
       credentials read-only,
     - on the page of a unit, the count of open findings that name it, and on
       the graph (ADR 162), a mark between two units that manage one
@@ -204,7 +228,7 @@ Facts:
 - Findings that are left behind and managed twice work on the first day,
   with no runner. Actions that need jobs wait for the job operations. Until
   then, the console shows the commands.
-- No finding closes because a scanner failed. Only a complete scope or a
+- No finding closes because a sweeper program failed. Only a complete scope or a
   state that one unit manages closes a finding.
 - An ignore always has a reason in the audit log.
 

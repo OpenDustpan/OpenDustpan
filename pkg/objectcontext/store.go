@@ -56,5 +56,11 @@ type Store interface {
 	// name owner, ordered by Ref.Key and then API before output. It starts
 	// after the key after and returns at most limit entries, from 1 to
 	// MaxBatch. It returns ErrInvalidContext for an invalid owner or limit.
+	//
+	// ByOwner does not resolve inherited owners. It matches the entries that
+	// name owner themselves. A unit that sets no owners and gets owner from
+	// its collection or its namespace is not in the answer: the answer holds
+	// the entry of that collection or namespace, and the caller lists the
+	// units of a collection to expand it.
 	ByOwner(ctx context.Context, ns namespace.Name, owner, after string, limit int) ([]Entry, error)
 }

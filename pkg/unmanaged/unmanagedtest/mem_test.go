@@ -27,7 +27,8 @@ type indexed struct {
 // each case runs before any SQL adapter exists.
 type mem struct {
 	fences   map[namespace.Name]int64
-	pools    map[namespace.Name]map[string]bool
+	pools    map[namespace.Name]map[string]string
+	links    map[namespace.Name]map[namespace.Name]bool
 	index    map[graph.Unit]*indexed
 	findings map[namespace.Name]map[unmanaged.ResourceKey]*unmanaged.Finding
 	seen     map[string]map[unmanaged.ResourceKey]bool
@@ -42,7 +43,8 @@ type mem struct {
 func newMem() *mem {
 	return &mem{
 		fences:   map[namespace.Name]int64{},
-		pools:    map[namespace.Name]map[string]bool{},
+		pools:    map[namespace.Name]map[string]string{},
+		links:    map[namespace.Name]map[namespace.Name]bool{},
 		index:    map[graph.Unit]*indexed{},
 		findings: map[namespace.Name]map[unmanaged.ResourceKey]*unmanaged.Finding{},
 		seen:     map[string]map[unmanaged.ResourceKey]bool{},
@@ -137,6 +139,7 @@ func (m *mem) DropUnit(_ context.Context, unit graph.Unit, fence namespace.Fence
 
 func (m *mem) Holders(
 	_ context.Context,
+	ns namespace.Name,
 	keys []unmanaged.ResourceKey,
 ) (map[unmanaged.ResourceKey][]unmanaged.Holder, error) {
 	if len(keys) == 0 || len(keys) > unmanaged.MaxLookup {
@@ -152,7 +155,7 @@ func (m *mem) Holders(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	all := m.allHolders()
+	all := m.allHolders(ns)
 	out := map[unmanaged.ResourceKey][]unmanaged.Holder{}
 
 	for _, k := range keys {
@@ -200,7 +203,7 @@ func (m *mem) Contested(
 
 	var out []unmanaged.Contest
 
-	for k, hs := range m.allHolders() {
+	for k, hs := range m.allHolders(ns) {
 		if after != (unmanaged.ResourceKey{Provider: "", ID: ""}) && k.String() <= after.String() {
 			continue
 		}
@@ -276,14 +279,6 @@ func (m *mem) ResolveUnseen(_ context.Context, scan unmanaged.Scan, _ time.Time,
 		return 0, unmanaged.ErrNotFound
 	}
 
-	complete := map[[2]string]bool{}
-
-	for _, sc := range s.Scopes {
-		if sc.Complete {
-			complete[[2]string{sc.Provider, sc.Scope}] = true
-		}
-	}
-
 	var n int64
 
 	for k, f := range m.findings[s.Namespace] {
@@ -291,7 +286,7 @@ func (m *mem) ResolveUnseen(_ context.Context, scan unmanaged.Scan, _ time.Time,
 			continue
 		}
 
-		if resolvesUnseen(s.Kind, f.Kind, complete[[2]string{k.Provider, unmanaged.Scope(k)}]) {
+		if resolvesUnseen(*s, *f) {
 			m.move(f, unmanaged.EventResolve)
 			n++
 		}
@@ -300,17 +295,19 @@ func (m *mem) ResolveUnseen(_ context.Context, scan unmanaged.Scan, _ time.Time,
 	return n, nil
 }
 
-// resolvesUnseen reports whether a finding of kind k that a scan of kind
-// scan did not see resolves. inComplete is true when the scan is complete
-// in the scope of the key of the finding.
-func resolvesUnseen(scan unmanaged.ScanKind, k unmanaged.Kind, inComplete bool) bool {
-	switch scan {
+// resolvesUnseen reports whether finding f, which sweep s did not see,
+// resolves.
+func resolvesUnseen(s unmanaged.Scan, f unmanaged.Finding) bool {
+	switch s.Kind {
 	case unmanaged.ScanCloud:
-		return k != unmanaged.KindManagedTwice && inComplete
+		return f.Kind != unmanaged.KindManagedTwice &&
+			slices.ContainsFunc(s.Scopes, func(sc unmanaged.ReportScope) bool {
+				return unmanaged.Covers(sc, f)
+			})
 	case unmanaged.ScanState:
-		return k == unmanaged.KindManagedTwice
+		return f.Kind == unmanaged.KindManagedTwice
 	default:
-		// No other kind of scan exists.
+		// No other kind of sweep exists.
 		return false
 	}
 }
@@ -372,7 +369,7 @@ func selects(flt unmanaged.Filter, f unmanaged.Finding) bool {
 		len(flt.Statuses) > 0 && !slices.Contains(flt.Statuses, f.Status),
 		flt.Unit != nil && !slices.Contains(f.Units, *flt.Unit),
 		flt.Provider != "" && flt.Provider != f.Key.Provider,
-		flt.Scope != "" && flt.Scope != unmanaged.Scope(f.Key),
+		flt.Scope != "" && flt.Scope != f.Scope,
 		flt.Type != "" && flt.Type != f.Type:
 		return false
 	}
@@ -468,6 +465,27 @@ func (m *mem) ExpireIgnores(_ context.Context, ns namespace.Name, now time.Time,
 	return n, nil
 }
 
+func (m *mem) ExpirePending(_ context.Context, ns namespace.Name, now time.Time, fence namespace.Fence) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if err := m.fenced(fence); err != nil {
+		return 0, err
+	}
+
+	var n int64
+
+	for _, f := range m.findings[ns] {
+		if f.Status == unmanaged.StatusPending && f.Pending != nil &&
+			!f.Pending.At.Add(unmanaged.MaxPending).After(now) {
+			m.move(f, unmanaged.EventPendingExpired)
+			n++
+		}
+	}
+
+	return n, nil
+}
+
 func (m *mem) PutRule(
 	_ context.Context,
 	r unmanaged.IgnoreRule,
@@ -548,8 +566,8 @@ func (m *mem) CreateTarget(_ context.Context, t unmanaged.Target, fence namespac
 	}
 
 	switch {
-	case !m.pools[t.Namespace][t.Pool]:
-		return fmt.Errorf("%w: the pool is not in the namespace", unmanaged.ErrInvalidTarget)
+	case m.pools[t.Namespace][t.Pool] != unmanagedtest.PurposeSweeps:
+		return fmt.Errorf("%w: the pool is not a sweep pool of the namespace", unmanaged.ErrInvalidTarget)
 	case m.targets[t.Namespace][t.Name].Name != "":
 		return unmanaged.ErrAlreadyExists
 	case len(m.targets[t.Namespace]) >= unmanaged.MaxTargets:
@@ -582,8 +600,8 @@ func (m *mem) UpdateTarget(_ context.Context, t unmanaged.Target, fence namespac
 		return unmanaged.ErrNotFound
 	}
 
-	if !m.pools[t.Namespace][t.Pool] {
-		return fmt.Errorf("%w: the pool is not in the namespace", unmanaged.ErrInvalidTarget)
+	if m.pools[t.Namespace][t.Pool] != unmanagedtest.PurposeSweeps {
+		return fmt.Errorf("%w: the pool is not a sweep pool of the namespace", unmanaged.ErrInvalidTarget)
 	}
 
 	m.targets[t.Namespace][t.Name] = t
@@ -756,6 +774,61 @@ func (m *mem) Scans(_ context.Context, ns namespace.Name, target, after string, 
 	return out, nil
 }
 
+// Links.
+
+func (m *mem) Link(_ context.Context, a, b namespace.Name, e audit.Entry) error {
+	if a == b {
+		return unmanaged.ErrInvalidLink
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.fences[a]; !ok {
+		return unmanaged.ErrNotFound
+	}
+
+	if _, ok := m.fences[b]; !ok {
+		return unmanaged.ErrNotFound
+	}
+
+	for _, p := range [][2]namespace.Name{{a, b}, {b, a}} {
+		peers := m.links[p[0]]
+		if peers == nil {
+			peers = map[namespace.Name]bool{}
+			m.links[p[0]] = peers
+		}
+
+		peers[p[1]] = true
+	}
+
+	m.audited = append(m.audited, e)
+
+	return nil
+}
+
+func (m *mem) Unlink(_ context.Context, a, b namespace.Name, e audit.Entry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if !m.links[a][b] {
+		return unmanaged.ErrNotFound
+	}
+
+	delete(m.links[a], b)
+	delete(m.links[b], a)
+	m.audited = append(m.audited, e)
+
+	return nil
+}
+
+func (m *mem) Linked(_ context.Context, ns namespace.Name) ([]namespace.Name, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return slices.Sorted(maps.Keys(m.links[ns])), nil
+}
+
 func (m *mem) fenced(f namespace.Fence) error {
 	if v, ok := m.fences[f.Namespace]; !ok || v != f.FailoverVersion {
 		return namespace.ErrFenced
@@ -770,10 +843,16 @@ func (m *mem) id(prefix string) string {
 	return fmt.Sprintf("%s-%d", prefix, m.next)
 }
 
-func (m *mem) allHolders() map[unmanaged.ResourceKey][]unmanaged.Holder {
+// allHolders returns the holders of every key in ns and in the namespaces
+// linked with ns.
+func (m *mem) allHolders(ns namespace.Name) map[unmanaged.ResourceKey][]unmanaged.Holder {
 	out := map[unmanaged.ResourceKey][]unmanaged.Holder{}
 
 	for u, ix := range m.index {
+		if u.Namespace != ns && !m.links[ns][u.Namespace] {
+			continue
+		}
+
 		for _, e := range ix.entries {
 			for _, k := range e.Keys {
 				out[k] = append(
@@ -867,6 +946,7 @@ func (m *mem) newFinding(
 		Pending:   nil,
 		Tags:      nil,
 		Type:      "",
+		Scope:     unmanaged.Scope(o.Key),
 		Region:    "",
 		Name:      "",
 		Scan:      "",
@@ -902,6 +982,9 @@ func (m *mem) fill(f *unmanaged.Finding, s unmanaged.Scan, o unmanaged.Observati
 	if o.Record != nil {
 		f.Evidence, f.Type, f.Region, f.Name, f.Tags = unmanaged.EvidenceScan, o.Record.Type, o.Record.Region,
 			o.Record.Name, o.Record.Tags
+		if o.Record.Scope != "" {
+			f.Scope = o.Record.Scope
+		}
 	} else if len(o.Holders) > 0 && f.Type == "" {
 		f.Type = o.Holders[0].Type
 	}
@@ -947,14 +1030,17 @@ func TestMem(t *testing.T) {
 		m := newMem()
 
 		return unmanagedtest.Harness{
-			Index: m, Findings: m, Scans: m,
+			Index: m, Links: m, Findings: m, Scans: m,
 			Namespace: func(_ *testing.T, name string) namespace.Fence {
 				m.mu.Lock()
 				defer m.mu.Unlock()
 
 				ns := namespace.Name(name)
 				m.fences[ns] = 1
-				m.pools[ns] = map[string]bool{unmanagedtest.Pool: true}
+				m.pools[ns] = map[string]string{
+					unmanagedtest.Pool:    unmanagedtest.PurposeSweeps,
+					unmanagedtest.JobPool: unmanagedtest.PurposeJobs,
+				}
 
 				return namespace.Fence{Namespace: ns, FailoverVersion: 1}
 			},
