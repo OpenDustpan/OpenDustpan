@@ -1,6 +1,6 @@
 # 237. `opendustpan dev`: a server for a trial or for CI, and the installation kind
 
-Status: accepted · 2026-10-18. Accepts RFC 75 with ADR 238. Supersedes in part ADR 23 decision 2 and ADR 39 decisions 1 and 4
+Status: accepted · 2026-10-18. Accepts RFC 75 with ADR 238. Supersedes in part ADR 23 decision 2, ADR 39 decisions 1 and 4 and ADR 53 decision 9
 
 ## Context
 
@@ -37,8 +37,8 @@ Facts:
   API (the `cloud` block) needs HTTPS. The OpenTofu `http` backend works
   over plain HTTP. The Pulumi CLI works over plain HTTP.
 - In Go, `SSL_CERT_FILE` replaces the system root store. It does not add
-  to it. Since Go 1.27, the variable also replaces the platform verifier on
-  macOS and Windows.
+  to it. For a client built with Go 1.27 or later, the variable also replaces
+  the platform verifier on macOS and Windows.
 - OpenTofu reads a `TF_TOKEN_` variable by host name only. Its encoding has
   no form for a port.
 - The container image declares `VOLUME /data`, runs as the user `nonroot`
@@ -70,6 +70,13 @@ Facts:
    the size limits of production. `dev` does not take `--config`, the
    database, the blob store, the backup target, a key setting, the audit
    sinks, OIDC or the proxy settings. A user who needs those runs `serve`.
+
+   `dev` reads its settings from flags only. It reads no `DUSTPAN_` variable
+   of a setting of `serve`, also not for a flag that `dev` takes. The only
+   variables that `dev` reads are `DUSTPAN_DATA_DIR` and
+   `DUSTPAN_DEV_ADMIN_TOKEN`. At start, `dev` clears each `DUSTPAN_` variable
+   of a secret setting of `serve` from its process environment, as decision
+   11 does for the admin token.
 
 ### The data directory
 
@@ -109,11 +116,14 @@ Facts:
    these is true:
    - The group or others can read, write or enter the data directory.
    - The current user ID does not own the data directory, the key file, the
-     token file, the TLS key, the certificate bundle, `dev.addr`, `dev.env`
-     or `dev.tfrc`, or the group or others can write one of them.
+     token file that `dev` made, the file of `--admin-token-file`, the TLS
+     key, the certificate bundle, `dev.addr`, `dev.env` or `dev.tfrc`, or the
+     group or others can write one of them.
 
    The error names the path, its mode or owner, and one command:
    `chmod 700 <dir>`, or `chown <uid> <path>` with the current user ID.
+   On Windows, `dev` and `health` check that the ACL of each path grants
+   access only to the current user, SYSTEM and Administrators.
 7. **The volume of the image.** The build stage of the image makes an
    empty directory. The final stage copies it with
    `COPY --from=build --chown=nonroot:nonroot /empty /data` before
@@ -164,23 +174,29 @@ Facts:
     holds it. The console sends the code in the body of a POST to the
     sign-in route of `dev`. The code signs one browser in to the console as
     the admin of the dev installation. It works one time. It stops working
-    15 minutes after the start, or when `dev` stops, whichever comes first.
+    10 minutes after the start, or when `dev` stops, whichever comes first.
     `dev` keeps only a hash of the code, in memory, and compares it in
-    constant time. Only the wiring of `dev` serves the route. `serve` and an
-    SDK server never serve it, whatever their installation kind. The route
-    test lists the route as public. The banner prints the link only when
+    constant time. The route is `POST /api/dustpan/v1/dev-sign-in`. It is a
+    route of the tool-neutral installation API that the handler registers
+    only when the wiring passes the option of the one-time code. Only the
+    wiring of `dev` in `cmd/opendustpan` passes it, and `pkg/dustpan` has no
+    option for it. `serve` and an SDK server never serve it, whatever their
+    installation kind. The route test registers it with that option and lists
+    it as public. The start gate of ADR 238 decision 15 covers it. The console
+    page of the link is `/sign-in#code=<code>`. The banner prints the link only when
     stderr is a terminal. Else it prints the path of the token file in place
     of the link, so a CI log or a container log never holds the code. A
     later start prints no link. The banner never prints the admin token.
     When `dev` serves no console, the banner names `--console-dir` in place
     of the link.
 
-    The 15 minutes are a product manager decision. Benchmark: magic sign-in
-    links of common SaaS products and OWASP session guidance expire within 15
-    minutes. Jenkins and Argo CD write the first admin secret to a file, not
-    to the log.
+    The 10 minutes are a product manager decision. Benchmark: NIST SP
+    800-63B limits an out-of-band secret to 10 minutes. Jenkins and Argo CD
+    write the first admin secret to a file, not to the log.
 
-    The admin token of `dev` is the bootstrap admin token (ADR 6). The
+    The admin token of `dev` is the bootstrap admin token (ADR 6). For `dev`,
+    the bootstrap admin token of ADR 6 can also come from these two sources:
+    `DUSTPAN_DEV_ADMIN_TOKEN` and `--admin-token-file`. The
     session of the link belongs to the same principal. To sign in again after
     the session ends, the user signs in to the console with the token from
     the token file. While the kind is `dev`, the console does not ask to
@@ -267,6 +283,8 @@ Facts:
     - `health --data-dir DIR` reads `DIR/dev.addr` and probes that address
       with that certificate. It first checks that the current user ID owns
       `DIR` and `dev.addr`, and that the group and others cannot write them.
+      On Windows, `dev` and `health` check that the ACL of each path grants
+      access only to the current user, SYSTEM and Administrators.
     - A missing `dev.addr`, a missing certificate or a process ID with
       another start time is "not ready", with exit code 1.
     - The image sets `DUSTPAN_DATA_DIR=/data`. The `HEALTHCHECK` stays
@@ -305,7 +323,7 @@ Facts:
     Benchmark: the dev modes of Vault and Temporal have no promotion. A
     promotion must replace a key that lived next to the data. A rewrap is
     not enough, because each copy of the dev directory opens the data keys.
-    The project designs its key handling against PCI DSS requirement 3.7,
+    Key handling is designed against PCI DSS v4.0.1 requirement 3.7.5,
     which asks for the replacement of a key that others may know. That
     needs a full rekey of each data key and ciphertext, a large
     prerequisite for trial data. The escape hatch is the export and import
@@ -317,14 +335,13 @@ Facts:
     opendustpan dev: this server is for a trial or for CI. Do not use it in production.
     Data:     /home/alex/.local/share/opendustpan/dev
     Server:   http://127.0.0.1:8080
-    Sign in:  http://127.0.0.1:8080/sign-in#code=<code>   (first start on a terminal only, works one time, for 15 minutes)
+    Sign in:  http://127.0.0.1:8080/sign-in#code=<code>   (first start on a terminal only, works one time, for 10 minutes)
     Settings: . /home/alex/.local/share/opendustpan/dev/dev.env
     The key-encryption key is in the data directory. A backup of this directory holds the key.
     For production, run: opendustpan serve --help
     ```
 
-    The exact path of the sign-in link is part of the implementation. With
-    `--ephemeral`, the `Data` line states that `dev` deletes the directory
+    With `--ephemeral`, the `Data` line states that `dev` deletes the directory
     at stop.
 
 ### The installation kind
@@ -335,7 +352,8 @@ Facts:
 24. **The column.** The `installation` table gets one column, `kind`, with
     the values `dev`, `production` and NULL. A CHECK constraint
     `kind IS NULL OR kind IN ('dev', 'production')` holds the values. The baseline migration inserts
-    the row with `kind` NULL, and no column default sets a kind. So a crash
+    the row with `kind` NULL, and no column default sets a kind. A new kind
+    needs a migration that rebuilds the CHECK constraint. So a crash
     between the migration and the claim leaves NULL, never a wrong kind. On
     a database from an untagged build, the new migration gives the row the
     kind NULL, and the first command claims it. This converts no data (ADR
@@ -348,8 +366,9 @@ Facts:
     does not exist yet, the adapter applies the migrations and the claim
     decides. An adapter with no kind option does no check before the
     migrations, and the claim decides.
-26. **The claim.** The claim is the first start-up step, before any step
-    that writes and before the listener opens. It is one compare-and-set:
+26. **The claim.** The claim is the first start-up step after the
+    migrations, before any other step that writes and before the listener
+    opens. It is one compare-and-set:
     `UPDATE installation SET kind = ? WHERE id = 1 AND kind IS NULL`. The
     server then reads the kind. When the stored kind differs from the kind
     of the command, the start stops. Several instances of `serve` on one new
@@ -378,10 +397,19 @@ Facts:
     `NewServer` reads no database, as today. `cmd/opendustpan` passes
     `production` for `serve` and `dev` for `dev`. With no kind option,
     `NewServer` uses `production`, so an SDK user gets the production rules.
-29. **Visible in the API, the console and the audit log.** `GET /api/server/upgrade-check`, the route that `upgrade check`
-    reads, reports the field `kind`. The route keeps its action, which is
-    `server:observe` in code and `installation:observe` in ADR 216. The console shows a band on each page
-    while the kind is `dev`. The audit entry of each start records the kind.
+    An SDK embedder that sets `dev` gets the relaxed rules of a dev
+    installation and never the sign-in route.
+29. **Visible in the API, the console and the audit log.** The
+    capabilities document `GET /api/dustpan/v1/capabilities` (ADR 211
+    decision 5) gets the field `installationKind`, with the value `dev` or
+    `production`. The field has the rule of `modules`: a signed-in caller with
+    `caller:read` on the caller gets it, and a caller with no sign-in does
+    not. The console shows a band on each page while the kind is `dev`.
+    `doctor --server` reads the field. The audit entry of each start records
+    the kind.
+
+    Benchmark: Vault and Grafana do not expose dev mode to anonymous
+    callers.
 30. **The errors.**
 
     ```
@@ -421,6 +449,8 @@ Facts:
   `dev.tfrc`.
 - If a client refuses a self-signed leaf, a new ADR must decide the
   replacement.
+- The capabilities document of ADR 211 must exist before the band and
+  `doctor --server` can read the kind.
 - The console needs the sign-in route of the one-time link and the band for
   the kind `dev`. The console change merges before the next server tag (ADR
   73 decision 3).

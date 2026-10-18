@@ -136,11 +136,12 @@ Facts:
     | The operator set a key-encryption key. The key file exists, has mode 0600 or stricter, and has the size of a base64 key. For a KMS key, `doctor` checks only that the operator set it. | fail |
     | The key file is not in the directory of the SQLite file or of the blobs, after link resolution. | warn |
     | The operator set a database. | fail |
-    | The operator set an admin token of at least 32 bytes. | fail |
+    | When the operator set an admin token, it has at least 32 bytes. | fail |
+    | The operator set no admin token: doctor prints that no bootstrap admin token is set. | pass |
     | The operator set a backup target. | warn |
     | The listen address is not loopback, the operator set no TLS, and no `--public-url` with `https` names a proxy. | warn |
     | With `--public-url`, the operator also set `--trusted-proxies`. | warn |
-    | With `--server`: the server reports the kind `production`. | fail |
+    | With `--server`: the capabilities document reports `installationKind` `production`. | fail |
     | With `--server`: `upgrade check` gives no `cannot start`. | warn |
     | With `--server`: the last backup is less than 25 hours old. | warn |
 
