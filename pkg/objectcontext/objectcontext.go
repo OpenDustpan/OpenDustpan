@@ -14,6 +14,7 @@
 package objectcontext
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -40,6 +41,9 @@ var (
 	// ErrNotFound reports an object with no stored context of the asked
 	// source.
 	ErrNotFound = errors.New("context not found")
+	// ErrUnitDeleted reports an API write of the context of a unit that is
+	// soft-deleted. A restore brings the unit back first.
+	ErrUnitDeleted = errors.New("the unit is deleted")
 	// ErrOutputInvalid reports a reserved output that is not a valid
 	// context output.
 	ErrOutputInvalid = errors.New("the opendustpan output is not valid")
@@ -398,6 +402,38 @@ type Entry struct {
 	Warning   string
 	UpdatedBy string
 	Fields    Fields
+}
+
+// entryJSON is the wire form of Entry.
+type entryJSON struct {
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+	Object    ObjectID   `json:"object"`
+	Source    Source     `json:"source"`
+	Readme    string     `json:"readme,omitempty"`
+	Item      string     `json:"item,omitempty"`
+	Warning   string     `json:"warning,omitempty"`
+	UpdatedBy string     `json:"updatedBy,omitempty"`
+	Fields    Fields     `json:"fields"`
+}
+
+// MarshalJSON implements json.Marshaler.
+func (e Entry) MarshalJSON() ([]byte, error) {
+	out := entryJSON{
+		UpdatedAt: nil, Object: IDOf(e.Object), Source: e.Source, Readme: e.Readme, Item: e.Item,
+		Warning: e.Warning, UpdatedBy: e.UpdatedBy, Fields: e.Fields,
+	}
+
+	if !e.UpdatedAt.IsZero() {
+		at := e.UpdatedAt.UTC()
+		out.UpdatedAt = &at
+	}
+
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("encode entry: %w", err)
+	}
+
+	return raw, nil
 }
 
 // validText reports whether s is valid UTF-8 within maxBytes, with no

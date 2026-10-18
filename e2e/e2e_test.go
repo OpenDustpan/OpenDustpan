@@ -1200,6 +1200,9 @@ func pulumiScenario(t *testing.T, env *e2e.Env) {
 
 	beforeID := stackIDBeforeRename(t, env, org)
 
+	// The context routes: the stack reads the owners of its namespace.
+	contextScenario(t, env, "pulumi", beforeID)
+
 	env.Step(ctx, t, e2e.StepSpec{
 		Check:  checkRenameKeptID(ctx, env, org, renamePath, beforeID),
 		Name:   "stack rename",
@@ -4141,6 +4144,8 @@ func tofuScenario(t *testing.T, env *e2e.Env) {
 	inventorySchemeScenario(t, env)
 	// The collection routes move the e2e workspace between two collections (ADR 51).
 	collectionsScenario(t, env)
+	// The context routes: the workspace reads the owners of its namespace.
+	tofuContextScenario(t, env)
 
 	// The sealed round trip with a key set: state pull, the API download of
 	// the current version and its MD5 attribute agree.
@@ -14652,4 +14657,16 @@ func tofuSealedStateScenario(t *testing.T, env *e2e.Env) {
 	if !ok || greeting.Value != cli.Outputs["greeting"].Value || greeting.Value == "" {
 		t.Fatalf("downloaded state lacks the pulled greeting: %s", download)
 	}
+}
+
+// tofuContextScenario runs the context scenario for the e2e workspace.
+func tofuContextScenario(t *testing.T, env *e2e.Env) {
+	t.Helper()
+
+	id, err := remoteWorkspaceID(t.Context(), env, e2e.Workspace)
+	if err != nil || id == "" {
+		t.Fatalf("read the ID of the workspace: %q, %v", id, err)
+	}
+
+	contextScenario(t, env, "opentofu", id)
 }

@@ -76,6 +76,7 @@ internal/              code that is not part of the SDK
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
   api/tfe/             HTTP adapter for the TFE-compatible API (OpenTofu)
   api/inventory/       HTTP adapter for the tool-neutral inventory API (also used by the console)
+  api/objectcontext/   HTTP adapter for the tool-neutral context API (also used by the console)
   api/server/          HTTP adapter for the tool-neutral installation API (backups, metrics)
   metrics/, token/...  helpers shared across packages
 load/                  load harness that replays recorded CLI traffic (make load); not part of make check

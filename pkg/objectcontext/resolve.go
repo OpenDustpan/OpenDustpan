@@ -1,6 +1,7 @@
 package objectcontext
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 
@@ -25,49 +26,106 @@ type Provenance struct {
 	Object Ref
 }
 
+// provenanceJSON is the wire form of Provenance: the kind of the object, its
+// source, and the object itself unless the layer is hidden and has no name.
+type provenanceJSON struct {
+	Ref    *ObjectID `json:"ref,omitempty"`
+	Object Kind      `json:"object"`
+	Source Source    `json:"source"`
+}
+
+// MarshalJSON implements json.Marshaler. A value that no layer sets writes
+// null. A layer that the caller cannot read has no namespace in its object,
+// so the answer names the kind and the source only.
+func (p Provenance) MarshalJSON() ([]byte, error) {
+	if p == (Provenance{Source: "", Object: Ref{Namespace: "", Kind: "", Name: "", Resource: "", Unit: graph.Unit{Namespace: "", Tool: "", ID: ""}}}) {
+		return []byte("null"), nil
+	}
+
+	out := provenanceJSON{Object: p.Object.Kind, Source: p.Source, Ref: nil}
+
+	if p.Object.Namespace != "" {
+		id := IDOf(p.Object)
+		out.Ref = &id
+	}
+
+	raw, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("encode provenance: %w", err)
+	}
+
+	return raw, nil
+}
+
 // Text is one resolved text field with its provenance.
 type Text struct {
-	Value string
-	From  Provenance
+	Value string     `json:"value"`
+	From  Provenance `json:"from"`
 }
 
 // Owners is the resolved owners with their provenance.
 type Owners struct {
-	Value []string
-	From  Provenance
+	Value []string   `json:"value"`
+	From  Provenance `json:"from"`
 }
 
 // LinkValue is one resolved link with its provenance.
 type LinkValue struct {
 	Link
 
-	From Provenance
+	From Provenance `json:"from"`
 }
 
 // Shadow names an API value that the output of the same object hides. The
 // console shows it, so that a person can delete the API value.
 type Shadow struct {
-	Object Ref
-	Field  Field
+	Object Ref   `json:"-"`
+	Field  Field `json:"field"`
+}
+
+// MarshalJSON implements json.Marshaler.
+func (s Shadow) MarshalJSON() ([]byte, error) {
+	raw, err := json.Marshal(struct {
+		Object ObjectID `json:"object"`
+		Field  Field    `json:"field"`
+	}{Object: IDOf(s.Object), Field: s.Field})
+	if err != nil {
+		return nil, fmt.Errorf("encode shadow: %w", err)
+	}
+
+	return raw, nil
 }
 
 // Warning is an output of a layer that did not parse.
 type Warning struct {
-	Object  Ref
-	Message string
+	Object  Ref    `json:"-"`
+	Message string `json:"message"`
+}
+
+// MarshalJSON implements json.Marshaler.
+func (w Warning) MarshalJSON() ([]byte, error) {
+	raw, err := json.Marshal(struct {
+		Object  ObjectID `json:"object"`
+		Message string   `json:"message"`
+	}{Object: IDOf(w.Object), Message: w.Message})
+	if err != nil {
+		return nil, fmt.Errorf("encode warning: %w", err)
+	}
+
+	return raw, nil
 }
 
 // Resolved is the effective context of one object, with the provenance of
 // each value. Readme is the readme output of the unit of the chain.
 type Resolved struct {
-	Summary  Text
-	Runbook  Text
-	OnCall   Text
-	Readme   string
-	Owners   Owners
-	Links    []LinkValue
-	Shadowed []Shadow
-	Warnings []Warning
+	Summary  Text        `json:"summary"`
+	Runbook  Text        `json:"runbook"`
+	OnCall   Text        `json:"onCall"`
+	Readme   string      `json:"readme,omitempty"`
+	Owners   Owners      `json:"owners"`
+	Links    []LinkValue `json:"links"`
+	Shadowed []Shadow    `json:"shadowed,omitempty"`
+	Warnings []Warning   `json:"warnings,omitempty"`
 }
 
 // chainOrder returns the order of the kinds in a chain, the most specific
