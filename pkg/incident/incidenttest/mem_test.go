@@ -70,7 +70,7 @@ func (m *memStore) Create(_ context.Context, in incident.Incident, fence namespa
 	return translate(err, incident.ErrInvalid)
 }
 
-func (m *memStore) Get(_ context.Context, id string) (incident.Incident, error) {
+func (m *memStore) Get(_ context.Context, ns namespace.Name, id string) (incident.Incident, error) {
 	var (
 		in incident.Incident
 		ok bool
@@ -78,8 +78,11 @@ func (m *memStore) Get(_ context.Context, id string) (incident.Incident, error) 
 
 	m.Read(func() { in, ok = m.incidents[id] })
 
-	if !ok {
-		return in, fmt.Errorf("get %s: %w", id, incident.ErrNotFound)
+	// An incident of another namespace answers as an unknown ID.
+	if !ok || in.Namespace != ns {
+		var none incident.Incident
+
+		return none, fmt.Errorf("get %s/%s: %w", ns, id, incident.ErrNotFound)
 	}
 
 	in.Classifications = slices.Clone(in.Classifications)
@@ -268,16 +271,28 @@ func (m *memStore) AddNote(_ context.Context, n incident.Note, fence namespace.F
 	return translate(err, incident.ErrNotFound)
 }
 
-func (m *memStore) Notes(_ context.Context, id string) ([]incident.Note, error) {
-	var out []incident.Note
+func (m *memStore) Notes(_ context.Context, ns namespace.Name, id string) ([]incident.Note, error) {
+	var (
+		out   []incident.Note
+		found bool
+	)
 
 	m.Read(func() {
+		in, ok := m.incidents[id]
+		if found = ok && in.Namespace == ns; !found {
+			return
+		}
+
 		for _, n := range m.notes {
 			if n.Incident == id {
 				out = append(out, n)
 			}
 		}
 	})
+
+	if !found {
+		return nil, fmt.Errorf("notes of %s/%s: %w", ns, id, incident.ErrNotFound)
+	}
 
 	slices.SortStableFunc(out, func(a, b incident.Note) int { return a.At.Compare(b.At) })
 
