@@ -131,6 +131,10 @@ _Avoid_: Permanent delete
 The server task that purges each deleted unit whose retention period ended. It runs one time each hour, the first time one hour after the server starts. `POST /api/server/deleted-units/sweep` runs it at once. It also finishes the blob purge records. It purges without the dependents check, because the retention period was the recovery window of the team (ADR 153). The end of the retention period of a stored plan or a job log is a redaction with the cause `retention` (ADR 152).
 _Avoid_: Retention sweep, sweep (that is the Sweep feature), garbage collection, reaper
 
+**Orphan cleanup**:
+The task that deletes a key blob with no record (ADR 151 decision 22). It waits a grace period of 24 hours from the write of the blob. So it never deletes the key blob of an item whose transaction has not ended.
+_Avoid_: Orphan sweep, sweep (that is the Sweep feature)
+
 **Blob purge record**:
 A row that a purge writes for a unit whose blobs may still exist. A save that started before the purge can write a blob after the purge deletes the blobs. The retention expiry deletes the blobs again when the record is older than 24 hours, and then finishes the record. In code this time is `BlobPurgeGrace`. It is not the retention period. It covers the live blob store only. The tombstone of the purge covers the backup targets (ADR 151).
 _Avoid_: Tombstone (that is the shred record of a purged unit)
@@ -471,7 +475,7 @@ Work that OpenDustpan asks an executor to do on one unit (ADR 100 decision 19). 
 _Avoid_: Task, deployment, run (without a tool), operation (alone: name the operation of the job or the durable operation)
 
 **Executor**:
-The way a job runs: write-back or runners (ADR 100 decision 19). The port `job.Executor` names the kind, `write-back` or `runner`, and gives the phases of a spec (ADR 101 decision 1). It also undoes what a job left open after a cancel, a rejection or an expiry. Both executors call the same progress ports, `job.Claimer` and `job.Recorder`. So both meet the same rules for claims, cancel, steps, logs and plans. The Runner entry no longer lists "executor" under _Avoid_.
+The way a job runs: write-back or runners (ADR 100 decision 19). The port `job.Executor` names the kind, `write-back` or `runner`, and gives the phases of a spec (ADR 101 decision 1). It also undoes what a job left open after a cancel, a rejection or an expiry. Both executors call the same progress ports, `job.Claimer` and `job.Recorder`. So both meet the same rules for claims, cancel, steps, logs and plans.
 _Avoid_: Launcher (that is the program of a runner that starts each step)
 
 **Phase**:
@@ -512,7 +516,7 @@ _Avoid_: Freeze override, bypass
 
 **Job token**:
 An access token that the server makes for the steps of a runner phase, at the claim of the phase (ADR 100 decision 20). It is a token of the principal that started the job. The server limits it to the unit of the job, and it has the expiry of the claim. It carries the job-ID claim. The launcher gives it to the tool (ADR 133, ADR 134). OpenTofu gets it through its credentials helper, and the Pulumi CLI through a file of mode 0600. It never goes in an environment variable. A job token of a job that ended authenticates nothing.
-_Avoid_: Runner token (the credential of a runner is an open question of ADR 101)
+_Avoid_: Runner token (the credential of a runner is the runner key)
 
 **Job-ID claim**:
 The one claim that a job token puts on the principal that it authenticates: the ID of the job (ADR 100 decision 20). The `identity` package holds it in `Principal.JobID`, which is empty for every other credential. The claim adds no action. A state write with the job token reports it as `StateVersion.Job`. So the job record and the history of the unit can show which state version the job wrote.
@@ -626,7 +630,7 @@ _Avoid_: Model config, provider account, API key
 
 **Reaper**:
 The durable operation that ends each agent run whose turn ended with no step that ends the run (ADR 120 decision 10). Its kind is `agent.KindReap`, and it runs every minute on one instance. It first deletes each sealed reveal past its hard expiry. It then ends each such run as canceled, or as failed with the stop reason `turn-failed`.
-_Avoid_: Retention sweep (that purges deleted units), garbage collector, janitor
+_Avoid_: Retention expiry (that purges deleted units), garbage collector, janitor
 
 **MCP endpoint**:
 The route `/api/agent/mcp` that serves the agent tools over the Streamable HTTP transport of the Model Context Protocol (ADR 123). It offers tools only: no resources, no prompts and no sampling. It needs no model connection. It is off until an administrator sets `mcpEnabled: true`. It answers 404 while it is off or while the audit log is off.
