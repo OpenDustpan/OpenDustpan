@@ -1,6 +1,6 @@
 # 100. A shared job model on durable operations
 
-Status: accepted · 2026-10-17 · an open question superseded by ADR 125 · decision 4 superseded in part by ADR 190
+Status: accepted · 2026-10-17 · an open question superseded by ADR 125 · decision 17 superseded in part by ADR 128 · decision 4 superseded in part by ADR 190
 
 ## Context
 
