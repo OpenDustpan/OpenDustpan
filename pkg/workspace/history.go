@@ -131,9 +131,13 @@ type StateAt struct {
 // StateAtReader finds the state of a workspace at a time.
 type StateAtReader interface {
 	// WorkspaceStateAt returns the state version that was current in the
-	// workspace id at the time at. The name differs from the method of
-	// stack.StateAtReader, so that one store can hold both. It returns ErrNoStateAt when no state version
+	// workspace id at the time at. The method name differs from the name
+	// of the same read in the other domain packages, so that one store can
+	// implement all of them. It returns ErrNoStateAt when no state version
 	// finalized at or before at, and ErrNotFound for an unknown workspace.
+	// State versions finalized in the same millisecond break the tie in the
+	// order in which they became current: the latest creation time first,
+	// then the ID.
 	// The ErrNoStateAt error is a *NoStateAtError, and its First holds the
 	// finalize time of the first state version, or the zero time when the
 	// workspace has none. A pending state version does not count. The result

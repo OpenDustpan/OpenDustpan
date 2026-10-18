@@ -30,6 +30,7 @@ func RunWorkspaceStateAt(t *testing.T, newStore WorkspaceStateAtFactory) {
 	}{
 		{name: "state at a time follows the finalize time", test: testWorkspaceStateAt},
 		{name: "state at a time ignores a pending state version", test: testWorkspaceStateAtPending},
+		{name: "state at a time breaks a tie of finalize times", test: testWorkspaceStateAtTie},
 		{name: "state at a time of a deleted and of an unknown workspace", test: testWorkspaceStateAtDeleted},
 	}
 
@@ -59,9 +60,20 @@ func (w stateAtWorkspace) finalizeAt(
 ) workspace.StateVersion {
 	t.Helper()
 
-	pending := createPendingVersion(t, s, w.ns, newPendingVersion(
-		t, w.locked, w.locked.Lock.ID, stateInput("lin-1", "v", serial),
-	))
+	return w.finalizeCreatedAt(t, s, serial, now(), at)
+}
+
+// finalizeCreatedAt is finalizeAt for a state version that the store creates
+// at the time created.
+func (w stateAtWorkspace) finalizeCreatedAt(
+	t *testing.T, s WorkspaceStateAtStore, serial int64, created, at time.Time,
+) workspace.StateVersion {
+	t.Helper()
+
+	sv := newPendingVersion(t, w.locked, w.locked.Lock.ID, stateInput("lin-1", "v", serial))
+	sv.CreatedAt = created
+
+	pending := createPendingVersion(t, s, w.ns, sv)
 	done := finalizedVersion(pending, at, "v")
 
 	if err := finalizeRecorded(t, s, w.ns.Fence(), done); err != nil {
@@ -197,4 +209,35 @@ func testWorkspaceStateAtDeleted(t *testing.T, s WorkspaceStateAtStore) {
 	if !errors.Is(err, workspace.ErrNotFound) {
 		t.Fatalf("state at of an unknown workspace: err = %v, want ErrNotFound", err)
 	}
+}
+
+// testWorkspaceStateAtTie proves that state versions with the same finalize
+// time break the tie in the order in which they became current: the latest
+// creation time first, then the ID. A read at that time agrees with that
+// order.
+func testWorkspaceStateAtTie(t *testing.T, s WorkspaceStateAtStore) {
+	t.Helper()
+
+	w, ws := newStateAtWorkspace(t, s)
+	tie := workspaceStateAtBase().Add(time.Minute)
+	created := now()
+
+	w.finalizeCreatedAt(t, s, 1, created, tie)
+	newer := w.finalizeCreatedAt(t, s, 2, created.Add(time.Second), tie)
+
+	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie, first: time.Time{}, want: stateAtAnswer(newer)})
+	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie.Add(time.Hour), first: time.Time{}, want: stateAtAnswer(newer)})
+
+	// With the same creation time, the smaller ID wins.
+	tie2 := tie.Add(time.Minute)
+	a := w.finalizeCreatedAt(t, s, 3, created, tie2)
+	b := w.finalizeCreatedAt(t, s, 4, created, tie2)
+
+	want := a
+	if b.ID < a.ID {
+		want = b
+	}
+
+	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie2, first: time.Time{}, want: stateAtAnswer(want)})
+	wantStateAt(t, s, ws.ID, stateAtQuestion{at: tie, first: time.Time{}, want: stateAtAnswer(newer)})
 }

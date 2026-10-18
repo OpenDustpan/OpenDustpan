@@ -38,6 +38,9 @@ func (s *Service) ReadStateAt(ctx context.Context, id ID, req StateAtRequest) (S
 		return StateAtRead{}, fmt.Errorf("%w: state at a time", ErrMissingDependency)
 	}
 
+	// The four reads below (workspace, state version at the time, state
+	// version, resources) are not one snapshot. A purge between them answers
+	// 404 for the state version that the second read found.
 	w, err := s.GetByID(ctx, id)
 	if err != nil {
 		return StateAtRead{}, err

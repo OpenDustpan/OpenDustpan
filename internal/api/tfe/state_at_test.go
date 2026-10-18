@@ -162,12 +162,12 @@ func TestStateAtErrors(t *testing.T) {
 		{
 			name: "a time that is not a number", target: "/state-at/yesterday", status: http.StatusUnprocessableEntity,
 			title:  "unprocessable",
-			detail: `invalid state version: time "yesterday" is not Unix milliseconds`,
+			detail: `the time "yesterday" in the path is not Unix milliseconds`,
 		},
 		{
 			name: "a negative time", target: "/state-at/-1", status: http.StatusUnprocessableEntity,
 			title:  "unprocessable",
-			detail: `invalid state version: time "-1" is not Unix milliseconds`,
+			detail: `the time "-1" in the path is not Unix milliseconds`,
 		},
 	}
 

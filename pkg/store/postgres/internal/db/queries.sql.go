@@ -8773,7 +8773,7 @@ const workspaceStateAt = `-- name: WorkspaceStateAt :one
 SELECT id, finalized_at_ms, holder
 FROM state_versions
 WHERE workspace_id = $1 AND status = 'finalized' AND finalized_at_ms <= $2
-ORDER BY finalized_at_ms DESC, id ASC
+ORDER BY finalized_at_ms DESC, created_at_ms DESC, id ASC
 LIMIT 1
 `
 
@@ -8789,8 +8789,10 @@ type WorkspaceStateAtRow struct {
 }
 
 // The finalized state version with the latest finalize time at or before a
-// time. Ties break by ID, as in the state version list. The index on
-// (workspace_id, finalized_at_ms DESC) serves the order.
+// time. Versions finalized in the same millisecond break the tie in the order
+// they became current: the latest creation time first, then the ID. A read at
+// the present agrees with the current pointer of the workspace. The index on
+// (workspace_id, finalized_at_ms DESC) serves the first key.
 func (q *Queries) WorkspaceStateAt(ctx context.Context, arg WorkspaceStateAtParams) (WorkspaceStateAtRow, error) {
 	row := q.db.QueryRow(ctx, workspaceStateAt, arg.WorkspaceID, arg.FinalizedAtMs)
 	var i WorkspaceStateAtRow

@@ -265,7 +265,9 @@ func WithWorkspaceStore(s workspace.Store) Option {
 	return func(o *settings) { o.workspaceStore = s }
 }
 
-// WithStateStore sets the state version persistence port. Required.
+// WithStateStore sets the state version persistence port. Required. A store
+// without WorkspaceStateAt (workspace.StateAtReader) is valid at start, but a
+// state-at read fails at request time with workspace.ErrMissingDependency.
 func WithStateStore(s workspace.StateStore) Option {
 	return func(o *settings) { o.stateStore = s }
 }

@@ -33,11 +33,28 @@ type stateAtDocument struct {
 	Meta     stateAtMeta          `json:"meta"`
 }
 
+// stateAtTimeError reports a time in the path of a state-at request that is
+// not Unix milliseconds. Its text names the time parameter. It matches
+// workspace.ErrInvalidState with errors.Is, so it answers 422.
+type stateAtTimeError struct {
+	raw string
+}
+
+// Error implements error.
+func (e *stateAtTimeError) Error() string {
+	return fmt.Sprintf("the time %q in the path is not Unix milliseconds", e.raw)
+}
+
+// Is reports whether target is workspace.ErrInvalidState.
+func (e *stateAtTimeError) Is(target error) bool {
+	return target == workspace.ErrInvalidState
+}
+
 // parseStateAt reads the time of a state-at request: Unix milliseconds.
 func parseStateAt(raw string) (time.Time, error) {
 	ms, err := strconv.ParseInt(raw, 10, 64)
 	if err != nil || ms < 0 {
-		return time.Time{}, fmt.Errorf("%w: time %q is not Unix milliseconds", workspace.ErrInvalidState, raw)
+		return time.Time{}, &stateAtTimeError{raw: raw}
 	}
 
 	return time.UnixMilli(ms).UTC(), nil
