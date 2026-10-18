@@ -1,6 +1,6 @@
 # 134. The launcher contract
 
-Status: accepted · 2026-10-18 · adds to ADR 101 decisions 7, 10 and 13
+Status: accepted · 2026-10-18 · adds to ADR 101 decisions 7, 10 and 13 · ADR 199 changes decisions 4 and 6
 
 ## Context
 
