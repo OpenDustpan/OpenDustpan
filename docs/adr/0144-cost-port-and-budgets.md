@@ -33,21 +33,32 @@ document. A policy decides at the start of a job and can gate a phase (ADR
    code and an amount in millionths of one unit. A price for each hour of a
    small resource keeps its digits. The server never converts between
    currencies. A sum of two currencies fails with `ErrCurrencyMismatch`.
+   A cost, a spend and a budget amount is 0 or more, and at most
+   `cost.MaxMicros`, 10^15 micros (one billion units). `Money.ValidateCost`
+   refuses other amounts with `ErrInvalid`. `Add` and `Sub` refuse a result
+   outside the int64 range with `ErrInvalid`, so no sum and no delta wraps
+   around. Only a delta can be below 0.
 2. **One period: a month.** Each estimate and each budget is a cost for one
    month. Each period is a calendar month in UTC (`cost.Period`). Plain text
-   shows "+EUR 31.20 a month". The console formats the amount for the
-   locale of the person.
+   shows "+EUR 31.20 a month". `Money.String` rounds to the minor unit of
+   the currency in ISO 4217 (`cost.MinorUnits`): "JPY 3100", "BHD 1.250",
+   and 2 decimals for a currency that its table does not name. The console
+   formats the amount for the locale of the person.
 
 ### Estimates
 
 3. **The estimate of a plan.** `cost.Estimate` has a subject, a source, a
    currency, the cost of each resource before and after the change, and the
    sums `Before` and `After` of the priced resources. `Delta` is `After`
-   minus `Before`. A resource that the estimator cannot price is in the
+   minus `Before`, and returns an error instead of a value that wraps
+   around. A resource that the estimator cannot price is in the
    estimate as unpriced, with a note. The work order shows the count of
    unpriced resources next to the delta, because the delta does not count
    them. `cost.Summed` computes the sums, and `Validate` refuses an
-   estimate whose sums do not match its resources.
+   estimate whose sums do not match its resources. `Estimate.Namespace` is
+   the namespace of the row: the namespace of the unit of a plan, or of
+   the blueprint. A blueprint of the installation has its estimate in the
+   server scope `@server`.
 4. **Two subjects.** The subject is the plan of a phase of a job, or a
    version of a blueprint in the Catalog. A unit made from a blueprint gets
    the estimate of its own plan. The Catalog shows the estimate of the last
@@ -60,12 +71,17 @@ document. A policy decides at the start of a job and can gate a phase (ADR
      source never holds a job. The input is the masked plan, the same
      document that a person with `job:read-plans` reads, so an estimator
      never gets a secret value.
-   - **Push.** A team that runs an estimator in its own pipeline, or in a
-     custom step of a runner job, sends the result through
+   - **Push.** A team that runs an estimator in a custom step of the role
+     `tool` in a runner job sends the result through
      `PUT /api/jobs/{id}/phases/{n}/cost-estimate`, with the source `api`.
+     The step authenticates with the job token, which only a step of the
+     role `tool` gets (ADR 133 decision 12). A hook step and a pipeline
+     outside the runners cannot push. Their way in is an adapter of the
+     `Estimator` port.
 
-   Both write through `cost.EstimateStore.PutEstimate`. A second estimate of
-   one subject replaces the first. This answers the option "generic
+   Both write through `cost.EstimateStore.PutEstimate`, with the fence of
+   the namespace of the estimate. A second estimate of one subject
+   replaces the first. This answers the option "generic
    extension points" of RFC 67 for estimates: the server keeps the shape,
    and any tool can fill it.
 6. **No estimator in the binary now.** The binary has no built-in
@@ -86,8 +102,8 @@ document. A policy decides at the start of a job and can gate a phase (ADR
    code, and the docs give the tag key.
 9. **A durable schedule reads spend.** Once an hour for each namespace with
    a budget, the server reads the spend, evaluates each budget, and saves
-   the status. A tool that does not answer keeps the last status, with its
-   time.
+   the status with the fence of the namespace. A tool that does not answer
+   keeps the last status, with its time.
 
 ### Budgets
 
@@ -106,26 +122,33 @@ document. A policy decides at the start of a job and can gate a phase (ADR
     The level is `ok`, `warning` at or above a threshold, or `exceeded` at
     or above 100 percent. A pending delta is the cost of a whole month, so a
     warning comes early, never late.
-12. **A warning, once.** When a status crosses a threshold that the last
-    status of the same month did not cross (`cost.NewlyCrossed`), the
-    server sends the event `budget.threshold` to the owners of the
-    namespace (ADR 145). Each threshold warns once a month.
+
+    A spend line or a pending estimate in another currency than the budget
+    does not count, and `Status.Skipped` counts it. The console shows the
+    count next to the status. So one estimate in another currency never
+    stops the warnings of a budget. A spend amount below 0 or above the cap
+    fails the evaluation with `ErrInvalid`, because it is an error of the
+    adapter.
+12. **A warning, once.** The status that the store keeps holds the
+    thresholds that warned in its month (`Status.Warned`).
+    `cost.MarkWarned` gives the thresholds that the new status crossed and
+    that no status of the same month warned about, and adds them to
+    `Warned`. The server sends the notification `budget.threshold` for each
+    of them to the owners of the namespace (ADR 145), and saves the status.
+    So each threshold warns once a month, also when the projection goes
+    from 85 to 70 and to 85 percent again. A new month starts with no
+    warned threshold.
 13. **A budget never blocks.** No budget refuses a start, a dispatch or a
     state write. The work order shows the impact of the change:
     `cost.ImpactOf` gives the percent before and after the delta, "budget
     after this change: 92% of EUR 4,000.00".
-14. **A policy can block.** The input of the decision at the start of a job
-    (ADR 103 decision 1) gets the cost: the delta, the unpriced count, the
-    currency, and for each budget of the namespace the percent before and
-    after. A policy can deny or gate a start on it. The policy owns that
-    rule, so a block is never silent: the denial names the policy and its
-    reason.
-
-    The estimate of a plan comes after the plan phase. A policy that reads
-    cost gates the next phase. The job model re-evaluates the gate of a
-    phase when its estimate arrives. An estimate that does not arrive in 15
-    minutes leaves the gate closed with the reason "no estimate", and a
-    person with `job:approve` can approve it.
+14. **Only a policy can block.** A block on cost is a rule of a policy, so
+    a block is never silent: the denial or the gate names the policy and
+    its reason. The decision at the start of a job (ADR 103 decision 1)
+    comes before the plan, so it cannot read the estimate of that plan.
+    This ADR does not decide how a policy gates a later phase on the
+    estimate. It asks the job model for it, under "Requests to other
+    designs".
 
 ### API, actions and audit
 
@@ -134,39 +157,82 @@ document. A policy decides at the start of a job and can gate a phase (ADR
     | Route | Action | Object |
     | --- | --- | --- |
     | `GET /api/jobs/{id}/phases/{n}/cost-estimate` | `job:read` | unit |
+    | `GET /api/jobs/{id}/phases/{n}/cost-estimate/resources` | `job:read-plans` | unit |
     | `PUT /api/jobs/{id}/phases/{n}/cost-estimate` | `job:write-cost` | unit |
     | `GET /api/catalog/{blueprint}/versions/{v}/cost-estimate` | the read action of the Catalog | blueprint |
     | `GET /api/namespaces/{ns}/budgets[/{id}]` | `namespace:read-cost` | namespace |
     | `POST`, `PUT`, `DELETE /api/namespaces/{ns}/budgets[/{id}]` | `namespace:manage-budgets` | namespace |
     | `GET /api/namespaces/{ns}/spend?month=` | `namespace:read-cost` | namespace |
 
+    The first route answers the sums, the delta, the currency, the source
+    and the unpriced count, which are metadata of the plan, as `job:read`
+    allows (ADR 102). The cost of each resource names the keys and the
+    types of the resources of the plan. That is content of the plan, so
+    the second route needs `job:read-plans`.
+
     Spend can be sensitive for a business, so it has its own read action.
     The built-in roles `viewer` and above get `namespace:read-cost`. The role
-    `admin` gets `namespace:manage-budgets`. The runner token of a job gets
-    `job:write-cost` on its unit.
+    `admin` gets `namespace:manage-budgets`.
+
+    Only the job token (ADR 100 decision 20) holds `job:write-cost`, on the
+    unit of its job, and only for the phases of its own job: a push for
+    another job ID than the job-ID claim fails with `identity.ErrDenied`. No
+    built-in role gives `job:write-cost`, so a session, a user token and an
+    agent that acts for a person never hold it.
 16. **Audit entries.** A pushed estimate, and a create, a change and a
     delete of a budget write one entry each, of the kind `change`, in the
     scope of the namespace. An estimate of the `Estimator` port, a spend
     read and a budget evaluation write no entry: they are not actions of a
     person.
-17. **Ports with conformance first.** `cost.EstimateStore` and
+17. **Fences.** Each write of `cost.EstimateStore` and `cost.BudgetStore`
+    carries the fence of the namespace of its row, also `SaveStatus`. The
+    store checks it in the transaction. A zero fence is valid only for an
+    estimate in the server scope, and a fence for such an estimate is
+    refused. A create or an estimate with a fence of another namespace
+    returns `ErrInvalid`. A write of a stored budget or of its status with
+    a fence of another namespace returns `ErrNotFound`, so a caller cannot
+    learn of a budget in a namespace that it does not hold. A stale fence
+    returns `namespace.ErrFenced`.
+18. **Ports with conformance first.** `cost.EstimateStore` and
     `cost.BudgetStore` get the suite `pkg/cost/costtest`, with a reference
-    adapter in memory. `cost.Estimator` and `cost.SpendSource` get their
+    adapter in memory. The suite runs a zero, a cross-namespace and a stale
+    fence on each write. `cost.Estimator` and `cost.SpendSource` get their
     suites with their first adapters.
 
 ## Requests to other designs
 
-- **Job model (ADR 103).** The decision input gets the cost of decision
-  14. A gate that a policy makes on cost waits for the estimate, as
-  decision 14 says.
+- **Job model (ADR 103).** A policy can block on cost only when the job
+  model lets it read the estimate. This ADR asks the job model to decide:
+  - whether the decision input at start gets the status of each budget of
+    the namespace (the percent before the change).
+  - whether the job model evaluates the policy again for the gate of the
+    next phase when the estimate of a plan arrives, with the delta, the
+    unpriced count, the currency and the percent of each budget after the
+    change in the input. ADR 103 now decides the gates once, at start.
+  - what a gate on cost does when no estimate arrives. A proposal: after
+    15 minutes the gate stays closed with the reason "no estimate", and a
+    person with `job:approve` can approve it.
+- **Job token (ADR 100 decision 20).** Decision 20 says that the job-ID
+  claim adds no action. Decision 15 of this ADR needs the job token to hold
+  `job:write-cost` on the unit of its job, and the route to compare the
+  job ID with the claim.
+- **Notifications (ADR 145).** ADR 145 appends a notification in the
+  transaction of its change. `BudgetStore.SaveStatus` takes no
+  notification yet, so that the cost package does not depend on the
+  notification package. The notification design adds the notifications of
+  `budget.threshold` to that transaction.
+- **Context read API (ADR 161).** Its open question 3 asks whether cost is
+  a section. This ADR gives the data: the last estimate of a unit and the
+  status of each budget.
 - **Blueprints and the Catalog.** The Catalog item of a blueprint version
   shows its estimate (decision 4). The blueprint design names the read
   action of the Catalog.
 
 ## Consequences
 
-- A team can bring any estimator: a pipeline step, a runner step, or an
-  adapter. The server keeps one shape and one store.
+- A team can bring any estimator: a step of the role `tool` in a runner
+  job, or an adapter. The server keeps one shape and one store. A pipeline
+  outside the runners has no job token, so it cannot push an estimate.
 - A spend tool can match spend to units only through a tag or its own
   mapping. A unit without the tag shows no spend.
 - No currency conversion: a namespace with budgets in two currencies needs

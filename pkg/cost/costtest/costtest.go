@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"opendustpan.org/opendustpan/internal/opsmem"
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/cost"
 	"opendustpan.org/opendustpan/pkg/namespace"
@@ -58,9 +57,13 @@ func Run(t *testing.T, newHarness Factory) {
 		{"an estimate replaces the estimate of its subject", testEstimateReplace},
 		{"an estimate from a client appends an entry, a scheduled one none", testEstimateAudit},
 		{"pending estimates are those of open jobs", testPending},
-		{"an estimate with a stale fence changes nothing", testEstimateFence},
+		{"an estimate of a blueprint of the installation takes a zero fence", testServerEstimate},
+		{"a subject keeps the namespace of its estimate", testEstimateNamespace},
+		{"every write refuses a wrong or stale fence", testFences},
 		{"budgets create, update once and list", testBudgets},
+		{"an update keeps the namespace of a budget", testBudgetNamespace},
 		{"a status saves with its version", testStatus},
+		{"a status keeps the thresholds that warned", testWarned},
 		{"delete removes the budget and its status", testDeleteBudget},
 	}
 
@@ -72,12 +75,22 @@ func Run(t *testing.T, newHarness Factory) {
 	}
 }
 
-const shop = namespace.Name("shop")
+const (
+	shop  = namespace.Name("shop")
+	other = namespace.Name("other")
+)
 
 func now() time.Time { return time.Date(2026, 10, 20, 10, 0, 0, 0, time.UTC) }
 
+// entry returns a valid audit entry of the kind change in shop.
 func entry(action string) audit.Entry {
-	return opsmem.Entry(shop, "alice", action, shop.String(), now())
+	return audit.Entry{
+		At: now(), Namespace: shop, Subject: "alice", IDPSubject: "", TokenID: "",
+		Action: action, Object: shop.String(), Version: "", ValuePath: "", ValueCount: nil, Changes: nil,
+		SourceIP: "192.0.2.1", UserAgent: "suite", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "req-suite", ObjectID: "", PrevHash: "", Hash: "",
+		Sequence: 0, FenceVersion: 0,
+	}
 }
 
 func eur(units int64) cost.Money {
@@ -108,7 +121,7 @@ func estimate(t *testing.T, id, job string, after int64) cost.Estimate {
 	}}
 
 	e, err := cost.Summed(cost.Estimate{
-		ID: id, Subject: subject(job), Unit: "opentofu:shop/web", Source: "test", Currency: "EUR",
+		ID: id, Subject: subject(job), Namespace: shop, Unit: "opentofu:shop/web", Source: "test", Currency: "EUR",
 		Before: eur(0), After: eur(0), Resources: r, CreatedAt: now(),
 	})
 	if err != nil {
@@ -141,7 +154,7 @@ func testEstimateReplace(t *testing.T, h Harness) {
 	put(t, h, fence, estimate(t, "est-2", "job-1", 31))
 
 	got, err := h.Estimates.GetEstimate(t.Context(), subject("job-1"))
-	if err != nil || got.ID != "est-2" || got.Delta() != eur(31) {
+	if err != nil || got.ID != "est-2" || got.After != eur(31) {
 		t.Fatalf("GetEstimate = %+v (%v), want est-2 with +31", got, err)
 	}
 
@@ -190,17 +203,196 @@ func testPending(t *testing.T, h Harness) {
 	}
 }
 
-func testEstimateFence(t *testing.T, h Harness) {
+func blueprintEstimate(t *testing.T) cost.Estimate {
+	t.Helper()
+
+	r := []cost.ResourceCost{{
+		Key: "aws_vpc.main", Type: "aws_vpc", Action: cost.ActionCreate,
+		Before: eur(0), After: eur(12), Unpriced: false, Note: "",
+	}}
+
+	e, err := cost.Summed(cost.Estimate{
+		ID: "est-b", Subject: cost.Subject{Job: "", Phase: 0, Blueprint: "vpc", BlueprintVersion: "1.0.0"},
+		Namespace: audit.ServerScope, Unit: "", Source: "test", Currency: "EUR",
+		Before: eur(0), After: eur(0), Resources: r, CreatedAt: now(),
+	})
+	if err != nil {
+		t.Fatalf("Summed: %v", err)
+	}
+
+	return e
+}
+
+func testServerEstimate(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := setup(t, h)
-	if _, err := h.Domain.BumpFence(t.Context(), fence); err != nil {
+	e := blueprintEstimate(t)
+
+	if err := h.Estimates.PutEstimate(t.Context(), e, fence, nil); !errors.Is(err, cost.ErrInvalid) {
+		t.Fatalf("PutEstimate in the server scope with a fence: err = %v, want ErrInvalid", err)
+	}
+
+	put(t, h, namespace.Fence{Namespace: "", FailoverVersion: 0}, e)
+
+	got, err := h.Estimates.GetEstimate(t.Context(), e.Subject)
+	if err != nil || got.ID != "est-b" {
+		t.Fatalf("GetEstimate = %+v (%v), want est-b", got, err)
+	}
+}
+
+func testEstimateNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	otherFence := create(t, h, other)
+	put(t, h, fence, estimate(t, "est-1", "job-1", 10))
+
+	e := estimate(t, "est-2", "job-1", 20)
+	e.Namespace = other
+
+	if err := h.Estimates.PutEstimate(t.Context(), e, otherFence, nil); !errors.Is(err, cost.ErrInvalid) {
+		t.Fatalf("PutEstimate of a subject of shop in other: err = %v, want ErrInvalid", err)
+	}
+
+	got, err := h.Estimates.GetEstimate(t.Context(), subject("job-1"))
+	if err != nil || got.ID != "est-1" {
+		t.Fatalf("GetEstimate = %+v (%v), want est-1", got, err)
+	}
+}
+
+func create(t *testing.T, h Harness, ns namespace.Name) namespace.Fence {
+	t.Helper()
+
+	fence, err := h.Domain.CreateNamespace(t.Context(), ns)
+	if err != nil {
+		t.Fatalf("CreateNamespace %s: %v", ns, err)
+	}
+
+	return fence
+}
+
+// fenceCase is one fence that a write gets, and the error it wants.
+type fenceCase struct {
+	name  string
+	fence func(shopFence, otherFence, stale namespace.Fence) namespace.Fence
+}
+
+func fenceCases() []fenceCase {
+	return []fenceCase{
+		{"a zero fence", func(_, _, _ namespace.Fence) namespace.Fence {
+			return namespace.Fence{Namespace: "", FailoverVersion: 0}
+		}},
+		{"the fence of another namespace", func(_, o, _ namespace.Fence) namespace.Fence { return o }},
+		{"a stale fence", func(_, _, s namespace.Fence) namespace.Fence { return s }},
+	}
+}
+
+// fenceWrite is one write method of the stores, with the sentinel that
+// it returns for a fence of another namespace or a zero fence.
+type fenceWrite struct {
+	name  string
+	scope error
+	write func(t *testing.T, h Harness, fence namespace.Fence) error
+}
+
+func fenceWrites() []fenceWrite {
+	manage := entry("namespace:manage-budgets")
+	status := cost.Status{
+		Budget: "bgt-1", Period: cost.PeriodOf(now()), Actual: eur(1), Forecast: eur(1), Pending: eur(0),
+		Projected: eur(1), Percent: 0, Crossed: nil, Warned: nil, Skipped: 0, Level: cost.LevelOK, AsOf: now(),
+	}
+
+	return []fenceWrite{
+		{"PutEstimate", cost.ErrInvalid, func(t *testing.T, h Harness, f namespace.Fence) error {
+			t.Helper()
+
+			return h.Estimates.PutEstimate(t.Context(), estimate(t, "est-9", "job-9", 10), f, nil)
+		}},
+		{"CreateBudget", cost.ErrInvalid, func(t *testing.T, h Harness, f namespace.Fence) error {
+			t.Helper()
+
+			b := budget()
+			b.ID = "bgt-9"
+
+			return h.Budgets.CreateBudget(t.Context(), b, f, manage)
+		}},
+		{"UpdateBudget", cost.ErrNotFound, func(t *testing.T, h Harness, f namespace.Fence) error {
+			t.Helper()
+
+			b := budget()
+			b.Version, b.Amount = 1, eur(5000)
+
+			return h.Budgets.UpdateBudget(t.Context(), b, f, manage)
+		}},
+		{"DeleteBudget", cost.ErrNotFound, func(t *testing.T, h Harness, f namespace.Fence) error {
+			t.Helper()
+
+			return h.Budgets.DeleteBudget(t.Context(), "bgt-1", f, manage)
+		}},
+		{"SaveStatus", cost.ErrNotFound, func(t *testing.T, h Harness, f namespace.Fence) error {
+			t.Helper()
+
+			return h.Budgets.SaveStatus(t.Context(), status, 0, f)
+		}},
+	}
+}
+
+// testFences runs each write method with each wrong fence. Each write
+// fails and changes nothing: the budget bgt-1 keeps version 1, no
+// estimate or status is stored, and no audit entry is appended.
+func testFences(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	otherFence := create(t, h, other)
+
+	if err := h.Budgets.CreateBudget(t.Context(), budget(), fence, entry("namespace:manage-budgets")); err != nil {
+		t.Fatalf("CreateBudget: %v", err)
+	}
+
+	current, err := h.Domain.BumpFence(t.Context(), fence)
+	if err != nil {
 		t.Fatalf("BumpFence: %v", err)
 	}
 
-	err := h.Estimates.PutEstimate(t.Context(), estimate(t, "est-1", "job-1", 10), fence, nil)
-	if !errors.Is(err, namespace.ErrFenced) {
-		t.Fatalf("PutEstimate: err = %v, want namespace.ErrFenced", err)
+	for _, w := range fenceWrites() {
+		for _, fc := range fenceCases() {
+			want := w.scope
+			if fc.name == "a stale fence" {
+				want = namespace.ErrFenced
+			}
+
+			if err := w.write(t, h, fc.fence(current, otherFence, fence)); !errors.Is(err, want) {
+				t.Fatalf("%s with %s: err = %v, want %v", w.name, fc.name, err, want)
+			}
+		}
+	}
+
+	assertUnchanged(t, h)
+}
+
+func assertUnchanged(t *testing.T, h Harness) {
+	t.Helper()
+
+	got, err := h.Budgets.Budgets(t.Context(), shop)
+	if err != nil || len(got) != 1 || got[0].Version != 1 {
+		t.Fatalf("Budgets = %+v (%v), want bgt-1 at version 1 only", got, err)
+	}
+
+	_, err = h.Estimates.GetEstimate(t.Context(), subject("job-9"))
+	if !errors.Is(err, cost.ErrNotFound) {
+		t.Fatalf("GetEstimate after refused writes: err = %v, want ErrNotFound", err)
+	}
+
+	_, _, err = h.Budgets.LastStatus(t.Context(), "bgt-1", cost.PeriodOf(now()))
+	if !errors.Is(err, cost.ErrNotFound) {
+		t.Fatalf("LastStatus after refused writes: err = %v, want ErrNotFound", err)
+	}
+
+	entries, err := h.Domain.AuditEntries(t.Context(), shop)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("audit entries = %d (%v), want the entry of the create only", len(entries), err)
 	}
 }
 
@@ -233,6 +425,35 @@ func testBudgets(t *testing.T, h Harness) {
 	if err != nil || len(got) != 1 || got[0].Amount != eur(5000) || got[0].Version != 2 {
 		t.Fatalf("Budgets = %+v (%v), want one of EUR 5000 at version 2", got, err)
 	}
+
+	b.ID = "bgt-none"
+	if err := h.Budgets.UpdateBudget(t.Context(), b, fence, manage); !errors.Is(err, cost.ErrNotFound) {
+		t.Fatalf("UpdateBudget of an unknown budget: err = %v, want ErrNotFound", err)
+	}
+}
+
+func testBudgetNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	create(t, h, other)
+	manage := entry("namespace:manage-budgets")
+
+	if err := h.Budgets.CreateBudget(t.Context(), budget(), fence, manage); err != nil {
+		t.Fatalf("CreateBudget: %v", err)
+	}
+
+	b := budget()
+	b.Version, b.Namespace = 1, other
+
+	if err := h.Budgets.UpdateBudget(t.Context(), b, fence, manage); !errors.Is(err, cost.ErrInvalid) {
+		t.Fatalf("UpdateBudget to another namespace: err = %v, want ErrInvalid", err)
+	}
+
+	got, err := h.Budgets.Budgets(t.Context(), other)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("Budgets of other = %+v (%v), want none", got, err)
+	}
 }
 
 func testStatus(t *testing.T, h Harness) {
@@ -248,14 +469,14 @@ func testStatus(t *testing.T, h Harness) {
 	p := cost.PeriodOf(now())
 	st := cost.Status{
 		Budget: "bgt-1", Period: p, Actual: eur(3300), Forecast: eur(3300), Pending: eur(0), Projected: eur(3300),
-		Percent: 82, Crossed: []int{80}, Level: cost.LevelWarning, AsOf: now(),
+		Percent: 82, Crossed: []int{80}, Warned: []int{80}, Skipped: 0, Level: cost.LevelWarning, AsOf: now(),
 	}
 
-	if err := h.Budgets.SaveStatus(t.Context(), st, 0); err != nil {
+	if err := h.Budgets.SaveStatus(t.Context(), st, 0, fence); err != nil {
 		t.Fatalf("SaveStatus: %v", err)
 	}
 
-	if err := h.Budgets.SaveStatus(t.Context(), st, 0); !errors.Is(err, cost.ErrConflict) {
+	if err := h.Budgets.SaveStatus(t.Context(), st, 0, fence); !errors.Is(err, cost.ErrConflict) {
 		t.Fatalf("SaveStatus on version 0 again: err = %v, want ErrConflict", err)
 	}
 
@@ -294,7 +515,56 @@ func testDeleteBudget(t *testing.T, h Harness) {
 
 	st.Budget, st.Period, st.Level, st.AsOf = "bgt-1", cost.PeriodOf(now()), cost.LevelOK, now()
 
-	if err := h.Budgets.SaveStatus(t.Context(), st, 0); !errors.Is(err, cost.ErrNotFound) {
+	if err := h.Budgets.SaveStatus(t.Context(), st, 0, fence); !errors.Is(err, cost.ErrNotFound) {
 		t.Fatalf("SaveStatus of a deleted budget: err = %v, want ErrNotFound", err)
+	}
+}
+
+// testWarned saves a status of 85 percent that warned at 80, then a status
+// of 70 percent, and reads back that the threshold 80 stays warned in the
+// month, so that a later 85 percent does not warn again.
+func testWarned(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	if err := h.Budgets.CreateBudget(t.Context(), budget(), fence, entry("namespace:manage-budgets")); err != nil {
+		t.Fatalf("CreateBudget: %v", err)
+	}
+
+	p := cost.PeriodOf(now())
+	high := cost.Status{
+		Budget: "bgt-1", Period: p, Actual: eur(3400), Forecast: eur(3400), Pending: eur(0), Projected: eur(3400),
+		Percent: 85, Crossed: []int{80}, Warned: nil, Skipped: 0, Level: cost.LevelWarning, AsOf: now(),
+	}
+
+	high, warn := cost.MarkWarned(nil, high)
+	if len(warn) != 1 || warn[0] != 80 {
+		t.Fatalf("MarkWarned = %v, want [80]", warn)
+	}
+
+	if err := h.Budgets.SaveStatus(t.Context(), high, 0, fence); err != nil {
+		t.Fatalf("SaveStatus 85%%: %v", err)
+	}
+
+	low := high
+	low.Percent, low.Crossed, low.Level = 70, nil, cost.LevelOK
+
+	prev, version, err := h.Budgets.LastStatus(t.Context(), "bgt-1", p)
+	if err != nil {
+		t.Fatalf("LastStatus: %v", err)
+	}
+
+	low, _ = cost.MarkWarned(&prev, low)
+	if err = h.Budgets.SaveStatus(t.Context(), low, version, fence); err != nil {
+		t.Fatalf("SaveStatus 70%%: %v", err)
+	}
+
+	prev, _, err = h.Budgets.LastStatus(t.Context(), "bgt-1", p)
+	if err != nil || len(prev.Warned) != 1 || prev.Warned[0] != 80 || prev.Percent != 70 {
+		t.Fatalf("LastStatus = %+v (%v), want 70%% with 80 warned", prev, err)
+	}
+
+	if _, warn = cost.MarkWarned(&prev, high); len(warn) != 0 {
+		t.Fatalf("MarkWarned at 85%% again = %v, want none", warn)
 	}
 }

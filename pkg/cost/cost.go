@@ -14,6 +14,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Sentinel errors returned by this package and by the ports.
@@ -61,9 +64,10 @@ const (
 )
 
 // ResourceCost is the estimate of one resource of a plan, as an amount for
-// one month before and after the change. Key is the key of the resource in
-// the state of its unit, and the server keeps it opaque. A resource that
-// the estimator cannot price is Unpriced, with zero amounts and a note.
+// one month before and after the change. Each amount is 0 or more, and at
+// most MaxMicros. Key is the key of the resource in the state of its unit,
+// and the server keeps it opaque. A resource that the estimator cannot
+// price is Unpriced, with zero amounts and a note.
 type ResourceCost struct {
 	Key      string
 	Type     string
@@ -101,10 +105,14 @@ func (s Subject) Validate() error {
 // Estimate is the cost of a planned change, for one month. Before and
 // After are the sums of the priced resources. Source names the adapter
 // and its version, or "api" for an estimate that a client sent. Unit is
-// the unit reference of the plan, and empty for a blueprint.
+// the unit reference of the plan, and empty for a blueprint. Namespace is
+// the namespace of the row: the namespace of the unit of a plan, or the
+// namespace of a blueprint, or audit.ServerScope for a blueprint of the
+// installation.
 type Estimate struct {
 	ID        string
 	Subject   Subject
+	Namespace namespace.Name
 	Unit      string
 	Source    string
 	Currency  string
@@ -142,9 +150,11 @@ func Summed(e Estimate) (Estimate, error) {
 }
 
 // Delta returns After minus Before: the change of the cost of a month,
-// "+EUR 31.20 a month" in the work order and the Catalog.
-func (e Estimate) Delta() Money {
-	return Money{Currency: e.Currency, Micros: e.After.Micros - e.Before.Micros}
+// "+EUR 31.20 a month" in the work order and the Catalog. It returns
+// ErrCurrencyMismatch when the sums are in two currencies, and ErrInvalid
+// when the difference does not fit.
+func (e Estimate) Delta() (Money, error) {
+	return e.After.Sub(e.Before)
 }
 
 // Unpriced returns the count of resources that the estimator could not
@@ -187,10 +197,28 @@ func (r ResourceCost) validate(currency string) error {
 
 	switch r.Action {
 	case ActionCreate, ActionUpdate, ActionReplace, ActionDelete, ActionNoOp:
-		return nil
+		return r.validateAmounts()
 	default:
 		return fmt.Errorf("%w: resource %s has an unknown action %q", ErrInvalid, r.Key, r.Action)
 	}
+}
+
+// validateAmounts returns ErrInvalid for an amount of a priced resource
+// below 0 or above MaxMicros.
+func (r ResourceCost) validateAmounts() error {
+	if r.Unpriced {
+		return nil
+	}
+
+	if err := r.Before.ValidateCost(); err != nil {
+		return fmt.Errorf("resource %s, before: %w", r.Key, err)
+	}
+
+	if err := r.After.ValidateCost(); err != nil {
+		return fmt.Errorf("resource %s, after: %w", r.Key, err)
+	}
+
+	return nil
 }
 
 // validateFields returns ErrInvalid for a field of the estimate that
@@ -205,6 +233,10 @@ func (e Estimate) validateFields() error {
 		return fmt.Errorf("%w: an estimate names its source in 1 to %d bytes", ErrInvalid, MaxSourceLen)
 	case len(e.Resources) > MaxResources:
 		return fmt.Errorf("%w: at most %d resources", ErrInvalid, MaxResources)
+	case e.Namespace == "":
+		return fmt.Errorf("%w: an estimate names its namespace", ErrInvalid)
+	case e.Subject.Job != "" && e.Namespace == audit.ServerScope:
+		return fmt.Errorf("%w: an estimate of a plan is in the namespace of its unit", ErrInvalid)
 	case e.Subject.Job != "" && e.Unit == "":
 		return fmt.Errorf("%w: an estimate of a plan names its unit", ErrInvalid)
 	}
@@ -223,9 +255,17 @@ func (e Estimate) validateSums() error {
 			return err
 		}
 
-		if !r.Unpriced {
-			before.Micros += r.Before.Micros
-			after.Micros += r.After.Micros
+		if r.Unpriced {
+			continue
+		}
+
+		var err error
+		if before, err = before.Add(r.Before); err != nil {
+			return fmt.Errorf("resource %s: %w", r.Key, err)
+		}
+
+		if after, err = after.Add(r.After); err != nil {
+			return fmt.Errorf("resource %s: %w", r.Key, err)
 		}
 	}
 

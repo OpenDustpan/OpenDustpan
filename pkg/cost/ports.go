@@ -10,7 +10,7 @@ import (
 
 // EstimateInput is what an estimator reads. Plan is the machine-readable
 // plan of the tool with every secret value masked, the same document that
-// a person with the read action of plans can read. It never holds a
+// a person with the action job:read-plans can read. It never holds a
 // secret value. Tool is the tool name, for example "OpenTofu".
 type EstimateInput struct {
 	Unit     string
@@ -22,8 +22,8 @@ type EstimateInput struct {
 // Estimator prices a plan. The server calls it after a plan phase stores
 // its plan, in a durable operation, so a slow price source never holds a
 // job. An adapter can call a price service, read a price list, or run an
-// estimator program. A team that runs its estimator in its own pipeline
-// sends the result through the API instead, with the source "api".
+// estimator program. A team that runs its estimator in a step of a runner
+// job sends the result through the API instead, with the source "api".
 type Estimator interface {
 	// Name returns the name and the version of the adapter, for
 	// Estimate.Source.
@@ -96,15 +96,22 @@ type SpendSource interface {
 	Spend(ctx context.Context, q SpendQuery) ([]SpendLine, error)
 }
 
-// EstimateStore is the persistence port for estimates. An estimate of a
-// plan is a write in the namespace of its unit, and carries its fence. An
-// estimate of a blueprint carries a zero fence.
+// EstimateStore is the persistence port for estimates.
+//
+// An estimate is a write in the namespace of its row, Estimate.Namespace,
+// and carries the fence of that namespace. A zero fence is valid only for
+// an estimate in audit.ServerScope, the estimate of a blueprint of the
+// installation, and a fence is refused for such an estimate.
 type EstimateStore interface {
-	// PutEstimate stores e and replaces the estimate of the same subject.
-	// It appends the audit entry e when the estimate came from a client
-	// through the API, and appends nothing when entry is nil. It returns
-	// ErrInvalid for an estimate that fails Validate, and
-	// namespace.ErrFenced.
+	// PutEstimate stores est and replaces the estimate of the same
+	// subject. It appends the audit entry when the estimate came from a
+	// client through the API, and appends nothing when entry is nil. It
+	// returns ErrInvalid for an estimate that fails Validate, for a fence
+	// of another namespace than est.Namespace, for a zero fence of an
+	// estimate in a namespace, for a fence of an estimate in
+	// audit.ServerScope, and for a subject whose stored estimate is in
+	// another namespace. It returns namespace.ErrFenced for a stale fence
+	// and namespace.ErrNotFound for an unknown namespace.
 	PutEstimate(ctx context.Context, est Estimate, fence namespace.Fence, entry *audit.Entry) error
 	// GetEstimate returns the estimate of s, or ErrNotFound.
 	GetEstimate(ctx context.Context, s Subject) (Estimate, error)
@@ -115,27 +122,43 @@ type EstimateStore interface {
 }
 
 // BudgetStore is the persistence port for budgets and their last status.
-// A budget is a write in its namespace: each write carries the fence of
-// the namespace and appends the audit entry e in its transaction.
+//
+// A budget and its status are writes in the namespace of the budget. Each
+// write carries the fence of that namespace. A budget is never in
+// audit.ServerScope, so a zero fence is always refused. A write of a
+// stored budget, found by its ID, returns ErrNotFound when the fence
+// belongs to another namespace than the budget, so that a caller cannot
+// learn of a budget in a namespace that it does not hold. A stale fence
+// returns namespace.ErrFenced.
 type BudgetStore interface {
-	// CreateBudget persists b with version 1. It returns ErrInvalid,
-	// ErrExists and namespace.ErrFenced.
+	// CreateBudget persists b with version 1 and appends the audit entry
+	// e in its transaction. It returns ErrInvalid for a budget that fails
+	// Validate, for a zero fence and for a fence of another namespace than
+	// b.Namespace. It returns ErrExists, namespace.ErrFenced and
+	// namespace.ErrNotFound for an unknown namespace.
 	CreateBudget(ctx context.Context, b Budget, fence namespace.Fence, e audit.Entry) error
-	// UpdateBudget replaces b.ID when b.Version is the stored version. It
-	// returns ErrNotFound, ErrInvalid, ErrConflict and
-	// namespace.ErrFenced.
+	// UpdateBudget replaces b.ID when b.Version is the stored version,
+	// and appends the audit entry e in its transaction. It returns
+	// ErrNotFound for an unknown budget, a zero fence or a fence of
+	// another namespace than the stored budget. It returns ErrInvalid for
+	// a budget that fails Validate or that names another namespace than
+	// the stored budget, ErrConflict and namespace.ErrFenced.
 	UpdateBudget(ctx context.Context, b Budget, fence namespace.Fence, e audit.Entry) error
-	// DeleteBudget deletes the budget id and its status. It returns
-	// ErrNotFound and namespace.ErrFenced.
+	// DeleteBudget deletes the budget id and its statuses, and appends the
+	// audit entry e in its transaction. It returns ErrNotFound for an
+	// unknown budget, a zero fence or a fence of another namespace than
+	// the budget, and namespace.ErrFenced.
 	DeleteBudget(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
 	// Budgets returns the budgets of ns, ordered by ID.
 	Budgets(ctx context.Context, ns namespace.Name) ([]Budget, error)
-	// SaveStatus stores st as the last status of its budget and period,
-	// when version is the version of the stored status, or 0 for none.
-	// It returns ErrNotFound for an unknown budget and ErrConflict for
-	// another version. The evaluation of a budget writes no audit entry.
-	SaveStatus(ctx context.Context, st Status, version int64) error
-	// LastStatus returns the last status of the budget id for p and its
-	// version, or ErrNotFound.
+	// SaveStatus stores st, with its Warned thresholds, as the last status
+	// of its budget and period, when version is the version of the stored
+	// status, or 0 for none. It returns ErrNotFound for an unknown budget,
+	// a zero fence or a fence of another namespace than the budget,
+	// ErrConflict for another version, and namespace.ErrFenced. The
+	// evaluation of a budget writes no audit entry.
+	SaveStatus(ctx context.Context, st Status, version int64, fence namespace.Fence) error
+	// LastStatus returns the last status of the budget id for p, with its
+	// Warned thresholds and its version, or ErrNotFound.
 	LastStatus(ctx context.Context, id string, p Period) (Status, int64, error)
 }
