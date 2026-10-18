@@ -74,7 +74,8 @@ namespace (ADR 190).
    `ErrInvalid` and `ErrReasonRequired`, `404` for `ErrNotFound`, `409` for
    `ErrConflict`, `ErrTransition`, `ErrFinished`, `ErrApplying`,
    `ErrPlanChanged`, `ErrPlanStale`, `ErrNotReady`, `ErrNotApproved` and
-   `ErrChangesRequested`, `403` for `ErrSelfApproval`, `ErrNotEligible`,
+   `ErrChangesRequested`, `403` for `ErrSelfApproval`, `ErrNotAuthor`,
+   `ErrNotEligible`,
    `ErrAuthorThread`, `ErrSelfResolve`, `ErrAgentDenied` and
    `ErrPolicyDenied`, `409` also for `ErrPolicyUnreadable` and
    `ErrSummaryUnreadable`, `422` for `ErrLimit`, and `503` for

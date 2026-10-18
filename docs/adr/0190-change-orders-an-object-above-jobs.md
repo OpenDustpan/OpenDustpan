@@ -65,7 +65,7 @@ label **One-way door** in the text. This list collects them:
 | All units of a change order are in one namespace (decision 3) | The fence, the backup and the audit scope are per namespace. |
 | The digest encoding `cho-digest/1` (ADR 191 decision 4) | Signatures in the audit chain hold the digest. A new encoding needs a new version name. |
 | The ID prefixes `cho-`, `cor-`, `cot-` and `coc-` (decision 2, ADRs 192 and 193) | IDs are in audit entries, links and backups. |
-| The prefix `cog-` of the content key of a change group (ADR 194 decision 5) | Thread anchors and backups hold the key. It is a content key, not an ID. |
+| The encoding of the content key of a change group: the prefix `cog-` and the HMAC-SHA-256 with the key of the namespace (ADR 194 decision 5) | Thread anchors and backups hold the key. It is a content key, not an ID. A new encoding stops each thread that follows a change group, and needs a new prefix. |
 | Shared code and the tool-neutral API say `plan` (ADR 195 decision 1) | API fields and audit entries hold the word. |
 | The audit entry shapes of ADR 197 decision 6 | The audit chain hashes each entry. |
 | Comment text is a history item with its own item key (ADR 198 decision 3) | Backups hold the sealed text. A later change needs a migration of each key. The summary of a review is a comment too (ADR 192 decision 1). |
@@ -118,9 +118,26 @@ label **One-way door** in the text. This list collects them:
 6. **The change order owns the approvals of its jobs.** The approvals,
    the signatures and the threads are on the change order, never on a gate
    of its jobs (owner). The `job.Decider` adapter gives no gate of the type
-   `job.GateApproval` to a job with a change order origin. It still applies
-   a `deny` of the decision point `job.start` (ADR 114 decision 10). The
-   job model still applies its other rules to these jobs: the freeze, the
+   `job.GateApproval` to a job with a change order origin. The policy of
+   the decision point `job.start` still applies, in two places:
+   - The operation `changeorder.decide` (ADR 192 decision 4) also asks
+     `job.start` for each unit of the revision, with the operation of that
+     unit (`apply` or `destroy`). Each `approve` requirement that it
+     returns joins the set of requirements that `changeorder.Match` fills.
+     A `deny` blocks the approval of the revision, as a `deny` of
+     `changeorder.review` does.
+   - At the start of an apply job, the `job.Decider` adapter still applies
+     a `deny` of `job.start` (ADR 114 decision 10). When `job.start` gives
+     `approve`, and the stored decisions of the revision do not hold each
+     requirement that it gives, the adapter refuses the start with
+     `job.ErrPolicyDenied`. An error of the port `job.ChangeOrders` also
+     refuses the start: the check fails closed. So a requirement of
+     `job.start` that the change order did not meet stops its apply job.
+
+   `jobtest` gets these cases: an apply job start when `job.start` gives
+   `approve` and the stored decisions hold its requirement (the start
+   passes), the same start when the stored decisions do not hold it, a
+   `deny` of `job.start`, and an error of the port. The job model still applies its other rules to these jobs: the freeze, the
    one change at a time on a unit, and the plan check at the dispatch.
    **One-way door.**
 7. **States.** A change order has one of nine states
@@ -188,7 +205,7 @@ label **One-way door** in the text. This list collects them:
    | applying | jobs-ended-all-succeeded | applied |
    | applying | jobs-ended-some-failed | partially-applied |
    | partially-applied | attach | planning |
-   | planning, plan-failed, in-review, approved, partially-applied | reject-and-close | closed |
+   | planning, plan-failed, in-review, approved, partially-applied | reject-and-close (with no digest in planning and plan-failed) | closed |
    | planning, plan-failed, in-review, approved, partially-applied | close | closed |
    | planning, plan-failed, in-review, approved, partially-applied | expire | expired |
 
@@ -207,6 +224,9 @@ label **One-way door** in the text. This list collects them:
    - An attach is possible in each state that is not terminal, except
      `applying`. A new plan while apply jobs run would hide what the jobs
      change. An attach in `applying` fails with `changeorder.ErrApplying`.
+   - `reject-and-close` is possible in `planning` and `plan-failed`, where
+     the current revision has no digest. There the submit names no digest:
+     it closes the change order and signs nothing (ADR 193 decision 6).
    - `reject-and-close` and `close` are not possible in `applying`. A
      person cancels the apply jobs through the job model first (ADR 100
      decision 11). The change order then moves to `partially-applied` or
@@ -286,8 +306,8 @@ label **One-way door** in the text. This list collects them:
     creates a change order, attaches a plan, approves, requests changes,
     rejects, closes, resolves or reopens a thread, or asks for an apply.
     Each of these fails with `changeorder.ErrAgentDenied`. The agent tool
-    set of ADR 122 has no tool for change orders. A tool needs an ADR (ADR
-    122 decision 14).
+    set of ADR 122 has no tool for change orders. A new agent tool needs a
+    later ADR.
 15. **Only the wiring sets the origin and the plan of a job.** The fields
     `job.Spec.ChangeOrder` and `job.Spec.Plan` give a job the rules of
     decisions 6 and 9: no approval gate, and an apply of a named stored

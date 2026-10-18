@@ -93,9 +93,16 @@ Facts:
    changes of its unit. The key of a change group is a content key, not an
    ID: the store derives it from the change, and never assigns it. It has
    the prefix `cog-`, which is not the prefix of the groups of principals,
-   and it is the hex of the first 16 bytes of the SHA-256 of the tool, the
-   type, the sorted value paths and the values before and after. These
-   values are never secret, so the key covers no secret value. The key is
+   and it is the hex of the first 16 bytes of the HMAC-SHA-256 of the tool,
+   the type, the sorted value paths and the values before and after. The
+   HMAC key is a random key of the namespace, which the store keeps sealed
+   as a data key of the namespace (ADR 23). It is the same key for each
+   revision, so the content key is stable. A delete of the namespace
+   shreds it. A plain hash of values that a reader can guess lets the
+   reader test each guess. The key of the namespace stops that test for a
+   reader who does not hold it. **One-way door:** thread anchors and
+   backups hold the content key, so a new encoding needs a new prefix.
+   These values are never secret, so the key covers no secret value. The key is
    not a digest of secret content (ADR 150 decision 6), and it tells nothing
    about a secret value. The key is stable from one revision to the next for
    the same change, and a thread can follow a change group (ADR 193 decision

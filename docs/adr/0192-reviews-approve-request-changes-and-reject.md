@@ -59,18 +59,23 @@ policy, with a number and the groups of the approvers.
    agent. `changeorder.CheckAgent` (ADR 196 decision 10) does not change.
 4. **Requirements.** At the end of each attach, when the revision is
    `ready`, the server asks the policy engines that the namespace binds to
-   the decision point `changeorder.review` (ADR 114). The input of the
+   the decision point `changeorder.review` (ADR 114). In the same
+   operation, it asks the decision point `job.start` for each unit of the
+   revision, with the operation of that unit (`apply` or `destroy`) (ADR
+   190 decision 6). The input of the
    kind `changeorder.review`, schema version 1, holds the authors, the
    namespace, each unit reference, its labels, its operation and the
    counts of the change kinds of its plan (ADR 194). It holds no value of
-   a resource and no secret. `policy.Combine` joins the decisions
-   (ADR 114 decision 4):
+   a resource and no secret. `policy.Combine` joins the decisions of both
+   decision points (ADR 114 decision 4):
    - `deny` blocks the approval of the revision. The change order stays
      `in-review` with the reasons of the policy, and the store refuses
      each `approve` with `changeorder.ErrPolicyDenied`. An author can
      attach a new revision.
    - `approve` gives the requirements: for each one, a number of
-     approvals and the groups of the approvers.
+     approvals and the groups of the approvers. The requirements of
+     `job.start` join the requirements of `changeorder.review` in one set,
+     and `changeorder.Match` fills that set (decision 6).
    - `allow` gives no requirement of its own.
 
    A change order always needs at least one approval by a person who is not
@@ -86,7 +91,7 @@ policy, with a number and the groups of the approvers.
    decision: a retry succeeds only after the policy changes. A change order
    with no approval would be a set of jobs. The revision records each
    decision as ADR 114 decision 11 says. A policy that fails is not a
-   decision. The revision stays `in-review` with no requirement, and the
+   decision. The change order stays `in-review` with no requirement, and the
    store refuses each `approve` with `changeorder.ErrPolicyFailed`, until a
    retry of the operation succeeds.
 
@@ -105,8 +110,10 @@ policy, with a number and the groups of the approvers.
    server adds the default requirement), a requirement with the number 0,
    a `mandatory` failed result of a resource policy, an unreadable policy
    report, an unreadable summary with no policy, an `invalid-requirement`
-   decision and its retry with the same policy, and the `MinApprovals`
-   check with requirements from a policy.
+   decision and its retry with the same policy, the `MinApprovals`
+   check with requirements from a policy, an `approve` requirement of
+   `job.start` that joins the set that `Match` fills, a `deny` of
+   `job.start`, and a failure of `job.start`.
 5. **Eligible approvers.** A principal is an eligible approver of a change
    order when all of these are true:
    - it holds `changeorder:approve` on each unit of the current revision,
@@ -151,7 +158,10 @@ policy, with a number and the groups of the approvers.
 8. **Close by an author.** An author can close a change order that is not
    terminal and not `applying`, with a reason, with `changeorder:author` on
    each unit. This is a withdrawal, not a rejection. The record names the
-   kind of the close: `rejected` or `withdrawn`. The reason of a
+   kind of the close: `rejected` or `withdrawn`. A close by a principal
+   that is not an author fails with `changeorder.ErrNotAuthor`, also with
+   `changeorder:author` on each unit. `changeordertest.RunStore` gets a
+   case for it. The reason of a
    withdrawal is in the audit entry of the close (ADR 197 decision 6), and
    a redaction cannot reach it. The reason of a `reject-and-close` is the
    summary of its review, a comment that a redaction can reach (decision

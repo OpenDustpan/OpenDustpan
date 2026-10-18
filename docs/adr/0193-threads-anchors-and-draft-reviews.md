@@ -59,7 +59,10 @@ comments on parts of it. The owner decided (owner):
    11). A comment thread needs `changeorder:comment` on each unit. An
    author can open comment threads and reply to each thread.
 5. **A draft review.** Each reviewer has at most one draft review on each
-   change order (`changeorder.Draft`). It holds the threads and the
+   change order (`changeorder.Draft`). The store keys a draft by the change
+   order, the subject and the agent reference, which is empty for a
+   person. So a person and each agent of that person have different
+   drafts. An agent never reads or submits the draft of its person. It holds the threads and the
    replies that the reviewer wrote and did not submit, each with its
    anchor. Only its reviewer reads it. The server keeps it, so a reviewer
    can continue on another device. A draft holds at most 100 items. A
@@ -74,10 +77,20 @@ comments on parts of it. The owner decided (owner):
    and the notifications. Then it deletes the draft. A submit names the
    digest that the reviewer saw. A digest that is not the digest of the
    current revision fails with `changeorder.ErrPlanChanged` for an
-   `approve` and a `reject-and-close`. For `request-changes` and `comment`,
-   the store maps the anchors of the draft to the current revision with
-   the rule of decision 7. So a reviewer who reads an old revision can
-   still ask for changes. Their threads show the revision that they read.
+   `approve`, and for a `reject-and-close` of a `ready` revision. A
+   `reject-and-close` while the current revision is `planning` or
+   `plan-failed` names no digest: it closes the change order and signs
+   nothing. For `request-changes` and `comment`, the store checks each
+   anchor of the draft against the revision that the reviewer saw, which
+   is the revision of the digest in the submit. An anchor that names no
+   change of that revision fails with `changeorder.ErrInvalid`. While the
+   current revision is `planning`, the submit names the digest of the last
+   `ready` revision that the reviewer saw. The threads keep the revision
+   that the reviewer saw as the revision of their anchor. When the next
+   revision is `ready`, they follow it with the rule of decision 7, and
+   can become outdated (decision 8). If that revision is already `ready`
+   at the submit, the store maps them in the transaction of the submit.
+   So a reviewer who reads an old revision can still ask for changes.
 7. **Threads follow their anchors into the next plan.** When a new
    revision becomes `ready`, the store maps each thread that is open to
    the new revision, in the transaction that marks the revision `ready`:

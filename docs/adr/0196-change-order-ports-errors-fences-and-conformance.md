@@ -31,11 +31,12 @@ each port before any adapter. Each write inside a namespace carries a
    | `ErrNotApproved` | An apply of a change order that is not `approved`. |
    | `ErrChangesRequested` | An approve or an apply while a blocking thread is open. The error names the threads. |
    | `ErrSelfApproval` | An approve, a request for changes or a reject by an author. |
+   | `ErrNotAuthor` | A close by a principal that is not an author, also with `changeorder:author` on each unit (ADR 192 decision 8). |
    | `ErrNotEligible` | A verdict or a resolve by a principal that is not an eligible approver. This includes the principal that opened a blocking thread and lost `changeorder:approve` (ADR 193 decision 9). |
    | `ErrAuthorThread` | A blocking thread, or a reopen of one, by an author. |
    | `ErrSelfResolve` | A resolve of a blocking thread by an author. |
    | `ErrReasonRequired` | A request for changes, a reject, a close, a dismissal or a reopen with no reason. |
-   | `ErrAgentDenied` | A write of an agent that is not a reply, a write of its own draft, or a review of the verdict `comment`. That review can hold comment threads, replies and blocking threads (ADR 190 decision 14). |
+   | `ErrAgentDenied` | A write of an agent that is not a reply, a write of its own draft, or a review of the verdict `comment`. A read or a submit of the draft of its person by an agent. That review can hold comment threads, replies and blocking threads (ADR 190 decision 14). |
    | `ErrPolicyDenied` | An approve of a revision that a policy denied (ADR 192 decision 4, ADR 194 decision 8). |
    | `ErrPolicyFailed` | An approve while the policy of the revision failed and no retry succeeded, also for a decision with a requirement that is not valid. For `invalid-requirement`, a retry succeeds only after the policy changes. |
    | `ErrPolicyUnreadable` | An approve of a revision with a resource policy report that the `PlanReader` cannot read. The error names the unit and the parse error (ADR 194 decision 8). |
@@ -131,21 +132,21 @@ each port before any adapter. Each write inside a namespace carries a
        // ErrAgentDenied, ErrFinished, ErrConflict.
        StartApply(ctx context.Context, id ID, a ApplyRequest, el Eligibility, version int64, f namespace.Fence, e []audit.Entry) (Order, error)
        // Close ends the change order closed. ErrReasonRequired,
-       // ErrApplying, ErrAgentDenied, ErrFinished, ErrConflict.
+       // ErrNotAuthor, ErrApplying, ErrAgentDenied, ErrFinished, ErrConflict.
        Close(ctx context.Context, id ID, c Closure, version int64, f namespace.Fence, e []audit.Entry) (Order, error)
        // Expire ends an idle change order. ErrTransition when it saw a
        // write after now minus DefaultIdleTimeout, or when it is applying.
        // ErrFinished.
        Expire(ctx context.Context, id ID, now time.Time, f namespace.Fence, e []audit.Entry) (Order, error)
-       // PutDraft stores the draft of d.Reviewer. A draft write appends no
+       // PutDraft stores the draft of d.Key. A draft write appends no
        // audit entry. ErrInvalid, ErrLimit above 100 items, ErrFinished.
        PutDraft(ctx context.Context, id ID, d Draft, f namespace.Fence) error
-       // GetDraft reads the draft of reviewer. ErrNotFound when it has
+       // GetDraft reads the draft of k: the subject and the agent
+       // reference, empty for a person. ErrNotFound when it has none.
+       GetDraft(ctx context.Context, id ID, k DraftKey) (Draft, error)
+       // DeleteDraft deletes the draft of k. ErrNotFound when it has
        // none.
-       GetDraft(ctx context.Context, id ID, reviewer string) (Draft, error)
-       // DeleteDraft deletes the draft of reviewer. ErrNotFound when it
-       // has none.
-       DeleteDraft(ctx context.Context, id ID, reviewer string, f namespace.Fence) error
+       DeleteDraft(ctx context.Context, id ID, k DraftKey, f namespace.Fence) error
    }
    ```
 
@@ -257,6 +258,7 @@ each port before any adapter. Each write inside a namespace carries a
     | Method | Agent |
     | --- | --- |
     | `PutDraft`, `GetDraft`, `DeleteDraft` on its own draft | allowed |
+    | `GetDraft` or `Submit` of the draft of its person (a draft key with an empty agent reference) | `ErrAgentDenied` |
     | `Submit` with the verdict `comment` | allowed, also with blocking threads for an agent of an eligible approver |
     | `Submit` with `approve`, `request-changes` or `reject-and-close` | `ErrAgentDenied` |
     | `Reply` | allowed |
@@ -294,8 +296,8 @@ each port before any adapter. Each write inside a namespace carries a
     - `pkg/job/jobtest` gets the cases of ADR 190: an apply job with
       `job.Spec.Plan`, its stale dispatch, the reader rule of the part
       `plan-apply`, no approval gate for a job with a change order origin,
-      the start of `changeorder.sync`, the origin cases of ADR 190
-      decision 15, and the refusal of a comment and a resolve on a job with
+      the start of `changeorder.sync`, the `job.start` cases of ADR 190
+      decision 6, the origin cases of ADR 190 decision 15, and the refusal of a comment and a resolve on a job with
       a change order origin (ADR 190 decision 16).
 
 ## Consequences

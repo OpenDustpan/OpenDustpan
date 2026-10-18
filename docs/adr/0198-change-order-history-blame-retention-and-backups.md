@@ -40,8 +40,11 @@ signatures (ADR 191).
 3. **A comment is a history item.** A comment is each comment of a thread,
    and the summary of each review, with its reason (ADR 192 decision 1).
    Each comment has its own item key of
-   the new item kind `comment` (`secret.ItemKindComment`), with the scope
-   of the namespace of the change order. The server writes the wrapped key
+   the item kind `comment`. That kind is an entry in the registry of item
+   kinds (`history.Kinds`, ADR 154 decision 15), with the owner kind
+   `change-order`, not a constant of the `secret` package. The scope of
+   the item key is the namespace and the owner ID, which is the change
+   order ID (ADR 154 decision 17). The server writes the wrapped key
    blob first, then the comment and the key record in one fenced
    transaction (ADR 151 decision 3). So a person who pastes a secret in a
    comment can have it destroyed, also in each backup target:
@@ -53,10 +56,10 @@ signatures (ADR 191).
    - The change order implements `history.Redactor` for comments. Its
      conformance suite is `historytest.RunRedactor` with the new table
      `historytest.CommentSituations()`.
-   - `history.ItemRef` names a unit today. A comment names a change order.
-     The history model gets a second owner kind for an item reference,
-     `change-order`, with the namespace and the change order ID. The
-     `history` package changes before the comment store lands.
+   - `history.ItemRef` names an owner (ADR 154 decision 17). A comment
+     names the owner kind `change-order`, with the namespace and the change
+     order ID. The `history` package changes before the comment store
+     lands.
    - A comment has no retention period. It stays until the final delete of
      the namespace, as the record of the review. **One-way door:** backups
      hold the sealed text of each comment.
