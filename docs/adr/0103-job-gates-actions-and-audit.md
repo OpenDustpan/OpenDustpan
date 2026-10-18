@@ -1,6 +1,6 @@
 # 103. Job gates, actions and audit entries
 
-Status: accepted · 2026-10-17 · decision 10 superseded in part by ADR 126 · decision 9 superseded in part by ADR 141
+Status: accepted · 2026-10-17 · decision 10 superseded in part by ADR 126 · decision 9 superseded in part by ADR 141. Gate counting extended by ADR 148. Decisions 2, 7, 9, 10 and 12 and the Consequences superseded in part by ADR 128. Decisions 1 and 2 superseded in part by ADR 190
 
 ## Context
 

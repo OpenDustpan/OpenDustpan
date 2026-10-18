@@ -53,6 +53,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"open stores a review and appends one entry", testOpen},
 		{"a second open of one use returns the first review", testOpenOnce},
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
+		{"get of a review of another scope is ErrNotFound", testGetOtherScope},
 		{"record stores a verdict once", testRecordOnce},
 		{"record on an older version is ErrConflict", testRecordConflict},
 		{"advance on an older version is ErrConflict", testAdvanceConflict},
@@ -208,7 +209,7 @@ func testOpen(t *testing.T, h Harness) {
 		t.Fatalf("Open = %+v, want a pending review with version 1", got)
 	}
 
-	stored, err := h.Store.Get(t.Context(), "bgr-1")
+	stored, err := h.Store.Get(t.Context(), shop, "bgr-1")
 	if err != nil || stored.Use.Ref != "job-1" || !stored.DueAt.Equal(got.DueAt) {
 		t.Fatalf("Get = %+v (%v), want the opened review", stored, err)
 	}
@@ -230,7 +231,7 @@ func testOpenOnce(t *testing.T, h Harness) {
 		t.Fatalf("second Open = %s, want %s", second.ID, first.ID)
 	}
 
-	if _, err := h.Store.Get(t.Context(), "bgr-2"); !errors.Is(err, breakglass.ErrNotFound) {
+	if _, err := h.Store.Get(t.Context(), shop, "bgr-2"); !errors.Is(err, breakglass.ErrNotFound) {
 		t.Fatalf("Get bgr-2: err = %v, want ErrNotFound", err)
 	}
 
@@ -243,8 +244,33 @@ func testOpenOnce(t *testing.T, h Harness) {
 func testGetUnknown(t *testing.T, h Harness) {
 	t.Helper()
 
-	if _, err := h.Store.Get(t.Context(), "bgr-none"); !errors.Is(err, breakglass.ErrNotFound) {
+	if _, err := h.Store.Get(t.Context(), shop, "bgr-none"); !errors.Is(err, breakglass.ErrNotFound) {
 		t.Fatalf("Get: err = %v, want ErrNotFound", err)
+	}
+}
+
+func testGetOtherScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	open(t, h, fence, review("bgr-1", "job-1", now()))
+	open(t, h, zero(), session("bgr-2", "ses-1"))
+
+	for _, tc := range []struct {
+		scope namespace.Name
+		id    string
+	}{
+		{other, "bgr-1"},
+		{audit.ServerScope, "bgr-1"},
+		{shop, "bgr-2"},
+	} {
+		if _, err := h.Store.Get(t.Context(), tc.scope, tc.id); !errors.Is(err, breakglass.ErrNotFound) {
+			t.Fatalf("Get %s in %s: err = %v, want ErrNotFound", tc.id, tc.scope, err)
+		}
+	}
+
+	if _, err := h.Store.Get(t.Context(), audit.ServerScope, "bgr-2"); err != nil {
+		t.Fatalf("Get bgr-2 in %s: %v", audit.ServerScope, err)
 	}
 }
 
@@ -258,7 +284,7 @@ func testRecordOnce(t *testing.T, h Harness) {
 		t.Fatalf("Record: %v", err)
 	}
 
-	got, err := h.Store.Get(t.Context(), "bgr-1")
+	got, err := h.Store.Get(t.Context(), shop, "bgr-1")
 	if err != nil || got.State != breakglass.StateAccepted || got.Verdict.Reviewer != "bob" || got.Version != 2 {
 		t.Fatalf("Get = %+v (%v), want the verdict with version 2", got, err)
 	}
@@ -439,7 +465,7 @@ func testStaleFence(t *testing.T, h Harness) {
 
 	unchanged(t, h, r, shop)
 
-	if _, err := h.Store.Get(t.Context(), "bgr-2"); !errors.Is(err, breakglass.ErrNotFound) {
+	if _, err := h.Store.Get(t.Context(), shop, "bgr-2"); !errors.Is(err, breakglass.ErrNotFound) {
 		t.Fatalf("Get after a fenced open: err = %v, want ErrNotFound", err)
 	}
 }
@@ -494,7 +520,7 @@ func testFenceScope(t *testing.T, h Harness) {
 			t.Fatalf("%s: Advance: err = %v, want ErrNotFound", tc.name, err)
 		}
 
-		if _, err := h.Store.Get(t.Context(), "bgr-new"); !errors.Is(err, breakglass.ErrNotFound) {
+		if _, err := h.Store.Get(t.Context(), tc.r.Use.Scope, "bgr-new"); !errors.Is(err, breakglass.ErrNotFound) {
 			t.Fatalf("%s: Get bgr-new: err = %v, want ErrNotFound", tc.name, err)
 		}
 	}
@@ -588,7 +614,7 @@ func testRecordStoredUse(t *testing.T, h Harness) {
 		t.Fatalf("Record: err = %v, want ErrSelfReview", err)
 	}
 
-	got, err := h.Store.Get(t.Context(), "bgr-1")
+	got, err := h.Store.Get(t.Context(), shop, "bgr-1")
 	if err != nil || got.Use.Subject != "alice" || got.State != breakglass.StatePending {
 		t.Fatalf("Get = %+v (%v), want the pending review of alice", got, err)
 	}
@@ -628,7 +654,7 @@ func testOpenInvalid(t *testing.T, h Harness) {
 			t.Fatalf("%s: Open: err = %v, want ErrInvalid", tc.name, err)
 		}
 
-		if _, err := h.Store.Get(t.Context(), r.ID); !errors.Is(err, breakglass.ErrNotFound) {
+		if _, err := h.Store.Get(t.Context(), shop, r.ID); !errors.Is(err, breakglass.ErrNotFound) {
 			t.Fatalf("%s: Get: err = %v, want ErrNotFound", tc.name, err)
 		}
 	}
@@ -658,7 +684,7 @@ func testOpenTakenID(t *testing.T, h Harness) {
 		t.Fatalf("Open of another job with the same ID: err = %v, want ErrInvalid", err)
 	}
 
-	got, err := h.Store.Get(t.Context(), "bgr-1")
+	got, err := h.Store.Get(t.Context(), shop, "bgr-1")
 	if err != nil || got.Use.Ref != "job-1" || got.Use.Scope != shop || got.Version != first.Version {
 		t.Fatalf("Get = %+v (%v), want the review of job-1 unchanged", got, err)
 	}
@@ -686,7 +712,7 @@ func testEntryScope(t *testing.T, h Harness) {
 		t.Fatalf("Open with an entry of %s: err = %v, want ErrInvalid", other, err)
 	}
 
-	if _, err := h.Store.Get(t.Context(), "bgr-2"); !errors.Is(err, breakglass.ErrNotFound) {
+	if _, err := h.Store.Get(t.Context(), shop, "bgr-2"); !errors.Is(err, breakglass.ErrNotFound) {
 		t.Fatalf("Get bgr-2: err = %v, want ErrNotFound", err)
 	}
 
@@ -777,7 +803,7 @@ func testListOverdue(t *testing.T, h Harness) {
 func unchanged(t *testing.T, h Harness, r breakglass.Review, scope namespace.Name) {
 	t.Helper()
 
-	got, err := h.Store.Get(t.Context(), r.ID)
+	got, err := h.Store.Get(t.Context(), scope, r.ID)
 	if err != nil || got.Version != r.Version || got.State != r.State || got.Step != r.Step {
 		t.Fatalf("Get %s = %+v (%v), want it unchanged", r.ID, got, err)
 	}

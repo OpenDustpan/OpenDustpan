@@ -116,6 +116,8 @@ type Layer struct {
 // Override is an on-call override: it puts Principal on call from Start
 // to End, over every layer. CreatedBy is the principal that added it, at
 // CreatedAt. The store sets CreatedAt from the time of its transaction.
+// The overrides of a schedule are in the order of their adds, and the
+// last one that covers a time wins.
 type Override struct {
 	ID        string
 	Principal string
@@ -240,6 +242,17 @@ func (o Override) Validate() error {
 	}
 
 	return nil
+}
+
+// SameOverrides reports whether a and b hold the same overrides in the
+// same order. Times are equal when they name the same instant, in any
+// location, so a list that a client read and sent back is the same list.
+// Store.Update uses it to accept the stored list in a request.
+func SameOverrides(a, b []Override) bool {
+	return slices.EqualFunc(a, b, func(x, y Override) bool {
+		return x.ID == y.ID && x.Principal == y.Principal && x.Reason == y.Reason && x.CreatedBy == y.CreatedBy &&
+			x.Start.Equal(y.Start) && x.End.Equal(y.End) && x.CreatedAt.Equal(y.CreatedAt)
+	})
 }
 
 func (l Layer) validate() error {

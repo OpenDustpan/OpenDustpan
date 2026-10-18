@@ -38,3 +38,6 @@ plan.
 
 Answered in part by ADR 102 (job plans and logs) and ADR 152 (history policy
 for job artifacts), on 2026-10-17.
+
+ADR 191 (plan revisions, unit plans and signatures) binds the approvals of
+a change order to the digest of all its stored plans, on 2026-10-18.

@@ -54,6 +54,7 @@ func Run(t *testing.T, newHarness Factory) {
 	base := []testCase{
 		{"create stores a calendar and get returns it", testCreateGet},
 		{"get of an unknown ID is ErrNotFound", testGetUnknown},
+		{"get of a calendar of another scope is ErrNotFound", testGetOtherScope},
 		{"a second create with one ID is ErrExists", testCreateExists},
 		{"update on an older version is ErrConflict", testUpdateConflict},
 		{"update keeps the holidays and the status of an unchanged feed", testUpdateKeepsFeed},
@@ -222,10 +223,10 @@ func create(t *testing.T, h Harness, fence namespace.Fence, c calendar.Calendar)
 	}
 }
 
-func get(t *testing.T, h Harness, id calendar.ID) calendar.Calendar {
+func get(t *testing.T, h Harness, scope namespace.Name, id calendar.ID) calendar.Calendar {
 	t.Helper()
 
-	c, err := h.Store.Get(t.Context(), id)
+	c, err := h.Store.Get(t.Context(), scope, id)
 	if err != nil {
 		t.Fatalf("Get %s: %v", id, err)
 	}
@@ -289,7 +290,7 @@ func testCreateGet(t *testing.T, h Harness) {
 	c.Feeds[0].Status = goodStatus(9, "forged")
 	create(t, h, f.shop, c)
 
-	got := get(t, h, "cal-berlin")
+	got := get(t, h, shop, "cal-berlin")
 	if got.Zone != "Europe/Berlin" || got.Owner != nsScope(shop) || got.Version != 1 ||
 		len(got.Holidays) != 1 || len(got.Feeds) != 1 || got.Feeds[0].URL != feedURL {
 		t.Fatalf("Get = %+v, want the created calendar at version 1", got)
@@ -307,8 +308,33 @@ func testCreateGet(t *testing.T, h Harness) {
 func testGetUnknown(t *testing.T, h Harness) {
 	t.Helper()
 
-	_, err := h.Store.Get(t.Context(), "cal-none")
+	_, err := h.Store.Get(t.Context(), shop, "cal-none")
 	wantErr(t, "Get", err, calendar.ErrNotFound)
+}
+
+func testGetOtherScope(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setup(t, h)
+	create(t, h, f.shop, sample("cal-berlin", nsScope(shop)))
+	create(t, h, noFence(), sample("cal-team", groupScope()))
+
+	for _, tc := range []struct {
+		scope namespace.Name
+		id    calendar.ID
+	}{
+		{lab, "cal-berlin"},
+		{audit.ServerScope, "cal-berlin"},
+		{shop, "cal-team"},
+		{shop, calendar.DefaultID},
+	} {
+		_, err := h.Store.Get(t.Context(), tc.scope, tc.id)
+		wantErr(t, "Get "+string(tc.id)+" in "+tc.scope.String(), err, calendar.ErrNotFound)
+	}
+
+	get(t, h, shop, "cal-berlin")
+	get(t, h, audit.ServerScope, "cal-team")
+	get(t, h, audit.ServerScope, calendar.DefaultID)
 }
 
 func testCreateExists(t *testing.T, h Harness) {
@@ -330,14 +356,14 @@ func testUpdateConflict(t *testing.T, h Harness) {
 	f := setup(t, h)
 	create(t, h, f.shop, sample("cal-berlin", nsScope(shop)))
 
-	c := get(t, h, "cal-berlin")
+	c := get(t, h, shop, "cal-berlin")
 	c.Name = "Berlin office"
 
 	if err := h.Store.Update(t.Context(), c, f.shop, nsEntry()); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
-	if got := get(t, h, "cal-berlin"); got.Version != 2 || got.Name != "Berlin office" {
+	if got := get(t, h, shop, "cal-berlin"); got.Version != 2 || got.Name != "Berlin office" {
 		t.Fatalf("Get = version %d name %q, want version 2 and the new name", got.Version, got.Name)
 	}
 
@@ -354,7 +380,7 @@ func testUpdateKeepsFeed(t *testing.T, h Harness) {
 	create(t, h, f.shop, sample("cal-berlin", nsScope(shop)))
 	replace(t, h, f.shop, "cal-berlin", fromFeed(date(12, 25), "Christmas Day"))
 
-	c := get(t, h, "cal-berlin")
+	c := get(t, h, shop, "cal-berlin")
 	c.Name = "Berlin office"
 	c.Holidays = []calendar.Holiday{manual(date(12, 31), "New Year's Eve")}
 	c.Feeds[0].Status = unread()
@@ -363,7 +389,7 @@ func testUpdateKeepsFeed(t *testing.T, h Harness) {
 		t.Fatalf("Update: %v", err)
 	}
 
-	got := get(t, h, "cal-berlin")
+	got := get(t, h, shop, "cal-berlin")
 	if len(got.Holidays) != 2 || got.Holidays[0].Source != calendar.SourceFeed || got.Holidays[1].Date != date(12, 31) {
 		t.Fatalf("holidays = %+v, want the feed holiday and the new manual holiday", got.Holidays)
 	}
@@ -380,13 +406,13 @@ func testUpdateMaskedURL(t *testing.T, h Harness) {
 	create(t, h, f.shop, sample("cal-berlin", nsScope(shop)))
 	replace(t, h, f.shop, "cal-berlin", fromFeed(date(12, 25), "Christmas Day"))
 
-	c := get(t, h, "cal-berlin").Masked()
+	c := get(t, h, shop, "cal-berlin").Masked()
 
 	if err := h.Store.Update(t.Context(), c, f.shop, nsEntry()); err != nil {
 		t.Fatalf("Update with the masked URL: %v", err)
 	}
 
-	got := get(t, h, "cal-berlin")
+	got := get(t, h, shop, "cal-berlin")
 	if got.Feeds[0].URL != feedURL || len(got.Holidays) != 2 {
 		t.Fatalf(
 			"feed = %q with %d holidays, want the stored URL and its holidays",
@@ -403,14 +429,14 @@ func testUpdateDropsFeed(t *testing.T, h Harness) {
 	create(t, h, f.shop, sample("cal-berlin", nsScope(shop)))
 	replace(t, h, f.shop, "cal-berlin", fromFeed(date(12, 25), "Christmas Day"))
 
-	c := get(t, h, "cal-berlin")
+	c := get(t, h, shop, "cal-berlin")
 	c.Feeds[0].URL = otherURL
 
 	if err := h.Store.Update(t.Context(), c, f.shop, nsEntry()); err != nil {
 		t.Fatalf("Update with a new URL: %v", err)
 	}
 
-	got := get(t, h, "cal-berlin")
+	got := get(t, h, shop, "cal-berlin")
 	if len(got.Holidays) != 1 || got.Feeds[0].Status != unread() {
 		t.Fatalf("holidays = %d, status = %+v, want only the manual holiday and a zero status",
 			len(got.Holidays), got.Feeds[0].Status)
@@ -426,14 +452,14 @@ func testUpdateDropsFeed(t *testing.T, h Harness) {
 		t.Fatalf("ReplaceFeedHolidays of the new URL: %v", err)
 	}
 
-	c = get(t, h, "cal-berlin")
+	c = get(t, h, shop, "cal-berlin")
 	c.Feeds = nil
 
 	if err := h.Store.Update(t.Context(), c, f.shop, nsEntry()); err != nil {
 		t.Fatalf("Update with no feed: %v", err)
 	}
 
-	if got = get(t, h, "cal-berlin"); len(got.Holidays) != 1 || len(got.Feeds) != 0 {
+	if got = get(t, h, shop, "cal-berlin"); len(got.Holidays) != 1 || len(got.Feeds) != 0 {
 		t.Fatalf("Get = %d holidays and %d feeds, want 1 manual holiday and no feed", len(got.Holidays), len(got.Feeds))
 	}
 }
@@ -444,7 +470,7 @@ func testUpdateOwner(t *testing.T, h Harness) {
 	f := setup(t, h)
 	create(t, h, f.shop, sample("cal-berlin", nsScope(shop)))
 
-	c := get(t, h, "cal-berlin")
+	c := get(t, h, shop, "cal-berlin")
 	c.Owner = groupScope()
 
 	err := h.Store.Update(t.Context(), c, f.shop, nsEntry())
@@ -456,14 +482,15 @@ func testUpdateDefault(t *testing.T, h Harness) {
 
 	setup(t, h)
 
-	c := get(t, h, calendar.DefaultID)
+	c := get(t, h, audit.ServerScope, calendar.DefaultID)
 	c.Zone = "Europe/Berlin"
 
 	if err := h.Store.Update(t.Context(), c, noFence(), serverEntry()); err != nil {
 		t.Fatalf("Update of the default: %v", err)
 	}
 
-	if got := get(t, h, calendar.DefaultID); got.Zone != "Europe/Berlin" || got.Version != c.Version+1 {
+	got := get(t, h, audit.ServerScope, calendar.DefaultID)
+	if got.Zone != "Europe/Berlin" || got.Version != c.Version+1 {
 		t.Fatalf("default = %s at version %d, want Europe/Berlin at version %d", got.Zone, got.Version, c.Version+1)
 	}
 
@@ -614,7 +641,7 @@ func testDelete(t *testing.T, h Harness) {
 		t.Fatalf("Delete: %v", err)
 	}
 
-	_, err := h.Store.Get(t.Context(), "cal-berlin")
+	_, err := h.Store.Get(t.Context(), shop, "cal-berlin")
 	wantErr(t, "Get after Delete", err, calendar.ErrNotFound)
 
 	err = h.Store.Delete(t.Context(), "cal-berlin", f.shop, nsEntry())
@@ -637,7 +664,7 @@ func testHolidayOrder(t *testing.T, h Harness) {
 
 	want := []calendar.Date{date(1, 1), date(12, 24), date(12, 26), date(12, 31)}
 
-	got := get(t, h, "cal-berlin")
+	got := get(t, h, shop, "cal-berlin")
 	if len(got.Holidays) != len(want) {
 		t.Fatalf("holidays = %d, want %d", len(got.Holidays), len(want))
 	}
@@ -685,7 +712,7 @@ func testReplaceBounds(t *testing.T, h Harness) {
 	full := manyHolidays(calendar.MaxHolidays, fromFeed)
 	replace(t, h, f.shop, "cal-berlin", full...)
 
-	if got := get(t, h, "cal-berlin"); got.Feeds[0].Status.Holidays != calendar.MaxHolidays {
+	if got := get(t, h, shop, "cal-berlin"); got.Feeds[0].Status.Holidays != calendar.MaxHolidays {
 		t.Fatalf("status holidays = %d, want %d", got.Feeds[0].Status.Holidays, calendar.MaxHolidays)
 	}
 
@@ -729,7 +756,7 @@ func testReplaceBounds(t *testing.T, h Harness) {
 		wantErr(t, tc.name, err, tc.want)
 	}
 
-	if got := get(t, h, "cal-berlin"); len(got.Holidays) != calendar.MaxHolidays+1 {
+	if got := get(t, h, shop, "cal-berlin"); len(got.Holidays) != calendar.MaxHolidays+1 {
 		t.Fatalf("holidays = %d, want the holidays of the last good read and the manual one", len(got.Holidays))
 	}
 
@@ -757,7 +784,7 @@ func testFeedKeepsLastGood(t *testing.T, h Harness) {
 		t.Fatalf("RecordFeedStatus: %v", err)
 	}
 
-	got := get(t, h, "cal-berlin")
+	got := get(t, h, shop, "cal-berlin")
 	if len(got.Holidays) != 3 {
 		t.Fatalf("holidays = %d, want 1 manual and 2 from the last good read", len(got.Holidays))
 	}
@@ -803,7 +830,7 @@ func testFeedNotModified(t *testing.T, h Harness) {
 		t.Fatalf("RecordFeedStatus of a not-modified read: %v", err)
 	}
 
-	got := get(t, h, "cal-berlin")
+	got := get(t, h, shop, "cal-berlin")
 	if len(got.Holidays) != 2 {
 		t.Fatalf("holidays = %d, want the manual holiday and the holiday of the last good read", len(got.Holidays))
 	}
@@ -831,7 +858,7 @@ func testFeedErrorClass(t *testing.T, h Harness) {
 	err := h.Store.RecordFeedStatus(t.Context(), "cal-berlin", status(feedID, raw), f.shop)
 	wantErr(t, "RecordFeedStatus with a raw error text", err, calendar.ErrInvalid)
 
-	if got := get(t, h, "cal-berlin"); got.Feeds[0].Status != unread() {
+	if got := get(t, h, shop, "cal-berlin"); got.Feeds[0].Status != unread() {
 		t.Fatalf("feed status = %+v, want no change", got.Feeds[0].Status)
 	}
 }
@@ -949,8 +976,8 @@ func takeSnapshot(t *testing.T, h Harness) snapshot {
 	t.Helper()
 
 	return snapshot{
-		berlin:   get(t, h, "cal-berlin"),
-		team:     get(t, h, "cal-team"),
+		berlin:   get(t, h, shop, "cal-berlin"),
+		team:     get(t, h, audit.ServerScope, "cal-team"),
 		resolved: []calendar.Resolved{resolve(t, h, nsScope(shop)), resolve(t, h, groupScope())},
 		entries:  []int{auditCount(t, h, shop), auditCount(t, h, lab), auditCount(t, h, audit.ServerScope)},
 	}
@@ -1046,14 +1073,14 @@ func testFeedURLChanged(t *testing.T, h Harness) {
 	replace(t, h, f.shop, "cal-berlin", fromFeed(date(12, 25), "Christmas Day"))
 
 	// An update gives the feed a new URL while a read of the old URL runs.
-	c := get(t, h, "cal-berlin")
+	c := get(t, h, shop, "cal-berlin")
 	c.Feeds[0].URL = otherURL
 
 	if err := h.Store.Update(t.Context(), c, f.shop, nsEntry()); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
-	before := get(t, h, "cal-berlin")
+	before := get(t, h, shop, "cal-berlin")
 
 	old := calendar.FeedRead{
 		Feed:     feedID,
@@ -1070,7 +1097,7 @@ func testFeedURLChanged(t *testing.T, h Harness) {
 	err = h.Store.RecordFeedStatus(t.Context(), "cal-berlin", status(feedID, failed), f.shop)
 	wantErr(t, "RecordFeedStatus of the old URL", err, calendar.ErrConflict)
 
-	after := get(t, h, "cal-berlin")
+	after := get(t, h, shop, "cal-berlin")
 	if len(after.Holidays) != len(before.Holidays) || after.Feeds[0].Status != before.Feeds[0].Status {
 		t.Fatalf("calendar = %+v, want no change from %+v", after, before)
 	}
@@ -1085,18 +1112,18 @@ func testEntryOtherNamespace(t *testing.T, h Harness) {
 	err := h.Store.Create(t.Context(), sample("cal-berlin", nsScope(shop)), f.shop, other)
 	wantErr(t, "Create with an entry of lab", err, calendar.ErrInvalid)
 
-	_, err = h.Store.Get(t.Context(), "cal-berlin")
+	_, err = h.Store.Get(t.Context(), shop, "cal-berlin")
 	wantErr(t, "Get after a refused create", err, calendar.ErrNotFound)
 
 	create(t, h, f.shop, sample("cal-berlin", nsScope(shop)))
 
-	c := get(t, h, "cal-berlin")
+	c := get(t, h, shop, "cal-berlin")
 	c.Name = "Changed"
 
 	err = h.Store.Update(t.Context(), c, f.shop, other)
 	wantErr(t, "Update with an entry of lab", err, calendar.ErrNotFound)
 
-	if got := get(t, h, "cal-berlin"); got.Name == "Changed" || got.Version != 1 {
+	if got := get(t, h, shop, "cal-berlin"); got.Name == "Changed" || got.Version != 1 {
 		t.Fatalf("calendar = %+v, want no change", got)
 	}
 
