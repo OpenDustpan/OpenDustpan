@@ -267,7 +267,25 @@ links.
    reports an error that names the image digest, the limit, its value
    and the pool setting that changes it, for example: `Image
    sha256:65801d79252f... has more than 500,000 entries. Set a larger
-   unpack.maxEntries on the pool, or use a smaller image.`
+   unpack.maxEntries on the pool, or use a smaller image.` The setting
+   name in this example is a placeholder. The implementation gives the
+   real names.
+8. **Registry credentials are secret items of a scope.** The credentials
+   that the server uses to resolve a tag of a private image are secret
+   items of a namespace, or of the installation (scope `@server`). The
+   server keeps them with the envelope encryption of each scope in
+   `pkg/secret`, as it keeps other secret items.
+   - A new action, `namespace:manage-registries` (object: a namespace),
+     allows a principal to set, replace and delete the registry
+     credentials of a namespace. It is in the namespace administration
+     family, and a session or an access token can hold it. For the scope
+     `@server`, only the roles that administer the installation set the
+     credentials.
+   - The API never returns a credential in plain text. The server
+     decrypts a credential only to resolve a tag, and keeps no copy
+     after the request to the registry.
+   - A job whose unit or pool names a digest needs no resolution and no
+     credentials.
 
 ## Consequences
 
@@ -288,9 +306,9 @@ links.
 - A team that uses a tag gets the image of the tag at the time of the
   plan, not at the time of the apply. To use a new image, the team plans
   again.
-- The server needs network access to the registries of the images, and
-  credentials for a private registry, to resolve a tag. A unit that
-  names a digest needs neither.
+- The server needs network access to the registries of the images to
+  resolve a tag, and the credentials of decision 8 for a private
+  registry. A unit that names a digest needs neither.
 - The implementation must make these changes:
   1. `cmd/dustpan-runner/go.mod` with the module path
      `opendustpan.org/opendustpan/cmd/dustpan-runner` and
@@ -314,8 +332,9 @@ links.
   third row of the first table (`k8s.io/api` types and a transport of our
   own, 2.95 MB) is the next option to measure.
 
-## Open questions
+## Requests to other designs
 
-- Where does the server keep the registry credentials that it uses to
-  resolve a tag of a private image, and which action allows a namespace
-  to set them?
+- **Identity (shared files).** The action `namespace:manage-registries`
+  (object: a namespace) of decision 8 joins the action list in
+  `pkg/identity` and the namespace administration roles, with its route
+  declarations and the policy check of ADR 17.
