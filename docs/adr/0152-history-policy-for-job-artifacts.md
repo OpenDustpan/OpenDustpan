@@ -1,6 +1,6 @@
 # 152. History policy for job artifacts
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17 · ADR 199 changes decision 4 for the kind `file-set`
 
 ## Context
 

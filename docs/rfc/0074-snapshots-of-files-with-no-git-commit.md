@@ -1,14 +1,15 @@
 ---
 rfc: 74
 title: Snapshots of files that have no git commit
-status: draft
+status: accepted
 created: 2026-10-18
 ---
 
 # RFC 74. Snapshots of files that have no git commit
 
-Status: draft. A review of the Catalog design against the source pipeline
-found that ADR 110 and ADR 135 do not agree on the code of a runner job
+Status: accepted. The project owner accepted option A on 2026-10-18 (see
+"Owner direction" and "Outcome"). A review of the Catalog design against
+the source pipeline found that ADR 110 and ADR 135 do not agree on the code of a runner job
 that has no git commit. ADR 110 lists this as an open question. This RFC holds the
 options. It changes no accepted ADR.
 
@@ -306,25 +307,19 @@ the digests.
   and has at most 64 parts.
 - A path has no control character (U+0000 to U+001F and U+007F to U+009F)
   and no `\`.
-- A path is valid UTF-8 in Unicode Normalization Form C (NFC). A path that
-  is not in NFC is an error. The writer does not normalize it.
-- Two paths that are equal after Unicode full case folding are an error,
-  because a file system that folds case writes them to one file.
-- No path, after full case folding, is equal to a proper prefix of
-  another path after full case folding. A proper prefix ends at a `/` of
-  the other path. So the file `a` and the file `a/b` are an error, and the
-  file `A` and the file `a/x` are an error too.
+- A path is valid UTF-8. The writer does not normalize it.
+- The server and the launcher compare paths byte for byte. They do not
+  normalize Unicode and do not fold case (see the owner direction).
+- No path is equal to a proper prefix of another path. A proper prefix
+  ends at a `/` of the other path. So the file `a` and the file `a/b` are
+  an error.
 - A duplicate path is an error.
 
-Full case folding is the mapping of the Unicode file `CaseFolding.txt`
-with the status C and F. NFC and case folding need the module
-`golang.org/x/text` as a direct dependency of `pkg/source` and of the
-launcher. Today it is an indirect dependency (v0.42.0). The project owner
-must approve this change (`CLAUDE.md`: ask before you add a dependency).
-The module selects its Unicode tables by the Go version: v0.42.0 with Go
-1.27 or later uses Unicode 17.0.0. An upgrade of the module or of Go that
-changes the Unicode version can change which paths are valid. So the
-Unicode version is part of the format, and a test checks it.
+Runners are Linux only, and a Linux file system compares names byte for
+byte. So two paths that differ in bytes are two files, also when they look
+equal in Unicode or differ only in case. This needs no new dependency: the
+module `golang.org/x/text` is not a dependency of `pkg/source` or of the
+launcher.
 
 **Directories.** The manifest and the tar file have no directory entries.
 A directory exists only as a parent of a file or a link, so a file set has
@@ -337,9 +332,8 @@ no empty directory. The launcher makes each parent directory with mode
 - A target is in normal form: no empty part, no `.` part, and `..` only
   at the start.
 - A target is at most 4,096 bytes. It follows the rules of a path for the
-  characters, UTF-8 and NFC: no control character, no `\`, and valid UTF-8
-  in NFC. A target that is not in NFC is an error. The writer does not
-  normalize it.
+  characters and UTF-8: no control character, no `\`, and valid UTF-8.
+  The writer does not normalize it.
 - The target, resolved from the directory of the link, is a regular file
   or a directory inside the file set. A target that leaves the file set or
   names nothing in it is an error.
@@ -350,7 +344,7 @@ no empty directory. The launcher makes each parent directory with mode
 - No path of the file set is below the path of a link. For example, the
   link `m` and the file `m/x` are an error.
 - A target never resolves at or below a mount path. The check compares
-  the resolved target and the mount path after full case folding.
+  the resolved target and the mount path byte for byte.
 
 **Tar.** `pkg/source` owns the exact bytes of each header. It does not
 use the encoder of `archive/tar`, because that encoder can change between
@@ -436,8 +430,8 @@ covers the key of each mount, not the bytes of the pack. When the forge
 gives a different pack for the same commit, the digest does not change.
 
 A mount path follows the path rules of section 3. No mount path is equal
-to the path of a link or below it. The comparison is after full case
-folding, as for the paths of section 3. The writer refuses a mount that
+to the path of a link or below it. The comparison is byte for byte, as
+for the paths of section 3. The writer refuses a mount that
 breaks
 these rules, and the launcher checks them in step 1 of section 5. Can a
 mount path be equal to, above or below a file or another mount? This
@@ -662,6 +656,22 @@ The content route answers:
   server gets, as the `source.fetch` operation gets a git pack? Then RFC 54
   needs only a fetcher for each source, not a format.
 
+## Owner direction
+
+On 2026-10-18 the project owner decided, through the project manager
+session:
+
+- Option A (the file set) is accepted.
+- Runners are Linux only.
+- So file names are compared byte for byte. There is no Unicode NFC
+  normalization, no case folding, and no `golang.org/x/text` dependency.
+- The manifest and the byte-exact tar stay as in option A.
+
 ## Outcome
 
-Empty until the project owner accepts or drops the RFC.
+Accepted: option A, the file set. Runners are Linux only, so paths are
+compared byte for byte. The text about NFC, case folding and two encodings
+of one name that collide on other operating systems is not needed, and the
+proposal no longer holds it. [ADR 199](../adr/0199-file-sets-for-sources-with-no-git-commit.md)
+records the decision. The open questions above stay open until an ADR
+decides each one.
