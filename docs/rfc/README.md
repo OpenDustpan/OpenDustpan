@@ -123,5 +123,5 @@ both together.
 | [72](0072-programmatic-runs-api-and-sdk.md) | Programmatic plans and applies through the API and an SDK | draft |
 | [73](0073-ai-agent-for-infrastructure.md) | An AI agent for infrastructure across both tools | accepted |
 | [74](0074-snapshots-of-files-with-no-git-commit.md) | Snapshots of files that have no git commit | draft |
-| [75](0075-commands-by-intent.md) | Commands by intent: a dev server with no setup, and a serve command that needs decisions | draft |
+| [75](0075-commands-by-intent.md) | Commands by intent: a dev server with no setup, and a serve command that needs decisions | accepted (ADRs 237 and 238) |
 | [78](0078-localization-open-questions.md) | Localization open questions: translated docs, the translation machine, the server formatter and the edges | discussing; translated docs, the translation agent, the formatter, the product name in chat, `resolvedLanguage` and reports of one string accepted (ADRs 232, 234 and 235) |

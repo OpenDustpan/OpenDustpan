@@ -1,6 +1,6 @@
 # 23. Secrets and the built-in key-encryption key
 
-Status: accepted · 2026-10-10
+Status: accepted · 2026-10-10 · decision 2 superseded in part by ADR 237
 
 ## Context
 
