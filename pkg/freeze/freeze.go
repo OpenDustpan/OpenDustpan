@@ -4,8 +4,8 @@
 // freeze and checks it at each dispatch, so a scheduled freeze and a freeze
 // that a person creates by hand stop the same work in the same way.
 //
-// A durable operation runs Plan for each schedule on a schedule of its own,
-// and writes the occurrences of the next Horizon to the Sink. The
+// A durable operation runs Plan for each schedule once in each RunInterval,
+// and writes the occurrences of the next Horizon through the Sink. The
 // dispatch check never computes a recurrence: it reads stored freezes only.
 package freeze
 
@@ -16,18 +16,23 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/calendar"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // Sentinel errors returned by this package and by Store and Sink
 // implementations.
 var (
-	// ErrInvalid reports a schedule that fails validation.
+	// ErrInvalid reports a schedule or an occurrence that fails
+	// validation.
 	ErrInvalid = errors.New("invalid freeze schedule")
-	// ErrNotFound reports an unknown schedule ID.
+	// ErrNotFound reports an unknown schedule ID, or a schedule in another
+	// namespace than the fence of the write.
 	ErrNotFound = errors.New("freeze schedule not found")
-	// ErrExists reports a create with an ID that a schedule already has.
+	// ErrExists reports a create with an ID that a schedule already has,
+	// or a delete of the freezes of a schedule that still exists.
 	ErrExists = errors.New("freeze schedule already exists")
 	// ErrConflict reports a write that names an older version of the
 	// schedule.
@@ -40,6 +45,9 @@ const (
 	IDPrefix = "fzs-"
 	// FreezeIDPrefix starts every freeze ID, as the job model writes it.
 	FreezeIDPrefix = "frz-"
+	// SubjectPrefix starts the subject that creates the freezes of a
+	// schedule. The subject is not a principal: it names the schedule.
+	SubjectPrefix = "@schedule:"
 	// MaxNameLen caps the name of a schedule, in bytes.
 	MaxNameLen = 100
 	// MaxReasonLen caps the reason of a schedule, in bytes.
@@ -53,9 +61,15 @@ const (
 	MaxDaysBefore = 5
 	// Horizon is how far ahead Plan writes occurrences.
 	Horizon = 14 * 24 * time.Hour
+	// RunInterval is the time between two runs of Plan for one schedule.
+	RunInterval = time.Hour
 	// DefaultNotice is how long before the start of an occurrence the
-	// server sends the event that a freeze comes.
+	// server sends the notification that a freeze comes.
 	DefaultNotice = 24 * time.Hour
+	// MaxNotice caps the notice of a schedule. A run writes the
+	// occurrences of the next Horizon, so a longer notice could come
+	// after the occurrence is written only.
+	MaxNotice = Horizon - RunInterval
 )
 
 // Kind is the kind of a schedule.
@@ -79,9 +93,21 @@ type Window struct {
 }
 
 // Weekly is the rule of KindWeekly. An occurrence starts at Start on each
-// day of Days, in the time zone Zone, and lasts Length. For example Days
-// Friday, Start 15:00 and Length 66 hours freeze each weekend until Monday
-// 09:00. A start that a daylight saving change skips moves forward.
+// day of Days, in the time zone Zone. Length is a length on the local
+// clock of Zone, in whole minutes: the occurrence ends at the local time
+// Length after its start. For example Days Friday, Start 15:00 and Length
+// 66 hours freeze each weekend until Monday 09:00 local time, also over a
+// daylight saving change. The elapsed time of that occurrence is then one
+// hour longer or shorter.
+//
+// A local time that occurs two times, when the clock goes back, is the
+// first of the two instants. A local time that a change skips, when the
+// clock goes forward, moves forward by the length of the gap: 02:30 on a
+// day that goes from 02:00 to 03:00 is 03:30.
+//
+// Zone is a name of the IANA time zone database, for example
+// "Europe/Berlin", or "UTC". The zone "Local" depends on the host of the
+// server, so Validate refuses it.
 type Weekly struct {
 	Days   calendar.WeekdaySet
 	Start  calendar.Clock
@@ -98,6 +124,9 @@ type Weekly struct {
 //     hours start and after they end.
 //   - DaysBefore: the last DaysBefore business days before each holiday,
 //     for example 1 to freeze the business day before a long weekend.
+//
+// The local times of the calendar follow the rules of Weekly for a time
+// that occurs two times or that a daylight saving change skips.
 type CalendarRule struct {
 	DaysOff      bool
 	Holidays     bool
@@ -108,8 +137,8 @@ type CalendarRule struct {
 // Schedule makes freezes in a namespace. Exactly one rule applies, the one
 // of Kind. A schedule makes occurrences only from From, and until Until
 // when Until is set. A schedule that is not Enabled makes none. Notice is
-// how long before each occurrence the server sends the event that a freeze
-// comes, and 0 means DefaultNotice.
+// how long before each occurrence the server sends the notification that
+// a freeze comes, and 0 means DefaultNotice.
 type Schedule struct {
 	ID        string
 	Namespace namespace.Name
@@ -128,8 +157,7 @@ type Schedule struct {
 }
 
 // Occurrence is one freeze that a schedule makes. Start and End are in
-// UTC. The job model stores it as a freeze with the ID OccurrenceID(Schedule,
-// Start) and the reason of the schedule.
+// UTC. The job model stores it as the freeze Schedule.FreezeOf returns.
 type Occurrence struct {
 	Schedule string
 	Start    time.Time
@@ -144,13 +172,49 @@ func OccurrenceID(schedule string, start time.Time) string {
 		strconv.FormatInt(start.UnixMilli(), 10)
 }
 
+// Subject returns the subject that creates the freezes of the schedule
+// id: SubjectPrefix and the schedule ID. The job model records it as
+// job.Freeze.CreatedBy. No principal has a subject with this prefix, so
+// the subject also marks a freeze as a freeze of the schedule.
+func Subject(id string) string {
+	return SubjectPrefix + id
+}
+
+// ScheduleOf returns the ID of the schedule that made f, and false for a
+// freeze that a person created.
+func ScheduleOf(f job.Freeze) (string, bool) {
+	id, ok := strings.CutPrefix(f.CreatedBy, SubjectPrefix)
+	if !ok || id == "" {
+		return "", false
+	}
+
+	return id, true
+}
+
+// FreezeOf returns the freeze of the job model for the occurrence o of s:
+// the ID OccurrenceID(s.ID, o.Start), the namespace and the reason of s,
+// the start and the end of o, and the creator Subject(s.ID). For a valid
+// schedule and an occurrence with an end after its start, the freeze
+// passes job.Freeze.Validate.
+func (s Schedule) FreezeOf(o Occurrence) job.Freeze {
+	return job.Freeze{
+		ID:        OccurrenceID(s.ID, o.Start),
+		Namespace: s.Namespace,
+		Reason:    s.Reason,
+		StartsAt:  o.Start.UTC(),
+		EndsAt:    o.End.UTC(),
+		CreatedBy: Subject(s.ID),
+		EndedBy:   "",
+	}
+}
+
 // Validate returns ErrInvalid for a schedule that breaks a bound, or whose
 // rule does not fit its kind.
 func (s Schedule) Validate() error {
 	switch {
 	case !strings.HasPrefix(s.ID, IDPrefix):
 		return fmt.Errorf("%w: a schedule ID starts with %q", ErrInvalid, IDPrefix)
-	case s.Namespace == "":
+	case s.Namespace == "" || s.Namespace == audit.ServerScope:
 		return fmt.Errorf("%w: a schedule needs a namespace", ErrInvalid)
 	case s.Name == "" || len(s.Name) > MaxNameLen:
 		return fmt.Errorf("%w: a schedule name has 1 to %d bytes", ErrInvalid, MaxNameLen)
@@ -158,8 +222,8 @@ func (s Schedule) Validate() error {
 		return fmt.Errorf("%w: a schedule reason has 1 to %d bytes", ErrInvalid, MaxReasonLen)
 	case !s.Until.IsZero() && !s.Until.After(s.From):
 		return fmt.Errorf("%w: the end of a schedule must be after its start", ErrInvalid)
-	case s.Notice < 0:
-		return fmt.Errorf("%w: a notice cannot be negative", ErrInvalid)
+	case s.Notice < 0 || s.Notice > MaxNotice:
+		return fmt.Errorf("%w: a notice is 0 to %s", ErrInvalid, MaxNotice)
 	}
 
 	return s.validateRule()

@@ -9,9 +9,12 @@ import (
 )
 
 // Occurrences returns the occurrences of s that overlap the range that
-// starts at from and ends at to, ordered by start, with no two that overlap or touch. It does
-// not cut an occurrence at from or to, so the start of an occurrence that
-// began before from stays the same at each call. cal is the calendar that
+// starts at from and ends at to, ordered by start, with no two that overlap
+// or touch. It does not cut an occurrence at from or to: for a calendar
+// rule it reads back and forward over each day that the rule freezes
+// whole, for at most calendar.MaxSearchDays days in each direction. So
+// the start and the end of an occurrence stay the same at each call
+// while the calendar does not change. cal is the calendar that
 // applies to the namespace. Only KindCalendar reads it. It returns
 // ErrInvalid for a schedule that fails Validate, and the errors of the
 // calendar for a calendar rule.
@@ -54,7 +57,7 @@ func (s Schedule) Plan(cal calendar.Calendar, now time.Time) ([]Occurrence, erro
 	return s.Occurrences(cal, now, now.Add(Horizon))
 }
 
-// NoticeAt returns the time of the event that announces o.
+// NoticeAt returns the time of the notification that announces o.
 func (s Schedule) NoticeAt(o Occurrence) time.Time {
 	n := s.Notice
 	if n == 0 {
@@ -117,8 +120,9 @@ func (w Weekly) validate() error {
 		return fmt.Errorf("%w: a weekly start is a time of day", ErrInvalid)
 	}
 
-	if w.Length <= 0 || w.Length > MaxWeeklyLength {
-		return fmt.Errorf("%w: a weekly length is above 0 and at most %s", ErrInvalid, MaxWeeklyLength)
+	if w.Length <= 0 || w.Length > MaxWeeklyLength || w.Length%time.Minute != 0 {
+		return fmt.Errorf("%w: a weekly length is whole minutes, above 0 and at most %s",
+			ErrInvalid, MaxWeeklyLength)
 	}
 
 	if gap := w.minGap(); w.Length+time.Hour > gap {
@@ -126,16 +130,32 @@ func (w Weekly) validate() error {
 			ErrInvalid, gap-time.Hour)
 	}
 
-	if _, err := time.LoadLocation(w.Zone); err != nil || w.Zone == "" {
-		return fmt.Errorf("%w: unknown zone %q", ErrInvalid, w.Zone)
+	if _, err := w.location(); err != nil {
+		return err
 	}
 
 	return nil
 }
 
+// location loads w.Zone. It refuses the empty zone and "Local", because
+// both depend on the host of the server.
+func (w Weekly) location() (*time.Location, error) {
+	if w.Zone == "" || w.Zone == "Local" {
+		return nil, fmt.Errorf("%w: a weekly rule needs an IANA zone, not %q", ErrInvalid, w.Zone)
+	}
+
+	loc, err := time.LoadLocation(w.Zone)
+	if err != nil {
+		return nil, fmt.Errorf("%w: unknown zone %q", ErrInvalid, w.Zone)
+	}
+
+	return loc, nil
+}
+
 // minGap returns the shortest time from one day of w.Days to the next day
-// of the set, one week for a single day. The extra hour of validate allows
-// for a daylight saving change.
+// of the set, one week for a single day. The extra hour of validate keeps
+// one hour between two occurrences on the local clock, so that the choice
+// of an instant for a local time never makes two occurrences overlap.
 func (w Weekly) minGap() time.Duration {
 	const day = 24 * time.Hour
 
@@ -161,32 +181,80 @@ func (w Weekly) minGap() time.Duration {
 const daysPerWeek = 7
 
 // spans returns the weekly occurrences whose start is from one week before
-// from up to to.
+// from up to to. Both the start and the end are local times in the zone.
 func (w Weekly) spans(from, to time.Time) ([]span, error) {
-	loc, err := time.LoadLocation(w.Zone)
+	loc, err := w.location()
 	if err != nil {
-		return nil, fmt.Errorf("%w: unknown zone %q", ErrInvalid, w.Zone)
+		return nil, err
 	}
 
 	var out []span
 
+	length := int(w.Length / time.Minute)
 	last := calendar.DateOf(to, loc)
-	for d := calendar.DateOf(from.Add(-MaxWeeklyLength), loc); !last.Before(d); d = d.AddDays(1) {
+
+	for d := calendar.DateOf(from.Add(-MaxWeeklyLength-day), loc); !last.Before(d); d = d.AddDays(1) {
 		if !w.Days.Has(d.Weekday()) {
 			continue
 		}
 
-		start := time.Date(d.Year, d.Month, d.Day, int(w.Start)/minutesPerHour, int(w.Start)%minutesPerHour, 0, 0, loc)
-		out = append(out, span{start: start, end: start.Add(w.Length)})
+		out = append(out, span{
+			start: localTime(d, int(w.Start), loc),
+			end:   localTime(d, int(w.Start)+length, loc),
+		})
 	}
 
 	return out, nil
 }
 
-const minutesPerHour = 60
+const day = 24 * time.Hour
 
-// spans returns the periods of the rule on each day from the day before
-// from to the day after to, in the zone of cal.
+// localTime returns the instant of the local time minutes after the start
+// of the date d in loc. minutes can be more than one day: the local clock
+// goes on over the next dates. A local time that occurs two times is the
+// first of the two instants. A local time that a daylight saving change
+// skips moves forward by the length of the gap.
+func localTime(d calendar.Date, minutes int, loc *time.Location) time.Time {
+	wall := time.Date(d.Year, d.Month, d.Day, 0, minutes, 0, 0, time.UTC)
+
+	var (
+		first time.Time
+		found bool
+	)
+
+	// The offsets in effect one day before and after the local time
+	// include both offsets of each change near it.
+	for _, probe := range [...]time.Duration{-day, 0, day} {
+		_, offset := wall.Add(probe).In(loc).Zone()
+
+		t := wall.Add(-time.Duration(offset) * time.Second)
+		if sameWall(t.In(loc), wall) && (!found || t.Before(first)) {
+			first, found = t, true
+		}
+	}
+
+	if found {
+		return first
+	}
+
+	// The change skips the local time. The offset before the change gives
+	// the instant that is the local time moved forward by the gap.
+	_, offset := wall.Add(-day).In(loc).Zone()
+
+	return wall.Add(-time.Duration(offset) * time.Second)
+}
+
+// sameWall reports whether t shows the date, the hour and the minute of
+// wall.
+func sameWall(t, wall time.Time) bool {
+	y, m, d := t.Date()
+	wy, wm, wd := wall.Date()
+
+	return y == wy && m == wm && d == wd && t.Hour() == wall.Hour() && t.Minute() == wall.Minute()
+}
+
+// spans returns the periods of the rule on each day from firstDay to
+// lastDay, in the zone of cal.
 func (r CalendarRule) spans(cal calendar.Calendar, from, to time.Time) ([]span, error) {
 	loc, err := cal.Location()
 	if err != nil {
@@ -197,21 +265,18 @@ func (r CalendarRule) spans(cal calendar.Calendar, from, to time.Time) ([]span, 
 
 	var out []span
 
-	last := calendar.DateOf(to, loc).AddDays(1)
+	last := r.lastDay(cal, calendar.DateOf(to, loc), before)
 	for d := r.firstDay(cal, calendar.DateOf(from, loc), before); !last.Before(d); d = d.AddDays(1) {
-		dayStart := time.Date(d.Year, d.Month, d.Day, 0, 0, 0, 0, loc)
-		next := d.AddDays(1)
-		dayEnd := time.Date(next.Year, next.Month, next.Day, 0, 0, 0, 0, loc)
-		_, holiday := cal.IsHoliday(d)
-		dayOff := !cal.WorkingDays.Has(d.Weekday())
+		dayStart := localTime(d, 0, loc)
+		dayEnd := localTime(d.AddDays(1), 0, loc)
 
 		switch {
-		case r.Holidays && holiday, r.DaysOff && dayOff, slices.Contains(before, d):
+		case r.whole(cal, d, before):
 			out = append(out, span{start: dayStart, end: dayEnd})
 		case r.OutsideHours && cal.IsBusinessDay(d):
 			out = append(out,
-				span{start: dayStart, end: clockAt(d, cal.DayStart, loc)},
-				span{start: clockAt(d, cal.DayEnd, loc), end: dayEnd})
+				span{start: dayStart, end: localTime(d, int(cal.DayStart), loc)},
+				span{start: localTime(d, int(cal.DayEnd), loc), end: dayEnd})
 		default:
 			// The rule does not freeze this day.
 		}
@@ -228,11 +293,7 @@ func (r CalendarRule) firstDay(cal calendar.Calendar, from calendar.Date, before
 	d := from.AddDays(-1)
 
 	for range calendar.MaxSearchDays {
-		_, holiday := cal.IsHoliday(d)
-		dayOff := !cal.WorkingDays.Has(d.Weekday())
-
-		whole := r.Holidays && holiday || r.DaysOff && dayOff || slices.Contains(before, d)
-		if !whole {
+		if !r.whole(cal, d, before) {
 			return d
 		}
 
@@ -240,6 +301,32 @@ func (r CalendarRule) firstDay(cal calendar.Calendar, from calendar.Date, before
 	}
 
 	return d
+}
+
+// lastDay returns the last day to read for a range that ends on the date
+// to. It goes forward over each day that the rule freezes whole, and one
+// day more, so that an occurrence that goes on after to keeps its end, for
+// example the morning before the working hours after a long holiday.
+func (r CalendarRule) lastDay(cal calendar.Calendar, to calendar.Date, before []calendar.Date) calendar.Date {
+	d := to.AddDays(1)
+
+	for range calendar.MaxSearchDays {
+		if !r.whole(cal, d, before) {
+			return d
+		}
+
+		d = d.AddDays(1)
+	}
+
+	return d
+}
+
+// whole reports whether the rule freezes the whole day d.
+func (r CalendarRule) whole(cal calendar.Calendar, d calendar.Date, before []calendar.Date) bool {
+	_, holiday := cal.IsHoliday(d)
+	dayOff := !cal.WorkingDays.Has(d.Weekday())
+
+	return r.Holidays && holiday || r.DaysOff && dayOff || slices.Contains(before, d)
 }
 
 // daysBeforeHolidays returns the last r.DaysBefore business days before
@@ -273,10 +360,6 @@ func (r CalendarRule) daysBeforeHolidays(
 	}
 
 	return out
-}
-
-func clockAt(d calendar.Date, c calendar.Clock, loc *time.Location) time.Time {
-	return time.Date(d.Year, d.Month, d.Day, int(c)/minutesPerHour, int(c)%minutesPerHour, 0, 0, loc)
 }
 
 // merge sorts spans by start and joins the spans that overlap or touch.

@@ -1,8 +1,8 @@
 package freezetest_test
 
 import (
-	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -13,6 +13,7 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/freeze"
 	"opendustpan.org/opendustpan/pkg/freeze/freezetest"
+	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -25,25 +26,36 @@ func TestMemConformance(t *testing.T) {
 		db := &memStore{
 			Domain:    opsmem.New(),
 			schedules: map[string]freeze.Schedule{},
-			freezes:   map[string]*stored{},
+			freezes:   map[string]*job.Freeze{},
+			now:       time.Time{},
 		}
 
-		return freezetest.Harness{Schedules: db, Sink: db, Domain: db}
+		return freezetest.Harness{Schedules: db, Freezes: db, Domain: db}
 	})
 }
 
-type stored struct {
-	ns namespace.Name
-	f  freezetest.Freeze
-}
-
-// memStore is the reference adapter of freeze.Store and freeze.Sink
-// in memory.
+// memStore is the reference adapter of freeze.Store and freeze.Sink in
+// memory. The fields below the domain change only under its mutex.
 type memStore struct {
 	*opsmem.Domain
 
 	schedules map[string]freeze.Schedule
-	freezes   map[string]*stored
+	freezes   map[string]*job.Freeze
+	now       time.Time
+}
+
+// scoped translates the error of a fence that does not belong to the
+// namespace of the row into sentinel.
+func scoped(err, sentinel error) error {
+	if errors.Is(err, opsmem.ErrScope) {
+		return fmt.Errorf("%w: %w", sentinel, err)
+	}
+
+	return err
+}
+
+func (m *memStore) SetNow(t time.Time) {
+	m.Read(func() { m.now = t })
 }
 
 func (m *memStore) Create(_ context.Context, s freeze.Schedule, fence namespace.Fence, e audit.Entry) error {
@@ -51,7 +63,7 @@ func (m *memStore) Create(_ context.Context, s freeze.Schedule, fence namespace.
 		return err
 	}
 
-	return m.Write(fence, []audit.Entry{e}, func() error {
+	err := m.Write(fence, opsmem.Scope(s.Namespace), []audit.Entry{e}, func() error {
 		if _, ok := m.schedules[s.ID]; ok {
 			return fmt.Errorf("create %s: %w", s.ID, freeze.ErrExists)
 		}
@@ -61,6 +73,8 @@ func (m *memStore) Create(_ context.Context, s freeze.Schedule, fence namespace.
 
 		return nil
 	})
+
+	return scoped(err, freeze.ErrInvalid)
 }
 
 func (m *memStore) Get(_ context.Context, id string) (freeze.Schedule, error) {
@@ -83,10 +97,11 @@ func (m *memStore) Update(_ context.Context, s freeze.Schedule, fence namespace.
 		return err
 	}
 
-	return m.Write(fence, []audit.Entry{e}, func() error {
-		old, ok := m.schedules[s.ID]
-		if !ok {
-			return fmt.Errorf("update %s: %w", s.ID, freeze.ErrNotFound)
+	var old freeze.Schedule
+
+	err := m.Write(fence, m.schedule(s.ID, &old), []audit.Entry{e}, func() error {
+		if old.Namespace != s.Namespace {
+			return fmt.Errorf("%w: a schedule cannot move to another namespace", freeze.ErrInvalid)
 		}
 
 		if old.Version != s.Version {
@@ -98,18 +113,20 @@ func (m *memStore) Update(_ context.Context, s freeze.Schedule, fence namespace.
 
 		return nil
 	})
+
+	return scoped(err, freeze.ErrNotFound)
 }
 
 func (m *memStore) Delete(_ context.Context, id string, fence namespace.Fence, e audit.Entry) error {
-	return m.Write(fence, []audit.Entry{e}, func() error {
-		if _, ok := m.schedules[id]; !ok {
-			return fmt.Errorf("delete %s: %w", id, freeze.ErrNotFound)
-		}
+	var old freeze.Schedule
 
+	err := m.Write(fence, m.schedule(id, &old), []audit.Entry{e}, func() error {
 		delete(m.schedules, id)
 
 		return nil
 	})
+
+	return scoped(err, freeze.ErrNotFound)
 }
 
 func (m *memStore) List(_ context.Context, ns namespace.Name) ([]freeze.Schedule, error) {
@@ -127,82 +144,187 @@ func (m *memStore) List(_ context.Context, ns namespace.Name) ([]freeze.Schedule
 }
 
 func (m *memStore) ReplaceScheduled(
-	_ context.Context, fence namespace.Fence, id string, from time.Time, occs []freeze.Occurrence,
+	_ context.Context, s freeze.Schedule, occs []freeze.Occurrence, fence namespace.Fence,
 ) error {
-	return m.Write(fence, nil, func() error {
-		want := map[string]freeze.Occurrence{}
-		for _, o := range occs {
-			want[freeze.OccurrenceID(id, o.Start)] = o
+	var stored freeze.Schedule
+
+	err := m.Write(fence, m.schedule(s.ID, &stored), nil, func() error {
+		if stored.Version != s.Version {
+			return fmt.Errorf("replace %s: %w", s.ID, freeze.ErrConflict)
 		}
 
-		m.dropUnwanted(id, from, want)
-		m.addOrExtend(fence.Namespace, id, from, want)
+		want := map[string]job.Freeze{}
+
+		for _, o := range occs {
+			if o.Schedule != stored.ID || !o.End.After(o.Start) {
+				return fmt.Errorf("%w: an occurrence of %s needs its schedule ID and an end after its start",
+					freeze.ErrInvalid, stored.ID)
+			}
+
+			f := stored.FreezeOf(o)
+			want[f.ID] = f
+		}
+
+		m.refresh(freeze.Subject(stored.ID), want)
+		m.add(freeze.Subject(stored.ID), want)
 
 		return nil
 	})
+
+	return scoped(err, freeze.ErrNotFound)
 }
 
-func (m *memStore) Freezes(_ context.Context, ns namespace.Name) ([]freezetest.Freeze, error) {
-	var out []freezetest.Freeze
+func (m *memStore) DeleteScheduled(_ context.Context, id string, fence namespace.Fence) error {
+	subject := freeze.Subject(id)
+
+	scope := func() (namespace.Name, error) {
+		if _, ok := m.schedules[id]; ok {
+			return "", fmt.Errorf("delete freezes of %s: %w", id, freeze.ErrExists)
+		}
+
+		for _, f := range m.freezes {
+			if f.CreatedBy == subject {
+				return f.Namespace, nil
+			}
+		}
+
+		return fence.Namespace, nil
+	}
+
+	err := m.Write(fence, scope, nil, func() error {
+		for fid, f := range m.freezes {
+			if f.CreatedBy == subject && f.EndedBy == "" && f.StartsAt.After(m.now) {
+				delete(m.freezes, fid)
+			}
+		}
+
+		return nil
+	})
+
+	return scoped(err, freeze.ErrNotFound)
+}
+
+// CreateFreeze implements job.FreezeStore.
+func (m *memStore) CreateFreeze(_ context.Context, f job.Freeze, fence namespace.Fence, e audit.Entry) error {
+	if err := f.Validate(); err != nil {
+		return err
+	}
+
+	err := m.Write(fence, opsmem.Scope(f.Namespace), []audit.Entry{e}, func() error {
+		m.freezes[f.ID] = &f
+
+		return nil
+	})
+
+	return scoped(err, job.ErrInvalid)
+}
+
+// EndFreeze implements job.FreezeStore, on the clock of the store.
+func (m *memStore) EndFreeze(_ context.Context, id, by string, fence namespace.Fence, e audit.Entry) error {
+	var f *job.Freeze
+
+	scope := func() (namespace.Name, error) {
+		var ok bool
+		if f, ok = m.freezes[id]; !ok {
+			return "", fmt.Errorf("end freeze %s: %w", id, job.ErrNotFound)
+		}
+
+		return f.Namespace, nil
+	}
+
+	err := m.Write(fence, scope, []audit.Entry{e}, func() error {
+		if f == nil || !f.ActiveAt(m.now) {
+			return fmt.Errorf("end freeze %s: %w", id, job.ErrFinished)
+		}
+
+		f.EndsAt, f.EndedBy = m.now, by
+
+		return nil
+	})
+
+	return scoped(err, job.ErrNotFound)
+}
+
+// ListFreezes implements job.FreezeStore.
+func (m *memStore) ListFreezes(_ context.Context, ns namespace.Name, since time.Time) ([]job.Freeze, error) {
+	var out []job.Freeze
 
 	m.Read(func() {
-		for _, s := range m.freezes {
-			if s.ns == ns {
-				out = append(out, s.f)
+		for _, f := range m.freezes {
+			if f.Namespace == ns && (f.EndsAt.IsZero() || f.EndsAt.After(since)) {
+				out = append(out, *f)
 			}
 		}
 	})
 
-	slices.SortFunc(
-		out,
-		func(a, b freezetest.Freeze) int { return cmp.Compare(a.Start.UnixMilli(), b.Start.UnixMilli()) },
-	)
+	slices.SortFunc(out, func(a, b job.Freeze) int { return a.StartsAt.Compare(b.StartsAt) })
 
 	return out, nil
 }
 
-func (m *memStore) EndFreeze(_ context.Context, id string, at time.Time) error {
-	return m.Write(namespace.Fence{Namespace: "", FailoverVersion: 0}, nil, func() error {
-		s, ok := m.freezes[id]
+// schedule returns a scope function that looks up the schedule id, keeps
+// it in got, and returns its namespace, or ErrNotFound.
+func (m *memStore) schedule(id string, got *freeze.Schedule) func() (namespace.Name, error) {
+	return func() (namespace.Name, error) {
+		s, ok := m.schedules[id]
 		if !ok {
-			return fmt.Errorf("end freeze %s: %w", id, freeze.ErrNotFound)
+			return "", fmt.Errorf("schedule %s: %w", id, freeze.ErrNotFound)
 		}
 
-		s.f.End, s.f.Ended = at, true
+		*got = s
 
-		return nil
-	})
+		return s.Namespace, nil
+	}
 }
 
-// dropUnwanted deletes each freeze of the schedule id that starts at or
-// after from and is not in want. The caller holds the mutex of the domain.
-func (m *memStore) dropUnwanted(id string, from time.Time, want map[string]freeze.Occurrence) {
-	for fid, s := range m.freezes {
-		if s.f.Schedule != id || s.f.Start.Before(from) {
+// refresh changes the stored freezes of subject toward want. The caller
+// holds the mutex of the domain.
+func (m *memStore) refresh(subject string, want map[string]job.Freeze) {
+	for fid, f := range m.freezes {
+		if f.CreatedBy != subject || f.EndedBy != "" {
 			continue
 		}
 
-		if _, ok := want[fid]; !ok {
+		w, ok := want[fid]
+
+		switch {
+		case f.StartsAt.After(m.now) && !ok:
 			delete(m.freezes, fid)
+		case f.StartsAt.After(m.now):
+			f.EndsAt, f.Reason = w.EndsAt, w.Reason
+		case ok && !f.EndsAt.IsZero() && w.EndsAt.After(f.EndsAt):
+			f.EndsAt = w.EndsAt
+		default:
+			// A started freeze keeps its end when the plan ends it earlier.
 		}
 	}
 }
 
-// addOrExtend adds each freeze of want that is missing, and sets the end
-// of each one that starts at or after from and has not ended. The caller
-// holds the mutex of the domain.
-func (m *memStore) addOrExtend(ns namespace.Name, id string, from time.Time, want map[string]freeze.Occurrence) {
-	for fid, o := range want {
-		s, ok := m.freezes[fid]
+// add stores each freeze of want that has no row. A freeze that started is
+// added only when no freeze of subject overlaps it. The caller holds the
+// mutex of the domain.
+func (m *memStore) add(subject string, want map[string]job.Freeze) {
+	for fid := range want {
+		if _, ok := m.freezes[fid]; ok {
+			continue
+		}
 
-		switch {
-		case !ok:
-			f := freezetest.Freeze{ID: fid, Schedule: id, Start: o.Start, End: o.End, Ended: false}
-			m.freezes[fid] = &stored{ns: ns, f: f}
-		case !s.f.Start.Before(from) && !s.f.Ended:
-			s.f.End = o.End
-		default:
-			// A freeze that started before from, or that ended, never changes.
+		w := want[fid]
+
+		if !w.StartsAt.After(m.now) && m.overlaps(subject, w) {
+			continue
+		}
+
+		m.freezes[fid] = &w
+	}
+}
+
+func (m *memStore) overlaps(subject string, w job.Freeze) bool {
+	for _, f := range m.freezes {
+		if f.CreatedBy == subject && f.StartsAt.Before(w.EndsAt) && (f.EndsAt.IsZero() || w.StartsAt.Before(f.EndsAt)) {
+			return true
 		}
 	}
+
+	return false
 }

@@ -74,34 +74,68 @@ func TestWeeklyOccurrences(t *testing.T) {
 	cal, loc := berlin(t)
 	at := func(m time.Month, d, h int) time.Time { return time.Date(2026, m, d, h, 0, 0, 0, loc) }
 
-	s := schedule(freeze.KindWeekly)
-	s.Weekly = freeze.Weekly{
+	utc := func(m time.Month, d, h, mi int) time.Time { return time.Date(2026, m, d, h, mi, 0, 0, time.UTC) }
+
+	weekend := freeze.Weekly{
 		Days:   calendar.Weekdays(time.Friday),
 		Start:  calendar.ClockOf(15, 0),
 		Length: 66 * time.Hour,
 		Zone:   "Europe/Berlin",
 	}
+	sunday := func(h, m int) freeze.Weekly {
+		return freeze.Weekly{
+			Days:   calendar.Weekdays(time.Sunday),
+			Start:  calendar.ClockOf(h, m),
+			Length: 2 * time.Hour,
+			Zone:   "Europe/Berlin",
+		}
+	}
 
 	cases := []struct {
 		name     string
+		rule     freeze.Weekly
 		from, to time.Time
 		want     []want
 	}{
-		{"two weekends", at(10, 12, 12), at(10, 26, 0), []want{
+		{"two weekends", weekend, at(10, 12, 12), at(10, 26, 0), []want{
 			{at(10, 16, 15), at(10, 19, 9)},
-			{at(10, 23, 15), at(10, 26, 8)}, // 66 hours over the change to winter time
+			// The end is Monday 09:00 on the local clock, also over the
+			// change to winter time: 67 hours elapse.
+			{at(10, 23, 15), at(10, 26, 9)},
 		}},
 		{
+			"a weekend over the change to summer time ends Monday 09:00, after 65 hours",
+			weekend, at(3, 26, 0), at(3, 28, 0),
+			[]want{{utc(3, 27, 14, 0), utc(3, 30, 7, 0)}},
+		},
+		{
 			"an occurrence that started before the range keeps its start",
-			at(10, 18, 12), at(10, 19, 0),
+			weekend, at(10, 18, 12), at(10, 19, 0),
 			[]want{{at(10, 16, 15), at(10, 19, 9)}},
 		},
-		{"an empty range", at(10, 20, 0), at(10, 20, 0), nil},
+		{"an empty range", weekend, at(10, 20, 0), at(10, 20, 0), nil},
+		{
+			"a start in the hour that the change to summer time skips moves forward by the gap",
+			sunday(2, 30), at(3, 28, 0), at(3, 30, 0),
+			// 02:30 does not exist on 29 March: the start is 03:30 summer
+			// time, and the end 04:30 summer time.
+			[]want{{utc(3, 29, 1, 30), utc(3, 29, 2, 30)}},
+		},
+		{
+			"a start in the hour that occurs two times is the first instant",
+			sunday(2, 30), at(10, 24, 0), at(10, 26, 0),
+			// 02:30 occurs at 00:30 and at 01:30 UTC on 25 October. The
+			// start is the first; the end 04:30 winter time is 03:30 UTC.
+			[]want{{utc(10, 25, 0, 30), utc(10, 25, 3, 30)}},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
+			s := schedule(freeze.KindWeekly)
+			s.Weekly = tc.rule
 
 			got, err := s.Occurrences(cal, tc.from, tc.to)
 			if err != nil {
@@ -168,6 +202,64 @@ func TestCalendarOccurrences(t *testing.T) {
 	}
 }
 
+// TestCalendarLongOccurrence checks that an occurrence that goes on after
+// the end of the range keeps its whole end: the holidays from 24 December
+// to 1 January, the weekend after them and the morning of Monday 4 January
+// before the working hours are one freeze.
+func TestCalendarLongOccurrence(t *testing.T) {
+	t.Parallel()
+
+	cal, loc := berlin(t)
+
+	cal.Holidays = nil
+	for d := (calendar.Date{Year: 2026, Month: 12, Day: 24}); d.Before(calendar.Date{Year: 2027, Month: 1, Day: 2}); d = d.AddDays(1) {
+		cal.Holidays = append(cal.Holidays, calendar.Holiday{
+			Date: d, Name: "Holidays", Source: calendar.SourceManual, Feed: "",
+		})
+	}
+
+	at := func(y int, m time.Month, d, h int) time.Time { return time.Date(y, m, d, h, 0, 0, 0, loc) }
+
+	s := schedule(freeze.KindCalendar)
+	s.Calendar = freeze.CalendarRule{DaysOff: true, Holidays: true, OutsideHours: true, DaysBefore: 0}
+
+	long := want{at(2026, 12, 23, 17), at(2027, 1, 4, 9)}
+
+	cases := []struct {
+		name string
+		now  time.Time
+		want []want
+	}{
+		{"a plan that ends inside the holidays", at(2026, 12, 18, 12), []want{
+			{at(2026, 12, 18, 17), at(2026, 12, 21, 9)},
+			{at(2026, 12, 21, 17), at(2026, 12, 22, 9)},
+			{at(2026, 12, 22, 17), at(2026, 12, 23, 9)},
+			long,
+		}},
+		{"a plan in the holidays", at(2026, 12, 28, 12), []want{
+			long,
+			{at(2027, 1, 4, 17), at(2027, 1, 5, 9)},
+			{at(2027, 1, 5, 17), at(2027, 1, 6, 9)},
+			{at(2027, 1, 6, 17), at(2027, 1, 7, 9)},
+			{at(2027, 1, 7, 17), at(2027, 1, 8, 9)},
+			{at(2027, 1, 8, 17), at(2027, 1, 11, 9)},
+		}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := s.Plan(cal, tc.now)
+			if err != nil {
+				t.Fatalf("Plan: %v", err)
+			}
+
+			check(t, got, tc.want)
+		})
+	}
+}
+
 func TestScheduleRange(t *testing.T) {
 	t.Parallel()
 
@@ -206,6 +298,51 @@ func TestOccurrenceIDIsStable(t *testing.T) {
 	}
 }
 
+func TestFreezeOf(t *testing.T) {
+	t.Parallel()
+
+	s := schedule(freeze.KindWindow)
+	o := freeze.Occurrence{
+		Schedule: s.ID,
+		Start:    time.Date(2026, 10, 16, 13, 0, 0, 0, time.UTC),
+		End:      time.Date(2026, 10, 19, 7, 0, 0, 0, time.UTC),
+	}
+
+	f := s.FreezeOf(o)
+	if f.ID != freeze.OccurrenceID(s.ID, o.Start) || f.Namespace != s.Namespace || f.Reason != s.Reason ||
+		f.CreatedBy != "@schedule:fzs-weekend" || f.EndedBy != "" {
+		t.Fatalf("FreezeOf = %+v", f)
+	}
+
+	if err := f.Validate(); err != nil {
+		t.Fatalf("the freeze of an occurrence fails job.Freeze.Validate: %v", err)
+	}
+
+	cases := []struct {
+		name      string
+		createdBy string
+		want      string
+		ok        bool
+	}{
+		{"a freeze of a schedule", freeze.Subject("fzs-nights"), "fzs-nights", true},
+		{"a freeze of a person", "alice", "", false},
+		{"the prefix with no schedule", freeze.SubjectPrefix, "", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			g := f
+			g.CreatedBy = tc.createdBy
+
+			if got, ok := freeze.ScheduleOf(g); got != tc.want || ok != tc.ok {
+				t.Fatalf("ScheduleOf = %q, %v; want %q, %v", got, ok, tc.want, tc.ok)
+			}
+		})
+	}
+}
+
 func TestValidate(t *testing.T) {
 	t.Parallel()
 
@@ -240,6 +377,34 @@ func TestValidate(t *testing.T) {
 		}, false},
 		{"an unknown kind", func(s *freeze.Schedule) { s.Kind = "monthly" }, false},
 		{"no reason", func(s *freeze.Schedule) { s.Reason = "" }, false},
+		{"the server scope", func(s *freeze.Schedule) { s.Namespace = "@server" }, false},
+		{"a weekly rule in the zone Local", func(s *freeze.Schedule) {
+			weekly(calendar.Weekdays(time.Friday), time.Hour)(s)
+			s.Weekly.Zone = "Local"
+		}, false},
+		{"a weekly rule with no zone", func(s *freeze.Schedule) {
+			weekly(calendar.Weekdays(time.Friday), time.Hour)(s)
+			s.Weekly.Zone = ""
+		}, false},
+		{"a weekly rule in an unknown zone", func(s *freeze.Schedule) {
+			weekly(calendar.Weekdays(time.Friday), time.Hour)(s)
+			s.Weekly.Zone = "Europe/Atlantis"
+		}, false},
+		{"a weekly rule in an IANA zone", func(s *freeze.Schedule) {
+			weekly(calendar.Weekdays(time.Friday), time.Hour)(s)
+			s.Weekly.Zone = "Europe/Berlin"
+		}, true},
+		{
+			"a weekly length that is not whole minutes",
+			weekly(calendar.Weekdays(time.Friday), time.Hour+time.Second),
+			false,
+		},
+		{"the longest notice", func(s *freeze.Schedule) { s.Notice = freeze.MaxNotice }, true},
+		{
+			"a notice longer than the plan of a run",
+			func(s *freeze.Schedule) { s.Notice = freeze.MaxNotice + time.Minute },
+			false,
+		},
 		{"an end before the start", func(s *freeze.Schedule) { s.Until = s.From.Add(-time.Hour) }, false},
 	}
 
