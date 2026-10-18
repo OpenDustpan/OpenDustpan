@@ -41,6 +41,9 @@ BANNED = [
     (r"compl(y|ies|ied|ying)\s+with\s+DORA", "say 'designed against DORA' and name the article"),
     (r"meet(s|ing)?\s+DORA", "say 'designed against DORA' and name the article"),
     (r"DORA[- ]conforman(t|ce)", "say 'designed against DORA' and name the article"),
+    (r"DORA[- ]ready", "say 'designed against DORA' and name the article"),
+    (r"meet(s|ing)?\s+Article", "say 'designed against DORA' and name the article"),
+    (r"satisf(y|ies|ied|ying)\s+DORA", "say 'designed against DORA' and name the article"),
 ]
 
 WORD_RE = re.compile(
@@ -114,6 +117,14 @@ def selftest():
         ("A DORA-conformant record.", ["DORA-conformant"]),
         ("Compliance with dora is the goal.", ["Compliance with dora"]),
         ("It meets the DORA article.", []),
+        ("A DORA-ready server.", ["DORA-ready"]),
+        ("It is dora ready.", ["dora ready"]),
+        ("This meets Article 17.", ["meets Article"]),
+        ("Each record meets article 9(4)(e).", ["meets article"]),
+        ("It satisfies DORA.", ["satisfies DORA"]),
+        ("The design satisfied dora in full.", ["satisfied dora"]),
+        ("Designed against DORA Article 17, not a claim that it meets the need.", []),
+        ("A word like Articles stays.", []),
     ]
     failed = 0
     for text, want in cases:

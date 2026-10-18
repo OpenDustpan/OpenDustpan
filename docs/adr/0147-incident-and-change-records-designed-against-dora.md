@@ -1,6 +1,6 @@
 # 147. Incident records, change records and reviews, designed against DORA
 
-Status: accepted · 2026-10-18
+Status: superseded in part by ADR 148 · accepted 2026-10-18
 
 ## Context
 

@@ -479,7 +479,7 @@ The way a job runs: write-back or runners (ADR 100 decision 19). The port `job.E
 _Avoid_: Launcher (that is the program of a runner that starts each step)
 
 **Phase**:
-The work that one executor does with one claim (ADR 100 decision 4). A phase has one of three kinds. `plan` holds runner steps that change nothing, and the stored plan. `apply` holds runner steps that change resources or write state. `deliver` is the commit of a write-back job. The executor gives the phases at start, and they do not change after. Each phase is one durable operation with the start key `<job ID>/<phase index>`. A takeover is a new claim on the same operation. Between two phases, no executor holds the job, so a wait for a person never keeps a runner busy.
+The work that one executor does with one claim (ADR 100 decision 4). A phase has one of four kinds. `plan` holds runner steps that change nothing, and the stored plan. `apply` holds runner steps that change resources or write state. `deliver` is the commit of a write-back job. `verify` comes after the apply phase of a runner job, and holds runner steps that change nothing and check the change (ADR 148 decision 3). A job has a `verify` phase only when the unit settings name its steps. The executor gives the phases at start, and they do not change after. Each phase is one durable operation with the start key `<job ID>/<phase index>`. A takeover is a new claim on the same operation. Between two phases, no executor holds the job, so a wait for a person never keeps a runner busy.
 _Avoid_: Step (a step is one argument list that a runner starts in a phase), stage
 
 **Gate**:
@@ -808,6 +808,12 @@ _Avoid_: Alert, issue, violation, scan result, orphan
 A rule of a namespace that ignores each new finding that it matches, with its reason (`unmanaged.IgnoreRule`, ADR 165). It selects by provider, account scope, type, a tag key with an optional value, and kinds. Only the provider is required. A type can be exact, or a prefix that ends with `*`. A rule can have an end. A rule never ignores a finding that existed before the rule, and its delete opens no finding. A finding names the rule that ignored it. A namespace has at most 500 rules.
 _Avoid_: Suppression, filter, allowlist
 
+### Operations
+
+**Cyber threat record**:
+A record of a cyber threat in a namespace, with an ID that has the prefix `thr-` (ADR 148 decision 13). It has a title, a description, the time of detection, links to units and notes. A person records whether the threat is significant, with a reason, and each voluntary notice of the threat to an authority. The server never decides that a threat is significant, and never sends a notice. A cyber threat record is not an incident: no service was affected.
+_Avoid_: Threat (alone), alert, vulnerability
+
 ## Flagged ambiguities
 
 - **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
@@ -841,4 +847,4 @@ _Avoid_: Suppression, filter, allowlist
 - **Link** has two meanings: a link in the context of an object, and a namespace link. Write "namespace link" for the second.
 - **Layer** is a source of the value of a setting (ADR 63). ADR 161 also says "layer" for one object of the context chain. Name which one.
 - **Redaction**, **masking** and **purge** are different. A redaction destroys the content of one history item. Masking hides a secret value in a read and keeps it. A purge ends a whole unit.
-- **Retention** has two meanings: the retention period of a deleted unit, and that of a stored plan or a job log (ADR 152). Name which one.
+- **Retention** has three meanings. The first is the retention period of a deleted unit. The second is that of a stored plan or a job log (ADR 152). The third is that of an incident record or a cyber threat record (ADR 148). Name which one.
