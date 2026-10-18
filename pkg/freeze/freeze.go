@@ -179,6 +179,27 @@ func OccurrenceID(ns namespace.Name, schedule string, start time.Time) string {
 		strconv.FormatInt(start.UnixMilli(), 10) + "-" + hex.EncodeToString(sum[:nsHashBytes])
 }
 
+// IsOccurrenceID reports whether id has the form of an OccurrenceID: the
+// prefix FreezeIDPrefix, a schedule ID with no prefix, a start in Unix
+// milliseconds and 16 lowercase hex digits. Only the writes of a schedule
+// make such an ID. A store refuses it in a freeze that a person creates,
+// because the ID of an occurrence is known before its plan runs.
+func IsOccurrenceID(id string) bool {
+	rest, ok := strings.CutPrefix(id, FreezeIDPrefix)
+	if !ok {
+		return false
+	}
+
+	head, sum, ok := strings.CutLast(rest, "-")
+	if !ok || len(sum) != 2*nsHashBytes || strings.Trim(sum, "0123456789abcdef") != "" {
+		return false
+	}
+
+	_, ms, ok := strings.CutLast(head, "-")
+
+	return ok && ms != "" && strings.Trim(ms, "0123456789") == ""
+}
+
 // nsHashBytes is the number of bytes of the hash of the namespace in an
 // occurrence ID.
 const nsHashBytes = 8

@@ -21,13 +21,16 @@ import (
 // nothing, so a write never appends to the audit log of another
 // namespace.
 type Store interface {
-	// Create persists s with version 1. It returns ErrInvalid for a
-	// schedule that fails Validate, or whose namespace is not the
-	// namespace of fence (also for a zero fence), and ErrExists for a
-	// used ID.
+	// Create persists s with version 1. The server makes the ID of s,
+	// never the request. It returns ErrInvalid for a schedule that fails
+	// Validate, or whose namespace is not the namespace of fence (also for
+	// a zero fence), and ErrExists for a used ID.
 	Create(ctx context.Context, s Schedule, fence namespace.Fence, e audit.Entry) error
-	// Get returns the schedule id, or ErrNotFound.
-	Get(ctx context.Context, id string) (Schedule, error)
+	// Get returns the schedule id of the namespace ns. It returns
+	// ErrNotFound for an unknown ID, and for a schedule of another
+	// namespace than ns, so a read never tells whether a schedule of
+	// another namespace exists.
+	Get(ctx context.Context, ns namespace.Name, id string) (Schedule, error)
 	// Update replaces the schedule s.ID when s.Version is the stored
 	// version, and stores it with the version s.Version plus 1. It
 	// returns ErrNotFound for an unknown ID, or for a stored schedule
@@ -41,9 +44,12 @@ type Store interface {
 	// unknown ID, or for a schedule whose namespace is not the namespace
 	// of fence (also for a zero fence). It deletes no freeze: the caller
 	// then calls Sink.DeleteScheduled in the same request. The scheduled
-	// run also calls Sink.DeleteScheduled for each schedule that has
-	// freezes but no row, so a request that fails between the two calls
-	// leaves no freeze that did not start.
+	// run also calls Sink.DeleteScheduled, with the fence of the namespace
+	// of the freezes, for each schedule ID that has freezes in a namespace
+	// and no row in that namespace: it reads the row with Get and the
+	// namespace of the freezes. So a request that fails between the two
+	// calls leaves no freeze that did not start, also when another
+	// namespace then uses the ID.
 	Delete(ctx context.Context, id string, fence namespace.Fence, e audit.Entry) error
 	// List returns the schedules of ns, ordered by ID.
 	List(ctx context.Context, ns namespace.Name) ([]Schedule, error)
@@ -67,8 +73,13 @@ type Store interface {
 // a person cannot make a freeze that the Sink takes as a freeze of a
 // schedule. It returns ErrInvalid of the job model for a freeze ID that
 // exists, in any namespace, and changes nothing: the job model has no
-// sentinel for an existing freeze. It returns the error of a fence of another namespace for an
-// audit entry of another namespace than the freeze. A
+// sentinel for an existing freeze. It returns ErrInvalid of the job model
+// for a freeze ID for which IsOccurrenceID is true, in any namespace:
+// the server makes the ID of each freeze, and only the writes of a
+// schedule make an ID of that form. So no freeze of a person can take the
+// ID of an occurrence before its plan runs. It returns the error of a
+// fence of another namespace for an audit entry of another namespace than
+// the freeze. A
 // freeze started when its start is at or before now on the clock of the
 // store. The Sink never changes, deletes or adds again a freeze whose
 // EndedBy is set: only a person ends a freeze early, and the person
@@ -103,8 +114,9 @@ type Sink interface {
 	// DeleteScheduled deletes each freeze of the schedule id in the
 	// namespace of fence that did not start and that no person ended. It
 	// is for a schedule that no longer exists: it returns ErrExists when
-	// the schedule id exists, in any namespace. It returns ErrNotFound for
-	// a zero fence. It never deletes a freeze of another namespace. With
+	// the schedule id exists in the namespace of fence. A schedule with
+	// the ID id in another namespace does not stop it. It returns
+	// ErrNotFound for a zero fence. It never deletes a freeze of another namespace. With
 	// no freeze to delete it returns nil.
 	DeleteScheduled(ctx context.Context, id string, fence namespace.Fence) error
 }

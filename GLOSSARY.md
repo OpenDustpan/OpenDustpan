@@ -479,7 +479,7 @@ The way a job runs: write-back or runners (ADR 100 decision 19). The port `job.E
 _Avoid_: Launcher (that is the program of a runner that starts each step)
 
 **Phase**:
-The work that one executor does with one claim (ADR 100 decision 4). A phase has one of three kinds. `plan` holds runner steps that change nothing, and the stored plan. `apply` holds runner steps that change resources or write state. `deliver` is the commit of a write-back job. The executor gives the phases at start, and they do not change after. Each phase is one durable operation with the start key `<job ID>/<phase index>`. A takeover is a new claim on the same operation. Between two phases, no executor holds the job, so a wait for a person never keeps a runner busy.
+The work that one executor does with one claim (ADR 100 decision 4). A phase has one of four kinds. `plan` holds runner steps that change nothing, and the stored plan. `apply` holds runner steps that change resources or write state. `deliver` is the commit of a write-back job. `verify` comes after the apply phase of a runner apply job and of a runner destroy job. It holds runner steps that change nothing and check the change (ADR 148 decision 3). A job has a `verify` phase only when the unit settings name its steps. The executor gives the phases at start, and they do not change after. Each phase is one durable operation with the start key `<job ID>/<phase index>`. A takeover is a new claim on the same operation. Between two phases, no executor holds the job, so a wait for a person never keeps a runner busy.
 _Avoid_: Step (a step is one argument list that a runner starts in a phase), stage
 
 **Gate**:
@@ -487,11 +487,19 @@ A condition in front of a phase that must open before the phase dispatches (ADR 
 _Avoid_: Approval (alone: an approval passes an approval gate), check
 
 **Confirmation gate**:
-The gate in front of each phase that changes, for a job that an agent started in approve-first mode (ADR 103 decision 2). Only the person who asked the agent can pass it. That person gives one confirmation, in a request of their own with no agent, with a fresh authentication. The fresh authentication is a new MFA step where built-in MFA covers the person. Otherwise, it is a new authentication at the SSO identity provider of the person. It is at most 15 minutes old (`job.ConfirmFreshness`). A confirmation with no fresh authentication fails with `ErrAuthStale`. The confirmation binds to the plan when a plan phase comes before. A policy never gives it and never takes it away. `job.Service.Confirm` records it and needs the start action of the job, not `job:approve`. An agent cannot give a confirmation (ADR 103 decision 7).
+The gate before each phase that changes, for a job of an agent in approve-first mode or with no mode (ADR 103 decision 2). A write-back job of an agent has it in front of its deliver phase in every mode (ADR 128 decision 4). Only the person who asked the agent can pass it. That person gives one confirmation in a request of their own with no agent. The request comes from an interactive console session, never from an access token (ADR 128 decision 5). It has a fresh authentication. That is a new MFA step where built-in MFA covers the person. Otherwise, it is a new authentication at the SSO identity provider of the person. Its maximum age is the lower of 15 minutes and W when W is above 0, else 15 minutes. W is the token freshness window of the session policy (`job.ConfirmMaxAge`, ADR 128 decision 7). A confirmation with no fresh authentication fails with `ErrAuthStale`. The confirmation binds to the plan when a plan phase comes before. A policy never gives it and never takes it away. `job.Service.Confirm` records it and needs the start action of the job, not `job:approve`. An agent cannot give a confirmation (ADR 103 decision 7).
 _Avoid_: Approval (an approval passes an approval gate), consent
 
+**Request-changes thread**:
+A thread on a job that a blocking comment opens (ADR 128 decision 11). A reviewer with `job:approve` opens it, or an agent of such a reviewer. The person who started the job cannot open one on a job that they started. While a thread is open, the job model accepts no approve verdict and no confirmation of the job (`job.ErrChangesRequested`). The person who opened the thread, or an approver who may dismiss, resolves it, each in a request with no agent. An approver who may dismiss can record an approve verdict on an approval gate of the job. The status of the gate does not matter. That needs `job:approve` and the groups of that gate. That approver is never the person who started the job, and never an agent. The person who started the job never resolves it, and an agent never resolves it. An agent never rejects a job: a blocking comment is the way for an agent to stop one. A later design of change orders gets the same thread.
+_Avoid_: rejection (a rejection ends the job), review (alone: that is the review request of the forge)
+
+**Dismissal**:
+The resolve of a request-changes thread by a person other than the person who opened it (ADR 128 decision 14). A dismissal needs a reason, and writes an audit entry with that reason.
+_Avoid_: Override (that is a break-glass or a forced write)
+
 **Agent mode**:
-The mode that a user sets for the agent that acts for them: approve-first, review-request or direct (ADR 103 decision 12). `job.CheckAgent` holds the rule at start. Approve-first is the default: each phase that changes gets a confirmation gate. In review-request mode, the agent changes a unit only through a write-back job that delivers as a review request, with no confirmation gate. In direct mode, the agent changes a unit with no confirmation. Direct mode needs three switches, each off by default: one of the installation, one of the namespace of the unit and one of the user. A runner job that only plans needs no mode, and it starts in every mode.
+The mode that a user sets for the agent that acts for them: approve-first, review-request or direct (ADR 103 decision 12). `job.CheckAgent` holds the rule at start. Approve-first is the default: each phase that changes gets a confirmation gate. In review-request mode, the agent changes a unit only through a write-back job that delivers as a review request. Its deliver phase still has a confirmation gate (ADR 128 decision 4). In direct mode, a runner job of the agent changes a unit with no confirmation. A write-back job pushes after the confirmation of its delivery. Direct mode needs three switches, each off by default: one of the installation, one of the namespace of the unit and one of the user. A runner job that only plans needs no mode, and it starts in every mode.
 _Avoid_: Autonomy level, agent permission
 
 **Freeze**:
@@ -617,7 +625,7 @@ One of the 12 task-shaped tools that an agent can call (ADR 122). The ADRs call 
 _Avoid_: Tool (alone, that is an infrastructure-as-code CLI), function, command, skill
 
 **Agent ref**:
-The reference to the agent that acts for a person (`agent.Ref`, ADR 125 decision 9). It holds the channel, and the run ID or the MCP session ID. `Ref.Validate` refuses a ref with no ID or with the ID of the other channel. The job model records it on the job, on each approval and on the decision input (ADR 125 decision 13).
+The reference to the agent that acts for a person (`agent.Ref`, ADR 125 decision 9). It holds the channel, and the run ID or the MCP session ID. `Ref.Validate` refuses a ref with no ID or with the ID of the other channel. The job model holds the same fields in `job.AgentRef` (ADR 128 decision 1). It records the reference on the job, on each approval and on the decision input. Each audit entry of the job holds it in the agent block (ADR 128 decision 17). A job never names an agent by a name only.
 _Avoid_: Agent ID, agent name, agent string
 
 **Channel**:
@@ -812,6 +820,75 @@ _Avoid_: Alert, issue, violation, scan result, orphan
 A rule of a namespace that ignores each new finding that it matches, with its reason (`unmanaged.IgnoreRule`, ADR 165). It selects by provider, account scope, type, a tag key with an optional value, and kinds. Only the provider is required. A type can be exact, or a prefix that ends with `*`. A rule can have an end. A rule never ignores a finding that existed before the rule, and its delete opens no finding. A finding names the rule that ignored it. A namespace has at most 500 rules.
 _Avoid_: Suppression, filter, allowlist
 
+### Console
+
+**Theme**:
+The look of the console that a person selects: `default` or `terminal` (ADR 180). A theme sets the font of the interface and the default of the keyboard settings. The colors come from the color mode and the color scheme.
+_Avoid_: Skin, style
+
+**Terminal theme**:
+The opt-in theme of the console: IBM Plex Mono for all text, dense, keyboard first, with color schemes. "Terminal" is its only name.
+_Avoid_: The name of a terminal emulator or of an editor for it
+
+**Color mode**:
+`system`, `light` or `dark`. `system` follows the color scheme of the operating system.
+_Avoid_: Theme (for light or dark)
+
+**Color scheme**:
+A palette of the Terminal theme, from the Gogh collection, mapped to the color tokens of the console (ADR 180). Its name is a label with credit to its authors, never our name. `opendustpan` is the built-in scheme: the palette of the default theme.
+_Avoid_: Theme (for a palette), skin
+
+**Preset**:
+Branding that an operator sets for the whole installation, for example the palette of OpenDustpan Cloud. A person never selects a preset, and a theme and a color scheme apply on top of it (ADR 180).
+_Avoid_: Scheme, theme (for branding)
+
+**Preferences**:
+The settings of the console that a person keeps on the account, on every device (`/api/server/caller/preferences`, ADR 180). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
+_Avoid_: Profile (a profile holds shared config and secrets, RFC 5), user settings
+
+
+**Language** (of a person):
+The language of the words that the console shows to a person. It is a BCP 47 tag. The console shows one of the 28 languages of ADR 181. The server checks only the shape of the tag, and the console owns the list. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
+_Avoid_: Locale (for the language)
+
+**Formatting locale**:
+The BCP 47 locale that sets how the console shows dates, times, numbers and lists, through the `Intl` APIs (ADR 181). The default is the browser's locale. A person can override the clock (`hourCycle`), the date style, the first day of the week and the time zone.
+_Avoid_: Language (for formats), region
+
+**Message file**:
+The file of the console that holds the messages of one language in ICU MessageFormat (ADR 181). It marks each high-stakes message, which needs native review before it ships.
+_Avoid_: Catalog (that is the self-service gateway), translation table
+
+**Term list**:
+The list of terms that stay in English in one language, for example "stack", "workspace", "plan" and "state" (ADR 181). An engineer whose first language is that language signs it off. The rule: use the word that does not make a user of that language cringe.
+_Avoid_: Glossary (that is this file), do-not-translate list
+
+**Pseudo-locale**:
+`en-XA`, a test language of the console (ADR 181). It makes each message longer, adds accents and puts brackets around it. Tests use it to find clipped text and text outside a message file. Release builds do not list it.
+_Avoid_: Test language, fake locale
+
+**Error code**:
+The stable machine code of an API error, for example `workspace.locked` (ADR 182). It is `errorCode` in the camelCase APIs and the JSON:API `code` member in the TFE-compatible API. A code never changes its meaning. The console selects its message by the code and never parses the English text. Not the `code` field of the camelCase error shapes, which is the HTTP status.
+_Avoid_: Error type, error ID, status code (for the machine code)
+
+### Operations
+
+**Incident**:
+An event in a namespace that disrupts a service, with an ID that has the prefix `inc-` (ADR 147). It has a title, a severity from 1 to 4, a state, the times of each step, a commander and links to units and jobs. It closes only with a root cause, a root-cause category and lessons. A person classifies it, reports it and reviews it. The server never decides any of these.
+_Avoid_: Ticket, outage, alert
+
+**Classification**:
+The record of a person that says whether an incident is major, with the criteria that the person found met (ADR 147 decision 5). Classifications are append-only. The last one is the current classification. The server never classifies an incident.
+_Avoid_: Triage, severity (a severity is a different field)
+
+**Commander**:
+The person who leads the response to an incident (ADR 147 decision 1).
+_Avoid_: Owner, lead
+
+**Cyber threat record**:
+A record of a cyber threat in a namespace, with an ID that has the prefix `thr-` (ADR 148 decision 13). It has a title, a description, the time of detection, links to units and notes. A person records whether the threat is significant, with a reason, and each voluntary notice of the threat to an authority. The server never decides that a threat is significant, and never sends a notice. A person closes the record with a note on the outcome. A cyber threat record is not an incident: the threat did not affect a service.
+_Avoid_: Threat (alone), alert, vulnerability
+
 ## Flagged ambiguities
 
 - **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
@@ -845,4 +922,4 @@ _Avoid_: Suppression, filter, allowlist
 - **Link** has two meanings: a link in the context of an object, and a namespace link. Write "namespace link" for the second.
 - **Layer** is a source of the value of a setting (ADR 63). ADR 161 also says "layer" for one object of the context chain. Name which one.
 - **Redaction**, **masking** and **purge** are different. A redaction destroys the content of one history item. Masking hides a secret value in a read and keeps it. A purge ends a whole unit.
-- **Retention** has two meanings: the retention period of a deleted unit, and that of a stored plan or a job log (ADR 152). Name which one.
+- **Retention** has three meanings. The first is the retention period of a deleted unit. The second is that of a stored plan or a job log (ADR 152). The third is that of an incident record or a cyber threat record (ADR 148). Name which one.
