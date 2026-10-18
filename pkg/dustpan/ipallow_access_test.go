@@ -121,6 +121,7 @@ func newIPAllowlistAccessServer(t *testing.T) *dustpan.Server {
 	})
 
 	acme := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Unix(0, 0),
 		Name:            "acme",
 		HomeRegion:      region,

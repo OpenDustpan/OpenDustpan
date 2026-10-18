@@ -56,6 +56,8 @@ func Run(t *testing.T, newStore Factory) {
 		{name: "seal stream round trips across chunk borders", test: testSealStreamRoundTrip},
 		{name: "seal stream binds the scope", test: testSealStreamBindsScope},
 		{name: "tampered sealed streams fail without a leak", test: testSealStreamTamper},
+		{name: "sealed state binds its state version", test: testSealStateBindsVersion},
+		{name: "truncated sealed streams fail", test: testSealStreamTruncated},
 	}
 
 	for _, tc := range cases {
@@ -103,6 +105,7 @@ func newNamespace(t *testing.T, s Store) namespace.Namespace {
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "acme",
 		HomeRegion:      "eu-west",

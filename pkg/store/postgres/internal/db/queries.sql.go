@@ -11,34 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const acquireAuditSinkLease = `-- name: AcquireAuditSinkLease :execrows
-INSERT INTO audit_sink_leases (sink, holder, expires_at_ms)
-VALUES ($1, $2, FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint + $3::bigint)
-ON CONFLICT (sink) DO UPDATE
-SET holder = EXCLUDED.holder, expires_at_ms = EXCLUDED.expires_at_ms
-WHERE audit_sink_leases.holder = EXCLUDED.holder OR audit_sink_leases.expires_at_ms <= FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint
-`
-
-type AcquireAuditSinkLeaseParams struct {
-	Sink   string
-	Holder string
-	TtlMs  int64
-}
-
-// Takes or renews the lease of one sink in one conditional write. It writes
-// when no row exists, when the stored lease ended, or when the caller holds
-// it, and changes nothing while another instance holds a live lease. The
-// caller reads the changed row count: one means it holds the lease. The
-// expiry is the database clock plus the TTL, so a wrong clock on one
-// instance cannot hold every lease.
-func (q *Queries) AcquireAuditSinkLease(ctx context.Context, arg AcquireAuditSinkLeaseParams) (int64, error) {
-	result, err := q.db.Exec(ctx, acquireAuditSinkLease, arg.Sink, arg.Holder, arg.TtlMs)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const activeUpdate = `-- name: ActiveUpdate :one
 SELECT u.stack_id, u.id, u.kind, u.dry_run, u.status, u.version, u.revision,
        u.lease_digest, u.lease_expires_at_ms, u.created_at_ms, u.started_at_ms, u.ended_at_ms,
@@ -127,6 +99,43 @@ func (q *Queries) AddGroupMember(ctx context.Context, arg AddGroupMemberParams) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const addSignInFailure = `-- name: AddSignInFailure :one
+
+WITH now_ms AS (
+    SELECT FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint AS now
+)
+INSERT INTO sign_in_failures (source, window_end_ms, count)
+SELECT $1::text, (now / $2::bigint + 1) * $2::bigint, 1
+FROM now_ms
+ON CONFLICT (source, window_end_ms) DO UPDATE SET count = sign_in_failures.count + 1
+RETURNING window_end_ms, count, (SELECT now FROM now_ms) AS now_ms
+`
+
+type AddSignInFailureParams struct {
+	Source   string
+	LengthMs int64
+}
+
+type AddSignInFailureRow struct {
+	WindowEndMs int64
+	Count       int64
+	NowMs       int64
+}
+
+// Sign-in failure budget. Every time comes from DatabaseNowMs, the clock of
+// the store, read in the same transaction as the write.
+// Adds one miss of source in the current window of length_ms, in one atomic
+// write, and answers the count of that window after the add with the time of
+// the add and the end of the window. Every time comes from the clock of the
+// store, read once in the statement, so the clock of an instance never moves
+// the window. Concurrent adds each count once.
+func (q *Queries) AddSignInFailure(ctx context.Context, arg AddSignInFailureParams) (AddSignInFailureRow, error) {
+	row := q.db.QueryRow(ctx, addSignInFailure, arg.Source, arg.LengthMs)
+	var i AddSignInFailureRow
+	err := row.Scan(&i.WindowEndMs, &i.Count, &i.NowMs)
+	return i, err
 }
 
 const advanceAuditSinkCursor = `-- name: AdvanceAuditSinkCursor :exec
@@ -543,6 +552,48 @@ func (q *Queries) ClaimDurableScheduleTick(ctx context.Context, arg ClaimDurable
 	return result.RowsAffected(), nil
 }
 
+const claimSinkOperation = `-- name: ClaimSinkOperation :one
+UPDATE durable_operations
+SET state = 'running', attempt = attempt + 1, expiries = expiries + $1::bigint,
+  claim_owner = $2::text, claim_token = $3::bigint,
+  claim_expires_at_ms = $4::bigint, updated_at_ms = $5::bigint
+WHERE id = $6::text
+RETURNING claim_token, claim_expires_at_ms
+`
+
+type ClaimSinkOperationParams struct {
+	AddExpiries int64
+	Owner       string
+	Token       int64
+	ExpiresAtMs int64
+	NowMs       int64
+	ID          string
+}
+
+type ClaimSinkOperationRow struct {
+	ClaimToken       int64
+	ClaimExpiresAtMs pgtype.Int8
+}
+
+// Claims the sink operation id for a new holder: the state returns to
+// running, the attempt and the claim token grow, and the expiry is the
+// database clock plus the TTL. The caller holds the row, checked the claim
+// first, and passes the new token. It adds add_expiries to the expiries:
+// one when the claim takes over an expired claim, none for a first claim.
+func (q *Queries) ClaimSinkOperation(ctx context.Context, arg ClaimSinkOperationParams) (ClaimSinkOperationRow, error) {
+	row := q.db.QueryRow(ctx, claimSinkOperation,
+		arg.AddExpiries,
+		arg.Owner,
+		arg.Token,
+		arg.ExpiresAtMs,
+		arg.NowMs,
+		arg.ID,
+	)
+	var i ClaimSinkOperationRow
+	err := row.Scan(&i.ClaimToken, &i.ClaimExpiresAtMs)
+	return i, err
+}
+
 const clearJournalOperations = `-- name: ClearJournalOperations :exec
 UPDATE update_journal SET operation_ids = '[]'
 WHERE stack_id = $1 AND update_id = $2
@@ -574,6 +625,27 @@ type CloseJournalParams struct {
 func (q *Queries) CloseJournal(ctx context.Context, arg CloseJournalParams) error {
 	_, err := q.db.Exec(ctx, closeJournal, arg.StackID, arg.ID)
 	return err
+}
+
+const contextUnitExists = `-- name: ContextUnitExists :one
+SELECT (EXISTS (SELECT 1 FROM inventory AS i WHERE i.namespace = $1 AND i.tool = $2 AND i.unit_id = $3)
+    OR EXISTS (SELECT 1 FROM inventory_deleted AS d WHERE d.namespace = $1 AND d.tool = $2 AND d.unit_id = $3))::boolean AS present
+`
+
+type ContextUnitExistsParams struct {
+	Namespace string
+	Tool      string
+	UnitID    string
+}
+
+// Whether the namespace holds the unit in its live inventory or in its deleted
+// units. A context write checks it in its own transaction, so a purge that
+// committed before the write refuses the write.
+func (q *Queries) ContextUnitExists(ctx context.Context, arg ContextUnitExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, contextUnitExists, arg.Namespace, arg.Tool, arg.UnitID)
+	var present bool
+	err := row.Scan(&present)
+	return present, err
 }
 
 const countAccessToken = `-- name: CountAccessToken :one
@@ -975,6 +1047,21 @@ func (q *Queries) CountRoleGrantsOnPrincipal(ctx context.Context, role string) (
 	return count, err
 }
 
+const countRunnableDurableOperations = `-- name: CountRunnableDurableOperations :one
+SELECT COUNT(*) FROM durable_operations WHERE kind = $1 AND state IN ('pending', 'running')
+`
+
+// The count of operations of one kind that can run now: pending or running.
+// An approval of an audit chain change reads it in the transaction of its
+// own start, while it holds the advisory lock of the server audit scope, so
+// a second approval waits for the first and refuses.
+func (q *Queries) CountRunnableDurableOperations(ctx context.Context, kind string) (int64, error) {
+	row := q.db.QueryRow(ctx, countRunnableDurableOperations, kind)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countRunningJournaledUpdates = `-- name: CountRunningJournaledUpdates :one
 SELECT COUNT(*)
 FROM updates
@@ -1228,8 +1315,8 @@ func (q *Queries) CreateInstallationSecretKey(ctx context.Context, arg CreateIns
 }
 
 const createNamespace = `-- name: CreateNamespace :execrows
-INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
-VALUES ($1, $2, $3, $4)
+INSERT INTO namespaces (name, home_region, failover_version, created_at_ms, id)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT DO NOTHING
 `
 
@@ -1238,6 +1325,7 @@ type CreateNamespaceParams struct {
 	HomeRegion      string
 	FailoverVersion int64
 	CreatedAtMs     int64
+	ID              string
 }
 
 func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams) (int64, error) {
@@ -1246,6 +1334,7 @@ func (q *Queries) CreateNamespace(ctx context.Context, arg CreateNamespaceParams
 		arg.HomeRegion,
 		arg.FailoverVersion,
 		arg.CreatedAtMs,
+		arg.ID,
 	)
 	if err != nil {
 		return 0, err
@@ -1975,6 +2064,58 @@ func (q *Queries) DeleteMissingCollectionMembership(ctx context.Context, unitID 
 	return err
 }
 
+const deleteObjectContext = `-- name: DeleteObjectContext :execrows
+DELETE FROM object_context
+WHERE namespace_id = $1 AND object_kind = $2 AND object_id = $3 AND resource_key = $4 AND source = $5
+`
+
+type DeleteObjectContextParams struct {
+	NamespaceID string
+	ObjectKind  string
+	ObjectID    string
+	ResourceKey string
+	Source      string
+}
+
+// Deletes one entry. The owner rows of the entry go with it.
+func (q *Queries) DeleteObjectContext(ctx context.Context, arg DeleteObjectContextParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteObjectContext,
+		arg.NamespaceID,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.ResourceKey,
+		arg.Source,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteObjectOwners = `-- name: DeleteObjectOwners :exec
+DELETE FROM object_context_owners
+WHERE namespace_id = $1 AND object_kind = $2 AND object_id = $3 AND resource_key = $4 AND source = $5
+`
+
+type DeleteObjectOwnersParams struct {
+	NamespaceID string
+	ObjectKind  string
+	ObjectID    string
+	ResourceKey string
+	Source      string
+}
+
+func (q *Queries) DeleteObjectOwners(ctx context.Context, arg DeleteObjectOwnersParams) error {
+	_, err := q.db.Exec(ctx, deleteObjectOwners,
+		arg.NamespaceID,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.ResourceKey,
+		arg.Source,
+	)
+	return err
+}
+
 const deletePrincipal = `-- name: DeletePrincipal :execrows
 UPDATE principals SET deleted_at_ms = $1
 WHERE id = $2 AND namespace = $3 AND deleted_at_ms IS NULL
@@ -2066,6 +2207,38 @@ WHERE workspace_id = $1
 // Removes every state version of one workspace, pending and finalized.
 func (q *Queries) DeleteStateVersionsOfWorkspace(ctx context.Context, workspaceID string) error {
 	_, err := q.db.Exec(ctx, deleteStateVersionsOfWorkspace, workspaceID)
+	return err
+}
+
+const deleteUnitContext = `-- name: DeleteUnitContext :exec
+DELETE FROM object_context
+WHERE namespace_id = $1 AND object_kind IN ('unit', 'resource') AND object_id = $2
+`
+
+type DeleteUnitContextParams struct {
+	NamespaceID string
+	ObjectID    string
+}
+
+// Deletes the entries of a unit and of its resources, both sources.
+func (q *Queries) DeleteUnitContext(ctx context.Context, arg DeleteUnitContextParams) error {
+	_, err := q.db.Exec(ctx, deleteUnitContext, arg.NamespaceID, arg.ObjectID)
+	return err
+}
+
+const deleteUnitOutputContext = `-- name: DeleteUnitOutputContext :exec
+DELETE FROM object_context
+WHERE namespace_id = $1 AND object_kind IN ('unit', 'resource') AND object_id = $2 AND source = 'output'
+`
+
+type DeleteUnitOutputContextParams struct {
+	NamespaceID string
+	ObjectID    string
+}
+
+// Deletes the output entries of a unit and of its resources.
+func (q *Queries) DeleteUnitOutputContext(ctx context.Context, arg DeleteUnitOutputContextParams) error {
+	_, err := q.db.Exec(ctx, deleteUnitOutputContext, arg.NamespaceID, arg.ObjectID)
 	return err
 }
 
@@ -2640,6 +2813,41 @@ func (q *Queries) FinishRestore(ctx context.Context, arg FinishRestoreParams) (i
 	return result.RowsAffected(), nil
 }
 
+const firstStateUpdateEnd = `-- name: FirstStateUpdateEnd :one
+SELECT u.ended_at_ms
+FROM updates AS u
+JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.ended_at_ms > 0
+ORDER BY u.version ASC
+LIMIT 1
+`
+
+func (q *Queries) FirstStateUpdateEnd(ctx context.Context, stackID string) (int64, error) {
+	row := q.db.QueryRow(ctx, firstStateUpdateEnd, stackID)
+	var ended_at_ms int64
+	err := row.Scan(&ended_at_ms)
+	return ended_at_ms, err
+}
+
+const firstWorkspaceStateFinalize = `-- name: FirstWorkspaceStateFinalize :one
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized'
+ORDER BY finalized_at_ms ASC, id ASC
+LIMIT 1
+`
+
+// The finalize time of the first finalized state version of a workspace.
+func (q *Queries) FirstWorkspaceStateFinalize(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, firstWorkspaceStateFinalize, workspaceID)
+	var finalized_at_ms int64
+	err := row.Scan(&finalized_at_ms)
+	return finalized_at_ms, err
+}
+
 const getAccessToken = `-- name: GetAccessToken :one
 SELECT id, principal_id, name, kind, created_at_ms, expires_at_ms, last_used_at_ms, revoked_at_ms, replaced_by, created_by, disabled_at_ms
 FROM access_tokens WHERE id = $1
@@ -3034,6 +3242,24 @@ func (q *Queries) GetCollection(ctx context.Context, arg GetCollectionParams) (G
 		&i.CreatedAtMs,
 	)
 	return i, err
+}
+
+const getCollectionNameByID = `-- name: GetCollectionNameByID :one
+SELECT name
+FROM collections
+WHERE namespace = $1 AND id = $2
+`
+
+type GetCollectionNameByIDParams struct {
+	Namespace string
+	ID        string
+}
+
+func (q *Queries) GetCollectionNameByID(ctx context.Context, arg GetCollectionNameByIDParams) (string, error) {
+	row := q.db.QueryRow(ctx, getCollectionNameByID, arg.Namespace, arg.ID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
 }
 
 const getCurrentStateVersion = `-- name: GetCurrentStateVersion :one
@@ -3436,7 +3662,7 @@ func (q *Queries) GetLatestCheckpoint(ctx context.Context, stackID string) (GetL
 }
 
 const getNamespace = `-- name: GetNamespace :one
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name = $1
 `
@@ -3448,6 +3674,7 @@ type GetNamespaceRow struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	ID                  string
 }
 
 func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRow, error) {
@@ -3460,12 +3687,13 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRo
 		&i.CreatedAtMs,
 		&i.AllowForcedWrites,
 		&i.AllowUnlockedWrites,
+		&i.ID,
 	)
 	return i, err
 }
 
 const getNamespaceForShare = `-- name: GetNamespaceForShare :one
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name = $1
 FOR SHARE
@@ -3478,6 +3706,7 @@ type GetNamespaceForShareRow struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	ID                  string
 }
 
 // Reads the namespace row with a shared lock. A switch change waits for the
@@ -3492,8 +3721,23 @@ func (q *Queries) GetNamespaceForShare(ctx context.Context, name string) (GetNam
 		&i.CreatedAtMs,
 		&i.AllowForcedWrites,
 		&i.AllowUnlockedWrites,
+		&i.ID,
 	)
 	return i, err
+}
+
+const getNamespaceID = `-- name: GetNamespaceID :one
+SELECT id
+FROM namespaces
+WHERE name = $1
+`
+
+// The stable ID of the namespace that has the name now.
+func (q *Queries) GetNamespaceID(ctx context.Context, name string) (string, error) {
+	row := q.db.QueryRow(ctx, getNamespaceID, name)
+	var id string
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getNamespaceIPAllowlist = `-- name: GetNamespaceIPAllowlist :one
@@ -4068,6 +4312,40 @@ func (q *Queries) GetUnitCollection(ctx context.Context, unitID string) (string,
 	var name string
 	err := row.Scan(&name)
 	return name, err
+}
+
+const getUnitCollectionName = `-- name: GetUnitCollectionName :one
+SELECT c.name
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = $1
+`
+
+// The name of the collection that holds the unit, for a change log row.
+func (q *Queries) GetUnitCollectionName(ctx context.Context, unitID string) (string, error) {
+	row := q.db.QueryRow(ctx, getUnitCollectionName, unitID)
+	var name string
+	err := row.Scan(&name)
+	return name, err
+}
+
+const getUnitOutputSeq = `-- name: GetUnitOutputSeq :one
+SELECT item_seq
+FROM object_context
+WHERE namespace_id = $1 AND object_kind = 'unit' AND object_id = $2 AND resource_key = '' AND source = 'output'
+`
+
+type GetUnitOutputSeqParams struct {
+	NamespaceID string
+	ObjectID    string
+}
+
+// The order of the state item that the output entries of a unit come from.
+func (q *Queries) GetUnitOutputSeq(ctx context.Context, arg GetUnitOutputSeqParams) (int64, error) {
+	row := q.db.QueryRow(ctx, getUnitOutputSeq, arg.NamespaceID, arg.ObjectID)
+	var item_seq int64
+	err := row.Scan(&item_seq)
+	return item_seq, err
 }
 
 const getUpdate = `-- name: GetUpdate :one
@@ -4704,6 +4982,44 @@ func (q *Queries) InsertDurableStep(ctx context.Context, arg InsertDurableStepPa
 	return err
 }
 
+const insertInventoryChange = `-- name: InsertInventoryChange :exec
+INSERT INTO inventory_changes (
+    namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+`
+
+type InsertInventoryChangeParams struct {
+	NamespaceID   string
+	Seq           int64
+	AtMs          int64
+	Tool          string
+	UnitID        string
+	Name          string
+	DisplayName   string
+	Status        string
+	Collection    string
+	Kind          string
+	ResourceCount pgtype.Int8
+}
+
+func (q *Queries) InsertInventoryChange(ctx context.Context, arg InsertInventoryChangeParams) error {
+	_, err := q.db.Exec(ctx, insertInventoryChange,
+		arg.NamespaceID,
+		arg.Seq,
+		arg.AtMs,
+		arg.Tool,
+		arg.UnitID,
+		arg.Name,
+		arg.DisplayName,
+		arg.Status,
+		arg.Collection,
+		arg.Kind,
+		arg.ResourceCount,
+	)
+	return err
+}
+
 const insertJournal = `-- name: InsertJournal :exec
 INSERT INTO update_journal (
     stack_id, update_id, arrival, blob_key, sha256, md5, size,
@@ -4805,6 +5121,33 @@ type InsertOIDCProviderParams struct {
 // keeps the record.
 func (q *Queries) InsertOIDCProvider(ctx context.Context, arg InsertOIDCProviderParams) error {
 	_, err := q.db.Exec(ctx, insertOIDCProvider, arg.ProviderID, arg.Issuer, arg.CreatedAtMs)
+	return err
+}
+
+const insertObjectOwner = `-- name: InsertObjectOwner :exec
+INSERT INTO object_context_owners (namespace_id, owner, object_kind, object_id, resource_key, source)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT DO NOTHING
+`
+
+type InsertObjectOwnerParams struct {
+	NamespaceID string
+	Owner       string
+	ObjectKind  string
+	ObjectID    string
+	ResourceKey string
+	Source      string
+}
+
+func (q *Queries) InsertObjectOwner(ctx context.Context, arg InsertObjectOwnerParams) error {
+	_, err := q.db.Exec(ctx, insertObjectOwner,
+		arg.NamespaceID,
+		arg.Owner,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.ResourceKey,
+		arg.Source,
+	)
 	return err
 }
 
@@ -4987,6 +5330,23 @@ func (q *Queries) LastAuditEntry(ctx context.Context, namespace string) (AuditEn
 		&i.FenceVersion,
 	)
 	return i, err
+}
+
+const latestWorkspaceStateFinalize = `-- name: LatestWorkspaceStateFinalize :one
+SELECT finalized_at_ms
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized'
+ORDER BY finalized_at_ms DESC
+LIMIT 1
+`
+
+// The latest finalize time of the finalized state versions of a workspace. A
+// finalize stamps a later time than this one, in the same transaction.
+func (q *Queries) LatestWorkspaceStateFinalize(ctx context.Context, workspaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, latestWorkspaceStateFinalize, workspaceID)
+	var finalized_at_ms int64
+	err := row.Scan(&finalized_at_ms)
+	return finalized_at_ms, err
 }
 
 const listAccessTokens = `-- name: ListAccessTokens :many
@@ -6095,6 +6455,207 @@ func (q *Queries) ListInventory(ctx context.Context, namespace string) ([]ListIn
 	return items, nil
 }
 
+const listInventoryChangeBounds = `-- name: ListInventoryChangeBounds :many
+WITH RECURSIVE units(tool, unit_id) AS (
+    (SELECT f.tool, f.unit_id
+     FROM inventory_changes AS f
+     WHERE f.namespace_id = $1
+     ORDER BY f.tool, f.unit_id
+     LIMIT 1)
+    UNION ALL
+    SELECT n.tool, n.unit_id
+    FROM units AS u
+    CROSS JOIN LATERAL (
+        SELECT s.tool, s.unit_id
+        FROM inventory_changes AS s
+        WHERE s.namespace_id = $1 AND (s.tool, s.unit_id) > (u.tool, u.unit_id)
+        ORDER BY s.tool, s.unit_id
+        LIMIT 1
+    ) AS n
+)
+SELECT r.namespace_id, r.seq, r.at_ms, r.tool, r.unit_id, r.name, r.display_name, r.status, r.collection,
+       r.kind, r.resource_count
+FROM units AS u
+CROSS JOIN LATERAL (
+    (SELECT a.namespace_id, a.seq, a.at_ms, a.tool, a.unit_id, a.name, a.display_name, a.status, a.collection,
+            a.kind, a.resource_count
+     FROM inventory_changes AS a
+     WHERE a.namespace_id = $1 AND a.tool = u.tool AND a.unit_id = u.unit_id
+       AND a.at_ms <= $2
+     ORDER BY a.seq DESC
+     LIMIT 1)
+    UNION
+    (SELECT l.namespace_id, l.seq, l.at_ms, l.tool, l.unit_id, l.name, l.display_name, l.status, l.collection,
+            l.kind, l.resource_count
+     FROM inventory_changes AS l
+     WHERE l.namespace_id = $1 AND l.tool = u.tool AND l.unit_id = u.unit_id
+     ORDER BY l.seq DESC
+     LIMIT 1)
+) AS r
+ORDER BY r.seq
+`
+
+type ListInventoryChangeBoundsParams struct {
+	NamespaceID string
+	AtMs        int64
+}
+
+// For each unit of a namespace, the row with the highest sequence among the
+// rows at or before the time, and the row with the highest sequence of all.
+// ReplayAt and ReplayView need no other row. A skip scan on the index finds
+// each unit once, then two lookups on the index read its rows. The lookup at
+// the time reads the rows of the unit after the time, so the cost follows the
+// count of units and of the rows after the time.
+func (q *Queries) ListInventoryChangeBounds(ctx context.Context, arg ListInventoryChangeBoundsParams) ([]InventoryChange, error) {
+	rows, err := q.db.Query(ctx, listInventoryChangeBounds, arg.NamespaceID, arg.AtMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryChange
+	for rows.Next() {
+		var i InventoryChange
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.Seq,
+			&i.AtMs,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Status,
+			&i.Collection,
+			&i.Kind,
+			&i.ResourceCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInventoryChanges = `-- name: ListInventoryChanges :many
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM inventory_changes
+WHERE namespace_id = $1
+  AND at_ms <= $2
+  AND seq > $3
+ORDER BY seq
+LIMIT $4
+`
+
+type ListInventoryChangesParams struct {
+	NamespaceID string
+	UntilMs     int64
+	AfterSeq    int64
+	PageLimit   int32
+}
+
+// One page of the change log of a namespace in the order of the sequence.
+func (q *Queries) ListInventoryChanges(ctx context.Context, arg ListInventoryChangesParams) ([]InventoryChange, error) {
+	rows, err := q.db.Query(ctx, listInventoryChanges,
+		arg.NamespaceID,
+		arg.UntilMs,
+		arg.AfterSeq,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryChange
+	for rows.Next() {
+		var i InventoryChange
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.Seq,
+			&i.AtMs,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Status,
+			&i.Collection,
+			&i.Kind,
+			&i.ResourceCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInventoryUnitBounds = `-- name: ListInventoryUnitBounds :many
+(SELECT a.namespace_id, a.seq, a.at_ms, a.tool, a.unit_id, a.name, a.display_name, a.status, a.collection,
+        a.kind, a.resource_count
+ FROM inventory_changes AS a
+ WHERE a.namespace_id = $1 AND a.tool = $2 AND a.unit_id = $3
+   AND a.at_ms <= $4
+ ORDER BY a.seq DESC
+ LIMIT 1)
+UNION
+(SELECT l.namespace_id, l.seq, l.at_ms, l.tool, l.unit_id, l.name, l.display_name, l.status, l.collection,
+        l.kind, l.resource_count
+ FROM inventory_changes AS l
+ WHERE l.namespace_id = $1 AND l.tool = $2 AND l.unit_id = $3
+ ORDER BY l.seq DESC
+ LIMIT 1)
+ORDER BY seq
+`
+
+type ListInventoryUnitBoundsParams struct {
+	NamespaceID string
+	Tool        string
+	UnitID      string
+	AtMs        int64
+}
+
+// The rows of ListInventoryChangeBounds for one unit.
+func (q *Queries) ListInventoryUnitBounds(ctx context.Context, arg ListInventoryUnitBoundsParams) ([]InventoryChange, error) {
+	rows, err := q.db.Query(ctx, listInventoryUnitBounds,
+		arg.NamespaceID,
+		arg.Tool,
+		arg.UnitID,
+		arg.AtMs,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []InventoryChange
+	for rows.Next() {
+		var i InventoryChange
+		if err := rows.Scan(
+			&i.NamespaceID,
+			&i.Seq,
+			&i.AtMs,
+			&i.Tool,
+			&i.UnitID,
+			&i.Name,
+			&i.DisplayName,
+			&i.Status,
+			&i.Collection,
+			&i.Kind,
+			&i.ResourceCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listJournalOperations = `-- name: ListJournalOperations :many
 SELECT operation_ids FROM update_journal
 WHERE stack_id = $1 AND update_id = $2
@@ -6195,7 +6756,7 @@ func (q *Queries) ListJournalSequences(ctx context.Context, arg ListJournalSeque
 }
 
 const listNamespaces = `-- name: ListNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 ORDER BY name
 `
@@ -6207,6 +6768,7 @@ type ListNamespacesRow struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	ID                  string
 }
 
 func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, error) {
@@ -6225,6 +6787,68 @@ func (q *Queries) ListNamespaces(ctx context.Context) ([]ListNamespacesRow, erro
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,
 			&i.AllowUnlockedWrites,
+			&i.ID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listObjectContext = `-- name: ListObjectContext :many
+SELECT tool, source, fields, warning, item_id, item_seq, updated_at_ms, updated_by
+FROM object_context
+WHERE namespace_id = $1 AND object_kind = $2 AND object_id = $3 AND resource_key = $4
+ORDER BY source
+`
+
+type ListObjectContextParams struct {
+	NamespaceID string
+	ObjectKind  string
+	ObjectID    string
+	ResourceKey string
+}
+
+type ListObjectContextRow struct {
+	Tool        string
+	Source      string
+	Fields      string
+	Warning     string
+	ItemID      string
+	ItemSeq     int64
+	UpdatedAtMs int64
+	UpdatedBy   string
+}
+
+// The entries of one object, both sources, API first. The caller checks the
+// fence of the namespace in the same transaction for a write.
+func (q *Queries) ListObjectContext(ctx context.Context, arg ListObjectContextParams) ([]ListObjectContextRow, error) {
+	rows, err := q.db.Query(ctx, listObjectContext,
+		arg.NamespaceID,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.ResourceKey,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListObjectContextRow
+	for rows.Next() {
+		var i ListObjectContextRow
+		if err := rows.Scan(
+			&i.Tool,
+			&i.Source,
+			&i.Fields,
+			&i.Warning,
+			&i.ItemID,
+			&i.ItemSeq,
+			&i.UpdatedAtMs,
+			&i.UpdatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -7022,6 +7646,23 @@ func (q *Queries) MinAuditSequence(ctx context.Context, namespace string) (int64
 	return column_1, err
 }
 
+const nextInventoryChangeSeq = `-- name: NextInventoryChangeSeq :one
+INSERT INTO inventory_change_heads (namespace_id, last_seq)
+VALUES ($1, 1)
+ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
+RETURNING last_seq
+`
+
+// Takes the next number of the change log of one namespace. The statement runs
+// last in the transaction of the write, after every other row lock, so the
+// order of the numbers is the order of the commits of the namespace.
+func (q *Queries) NextInventoryChangeSeq(ctx context.Context, namespaceID string) (int64, error) {
+	row := q.db.QueryRow(ctx, nextInventoryChangeSeq, namespaceID)
+	var last_seq int64
+	err := row.Scan(&last_seq)
+	return last_seq, err
+}
+
 const nextJournalArrival = `-- name: NextJournalArrival :one
 SELECT (COALESCE(MAX(arrival), 0) + 1)::BIGINT AS arrival
 FROM update_journal
@@ -7059,7 +7700,7 @@ func (q *Queries) NextRefusalArrival(ctx context.Context, arg NextRefusalArrival
 }
 
 const pageNamespaces = `-- name: PageNamespaces :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > $1
 ORDER BY name
@@ -7078,6 +7719,7 @@ type PageNamespacesRow struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	ID                  string
 }
 
 func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) ([]PageNamespacesRow, error) {
@@ -7096,6 +7738,7 @@ func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) 
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,
 			&i.AllowUnlockedWrites,
+			&i.ID,
 		); err != nil {
 			return nil, err
 		}
@@ -7108,7 +7751,7 @@ func (q *Queries) PageNamespaces(ctx context.Context, arg PageNamespacesParams) 
 }
 
 const pageNamespacesByNames = `-- name: PageNamespacesByNames :many
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes
+SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces
 WHERE name > $1 AND name = ANY($2::text[])
 ORDER BY name
@@ -7128,6 +7771,7 @@ type PageNamespacesByNamesRow struct {
 	CreatedAtMs         int64
 	AllowForcedWrites   bool
 	AllowUnlockedWrites bool
+	ID                  string
 }
 
 func (q *Queries) PageNamespacesByNames(ctx context.Context, arg PageNamespacesByNamesParams) ([]PageNamespacesByNamesRow, error) {
@@ -7146,6 +7790,86 @@ func (q *Queries) PageNamespacesByNames(ctx context.Context, arg PageNamespacesB
 			&i.CreatedAtMs,
 			&i.AllowForcedWrites,
 			&i.AllowUnlockedWrites,
+			&i.ID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pageObjectContextByOwner = `-- name: PageObjectContextByOwner :many
+SELECT c.object_kind, c.object_id, c.tool, c.resource_key, c.source, c.fields, c.warning, c.item_id,
+       c.item_seq, c.updated_at_ms, c.updated_by
+FROM object_context_owners o
+JOIN object_context c
+    ON c.namespace_id = o.namespace_id AND c.object_kind = o.object_kind AND c.object_id = o.object_id
+   AND c.resource_key = o.resource_key AND c.source = o.source
+WHERE o.namespace_id = $1 AND o.owner = $2
+  AND (o.object_kind, o.object_id, o.resource_key, o.source) > ($3, $4, $5, $6)
+ORDER BY o.object_kind, o.object_id, o.resource_key, o.source
+LIMIT $7
+`
+
+type PageObjectContextByOwnerParams struct {
+	NamespaceID string
+	Owner       string
+	AfterKind   string
+	AfterID     string
+	AfterKey    string
+	AfterSource string
+	PageLimit   int32
+}
+
+type PageObjectContextByOwnerRow struct {
+	ObjectKind  string
+	ObjectID    string
+	Tool        string
+	ResourceKey string
+	Source      string
+	Fields      string
+	Warning     string
+	ItemID      string
+	ItemSeq     int64
+	UpdatedAtMs int64
+	UpdatedBy   string
+}
+
+// One page of the entries that name an owner, read from the owner index and
+// joined by the primary key of the entries.
+func (q *Queries) PageObjectContextByOwner(ctx context.Context, arg PageObjectContextByOwnerParams) ([]PageObjectContextByOwnerRow, error) {
+	rows, err := q.db.Query(ctx, pageObjectContextByOwner,
+		arg.NamespaceID,
+		arg.Owner,
+		arg.AfterKind,
+		arg.AfterID,
+		arg.AfterKey,
+		arg.AfterSource,
+		arg.PageLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PageObjectContextByOwnerRow
+	for rows.Next() {
+		var i PageObjectContextByOwnerRow
+		if err := rows.Scan(
+			&i.ObjectKind,
+			&i.ObjectID,
+			&i.Tool,
+			&i.ResourceKey,
+			&i.Source,
+			&i.Fields,
+			&i.Warning,
+			&i.ItemID,
+			&i.ItemSeq,
+			&i.UpdatedAtMs,
+			&i.UpdatedBy,
 		); err != nil {
 			return nil, err
 		}
@@ -7166,6 +7890,39 @@ func (q *Queries) PrincipalExists(ctx context.Context, id string) (int64, error)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const pruneSignInFailures = `-- name: PruneSignInFailures :execrows
+DELETE FROM sign_in_failures
+WHERE window_end_ms <= (
+    FLOOR(EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint - $1::bigint
+)
+`
+
+// Deletes every window that ended age_ms or longer ago on the clock of the
+// store, read in the statement.
+func (q *Queries) PruneSignInFailures(ctx context.Context, ageMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneSignInFailures, ageMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const pruneSignInFailuresAt = `-- name: PruneSignInFailuresAt :execrows
+DELETE FROM sign_in_failures
+WHERE window_end_ms <= $1::bigint
+`
+
+// Deletes every window that ended at or before threshold_ms. The caller
+// passes the threshold instead of the clock of the store, so a test can pin
+// the prune at the boundary of a window.
+func (q *Queries) PruneSignInFailuresAt(ctx context.Context, thresholdMs int64) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneSignInFailuresAt, thresholdMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const pruneSignInRequests = `-- name: PruneSignInRequests :execrows
@@ -7273,26 +8030,6 @@ func (q *Queries) PutCheckpoint(ctx context.Context, arg PutCheckpointParams) er
 		arg.BlobMd5,
 	)
 	return err
-}
-
-const releaseAuditSinkLease = `-- name: ReleaseAuditSinkLease :execrows
-DELETE FROM audit_sink_leases
-WHERE sink = $1 AND holder = $2
-`
-
-type ReleaseAuditSinkLeaseParams struct {
-	Sink   string
-	Holder string
-}
-
-// Releases the lease of one sink only when holder holds it. It changes
-// nothing when no row exists or another instance holds the lease.
-func (q *Queries) ReleaseAuditSinkLease(ctx context.Context, arg ReleaseAuditSinkLeaseParams) (int64, error) {
-	result, err := q.db.Exec(ctx, releaseAuditSinkLease, arg.Sink, arg.Holder)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const removeGroupMember = `-- name: RemoveGroupMember :execrows
@@ -7839,6 +8576,32 @@ func (q *Queries) RunningMutatingUpdates(ctx context.Context, stackID string) (i
 	return count, err
 }
 
+const runningUpdateAt = `-- name: RunningUpdateAt :one
+SELECT u.version
+FROM updates AS u
+WHERE u.stack_id = $1
+  AND u.version > $3
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.started_at_ms <= $2
+  AND (u.ended_at_ms = 0 OR u.ended_at_ms > $2)
+ORDER BY u.version DESC
+LIMIT 1
+`
+
+type RunningUpdateAtParams struct {
+	StackID     string
+	StartedAtMs int64
+	Version     int64
+}
+
+func (q *Queries) RunningUpdateAt(ctx context.Context, arg RunningUpdateAtParams) (int64, error) {
+	row := q.db.QueryRow(ctx, runningUpdateAt, arg.StackID, arg.StartedAtMs, arg.Version)
+	var version int64
+	err := row.Scan(&version)
+	return version, err
+}
+
 const saveSensitiveMarks = `-- name: SaveSensitiveMarks :execrows
 UPDATE state_versions
 SET sensitive_marks = $1
@@ -8278,6 +9041,17 @@ func (q *Queries) SoftDeleteWorkspace(ctx context.Context, arg SoftDeleteWorkspa
 	return result.RowsAffected(), nil
 }
 
+const stackExistsByID = `-- name: StackExistsByID :one
+SELECT id FROM stacks WHERE id = $1
+`
+
+func (q *Queries) StackExistsByID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, stackExistsByID, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const stackRefByID = `-- name: StackRefByID :one
 SELECT namespace, project, name
 FROM stacks
@@ -8294,6 +9068,36 @@ func (q *Queries) StackRefByID(ctx context.Context, id string) (StackRefByIDRow,
 	row := q.db.QueryRow(ctx, stackRefByID, id)
 	var i StackRefByIDRow
 	err := row.Scan(&i.Namespace, &i.Project, &i.Name)
+	return i, err
+}
+
+const stateAtUpdate = `-- name: StateAtUpdate :one
+SELECT u.version, u.ended_at_ms, u.created_by
+FROM updates AS u
+JOIN checkpoints AS c ON c.stack_id = u.stack_id AND c.update_id = u.id
+WHERE u.stack_id = $1
+  AND u.dry_run = FALSE AND u.kind <> 'preview'
+  AND u.status <> 'not started'
+  AND u.ended_at_ms > 0 AND u.ended_at_ms <= $2
+ORDER BY u.version DESC
+LIMIT 1
+`
+
+type StateAtUpdateParams struct {
+	StackID   string
+	EndedAtMs int64
+}
+
+type StateAtUpdateRow struct {
+	Version   int64
+	EndedAtMs int64
+	CreatedBy string
+}
+
+func (q *Queries) StateAtUpdate(ctx context.Context, arg StateAtUpdateParams) (StateAtUpdateRow, error) {
+	row := q.db.QueryRow(ctx, stateAtUpdate, arg.StackID, arg.EndedAtMs)
+	var i StateAtUpdateRow
+	err := row.Scan(&i.Version, &i.EndedAtMs, &i.CreatedBy)
 	return i, err
 }
 
@@ -8815,6 +9619,57 @@ func (q *Queries) UpsertInventory(ctx context.Context, arg UpsertInventoryParams
 	return err
 }
 
+const upsertObjectContext = `-- name: UpsertObjectContext :exec
+INSERT INTO object_context (
+    namespace_id, object_kind, object_id, tool, resource_key, source, fields, warning,
+    item_id, item_seq, resource_deleted_at_ms, marks_seq, updated_at_ms, updated_by
+)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULL, 0, $11, $12)
+ON CONFLICT (namespace_id, object_kind, object_id, resource_key, source) DO UPDATE
+SET tool = excluded.tool,
+    fields = excluded.fields,
+    warning = excluded.warning,
+    item_id = excluded.item_id,
+    item_seq = excluded.item_seq,
+    updated_at_ms = excluded.updated_at_ms,
+    updated_by = excluded.updated_by
+`
+
+type UpsertObjectContextParams struct {
+	NamespaceID string
+	ObjectKind  string
+	ObjectID    string
+	Tool        string
+	ResourceKey string
+	Source      string
+	Fields      string
+	Warning     string
+	ItemID      string
+	ItemSeq     int64
+	UpdatedAtMs int64
+	UpdatedBy   string
+}
+
+// Writes one entry. The deleted mark of a resource and its order stay as
+// they are on a conflict.
+func (q *Queries) UpsertObjectContext(ctx context.Context, arg UpsertObjectContextParams) error {
+	_, err := q.db.Exec(ctx, upsertObjectContext,
+		arg.NamespaceID,
+		arg.ObjectKind,
+		arg.ObjectID,
+		arg.Tool,
+		arg.ResourceKey,
+		arg.Source,
+		arg.Fields,
+		arg.Warning,
+		arg.ItemID,
+		arg.ItemSeq,
+		arg.UpdatedAtMs,
+		arg.UpdatedBy,
+	)
+	return err
+}
+
 const upsertUnitCollection = `-- name: UpsertUnitCollection :exec
 INSERT INTO collection_members (unit_id, namespace, collection_key, assigned_at_ms)
 VALUES ($1, $2, $3, $4)
@@ -8852,4 +9707,48 @@ func (q *Queries) WorkspaceExists(ctx context.Context, id string) (bool, error) 
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const workspaceExistsByID = `-- name: WorkspaceExistsByID :one
+SELECT id FROM workspaces WHERE id = $1
+`
+
+// A workspace by its ID, a soft-deleted one included.
+func (q *Queries) WorkspaceExistsByID(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRow(ctx, workspaceExistsByID, id)
+	var id_2 string
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
+const workspaceStateAt = `-- name: WorkspaceStateAt :one
+SELECT id, finalized_at_ms, holder
+FROM state_versions
+WHERE workspace_id = $1 AND status = 'finalized' AND finalized_at_ms <= $2
+ORDER BY finalized_at_ms DESC, id ASC
+LIMIT 1
+`
+
+type WorkspaceStateAtParams struct {
+	WorkspaceID   string
+	FinalizedAtMs int64
+}
+
+type WorkspaceStateAtRow struct {
+	ID            string
+	FinalizedAtMs int64
+	Holder        string
+}
+
+// The finalized state version with the latest finalize time at or before a
+// time. A finalize stamps a time after every earlier finalize of the
+// workspace, so the version that became current last has the latest finalize
+// time, and a read at the present agrees with the current pointer. Ties break
+// by ID, as in the state version list; only rows that the stamp did not write
+// can tie. The index on (workspace_id, finalized_at_ms DESC) serves the order.
+func (q *Queries) WorkspaceStateAt(ctx context.Context, arg WorkspaceStateAtParams) (WorkspaceStateAtRow, error) {
+	row := q.db.QueryRow(ctx, workspaceStateAt, arg.WorkspaceID, arg.FinalizedAtMs)
+	var i WorkspaceStateAtRow
+	err := row.Scan(&i.ID, &i.FinalizedAtMs, &i.Holder)
+	return i, err
 }

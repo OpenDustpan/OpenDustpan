@@ -40,25 +40,25 @@ func TestParseState(t *testing.T) {
 type stubSealer struct{}
 
 func (stubSealer) SealState(
-	_ context.Context, _ namespace.Name, _ string, r io.Reader,
+	_ context.Context, _ namespace.Name, _, _ string, r io.Reader,
 ) (io.Reader, error) {
 	return r, nil
 }
 
 func (stubSealer) OpenState(
-	_ context.Context, _ namespace.Name, _ string, r io.Reader,
+	_ context.Context, _ namespace.Name, _, _ string, r io.Reader,
 ) (io.Reader, error) {
 	return r, nil
 }
 
 func (stubSealer) SealOutputs(
-	_ context.Context, _ namespace.Name, _ string, plain []byte,
+	_ context.Context, _ namespace.Name, _, _ string, plain []byte,
 ) ([]byte, error) {
 	return plain, nil
 }
 
 func (stubSealer) OpenOutputs(
-	_ context.Context, _ namespace.Name, _ string, sealed []byte,
+	_ context.Context, _ namespace.Name, _, _ string, sealed []byte,
 ) ([]byte, error) {
 	return sealed, nil
 }
@@ -123,6 +123,7 @@ func (fakeNamespaces) CreateNamespace(_ context.Context, _ namespace.Namespace) 
 
 func (fakeNamespaces) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            name,
 		HomeRegion:      testRegion,
@@ -944,15 +945,20 @@ func TestEnterForceLeavesClientEncryptedWorkspaceLocked(t *testing.T) {
 			Status:          workspace.StatusFinalized,
 			Content:         "tofu/ws-1/sv-1/a1",
 			Outputs:         nil,
-			MD5:             [16]byte{},
-			Serial:          1,
-			Size:            0,
-			Force:           false,
-			Sealed:          false,
-			RestoredFrom:    "",
-			SensitiveMarks:  nil,
-			FenceBy:         "",
-			UnlockedWrite:   false,
+			// The size and MD5 of the document encryptedBlobs serves,
+			// as a stored row names them.
+			MD5: [16]byte{
+				0x32, 0xdd, 0x0c, 0x61, 0x5e, 0xc2, 0x98, 0xbc,
+				0x44, 0x68, 0xd1, 0xbd, 0xb8, 0x10, 0xd6, 0xc0,
+			},
+			Serial:         1,
+			Size:           29,
+			Force:          false,
+			Sealed:         false,
+			RestoredFrom:   "",
+			SensitiveMarks: nil,
+			FenceBy:        "",
+			UnlockedWrite:  false,
 		},
 	}
 

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,22 +18,33 @@ import (
 )
 
 const (
-	// tagTimeout bounds the git lookup of the previous release tag.
+	// tagTimeout bounds the git lookup of the release tags.
 	tagTimeout = 30 * time.Second
 	// upgradeSecret is the Pulumi config secret the test writes before the
 	// restart and reads back after it.
 	upgradeSecret = "s3cr3t"
 )
 
+// upgradeRecentTags holds how many of the newest release tags the upgrade
+// test covers, next to the first tag. Upgrades can skip any number of
+// releases, so the test covers the oldest schema and the newest ones: the
+// first v* tag plus the last upgradeRecentTags tags. With four or fewer tags
+// it covers every tag.
+const upgradeRecentTags = 3
+
 // TestUpgrade checks that the data, the secrets and the held lock survive a
-// restart on the same database. With no v* tag as an ancestor of HEAD it
-// runs the empty-database case: the current binary starts on a new database,
-// the real Pulumi CLI and OpenTofu write state, an OpenTofu lock is held,
-// the server stops, and the current binary starts again. With a tag it runs
-// the previous-tag case of ADR 33 decision 7: the tag binary is built with
-// `git archive` in a temporary directory, so the working tree and the index
-// never change, it writes the same state, the current binary upgrades the
-// database, and the old binary must then refuse the upgraded database.
+// restart on the same database. With no v* tag reachable from HEAD it runs
+// the empty-database case: the current binary starts on a new database, the
+// real Pulumi CLI and OpenTofu write state, an OpenTofu lock is held, the
+// server stops, and the current binary starts again. With tags it runs one
+// upgrade per supported tag, each straight to the current binary: the tag
+// binary is built with `git archive` in a temporary directory, so the
+// working tree and the index never change, it writes the same state, the
+// current binary upgrades the database, and the old binary must then refuse
+// the upgraded database when it has the schema check. The supported tags are
+// the first tag plus the last few, as supportedUpgradeTags lists them. With
+// no tag the test logs that it ran over 0 tags and runs the empty-database
+// case, so it never skips silently.
 // Run it with `make upgrade-test`; it is not part of `make check`.
 func TestUpgrade(t *testing.T) {
 	t.Parallel()
@@ -47,9 +59,9 @@ func TestUpgrade(t *testing.T) {
 		t.Fatal("the upgrade test needs E2E_SERVER=binary (run make upgrade-test)")
 	}
 
-	tag := previousTag(t)
+	tags := supportedUpgradeTags(listReleaseTags(t))
 
-	t.Logf("upgrade case: %s (newest v* tag ancestor of HEAD: %s)", upgradeCase(tag), tag)
+	t.Logf("upgrade test ran over %d tags: %s", len(tags), strings.Join(tags, ", "))
 
 	fetcher := &e2e.Fetcher{Client: http.DefaultClient, CacheDir: cacheDir(t)}
 
@@ -57,6 +69,21 @@ func TestUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stores: %v", err)
 	}
+
+	tools := installUpgradeTools(t, fetcher)
+
+	if len(tags) == 0 {
+		runEmptyUpgrades(t, databases, tools)
+
+		return
+	}
+
+	runTagUpgrades(t, tags, databases, tools)
+}
+
+// installUpgradeTools installs the newest CLI of each tool and groups them.
+func installUpgradeTools(t *testing.T, fetcher *e2e.Fetcher) upgradeTools {
+	t.Helper()
 
 	pulumiVersions := e2e.Pulumi().Versions()
 	tofuVersions := e2e.OpenTofu().Versions()
@@ -80,29 +107,46 @@ func TestUpgrade(t *testing.T) {
 
 	t.Logf("pulumi %s with tofu %s", pulumiCLI.Version, tofuCLI.Version)
 
-	if tag == "none" {
-		for _, db := range databases {
-			t.Run(string(db), func(t *testing.T) {
-				t.Parallel()
-				upgradeOnStore(t, pulumiCLI, tofuCLI, db)
-			})
-		}
+	return upgradeTools{pulumi: pulumiCLI, tofu: tofuCLI}
+}
 
-		return
-	}
-
-	oldBin := e2e.BuildTagBinary(t.Context(), t, tag, t.TempDir())
-	newBin := e2e.BuildCurrentBinary(t.Context(), t, t.TempDir())
-
-	t.Logf("built previous tag %s at %s and the current binary at %s", tag, oldBin, newBin)
-
-	tools := upgradeTools{pulumi: pulumiCLI, tofu: tofuCLI}
+// runEmptyUpgrades writes state with the current binary and restarts it.
+func runEmptyUpgrades(t *testing.T, databases []e2e.Store, tools upgradeTools) {
+	t.Helper()
 
 	for _, db := range databases {
 		t.Run(string(db), func(t *testing.T) {
 			t.Parallel()
-			upgradeFromTagOnStore(t, upgradeRun{tag: tag, oldBin: oldBin, newBin: newBin, tools: tools, store: db})
+			upgradeOnStore(t, tools.pulumi, tools.tofu, db)
 		})
+	}
+}
+
+// runTagUpgrades upgrades each supported tag straight to the current binary.
+func runTagUpgrades(t *testing.T, tags []string, databases []e2e.Store, tools upgradeTools) {
+	t.Helper()
+
+	newBin := e2e.BuildCurrentBinary(t.Context(), t, t.TempDir())
+
+	oldBins := make(map[string]string, len(tags))
+	for _, tag := range tags {
+		oldBins[tag] = e2e.BuildTagBinary(t.Context(), t, tag, t.TempDir())
+		t.Logf("built tag %s at %s and the current binary at %s", tag, oldBins[tag], newBin)
+	}
+
+	for _, tag := range tags {
+		for _, db := range databases {
+			t.Run(tag+"/"+string(db), func(t *testing.T) {
+				t.Parallel()
+				upgradeFromTagOnStore(t, upgradeRun{
+					tag:    tag,
+					oldBin: oldBins[tag],
+					newBin: newBin,
+					tools:  tools,
+					store:  db,
+				})
+			})
+		}
 	}
 }
 
@@ -121,41 +165,58 @@ type upgradeRun struct {
 	store  e2e.Store
 }
 
-// upgradeCase names the test case for tag: the empty-database case without
-// a tag, else the previous-tag case.
-func upgradeCase(tag string) string {
-	if tag == "none" {
-		return "empty database"
-	}
-
-	return "previous tag"
-}
-
-// previousTag returns the newest v* tag that is an ancestor of HEAD, or
-// "none" when the repository has no such tag. When git finds none and the
-// clone is shallow, it fails with an error that says to fetch tags, because
-// the default CI checkout fetches no tags.
-func previousTag(t *testing.T) string {
+// listReleaseTags returns every v* tag reachable from HEAD, ordered by
+// version. It returns nothing when the repository has no such tag. When git
+// finds none and the clone is shallow, it fails with an error that says to
+// fetch tags, because the default CI checkout fetches no tags.
+func listReleaseTags(t *testing.T) []string {
 	t.Helper()
 
 	ctx, cancel := context.WithTimeout(t.Context(), tagTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git", "describe", "--tags", "--abbrev=0", "--match", "v*")
+	cmd := exec.CommandContext(ctx, "git", "tag", "--merged", "HEAD", "--list", "v*", "--sort=version:refname")
+	cmd.Dir = e2e.GitTopLevel(ctx, t)
 
 	out, err := cmd.Output()
-	if err == nil {
-		if tag := strings.TrimSpace(string(out)); tag != "" {
-			return tag
+	if err != nil {
+		if isShallowRepository(t) {
+			t.Fatalf("no v* tag found and the clone is shallow: fetch tags with " +
+				"`git fetch --tags` (or unshallow the clone first)")
+		}
+
+		return nil
+	}
+
+	var tags []string
+
+	for line := range strings.Lines(strings.TrimSpace(string(out))) {
+		if tag := strings.TrimSpace(line); tag != "" {
+			tags = append(tags, tag)
 		}
 	}
 
-	if isShallowRepository(t) {
+	if len(tags) == 0 && isShallowRepository(t) {
 		t.Fatalf("no v* tag found and the clone is shallow: fetch tags with " +
 			"`git fetch --tags` (or unshallow the clone first)")
 	}
 
-	return "none"
+	return tags
+}
+
+// supportedUpgradeTags narrows all release tags to the supported set: the
+// first tag plus the last upgradeRecentTags tags. With four or fewer tags it
+// returns every tag in version order.
+func supportedUpgradeTags(all []string) []string {
+	if len(all) <= upgradeRecentTags+1 {
+		return slices.Clone(all)
+	}
+
+	out := make([]string, 0, upgradeRecentTags+1)
+	out = append(out, all[0])
+	out = append(out, all[len(all)-upgradeRecentTags:]...)
+
+	return out
 }
 
 // isShallowRepository reports whether the repository is a shallow clone.

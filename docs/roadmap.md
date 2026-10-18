@@ -181,34 +181,52 @@ promote units from them, inside guard rails.
 | server  | [RFC 16](rfc/0016-egress-proxy.md) Egress proxy                                 | all                     | draft |
 | console | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | catalog and create form | draft |
 
+## Accepted designs that wait for adapters
+
+The owner accepted these designs on 17 and 18 October 2026. Each has its
+ports and conformance suites in `pkg/`, and no SQL adapter, HTTP handler or
+binary yet. Each row says what the design unblocks. The open work of each
+design is in its ADRs.
+
+| Design                                                         | ADRs       | Unblocks                                                                   |
+|----------------------------------------------------------------|------------|----------------------------------------------------------------------------|
+| The shared job model (`pkg/job`)                               | 100 to 103 | the Catalog, Dusty, the runner protocol and the write-back executor        |
+| Runners, the runner protocol, the launcher and sources         | 130 to 138 | remote runs on runners (RFC 6), cloud sweeps (ADR 164)                      |
+| Dusty, the built-in agent, the MCP endpoint and the stdio proxy | 120 to 127 | agent runs and agent changes through jobs                                   |
+| Unit history, redaction, history policy and safe delete        | 150 to 153 | blame, point-in-time views, redaction, retention of job artifacts          |
+| Context, the context read API, the graph and Sweep             | 160 to 165 | the context API, the graph and focus view, the state check, Sweep, findings |
+
 ## Later
 
 Wanted, but not in an ordered milestone yet. Each row says what it waits on.
 
-| Item                                                                        | Waits on                                                 |
-|-----------------------------------------------------------------------------|----------------------------------------------------------|
-| [RFC 7](rfc/0007-one-binary-many-roles.md) One binary, many roles           | a second role that needs its own process (runner, RFC 6) |
-| [RFC 9](rfc/0009-themes-and-white-labeling.md) Themes and white-labeling    | Console core views (RFC 52)                              |
-| [RFC 11](rfc/0011-languages-and-locales.md) Languages and locales           | Console core views (RFC 52)                              |
-| [RFC 25](rfc/0025-drift-detection.md) Drift detection                       | runs (milestone 5)                                       |
-| [RFC 29](rfc/0029-existing-ci.md) Existing CI as the executor               | runs (milestone 5)                                       |
-| [RFC 31](rfc/0031-kubernetes.md) Kubernetes                                 | runners (RFC 6)                                          |
-| [RFC 33](rfc/0033-customer-managed-keys.md) Customer-managed keys           | secrets (RFC 3, part 2)                                  |
-| [RFC 36](rfc/0036-high-availability.md) High availability                   | home regions and fencing in use (ADR 4)                  |
-| [RFC 37](rfc/0037-federation.md) Namespace placement and routing      | installation settings (RFC 68); replication (ADR 4) for regions |
-| [RFC 39](rfc/0039-reading-state.md) Reading state contents                  | accepted (ADR 41); a milestone to place it in            |
-| [RFC 40](rfc/0040-inventory-queries.md) Inventory queries                   | the inventory projection (ADR 13) at scale               |
-| [RFC 41](rfc/0041-agent-interface.md) Interface for AI agents               | read-only tokens (RFC 20)                                |
-| [RFC 47](rfc/0047-discovery-and-codification.md) Discovery and codification | runs (milestone 5)                                       |
-| [RFC 48](rfc/0048-management-as-code.md) Managing OpenDustpan as code       | a stable REST API for groups and roles (milestone 4)     |
-| [RFC 53](rfc/0053-terraform-cli.md) Terraform CLI support                   | OpenTofu (milestone 2) and a license check               |
-| [RFC 54](rfc/0054-sources-beyond-git.md) Sources other than git             | runs (milestone 5)                                       |
-| [RFC 57](rfc/0057-documentation.md) Documentation as a product              | its research                                             |
-| [RFC 61](rfc/0061-docs-site-and-landing-page.md) Docs site and landing page | documentation as a product (RFC 57)                      |
-| [RFC 66](rfc/0066-moving-units-between-namespaces-and-installations.md) Moving units | unit lifecycle (RFC 17, ADR 47)                  |
-| [RFC 67](rfc/0067-spend-and-cost-tool-integration.md) Spend and cost tools  | a decision on cost estimation (RFC 45)                   |
-| [RFC 68](rfc/0068-installation-settings.md) Installation settings          | the shape of the installation API (RFC 59)               |
-| [RFC 69](rfc/0069-community-channels.md) Community channels                 | the owner sets up the channels                           |
+| Item                                                                                               | Waits on                                                        |
+|----------------------------------------------------------------------------------------------------|-----------------------------------------------------------------|
+| [RFC 7](rfc/0007-one-binary-many-roles.md) One binary, many roles                                  | a second role that needs its own process (runner, RFC 6)        |
+| [RFC 9](rfc/0009-themes-and-white-labeling.md) Themes and white-labeling                           | Console core views (RFC 52)                                     |
+| [RFC 11](rfc/0011-languages-and-locales.md) Languages and locales                                  | Console core views (RFC 52)                                     |
+| [RFC 25](rfc/0025-drift-detection.md) Drift detection                                              | runs (milestone 5)                                              |
+| [RFC 29](rfc/0029-existing-ci.md) Existing CI as the executor                                      | runs (milestone 5)                                              |
+| [RFC 31](rfc/0031-kubernetes.md) Kubernetes                                                        | runners (RFC 6)                                                 |
+| [RFC 33](rfc/0033-customer-managed-keys.md) Customer-managed keys                                  | secrets (RFC 3, part 2)                                         |
+| [RFC 36](rfc/0036-high-availability.md) High availability                                          | home regions and fencing in use (ADR 4)                         |
+| [RFC 37](rfc/0037-federation.md) Namespace placement and routing                                   | installation settings (RFC 68); replication (ADR 4) for regions |
+| [RFC 39](rfc/0039-reading-state.md) Reading state contents                                         | accepted (ADR 41); a milestone to place it in                   |
+| [RFC 40](rfc/0040-inventory-queries.md) Inventory queries                                          | the inventory projection (ADR 13) at scale                      |
+| [RFC 41](rfc/0041-agent-interface.md) Interface for AI agents                                      | read-only tokens (RFC 20)                                       |
+| [RFC 47](rfc/0047-discovery-and-codification.md) Discovery and codification                        | runs (milestone 5)                                              |
+| [RFC 48](rfc/0048-management-as-code.md) Managing OpenDustpan as code                              | a stable REST API for groups and roles (milestone 4)            |
+| [RFC 53](rfc/0053-terraform-cli.md) Terraform CLI support                                          | OpenTofu (milestone 2) and a license check                      |
+| [RFC 54](rfc/0054-sources-beyond-git.md) Sources other than git                                    | runs (milestone 5)                                              |
+| [RFC 57](rfc/0057-documentation.md) Documentation as a product                                     | its research                                                    |
+| [RFC 61](rfc/0061-docs-site-and-landing-page.md) Docs site and landing page                        | documentation as a product (RFC 57)                             |
+| [RFC 66](rfc/0066-moving-units-between-namespaces-and-installations.md) Moving units               | unit lifecycle (RFC 17, ADR 47)                                 |
+| [RFC 67](rfc/0067-spend-and-cost-tool-integration.md) Spend and cost tools                         | a decision on cost estimation (RFC 45)                          |
+| [RFC 45](rfc/0045-cost-estimation.md) Cost estimation                                              | research on spend and cost tools (RFC 67)                       |
+| [RFC 68](rfc/0068-installation-settings.md) Installation settings                                  | the shape of the installation API (RFC 59)                      |
+| [RFC 69](rfc/0069-community-channels.md) Community channels                                        | the owner sets up the channels                                  |
+| [RFC 72](rfc/0072-programmatic-runs-api-and-sdk.md) Programmatic runs through the API and an SDK   | runners (RFC 6) and the run model (milestone 5)                 |
+| [RFC 73](rfc/0073-ai-agent-for-infrastructure.md) An AI agent for infrastructure across both tools | the interface for AI agents (RFC 41) and access tokens (RFC 20) |
 
 ## Candidates to drop or merge
 
@@ -220,7 +238,6 @@ Not decided. Each row says why it could go, and where it could go.
 | [RFC 44](rfc/0044-bulk-operations.md) Bulk operations                  | merge into RFC 40                  | bulk actions run on a saved view or a query result                    |
 | [RFC 49](rfc/0049-run-tasks.md) Run tasks                              | merge into RFC 13                  | a run task is a policy check with a callback                          |
 | [RFC 50](rfc/0050-policy-authoring.md) Policy authoring                | merge into RFC 13                  | same subject; split again only if RFC 13 grows too big                |
-| [RFC 45](rfc/0045-cost-estimation.md) Cost estimation                  | drop, or an RFC 52 extension point | other tools do it well; OpenDustpan can show their output             |
 | [RFC 46](rfc/0046-insights.md) Insights                                | drop, or later                     | needs RFCs 26 and 40 first; low value before many users               |
 | [RFC 51](rfc/0051-change-management-integrations.md) Change management | drop, or later                     | a webhook (RFC 23) may be enough                                      |
 

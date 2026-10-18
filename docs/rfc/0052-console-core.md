@@ -50,4 +50,7 @@ decides nothing. An ADR records a decision (ADR 15).
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 211](../adr/0211-optional-modules-and-the-capabilities-document.md)
+on 2026-10-18: the console reads the capabilities document now, hides the
+sections of an off module, and checks the API version. The other questions
+stay open.

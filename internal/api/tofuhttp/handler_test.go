@@ -215,6 +215,7 @@ type fakeNamespaces struct{}
 // Get returns the namespace with both switches on.
 func (fakeNamespaces) Get(context.Context, namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Time{},
 		Name:            "acme",
 		HomeRegion:      "",
@@ -289,13 +290,14 @@ func newTestHandler(t *testing.T, units *fakeUnits) http.Handler {
 	t.Helper()
 
 	h, err := tofuhttp.NewHandler(tofuhttp.Config{
-		Authenticator: tokenAuth{},
-		Authorizer:    userAuthz{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Workspaces:    units,
-		Namespaces:    fakeNamespaces{},
-		Audit:         nil,
-		Gate:          nil,
+		Authenticator:  tokenAuth{},
+		Authorizer:     userAuthz{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Workspaces:     units,
+		Namespaces:     fakeNamespaces{},
+		Audit:          nil,
+		Gate:           nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

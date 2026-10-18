@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
@@ -42,6 +43,8 @@ const (
 	pgColEndedAtMs   = "ended_at_ms"
 	pgColName        = "name"
 	pgColNamespace   = "namespace"
+	pgColNamespaceID = "namespace_id"
+	pgColSeq         = "seq"
 	pgColSequence    = "sequence"
 	pgColSize        = "size"
 	pgColStackID     = "stack_id"
@@ -57,6 +60,9 @@ const (
 	pgColSubject     = "subject"
 	pgColDeletedName = "deleted_name"
 	pgColTool        = "tool"
+	pgColObjectKind  = "object_kind"
+	pgColObjectID    = "object_id"
+	pgColResourceKey = "resource_key"
 	pgColPrincipalID = "principal_id"
 	pgColDisplayName = "display_name"
 	pgColProviderID  = "provider_id"
@@ -86,6 +92,7 @@ type pgCopyTable struct {
 func pgCopyTables() []pgCopyTable {
 	tables := append([]pgCopyTable{}, pgCopyStackTables()...)
 	tables = append(tables, pgCopyScopeTables()...)
+	tables = append(tables, pgInventoryChangeTables()...)
 	tables = append(tables, pgCopyWorkspaceTables()...)
 	tables = append(tables, pgCopyIdentityTables()...)
 	tables = append(tables, pgCopySessionTables()...)
@@ -101,7 +108,7 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "namespaces",
 			columns: []string{
 				pgColName, "home_region", "failover_version", pgColCreatedAtMs,
-				"allow_forced_writes", "allow_unlocked_writes", "ip_allowlist",
+				"allow_forced_writes", "allow_unlocked_writes", "ip_allowlist", "id",
 			},
 			orderBy: []string{pgColName},
 		},
@@ -165,6 +172,25 @@ func pgCopyStackTables() []pgCopyTable {
 	}
 }
 
+// pgInventoryChangeTables holds the COPY columns of the inventory change log.
+func pgInventoryChangeTables() []pgCopyTable {
+	return []pgCopyTable{
+		{
+			table:   "inventory_change_heads",
+			columns: []string{pgColNamespaceID, "last_seq"},
+			orderBy: []string{pgColNamespaceID},
+		},
+		{
+			table: "inventory_changes",
+			columns: []string{
+				pgColNamespaceID, pgColSeq, "at_ms", pgColTool, pgColUnitID, pgColName, pgColDisplayName,
+				pgColStatus, "collection", "kind", "resource_count",
+			},
+			orderBy: []string{pgColNamespaceID, pgColSeq},
+		},
+	}
+}
+
 // pgCopyScopeTables holds the COPY columns of the secret and inventory
 // tables, in foreign-key order.
 func pgCopyScopeTables() []pgCopyTable {
@@ -203,6 +229,33 @@ func pgCopyScopeTables() []pgCopyTable {
 				pgColUnitID, pgColNamespace, "collection_key", "assigned_at_ms",
 			},
 			orderBy: []string{pgColUnitID},
+		},
+		{
+			table: "object_context",
+			columns: []string{
+				pgColNamespaceID,
+				pgColObjectKind,
+				pgColObjectID,
+				pgColTool,
+				pgColResourceKey,
+				pgColSource,
+				"fields",
+				"warning",
+				"item_id",
+				"item_seq",
+				"resource_deleted_at_ms",
+				"marks_seq",
+				"updated_at_ms",
+				"updated_by",
+			},
+			orderBy: []string{pgColNamespaceID, pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource},
+		},
+		{
+			table: "object_context_owners",
+			columns: []string{
+				pgColNamespaceID, "owner", pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource,
+			},
+			orderBy: []string{pgColNamespaceID, "owner", pgColObjectKind, pgColObjectID, pgColResourceKey, pgColSource},
 		},
 		{
 			table:   "blob_purges",
@@ -276,13 +329,18 @@ func pgControlTables() []pgCopyTable {
 		},
 		{
 			table:   backup.TableDurableSteps,
-			columns: []string{"operation_id", pgColName, "seq", "result", "done_at_ms"},
-			orderBy: []string{"operation_id", "seq"},
+			columns: []string{"operation_id", pgColName, pgColSeq, "result", "done_at_ms"},
+			orderBy: []string{"operation_id", pgColSeq},
 		},
 		{
 			table:   backup.TableDurableSchedules,
 			columns: []string{pgColName, "interval_ms", "next_run_at_ms", "last_claimed_at_ms"},
 			orderBy: []string{pgColName},
+		},
+		{
+			table:   backup.TableSignInFailures,
+			columns: []string{"source", "window_end_ms", "count"},
+			orderBy: []string{"source", "window_end_ms"},
 		},
 		{
 			table:   backup.TableBackups,
@@ -758,6 +816,10 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, sealedErr
 	}
 
+	if idsErr := checkStagedNamespaceIDs(ctx, s.pool, in.staging); idsErr != nil {
+		return backup.Summary{}, idsErr
+	}
+
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
 	if err != nil {
 		return backup.Summary{}, err
@@ -965,6 +1027,35 @@ func checkStagedSealedState(ctx context.Context, pool *pgxpool.Pool, staging str
 
 	if unsealed {
 		return fmt.Errorf("import holds an unsealed state version: %w", workspace.ErrUnsealedState)
+	}
+
+	return nil
+}
+
+// checkStagedNamespaceIDs refuses a staged backup with a namespace whose ID is
+// not a valid namespace ID. It returns ErrCorrupt.
+func checkStagedNamespaceIDs(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	rows, err := pool.Query(ctx, "SELECT name, id FROM "+stagingTable(staging, "namespaces"))
+	if err != nil {
+		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var name, id string
+
+		if scanErr := rows.Scan(&name, &id); scanErr != nil {
+			return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+		}
+
+		if _, parseErr := namespace.ParseID(id); parseErr != nil {
+			return fmt.Errorf("staged namespace %q has an invalid ID: %w: %w", name, parseErr, backup.ErrCorrupt)
+		}
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
 	}
 
 	return nil

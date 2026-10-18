@@ -266,6 +266,145 @@ const (
 	// and trust rules. Its object is ServerObject. Of the built-in roles,
 	// only the site administrator holds it.
 	ActionServerRestoreAccess Action = "server:restore-access"
+
+	// The actions below belong to features that have no routes yet. The
+	// access package classifies none of them, so the policy check denies
+	// each one to every principal that is not an administrator, until its
+	// feature lands.
+
+	// ActionUnitRunPlan allows starting a runner job that only plans. Its
+	// object is a unit.
+	ActionUnitRunPlan Action = "unit:run-plan"
+	// ActionUnitRunApply allows starting a runner job that applies or
+	// refreshes. Its object is a unit.
+	ActionUnitRunApply Action = "unit:run-apply"
+	// ActionUnitRunDestroy allows starting a runner job that destroys the
+	// resources of a unit. Its object is a unit.
+	ActionUnitRunDestroy Action = "unit:run-destroy"
+	// ActionUnitWriteBack allows starting a write-back job: a commit to the
+	// code location of a unit. Its object is a unit.
+	ActionUnitWriteBack Action = "unit:write-back"
+	// ActionUnitDefineSteps allows changing the custom steps of a unit in
+	// its settings, or of a blueprint. Custom steps run on the runners of
+	// the namespace, so their change is its own action, apart from the
+	// start of a job. Its object is a unit, or the blueprint.
+	ActionUnitDefineSteps Action = "unit:define-steps"
+	// ActionJobRead allows reading the jobs of a unit: the spec, the state,
+	// the phases, the steps, the approvals and the metadata of plans and
+	// logs. Its object is a unit, or the namespace for a list.
+	ActionJobRead Action = "job:read"
+	// ActionJobReadLogs allows reading the content of job logs. Its object
+	// is a unit. A redaction of a plan or of a log, also by substitution,
+	// needs ActionUnitRedact: the job model has no redact action of its own.
+	ActionJobReadLogs Action = "job:read-logs"
+	// ActionJobReadPlans allows reading the content of stored plans, with
+	// the values that the tool marks as sensitive masked. The unmasked plan
+	// also needs ActionUnitReadSecrets. Its object is a unit.
+	ActionJobReadPlans Action = "job:read-plans"
+	// ActionJobCancel allows canceling a job. Its object is a unit.
+	ActionJobCancel Action = "job:cancel"
+	// ActionJobApprove allows approving or rejecting a job that waits for
+	// approval. Its object is a unit. The gate can also limit the approvers
+	// to groups.
+	ActionJobApprove Action = "job:approve"
+	// ActionNamespaceManageFreezes allows creating and ending the change
+	// freezes of a namespace. Its object is a namespace.
+	ActionNamespaceManageFreezes Action = "namespace:manage-freezes"
+	// ActionNamespaceBreakFreeze allows starting a job through an active
+	// change freeze. Its object is a namespace. Its family must differ from
+	// the family of ActionNamespaceManageFreezes, so a principal that can end
+	// a freeze does not also get break-glass, and the reverse.
+	ActionNamespaceBreakFreeze Action = "namespace:break-freeze"
+	// ActionNamespaceManageRunners allows creating and deleting the runner
+	// pools of a namespace, and registering and removing runners. Its
+	// object is a namespace.
+	ActionNamespaceManageRunners Action = "namespace:manage-runners"
+	// ActionRunnerClaim allows a runner to claim the phases of its pool and
+	// to report on them. Only a runner credential holds it. Its object is a
+	// runner pool.
+	ActionRunnerClaim Action = "runner:claim"
+	// ActionAgentUse allows the agent and outside agents to act for the
+	// holder in a namespace. Every tool call that touches an object in a
+	// namespace checks it on that namespace, in addition to the action of
+	// the tool. Its object is a namespace.
+	ActionAgentUse Action = "agent:use"
+	// ActionAgentStartRun allows a person to start a run of the built-in
+	// agent and to read, continue and cancel its own runs. Its object is
+	// CallerObject.
+	ActionAgentStartRun Action = "agent:start-run"
+	// ActionNamespaceManageAgentRuns allows reading and canceling the runs
+	// of other persons that started in a namespace. Its object is a
+	// namespace.
+	ActionNamespaceManageAgentRuns Action = "namespace:manage-agent-runs"
+	// ActionNamespaceManageAgent allows changing the agent settings of a
+	// namespace: the opt-in for direct changes, the opt-in for secret
+	// values, the default change mode and lower limits. Its object is a
+	// namespace.
+	ActionNamespaceManageAgent Action = "namespace:manage-agent"
+	// ActionServerManageAgent allows connecting and disconnecting a model,
+	// setting the limits of the installation and reading the token use of
+	// every run. Its object is ServerObject.
+	ActionServerManageAgent Action = "server:manage-agent"
+	// ActionServerAcceptAgentSecretAccess allows the acceptance that opens
+	// the secret gate after a start with the secret access flag. Its object
+	// is ServerObject.
+	ActionServerAcceptAgentSecretAccess Action = "server:accept-agent-secret-access"
+	// ActionCallerManageAgentOptIns allows a person to set its own opt-ins:
+	// direct changes and secret values. Its object is CallerObject.
+	ActionCallerManageAgentOptIns Action = "caller:manage-agent-opt-ins"
+	// ActionUnitObserve allows reading the live status of the resources of a
+	// unit from its cloud: events of workloads and the health of targets. Its
+	// object is a unit. It is a read, but it reaches the cloud account of the
+	// unit with short-lived read-only credentials, so it has its own action.
+	ActionUnitObserve Action = "unit:observe"
+	// ActionNamespaceReadRunners allows reading the pools, the runners and
+	// the join tokens of a namespace, with no secret. Its object is a
+	// namespace.
+	ActionNamespaceReadRunners Action = "namespace:read-runners"
+	// ActionRunnerJoin allows registering a runner key in a pool. Only a
+	// join token holds it. Its object is a runner pool.
+	ActionRunnerJoin Action = "runner:join"
+	// ActionNamespaceReadUnmanaged allows reading the findings, the sweeps,
+	// the sweep targets and the ignore rules of a namespace. Its object is
+	// the namespace. A finding names only the units that the caller can
+	// read, and counts the others.
+	ActionNamespaceReadUnmanaged Action = "namespace:read-unmanaged"
+	// ActionNamespaceTriageUnmanaged allows the actions on a finding:
+	// ignore, stop ignoring, choose an owner, mark for delete, cancel a
+	// pending action, and start an import or code generation. It also
+	// allows the ignore rules. Its object is the namespace. An action that starts a job also needs the
+	// action of the job on its unit.
+	ActionNamespaceTriageUnmanaged Action = "namespace:triage-unmanaged"
+	// ActionNamespaceManageSweeps allows creating, changing and deleting the
+	// sweep targets of a namespace, with their schedule, their runner pool
+	// and the command that their runner starts. Its object is the namespace.
+	ActionNamespaceManageSweeps Action = "namespace:manage-sweeps"
+	// ActionNamespaceStartSweep allows starting and canceling a sweep of a
+	// sweep target, or a state check, now. Its object is the namespace.
+	ActionNamespaceStartSweep Action = "namespace:start-sweep"
+	// ActionServerLinkNamespaces allows linking and unlinking two
+	// namespaces, so that the classification of each one reads the units of
+	// the other. Its object is ServerObject.
+	ActionServerLinkNamespaces Action = "server:link-namespaces"
+	// ActionUnitSetContext allows setting and deleting the API context of a
+	// unit and of its resources. Its object is the unit.
+	ActionUnitSetContext Action = "unit:set-context"
+	// ActionCollectionSetContext allows setting and deleting the API context
+	// of a collection. Its object is the collection.
+	ActionCollectionSetContext Action = "collection:set-context"
+	// ActionNamespaceSetContext allows setting and deleting the API context
+	// of a namespace. Its object is the namespace.
+	ActionNamespaceSetContext Action = "namespace:set-context"
+	// ActionBlueprintRead allows reading a blueprint and its context. Its
+	// object is the blueprint.
+	ActionBlueprintRead Action = "blueprint:read"
+	// ActionBlueprintSetContext allows setting and deleting the API context
+	// of a blueprint. Its object is the blueprint.
+	ActionBlueprintSetContext Action = "blueprint:set-context"
+	// ActionUnitRedact allows a redaction of an old history item of a unit:
+	// the server destroys its content and keeps its metadata. It cannot be
+	// undone. Its object is a unit.
+	ActionUnitRedact Action = "unit:redact"
 )
 
 // Object limits for the tool and unit parts of a unit reference.

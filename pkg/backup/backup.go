@@ -40,11 +40,14 @@ const (
 )
 
 // The tables of durable operations: one row for each operation, one row for
-// each recorded step, and one row for each schedule.
+// each recorded step, and one row for each schedule. The sign-in failure
+// budget is a windowed count in the database: the live rows stay across the
+// swap of a restore, as the claim tokens and the next runs do.
 const (
 	TableDurableOperations = "durable_operations"
 	TableDurableSteps      = "durable_steps"
 	TableDurableSchedules  = "durable_schedules"
+	TableSignInFailures    = "sign_in_failures"
 )
 
 // The control tables that a backup leaves out and a restore keeps, besides
@@ -71,7 +74,7 @@ const (
 //
 //nolint:gochecknoglobals // The shared frozen table list: Go has no constant slices, and both adapters use this one source.
 var Tables = []string{
-	"namespaces",
+	portTableNamespaces,
 	"stacks",
 	"stack_tags",
 	"updates",
@@ -83,8 +86,12 @@ var Tables = []string{
 	"secret_keys",
 	"inventory",
 	"inventory_deleted",
+	"inventory_change_heads",
+	"inventory_changes",
 	"collections",
 	"collection_members",
+	"object_context",
+	"object_context_owners",
 	"blob_purges",
 	"workspaces",
 	"state_versions",

@@ -54,6 +54,7 @@ func TestBlobCacheServesRepeatReads(t *testing.T) {
 	}
 
 	err = st.CreateNamespace(t.Context(), namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            "acme",
 		HomeRegion:      region,

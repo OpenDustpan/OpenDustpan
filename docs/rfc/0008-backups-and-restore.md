@@ -90,3 +90,7 @@ milestone 3: backup and restore of the whole installation, to a local
 directory or to S3-compatible storage. Schedules, retention, backups of one
 namespace, other targets, a public format and encryption of the whole backup
 stay open for a later decision.
+
+On 2026-10-18 the owner decided that one namespace can be backed up and
+restored ([ADR 218](../adr/0218-what-a-namespace-is-for-and-when-to-make-one.md)
+decision 4). Open parts of it are in RFC 76.

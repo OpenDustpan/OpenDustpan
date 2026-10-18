@@ -107,6 +107,7 @@ func (f fixture) createNamespace(t *testing.T, name, home string) {
 	t.Helper()
 
 	err := f.store.CreateNamespace(t.Context(), namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            namespace.Name(name),
 		HomeRegion:      namespace.Region(home),
@@ -814,6 +815,7 @@ func seedRunCheckStore(t *testing.T) *sqlite.Store {
 	createErr := st.CreateNamespace(
 		t.Context(),
 		namespace.Namespace{
+			ID:              namespace.NewID(),
 			CreatedAt:       time.Now(),
 			Name:            "acme",
 			HomeRegion:      region,

@@ -1,6 +1,6 @@
 # 59. The hosted service has no feature that the open-source server lacks
 
-Status: accepted · 2026-10-13
+Status: accepted · 2026-10-13. Decision 6 superseded in part by ADR 215: the hosted service is multitenant, with the namespace as the tenant
 
 ## Context
 

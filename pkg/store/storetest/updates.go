@@ -67,6 +67,7 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "a purge removes a deleted stack for good", test: testPurgeStack},
 		{name: "a sweep purge checks the retention in its transaction", test: testSweepPurgeChecksTheRetention},
 		{name: "a purge ends the grants on the stack", test: testPurgeStackRevokesItsGrants},
+		{name: "a purge removes the context of the stack", test: testPurgeStackDropsItsContext},
 		{name: "an audit entry on a stack gets its stable ID", test: testAppendFillsStackID},
 		{
 			name: "a restore or a purge with the fence of another namespace changes nothing",
@@ -145,6 +146,9 @@ func RunUpdates(t *testing.T, newStore UpdatesFactory) {
 		{name: "rename keeps history, checkpoint and events", test: testRenameKeepsHistory},
 		{name: "inventory follows an update finish", test: testInventoryAfterUpdateFinish},
 		{name: "inventory holds the lock of a running update", test: testInventoryHoldsRunningLock},
+		{name: "the change log follows the writes of a stack", test: testStackChangeLog},
+		{name: "the change log follows the end of an update", test: testStackChangeLogUpdates},
+		{name: "a refused write of a stack appends no change log row", test: testStackChangeLogFence},
 		{name: "inventory shows no lock for a preview or a dry run", test: testInventoryIgnoresPreviewLock},
 		{name: "inventory keeps the lock after the lease expires", test: testInventoryKeepsLockAfterLeaseExpiry},
 		{name: "a stale fence on start and end writes no lock", test: testUpdateInventoryLockFenced},

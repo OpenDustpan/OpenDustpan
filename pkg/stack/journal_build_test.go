@@ -360,6 +360,7 @@ func newBuildFixtureWith(
 	blobs := newMemBlob(clk)
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       clk.now,
 		Name:            "acme",
 		HomeRegion:      "local",

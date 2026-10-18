@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/internal/api/refusal"
 	"opendustpan.org/opendustpan/internal/baseurl"
 	"opendustpan.org/opendustpan/internal/bodygate"
 	"opendustpan.org/opendustpan/internal/sessionauth"
@@ -132,8 +133,11 @@ type Handler struct {
 	gate           *bodygate.Gate
 	audit          audit.Store
 	onAuditFailure func()
-	mux            *patternMux
-	routes         []Route
+	// guard checks the declared actions of the routes and writes the entry of
+	// each refusal.
+	guard  *refusal.Recorder
+	mux    *patternMux
+	routes []Route
 	// deltaCutoff is the advertised delta checkpoint cutoff in bytes. Zero
 	// means the server hides the delta capability.
 	deltaCutoff int
@@ -180,9 +184,11 @@ func NewHandler(cfg Config) (*Handler, error) {
 		gate:           cfg.Gate,
 		audit:          cfg.Audit,
 		onAuditFailure: cfg.OnAuditFailure,
-		mux:            newPatternMux(),
-		routes:         nil,
-		deltaCutoff:    cfg.CheckpointDeltaCutoff,
+		guard: refusal.New(cfg.Authorizer, cfg.Audit, cfg.Namespaces, cfg.Logger,
+			cfg.OnAuditFailure),
+		mux:         newPatternMux(),
+		routes:      nil,
+		deltaCutoff: cfg.CheckpointDeltaCutoff,
 
 		disablePulumiJournaling: cfg.DisablePulumiJournaling,
 		supportedJournal:        maxSupportedJournalVersion,
@@ -946,7 +952,7 @@ func classify(err error) (int, string) {
 		errors.Is(err, identity.ErrInvalidObject), errors.Is(err, stack.ErrInvalidUpdate):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, namespace.ErrNotFound), errors.Is(err, stack.ErrNotFound),
-		errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState),
+		errors.Is(err, stack.ErrUpdateNotFound), errors.Is(err, stack.ErrNoState), errors.Is(err, stack.ErrNoStateAt),
 		errors.Is(err, stack.ErrResourceNotFound):
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, stack.ErrHasResources):

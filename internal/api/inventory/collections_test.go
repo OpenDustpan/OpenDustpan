@@ -226,6 +226,7 @@ func newMoveFixtureWithSessions(
 		Collections:   svc,
 		Moves:         moves,
 		Deleted:       &memDeleted{entries: nil},
+		History:       nil,
 		Lifecycles:    testLifecycles(),
 		ReadScope:     fixedScope{err: nil, ids: nil, all: true},
 		Now:           nil,

@@ -1,13 +1,14 @@
 ---
 rfc: 11
 title: Languages and locales
-status: draft
+status: accepted
+adr: 181, 182
 created: 2026-10-10
 ---
 
 # RFC 11. Languages and locales
 
-Status: draft.
+Status: accepted as ADR 181 and ADR 182.
 
 ## Problem
 
@@ -132,4 +133,9 @@ users.
 
 ## Outcome
 
-None yet.
+Accepted on 2026-10-18 as [ADR 181](../adr/0181-console-languages-formats-and-translation.md)
+(languages, formats and translation) and
+[ADR 182](../adr/0182-stable-error-codes-for-api-errors.md) (stable error
+codes). The owner chose 28 languages for the first release, and a list of
+terms that stay in English for each language. English (UK) and right-to-left
+languages are not in the first release.

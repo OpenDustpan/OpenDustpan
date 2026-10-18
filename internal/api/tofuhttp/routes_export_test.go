@@ -13,13 +13,14 @@ func TestRoutesReturnsACopy(t *testing.T) {
 	t.Parallel()
 
 	h, err := tofuhttp.NewHandler(tofuhttp.Config{
-		Authenticator: tokenAuth{},
-		Authorizer:    userAuthz{},
-		Logger:        slog.New(slog.DiscardHandler),
-		Workspaces:    newFakeUnits(true),
-		Namespaces:    fakeNamespaces{},
-		Audit:         nil,
-		Gate:          nil,
+		Authenticator:  tokenAuth{},
+		Authorizer:     userAuthz{},
+		Logger:         slog.New(slog.DiscardHandler),
+		Workspaces:     newFakeUnits(true),
+		Namespaces:     fakeNamespaces{},
+		Audit:          nil,
+		Gate:           nil,
+		OnAuditFailure: nil,
 	})
 	if err != nil {
 		t.Fatalf("new handler: %v", err)

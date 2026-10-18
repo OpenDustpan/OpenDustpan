@@ -310,6 +310,7 @@ func (h *Handler) stateRoutes() []Route {
 			Resolve: h.resolveStateVersionID,
 			Serve:   h.getStateResource,
 		},
+		h.stateAtRoute(),
 		h.revealRoute(),
 	}
 
@@ -481,6 +482,34 @@ func (h *Handler) resolveWorkspaceID(w http.ResponseWriter, r *http.Request) (id
 	return unitObject(ws.Ref)
 }
 
+// stateAtRoute returns the route of the masked state of a workspace at a
+// time. It needs unit:read on the unit of the workspace, the same as the
+// masked resource list. The resolver maps the ID to the unit. A time before
+// the first finalized state version answers 404 and names the time of the
+// first one; a state the client encrypted answers opaque.
+func (h *Handler) stateAtRoute() Route {
+	return Route{
+		Method:  http.MethodGet,
+		Path:    "/api/v2/workspaces/{workspace_id}/state-at/{at}",
+		Scope:   ScopeAuthorized,
+		Actions: []identity.Action{identity.ActionUnitRead},
+		Resolve: h.resolveStateAtWorkspace,
+		Serve:   h.readStateAt,
+	}
+}
+
+// resolveStateAtWorkspace returns the unit for the workspace ID in the
+// workspace_id path value. An unknown ID fails with absence, which the
+// wrapper answers as 403 for a caller without rights and 404 otherwise.
+func (h *Handler) resolveStateAtWorkspace(_ http.ResponseWriter, r *http.Request) (identity.Object, error) {
+	ws, err := h.workspaces.GetByID(r.Context(), workspace.ID(r.PathValue("workspace_id")))
+	if err != nil {
+		return identity.Object{}, err
+	}
+
+	return unitObject(ws.Ref)
+}
+
 // resolveStateVersionWorkspace returns the unit for the workspace ID in the
 // path value, without reading the body: the state version create body holds
 // the base64 outputs document and is far larger than the shared resolver
@@ -555,7 +584,7 @@ func (h *Handler) enforceAuthorized(route Route) http.HandlerFunc {
 		}
 
 		for _, action := range route.Actions {
-			if err := h.authz.Authorize(ctx, p, action, obj); err != nil {
+			if err := h.guard.Authorize(ctx, r, p, action, obj); err != nil {
 				h.writeDenied(ctx, w, p, obj, fmt.Errorf("authorize %s: %w", action, err))
 
 				return

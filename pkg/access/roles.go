@@ -19,8 +19,8 @@ const (
 	// RoleSecretViewer reads like a viewer, and reveals secret values
 	// (ADR 41, decision 4).
 	RoleSecretViewer = "secret-viewer"
-	// RoleWriter reads, and runs updates and applies: it writes state and
-	// encrypts and decrypts secrets.
+	// RoleWriter reads, and runs updates and applies: it writes state, sets
+	// the context of units, and encrypts and decrypts secrets.
 	RoleWriter = "writer"
 	// RoleMaintainer writes, and makes, renames, deletes, restores, unlocks
 	// and moves units, and manages collections. It cannot purge a deleted
@@ -64,7 +64,7 @@ var builtInDescriptions = []struct {
 	{RoleViewer, "Reads namespaces, collections and units, and their state with secret values masked."},
 	{RoleAuditor, "Reads like a viewer, and reads the audit log and the access review."},
 	{RoleSecretViewer, "Reads like a viewer, and reveals secret values."},
-	{RoleWriter, "Reads, and runs updates, plans and applies."},
+	{RoleWriter, "Reads, runs updates, plans and applies, and sets the context of units."},
 	{
 		RoleMaintainer,
 		"Writes, and makes, renames, deletes, restores, unlocks and moves units, and manages collections.",
@@ -100,6 +100,7 @@ func writerActions() []identity.Action {
 		identity.ActionUnitWrite,
 		identity.ActionUnitEncrypt,
 		identity.ActionUnitDecrypt,
+		identity.ActionUnitSetContext,
 	)
 }
 

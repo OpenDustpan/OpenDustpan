@@ -28,4 +28,8 @@ approves runs; Burrito bulk-syncs layers.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
+decision 5 on 2026-10-18: a bulk call takes up to 100 IDs, checks, does,
+records and audits each item on its own, is not atomic, and answers one
+result for each ID. The error of an item is the error of a call on that
+item alone, and the `Idempotency-Key` header of ADR 210 makes a retry safe. The first bulk operations stay open.

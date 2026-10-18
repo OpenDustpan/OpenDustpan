@@ -80,7 +80,7 @@ Other verified failures, with their issue where one exists:
   state (`pkg/store/postgres/restore.go:264-326`). Reproduced on both
   dialects (#678). Fixed on `main` by #695: the swap now keeps the
   installation state of the target.
-- A running backup races the retention sweep: a purge that commits after the
+- A running backup races the retention expiry: a purge that commits after the
   backup's snapshot deletes blobs that the backup still copies (#683).
 - Writes at installation scope (tokens, sessions, principals, grants) carry
   no fence, so they can commit during a restore (#684).
@@ -94,7 +94,7 @@ Other verified failures, with their issue where one exists:
 
 The code also shows these gaps (read, not yet tested):
 
-- The backup slot, the restore slot and the retention sweep's guard are in
+- The backup slot, the restore slot and the retention expiry's guard are in
   process memory (`pkg/backup/service.go:132-133`,
   `pkg/backup/restore_service.go:114-115`, `pkg/inventory/sweep.go:114`).
 - Only the instance that runs a restore can answer its status while the swap
@@ -126,7 +126,7 @@ The server has a few coarse jobs (research, part 6):
 | Backup | A row and an in-process slot | Minutes to hours | Few per day |
 | Restore | A row, an in-process slot, maintenance mode, a schema swap | Minutes to hours | Rare |
 | Audit chain migration | A claim in the chain record | Minutes | Rare |
-| Retention sweep, chain check, inactivity disable, sign-in prune | A ticker on every instance | Seconds to minutes | One per period |
+| Retention expiry, chain check, inactivity disable, sign-in prune | A ticker on every instance | Seconds to minutes | One per period |
 | Audit shipping | A lease per sink, a cursor per scope | Continuous | One per sink |
 
 None of them needs many small workflows, durable sleep for days or messages
@@ -433,7 +433,7 @@ Small first steps from the review, each with its own test:
 | Audit chain start-up | Every start, can enter maintenance | Every start (a per-instance check); chain record writes become compare-and-set | Nothing |
 | Sign-in provider binding | Every start | Every start | Nothing |
 | Inactivity disable | Ticker on every instance, hourly | Schedule | The ticker |
-| Retention sweep | Ticker on every instance, `TryLock` | Schedule that starts operations | The ticker, `TryLock` |
+| Retention expiry | Ticker on every instance, `TryLock` | Schedule that starts operations | The ticker, `TryLock` |
 | Sign-in request prune | Ticker on every instance | Schedule | The ticker |
 | Audit chain check and checkpoints | Ticker on every instance, marks in memory | Schedule; result and marks in the database (review C5, C6) | The ticker, the marks in memory |
 | Audit chain migration | Claim in the chain record, sleeps | Operation | The hand-made claim, the fixed sleeps |
@@ -511,7 +511,7 @@ more ticks pass with no run. At the next start, every instance starts its
 scheduler at about the same time. The owner does not want a thundering herd
 at start-up.
 
-The jobs that become schedules are the retention sweep, the audit chain
+The jobs that become schedules are the retention expiry, the audit chain
 check, the inactivity disable, the sign-in request prune and the counter
 prune. Each one is a sweep: one run does all the work that the missed runs
 would do. None of them needs to know how many ticks it missed.
@@ -559,7 +559,7 @@ scheduler loop, and two cases in the suite:
 - **Skip every missed tick.** The schedule moves `next_run_at` to the next
   boundary after now and runs then. No run at start-up at all. The cost: an
   inactive token can stay enabled for up to one more interval after a long
-  stop, and a retention sweep can wait one more interval.
+  stop, and a retention expiry can wait one more interval.
 - **Run each missed tick.** A backlog of runs at start-up. None of the jobs
   needs it, and it is the herd that the owner does not want.
 
@@ -780,7 +780,7 @@ None. The owner decided every question on 2026-10-16.
 | 4 | Audit chain start-up | Start | Chain record | A different setting puts the installation in maintenance mode |
 | 5 | Sign-in provider binding | Start | Rows | First writer wins |
 | 6 | Inactivity disable | Before serve, then hourly | Rows, server audit lock | Serialized; the second run finds nothing |
-| 7 | Retention sweep | Hourly | Rows and blobs, in-process `TryLock` | Both instances purge |
+| 7 | Retention expiry | Hourly | Rows and blobs, in-process `TryLock` | Both instances purge |
 | 8 | Sign-in request prune | Every 10 min | Rows | Harmless |
 | 9 | Chain check and checkpoint write | Hourly | Blobs; marks in memory | Every instance reads the whole log |
 | 10 | Chain migration | After an approval | Claim in the chain record; queue in memory | Only the approving instance runs it |

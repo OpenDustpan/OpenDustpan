@@ -457,6 +457,7 @@ var keepControlStatements = []string{
 	`DELETE FROM main.durable_steps`,
 	`DELETE FROM main.durable_operations`,
 	`DELETE FROM main.durable_schedules`,
+	`DELETE FROM main.sign_in_failures`,
 	`DELETE FROM main.backups`,
 	`DELETE FROM main.restores`,
 	`DELETE FROM main.installation`,
@@ -466,12 +467,18 @@ var keepControlStatements = []string{
 		`SELECT operation_id, name, seq, result, done_at_ms FROM live.durable_steps`,
 	`INSERT INTO main.durable_schedules (` + durableScheduleColumns + `) ` +
 		`SELECT ` + durableScheduleColumns + ` FROM live.durable_schedules`,
+	`INSERT INTO main.sign_in_failures (` + signInFailureColumns + `) ` +
+		`SELECT ` + signInFailureColumns + ` FROM live.sign_in_failures`,
 	`INSERT INTO main.backups (` + backupColumns + `) ` +
 		`SELECT ` + backupColumns + ` FROM live.backups`,
 	`INSERT INTO main.restores (` + restoreColumns + `) ` +
 		`SELECT ` + restoreColumns + ` FROM live.restores`,
 	`INSERT INTO main.installation (id, state) SELECT id, state FROM live.installation`,
 }
+
+// signInFailureColumns lists every column of sign_in_failures, for the copy
+// of the control tables.
+const signInFailureColumns = `source, window_end_ms, count`
 
 // copyControlTables runs keepControlStatements in tx, which holds the live
 // database attached as live.
