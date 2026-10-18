@@ -2,13 +2,15 @@
 // store dialect.
 //
 // The write tests run only when DUSTPAN_TEST_BASELINE_IN names a directory
-// that holds the numbered migrations from before the baseline, in
+// that holds the numbered migrations to collapse, in
 // pkg/store/<dialect>/migrations/. scripts/regenerate-baseline.sh sets it up
-// and runs them. For each dialect a write test applies every old migration
-// in order to an empty database, then the statements of
-// testdata/after-<dialect>.sql, and writes one baseline file: the
-// version-table statements below, then the schema and the rows of that
-// database without the version table. It then applies the baseline to a
+// and runs them. For each dialect a write test applies every input
+// migration in order to an empty database. When the input holds no baseline
+// yet, it then applies the statements of testdata/after-<dialect>.sql. It
+// writes one baseline file: the version-table statements below, then the
+// schema and the rows of that database without the version table. The
+// version of the file is above the version of each input migration of both
+// dialects (migrate.CollapseVersion). It then applies the baseline to a
 // second empty database and fails when the schema or the rows of the two
 // databases differ.
 //
@@ -38,7 +40,6 @@ import (
 	_ "modernc.org/sqlite" // The driver of the SQLite adapter.
 
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
-	"opendustpan.org/opendustpan/pkg/store/schema"
 )
 
 // Variables that the regeneration script sets.
@@ -97,8 +98,7 @@ func header(dialect, ref, extra string) string {
 	return minimumLine + `
 -- Generated file. Do not edit it by hand. make regenerate-baseline writes it
 -- from the ` + dialect + ` migrations of ` + ref + `.
--- This baseline replaced every migration before it, as a one-time exception
--- to the rule that an applied migration never changes. No binary opens a
+-- This baseline replaced every migration before it. No binary opens a
 -- database or restores a backup from before it.
 ` + extra
 }
@@ -152,9 +152,12 @@ func dirs(t *testing.T) paths {
 	return paths{in: in, out: out}
 }
 
-// oldMigrations returns the migrations of dialect in the input directory,
-// ordered by version, without a baseline that the input may already hold.
-func oldMigrations(t *testing.T, in, dialect string) []migrate.Migration {
+// dialects are the store dialects that each get a baseline.
+var dialects = []string{"sqlite", "postgres"} //nolint:gochecknoglobals // A fixed list, read only.
+
+// inputMigrations returns the migrations of dialect in the input directory,
+// ordered by version.
+func inputMigrations(t *testing.T, in, dialect string) []migrate.Migration {
 	t.Helper()
 
 	all, err := migrate.Load(os.DirFS(filepath.Join(in, "pkg", "store", dialect)), "migrations")
@@ -162,12 +165,41 @@ func oldMigrations(t *testing.T, in, dialect string) []migrate.Migration {
 		t.Fatalf("load %s migrations: %v", dialect, err)
 	}
 
-	all = slices.DeleteFunc(all, func(m migrate.Migration) bool { return m.Version >= schema.BaselineVersion })
 	if len(all) == 0 {
-		t.Fatalf("no %s migrations before the baseline in %s", dialect, in)
+		t.Fatalf("no %s migrations in %s", dialect, in)
 	}
 
 	return all
+}
+
+// collapseVersion returns the version of the new baseline: above every
+// input migration of every dialect, so both dialects get one version.
+func collapseVersion(t *testing.T, in string) int64 {
+	t.Helper()
+
+	var versions []int64
+
+	for _, dialect := range dialects {
+		for _, m := range inputMigrations(t, in, dialect) {
+			versions = append(versions, m.Version)
+		}
+	}
+
+	return migrate.CollapseVersion(versions)
+}
+
+// baselineName returns the file name of the baseline with version v.
+func baselineName(v int64) string {
+	return fmt.Sprintf("%04d_baseline.sql", v)
+}
+
+// holdsBaseline reports whether migrations hold a baseline already. Then
+// the statements of testdata/after-<dialect>.sql are in it, and the test
+// does not run them again.
+func holdsBaseline(migrations []migrate.Migration) bool {
+	return slices.ContainsFunc(migrations, func(m migrate.Migration) bool {
+		return strings.HasSuffix(m.Name, "_baseline.sql")
+	})
 }
 
 // after returns the statements that run after the old migrations.
@@ -183,9 +215,17 @@ func after(t *testing.T, dialect string) string {
 	return string(data)
 }
 
-// writeBaseline writes body as the baseline file of dialect, after the
-// header with the extra header lines.
-func writeBaseline(t *testing.T, out, dialect, extra, body string) {
+// target names the baseline file that a write test writes: its dialect,
+// its file name and the extra header lines.
+type target struct {
+	dialect string
+	name    string
+	extra   string
+}
+
+// writeBaseline writes body as the baseline file of to, after the header
+// with the extra header lines.
+func writeBaseline(t *testing.T, out string, to target, body string) {
 	t.Helper()
 
 	ref := os.Getenv(envRef)
@@ -193,9 +233,9 @@ func writeBaseline(t *testing.T, out, dialect, extra, body string) {
 		t.Fatalf("set %s to the Git ref of the old migrations", envRef)
 	}
 
-	path := filepath.Join(out, "pkg", "store", dialect, "migrations", schema.BaselineName)
+	path := filepath.Join(out, "pkg", "store", to.dialect, "migrations", to.name)
 
-	content := header(dialect, ref, extra) + "\n" + body
+	content := header(to.dialect, ref, to.extra) + "\n" + body
 
 	//nolint:gosec // out is the repository root that the regeneration script passes; the test writes only there.
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
@@ -216,19 +256,23 @@ func TestWriteSQLiteBaseline(t *testing.T) {
 	dir := dirs(t)
 	ctx := t.Context()
 
+	name := baselineName(collapseVersion(t, dir.in))
+	input := inputMigrations(t, dir.in, "sqlite")
 	old := openSQLite(t)
 
-	for _, m := range oldMigrations(t, dir.in, "sqlite") {
+	for _, m := range input {
 		execSQLite(ctx, t, old, m.Name, m.SQL)
 	}
 
-	execSQLite(ctx, t, old, "after-sqlite.sql", after(t, "sqlite"))
+	if !holdsBaseline(input) {
+		execSQLite(ctx, t, old, "after-sqlite.sql", after(t, "sqlite"))
+	}
 
 	dumped := dumpSQLite(ctx, t, old)
 	body := sqliteSchemaPrefix + dumped
 
 	fresh := openSQLite(t)
-	execSQLite(ctx, t, fresh, schema.BaselineName, body)
+	execSQLite(ctx, t, fresh, name, body)
 
 	if got := dumpSQLite(ctx, t, fresh); got != dumped {
 		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(dumped, got))
@@ -236,7 +280,7 @@ func TestWriteSQLiteBaseline(t *testing.T) {
 
 	checkSQLiteVersionTable(t, old, fresh)
 
-	writeBaseline(t, dir.out, "sqlite", "", body)
+	writeBaseline(t, dir.out, target{dialect: "sqlite", name: name, extra: ""}, body)
 }
 
 func TestWritePostgresBaseline(t *testing.T) {
@@ -263,18 +307,23 @@ func TestWritePostgresBaseline(t *testing.T) {
 			"install postgresql-client-%d and put its pg_dump first in PATH", dumpMajor, server, server)
 	}
 
-	for _, m := range oldMigrations(t, dir.in, "postgres") {
+	name := baselineName(collapseVersion(t, dir.in))
+	input := inputMigrations(t, dir.in, "postgres")
+
+	for _, m := range input {
 		execPostgres(ctx, t, old, m.Name, m.SQL)
 	}
 
-	execPostgres(ctx, t, old, "after-postgres.sql", after(t, "postgres"))
+	if !holdsBaseline(input) {
+		execPostgres(ctx, t, old, "after-postgres.sql", after(t, "postgres"))
+	}
 
 	dumped := dumpPostgres(t, base, oldSchema.name)
 	body := postgresSchemaPrefix + dumped
 
 	freshSchema := newPostgresSchema(t, base)
 	fresh := connectPostgres(t, freshSchema.url)
-	execPostgres(ctx, t, fresh, schema.BaselineName, body)
+	execPostgres(ctx, t, fresh, name, body)
 
 	if got := dumpPostgres(t, base, freshSchema.name); got != dumped {
 		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(dumped, got))
@@ -282,7 +331,12 @@ func TestWritePostgresBaseline(t *testing.T) {
 
 	checkPostgresVersionTable(ctx, t, old, fresh)
 
-	writeBaseline(t, dir.out, "postgres", pgDumpLine+strconv.Itoa(dumpMajor)+"\n", body)
+	writeBaseline(
+		t,
+		dir.out,
+		target{dialect: "postgres", name: name, extra: pgDumpLine + strconv.Itoa(dumpMajor) + "\n"},
+		body,
+	)
 }
 
 // serverMajor returns the major version of the PostgreSQL server of conn.

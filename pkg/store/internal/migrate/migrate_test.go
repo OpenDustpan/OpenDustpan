@@ -355,3 +355,36 @@ func TestCheckRefusesBadBinaryVersion(t *testing.T) {
 		t.Fatalf("Check with a bad binary version = %v, want ErrBadBinaryVersion", err)
 	}
 }
+
+func TestCollapseVersion(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		versions []int64
+		want     int64
+	}{
+		{name: "no files", versions: nil, want: schema.BaselineVersion},
+		{name: "files below the baseline", versions: []int64{1, 50, 99}, want: schema.BaselineVersion},
+		{name: "files from the baseline on", versions: []int64{100, 103, 104}, want: 105},
+		{name: "mixed", versions: []int64{7, 99, 100, 104}, want: 105},
+		{name: "unordered", versions: []int64{104, 3, 100}, want: 105},
+		{name: "one file at the baseline", versions: []int64{100}, want: 101},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := migrate.CollapseVersion(tc.versions); got != tc.want {
+				t.Fatalf("CollapseVersion(%v) = %d, want %d", tc.versions, got, tc.want)
+			}
+
+			for _, v := range tc.versions {
+				if migrate.CollapseVersion(tc.versions) <= v {
+					t.Fatalf("CollapseVersion(%v) is not above %d", tc.versions, v)
+				}
+			}
+		})
+	}
+}
