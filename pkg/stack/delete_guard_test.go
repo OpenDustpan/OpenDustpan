@@ -197,6 +197,7 @@ func newDeleteFixture(
 
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now,
 		Name:            "acme",
 		HomeRegion:      "local",
@@ -355,6 +356,7 @@ func TestDeleteServiceWithoutStatePassesEmptyGuard(t *testing.T) {
 
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now,
 		Name:            "acme",
 		HomeRegion:      "local",
@@ -679,6 +681,7 @@ func newSequencedDeleteFixtureWithLimit(t *testing.T, limit int) sequencedDelete
 
 	now := time.Date(2026, time.October, 12, 12, 0, 0, 0, time.UTC)
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now,
 		Name:            "acme",
 		HomeRegion:      "local",

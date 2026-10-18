@@ -108,6 +108,7 @@ func membershipSetup(t *testing.T) (*Store, namespace.Namespace, workspace.ID) {
 	t.Cleanup(s.Close)
 
 	ns := namespace.Namespace{
+		ID:        namespace.NewID(),
 		CreatedAt: at, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}

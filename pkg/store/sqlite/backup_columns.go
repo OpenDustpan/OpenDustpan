@@ -66,6 +66,7 @@ func sqliteBackupTables() []sqliteBackupTable {
 				"allow_forced_writes",
 				"allow_unlocked_writes",
 				"ip_allowlist",
+				"id",
 			},
 		},
 		{

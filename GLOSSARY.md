@@ -20,6 +20,10 @@ _Avoid_: "Pulumi CLI" as a label, "Pulumi Cloud" for the Pulumi CLI, "Terraform"
 The unit of tenancy that owns units, access rules and secrets. Each tool calls it an organization.
 _Avoid_: Organization (except when naming a tool's own protocol field), tenant, account, org
 
+**Namespace ID**:
+The stable, opaque identifier of a namespace, with the prefix `ns-`. The server makes it when it creates the namespace, and it never changes. A new namespace with the name of a purged namespace gets a new Namespace ID. So rows that hold the old ID never reach it.
+_Avoid_: Namespace key, org ID, UUID
+
 **Unit**:
 One deployable instance of infrastructure with its own state, in the model of the tool that owns it. A Pulumi stack and an OpenTofu workspace are units.
 _Avoid_: Environment, deployment, target

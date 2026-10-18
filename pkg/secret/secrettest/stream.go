@@ -113,6 +113,7 @@ func streamNamespace(t *testing.T, s Store) {
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Date(2026, time.October, 11, 12, 0, 0, 0, time.UTC),
 		Name:            "acme",
 		HomeRegion:      "local",

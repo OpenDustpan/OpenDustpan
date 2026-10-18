@@ -330,6 +330,7 @@ func newWorkspaceNamespace(t *testing.T, s WorkspaceStore, name string) namespac
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            namespace.Name(name),
 		HomeRegion:      "eu-west",
@@ -666,6 +667,7 @@ func testWorkspaceMissingNamespace(t *testing.T, s WorkspaceStore) {
 	t.Helper()
 
 	ghost := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       now(),
 		Name:            "ghost",
 		HomeRegion:      "eu-west",

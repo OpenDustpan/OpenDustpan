@@ -129,6 +129,7 @@ func createCollectionNamespace(t *testing.T, st *sqlite.Store, at time.Time) nam
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:        namespace.NewID(),
 		CreatedAt: at, Name: "acme", HomeRegion: "eu-west", FailoverVersion: 1,
 		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
 	}
