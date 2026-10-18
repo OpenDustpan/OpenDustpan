@@ -37,7 +37,7 @@ policy, with a number and the groups of the approvers.
 
    | Verdict | Who | Reason | Effect |
    | --- | --- | --- | --- |
-   | `approve` | an eligible approver (decision 5), never an author, never an agent | optional | One signature on the current revision (ADR 191 decision 5). |
+   | `approve` | an eligible approver (decision 5), never an author, never an agent | optional | One signature on the current revision, at most one for each principal (ADR 191 decision 5). |
    | `request-changes` | an eligible approver, never an author, never an agent | required | Opens at least one request-changes thread. The change order stays open (owner). |
    | `comment` | a principal with `changeorder:comment` on each unit, or an agent of one | optional | Opens comment threads, and replies. It can also open blocking threads, for an eligible approver or an agent of an eligible approver (ADR 193 decision 4). |
    | `reject-and-close` | an eligible approver, never an author, never an agent | required | The change order ends `closed` (owner). |
@@ -82,11 +82,20 @@ policy, with a number and the groups of the approvers.
    requirements is never empty. A requirement with a number below 1 or
    above 10, or more than 10 requirements, is not a valid decision: the
    store records the policy of the revision as failed, with the reason
-   `invalid-requirement`. A change order with no approval would be a set of
-   jobs. The revision records each decision as ADR 114 decision 11 says. A
-   policy that fails is not a decision. The revision stays `in-review`
-   with no requirement, and the store refuses each `approve` with
-   `changeorder.ErrPolicyFailed`, until a retry of the operation succeeds.
+   `invalid-requirement`. The durable operation does not retry the same
+   decision: a retry succeeds only after the policy changes. A change order
+   with no approval would be a set of jobs. The revision records each
+   decision as ADR 114 decision 11 says. A policy that fails is not a
+   decision. The revision stays `in-review` with no requirement, and the
+   store refuses each `approve` with `changeorder.ErrPolicyFailed`, until a
+   retry of the operation succeeds.
+
+   A unit plan whose summary is `unreadable` (ADR 194 decision 6) blocks the
+   approval of the revision, also with no policy and with `allow`. The store
+   refuses each `approve` with `changeorder.ErrSummaryUnreadable`, which
+   names the unit. The checks fail closed. An author attaches a new
+   revision. A reviewer can attach one too, and then becomes an author (ADR
+   190 decision 4).
    Before the operation `changeorder.decide` stores the decisions, the
    store refuses each `approve` with `changeorder.ErrNotReady`.
 
@@ -95,7 +104,9 @@ policy, with a number and the groups of the approvers.
    approve after a `deny`, a set of decisions with no requirement (the
    server adds the default requirement), a requirement with the number 0,
    a `mandatory` failed result of a resource policy, an unreadable policy
-   report, and the `MinApprovals` check with requirements from a policy.
+   report, an unreadable summary with no policy, an `invalid-requirement`
+   decision and its retry with the same policy, and the `MinApprovals`
+   check with requirements from a policy.
 5. **Eligible approvers.** A principal is an eligible approver of a change
    order when all of these are true:
    - it holds `changeorder:approve` on each unit of the current revision,
@@ -116,12 +127,19 @@ policy, with a number and the groups of the approvers.
    signature fills one slot of a requirement whose groups hold the
    approver. `changeorder.Match` finds a maximum matching with augmenting
    paths. The requirements are met when the matching fills each slot.
-   `Match` is deterministic: it takes the signatures in the order of their
-   time, and the requirements in the order of `policy.Combined`. The
+   `Match` counts distinct subjects: two signatures of one subject fill at
+   most one slot. The store refuses a second signature of a principal on
+   one revision (ADR 191 decision 5), and `Match` does not trust that
+   check. `Match` is deterministic: it takes the signatures in the order of
+   their time, and the requirements in the order of `policy.Combined`. The
    answer names, for each requirement, the signatures that fill it and the
    count that it still needs. A table-driven test covers two groups with
    one shared member, a person in each group, a requirement with no
-   groups, and more signatures than slots. The bounds keep the cost low:
+   groups, more signatures than slots, and two signatures of one subject
+   on a requirement of two approvals (one slot filled).
+   `changeordertest.RunStore` gets a case for a second `approve` by the
+   same principal on the same revision, which fails with
+   `changeorder.ErrInvalid`. The bounds keep the cost low:
    at most 10 requirements of at most 10 approvals each, and at most 100
    signatures on one revision.
 7. **Open threads block approval.** While a blocking thread is open, the
@@ -133,7 +151,11 @@ policy, with a number and the groups of the approvers.
 8. **Close by an author.** An author can close a change order that is not
    terminal and not `applying`, with a reason, with `changeorder:author` on
    each unit. This is a withdrawal, not a rejection. The record names the
-   kind of the close: `rejected` or `withdrawn`.
+   kind of the close: `rejected` or `withdrawn`. The reason of a
+   withdrawal is in the audit entry of the close (ADR 197 decision 6), and
+   a redaction cannot reach it. The reason of a `reject-and-close` is the
+   summary of its review, a comment that a redaction can reach (decision
+   1).
 9. **A signature stops to count.** A signature of a principal that lost
    `changeorder:approve` on a unit, or that lost the membership of each
    group of its requirement, stops to count. Its record keeps the cause
@@ -145,11 +167,15 @@ policy, with a number and the groups of the approvers.
      service reads the access data and computes the eligibility
      (`changeorder.Eligibility`): for each signer of the current revision
      and for the actor, the requirements whose groups hold that principal,
-     or none when the principal is not eligible. It also reads the version
-     of the access data (`identity.AccessVersion`), a counter that each
-     change of a grant, a role or a group membership makes higher.
-   - The store gets the eligibility and the version. In its transaction, it
-     reads the version again. A version that changed fails the write with
+     or none when the principal is not eligible. It also reads the access
+     version of each of these principals (`identity.AccessVersion`): a
+     counter for each principal that each change of a grant, a role or a
+     group membership that reaches that principal makes higher. There is
+     no global counter, so a change for one principal does not fail the
+     writes of other principals.
+   - The store gets the eligibility and the access versions. In its
+     transaction, it reads the access versions of the actor and of each
+     signer again. A version that changed fails the write with
      `changeorder.ErrConflict`, and the service computes the eligibility
      again, at most 3 times. So a revoke that commits between the check
      and the commit never counts a signature that the revoke voided.

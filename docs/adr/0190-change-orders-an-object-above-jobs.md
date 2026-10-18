@@ -64,7 +64,8 @@ label **One-way door** in the text. This list collects them:
 | A change order owns the approvals of its jobs (decision 6) | Stored jobs and change orders depend on where an approval lives. |
 | All units of a change order are in one namespace (decision 3) | The fence, the backup and the audit scope are per namespace. |
 | The digest encoding `cho-digest/1` (ADR 191 decision 4) | Signatures in the audit chain hold the digest. A new encoding needs a new version name. |
-| The ID prefixes `cho-`, `cor-`, `cot-`, `coc-` and `grp-` (decision 2, ADRs 192 to 194) | IDs are in audit entries, links and backups. |
+| The ID prefixes `cho-`, `cor-`, `cot-` and `coc-` (decision 2, ADRs 192 and 193) | IDs are in audit entries, links and backups. |
+| The prefix `cog-` of the content key of a change group (ADR 194 decision 5) | Thread anchors and backups hold the key. It is a content key, not an ID. |
 | Shared code and the tool-neutral API say `plan` (ADR 195 decision 1) | API fields and audit entries hold the word. |
 | The audit entry shapes of ADR 197 decision 6 | The audit chain hashes each entry. |
 | Comment text is a history item with its own item key (ADR 198 decision 3) | Backups hold the sealed text. A later change needs a migration of each key. The summary of a review is a comment too (ADR 192 decision 1). |
@@ -110,8 +111,8 @@ label **One-way door** in the text. This list collects them:
    The spec of each job holds the origin `changeorder.Origin`: the change
    order ID and the revision number. The job keeps it, so a reader of a job
    finds its change order. Decision 15 gives the rules that protect the
-   origin and `job.Spec.Plan`. Version 1 runs runner jobs only. A write-back job
-   applies in the team's CI, so the server cannot bind its apply to a
+   origin and `job.Spec.Plan`. Version 1 runs runner jobs only. A write-back
+   job applies in the team's CI, so the server cannot bind its apply to a
    stored plan. A write-back change keeps the gates of the job model (ADR
    103).
 6. **The change order owns the approvals of its jobs.** The approvals,
@@ -148,6 +149,8 @@ label **One-way door** in the text. This list collects them:
      did not fail,
    - no resource policy report of a unit plan has a `mandatory` result with
      the outcome `fail`, and no report is unreadable (ADR 194 decision 8),
+   - no unit plan has a summary that is `unreadable` (ADR 194 decision 6).
+     This check applies also with no policy,
    - the set of requirements is not empty, and each requirement needs at
      least 1 approval,
    - the matching of ADR 192 decision 6 fills each slot of each
@@ -222,8 +225,9 @@ label **One-way door** in the text. This list collects them:
    that it read, its age and its redaction. A stale plan fails the dispatch
    with `job.ErrPlanStale`. The apply job has no plan phase to go back to,
    so it ends `failed` with the reason `plan-stale`, and it changed
-   nothing. The dispatch also applies the origin check of decision 15. The runner of that apply job reads the part `plan-apply` of
-   the named plan, and refuses a part with another hash.
+   nothing. The dispatch also applies the origin check of decision 15. The
+   runner of that apply job reads the part `plan-apply` of the named plan,
+   and refuses a part with another hash.
 10. **Apply is a request of a person.** A change order in `approved` does
     not apply on its own. A principal asks for the apply (ADR 197). Before
     the transaction, `changeorder.Service` checks for each unit of the
@@ -273,14 +277,17 @@ label **One-way door** in the text. This list collects them:
 13. **The change order is namespace data.** The store checks the namespace
     fence and appends the audit entries in the transaction of each write.
     The backup of a namespace holds its change orders (ADR 196 decision 6).
-14. **Agents.** An agent reads a change order and leaves comments and
-    blocking comments only (owner, ADR 128 decision 10). An agent records
-    no verdict: it submits its blocking threads in a review of the verdict
-    `comment` (ADR 192 decision 2). An agent never creates a change order,
-    attaches a plan, approves, requests changes, rejects, closes, resolves
-    a thread or asks for an apply. Each of these fails with
-    `changeorder.ErrAgentDenied`. The agent tool set of ADR 122 has no tool
-    for change orders. A tool needs an ADR (ADR 122 decision 14).
+14. **Agents.** An agent reads a change order and leaves comments, when a
+    later ADR gives it a tool. It leaves comments and blocking comments only
+    (owner, ADR 128 decision 10). An agent records no verdict: it submits
+    its blocking threads in a review of the verdict `comment` (ADR 192
+    decision 2). It can write its own draft review, because its threads
+    queue in a draft before the submit (ADR 196 decision 10). An agent never
+    creates a change order, attaches a plan, approves, requests changes,
+    rejects, closes, resolves or reopens a thread, or asks for an apply.
+    Each of these fails with `changeorder.ErrAgentDenied`. The agent tool
+    set of ADR 122 has no tool for change orders. A tool needs an ADR (ADR
+    122 decision 14).
 15. **Only the wiring sets the origin and the plan of a job.** The fields
     `job.Spec.ChangeOrder` and `job.Spec.Plan` give a job the rules of
     decisions 6 and 9: no approval gate, and an apply of a named stored
@@ -288,17 +295,22 @@ label **One-way door** in the text. This list collects them:
     - The job start route and `job.Service.Start` refuse a spec with
       `ChangeOrder` or `Plan` set, with `job.ErrInvalid`. The request body
       of the route has no field for them.
-    - The wiring starts the jobs of a change order with the new method
-      `job.Service.StartForChangeOrder`. No route calls it. The route test
-      checks that no handler of the job routes calls it.
-    - `StartForChangeOrder` and the `job.Decider` adapter check, through
-      the new port `job.ChangeOrders` that the wiring implements on
-      `changeorder.Store`, that the origin names a change order of the
-      namespace of the job, and a revision of that change order that holds
-      the unit of the job. For a plan job, the revision is the current
-      revision. For an apply job, the change order is `applying` on that
-      revision, and `Spec.Plan` is the plan ID of the unit plan of the same
-      unit in that revision. A check that fails refuses the start with
+    - The wiring starts the jobs of a change order with the method
+      `StartForChangeOrder` of the new type `job.ChangeOrderStarter`. That
+      type is apart from `job.Service`, and only the wiring constructs it.
+      No handler gets it: the HTTP adapters get `job.Service` only. A
+      depguard or forbidigo rule for `internal/api/...` refuses each use of
+      `job.ChangeOrderStarter` and of its constructor. That rule is the
+      structural check. The route test also checks that no handler of the
+      job routes calls it.
+    - As a second layer, `StartForChangeOrder` and the `job.Decider` adapter
+      check, through the new port `job.ChangeOrders` that the wiring
+      implements on `changeorder.Store`, that the origin names a change
+      order of the namespace of the job, and a revision of that change order
+      that holds the unit of the job. For a plan job, the revision is the
+      current revision. For an apply job, the change order is `applying` on
+      that revision, and `Spec.Plan` is the plan ID of the unit plan of the
+      same unit in that revision. A check that fails refuses the start with
       `job.ErrInvalid` and creates no job. An error of the port fails the
       start: the check fails closed.
     - The dispatch check of the job store applies the same check to an
@@ -361,8 +373,9 @@ it.
 - `pkg/job` changes: `job.Spec.Plan`, `job.Spec.ChangeOrder` (the origin),
   the phase row of decision 9, the reader rule of the part `plan-apply`,
   the decider rule of decision 6, the sync operation of decision 11, the
-  method `StartForChangeOrder` and the port `job.ChangeOrders` of decision
-  15, and the refusal of decision 16. `jobtest` gets a case for each.
+  type `job.ChangeOrderStarter` and the port `job.ChangeOrders` of decision
+  15, and the refusal of decision 16. `jobtest` gets a case for each. The
+  lint configuration gets the rule of decision 15 for `internal/api/...`.
 - `GLOSSARY.md` gets the terms of ADRs 190 to 198.
 
 ## Open questions

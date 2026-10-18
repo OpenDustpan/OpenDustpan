@@ -105,6 +105,11 @@ signatures (ADR 191).
 - A secret in a comment can be destroyed in each copy that the server
   controls. A copy in a notification is not possible, because a
   notification never holds a comment text (ADR 197 decision 7).
+- A secret in the reason of a dismissal, of a reopen or of a close by an
+  author cannot be destroyed: the audit entry holds the reason, and a
+  redaction cannot reach it (ADR 197 decision 6). The console warns at the
+  input. The reason of a `reject-and-close` is the summary of a review, so
+  a redaction reaches it.
 - The change order record grows with each review and each comment. The
   sizing guide states the growth for a change order of 100 units and 500
   threads.

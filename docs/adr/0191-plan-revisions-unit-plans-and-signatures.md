@@ -38,6 +38,9 @@ all the stored plans of one revision at the same time.
      not an ancestor fails the attach with `changeorder.ErrInvalid`. A forge
      that does not answer fails the attach with
      `changeorder.ErrForgeUnavailable`.
+   - A base commit that the author gave is not the head commit. A base
+     that is the same commit as the head gives an empty cause diff, and
+     fails the attach with `changeorder.ErrInvalid`.
 
    In the transaction of the attach, the store:
    - checks the state with `changeorder.Next` (ADR 190 decision 8),
@@ -66,14 +69,15 @@ all the stored plans of one revision at the same time.
 4. **The digest of a revision.** When a revision becomes `ready`, the store
    computes its digest (`changeorder.Digest`). It is the SHA-256 of a
    canonical encoding with the version name `cho-digest/1`. The encoding
-   holds the change order ID, the revision number and, for each unit plan
-   in the order of the unit IDs: the unit ID, the unit reference, the
+   holds the change order ID, the revision number and, for each unit plan in
+   the order of the unit IDs: the unit ID, the unit reference, the
    operation, the code location (the repository and the path), the commit,
-   the plan ID, the two part hashes and the state version. The encoding is a list of length-prefixed byte strings, so no
-   two inputs give the same bytes. A table-driven test holds known inputs
-   and their digests. **One-way door:** signatures and audit entries hold
-   the digest. A new encoding gets a new version name, and the store keeps
-   the old one for old revisions.
+   the plan ID, the two part hashes and the state version. The encoding is a
+   list of length-prefixed byte strings, so no two inputs give the same
+   bytes. A table-driven test holds known inputs and their digests.
+   **One-way door:** signatures and audit entries hold the digest. A new
+   encoding gets a new version name, and the store keeps the old one for old
+   revisions.
 5. **A signature.** A signature (`changeorder.Signature`) is the record
    that binds one approval to one revision. It holds the subject of the
    approver, the revision number, the digest that the approver saw, the
@@ -85,6 +89,12 @@ all the stored plans of one revision at the same time.
    the digest of the current revision fails with
    `changeorder.ErrPlanChanged`, and records nothing. So a person never
    signs a plan that they did not see.
+
+   A principal has at most one signature on each revision, so at most one
+   signature counts for each principal. A second `approve` by the same
+   principal on the same revision fails with `changeorder.ErrInvalid`, and
+   records nothing. The matching of ADR 192 decision 6 counts distinct
+   subjects.
 6. **A new plan resets the signatures (owner).** An attach voids each
    signature of each earlier revision, in the same transaction. A void
    signature stays in the record with the time and the cause `new-plan`.

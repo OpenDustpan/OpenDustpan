@@ -18,9 +18,9 @@ each port before any adapter. Each write inside a namespace carries a
 
    | Error | When |
    | --- | --- |
-   | `ErrInvalid` | A request with an empty or bad field. A unit of another namespace, or a unit with no runner pool. A base commit that is not an ancestor of the head. An anchor that names no change of the plan. |
+   | `ErrInvalid` | A request with an empty or bad field. A unit of another namespace, or a unit with no runner pool. A base commit that is not an ancestor of the head, or that is the head (an empty cause diff). An anchor that names no change of the plan. A second `approve` by the same principal on the same revision. |
    | `ErrNotFound` | An unknown change order, revision, thread or draft, or a caller without `changeorder:read` on each unit (decision 9). |
-   | `ErrConflict` | A write on a stale read of the change order, or with a version of the access data that changed (ADR 192 decision 9). |
+   | `ErrConflict` | A write on a stale read of the change order. A write with an access version of the actor or of a signer that changed (ADR 192 decision 9). |
    | `ErrTransition` | An event that `Next` does not allow in the state. |
    | `ErrFinished` | A write on a terminal change order. |
    | `ErrApplying` | An attach, a close or a reject while apply jobs run. |
@@ -35,10 +35,11 @@ each port before any adapter. Each write inside a namespace carries a
    | `ErrAuthorThread` | A blocking thread, or a reopen of one, by an author. |
    | `ErrSelfResolve` | A resolve of a blocking thread by an author. |
    | `ErrReasonRequired` | A request for changes, a reject, a close, a dismissal or a reopen with no reason. |
-   | `ErrAgentDenied` | A write of an agent that is not a reply or a review of the verdict `comment`. That review can hold comment threads, replies and blocking threads (ADR 190 decision 14). |
+   | `ErrAgentDenied` | A write of an agent that is not a reply, a write of its own draft, or a review of the verdict `comment`. That review can hold comment threads, replies and blocking threads (ADR 190 decision 14). |
    | `ErrPolicyDenied` | An approve of a revision that a policy denied (ADR 192 decision 4, ADR 194 decision 8). |
-   | `ErrPolicyFailed` | An approve while the policy of the revision failed and no retry succeeded, also for a decision with a requirement that is not valid. |
+   | `ErrPolicyFailed` | An approve while the policy of the revision failed and no retry succeeded, also for a decision with a requirement that is not valid. For `invalid-requirement`, a retry succeeds only after the policy changes. |
    | `ErrPolicyUnreadable` | An approve of a revision with a resource policy report that the `PlanReader` cannot read. The error names the unit and the parse error (ADR 194 decision 8). |
+   | `ErrSummaryUnreadable` | An approve of a revision with a unit plan whose summary is `unreadable`, also with no policy. The error names the unit and the error of the `PlanReader` (ADR 192 decision 4, ADR 194 decision 6). |
    | `ErrToolUnsupported` | A `PlanReader` that does not know the tool of a unit. |
    | `ErrPlanFormat` | A readable plan that the `PlanReader` cannot parse. |
    | `ErrForgeUnavailable` | A forge that does not answer for a cause diff. |
@@ -49,7 +50,7 @@ each port before any adapter. Each write inside a namespace carries a
    | `job` error at a plan or apply start | `changeorder` result |
    | --- | --- |
    | `job.ErrPolicyDenied`, `job.ErrFrozen` with no break-glass, `job.ErrLimit`, `job.ErrInvalid` | The unit plan or the apply of that unit is `failed`, with the reason. |
-   | `job.ErrUnitBusy` | None. The job is queued, as the job model says (ADR 100 decision 10). |
+   | `job.ErrUnitBusy` | The start returns a queued job. Nothing changes (ADR 100 decision 10). |
    | `job.ErrPlanStale` at the dispatch of an apply job | The apply of that unit is `failed` with the reason `plan-stale` (ADR 190 decision 9). |
    | `identity.ErrDenied` | The unit plan or the apply of that unit is `failed` with the reason `denied`, and the record names the missing action. |
    | another error | The durable operation retries with its backoff for at most 1 hour. Then the unit plan or the apply of that unit is `failed` with the reason `start-failed`. |
@@ -106,9 +107,10 @@ each port before any adapter. Each write inside a namespace carries a
        // ErrPlanChanged, ErrNotReady, ErrChangesRequested,
        // ErrSelfApproval, ErrNotEligible, ErrAuthorThread,
        // ErrReasonRequired, ErrAgentDenied, ErrPolicyDenied,
-       // ErrPolicyFailed, ErrPolicyUnreadable, ErrApplying for a
-       // reject-and-close, ErrTransition, ErrFinished, ErrConflict,
-       // ErrLimit.
+       // ErrPolicyFailed, ErrPolicyUnreadable, ErrSummaryUnreadable,
+       // ErrApplying for a reject-and-close, ErrTransition, ErrFinished,
+       // ErrConflict, ErrLimit. ErrInvalid for a second approve by the
+       // same principal on the same revision.
        Submit(ctx context.Context, id ID, r Review, el Eligibility, version int64, f namespace.Fence, e []audit.Entry) (Order, error)
        // Reply adds comment c to thread t. ErrNotFound for an unknown
        // thread. ErrInvalid, ErrFinished, ErrLimit.
@@ -148,11 +150,11 @@ each port before any adapter. Each write inside a namespace carries a
    ```
 
    `Submit`, `Resolve`, `Reopen` and `StartApply` read the threads, the
-   signatures, the requirements and the version of the access data in the
-   same transaction as their write. So two reviewers that write at the same
-   time never make an approved change order with an open blocking thread,
-   and a revoke between the check and the commit fails the write with
-   `ErrConflict` (ADR 192 decision 9).
+   signatures, the requirements and the access versions of the actor and of
+   each signer in the same transaction as their write. So two reviewers that
+   write at the same time never make an approved change order with an open
+   blocking thread, and a revoke between the check and the commit fails the
+   write with `ErrConflict` (ADR 192 decision 9).
 3. **The cause diff port.** `changeorder.CauseDiffs` reads a diff from the
    forge. A forge adapter implements it in the wiring.
 
@@ -244,24 +246,41 @@ each port before any adapter. Each write inside a namespace carries a
    an error that wraps `identity.ErrDenied`.
 10. **The rules of agents in one place.** `changeorder.CheckAgent` holds
     the rule of ADR 190 decision 14: an actor with an agent reference can
-    submit a review of the verdict `comment` with comment threads, replies
-    and blocking threads (as an agent of an eligible approver), and write a
-    reply, and nothing else. A table-driven test checks each method and
-    each verdict.
+    write its own draft (`PutDraft`, `GetDraft` and `DeleteDraft`), submit
+    a review of the verdict `comment` with comment threads, replies and
+    blocking threads (as an agent of an eligible approver), and write a
+    reply, and nothing else. The draft holds the threads before the submit,
+    so the agent needs the draft writes to submit blocking threads. An agent
+    still records no verdict. A table-driven test checks each method and
+    each verdict:
+
+    | Method | Agent |
+    | --- | --- |
+    | `PutDraft`, `GetDraft`, `DeleteDraft` on its own draft | allowed |
+    | `Submit` with the verdict `comment` | allowed, also with blocking threads for an agent of an eligible approver |
+    | `Submit` with `approve`, `request-changes` or `reject-and-close` | `ErrAgentDenied` |
+    | `Reply` | allowed |
+    | `Create`, `Attach`, `Resolve`, `Reopen`, `StartApply`, `Close` | `ErrAgentDenied` |
 11. **Conformance suites first.**
-    - `pkg/changeorder/changeordertest.RunStore` gets a reference adapter
-      in memory in the tests of the package, so each case runs before any
-      SQL adapter. The cases cover each row of the table of `Next`, each
-      error of decision 1, the three fences of decision 6, the reset of
-      signatures at an attach, the matching of ADR 192 decision 6, the
-      follow and outdated rules of ADR 193, the draft rules, two submits
-      at the same time, a resolve by an author, a resolve by an agent, a
+    - `pkg/changeorder/changeordertest.RunStore` gets a reference adapter in
+      memory in the tests of the package, so each case runs before any SQL
+      adapter. The cases cover each row of the table of `Next`, each error
+      of decision 1, the three fences of decision 6, the reset of signatures
+      at an attach, the matching of ADR 192 decision 6, the follow and
+      outdated rules of ADR 193, the draft rules, a draft write and a
+      `comment` submit with blocking threads by an agent, two submits at the
+      same time, a second `approve` by the same principal on the same
+      revision, an attach with a base that is the head, a change of the
+      access version of one signer during a submit, a reopen of a blocking
+      thread by an author, by an agent and by the principal that opened it
+      and lost `changeorder:approve`, an approve with an unreadable summary
+      and no policy, a resolve by an author, a resolve by an agent, a
       resolve by the principal that opened a thread and lost
       `changeorder:approve`, a dismissal with no reason, an `ObserveJob`
-      call with an old job version, an apply start that failed for one
-      unit, a revoke between the check and the commit, the cases of
-      `Approved` (ADR 192 decision 4), and a backup that holds no draft.
-      Each SQL adapter runs it.
+      call with an old job version, an apply start that failed for one unit,
+      a revoke between the check and the commit, the cases of `Approved`
+      (ADR 192 decision 4), and a backup that holds no draft. Each SQL
+      adapter runs it.
     - `changeordertest.RunPlanReader` takes a reader and a set of fixture
       plans with their expected summaries. Each tool package runs it with
       fixtures of each supported version of its CLI. The fixtures include

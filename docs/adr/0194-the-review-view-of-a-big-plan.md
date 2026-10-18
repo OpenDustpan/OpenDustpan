@@ -82,24 +82,26 @@ Facts:
    - a warning for each pair of units of the change order where one unit
      reads the outputs of the other (decision 7). The apply jobs have no
      order, so the unit that reads can apply first.
-5. **Change groups of identical in-place changes.** Two `update` changes
-   are identical when they have the same tool, the same type, the same set
-   of value paths that change, and the same values before and after on
-   each path. A change group (`changeorder.ChangeGroup`) holds two or more
-   identical changes, from one unit or from several units of the same
-   tool. A change that touches a secret path is never in a change group: a
-   secret path is a value path whose value before or after the tool marks
-   as sensitive (ADR 41). The view lists such a change one by one, in the
-   other changes of its unit. The key of a change group has the prefix
-   `grp-` and is the hex of the first 16 bytes of the SHA-256 of the tool,
-   the type, the sorted value paths and the values before and after. These
+5. **Change groups of identical in-place changes.** Two `update` changes are
+   identical when they have the same tool, the same type, the same set of
+   value paths that change, and the same values before and after on each
+   path. A change group (`changeorder.ChangeGroup`) holds two or more
+   identical changes, from one unit or from several units of the same tool.
+   A change that touches a secret path is never in a change group: a secret
+   path is a value path whose value before or after the tool marks as
+   sensitive (ADR 41). The view lists such a change one by one, in the other
+   changes of its unit. The key of a change group is a content key, not an
+   ID: the store derives it from the change, and never assigns it. It has
+   the prefix `cog-`, which is not the prefix of the groups of principals,
+   and it is the hex of the first 16 bytes of the SHA-256 of the tool, the
+   type, the sorted value paths and the values before and after. These
    values are never secret, so the key covers no secret value. The key is
-   not a digest of secret content (ADR 150 decision 6), and it tells
-   nothing about a secret value. The key is stable from one revision
-   to the next for the same change, and a thread can follow a change group
-   (ADR 193 decision 7). A `create`, a `replace`, a `delete` and a `read`
-   are never in a change group. The console shows a change group as one
-   row with its count, and opens it to list each resource.
+   not a digest of secret content (ADR 150 decision 6), and it tells nothing
+   about a secret value. The key is stable from one revision to the next for
+   the same change, and a thread can follow a change group (ADR 193 decision
+   7). A `create`, a `replace`, a `delete` and a `read` are never in a
+   change group. The console shows a change group as one row with its count,
+   and opens it to list each resource.
 6. **The analysis runs once for each unit plan.** When a unit plan becomes
    `ready`, the store starts the durable operation `changeorder.analyze`
    with the start key `<change order ID>/<revision>/<unit ID>`. The
@@ -128,6 +130,9 @@ Facts:
      unreadable unit never count as safe.
    - When the unit plan has the part `policy-report`, that report counts as
      unreadable too (decision 8).
+   - The unreadable summary blocks the approval of the revision, also with
+     no policy, with `changeorder.ErrSummaryUnreadable` (ADR 192 decision
+     4). An author attaches a new revision.
 7. **The blast radius.** For each unit of the revision, the view shows its
    blast radius from the graph (ADR 162): the units that read its outputs,
    2 hops downstream by default. A unit that the reader cannot read counts

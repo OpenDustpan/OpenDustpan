@@ -625,7 +625,7 @@ The principal that created a change order, or that attached a plan revision to i
 _Avoid_: Owner (that is a context field), requester (that is of a Catalog request)
 
 **Signature**:
-The record that binds one approval to one plan revision of a change order (ADR 191). It holds the approver, the revision and the digest that the approver saw. It also holds the requirement that it counts for, the time and the kind of the credential. A new revision voids it, with the cause `new-plan`. A loss of access voids it, with the cause `access-lost`. The digest is the SHA-256 of the encoding `cho-digest/1` of the revision.
+The record that binds one approval to one plan revision of a change order (ADR 191). It holds the approver, the revision and the digest that the approver saw. It also holds the requirement that it counts for, the time and the kind of the credential. A principal has at most one signature on each revision. A new revision voids it, with the cause `new-plan`. A loss of access voids it, with the cause `access-lost`. The digest is the SHA-256 of the encoding `cho-digest/1` of the revision.
 _Avoid_: Sign-off, stamp, approval (alone: an approval is the verdict)
 
 **Approval requirement**:
@@ -661,7 +661,7 @@ The section of the review view of a change order that lists each replacement and
 _Avoid_: Dangerous changes, warnings
 
 **Change group**:
-Two or more identical in-place changes in the plan revision of a change order (ADR 194 decision 5). Identical means the same tool, type, value paths and values before and after. A change that touches a secret path is never in a change group, so the key covers no secret value. Its key has the prefix `grp-`, and the key stays the same from one revision to the next for the same change. A thread can have a change group as its anchor, of the kind `change-group`. In Go, it is `changeorder.ChangeGroup`.
+Two or more identical in-place changes in the plan revision of a change order (ADR 194 decision 5). Identical means the same tool, type, value paths and values before and after. A change that touches a secret path is never in a change group, so the key covers no secret value. Its key is a content key, not an ID, with the prefix `cog-`. The key stays the same from one revision to the next for the same change. A thread can have a change group as its anchor, of the kind `change-group`. In Go, it is `changeorder.ChangeGroup`.
 _Avoid_: Group (alone: that is a set of principals), batch, bucket
 
 **Proposed changes**:

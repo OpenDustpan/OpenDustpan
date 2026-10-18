@@ -63,8 +63,8 @@ namespace (ADR 190).
    | `GET /api/change-orders/{ns}/{id}/threads` | `changeorder:read` | The threads, with the filters `open`, `blocking` and `outdated`. |
    | `POST /api/change-orders/{ns}/{id}/threads/{thread}/replies` | `changeorder:comment` | `201` with the comment. |
    | `POST /api/change-orders/{ns}/{id}/threads/{thread}/resolve` | `changeorder:approve`, or `changeorder:comment` for the principal that opened a comment thread | The thread. A dismissal needs `reason`. |
-   | `POST /api/change-orders/{ns}/{id}/threads/{thread}/reopen` | `changeorder:approve`, or `changeorder:comment` for the principal that opened the thread | The thread. |
-   | `POST /api/change-orders/{ns}/{id}/apply` | `changeorder:apply` | `202` with the change order in `applying`. The body names the digest, and an optional `breakGlass` with a reason. |
+   | `POST /api/change-orders/{ns}/{id}/threads/{thread}/reopen` | `changeorder:approve`, or `changeorder:comment` for the principal that opened a comment thread | The thread. The body needs `reason`. |
+   | `POST /api/change-orders/{ns}/{id}/apply` | `changeorder:apply`, and `namespace:break-freeze` on the namespace for `breakGlass` | `202` with the change order in `applying`. The body names the digest, and an optional `breakGlass` with a reason. |
    | `POST /api/change-orders/{ns}/{id}/close` | `changeorder:author` for a withdrawal | The change order. The body needs `reason`. |
    | `POST /api/change-orders/{ns}/{id}/threads/{thread}/comments/{comment}/redact` | `unit:redact` on each unit | The comment, with its text redacted. The body needs `reason`. |
 
@@ -76,10 +76,11 @@ namespace (ADR 190).
    `ErrPlanChanged`, `ErrPlanStale`, `ErrNotReady`, `ErrNotApproved` and
    `ErrChangesRequested`, `403` for `ErrSelfApproval`, `ErrNotEligible`,
    `ErrAuthorThread`, `ErrSelfResolve`, `ErrAgentDenied` and
-   `ErrPolicyDenied`, `409` also for `ErrPolicyUnreadable`, `422` for
-   `ErrLimit`, and `503` for `ErrPolicyFailed` and `ErrForgeUnavailable`. The errors use the error shape of the
-   tool-neutral APIs, and each one names the object and the one action
-   that helps.
+   `ErrPolicyDenied`, `409` also for `ErrPolicyUnreadable` and
+   `ErrSummaryUnreadable`, `422` for `ErrLimit`, and `503` for
+   `ErrPolicyFailed` and `ErrForgeUnavailable`. The errors use the error
+   shape of the tool-neutral APIs, and each one names the object and the
+   one action that helps.
 6. **Audit entries.** Each of these writes one audit entry in the
    transaction of the change, with the change order ID and the revision
    number. The object is the namespace, and the entry lists the unit
@@ -105,10 +106,18 @@ namespace (ADR 190).
    An entry never holds the text of a comment, the summary or the reason of
    a review, a value of a plan or the cause diff. So a redaction of a
    comment (ADR 198 decision 3) reaches each copy that the server controls,
-   and the audit chain keeps a hash of the text. The change order record holds the text. The jobs of the
-   change order write their own entries (ADR 103 decision 9). A read and a
-   draft write write no entry. **One-way door:** the audit chain hashes
-   these shapes.
+   and the audit chain keeps a hash of the text. The change order record
+   holds the text. The jobs of the change order write their own entries
+   (ADR 103 decision 9). A read and a draft write write no entry.
+   **One-way door:** the audit chain hashes these shapes.
+
+   The limit: the reason of a dismissal, of a reopen and of a close by an
+   author is in the field `reason` of its audit entry. These reasons are
+   not comments, and a redaction cannot reach them. The console warns at
+   the input of each of these reasons that the reason stays in the audit
+   log, and asks the person not to paste a secret. The reason of a
+   `reject-and-close` is different: it is the summary of its review, a
+   comment that a redaction can reach (ADR 192 decision 1).
 7. **Notifications.** The catalog of types of ADR 145 decision 5 gets:
    `change-order.review-requested` (a revision is `ready`, to the eligible
    approvers), `change-order.changes-requested` (to the authors),

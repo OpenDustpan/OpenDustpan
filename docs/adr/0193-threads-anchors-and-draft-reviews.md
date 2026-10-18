@@ -124,11 +124,25 @@ comments on parts of it. The owner decided (owner):
     (ADR 128 decision 14). A dismissal needs a reason with the limits of
     ADR 192 decision 2, else it fails with `changeorder.ErrReasonRequired`.
     The audit entry of the dismissal holds the reason (ADR 197 decision 6).
-11. **Reopen.** The principal that opened a thread, or an eligible
-    approver, can reopen a resolved thread, with a reason. A reopened
-    blocking thread blocks again, and an approved change order moves back
-    to `in-review`. An author cannot reopen a blocking thread
-    (`changeorder.ErrAuthorThread`), because an author cannot open one.
+    The reason is not a comment, so a redaction cannot reach it. The
+    console warns at the input that the reason stays in the audit log.
+11. **Reopen.** A reopen of a resolved thread needs a reason. A reopen of
+    a blocking thread has the same rule as a resolve (decision 9). It
+    accepts only these, each in a request with no agent reference:
+    - the principal that opened the thread, while that principal still
+      holds `changeorder:approve` on each unit of the current revision, and
+      is not an author,
+    - an eligible approver of the change order.
+
+    An author fails with `changeorder.ErrAuthorThread`, because an author
+    cannot open a blocking thread. A principal that opened the thread and
+    lost `changeorder:approve` on a unit fails with
+    `changeorder.ErrNotEligible`. A request with an agent reference fails
+    with `changeorder.ErrAgentDenied`. The principal that opened a comment
+    thread, and each eligible approver, can reopen it. A reopened blocking
+    thread blocks again, and an approved change order moves back to
+    `in-review`. The audit entry of the reopen holds the reason, and a
+    redaction cannot reach it (ADR 197 decision 6).
 12. **Limits.** A change order holds at most 500 threads, and a thread at
     most 200 comments. A write above a limit fails with
     `changeorder.ErrLimit`, which names the limit.
