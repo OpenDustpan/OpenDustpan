@@ -10,8 +10,8 @@ created: 2026-10-10
 Status: discussing. On 2026-10-18 the owner decided the ten points that
 ADR 200 lists. ADRs 200 to 209 hold the design that follows from them, and
 the owner accepts or refuses that design on the merge of its pull request.
-The 23 questions below are still open, each with its options and a
-recommendation.
+The questions below are open, each with its options and a
+recommendation. Question 25 records a decision of the project manager.
 
 ## Problem
 
@@ -84,8 +84,9 @@ another option.
    Recommendation: A.
 2. **The first cloud logins.**
    - A. AWS, Google Cloud and Azure first, then Vault. It covers most
-     clouds first, and Vault users keep `secrets/vault` with a static
-     token for a short time.
+     clouds first. `secrets/vault` needs `login/vault` (ADR 207 decision 6),
+     so Vault users read Vault through `secrets/external` and an adapter of
+     their own until `login/vault` ships.
    - B. AWS and Vault first. It covers fewer clouds, but gives dynamic
      secrets early.
    - C. All four in one slice. The first release comes later.
@@ -259,8 +260,8 @@ another option.
       keep expressions in inputs, but the server must track what each
       input reads.
     - B. Destination inputs (`url`, `address`, `tokenUrl` and the like)
-       must be literals. Simple to check, but a profile cannot compute a
-       host from a shared value.
+      must be literals. Simple to check, but a profile cannot compute a
+      host from a shared value.
     - C. No rule. A writer can send secrets to a host of their own.
 
     The ADRs use A (ADR 202 decision 2). Recommendation: A.
@@ -268,8 +269,8 @@ another option.
     - A. Each role with `unit:write` gets `profile:write`. A person who
       deploys can change any profile, also a guardrail profile.
     - B. No profile action beyond `profile:read` for `unit:write`. A grant
-      gives more. Least privilege (as in ISO 27001 A.8.2), but an admin
-      grants writers by hand.
+      gives more. Least privilege, designed against ISO/IEC 27001:2022
+      A.8.2, but an admin grants writers by hand.
     - C. Grant it, but protect namespace attachments by default. Fewer
       grants, but a writer can still change profiles that units use.
 
@@ -299,16 +300,28 @@ another option.
     The ADRs use A (ADR 209). Recommendation: A.
 22. **Whose authority a Catalog attachment uses.** A blueprint names a
     profile, and an attach needs `profile:open`.
-    - A. The authority of the blueprint publisher, checked at publish time
-      and audited. A requester needs no `profile:open`, but a publisher
-      decides for each later request.
+    - A. The authority of the blueprint publisher, checked at publish time,
+      at each open of a job and audited. A requester needs no
+      `profile:open`, but a publisher decides for each later request. The
+      cost of a departure: when the publisher leaves or loses an action,
+      each job of each unit of the blueprint fails with
+      `profile.ErrAttachmentAuthority` until a person re-authorizes each
+      attachment, or the units move to a version of another publisher (ADR
+      203 decisions 4 and 5). The daily check and the access review find
+      such attachments before a job fails.
     - B. The authority of the requester. Each requester then needs
       `profile:open`, so most Catalog users cannot attach the platform
       profile.
     - C. A stated exception in the authorization rules, with an audit entry.
       It works, but it is a special case in the policy check.
+    - D. A service principal of the Catalog as the authority, which an
+      admin grants `profile:open` and `profile:attach` on each platform
+      profile. No person leaves, so no departure breaks jobs. But one
+      principal then opens each profile that any blueprint names, and its
+      grants need their own review.
 
-    The ADRs use A (ADR 203). Recommendation: A.
+    The ADRs use A (ADR 203). Recommendation: A, with re-authorize and the
+    access review.
 23. **The scope of `profileProviderNetworks`.** It allows provider blocks to
     reach private networks.
     - A. The whole installation. Simple, but on a shared installation each
@@ -318,9 +331,42 @@ another option.
       namespaces that need it.
     - C. For each host and port. The narrowest, but each new host needs an
       operator change.
+    - D. B and C together: each entry is a CIDR block or a `host:port`,
+      and names the namespaces that can use it. The operator picks the
+      narrowest form that works.
 
-    The ADRs use B or C (ADR 206). Recommendation: B for networks and C for
-    single hosts.
+    The ADRs use D (ADR 206 decision 6). Recommendation: D.
+24. **The hard stop of an issuer key at an `issuerURL`.** When the copy
+    check fails, the active key keeps signing after 90 days (ADR 204
+    decision 3).
+    - A. Warn from day 90 in each open answer, in a banner of the console
+      and in a `WARN` log, and stop at day 180 with
+      `profile.ErrIssuerKeyExpired`. A key never signs for more than 180
+      days, but a homelab that misses the warnings loses its cloud logins
+      at day 180.
+    - B. No stop: warn, and keep signing. Logins never stop, but a key can
+      sign for years, and a key that leaked keeps working.
+    - C. Stop at day 90, as for a namespace with no `issuerURL`. The
+      shortest life of a key, but each missed copy stops the logins at
+      once.
+
+    The ADRs use A (ADR 204 decision 3). Recommendation: A.
+25. **A block in a merge (decided by the project manager).** Imports and
+    attachments merge maps key by key. A block of `providers` or
+    `rotators` that merged key by key could take one input of a narrower
+    profile and send the secret inputs of a wider profile to its host.
+    - A. A block is atomic in a merge: a later block of the same name
+      replaces the earlier block whole, and runs in the own tree of its own
+      profile. A value of a profile reads the block of its own tree.
+    - B. A block name that two profiles of one merge use fails the open
+      with a named error. Safe, but a narrower attachment cannot replace a
+      block of a wider one at all.
+    - C. Merge key by key, as for values. Short, but it lets a narrower
+      profile redirect the secrets of a wider one.
+
+    Decision of the project manager on 18 October 2026: A (ADR 201
+    decision 3). The owner accepts it or picks another option on the
+    merge.
 
 ## Outcome
 

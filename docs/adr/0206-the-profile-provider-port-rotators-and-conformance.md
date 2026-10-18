@@ -158,17 +158,22 @@ own, as `pkg/blob/s3` does for the blob port.
    type Rotator interface {
        // Adapter is the name of the adapter, for example "postgres".
        Adapter() string
-       // Spec describes the inputs and the state of the rotator.
+       // Spec describes the inputs, the target inputs, the state and the
+       // slots of the rotator: how many credentials the remote holds at
+       // the same time for one block (ADR 202 decision 8). Slots is 0
+       // for a rotator that holds no remote credential.
        Spec() Spec
        // Check validates the inputs of one rotator block at save. It
        // calls no network. ErrInvalid.
        Check(in Value) error
        // Rotate makes a new credential. It gets the current state, the
-       // credential of the login block that the rotator names and the
-       // rotation ID, and returns the new state. It never retires the
-       // current credential. A second call with the same rotation ID is
-       // the same rotation: it returns the credential of the first call
-       // and makes no second credential. ErrInvalid, ErrRemoteDenied,
+       // credential of the login block that the rotator names, the
+       // rotation ID, the slot to write and, when the server makes the
+       // credential, the new credential. It returns the new state. It
+       // writes only that slot, and never changes the credential of
+       // another slot. A second call with the same rotation ID is the
+       // same rotation: it returns the credential of the first call and
+       // makes no second credential. ErrInvalid, ErrRemoteDenied,
        // ErrRemoteNotFound, ErrUnavailable as for Open.
        Rotate(ctx context.Context, r RotateRequest) (Rotation, error)
        // Retire revokes the credential of an earlier rotation. A
@@ -178,18 +183,22 @@ own, as `pkg/blob/s3` does for the blob port.
    }
    ```
 
-   ADR 202 decision 8 gives the schedule, the state and the record of a
-   rotation. The server calls `Rotate` for one block only while it holds
-   the **rotation lease** of that block in the store, so a manual rotate
-   and a scheduled run never run at the same time. The second start
-   fails with `profile.ErrConflict`, or joins the rotation that runs.
-   Before it calls `Rotate`, the server writes the rotation record with
-   the state `pending` and a new `RotationID`. `RotationID` is the
-   idempotency key of the rotation. When the call times out or the server
-   stops after the remote system made the credential, the next attempt
-   finds the `pending` record and calls `Rotate` again with the same
-   `RotationID`, so no credential stays live with no record. The record
-   leaves `pending` only in the transaction that writes the new state.
+   ADR 202 decision 8 gives the schedule, the state, the slots and the
+   record of a rotation. The server calls `Rotate` for one block only
+   while it holds the **rotation lease** of that block in the store, so a
+   manual rotate and a scheduled run never run at the same time. A second
+   manual start fails with `profile.ErrConflict`, and a second scheduled
+   start waits for its next run. Before it calls `Rotate`, the server
+   writes the rotation record with the state `pending`, a new
+   `RotationID`, the slot and any credential that the server makes.
+   `RotationID` is the idempotency key of the rotation. When the call
+   times out or the server stops after the remote system made the
+   credential, the next attempt finds the `pending` record and calls
+   `Rotate` again with the same `RotationID`, so no credential stays live
+   with no record. The record leaves `pending` only in the transaction
+   that writes the new state, or after a `Retire` of the `pending`
+   `RotationID` succeeded. A failure after the retries never ends
+   `pending` by itself.
 6. **Each call goes through one outbound client.** An adapter gets its HTTP
    client from the wiring, never from `http.DefaultClient`:
    `egresshttp.Client(egress.NoRedirect, egress.HTTPSOnly)` with the dial
@@ -199,7 +208,8 @@ own, as `pkg/blob/s3` does for the blob port.
      database on a private address. The installation setting
      `profileProviderNetworks` lists the private destinations that a
      provider can reach. It is empty by default. Only an operator sets it
-     (`server:manage-settings`). Each entry is a CIDR block or a
+     (`installation:manage-settings`, ADR 210, in review). A longer list
+   needs a fresh MFA step (ADR 200 decision 9). Each entry is a CIDR block or a
      `host:port`, and each entry names the namespaces that can use it, or
      `*` for all namespaces. On a shared installation, an operator who
      allows one Vault for one team writes `vault.internal:8200` for that
@@ -215,7 +225,8 @@ own, as `pkg/blob/s3` does for the blob port.
      CA. Each block that calls a host accepts the input `caCertificates`, a
      PEM bundle that the client trusts for that block in addition to the
      system roots. The installation setting `profileCACertificates` holds a
-     PEM bundle that every block trusts. There is no option to skip the
+     PEM bundle that every block trusts. A longer bundle needs a fresh MFA
+     step (ADR 200 decision 9). There is no option to skip the
      check of the certificate, in a block or in a setting.
    - The egress proxy of RFC 16, when it exists, applies to these calls
      too.
@@ -255,7 +266,14 @@ own, as `pkg/blob/s3` does for the blob port.
    - Rotators: `Rotate` keeps the current credential, `Retire` of a gone
      credential gives nil, a `Rotate` that fails leaves the state as it
      was, and a second `Rotate` with the same rotation ID makes no second
-     credential.
+     credential. `Spec` declares the slots. With each slot full, a
+     `Rotate` into one slot leaves the credential of each other slot valid
+     at the fake, so that a `retiring` credential keeps working. A
+     rotator with a credential that the server makes uses the credential
+     of the request, and makes no other one.
+   - `profiletest` checks the server side: a rotation into a slot that a
+     `retiring` credential holds fails with `profile.ErrConflict` and
+     names the time when the slot frees, and calls no `Rotate`.
    - TLS: a block with `caCertificates` reaches a fake that has a
      certificate of that CA, and a block without it fails with
      `ErrUnavailable`.

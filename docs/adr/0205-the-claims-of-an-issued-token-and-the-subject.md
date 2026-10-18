@@ -109,8 +109,8 @@ CircleCI. The facts that shape this ADR:
    `ref`, `ref_type`, `ref_protected` and `commit` are present only when
    all of these are true:
    - At job start, the server resolved the commit itself as the head of
-     the named ref, through the forge connection of the repository (ADR
-     213, in review). The request named a ref, not a commit.
+     the named ref, through the forge connection of the repository (the
+     forge connections of ADR 213, in review). The request named a ref, not a commit.
    - For `ref_protected`, the server asked the forge, at the same time and
      with the credential of that same forge connection, whether the ref is
      protected.

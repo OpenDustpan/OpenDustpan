@@ -89,12 +89,24 @@ gives what the relying parties need:
    on the public list of the route test, and send `Cache-Control:
    max-age=300`. An unknown namespace ID answers `404`. A namespace with no
    key yet answers its discovery document and an empty JWKS.
+
+   **Outside the versioned API (one-way door).** `/oidc/{nsid}/...` is a
+   protocol endpoint, as the discovery document `/.well-known/terraform.json`
+   is. It is not under `/api/dustpan/v1/` (ADR 210, in review), and a new
+   major version of the tool-neutral API never moves or changes it. The
+   path is part of the issuer URL that clouds hold, so a version in it
+   would break each trust at each new major version. Its answers keep the
+   shapes of OpenID Connect Discovery 1.0 and RFC 7517, not the JSON style
+   of ADR 210. ADR 200 decision 9 lists this exception for ADR 210.
 3. **The issuer can live at another URL.** A homelab server is often not
    reachable from the internet, and AWS and Azure must read the JWKS. So a
    namespace can set `issuerURL` to an `https` URL that it hosts, for
    example a bucket of static files.
-   - `GET /api/issuer/{ns}/export` answers the two files, the discovery
+   - `GET .../issuer/export` answers the two files, the discovery
      document and the JWKS, for that URL. The person copies them to it.
+     The export is read-only: it never makes a key. For a namespace with
+     no key, it fails with `profile.ErrIssuerKeyMissing`, which names
+     `POST .../issuer/keys`.
    - The JWKS of the export holds each key of the states `next`, `active`
      and `retired`, the same keys as `GET /oidc/{nsid}/jwks`. So a token
      that a key signed just before a promotion still verifies after the
@@ -102,18 +114,43 @@ gives what the relying parties need:
      notification `issuer.key-next` (decision 11) tells the team when to
      copy.
    - Before the first copy, a person makes the keys with `POST
-     /api/issuer/{ns}/keys` (decision 13). The export also makes them when
-     the namespace has no key. So the first login after a copy works, and
-     the first open of a login block does not make a key that no file
-     holds.
-   - For a namespace with `issuerURL`, the server promotes a `next` key
-     (decision 5) only after it read the JWKS at `issuerURL` through the
-     egress guard and found the `kid` of the `next` key. When the read
-     fails or the `kid` is not there, the active key keeps signing after
-     its 90 days, the server sends `issuer.key-copy-missing` (decision 11)
-     each day, and it tries again the next day. An active key never signs
-     for more than 180 days. At that limit the open of a login block fails
-     with `profile.ErrIssuerKeyExpired`, which names the export route.
+     .../issuer/keys` (decision 13), then exports and copies the files. So
+     the first login after a copy works, and the first open of a login
+     block does not make a key that no file holds.
+   - **The copy check.** The server reads the discovery document at
+     `<issuerURL>/.well-known/openid-configuration` through the egress
+     guard, and checks that its `issuer` is `issuerURL` and that its
+     `jwks_uri` is `<issuerURL>/jwks`. It then reads the JWKS at that
+     `jwks_uri` and looks for a `kid`. The check passes only when each step
+     passes. It runs in the daily schedule, before each manual rotation,
+     and at `POST .../issuer/keys/check-copy`, which runs it at once and
+     answers each step with its outcome. A person who copied the files
+     calls that route, and needs not wait up to 24 hours for the schedule.
+   - **For a namespace with `issuerURL`, the server never signs with a key
+     that the copied JWKS does not hold.** It promotes a `next` key
+     (decision 5), in the schedule or in a manual normal rotation, only
+     after the copy check found the `kid` of the `next` key. A manual
+     rotation whose check fails changes nothing, and fails with
+     `profile.ErrIssuerKeyMissing`, which names the export route and the
+     route of the copy check. After an emergency rotation, the new `active` key is in
+     no copy, so each open of a login block fails with
+     `profile.ErrIssuerKeyMissing` until the copy check finds the `kid` of
+     the new `active` key.
+   - When the daily check fails, the active key keeps signing after its 90
+     days, the server sends `issuer.key-copy-missing` (decision 11) each
+     day, and it tries again the next day. Many homelabs have no
+     notification sink, so from day 90 the server also warns in each place
+     that a person sees, with the number of days left before day 180:
+     - in the answer of each open that signs with the key: a warning
+       diagnostic of the OpenTofu provider, a line on the standard error of
+       the run command, a warning in the answer of the REST API, and a
+       diagnostic in the answer of the Pulumi paths where the Pulumi CLI
+       shows one (an item for `make e2e` to check, ADR 209 decision 5),
+     - in a banner of the console for each person with `namespace:read`,
+     - in a log line at the level `WARN`, once a day for each namespace.
+   - An active key never signs for more than 180 days. At that limit the
+     open of a login block fails with `profile.ErrIssuerKeyExpired`, which
+     names the export route and the route of the copy check.
    - Google Cloud, Vault and Kubernetes can take the keys with no URL. The
      docs show each one.
 4. **Keys.** A key is RSA 2048 with `RS256`, with a `kid` of the prefix
@@ -132,29 +169,40 @@ gives what the relying parties need:
      key never signs anything.
    - The keys are namespace data. The backup of the namespace holds the
      wrapped keys, so a restore keeps the trust of each cloud.
-   - A restore into another installation is a copy unless it is a move of
-     the namespace (the source stops serving it). A copy must not sign with
-     the same keys as the source, or two installations sign for one
-     issuer. So a restore that is not a move restores no key. The
-     namespace gets new keys at the next open, and its clouds must trust
-     the new issuer URL.
+   - **Two signers never hold one key.** Each sign is tied to the fence of
+     the namespace: the server answers a token only after `RecordOpen`
+     commits with the fence of the open (ADR 200 decision 4). A store
+     refuses a stale failover version, so an instance whose failover
+     version is stale signs nothing that it can answer.
+     - A move of a namespace to another region of the same installation is
+       a promotion, which adds one to the failover version. The old home
+       region then fails each fence check, and stops signing.
+     - A restore into the installation that made the backup increments the
+       failover version of every namespace (ADR 38 decision 7). It restores
+       the keys, so the trust of each cloud stays.
+     - A restore into another installation is a copy. It restores no key,
+       whatever the request says: the restore has no flag that keeps keys.
+       So two installations never sign with one key. The namespace gets new
+       keys, and its clouds must trust the new issuer URL. The backup
+       names the installation that made it, so the restore can tell the
+       two cases.
    - Only `profile.Issuer` reads a private key, in the memory of the
      instance that signs, for at most one minute. No route answers a
      private key.
 5. **Rotation.** The schedule `issuer.rotate` runs each day:
    - A namespace with no key gets an `active` key and a `next` key at the
-     first open of a login block, at `POST /api/issuer/{ns}/keys`, or at
-     the first export (decision 3). A namespace with `issuerURL` and no
-     key refuses the open with `profile.ErrIssuerKeyMissing`, which names
-     the route that makes the keys, so the server never signs with a key
-     that no copied file holds.
+     first open of a login block, or at `POST .../issuer/keys`. A namespace
+     with `issuerURL` and no key refuses the open with
+     `profile.ErrIssuerKeyMissing`, which names the route that makes the
+     keys, so the server never signs with a key that no copied file holds.
    - Each active key signs for 90 days. Seven days before the end, the
      schedule makes a new `next` key if none exists. At the end, the `next`
      key becomes `active` and the old key becomes `retired`. For a
-     namespace with `issuerURL`, the check of decision 3 comes first.
+     namespace with `issuerURL`, the copy check of decision 3 comes first.
    - A `retired` key stays in the JWKS for 7 days, then becomes `deleted`.
    - A person with `namespace:manage-issuer` can rotate now. A normal
-     rotation makes the `next` key active and makes a new `next` key.
+     rotation makes the `next` key active and makes a new `next` key. For a
+     namespace with `issuerURL`, the copy check of decision 3 runs first.
    - An **emergency rotation** makes a fresh `active` key and a fresh
      `next` key, and deletes each earlier key at once, also the earlier
      `next` key. A compromise of the store or of the wrapper may expose the
@@ -164,8 +212,10 @@ gives what the relying parties need:
      refreshes its cache, which can take minutes to hours. A cloud session
      that a token already got, for example an STS session of up to 12
      hours, stays valid until it ends. The docs say this, and say how to
-     revoke such sessions at each cloud. The console says that a copy of
-     the files at an `issuerURL` must follow at once.
+     revoke such sessions at each cloud. For a namespace with `issuerURL`,
+     the opens of login blocks fail until the copy check finds the new key
+     (decision 3), so the console says that a copy of the files and a call
+     of the route of the copy check must follow at once.
    - The JWKS holds at most 4 keys: one `active`, one `next` and at most 2
      `retired`. When a manual rotation would make a third `retired` key,
      the oldest `retired` key becomes `deleted` before its 7 days end. A
@@ -226,7 +276,11 @@ gives what the relying parties need:
 
    Each change writes an audit entry. A change of the template or of
    `issuerURL` breaks the trust of each cloud that matched the earlier
-   form, so the console shows the subjects before and after.
+   form, so the console shows the subjects before and after. A change of
+   `issuerURL` or of the template, `allowBlockSubjects` from `false` to
+   `true`, and `includeActorName` from `false` to `true` need a fresh MFA
+   step, as ADR 212 decision 3 (in review) gives for a change that reduces
+   security. ADR 200 decision 9 lists them for ADR 212.
 10. **Audit.** Each token that the server signs writes one audit entry of
     the kind `access`, in the transaction that records the open: the
     profile, the block, the audience, the subject, `jti`, `exp` and the
@@ -235,28 +289,35 @@ gives what the relying parties need:
 11. **Notifications.** The catalog of ADR 145 decision 5 gets
     `issuer.key-next` (a new next key, with the time when it becomes
     active), `issuer.key-revoked` (an emergency rotation) and
-    `issuer.key-copy-missing` (the JWKS at `issuerURL` has no `next` key,
+    `issuer.key-copy-missing` (the copy check at `issuerURL` failed,
     decision 3). A notice
     holds the namespace, the `kid` and the times, never a key.
-12. **A preview of the claims.** `POST /api/issuer/{ns}/claims-preview`
+12. **A preview of the claims.** `POST .../issuer/claims-preview`
     takes a profile, a block and a context: a unit, an action, a phase and
     a ref. It answers the claims and the subject that a token would carry.
     It signs nothing, mints no token and calls no adapter. It needs
     `profile:read` on the profile. The console shows the subject of each
     login block above the editor, so a person can copy it into a trust
     policy. This is the claims debugger of the parity list.
-13. **Actions and routes.**
+13. **Actions and routes.** The issuer is part of the core, as profiles
+    are (ADR 200 decision 9). The routes of the issuer settings are under
+    `/api/dustpan/v1/namespaces/{namespace}/issuer`, with the style of ADR
+    210: `PATCH` with JSON Merge Patch, `ETag` and `If-Match`, and RFC 3339
+    times. The operations that are not a create, a read, an update or a
+    delete use a sub-path until ADR 210 decides the shape of a custom
+    method (ADR 203 decision 12).
 
     | Method and path | Action | Answer |
     | --- | --- | --- |
-    | `GET /oidc/{nsid}/.well-known/openid-configuration` | none (public) | The discovery document. |
-    | `GET /oidc/{nsid}/jwks` | none (public) | The public keys of the states `next`, `active` and `retired`. |
-    | `GET /api/issuer/{ns}` | `namespace:read` | The settings, the issuer URL and the metadata of each key. |
-    | `PUT /api/issuer/{ns}` | `namespace:manage-issuer` | The settings of decision 9. |
-    | `POST /api/issuer/{ns}/keys` | `namespace:manage-issuer` | Makes the `active` and `next` keys of a namespace that has no key. `409` when keys exist. |
-    | `POST /api/issuer/{ns}/keys/rotate` | `namespace:manage-issuer` | The keys after the rotation. The body sets `emergency` and requires `reason`. |
-    | `GET /api/issuer/{ns}/export` | `namespace:manage-issuer` | The two files of decision 3. Makes the keys when the namespace has none. |
-    | `POST /api/issuer/{ns}/claims-preview` | `profile:read` on the profile | The claims of decision 12. |
+    | `GET /oidc/{nsid}/.well-known/openid-configuration` | none (public) | The discovery document. Outside the versioned API (decision 2). |
+    | `GET /oidc/{nsid}/jwks` | none (public) | The public keys of the states `next`, `active` and `retired`. Outside the versioned API. |
+    | `GET .../issuer` | `namespace:read` | The settings, the issuer URL, the metadata of each key, and the last outcome of the copy check. |
+    | `PATCH .../issuer` | `namespace:manage-issuer`, and a fresh MFA step for the changes of decision 9 | The settings of decision 9. |
+    | `POST .../issuer/keys` | `namespace:manage-issuer` | Makes the `active` and `next` keys of a namespace that has no key. `409` when keys exist. |
+    | `POST .../issuer/keys/rotate` | `namespace:manage-issuer` | The keys after the rotation. The body sets `emergency` and requires `reason`. |
+    | `POST .../issuer/keys/check-copy` | `namespace:manage-issuer` | Runs the copy check of decision 3 now, and answers each step. |
+    | `GET .../issuer/export` | `namespace:manage-issuer` | The two files of decision 3. Read-only. |
+    | `POST .../issuer/claims-preview` | `profile:read` on the profile | The claims of decision 12. |
 
     The built-in role that holds `namespace:admin` gets
     `namespace:manage-issuer`.

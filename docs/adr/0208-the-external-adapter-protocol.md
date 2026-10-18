@@ -129,7 +129,7 @@ each call.
      "schemaVersion": 1,
      "values": { "dbHost": "db.internal", "dbPassword": "s3cret" },
      "plain": ["/dbHost"],
-     "expires": 1792345678000,
+     "expires": "2026-10-18T09:30:00Z",
      "identity": "cmdb role payments-read"
    }
    ```
@@ -137,8 +137,9 @@ each call.
    - `values` is any JSON value. Each leaf is secret, except the leaves that
      `plain` names with JSON pointers. A forgotten mark then hides a value
      and never shows one.
-   - `expires` is optional, in Unix milliseconds. An open does not cache a
-     result past it (ADR 203).
+   - `expires` is optional, an RFC 3339 time in UTC, the time format of
+     ADR 210 (in review). An open does not cache a result past it (ADR
+     203). A value that is not an RFC 3339 time is `ErrUnavailable`.
    - `identity` is optional, for the audit entry. The server cuts it to 200
      characters.
    - For `rotate`, the answer also holds `state`, the new state, which the
@@ -190,11 +191,14 @@ each call.
   endpoint and no shared secret.
 - The server sends secret inputs and the JWT to the adapter. A profile
   author who points a block at a wrong URL sends them there. So a save
-  that makes a routing change needs `profile:open` (ADR 202 decision 2): a
-  change to any path that an input of the block reads, directly or
-  through other values, a change to the imports or the exports, and a
-  rollback or tag move that changes the resolved inputs of the block. The
-  diff compares the evaluated hosts of each block, not the text, and shows
-  each new host to a reviewer of the change (ADR 202 decision 5).
+  that makes a routing change needs `profile:open` (ADR 202 decision 2):
+  any difference in the text of the block, or of a path that an input of
+  the block reads, directly or through other values, also in an import
+  and in each profile that imports the changed profile, any difference in
+  the imports or the exports, and a rollback, tag move or apply of a draft
+  with such a difference. The server decides this from the syntax, with
+  no open. The diff compares the evaluated hosts of each block, not the
+  text, and shows each new host to a reviewer of the change (ADR 202
+  decision 5).
 - The public SDK of the server (ADR 35) gets `pkg/profile/external`, which
   adapter authors import.

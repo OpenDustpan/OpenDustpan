@@ -93,9 +93,16 @@ double what a person must learn and what the server must limit.
      tenancy and of the fence (ADR 4).
    - The open merges the values, the providers and the exports of each
      import in list order, then the profile's own document. A later item
-     wins. Maps merge key by key, as JSON Merge Patch (RFC 7396) does. A list
-     or a scalar replaces the earlier value. A `null` removes the earlier
-     value.
+     wins. Maps of `values` and `exports` merge key by key, as JSON Merge
+     Patch (RFC 7396) does. A list or a scalar replaces the earlier value. A
+     `null` removes the earlier value.
+   - **A block is atomic in a merge.** A block of `providers` or
+     `rotators` never merges key by key. A later block of the same name
+     replaces the earlier block whole, in the merge of imports and in the
+     merge of attachments (ADR 203 decision 5). A `null` removes it.
+     So no block holds fields from two profiles, and a narrower attachment
+     cannot change one input, for example `with.url`, of a block of a wider
+     attachment and keep its other inputs.
    - `merge: false` evaluates the import and keeps it out of the merge. An
      expression reads it as `imports["network/prod"].values.vpcId`.
    - An expression can also read one value of another profile with no
@@ -137,7 +144,21 @@ double what a person must learn and what the server must limit.
      values of P. It never holds a value of a profile that imports P, of an
      attachment, or of a `merge: false` import of P. The same profile
      revision gives the same own tree in each open with the same context,
-     whatever imports it.
+     whatever imports it. In the same way, `providers` for P holds the
+     blocks of the own tree of P: the blocks of its imports, then its own
+     blocks, merged as whole blocks.
+   - **Each block is evaluated in the own tree of the profile that holds
+     it.** Each field of a block (`with`, `login`, `audience`, `subject`,
+     `timeout`, `export`, `neverStore`, `protocolVersion`, `observe`, and
+     for a rotator block `schedule`) is read in the own tree and the
+     context of the profile that wrote the block. `login` names a login
+     block of that own tree. When a later block replaces a block in a
+     merge, the later block runs with the own tree of its own profile, and
+     never with a value of the profile whose block it replaced. A value of
+     profile P that reads `providers.<name>` reads the block of the own tree
+     of P, so that block still runs for P, with the inputs of P. The merge
+     decides only which block gives `providers.<name>` and the default
+     exports in the final result.
    - A value that comes from a provider, an adapter or `context` is data.
      The open never parses it again as an expression, so a `${` in such a
      value stays text.
@@ -213,7 +234,8 @@ double what a person must learn and what the server must limit.
      or through other expressions, is a **routing change**, which needs
      `profile:open` as well as `profile:write` (ADR 202 decision 2). The
      save finds these paths from the syntax tree, as for the marks of
-     decision 12.
+     decision 12, also in the imports of the profile and in each profile
+     that imports it.
    - `login` names a login block of this profile or of an import. The
      open gives its result to this block (`Request.Login`).
    - `audience` and `subject` (a subject template, ADR 205 decision 6) are
@@ -285,6 +307,14 @@ double what a person must learn and what the server must limit.
     that set the value and the profile that set the type. We use this small
     form instead of JSON Schema. It covers the checks of `fn::validate` that
     the ESC docs show, and it needs no new dependency.
+
+    A type must not tell a secret of another profile. When the final value
+    of a path is a secret that does not come from the own tree of the
+    profile that set the type, only `kind` and `required` apply to it. A
+    type with any other limit on such a path fails the open with
+    `profile.ErrInvalid`, which names the path and both profiles, whatever
+    the value is. So a failure never depends on the secret. The docs say to
+    put the type of a secret in the profile that sets the secret.
 11. **Checks.** `checks` holds 0 to 32 rules:
 
     ```yaml
@@ -313,6 +343,15 @@ double what a person must learn and what the server must limit.
       profile of `profiles[...]`) runs on the own tree of that profile
       (decision 4).
     - Each check runs with the context of the profile that holds it.
+    - **A check is not a secret oracle.** A check of profile P can read a
+      secret leaf only when the final value of the leaf comes from the own
+      tree of P. When a check reads a path whose final value is a secret
+      from another profile, the open fails with `profile.ErrInvalid`, which
+      names the check and the path, before the check runs and whatever the
+      value is. The server finds the paths from the syntax tree, as for the
+      marks of decision 12. So a narrower attachment cannot test a secret of
+      a wider attachment with a rule such as `startsWith`, and the reverse.
+      A check of P can still test each plain value of the final result.
 12. **Marks propagate.** Each value has two marks:
     - **secret**: from `$secret`, `$sealed`, a secret output of a provider,
       or `secret(x)`.

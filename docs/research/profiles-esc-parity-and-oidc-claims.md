@@ -95,7 +95,7 @@ Marks: **same** (the feature exists in profiles, in our format), **own**
 | `gh-login` (GitHub App) | /docs/esc/providers/login/gh-login/ | `login/github` | same |
 | `doppler-login`, `infisical-login`, `snowflake-login` | /docs/esc/providers/login/ | `login/doppler`, `login/infisical`, `login/snowflake` | same |
 | `oidc` (a token for any audience, launched 2026-10-15) | /docs/esc/providers/login/oidc/ | `login/oidc` with the subject template of the namespace or the block (ADR 207 decision 4) | more |
-| `debug-oidc-claims` | /docs/esc/providers/login/debug-oidc-claims/ | `POST /api/issuer/{ns}/claims-preview`, and the subject above the editor (ADR 204 decision 12) | same |
+| `debug-oidc-claims` | /docs/esc/providers/login/debug-oidc-claims/ | `POST /api/dustpan/v1/namespaces/{namespace}/issuer/claims-preview`, and the subject above the editor (ADR 204 decision 12) | same |
 | `subjectAttributes` (6 attributes) | /docs/esc/providers/login/aws-login/ | Subject templates from 19 keys (ADR 205 decision 6) | more |
 | Kubernetes, OAuth 2.0 identity providers | not in the catalog | `login/kubernetes`, `login/oauth` with presets (ADR 207 decisions 3 and 5) | more |
 | `pulumi env setup aws`, `azure`, `gcp` (changes a cloud account) | /docs/iac/cli/commands/pulumi_env_setup/ | The docs show each trust policy. No command changes a cloud account. | not taken |
@@ -177,7 +177,7 @@ Marks: **same** (the feature exists in profiles, in our format), **own**
 | Ownership transfer | OpenAPI `ReassignEnvironmentOwnership` | Profiles have no owner. Grants decide (ADR 52). | not taken |
 | Audit events, including issued OIDC tokens | /docs/esc/administration/audit-logs/ | An entry for each open and each token (ADR 203 decision 9, ADR 204 decision 10) | same |
 | Open sessions with a duration, 2 hours by default | OpenAPI `OpenEnvironment` | Same (ADR 203 decision 3) | same |
-| Check of a document, provider and context schemas | OpenAPI `CheckEnvironment` | `POST .../check`, `GET /api/profiles/-/adapters`, `GET /api/profiles/-/context-schema` | same |
+| Check of a document, provider and context schemas | OpenAPI `CheckEnvironment` | `POST .../check`, `GET /api/dustpan/v1/profile-adapters`, `GET /api/dustpan/v1/profile-context-schema` | same |
 | Attach to many stacks by collection | none found | Profile attachments on a namespace, a collection or a unit (ADR 203 decision 5) | more |
 
 ## 2. OIDC claims of CI and IaC products

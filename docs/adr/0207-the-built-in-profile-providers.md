@@ -173,9 +173,11 @@ here:
      server writes an audit entry and the lease ends at its own TTL in
      Vault. An open with no session, for example an open of a job, revokes
      its leases when the job ends. The docs say to give each dynamic role
-     a short TTL, because a revoke can fail. The server calls
-   the REST API of each store with the standard library, and signs AWS
-   calls with the SigV4 code that the S3 blob adapter already has.
+     a short TTL, because a revoke can fail.
+
+   The server calls the REST API of each store with the standard library,
+   and signs AWS calls with the SigV4 code that the S3 blob adapter
+   already has.
 7. **Outputs providers.**
 
    | `use` | Reads | Main inputs |
@@ -205,8 +207,20 @@ here:
      publisher for a Catalog attachment, and not the person who started
      the job. The save checks the same for the author, so
      an author cannot put into a profile an output that the author cannot
-     read. When output sharing rules exist (RFC 15), the adapter applies
-     them too.
+     read.
+   - **A job open needs both rules.** For an open by a job, the output
+     must pass both: an output-sharing rule of the source unit names the
+     unit of the job, and the attachment authority holds `unit:read`, and
+     `unit:read-secrets` for a secret output, on the source unit. The open
+     gets the intersection of the two, never more. A missing sharing rule
+     fails the block with `identity.ErrDenied`, which names the source unit
+     and the unit of the job. A missing action fails the open with
+     `profile.ErrAttachmentAuthority` (ADR 203 decision 4). ADR 213
+     decision 1 (in review) gives the same intersection for a read of the
+     job token through the API, with the principal that started the job. A
+     read of the job token uses the rule of ADR 213. An open of a profile
+     uses the rule of this decision. ADR 200 decision 9 lists this for ADR
+     213.
    - `outputs/opentofu-state` reads S3 (with `login/aws`), the HTTP backend
      of OpenTofu, and the `remote` backend of a TFE-compatible API, for
      example another installation. It gives the root outputs.

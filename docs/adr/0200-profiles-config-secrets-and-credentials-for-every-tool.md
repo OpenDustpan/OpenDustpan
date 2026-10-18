@@ -63,6 +63,17 @@ The research note `docs/research/profiles-esc-parity-and-oidc-claims.md`
 holds the parity table of ESC, the comparison of claims, and what each
 external system accepts, with the sources and their dates.
 
+ADRs 210 to 214 are in review at the same time. They hold the class A
+decisions of the project lead: the tool-neutral API prefix, paths, actions
+and JSON style (ADR 210), optional modules and the capabilities document
+(ADR 211), the fresh MFA step for a change that reduces security (ADR 212),
+job tokens and forge connections (ADR 213), and docs pages (ADR 214). These
+ADRs follow them: the routes are under `/api/dustpan/v1/`, an update is a
+`PATCH` with JSON Merge Patch, a write takes `If-Match` with an `ETag`, a
+list pages with `pageToken`, a time on the wire is an RFC 3339 string, and
+the installation actions have the area `installation:`. Decision 9 lists
+what ADRs 210 to 214 must say for these ADRs to fit.
+
 ### One-way doors
 
 | Decision | Why it is hard to undo |
@@ -72,6 +83,7 @@ external system accepts, with the sources and their dates.
 | The claim names and values, version 1 (ADR 205 decision 1) | Trust policies and Vault roles hold them. |
 | The subject format and the order of its keys (ADR 205 decision 6) | Trust policies hold subjects. |
 | The body and the JWT of the external adapter protocol, version 1 (ADR 208) | Adapters that teams host hold the shape. |
+| The issuer paths `/oidc/{nsid}/...` outside the versioned API (ADR 204 decision 2) | The issuer URL holds the path. A version in it would break each trust at each new major version. |
 | The document format, `schemaVersion` 1 (ADR 201) | Stored revisions hold it. |
 | The ID prefixes `prf-`, `pos-`, `oik-` and `oit-` | IDs are in audit entries, links, tokens and backups. |
 | The audit entry of an open (ADR 203 decision 9) | The audit chain hashes each entry. |
@@ -111,7 +123,7 @@ external system accepts, with the sources and their dates.
    | --- | --- |
    | `ErrInvalid` | A bad field, document, block, audience or template. |
    | `ErrNotFound` | An unknown profile, revision, tag, draft or session, or a caller without `profile:read`. Never an answer of a remote system. |
-   | `ErrConflict` | A write on a stale read, or a rotation of a block that another rotation holds (ADR 202 decision 8). |
+   | `ErrConflict` | A write on a stale read. Also a rotation of a block that another rotation holds, and a rotation into a slot that a `retiring` credential holds (ADR 202 decision 8). The error names the time when the lease or the slot frees. |
    | `ErrSchemaVersion` | A document with a higher `schemaVersion`. |
    | `ErrImportCycle` | A cycle of imports or `profiles[...]` reads. |
    | `ErrReference` | A path that does not exist at open. |
@@ -124,6 +136,9 @@ external system accepts, with the sources and their dates.
    | `ErrOpenRule` | A job of a profile with an open rule. |
    | `ErrInUse` | A rename or a delete of a profile that another object names. |
    | `ErrIssuerNotConfigured` | A token with no `publicURL`. |
+   | `ErrIssuerKeyMissing` | A token of a namespace with `issuerURL` whose signing key is in no copied JWKS yet. The namespace has no key, or the copy check did not find the key of an emergency rotation. Also a manual rotation whose `next` key the copy check did not find. Also an export of a namespace with no key (ADR 204 decisions 3 and 5). The error names the route that makes the keys or the route of the copy check. |
+   | `ErrIssuerKeyExpired` | A token of a namespace with `issuerURL` whose active key signed for 180 days (ADR 204 decision 3). The error names the export route and the route that checks the copy. |
+   | `ErrAttachmentAuthority` | An open of a job whose attachment authority does not hold an action of the attach checks now (ADR 203 decision 4). It wraps `identity.ErrDenied`, and names the attachment, the authority and the missing action. |
    | `ErrSubjectTooLong` | A subject template whose subject can pass 600 characters. |
    | `ErrAccessRequired` | An open of a profile with an open rule, with no approved access request. |
    | `ErrExprVersion` | A revision whose Expr version the server cannot run (ADR 112 decision 11). |
@@ -173,13 +188,22 @@ external system accepts, with the sources and their dates.
        PutDraft(ctx context.Context, id ID, d Draft, f namespace.Fence) (Draft, error)
        SubmitReview(ctx context.Context, id ID, d DraftID, v Review, f namespace.Fence, e []audit.Entry) (Draft, error)
        ApplyDraft(ctx context.Context, id ID, d DraftID, f namespace.Fence, e []audit.Entry) (Revision, error)
+       // Lease takes the rotation lease of one block and answers its
+       // lease token (ADR 202 decision 8). ErrConflict, with the time
+       // when the lease or the slot frees.
+       Lease(ctx context.Context, id ID, block string, now time.Time, f namespace.Fence) (LeaseToken, error)
        // Rotated stores the outcome of one rotation of one block, in one
-       // transaction of its record. ErrConflict for a stale record.
-       Rotated(ctx context.Context, id ID, block string, o RotationOutcome, f namespace.Fence, e []audit.Entry) (RotationRecord, error)
+       // transaction of its record. ErrConflict for a stale record or a
+       // lease token that is not the token of the live lease.
+       Rotated(ctx context.Context, id ID, block string, l LeaseToken, o RotationOutcome, f namespace.Fence, e []audit.Entry) (RotationRecord, error)
        // Attach and Detach hold the attachments of ADR 203 decision 5.
        // ErrInvalid for an object of another namespace.
        Attach(ctx context.Context, a Attachment, f namespace.Fence, e []audit.Entry) (Attachment, error)
        Detach(ctx context.Context, a AttachmentID, f namespace.Fence, e []audit.Entry) error
+       // Reauthorize replaces the attachment authority of a with the
+       // principal p (ADR 203 decision 4). ErrNotFound, ErrConflict for a
+       // stale ETag.
+       Reauthorize(ctx context.Context, a AttachmentID, p string, etag string, f namespace.Fence, e []audit.Entry) (Attachment, error)
        // Attached answers the attachments of a unit in merge order, each
        // resolved to a revision. ErrNotFound for an unknown unit.
        Attached(ctx context.Context, u identity.Object) ([]Resolved, error)
@@ -219,7 +243,9 @@ external system accepts, with the sources and their dates.
        // Published answers the keys of the JWKS: next, active, retired.
        Published(ctx context.Context, ns namespace.ID) ([]PublicKey, error)
        // Rotate applies one step of the rotation at now, or an emergency
-       // rotation. ErrConflict for a second active key.
+       // rotation. ErrConflict for a second active key. The caller runs
+       // the copy check of ADR 204 decision 3 first for a namespace with
+       // issuerURL.
        Rotate(ctx context.Context, ns namespace.ID, now time.Time, emergency bool, f namespace.Fence, e []audit.Entry) ([]PublicKey, error)
    }
 
@@ -227,8 +253,9 @@ external system accepts, with the sources and their dates.
    type Sessions interface {
        // Put stores a sealed result until expires, bound to the principal
        // and the job of the credential. ErrLimit above 100 live sessions
-       // for the principal. A session holds no audit entry: the open
-       // wrote it (ADR 203 decision 9).
+       // for the principal of a direct open, or for the job of a job open.
+       // A session holds no audit entry: the open wrote it (ADR 203
+       // decision 9).
        Put(ctx context.Context, s Session, f namespace.Fence) (SessionID, error)
        // Get reads a session for the same principal and job. ErrNotFound
        // for another credential, an unknown session or a session that
@@ -240,7 +267,8 @@ external system accepts, with the sources and their dates.
 
    // UnitOutputs reads the outputs of units for outputs/opendustpan
    // (ADR 207 decision 7). The wiring implements it over the masked reads
-   // of the tool packages. ErrNotFound, ErrUnavailable.
+   // of the tool packages, and checks the output-sharing rule for a job
+   // open. ErrNotFound, ErrUnavailable, identity.ErrDenied.
    type UnitOutputs interface {
        Outputs(ctx context.Context, a Actor, u identity.Object, names []string, secrets bool) (UnitOutputSet, error)
    }
@@ -295,6 +323,14 @@ external system accepts, with the sources and their dates.
      not a path. ADR 203 decision 6 adds these variables to the list. The
      credential-variable rule of ADR 101 decision 7 still applies to each
      one, and a secret fails the job start. This extends ADR 134 decision 6.
+   - **ADR 213 decision 1** (in review) gives a job token the outputs of
+     another unit only when an output-sharing rule of that unit names the
+     unit of the job and the principal that started the job can read the
+     outputs. An open of `outputs/opendustpan` by a job is not a read of the
+     job token: ADR 207 decision 7 requires the output-sharing rule and the
+     grants of the attachment authority, not of the person who started the
+     job. Both rules are intersections, and they differ only in the
+     principal. Decision 9 lists this for ADR 213.
    - **ESC parity and ADR 101 decision 10.** ESC sets secrets as
      environment variables of a command. On a runner, no credential passes
      through a variable. ADR 201 decision 9 keeps the rule of ADR 101 on a
@@ -310,12 +346,40 @@ external system accepts, with the sources and their dates.
    starts a deployment, which waits for run triggers (RFC 24).
 8. **Terms.** `GLOSSARY.md` gets: Profile, Profile revision, Revision tag,
    Profile folder, Entry, Provider block, Profile provider, Rotator,
-   Rotation record, Rotation lease, Exports, Never store, Open, Open
+   Rotation record, Rotator slot, Rotation lease, Exports, Never store, Open, Open
    session, Profile attachment, Attachment authority, Change rule, Routing
-   change, Profile draft, Open rule, Access request,
+   change, Taint set, Profile draft, Open rule, Access request,
    Issuer, Issued token, Subject template, External adapter. The word for
    a profile in the paths of the Pulumi Cloud-compatible API is
    `environments`, because the CLI sends it (ADR 209 decision 6).
+9. **What ADRs 210 to 214 must say (in review).** These ADRs fit ADRs 210
+   to 214 when those ADRs merge with these items. The pull request of ADRs
+   210 to 214 gets the list:
+   - **ADR 210 decision 1**: the issuer paths `/oidc/{nsid}/.well-known/openid-configuration`
+     and `/oidc/{nsid}/jwks` are protocol endpoints outside the versioned
+     API, as the discovery document `/.well-known/terraform.json` is. They
+     never move under `/api/dustpan/v1/`, and a new major version never
+     changes them (ADR 204 decision 2).
+   - **ADR 210, the custom method**: the operations of these ADRs that are
+     not a create, a read, an update or a delete use a sub-path until ADR
+     210 decides the shape (ADR 203 decision 12).
+   - **ADR 211 decision 1**: profiles and the issuer are part of the core.
+     They hold secrets and signing keys, and their schedules rotate
+     credentials and keys and revoke leases. A switch that stopped them
+     would leave live credentials and keys with no rotation. So no switch
+     turns them off.
+   - **ADR 212 decision 3**: the first list of changes that need a fresh
+     MFA step gets the changes of ADR 204 decision 9: a change of
+     `issuerURL`, a change of the subject template of a namespace,
+     `allowBlockSubjects` from `false` to `true` and `includeActorName`
+     from `false` to `true`, and a longer list in the installation settings
+     `profileProviderNetworks` or `profileCACertificates` (ADR 206 decision
+     6).
+   - **ADR 213 decision 1**: the job-token read of shared outputs uses the
+     principal that started the job. An open of `outputs/opendustpan` by a
+     job uses the attachment authority instead, and also needs the
+     output-sharing rule (ADR 207 decision 7). ADR 213 says that its rule
+     does not apply to an open of a profile.
 
 ## Worked examples
 
@@ -484,7 +548,7 @@ exports:
 - A blueprint names `payments/prod` in `platform.profile`, so each unit of
   the Catalog gets the attachment. The attachment uses the authority of the
   person who published the blueprint, which the server checks at publish
-  time and audits. A person who requests a unit needs no `profile:open`
+  time, again at each open of each job, and audits. A person who requests a unit needs no `profile:open`
   (ADR 203 decision 5).
 
 ## Consequences
@@ -496,6 +560,8 @@ exports:
 - `GLOSSARY.md` gets the terms of decision 8. RFC 5 gets the status
   `discussing`, the accepted parts, and the open questions.
 - The status line of ADR 12 names ADR 209.
+- When ADRs 210 to 214 merge, each item of decision 9 is in them, or these
+  ADRs change first.
 
 ## Open questions
 

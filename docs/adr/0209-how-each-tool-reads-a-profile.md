@@ -136,7 +136,17 @@ The research note gives what the Pulumi CLI calls, from its source:
    credentials helper of the launcher answers the job token (ADR 134
    decision 7). With a job token, the provider opens only the profiles that
    the job fixed (ADR 203 decision 4). A profile that the unit does not
-   attach fails with an error that names the attachment to make.
+   attach fails with an error that names the attachment to make. A job
+   token always opens the revision that the spec fixed:
+   - A `profile` with no `@`, or with the tag that the spec recorded for
+     that profile, opens the fixed revision.
+   - A `profile` with `@<number>` that is the fixed revision opens it.
+   - Any other `@tag` or `@<number>`, for example a tag that moved after
+     the job start, fails with `profile.ErrInvalid`, which names the
+     revision that the job fixed and the revision that the module asked
+     for. It says to open the profile with no pin, or to change the
+     attachment. The
+     provider never opens a revision that the spec did not fix.
 5. **The Pulumi CLI, through the Pulumi Cloud-compatible API (owner).** The
    server serves the paths that the CLI sends, under the route prefix of
    that API:

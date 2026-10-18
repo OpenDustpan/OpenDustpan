@@ -64,14 +64,17 @@ of its environments to webhooks.
      credential in it, whichever is first.
    - The store seals the result with the data key of the root profile. A
      schedule deletes each session that ended. A principal has at most 100
-     sessions that did not end.
+     sessions of direct opens that did not end. A job has at most 100
+     sessions that did not end, so a principal of a CI system with many
+     jobs at the same time does not reach the limit.
    - Only the credential that opened a session reads it: the same
      principal, and for a job token the same job. A person who started a job
      cannot read a session of the job with a personal token.
    - Each read of a session checks the action again, as at the open: for a
      direct open, `profile:open` on each profile of the session, and an
      access request that is still valid when an open rule applies. For a
-     job open, it checks that the job is not terminal. A read that fails the check
+     job open, it checks that the job is not terminal, and the attachment
+     authority as at the open (decision 4). A read that fails the check
      fails with `identity.ErrDenied`, and the server deletes the session.
      So a revoked grant or an expired access request ends the session at
      the next read, not at the end of its duration.
@@ -107,10 +110,49 @@ of its environments to webhooks.
      `outputs/opendustpan` (ADR 207), uses the caller for a direct open.
      For a job open, it uses the **attachment authority**: the principal
      that made the attachment, or for a Catalog attachment the publisher
-     of the blueprint. The attachment stores that principal. The server
-     checks its actions again at the start of each job, so a revoked grant
-     fails the next job with `identity.ErrDenied`, which names the
-     attachment.
+     of the blueprint. The attachment stores that principal.
+   - **The server checks the authority again at each open of a job**: at
+     the job start, at each open of a step (decision 6), at each token
+     renewal (decision 7) and at each read of a session of the job
+     (decision 3). It checks the full set of the attach checks, and then
+     the reads of each block. Each failure fails the open with
+     `profile.ErrAttachmentAuthority`, which wraps `identity.ErrDenied`
+     and names the attachment, the authority and the action:
+
+     | Action of the authority | Object | When it is missing |
+     | --- | --- | --- |
+     | the principal is active | | The principal is disabled, deleted or left the namespace. The error says `authority disabled`. |
+     | `profile:open` | the attached profile, and each profile that it imports or reads | The error names the first profile. |
+     | `profile:attach` | the attached profile | |
+     | `unit:manage` | the object of the attachment (a namespace, a collection or a unit) | |
+     | `unit:read`, and `unit:read-secrets` for a secret output | the source unit of `outputs/opendustpan` (ADR 207 decision 7) | The error also names the block. |
+
+     So a revoked grant fails the next open of a job, also in a job that
+     runs, and not only the next job.
+   - **Re-authorize.** When an authority is no longer valid, each job of
+     each unit of the attachment fails. `POST
+     .../profile-attachments/{attachment}/reauthorize` makes the caller the
+     attachment authority. The caller must pass the attach checks of
+     decision 5 at that time. The route writes an audit entry with the
+     authority before and after. It needs `If-Match`, so two people do not
+     replace each other.
+   - **The access review.** `GET .../profile-attachments?authority=invalid`
+     lists each attachment of the namespace whose authority fails an
+     attach check now, with the missing action. The access-review export of
+     ADR 52 holds the same list. A schedule checks the authorities each day
+     and sends `profile.attachment-authority-invalid` for each attachment
+     that became invalid, so a team finds it before a job fails.
+   - **Shared outputs.** An open of `outputs/opendustpan` by a job needs
+     both: an output-sharing rule of the source unit names the unit of the
+     job, and the attachment authority holds `unit:read`, and
+     `unit:read-secrets` for a secret output, on the source unit (ADR 207
+     decision 7). The result is the intersection of the two. ADR 213
+     decision 1 (in review) gives the same intersection for a read of the
+     job token, with the principal that started the job in place of the
+     attachment authority. The two reads are different: a job token reads
+     outputs through the API with the rule of ADR 213, and an open of a
+     profile reads them with the rule of this ADR. ADR 200 decision 9 lists
+     this for ADR 213.
    - **An agent** opens with masked values only: each secret answers
      `[masked]`, and no login block runs. No path gives an agent a value of
      a profile in plain text, also with the secret gate of ADR 124 open,
@@ -143,6 +185,15 @@ of its environments to webhooks.
      no `profile:open`. The attachment that the Catalog makes names the
      publisher as its attachment authority (decision 4), and its audit
      entry names the request, the blueprint and the publisher.
+   - A new version of a blueprint can have another publisher. The publish
+     of that version checks the new publisher as above. An existing
+     attachment keeps the authority of the publisher of the version that
+     made it. When a unit moves to the new version, its Catalog attachment
+     gets the publisher of the new version as its authority, in the same
+     transaction, with an audit entry. When the new version names another
+     profile, the move replaces the attachment. Until a unit moves, an
+     attachment whose earlier publisher is no longer valid is in the access
+     review (decision 4), and a person can re-authorize it.
    - At the start of a job, the server resolves the attachments of the
      unit to fixed revisions and stores them in the spec, as ADR 100
      decision 5 says. It also fixes the revision of each profile that they
@@ -190,8 +241,10 @@ of its environments to webhooks.
    new one through its session at two thirds of its life, and replaces the
    file with a rename, so a reader never sees half a file. A step that
    runs for hours keeps a valid token, and the SDK of the cloud reads the
-   new file. The session path is `POST /runner/v1/session/credentials/renew`.
-   It answers only the token files of the step.
+   new file. The session path of the runner protocol is `POST
+   .../session/credentials/renew`, under the prefix that ADR 210 gives the
+   runner protocol. It answers only the token files of the step. Each
+   renewal checks the attachment authority again (decision 4).
 8. **No cache across opens.** Each open calls its blocks again. A step of a
    job opens once. So each credential is as short-lived as its block says,
    and a revoke in a cloud applies at the next open. This rule does not
@@ -218,7 +271,8 @@ of its environments to webhooks.
     | `profile.import-changed` | A profile that this profile imports got a new revision under the tag of the import. |
     | `profile.draft-submitted`, `profile.draft-approved` | The review of a draft (ADR 202 decision 6). |
     | `profile.access-requested`, `profile.access-approved` | The gate on opens (ADR 202 decision 7). |
-    | `profile.rotation-succeeded`, `profile.rotation-failed` | A rotation (ADR 202 decision 8). |
+    | `profile.rotation-succeeded`, `profile.rotation-failed` | A rotation (ADR 202 decision 8). `profile.rotation-failed` also comes each day for a record that stays `pending` or `orphaned`. |
+    | `profile.attachment-authority-invalid` | The daily check found an attachment whose authority fails an attach check (decision 4). |
 
     A webhook sink of ADR 145 signs each delivery. A notification holds
     names, IDs, revisions and links, never a value (ADR 145 decision 4).
@@ -231,7 +285,7 @@ of its environments to webhooks.
     | `profile:open` | the profile | Open, read the static secrets of a document, a diff with secrets. |
     | `profile:approve` | the profile | Approve a draft or an access request (ADR 202). |
     | `profile:rotate` | the profile | Rotate now. |
-    | `profile:attach` | the profile | Attach and detach, with `unit:manage` on the object, and `profile:open` for an attach. |
+    | `profile:attach` | the profile | Attach and detach, with `unit:manage` on the object, and `profile:open` for an attach or a re-authorize. |
     | `profile:manage` | the profile | Change the rules and the settings, rename, delete, restore, retract, deletion protection. |
     | `profile:redact` | the profile | Redact a revision (ADR 202 decision 2). |
 
@@ -240,58 +294,83 @@ of its environments to webhooks.
     profile action goes only to the role that holds `namespace:admin`, and
     to custom roles through a grant (ADR 52), for example a grant of
     `profile:write` on one profile folder to a team. The reason is least
-    privilege, the rule of ISO/IEC 27001:2022 control A.8.2 on privileged
-    access: a person who deploys does not change, attach or detach the
+    privilege, designed against ISO/IEC 27001:2022 A.8.2 on privileged
+    access rights: a person who deploys does not change, attach or detach the
     profiles that hold guardrails, for example the `checks` and `$final`
     values of a namespace attachment. So the default for a person who
     deploys is to deploy with a profile, and not to read or change it.
-12. **Routes.** The routes are tool-neutral, under `/api/profiles`. `{ns}` is
-    the namespace and `{profile}` the profile name, with one or two
-    segments. The routes of a namespace that are not one profile start with
-    `-`, for example `/api/profiles/{ns}/-/labels`, and no name segment is
-    `-`. No name segment is one of the words that a route of a profile adds:
-    `revisions`, `rollback`, `diff`, `tags`, `labels`, `open`, `check`,
-    `drafts`, `access-requests`, `rules`, `settings`, `rotate`,
-    `rotations`, `clone`, `rename`, `restore`, `referrers`. The save
-    refuses such a name with `profile.ErrInvalid`. So each path has one
-    meaning. `ServeMux` cannot match a name of one or two segments with
-    one wildcard. So each route of a profile is registered as
-    `/api/profiles/{ns}/{rest...}`, and the handler parses `rest` by hand:
-    it reads the name from the left, and the first segment that is one of
-    the words above starts the rest of the route.
+12. **Routes.** The routes are tool-neutral, under the prefix and the
+    style of ADR 210 (in review). `{namespace}` is the namespace and
+    `{profile}` is one path segment that holds the profile name or its
+    `prf-` ID. The routes below drop the prefix
+    `/api/dustpan/v1/namespaces/{namespace}`, except the two routes of the
+    installation.
+    - **A name of two segments is one escaped segment.** A client sends
+      `payments/aws-prod` as `payments%2Faws-prod`. `ServeMux` matches each
+      segment of the escaped path, so `%2F` stays in one wildcard, and
+      `PathValue("profile")` answers `payments/aws-prod`. A route test
+      checks this for each profile route: it sends a name with `%2F` and
+      expects the profile, and it sends the same name with a plain `/` and
+      expects `404`. With this rule, no route parses a path by hand, and no
+      name segment needs a list of reserved words. A reverse proxy that
+      decodes `%2F` before the server breaks these paths. The docs say
+      so, and say that the `prf-` ID always works. A name never starts with
+      `prf-`, so a segment is never both.
+    - The objects of a namespace that are not one profile are collections
+      of the namespace: `profile-labels`, `profile-sessions` and
+      `profile-attachments`. The adapter specs and the context schema are
+      objects of the installation: `/api/dustpan/v1/profile-adapters` and
+      `/api/dustpan/v1/profile-context-schema`.
+    - An update is a `PATCH` with JSON Merge Patch. Each answer that
+      returns one resource holds its `ETag`. `PATCH`, `PUT`, `DELETE` and
+      each write of a profile take `If-Match`, and a save requires it: the
+      `ETag` of a profile names its newest revision, so a save on a stale
+      read answers `412`. A list takes `pageSize` and `pageToken`. A time is
+      an RFC 3339 string.
+    - The operations that are not a create, a read, an update or a delete
+      (`open`, `check`, `rollback`, `retract`, `redact`, `rotate`,
+      `abandon`, `apply`, `clone`, `rename`, `restore`, `withdraw`,
+      `reauthorize`, and `keys/rotate` and `keys/check-copy` of ADR 204)
+      use a sub-path. ADR 210 has not decided the shape of a custom method.
+      These routes change with that decision.
 
     | Method and path | Action |
     | --- | --- |
-    | `GET`, `POST /api/profiles/{ns}` | `profile:read`, `profile:write` |
-    | `GET`, `DELETE /api/profiles/{ns}/{profile}` | `profile:read`, `profile:manage` |
-    | `GET`, `PUT /api/profiles/{ns}/{profile}/settings` | `profile:read`, `profile:manage`: deletion protection and the other settings of the profile |
-    | `GET`, `POST /api/profiles/{ns}/{profile}/revisions` | `profile:read`, `profile:write` for a save, with `If-Match` on the revision |
-    | `GET /api/profiles/{ns}/{profile}/revisions/{rev}` | `profile:read`, and `profile:open` with `showSecrets` |
-    | `POST /api/profiles/{ns}/{profile}/revisions/{rev}/retract` | `profile:manage` |
-    | `POST /api/profiles/{ns}/{profile}/rollback` | `profile:write` |
-    | `GET /api/profiles/{ns}/{profile}/diff` | `profile:read`, and `profile:open` with `showSecrets` |
-    | `GET`, `PUT`, `DELETE /api/profiles/{ns}/{profile}/tags/{tag}` | `profile:read`, `profile:write` |
-    | `GET`, `PUT /api/profiles/{ns}/{profile}/labels` | `profile:read`, `profile:write` |
-    | `GET /api/profiles/{ns}/-/labels` | `profile:read` on the namespace |
-    | `POST /api/profiles/{ns}/{profile}/open` | `profile:open`, or a job token (decision 4) |
-    | `GET /api/profiles/{ns}/-/sessions/{session}` | the credential that opened the session (decision 3) |
-    | `POST /api/profiles/{ns}/{profile}/check` | `profile:read`: check a document with no save |
-    | `GET`, `POST /api/profiles/{ns}/{profile}/drafts` | `profile:read`, `profile:write` |
-    | `GET`, `PUT /api/profiles/{ns}/{profile}/drafts/{draft}` | `profile:read`, the author |
-    | `POST /api/profiles/{ns}/{profile}/drafts/{draft}/reviews` | `profile:approve` |
-    | `GET`, `POST /api/profiles/{ns}/{profile}/access-requests` | `profile:read` (each request of the profile), `profile:open` |
-    | `GET /api/profiles/{ns}/{profile}/access-requests/{id}` | `profile:read` |
-    | `POST /api/profiles/{ns}/{profile}/access-requests/{id}/withdraw` | the requester |
-    | `POST /api/profiles/{ns}/{profile}/access-requests/{id}/reviews` | `profile:approve` |
-    | `GET`, `PUT /api/profiles/{ns}/{profile}/rules` | `profile:read`, `profile:manage` |
-    | `POST /api/profiles/{ns}/{profile}/rotate` | `profile:rotate` |
-    | `GET /api/profiles/{ns}/{profile}/rotations` | `profile:read` |
-    | `POST /api/profiles/{ns}/{profile}/clone`, `.../rename`, `.../restore` | `profile:write`, `profile:manage`, `profile:manage` |
-    | `GET /api/profiles/{ns}/{profile}/referrers` | `profile:read` |
-    | `GET`, `POST /api/profiles/{ns}/-/attachments` | `profile:read`, and `profile:attach`, `profile:open` and `unit:manage` |
-    | `DELETE /api/profiles/{ns}/-/attachments/{attachment}` | `profile:attach` and `unit:manage` |
-    | `GET /api/profiles/-/adapters`, `GET /api/profiles/-/context-schema` | any signed-in principal |
-    | `POST /api/profiles/{ns}/{profile}/revisions/{rev}/redact` | `profile:redact` |
+    | `GET`, `POST /profiles` | `profile:read`, `profile:write` |
+    | `GET`, `DELETE /profiles/{profile}` | `profile:read`, `profile:manage` |
+    | `GET`, `PATCH /profiles/{profile}/settings` | `profile:read`, `profile:manage`: deletion protection and the other settings of the profile |
+    | `GET`, `POST /profiles/{profile}/revisions` | `profile:read`, `profile:write` for a save, with `If-Match` |
+    | `GET /profiles/{profile}/revisions/{rev}` | `profile:read`, and `profile:open` with `showSecrets` |
+    | `POST /profiles/{profile}/revisions/{rev}/retract` | `profile:manage` |
+    | `POST /profiles/{profile}/revisions/{rev}/redact` | `profile:redact` |
+    | `POST /profiles/{profile}/rollback` | `profile:write` |
+    | `GET /profiles/{profile}/diff` | `profile:read`, and `profile:open` with `showSecrets` |
+    | `GET /profiles/{profile}/tags` | `profile:read` |
+    | `GET`, `PUT`, `DELETE /profiles/{profile}/tags/{tag}` | `profile:read`, `profile:write`. A `PUT` creates or moves the tag, whose whole body is the revision. |
+    | `GET`, `PATCH /profiles/{profile}/labels` | `profile:read`, `profile:write` |
+    | `GET /profile-labels` | `profile:read` on the namespace |
+    | `POST /profiles/{profile}/open` | `profile:open`, or a job token (decision 4) |
+    | `GET /profile-sessions/{session}` | the credential that opened the session (decision 3) |
+    | `POST /profiles/{profile}/check` | `profile:read`: check a document with no save |
+    | `GET`, `POST /profiles/{profile}/drafts` | `profile:read`, `profile:write` |
+    | `GET`, `PATCH /profiles/{profile}/drafts/{draft}` | `profile:read`, the author |
+    | `POST /profiles/{profile}/drafts/{draft}/reviews` | `profile:approve` |
+    | `POST /profiles/{profile}/drafts/{draft}/apply` | the author or `profile:write`, and `profile:open` for a routing change (ADR 202 decision 6) |
+    | `GET`, `POST /profiles/{profile}/access-requests` | `profile:read` (each request of the profile), `profile:open` |
+    | `GET /profiles/{profile}/access-requests/{id}` | `profile:read` |
+    | `POST /profiles/{profile}/access-requests/{id}/withdraw` | the requester |
+    | `POST /profiles/{profile}/access-requests/{id}/reviews` | `profile:approve` |
+    | `GET`, `PATCH /profiles/{profile}/rules` | `profile:read`, `profile:manage` |
+    | `POST /profiles/{profile}/rotate` | `profile:rotate` |
+    | `GET /profiles/{profile}/rotations` | `profile:read` |
+    | `POST /profiles/{profile}/rotators/{block}/abandon` | `profile:rotate` |
+    | `DELETE /profiles/{profile}/rotations/{record}` | `profile:rotate`, for an `orphaned` record only (ADR 202 decision 8) |
+    | `POST /profiles/{profile}/clone`, `.../rename`, `.../restore` | `profile:write`, `profile:manage`, `profile:manage` |
+    | `GET /profiles/{profile}/referrers` | `profile:read` |
+    | `GET`, `POST /profile-attachments` | `profile:read`, and `profile:attach`, `profile:open` and `unit:manage`. A `GET` takes the filter `authority=invalid` (decision 4). |
+    | `DELETE /profile-attachments/{attachment}` | `profile:attach` and `unit:manage` |
+    | `POST /profile-attachments/{attachment}/reauthorize` | `profile:attach`, `profile:open` and `unit:manage`, with `If-Match` |
+    | `GET /api/dustpan/v1/profile-adapters`, `GET /api/dustpan/v1/profile-context-schema` | any signed-in principal |
 
     The paths are proposals for the route table. The route test gets each
     one with its actions. The errors use the error shape of the
