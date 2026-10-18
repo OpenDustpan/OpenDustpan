@@ -119,10 +119,37 @@ the **retention expiry** (see "Requests to other designs"). The Go names of
    names no unit of the other namespace. A resource that a unit of each of
    the two namespaces holds is managed twice in both. Each finding names
    only the unit of its own namespace, and says that a unit of a linked
-   namespace also holds the key. An unlink takes effect at the next state
-   check of each namespace. A link is installation data: its writes append
+   namespace also holds the key. A link is installation data: its writes append
    an audit entry with the two namespaces and the person. The suite holds a
    case for each of the three reasons above.
+
+   - **Unlink.** After an unlink, `Index.Holders` and `Index.Contested` of
+     each namespace leave out the units of the other at once. The findings
+     change at the next sweep that observes their keys. The next state check
+     of each namespace resolves a finding of managed twice that the link
+     made. A finding of not in any unit that the link resolved stays
+     resolved until the next cloud sweep of its scope, which can be up to
+     30 days later (`unmanaged.MaxEvery`): only a cloud sweep sees a
+     resource that no unit holds. The suite holds the case of the state
+     check.
+   - **Keyed by ID.** A link holds the stable IDs of its two namespaces,
+     never their names. A namespace that a person creates later under the
+     name of a purged namespace has a new ID and gets no link of the purged
+     one.
+   - **Soft delete and restore of a namespace.** The soft delete of a
+     namespace marks it deleted for its links in the same transaction
+     (`Links.SetNamespaceDeleted`). Its links stop to classify at once:
+     `Links.Linked` leaves them out, and `Index.Holders` and
+     `Index.Contested` of the other namespace answer no unit of the deleted
+     one. The links stay stored only so that a restore of the namespace in
+     its recovery window brings them back.
+   - **Purge of a namespace.** The purge of a namespace deletes its links
+     and appends an audit entry, in the same transaction
+     (`Links.DropNamespace`).
+
+   The suite holds a case for each of these: a purge then a new namespace
+   under the same name shows no link in `Linked` and in `Holders`, a soft
+   delete stops the classification, and a restore brings the link back.
 
 ### The state check
 
@@ -168,9 +195,10 @@ the **retention expiry** (see "Requests to other designs"). The Go names of
 13. **`unmanaged.Index`** holds the index: `ReplaceUnit`, `SetDeleted`,
     `DropUnit`, `Holders` and `Contested`. Each write carries the fence of
     the namespace of the unit. `Holders` and `Contested` take the namespace
-    of the caller and answer its holders and those of its linked namespaces
-    only. **`unmanaged.Links`** holds the links: `Link`, `Unlink` and
-    `Linked`. The suite in `unmanagedtest` states the behavior of both, and
+    of the caller and answer its holders and those of its live linked
+    namespaces only. **`unmanaged.Links`** holds the links: `Link`,
+    `Unlink`, `Linked`, `SetNamespaceDeleted` and `DropNamespace`. The
+    suite in `unmanagedtest` states the behavior of both, and
     a reference adapter in memory runs it today. The SQL adapters need an
     index on the normalized key. A lookup takes at most 1,000 keys.
 
@@ -202,6 +230,11 @@ the **retention expiry** (see "Requests to other designs"). The Go names of
   `POST /api/server/deleted-units/expire`. Then "sweep" names one concept.
 - **Identity.** The action `server:link-namespaces`, held only by the roles
   that administer the installation.
+- **Namespaces (shared files).** A namespace gets a stable ID that a new
+  namespace under the same name does not reuse. The design of the soft
+  delete, the restore and the purge of a namespace calls
+  `Links.SetNamespaceDeleted` and `Links.DropNamespace` in their
+  transactions (decision 9).
 
 ## Open questions
 

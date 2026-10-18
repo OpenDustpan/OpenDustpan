@@ -31,12 +31,13 @@ const (
 	MaxFindingUnits = 20
 	// MaxPage bounds a page of findings.
 	MaxPage = 500
-	// MaxPending is the longest time that a finding waits in StatusPending.
-	// The schedule then applies EventPendingExpired, and the finding opens
-	// again, so an action whose job or whose sweep never came does not hide
-	// the finding for ever. It is longer than the 14 days after which a job
-	// that waits for a state version expires, so a job ends first.
-	MaxPending = 15 * day
+	// MinPending is the shortest wait of a finding in StatusPending
+	// (PendingWait). It is longer than the 14 days after which a job that
+	// waits for a state version expires, so a job ends first.
+	MinPending = 15 * day
+	// pendingRuns is how many runs of its target a pending finding waits
+	// for, at least (PendingWait).
+	pendingRuns = 2
 )
 
 // Status is where a finding is in its life.
@@ -89,8 +90,8 @@ const (
 	// needs ActionNamespaceTriageUnmanaged. It does not cancel the job of
 	// the action: a person cancels the job with the actions of the job.
 	EventCancel Event = "cancel"
-	// EventPendingExpired is the end of a wait in StatusPending after
-	// MaxPending.
+	// EventPendingExpired is the end of a wait in StatusPending at
+	// Pending.Until.
 	EventPendingExpired Event = "pending-expired"
 )
 
@@ -237,14 +238,28 @@ func SpecOf(a ActionKind, k Kind) (ActionSpec, error) {
 // Pending is the action that a pending finding waits for. Job is the ID of
 // the job that the action started, or empty. Keep is the unit that keeps a
 // resource that is managed twice. Target is the unit of an import or of code
-// generation.
+// generation. Until is the end of the wait, after At: At plus PendingWait.
 type Pending struct {
 	At     time.Time
+	Until  time.Time
 	Keep   *graph.Unit
 	Target *graph.Unit
 	Action ActionKind
 	Job    string
 	By     string
+}
+
+// PendingWait returns how long a finding waits in StatusPending for an
+// action, when the longest Every of the enabled targets whose scopes cover
+// the finding is every: two times every, and at least MinPending. every is
+// zero when no such target sweeps on a schedule. At Pending.Until the
+// schedule applies EventPendingExpired, and the finding opens again, so an
+// action whose job or whose sweep never came does not hide the finding for
+// ever. Two times every gives the sweep that shows the result one missed
+// run: a target that sweeps every 30 days needs up to 30 days to see a
+// delete, and 15 days would open the finding again before it.
+func PendingWait(every time.Duration) time.Duration {
+	return max(MinPending, pendingRuns*every)
 }
 
 // Finding is one unmanaged resource in one namespace. A namespace has at most

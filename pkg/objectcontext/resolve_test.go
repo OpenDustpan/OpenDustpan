@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 )
 
@@ -19,6 +20,12 @@ var (
 	bpRef   = objectcontext.BlueprintRef("acme", "service")
 	unitRef = objectcontext.UnitRef(unit)
 	resRef  = objectcontext.ResourceRef(unit, "module.db.aws_db_instance.main")
+	// hiddenColl is the provenance object of a collection layer that the
+	// caller cannot read: the kind only, with no name.
+	hiddenColl = objectcontext.Ref{
+		Kind: objectcontext.KindCollection, Namespace: "", Name: "", Resource: "",
+		Unit: graph.Unit{Namespace: "", Tool: "", ID: ""},
+	}
 )
 
 func entry(ref objectcontext.Ref, src objectcontext.Source, f objectcontext.Fields) *objectcontext.Entry {
@@ -372,9 +379,9 @@ func hiddenLayerCase() resolveCase {
 			},
 		},
 		owners: objectcontext.Owners{
-			Value: []string{"group:web-code"}, From: from(collRef, objectcontext.SourceOutput),
+			Value: []string{"group:web-code"}, From: from(hiddenColl, objectcontext.SourceOutput),
 		},
-		onCall:   objectcontext.Text{Value: "pager:web", From: from(collRef, objectcontext.SourceAPI)},
+		onCall:   objectcontext.Text{Value: "pager:web", From: from(hiddenColl, objectcontext.SourceAPI)},
 		links:    []string{"https://status.example.com"},
 		summary:  unset[objectcontext.Text](),
 		shadowed: nil,

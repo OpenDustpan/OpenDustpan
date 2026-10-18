@@ -263,6 +263,28 @@ func Scope(k ResourceKey) string {
 	return ""
 }
 
+// Region returns the region of a normalized key, where the key names one:
+// field 4 of an AWS ARN, and the segment after "/regions/" of a Google Cloud
+// full resource name. It returns the empty string for a key that names no
+// region, for example the ARN of an IAM role or an Azure resource ID, and for
+// another provider. A zone is not a region: the server does not derive a
+// region from a zone.
+func Region(k ResourceKey) string {
+	switch k.Provider {
+	case ProviderAWS:
+		if parts := strings.SplitN(k.ID, ":", arnParts); len(parts) == arnParts {
+			return parts[3]
+		}
+	case ProviderGCP:
+		return segmentAfter(k.ID, "/regions/")
+	default:
+		// An Azure ID and a Kubernetes ID name no region, and the server
+		// knows no region of another provider.
+	}
+
+	return ""
+}
+
 // validProvider reports whether p is a valid provider name: a lowercase
 // identifier.
 func validProvider(p string) bool {

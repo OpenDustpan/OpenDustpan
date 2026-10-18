@@ -23,6 +23,7 @@ func findingCases() []suiteCase {
 		{"findings: a key with no account takes the scope of its sweep", testResolveNoAccount},
 		{"findings: a person cancels a pending action", testCancelPending},
 		{"findings: a pending action ends at its time", testExpirePending},
+		{"findings: a pending action waits two runs of a slow target", testExpirePendingSlowTarget},
 		{"findings: a stale fence refuses each write", testFindingsFenced},
 	}
 }
@@ -763,8 +764,8 @@ func testResolveNoAccount(t *testing.T, h Harness) {
 }
 
 // pendingFinding makes one open finding in acme and starts an action on it
-// at at().
-func pendingFinding(t *testing.T, h Harness, f namespace.Fence) unmanaged.Finding {
+// at at(), which waits PendingWait(every).
+func pendingFinding(t *testing.T, h Harness, f namespace.Fence, every time.Duration) unmanaged.Finding {
 	t.Helper()
 
 	s := matchingScan(t, h, f, unmanaged.ScanState, nil)
@@ -775,7 +776,8 @@ func pendingFinding(t *testing.T, h Harness, f namespace.Fence) unmanaged.Findin
 	must(t, "record", err)
 
 	pending := &unmanaged.Pending{
-		At: at(), Keep: nil, Target: nil, Action: unmanaged.ActionDelete, Job: "", By: "user:ada",
+		At: at(), Until: at().Add(unmanaged.PendingWait(every)), Keep: nil, Target: nil,
+		Action: unmanaged.ActionDelete, Job: "", By: "user:ada",
 	}
 
 	got, err := h.Findings.Act(t.Context(), "acme", firstFinding(t, h).ID, unmanaged.StatusOpen, unmanaged.EventAct,
@@ -793,7 +795,7 @@ func testCancelPending(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := h.Namespace(t, "acme")
-	fd := pendingFinding(t, h, f)
+	fd := pendingFinding(t, h, f, 0)
 	e := auditOf("acme", "namespace:triage-unmanaged")
 	none := unmanaged.Change{Ignore: nil, Pending: nil}
 
@@ -812,16 +814,16 @@ func testExpirePending(t *testing.T, h Harness) {
 	t.Helper()
 
 	f := h.Namespace(t, "acme")
-	pendingFinding(t, h, f)
+	pendingFinding(t, h, f, 0)
 
-	n, err := h.Findings.ExpirePending(t.Context(), "acme", at().Add(unmanaged.MaxPending-time.Minute), f)
+	n, err := h.Findings.ExpirePending(t.Context(), "acme", at().Add(unmanaged.MinPending-time.Minute), f)
 	must(t, "expire early", err)
 
 	if n != 0 {
 		t.Errorf("expired %d before the end, want 0", n)
 	}
 
-	n, err = h.Findings.ExpirePending(t.Context(), "acme", at().Add(unmanaged.MaxPending), f)
+	n, err = h.Findings.ExpirePending(t.Context(), "acme", at().Add(unmanaged.MinPending), f)
 	must(t, "expire", err)
 
 	if got := firstFinding(t, h); n != 1 || got.Status != unmanaged.StatusOpen || got.Pending != nil {
@@ -830,4 +832,27 @@ func testExpirePending(t *testing.T, h Harness) {
 
 	_, err = h.Findings.ExpirePending(t.Context(), "acme", at(), stale(f))
 	wantErr(t, "expire with a stale fence", err, namespace.ErrFenced)
+}
+
+func testExpirePendingSlowTarget(t *testing.T, h Harness) {
+	t.Helper()
+
+	// A target that sweeps every 30 days needs up to 30 days to see the
+	// result of a delete. The wait is two runs, not MinPending.
+	f := h.Namespace(t, "acme")
+	pendingFinding(t, h, f, unmanaged.MaxEvery)
+
+	n, err := h.Findings.ExpirePending(t.Context(), "acme", at().Add(unmanaged.MinPending), f)
+	must(t, "expire at the shortest wait", err)
+
+	if n != 0 {
+		t.Errorf("expired %d after %v, want 0 before two runs of the target", n, unmanaged.MinPending)
+	}
+
+	n, err = h.Findings.ExpirePending(t.Context(), "acme", at().Add(2*unmanaged.MaxEvery), f)
+	must(t, "expire after two runs", err)
+
+	if n != 1 {
+		t.Errorf("expired %d after two runs of the target, want 1", n)
+	}
 }

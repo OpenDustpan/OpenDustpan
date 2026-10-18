@@ -79,7 +79,9 @@ func (r Record) Key() (ResourceKey, error) {
 }
 
 // ParseHeader reads the header line of a report. It refuses an unknown
-// field. It returns ErrInvalidReport.
+// field, and a scope that comes twice: one provider and account scope is one
+// scope, with one Complete and one list of regions, so a complete copy cannot
+// hide a copy that failed. It returns ErrInvalidReport.
 func ParseHeader(line []byte) (ReportHeader, error) {
 	var h ReportHeader
 	if err := decodeStrict(line, &h); err != nil {
@@ -102,7 +104,28 @@ func ParseHeader(line []byte) (ReportHeader, error) {
 		}
 	}
 
+	if err := checkUniqueScopes(h.Scopes); err != nil {
+		return ReportHeader{}, err
+	}
+
 	return h, nil
+}
+
+// checkUniqueScopes reports whether each provider and account scope comes at
+// most one time in scopes. It returns ErrInvalidReport.
+func checkUniqueScopes(scopes []ReportScope) error {
+	seen := make(map[[2]string]bool, len(scopes))
+
+	for _, s := range scopes {
+		id := [2]string{s.Provider, s.Scope}
+		if seen[id] {
+			return fmt.Errorf("%w: scope %q of provider %q comes twice", ErrInvalidReport, s.Scope, s.Provider)
+		}
+
+		seen[id] = true
+	}
+
+	return nil
 }
 
 // checkReportScope reports whether s is a valid scope of a report header. It
@@ -123,8 +146,9 @@ func checkReportScope(s ReportScope) error {
 	return nil
 }
 
-// ParseRecord reads one record line of a report and normalizes its key. It
-// refuses an unknown field. It returns ErrInvalidReport, which wraps
+// ParseRecord reads one record line of a report and normalizes its key. A
+// record with no region takes the region of its key (Region). It refuses an
+// unknown field. It returns ErrInvalidReport, which wraps
 // ErrInvalidKey for an invalid key.
 func ParseRecord(line []byte) (Record, ResourceKey, error) {
 	var r Record
@@ -146,6 +170,9 @@ func ParseRecord(line []byte) (Record, ResourceKey, error) {
 	}
 
 	r.ID = key.ID
+	if r.Region == "" {
+		r.Region = Region(key)
+	}
 
 	return r, key, nil
 }
@@ -153,9 +180,14 @@ func ParseRecord(line []byte) (Record, ResourceKey, error) {
 // CheckHeaderScopes reports whether each scope of the header of a report is
 // a scope of its target: the same provider and account scope, and, when the
 // target scope lists regions, only regions that it lists. A report whose
-// header names any other scope is refused as a whole, so a runner cannot
-// widen its sweep beyond its target. It returns ErrInvalidReport.
+// header names any other scope, or names a scope twice, is refused as a
+// whole, so a runner cannot widen its sweep beyond its target. It returns
+// ErrInvalidReport.
 func CheckHeaderScopes(target []TargetScope, header []ReportScope) error {
+	if err := checkUniqueScopes(header); err != nil {
+		return err
+	}
+
 	for _, h := range header {
 		i := slices.IndexFunc(
 			target,
@@ -199,6 +231,9 @@ func CheckHeaderScopes(target []TargetScope, header []ReportScope) error {
 //     belongs to the scope that the record names, or, when the record names
 //     none, to the one scope of its provider in the header. With two or more
 //     such scopes and no name, the record is outside.
+//   - The region of a record is the region of its key (Region), else the
+//     region that the record names. A record whose region is not the region
+//     of its key is outside, as a record that names another account.
 //   - When the scope lists regions, a record with a region belongs to it only
 //     with one of them. A record with no region is a global resource, for
 //     example an IAM role, and belongs to the scope.
@@ -209,6 +244,11 @@ func RecordScope(header []ReportScope, r Record, k ResourceKey) (ReportScope, bo
 	none := ReportScope{Provider: "", Scope: "", Error: "", Regions: nil, Complete: false}
 
 	want, ok := recordAccount(r, k)
+	if !ok {
+		return none, false
+	}
+
+	region, ok := recordRegion(r, k)
 	if !ok {
 		return none, false
 	}
@@ -226,7 +266,7 @@ func RecordScope(header []ReportScope, r Record, k ResourceKey) (ReportScope, bo
 	}
 
 	sc := match[0]
-	if r.Region != "" && len(sc.Regions) > 0 && !slices.Contains(sc.Regions, r.Region) {
+	if region != "" && len(sc.Regions) > 0 && !slices.Contains(sc.Regions, region) {
 		return none, false
 	}
 
@@ -243,6 +283,22 @@ func recordAccount(r Record, k ResourceKey) (string, bool) {
 	case own == "":
 		return r.Scope, true
 	case r.Scope != "" && r.Scope != own:
+		return "", false
+	default:
+		return own, true
+	}
+}
+
+// recordRegion returns the region that record r with key k names: the region
+// of the key, else the region of the record, else empty. It returns false
+// when the record names another region than its key.
+func recordRegion(r Record, k ResourceKey) (string, bool) {
+	own := Region(k)
+
+	switch {
+	case own == "":
+		return r.Region, true
+	case r.Region != "" && r.Region != own:
 		return "", false
 	default:
 		return own, true

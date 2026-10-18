@@ -28,7 +28,9 @@ type indexed struct {
 type mem struct {
 	fences   map[namespace.Name]int64
 	pools    map[namespace.Name]map[string]string
-	links    map[namespace.Name]map[namespace.Name]bool
+	ids      map[namespace.Name]int
+	gone     map[int]bool
+	links    map[int]map[int]bool
 	index    map[graph.Unit]*indexed
 	findings map[namespace.Name]map[unmanaged.ResourceKey]*unmanaged.Finding
 	seen     map[string]map[unmanaged.ResourceKey]bool
@@ -44,7 +46,9 @@ func newMem() *mem {
 	return &mem{
 		fences:   map[namespace.Name]int64{},
 		pools:    map[namespace.Name]map[string]string{},
-		links:    map[namespace.Name]map[namespace.Name]bool{},
+		ids:      map[namespace.Name]int{},
+		gone:     map[int]bool{},
+		links:    map[int]map[int]bool{},
 		index:    map[graph.Unit]*indexed{},
 		findings: map[namespace.Name]map[unmanaged.ResourceKey]*unmanaged.Finding{},
 		seen:     map[string]map[unmanaged.ResourceKey]bool{},
@@ -477,7 +481,7 @@ func (m *mem) ExpirePending(_ context.Context, ns namespace.Name, now time.Time,
 
 	for _, f := range m.findings[ns] {
 		if f.Status == unmanaged.StatusPending && f.Pending != nil &&
-			!f.Pending.At.Add(unmanaged.MaxPending).After(now) {
+			!f.Pending.Until.After(now) {
 			m.move(f, unmanaged.EventPendingExpired)
 			n++
 		}
@@ -774,7 +778,7 @@ func (m *mem) Scans(_ context.Context, ns namespace.Name, target, after string, 
 	return out, nil
 }
 
-// Links.
+// Links. A link holds the IDs of the two namespaces, never their names.
 
 func (m *mem) Link(_ context.Context, a, b namespace.Name, e audit.Entry) error {
 	if a == b {
@@ -784,18 +788,17 @@ func (m *mem) Link(_ context.Context, a, b namespace.Name, e audit.Entry) error 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if _, ok := m.fences[a]; !ok {
+	ia, oka := m.ids[a]
+	ib, okb := m.ids[b]
+
+	if !oka || !okb || m.gone[ia] || m.gone[ib] {
 		return unmanaged.ErrNotFound
 	}
 
-	if _, ok := m.fences[b]; !ok {
-		return unmanaged.ErrNotFound
-	}
-
-	for _, p := range [][2]namespace.Name{{a, b}, {b, a}} {
+	for _, p := range [][2]int{{ia, ib}, {ib, ia}} {
 		peers := m.links[p[0]]
 		if peers == nil {
-			peers = map[namespace.Name]bool{}
+			peers = map[int]bool{}
 			m.links[p[0]] = peers
 		}
 
@@ -811,12 +814,15 @@ func (m *mem) Unlink(_ context.Context, a, b namespace.Name, e audit.Entry) erro
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if !m.links[a][b] {
+	ia, oka := m.ids[a]
+	ib, okb := m.ids[b]
+
+	if !oka || !okb || !m.links[ia][ib] {
 		return unmanaged.ErrNotFound
 	}
 
-	delete(m.links[a], b)
-	delete(m.links[b], a)
+	delete(m.links[ia], ib)
+	delete(m.links[ib], ia)
 	m.audited = append(m.audited, e)
 
 	return nil
@@ -826,7 +832,59 @@ func (m *mem) Linked(_ context.Context, ns namespace.Name) ([]namespace.Name, er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	return slices.Sorted(maps.Keys(m.links[ns])), nil
+	return slices.Sorted(maps.Keys(m.liveLinks(ns))), nil
+}
+
+func (m *mem) SetNamespaceDeleted(_ context.Context, ns namespace.Name, deleted bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id, ok := m.ids[ns]
+	if !ok {
+		return unmanaged.ErrNotFound
+	}
+
+	m.gone[id] = deleted
+
+	return nil
+}
+
+func (m *mem) DropNamespace(_ context.Context, ns namespace.Name, e audit.Entry) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	id, ok := m.ids[ns]
+	if !ok {
+		return unmanaged.ErrNotFound
+	}
+
+	for peer := range m.links[id] {
+		delete(m.links[peer], id)
+	}
+
+	delete(m.links, id)
+	m.audited = append(m.audited, e)
+
+	return nil
+}
+
+// liveLinks returns the names of the live namespaces linked with ns, or none
+// when ns is deleted. The caller holds m.mu.
+func (m *mem) liveLinks(ns namespace.Name) map[namespace.Name]bool {
+	out := map[namespace.Name]bool{}
+
+	id, ok := m.ids[ns]
+	if !ok || m.gone[id] {
+		return out
+	}
+
+	for name, peer := range m.ids {
+		if m.links[id][peer] && !m.gone[peer] {
+			out[name] = true
+		}
+	}
+
+	return out
 }
 
 func (m *mem) fenced(f namespace.Fence) error {
@@ -847,9 +905,10 @@ func (m *mem) id(prefix string) string {
 // linked with ns.
 func (m *mem) allHolders(ns namespace.Name) map[unmanaged.ResourceKey][]unmanaged.Holder {
 	out := map[unmanaged.ResourceKey][]unmanaged.Holder{}
+	linked := m.liveLinks(ns)
 
 	for u, ix := range m.index {
-		if u.Namespace != ns && !m.links[ns][u.Namespace] {
+		if u.Namespace != ns && !linked[u.Namespace] {
 			continue
 		}
 
@@ -1036,6 +1095,11 @@ func TestMem(t *testing.T) {
 				defer m.mu.Unlock()
 
 				ns := namespace.Name(name)
+				if _, ok := m.ids[ns]; !ok {
+					m.next++
+					m.ids[ns] = m.next
+				}
+
 				m.fences[ns] = 1
 				m.pools[ns] = map[string]string{
 					unmanagedtest.Pool:    unmanagedtest.PurposeSweeps,
@@ -1043,6 +1107,15 @@ func TestMem(t *testing.T) {
 				}
 
 				return namespace.Fence{Namespace: ns, FailoverVersion: 1}
+			},
+			PurgeNamespace: func(_ *testing.T, name string) {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				ns := namespace.Name(name)
+				delete(m.ids, ns)
+				delete(m.fences, ns)
+				delete(m.pools, ns)
 			},
 		}
 	})

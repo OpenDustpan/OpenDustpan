@@ -30,13 +30,16 @@ const (
 // Harness is one fresh, empty store for one subtest. The four ports share
 // one store, as the SQL adapters do. Namespace makes the namespace name, a
 // runner pool Pool and a runner pool JobPool in it, and returns the current
-// fence of the namespace.
+// fence of the namespace. PurgeNamespace deletes the namespace name, as the
+// purge of a namespace does after it calls Links.DropNamespace: a later
+// Namespace of the same name makes a new namespace with a new ID.
 type Harness struct {
-	Index     unmanaged.Index
-	Links     unmanaged.Links
-	Findings  unmanaged.FindingStore
-	Scans     unmanaged.ScanStore
-	Namespace func(t *testing.T, name string) namespace.Fence
+	Index          unmanaged.Index
+	Links          unmanaged.Links
+	Findings       unmanaged.FindingStore
+	Scans          unmanaged.ScanStore
+	Namespace      func(t *testing.T, name string) namespace.Fence
+	PurgeNamespace func(t *testing.T, name string)
 }
 
 // Factory returns a fresh harness for one subtest.

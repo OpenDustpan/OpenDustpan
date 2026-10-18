@@ -138,6 +138,28 @@ func TestNextScan(t *testing.T) {
 	}
 }
 
+func TestPendingWait(t *testing.T) {
+	t.Parallel()
+
+	const day = 24 * time.Hour
+
+	cases := []struct {
+		every, want time.Duration
+	}{
+		{0, unmanaged.MinPending},
+		{unmanaged.MinEvery, unmanaged.MinPending},
+		{7 * day, unmanaged.MinPending},
+		{10 * day, 20 * day},
+		{unmanaged.MaxEvery, 2 * unmanaged.MaxEvery},
+	}
+
+	for _, tc := range cases {
+		if got := unmanaged.PendingWait(tc.every); got != tc.want {
+			t.Errorf("PendingWait(%v) = %v, want %v", tc.every, got, tc.want)
+		}
+	}
+}
+
 func TestSpecOf(t *testing.T) {
 	t.Parallel()
 

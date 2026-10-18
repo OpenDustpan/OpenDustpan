@@ -69,11 +69,15 @@ Dusty and of the MCP server.
    For example, a caller with no `collection:read` gets the context of the
    unit and of the namespace, and a `denied` mark on the collection layer.
    - **Owners and on-call resolve over every layer.** A denied layer still
-     gives its owners and its on-call, with their provenance. It gives
-     nothing else: no summary, runbook, links, readme, warnings, shadowed
-     values or entries. Owners and on-call are not sensitive, and during an
-     incident a person who reads a unit must get the right people to call,
-     also when their role does not hold `collection:read`.
+     gives its owners and its on-call. It gives nothing else: no summary,
+     runbook, links, readme, warnings, shadowed values or entries. Owners
+     and on-call are not sensitive, and during an incident a person who
+     reads a unit must get the right people to call, also when their role
+     does not hold `collection:read`. Their provenance keeps the source and
+     the kind of the layer only: the object of the provenance has no name.
+     So a caller with no `collection:read` learns that the owners come from
+     the collection of the unit, and does not learn the name of the
+     collection.
      `objectcontext.Resolve` holds the rule (`Layer.Hidden`), and a test
      covers it. The section counts the denied layers in `hidden`.
 6. **Each tool keeps its words.** The `identity` and `changes` sections of a

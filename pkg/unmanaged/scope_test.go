@@ -38,6 +38,7 @@ func TestCheckHeaderScopes(t *testing.T) {
 		{"a scope of no target", []unmanaged.ReportScope{reportScope("333333333333")}, false},
 		{"a region of no target", []unmanaged.ReportScope{reportScope("222222222222", "us-east-1")}, false},
 		{"every region of a target with regions", []unmanaged.ReportScope{reportScope("222222222222")}, false},
+		{"a scope twice", []unmanaged.ReportScope{failedScope("111111111111"), reportScope("111111111111")}, false},
 		{"another provider", []unmanaged.ReportScope{{
 			Provider: "gcp", Scope: "111111111111", Complete: true, Error: "", Regions: nil,
 		}}, false},
@@ -82,6 +83,18 @@ func TestRecordScope(t *testing.T) {
 		},
 		{"a region outside the scope", one, "arn:aws:ec2:us-east-1:111111111111:vpc/v", "us-east-1", "", "", false},
 		{"a global resource", one, "arn:aws:iam::111111111111:role/ops", "", "", "111111111111", true},
+		{
+			"the region of the key, none in the record", one, "arn:aws:ec2:eu-west-1:111111111111:vpc/v", "", "",
+			"111111111111", true,
+		},
+		{
+			"the region of the key outside the scope", one, "arn:aws:ec2:us-east-1:111111111111:vpc/v", "", "",
+			"", false,
+		},
+		{
+			"a record that names another region than its key", one, "arn:aws:ec2:us-east-1:111111111111:vpc/v",
+			"eu-west-1", "", "", false,
+		},
 	}
 
 	for _, tc := range cases {

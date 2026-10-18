@@ -3,6 +3,8 @@ package objectcontext
 import (
 	"fmt"
 	"slices"
+
+	"opendustpan.org/opendustpan/pkg/graph"
 )
 
 // Layer is the context of one object from both sources. API and Output are
@@ -88,12 +90,14 @@ func chainOrder() []Kind {
 //     the units made from it.
 //   - The links come from every layer, the most specific first, with no
 //     second link of the same URL, up to MaxEffectiveLinks.
-//   - A hidden layer gives its owners and its on-call only, with their
-//     provenance. Its summary, runbook, links, readme, warnings and
-//     shadowed values stay out of the answer. Owners and on-call are not
-//     sensitive, and a person who reads a unit during an incident must get
-//     the right people to call, also when a role does not hold the read
-//     action of the collection or of the namespace.
+//   - A hidden layer gives its owners and its on-call only. Its summary,
+//     runbook, links, readme, warnings and shadowed values stay out of the
+//     answer. Owners and on-call are not sensitive, and a person who reads a
+//     unit during an incident must get the right people to call, also when
+//     a role does not hold the read action of the collection or of the
+//     namespace. Their provenance keeps the source and the kind of the
+//     layer only: the name of the object is blank, so the caller does not
+//     learn, for example, the name of a collection that it cannot read.
 //
 // It returns ErrInvalidObject for a chain out of order, an empty chain, or a
 // layer whose entries name another object.
@@ -125,6 +129,14 @@ func (r *Resolved) add(l *Layer, seenURL map[string]bool) (Fields, map[Field]Pro
 	eff, from, shadows := l.merge()
 
 	if l.Hidden {
+		blank := Ref{
+			Kind: l.Object.Kind, Namespace: "", Name: "", Resource: "",
+			Unit: graph.Unit{Namespace: "", Tool: "", ID: ""},
+		}
+		for f := range from {
+			from[f] = Provenance{Source: from[f].Source, Object: blank}
+		}
+
 		if l.Object.Kind != KindBlueprint {
 			r.addPeople(&eff, from)
 		}

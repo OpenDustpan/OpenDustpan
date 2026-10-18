@@ -142,6 +142,16 @@ func TestParseHeader(t *testing.T) {
 		},
 		{"no scope", `{"format":"opendustpan-sweep-report","version":1,"scopes":[]}`, false},
 		{
+			"a scope twice",
+			`{"format":"opendustpan-sweep-report","version":1,"scopes":[{"provider":"aws","scope":"1","complete":false,"error":"x"},{"provider":"aws","scope":"1","complete":true}]}`,
+			false,
+		},
+		{
+			"one scope name of two providers",
+			`{"format":"opendustpan-sweep-report","version":1,"scopes":[{"provider":"aws","scope":"1","complete":true},{"provider":"gcp","scope":"1","complete":true}]}`,
+			true,
+		},
+		{
 			"unknown field",
 			`{"format":"opendustpan-sweep-report","version":1,"scopes":[{"provider":"aws","scope":"1","complete":true}],"x":1}`,
 			false,
@@ -195,6 +205,40 @@ func TestParseRecord(t *testing.T) {
 		if err == nil && (key.ID != tc.keyID || rec.ID != tc.keyID) {
 			t.Errorf("%s: key %q record %q, want %q", tc.name, key.ID, rec.ID, tc.keyID)
 		}
+	}
+}
+
+func TestRegion(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		key  unmanaged.ResourceKey
+		want string
+	}{
+		{unmanaged.ResourceKey{Provider: "aws", ID: "arn:aws:ec2:eu-west-1:111111111111:vpc/v"}, "eu-west-1"},
+		{unmanaged.ResourceKey{Provider: "aws", ID: "arn:aws:iam::111111111111:role/ops"}, ""},
+		{unmanaged.ResourceKey{Provider: "aws", ID: bucketARN}, ""},
+		{unmanaged.ResourceKey{
+			Provider: "gcp", ID: "//compute.googleapis.com/projects/p/regions/europe-west1/subnetworks/s",
+		}, "europe-west1"},
+		{unmanaged.ResourceKey{
+			Provider: "gcp", ID: "//compute.googleapis.com/projects/p/zones/europe-west1-b/instances/i",
+		}, ""},
+		{unmanaged.ResourceKey{Provider: "azure", ID: "/subscriptions/a/resourcegroups/b"}, ""},
+	}
+
+	for _, tc := range cases {
+		if got := unmanaged.Region(tc.key); got != tc.want {
+			t.Errorf("Region(%s) = %q, want %q", tc.key, got, tc.want)
+		}
+	}
+
+	// A record with no region takes the region of its key.
+	rec, _, err := unmanaged.ParseRecord(
+		[]byte(`{"provider":"aws","id":"arn:aws:ec2:eu-west-1:111111111111:vpc/v","type":"AWS::EC2::VPC"}`),
+	)
+	if err != nil || rec.Region != "eu-west-1" {
+		t.Errorf("record %+v, %v; want the region eu-west-1 of its key", rec, err)
 	}
 }
 

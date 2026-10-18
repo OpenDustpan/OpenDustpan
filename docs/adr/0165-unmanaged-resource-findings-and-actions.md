@@ -84,12 +84,21 @@ Facts:
      was a mistake. It does not cancel the job of the action: the person
      cancels the job with the actions of the job (ADR 103). The end of that
      job then finds the finding open, and its `action-ended` changes nothing.
-   - A **pending-expired** ends a wait after 15 days
-     (`unmanaged.MaxPending`). The schedule of ADR 164 applies it every 15
-     minutes (`FindingStore.ExpirePending`). So an action whose job or sweep
-     never came does not hide a finding for ever. The time is longer than the
-     14 days after which a job that waits for a state version expires
-     (ADR 101), so the job ends first, with `action-ended`.
+   - A **pending-expired** ends a wait at its end time
+     (`Pending.Until`). The wait is the longer of 15 days
+     (`unmanaged.MinPending`) and two times the `every` of the target that
+     sweeps the finding: the longest `every` of the enabled targets whose
+     scopes cover the finding (`unmanaged.PendingWait`). A target that
+     sweeps every 30 days needs up to 30 days to see the result of a
+     delete, so its findings wait 60 days, and the wait allows one missed
+     run. The action sets the end time when it starts, so a later change of
+     the target does not move it. The schedule of ADR 164 applies it every
+     15 minutes (`FindingStore.ExpirePending`). So an action whose job or
+     sweep never came does not hide a finding for ever. The shortest wait is
+     longer than the 14 days after which a job that waits for a state
+     version expires (ADR 101), so the job ends first, with `action-ended`.
+     The suite holds a case for the shortest wait and one for a target of
+     30 days, and a test holds `PendingWait`.
 5. **The status that the caller read.** An action names the status that the
    person saw. The store refuses the action when the status changed
    (`ErrStatusChanged`), so two people never act on one finding at the same

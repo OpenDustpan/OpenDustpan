@@ -119,8 +119,8 @@ type Contest struct {
 // replaces the entries once. Every write checks the fence of the namespace of
 // the unit. Every adapter runs the suite in unmanagedtest.
 //
-// The reads see the units of one namespace and of the namespaces linked with
-// it (Links), never any other. So a namespace cannot learn which keys the
+// The reads see the units of one namespace and of the live namespaces linked
+// with it (Links), never any other. So a namespace cannot learn which keys the
 // units of another namespace hold, and cannot change the findings of a
 // namespace that did not link it.
 type Index interface {
@@ -164,17 +164,46 @@ type Index interface {
 // needs ActionServerLinkNamespaces. A link is installation data: its writes
 // append their audit entry in the same transaction, and carry no namespace
 // fence. Every adapter runs the suite in unmanagedtest.
+//
+// A link holds the stable IDs of its two namespaces, never their names. Each
+// method resolves a name to the ID of the namespace that holds the name now.
+// So a namespace that is created later under the name of a purged namespace
+// has a new ID and gets no link of the purged one.
+//
+// A link classifies only while both of its namespaces are live. While one of
+// them is soft deleted, the link stays stored and classifies nothing: Linked
+// leaves it out, and Index.Holders and Index.Contested answer no holder of
+// the deleted namespace. The link stays only so that a restore of the
+// namespace in its recovery window brings it back.
 type Links interface {
 	// Link links a and b, in both directions, and appends e. A link that
 	// exists is not an error. It returns ErrInvalidLink for a namespace
-	// linked with itself and ErrNotFound for an unknown namespace.
+	// linked with itself and ErrNotFound for an unknown or deleted
+	// namespace.
 	Link(ctx context.Context, a, b namespace.Name, e audit.Entry) error
-	// Unlink removes the link of a and b and appends e. The findings that
-	// the link made stay until the next state check, which reads the units
-	// of each namespace alone. It returns ErrNotFound when no link exists.
+	// Unlink removes the link of a and b and appends e. It returns
+	// ErrNotFound when no link exists. Then Index.Holders and
+	// Index.Contested of each namespace leave out the units of the other at
+	// once. The findings that the link made change at the next sweep that
+	// observes their keys: the next state check of each namespace resolves a
+	// finding of managed twice that the link made, and a finding of not in
+	// any unit that the link resolved stays resolved until the next cloud
+	// sweep of its scope, up to MaxEvery later.
 	Unlink(ctx context.Context, a, b namespace.Name, e audit.Entry) error
-	// Linked returns the namespaces linked with ns, ordered by name.
+	// Linked returns the live namespaces linked with ns, ordered by name. It
+	// returns none for a deleted ns.
 	Linked(ctx context.Context, ns namespace.Name) ([]namespace.Name, error)
+	// SetNamespaceDeleted marks the namespace ns as deleted or live for its
+	// links. The soft delete and the restore of the namespace call it in
+	// their own transaction. The links of a deleted namespace stop to
+	// classify at once, and a restore brings them back. It returns
+	// ErrNotFound for an unknown namespace.
+	SetNamespaceDeleted(ctx context.Context, ns namespace.Name, deleted bool) error
+	// DropNamespace deletes every link of ns and appends e, also when ns has
+	// no link. The purge of the namespace calls it in its own transaction,
+	// before it deletes the namespace. It returns ErrNotFound for an unknown
+	// namespace.
+	DropNamespace(ctx context.Context, ns namespace.Name, e audit.Entry) error
 }
 
 // Observation is the class of one key in one sweep. Record is the record of a
@@ -268,8 +297,8 @@ type FindingStore interface {
 	// namespace.ErrFenced.
 	ExpireIgnores(ctx context.Context, ns namespace.Name, now time.Time, fence namespace.Fence) (int64, error)
 	// ExpirePending applies EventPendingExpired to each pending finding of
-	// ns whose action started at or before now minus MaxPending. It returns
-	// the count, and namespace.ErrFenced.
+	// ns whose wait ended at or before now (Pending.Until). It returns the
+	// count, and namespace.ErrFenced.
 	ExpirePending(ctx context.Context, ns namespace.Name, now time.Time, fence namespace.Fence) (int64, error)
 	// PutRule creates the rule r and appends e. It returns ErrInvalidRule,
 	// ErrInvalidReason, ErrAlreadyExists for a taken ID, ErrLimit above

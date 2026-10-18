@@ -154,6 +154,10 @@ Facts from the job model:
       the target lists regions. The match refuses a report whose header
       names any other scope, and the sweep fails
       (`unmanaged.CheckHeaderScopes`).
+    - **Each scope comes one time.** The parser refuses a header that names
+      one provider and account scope twice (`unmanaged.ParseHeader`). Else a
+      complete copy of a scope could hide a copy that failed, and the match
+      would resolve findings that the sweep did not see.
     - **The match drops a record outside the header.** It gives each
       record the scope of the header that it belongs to
       (`unmanaged.RecordScope`), and drops the record when there is none.
@@ -164,7 +168,14 @@ Facts from the job model:
       sweep that saw it: the scope that the record names, or the one scope
       of its provider in the header. With two or more such scopes and no
       name, the match drops the record. A finding keeps that scope and the region
-      of the record. A finding from a state check of such a key has no scope
+      of the record.
+    - **The region of the key wins.** Where the key names a region (field 4
+      of an AWS ARN, the segment after `/regions/` of a Google Cloud full
+      resource name), the record takes that region (`unmanaged.Region`). A
+      record that names another region than its key is outside the header,
+      as a record that names another account than its key, and the match
+      drops it. So a runner cannot move a finding to a region that the
+      sweep does not cover, or out of one that it covers. A finding from a state check of such a key has no scope
       until a sweep sees it, and no sweep resolves it before.
     - **A complete scope.** A scope with `complete: false` had an error, for
       example a region that refused the credentials. The server never

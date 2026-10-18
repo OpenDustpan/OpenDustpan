@@ -1,8 +1,10 @@
 package unmanagedtest
 
 import (
+	"slices"
 	"testing"
 
+	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/unmanaged"
 )
@@ -16,6 +18,209 @@ func linkCases() []suiteCase {
 		{"links: a namespace cannot enumerate the keys of another", testLinkEnumeration},
 		{"links: another namespace cannot resolve a finding in silence", testLinkSilentResolve},
 		{"links: another namespace cannot flood findings of managed twice", testLinkFlooding},
+		{"links: an unlink leaves out the other namespace and the state check resolves", testUnlinkResolves},
+		{"links: a namespace under a purged name gets no link", testLinkPurgedName},
+		{"links: a soft delete of a namespace stops its links at once", testLinkSoftDelete},
+		{"links: a restore of a namespace brings its links back", testLinkRestore},
+	}
+}
+
+// linkedPair makes the namespaces acme and other, links them, and makes a
+// unit of each that holds key. It returns the fence of acme.
+func linkedPair(t *testing.T, h Harness, key unmanaged.ResourceKey) namespace.Fence {
+	t.Helper()
+
+	acme, other := h.Namespace(t, "acme"), h.Namespace(t, "other")
+	a, x := Unit("acme", "a"), Unit("other", "x")
+
+	must(t, "replace a", h.Index.ReplaceUnit(t.Context(), a, 1, []unmanaged.IndexEntry{entry(a, key)}, acme))
+	must(t, "replace x", h.Index.ReplaceUnit(t.Context(), x, 1, []unmanaged.IndexEntry{entry(x, key)}, other))
+	must(t, "link", h.Links.Link(t.Context(), "acme", "other", auditOf("", "server:link-namespaces")))
+
+	return acme
+}
+
+// stateCheck runs a state check of acme as the server does: it classifies
+// the contested keys and the key of each finding that is not resolved,
+// records them, resolves the findings that it did not observe, and ends the
+// sweep.
+func stateCheck(t *testing.T, h Harness, acme namespace.Fence) {
+	t.Helper()
+
+	contested, err := h.Index.Contested(t.Context(), "acme", unmanaged.ResourceKey{Provider: "", ID: ""}, 10)
+	must(t, "contested", err)
+
+	var keys []unmanaged.ResourceKey
+	for _, c := range contested {
+		keys = append(keys, c.Key)
+	}
+
+	all := listAll(t, h)
+	for i := range all {
+		if all[i].Status != unmanaged.StatusResolved && !slices.Contains(keys, all[i].Key) {
+			keys = append(keys, all[i].Key)
+		}
+	}
+
+	s := matchingScan(t, h, acme, unmanaged.ScanState, nil)
+	if len(keys) > 0 {
+		_, err = h.Findings.Record(t.Context(), s, classify(t, h, nil, keys...), at(), acme)
+		must(t, "record", err)
+	}
+
+	_, err = h.Findings.ResolveUnseen(t.Context(), s, at(), acme)
+	must(t, "resolve unseen", err)
+
+	_, err = h.Scans.AdvanceScan(t.Context(), "acme", s.ID, unmanaged.ScanEventMatched,
+		unmanaged.ScanUpdate{Scopes: nil, Counts: nil, Reason: ""}, acme, auditOf("acme", "namespace:start-sweep"))
+	must(t, "end the state check", err)
+}
+
+// wantHolders checks that the holders of key in ns are exactly the units of
+// want, and that the contests of ns name only units of want.
+func wantHolders(t *testing.T, h Harness, ns namespace.Name, key unmanaged.ResourceKey, want ...graph.Unit) {
+	t.Helper()
+
+	got, err := h.Index.Holders(t.Context(), ns, []unmanaged.ResourceKey{key})
+	must(t, "holders", err)
+
+	units := make([]graph.Unit, 0, len(got[key]))
+	for _, hd := range got[key] {
+		units = append(units, hd.Unit)
+	}
+
+	if !slices.Equal(units, want) {
+		t.Errorf("holders of %s in %s: %v, want %v", key, ns, units, want)
+	}
+
+	contested, err := h.Index.Contested(t.Context(), ns, unmanaged.ResourceKey{Provider: "", ID: ""}, 10)
+	must(t, "contested", err)
+
+	for _, c := range contested {
+		for _, hd := range c.Holders {
+			if !slices.Contains(want, hd.Unit) {
+				t.Errorf("contest of %s in %s names %s, want only %v", c.Key, ns, hd.Unit, want)
+			}
+		}
+	}
+}
+
+func testUnlinkResolves(t *testing.T, h Harness) {
+	t.Helper()
+
+	key := AWSKey("shared")
+	acme := linkedPair(t, h, key)
+	a, x := Unit("acme", "a"), Unit("other", "x")
+
+	stateCheck(t, h, acme)
+
+	if fd := firstFinding(t, h); fd.Kind != unmanaged.KindManagedTwice || fd.Status != unmanaged.StatusOpen ||
+		!fd.Elsewhere {
+		t.Fatalf("finding %+v with a link, want open, managed twice and elsewhere", fd)
+	}
+
+	must(t, "unlink", h.Links.Unlink(t.Context(), "acme", "other", auditOf("", "server:link-namespaces")))
+
+	// The reads leave out the other namespace at once.
+	wantHolders(t, h, "acme", key, a)
+	wantHolders(t, h, "other", key, x)
+
+	// The next state check observes the key again: one live unit of acme
+	// holds it, and the finding resolves.
+	stateCheck(t, h, acme)
+
+	if fd := firstFinding(t, h); fd.Status != unmanaged.StatusResolved {
+		t.Errorf("finding %+v after the unlink and a state check, want resolved", fd)
+	}
+}
+
+func testLinkPurgedName(t *testing.T, h Harness) {
+	t.Helper()
+
+	key := AWSKey("shared")
+	linkedPair(t, h, key)
+	a := Unit("acme", "a")
+
+	// The purge of other drops its units and its links, then deletes it.
+	must(t, "drop x", h.Index.DropUnit(t.Context(), Unit("other", "x"), namespace.Fence{
+		Namespace: "other", FailoverVersion: 1,
+	}))
+	must(t, "drop the links", h.Links.DropNamespace(t.Context(), "other", auditOf("", "server:purge-namespace")))
+
+	if got, err := h.Links.Linked(t.Context(), "acme"); err != nil || len(got) != 0 {
+		t.Errorf("linked with acme after the purge dropped the links: %v, %v; want none", got, err)
+	}
+
+	h.PurgeNamespace(t, "other")
+
+	// A new namespace under the name gets nothing of the purged one.
+	other := h.Namespace(t, "other")
+	y := Unit("other", "y")
+	must(t, "replace y", h.Index.ReplaceUnit(t.Context(), y, 1, []unmanaged.IndexEntry{entry(y, key)}, other))
+
+	for _, ns := range []namespace.Name{"acme", "other"} {
+		got, err := h.Links.Linked(t.Context(), ns)
+		must(t, "linked", err)
+
+		if len(got) != 0 {
+			t.Errorf("linked with %s after the purge: %v, want none", ns, got)
+		}
+	}
+
+	wantHolders(t, h, "acme", key, a)
+	wantHolders(t, h, "other", key, y)
+}
+
+// softDeleteOther soft deletes the namespace other of linkedPair and checks
+// that its link classifies nothing.
+func softDeleteOther(t *testing.T, h Harness, key unmanaged.ResourceKey) {
+	t.Helper()
+
+	must(t, "soft delete", h.Links.SetNamespaceDeleted(t.Context(), "other", true))
+
+	got, err := h.Links.Linked(t.Context(), "acme")
+	must(t, "linked", err)
+
+	if len(got) != 0 {
+		t.Errorf("linked with acme while other is deleted: %v, want none", got)
+	}
+
+	wantHolders(t, h, "acme", key, Unit("acme", "a"))
+
+	obs := classify(t, h, nil, key)
+	if obs[0].Class != unmanaged.ClassManaged {
+		t.Errorf("class of %s while other is deleted: %s, want managed", key, obs[0].Class)
+	}
+}
+
+func testLinkSoftDelete(t *testing.T, h Harness) {
+	t.Helper()
+
+	key := AWSKey("shared")
+	linkedPair(t, h, key)
+	softDeleteOther(t, h, key)
+}
+
+func testLinkRestore(t *testing.T, h Harness) {
+	t.Helper()
+
+	key := AWSKey("shared")
+	linkedPair(t, h, key)
+	softDeleteOther(t, h, key)
+
+	must(t, "restore", h.Links.SetNamespaceDeleted(t.Context(), "other", false))
+
+	got, err := h.Links.Linked(t.Context(), "acme")
+	must(t, "linked", err)
+
+	if !slices.Equal(got, []namespace.Name{"other"}) {
+		t.Errorf("linked with acme after the restore: %v, want other", got)
+	}
+
+	wantHolders(t, h, "acme", key, Unit("acme", "a"), Unit("other", "x"))
+
+	if obs := classify(t, h, nil, key); obs[0].Class != unmanaged.ClassManagedTwice {
+		t.Errorf("class of %s after the restore: %s, want managed twice", key, obs[0].Class)
 	}
 }
 
