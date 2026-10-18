@@ -1,6 +1,6 @@
 # 127. Agent context comes from a reserved output and object metadata
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17 · the output schema and its parser superseded in part by ADR 160
 
 ## Context
 

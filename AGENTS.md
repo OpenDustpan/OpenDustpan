@@ -61,6 +61,16 @@ pkg/                   the public SDK (ADR 35)
   identity/            ports: Authenticator, Authorizer; bootstrap StaticToken, AdminOnly
   blob/                port: object storage; blob/fs and blob/s3 adapters; blob/blobtest suite
   backup/              domain: backup ports (export, import, registry) and the table list
+  history/             domain: unit history, redaction, item keys of history items, tombstones, retention
+  dependency/          domain: dependency edges between units, dependents window, safe delete
+  job/                 domain: jobs, phases, gates, executors (write-back, runners) on durable operations
+  runner/              domain: runner pools, runners, claims and the runner protocol (runner/protocol)
+  launcher/            domain: the launcher contract (a static binary that runs the steps of one claim)
+  source/              domain: source snapshots, the source policy and checks of fetched code
+  agent/               domain: Dusty, the built-in agent: runs, turns, tools, the MCP endpoint
+  objectcontext/       domain: context on every object and the context read API
+  graph/               domain: the unit graph, blast radius and focus view
+  unmanaged/           domain: the resource index, Sweep and findings of unmanaged resources
   store/               SQL adapters: sqlite/, postgres/; storetest/ conformance suite
 internal/              code that is not part of the SDK
   api/pulumi/          HTTP adapter for the Pulumi Cloud-compatible API (also used by the console)
@@ -98,7 +108,9 @@ The web console lives in its own repository, `OpenDustpan/console` (ADR 8).
 
 ## Backend rules (Go)
 
-- Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`) never import
+- Domain packages (`namespace`, `stack`, `secret`, `workspace`, `identity`, `blob`, `backup`,
+  `history`, `dependency`, `job`, `runner`, `launcher`, `source`, `agent`, `objectcontext`, `graph`,
+  `unmanaged`) never import
   `net/http`, `database/sql`, drivers, `pkg/store/...` or `internal/api/...`. depguard enforces this.
 - Define interfaces (ports) in the package that consumes them. Keep them
   small, and document them with the errors they return.

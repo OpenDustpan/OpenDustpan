@@ -1,6 +1,6 @@
 # 38. Restore through the server, in maintenance mode
 
-Status: accepted · 2026-10-11
+Status: accepted · 2026-10-11 · superseded in part by ADR 151 (expected gaps)
 
 ## Context
 

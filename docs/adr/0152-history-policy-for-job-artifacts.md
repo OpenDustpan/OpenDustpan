@@ -51,7 +51,7 @@ This ADR and ADR 102 now split the work, so that one design remains.
    `--plan-retention` (`DUSTPAN_PLAN_RETENTION`) and `--job-log-retention`
    (`DUSTPAN_JOB_LOG_RETENTION`). The minimum is one day
    (`history.MinRetention`, 24 hours), so that a typing error cannot shred
-   every plan and log at the next sweep. The `history` package holds these
+   every plan and log at the next expiry run. The `history` package holds these
    values in Go: the two durations, the four setting names
    (`history.PlanRetentionFlag`, `history.PlanRetentionEnv`,
    `history.JobLogRetentionFlag`, `history.JobLogRetentionEnv`), the type
@@ -66,19 +66,19 @@ This ADR and ADR 102 now split the work, so that one design remains.
    the item. A new period applies to new items only. So a change of a
    setting never makes an item expire at once. The period starts at the
    creation of the item, not at the end of its job.
-5. **The end of the period is a redaction.** The retention sweep finds each
+5. **The end of the period is a redaction.** The retention expiry finds each
    plan and each log version whose expiry time is in the past. It redacts
    each one through the `Redactor` of the job model, on the path of
    ADR 151 decisions 15 and 16, with the actor `@server`, the cause
    `retention` and the reason `retention period ended`. The audit entry has
    the shape of ADR 151 decision 26, with the action `unit:redact`. The
-   metadata stays. The sweep also redacts the current version of a job
+   metadata stays. The expiry also redacts the current version of a job
    log when its period ends: retention may expire the current version, a
    request may not (decision 9, ADR 151 decision 14).
 6. **Plans of a job that has not ended.** A plan of a job that has not
    ended does not expire before the end of its job. This covers a plan that
    an open approval names (ADR 103). When the job ends after the expiry
-   time, the next sweep redacts the plan.
+   time, the next expiry run redacts the plan.
 7. **The metadata stays until the purge.** The rows of expired and
    redacted plans and log versions stay until the final delete of the unit
    (ADR 47). They hold sizes, hashes, times and actors, never content. No
@@ -167,7 +167,7 @@ and the `job` package must use them:
 
 - Plans and job logs grow the blob store until their retention period ends.
   The sizing guide states the growth for each job.
-- The retention sweep writes one audit entry for each expired item.
+- The retention expiry writes one audit entry for each expired item.
 - The `history` package holds no type and no port for plans or job logs.
   The job model holds them. The `history` package holds the retention
   defaults, the minimum, the setting names and the check of decision 3,
@@ -177,7 +177,7 @@ and the `job` package must use them:
 - Open work, with the job model of ADRs 100 to 103:
   1. The `Redactor` of the job model, with `historytest.RunRedactor`.
   2. The flags of the retention settings with the names of decision 3, the
-     expiry time of each item and the sweep step.
+     expiry time of each item and the expiry step.
   3. The role table change of decision 11.
 
 ## Answered questions

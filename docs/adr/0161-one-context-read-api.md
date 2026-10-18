@@ -1,6 +1,6 @@
 # 161. One tool-neutral context read API
 
-Status: proposed · 2026-10-17
+Status: accepted · 2026-10-17
 
 ## Context
 
@@ -188,6 +188,6 @@ collection (decision 5):
 2. **Drift.** RFC 25 proposes drift detection. When it exists, does drift go
    into `health`, or into a section of its own?
 3. **Cost.** RFC 45 proposes cost estimation. Is cost a section?
-4. **Resource dependents.** ADR 153 decision 15 answers the dependents of a
+4. **Resource dependents.** ADR 153 decision 16 answers the dependents of a
    resource inside its unit. Does the `dependencies` section of a resource
    answer them, or only the unit edges?

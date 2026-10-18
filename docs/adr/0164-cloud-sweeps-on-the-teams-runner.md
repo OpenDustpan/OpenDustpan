@@ -1,6 +1,6 @@
 # 164. Cloud sweeps on the team's runner, with the runner's read-only identity
 
-Status: proposed · 2026-10-17 · adds to ADR 101 (runner pools and the runner protocol)
+Status: accepted · 2026-10-17 · adds to ADR 101 (runner pools and the runner protocol)
 
 ## Context
 
@@ -280,7 +280,9 @@ Facts from the job model:
     - `GET /api/unmanaged/{namespace}/sweeps/{id}`
     - `POST /api/unmanaged/{namespace}/sweeps/{id}/cancel`
     - In the runner protocol: the claim of a sweep, and
-      `PUT /runner/v1/sweeps/{id}/report` for the upload.
+      `PUT /runner/v1/session/sweep-report` for the upload (ADR 131). The
+      path is in the session scope, so only the session key of the claim
+      can upload. The upload ends the claim (`runner.SweepClaimer.Report`).
 
 ## Consequences
 
