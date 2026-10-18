@@ -1,0 +1,225 @@
+package catalog
+
+import (
+	"context"
+	"encoding/json"
+	"time"
+
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/job"
+	"opendustpan.org/opendustpan/pkg/namespace"
+)
+
+// Store is the persistence port for requests and their revisions. Each SQL
+// store adapter implements it in its own SQL and runs the suite in package
+// catalogtest. Each write checks fence in its transaction and returns an
+// error that wraps namespace.ErrFenced when the fence is stale, and appends
+// its audit entries in the same transaction.
+type Store interface {
+	// Submit stores s: it creates the request at its first revision, with
+	// s.Request.Version 0, or updates it at s.Request.Version, and stores
+	// the revision in StateAccepted with the durable operation of KindStart
+	// and the start key of Revision.Key, in one transaction. The store sets
+	// the ID of a new request, the number of the revision, which is the
+	// last number plus 1, and Request.Last. It returns ErrConflict when the
+	// request is not at s.Request.Version, also for a create of a request
+	// that exists, and ErrInFlight when a revision of the request has not
+	// ended.
+	Submit(ctx context.Context, s *Submission, fence namespace.Fence) (Request, Revision, error)
+	// Get returns the request ref, or ErrNotFound.
+	Get(ctx context.Context, ref RequestRef) (Request, error)
+	// Revision returns revision n of the request id, or ErrNotFound.
+	Revision(ctx context.Context, id RequestID, n int) (Revision, error)
+	// ListRequests returns the requests that f selects, by ID.
+	ListRequests(ctx context.Context, f ListFilter) ([]Request, error)
+	// Change applies c to the revision c.Number of the request c.Ref, with
+	// CheckTransition, at c.Version of the request, and appends e, in one
+	// transaction. A change to StateApplied also sets Request.Applied and
+	// Request.Ensure. A change to a terminal state of a create starts the
+	// durable operation of KindQuota, with the start key of QuotaKey. It returns ErrNotFound, ErrConflict,
+	// and the errors of CheckTransition.
+	Change(ctx context.Context, c RevisionChange, fence namespace.Fence, e []audit.Entry) (Revision, error)
+	// ObserveStateVersion applies a final state version to the revision from
+	// git that waits for it, in the transaction of the state write: the
+	// revision of the unit of v in StateAwaitingState with no job, whose
+	// commit is the commit of v, or, when v has no commit, whose render was
+	// at or before v. That revision becomes StateApplied. It returns the
+	// revision that changed, and false when none did.
+	ObserveStateVersion(ctx context.Context, v job.StateVersion, fence namespace.Fence) (Revision, bool, error)
+}
+
+// BlueprintStore is the persistence port for blueprints: one draft and the
+// published versions of each. It runs the suite in package catalogtest.
+// Each write checks fence and appends its audit entries in its transaction.
+type BlueprintStore interface {
+	// PutDraft writes the draft of b in the namespace of fence, at version
+	// of the draft that the caller read, 0 for a new blueprint. It returns
+	// the new version of the draft, ErrConflict for a stale version, and
+	// ErrLimit above the blueprints of a namespace.
+	PutDraft(ctx context.Context, b Blueprint, version int64, fence namespace.Fence, e []audit.Entry) (int64, error)
+	// Draft returns the draft of ref and its version, or ErrNotFound.
+	Draft(ctx context.Context, ref BlueprintRef) (Blueprint, int64, error)
+	// Publish stores b, the draft of ref at version as the caller checked
+	// it, as the next published version, from 1. It returns ErrConflict when
+	// the draft is no longer at version, and ErrLimit above the published
+	// versions of a blueprint.
+	Publish(ctx context.Context, p Publication, fence namespace.Fence, e []audit.Entry) (Version, error)
+	// Version returns the published version n of ref, or ErrNotFound.
+	Version(ctx context.Context, ref BlueprintRef, n int) (Version, error)
+	// ListBlueprints returns the newest published version of each blueprint
+	// of ns, by name. A blueprint with no published version is not in it.
+	ListBlueprints(ctx context.Context, ns namespace.Name) ([]Version, error)
+	// Retire marks the version n of ref retired. A retire of a retired
+	// version changes nothing. It returns ErrNotFound.
+	Retire(ctx context.Context, ref BlueprintRef, n int, fence namespace.Fence, e []audit.Entry) error
+	// SetExprVersion records that the version n of ref compiles with the
+	// Expr version expr. It returns ErrNotFound.
+	SetExprVersion(ctx context.Context, ref BlueprintRef, n int, expr string, fence namespace.Fence) error
+}
+
+// Publication is one publish: the draft of Ref at DraftVersion, as the
+// caller checked and compiled it, with the Expr version that compiled it.
+type Publication struct {
+	At           time.Time
+	Ref          BlueprintRef
+	By           string
+	Blueprint    Blueprint
+	DraftVersion int64
+}
+
+// Provision is what UnitProvisioner.Provision makes: the unit of a request,
+// of the tool of the blueprint, with the name that the blueprint computed.
+type Provision struct {
+	Request   RequestID
+	Tool      string
+	Unit      string
+	Ref       RequestRef
+	Blueprint BlueprintRef
+	Version   int
+}
+
+// UnitProvisioner makes and deletes the unit of a request. The internal
+// wiring implements it with each tool package, so no tool package imports
+// this package.
+type UnitProvisioner interface {
+	// Provision makes an empty unit for p: a Pulumi stack or an OpenTofu
+	// workspace with no state, and records the blueprint of the unit for
+	// the inventory. It is idempotent by p.Request: a second call returns
+	// the unit of the first. It returns the unit reference with its stable
+	// unit ID set, and ErrUnitName for a name that the tool refuses or a
+	// unit that another request or no request owns.
+	Provision(ctx context.Context, p Provision) (identity.Object, error)
+	// Remove deletes the unit of request id when it has no state version.
+	// A remove of a unit that does not exist changes nothing. It returns
+	// ErrHasState for a unit with a state version, which stays.
+	Remove(ctx context.Context, unit identity.Object, id RequestID) error
+}
+
+// File is one file of a render, with a path below the render directory.
+type File struct {
+	Path    string `json:"path"`
+	Content []byte `json:"content"`
+}
+
+// RenderInput is what a Renderer renders: a document of a request, the
+// blueprint version that it pins, and the unit.
+type RenderInput struct {
+	Version  *Version
+	Document *Document
+	Unit     identity.Object
+}
+
+// Rendered is the result of a render: the operation that the tool runs,
+// the files, and the config keys that the files set, for the one-home check
+// against the other homes of the unit.
+type Rendered struct {
+	Operation Operation `json:"operation"`
+	Files     []File    `json:"files"`
+	Keys      []string  `json:"keys"`
+}
+
+// Renderer turns a revision into the files of one tool: an OpenTofu root
+// module of one module call and its variables file, or a Pulumi YAML
+// program of one component resource and its stack settings. Each tool has
+// one adapter in the internal wiring. Two renders of one input give the
+// same bytes. A render never holds a secret value: secrets come from the
+// profile of the blueprint at run time.
+type Renderer interface {
+	// Tool returns the tool name that the renderer renders for.
+	Tool() string
+	// Render returns the files of in. It returns ErrOneHome, naming the key
+	// and both homes, for a key that another home of the unit also sets,
+	// for example a stack settings file that the team wrote.
+	Render(ctx context.Context, in RenderInput) (Rendered, error)
+}
+
+// SubmitRequest is the body of a submit: the document, the reason of the
+// change, and an optional break-glass through an active freeze.
+// IdempotencyKey makes a retry safe.
+type SubmitRequest struct {
+	BreakGlass     *job.BreakGlass
+	Document       Document
+	Reason         string
+	IdempotencyKey string
+	Channel        audit.Channel
+}
+
+// SubmitResult is the answer of a submit. Unchanged is true when the
+// document equals the last applied revision, which then is Revision and
+// has no new job.
+type SubmitResult struct {
+	Request   Request
+	Revision  Revision
+	Unchanged bool
+}
+
+// OptionsQuery asks for the options of the choices of a blueprint version
+// with the answers so far.
+type OptionsQuery struct {
+	Answers   map[string]json.RawMessage
+	Blueprint BlueprintRef
+	Version   int
+}
+
+// Service is what the REST API and every feature of the server that sends
+// Catalog requests call. It checks the actions of Requirements, runs the
+// checks at each recheck point, writes the audit entries, and starts jobs
+// through job.Service. Each method that takes a request returns ErrNotFound
+// when the principal lacks catalog:read on the unit of the request.
+type Service interface {
+	// Submit checks req at PointSubmit and stores a revision. It returns a
+	// *CheckError that matches ErrCheckFailed with every failure, ErrInFlight,
+	// job.ErrFrozen for a submit during a freeze with no break-glass, an
+	// error that wraps identity.ErrDenied for a missing action, and an error
+	// that wraps policy.ErrUnavailable or ErrSourceUnavailable for a check
+	// that cannot run.
+	Submit(ctx context.Context, a job.Actor, req SubmitRequest) (SubmitResult, error)
+	// Check runs the checks of PointSubmit on d and stores nothing. It
+	// returns the failures, and the errors of Submit for a check that
+	// cannot run.
+	Check(ctx context.Context, a job.Actor, d Document) ([]Failure, error)
+	// Options returns the options of each choice input of q, in the order
+	// of Order.
+	Options(ctx context.Context, a job.Actor, q OptionsQuery) ([]OptionSet, error)
+	// Render checks d at PointApply and returns its files, for the team's
+	// CI. commit is the commit of the checkout. A document that differs
+	// from the last revision stores a revision from git. It returns a
+	// *CheckError and ErrInFlight as Submit does.
+	Render(ctx context.Context, a job.Actor, d Document, commit string) (Rendered, error)
+	// Get returns the request ref.
+	Get(ctx context.Context, a job.Actor, ref RequestRef) (Request, error)
+	// Cancel cancels the revision in flight of ref through job.Service, and
+	// returns the error of the job model, for example job.ErrDelivered.
+	Cancel(ctx context.Context, a job.Actor, ref RequestRef, reason string) (Revision, error)
+}
+
+// Rechecker is what the job model calls before it records an approval and
+// before the dispatch of a phase that changes, for a job with a Catalog
+// origin. It checks the revision key of the job at point. It returns a
+// *CheckError for a failure, which rejects the job, ErrPolicyChanged for a
+// policy that asks for more approvals than the job has, and another error
+// for a check that cannot run, which leaves the job as it is.
+type Rechecker interface {
+	Recheck(ctx context.Context, revision string, point RecheckPoint) error
+}
