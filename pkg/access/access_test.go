@@ -439,9 +439,7 @@ func TestActionsWithoutRoutesAreUnclassified(t *testing.T) {
 		identity.ActionNamespaceManageSweeps,
 		identity.ActionNamespaceStartSweep,
 		identity.ActionServerLinkNamespaces,
-		identity.ActionUnitSetContext,
 		identity.ActionCollectionSetContext,
-		identity.ActionNamespaceSetContext,
 		identity.ActionBlueprintRead,
 		identity.ActionBlueprintSetContext,
 		identity.ActionUnitRedact,
@@ -551,6 +549,39 @@ func TestBuiltInRoleFamilies(t *testing.T) {
 			if !site.Has(a) {
 				t.Errorf("site administrator lacks %s", a)
 			}
+		}
+	}
+}
+
+// TestContextActionRoles proves which built-in roles hold the actions that set
+// context. A viewer never writes. A writer sets the context of units, as it
+// can already change the reserved output of a unit with a state write. Only
+// the roles that administer a namespace set the context of the namespace,
+// because its owners and on-call text are the default of every unit in it.
+func TestContextActionRoles(t *testing.T) {
+	t.Parallel()
+
+	holders := map[identity.Action][]string{
+		identity.ActionUnitSetContext: {
+			access.RoleWriter, access.RoleMaintainer, access.RoleAdmin, access.RoleAccountAdministrator,
+			access.RoleSiteAdministrator,
+		},
+		identity.ActionNamespaceSetContext: {
+			access.RoleAdmin, access.RoleAccountAdministrator, access.RoleSiteAdministrator,
+		},
+	}
+
+	for _, role := range access.BuiltInRoles() {
+		for action, want := range holders {
+			if got := role.Has(action); got != slices.Contains(want, role.ID) {
+				t.Errorf("role %q holds %s = %v, want %v", role.ID, action, got, !got)
+			}
+		}
+	}
+
+	for action := range holders {
+		if fam, ok := access.FamilyOf(action); !ok || fam != access.FamilyData {
+			t.Errorf("family of %s = %v, %v; want the data family", action, fam, ok)
 		}
 	}
 }
