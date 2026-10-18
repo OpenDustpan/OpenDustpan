@@ -141,7 +141,7 @@ Facts:
     | The operator set a backup target. | warn |
     | The listen address is not loopback, the operator set no TLS, and no `--public-url` with `https` names a proxy. | warn |
     | With `--public-url`, the operator also set `--trusted-proxies`. | warn |
-    | With `--server`: the capabilities document reports `installationKind` `production`. | fail |
+    | With `--server`: doctor sends the token of the client commands, and the capabilities document reports `installationKind` `production`. A missing field fails the check. | fail |
     | With `--server`: `upgrade check` gives no `cannot start`. | warn |
     | With `--server`: the last backup is less than 25 hours old. | warn |
 

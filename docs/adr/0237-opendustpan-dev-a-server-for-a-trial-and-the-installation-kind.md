@@ -72,8 +72,7 @@ Facts:
    sinks, OIDC or the proxy settings. A user who needs those runs `serve`.
 
    `dev` reads its settings from flags only. It reads no `DUSTPAN_` variable
-   of a setting of `serve`, also not for a flag that `dev` takes. The only
-   variables that `dev` reads are `DUSTPAN_DATA_DIR` and
+   of a setting of `serve`, also not for a flag that `dev` takes. The only `DUSTPAN_` variables that `dev` reads are `DUSTPAN_DATA_DIR` and
    `DUSTPAN_DEV_ADMIN_TOKEN`. At start, `dev` clears each `DUSTPAN_` variable
    of a secret setting of `serve` from its process environment, as decision
    11 does for the admin token.
@@ -176,7 +175,7 @@ Facts:
     the admin of the dev installation. It works one time. It stops working
     10 minutes after the start, or when `dev` stops, whichever comes first.
     `dev` keeps only a hash of the code, in memory, and compares it in
-    constant time. The route is `POST /api/dustpan/v1/dev-sign-in`. It is a
+    constant time. The route is `POST /api/dustpan/v1/sign-in/dev-code`, in the sign-in path of ADR 210 decision 2. It is a
     route of the tool-neutral installation API that the handler registers
     only when the wiring passes the option of the one-time code. Only the
     wiring of `dev` in `cmd/opendustpan` passes it, and `pkg/dustpan` has no
