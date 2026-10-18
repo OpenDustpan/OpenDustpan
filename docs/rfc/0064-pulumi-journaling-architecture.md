@@ -925,7 +925,7 @@ This RFC changes no ADR. A new ADR must decide:
   reads, but its list "What this ADR replaces" does not name ADR 37,
   decision 8. The new ADR must name it.
 - **ADR 37, decisions 2, 3 and 11**: the key shape and the order of writes
-  for journal blobs, and their place in backups and in the orphan sweep.
+  for journal blobs, and their place in backups and in the orphan cleanup.
 - **ADR 20, decision 5** ("The server advertises no delta capability and
   no journaling"): ADR 37 replaced the delta part. The new ADR replaces the
   journaling part.

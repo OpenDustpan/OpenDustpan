@@ -11,57 +11,57 @@ import (
 const (
 	// ActionUnitRunPlan allows starting a runner job that only plans. Its
 	// object is a unit.
-	ActionUnitRunPlan identity.Action = "unit:run-plan"
+	ActionUnitRunPlan = identity.ActionUnitRunPlan
 	// ActionUnitRunApply allows starting a runner job that applies or
 	// refreshes. Its object is a unit.
-	ActionUnitRunApply identity.Action = "unit:run-apply"
+	ActionUnitRunApply = identity.ActionUnitRunApply
 	// ActionUnitRunDestroy allows starting a runner job that destroys the
 	// resources of a unit. Its object is a unit.
-	ActionUnitRunDestroy identity.Action = "unit:run-destroy"
+	ActionUnitRunDestroy = identity.ActionUnitRunDestroy
 	// ActionUnitWriteBack allows starting a write-back job: a commit to the
 	// code location of a unit. Its object is a unit.
-	ActionUnitWriteBack identity.Action = "unit:write-back"
+	ActionUnitWriteBack = identity.ActionUnitWriteBack
 	// ActionUnitDefineSteps allows changing the custom steps of a unit in
 	// its settings, or of a blueprint. Custom steps run on the runners of
 	// the namespace, so their change is its own action, apart from the
 	// start of a job. Its object is a unit, or the blueprint.
-	ActionUnitDefineSteps identity.Action = "unit:define-steps"
+	ActionUnitDefineSteps = identity.ActionUnitDefineSteps
 	// ActionJobRead allows reading the jobs of a unit: the spec, the state,
 	// the phases, the steps, the approvals and the metadata of plans and
 	// logs. Its object is a unit, or the namespace for a list.
-	ActionJobRead identity.Action = "job:read"
+	ActionJobRead = identity.ActionJobRead
 	// ActionJobReadLogs allows reading the content of job logs. Its object
 	// is a unit. A redaction of a plan or of a log, also by substitution,
 	// needs the action unit:redact of the history model: the job model has
 	// no redact action of its own.
-	ActionJobReadLogs identity.Action = "job:read-logs"
+	ActionJobReadLogs = identity.ActionJobReadLogs
 	// ActionJobReadPlans allows reading the content of stored plans, with
 	// the values that the tool marks as sensitive masked. The unmasked plan
 	// also needs identity.ActionUnitReadSecrets. Its object is a unit. Each
 	// built-in role with identity.ActionUnitRead also gets it.
-	ActionJobReadPlans identity.Action = "job:read-plans"
+	ActionJobReadPlans = identity.ActionJobReadPlans
 	// ActionJobCancel allows canceling a job. Its object is a unit.
-	ActionJobCancel identity.Action = "job:cancel"
+	ActionJobCancel = identity.ActionJobCancel
 	// ActionJobApprove allows approving or rejecting a job that waits for
 	// approval. Its object is a unit. The gate can also limit the approvers
 	// to groups.
-	ActionJobApprove identity.Action = "job:approve"
+	ActionJobApprove = identity.ActionJobApprove
 	// ActionNamespaceManageFreezes allows creating and ending the change
 	// freezes of a namespace. Its object is a namespace.
-	ActionNamespaceManageFreezes identity.Action = "namespace:manage-freezes"
+	ActionNamespaceManageFreezes = identity.ActionNamespaceManageFreezes
 	// ActionNamespaceBreakFreeze allows starting a job through an active
 	// change freeze. Its object is a namespace. It is in another family than
 	// ActionNamespaceManageFreezes, so a principal that can end a freeze
 	// does not also get break-glass, and the reverse.
-	ActionNamespaceBreakFreeze identity.Action = "namespace:break-freeze"
+	ActionNamespaceBreakFreeze = identity.ActionNamespaceBreakFreeze
 	// ActionNamespaceManageRunners allows creating and deleting the runner
 	// pools of a namespace, and registering and removing runners. Its
 	// object is a namespace.
-	ActionNamespaceManageRunners identity.Action = "namespace:manage-runners"
+	ActionNamespaceManageRunners = identity.ActionNamespaceManageRunners
 	// ActionRunnerClaim allows a runner to claim the phases of its pool and
 	// to report on them. Only a runner credential holds it. Its object is a
 	// runner pool.
-	ActionRunnerClaim identity.Action = "runner:claim"
+	ActionRunnerClaim = identity.ActionRunnerClaim
 )
 
 // Requirement is one action that a request needs, on one object.

@@ -1,6 +1,6 @@
 # 100. A shared job model on durable operations
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17 · an open question superseded by ADR 125
 
 ## Context
 
@@ -258,7 +258,7 @@ The owner approved the decisions of this ADR on 17 October 2026.
     A table-driven test checks the rule, and the conformance suite has a
     case for a cancel whose claim expires. The retention of plans and logs
     is not a schedule of the job model: at the end of the retention period
-    of an item, the retention sweep of the history model redacts it
+    of an item, the retention expiry of the history model redacts it
     through the `history.Redactor` of the job model, with the cause
     `retention` (ADR 102 decision 10, ADR 152).
 15. **A final state version closes a write-back job.** The internal wiring

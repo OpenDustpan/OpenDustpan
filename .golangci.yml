@@ -124,9 +124,16 @@ linters:
             - "**/pkg/collection/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/durable/**"
+            - "**/pkg/agent/**"
             - "**/pkg/job/**"
             - "**/pkg/history/**"
             - "**/pkg/dependency/**"
+            - "**/pkg/graph/**"
+            - "**/pkg/objectcontext/**"
+            - "**/pkg/unmanaged/**"
+            - "**/pkg/runner/**"
+            - "**/pkg/launcher/**"
+            - "**/pkg/source/**"
             - "**/pkg/catalog/**"
             - "**/pkg/policy/**"
             - "**/pkg/quota/**"
@@ -395,7 +402,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/history/historytest/|^pkg/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^pkg/catalog/catalogtest/|^pkg/policy/policytest/|^pkg/quota/quotatest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/history/historytest/|^pkg/dependency/dependencytest/|^pkg/stack/stackhistorytest/|^pkg/workspace/workspacehistorytest/|^pkg/agent/agenttest/|^pkg/graph/graphtest/|^pkg/objectcontext/objectcontexttest/|^pkg/unmanaged/unmanagedtest/|^pkg/runner/runnertest/|^pkg/catalog/catalogtest/|^pkg/policy/policytest/|^pkg/quota/quotatest/)
         linters:
           - mnd
           - funlen
