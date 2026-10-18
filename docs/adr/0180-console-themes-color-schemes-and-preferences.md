@@ -155,8 +155,8 @@ table.
 ### Branding
 
 11. **A preset is not a user scheme (owner).** The palette of
-    OpenDustpan Cloud (ADR 77; warm charcoal, with a thin yellow rule at
-    the top) is a preset of the white-label mechanism. An operator sets a preset for the
+    OpenDustpan Cloud (named in ADR 77) is warm charcoal, with a thin
+    yellow rule at the top. It is a preset of the white-label mechanism. An operator sets a preset for the
     installation. A person never selects a preset, and the preferences of a
     person never hold one. The theme and the scheme of a person apply on
     top of the preset. RFC 9 stays open for the rest of the mechanism.
