@@ -562,6 +562,12 @@ func (coverageWorkspaces) ReadResource(
 	return workspace.StateDetail{}, workspace.ErrStateVersionNotFound
 }
 
+func (coverageWorkspaces) ReadStateAt(
+	_ context.Context, _ workspace.ID, _ workspace.StateAtRequest,
+) (workspace.StateAtRead, error) {
+	return workspace.StateAtRead{}, workspace.ErrNoStateAt
+}
+
 func (coverageWorkspaces) DiffStates(
 	_ context.Context, _, _ workspace.StateVersionID, _ string, _ int,
 ) (workspace.StateDiff, error) {
@@ -982,6 +988,7 @@ func CoverageAllowlist() []AllowEntry {
 		auditChainAllowEntries(),
 		operatorAllowEntries(),
 		stateAllowEntries(),
+		tofuStateAtAllowEntries(),
 		restoreAllowEntries(),
 		journalAllowEntries(),
 		tofuHTTPAllowEntries(),
@@ -1544,6 +1551,22 @@ func operatorAllowEntries() []AllowEntry {
 // stateCoveringTest names the test that proves the masked state routes
 // instead of a CLI: no CLI version in the matrix calls them.
 const stateCoveringTest = "TestCLIs (pulumiMaskedStateScenario)"
+
+// tofuStateAtAllowEntries returns the OpenTofu console route of the state at a
+// time, which no CLI calls. The harness step of the masked scenario drives it.
+func tofuStateAtAllowEntries() []AllowEntry {
+	const covering = "TestCLIs (tofuMaskedStateScenario)"
+
+	return []AllowEntry{
+		{
+			Method: http.MethodGet, Path: "/api/v2/workspaces/{workspace_id}/state-at/{at}",
+			CoveringTest: covering,
+			Reason: "Console route: the CLI never reads the state at a time. " +
+				"The harness step reads it between two applies and before the first, " +
+				"and checks the state version, the masking and the 404 text.",
+		},
+	}
+}
 
 // stateAllowEntries returns the console state routes that no CLI calls. The
 // harness steps of stateCoveringTest drive them directly after two ups.
