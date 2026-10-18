@@ -49,7 +49,12 @@ Facts:
    author made: the file diff from the base commit to the head commit of
    each code location of the revision. The base commit is the commit of
    the last state version of the unit that a job wrote, when the job
-   record names one. Else the author gives it at the attach. The port
+   record names one. Else the author gives it at the attach, and the
+   attach checks that it is an ancestor of the head commit (ADR 191
+   decision 2). The view and the API label the source of each base:
+   `baseSource` is `job` or `author`, and the console shows "Base given by
+   the author" for `author`. A reviewer then knows that the author chose
+   the start of the diff. The port
    `changeorder.CauseDiffs` reads it from the forge (ADR 196 decision 3).
    The server does not store the cause diff. The forge is its home, and
    the server reads it again at each read, with a cache in memory of at
@@ -68,23 +73,33 @@ Facts:
    `replace`, `delete` and `read`. A resource with no change is not in the
    summary. The core never parses the plan of a tool.
 4. **Needs attention.** Each `replace` and each `delete` is in the section
-   "Needs attention", one by one, and never in a group (owner). A
+   "Needs attention", one by one, and never in a change group (owner). A
    `destroy` operation of a unit puts each of its resources there. The
-   section comes before every group, also when it holds one resource.
-5. **Groups of identical in-place changes.** Two `update` changes are
-   identical when they have the same tool, the same type, the same set of
-   value paths that change, and the same values before and after on each
-   path. A group (`changeorder.Group`) holds two or more identical
-   changes, from one unit or from several units of the same tool. Its key
-   has the prefix `grp-` and is the hex of the first 16 bytes of the
-   SHA-256 of the tool, the type, the sorted value paths and a digest of
-   the values. The server computes the digest of a secret value inside the
-   server, as ADR 150 decision 6 does, and never answers or stores it. So
-   the key is stable from one revision to the next for the same change,
-   and a thread can follow a group (ADR 193 decision 7). A `create`, a
-   `replace`, a `delete` and a `read` are never in a group. The console
-   shows a group as one row with its count, and opens it to list each
-   resource.
+   section comes before every change group, also when it holds one
+   resource. The section also holds:
+   - each unit whose summary is `unreadable` (decision 6), as a whole, with
+     the error and the link to its readable plan,
+   - a warning for each pair of units of the change order where one unit
+     reads the outputs of the other (decision 7). The apply jobs have no
+     order, so the unit that reads can apply first.
+5. **Change groups of identical in-place changes.** Two `update` changes
+   are identical when they have the same tool, the same type, the same set
+   of value paths that change, and the same values before and after on
+   each path. A change group (`changeorder.ChangeGroup`) holds two or more
+   identical changes, from one unit or from several units of the same
+   tool. A change that touches a secret path is never in a change group: a
+   secret path is a value path whose value before or after the tool marks
+   as sensitive (ADR 41). The view lists such a change one by one, in the
+   other changes of its unit. The key of a change group has the prefix
+   `grp-` and is the hex of the first 16 bytes of the SHA-256 of the tool,
+   the type, the sorted value paths and the values before and after. These
+   values are never secret, so the key covers no secret value. The key is
+   not a digest of secret content (ADR 150 decision 6), and it tells
+   nothing about a secret value. The key is stable from one revision
+   to the next for the same change, and a thread can follow a change group
+   (ADR 193 decision 7). A `create`, a `replace`, a `delete` and a `read`
+   are never in a change group. The console shows a change group as one
+   row with its count, and opens it to list each resource.
 6. **The analysis runs once for each unit plan.** When a unit plan becomes
    `ready`, the store starts the durable operation `changeorder.analyze`
    with the start key `<change order ID>/<revision>/<unit ID>`. The
@@ -103,15 +118,23 @@ Facts:
    The revision becomes `ready` only after each analysis ended. A
    `PlanReader` that fails, for example on a plan format that it does not
    know, marks the summary of that unit `unreadable` with the error. The
-   revision is still `ready`. The view then lists the unit with the link
-   to its readable plan, and the review cannot group its changes. The
-   change kinds of that unit count as unknown in the policy input.
+   revision is still `ready`. The checks fail closed:
+   - The view puts the unit in "Needs attention" as a whole (decision 4),
+     with the link to its readable plan. No change of that unit is in a
+     change group.
+   - The policy input of ADR 192 decision 4 marks the unit with
+     `unreadable: true` and gives no counts of change kinds for it. A
+     policy never reads a missing count as 0. The change kinds of an
+     unreadable unit never count as safe.
+   - When the unit plan has the part `policy-report`, that report counts as
+     unreadable too (decision 8).
 7. **The blast radius.** For each unit of the revision, the view shows its
    blast radius from the graph (ADR 162): the units that read its outputs,
    2 hops downstream by default. A unit that the reader cannot read counts
    as hidden. The view shows the owners of each unit (ADR 161). The view
    marks each unit of the blast radius that is also a unit of the change
    order, because the apply jobs have no order (ADR 190, "Consequences").
+   Each such pair also gives a warning in "Needs attention" (decision 4).
 8. **The policy results.** The view shows two kinds of results:
    - **The edit policy:** the decision of each engine at the decision
      point `changeorder.review` (ADR 192 decision 4), with its effect, its
@@ -126,6 +149,10 @@ Facts:
      server never runs a resource policy (RFC 13). A `mandatory` result
      with the outcome `fail` blocks the approval of the revision with
      `changeorder.ErrPolicyDenied`, as a `deny` of the edit policy does.
+     A report that the `PlanReader` cannot read blocks the approval of the
+     revision with `changeorder.ErrPolicyUnreadable`, which names the unit
+     and the error. An unreadable report never counts as a pass. The
+     author attaches a new revision.
 9. **Who reads what.** The view needs `changeorder:read` on each unit of
    the change order. The masked values of a unit need `job:read-plans` on
    that unit, as the readable plan does (ADR 102 decision 8). A reader

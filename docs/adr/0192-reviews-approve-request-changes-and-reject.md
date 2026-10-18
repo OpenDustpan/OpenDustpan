@@ -27,14 +27,19 @@ policy, with a number and the groups of the approvers.
    subject of the reviewer, the agent reference when an agent submitted
    it, the revision number, the digest that the reviewer saw, a verdict, a
    summary, the threads that it opened, and the time. A review does not
-   change after its submit.
+   change after its submit. The summary is a comment (ADR 193 decision 2):
+   the review holds the ID of that comment (`coc-`), and the text is a
+   history item with its own item key (ADR 198 decision 3). So a redaction
+   reaches the summary and the reason of a review, as for each comment.
+   The audit entry of the review holds the SHA-256 of the summary and the
+   comment ID, never the text (ADR 197 decision 6).
 2. **Four verdicts.**
 
    | Verdict | Who | Reason | Effect |
    | --- | --- | --- | --- |
    | `approve` | an eligible approver (decision 5), never an author, never an agent | optional | One signature on the current revision (ADR 191 decision 5). |
-   | `request-changes` | an eligible approver, or an agent of an eligible approver, never an author | required | Opens at least one request-changes thread. The change order stays open (owner). |
-   | `comment` | a principal with `changeorder:comment` on each unit, or an agent of one | optional | Opens threads that do not block, and replies. |
+   | `request-changes` | an eligible approver, never an author, never an agent | required | Opens at least one request-changes thread. The change order stays open (owner). |
+   | `comment` | a principal with `changeorder:comment` on each unit, or an agent of one | optional | Opens comment threads, and replies. It can also open blocking threads, for an eligible approver or an agent of an eligible approver (ADR 193 decision 4). |
    | `reject-and-close` | an eligible approver, never an author, never an agent | required | The change order ends `closed` (owner). |
 
    A reason is the summary of the review: 1 to 1,000 characters of plain
@@ -48,6 +53,10 @@ policy, with a number and the groups of the approvers.
    thread that blocks until a person resolves it. A review with the verdict
    `approve` and a blocking thread in its draft fails with
    `changeorder.ErrInvalid`: one review cannot both approve and block.
+   An agent records no verdict (ADR 128 decision 10). It submits its
+   blocking threads in a review of the verdict `comment`. That review
+   blocks approval through its threads, and records no verdict of the
+   agent. `changeorder.CheckAgent` (ADR 196 decision 10) does not change.
 4. **Requirements.** At the end of each attach, when the revision is
    `ready`, the server asks the policy engines that the namespace binds to
    the decision point `changeorder.review` (ADR 114). The input of the
@@ -65,13 +74,28 @@ policy, with a number and the groups of the approvers.
    - `allow` gives no requirement of its own.
 
    A change order always needs at least one approval by a person who is not
-   an author (`changeorder.MinApprovals`). With no policy, or with `allow`,
-   the server adds one requirement of one approval with no groups. A
-   change order with no approval would be a set of jobs. The revision
-   records each decision as ADR 114 decision 11 says. A policy that fails
-   is not a decision. The revision stays `in-review` with no requirement,
-   and the store refuses each `approve` with `changeorder.ErrPolicyFailed`,
-   until a retry of the operation succeeds.
+   an author (`changeorder.MinApprovals`). This rule always applies, also
+   when a policy gives requirements. It is a check of `changeorder.Approved`
+   (ADR 190 decision 7), not one more slot of the matching. With no
+   policy, with `allow`, or with `approve` and no requirement, the server
+   adds one requirement of one approval with no groups. So a stored set of
+   requirements is never empty. A requirement with a number below 1 or
+   above 10, or more than 10 requirements, is not a valid decision: the
+   store records the policy of the revision as failed, with the reason
+   `invalid-requirement`. A change order with no approval would be a set of
+   jobs. The revision records each decision as ADR 114 decision 11 says. A
+   policy that fails is not a decision. The revision stays `in-review`
+   with no requirement, and the store refuses each `approve` with
+   `changeorder.ErrPolicyFailed`, until a retry of the operation succeeds.
+   Before the operation `changeorder.decide` stores the decisions, the
+   store refuses each `approve` with `changeorder.ErrNotReady`.
+
+   `changeordertest.RunStore` gets a case for each path: an approve while
+   the decisions are not stored, an approve after a policy failed, an
+   approve after a `deny`, a set of decisions with no requirement (the
+   server adds the default requirement), a requirement with the number 0,
+   a `mandatory` failed result of a resource policy, an unreadable policy
+   report, and the `MinApprovals` check with requirements from a policy.
 5. **Eligible approvers.** A principal is an eligible approver of a change
    order when all of these are true:
    - it holds `changeorder:approve` on each unit of the current revision,
@@ -110,14 +134,33 @@ policy, with a number and the groups of the approvers.
    terminal and not `applying`, with a reason, with `changeorder:author` on
    each unit. This is a withdrawal, not a rejection. The record names the
    kind of the close: `rejected` or `withdrawn`.
-9. **A signature stops to count.** At each write, the store reads the
-   signatures of the current revision again with the access of now. A
-   signature of a principal that lost `changeorder:approve` on a unit, or
-   that lost the membership of each group of its requirement, stops to
-   count. Its record keeps the cause `access-lost`. An approved change
-   order then moves back to `in-review` (`signature-void`, ADR 190
-   decision 8). This rule is the same as the rule of a view at a time:
-   the access of now decides (ADR 150 decision 14).
+9. **A signature stops to count.** A signature of a principal that lost
+   `changeorder:approve` on a unit, or that lost the membership of each
+   group of its requirement, stops to count. Its record keeps the cause
+   `access-lost`. An approved change order then moves back to `in-review`
+   (`signature-void`, ADR 190 decision 8). This rule is the same as the
+   rule of a view at a time: the access of now decides (ADR 150 decision
+   14). The exact rule:
+   - Before each `Submit`, `Resolve`, `Reopen` and `StartApply`, the
+     service reads the access data and computes the eligibility
+     (`changeorder.Eligibility`): for each signer of the current revision
+     and for the actor, the requirements whose groups hold that principal,
+     or none when the principal is not eligible. It also reads the version
+     of the access data (`identity.AccessVersion`), a counter that each
+     change of a grant, a role or a group membership makes higher.
+   - The store gets the eligibility and the version. In its transaction, it
+     reads the version again. A version that changed fails the write with
+     `changeorder.ErrConflict`, and the service computes the eligibility
+     again, at most 3 times. So a revoke that commits between the check
+     and the commit never counts a signature that the revoke voided.
+   - The store applies the eligibility in the transaction: it voids each
+     signature whose principal is no longer eligible, then computes
+     `Approved`.
+   - A write with no eligibility (a reply, the analysis, the decisions, an
+     `ObserveJob`) voids no signature. The schedule `changeorder.reconcile`
+     (ADR 190 decision 12) applies the rule each hour to each change order
+     in `in-review` or `approved`. An apply request applies it in its own
+     transaction.
 10. **The console.** The review panel has two main buttons: Approve, and a
     split button with Request changes. The menu of the split button holds
     Reject and close (owner). Request changes and Reject and close each

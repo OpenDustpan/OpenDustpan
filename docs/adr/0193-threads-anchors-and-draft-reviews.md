@@ -43,7 +43,7 @@ comments on parts of it. The owner decided (owner):
    | --- | --- | --- |
    | `plan` | nothing more | "Why do we change this now?" |
    | `resources` | 1 to 50 resource references | "This subnet must not be public." |
-   | `group` | one group key (ADR 194 decision 5) | "These 40 tag changes are fine, except the cost center." |
+   | `change-group` | one change group key (ADR 194 decision 5) | "These 40 tag changes are fine, except the cost center." |
 
    A resource reference (`changeorder.ResourceRef`) holds the unit ID and
    the key of the resource in the plan of its tool: the URN for Pulumi,
@@ -64,7 +64,10 @@ comments on parts of it. The owner decided (owner):
    anchor. Only its reviewer reads it. The server keeps it, so a reviewer
    can continue on another device. A draft holds at most 100 items. A
    write of a draft writes no audit entry and sends no notification: a
-   draft changes nothing until its submit.
+   draft changes nothing until its submit. A draft is not in a backup: the
+   backup of a namespace leaves out the table of drafts (ADR 198 decision
+   4). The store deletes a draft at its submit, at the end of its change
+   order, or 30 days after its last write.
 6. **One submit.** A submit of a review (ADR 192) writes, in one fenced
    transaction: the review, each thread and reply of the draft, the
    signature for an `approve`, the change of the state, the audit entries
@@ -81,8 +84,8 @@ comments on parts of it. The owner decided (owner):
    - An anchor of the kind `plan` always maps.
    - An anchor of the kind `resources` maps each reference whose unit and
      key have a change in the new plan.
-   - An anchor of the kind `group` maps when the new plan has a group with
-     the same group key (ADR 194 decision 5).
+   - An anchor of the kind `change-group` maps when the new plan has a
+     change group with the same key (ADR 194 decision 5).
 
    `changeorder.Follow` holds the rule, and a table-driven test checks it.
    A thread whose anchor maps in full gets the new revision as the revision
@@ -90,8 +93,8 @@ comments on parts of it. The owner decided (owner):
    the revision of its anchor.
 8. **Outdated threads still block.** A thread is outdated when its anchor
    does not map in full. That is, at least one resource reference has no
-   change in the new plan, or the group key is not in the new plan. The
-   thread keeps its old anchor and the revision of that anchor. It names
+   change in the new plan, or the change group key is not in the new plan.
+   The thread keeps its old anchor and the revision of that anchor. It names
    each reference that did not map. A blocking thread that is outdated
    still blocks approval until a person resolves it (owner). The console
    shows it with the label "Outdated", with the old plan of its anchor
@@ -99,17 +102,23 @@ comments on parts of it. The owner decided (owner):
 9. **Who resolves a thread.** `changeorder.Service.Resolve` closes a
    thread. For a blocking thread it accepts only these, each in a request
    with no agent reference (owner, ADR 128 decision 13):
-   - the principal that opened the thread, when that principal is not an
-     author,
+   - the principal that opened the thread, while that principal still
+     holds `changeorder:approve` on each unit of the current revision, and
+     is not an author,
    - an eligible approver of the change order.
+
+   A principal that opened a blocking thread and then lost
+   `changeorder:approve` on a unit, or that became an author with an
+   attach, fails with `changeorder.ErrNotEligible`, or with
+   `changeorder.ErrSelfResolve` for an author.
 
    It refuses each author with `changeorder.ErrSelfResolve`, also when the
    author holds `changeorder:approve` and is a member of each group. It
    refuses each request with an agent reference with
    `changeorder.ErrAgentDenied`, also for a thread that an agent of the
    same person opened. A thread that an agent opened has the person of the
-   agent as the principal that opened it. A comment thread can be resolved
-   by the principal that opened it and by each eligible approver.
+   agent as the principal that opened it. The principal that opened a
+   comment thread, and each eligible approver, can resolve it.
 10. **A dismissal needs a reason (owner).** A resolve of a blocking thread
     by an approver other than the principal that opened it is a dismissal
     (ADR 128 decision 14). A dismissal needs a reason with the limits of

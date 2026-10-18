@@ -26,8 +26,20 @@ all the stored plans of one revision at the same time.
    `superseded`, and stay in the record.
 2. **Attach.** An author attaches a revision with the units, the operation
    of each unit (`apply` or `destroy`) and the code location of each unit
-   with its commit (ADR 100 decision 5). The first revision comes with the
-   create of the change order. In the transaction of the attach, the store:
+   with its commit (ADR 100 decision 5). The author can also give a base
+   commit for each code location (ADR 194 decision 2). The first revision
+   comes with the create of the change order. Before the transaction,
+   `changeorder.Service` checks each unit:
+   - The unit has a runner pool that the job model can use for a runner job
+     on that unit (ADR 130). A unit with no such pool fails the attach with
+     `changeorder.ErrInvalid`, which names the unit.
+   - A base commit that the author gave is an ancestor of the head commit,
+     through `changeorder.CauseDiffs` (ADR 196 decision 3). A base that is
+     not an ancestor fails the attach with `changeorder.ErrInvalid`. A forge
+     that does not answer fails the attach with
+     `changeorder.ErrForgeUnavailable`.
+
+   In the transaction of the attach, the store:
    - checks the state with `changeorder.Next` (ADR 190 decision 8),
    - marks the revision before it `superseded`,
    - voids each signature of the revision before it (decision 6),
@@ -56,8 +68,8 @@ all the stored plans of one revision at the same time.
    canonical encoding with the version name `cho-digest/1`. The encoding
    holds the change order ID, the revision number and, for each unit plan
    in the order of the unit IDs: the unit ID, the unit reference, the
-   operation, the commit, the plan ID, the two part hashes and the state
-   version. The encoding is a list of length-prefixed byte strings, so no
+   operation, the code location (the repository and the path), the commit,
+   the plan ID, the two part hashes and the state version. The encoding is a list of length-prefixed byte strings, so no
    two inputs give the same bytes. A table-driven test holds known inputs
    and their digests. **One-way door:** signatures and audit entries hold
    the digest. A new encoding gets a new version name, and the store keeps

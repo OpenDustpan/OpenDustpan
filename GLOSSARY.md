@@ -491,7 +491,7 @@ The gate before each phase that changes, for a job of an agent in approve-first 
 _Avoid_: Approval (an approval passes an approval gate), consent
 
 **Request-changes thread**:
-A thread on a job that a blocking comment opens (ADR 128 decision 11). A reviewer with `job:approve` opens it, or an agent of such a reviewer. The person who started the job cannot open one on a job that they started. While a thread is open, the job model accepts no approve verdict and no confirmation of the job (`job.ErrChangesRequested`). The person who opened the thread, or an approver who may dismiss, resolves it, each in a request with no agent. An approver who may dismiss can record an approve verdict on an approval gate of the job. The status of the gate does not matter. That needs `job:approve` and the groups of that gate. That approver is never the person who started the job, and never an agent. The person who started the job never resolves it, and an agent never resolves it. An agent never rejects a job: a blocking comment is the way for an agent to stop one. A later design of change orders gets the same thread.
+A thread on a job that a blocking comment opens (ADR 128 decision 11). A reviewer with `job:approve` opens it, or an agent of such a reviewer. The person who started the job cannot open one on a job that they started. While a thread is open, the job model accepts no approve verdict and no confirmation of the job (`job.ErrChangesRequested`). The person who opened the thread, or an approver who may dismiss, resolves it, each in a request with no agent. An approver who may dismiss can record an approve verdict on an approval gate of the job. The status of the gate does not matter. That needs `job:approve` and the groups of that gate. That approver is never the person who started the job, and never an agent. The person who started the job never resolves it, and an agent never resolves it. An agent never rejects a job: a blocking comment is the way for an agent to stop one. A change order has its own request-changes threads (ADR 193). A job with a change order origin gets no job thread (ADR 190 decision 16).
 _Avoid_: rejection (a rejection ends the job), review (alone: that is the review request of the forge)
 
 **Dismissal**:
@@ -629,7 +629,7 @@ The record that binds one approval to one plan revision of a change order (ADR 1
 _Avoid_: Sign-off, stamp, approval (alone: an approval is the verdict)
 
 **Approval requirement**:
-One `approve` decision of a policy for a change order: a number of approvals and the groups of the approvers (ADR 192). A change order needs each requirement, and one signature fills one slot of one requirement only. So the approvals across requirements come from distinct people. With no policy, a change order has one requirement of one approval with no groups.
+One `approve` decision of a policy for a change order: a number of approvals and the groups of the approvers (ADR 192). A change order needs each requirement, and one signature fills one slot of one requirement only. So the approvals across requirements come from distinct people. With no policy, a change order has one requirement of one approval with no groups. Each requirement needs at least 1 approval. A change order always needs at least 1 signature by a principal that is not an author (`MinApprovals`), also when a policy gives the requirements.
 _Avoid_: Quorum, rule (alone)
 
 **Eligible approver**:
@@ -637,11 +637,11 @@ A principal that can approve a change order (ADR 192 decision 5). It holds `chan
 _Avoid_: Reviewer (alone: any reader can comment)
 
 **Change order review**:
-One submit of one reviewer on one plan revision, with an ID with the prefix `cor-` (ADR 192). Its verdict is `approve`, `request-changes`, `comment` or `reject-and-close`. Request changes keeps the change order open and opens at least one request-changes thread. Reject and close ends the change order `closed`. Both need a reason. An agent never approves and never rejects.
+One submit of one reviewer on one plan revision, with an ID with the prefix `cor-` (ADR 192). Its verdict is `approve`, `request-changes`, `comment` or `reject-and-close`. Request changes keeps the change order open and opens at least one request-changes thread. Reject and close ends the change order `closed`. Both need a reason. Its summary is a comment, so a redaction reaches it. An agent records no verdict: it submits its blocking threads in a review of the verdict `comment`.
 _Avoid_: Review (alone), sign-off
 
 **Draft review**:
-The threads and replies that one reviewer wrote on a change order and did not submit (ADR 193 decision 5). Only its reviewer reads it. The reviewer submits it in one review. A draft write writes no audit entry.
+The threads and replies that one reviewer wrote on a change order and did not submit (ADR 193 decision 5). Only its reviewer reads it. The reviewer submits it in one review. A draft write writes no audit entry. No backup holds a draft, and the store deletes it 30 days after its last write.
 _Avoid_: Pending review, draft (alone)
 
 **Thread anchor**:
@@ -657,11 +657,11 @@ The change of the code that the author of a change order made (ADR 194 decision 
 _Avoid_: Source diff, code diff (alone), state diff (that compares two state versions)
 
 **Needs attention**:
-The section of the review view of a change order that lists each replacement and each delete, one by one (ADR 194 decision 4). It comes before every change group. A replacement or a delete is never in a group.
+The section of the review view of a change order that lists each replacement and each delete, one by one (ADR 194 decision 4). It also lists, as a whole, each unit whose plan the server cannot read. It gives a warning for two units of the change order where one reads the outputs of the other. It comes before every change group. A replacement or a delete is never in a group.
 _Avoid_: Dangerous changes, warnings
 
 **Change group**:
-Two or more identical in-place changes in the plan revision of a change order (ADR 194 decision 5). Identical means the same tool, type, value paths and values before and after. Its key has the prefix `grp-`, and the key stays the same from one revision to the next for the same change. A thread can have a change group as its anchor.
+Two or more identical in-place changes in the plan revision of a change order (ADR 194 decision 5). Identical means the same tool, type, value paths and values before and after. A change that touches a secret path is never in a change group, so the key covers no secret value. Its key has the prefix `grp-`, and the key stays the same from one revision to the next for the same change. A thread can have a change group as its anchor, of the kind `change-group`. In Go, it is `changeorder.ChangeGroup`.
 _Avoid_: Group (alone: that is a set of principals), batch, bucket
 
 **Proposed changes**:

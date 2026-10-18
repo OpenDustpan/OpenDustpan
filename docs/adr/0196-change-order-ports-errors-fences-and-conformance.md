@@ -18,26 +18,27 @@ each port before any adapter. Each write inside a namespace carries a
 
    | Error | When |
    | --- | --- |
-   | `ErrInvalid` | A request with an empty or bad field, a unit of another namespace, an anchor that names no change of the plan. |
+   | `ErrInvalid` | A request with an empty or bad field. A unit of another namespace, or a unit with no runner pool. A base commit that is not an ancestor of the head. An anchor that names no change of the plan. |
    | `ErrNotFound` | An unknown change order, revision, thread or draft, or a caller without `changeorder:read` on each unit (decision 9). |
-   | `ErrConflict` | A write on a stale read of the change order. |
+   | `ErrConflict` | A write on a stale read of the change order, or with a version of the access data that changed (ADR 192 decision 9). |
    | `ErrTransition` | An event that `Next` does not allow in the state. |
    | `ErrFinished` | A write on a terminal change order. |
    | `ErrApplying` | An attach, a close or a reject while apply jobs run. |
    | `ErrLimit` | A write above a limit. The error names the limit. |
    | `ErrPlanChanged` | A digest that is not the digest of the current revision. |
    | `ErrPlanStale` | An apply with a stale unit plan. The error names each unit. |
-   | `ErrNotReady` | An approve or an apply before the revision is `ready`. |
+   | `ErrNotReady` | An approve or an apply before the revision is `ready`, or before the store has its policy decisions. |
    | `ErrNotApproved` | An apply of a change order that is not `approved`. |
    | `ErrChangesRequested` | An approve or an apply while a blocking thread is open. The error names the threads. |
    | `ErrSelfApproval` | An approve, a request for changes or a reject by an author. |
-   | `ErrNotEligible` | A verdict by a principal that is not an eligible approver. |
+   | `ErrNotEligible` | A verdict or a resolve by a principal that is not an eligible approver. This includes the principal that opened a blocking thread and lost `changeorder:approve` (ADR 193 decision 9). |
    | `ErrAuthorThread` | A blocking thread, or a reopen of one, by an author. |
    | `ErrSelfResolve` | A resolve of a blocking thread by an author. |
    | `ErrReasonRequired` | A request for changes, a reject, a close, a dismissal or a reopen with no reason. |
-   | `ErrAgentDenied` | A write of an agent other than a comment, a reply or a blocking thread (ADR 190 decision 14). |
+   | `ErrAgentDenied` | A write of an agent that is not a reply or a review of the verdict `comment`. That review can hold comment threads, replies and blocking threads (ADR 190 decision 14). |
    | `ErrPolicyDenied` | An approve of a revision that a policy denied (ADR 192 decision 4, ADR 194 decision 8). |
-   | `ErrPolicyFailed` | An approve while the policy of the revision failed and no retry succeeded. |
+   | `ErrPolicyFailed` | An approve while the policy of the revision failed and no retry succeeded, also for a decision with a requirement that is not valid. |
+   | `ErrPolicyUnreadable` | An approve of a revision with a resource policy report that the `PlanReader` cannot read. The error names the unit and the parse error (ADR 194 decision 8). |
    | `ErrToolUnsupported` | A `PlanReader` that does not know the tool of a unit. |
    | `ErrPlanFormat` | A readable plan that the `PlanReader` cannot parse. |
    | `ErrForgeUnavailable` | A forge that does not answer for a cause diff. |
@@ -50,8 +51,13 @@ each port before any adapter. Each write inside a namespace carries a
    | `job.ErrPolicyDenied`, `job.ErrFrozen` with no break-glass, `job.ErrLimit`, `job.ErrInvalid` | The unit plan or the apply of that unit is `failed`, with the reason. |
    | `job.ErrUnitBusy` | None. The job is queued, as the job model says (ADR 100 decision 10). |
    | `job.ErrPlanStale` at the dispatch of an apply job | The apply of that unit is `failed` with the reason `plan-stale` (ADR 190 decision 9). |
-   | `identity.ErrDenied` | The operation fails, and the change order records the missing action. |
-   | another error | The durable operation retries with its backoff. |
+   | `identity.ErrDenied` | The unit plan or the apply of that unit is `failed` with the reason `denied`, and the record names the missing action. |
+   | another error | The durable operation retries with its backoff for at most 1 hour. Then the unit plan or the apply of that unit is `failed` with the reason `start-failed`. |
+
+   A failed apply start of a unit counts as an apply of that unit that
+   ended (ADR 190 decision 10). So each start failure moves the change
+   order out of `applying` when each other apply ended, and no change order
+   stays in `applying`. A test of the wiring checks each row.
 
 2. **The store port.** `changeorder.Store` persists change orders. Each
    method that writes takes a `namespace.Fence` and the audit entries of
@@ -59,51 +65,94 @@ each port before any adapter. Each write inside a namespace carries a
    returns `namespace.ErrFenced` for a stale fence, and changes nothing on
    an error.
 
+   Each method that writes also returns `ErrNotFound` for an unknown change
+   order or a fence of another namespace (decision 6), `ErrFinished` for a
+   terminal change order where the method says so, and
+   `namespace.ErrFenced`. Each method that takes a version returns
+   `ErrConflict` for a stale version. The comments name the other errors.
+
    ```go
    type Store interface {
        // Create stores o in planning with revision 1, and starts the
-       // operation changeorder.plan. ErrLimit, ErrInvalid.
+       // operation changeorder.plan. ErrInvalid for a bad field, a unit of
+       // another namespace or a fence of another namespace. ErrLimit.
        Create(ctx context.Context, o Order, f namespace.Fence, e []audit.Entry) (Order, error)
-       Get(ctx context.Context, id ID) (Order, error) // ErrNotFound
+       // Get reads one change order. ErrNotFound.
+       Get(ctx context.Context, id ID) (Order, error)
+       // List reads one page. ErrInvalid for a bad filter or cursor.
        List(ctx context.Context, q Filter) (Page, error)
        // Attach adds revision r, voids the signatures of each earlier
-       // revision, and starts changeorder.plan. ErrTransition,
-       // ErrApplying, ErrFinished, ErrConflict, ErrLimit.
+       // revision, and starts changeorder.plan. ErrInvalid,
+       // ErrTransition, ErrApplying, ErrFinished, ErrConflict, ErrLimit.
        Attach(ctx context.Context, id ID, r Revision, version int64, f namespace.Fence, e []audit.Entry) (Order, error)
-       // ObserveJob applies the state of one job of the change order.
-       // A job version that the store saw changes nothing.
+       // ObserveJob applies the state of one job of the change order, or
+       // a start that failed. A job version that the store saw changes
+       // nothing. ErrInvalid for a job of another revision or unit.
+       // ErrFinished for a terminal change order.
        ObserveJob(ctx context.Context, j JobState, f namespace.Fence) (Order, error)
        // SetAnalysis stores the metadata of the summary of one unit
        // plan, and marks the revision ready when each analysis ended.
+       // ErrInvalid for a unit that is not in rev. ErrTransition for a
+       // revision that is superseded. ErrFinished.
        SetAnalysis(ctx context.Context, id ID, rev int, s SummaryMeta, f namespace.Fence) (Order, error)
        // SetRequirements stores the policy decisions of a ready revision.
+       // ErrNotReady for a revision that is not ready. ErrTransition for
+       // a revision that is superseded. ErrFinished.
        SetRequirements(ctx context.Context, id ID, rev int, d Decisions, f namespace.Fence, e []audit.Entry) (Order, error)
        // Submit writes review r with its threads, its signature and the
        // change of the state, and deletes the draft. It checks the rules
-       // of Eligible, Match, Follow and Next in its transaction.
-       Submit(ctx context.Context, id ID, r Review, version int64, f namespace.Fence, e []audit.Entry) (Order, error)
+       // of Eligible, Match, Follow, Approved and Next in its
+       // transaction, with el (ADR 192 decision 9). ErrInvalid,
+       // ErrPlanChanged, ErrNotReady, ErrChangesRequested,
+       // ErrSelfApproval, ErrNotEligible, ErrAuthorThread,
+       // ErrReasonRequired, ErrAgentDenied, ErrPolicyDenied,
+       // ErrPolicyFailed, ErrPolicyUnreadable, ErrApplying for a
+       // reject-and-close, ErrTransition, ErrFinished, ErrConflict,
+       // ErrLimit.
+       Submit(ctx context.Context, id ID, r Review, el Eligibility, version int64, f namespace.Fence, e []audit.Entry) (Order, error)
+       // Reply adds comment c to thread t. ErrNotFound for an unknown
+       // thread. ErrInvalid, ErrFinished, ErrLimit.
        Reply(ctx context.Context, id ID, t ThreadID, c Comment, f namespace.Fence, e []audit.Entry) (Order, error)
-       Resolve(ctx context.Context, id ID, t ThreadID, r Resolution, f namespace.Fence, e []audit.Entry) (Order, error)
-       Reopen(ctx context.Context, id ID, t ThreadID, r Resolution, f namespace.Fence, e []audit.Entry) (Order, error)
+       // Resolve closes thread t, with el. ErrNotFound for an unknown
+       // thread. ErrSelfResolve, ErrNotEligible, ErrAgentDenied,
+       // ErrReasonRequired, ErrTransition for a thread that is resolved,
+       // ErrFinished, ErrConflict.
+       Resolve(ctx context.Context, id ID, t ThreadID, r Resolution, el Eligibility, f namespace.Fence, e []audit.Entry) (Order, error)
+       // Reopen opens thread t again, with el. ErrNotFound for an unknown
+       // thread. ErrAuthorThread, ErrNotEligible, ErrAgentDenied,
+       // ErrReasonRequired, ErrTransition for a thread that is open,
+       // ErrFinished, ErrConflict.
+       Reopen(ctx context.Context, id ID, t ThreadID, r Resolution, el Eligibility, f namespace.Fence, e []audit.Entry) (Order, error)
        // StartApply moves an approved change order to applying and
-       // starts changeorder.apply. ErrNotApproved, ErrPlanChanged,
-       // ErrChangesRequested.
-       StartApply(ctx context.Context, id ID, a ApplyRequest, version int64, f namespace.Fence, e []audit.Entry) (Order, error)
+       // starts changeorder.apply, with el. ErrNotApproved,
+       // ErrPlanChanged, ErrChangesRequested, ErrNotReady,
+       // ErrAgentDenied, ErrFinished, ErrConflict.
+       StartApply(ctx context.Context, id ID, a ApplyRequest, el Eligibility, version int64, f namespace.Fence, e []audit.Entry) (Order, error)
+       // Close ends the change order closed. ErrReasonRequired,
+       // ErrApplying, ErrAgentDenied, ErrFinished, ErrConflict.
        Close(ctx context.Context, id ID, c Closure, version int64, f namespace.Fence, e []audit.Entry) (Order, error)
        // Expire ends an idle change order. ErrTransition when it saw a
-       // write after now minus DefaultIdleTimeout.
+       // write after now minus DefaultIdleTimeout, or when it is applying.
+       // ErrFinished.
        Expire(ctx context.Context, id ID, now time.Time, f namespace.Fence, e []audit.Entry) (Order, error)
-       // Drafts. A draft write appends no audit entry.
+       // PutDraft stores the draft of d.Reviewer. A draft write appends no
+       // audit entry. ErrInvalid, ErrLimit above 100 items, ErrFinished.
        PutDraft(ctx context.Context, id ID, d Draft, f namespace.Fence) error
-       GetDraft(ctx context.Context, id ID, reviewer string) (Draft, error) // ErrNotFound
+       // GetDraft reads the draft of reviewer. ErrNotFound when it has
+       // none.
+       GetDraft(ctx context.Context, id ID, reviewer string) (Draft, error)
+       // DeleteDraft deletes the draft of reviewer. ErrNotFound when it
+       // has none.
        DeleteDraft(ctx context.Context, id ID, reviewer string, f namespace.Fence) error
    }
    ```
 
    `Submit`, `Resolve`, `Reopen` and `StartApply` read the threads, the
-   signatures and the requirements in the same transaction as their write.
-   So two reviewers that write at the same time never make an approved
-   change order with an open blocking thread.
+   signatures, the requirements and the version of the access data in the
+   same transaction as their write. So two reviewers that write at the same
+   time never make an approved change order with an open blocking thread,
+   and a revoke between the check and the commit fails the write with
+   `ErrConflict` (ADR 192 decision 9).
 3. **The cause diff port.** `changeorder.CauseDiffs` reads a diff from the
    forge. A forge adapter implements it in the wiring.
 
@@ -115,6 +164,10 @@ each port before any adapter. Each write inside a namespace carries a
        // seconds. A diff above limit answers its first part with
        // Truncated set.
        Diff(ctx context.Context, loc Location, base, head string, limit int64) (Diff, error)
+       // IsAncestor answers whether base is an ancestor of head in the
+       // repository of loc. ErrNotFound for an unknown repository or
+       // commit, ErrForgeUnavailable as for Diff.
+       IsAncestor(ctx context.Context, loc Location, base, head string) (bool, error)
    }
    ```
 
@@ -163,8 +216,9 @@ each port before any adapter. Each write inside a namespace carries a
    fence fails with `namespace.ErrFenced`. The store also refuses a write
    whose audit entry names another namespace. The tables of the change
    order are data tables, so the backup of the namespace holds them. The
-   durable operations of decision 7 are control tables (ADR 72 decision
-   5).
+   table of drafts is the one exception: the backup leaves it out (ADR 198
+   decision 4). The durable operations of decision 7 are control tables
+   (ADR 72 decision 5).
 7. **Durable operations.** The change order starts these operations of ADR
    72, each in the transaction of the write that needs it:
 
@@ -190,9 +244,10 @@ each port before any adapter. Each write inside a namespace carries a
    an error that wraps `identity.ErrDenied`.
 10. **The rules of agents in one place.** `changeorder.CheckAgent` holds
     the rule of ADR 190 decision 14: an actor with an agent reference can
-    write a comment thread, a reply and a blocking thread (as an agent of
-    an eligible approver), and nothing else. A table-driven test checks
-    each method.
+    submit a review of the verdict `comment` with comment threads, replies
+    and blocking threads (as an agent of an eligible approver), and write a
+    reply, and nothing else. A table-driven test checks each method and
+    each verdict.
 11. **Conformance suites first.**
     - `pkg/changeorder/changeordertest.RunStore` gets a reference adapter
       in memory in the tests of the package, so each case runs before any
@@ -201,7 +256,11 @@ each port before any adapter. Each write inside a namespace carries a
       signatures at an attach, the matching of ADR 192 decision 6, the
       follow and outdated rules of ADR 193, the draft rules, two submits
       at the same time, a resolve by an author, a resolve by an agent, a
-      dismissal with no reason, and an `ObserveJob` call with an old job version.
+      resolve by the principal that opened a thread and lost
+      `changeorder:approve`, a dismissal with no reason, an `ObserveJob`
+      call with an old job version, an apply start that failed for one
+      unit, a revoke between the check and the commit, the cases of
+      `Approved` (ADR 192 decision 4), and a backup that holds no draft.
       Each SQL adapter runs it.
     - `changeordertest.RunPlanReader` takes a reader and a set of fixture
       plans with their expected summaries. Each tool package runs it with
@@ -216,7 +275,9 @@ each port before any adapter. Each write inside a namespace carries a
     - `pkg/job/jobtest` gets the cases of ADR 190: an apply job with
       `job.Spec.Plan`, its stale dispatch, the reader rule of the part
       `plan-apply`, no approval gate for a job with a change order origin,
-      and the start of `changeorder.sync`.
+      the start of `changeorder.sync`, the origin cases of ADR 190
+      decision 15, and the refusal of a comment and a resolve on a job with
+      a change order origin (ADR 190 decision 16).
 
 ## Consequences
 

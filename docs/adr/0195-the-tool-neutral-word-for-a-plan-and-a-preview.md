@@ -32,13 +32,16 @@ Facts:
    word.
 2. **User-facing text for one unit keeps the word of its tool.** A page, a
    label or a message about one unit says "preview" for a Pulumi unit and
-   "plan" for an OpenTofu unit. The console takes the word from the tool
-   of the unit (`changeorder.UnitWord`), never from a fixed string.
+   "plan" for an OpenTofu unit. The API answers the `tool` of each unit
+   (`pulumi` or `opentofu`), and never a word for the plan. The console
+   maps the tool to its word. The core has no switch on the tool for this
+   word.
 3. **User-facing text for units of two tools says "proposed changes".**
    The heading of a change order, of its revisions and of its review
    view, says "Proposed changes" when its units are of more than one tool.
    When all its units are of one tool, the heading uses the word of that
-   tool: "Preview" or "Plan".
+   tool: "Preview" or "Plan". The console picks the heading from the
+   `tool` of each unit in the answer of the API.
 4. **The terms of the change order.** These terms join `GLOSSARY.md` with
    this rule: "plan revision" and "unit plan" in shared code and docs, and
    the word of the tool, or "proposed changes", in the console.

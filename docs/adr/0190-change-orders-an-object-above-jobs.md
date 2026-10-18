@@ -1,6 +1,6 @@
 # 190. Change orders: an object above jobs
 
-Status: accepted · 2026-10-18 · ADRs 191 to 198 give the parts · supersedes parts of ADRs 100, 102, 103 and 147
+Status: accepted · 2026-10-18 · ADRs 191 to 198 give the parts · supersedes parts of ADRs 100, 102, 103, 128 and 147
 
 ## Context
 
@@ -65,8 +65,9 @@ label **One-way door** in the text. This list collects them:
 | All units of a change order are in one namespace (decision 3) | The fence, the backup and the audit scope are per namespace. |
 | The digest encoding `cho-digest/1` (ADR 191 decision 4) | Signatures in the audit chain hold the digest. A new encoding needs a new version name. |
 | The ID prefixes `cho-`, `cor-`, `cot-`, `coc-` and `grp-` (decision 2, ADRs 192 to 194) | IDs are in audit entries, links and backups. |
+| Shared code and the tool-neutral API say `plan` (ADR 195 decision 1) | API fields and audit entries hold the word. |
 | The audit entry shapes of ADR 197 decision 6 | The audit chain hashes each entry. |
-| Comment text is a history item with its own item key (ADR 198 decision 3) | Backups hold the sealed text. A later change needs a migration of each key. |
+| Comment text is a history item with its own item key (ADR 198 decision 3) | Backups hold the sealed text. A later change needs a migration of each key. The summary of a review is a comment too (ADR 192 decision 1). |
 
 ## Decision
 
@@ -108,7 +109,8 @@ label **One-way door** in the text. This list collects them:
 
    The spec of each job holds the origin `changeorder.Origin`: the change
    order ID and the revision number. The job keeps it, so a reader of a job
-   finds its change order. Version 1 runs runner jobs only. A write-back job
+   finds its change order. Decision 15 gives the rules that protect the
+   origin and `job.Spec.Plan`. Version 1 runs runner jobs only. A write-back job
    applies in the team's CI, so the server cannot bind its apply to a
    stored plan. A write-back change keeps the gates of the job model (ADR
    103).
@@ -135,10 +137,31 @@ label **One-way door** in the text. This list collects them:
    | `closed` | Terminal. A reviewer rejected and closed it, or an author closed it, each with a reason. |
    | `expired` | Terminal. It saw no write for the idle timeout (decision 12). |
 
-   `approved` is a state that the store computes from the signatures and
-   the threads, in the transaction of each write. A thread that opens on an
-   approved change order moves it back to `in-review`. The signatures stay
-   and count again when no thread is open (ADR 128 decision 12).
+   `approved` is a state that the store computes in the transaction of
+   each write, with the function `changeorder.Approved`. It gives
+   `approved` only when all of these are true for the current revision:
+   - the revision is `ready`,
+   - the store holds the policy decisions of the revision (ADR 192
+     decision 4). A revision whose operation `changeorder.decide` did not
+     end has none,
+   - the combined effect of the decisions is not `deny`, and the policy
+     did not fail,
+   - no resource policy report of a unit plan has a `mandatory` result with
+     the outcome `fail`, and no report is unreadable (ADR 194 decision 8),
+   - the set of requirements is not empty, and each requirement needs at
+     least 1 approval,
+   - the matching of ADR 192 decision 6 fills each slot of each
+     requirement,
+   - at least `changeorder.MinApprovals` (1) signatures count, each by a
+     principal that is not an author. This check applies also when a
+     policy gives the requirements (ADR 192 decision 4),
+   - no blocking thread is open.
+
+   A recompute with no stored decisions, or with no requirement, never
+   gives `approved`. A table-driven test of `Approved` has a row for each
+   condition. A thread that opens on an approved change order moves it back
+   to `in-review`. The signatures stay and count again when no thread is
+   open (ADR 128 decision 12).
 8. **One table of transitions.** `changeorder.Next` is the only place that
    decides a transition. An event that the table does not allow fails with
    `changeorder.ErrTransition`. Any event on a terminal state fails with
@@ -155,6 +178,8 @@ label **One-way door** in the text. This list collects them:
    | in-review | requirements-met | approved |
    | approved | thread-opened | in-review |
    | approved | signature-void | in-review |
+   | planning, plan-failed, in-review, applying, partially-applied | thread-opened | the same state |
+   | in-review | signature-void | in-review |
    | approved | attach | planning |
    | approved | apply | applying |
    | applying | jobs-ended-all-succeeded | applied |
@@ -163,6 +188,17 @@ label **One-way door** in the text. This list collects them:
    | planning, plan-failed, in-review, approved, partially-applied | reject-and-close | closed |
    | planning, plan-failed, in-review, approved, partially-applied | close | closed |
    | planning, plan-failed, in-review, approved, partially-applied | expire | expired |
+
+   These writes are not events, and do not call `Next`: a reply, a comment
+   thread, a resolve, a draft write, the analysis of a unit plan and the
+   store of the policy decisions. Each one is possible in each state that is
+   not terminal, also in `applying` and `partially-applied`. A reopen of a
+   blocking thread is the event `thread-opened`. After each write, the
+   store computes `Approved` again. In `in-review`, a result of `approved`
+   is the event `requirements-met`. In `approved`, a result that is not
+   `approved` is the event `signature-void`, or `thread-opened` for a new
+   or reopened blocking thread. In `applying`, a blocking thread stops no
+   apply job. It blocks the approval of a later revision.
 
    These rules in the table need a reason:
    - An attach is possible in each state that is not terminal, except
@@ -175,9 +211,9 @@ label **One-way door** in the text. This list collects them:
    - `partially-applied` is not terminal. An author attaches a new plan for
      the units that did not apply, or closes the change order. The new plan
      needs new signatures (ADR 191 decision 6).
-   - `signature-void` applies when a signature stops to count, for example
-     when the approver loses `changeorder:approve` on a unit (ADR 192
-     decision 9).
+   - `signature-void` applies when the result of `Approved` changes to
+     false with no new thread, for example when the approver loses
+     `changeorder:approve` on a unit (ADR 192 decision 9).
 9. **An apply job applies the plan of its plan job.** The spec of an apply
    job names the stored plan (`pln-`) of the plan job of the same unit in
    the approved revision, in the new field `job.Spec.Plan`. Such a job has
@@ -186,19 +222,37 @@ label **One-way door** in the text. This list collects them:
    that it read, its age and its redaction. A stale plan fails the dispatch
    with `job.ErrPlanStale`. The apply job has no plan phase to go back to,
    so it ends `failed` with the reason `plan-stale`, and it changed
-   nothing. The runner of that apply job reads the part `plan-apply` of
+   nothing. The dispatch also applies the origin check of decision 15. The runner of that apply job reads the part `plan-apply` of
    the named plan, and refuses a part with another hash.
 10. **Apply is a request of a person.** A change order in `approved` does
-    not apply on its own. A principal asks for the apply (ADR 197). The
-    store checks in one transaction that the change order is `approved` and
-    that the request names the digest of the current revision. It then
-    moves the change order to `applying` and starts the durable operation
-    `changeorder.apply` with the start key `<change order ID>/<revision>`.
-    That operation starts one apply job for each unit, with the
-    idempotency key `<change order ID>/<revision>/<unit ID>/apply`. So a
-    retry after a crash gives one apply job for each unit. The apply jobs
-    of one change order run with no order between them. Each unit keeps the
-    one change at a time rule of the job model.
+    not apply on its own. A principal asks for the apply (ADR 197). Before
+    the transaction, `changeorder.Service` checks for each unit of the
+    revision:
+    - that the principal holds `unit:run-apply`, or `unit:run-destroy` for
+      a `destroy` unit (ADR 103 decision 8), else `identity.ErrDenied`
+      names the unit and the action,
+    - that the unit has a runner pool that the job model can use (ADR 130),
+      else `changeorder.ErrInvalid` names the unit,
+    - that the unit plan is not stale (ADR 191 decision 7).
+
+    The store then checks in one transaction that the change order is
+    `approved` and that the request names the digest of the current
+    revision. It moves the change order to `applying` and starts the
+    durable operation `changeorder.apply` with the start key `<change order
+    ID>/<revision>`. That operation starts one apply job for each unit,
+    with the idempotency key `<change order ID>/<revision>/<unit ID>/apply`.
+    So a retry after a crash gives one apply job for each unit. The apply
+    jobs of one change order run with no order between them. Each unit
+    keeps the one change at a time rule of the job model.
+
+    A check before the transaction can pass and the start can still fail,
+    for example when a grant changes. Each start failure of the apply of a
+    unit makes the apply of that unit `failed`, with the reason, and the
+    store records it with `ObserveJob` as an apply that ended (ADR 196
+    decision 1). An apply of a unit ends when its job ends or when its
+    start failed. When the apply of each unit ended, the store applies
+    `jobs-ended-all-succeeded` or `jobs-ended-some-failed`. So no change
+    order stays in `applying` because a start failed.
 11. **The change order follows its jobs.** The job store starts the
     durable operation `changeorder.sync` in the transaction of each change
     of a job with a change order origin, with the start key `<change order
@@ -220,11 +274,50 @@ label **One-way door** in the text. This list collects them:
     fence and appends the audit entries in the transaction of each write.
     The backup of a namespace holds its change orders (ADR 196 decision 6).
 14. **Agents.** An agent reads a change order and leaves comments and
-    blocking comments only (owner, ADR 128 decision 10). An agent never
-    creates a change order, attaches a plan, approves, rejects, closes,
-    resolves a thread or asks for an apply. Each of these fails with
+    blocking comments only (owner, ADR 128 decision 10). An agent records
+    no verdict: it submits its blocking threads in a review of the verdict
+    `comment` (ADR 192 decision 2). An agent never creates a change order,
+    attaches a plan, approves, requests changes, rejects, closes, resolves
+    a thread or asks for an apply. Each of these fails with
     `changeorder.ErrAgentDenied`. The agent tool set of ADR 122 has no tool
     for change orders. A tool needs an ADR (ADR 122 decision 14).
+15. **Only the wiring sets the origin and the plan of a job.** The fields
+    `job.Spec.ChangeOrder` and `job.Spec.Plan` give a job the rules of
+    decisions 6 and 9: no approval gate, and an apply of a named stored
+    plan. So no caller other than the wiring of the change order sets them:
+    - The job start route and `job.Service.Start` refuse a spec with
+      `ChangeOrder` or `Plan` set, with `job.ErrInvalid`. The request body
+      of the route has no field for them.
+    - The wiring starts the jobs of a change order with the new method
+      `job.Service.StartForChangeOrder`. No route calls it. The route test
+      checks that no handler of the job routes calls it.
+    - `StartForChangeOrder` and the `job.Decider` adapter check, through
+      the new port `job.ChangeOrders` that the wiring implements on
+      `changeorder.Store`, that the origin names a change order of the
+      namespace of the job, and a revision of that change order that holds
+      the unit of the job. For a plan job, the revision is the current
+      revision. For an apply job, the change order is `applying` on that
+      revision, and `Spec.Plan` is the plan ID of the unit plan of the same
+      unit in that revision. A check that fails refuses the start with
+      `job.ErrInvalid` and creates no job. An error of the port fails the
+      start: the check fails closed.
+    - The dispatch check of the job store applies the same check to an
+      apply job, in the transaction of the dispatch. A check that fails
+      ends the job `failed` with the reason `origin-mismatch`, before any
+      change.
+
+    `jobtest` gets these cases: `Start` with `ChangeOrder` set, `Start`
+    with `Plan` set, an apply job whose change order is not `applying`, an
+    origin with another revision, a `Spec.Plan` of another unit, a
+    `Spec.Plan` that is not the plan of the unit, a change order of another
+    namespace, an error of the port, a dispatch after the check stops to
+    pass, and a start that passes each check.
+16. **No job thread on a job of a change order.** The threads of the
+    change order hold the review of its jobs (decision 6). So
+    `job.Service.Comment` and `job.Service.ResolveThread` (ADR 128
+    decisions 11 to 13) refuse a job with a change order origin, with
+    `job.ErrInvalid`. The error names the change order and says to comment
+    on its threads. `jobtest` gets a case for each method.
 
 ## What this ADR replaces
 
@@ -244,6 +337,10 @@ it.
 - **ADR 103, decision 1 and decision 2:** the policy decision gives the
   approval gates of each job. A job with a change order origin gets no
   approval gate. Its change order holds the approvals (decision 6).
+- **ADR 128, decisions 11 to 13:** a blocking comment opens a
+  request-changes thread on a job, which blocks approval until a person
+  resolves it. A job with a change order origin gets no comment and no
+  thread. The threads of its change order apply (decision 16).
 - **ADR 147, decision 9:** "A job is the change record. No new object is
   necessary." For a change under a change order, the change order and its
   jobs are the change record (ADR 198 decision 6).
@@ -263,8 +360,9 @@ it.
   unit. The blast radius in the review shows such links (ADR 194).
 - `pkg/job` changes: `job.Spec.Plan`, `job.Spec.ChangeOrder` (the origin),
   the phase row of decision 9, the reader rule of the part `plan-apply`,
-  the decider rule of decision 6, and the sync operation of decision 11.
-  `jobtest` gets a case for each.
+  the decider rule of decision 6, the sync operation of decision 11, the
+  method `StartForChangeOrder` and the port `job.ChangeOrders` of decision
+  15, and the refusal of decision 16. `jobtest` gets a case for each.
 - `GLOSSARY.md` gets the terms of ADRs 190 to 198.
 
 ## Open questions

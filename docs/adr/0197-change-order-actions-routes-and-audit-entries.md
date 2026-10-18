@@ -59,7 +59,7 @@ namespace (ADR 190).
    | `GET /api/change-orders/{ns}/{id}/revisions/{rev}/view` | `changeorder:read`, and `job:read-plans` for the values of each unit | The review view of ADR 194, in its order. |
    | `GET /api/change-orders/{ns}/{id}/revisions/{rev}/cause-diff` | `changeorder:read` | The cause diff, with `truncated` or `no-base` when they apply. |
    | `GET`, `PUT`, `DELETE /api/change-orders/{ns}/{id}/draft` | `changeorder:comment` | The draft of the caller only. |
-   | `POST /api/change-orders/{ns}/{id}/reviews` | `changeorder:comment` for `comment`, `changeorder:approve` for the other verdicts | `201` with the review. The body names the verdict, the digest and the summary. |
+   | `POST /api/change-orders/{ns}/{id}/reviews` | `changeorder:comment` for `comment`, `changeorder:approve` for the other verdicts and for a `comment` review with a blocking thread | `201` with the review. The body names the verdict, the digest and the summary. |
    | `GET /api/change-orders/{ns}/{id}/threads` | `changeorder:read` | The threads, with the filters `open`, `blocking` and `outdated`. |
    | `POST /api/change-orders/{ns}/{id}/threads/{thread}/replies` | `changeorder:comment` | `201` with the comment. |
    | `POST /api/change-orders/{ns}/{id}/threads/{thread}/resolve` | `changeorder:approve`, or `changeorder:comment` for the principal that opened a comment thread | The thread. A dismissal needs `reason`. |
@@ -76,8 +76,8 @@ namespace (ADR 190).
    `ErrPlanChanged`, `ErrPlanStale`, `ErrNotReady`, `ErrNotApproved` and
    `ErrChangesRequested`, `403` for `ErrSelfApproval`, `ErrNotEligible`,
    `ErrAuthorThread`, `ErrSelfResolve`, `ErrAgentDenied` and
-   `ErrPolicyDenied`, `422` for `ErrLimit`, and `503` for `ErrPolicyFailed`
-   and `ErrForgeUnavailable`. The errors use the error shape of the
+   `ErrPolicyDenied`, `409` also for `ErrPolicyUnreadable`, `422` for
+   `ErrLimit`, and `503` for `ErrPolicyFailed` and `ErrForgeUnavailable`. The errors use the error shape of the
    tool-neutral APIs, and each one names the object and the one action
    that helps.
 6. **Audit entries.** Each of these writes one audit entry in the
@@ -91,7 +91,7 @@ namespace (ADR 190).
    | Create | the principal | `changeorder:author` | `change` | the title, the units and their operations |
    | Attach | the principal | `changeorder:author` | `change` | the revision, the count of signatures that it voided |
    | Policy decisions stored | the instance | `changeorder:author` | `change` | the combined effect and the policy versions |
-   | Review submitted | the reviewer, and the agent | `changeorder:comment` or `changeorder:approve` | `change` | the verdict, the digest, the IDs of the threads that it opened, and the reason for `request-changes` and `reject-and-close` |
+   | Review submitted | the reviewer, and the agent | `changeorder:comment` or `changeorder:approve` | `change` | the verdict, the digest and the IDs of the threads that it opened. For the summary, its comment ID and the SHA-256 of its text, never the text (ADR 192 decision 1). |
    | Reply | the author of the comment, and the agent | `changeorder:comment` | `change` | the thread ID |
    | Resolve by the principal that opened the thread | that principal | `changeorder:approve` or `changeorder:comment` | `change` | the thread ID |
    | Dismissal | the person who dismisses | `changeorder:approve` | `change` | the thread ID, and the reason in the field `reason` |
@@ -102,8 +102,10 @@ namespace (ADR 190).
    | Expiry | the instance | `changeorder:author` | `change` | the idle time |
    | Redaction of a comment | as ADR 151 decision 26 says | `unit:redact` | `change` | the comment ID and the reason |
 
-   An entry never holds the text of a comment, a value of a plan or the
-   cause diff. The change order record holds the text. The jobs of the
+   An entry never holds the text of a comment, the summary or the reason of
+   a review, a value of a plan or the cause diff. So a redaction of a
+   comment (ADR 198 decision 3) reaches each copy that the server controls,
+   and the audit chain keeps a hash of the text. The change order record holds the text. The jobs of the
    change order write their own entries (ADR 103 decision 9). A read and a
    draft write write no entry. **One-way door:** the audit chain hashes
    these shapes.

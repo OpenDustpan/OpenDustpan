@@ -37,7 +37,9 @@ signatures (ADR 191).
    stored plan does (ADR 152 decision 7). The purge of a unit deletes the
    metadata rows of that unit, and the change order keeps the unit
    reference with its name.
-3. **A comment is a history item.** Each comment has its own item key of
+3. **A comment is a history item.** A comment is each comment of a thread,
+   and the summary of each review, with its reason (ADR 192 decision 1).
+   Each comment has its own item key of
    the new item kind `comment` (`secret.ItemKindComment`), with the scope
    of the namespace of the change order. The server writes the wrapped key
    blob first, then the comment and the key record in one fenced
@@ -62,10 +64,15 @@ signatures (ADR 191).
    its reviews, its signatures, its threads with their anchors and the
    metadata of its comments stay until the final delete of the namespace.
    They hold IDs, hashes, digests, names, times and reasons. They never
-   hold a value of a plan. A draft is deleted at its submit, at the end of
-   its change order, or 30 days after its last write.
+   hold a value of a plan. The store deletes a draft at its submit, at the
+   end of its change order, or 30 days after its last write. A draft is
+   not sealed with an item key. So no backup holds it: the backup of a
+   namespace leaves out the table of drafts, and a restore gives no draft.
+   A redaction cannot reach a copy of a draft text, so no such copy leaves
+   the database.
 5. **Backups and restore.** The tables of the change order are data tables
-   of the namespace (ADR 196 decision 6). A backup holds them, and the
+   of the namespace (ADR 196 decision 6). A backup holds them, except the
+   table of drafts (decision 4), and the
    portable format (ADR 42) gets them as tables of the namespace. A
    restore applies each redaction of a comment, as for every item kind
    (ADR 151 decision 21). After a restore, a change order can name a job
