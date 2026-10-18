@@ -359,17 +359,19 @@ func TestCheckRefusesBadBinaryVersion(t *testing.T) {
 func TestCollapseVersion(t *testing.T) {
 	t.Parallel()
 
+	b := schema.BaselineVersion
+
 	cases := []struct {
 		name     string
 		versions []int64
 		want     int64
 	}{
-		{name: "no files", versions: nil, want: schema.BaselineVersion},
-		{name: "files below the baseline", versions: []int64{1, 50, 99}, want: schema.BaselineVersion},
-		{name: "files from the baseline on", versions: []int64{100, 103, 104}, want: 105},
-		{name: "mixed", versions: []int64{7, 99, 100, 104}, want: 105},
-		{name: "unordered", versions: []int64{104, 3, 100}, want: 105},
-		{name: "one file at the baseline", versions: []int64{100}, want: 101},
+		{name: "no files", versions: nil, want: b},
+		{name: "files below the baseline", versions: []int64{1, b / 2, b - 1}, want: b},
+		{name: "files from the baseline on", versions: []int64{b, b + 3, b + 4}, want: b + 5},
+		{name: "mixed", versions: []int64{7, b - 1, b, b + 4}, want: b + 5},
+		{name: "unordered", versions: []int64{b + 4, 3, b}, want: b + 5},
+		{name: "one file at the baseline", versions: []int64{b}, want: b + 1},
 	}
 
 	for _, tc := range cases {

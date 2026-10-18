@@ -356,17 +356,18 @@ func TestWritePostgresBaseline(t *testing.T) {
 		execPostgres(ctx, t, old, "after-postgres.sql", after(t, "postgres"))
 	}
 
-	dumped := dumpPostgres(t, base, oldSchema.name)
+	dumped := postgresBody(t, base, oldSchema.name)
 	body := postgresSchemaPrefix + dumped
 
 	freshSchema := newPostgresSchema(t, base)
 	fresh := connectPostgres(t, freshSchema.url)
 	execPostgres(ctx, t, fresh, name, body)
 
-	if got := dumpPostgres(t, base, freshSchema.name); got != dumped {
+	if got := postgresBody(t, base, freshSchema.name); got != dumped {
 		t.Fatalf("the baseline gives another schema than the migrations:\n%s", firstDifference(dumped, got))
 	}
 
+	checkPostgresTables(ctx, t, old, fresh)
 	checkPostgresVersionTable(ctx, t, old, fresh)
 
 	writeBaseline(
@@ -774,8 +775,11 @@ func newPostgresSchema(t *testing.T, base string) pgSchema {
 			return
 		}
 
-		if _, dropErr := dropper.Exec(ctx, "DROP SCHEMA "+pgx.Identifier{name}.Sanitize()+" CASCADE"); dropErr != nil {
-			t.Errorf("drop schema: %v", dropErr)
+		for _, drop := range []string{name, name + controlSuffix} {
+			stmt := "DROP SCHEMA IF EXISTS " + pgx.Identifier{drop}.Sanitize() + " CASCADE"
+			if _, dropErr := dropper.Exec(ctx, stmt); dropErr != nil {
+				t.Errorf("drop schema: %v", dropErr)
+			}
 		}
 
 		if closeErr := dropper.Close(ctx); closeErr != nil {
@@ -826,6 +830,150 @@ func execPostgres(ctx context.Context, t *testing.T, conn *pgx.Conn, name, state
 	})
 	if err != nil {
 		t.Fatalf("apply %s: %v", name, err)
+	}
+}
+
+// controlSuffix is appended to the name of the live schema to name the
+// control schema, which holds the tables that a restore never renames.
+const controlSuffix = "_control"
+
+// controlTables returns the tables that live in the control schema.
+func controlTables() []string {
+	return []string{"installation", "backups", "restores"}
+}
+
+// postgresBody returns the baseline text of the live schema name and of its
+// control schema. The statements create the control tables in the live
+// schema, where sqlc reads them, and a DO block then moves them to the schema
+// that appends _control to the current schema, as the migration that moved
+// them did.
+func postgresBody(t *testing.T, base, name string) string {
+	t.Helper()
+
+	live := dumpPostgres(t, base, name)
+
+	// A database built from the baseline before the migration that moved
+	// the tables has no control schema.
+	if !postgresSchemaExists(t, base, name+controlSuffix) {
+		return live
+	}
+
+	control := dumpPostgres(t, base, name+controlSuffix)
+
+	var move strings.Builder
+
+	for _, table := range controlTables() {
+		move.WriteString("  EXECUTE format('ALTER TABLE %I." + table + " SET SCHEMA %I', live, ctl);\n")
+	}
+
+	return live + "\n" + control + `
+DO $$
+DECLARE
+  live text := current_schema();
+  ctl text := current_schema() || '` + controlSuffix + `';
+BEGIN
+  EXECUTE format('CREATE SCHEMA IF NOT EXISTS %I', ctl);
+` + move.String() + `END $$;
+`
+}
+
+// postgresSchemaExists reports whether the database at base has schema name.
+func postgresSchemaExists(t *testing.T, base, name string) bool {
+	t.Helper()
+
+	conn := connectPostgres(t, base)
+
+	const query = `SELECT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = $1)`
+
+	var found bool
+
+	err := conn.QueryRow(t.Context(), query, name).Scan(&found)
+	if err != nil {
+		t.Fatalf("look for schema %s: %v", name, err)
+	}
+
+	return found
+}
+
+// missingTables returns the entries of want that got lacks.
+func missingTables(want, got []string) []string {
+	var out []string
+
+	for _, name := range want {
+		if !slices.Contains(got, name) {
+			out = append(out, name)
+		}
+	}
+
+	return out
+}
+
+// postgresTables returns schema.table for each table in the current schema
+// of conn and in its control schema.
+func postgresTables(ctx context.Context, t *testing.T, conn *pgx.Conn) []string {
+	t.Helper()
+
+	rows, err := conn.Query(ctx, `SELECT 'live.' || table_name FROM information_schema.tables
+		WHERE table_schema = current_schema() AND table_type = 'BASE TABLE'
+		UNION ALL
+		SELECT 'control.' || table_name FROM information_schema.tables
+		WHERE table_schema = current_schema() || $1 AND table_type = 'BASE TABLE'
+		ORDER BY 1`, controlSuffix)
+	if err != nil {
+		t.Fatalf("list the tables: %v", err)
+	}
+
+	defer rows.Close()
+
+	var out []string
+
+	for rows.Next() {
+		var name string
+
+		if scanErr := rows.Scan(&name); scanErr != nil {
+			t.Fatalf("list the tables: %v", scanErr)
+		}
+
+		out = append(out, name)
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		t.Fatalf("list the tables: %v", rowsErr)
+	}
+
+	return out
+}
+
+// checkPostgresTables fails t unless the baseline builds each table, in the
+// live schema and in the control schema, that the old migrations built.
+func checkPostgresTables(ctx context.Context, t *testing.T, old, fresh *pgx.Conn) {
+	t.Helper()
+
+	want := postgresTables(ctx, t, old)
+
+	if len(want) == 0 {
+		t.Fatal("the old migrations built no table")
+	}
+
+	if lost := missingTables(want, postgresTables(ctx, t, fresh)); len(lost) > 0 {
+		t.Fatalf("the baseline lacks the tables %v that the old migrations built", lost)
+	}
+}
+
+// TestMissingTables proves that the table check names a table that the
+// baseline lacks, also in the control schema.
+func TestMissingTables(t *testing.T) {
+	t.Parallel()
+
+	want := []string{"live.stacks", "control.backups", "control.installation"}
+
+	if got := missingTables(want, want); len(got) != 0 {
+		t.Fatalf("missing tables of equal lists = %v, want none", got)
+	}
+
+	got := missingTables(want, []string{"live.stacks"})
+	if !slices.Equal(got, []string{"control.backups", "control.installation"}) {
+		t.Fatalf("missing tables = %v, want the two control tables", got)
 	}
 }
 

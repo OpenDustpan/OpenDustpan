@@ -60,7 +60,11 @@ DUSTPAN_TEST_BASELINE_IN="$IN" DUSTPAN_TEST_BASELINE_OUT="$ROOT" DUSTPAN_TEST_BA
 # dialects must have the same one.
 BASELINE=""
 for dialect in sqlite postgres; do
-	newest="$(ls "$ROOT/pkg/store/$dialect/migrations/" | grep '^[0-9]*_baseline\.sql$' | sort | tail -n 1 || true)"
+	newest=""
+	for file in "$ROOT/pkg/store/$dialect/migrations/"[0-9]*_baseline.sql; do
+		[ -e "$file" ] || continue
+		newest="$(basename "$file")"
+	done
 	if [ -z "$newest" ]; then
 		echo "regenerate-baseline: no baseline file in pkg/store/$dialect/migrations" >&2
 		exit 1
@@ -94,9 +98,16 @@ printf '%s\n%s\n' \
 	>"$ROOT/pkg/store/schema/migrations/$BASELINE"
 
 # The three directories must end with the same file names.
-sqlite_names="$(ls "$ROOT/pkg/store/sqlite/migrations/" | grep '\.sql$' || true)"
+sql_names() {
+	for file in "$1"/*.sql; do
+		[ -e "$file" ] || continue
+		basename "$file"
+	done
+}
+
+sqlite_names="$(sql_names "$ROOT/pkg/store/sqlite/migrations")"
 for dir in postgres schema; do
-	names="$(ls "$ROOT/pkg/store/$dir/migrations/" | grep '\.sql$' || true)"
+	names="$(sql_names "$ROOT/pkg/store/$dir/migrations")"
 	if [ "$names" != "$sqlite_names" ]; then
 		echo "regenerate-baseline: pkg/store/$dir/migrations holds other file names than pkg/store/sqlite/migrations" >&2
 		exit 1
