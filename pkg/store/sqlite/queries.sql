@@ -8,11 +8,6 @@ SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, 
 FROM namespaces
 WHERE name = ?;
 
--- name: GetNamespaceByID :one
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
-FROM namespaces
-WHERE id = ?;
-
 -- name: ListNamespaces :many
 SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces

@@ -78,10 +78,5 @@ func checkBackfilledIDs(t *testing.T, s *postgres.Store, names ...namespace.Name
 		}
 
 		seen[ns.ID] = true
-
-		got, err := s.GetNamespaceByID(t.Context(), ns.ID)
-		if err != nil || got != ns {
-			t.Fatalf("get namespace by ID %q = %+v, %v, want %+v", ns.ID, got, err, ns)
-		}
 	}
 }

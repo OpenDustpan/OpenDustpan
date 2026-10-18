@@ -3363,37 +3363,6 @@ func (q *Queries) GetNamespace(ctx context.Context, name string) (GetNamespaceRo
 	return i, err
 }
 
-const getNamespaceByID = `-- name: GetNamespaceByID :one
-SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
-FROM namespaces
-WHERE id = $1
-`
-
-type GetNamespaceByIDRow struct {
-	Name                string
-	HomeRegion          string
-	FailoverVersion     int64
-	CreatedAtMs         int64
-	AllowForcedWrites   bool
-	AllowUnlockedWrites bool
-	ID                  string
-}
-
-func (q *Queries) GetNamespaceByID(ctx context.Context, id string) (GetNamespaceByIDRow, error) {
-	row := q.db.QueryRow(ctx, getNamespaceByID, id)
-	var i GetNamespaceByIDRow
-	err := row.Scan(
-		&i.Name,
-		&i.HomeRegion,
-		&i.FailoverVersion,
-		&i.CreatedAtMs,
-		&i.AllowForcedWrites,
-		&i.AllowUnlockedWrites,
-		&i.ID,
-	)
-	return i, err
-}
-
 const getNamespaceForShare = `-- name: GetNamespaceForShare :one
 SELECT name, home_region, failover_version, created_at_ms, allow_forced_writes, allow_unlocked_writes, id
 FROM namespaces

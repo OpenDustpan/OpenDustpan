@@ -505,23 +505,6 @@ func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespac
 	return codec.FromNamespaceRow(codec.NamespaceRow(row)), nil
 }
 
-// GetNamespaceByID implements namespace.IDReader.
-func (s *Store) GetNamespaceByID(ctx context.Context, id namespace.ID) (namespace.Namespace, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	row, err := s.queries.GetNamespaceByID(ctx, id.String())
-	if errors.Is(err, sql.ErrNoRows) {
-		return namespace.Namespace{}, namespace.ErrNotFound
-	}
-
-	if err != nil {
-		return namespace.Namespace{}, fmt.Errorf("select namespace by ID: %w", err)
-	}
-
-	return codec.FromNamespaceRow(codec.NamespaceRow(row)), nil
-}
-
 // SetOverrides implements namespace.Store. It replaces the override switches
 // of the namespace (ADR 44, decision 6).
 func (s *Store) SetOverrides(

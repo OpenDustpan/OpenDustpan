@@ -43,15 +43,15 @@ var (
 	// ErrNoPaging reports a namespace store that does not page namespaces:
 	// it does not implement Pager.
 	ErrNoPaging = errors.New("the namespace store does not page namespaces")
-	// ErrNoIDReader reports a namespace store that does not find namespaces
-	// by ID: it does not implement IDReader.
-	ErrNoIDReader = errors.New("the namespace store does not find namespaces by ID")
 	// ErrInvalidPage reports a page query with a limit outside 1 to
 	// maxPageLimit.
 	ErrInvalidPage = errors.New("invalid namespace page")
 )
 
 const maxNameLength = 100
+
+// maxIDLength is the longest namespace ID, prefix included.
+const maxIDLength = 100
 
 // maxPageLimit is the largest page size a page query can name. It holds one
 // row more than the largest page a caller can ask for, so a handler that
@@ -95,7 +95,7 @@ func NewID() ID {
 // ParseID validates s as a namespace ID: the prefix "ns-", then ASCII
 // letters, digits, '-', '_' and '.', at most 100 characters in total.
 func ParseID(s string) (ID, error) {
-	if !strings.HasPrefix(s, idPrefix) || len(s) == len(idPrefix) || !ident.Valid(s, maxNameLength) {
+	if !strings.HasPrefix(s, idPrefix) || len(s) == len(idPrefix) || !ident.Valid(s, maxIDLength) {
 		return "", fmt.Errorf("%w: %q", ErrInvalidID, s)
 	}
 
@@ -190,14 +190,6 @@ type Store interface {
 	Ping(ctx context.Context) error
 }
 
-// IDReader finds a namespace by its ID. It is an optional port: a Store
-// that does not implement it answers ErrNoIDReader through Service. Both SQL
-// stores implement it, and the conformance suite checks it.
-type IDReader interface {
-	// GetNamespaceByID returns the namespace with the ID id, or ErrNotFound.
-	GetNamespaceByID(ctx context.Context, id ID) (Namespace, error)
-}
-
 // Filter names which namespaces qualify for a page or a count. With All
 // set, every namespace qualifies; otherwise only the namespaces named in
 // Names qualify (unknown names are ignored; empty Names gives none).
@@ -290,23 +282,6 @@ func (s *Service) Get(ctx context.Context, name Name) (Namespace, error) {
 	ns, err := s.store.GetNamespace(ctx, name)
 	if err != nil {
 		return Namespace{}, fmt.Errorf("get namespace %q: %w", name, err)
-	}
-
-	return ns, nil
-}
-
-// GetByID returns the namespace with the ID id through the IDReader port of
-// the store. It returns ErrNoIDReader when the store does not implement
-// IDReader.
-func (s *Service) GetByID(ctx context.Context, id ID) (Namespace, error) {
-	reader, ok := s.store.(IDReader)
-	if !ok {
-		return Namespace{}, ErrNoIDReader
-	}
-
-	ns, err := reader.GetNamespaceByID(ctx, id)
-	if err != nil {
-		return Namespace{}, fmt.Errorf("get namespace with ID %q: %w", id, err)
 	}
 
 	return ns, nil

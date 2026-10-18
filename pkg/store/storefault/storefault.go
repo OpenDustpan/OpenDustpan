@@ -92,7 +92,6 @@ type Fault struct {
 //nolint:interfacebloat // One wrapper for the whole store: every SQL port shares one fault table.
 type Inner interface {
 	namespace.Store
-	namespace.IDReader
 	stack.Store
 	stack.UpdateStore
 	stack.CheckpointStore
@@ -170,16 +169,6 @@ func (s *Store) GetNamespace(ctx context.Context, name namespace.Name) (namespac
 	}
 
 	return s.inner.GetNamespace(ctx, name)
-}
-
-// GetNamespaceByID returns the namespace with the ID id, unless a fault fires
-// first.
-func (s *Store) GetNamespaceByID(ctx context.Context, id namespace.ID) (namespace.Namespace, error) {
-	if err := s.before(ctx, "GetNamespaceByID"); err != nil {
-		return namespace.Namespace{}, err
-	}
-
-	return s.inner.GetNamespaceByID(ctx, id)
 }
 
 // SetOverrides replaces the override switches of a namespace, unless a fault

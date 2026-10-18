@@ -10,6 +10,7 @@ const (
 	portColProviderID   = "provider_id"
 	portColCreatedBy    = "created_by"
 	portColNamespace    = "namespace"
+	portTableNamespaces = "namespaces"
 	portColVersion      = "version"
 	portColStackID      = "stack_id"
 	portColStatus       = "status"
@@ -46,7 +47,7 @@ const (
 func portableSpec() []PortableTable {
 	return []PortableTable{
 		{
-			Table:   "namespaces",
+			Table:   portTableNamespaces,
 			OrderBy: []string{portColName},
 			Columns: []Column{
 				{Name: portColName, Kind: KindText},

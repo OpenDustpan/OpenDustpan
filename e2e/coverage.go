@@ -128,7 +128,7 @@ func (coverageNamespaceStore) CreateNamespace(_ context.Context, _ namespace.Nam
 func (coverageNamespaceStore) GetNamespace(_ context.Context, name namespace.Name) (namespace.Namespace, error) {
 	return namespace.Namespace{
 		CreatedAt:       time.Time{},
-		ID:              "",
+		ID:              namespace.NewID(),
 		Name:            name,
 		HomeRegion:      "test-region",
 		FailoverVersion: 1,
