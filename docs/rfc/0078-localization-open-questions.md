@@ -99,12 +99,12 @@ of CLDR, which `golang.org/x/text` does not format today.
 
 ### 4. The product name in chat messages
 
-The owner's first rule named the console and emails only. Chat messages are not in the rule.
+The owner's first rule named the console and emails only. Chat messages were not in the rule.
 
 | Option | Effect |
 | --- | --- |
 | A. Chat messages use the product name, as emails do | One rule for every text that reaches a person. |
-| B. Chat messages name no product | The chat app's own name and icon name the sender. This is the state until a decision. |
+| B. Chat messages name no product | The chat app's own name and icon name the sender. This was the state before the decision. |
 | C. Chat messages say "OpenDustpan" | The chat shows a name that the operator replaced everywhere else. |
 
 Proposal: A, if the owner agrees that "emails" in the rule stands for
@@ -120,8 +120,8 @@ the emails can differ.
 
 | Option | Effect |
 | --- | --- |
-| A. The installation default (the state now) | No new field. The emails can be in another language than the console. |
-| B. The console writes the matched language to a read-only field `resolvedLanguage` of the preferences after sign-in | The emails follow the console. The server keeps one more field that the person did not set. |
+| A. The installation default (the state before the decision) | No new field. The emails can be in another language than the console. |
+| B. The console writes the matched language to a field `resolvedLanguage` of the preferences that only the console sets after sign-in | The emails follow the console. The server keeps one more field that the person did not set. |
 | C. The console asks for a language at the first sign-in | One more step for each new person. |
 
 Proposal: B. Its value is the result of the browser match of ADR 181
@@ -154,7 +154,7 @@ not the message.
 
 | Option | Effect |
 | --- | --- |
-| A. The form of the page only (the state now) | The reviewer finds the message from the text. |
+| A. The form of the page only (the state before the decision) | The reviewer finds the message from the text. |
 | B. A translation mode in settings that shows the ID of each message next to its text | The report names the message. One more mode to build and to test. |
 
 Proposal: A for now. B when the number of reports shows that A is too

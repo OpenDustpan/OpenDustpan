@@ -96,12 +96,13 @@ Facts:
 
 9. **The public sign-in answer holds the branding.** The answer of ADR 212
    decision 6 adds `productName`, `agentName`, `accent` and the paths of
-   the logos, next to `brandingPreset`:
+   the logos, next to `brandingPreset` and `translationFeedbackLinks` (ADR 232 decision 6):
 
    ```json
    {
      "providers": [{ "id": "corp-sso", "displayName": "Corp SSO" }],
      "brandingPreset": "default",
+     "translationFeedbackLinks": true,
      "productName": "Platform Portal",
      "agentName": "Sparky",
      "accent": { "light": "#0b5fff", "dark": "#7aa7ff" },
@@ -111,7 +112,7 @@ Facts:
 
    A logo of `null` means the OpenDustpan logo. This replaces the sentence
    of ADR 212 decision 6 that the answer holds the preset only. The answer
-   holds no secret and no other setting.
+   holds no secret and no setting other than these.
 10. **The logo route.** `GET /api/dustpan/v1/branding/logo/{mode}` answers
     the file with its stored type, `X-Content-Type-Options: nosniff`,
     `Content-Security-Policy: default-src 'none'` and

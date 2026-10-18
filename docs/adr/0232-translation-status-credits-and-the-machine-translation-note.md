@@ -166,8 +166,7 @@ Facts:
     owner checks a message, its status is `native-reviewed`, and its
     reviewer is `project-owner`. The repository never holds the owner's
     personal name for this role. The English source has no status of its
-    own (decision 1). Its row in the language status file shows
-    `native-reviewed` after the owner checks it, so that English never
+    own (decision 1). The language status file has no row for `en`, and English never
     shows the note. The credits page names "the project owner" for these
     three languages.
 12. **The review order (owner).** Reviewers check high-stakes messages
