@@ -53,7 +53,7 @@ both together.
 | [2](0002-organizations-are-namespaces.md) | Organizations are namespaces, in every client | accepted |
 | [3](0003-domain-modules-for-updates-secrets-and-state.md) | Domain modules for updates, secrets and OpenTofu state | accepted |
 | [4](0004-what-sits-under-a-namespace.md) | What sits under a namespace | discussing; collections and CLI placement accepted (ADR 51, ADR 61) |
-| [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | draft |
+| [5](0005-profiles.md) | Profiles, shared config and secrets for every tool | discussing; the core accepted (ADRs 200 to 209) |
 | [6](0006-runners-and-remote-runs.md) | Runners and remote runs | draft |
 | [7](0007-one-binary-many-roles.md) | One binary, many roles, removable features | draft; module switches and the capabilities document accepted (ADR 211) |
 | [8](0008-backups-and-restore.md) | Backups and restore, built in | accepted |

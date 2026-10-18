@@ -696,6 +696,116 @@ _Avoid_: Group (alone: that is a set of principals), batch, bucket
 The console heading of a plan of a change order whose units are of more than one tool (ADR 195). For units of one tool, the heading is the word of that tool: "Preview" or "Plan".
 _Avoid_: Plan (for a set of Pulumi units), preview (for OpenTofu units), change set
 
+### Profiles
+
+**Profile**:
+A named set of config, secrets and credential sources in one namespace, which a run of any tool can read (ADR 200). It has an ID with the prefix `prf-` and a name of one or two segments, for example `aws-prod` or `payments/aws-prod`. Each save makes a new profile revision.
+_Avoid_: Environment (except in the paths of the Pulumi Cloud-compatible API), context, config, variable set, vault
+
+**Profile folder**:
+The first segment of a profile name of two segments. It groups profiles in views, and the Pulumi CLI sees it as the ESC project (ADR 202 decision 9).
+_Avoid_: Project (alone)
+
+**Profile revision**:
+One immutable, numbered version of the document of a profile (ADR 202 decision 2). Each revision is a history item with its own item key.
+_Avoid_: Version (alone)
+
+**Revision tag**:
+A name that points to one profile revision, for example `stable`. The tag `latest` always names the newest revision that is not retracted (ADR 202 decision 3).
+_Avoid_: Label (a label is a key and a value for views), version tag
+
+**Entry**:
+A map in the `values` of a profile document whose keys start with `$`, for example `$secret`, `$final` or `$type`. It describes one value (ADR 201 decision 6).
+_Avoid_: Function, fn
+
+**Provider block**:
+A named block under `providers` in a profile document. Its `use` names a profile provider, for example `login/aws` (ADR 201 decision 7).
+_Avoid_: Provider (alone), source, integration
+
+**Profile provider**:
+An adapter that an open of a profile calls, of the kind `login`, `secrets` or `outputs` (ADR 206). The external adapter is one of them.
+_Avoid_: Provider (alone: that is a plugin of OpenTofu or the Pulumi CLI), integration, plugin
+
+**Rotator**:
+An adapter that makes a new credential on a schedule and retires the old one (ADR 206 decision 5). A rotator block of a profile names it.
+_Avoid_: Rotation provider
+
+**Rotation record**:
+The sealed state of one rotator block, with the current, the previous and each `retiring` credential, and the slot of each one. It lives outside the document, so a rollback never brings back a retired credential. The server binds it to a hash of the target inputs of the block, which are static. A change of that hash starts a new record. The old record is `detached` for 30 days, then the server retires its credentials, or keeps it as `orphaned` when a retire fails (ADR 202 decision 8).
+_Avoid_: Rotation state (alone)
+
+**Rotator slot**:
+One place at the remote for one credential of a rotator block, for example one of the two access keys of an IAM user. The spec of a rotator declares its slots. A rotation writes into a slot that holds no `current` credential. It retires the credential of that slot first, and fails with `ErrConflict` while the grace period of that credential has not ended (ADR 202 decision 8).
+_Avoid_: Key slot, version
+
+**Rotation lease**:
+The lease in the store that lets one rotation at a time run for one rotator block. It lasts at most 90 minutes. The record of the outcome must carry its lease token. A manual rotation and a scheduled one take the same lease. The rotation writes the state `pending` before it calls the rotator. A failure keeps `pending` until a later rotation or an abandon (ADR 202 decision 8).
+_Avoid_: Rotation lock
+
+**Exports**:
+The part of a profile document that says what reaches a consumer: `variables`, `files`, `pulumi` and `opentofu` (ADR 201 decision 9).
+_Avoid_: Outputs (outputs belong to a unit or a provider block), environment variables (alone)
+
+**Never store**:
+The mark of a value that no consumer may store in a plan or in state. The data source of OpenTofu refuses it, and only the ephemeral resource reads it (ADR 201 decision 12, ADR 209 decision 3).
+_Avoid_: Ephemeral (alone), transient
+
+**Open**:
+The resolve of a profile for one caller: imports, provider blocks, types and checks, with the secret marks (ADR 203). Each open writes one audit entry. An open needs `profile:open`, or a job token for a profile that the job fixed.
+_Avoid_: Read (a read of a profile gives sealed secrets), decrypt
+
+**Open session**:
+The stored result of an open, with an ID of the prefix `pos-` (ADR 203 decision 3). Only its principal reads it, for at most 12 hours, and each read checks the action of the principal again.
+_Avoid_: Session (alone)
+
+**Profile attachment**:
+A link from a profile to a namespace, a collection or a unit. The jobs of each unit of the object read the profile (ADR 203 decision 5).
+_Avoid_: Binding, assignment (an assignment is a runner term)
+
+**Attachment authority**:
+The principal whose actions an open uses. For a direct open, it is the caller. For a job open, it is the principal who made the attachment. For an attachment of the Catalog, it is the person who published the blueprint version. The server checks the full set of the attach checks again at each open of a job. These are the job start, each step, each token renewal and each read of a session. A person who passes the attach checks can re-authorize an attachment (ADR 203 decision 4).
+_Avoid_: Attachment owner, run-as
+
+**Change rule**:
+The rule of a profile that turns each save into a profile draft that needs approvals (ADR 202 decision 6).
+_Avoid_: Ruleset, change gate
+
+**Routing change**:
+A change of a profile that can change where a provider or rotator block sends secrets. The server decides it from the syntax, with no open. It is one of these: a difference in the text of a `providers` or `rotators` block. A difference in the text of a path of the taint set of a block. A difference in `imports` or `exports`. A rollback, tag move or apply of a draft with such a difference. A change of profile Q can also be a routing change for a referrer of Q. This is true when the referrer follows the changed revision and has a block whose taint set holds a changed path. It needs `profile:open` on the profile and on each such referrer, as well as `profile:write`. The diff compares the evaluated destination hosts, not the text (ADR 202 decision 2).
+_Avoid_: Sensitive change, dangerous change
+
+**Taint set**:
+Each path that an input of a provider or rotator block reads, directly or through expressions. The paths are in the own tree of the profile that holds the block. The server finds it from the syntax tree. A change to a path of a taint set is a routing change (ADR 202 decision 2).
+_Avoid_: Dependencies (alone), inputs (alone)
+
+**Profile draft**:
+A proposed revision of a profile under a change rule, with a base revision and approvals. It applies as a new revision after approval (ADR 202 decision 6).
+_Avoid_: Change request, draft (alone: a draft review belongs to a change order)
+
+**Open rule**:
+The rule of a profile that needs an approved access request before a person opens it (ADR 202 decision 7).
+_Avoid_: Open gate, just-in-time access
+
+**Access request**:
+A request of a person to open a profile for a time, under an open rule (ADR 202 decision 7). It holds a reason.
+_Avoid_: Open request
+
+**Issuer**:
+The OIDC issuer of one namespace, at `https://<issuer host>/oidc/<namespace ID>`, with its own signing keys (ADR 204). The issuer host comes from the installation setting `issuerBaseURL`, else from `publicURL`. When the namespace sets `issuerURL`, `iss` is that URL, and the server signs only with a key that the copy check found at that URL. Its paths `/oidc/<namespace ID>/...` are outside the versioned API. Clouds and other systems trust it.
+_Avoid_: Identity provider (an identity provider signs in people), OIDC provider (alone)
+
+**Issued token**:
+A JWT that the issuer of a namespace signs, with the claims of ADR 205. Its `purpose` is `login` or `adapter`. It lives at most 60 minutes.
+_Avoid_: ID token, access token (an access token authenticates to OpenDustpan)
+
+**Subject template**:
+The list of keys that make the `sub` of an issued token, for example `namespace`, `collection`, `tool`, `unit` and `access` (ADR 205 decision 6).
+_Avoid_: Subject attributes, sub format
+
+**External adapter**:
+A profile provider or a rotator that a team writes and hosts. The server calls it with an HTTPS `POST` and an issued token with the hash of the body (ADR 208).
+_Avoid_: Webhook, plugin, connector
+
 ### Agents
 
 **Dusty**:
@@ -982,7 +1092,7 @@ _Avoid_: Scheme, theme (for branding)
 
 **Preferences**:
 The settings of the console that a person keeps on the account, on every device (`/api/dustpan/v1/me/preferences`, ADR 180, ADR 210). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
-_Avoid_: Profile (a profile holds shared config and secrets, RFC 5), user settings
+_Avoid_: Profile (a profile holds shared config and secrets, ADR 200), user settings
 
 
 **Language** (of a person):
@@ -1035,6 +1145,7 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Project** has two meanings. Always write "Pulumi project" or "TFE project".
 - **Organization** is the word each tool uses for a namespace. Use it only to name a field or command of a tool's protocol.
 - **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.
+- **Lease** names the update lease of the Pulumi CLI, the rotation lease of a rotator block, and a lease of Vault (ADR 207). Name which one.
 - **Orphan** means a stored file, for example a blob that no row names. For a cloud resource that no unit manages, or that two units manage, write "unmanaged resource" and name its kind.
 - **Catalog** is the self-service gateway only. The list of all units is the inventory.
 - **Job** and **operation** are different. A job is work that OpenDustpan asks an executor to do on one unit. Each phase of a job is one durable operation (ADR 100). The operation of a job is `plan`, `apply`, `destroy` or `refresh`. Name which one.
@@ -1066,4 +1177,9 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **`@server`** is the name of the authorization and audit object of the installation, and of the installation scope of a secret. It is not an action area and not a path. The action area is `installation:`, and no path of the API holds the word `server` (ADR 210).
 - **Layer** is a source of the value of a setting (ADR 63). ADR 161 also says "layer" for one object of the context chain. Name which one.
 - **Redaction**, **masking** and **purge** are different. A redaction destroys the content of one history item. Masking hides a secret value in a read and keeps it. A purge ends a whole unit.
+- **Provider** has two meanings. A provider of OpenTofu or the Pulumi CLI is a plugin of the tool, for example a provider wrapper (ADR 170). A profile provider is an adapter that an open calls (ADR 206). Write "profile provider" or "provider block" for the second.
+- **Environment** is the word of the Pulumi CLI for a profile, in the paths of the Pulumi Cloud-compatible API (ADR 209). Everywhere else, write "profile". An environment variable is a variable of a process.
+- **Open session** and the other sessions are different: an open session holds the result of one open of a profile (ADR 203).
+- **Access** is also a claim of an issued token: `read`, `write`, `rotate` or `open` (ADR 205). An access token authenticates to OpenDustpan. Name which one.
+- **Tag** has two meanings: a tag that a tool sends for a unit, and a revision tag of a profile. The key and value pairs of a profile are labels. Name which one.
 - **Retention** has three meanings. The first is the retention period of a deleted unit. The second is that of a stored plan or a job log (ADR 152). The third is that of an incident record or a cyber threat record (ADR 148). Name which one.

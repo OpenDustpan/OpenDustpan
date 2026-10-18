@@ -32,6 +32,7 @@ func RunWorkspaceStateAt(t *testing.T, newStore WorkspaceStateAtFactory) {
 		{name: "state at a time ignores a pending state version", test: testWorkspaceStateAtPending},
 		{name: "state at a time after finalizes that ask for one millisecond", test: testWorkspaceStateAtTie},
 		{name: "state at a time after a fence in the current millisecond", test: testWorkspaceStateAtFenceTie},
+		{name: "state version list after finalizes in one millisecond", test: testWorkspaceListOrderTie},
 		{name: "state at a time of a deleted and of an unknown workspace", test: testWorkspaceStateAtDeleted},
 	}
 
@@ -270,6 +271,51 @@ func testWorkspaceStateAtTie(t *testing.T, s WorkspaceStateAtStore) {
 
 	wantStamped(t, back, tie2.Add(2*time.Millisecond))
 	wantStateAtNowIsCurrent(t, s, ws.ID, back)
+}
+
+// testWorkspaceListOrderTie proves that the state version list follows the
+// order in which the versions became current, newest first, when the
+// finalizes ask for one millisecond: also for a forced version that is
+// created before the others and finalizes last, where an order by version
+// ID would differ.
+func testWorkspaceListOrderTie(t *testing.T, s WorkspaceStateAtStore) {
+	t.Helper()
+
+	ns := newWorkspaceNamespace(t, s, "acme")
+	ws := turnOnSwitches(t, s, ns, createTestWorkspace(t, s, ns, "network"),
+		namespace.Overrides{Forced: true, Unlocked: false})
+	w := stateAtWorkspace{ns: ns, locked: lockTestWorkspace(t, s, ns, ws, "alice")}
+	tie := workspaceStateAtBase().Add(time.Minute)
+	created := now()
+
+	early := createPendingVersion(t, s, ns, newPendingVersion(
+		t, w.locked, w.locked.Lock.ID, forcedInput("lin-1", "f", 1),
+	))
+	first := w.finalizeCreatedAt(t, s, 1, created, tie)
+	second := w.finalizeCreatedAt(t, s, 2, created.Add(time.Second), tie)
+
+	if err := finalizeRecorded(t, s, ns.Fence(), finalizedVersion(early, tie, "f")); err != nil {
+		t.Fatalf("finalize forced state version: %v", err)
+	}
+
+	forced := storedStateVersion(t, s, early.ID)
+	want := []workspace.StateVersionID{forced.ID, second.ID, first.ID}
+
+	list, total, err := s.ListStateVersions(t.Context(), ws.ID, workspace.Page{Limit: 100, Offset: 0})
+	if err != nil {
+		t.Fatalf("list state versions: %v", err)
+	}
+
+	if total != len(want) || len(list) != len(want) {
+		t.Fatalf("list holds %d of %d versions, want %d", len(list), total, len(want))
+	}
+
+	for i, id := range want {
+		if list[i].ID != id {
+			t.Fatalf("list[%d] is %s, want %s (the order in which the versions became current, newest first)",
+				i, list[i].ID, id)
+		}
+	}
 }
 
 // testWorkspaceStateAtFenceTie proves that FenceAndUnlock also stamps a time
