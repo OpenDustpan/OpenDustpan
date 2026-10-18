@@ -1,6 +1,6 @@
 # 121. The model port is provider-neutral and has no stream
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17 · decisions 1, 2, 4, 8 and 9, and one item of "Not decided here", superseded in part by ADR 129
 
 ## Context
 
