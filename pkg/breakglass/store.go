@@ -49,8 +49,12 @@ type Store interface {
 	// namespace.ErrNotFound and namespace.ErrFenced as the Store
 	// describes. It appends e only when it creates the review.
 	Open(ctx context.Context, r Review, fence namespace.Fence, e audit.Entry) (Review, error)
-	// Get returns the review id, or ErrNotFound.
-	Get(ctx context.Context, id string) (Review, error)
+	// Get returns the review id of scope: the namespace of the review, or
+	// audit.ServerScope for a review of a break-glass account session. It
+	// returns ErrNotFound for an unknown ID and for a review of another
+	// scope, so that a read in one namespace does not tell whether a
+	// review of another scope exists.
+	Get(ctx context.Context, scope namespace.Name, id string) (Review, error)
 	// List returns the reviews that match f, ordered by ID.
 	List(ctx context.Context, f Filter) ([]Review, error)
 	// Record stores the verdict of r when r.Version is the stored version,

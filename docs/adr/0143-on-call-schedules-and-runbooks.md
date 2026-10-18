@@ -1,6 +1,6 @@
 # 143. On-call schedules, handoffs and runbooks
 
-Status: accepted · 2026-10-18
+Status: accepted · 2026-10-18 · decisions 1, 3 and 15 superseded in part by ADR 149
 
 ## Context
 

@@ -1,6 +1,6 @@
 # 145. One notification model with sinks for email, chat and signed webhooks
 
-Status: accepted · 2026-10-18 · answers part of RFC 23
+Status: accepted · 2026-10-18 · answers part of RFC 23. Decisions 3, 13, 15, 24 and 27 and the identity consequence superseded in part by ADR 149
 
 ## Context
 

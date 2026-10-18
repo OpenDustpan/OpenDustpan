@@ -78,6 +78,10 @@ func (m *memStore) Create(_ context.Context, s oncall.Schedule, fence namespace.
 		return fmt.Errorf("create %s: %w: only a copy sets the copied shifts", s.ID, oncall.ErrInvalid)
 	}
 
+	if len(s.Overrides) > 0 {
+		return fmt.Errorf("create %s: %w: only an add of an override writes overrides", s.ID, oncall.ErrInvalid)
+	}
+
 	return translate(m.Write(fence, entryIn(e, opsmem.Scope(s.Namespace)), []audit.Entry{e}, func() error {
 		if _, ok := m.schedules[s.ID]; ok {
 			return fmt.Errorf("create %s: %w", s.ID, oncall.ErrExists)
@@ -106,10 +110,29 @@ func (m *memStore) Get(_ context.Context, ref oncall.Ref) (oncall.Schedule, erro
 		return s, fmt.Errorf("get %s/%s: %w", ref.Namespace, ref.Name, oncall.ErrNotFound)
 	}
 
-	return s, nil
+	return detach(s), nil
+}
+
+// detach returns s with its own copies of the slices of the store, so a
+// caller that changes the schedule that Get returned does not change the
+// stored one, as with a SQL adapter.
+func detach(s oncall.Schedule) oncall.Schedule {
+	s.Layers = slices.Clone(s.Layers)
+	for i := range s.Layers {
+		s.Layers[i].Members = slices.Clone(s.Layers[i].Members)
+	}
+
+	s.Overrides, s.Copied = slices.Clone(s.Overrides), slices.Clone(s.Copied)
+
+	return s
 }
 
 func (m *memStore) Update(_ context.Context, s oncall.Schedule, fence namespace.Fence, e audit.Entry) error {
+	// The update keeps the stored overrides. It accepts no overrides or
+	// the stored list, and validates the rest of s.
+	sent := s.Overrides
+	s.Overrides = nil
+
 	if err := s.Validate(); err != nil {
 		return err
 	}
@@ -134,11 +157,15 @@ func (m *memStore) Update(_ context.Context, s oncall.Schedule, fence namespace.
 			return fmt.Errorf("update %s: %w", s.ID, oncall.ErrConflict)
 		}
 
+		if len(sent) != 0 && !oncall.SameOverrides(sent, old.Overrides) {
+			return fmt.Errorf("update %s: %w: only an add writes an override", s.ID, oncall.ErrInvalid)
+		}
+
 		if other, used := m.byRef(oncall.Ref{Namespace: s.Namespace, Name: s.Name}); used && other.ID != s.ID {
 			return fmt.Errorf("update %s: %w", s.Name, oncall.ErrExists)
 		}
 
-		s.Copied, s.Synced = old.Copied, old.Synced
+		s.Copied, s.Synced, s.Overrides = old.Copied, old.Synced, old.Overrides
 		s.Version++
 		m.schedules[s.ID] = s
 
@@ -240,16 +267,30 @@ func (m *memStore) AddHandoff(_ context.Context, h oncall.Handoff, fence namespa
 	}), oncall.ErrNotFound)
 }
 
-func (m *memStore) Handoffs(_ context.Context, schedule string, from, to time.Time) ([]oncall.Handoff, error) {
-	var out []oncall.Handoff
+func (m *memStore) Handoffs(
+	_ context.Context, ns namespace.Name, schedule string, from, to time.Time,
+) ([]oncall.Handoff, error) {
+	var (
+		out   []oncall.Handoff
+		found bool
+	)
 
 	m.Read(func() {
+		s, ok := m.schedules[schedule]
+		if found = ok && s.Namespace == ns; !found {
+			return
+		}
+
 		for _, h := range m.handoffs {
 			if h.Schedule == schedule && !h.At.Before(from) && h.At.Before(to) {
 				out = append(out, h)
 			}
 		}
 	})
+
+	if !found {
+		return nil, fmt.Errorf("handoffs of %s/%s: %w", ns, schedule, oncall.ErrNotFound)
+	}
 
 	slices.SortFunc(out, func(a, b oncall.Handoff) int { return b.At.Compare(a.At) })
 

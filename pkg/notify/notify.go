@@ -15,6 +15,8 @@ package notify
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -184,11 +186,28 @@ func (l Link) valid() bool {
 }
 
 // Recipient names a person or a group that a notice is for. Exactly one
-// field is set. A subscription routes every notification. A recipient
-// routes a notice also to the personal contacts of each person.
+// field is set. Admins names the administrators of the scope of the
+// notification: each principal that holds the action to manage the
+// notifications of the scope (see Contacts.Admins). A subscription routes
+// every notification. A recipient routes a notice also to the personal
+// contacts of each person.
 type Recipient struct {
 	Principal string
 	Group     string
+	Admins    bool
+}
+
+// valid reports whether exactly one field of r is set.
+func (r Recipient) valid() bool {
+	set := 0
+
+	for _, ok := range []bool{r.Principal != "", r.Group != "", r.Admins} {
+		if ok {
+			set++
+		}
+	}
+
+	return set == 1
 }
 
 // Notification is one fact. Scope is the namespace of the object, or the
@@ -231,9 +250,10 @@ func (n Notification) Validate() error {
 
 // Fit returns n with its text cut to the bounds, so that a notification
 // never fails the domain write that carries it. It cuts the summary, the
-// dedupe key, the link titles and the attribute values at a rune boundary,
-// uses the type as the summary and the ID as the dedupe key when they are
-// empty, drops each link
+// link titles and the attribute values at a rune boundary, replaces a
+// dedupe key above the bound with a prefix of it and the SHA-256 of the
+// full key (see fitKey), uses the type as the summary and the ID as the
+// dedupe key when they are empty, drops each link
 // that is not valid and each attribute with a key that is not valid, and
 // keeps the first MaxLinks links, the MaxAttributes attributes with the
 // lowest keys, and the first MaxRecipients valid recipients. Fit does not
@@ -245,7 +265,7 @@ func (n Notification) Fit() Notification {
 		n.Summary = string(n.Type)
 	}
 
-	n.DedupeKey = cut(cmp.Or(n.DedupeKey, n.ID), MaxAttributeLen)
+	n.DedupeKey = fitKey(cmp.Or(n.DedupeKey, n.ID))
 
 	links := make([]Link, 0, min(len(n.Links), MaxLinks))
 	for _, l := range n.Links {
@@ -268,7 +288,7 @@ func (n Notification) Fit() Notification {
 
 	recipients := make([]Recipient, 0, min(len(n.Recipients), MaxRecipients))
 	for _, r := range n.Recipients {
-		if (r.Principal == "") != (r.Group == "") && len(recipients) < MaxRecipients {
+		if r.valid() && len(recipients) < MaxRecipients {
 			recipients = append(recipients, r)
 		}
 	}
@@ -276,6 +296,22 @@ func (n Notification) Fit() Notification {
 	n.Recipients = recipients
 
 	return n
+}
+
+// fitKey returns a dedupe key of at most MaxAttributeLen bytes. A key
+// above the bound becomes its first bytes, cut at a rune boundary, then
+// "#" and the hex SHA-256 of the full key. A cut alone would make two keys
+// with the same first bytes one key, and the outbox would then drop the
+// second notification.
+func fitKey(k string) string {
+	if len(k) <= MaxAttributeLen {
+		return k
+	}
+
+	sum := sha256.Sum256([]byte(k))
+	tail := "#" + hex.EncodeToString(sum[:])
+
+	return cut(k, MaxAttributeLen-len(tail)) + tail
 }
 
 // cut returns s cut to at most limit bytes, at a rune boundary.
@@ -348,8 +384,8 @@ func (n Notification) validateParts() error {
 	}
 
 	for _, r := range n.Recipients {
-		if (r.Principal == "") == (r.Group == "") {
-			return fmt.Errorf("%w: a recipient names a principal or a group", ErrInvalid)
+		if !r.valid() {
+			return fmt.Errorf("%w: a recipient names a principal, a group or the administrators", ErrInvalid)
 		}
 	}
 
