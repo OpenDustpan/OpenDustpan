@@ -230,7 +230,7 @@ data of the other.
 - Cost: medium. A second server command, a column in the `installation`
   table with a store port, a change to the README quickstart, the guides,
   the container image, `scripts/demo.sh` and the e2e setup. ADRs 23, 39,
-  41, 154, 33 and 63 get a status line.
+  41 and 154 get a status line.
 - Gives: a trial with zero steps before the first start, also in CI. A
   `serve` command whose every start is a production start. The help of
   each command explains one intent.
@@ -304,8 +304,13 @@ Changes from the starting point in the brief:
    data directory. `dev.env` holds the variables that the Pulumi CLI, OpenTofu
    and the `opendustpan` client commands read: the server URL, the token
    (see "What `dev` prints and writes"), `SSL_CERT_FILE` when TLS is on,
-   `TF_CLI_CONFIG_FILE`, `TF_HTTP_PASSWORD`, and `DUSTPAN_DEV=1`. A user
-   runs `. <data dir>/dev.env` and every tool works.
+   `TF_CLI_CONFIG_FILE`, `TF_HTTP_USERNAME=dustpan`, `TF_HTTP_PASSWORD`, and
+   `DUSTPAN_DEV=1`. OpenTofu sends basic authentication only with a user
+   name, and the server ignores the user name. The server variables are
+   `PULUMI_BACKEND_URL` and `DUSTPAN_SERVER`. A user
+   runs `. <data dir>/dev.env` and every tool works. `dev.env` is a POSIX
+   `sh` file. On GitHub Actions, a step runs `. dev.env` and the tools in
+   the same step.
 4. **`dev` refuses production data too.** The brief has `serve` refuse dev
    data. The other direction matters as well: `dev` makes keys and binds to
    loopback, so `dev` on a production database might start with a wrong key.
@@ -357,7 +362,8 @@ its own defaults and its own small set of flags.
   token file, the certificate, `dev.addr`, `dev.env` and `dev.tfrc`. `dev`
   uses it again at the next start.
 - **Ownership and file modes.** `dev` makes the data directory with mode
-  0700. It makes the key file, the token file, `dev.addr`, `dev.env`,
+  0700. It sets mode 0700 on an empty directory that it claims. A
+  `lost+found` directory at a mount root is allowed. It makes the key file, the token file, `dev.addr`, `dev.env`,
   `dev.tfrc` and each private key of the TLS design with mode 0600. At each
   start, `dev` refuses to start when one of these is true:
   - The group or others can read, write or enter the data directory, as
@@ -369,9 +375,13 @@ its own defaults and its own small set of flags.
   `chmod 700 <dir>`, or `chown <uid> <path>` with the current user ID.
 - **The volume of the image.** The image has no `/data` directory, so the
   container runtime makes the mount point, owned by root. The user
-  `nonroot` then cannot make `/data/dev`. The Dockerfile must make `/data`
-  owned by `nonroot` before `VOLUME /data`, so that a named volume starts
-  with that owner. A bind mount keeps the owner on the host. For a bind
+  `nonroot` then cannot make `/data/dev`. The build stage makes an empty
+  directory, and the final stage copies it with
+  `COPY --from=build --chown=nonroot:nonroot /empty /data` before
+  `VOLUME /data`. A named volume copies that owner only when the volume is
+  new and empty. For a bind mount and for Kubernetes, the guide sets
+  `fsGroup: 65532`. This also helps `serve` on a new named volume. A bind
+  mount keeps the owner on the host. For a bind
   mount that `nonroot` cannot write, `dev` stops with an error that names
   the path and the user ID 65532 of `nonroot`. The image smoke test must
   check that `dev` starts on a new named volume.
@@ -403,23 +413,22 @@ its own defaults and its own small set of flags.
   `DUSTPAN_DEV_ADMIN_TOKEN` from its process environment after it reads the
   variable. Else `dev` makes a token on the first start and keeps it in the
   token file.
-- **What `dev` prints and writes.** `dev` writes the token into a file
+- **What `dev` prints and writes.** `dev` writes the token into `dev.env`
   only when `dev` made it.
   - A token that `dev` made: `dev.env` sets `DUSTPAN_ADMIN_TOKEN`,
-    `PULUMI_ACCESS_TOKEN` and `TF_HTTP_PASSWORD` to it, and `dev.tfrc`
+    `PULUMI_ACCESS_TOKEN` and `TF_HTTP_PASSWORD` to it, sets
+    `TF_HTTP_USERNAME=dustpan`, and `dev.tfrc`
     holds it in a `credentials` block.
   - A token from `DUSTPAN_DEV_ADMIN_TOKEN`: `dev.env` takes the value from
     the variable in the shell that loads it, and holds no token:
     `export DUSTPAN_ADMIN_TOKEN="${DUSTPAN_DEV_ADMIN_TOKEN:?}"`, and the same
-    for `PULUMI_ACCESS_TOKEN` and `TF_HTTP_PASSWORD`. A `dev.tfrc` cannot
-    read a variable, so it holds no `credentials` block. OpenTofu then reads
-    the token of the TFE-compatible API from a `TF_TOKEN_` variable for the
-    host, which `dev.env` sets in the same way. The ADR must check with
-    the real CLI how OpenTofu names that variable for a host with a port.
-    This choice keeps one step for the job (it sets one variable), and
-    `. dev.env` still sets every tool. The other choice, a list of
-    variables that the job sets itself, gives the job one step for each
-    tool.
+    for `PULUMI_ACCESS_TOKEN` and `TF_HTTP_PASSWORD`, and it sets
+    `TF_HTTP_USERNAME=dustpan`. OpenTofu reads a `TF_TOKEN_` variable by
+    host name only. Its encoding has no form for a port, so no `TF_TOKEN_`
+    variable names `localhost:8080`. So for a token from
+    `DUSTPAN_DEV_ADMIN_TOKEN`, `dev.tfrc` holds the token in a
+    `credentials` block, with mode 0600 in the data directory with mode
+    0700. The ADR checks this with the real CLI.
   - A token from `--admin-token-file`: `dev.env` sets
     `DUSTPAN_ADMIN_TOKEN_FILE` to that path, and holds no token. The Pulumi
     CLI and OpenTofu read no token file, so the banner names the variables
@@ -544,9 +553,13 @@ find the address and the certificate of `dev`.
 
 - **`dev.addr`.** `dev` deletes `dev.addr` at start, before it listens.
   When it listens, it writes `dev.addr` (mode 0600) with the bound address
-  and the certificate path. At stop, it deletes `dev.addr` again. The file
+  and the certificate path. `dev.addr` also holds the process ID and the
+  start time of `dev` (`/proc/<pid>/stat`). `health` treats a `dev.addr`
+  whose process ID has another start time as missing, and then probes with
+  the settings of `serve`. At stop, it deletes `dev.addr` again. The file
   holds an address that a client can dial: `dev` writes `127.0.0.1` for
-  the wildcard `0.0.0.0` or an empty host, and `::1` for the wildcard `::`.
+  the wildcards `0.0.0.0`, `::` and an empty host. It writes an IPv6
+  address in the form `[addr]:port`.
   A crash leaves a stale `dev.addr`. The probe then fails to connect and
   reports "not ready".
 - **`health --data-dir DIR`** reads `DIR/dev.addr`, and probes that address
@@ -638,9 +651,10 @@ answer.
   adapter returns an error and applies no migration. So `serve` on a dev
   database stops before it changes the schema. When the column does not
   exist yet, the adapter applies the migrations, and the claim below
-  decides.
-- **The claim.** The server claims the mode in `startUp`, next to
-  `secret.CheckWrapper` and before the listener opens. The claim is one
+  decides. An adapter opened with no mode option does no check before the
+  migrations (the SDK default), and the claim decides.
+- **The claim.** The server claims the mode first in the start-up steps,
+  before any step that writes, and before the listener opens. The claim is one
   compare-and-set: `UPDATE installation SET mode = ? WHERE id = 1 AND mode
   IS NULL`. Then the server reads the mode. When the stored mode differs
   from the mode of the command, the start stops. Several instances of
@@ -671,8 +685,10 @@ answer.
   the start-up steps succeeded, except `GET /health/live`, which stays 204
   (ADR 34). `GET /health/ready` answers 503 in the same time. A new
   exported method, `Server.Start(ctx) error`, runs the start-up steps
-  (the key check, the claim and the other steps of `startUp`). `Run` calls
-  `Start`. An embedder that serves `Handler` calls `Start`. Why the gate
+  (today `runStartUp`: the key check, the claim, the running backups and
+  restores with the fence, the audit chain and the sign-in providers).
+  `Run` calls `Start`. `Start` runs once: `Run` after a successful `Start`
+  does not repeat the steps. An embedder that serves `Handler` calls `Start`. Why the gate
   and not an exported start check alone: an embedder can forget a call,
   and a forgotten check fails open. With the gate, a forgotten `Start`
   gives 503, which the embedder sees at the first request. The gate also
@@ -700,11 +716,13 @@ manager"). To keep the units of a trial, the user moves them into a
 production server with the commands of each tool. For each Pulumi stack:
 
 ```
-pulumi login https://localhost:8080                 # in the shell with dev.env
+pulumi login https://localhost:8080                 # in the shell with dev.env (the --tls case)
+pulumi config --stack dev/demo/dev --show-secrets --json > demo-config.json   # in the shell with dev.env
 pulumi stack export --stack dev/demo/dev --show-secrets --file demo.json
 pulumi login https://dustpan.example.com            # in a new shell, with the production token
 pulumi stack init team/demo/dev
 pulumi stack import --stack team/demo/dev --file demo.json
+# set each secret value again: pulumi config set --stack team/demo/dev --secret <key> <value>
 ```
 
 For each OpenTofu workspace, in the project directory:
@@ -718,7 +736,10 @@ tofu state push demo.tfstate
 
 `--show-secrets` writes the secret values in plain text to `demo.json`, so
 that the production server encrypts them with its own key. The user
-deletes `demo.json` and `demo.tfstate` after the import. RFC 66 holds
+deletes `demo.json` and `demo.tfstate` after the import. The secret values
+of the stack configuration use the key of `dev`, so the user
+sets each one again on the production stack. The user deletes
+`demo-config.json` too. Stack history, tags and update events do not move. RFC 66 holds
 tooling to move units between installations. The dev data stays until the
 user deletes the data directory.
 
@@ -783,8 +804,6 @@ form, for example "decision 12 superseded in part by ADR N":
 | 39 | 4, "a gate, not only a rule" | decision 4 superseded in part by ADR N | The gate allows the wiring of `serve` and `dev`. The test that fails when a command other than `serve` opens a store names `dev` too. |
 | 41 | 12, "the key, with no silent default" | decision 12 superseded in part by ADR N | The default key file path, the terminal prompt and `--generate-key-encryption-key` go from `serve`. `dev` makes its own key. The error text changes. The "upgrade check" item names the new settings. |
 | 154 | 10, the escape hatch and its warning | decision 10 superseded in part by ADR N | The escape hatch goes to `dev`. The error text of `serve` changes. The warning for a made key file goes. A warning for an explicit key file next to the data stays. |
-| 33 | the warning of the upgrade check | superseded in part by ADR N | The warning names `--key-encryption-key-file`, `DUSTPAN_KEY_ENCRYPTION_KEY` and `key generate`. |
-| 63 | the file keys of the configuration file | superseded in part by ADR N | The key `generate-key-encryption-key` goes. `database` has no default. |
 
 These ADRs do not change:
 
@@ -821,7 +840,7 @@ All personas are equal. Each row shows the first start and the normal run.
 | Small team | One person runs `opendustpan dev` on a laptop for a day. | The container image on one host with a mounted key file, SQLite or PostgreSQL, a backup target and OIDC sign-in. `opendustpan doctor` before the first start. |
 | Startup | `opendustpan dev` locally, and in CI from day one. | PostgreSQL and S3 from a cloud provider, the key in a secret store mounted as a file, two instances behind a load balancer. `doctor --server` in the deploy pipeline after each upgrade. |
 | Enterprise | A platform engineer runs `opendustpan dev` to read the API and the console. A security reviewer reads `serve --help`: every production start needs a key, a database and a token that the operator gave. | Configuration file from configuration management, the key from a secret store or a KMS (RFC 33), audit sinks, signed audit checkpoints, IP allowlists. `serve` refuses dev data and a dev key, so a copy of a test database cannot become production by mistake. No dev key and no dev token ever reaches production. |
-| CI pipeline | `opendustpan dev --data-dir "$RUNNER_TEMP/dustpan" & pid=$!`, then a loop: `until opendustpan health --data-dir "$RUNNER_TEMP/dustpan"; do kill -0 "$pid" \|\| exit 1; sleep 1; done`, then `. "$RUNNER_TEMP/dustpan/dev.env"`. The `kill -0` check stops the loop when `dev` stopped with an error. When the job sets `DUSTPAN_DEV_ADMIN_TOKEN`, the job knows the token before the start, and `dev` never prints it. In a service container: `dev --listen 0.0.0.0:8080 --hostname dustpan`. | The same at each run. The data directory goes with the runner. No key, certificate or token is a CI secret. A production token in the job environment does not reach `dev`. |
+| CI pipeline | `opendustpan dev --data-dir "$RUNNER_TEMP/dustpan" & pid=$!`, then a loop: `until opendustpan health --data-dir "$RUNNER_TEMP/dustpan"; do kill -0 "$pid" \|\| exit 1; sleep 1; done`, then `. "$RUNNER_TEMP/dustpan/dev.env"`. The `kill -0` check stops the loop when `dev` stopped with an error. When the job sets `DUSTPAN_DEV_ADMIN_TOKEN`, the job knows the token before the start, and `dev` never prints it. In a service container: `dev --listen 0.0.0.0:8080 --hostname dustpan`. The job sets the variables itself: `PULUMI_BACKEND_URL` and `DUSTPAN_SERVER` as `http://dustpan:8080`, the token from `DUSTPAN_DEV_ADMIN_TOKEN`, `TF_HTTP_USERNAME` and `TF_HTTP_PASSWORD`. | The same at each run. The data directory goes with the runner. No key, certificate or token is a CI secret. A production token in the job environment does not reach `dev`. |
 
 ## Compatibility
 
@@ -861,9 +880,12 @@ All personas are equal. Each row shows the first start and the normal run.
   `/data/dev` on the volume and the `HEALTHCHECK` finds it (see
   "`opendustpan health` and `dev`"). The Dockerfile makes `/data` owned by
   `nonroot` (see "The volume of the image").
-- **The SDK.** `Handler` answers 503 until `Start` succeeded. An embedder
-  that mounts `Handler` today must add a call to `Start`. No tag shipped,
-  so no embedder depends on the current behavior (ADR 73 decision 4).
+- **The SDK.** `Handler` answers 503 until `Start` succeeded. No tag
+  shipped, so no outside embedder depends on the current behavior (ADR 73
+  decision 4). In this repository, the e2e harness (`e2e/harness.go`), the
+  load harness (`load/main.go`) and the tests in `pkg/dustpan` and `e2e`
+  that serve `Handler` without `Run` add a call to `Start` in the same pull
+  request.
 - **Documents and scripts.** The README quickstart, the configuration
   reference, the security model, the guide for several instances, the guide
   for backup and upgrade, `scripts/demo.sh` and the e2e setup change in the
@@ -955,6 +977,8 @@ Windows it is worse off under any option that is TLS only (see "TLS in
   `backend "http"` work at once on every platform. The `cloud` block does
   not work.
 - (c) Both: HTTP on one port, loopback only, and HTTPS on the next port.
+  Two ports: `dev.addr`, `dev.env`, the banner and the health probe name
+  both, and a container publishes two ports.
 - (d) HTTP by default, plus a `--tls` flag that turns on HTTPS. This is
   the pattern of Vault `-dev-tls`. The Pulumi CLI and `backend "http"`
   work at once. The `cloud` block needs the flag.
