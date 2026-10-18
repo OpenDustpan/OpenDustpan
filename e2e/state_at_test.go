@@ -179,3 +179,146 @@ func checkStateAtRunning(ctx context.Context, t *testing.T, env *e2e.Env, org st
 
 	env.EndHeldUpdate(ctx, t, held, "cancelled") //nolint:misspell // The CLI's wire value; it must not change.
 }
+
+// stateAtData decodes the state version of the state-at document in e2e
+// checks.
+type stateAtData struct {
+	ID string `json:"id"`
+}
+
+// stateAtMeta decodes the meta of the state-at document in e2e checks.
+type stateAtMeta struct {
+	RequestedBy string `json:"requested-by"` //nolint:tagliatelle // The wire name of this API.
+	FinalizedAt int64  `json:"finalized-at"` //nolint:tagliatelle // The wire name of this API.
+	Opaque      bool   `json:"opaque"`
+}
+
+// stateAtDoc decodes the state of a workspace at a time in e2e checks.
+type stateAtDoc struct {
+	Data     stateAtData          `json:"data"`
+	Included []maskedResourceItem `json:"included"`
+	Meta     stateAtMeta          `json:"meta"`
+}
+
+// stateAtVersions are the inputs of the OpenTofu state-at checks: the
+// workspace, its state versions after the first and the second apply, and a
+// time before the first apply and a time between the two applies.
+type stateAtVersions struct {
+	before    time.Time
+	between   time.Time
+	workspace string
+	first     string
+	second    string
+}
+
+// stateAtPathTofu returns the route of the state of a workspace at a time.
+func stateAtPathTofu(workspaceID string, at time.Time) string {
+	return fmt.Sprintf("/api/v2/workspaces/%s/state-at/%d", workspaceID, at.UnixMilli())
+}
+
+// firstTofuStateTime matches the time of the first state version in the text
+// of the 404.
+var firstTofuStateTime = regexp.MustCompile(`the first state version of \S+ is at \S+ \((\d+) ms\)`)
+
+// checkOpaqueStateAt proves the answer for a state the client encrypted:
+// opaque, with no resource.
+func checkOpaqueStateAt(body string) error {
+	var doc stateAtDoc
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		return fmt.Errorf("decode state at a time: %w", err)
+	}
+
+	if !doc.Meta.Opaque || len(doc.Included) != 0 || doc.Data.ID == "" {
+		return fmt.Errorf("%w: state at a time = %s, want opaque with no resource", errUnexpected, body)
+	}
+
+	return nil
+}
+
+// checkStateAtVersion returns the check of one state-at answer: the state
+// version wantID with masked resources and no secret in plain text. It stores
+// the finalize time of the answer in finalized.
+func checkStateAtVersion(name, wantID string, finalized *int64) func(string) error {
+	return func(body string) error {
+		var doc stateAtDoc
+		if err := json.Unmarshal([]byte(body), &doc); err != nil {
+			return fmt.Errorf("decode state at a time: %w", err)
+		}
+
+		if doc.Data.ID != wantID || doc.Meta.Opaque || len(doc.Included) == 0 || doc.Meta.RequestedBy == "" {
+			return fmt.Errorf("%w: state at %s = %s, want %s", errUnexpected, name, body, wantID)
+		}
+
+		if strings.Contains(body, maskedSecretV1) || strings.Contains(body, maskedSecretV2) {
+			return fmt.Errorf("%w: state at %s holds a secret in plain text", errUnexpected, name)
+		}
+
+		*finalized = doc.Meta.FinalizedAt
+
+		return nil
+	}
+}
+
+// checkFirstStateTime returns the check of the 404 body: its text names the
+// finalize time of the first state version.
+func checkFirstStateTime(firstAt *int64) func(string) error {
+	return func(body string) error {
+		match := firstTofuStateTime.FindStringSubmatch(body)
+		if len(match) != 2 || match[1] != strconv.FormatInt(*firstAt, 10) {
+			return fmt.Errorf("%w: 404 body = %s, want the first finalize time %d ms", errUnexpected, body, *firstAt)
+		}
+
+		return nil
+	}
+}
+
+// maskedStateAtChecks proves the state at a time after two applies: a time
+// between them answers the first state version with masked resources, now
+// answers the second one, and a time before the first apply answers 404 that
+// names the finalize time of the first state version.
+func maskedStateAtChecks(ctx context.Context, t *testing.T, env *e2e.Env, in stateAtVersions) {
+	t.Helper()
+
+	wsID := env.WorkspaceIDByName(ctx, t, in.workspace)
+
+	var firstAt, secondAt int64
+
+	for _, spec := range []e2e.APIStepSpec{
+		{
+			Check:     checkStateAtVersion("a time between two applies", in.first, &firstAt),
+			Name:      "masked state at a time between two applies",
+			Method:    http.MethodGet,
+			Path:      stateAtPathTofu(wsID, in.between),
+			Body:      "",
+			Want:      http.StatusOK,
+			UserAgent: "",
+			Scheme:    "",
+		},
+		{
+			Check:     checkStateAtVersion("now", in.second, &secondAt),
+			Name:      "masked state at a time now",
+			Method:    http.MethodGet,
+			Path:      stateAtPathTofu(wsID, time.Now()),
+			Body:      "",
+			Want:      http.StatusOK,
+			UserAgent: "",
+			Scheme:    "",
+		},
+		{
+			Check:     checkFirstStateTime(&firstAt),
+			Name:      "masked state at a time before the first apply",
+			Method:    http.MethodGet,
+			Path:      stateAtPathTofu(wsID, in.before),
+			Body:      "",
+			Want:      http.StatusNotFound,
+			UserAgent: "",
+			Scheme:    "",
+		},
+	} {
+		env.APIStepA(ctx, t, spec)
+	}
+
+	if secondAt <= firstAt {
+		t.Fatalf("finalize times = %d ms then %d ms, want the second after the first", firstAt, secondAt)
+	}
+}

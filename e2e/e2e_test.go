@@ -7228,6 +7228,8 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 	writeImportConfig(t, dir, maskedCloudConfig(env.Host(), "masked"))
 
 	env.StepIn(ctx, t, dir, step("masked init", nil, "init", "-input=false", "-no-color"))
+	beforeFirst := time.Now()
+
 	env.StepIn(ctx, t, dir, e2e.StepSpec{
 		Check:  nil,
 		Name:   "masked apply 1",
@@ -7237,6 +7239,9 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 		Fail:   false,
 		Redact: false,
 	})
+	betweenApplies := time.Now()
+	firstVersion := maskedCurrentVersion(ctx, t, env, "masked")
+
 	env.StepIn(ctx, t, dir, e2e.StepSpec{
 		Check:  nil,
 		Name:   "masked apply 2",
@@ -7253,6 +7258,9 @@ func tofuMaskedStateScenario(t *testing.T, env *e2e.Env) {
 	maskedOutputsCheck(ctx, t, env, "masked")
 	maskedSensitiveAttributesFinding(ctx, t, env, "masked", versionID)
 	maskedRevealCheck(ctx, t, env, versionID)
+	maskedStateAtChecks(ctx, t, env, stateAtVersions{
+		workspace: "masked", first: firstVersion, second: versionID, before: beforeFirst, between: betweenApplies,
+	})
 
 	tofuMaskedEncryptedScenario(ctx, t, env)
 }
@@ -8200,6 +8208,17 @@ func tofuMaskedEncryptedScenario(ctx context.Context, t *testing.T, env *e2e.Env
 	} {
 		env.APIStepA(ctx, t, spec)
 	}
+
+	env.APIStepA(ctx, t, e2e.APIStepSpec{
+		Check:     checkOpaqueStateAt,
+		Name:      "masked encrypted state at a time",
+		Method:    http.MethodGet,
+		Path:      stateAtPathTofu(env.WorkspaceIDByName(ctx, t, "masked-encrypted"), time.Now()),
+		Body:      "",
+		Want:      http.StatusOK,
+		UserAgent: "",
+		Scheme:    "",
+	})
 
 	wsID := env.WorkspaceIDByName(ctx, t, "masked-encrypted")
 
