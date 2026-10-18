@@ -184,4 +184,8 @@ worked into the proposal above.
 
 ## Outcome
 
-None yet.
+Accepted in part on 2026-10-17 and 2026-10-18. ADRs 100 to 103 decide the
+shared job model and its two executors. ADRs 130 to 138 decide runner pools,
+the runner protocol, the launcher and the source pipeline. ADR 135 supersedes
+the "Source" item of this RFC, and ADR 100 decision 19 supersedes its glossary
+entries for Job and the _Avoid_ entry "executor".

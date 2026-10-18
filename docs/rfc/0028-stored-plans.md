@@ -36,4 +36,5 @@ plan.
 
 ## Outcome
 
-None yet.
+Answered in part by ADR 102 (job plans and logs) and ADR 152 (history policy
+for job artifacts), on 2026-10-17.

@@ -397,6 +397,65 @@ func TestUnclassifiedActionIsDenied(t *testing.T) {
 	assertChecks(t, f.authz, admin, []check{{identity.ServerObject(), identity.Action("server:future"), true}})
 }
 
+// TestActionsWithoutRoutesAreUnclassified checks that the actions of the
+// features with no routes yet stay unclassified. So no role holds them, and
+// the policy check denies them to a site administrator on the installation
+// and on a namespace. A feature classifies its actions when its routes land.
+func TestActionsWithoutRoutesAreUnclassified(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	site := f.person(t, "site")
+	f.grant(t, prn("site"), access.RoleSiteAdministrator, identity.ServerObject())
+
+	for _, a := range []identity.Action{
+		identity.ActionUnitRunPlan,
+		identity.ActionUnitRunApply,
+		identity.ActionUnitRunDestroy,
+		identity.ActionUnitWriteBack,
+		identity.ActionUnitDefineSteps,
+		identity.ActionJobRead,
+		identity.ActionJobReadLogs,
+		identity.ActionJobReadPlans,
+		identity.ActionJobCancel,
+		identity.ActionJobApprove,
+		identity.ActionNamespaceManageFreezes,
+		identity.ActionNamespaceBreakFreeze,
+		identity.ActionNamespaceManageRunners,
+		identity.ActionRunnerClaim,
+		identity.ActionAgentUse,
+		identity.ActionAgentStartRun,
+		identity.ActionNamespaceManageAgentRuns,
+		identity.ActionNamespaceManageAgent,
+		identity.ActionServerManageAgent,
+		identity.ActionServerAcceptAgentSecretAccess,
+		identity.ActionCallerManageAgentOptIns,
+		identity.ActionUnitObserve,
+		identity.ActionNamespaceReadRunners,
+		identity.ActionRunnerJoin,
+		identity.ActionNamespaceReadUnmanaged,
+		identity.ActionNamespaceTriageUnmanaged,
+		identity.ActionNamespaceManageSweeps,
+		identity.ActionNamespaceStartSweep,
+		identity.ActionServerLinkNamespaces,
+		identity.ActionUnitSetContext,
+		identity.ActionCollectionSetContext,
+		identity.ActionNamespaceSetContext,
+		identity.ActionBlueprintRead,
+		identity.ActionBlueprintSetContext,
+		identity.ActionUnitRedact,
+	} {
+		if fam, ok := access.FamilyOf(a); ok {
+			t.Errorf("action %q has the family %v, want none until its routes land", a, fam)
+		}
+
+		assertChecks(t, f.authz, site, []check{
+			{identity.ServerObject(), a, false},
+			{identity.NamespaceObject("acme"), a, false},
+		})
+	}
+}
+
 // TestOperatorHoldsNoAdministrationOrData checks the operator refusals that
 // the families exist for: an operator grant on the installation cannot make
 // a principal, cannot grant, and cannot read the state of a unit.
