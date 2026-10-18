@@ -132,6 +132,7 @@ func (s Schedule) pick(t time.Time, loc *time.Location) (Shift, bool) {
 }
 
 // pickOverride returns the person of the last override that covers t.
+// The overrides are in the order of their adds, so the last add wins.
 func (s Schedule) pickOverride(t time.Time) (Shift, bool) {
 	for i := len(s.Overrides) - 1; i >= 0; i-- {
 		if o := &s.Overrides[i]; !t.Before(o.Start) && t.Before(o.End) {

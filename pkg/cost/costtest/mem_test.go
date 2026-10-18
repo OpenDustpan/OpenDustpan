@@ -106,7 +106,9 @@ func (m *memStore) PutEstimate(_ context.Context, est cost.Estimate, fence names
 	}), cost.ErrInvalid)
 }
 
-func (m *memStore) GetEstimate(_ context.Context, s cost.Subject, o cost.Origin) (cost.Estimate, error) {
+func (m *memStore) GetEstimate(
+	_ context.Context, scope namespace.Name, s cost.Subject, o cost.Origin,
+) (cost.Estimate, error) {
 	var (
 		r  estimateRow
 		ok bool
@@ -114,7 +116,7 @@ func (m *memStore) GetEstimate(_ context.Context, s cost.Subject, o cost.Origin)
 
 	m.Read(func() { r, ok = m.estimates[estimateKey{subject: s, origin: o}] })
 
-	if !ok {
+	if !ok || r.ns != scope {
 		return cost.Estimate{}, fmt.Errorf("estimate of %s: %w", s.Job, cost.ErrNotFound)
 	}
 
@@ -213,13 +215,19 @@ func (m *memStore) SaveStatus(_ context.Context, st cost.Status, version int64, 
 	}), cost.ErrNotFound)
 }
 
-func (m *memStore) LastStatus(_ context.Context, id string, p cost.Period) (cost.Status, int64, error) {
+func (m *memStore) LastStatus(
+	_ context.Context, ns namespace.Name, id string, p cost.Period,
+) (cost.Status, int64, error) {
 	var (
 		r  statusRow
 		ok bool
 	)
 
-	m.Read(func() { r, ok = m.statuses[statusKey{budget: id, period: p}] })
+	m.Read(func() {
+		if b, found := m.budgets[id]; found && b.Namespace == ns {
+			r, ok = m.statuses[statusKey{budget: id, period: p}]
+		}
+	})
 
 	if !ok {
 		return cost.Status{}, 0, fmt.Errorf("status of %s: %w", id, cost.ErrNotFound)

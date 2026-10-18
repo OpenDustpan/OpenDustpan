@@ -1,6 +1,6 @@
 # 144. A pluggable cost port: estimates, actual spend and budgets
 
-Status: accepted · 2026-10-18 · answers part of RFC 45 and RFC 67
+Status: accepted · 2026-10-18 · answers part of RFC 45 and RFC 67 · decision 15 superseded in part by ADR 149
 
 ## Context
 

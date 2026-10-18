@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,6 +80,10 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a write refuses an audit entry of another namespace", testEntryScope},
 		{"one start in two namespaces makes two freezes", testSameStartTwoNamespaces},
 		{"create freeze refuses an ID that exists", testCreateFreezeExists},
+		{"get of a schedule of another namespace is ErrNotFound", testGetOtherNamespace},
+		{"create freeze refuses an ID in the form of an occurrence", testCreateFreezeOccurrenceID},
+		{"a create freeze with an occurrence ID never stops the replace", testCreateFreezeOccurrenceRace},
+		{"delete scheduled after the ID is used in another namespace", testDeleteScheduledReused},
 	}
 
 	for _, tc := range cases {
@@ -238,7 +243,7 @@ func testCreateGet(t *testing.T, h Harness) {
 	fence := setup(t, h)
 	create(t, h, fence, id)
 
-	got, err := h.Schedules.Get(t.Context(), id)
+	got, err := h.Schedules.Get(t.Context(), shop, id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -247,7 +252,7 @@ func testCreateGet(t *testing.T, h Harness) {
 		t.Fatalf("Get = %+v, want the created schedule with version 1", got)
 	}
 
-	if _, err := h.Schedules.Get(t.Context(), "fzs-none"); !errors.Is(err, freeze.ErrNotFound) {
+	if _, err := h.Schedules.Get(t.Context(), shop, "fzs-none"); !errors.Is(err, freeze.ErrNotFound) {
 		t.Fatalf("Get unknown: err = %v, want ErrNotFound", err)
 	}
 }
@@ -282,7 +287,7 @@ func testUpdateConflict(t *testing.T, h Harness) {
 		t.Fatalf("Update: %v", err)
 	}
 
-	got, err := h.Schedules.Get(t.Context(), id)
+	got, err := h.Schedules.Get(t.Context(), shop, id)
 	if err != nil || got.Version != 2 || got.Name != "Weekends" {
 		t.Fatalf("Get after Update = %+v (%v), want version 2", got, err)
 	}
@@ -333,7 +338,7 @@ func testUpdateDeleteErrors(t *testing.T, h Harness) {
 		}
 	}
 
-	got, err := h.Schedules.Get(t.Context(), id)
+	got, err := h.Schedules.Get(t.Context(), shop, id)
 	if err != nil || got.Version != 1 || got.Namespace != shop || entries(t, h) != 1 {
 		t.Fatalf("after refused writes: %+v (%v), %d entries; want the schedule unchanged and 1 entry",
 			got, err, entries(t, h))
@@ -372,12 +377,12 @@ func testFences(t *testing.T, h Harness) {
 
 	refuseFences(t, h, s, foreign, stale)
 
-	got, err := h.Schedules.Get(t.Context(), id)
+	got, err := h.Schedules.Get(t.Context(), shop, id)
 	if err != nil || got.Version != 1 || got.Name != s.Name {
 		t.Fatalf("schedule after refused writes = %+v (%v), want it unchanged", got, err)
 	}
 
-	if _, err := h.Schedules.Get(t.Context(), "fzs-new"); !errors.Is(err, freeze.ErrNotFound) {
+	if _, err := h.Schedules.Get(t.Context(), shop, "fzs-new"); !errors.Is(err, freeze.ErrNotFound) {
 		t.Fatalf("Get of a refused create: err = %v, want ErrNotFound", err)
 	}
 
@@ -945,12 +950,12 @@ func testEntryScope(t *testing.T, h Harness) {
 func wantUnchanged(t *testing.T, h Harness, s freeze.Schedule, manual job.Freeze, before int) {
 	t.Helper()
 
-	got, err := h.Schedules.Get(t.Context(), id)
+	got, err := h.Schedules.Get(t.Context(), shop, id)
 	if err != nil || got.Version != 1 || got.Name != s.Name {
 		t.Fatalf("schedule after refused writes = %+v (%v), want it unchanged", got, err)
 	}
 
-	if _, err = h.Schedules.Get(t.Context(), "fzs-new"); !errors.Is(err, freeze.ErrNotFound) {
+	if _, err = h.Schedules.Get(t.Context(), shop, "fzs-new"); !errors.Is(err, freeze.ErrNotFound) {
 		t.Fatalf("Get of a refused create: err = %v, want ErrNotFound", err)
 	}
 
@@ -1037,5 +1042,178 @@ func testCreateFreezeExists(t *testing.T, h Harness) {
 
 	if fs := otherFreezes(t, h); len(fs) != 0 {
 		t.Fatalf("freezes in other = %+v, want none", fs)
+	}
+}
+
+func testGetOtherNamespace(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	create(t, h, fence, id)
+
+	if _, err := h.Domain.CreateNamespace(t.Context(), other); err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	if _, err := h.Schedules.Get(t.Context(), other, id); !errors.Is(err, freeze.ErrNotFound) {
+		t.Fatalf("Get of %s in %s: err = %v, want ErrNotFound", id, other, err)
+	}
+
+	if _, err := h.Schedules.Get(t.Context(), "", id); !errors.Is(err, freeze.ErrNotFound) {
+		t.Fatalf("Get of %s with no namespace: err = %v, want ErrNotFound", id, err)
+	}
+}
+
+// occurrenceFreeze returns a freeze of a person in ns whose ID is the ID
+// of the occurrence o of the schedule id in shop.
+func occurrenceFreeze(ns namespace.Name, o freeze.Occurrence) job.Freeze {
+	return job.Freeze{
+		ID:        freeze.OccurrenceID(shop, id, o.Start),
+		Namespace: ns,
+		Reason:    "Not a schedule",
+		StartsAt:  o.Start,
+		EndsAt:    o.End,
+		CreatedBy: "mallory",
+		EndedBy:   "",
+	}
+}
+
+// otherEntry returns the audit entry of a write in other.
+func otherEntry() audit.Entry {
+	e := entry()
+	e.Namespace, e.Object = other, other.String()
+
+	return e
+}
+
+// testCreateFreezeOccurrenceID creates, in other and in shop, a freeze of
+// a person with the ID of an occurrence of a schedule in shop, before the
+// schedule plans it. Each create fails, and the replace in shop then
+// writes the freeze of the schedule.
+func testCreateFreezeOccurrenceID(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+
+	foreign, err := h.Domain.CreateNamespace(t.Context(), other)
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	o := occ(id, 24, 48)
+
+	err = h.Freezes.CreateFreeze(t.Context(), occurrenceFreeze(other, o), foreign, otherEntry())
+	if !errors.Is(err, job.ErrInvalid) {
+		t.Fatalf("CreateFreeze in %s with an occurrence ID of %s: err = %v, want job.ErrInvalid", other, shop, err)
+	}
+
+	err = h.Freezes.CreateFreeze(t.Context(), occurrenceFreeze(shop, o), fence, entry())
+	if !errors.Is(err, job.ErrInvalid) {
+		t.Fatalf("CreateFreeze in %s with an occurrence ID: err = %v, want job.ErrInvalid", shop, err)
+	}
+
+	s := create(t, h, fence, id)
+	replace(t, h, fence, s, o)
+
+	if fs := freezes(t, h); len(fs) != 1 || !same(fs[0], s.FreezeOf(o)) {
+		t.Fatalf("freezes in shop = %+v, want the freeze of the schedule", fs)
+	}
+
+	if fs := otherFreezes(t, h); len(fs) != 0 {
+		t.Fatalf("freezes in other = %+v, want none", fs)
+	}
+}
+
+// testCreateFreezeOccurrenceRace runs the replace of a schedule in shop
+// and a create of a freeze in other with the occurrence ID at one time.
+// In each order, the create fails and the freeze of the schedule exists.
+func testCreateFreezeOccurrenceRace(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+
+	foreign, err := h.Domain.CreateNamespace(t.Context(), other)
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	s := create(t, h, fence, id)
+	o := occ(id, 24, 48)
+
+	var (
+		wg                  sync.WaitGroup
+		replaced, createErr error
+	)
+
+	start := make(chan struct{})
+
+	wg.Go(func() {
+		<-start
+
+		replaced = h.Freezes.ReplaceScheduled(t.Context(), s, []freeze.Occurrence{o}, fence)
+	})
+	wg.Go(func() {
+		<-start
+
+		createErr = h.Freezes.CreateFreeze(t.Context(), occurrenceFreeze(other, o), foreign, otherEntry())
+	})
+
+	close(start)
+	wg.Wait()
+
+	if replaced != nil || !errors.Is(createErr, job.ErrInvalid) {
+		t.Fatalf("ReplaceScheduled = %v, CreateFreeze = %v; want nil and job.ErrInvalid", replaced, createErr)
+	}
+
+	if fs := freezes(t, h); len(fs) != 1 || !same(fs[0], s.FreezeOf(o)) {
+		t.Fatalf("freezes in shop = %+v, want the freeze of the schedule", fs)
+	}
+
+	if fs := otherFreezes(t, h); len(fs) != 0 {
+		t.Fatalf("freezes in other = %+v, want none", fs)
+	}
+}
+
+// testDeleteScheduledReused deletes the schedule id in shop, and other
+// creates a schedule with the free ID id before the delete of the freezes
+// in shop. The delete of the freezes in shop still removes each freeze
+// that did not start, and refuses in other, where the schedule exists.
+func testDeleteScheduledReused(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := setup(t, h)
+	s := create(t, h, fence, id)
+	replace(t, h, fence, s, occ(id, -2, 6), occ(id, 24, 48))
+
+	if err := h.Schedules.Delete(t.Context(), id, fence, entry()); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	foreign, err := h.Domain.CreateNamespace(t.Context(), other)
+	if err != nil {
+		t.Fatalf("CreateNamespace: %v", err)
+	}
+
+	o := sample(id)
+	o.Namespace = other
+
+	if err := h.Schedules.Create(t.Context(), o, foreign, otherEntry()); err != nil {
+		t.Fatalf("Create in other: %v", err)
+	}
+
+	if _, err := h.Schedules.Get(t.Context(), shop, id); !errors.Is(err, freeze.ErrNotFound) {
+		t.Fatalf("Get of %s in %s: err = %v, want ErrNotFound", id, shop, err)
+	}
+
+	if err := h.Freezes.DeleteScheduled(t.Context(), id, fence); err != nil {
+		t.Fatalf("DeleteScheduled in shop: %v", err)
+	}
+
+	if fs := freezes(t, h); len(fs) != 1 || !slices.Equal(ends(fs), []int{6}) {
+		t.Fatalf("freezes in shop = %+v, want the started freeze only", fs)
+	}
+
+	if err := h.Freezes.DeleteScheduled(t.Context(), id, foreign); !errors.Is(err, freeze.ErrExists) {
+		t.Fatalf("DeleteScheduled in other: err = %v, want ErrExists", err)
 	}
 }
