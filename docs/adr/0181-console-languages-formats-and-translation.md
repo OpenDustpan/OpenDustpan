@@ -1,6 +1,6 @@
 # 181. Console languages, formats and translation
 
-Status: accepted · 2026-10-18. Accepts RFC 11. Adds to ADR 180. Route paths superseded in part by ADR 210
+Status: accepted · 2026-10-18. Accepts RFC 11. Adds to ADR 180. Route paths superseded in part by ADR 210. Decision 1 superseded in part by ADR 231. Decisions 18 and 19 superseded in part by ADR 232. Extended by ADRs 231 to 234
 
 ## Context
 
