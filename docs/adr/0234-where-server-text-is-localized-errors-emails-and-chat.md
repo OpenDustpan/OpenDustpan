@@ -76,9 +76,10 @@ Facts:
    | A person (ADR 145 decision 24) | `language` in the preferences of the person, then `resolvedLanguage`, then the installation setting `localization.defaultLanguage` |
    | A subscription to a channel or an address | the new field `language` of the subscription, then `localization.defaultLanguage` |
 
-   `resolvedLanguage` is a new read-only field of the preferences. After
-   sign-in, the console writes to it the language that it matched from the
-   browser (ADR 181 decision 2). A person never sets it, and their own
+   `resolvedLanguage` is a new field of the preferences that only the
+   console sets. The settings page does not show it. After sign-in, the
+   console writes to it the language that it matched from the browser
+   (ADR 181 decision 2). A person never sets it, and their own
    `language` always wins over it. So a person who never set a language
    gets emails in the language of their console.
 
@@ -93,8 +94,9 @@ Facts:
    the formatting locale and the `digits` override of the person, through
    `golang.org/x/text`. With no formatting locale, it uses the language of
    the notice. A date and a time have one fixed form in every language,
-   for example `2026-10-18 15:33 UTC`, in the time zone and the digits of
-   the person. With no time zone, it uses UTC. Each time names its time
+   for example `2026-10-18 15:33 UTC`, in the time zone of the person,
+   with Western digits, as ADR 231 decision 5 says for the ISO 8601 style.
+   With no time zone, it uses UTC. Each time names its time
    zone, because a person often reads a notice on another device. A
    subscription has no formatting locale. It uses the language of the
    notice and UTC. A date form for each locale in notices stays an open
@@ -109,8 +111,10 @@ Facts:
    ADR 232 and ADR 233. A notice in a language with the status
    `machine-translated` ends with the note of ADR 232 decision 4, in that
    language and in English, with a report link if the installation shows
-   it. The link of a notice holds the language and the notice type, never
-   a value of the notice, and has the rules of ADR 232 decision 5. A high-stakes notice that is not
+   it. The link of a notice holds the language, the notice type as the key
+   of the message and the version of the server, never a value of the
+   notice, and no route pattern. The other rules of ADR 232 decision 5
+   apply. A high-stakes notice that is not
    `native-reviewed` goes in English as a whole, with `lang="en"`. High-stakes
    notices are approval requests, security notices, secret and token
    expiry, and failed jobs.
@@ -126,7 +130,8 @@ Facts:
 
 10. **Dusty answers in the language of the person.** Dusty writes its
     answers in the language of the person who asks, from the preferences.
-    With no `language`, it uses the language of the question. The prompt
+    With no `language`, it uses `resolvedLanguage`, then the language of the
+    question. The prompt
     of a run gives the model the language, the term lists of ADR 233 and the
     rule that machine-made values stay as they are. Tool names, tool output
     and the descriptions of tools stay in English. An answer of Dusty has no
@@ -158,10 +163,12 @@ Facts:
   limits that sentence to errors, logs and machine-facing text.
 - The server reads `language`, `resolvedLanguage` and the format fields of
   the preferences. The document of ADR 181 decision 8 gets one field from
-  this ADR, the read-only `resolvedLanguage` (decision 5). ADR 231
+  this ADR, the console-set `resolvedLanguage` (decision 5). ADR 231
   decision 5 adds `digits`, and the server reads it too.
 - `golang.org/x/text` moves from an indirect to a direct dependency in
   `go.mod` with the formatter.
+- The server message package gets the `ar-XB` pseudo-locale of ADR 231
+  decision 15 for tests. No release build lists it.
 - The settings resource gets `localization.defaultLanguage`. A subscription
   of ADR 145 gets the field `language`, a BCP 47 tag or `null`.
 - Each notice type gets its server messages in `en` first. The other

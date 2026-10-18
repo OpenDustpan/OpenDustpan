@@ -50,8 +50,10 @@ Facts:
    target, and contrast.
 6. **The email check runs in the console repository (owner).** A Go test
    of the server renders each email template in `en` and in `ar-XB` to a
-   file. The CI of the console repository takes these files and runs axe
-   on the HTML part of each. The server repository gets no Node toolchain.
+   file in the testdata of the server message package, and the server
+   repository commits these files. The CI of the console repository reads
+   them at a pinned server commit and runs axe on the HTML part of each.
+   The server repository gets no Node toolchain.
 7. **Chat text carries meaning in words.** A chat message puts each status
    in a word, never in an emoji or a color alone. The console's voice rule
    bans emoji anyway.

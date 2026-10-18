@@ -134,7 +134,9 @@ Facts:
 ### Review
 
 8. **Machine translation first (owner).** A new string gets a machine
-   translation in each language in the pull request that adds it. Its
+   translation in each language after the pull request that adds it
+   merges, or in that pull request when a maintainer runs the step there.
+   A missing translation never blocks the pull request (decision 15). Its
    inputs are those of ADR 181 decision 19: the English message, its
    description, `GLOSSARY.md` and the term list of the language.
 9. **A translation agent and a review agent (owner).** An AI translation
@@ -142,8 +144,9 @@ Facts:
    design and the use of the console: the screen that shows the message,
    the message's description, the term lists and `GLOSSARY.md`. It has
    access to the internet, for example to look up the words of a tool's
-   own translated docs. The agent translates a message only after the
-   owner proof-reads its English source and its Afrikaans text. A second
+   own translated docs. The agent first translates a message into Afrikaans.
+   It translates the other languages only after the owner proof-reads the
+   English source and the Afrikaans text. A second
    agent reviews each translation against the checks of ADR 233 and the
    context. The two agents loop until the review finds no problem.
 

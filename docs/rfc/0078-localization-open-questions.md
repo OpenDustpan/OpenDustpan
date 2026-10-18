@@ -63,8 +63,9 @@ lost argument, a lost plural category. The strings are public in the
 repository, so the provider sees nothing secret.
 
 Decision (owner): A. An AI translation agent with the full context of the
-console and access to the internet translates, after the owner proof-reads
-the English source and the Afrikaans text. A second agent reviews, and the
+console and access to the internet first translates into Afrikaans. It
+translates the other languages only after the owner proof-reads the
+English source and the Afrikaans text. A second agent reviews, and the
 two loop until the review is clean. A translation that fails the checks is
 never committed. The repository pins the prompts and names no model. A
 maintainer runs the step, and CI holds no API key. ADR 232 decision 9
@@ -90,7 +91,7 @@ direct dependency.
 Decision (owner): A. `golang.org/x/text` is a direct dependency, for
 language matching, plural rules and number formatting. Dates and times in
 notices use one fixed form in every language, for example
-`2026-10-18 15:33 UTC`, in the time zone and the digits of the person. ADR
+`2026-10-18 15:33 UTC`, in the time zone of the person, with Western digits. ADR
 234 decisions 6 and 11 record it.
 
 Still open: a date form for each locale in notices. It needs the date data
@@ -98,8 +99,7 @@ of CLDR, which `golang.org/x/text` does not format today.
 
 ### 4. The product name in chat messages
 
-ADR 235 decision 4 records the owner's rule: the product name reaches the
-console and emails only. Chat messages are not in the rule.
+The owner's first rule named the console and emails only. Chat messages are not in the rule.
 
 | Option | Effect |
 | --- | --- |
@@ -114,7 +114,7 @@ Decision (owner): A. ADR 235 decision 4 records it.
 
 ### 5. The language of a person who never set one
 
-ADR 234 decision 5 uses the installation default when `language` is
+ADR 234 decision 5 first used the installation default when `language` is
 `null`. The console uses the browser for such a person, so the console and
 the emails can differ.
 
@@ -149,7 +149,7 @@ decision 12 records it. The question stays open.
 
 ### 7. A report of one string from the page
 
-ADR 232 decision 5 reports a wrong string through a form that has the page,
+ADR 232 decision 5 first reported a wrong string through a form of the page,
 not the message.
 
 | Option | Effect |
