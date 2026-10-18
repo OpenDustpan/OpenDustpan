@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
 // exampleTable has one column of each kind, so the writer's forms are all
@@ -279,5 +280,95 @@ func TestPortableManifestFormat(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("manifest %s does not contain %s", text, want)
 		}
+	}
+}
+
+// namespacesTable returns the portable namespaces table.
+func namespacesTable(t *testing.T) backup.PortableTable {
+	t.Helper()
+
+	for _, candidate := range backup.PortableTables() {
+		if candidate.Table == "namespaces" {
+			return candidate
+		}
+	}
+
+	t.Fatal("portable tables have no namespaces table")
+
+	return backup.PortableTable{Table: "", OrderBy: nil, Columns: nil}
+}
+
+// readNamespaceRow writes one namespaces row with the id value id to a table
+// file and reads the file back. It returns the number of rows that reached
+// the caller and the error of the read.
+func readNamespaceRow(t *testing.T, id any) (int, error) {
+	t.Helper()
+
+	table := namespacesTable(t)
+
+	var buf bytes.Buffer
+
+	tw, err := backup.NewTableWriter(&buf, table)
+	if err != nil {
+		t.Fatalf("new table writer: %v", err)
+	}
+
+	row := []any{"acme", "eu-west", int64(1), int64(1000), false, false, "", id}
+	if writeErr := tw.WriteRow(row); writeErr != nil {
+		t.Fatalf("write row: %v", writeErr)
+	}
+
+	file, err := tw.Close()
+	if err != nil {
+		t.Fatalf("close table writer: %v", err)
+	}
+
+	open := func(string) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(buf.Bytes())), nil
+	}
+
+	rows := 0
+	err = backup.ReadPortableTable(t.Context(), open, file, table, func([]any) error {
+		rows++
+
+		return nil
+	})
+
+	return rows, err
+}
+
+// TestReadPortableNamespaceIDs proves that a portable namespaces table with
+// an ID that ParseID refuses fails with ErrCorrupt and ErrInvalidID, and that
+// a valid ID reaches the caller.
+func TestReadPortableNamespaceIDs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		id   any
+		want bool
+	}{
+		{name: "valid", id: "ns-abcdefghij234567klmn", want: true},
+		{name: "empty", id: "", want: false},
+		{name: "no prefix", id: "acme", want: false},
+		{name: "prefix only", id: "ns-", want: false},
+		{name: "bad character", id: "ns-a/b", want: false},
+		{name: "too long", id: "ns-" + strings.Repeat("a", 98), want: false},
+		{name: "null", id: nil, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rows, err := readNamespaceRow(t, tc.id)
+			if tc.want && (err != nil || rows != 1) {
+				t.Fatalf("read: rows = %d, err = %v, want 1 row", rows, err)
+			}
+
+			if !tc.want && (!errors.Is(err, backup.ErrCorrupt) || !errors.Is(err, namespace.ErrInvalidID)) {
+				t.Fatalf("read: err = %v, want ErrCorrupt and ErrInvalidID", err)
+			}
+		})
 	}
 }

@@ -113,6 +113,7 @@ func seedPlanNamespaces(t *testing.T, s *Store, n int) {
 
 	for i := range n {
 		ns := namespace.Namespace{
+			ID:              namespace.NewID(),
 			CreatedAt:       now,
 			Name:            namespace.Name(fmt.Sprintf("ns-%05d", i)),
 			HomeRegion:      "eu-west",

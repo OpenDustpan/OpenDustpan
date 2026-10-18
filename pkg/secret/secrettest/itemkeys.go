@@ -69,6 +69,7 @@ func itemKeyNamespace(t *testing.T, s ItemKeyStore) namespace.Fence {
 	t.Helper()
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       itemKeyTime(),
 		Name:            "acme",
 		HomeRegion:      "local",

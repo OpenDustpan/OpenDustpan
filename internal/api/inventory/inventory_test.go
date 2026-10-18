@@ -70,6 +70,7 @@ func seedNamespace(t *testing.T, nsStore *memNamespaceStore) {
 	}
 
 	ns := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            n,
 		HomeRegion:      "test-region",
@@ -332,6 +333,7 @@ func changeTime() time.Time {
 func seedEntries(nsStore *memNamespaceStore, reader *memReader) {
 	ns := namespace.Name("acme")
 	nsStore.namespaces[ns] = namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       changeTime(),
 		Name:            ns,
 		HomeRegion:      "test-region",

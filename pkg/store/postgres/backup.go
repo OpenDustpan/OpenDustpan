@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"opendustpan.org/opendustpan/pkg/backup"
+	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/secret"
 	"opendustpan.org/opendustpan/pkg/store/internal/codec"
 	"opendustpan.org/opendustpan/pkg/store/internal/migrate"
@@ -101,7 +102,7 @@ func pgCopyStackTables() []pgCopyTable {
 			table: "namespaces",
 			columns: []string{
 				pgColName, "home_region", "failover_version", pgColCreatedAtMs,
-				"allow_forced_writes", "allow_unlocked_writes", "ip_allowlist",
+				"allow_forced_writes", "allow_unlocked_writes", "ip_allowlist", "id",
 			},
 			orderBy: []string{pgColName},
 		},
@@ -756,6 +757,10 @@ func (s *Store) buildStaging(ctx context.Context, in stagingInput) (backup.Summa
 		return backup.Summary{}, sealedErr
 	}
 
+	if idsErr := checkStagedNamespaceIDs(ctx, s.pool, in.staging); idsErr != nil {
+		return backup.Summary{}, idsErr
+	}
+
 	sum, err := s.summarizeStaging(ctx, in.staging, in.want)
 	if err != nil {
 		return backup.Summary{}, err
@@ -963,6 +968,35 @@ func checkStagedSealedState(ctx context.Context, pool *pgxpool.Pool, staging str
 
 	if unsealed {
 		return fmt.Errorf("import holds an unsealed state version: %w", workspace.ErrUnsealedState)
+	}
+
+	return nil
+}
+
+// checkStagedNamespaceIDs refuses a staged backup with a namespace whose ID is
+// not a valid namespace ID. It returns ErrCorrupt.
+func checkStagedNamespaceIDs(ctx context.Context, pool *pgxpool.Pool, staging string) error {
+	rows, err := pool.Query(ctx, "SELECT name, id FROM "+stagingTable(staging, "namespaces"))
+	if err != nil {
+		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		var name, id string
+
+		if scanErr := rows.Scan(&name, &id); scanErr != nil {
+			return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
+		}
+
+		if _, parseErr := namespace.ParseID(id); parseErr != nil {
+			return fmt.Errorf("staged namespace %q has an invalid ID: %w: %w", name, parseErr, backup.ErrCorrupt)
+		}
+	}
+
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("read staged namespaces: %w", backup.ErrExportRead)
 	}
 
 	return nil

@@ -169,23 +169,7 @@ func (s *Store) Ping(ctx context.Context) error {
 
 // CreateNamespace implements namespace.Store.
 func (s *Store) CreateNamespace(ctx context.Context, ns namespace.Namespace) error {
-	row := codec.ToNamespaceRow(ns)
-
-	n, err := s.queries.CreateNamespace(ctx, db.CreateNamespaceParams{
-		Name:            row.Name,
-		HomeRegion:      row.HomeRegion,
-		FailoverVersion: row.FailoverVersion,
-		CreatedAtMs:     row.CreatedAtMs,
-	})
-	if err != nil {
-		return fmt.Errorf("insert namespace: %w", err)
-	}
-
-	if n == 0 {
-		return namespace.ErrAlreadyExists
-	}
-
-	return nil
+	return insertNamespaceRow(ctx, s.queries, codec.ToNamespaceRow(ns))
 }
 
 // GetNamespace implements namespace.Store.

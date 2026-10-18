@@ -97,6 +97,7 @@ func startFaultServer(t *testing.T) *faultServer {
 	t.Cleanup(ts.Close)
 
 	faultNamespace := namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            namespace.Name(faultNS),
 		HomeRegion:      namespace.Region(faultRegion),

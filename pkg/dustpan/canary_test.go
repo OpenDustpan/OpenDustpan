@@ -133,6 +133,7 @@ func seedCanaryNamespace(t *testing.T, st *sqlite.Store) {
 	t.Helper()
 
 	err := st.CreateNamespace(t.Context(), namespace.Namespace{
+		ID:              namespace.NewID(),
 		CreatedAt:       time.Now(),
 		Name:            namespace.Name("acme"),
 		HomeRegion:      namespace.Region(region),
