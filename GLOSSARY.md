@@ -479,7 +479,7 @@ The way a job runs: write-back or runners (ADR 100 decision 19). The port `job.E
 _Avoid_: Launcher (that is the program of a runner that starts each step)
 
 **Phase**:
-The work that one executor does with one claim (ADR 100 decision 4). A phase has one of three kinds. `plan` holds runner steps that change nothing, and the stored plan. `apply` holds runner steps that change resources or write state. `deliver` is the commit of a write-back job. The executor gives the phases at start, and they do not change after. Each phase is one durable operation with the start key `<job ID>/<phase index>`. A takeover is a new claim on the same operation. Between two phases, no executor holds the job, so a wait for a person never keeps a runner busy.
+The work that one executor does with one claim (ADR 100 decision 4). A phase has one of four kinds. `plan` holds runner steps that change nothing, and the stored plan. `apply` holds runner steps that change resources or write state. `deliver` is the commit of a write-back job. `verify` comes after the apply phase of a runner apply job and of a runner destroy job. It holds runner steps that change nothing and check the change (ADR 148 decision 3). A job has a `verify` phase only when the unit settings name its steps. The executor gives the phases at start, and they do not change after. Each phase is one durable operation with the start key `<job ID>/<phase index>`. A takeover is a new claim on the same operation. Between two phases, no executor holds the job, so a wait for a person never keeps a runner busy.
 _Avoid_: Step (a step is one argument list that a runner starts in a phase), stage
 
 **Gate**:
@@ -842,6 +842,24 @@ _Avoid_: Scheme, theme (for branding)
 The settings of the console that a person keeps on the account, on every device (`/api/server/caller/preferences`, ADR 180). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
 _Avoid_: Profile (a profile holds shared config and secrets, RFC 5), user settings
 
+### Operations
+
+**Incident**:
+An event in a namespace that disrupts a service, with an ID that has the prefix `inc-` (ADR 147). It has a title, a severity from 1 to 4, a state, the times of each step, a commander and links to units and jobs. It closes only with a root cause, a root-cause category and lessons. A person classifies it, reports it and reviews it. The server never decides any of these.
+_Avoid_: Ticket, outage, alert
+
+**Classification**:
+The record of a person that says whether an incident is major, with the criteria that the person found met (ADR 147 decision 5). Classifications are append-only. The last one is the current classification. The server never classifies an incident.
+_Avoid_: Triage, severity (a severity is a different field)
+
+**Commander**:
+The person who leads the response to an incident (ADR 147 decision 1).
+_Avoid_: Owner, lead
+
+**Cyber threat record**:
+A record of a cyber threat in a namespace, with an ID that has the prefix `thr-` (ADR 148 decision 13). It has a title, a description, the time of detection, links to units and notes. A person records whether the threat is significant, with a reason, and each voluntary notice of the threat to an authority. The server never decides that a threat is significant, and never sends a notice. A person closes the record with a note on the outcome. A cyber threat record is not an incident: the threat did not affect a service.
+_Avoid_: Threat (alone), alert, vulnerability
+
 ## Flagged ambiguities
 
 - **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
@@ -875,4 +893,4 @@ _Avoid_: Profile (a profile holds shared config and secrets, RFC 5), user settin
 - **Link** has two meanings: a link in the context of an object, and a namespace link. Write "namespace link" for the second.
 - **Layer** is a source of the value of a setting (ADR 63). ADR 161 also says "layer" for one object of the context chain. Name which one.
 - **Redaction**, **masking** and **purge** are different. A redaction destroys the content of one history item. Masking hides a secret value in a read and keeps it. A purge ends a whole unit.
-- **Retention** has two meanings: the retention period of a deleted unit, and that of a stored plan or a job log (ADR 152). Name which one.
+- **Retention** has three meanings. The first is the retention period of a deleted unit. The second is that of a stored plan or a job log (ADR 152). The third is that of an incident record or a cyber threat record (ADR 148). Name which one.
