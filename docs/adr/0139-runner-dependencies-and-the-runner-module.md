@@ -140,6 +140,19 @@ system as a tar stream.
   that runs as root to each machine host. The `process` sandbox of
   ADR 137 must also run on a laptop with no such daemon.
 
+The spike also unpacked public images for `linux/amd64` with
+`mutate.Extract` on 18 October 2026, to set the unpack limits. "Entries"
+counts each file, directory and link of the flattened file system.
+
+| Image | Compressed | Unpacked | Entries | Largest file |
+| --- | --- | --- | --- | --- |
+| `gcr.io/distroless/static-debian12:latest` | 0.72 MB | 2.11 MB | 1,436 | 0.22 MB |
+| `docker.io/library/python:3.13-slim` | 43.06 MB | 114.76 MB | 5,638 | 6.52 MB |
+| `ghcr.io/opentofu/opentofu:1.10` | 39.56 MB | 115.83 MB | 1,316 | 88.44 MB (`tofu`) |
+| `docker.io/hashicorp/terraform:latest` | 51.11 MB | 148.49 MB | 1,213 | 120.57 MB (`terraform`) |
+| `docker.io/pulumi/pulumi-nodejs:latest` | 306.10 MB | 746.97 MB | 13,289 | 150.28 MB (`node`) |
+| `docker.io/pulumi/pulumi:latest` (all languages) | 3.38 GB | 10.53 GB | 331,804 | 150.28 MB (`node`) |
+
 ### The module boundary
 
 The spike added a stub `dustpan-runner` command that imports
@@ -183,15 +196,15 @@ links.
    `authn`, `v1/remote` and `v1/mutate`, and `pkg/registry` in tests. It
    does not use `crane` itself, the Google keychain or the Kubernetes
    keychain.
-   - It pulls each image by digest. When a unit names a tag, the
-     coordinator resolves the tag to a digest once, records the digest
-     for the phase, and pulls that digest.
+   - It pulls each image only by the digest that the runner protocol
+     gives (decision 6). It parses the reference with `name.NewDigest`,
+     which refuses a tag.
    - `mutate.Extract` makes the flattened tar stream. The coordinator
      writes it to the bundle directory through an `os.Root`, which refuses
      each path and link that leaves the directory, also a link with an
      absolute target. It writes no device node, and it changes the owner
-     of a file only when it runs as root. It stops at a byte limit and a
-     file limit from the settings of the coordinator.
+     of a file only when it runs as root. It applies the unpack limits
+     of decision 7.
    - Credentials come from a Docker config file in the configuration
      directory of the coordinator, read by `authn.DefaultKeychain`. A
      cloud registry uses the credential helper of the cloud, installed on
@@ -201,9 +214,10 @@ links.
    pinned exactly in `go.mod` and is at least two weeks old (ADR 7). The
    runner module requires `golang.org/x/net` v0.60.0 or later, because
    `client-go` v0.37.1 reaches 5 vulnerabilities in v0.57.0.
-   The Go team released `golang.org/x/net` v0.60.0 on 8 October 2026, so it is two
-   weeks old on 22 October 2026. The runner code lands on that day or
-   later.
+   The Go team released `golang.org/x/net` v0.60.0 on 8 October 2026,
+   so it is two weeks old on 22 October 2026. The runner code lands on
+   that day or later. There is no exception to the two-week rule for this
+   fix: no feature needs the runner before that day.
 4. **A nested Go module for the runner (option C).** `cmd/dustpan-runner`
    holds its own `go.mod`, with the module path
    `opendustpan.org/opendustpan/cmd/dustpan-runner`. The runner packages
@@ -215,11 +229,7 @@ links.
      `go install ...@version` does not work for a module with a
      `replace` directive. The release archives and the image ship the
      runner.
-   - The `gomoddirectives` settings allow this one local replacement.
-   - `make lint`, `make nilaway`, `make vuln`, `make test` and
-     `make licenses` run in both modules. `make trivy` downloads the
-     modules of both and gives both `go.mod` files to the license gate.
-     Dependabot watches both directories.
+   - The changes to the checks are in the list under "Consequences".
 5. **A depguard rule keeps the imports out of the server.** The rule
    `runnerdeps` in `.golangci.yml` applies to every file outside
    `cmd/dustpan-runner/`. It denies `k8s.io`, `sigs.k8s.io`,
@@ -227,6 +237,37 @@ links.
    nested module stops a server import at build time, and the rule
    stops it at lint time with the reason. The rule also covers the
    launcher, which stays on the standard library.
+6. **Images are digests in the runner protocol.** The runner protocol
+   carries the image of a phase only as a reference with a digest
+   (`<repository>@sha256:<hex>`), never as a tag. When a unit or a pool
+   names a tag, the server resolves the tag to a digest when it plans the
+   job, and records the digest in the job spec. Each phase of the job
+   uses that digest, also after a takeover. The Kubernetes coordinator
+   puts the reference with the digest in the pod, and the machine
+   coordinator pulls it. A coordinator refuses a claim whose image has
+   no digest.
+   - The server resolves a tag with a request for the manifest on the
+     standard library (`HEAD`, and the token challenge of the registry
+     protocol). It does not link go-containerregistry: the depguard rule
+     of decision 5 still applies to the server.
+7. **Unpack limits with defaults, for each pool.** The machine coordinator
+   counts while it unpacks an image, and stops at the first limit that
+   the image passes. Each pool can change each limit. The defaults give
+   about 1.5 times the largest image of the table above, and more than
+   10 times its largest file:
+
+   | Limit | Default | Largest measured |
+   | --- | --- | --- |
+   | Total unpacked bytes | 16 GiB (17,179,869,184 bytes) | 10.53 GB |
+   | Entries (files, directories and links) | 500,000 | 331,804 |
+   | Size of one file | 2 GiB (2,147,483,648 bytes) | 150.28 MB |
+
+   An image that passes a limit fails the phase before its first step.
+   The coordinator deletes the files that it unpacked, and the phase
+   reports an error that names the image digest, the limit, its value
+   and the pool setting that changes it, for example: `Image
+   sha256:65801d79252f... has more than 500,000 entries. Set a larger
+   unpack.maxEntries on the pool, or use a smaller image.`
 
 ## Consequences
 
@@ -244,13 +285,37 @@ links.
   direct imports only.
 - The Makefile and CI do more work: each Go check runs once for each
   module.
+- A team that uses a tag gets the image of the tag at the time of the
+  plan, not at the time of the apply. To use a new image, the team plans
+  again.
+- The server needs network access to the registries of the images, and
+  credentials for a private registry, to resolve a tag. A unit that
+  names a digest needs neither.
+- The implementation must make these changes:
+  1. `cmd/dustpan-runner/go.mod` with the module path
+     `opendustpan.org/opendustpan/cmd/dustpan-runner` and
+     `replace opendustpan.org/opendustpan => ../..`.
+  2. `make lint`, `make lint-journal-build`, `make nilaway`, `make vuln`,
+     `make test` and `make licenses` run in both modules. A run from the
+     root does not include the nested module.
+  3. `make trivy` runs `go mod download` in both modules, and gives both
+     `go.mod` files to `scripts/trivy-license-gate.py`.
+  4. The `gomoddirectives` settings in `.golangci.yml` allow the one local
+     replacement of `opendustpan.org/opendustpan`, and no other.
+  5. `.github/dependabot.yml` watches `/cmd/dustpan-runner` as well as
+     `/`.
+  6. The machine coordinator writes each unpacked file through an
+     `os.Root`, because `mutate.Extract` keeps links with absolute
+     targets.
+  7. The release builds `dustpan-runner` from the same tag as the
+     server, and ships the license files of the runner modules with the
+     runner archive and image.
 - If the image size of the Kubernetes coordinator becomes a problem, the
   third row of the first table (`k8s.io/api` types and a transport of our
   own, 2.95 MB) is the next option to measure.
 
 ## Open questions
 
-- Does the runner protocol carry an image only as a digest, so that the
-  coordinator never resolves a tag?
-- Do the byte limit and the file limit of an unpacked image get defaults
-  in the settings reference, as the source pipeline limits of ADR 135 do?
+- Where does the server keep the registry credentials that it uses to
+  resolve a tag of a private image, and which action allows a namespace
+  to set them?
