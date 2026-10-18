@@ -19,7 +19,8 @@ var ErrInvalidURL = errors.New("not an absolute http or https URL")
 // Origin is the scheme, host and port of the base URL of a provider. A caller
 // sends requests only to its origin.
 type Origin struct {
-	// Scheme is "https", or "http" for a loopback host.
+	// Scheme is "https" or "http". OriginOf accepts both for any host; the
+	// declaration check allows "http" only for a loopback host.
 	Scheme string
 	// Host is the lowercase host name or IP address, without brackets.
 	Host string

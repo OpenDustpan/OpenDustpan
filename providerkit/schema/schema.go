@@ -111,6 +111,16 @@ func ValidName(name string) bool {
 	return namePattern.MatchString(name)
 }
 
+var providerNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,31}$`)
+
+// ValidProviderName reports whether name is a valid provider type name:
+// lowercase letters and digits. The name "dustpan" is not valid, because the
+// file form of a secret then gives a variable DUSTPAN_<ATTR>_FILE, inside the
+// DUSTPAN_ prefix that the launcher reserves.
+func ValidProviderName(name string) bool {
+	return name != "dustpan" && providerNamePattern.MatchString(name)
+}
+
 // Lookup returns the attribute with the name, and false when the schema has
 // none.
 func (s Schema) Lookup(name string) (Attribute, bool) {

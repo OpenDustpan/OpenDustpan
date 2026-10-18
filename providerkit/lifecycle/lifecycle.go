@@ -150,7 +150,7 @@ func Created(got schema.Values) bool {
 // Create or Update: got, with each attribute that got leaves null or missing
 // taken from base, and passed through ForTool. Base is the prior state for
 // an Update, and Change.Planned for a Create. An unknown value of base gives
-// null.
+// null. A null in got means "not reported": got never clears an attribute.
 //
 // Without it, a failed update that returns only the id would give the tool
 // null for every other attribute. The next plan would then show a change of

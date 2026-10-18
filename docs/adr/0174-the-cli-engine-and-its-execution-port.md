@@ -42,6 +42,11 @@ package `cliexec` of `opendustpan/providerkit`.
      `--name={x}` is valid. Else `--{x}` with `x` set to
      `output=/etc/cron.d/x` gives the option `--output=/etc/cron.d/x`
      (`Template.OptionNameRef`).
+   - The engine refuses an argument that starts with `-` also after a `--`
+     argument. A program that reads `@file` arguments reads the file when a
+     value starts with `@`. An author puts a value for such a program after
+     `=` in an option, as in `--data={body}`, so that the program does not
+     read it as a file name.
 4. **The environment.** The program gets the variables that the declaration
    sets, `PATH` of the provider process, and `HOME` and `TMPDIR` in a
    private directory of the run. It gets nothing else. A declaration cannot

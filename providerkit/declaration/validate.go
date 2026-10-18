@@ -64,9 +64,11 @@ func (sc scope) checkRef(ref Ref, sl slot) error {
 	switch {
 	case ref.Kind == RefFile && (!sc.cli || sl != slotPublic):
 		return fmt.Errorf("%w: %s is allowed only in a command argument or an environment variable", ErrInvalid, ref)
-	case ref.Kind != RefFile && a.Sensitive && sl == slotPublic:
+	case ref.Kind != RefFile && (a.Sensitive || a.WriteOnly) && sl == slotPublic:
 		return fmt.Errorf(
-			"%w: %s is sensitive and cannot go in an argument, a variable, a path or a query", ErrInvalid, ref,
+			"%w: %s is sensitive or write-only and cannot go in an argument, a variable, a path or a query",
+			ErrInvalid,
+			ref,
 		)
 	default:
 		return nil

@@ -91,6 +91,7 @@ func TestValidateHTTP(t *testing.T) {
 		name   string
 		change func(d *declaration.Document)
 	}{
+		{name: "reserved provider name", change: func(d *declaration.Document) { d.Provider.Name = "dustpan" }},
 		{name: "provider name with a hyphen", change: func(d *declaration.Document) { d.Provider.Name = "my-ipam" }},
 		{
 			name:   "plain http base URL",
@@ -101,6 +102,13 @@ func TestValidateHTTP(t *testing.T) {
 			name:   "token is not sensitive",
 			change: func(d *declaration.Document) { d.HTTP.Auth.Token = "{config.endpoint}" },
 		},
+		{name: "write-only attribute in a query", change: func(d *declaration.Document) {
+			addAttribute(d, declaration.Attribute{
+				Name: "key", Type: "string", Mode: "optional",
+				Sensitive: false, WriteOnly: true, Replace: false, Stable: false, Description: "",
+			})
+			d.Resources[0].Create.Request.Query = map[string]string{"key": "{key}"}
+		}},
 		{name: "unknown auth kind", change: func(d *declaration.Document) { d.HTTP.Auth.Kind = "digest" }},
 		{name: "sensitive config in a query", change: func(d *declaration.Document) {
 			d.Resources[0].Read.Request.Query = map[string]string{"key": "{config.token}"}
@@ -434,6 +442,13 @@ func TestValidateCLI(t *testing.T) {
 		}},
 		{name: "sensitive attribute in an argument", change: func(d *declaration.Document) {
 			d.DataSources[0].Read.Command.Args = []string{"lookup", "{phone}"}
+		}},
+		{name: "write-only attribute in an argument", change: func(d *declaration.Document) {
+			addAttribute(d, declaration.Attribute{
+				Name: "key", Type: "string", Mode: "optional",
+				Sensitive: false, WriteOnly: true, Replace: false, Stable: false, Description: "",
+			})
+			d.Resources[0].Create.Command.Args = append(d.Resources[0].Create.Command.Args, "--key={key}")
 		}},
 		{name: "file reference on the standard input", change: func(d *declaration.Document) {
 			d.Resources[0].Create.Command.Stdin["/key"] = "{file:config.api_key}"

@@ -104,7 +104,7 @@ stores the plan of a plan phase, and the apply phase applies it (ADR 102).
    write-only attribute as a secret, so it is in state as ciphertext only.
    This is the case where "avoidable" ends. `lifecycletest` checks that the
    write-only value of the fixture reached the fake of the remote system.
-8. **No secret in a public place.** A sensitive value never goes in a command
+8. **No secret in a public place.** A sensitive or write-only value never goes in a command
    argument, an environment variable, a URL path or a query (ADR 171
    decision 9). The HTTP engine adds a credential after it logs the request,
    never follows a redirect, and needs HTTPS (ADR 173).

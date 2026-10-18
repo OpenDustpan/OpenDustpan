@@ -290,3 +290,29 @@ func TestFloatValue(t *testing.T) {
 		t.Error("FloatValue(1, 16) ok, want false")
 	}
 }
+
+func TestValidProviderName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"letters and digits", "ipam2", true},
+		{"reserved", "dustpan", false},
+		{"hyphen", "my-ipam", false},
+		{"empty", "", false},
+		{"starts with a digit", "2ipam", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := schema.ValidProviderName(tt.in); got != tt.want {
+				t.Fatalf("ValidProviderName(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+}

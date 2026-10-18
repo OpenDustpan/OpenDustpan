@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 
 	"opendustpan.org/providerkit/lifecycle"
 	"opendustpan.org/providerkit/schema"
@@ -24,8 +23,6 @@ var (
 // maxDocumentBytes limits the size of a declaration. A provider with a few
 // hundred types fits in far less.
 const maxDocumentBytes = 4 << 20
-
-var providerNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,31}$`)
 
 // Parse reads and checks one declaration. Errors: ErrSchemaVersion for a
 // missing or unknown version, ErrInvalid for a file that the version does
@@ -84,8 +81,12 @@ func (d Document) Validate() error {
 		return fmt.Errorf("%w: %d", ErrSchemaVersion, d.Schema)
 	}
 
-	if !providerNamePattern.MatchString(d.Provider.Name) {
-		return fmt.Errorf("%w: provider name %q must be lowercase letters and digits", ErrInvalid, d.Provider.Name)
+	if !schema.ValidProviderName(d.Provider.Name) {
+		return fmt.Errorf(
+			"%w: provider name %q must be lowercase letters and digits, and not \"dustpan\"",
+			ErrInvalid,
+			d.Provider.Name,
+		)
 	}
 
 	config, err := d.ConfigSchema()
