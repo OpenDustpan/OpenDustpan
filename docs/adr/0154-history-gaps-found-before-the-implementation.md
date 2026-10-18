@@ -13,6 +13,9 @@ history).
 
 The facts on `main` that the decisions build on:
 
+- **A namespace has no stable ID on `main`.** `namespace.Namespace` has only
+  a `Name`. The stable namespace ID of ADR 163 does not exist yet, and
+  decisions 2 and 8 depend on it.
 - **No adapter exists yet** for `secret.ItemKeyIndex`, `secret.ItemSealer`
   or `inventory.HistoryReader`. Only the ports, `secrettest.RunItemKeys`,
   the `historytest` suites with an in-memory store, and `inventory.ReplayAt`
@@ -59,6 +62,9 @@ The facts on `main` that the decisions build on:
    The row lock lasts until the commit. So a second transaction of the same
    namespace waits, and gets the next number only after the first commits.
    The order of the sequences is the order of the commits in the namespace.
+   This needs write transactions at `READ COMMITTED` (the PostgreSQL default
+   and the level of the adapter), because a stricter level can fail the
+   transaction that waited instead of giving it the next number.
    A transaction that rolls back also rolls back its number.
 2. **The sequence is per namespace, not per installation.** This replaces
    the words "across the installation" of the `inventory.Change` doc.
@@ -136,7 +142,11 @@ The facts on `main` that the decisions build on:
    the unit by its tool and stable ID in the namespace of the path: the
    live unit, or the soft-deleted unit. When no such unit exists, the
    handler answers 404. Then it checks `unit:read` on that unit with its
-   stable ID. The routes of this decision and of decision 20 use the same
+   stable ID. For an owner that is a change order, the handler finds the
+   change order by its ID in the namespace of the path, and checks
+   `changeorder:read` on each unit of the change order. It answers the same
+   404 when the change order is absent from the namespace, and when one
+   check fails. The routes of this decision and of decision 20 use the same
    rule, as ADR 149 decision 4 says: an unknown unit, a unit of another
    namespace, a purged unit, and a unit on which the caller does not have
    the action all answer the same 404. So the answer never tells that the
@@ -177,8 +187,11 @@ The facts on `main` that the decisions build on:
       (DUSTPAN_KEY_ENCRYPTION_KEY_FILE) or DUSTPAN_KEY_ENCRYPTION_KEY`.
     - The escape hatch for development is
       `--generate-key-encryption-key`. On the first start, the server makes
-      a local key file. On each start with this setting, the server logs
-      this warning: `the key-encryption key is a local file that this
+      a local key file. The server logs the warning below on each start
+      whose key comes from a key file that `serve` made, by this flag or by
+      the terminal prompt. It never logs it when the key comes from
+      DUSTPAN_KEY_ENCRYPTION_KEY or from a file that the operator supplied.
+      The warning: `the key-encryption key is a local file that this
       server made: for production, set --key-encryption-key-file or
       DUSTPAN_KEY_ENCRYPTION_KEY`.
 11. **Each create port takes the record.** Each port method that creates a
@@ -208,6 +221,8 @@ The facts on `main` that the decisions build on:
     - A create with a stale fence leaves no item and no record.
     - A key of another item answers `ErrInvalidItemRef`.
     - A repeated create keeps the first record.
+    - A stored record whose key is shredded: the create returns the stored
+      (redacted) item with `ErrShredded`.
 
 ### G4. Client-encrypted items and the blame check
 
@@ -293,13 +308,13 @@ The facts on `main` that the decisions build on:
     prefixes (ADR 19), so two owners never share a scope. `OwnerKind` has
     the same syntax rule as `ItemKind`. For the kind `comment`, the scope
     of the item key is the namespace and the ID of the change order that
-    owns the comment. PR #846 aligns ADR 198 decision 3 to this rule.
+    owns the comment. ADR 198 decision 3 uses this rule.
 18. **Each owner kind names its object, its actions and its end.**
 
     | Owner kind | Object of the read | Redact action | End of its items |
     | --- | --- | --- | --- |
-    | `unit` | the unit | `unit:redact` on the unit | the purge of the unit, with a tombstone (ADR 151 decision 8) |
-    | `change-order` | each unit of the change order | `unit:redact` on each unit (ADR 198 decision 3) | the purge of the namespace |
+    | `unit` | the unit: `unit:read` on the unit | `unit:redact` on the unit | the purge of the unit, with a tombstone (ADR 151 decision 8) |
+    | `change-order` | the change order: `changeorder:read` on each unit of the change order | `unit:redact` on each unit (ADR 198 decision 3) | the purge of the namespace |
 
     A tombstone names an owner, not only a unit, so the purge of a
     namespace writes one tombstone for each owner that is not a unit, in the
@@ -373,10 +388,11 @@ The facts on `main` that the decisions build on:
 
 24. **`inventorytest.RunHistory`.** Every store that implements
     `inventory.HistoryReader` runs it. Its fixture is the reader, a
-    `namespace.Store`, and a fixture method
-    `AppendChange(ctx, c, fence) (inventory.Change, error)` that runs the
-    append code of the store in a fenced transaction of its own. It is not a
-    port method: each tool appends in its own write transaction. The cases:
+    `namespace.Store`, and two fixture methods:
+    `AppendChange(ctx, c, fence) (inventory.Change, error)`, which runs the
+    append code of the store in a fenced transaction of its own, and
+    `PurgeNamespace(ctx, ns)`, because `namespace.Store` has no purge on
+    `main`. They are not port methods: each tool appends in its own write transaction. The cases:
 
     | Case | What it checks |
     | --- | --- |
@@ -422,6 +438,9 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   `PrepareItemKey`.
 - **ADR 151, decision 15.2:** the blame check now has the rule for opaque
   items (decision 13).
+- **ADR 151, decision 8, in part:** the tombstone names an owner, not only
+  a unit, so `history.Tombstone` changes (decision 18). The purge of a unit
+  still writes its tombstone as ADR 151 decision 8 says.
 - **ADR 151, decision 28:** `GET /api/inventory/redactions/{redaction_id}` is
   now `GET /api/inventory/namespaces/{namespace}/redactions/{redaction_id}`
   (decisions 8 and 9).
@@ -448,14 +467,15 @@ ADR 1 forbids edits to an accepted ADR. So this ADR records what it replaces:
   another namespace.
 - Open work, in this order. Each route lands with its e2e step first
   (ADR 12) and its action in the route table (ADR 17):
-  1. `inventorytest.RunHistory` with its in-memory store, then the counter
+  1. The stable namespace ID (ADR 163), because decisions 2 and 8 need it.
+  2. `inventorytest.RunHistory` with its in-memory store, then the counter
      table, the change log tables and the adapters.
-  2. The port change of `ItemSealer` and `ItemKeyIndex`, then the `key`
+  3. The port change of `ItemSealer` and `ItemKeyIndex`, then the `key`
      parameter of each create port, with the cases of decision 12.
-  3. The kind and owner registry, `history.Owner`, and the syntax rule of
+  4. The kind and owner registry, `history.Owner`, and the syntax rule of
      `ItemKind` and `OwnerKind`.
-  4. `SealNested` and `OpenNested` with a test that seals under two item
+  5. `SealNested` and `OpenNested` with a test that seals under two item
      keys, shreds one, and fails to open.
-  5. The blame rule for opaque items, with its three situations.
-  6. The routes of decisions 8 and 20, with the port
+  6. The blame rule for opaque items, with its three situations.
+  7. The routes of decisions 8 and 20, with the port
      `inventory.UnitStateAt` of each tool.
