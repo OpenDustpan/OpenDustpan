@@ -338,6 +338,10 @@ _Avoid_: Environment, stack
 A group of workspaces in the TFE-compatible API. It has no effect on names or state.
 _Avoid_: Project (without a qualifier), folder
 
+**Plan**:
+The OpenTofu record of the changes that an apply will make to a workspace. OpenDustpan stores a plan and shows it. The Pulumi CLI calls its record of planned changes a preview.
+_Avoid_: Preview (for OpenTofu), dry run, diff (a diff compares two state versions)
+
 **Workspace lock**:
 The lock that one principal holds on a workspace while it changes the state of the workspace. The lock stays until the principal or an administrator releases it.
 _Avoid_: Lease
@@ -442,6 +446,36 @@ _Avoid_: Secret count
 The build of the server and the console that the project runs as its hosted service. It uses the public SDK and the console extension points. It adds only shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59).
 _Avoid_: Fork, enterprise edition, cloud edition
 
+### Resources, self-service and runs
+
+**Unmanaged resource**:
+A cloud resource that does not have exactly one unit that manages it. It has three kinds. **Not in any unit**: the state of no unit holds the resource, and only a cloud scan can find it. **Left behind**: the resource is in the last state of a deleted unit, or of a unit whose destroy failed. **Managed twice**: the same cloud resource ID is in the state of two units, from one tool or from both.
+_Avoid_: Orphan (that is a stored file), ghost resource, shadow resource
+
+**Catalog**:
+The self-service gateway of OpenDustpan, at the API path `/api/catalog`. A principal sends a Catalog request to it, for example for a unit from a blueprint. Write it with a capital C, as a name.
+_Avoid_: Service catalog, marketplace, portal, inventory
+
+**Catalog request**:
+A declarative JSON document that a principal sends to the Catalog. It states the result that the principal wants, not the steps to get it.
+_Avoid_: Order, ticket, form
+
+**Blueprint**:
+A program that a platform team offers for self-service, with an input schema, platform values and a version. Units made from it are normal stacks or workspaces.
+_Avoid_: Template (Pulumi templates copy code), no-code module, product, offering, golden path
+
+**Runner**:
+A process that the customer hosts. It claims jobs from the backend and runs infrastructure-as-code tools in the customer's network. The backend never runs a tool itself.
+_Avoid_: Agent, worker, executor
+
+**Job**:
+One piece of work for a runner: a tool, a unit reference, an operation and the source to run it on. It produces one Pulumi update or one OpenTofu run.
+_Avoid_: Task, deployment, run (without a tool), operation (that is a durable operation in the server)
+
+**Dusty**:
+The built-in AI agent of OpenDustpan. It is off until an administrator connects a model.
+_Avoid_: Assistant, copilot, bot
+
 ## Flagged ambiguities
 
 - **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
@@ -450,6 +484,9 @@ _Avoid_: Fork, enterprise edition, cloud edition
 - **Project** has two meanings. Always write "Pulumi project" or "TFE project".
 - **Organization** is the word each tool uses for a namespace. Use it only to name a field or command of a tool's protocol.
 - **Lease** and **workspace lock** both stop concurrent writes, but they act differently after a crash. Do not use one word for both.
+- **Orphan** means a stored file, for example a blob that no row names. For a cloud resource that no unit manages, or that two units manage, write "unmanaged resource" and name its kind.
+- **Catalog** is the self-service gateway only. The list of all units is the inventory.
+- **Job** and **operation** are different. A job is work for a runner, outside the server. A durable operation is work inside the server (ADR 72).
 - **Migration** means a SQL schema migration only. For the move of a unit into OpenDustpan, write "import".
 - **Restore** has three meanings. A restore of a backup replaces the data of a whole installation (ADR 38). A restore of a version makes one older version of a unit its new current state (ADR 28). A restore of a deleted unit brings the unit back before its purge (ADR 47). Name which one.
 - **Lock** names the workspace lock of OpenTofu and the unit lock of the inventory. Code also says "stack lock" for the hold that a mutating Pulumi update has on its stack. Do not call a lease a lock.
