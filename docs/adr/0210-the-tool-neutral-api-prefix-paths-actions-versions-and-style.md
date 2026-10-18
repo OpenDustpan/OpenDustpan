@@ -191,7 +191,7 @@ The facts on `main`:
      answer in the same transaction as the write of the operation, so a
      crash never stores an answer without the operation. A pending record
      that has no final answer after 5 minutes (for example after a crash)
-     expires, and a retry with the same key then does the operation.
+     expires, and a retry with the same key then does the operation. The transaction of the final answer checks that the pending record of this request is still in place. If the record expired and a retry took the key, the transaction rolls back, so the operation never runs twice.
    - **Backup and restore.** The idempotency table is not in the backup
      table list. A restore empties it.
 
@@ -315,6 +315,8 @@ ADRs 28, 30, 32, 38, 60, 64, 65, 67, 70, 102, 110, 113, 117, 120, 122, 123,
 124, 125, 129, 138, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150,
 151, 152, 153, 154, 160, 161, 162, 163, 164, 165, 166, 180, 181, 182 and
 197.
+
+Decision 6 also amends ADR 200 decision 9 and ADR 203 decision 12. A replay record holds a keyed hash (HMAC-SHA-256) of the body, and a route that does not take the key answers 400.
 
 ## Not decided here
 

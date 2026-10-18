@@ -96,7 +96,8 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
    - "revoke on removal" from on to off,
    - the audit log, the hash chain or signed checkpoints from on to off,
      when the API can set the setting,
-   - a longer list of trusted proxies, when the API can set the setting,
+      - a longer list of trusted proxies, when the API can set the setting,
+   - a longer list `protectedBranches` of a source policy,
    - "fresh MFA for every approval" of a namespace from on to off,
    - the three changes of ADR 70 decisions 16, 17 and 23.
 
@@ -216,7 +217,7 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
      the default.
    - The resource has one revision. The revision changes at each change
      of a database value, and at each reload or start that changes an
-     effective value or a source. The `ETag` covers the effective values.
+     effective value or a source. The `ETag` is the revision.
      Each answer holds its `ETag`. A `PATCH` needs `If-Match`. A stale
      revision answers 412 and changes nothing.
    - A key that the static layer sets is locked: a `PATCH` that sets it

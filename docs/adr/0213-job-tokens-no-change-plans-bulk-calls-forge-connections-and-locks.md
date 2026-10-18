@@ -1,6 +1,6 @@
 # 213. Job tokens and outputs, plans with no change, the start policy input, bulk calls, the options action, forge connections and locks
 
-Status: accepted · 2026-10-18. Supersedes in part ADR 100 decision 20. Extends ADR 103 decisions 1 and 8, ADR 153 decision 4, ADR 20 and ADR 25. Answers an open question of ADR 103, ADR 117 and ADR 141. Accepts part of RFC 18
+Status: accepted · 2026-10-18. Supersedes in part ADR 100 decision 20. Extends ADR 103 decisions 1 and 8, ADR 135 decision 6, ADR 153 decision 4, ADR 20 and ADR 25. Answers an open question of ADR 103, ADR 117 and ADR 141. Accepts part of RFC 18
 
 ## Context
 
@@ -104,12 +104,10 @@ or that the competitors share where these sources say nothing:
    state of its own unit only when one of these is true:
    - the principal that started the job has `unit:read-secrets` on the
      unit.
-   - the commit of the job is on a branch that the source policy of the
-     code location marks protected.
+   - the server resolved the commit of the job at the start. From the head of a branch that the source policy of the namespace lists in `protectedBranches`. A commit that the start request names by its hash never passes, and a file set (ADR 199) never passes. `protectedBranches` extends the source policy of ADR 135 decision 6. It is empty by default, and a change of it needs `namespace:manage-runners`.
 
    Else the plan runs with masked secrets and no decrypt. A plan that needs
-   a secret then fails with `job.ErrSecretsWithheld`. The server checks
-   the condition at each decrypt.
+   a secret then fails with `job.ErrSecretsWithheld`. The server checks the condition at each decrypt and at each unmasked read of the state.
 
    The token gets no write except the lock or the update lease of the plan
    and the events of the plan. It gets no state write, no checkpoint and no
@@ -150,7 +148,7 @@ or that the competitors share where these sources say nothing:
    secret value" stays.
 
    A value is at most 4,096 bytes as JSON. A longer value is in the input
-   as a JSON string of its first 4,096 bytes, and the edit has the flag
+   as a JSON string of its first 4,096 bytes, cut at a character boundary, and the edit has the flag
    `truncated: true`. A policy that must see the whole value denies an
    edit with the flag.
 

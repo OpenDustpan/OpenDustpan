@@ -36,8 +36,7 @@ The facts on `main`:
    (ADR 182). The arguments name the module and its switch, for example
    `{"module": "agent", "switch": "agent.enabled"}`, so an operator knows
    which switch to turn on. The message says the same. A route of a module
-   that is on, and a path that no module has, keep the 404 that they have
-   today. The module starts no schedule, no timer and no durable operation
+   that is on, and a path that no module has, keep the 404 that they have today. An off module checks the sign-in first, so an anonymous request gets 401 as for a module that is on. The module starts no schedule, no timer and no durable operation
    of its own. A durable operation of the module that runs when the
    operator turns the module off runs to its end. The server refuses each
    new one. Its data stays in the store. When the operator turns the

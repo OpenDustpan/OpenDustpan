@@ -187,5 +187,5 @@ Accepted as ADRs 110 to 117, the Catalog and blueprints, on 2026-10-17, and
 as [ADR 199](../adr/0199-file-sets-for-sources-with-no-git-commit.md), file
 sets for sources with no git commit, on 2026-10-18.
 [ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
-decision 5 gives the read of the options of a blueprint form its own action.
+decision 6 gives the read of the options of a blueprint form its own action.
 A question of this RFC that these ADRs do not decide needs a new RFC.
