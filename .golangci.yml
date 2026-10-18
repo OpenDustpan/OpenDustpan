@@ -124,6 +124,14 @@ linters:
             - "**/pkg/collection/**"
             - "**/pkg/maintenance/**"
             - "**/pkg/durable/**"
+            - "**/pkg/calendar/**"
+            - "**/pkg/freeze/**"
+            - "**/pkg/breakglass/**"
+            - "**/pkg/oncall/**"
+            - "**/pkg/cost/**"
+            - "**/pkg/event/**"
+            - "**/pkg/chatops/**"
+            - "**/pkg/incident/**"
             - "**/pkg/blob/*.go"
             - "**/pkg/logsink/*.go"
             - "!**/*_test.go"
@@ -389,7 +397,7 @@ linters:
     rules:
       # Tests may use numeric literals and longer table-driven functions. The
       # conformance suites are tests that adapters import, so the same applies.
-      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/)
+      - path: (_test\.go$|^pkg/store/storetest/|^pkg/blob/blobtest/|^pkg/secret/secrettest/|^pkg/audit/audittest/|^pkg/principal/principaltest/|^pkg/accesstoken/accesstokentest/|^pkg/session/sessiontest/|^pkg/access/accesstest/|^pkg/durable/durabletest/|^pkg/calendar/calendartest/|^pkg/freeze/freezetest/|^pkg/breakglass/breakglasstest/|^pkg/oncall/oncalltest/|^pkg/cost/costtest/|^pkg/event/eventtest/|^pkg/chatops/chatopstest/|^pkg/incident/incidenttest/)
         linters:
           - mnd
           - funlen
