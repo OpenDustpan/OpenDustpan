@@ -1,4 +1,4 @@
-# 203. Job tokens and outputs, plans with no change, the start policy input, bulk calls, the options action, forge connections and locks
+# 213. Job tokens and outputs, plans with no change, the start policy input, bulk calls, the options action, forge connections and locks
 
 Status: accepted · 2026-10-18 · supersedes in part ADR 100 decision 20. Extends ADR 103 decision 1. Answers an open question of ADR 117
 
@@ -121,7 +121,7 @@ that the competitors share where these sources say nothing:
 
 ## Not decided here
 
-- Which bulk operations exist first, and their routes (ADR 200 decision 2).
+- Which bulk operations exist first, and their routes (ADR 210 decision 2).
 - The status vocabulary of RFC 26 and its order.
 - Whether an output-sharing rule can name a unit of another namespace.
 

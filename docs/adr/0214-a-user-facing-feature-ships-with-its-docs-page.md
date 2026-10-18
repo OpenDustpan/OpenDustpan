@@ -1,4 +1,4 @@
-# 204. A user-facing feature needs its docs page in the same pull request
+# 214. A user-facing feature needs its docs page in the same pull request
 
 Status: accepted · 2026-10-18 · accepts part of RFC 57
 

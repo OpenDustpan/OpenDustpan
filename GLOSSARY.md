@@ -65,7 +65,7 @@ The backend or product that holds the state of a unit before an import. Examples
 _Avoid_: Origin, legacy backend
 
 **Installation**:
-One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API acts on the whole installation. Its routes are under `/api/dustpan/v1/`, with no `server` word in the path (ADR 200).
+One OpenDustpan deployment: its SQL store, its blob store and its key-encryption key, with each server process that uses them. The installation API acts on the whole installation. Its routes are under `/api/dustpan/v1/`, with no `server` word in the path (ADR 210).
 _Avoid_: Cluster, instance (one server process), deployment
 
 **Instance**:
@@ -85,15 +85,15 @@ A source of the value of a setting: `flag`, `env`, `file`, `database` or `defaul
 _Avoid_: Level, tier
 
 **Optional module**:
-A feature outside the core that has its own routes, its own schedules or both, for example the Catalog or Sweep. It has one declared switch. When the switch is off, its routes answer 404 and it runs no schedules. Its data stays (ADR 201). The core is never off: namespaces, identity, authorization, the audit log, secrets, maintenance mode and backups.
+A feature outside the core that has its own routes, its own schedules or both, for example the Catalog or Sweep. It has one declared switch. When the switch is off, its routes answer 404 and it runs no schedules. Its data stays (ADR 211). The core is never off: namespaces, identity, authorization, the audit log, secrets, maintenance mode and backups.
 _Avoid_: Feature flag, plugin, add-on, module (alone)
 
 **Capabilities document**:
-The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutral API and each optional module with its state (ADR 201). The console reads it after the sign-in. It is not the `/api/capabilities` route of the Pulumi Cloud-compatible API.
+The answer of `GET /api/dustpan/v1/capabilities`: the version of the tool-neutral API and each optional module with its state (ADR 211). The console reads it after the sign-in. It is not the `/api/capabilities` route of the Pulumi Cloud-compatible API.
 _Avoid_: Feature list, handshake, capability (alone)
 
 **Forge connection**:
-The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server seals the credentials in the database as a sensitive setting of the namespace. A namespace can have many forge connections, and one of them is the default (ADR 203).
+The credentials that let the server use one forge for a namespace: read files, take webhooks, post results and, if allowed, push. The server seals the credentials in the database as a sensitive setting of the namespace. A namespace can have many forge connections, and one of them is the default (ADR 213).
 _Avoid_: VCS integration, VCS provider, app (alone)
 
 **Sensitive setting**:
@@ -969,7 +969,7 @@ Branding that an operator sets for the whole installation, for example the palet
 _Avoid_: Scheme, theme (for branding)
 
 **Preferences**:
-The settings of the console that a person keeps on the account, on every device (`/api/dustpan/v1/me/preferences`, ADR 180, ADR 200). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
+The settings of the console that a person keeps on the account, on every device (`/api/dustpan/v1/me/preferences`, ADR 180, ADR 210). They are the theme, the color mode, the color schemes of the Terminal theme and the keyboard settings. The keyboard settings are shortcut hints, single-key shortcuts and the hint style: `brackets` `[a]`, `angles` `‹a›` or `inverse`. The keyboard settings apply only in the Terminal theme.
 _Avoid_: Profile (a profile holds shared config and secrets, RFC 5), user settings
 
 
@@ -1049,8 +1049,8 @@ _Avoid_: Threat (alone), alert, vulnerability
 - **Scope** has three meanings: the namespace and unit of a data key, an audit scope, and an account scope of a sweep target. Write "account scope" for the third.
 - **Holder** has three meanings: the holder of a lock, the holder of an action, and the holder of a resource key. Name which one.
 - **Link** has two meanings: a link in the context of an object, and a namespace link. Write "namespace link" for the second.
-- **Module** has three meanings: an OpenTofu module, a Go module and an optional module of the server (ADR 201). Write "optional module" for the third.
-- **Capability** has four meanings. They are an upload capability, a capability probe (ADR 129), the capability list of the Pulumi CLI and the capabilities document (ADR 201). Name which one.
+- **Module** has three meanings: an OpenTofu module, a Go module and an optional module of the server (ADR 211). Write "optional module" for the third.
+- **Capability** has four meanings. They are an upload capability, a capability probe (ADR 129), the capability list of the Pulumi CLI and the capabilities document (ADR 211). Name which one.
 - **Layer** is a source of the value of a setting (ADR 63). ADR 161 also says "layer" for one object of the context chain. Name which one.
 - **Redaction**, **masking** and **purge** are different. A redaction destroys the content of one history item. Masking hides a secret value in a read and keeps it. A purge ends a whole unit.
 - **Retention** has three meanings. The first is the retention period of a deleted unit. The second is that of a stored plan or a job log (ADR 152). The third is that of an incident record or a cyber threat record (ADR 148). Name which one.

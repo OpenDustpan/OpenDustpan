@@ -91,7 +91,7 @@ Everything else scales by adding replicas of the same binary with different
 
 ## Outcome
 
-Accepted in part as [ADR 201](../adr/0201-optional-modules-and-the-capabilities-document.md)
+Accepted in part as [ADR 211](../adr/0211-optional-modules-and-the-capabilities-document.md)
 on 2026-10-18, as the project manager decided under the owner's decision rule: the core that is never off, one declared switch
 for each optional module, 404 and no schedules for an off module, every
 migration always applies, and the capabilities document. The roles of the

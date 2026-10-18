@@ -329,7 +329,7 @@ Lead decisions under owner delegation, 2026-10-13:
   roles once. No cache lives across requests.
 
 Project manager decision on 2026-10-18, under the owner's decision rule:
-[ADR 202](../adr/0202-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
+[ADR 212](../adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
 decision 1 adds the built-in `planner` role: the actions of `viewer`, with
 `unit:run-plan` and `job:read-plans`, and the caveat for a workstation.
 

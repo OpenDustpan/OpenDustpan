@@ -889,6 +889,6 @@ the owner's approval.
 
 ## Outcome
 
-Accepted in part as [ADR 202](../adr/0202-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
+Accepted in part as [ADR 212](../adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
 decision 3 on 2026-10-18: a setting change that reduces security needs a
 fresh MFA step (open question 4). The other questions stay open.

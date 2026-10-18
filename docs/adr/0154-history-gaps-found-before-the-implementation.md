@@ -1,6 +1,6 @@
 # 154. History: seven gaps found before the implementation
 
-Status: accepted · 2026-10-18 · supersedes part of ADRs 150 and 151 (see "What this ADR replaces"). Route paths superseded in part by ADR 200
+Status: accepted · 2026-10-18 · supersedes part of ADRs 150 and 151 (see "What this ADR replaces"). Route paths superseded in part by ADR 210
 
 ## Context
 

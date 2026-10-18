@@ -54,6 +54,6 @@ RFC then proposes the approach.
 
 ## Outcome
 
-Accepted in part as [ADR 204](../adr/0204-a-user-facing-feature-ships-with-its-docs-page.md)
+Accepted in part as [ADR 214](../adr/0214-a-user-facing-feature-ships-with-its-docs-page.md)
 on 2026-10-18: a user-facing feature is done only with its docs page in the
 same pull request. The other questions stay open.

@@ -38,4 +38,4 @@ the upgrade test.
 
 Closed on 2026-10-18. The usage ledger for deprecated features waits for a
 trigger: the project decides it at the first deprecation of a feature (ADR
-200, "Not decided here").
+210, "Not decided here").

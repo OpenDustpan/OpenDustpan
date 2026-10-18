@@ -1,6 +1,6 @@
 # 60. The audit log is a port, and logs go to swappable sinks
 
-Status: accepted · 2026-10-13 · the optional hash fields of decision 5 superseded by ADR 72. Route paths and `server:` action names superseded in part by ADR 200
+Status: accepted · 2026-10-13 · the optional hash fields of decision 5 superseded by ADR 72. Route paths and `server:` action names superseded in part by ADR 210
 
 ## Context
 

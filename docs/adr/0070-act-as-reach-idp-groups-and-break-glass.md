@@ -1,6 +1,6 @@
 # 70. Act-as reach, identity provider groups and break-glass accounts
 
-Status: accepted · 2026-10-15. The `server:` action names superseded in part by ADR 200
+Status: accepted · 2026-10-15. The `server:` action names superseded in part by ADR 210
 
 ## Context
 

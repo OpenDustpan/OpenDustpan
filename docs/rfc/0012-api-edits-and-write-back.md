@@ -284,7 +284,7 @@ worked into the proposal above.
 
 ## Outcome
 
-Accepted in part as [ADR 203](../adr/0203-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
+Accepted in part as [ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
 on 2026-10-18, as the project manager decided under the owner's decision rule: the credentials of a forge connection are sealed
 in the database as a sensitive setting of the namespace, with rotation
 (decision 6), and a namespace has many forge connections with one default

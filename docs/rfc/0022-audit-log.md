@@ -151,7 +151,7 @@ the target installation, writes no change entry, and warns when the
 restored log holds chained entries and the chain is off.
 
 Project manager decisions on 2026-10-18, under the owner's decision rule
-([ADR 202](../adr/0202-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)):
+([ADR 212](../adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)):
 
 - Decision 4 records the trusted-proxy rule that the code has: named
   proxies, one named header, and a walk from the right. It supersedes in

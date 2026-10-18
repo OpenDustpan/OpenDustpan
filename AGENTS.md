@@ -44,7 +44,7 @@ Consider a change done only when `make check` passes with zero findings:
   to run after the tests. Add this file to each new test package.
 - `sqlc diff` is clean (regenerate with `make generate`, never edit `internal/db`).
 - A feature that a user can see has its page in the user documentation in
-  the same pull request (ADR 204).
+  the same pull request (ADR 214).
 
 Do not report work as finished if any of these fail. Say what fails instead.
 

@@ -196,7 +196,7 @@ decision 3 (one action for each kind of token):
   A revoke never raises access and needs only `server:manage-tokens`.
 
 Project manager decision on 2026-10-18, under the owner's decision rule:
-[ADR 202](../adr/0202-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
+[ADR 212](../adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
 decision 2 makes the SMTP settings installation settings with the precedence
 of ADR 63. The password comes from an environment variable or a `*_FILE`
 file.

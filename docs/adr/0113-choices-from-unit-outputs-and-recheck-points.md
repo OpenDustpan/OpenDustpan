@@ -1,6 +1,6 @@
 # 113. Choices from unit outputs, and the recheck points
 
-Status: accepted · 2026-10-17. Route paths superseded in part by ADR 200
+Status: accepted · 2026-10-17. Route paths superseded in part by ADR 210
 
 ## Context
 

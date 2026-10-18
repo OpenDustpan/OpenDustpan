@@ -1,4 +1,4 @@
-# 202. The planner role, SMTP settings, fresh MFA for weaker settings, trusted proxies, the restore audit entry and the branding preset
+# 212. The planner role, SMTP settings, fresh MFA for weaker settings, trusted proxies, the restore audit entry and the branding preset
 
 Status: accepted · 2026-10-18 · supersedes in part ADR 27 decision 2 · extends ADR 52, ADR 56 and ADR 180 decision 11
 
@@ -119,7 +119,7 @@ that Google, AWS, PCI DSS, SOC 2 and ISO 27001 share:
    180 decision 11 is an installation setting with the precedence of ADR 63
    decision 1. `GET /api/dustpan/v1/settings/branding-preset` answers it.
    `PUT` on the same path changes it, with the action
-   `installation:manage-settings` (ADR 200 decision 3), and writes an audit
+   `installation:manage-settings` (ADR 210 decision 3), and writes an audit
    entry. The `GET` route is on the public list of the route test, because
    the sign-in page shows the preset before a person signs in. It holds no
    secret.

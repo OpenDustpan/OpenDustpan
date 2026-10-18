@@ -150,7 +150,7 @@ worked into the proposal above.
 
 ## Outcome
 
-Accepted in part as [ADR 203](../adr/0203-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
+Accepted in part as [ADR 213](../adr/0213-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
 decision 1 on 2026-10-18: a job token reads only the outputs whose sharing
 rule names the unit of the job, intersected with the grants of the principal
 that started the job. The other questions stay open.

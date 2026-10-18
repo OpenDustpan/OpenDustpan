@@ -1,6 +1,6 @@
 # 64. The audit chain is a start setting, and a change is a migration
 
-Status: accepted · 2026-10-15 · the "when it is above 0" part of decision 10 superseded by ADR 72. Route paths and `server:` action names superseded in part by ADR 200
+Status: accepted · 2026-10-15 · the "when it is above 0" part of decision 10 superseded by ADR 72. Route paths and `server:` action names superseded in part by ADR 210
 
 ## Context
 

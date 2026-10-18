@@ -1,6 +1,6 @@
 # 160. Context on every object: sources, precedence and storage
 
-Status: accepted · 2026-10-17 · changes the output schema of ADR 127 before it ships (see "Changes to ADR 127"). Decisions 8, 13, 16 and 18 and open question 4 superseded in part by ADR 166. Route paths superseded in part by ADR 200
+Status: accepted · 2026-10-17 · changes the output schema of ADR 127 before it ships (see "Changes to ADR 127"). Decisions 8, 13, 16 and 18 and open question 4 superseded in part by ADR 166. Route paths superseded in part by ADR 210
 
 ## Context
 

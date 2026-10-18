@@ -1,6 +1,6 @@
 # 138. Runner actions, audit entries and the REST API
 
-Status: accepted · 2026-10-18 · adds to ADR 103 decisions 8 and 9. Route paths superseded in part by ADR 200
+Status: accepted · 2026-10-18 · adds to ADR 103 decisions 8 and 9. Route paths superseded in part by ADR 210
 
 ## Context
 

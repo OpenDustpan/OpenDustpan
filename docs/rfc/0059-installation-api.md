@@ -3,12 +3,12 @@ rfc: 59
 title: Shape of the installation API served by api/server
 status: accepted
 created: 2026-10-11
-adr: 200
+adr: 210
 ---
 
 # RFC 59. Shape of the installation API served by api/server
 
-Status: accepted (ADR 200).
+Status: accepted (ADR 210).
 
 ## Problem
 
@@ -82,7 +82,7 @@ decides nothing. An ADR records a decision (ADR 15).
 
 ## Outcome
 
-Accepted as [ADR 200](../adr/0200-the-tool-neutral-api-prefix-paths-actions-versions-and-style.md)
+Accepted as [ADR 210](../adr/0210-the-tool-neutral-api-prefix-paths-actions-versions-and-style.md)
 on 2026-10-18, as the project manager decided under the owner's decision rule: one prefix
 `/api/dustpan/v1/` for every tool-neutral route, resource-oriented paths,
 `<area>:<verb>` action names with `installation:` for `server:`, a major

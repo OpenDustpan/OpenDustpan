@@ -1,4 +1,4 @@
-# 201. Optional modules, one switch each, and the capabilities document
+# 211. Optional modules, one switch each, and the capabilities document
 
 Status: accepted · 2026-10-18 · accepts part of RFC 7 and part of RFC 52
 

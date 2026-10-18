@@ -3,12 +3,12 @@ rfc: 28
 title: Stored plans and plan-bound approvals
 status: accepted
 created: 2026-10-10
-adr: 102, 152, 191, 194, 203
+adr: 102, 152, 191, 194, 213
 ---
 
 # RFC 28. Stored plans and plan-bound approvals
 
-Status: accepted (ADRs 102, 152, 191, 194 and 203). It was a stub opened from
+Status: accepted (ADRs 102, 152, 191, 194 and 213). It was a stub opened from
 the competitor review in the research doc "IaC and TACOS landscape".
 
 ## Problem
@@ -46,7 +46,7 @@ a change order to the digest of all its stored plans, on 2026-10-18.
 ADR 194 (the review view of a big plan) shows a stored plan to a reviewer,
 on 2026-10-18.
 
-ADR 203 decision 2: a plan with no change ends `succeeded` with no apply and
+ADR 213 decision 2: a plan with no change ends `succeeded` with no apply and
 needs no signature, on 2026-10-18, as the project manager decided under the owner's decision rule.
 
 Closed on 2026-10-18. A question of this RFC that these ADRs do not decide

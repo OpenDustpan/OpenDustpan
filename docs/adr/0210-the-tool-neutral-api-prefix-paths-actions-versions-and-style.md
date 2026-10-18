@@ -1,4 +1,4 @@
-# 200. The tool-neutral API: one prefix, resource paths, action names, versions and a style guide
+# 210. The tool-neutral API: one prefix, resource paths, action names, versions and a style guide
 
 Status: accepted · 2026-10-18 · accepts RFC 59. Supersedes in part the route paths and the `server:` action names of earlier ADRs (see "What this ADR replaces")
 

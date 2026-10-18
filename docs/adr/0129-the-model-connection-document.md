@@ -1,6 +1,6 @@
 # 129. The operator sets every field of the model connection
 
-Status: accepted · 2026-10-18 · supersedes parts of ADRs 120 and 121 (see "What this ADR replaces"). Route paths and `server:` action names superseded in part by ADR 200
+Status: accepted · 2026-10-18 · supersedes parts of ADRs 120 and 121 (see "What this ADR replaces"). Route paths and `server:` action names superseded in part by ADR 210
 
 ## Context
 
