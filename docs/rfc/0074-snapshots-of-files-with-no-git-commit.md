@@ -63,8 +63,9 @@ for each of them.
 Each option must meet these constraints. They come from accepted ADRs and
 from the review.
 
-1. **Addressed by content and immutable.** The key of a snapshot is a hash
-   of its content. Two writes of the same content give the same key. No
+1. **Addressed by content and immutable.** The digest of a snapshot is a
+   hash of its content. Two writes of the same content give the same
+   digest. No
    write changes a snapshot after it is ready. This is the rule of ADR 135
    decision 1 for git.
 2. **Pinned by a digest.** The job spec names the snapshot by one digest,
@@ -223,7 +224,7 @@ file as one layer, with its path in the annotation
 | 2. Pinned by a digest | `sha256:` of the manifest | Commit ID, SHA-1 or SHA-256 | `sha256:` of the manifest |
 | 3. Reproducible | Yes, by the format rules | Only with a fixed author, time, message and no parent | Yes, with a fixed config and fixed tar headers |
 | 4. Bounded | Limits on the manifest | Limits of ADR 135 | Limits on each layer |
-| 5. Sealed | Data key or item key, manifest and tar | Data key or item key, and the repository on the server too | Data key or item key |
+| 5. Sealed | Item key for the tar, data key for the manifest | Data key or item key, and the repository on the server too | Data key or item key |
 | 6. Backup and retention | Manifest in SQL, tar by a rule | A repository to back up | File list in SQL (C) or manifest (C2), blobs by a rule |
 | 7. Tool-neutral | Yes | Yes | Yes |
 | 8. Fenced writes | One record | A record and a ref update | One record |
@@ -267,11 +268,27 @@ But a purge or a redaction of one unit must then count the other units,
 and must keep the blobs while one other unit uses them. Rendered root
 modules are a few KiB, so the storage that a shared key saves is small.
 
+**Two writes of one key.** Two jobs of one unit can render the same file
+set at the same time. The server names each blob by a random ID, never by
+the digest, so the two writes never write to the same blob. Each job
+inserts the record of the key. An insert that meets an existing record of
+the same key is a success: the job uses the existing record and its
+blobs. The blobs of the job that lost have no record, and go to the orphan
+cleanup (ADR 151 decision 22).
+
 ### 2. The job spec
 
 `job.Location` of the kind `catalog` names the digest (ADR 110 change 3).
 The launcher gets the digest from its job session and puts it in
 `DUSTPAN_SNAPSHOT`. `DUSTPAN_COMMIT` stays empty (see the open questions).
+
+This amends ADR 134 in two places:
+
+- Decision 6 lists the variables of the launcher. `DUSTPAN_SNAPSHOT` is a
+  new variable in that list.
+- Decision 4 step 4 gets the source snapshot and checks it. For a file
+  set, step 4 gets the file set, does the checks of section 5 and writes
+  the files. A failure ends with exit code 68, as for a git snapshot.
 
 ### 3. The exact canonical form
 
@@ -285,12 +302,28 @@ the digests.
 
 - The separator is `/`. A path has no leading `/` and no trailing `/`.
 - No part of a path is empty, `.` or `..`.
+- A part of a path is at most 255 bytes. A path is at most 4,096 bytes.
+- A path has no control character (U+0000 to U+001F and U+007F to U+009F)
+  and no `\`.
 - A path is valid UTF-8 in Unicode Normalization Form C (NFC). A path that
   is not in NFC is an error. The writer does not normalize it.
-- Two paths that are equal after NFC or after Unicode case folding are an
-  error, because a file system that folds case or normalizes names writes
-  them to one file.
+- Two paths that are equal after Unicode full case folding are an error,
+  because a file system that folds case writes them to one file.
+- No path, after full case folding, is equal to a proper prefix of
+  another path after full case folding. A proper prefix ends at a `/` of
+  the other path. So the file `a` and the file `a/b` are an error, and the
+  file `A` and the file `a/x` are an error too.
 - A duplicate path is an error.
+
+Full case folding is the mapping of the Unicode file `CaseFolding.txt`
+with the status C and F. NFC and case folding need the module
+`golang.org/x/text` as a direct dependency of `pkg/source` and of the
+launcher. Today it is an indirect dependency (v0.42.0). The project owner
+must approve this change (`CLAUDE.md`: ask before you add a dependency).
+The module selects its Unicode tables by the Go version: v0.42.0 with Go
+1.27 or later uses Unicode 17.0.0. An upgrade of the module or of Go that
+changes the Unicode version can change which paths are valid. So the
+Unicode version is part of the format, and a test checks it.
 
 **Directories.** The manifest and the tar file have no directory entries.
 A directory exists only as a parent of a file or a link, so a file set has
@@ -305,33 +338,75 @@ no empty directory. The launcher makes each parent directory with mode
 - The target, resolved from the directory of the link, is a regular file
   or a directory inside the file set. A target that leaves the file set or
   names nothing in it is an error.
+- A target is never the root of the file set, and never the link itself
+  or a directory above the link. So a link never makes a loop.
 - A target is never a link, and no part of the resolved path is a link.
   So no chain goes through a link.
 - No path of the file set is below the path of a link. For example, the
   link `m` and the file `m/x` are an error.
 
-**Tar.**
+**Tar.** `pkg/source` owns the exact bytes of each header. It does not
+use the encoder of `archive/tar`, because that encoder can change between
+Go versions. Golden test vectors in `sourcetest` hold the exact bytes of
+a set of tar files, and the writer must give these bytes.
 
-- The format is PAX (POSIX.1-2001). Each header has a time of 0, a user
-  and a group of 0, no user name and no group name. A PAX extended header
-  holds only the records `path` and `linkpath`, and only when a value
-  does not fit the USTAR fields.
-- The entry types are regular file and symbolic link only. A hard link, a
-  directory, a character device, a block device, a FIFO, a sparse file and
-  every other type are errors.
-- The writer sets fixed mode bits: `0644` for a regular file, `0755` for an
-  executable file, `0777` for a link.
+- The format is USTAR. Each entry has one USTAR header. An entry has a
+  PAX extended header (typeflag `x`) before its USTAR header only when its
+  path or its link target is not ASCII or is more than 100 bytes.
+- A PAX extended header holds only the records `path` and `linkpath`, in
+  this order, and only the records that the entry needs. Each record has
+  the form `<length> <key>=<value>\n`, where the length is decimal and
+  counts the whole record.
+- The PAX extended header has the name `PaxHeader`, the mode `0644`, the
+  size of its records, and the other fields as below.
+- A USTAR header has these fields:
+  - The name: the path in ASCII, or empty when a PAX record holds the
+    path. The prefix field is always empty.
+  - The mode: `0644` for a regular file, `0755` for an executable file,
+    `0777` for a link.
+  - The user ID 0, the group ID 0, the time Unix 0 and the size. A link
+    has the size 0.
+  - The typeflag: `0` for a regular file, `2` for a symbolic link.
+  - The link name: the target in ASCII, or empty when a PAX record holds
+    the target, or empty for a regular file.
+  - The magic `ustar\0` and the version `00`.
+  - An empty user name and an empty group name, and the device numbers 0.
+- Each number field is octal with leading zeros, in the full width of the
+  field minus one byte, and ends with a NUL byte. The checksum field is
+  six octal digits, a NUL byte and a space. Unused bytes are NUL.
 - The entries are in the order of the manifest. The tar file ends with
   the two zero blocks of the format. A byte after them is an error.
 
+The launcher checks each header that `archive/tar` reads:
+
+- `Header.Format` is USTAR, or PAX for an entry that has a PAX extended
+  header.
+- `Header.PAXRecords` holds no key other than `path` and `linkpath`.
+- The typeflag is `0` or `2`. A GNU long name (`L`), a GNU long link
+  (`K`), a global PAX header (`g`), a hard link, a directory, a character
+  device, a block device, a FIFO, a sparse file and every other type are
+  errors.
+- The mode, the user ID, the group ID, the time, the user name, the group
+  name and the size have the values above.
+
 **Manifest values.**
 
+- `schemaVersion` is the integer 1, and `mediaType` is
+  `application/vnd.opendustpan.file-set.manifest.v1+json`. A launcher
+  refuses a version or a media type that it does not know.
+- `producer` holds the name and the version of the producer.
+- `tar` holds the size and the SHA-256 of the tar file.
+- An entry of a regular file holds its path, its mode, its size and its
+  SHA-256. An entry of a link holds its path, its mode and its target, and
+  has no size and no SHA-256. The tar header of a link gives the size 0.
+- A mount holds its path and the key of its snapshot (section 4).
 - A size is a JSON integer from 0 to 2^53 − 1, so that RFC 8785 writes it
   in one form.
 - Each hash is SHA-256 in lowercase hex, with no prefix. The digest of the
   file set has the prefix `sha256:`.
 - A mode is one of the strings `file`, `executable` and `symlink`.
-- Entries are in the order of the bytes of their paths.
+- Entries are in the order of the bytes of their paths. Mounts are in the
+  order of the bytes of their paths.
 - The hash of the tar file is the hash of its plaintext, before the server
   seals it.
 
@@ -349,11 +424,18 @@ holds this key and the path of the mount. So the digest of the file set
 covers the key of each mount, not the bytes of the pack. When the forge
 gives a different pack for the same commit, the digest does not change.
 
+A mount path follows the path rules of section 3. No mount path is equal
+to the path of a link or below it. The writer refuses a mount that breaks
+these rules, and the launcher checks them in step 1 of section 5. Can a
+mount path be equal to, above or below a file or another mount? This
+stays an open question.
+
 The start transaction of the job writes in this order:
 
 1. The renderer makes the file set in memory and the server checks the
    limits.
-2. The server writes the manifest and the tar file to the blob store.
+2. The server writes the manifest and the tar file to the blob store,
+   each with a random blob ID.
 3. The transaction writes the record of the file set, with the fence.
 4. The transaction starts one `source.fetch` operation for each mount
    that has no snapshot yet (ADR 135 decision 2).
@@ -368,24 +450,30 @@ The launcher never writes to the work directory before it checks the
 hash of the tar file:
 
 1. It checks the SHA-256 of the manifest against the digest of the job
-   spec, and checks the manifest against the rules of section 3 and the
-   limits of section 6.
-2. It reads the tar file into a private staging area, with mode `0700`,
-   outside the work directory. It stops at the size that the manifest
-   gives, and at the limit. It checks the SHA-256 of the tar file against
-   the manifest.
-3. It unpacks the tar file into a staging directory. For each entry, it
-   checks the path, the type, the mode and the order against the
-   manifest, and the hash and the size of the content as it reads it.
-4. It moves the tree into the work directory only when all checks pass.
-   On any error, it deletes the staging area and the job fails before its
+   spec, and checks the manifest against the rules of section 3, the
+   rules of the mount paths of section 4 and the limits of section 6.
+2. It makes a staging directory with mode `0700`. The staging directory
+   is a sibling of the work directory below the root directory of the job,
+   so it is on the same file system. It reads the tar file into the
+   staging directory. It stops at the size that the manifest gives, and at
+   the limit. It checks the SHA-256 of the tar file against the manifest.
+3. It unpacks the tar file into the staging directory. For each entry, it
+   checks the header (section 3), the path, the type, the mode and the
+   order against the manifest, and the hash and the size of the content
+   as it reads it. It then writes each mount at its path in the staging
+   directory.
+4. It moves the tree to the work directory with one `rename(2)` only when
+   all checks pass. The work directory must not exist before the move. A
+   work directory that exists is an error. The error `EXDEV` is an error
+   too. The launcher never copies the tree instead of the move. On any
+   error, it deletes the staging directory and the job fails before its
    first step.
 
 The unpack follows the rules of ADR 139 decision 2 (proposed): it writes
 through an `os.Root` on the staging directory, it creates each regular
 file with `O_CREATE|O_EXCL|O_NOFOLLOW`, and it writes each link with
-`Root.Symlink` after the checks of section 3. The launcher then writes the
-mounts at their paths.
+`Root.Symlink` after the checks of section 3. The launcher writes each
+mount through the same `os.Root`, before the move.
 
 ### 6. Limits
 
@@ -399,6 +487,15 @@ or one symbolic link of the manifest. Directories are not entries.
 | Entries | the same | 10,000 |
 | Total content bytes (the sum of the sizes) | the same, and while the launcher unpacks | 64 MiB (67,108,864 bytes) |
 | Size of one file | the same | 16 MiB (16,777,216 bytes) |
+| Size of the tar file | the same, and while the launcher reads the tar file | the content limit, plus the entry limit × 10,240 bytes, plus 1,024 bytes: 169,509,888 bytes with the defaults |
+
+The limit of the tar file comes from the other limits. One entry adds at
+most 10,240 bytes to its content: a PAX extended header of 512 bytes, its
+records of at most 8,704 bytes (a path and a link target of 4,096 bytes
+each, with the record overhead, in blocks of 512 bytes), a USTAR header
+of 512 bytes, and at most 511 bytes of padding. The two zero blocks at the
+end are 1,024 bytes. The manifest holds the size of the tar file, and the
+launcher refuses a size above the limit.
 
 A rendered root module is a few KiB, so these limits leave room for an
 upload of RFC 72. The limits of ADR 135 decision 8 still apply to the
@@ -413,19 +510,24 @@ fewer files.` The setting name is a placeholder.
 
 ### 7. Sealing
 
-The server seals the tar file with the data key of the namespace, as ADR
-135 decision 10 does. A producer that can put a secret in a file set (none
-today) seals it with an item key of its own, so that a redaction can shred
-it.
+The server seals the tar file of each file set with an item key of its
+own (ADR 151 decision 1). A redaction shreds that key (ADR 151 decision
+11), so a server that restores a backup after the redaction cannot read the
+tar file.
+
+The server seals the manifest in SQL with the data key of the namespace
+(ADR 135 decision 10). The manifest is metadata, as ADR 152 decision 7
+keeps the sizes and hashes of a job artifact: it holds paths, modes,
+sizes, hashes and link targets, never the content of a file. So the
+manifest stays readable after a redaction of the tar file.
 
 The digest is the hash of the plaintext manifest. This has a cost: the
 manifest names each path and the hash of each file, so a person who sees
-a digest or the manifest can test a guess of the content of a small file.
-A hash of the sealed bytes would hide this, but the digest would then
-change with each seal and would not be reproducible (constraint 3). We
-propose to keep the plaintext digest and to seal the manifest in SQL with
-the same key as the tar file. A reader then needs the key to see the
-paths and the hashes, and the job spec shows only the digest.
+the manifest can test a guess of the content of a small file. A hash of
+the sealed bytes would hide this, but the digest would then change with
+each seal and would not be reproducible (constraint 3). We propose to
+keep the plaintext digest. A reader needs the data key to see the paths
+and the hashes, and the job spec shows only the digest.
 
 ### 8. Backup and retention
 
@@ -435,21 +537,39 @@ paths and the hashes, and the job spec shows only the digest.
   `file-set`, with the digest as its item ID (ADR 150 decision 1). This
   needs an amendment of ADR 150 decision 1, which lists the kinds
   `state`, `plan` and `job-log`.
+- The `source` package owns the `history.Redactor` of `file-set` items,
+  as ADR 152 decision 2 gives the job model the `Redactor` of its items.
+  It runs the conformance suite `historytest.RunRedactor` with a table of
+  file-set situations.
 - The tar file stays in the blob store, and in the backup, until the
-  latest expiry time of the first version of the job log of each job of
-  the unit that names the file set (ADR 152 decisions 3 and 4). The rule
-  uses the first version because a substitution writes a new version with a new
-  expiry time, and a substitution must not extend the life of the files.
+  expiry time of the file set. The expiry time is the latest of these
+  times, for each job of the unit that names the file set:
+  - The expiry time of the first version of the job log of the job (ADR
+    152 decisions 3 and 4).
+  - For a job with no job log: the end of the job plus the job-log
+    retention period of the installation at the end of the job
+    (`--job-log-retention`).
+
+  The rule uses the first version because a substitution writes a new
+  version with a new expiry time, and a substitution must not extend the
+  life of the files. A file set does not expire before the end of each
+  job that names it, as ADR 152 decision 6 gives for a plan.
+- This amends ADR 152 decision 4 for the kind `file-set`. Decision 4
+  computes the expiry time once, when the server creates the item. The
+  expiry time of a file set grows: each new job that names the file set
+  can make it later. It never makes it earlier.
 - The end of that period is a redaction of the `file-set` item, on the
   path of ADR 152 decision 5: the actor `@server`, the cause `retention`,
-  and an audit entry with the action `unit:redact`. The redaction deletes
-  the tar file and keeps the manifest.
+  and an audit entry with the action `unit:redact`. The redaction shreds
+  the item key, deletes the tar file and keeps the manifest.
 - The purge of the unit deletes the manifest and the tar file.
-- A job after a restore that needs a deleted tar file renders again. When
-  the new digest is equal, the server writes the tar file again. When it
-  is different, the job fails with `source.ErrFileSetDigestMismatch`,
-  which names the old digest and the new digest. The server never
-  replaces a file set in silence.
+- The server never writes a redacted file set again. A job that needs a
+  redacted file set fails with `source.ErrFileSetRedacted`, which names
+  the digest, and the server changes nothing. To run the unit again, a
+  person starts a new change, which renders a new file set. When the new
+  content is different, the new file set has a new digest and so a new
+  key of the unit. When the new content is equal, the digest is equal and
+  the server refuses it with the same error.
 
 ### 9. Code
 
@@ -464,13 +584,23 @@ names the digest. We propose two routes in the job API, for example:
 
 | Operation | Route | Action | Object |
 | --- | --- | --- | --- |
-| Read the manifest of the file set of a job | `GET /api/jobs/{job}/files` | `job:read-files` | unit |
-| Read the content of one file | `GET /api/jobs/{job}/files/{path}` | `job:read-files` | unit |
+| Read the manifest of the file set of a job | `GET /api/jobs/{job_id}/files` | `job:read-files` | unit |
+| Read the content of one file | `GET /api/jobs/{job_id}/files/{path...}` | `job:read-files` | unit |
 
 `job:read-files` is a new action, like `job:read-logs` (ADR 152 decision
 10). The console shows the manifest, each file and the diff of two
-manifests through these routes only (ADR 17). A redacted tar file answers
-410 for the content of a file, and the manifest stays readable.
+manifests through these routes only (ADR 17).
+
+The content route answers:
+
+- 200 with the bytes of a regular file of the manifest.
+- 200 with the manifest entry of a link, which holds its target. The
+  route never follows a link.
+- 404 for a path that is not an entry of the manifest. A path at or below
+  a mount is not an entry, so it answers 404. The manifest gives the key
+  of the mount, and the code of a mount stays in its forge.
+- 410 for each entry of a redacted file set. The manifest route still
+  answers 200.
 
 ## Open questions
 
@@ -496,7 +626,9 @@ manifests through these routes only (ADR 17). A redacted tar file answers
 - **Mount paths.** Which path below the work directory does a module
   snapshot get, and can two mounts share a path prefix? Can a mount path
   be equal to a file of the set, or be below it or above it? We propose
-  that each of these is an error, but the rule is not decided.
+  that each of these is an error, but the rule is not decided. Section 4
+  decides only that a mount path follows the path rules and is never at
+  or below a link.
 - **Renderer upgrades.** A new renderer version can give new bytes for the
   same revision. Does a rerun of an old revision use the stored file set,
   or render again and show the diff before it runs?
