@@ -788,6 +788,14 @@ _Avoid_: Impact, dependents (that is one hop downstream)
 A tool-neutral projection with one entry for each managed resource of the latest state item of each unit (ADR 163). An entry holds the unit, the key of the resource in its state, the type and its resource keys. A data source is never an entry. A durable operation replaces the entries of a unit after each new latest state item, and writes only the difference. A unit has at most 100,000 entries. A unit with client-encrypted state has no entries.
 _Avoid_: Inventory (that is the list of units), resource catalog
 
+**Projection run**:
+One run of the durable operation `projection.unit` for one unit (ADR 166). It reads the latest state item of the unit with secret values masked. It writes the output entries of context, the entries of the resource index and the deleted marks of resource context. Each transaction that sets a new latest state item starts a run, unless a run of the unit already waits. So state items that arrive while a run waits coalesce into that run. A run is not part of blame.
+_Avoid_: Projection job (a job belongs to the job model), indexer, scan
+
+**Projection table**:
+A table that holds only data that the server can compute again from other tables (ADR 166). The resource index is one. A backup leaves the projection tables out. A restore empties them, and the server builds them again for each namespace. Until the build of a namespace ends, its state check and the match of its sweeps wait. So an index that is not complete never changes a finding.
+_Avoid_: Cache, derived table, control table (a restore keeps its rows)
+
 **Resource key**:
 The provider and the cloud ID of one resource, which the resource index uses to find one cloud resource in several units (ADR 163). For AWS, it is the ARN. For Azure, it is the resource ID. For Google Cloud, it is the full resource name. Two keys name the same cloud resource when they are equal after `unmanaged.NormalizeKey`. A resource with no such attribute has no resource key. It is not the key of a resource in its state, the URN or the address.
 _Avoid_: Resource ID, cloud ID (alone), URN, address
