@@ -1,6 +1,6 @@
 # 142. A second-person review of each break-glass by the next business day
 
-Status: accepted · 2026-10-18 · supersedes ADR 70 decision 26 in part (see "Superseded decisions"). Decisions 12 and 15 superseded in part by ADR 149
+Status: accepted · 2026-10-18 · supersedes ADR 70 decision 26 in part (see "Superseded decisions"). Decisions 12 and 15 superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 200
 
 ## Context
 

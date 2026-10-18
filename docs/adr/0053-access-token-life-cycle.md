@@ -1,6 +1,6 @@
 # 53. Access token life cycle, inactivity disable and expiry warnings
 
-Status: accepted · 2026-10-13
+Status: accepted · 2026-10-13. The SMTP settings decided by ADR 202
 
 ## Context
 

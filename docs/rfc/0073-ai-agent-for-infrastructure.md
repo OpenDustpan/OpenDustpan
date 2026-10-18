@@ -1,13 +1,14 @@
 ---
 rfc: 73
 title: An AI agent for infrastructure across both tools
-status: draft
+status: accepted
 created: 2026-10-17
+adr: 120, 121, 122, 123, 124, 125, 126, 127, 128
 ---
 
 # RFC 73. An AI agent for infrastructure across both tools
 
-Status: draft. The question and the open questions only. This RFC proposes no design.
+Status: accepted (ADRs 120 to 128). The question and the open questions only. This RFC proposes no design.
 
 ## Problem
 
@@ -54,4 +55,5 @@ Each option was open when this RFC was written.
 ## Outcome
 
 Accepted on 2026-10-17 as ADRs 120 to 127: Dusty, the built-in agent, runs in
-the server as an agent loop on durable operations.
+the server as an agent loop on durable operations. ADR 128 puts agents in
+the job model and the history model.

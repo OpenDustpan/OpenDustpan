@@ -34,4 +34,6 @@ depends on this list.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 203](../adr/0203-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
+decision 8 on 2026-10-18: a lock is a flag, not a status. The vocabulary and
+its order stay open.

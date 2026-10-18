@@ -1,6 +1,6 @@
 # 153. Safe delete: dependents and the recovery window
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17. Route paths and `server:` action names superseded in part by ADR 200
 
 ## Context
 

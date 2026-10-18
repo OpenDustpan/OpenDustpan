@@ -96,10 +96,11 @@ it.
 
 ### 3. Write-back to git
 
-- A **source** links a unit to a repository on a forge connection, a ref and
-  a directory. RFC 6 already uses the word for what a runner checks out.
+- A **code location** links a unit to a repository on a forge connection, a
+  ref and a directory (see "Code location" in `GLOSSARY.md`). "Source" means
+  the backend of a unit before an import.
 - A **write-back** is an API edit whose home is git. The backend turns it into
-  a commit on the unit's source.
+  a commit on the unit's code location.
 - **The backend commits through the `Forge` port, never through a runner.**
   Writing a data file is not running an infrastructure-as-code tool, so RFC
   6's principle does not apply. The forge APIs create a commit without a clone (GitHub's contents and Git
@@ -107,8 +108,8 @@ it.
   the backend needs no git binary, no working copy and no runner. The edit
   lands in seconds, even when no runner is online.
 - **Delivery.** A write-back goes as a **review request** by default: a new
-  branch, and a pull request or merge request. A direct push to the source's
-  ref is an option per source. The forge's branch protection decides what the
+  branch, and a pull request or merge request. A direct push to the ref of the code
+  location is an option per code location. The forge's branch protection decides what the
   connection can push to. OpenDustpan does not go around it. On GitHub, write
   access to contents covers every branch, so only branch protection or
   rulesets keep the connection off `main`.
@@ -117,7 +118,7 @@ it.
     ciphertext from the `secret` package, which is how the Pulumi CLI keeps
     them in git today.
   - OpenTofu: one variables file per workspace, in JSON
-    (`*.tfvars.json`), named by the source. JSON needs no formatter and loses
+    (`*.tfvars.json`), named by the code location. JSON needs no formatter and loses
     no comments. Editing hand-written HCL `.tfvars` is a later option.
   - OpenTofu has no encrypted form for a variable in a file. So a secret
     OpenTofu variable can never have git as its home. Its home is a profile.
@@ -154,7 +155,7 @@ for each unit.
 ### 5. Existing projects
 
 Write-back must work on a repository that OpenDustpan did not create. An
-operator links each unit to a source. For Pulumi stacks, the git details of
+operator links each unit to a code location. For Pulumi stacks, the git details of
 past updates can suggest the repository. They may not give the directory.
 For OpenTofu workspaces, the operator gives everything, or links many
 workspaces at once by a naming rule.
@@ -178,7 +179,7 @@ When a review request exists, two orders are possible:
 
 This RFC does not judge which order is right. Teams that use Atlantis chose
 option 2 for real reasons. Following RFC 9's posture, OpenDustpan gives the
-choice per source and makes option 1 the default.
+choice per code location and makes option 1 the default.
 
 The two tools differ in one place that matters:
 
@@ -223,10 +224,10 @@ The credentials that let the backend use one forge for a namespace: read
 files, take webhooks, post results and, if allowed, push.
 _Avoid_: VCS integration, app (alone)
 
-**Source**:
+**Code location**:
 The repository on a forge connection, the ref and the directory that hold the
-program and config of a unit.
-_Avoid_: Repo (in docs), VCS connection, origin
+program and config of a unit. `GLOSSARY.md` now holds this term.
+_Avoid_: Source (that is the backend of a unit before an import), repo (in docs), VCS connection, origin
 
 **Write-back**:
 An edit made through the API to a value whose home is git. The backend
@@ -283,4 +284,8 @@ worked into the proposal above.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 203](../adr/0203-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
+on 2026-10-18, as the project manager decided under the owner's decision rule: the credentials of a forge connection are sealed
+in the database as a sensitive setting of the namespace, with rotation
+(decision 6), and a namespace has many forge connections with one default
+(decision 7). The other questions stay open.

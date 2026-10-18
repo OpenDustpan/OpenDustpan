@@ -28,4 +28,7 @@ approves runs; Burrito bulk-syncs layers.
 
 ## Outcome
 
-None yet.
+Accepted in part as [ADR 203](../adr/0203-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
+decision 4 on 2026-10-18: a bulk call takes up to 100 IDs, checks, does,
+records and audits each item on its own, is not atomic, and answers one
+result for each ID. The first bulk operations stay open.

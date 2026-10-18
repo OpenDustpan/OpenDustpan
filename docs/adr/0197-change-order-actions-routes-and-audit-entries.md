@@ -1,6 +1,6 @@
 # 197. Change order actions, routes and audit entries
 
-Status: accepted · 2026-10-18 · part of ADR 190
+Status: accepted · 2026-10-18 · part of ADR 190. Route paths superseded in part by ADR 200
 
 ## Context
 

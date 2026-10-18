@@ -1,6 +1,6 @@
 # 140. Business calendars for namespaces and teams
 
-Status: accepted · 2026-10-18 · decisions 1 and 18 superseded in part by ADR 149
+Status: accepted · 2026-10-18 · decisions 1 and 18 superseded in part by ADR 149. Route paths and `server:` action names superseded in part by ADR 200
 
 ## Context
 

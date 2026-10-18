@@ -1,6 +1,6 @@
 # 38. Restore through the server, in maintenance mode
 
-Status: accepted · 2026-10-11 · superseded in part by ADR 151 (expected gaps)
+Status: accepted · 2026-10-11 · superseded in part by ADR 151 (expected gaps). The `server:` action names superseded in part by ADR 200. The restore audit entry decided by ADR 202
 
 ## Context
 

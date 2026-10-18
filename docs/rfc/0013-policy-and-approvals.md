@@ -227,4 +227,13 @@ worked into the proposal above.
 
 ## Outcome
 
-None yet.
+Not accepted as a whole. On 2026-10-18:
+
+- The sentence "One edit has one place for approval: OpenDustpan or the
+  forge, never both" is superseded. ADR 103 and ADR 110 decide that the
+  approvals of OpenDustpan add to the approvals of the forge.
+- ADR 203 decision 3: the policy input of `job.start` holds the old and the
+  new value of each edit key that is not secret, and a flag for a secret
+  key, as the project manager decided under the owner's decision rule.
+
+The other questions stay open.

@@ -1,14 +1,15 @@
 ---
 rfc: 28
 title: Stored plans and plan-bound approvals
-status: draft
+status: accepted
 created: 2026-10-10
+adr: 102, 152, 191, 194, 203
 ---
 
 # RFC 28. Stored plans and plan-bound approvals
 
-Status: draft. A stub opened from the competitor review in the research doc
-"IaC and TACOS landscape". It records the gap and first ideas only.
+Status: accepted (ADRs 102, 152, 191, 194 and 203). It was a stub opened from
+the competitor review in the research doc "IaC and TACOS landscape".
 
 ## Problem
 
@@ -41,3 +42,12 @@ for job artifacts), on 2026-10-17.
 
 ADR 191 (plan revisions, unit plans and signatures) binds the approvals of
 a change order to the digest of all its stored plans, on 2026-10-18.
+
+ADR 194 (the review view of a big plan) shows a stored plan to a reviewer,
+on 2026-10-18.
+
+ADR 203 decision 2: a plan with no change ends `succeeded` with no apply and
+needs no signature, on 2026-10-18, as the project manager decided under the owner's decision rule.
+
+Closed on 2026-10-18. A question of this RFC that these ADRs do not decide
+needs a new RFC.

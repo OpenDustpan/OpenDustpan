@@ -1,13 +1,15 @@
 ---
 rfc: 14
 title: Blueprints, self-service units with validated inputs
-status: draft
+status: accepted
 created: 2026-10-10
+adr: 110, 111, 112, 113, 114, 115, 116, 117, 199
 ---
 
 # RFC 14. Blueprints, self-service units with validated inputs
 
-Status: draft. The name, the scope and the input model are proposals.
+Status: accepted. ADRs 110 to 117 and ADR 199 record the decisions (see
+"Outcome").
 
 ## Problem
 
@@ -181,4 +183,9 @@ worked into the proposal above.
 
 ## Outcome
 
-None yet.
+Accepted as ADRs 110 to 117, the Catalog and blueprints, on 2026-10-17, and
+as [ADR 199](../adr/0199-file-sets-for-sources-with-no-git-commit.md), file
+sets for sources with no git commit, on 2026-10-18.
+[ADR 203](../adr/0203-job-tokens-no-change-plans-bulk-calls-forge-connections-and-locks.md)
+decision 5 gives the read of the options of a blueprint form its own action.
+A question of this RFC that these ADRs do not decide needs a new RFC.

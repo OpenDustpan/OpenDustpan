@@ -1,6 +1,6 @@
 # 8. Server and console live in separate repositories
 
-Status: accepted · 2026-10-09 · amends the repository layout in ADR 5
+Status: accepted · 2026-10-09 · amends the repository layout in ADR 5. The version handshake decided by ADR 201
 
 ## Context
 

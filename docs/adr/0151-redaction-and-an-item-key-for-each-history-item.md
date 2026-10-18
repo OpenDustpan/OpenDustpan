@@ -1,6 +1,6 @@
 # 151. Redaction, and an item key for each history item
 
-Status: accepted · 2026-10-17 · supersedes part of ADRs 20, 28, 30, 37, 38, 41 and 43 (see "What this ADR replaces"). Decisions 3, 8, 15, 28 and 29 and the item kinds superseded in part by ADR 154
+Status: accepted · 2026-10-17 · supersedes part of ADRs 20, 28, 30, 37, 38, 41 and 43 (see "What this ADR replaces"). Decisions 3, 8, 15, 28 and 29 and the item kinds superseded in part by ADR 154. Route paths superseded in part by ADR 200
 
 ## Context
 
