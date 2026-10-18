@@ -69,6 +69,12 @@ type Attribute struct {
 	WriteOnly bool `json:"writeOnly,omitempty"`
 	// Replace makes a change replace the object.
 	Replace bool `json:"replace,omitempty"`
+	// Stable marks a computed or optional computed attribute that an update
+	// in place never changes, for example a creation time. The plan of an
+	// update keeps its value. Without it, the plan of an update makes the
+	// value unknown, and the engine reads it from the reply of the update,
+	// or reads the object after the update.
+	Stable bool `json:"stable,omitempty"`
 	// Description is the text of the documentation.
 	Description string `json:"description,omitempty"`
 }
@@ -77,15 +83,22 @@ type Attribute struct {
 type Resource struct {
 	// Name is the type name without the provider prefix, in snake_case.
 	Name string `json:"name"`
-	// Attributes must include "id".
+	// Attributes must include "id". Create or Read must give each computed
+	// and optional computed attribute.
 	Attributes []Attribute `json:"attributes"`
-	// Create makes the object. Its reply or output gives the id.
+	// Create makes the object. Its reply or output gives the id. When it
+	// does not give every computed and optional computed attribute, the
+	// engine runs Read after it.
 	Create Operation `json:"create"`
-	// Read gets the object by id. A not-found answer removes the object
-	// from state, which shows as drift in the next plan.
+	// Read gets the object by id. It can reference only "{id}" and the
+	// provider configuration, because an import has nothing else. A
+	// not-found answer removes the object from state, which shows as drift
+	// in the next plan.
 	Read Operation `json:"read"`
 	// Update changes the object in place. Without it, every attribute that
-	// the user sets must force a replace.
+	// the user sets must force a replace. When it does not give every
+	// computed and optional computed attribute that is not stable, the
+	// engine runs Read after it.
 	Update *Operation `json:"update,omitempty"`
 	// Delete removes the object. A not-found answer counts as done.
 	Delete Operation `json:"delete"`
@@ -115,7 +128,10 @@ type Operation struct {
 type HTTPEngine struct {
 	// BaseURL is the URL that request paths are relative to. It can hold
 	// references to the configuration, for example "{config.endpoint}". It
-	// must be https, unless the user sets it to a loopback address.
+	// must be https, unless the user sets it to a loopback address, and it
+	// has no user information, query or fragment (CheckEndpoint). The engine
+	// checks a URL with references when it is configured. The engine sends
+	// requests only to the origin of this URL.
 	BaseURL string `json:"baseURL"`
 	// Auth says how the engine authenticates each request.
 	Auth Auth `json:"auth"`
@@ -155,7 +171,8 @@ type Auth struct {
 	Username string `json:"username,omitempty"`
 	// Password is the password for the kind "basic".
 	Password string `json:"password,omitempty"`
-	// TokenURL is the token endpoint for "oauth2ClientCredentials".
+	// TokenURL is the token endpoint for "oauth2ClientCredentials". It
+	// follows the rules of BaseURL.
 	TokenURL string `json:"tokenURL,omitempty"`
 	// ClientID is the client for "oauth2ClientCredentials".
 	ClientID string `json:"clientID,omitempty"`
@@ -186,7 +203,8 @@ type Request struct {
 	// Method is GET, POST, PUT, PATCH or DELETE.
 	Method string `json:"method"`
 	// Path starts with "/". A reference fills a whole path segment, and the
-	// engine escapes it.
+	// engine escapes it with PathSegment. A literal segment is not "." or
+	// "..".
 	Path string `json:"path"`
 	// Query maps each query parameter to a literal or a reference.
 	Query map[string]string `json:"query,omitempty"`
@@ -257,9 +275,9 @@ type CLIEngine struct {
 // Command is one run of the program of the CLI engine.
 type Command struct {
 	// Args are the arguments after the program, one element each. A
-	// reference can fill a whole element or a part of it. A value that
-	// fills the start of an element and starts with "-" fails the command,
-	// so a value cannot become an option.
+	// reference can fill a whole element or a part of it. When a reference
+	// starts an element and the expanded element starts with "-", the
+	// command fails, so a value cannot become an option.
 	Args []string `json:"args"`
 	// Stdin maps a JSON pointer in a JSON object on the standard input to a
 	// literal or a reference. An empty map gives an empty standard input.

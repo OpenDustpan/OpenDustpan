@@ -28,9 +28,12 @@ port that runs one command. The port is in `providerkit/cliexec`.
    unchanged. The program is a bare name that the runner finds on `PATH`,
    or a clean absolute path.
 3. **A value cannot become an option.** A reference can fill a whole
-   argument or a part of it, as in `--schedule={schedule}`. When a value
-   starts an argument and itself starts with `-`, the command fails with
-   `ErrOptionValue` and does not run (`Template.ExpandArg`).
+   argument or a part of it, as in `--schedule={schedule}`. When a reference
+   starts an argument, the engine expands the whole argument first. If the
+   result starts with `-`, the command fails with `ErrOptionValue` and does
+   not run (`Template.ExpandArg`). An empty first value then cannot let a
+   later value or literal start the argument: `{a}{b}` with `a` empty and
+   `b` set to `-rf`, and `{a}-x` with `a` empty, both fail.
 4. **The environment.** The program gets the variables that the
    declaration sets, `PATH` of the runner, and `HOME` and `TMPDIR` in a
    private directory of the run. It gets nothing else. A declaration cannot
@@ -60,8 +63,10 @@ port that runs one command. The port is in `providerkit/cliexec`.
 - The runner suite (`cliexectest`) runs a real helper program: arguments
   arrive as they are, the program gets only the declared environment and a
   private `HOME`, the standard input arrives, an exit code is a result, the
-  timeout stops the program, large output fails, an invalid command does
-  not start, and a missing program is an error.
+  timeout stops the program, the timeout also stops a grandchild in the
+  process group, a canceled context stops the program, large standard
+  output and large standard error fail, an invalid command does not start,
+  and a missing program is an error.
 - The rules of `Command.Validate` and the option rule have table tests.
 - A tool that reads a credential only from an environment variable cannot
   be declared. Its team writes an SDK provider, or wraps the tool in a

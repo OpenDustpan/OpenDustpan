@@ -26,11 +26,12 @@ func TestSuiteAgainstReferenceCaller(t *testing.T) {
 		}
 		t.Cleanup(client.CloseIdleConnections)
 
-		return referenceCaller{client: client, max: o.MaxReplyBytes, auth: o.Authorizer}
+		return referenceCaller{origin: o.Origin, client: client, max: o.MaxReplyBytes, auth: o.Authorizer}
 	})
 }
 
 type referenceCaller struct {
+	origin httpexec.Origin
 	client *http.Client
 	max    int64
 	auth   httpexec.Authorizer
@@ -38,6 +39,10 @@ type referenceCaller struct {
 
 func (c referenceCaller) Call(ctx context.Context, req httpexec.Request) (httpexec.Reply, error) {
 	var none httpexec.Reply
+
+	if err := c.origin.Check(req.URL); err != nil {
+		return none, err
+	}
 
 	h := req.Header.Clone()
 	if err := c.auth.Authorize(ctx, h); err != nil {

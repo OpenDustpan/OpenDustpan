@@ -168,20 +168,21 @@ func (t Template) Expand(lookup func(Ref) (string, error)) (string, error) {
 }
 
 // ExpandArg expands one command argument. When a reference starts the
-// argument and its value starts with "-", it returns ErrOptionValue: a value
-// cannot become an option of the program. A literal "-" in the declaration,
-// as in "--name={name}", is the author's own option and is allowed.
+// argument and the whole expanded argument starts with "-", it returns
+// ErrOptionValue: a value cannot become an option of the program. This also
+// holds when the first value is empty and a later value or literal gives the
+// "-", as in "{a}{b}" or "{a}-x". A literal "-" at the start of the
+// declaration, as in "--name={name}", is the author's own option and is
+// allowed.
 func (t Template) ExpandArg(lookup func(Ref) (string, error)) (string, error) {
-	if len(t) > 0 && t[0].Ref.Kind != RefNone {
-		v, err := lookup(t[0].Ref)
-		if err != nil {
-			return "", err
-		}
-
-		if strings.HasPrefix(v, "-") {
-			return "", fmt.Errorf("%w: %s", ErrOptionValue, t[0].Ref)
-		}
+	arg, err := t.Expand(lookup)
+	if err != nil {
+		return "", err
 	}
 
-	return t.Expand(lookup)
+	if len(t) > 0 && t[0].Ref.Kind != RefNone && strings.HasPrefix(arg, "-") {
+		return "", fmt.Errorf("%w: %s", ErrOptionValue, t[0].Ref)
+	}
+
+	return arg, nil
 }

@@ -44,10 +44,12 @@ The options:
    tools then show the same change for the same declaration. This follows
    ADR 12: a shared core, one adapter for each tool.
 2. **One binary, two names.** A build makes one binary. It reads the base
-   name of its program, as the launcher does (ADR 134 decision 2):
-   `terraform-provider-<name>` serves OpenTofu, and `pulumi-resource-<name>`
-   serves the Pulumi CLI. The release (ADR 177) packs the same binary under
-   each name.
+   name of its program, as the launcher does (ADR 134 decision 2). A name
+   that starts with `terraform-provider-<name>_v` serves OpenTofu: the
+   archive holds the binary as `terraform-provider-<name>_v<version>`
+   (ADR 177). The name `pulumi-resource-<name>` serves the Pulumi CLI. Any
+   other name stops the binary with an error that names the two forms. The
+   release packs the same binary under each name.
 3. **Names in each tool.** For a provider `ipam` with a resource
    `allocation` and a data source `prefix`:
    - OpenTofu: the resource type `ipam_allocation` and the data source
@@ -63,10 +65,25 @@ The options:
    Pulumi user runs `pulumi package add` with the plugin to get a local SDK
    in the language of the program. OpenDustpan publishes no SDK for each
    language.
-6. **The handshake without `go-plugin`.** The OpenTofu handshake is one line
-   on the standard output and a TLS certificate exchange. The adapter
-   implements it on `crypto/tls`. It does not use the `go-plugin` library
-   (MPL-2.0).
+6. **The handshake without the `go-plugin` library.** OpenTofu starts a
+   provider with the plugin protocol of the `go-plugin` library (MPL-2.0).
+   The adapter implements the parts that OpenTofu uses, on `net`,
+   `crypto/tls` and gRPC, without the library:
+   - The magic cookie. OpenTofu sets the variable `TF_PLUGIN_MAGIC_COOKIE`
+     to a fixed value. Without it, the binary stops with an error that says
+     it is a plugin and not a command for a person.
+   - The protocol version. OpenTofu lists the versions that it speaks in
+     `PLUGIN_PROTOCOL_VERSIONS`. The adapter picks 6, and stops with an
+     error when the list does not have it.
+   - AutoMTLS. OpenTofu gives its client certificate in
+     `PLUGIN_CLIENT_CERT`. The adapter makes a self-signed server
+     certificate for the run, accepts only that client certificate, and
+     sends its own certificate in the handshake line.
+   - The handshake line on the standard output:
+     `1|6|tcp|127.0.0.1:<port>|grpc|<certificate>`.
+   - The `GRPCController` service with `Shutdown`, which OpenTofu calls to
+     stop the plugin. The adapter also serves the stdio and broker services
+     when the e2e step shows that OpenTofu needs them.
 7. **Each adapter lands with its e2e step.** An adapter is supported only
    once `make e2e` drives the real CLI through a provider that it serves
    (AGENTS.md). The e2e suite builds the example declarations of
@@ -85,7 +102,7 @@ The options:
 
 ## Open questions
 
-These are dependency questions for the PM, with licenses.
+These are dependency questions for the project owner, with licenses.
 
 - `google.golang.org/grpc` (Apache-2.0) and `google.golang.org/protobuf`
   (BSD-3-Clause). Both adapters need them.
@@ -93,7 +110,13 @@ These are dependency questions for the PM, with licenses.
   repository under MPL-2.0. The adapter needs Go code generated from it.
   Copying the file or its generated code into this repository brings an
   MPL-2.0 file into an Apache-2.0 project. MPL-2.0 is file-level copyleft,
-  and the license gate accepts it (`make trivy`), but the PM decides.
+  and the license gate accepts it (`make trivy`), but the project owner
+  decides.
+- The `go-plugin` protocol definitions (`grpc_controller.proto`,
+  `grpc_stdio.proto` and `grpc_broker.proto`) are in the `go-plugin`
+  repository under MPL-2.0. The services of decision 6 need Go code
+  generated from them, which has the same license question as
+  `tfplugin6.proto`.
 - The protocol definitions of the Pulumi CLI are in the Pulumi repository
   under Apache-2.0. The adapter needs Go code generated from them.
 - `protoc` and `protoc-gen-go` are build tools, not linked code. The

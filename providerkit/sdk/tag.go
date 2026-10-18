@@ -18,13 +18,13 @@ const TagName = "provider"
 
 // ParseTag reads a tag of the form "name,option,...". The options are one
 // mode ("required", "optional", "computed", or "optional,computed") and any
-// of "sensitive", "writeonly" and "replace". It returns an attribute with
-// no type and no description.
+// of "sensitive", "writeonly", "replace" and "stable". It returns an
+// attribute with no type and no description.
 func ParseTag(tag string) (schema.Attribute, error) {
 	parts := strings.Split(tag, ",")
 	a := schema.Attribute{
 		Name: parts[0], Type: schema.Type{Kind: schema.KindInvalid, Elem: nil}, Mode: schema.ModeInvalid,
-		Sensitive: false, WriteOnly: false, Replace: false, Description: "",
+		Sensitive: false, WriteOnly: false, Replace: false, Stable: false, Description: "",
 	}
 
 	if !schema.ValidName(a.Name) {
@@ -33,31 +33,22 @@ func ParseTag(tag string) (schema.Attribute, error) {
 
 	var optional, computed, required bool
 
+	options := map[string]*bool{
+		"required": &required, "optional": &optional, "computed": &computed,
+		"sensitive": &a.Sensitive, "writeonly": &a.WriteOnly, "replace": &a.Replace, "stable": &a.Stable,
+	}
+
 	for _, opt := range parts[1:] {
-		var seen *bool
+		seen, ok := options[opt]
 
-		switch opt {
-		case "required":
-			seen = &required
-		case "optional":
-			seen = &optional
-		case "computed":
-			seen = &computed
-		case "sensitive":
-			seen = &a.Sensitive
-		case "writeonly":
-			seen = &a.WriteOnly
-		case "replace":
-			seen = &a.Replace
-		default:
+		switch {
+		case !ok:
 			return a, fmt.Errorf("%w: tag %q: unknown option %q", ErrInvalidModel, tag, opt)
-		}
-
-		if *seen {
+		case *seen:
 			return a, fmt.Errorf("%w: tag %q: option %q is there twice", ErrInvalidModel, tag, opt)
+		default:
+			*seen = true
 		}
-
-		*seen = true
 	}
 
 	a.Mode = tagMode(required, optional, computed)
@@ -87,7 +78,11 @@ func tagMode(required, optional, computed bool) schema.Mode {
 // M, in field order. A field without the tag is not an attribute. The Go
 // types map as follows: string to string; the int, uint and float types to
 // number; bool to bool; a slice to a list; a map with string keys to a map.
-// A pointer to one of these makes no difference to the type.
+//
+// A field of a required attribute is not a pointer. A field of any other
+// attribute is a pointer, and nil is null: the zero value of a type, for
+// example "" or 0, can be a value that the user sets, so it cannot also mean
+// "not set". The element of a slice or a map is not a pointer.
 func SchemaOf[M any]() (schema.Schema, error) {
 	s := schema.Schema{Version: 0, Attributes: nil}
 
@@ -111,6 +106,10 @@ func SchemaOf[M any]() (schema.Schema, error) {
 			return s, fmt.Errorf("field %s: %w", f.Name, err)
 		}
 
+		if err = checkPointer(a, f.Type); err != nil {
+			return s, fmt.Errorf("field %s: %w", f.Name, err)
+		}
+
 		if a.Type, err = typeOf(f.Type); err != nil {
 			return s, fmt.Errorf("field %s: %w", f.Name, err)
 		}
@@ -125,11 +124,34 @@ func SchemaOf[M any]() (schema.Schema, error) {
 	return s, nil
 }
 
+// checkPointer checks that the field of a required attribute is not a pointer
+// and that every other field is one.
+func checkPointer(a schema.Attribute, t reflect.Type) error {
+	pointer := t.Kind() == reflect.Pointer
+
+	switch {
+	case a.Mode == schema.ModeRequired && pointer:
+		return fmt.Errorf("%w: the required attribute %q cannot be a pointer", ErrInvalidModel, a.Name)
+	case a.Mode != schema.ModeRequired && !pointer:
+		return fmt.Errorf("%w: the %s attribute %q must be a pointer, so that nil can mean null",
+			ErrInvalidModel, a.Mode, a.Name)
+	default:
+		return nil
+	}
+}
+
+// typeOf returns the attribute type of the Go type of a field. A pointer is
+// allowed only at the top of a field.
 func typeOf(t reflect.Type) (schema.Type, error) {
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 
+	return elemTypeOf(t)
+}
+
+// elemTypeOf returns the attribute type of a Go type that is not a pointer.
+func elemTypeOf(t reflect.Type) (schema.Type, error) {
 	var none schema.Type
 
 	switch t.Kind() {
@@ -142,7 +164,7 @@ func typeOf(t reflect.Type) (schema.Type, error) {
 		reflect.Float32, reflect.Float64:
 		return schema.Number(), nil
 	case reflect.Slice:
-		elem, err := typeOf(t.Elem())
+		elem, err := elemTypeOf(t.Elem())
 
 		return schema.ListOf(elem), err
 	case reflect.Map:
@@ -150,7 +172,7 @@ func typeOf(t reflect.Type) (schema.Type, error) {
 			return none, fmt.Errorf("%w: map key %s is not a string", ErrInvalidModel, t.Key())
 		}
 
-		elem, err := typeOf(t.Elem())
+		elem, err := elemTypeOf(t.Elem())
 
 		return schema.MapOf(elem), err
 	case reflect.Invalid, reflect.Uintptr, reflect.Complex64, reflect.Complex128, reflect.Array, reflect.Chan,

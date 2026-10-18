@@ -18,7 +18,7 @@ ADR 176 makes one binary that serves both tools under two names.
    `providerkit/cmd/dustpan-provider`. It has these commands:
    - `check <declaration>`: parse and check a declaration, and, when the
      declaration names an OpenAPI document, compare the two (ADR 171
-     decision 10).
+     decision 12).
    - `derive --openapi <document>`: write a first declaration from chosen
      operations of an OpenAPI document.
    - `build <declaration> --version <semver>`: write a generated `main`
@@ -66,8 +66,8 @@ ADR 176 makes one binary that serves both tools under two names.
 - Signing. OpenTofu checks a signature of the checksums file when a registry
   gives a signing key. Signing in Go needs an OpenPGP library, for example
   `github.com/ProtonMail/go-crypto` (BSD-3-Clause), which is a new
-  dependency. The other way is to call `gpg` in the CI of the team. The PM
-  decides.
+  dependency. The other way is to call `gpg` in the CI of the team. The project
+  owner decides.
 - Whether OpenDustpan serves the provider registry protocol of OpenTofu and
   a plugin download URL for the Pulumi CLI, for the providers that teams
   build. RFC 10 (artifact registry) is the place for that question.

@@ -61,6 +61,14 @@ func TestParseTag(t *testing.T) {
 			replace:   false,
 			ok:        false,
 		},
+		{
+			tag:       "created,computed,stable",
+			mode:      schema.ModeComputed,
+			sensitive: false,
+			writeOnly: false,
+			replace:   false,
+			ok:        true,
+		},
 		{tag: "name,secret", mode: schema.ModeInvalid, sensitive: false, writeOnly: false, replace: false, ok: false},
 		{tag: "Name,required", mode: schema.ModeInvalid, sensitive: false, writeOnly: false, replace: false, ok: false},
 	}
@@ -87,23 +95,47 @@ func TestParseTag(t *testing.T) {
 }
 
 type override struct {
-	ID       string            `provider:"id,computed"`
-	Schedule string            `provider:"schedule,required,replace"`
-	People   []string          `provider:"people,required"`
-	Labels   map[string]string `provider:"labels,optional"`
-	Hours    *int              `provider:"hours,optional,computed"`
-	Token    string            `provider:"token,optional,sensitive,writeonly"`
+	ID       *string            `provider:"id,computed"`
+	Schedule string             `provider:"schedule,required,replace"`
+	People   []string           `provider:"people,required"`
+	Labels   *map[string]string `provider:"labels,optional"`
+	Hours    *int               `provider:"hours,optional,computed"`
+	Token    *string            `provider:"token,optional,sensitive,writeonly"`
 	note     string
 }
 
 type badField struct {
-	ID   string         `provider:"id,computed"`
-	Data chan<- float64 `provider:"data,optional"`
+	ID   *string         `provider:"id,computed"`
+	Data *chan<- float64 `provider:"data,optional"`
 }
 
 type badKey struct {
-	ID   string         `provider:"id,computed"`
-	Data map[int]string `provider:"data,optional"`
+	ID   *string         `provider:"id,computed"`
+	Data *map[int]string `provider:"data,optional"`
+}
+
+type optionalNotPointer struct {
+	ID   *string `provider:"id,computed"`
+	Team string  `provider:"team,optional"`
+}
+
+type computedNotPointer struct {
+	ID string `provider:"id,computed"`
+}
+
+type requiredPointer struct {
+	ID   *string `provider:"id,computed"`
+	Name *string `provider:"name,required"`
+}
+
+type pointerElements struct {
+	ID    *string   `provider:"id,computed"`
+	Names []*string `provider:"names,required"`
+}
+
+type stableRequired struct {
+	ID   *string `provider:"id,computed"`
+	Name string  `provider:"name,required,stable"`
 }
 
 func TestSchemaOf(t *testing.T) {
@@ -133,16 +165,26 @@ func TestSchemaOf(t *testing.T) {
 		}
 	}
 
-	_ = override{ID: "", Schedule: "", People: nil, Labels: nil, Hours: nil, Token: "", note: ""}
+	_ = override{ID: nil, Schedule: "", People: nil, Labels: nil, Hours: nil, Token: nil, note: ""}
+	_ = optionalNotPointer{ID: nil, Team: ""}
+	_ = computedNotPointer{ID: ""}
+	_ = requiredPointer{ID: nil, Name: nil}
+	_ = pointerElements{ID: nil, Names: nil}
+	_ = stableRequired{ID: nil, Name: ""}
 }
 
 func TestSchemaOfRefuses(t *testing.T) {
 	t.Parallel()
 
 	for name, f := range map[string]func() (schema.Schema, error){
-		"not a struct":  sdk.SchemaOf[string],
-		"channel field": sdk.SchemaOf[badField],
-		"integer keys":  sdk.SchemaOf[badKey],
+		"not a struct":                 sdk.SchemaOf[string],
+		"channel field":                sdk.SchemaOf[badField],
+		"integer keys":                 sdk.SchemaOf[badKey],
+		"optional field is no pointer": sdk.SchemaOf[optionalNotPointer],
+		"computed field is no pointer": sdk.SchemaOf[computedNotPointer],
+		"required field is a pointer":  sdk.SchemaOf[requiredPointer],
+		"slice of pointers":            sdk.SchemaOf[pointerElements],
+		"stable on a required field":   sdk.SchemaOf[stableRequired],
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

@@ -91,24 +91,52 @@ type Session struct {
 // Resource is the life cycle of one resource type. Each method gets the
 // values that the planner or the prior state gives, and returns the values
 // that the remote system now has. A returned value set holds every attribute
-// of the schema, with no unknown value, and with write-only attributes null.
+// of the schema, with no unknown value. A write-only attribute can hold the
+// value that the engine sent: the adapter passes every returned value set
+// through ForTool, so the tool never gets it.
 type Resource interface {
-	// Create makes the object. Planned holds the configuration, with
-	// unknown values for what the remote system sets. Errors: ErrRejected,
-	// ErrUnavailable.
+	// Create makes the object. Planned is Change.Planned: the
+	// configuration, with the write-only values, and unknown values for
+	// what the remote system sets.
+	//
+	// When the remote system made the object and a later step failed, for
+	// example a second call or a read, Create returns the values that it
+	// has, with at least the id, together with the error. The adapter
+	// keeps that object in state (see Created), so that it is not
+	// orphaned. Errors: ErrRejected, ErrUnavailable.
 	Create(ctx context.Context, planned schema.Values) (schema.Values, error)
 	// Read returns the current values of the object. Prior holds at least
 	// the id. An import calls Read with only the id. Errors: ErrNotFound,
 	// ErrUnavailable.
 	Read(ctx context.Context, prior schema.Values) (schema.Values, error)
 	// Update changes the object in place. The planner calls it only when
-	// no changed attribute forces a replace. Errors: ErrNotFound,
+	// no changed attribute forces a replace. Planned holds the write-only
+	// values, as for Create. When the change was partly applied, Update
+	// returns the values that the object now has, with at least the id,
+	// together with the error, as Create does. Errors: ErrNotFound,
 	// ErrRejected, ErrUnavailable.
 	Update(ctx context.Context, prior, planned schema.Values) (schema.Values, error)
 	// Delete removes the object. It returns nil when the object is already
 	// gone, so that a retried destroy ends. Errors: ErrRejected,
 	// ErrUnavailable.
 	Delete(ctx context.Context, prior schema.Values) error
+}
+
+// Created reports whether a Create or an Update that returned an error left
+// an object: got holds a known id that is not empty. The adapter then gives
+// its tool got, passed through ForTool, together with the error:
+//   - The OpenTofu adapter returns got as the new state with the error.
+//     OpenTofu keeps an object of a failed create as tainted and replaces it
+//     in the next apply. After a failed update it keeps got.
+//   - The Pulumi adapter returns a partial failure with the id and got. The
+//     Pulumi CLI keeps the object in state and applies the configuration
+//     again in the next update.
+//
+// Without an id, the adapter reports the error alone, as for any failure.
+func Created(got schema.Values) bool {
+	id, ok := got[schema.IDAttribute].AsString()
+
+	return ok && id != ""
 }
 
 // DataSource reads values from the remote system. A fact, for example the

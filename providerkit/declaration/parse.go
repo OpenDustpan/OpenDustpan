@@ -8,6 +8,7 @@ import (
 	"io"
 	"regexp"
 
+	"opendustpan.org/opendustpan/providerkit/lifecycle"
 	"opendustpan.org/opendustpan/providerkit/schema"
 )
 
@@ -19,12 +20,6 @@ var (
 	// wrapped message names the place in the file and the rule.
 	ErrInvalid = errors.New("invalid declaration")
 )
-
-// FileSuffix names the file form of a sensitive configuration attribute. For
-// each sensitive attribute "token", a built provider also accepts
-// "token_file", the path of a file that holds the value. A credential then
-// need not appear in the configuration of the tool at all.
-const FileSuffix = "_file"
 
 // maxDocumentBytes limits the size of a declaration. A provider with a few
 // hundred types fits in far less.
@@ -102,11 +97,10 @@ func (d Document) Validate() error {
 		if a.Mode != schema.ModeRequired && a.Mode != schema.ModeOptional {
 			return fmt.Errorf("%w: provider config attribute %q must be required or optional", ErrInvalid, a.Name)
 		}
+	}
 
-		if _, taken := config.Lookup(a.Name + FileSuffix); a.Sensitive && taken {
-			return fmt.Errorf("%w: provider config attribute %q is taken by the file form of %q",
-				ErrInvalid, a.Name+FileSuffix, a.Name)
-		}
+	if _, err := lifecycle.WithFileForms(config); err != nil {
+		return fmt.Errorf("%w: provider config: %w", ErrInvalid, err)
 	}
 
 	if err := d.validateEngine(config); err != nil {
@@ -171,7 +165,9 @@ func uniqueName(seen map[string]string, name, where string) error {
 	return nil
 }
 
-// ConfigSchema returns the schema of the provider configuration.
+// ConfigSchema returns the schema of the provider configuration, as the
+// declaration gives it. The built provider serves it with the file form of
+// each secret, from lifecycle.WithFileForms.
 func (d Document) ConfigSchema() (schema.Schema, error) {
 	return toSchema(d.Provider.Config)
 }
@@ -202,7 +198,8 @@ func toSchema(attrs []Attribute) (schema.Schema, error) {
 
 		s.Attributes = append(s.Attributes, schema.Attribute{
 			Name: a.Name, Type: t, Mode: mode,
-			Sensitive: a.Sensitive, WriteOnly: a.WriteOnly, Replace: a.Replace, Description: a.Description,
+			Sensitive: a.Sensitive, WriteOnly: a.WriteOnly, Replace: a.Replace, Stable: a.Stable,
+			Description: a.Description,
 		})
 	}
 

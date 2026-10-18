@@ -33,8 +33,11 @@ The owner left open where the code lives and how one description serves
 both tools. This ADR decides where the code lives. ADR 176 decides how one
 description serves both tools.
 
-The project owner approved every decision of this ADR. The label "(owner)"
-names a decision that the text of the owner of 17 October 2026 states.
+The label "(owner)" names a decision that the text of the owner of 17
+October 2026 states. The label "(PM, for the project owner)" names a decision
+that the PM made for the project owner. The project owner did not approve the
+other decisions of ADRs 170 to 179 one by one. They are the design of these
+ADRs, and the project owner accepts or refuses them with the pull request.
 
 ## Decision
 
@@ -47,7 +50,8 @@ names a decision that the text of the owner of 17 October 2026 states.
    provider in Go with the SDK (ADR 178). All three implement one core
    port (ADR 172), and each gives one provider that works with OpenTofu
    and with the Pulumi CLI (ADR 176).
-3. **A separate Go module in this repository.** The code lives in
+3. **A separate Go module in this repository (PM, for the project
+   owner).** The code lives in
    `providerkit/`, with the module path
    `opendustpan.org/opendustpan/providerkit`. Its release tags are
    `providerkit/vX.Y.Z`. The reasons:
@@ -62,7 +66,8 @@ names a decision that the text of the owner of 17 October 2026 states.
    - The `go.mod` of the module lists only what providers need. An author
      who adds the SDK does not get the server's dependencies in the module
      graph of the provider.
-4. **Why not a separate repository, and why not `pkg/`.** One repository
+4. **Why not a separate repository, and why not `pkg/` (PM, for the
+   project owner).** One repository
    keeps one review, one CI, one lint configuration and one set of rules.
    The CLI engine and the launcher share the rule "an argument list, no
    shell", and a change to that rule can change both in one pull request.

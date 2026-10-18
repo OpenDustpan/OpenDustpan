@@ -43,13 +43,15 @@ type Reply struct {
 
 // Caller is the port of the HTTP engine.
 type Caller interface {
-	// Call sends the request once and returns the reply. It adds the
-	// credential of its Authorizer to a copy of the headers and does not
-	// change req. A reply of any status is a reply, not an error. It never
-	// follows a redirect: a 3xx comes back as a reply, so a credential
-	// never goes to a host that the user did not configure. Errors:
-	// ErrTooLarge, the error of the Authorizer, the error of ctx, or a
-	// network error.
+	// Call sends the request once and returns the reply. A caller is built
+	// with the Origin of the base URL. A request to another origin is
+	// ErrOtherOrigin: the caller sends nothing and does not ask its
+	// Authorizer. Else it adds the credential of its Authorizer to a copy of
+	// the headers and does not change req. A reply of any status is a
+	// reply, not an error. It never follows a redirect: a 3xx comes back as
+	// a reply, so a credential never goes to a host that the user did not
+	// configure. Errors: ErrOtherOrigin, ErrTooLarge, the error of the
+	// Authorizer, the error of ctx, or a network error.
 	Call(ctx context.Context, req Request) (Reply, error)
 }
 

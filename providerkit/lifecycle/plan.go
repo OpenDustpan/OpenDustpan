@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 
 	"opendustpan.org/opendustpan/providerkit/schema"
@@ -48,12 +49,16 @@ func (a Action) String() string {
 type Change struct {
 	// Action is what the apply does.
 	Action Action
-	// Planned is the expected values after the apply: the configuration,
-	// plus prior values for computed attributes, plus unknown values for
-	// what the remote system sets. It is nil for a delete.
+	// Planned is the expected values after the apply, as the engine gets
+	// them in Create or Update: the configuration, with the write-only
+	// values; prior values for stable computed attributes and the id;
+	// unknown values for what the remote system sets. It is nil for a
+	// delete. An adapter shows a tool ForTool(schema, Planned), never
+	// Planned itself.
 	Planned schema.Values
-	// Changed names the attributes whose planned value differs from the
-	// prior value, in schema order.
+	// Changed names the attributes of the configuration whose planned value
+	// differs from the prior value, in schema order. A computed attribute
+	// that an update makes unknown is not in it.
 	Changed []string
 	// ReplacedBy names the changed attributes that force a replace, in
 	// schema order.
@@ -66,9 +71,12 @@ type Change struct {
 // Pulumi show the same change for the same declaration.
 //
 // The rules:
-//   - A write-only attribute is null in Planned and never counts as changed.
-//   - A computed attribute keeps its prior value, or is unknown on create and
-//     replace.
+//   - A write-only attribute takes the configuration value in Planned, so
+//     the engine can send it. It never counts as changed.
+//   - A computed attribute is unknown on create and replace. On an update it
+//     is unknown too, because an API can change it on any write. The id and
+//     a stable attribute keep their prior values on an update. Every
+//     computed attribute keeps its prior value when nothing changes.
 //   - An optional computed attribute takes the configuration value when it
 //     is not null, and else behaves as a computed attribute.
 //   - An unknown configuration value counts as changed.
@@ -113,10 +121,31 @@ func Plan(s schema.Schema, prior, config schema.Values) (Change, error) {
 		change.Planned = fresh(s, config)
 	case len(change.Changed) > 0:
 		change.Action = ActionUpdate
+		unknownOnUpdate(s, config, planned)
 	default:
 	}
 
 	return change, nil
+}
+
+// ForTool returns a copy of vs with every write-only attribute null. An
+// adapter passes each value set to its tool through it: the planned values
+// of a change, and the values that Create, Read and Update return. A tool
+// then never stores a write-only value.
+func ForTool(s schema.Schema, vs schema.Values) schema.Values {
+	if vs == nil {
+		return nil
+	}
+
+	out := maps.Clone(vs)
+
+	for _, a := range s.Attributes {
+		if _, ok := out[a.Name]; ok && a.WriteOnly {
+			out[a.Name] = schema.NullOf(a.Type)
+		}
+	}
+
+	return out
 }
 
 // CheckConfig returns ErrInvalidConfig when config sets an attribute that the
@@ -155,13 +184,9 @@ func fresh(s schema.Schema, config schema.Values) schema.Values {
 	planned := make(schema.Values, len(s.Attributes))
 
 	for _, a := range s.Attributes {
-		switch {
-		case a.WriteOnly:
-			planned[a.Name] = schema.NullOf(a.Type)
-		case a.Mode == schema.ModeComputed,
-			a.Mode == schema.ModeOptionalComputed && config.Get(a).IsNull():
+		if setByRemote(a, config) {
 			planned[a.Name] = schema.UnknownOf(a.Type)
-		default:
+		} else {
 			planned[a.Name] = config.Get(a)
 		}
 	}
@@ -171,13 +196,25 @@ func fresh(s schema.Schema, config schema.Values) schema.Values {
 
 // keep returns the planned value of one attribute of an existing object.
 func keep(a schema.Attribute, prior, config schema.Values) schema.Value {
-	switch {
-	case a.WriteOnly:
-		return schema.NullOf(a.Type)
-	case a.Mode == schema.ModeComputed,
-		a.Mode == schema.ModeOptionalComputed && config.Get(a).IsNull():
+	if setByRemote(a, config) {
 		return prior.Get(a)
-	default:
-		return config.Get(a)
 	}
+
+	return config.Get(a)
+}
+
+// unknownOnUpdate makes each computed value of an update unknown, except the
+// id and the stable attributes.
+func unknownOnUpdate(s schema.Schema, config, planned schema.Values) {
+	for _, a := range s.Attributes {
+		if setByRemote(a, config) && !a.Stable && a.Name != schema.IDAttribute {
+			planned[a.Name] = schema.UnknownOf(a.Type)
+		}
+	}
+}
+
+// setByRemote reports whether the remote system sets the value: the
+// attribute is computed, or optional computed with no configured value.
+func setByRemote(a schema.Attribute, config schema.Values) bool {
+	return a.Mode == schema.ModeComputed || a.Mode == schema.ModeOptionalComputed && config.Get(a).IsNull()
 }

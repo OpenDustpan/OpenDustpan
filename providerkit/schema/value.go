@@ -21,6 +21,12 @@ type Value struct {
 	entries map[string]Value
 }
 
+// NumberPrecision is the precision in bits of every number value. Each
+// conversion to a number value rounds to it, so two values that come from
+// different sources compare by one rule. 512 bits hold every int64, uint64
+// and float64 exactly, and decimal numbers of about 150 digits.
+const NumberPrecision = 512
+
 // Values is the set of attribute values of one configuration, resource or
 // data source, by attribute name. A missing name is the same as null.
 type Values map[string]Value
@@ -57,17 +63,18 @@ func StringValue(s string) Value {
 	return v
 }
 
-// NumberValue returns a known number. It copies n.
+// NumberValue returns a known number. It copies n and rounds the copy to
+// NumberPrecision.
 func NumberValue(n *big.Float) Value {
 	v := known(Number())
-	v.num = new(big.Float).Copy(n)
+	v.num = newNumber().Set(n)
 
 	return v
 }
 
 // IntValue returns a known number with the value of i.
 func IntValue(i int64) Value {
-	return NumberValue(new(big.Float).SetInt64(i))
+	return NumberValue(newNumber().SetInt64(i))
 }
 
 // BoolValue returns a known bool.
@@ -132,14 +139,19 @@ func (v Value) AsString() (string, bool) {
 	return v.str, v.typ.Kind == KindString && v.IsKnown() && !v.null
 }
 
-// AsNumber returns a copy of the number, and false when the value is not a
-// known, non-null number.
+// AsNumber returns a copy of the number, of NumberPrecision, and false when
+// the value is not a known, non-null number.
 func (v Value) AsNumber() (*big.Float, bool) {
 	if v.typ.Kind != KindNumber || !v.IsKnown() || v.null || v.num == nil {
 		return nil, false
 	}
 
-	return new(big.Float).Copy(v.num), true
+	return newNumber().Set(v.num), true
+}
+
+// newNumber returns a zero number of NumberPrecision.
+func newNumber() *big.Float {
+	return new(big.Float).SetPrec(NumberPrecision)
 }
 
 // IsTrue reports whether the value is the known bool true.

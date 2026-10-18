@@ -22,21 +22,37 @@ The types are in `providerkit/sdk`.
 
    ```go
    type Override struct {
-   	ID       string `provider:"id,computed"`
-   	Schedule string `provider:"schedule,required,replace"`
-   	Person   string `provider:"person,required"`
-   	Token    string `provider:"token,optional,sensitive,writeonly"`
+   	ID        *string `provider:"id,computed"`
+   	Schedule  string  `provider:"schedule,required,replace"`
+   	Person    string  `provider:"person,required"`
+   	Token     *string `provider:"token,optional,sensitive,writeonly"`
+   	CreatedAt *string `provider:"created_at,computed,stable"`
    }
    ```
 
    The tag is `name,option,...`. The options are one mode (`required`,
    `optional`, `computed`, or `optional,computed`) and any of `sensitive`,
-   `writeonly` and `replace` (`sdk.ParseTag`).
+   `writeonly`, `replace` and `stable` (`sdk.ParseTag`). `stable` has the
+   meaning of the declaration flag (ADR 171 decision 7).
 2. **The schema comes from the struct.** `sdk.SchemaOf` maps `string` to
    string, the integer and float types to number, `bool` to bool, a slice to
-   a list, and a map with string keys to a map. A pointer makes no difference
-   to the type. The SDK checks every struct when the provider starts, and a
-   bad struct stops the start with `ErrInvalidModel`.
+   a list, and a map with string keys to a map. The SDK checks every struct
+   when the provider starts, and a bad struct stops the start with
+   `ErrInvalidModel`.
+   - **Null is nil (PM, for the project owner).** The field of a required
+     attribute is not a pointer. The field of an optional, computed or
+     optional computed attribute is a pointer, and nil means null.
+     `SchemaOf` refuses any other field. The zero value of a type, for
+     example `""` or `0`, can be a value that the user sets, so it cannot
+     also mean "not set". The element of a slice or a map is not a
+     pointer.
+   - **Conversion.** `sdk.Decode` and `sdk.Encode` convert between the
+     values of the core and the struct. A number becomes an integer field
+     only when it is a whole number in the range of the field. Any other
+     number, for example 1.5 or 300 for an `int8`, is `ErrInvalidConfig`,
+     because a conversion would lose a part of it. A number becomes a float
+     field rounded to the nearest float. A number of the core has a fixed
+     precision of 512 bits (`schema.NumberPrecision`).
 3. **One function for each operation.** `sdk.Resource[C, M]` has `Create`,
    `Read`, `Update` and `Delete`, each on the model struct `M`.
    `sdk.DataSource[C, M]` has `Read`. A nil `Update` means that each field
@@ -47,11 +63,21 @@ The types are in `providerkit/sdk`.
    - `Delete` returns nil for an object that is gone.
    - The core planner decides every change (ADR 172). The author writes no
      diff.
-   - Each sensitive configuration field gets the file form (ADR 175).
+   - Each sensitive configuration field gets the file form (ADR 175), from
+     the same function as a declared provider (`sdk.ConfigSchemaOf`, which
+     calls `lifecycle.WithFileForms`).
 5. **Commands through the same runner.** `sdk.Call` gives each operation the
    configuration and a `cliexec.Runner`. An SDK provider starts its tool by
    the rules of the CLI engine: an argument list, no shell, a private
    environment, and process groups (ADR 174).
+   - The runner does not check arguments or variables for secrets. The
+     declaration rules of ADR 171 decision 9 do not reach Go code, so the
+     author keeps a secret out of arguments and variables.
+   - `Call.SecretFile` writes a secret to a new file of mode 0600 in the
+     private directory of the session, and returns the path. The operation
+     gives the path to its tool, for example as `--token-file=<path>`. The
+     session deletes the directory when it closes (ADR 175 decision 9). The
+     other way is the standard input of the command.
 6. **Serving.** The SDK turns a `sdk.Provider[C]` into a
    `lifecycle.Provider`, and serves it through both protocol adapters (ADR
    176). The `main` function of the author calls one serve function, which

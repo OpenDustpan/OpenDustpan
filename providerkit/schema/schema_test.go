@@ -2,6 +2,8 @@ package schema_test
 
 import (
 	"errors"
+	"math"
+	"math/big"
 	"testing"
 
 	"opendustpan.org/opendustpan/providerkit/schema"
@@ -10,7 +12,7 @@ import (
 func attr(name string, t schema.Type, mode schema.Mode) schema.Attribute {
 	return schema.Attribute{
 		Name: name, Type: t, Mode: mode,
-		Sensitive: false, WriteOnly: false, Replace: false, Description: "",
+		Sensitive: false, WriteOnly: false, Replace: false, Stable: false, Description: "",
 	}
 }
 
@@ -27,6 +29,15 @@ func TestValidateResource(t *testing.T) {
 
 	sensitiveID := id
 	sensitiveID.Sensitive = true
+
+	stableComputed := attr("created_at", schema.String(), schema.ModeComputed)
+	stableComputed.Stable = true
+
+	stableOptionalComputed := attr("ttl", schema.String(), schema.ModeOptionalComputed)
+	stableOptionalComputed.Stable = true
+
+	stableRequired := attr("name", schema.String(), schema.ModeRequired)
+	stableRequired.Stable = true
 
 	tests := []struct {
 		name  string
@@ -55,6 +66,9 @@ func TestValidateResource(t *testing.T) {
 		{name: "no mode", attrs: []schema.Attribute{id, attr("name", schema.String(), schema.ModeInvalid)}, ok: false},
 		{name: "write-only computed", attrs: []schema.Attribute{id, writeOnlyComputed}, ok: false},
 		{name: "replace on computed", attrs: []schema.Attribute{id, replaceComputed}, ok: false},
+		{name: "stable computed", attrs: []schema.Attribute{id, stableComputed}, ok: true},
+		{name: "stable optional computed", attrs: []schema.Attribute{id, stableOptionalComputed}, ok: true},
+		{name: "stable required", attrs: []schema.Attribute{id, stableRequired}, ok: false},
 		{
 			name: "list without element type",
 			attrs: []schema.Attribute{
@@ -161,5 +175,37 @@ func TestValueEqual(t *testing.T) {
 				t.Fatalf("Equal() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestNumberPrecision(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   *big.Float
+	}{
+		{name: "default precision", in: big.NewFloat(0.1)},
+		{name: "low precision", in: new(big.Float).SetPrec(8).SetInt64(3)},
+		{name: "high precision", in: new(big.Float).SetPrec(2048).SetInt64(math.MaxInt64)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := schema.NumberValue(tt.in).AsNumber()
+			if !ok || got.Prec() != schema.NumberPrecision {
+				t.Fatalf("AsNumber() precision = %d, %v, want %d", got.Prec(), ok, schema.NumberPrecision)
+			}
+
+			if got.Cmp(tt.in) != 0 {
+				t.Fatalf("AsNumber() = %s, want %s", got, tt.in)
+			}
+		})
+	}
+
+	if !schema.IntValue(math.MaxInt64).Equal(schema.NumberValue(new(big.Float).SetInt64(math.MaxInt64))) {
+		t.Fatal("IntValue and NumberValue of one int64 are not equal")
 	}
 }

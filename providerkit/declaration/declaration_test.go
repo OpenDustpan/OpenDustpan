@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/providerkit/declaration"
+	"opendustpan.org/opendustpan/providerkit/lifecycle"
 )
 
 func load(t *testing.T, name string) declaration.Document {
@@ -140,6 +141,51 @@ func TestValidateHTTP(t *testing.T) {
 			d.Resources[0].Read.Request.Response["address"] = "address"
 		}},
 		{name: "retry of a 200", change: func(d *declaration.Document) { d.HTTP.Retry.Statuses = []int{200} }},
+		{name: "base URL with user information", change: func(d *declaration.Document) {
+			d.HTTP.BaseURL = "https://user:pw@ipam.example.org"
+		}},
+		{name: "base URL with a query", change: func(d *declaration.Document) {
+			d.HTTP.BaseURL = "https://ipam.example.org/?x=1"
+		}},
+		{name: "base URL with an empty query", change: func(d *declaration.Document) {
+			d.HTTP.BaseURL = "https://ipam.example.org/?"
+		}},
+		{name: "base URL with a fragment", change: func(d *declaration.Document) {
+			d.HTTP.BaseURL = "https://ipam.example.org/#top"
+		}},
+		{name: "relative base URL", change: func(d *declaration.Document) { d.HTTP.BaseURL = "/v1" }},
+		{name: "plain http token URL", change: func(d *declaration.Document) {
+			d.HTTP.Auth = oauth2("http://login.example.org/token")
+		}},
+		{name: "token URL with user information", change: func(d *declaration.Document) {
+			d.HTTP.Auth = oauth2("https://u:p@login.example.org/token")
+		}},
+		{name: "token URL with a sensitive reference", change: func(d *declaration.Document) {
+			d.HTTP.Auth = oauth2("https://login.example.org/{config.token}")
+		}},
+		{name: "literal dot-dot path segment", change: func(d *declaration.Document) {
+			d.Resources[0].Read.Request.Path = "/allocations/../admin/{id}"
+		}},
+		{name: "literal dot path segment", change: func(d *declaration.Document) {
+			d.Resources[0].Read.Request.Path = "/./allocations/{id}"
+		}},
+		{name: "read references more than the id", change: func(d *declaration.Document) {
+			d.Resources[0].Read.Request.Path = "/prefixes/{prefix_id}/allocations/{id}"
+		}},
+		{name: "read query references more than the id", change: func(d *declaration.Document) {
+			d.Resources[0].Read.Request.Query = map[string]string{"prefix": "{prefix_id}"}
+		}},
+		{name: "computed attribute that neither create nor read gives", change: func(d *declaration.Document) {
+			delete(d.Resources[0].Create.Request.Response, "address")
+			delete(d.Resources[0].Read.Request.Response, "address")
+		}},
+		{name: "stable on a required attribute", change: func(d *declaration.Document) {
+			d.Resources[0].Attributes[1].Stable = true
+		}},
+		{name: "secret whose file form is longer than 64 characters", change: func(d *declaration.Document) {
+			d.Provider.Config[1].Name = strings.Repeat("t", 60)
+			d.HTTP.Auth.Token = "{config." + strings.Repeat("t", 60) + "}"
+		}},
 		{name: "timeout that is not a duration", change: func(d *declaration.Document) { d.HTTP.Timeout = "30" }},
 	}
 
@@ -158,6 +204,162 @@ func TestValidateHTTP(t *testing.T) {
 	}
 }
 
+func oauth2(tokenURL string) declaration.Auth {
+	return declaration.Auth{ //nolint:gosec // The secret is a reference to a configuration attribute.
+		Kind: declaration.AuthOAuth2, Token: "", Header: "", Username: "", Password: "", TokenURL: tokenURL,
+		ClientID: "{config.endpoint}", ClientSecret: "{config.token}", Scopes: nil,
+	}
+}
+
+// TestValidateAccepts changes one thing in the IPAM example and expects no
+// error.
+func TestValidateAccepts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		change func(d *declaration.Document)
+	}{
+		{name: "loopback http base URL", change: func(d *declaration.Document) {
+			d.HTTP.BaseURL = "http://127.0.0.1:8080/v1"
+		}},
+		{name: "https token URL", change: func(d *declaration.Document) {
+			d.HTTP.Auth = oauth2("https://login.example.org/oauth/token")
+		}},
+		{name: "token URL with a reference", change: func(d *declaration.Document) {
+			d.HTTP.Auth = oauth2("{config.endpoint}/token")
+		}},
+		{name: "stable computed attribute", change: func(d *declaration.Document) {
+			d.Resources[0].Attributes[3].Stable = true
+		}},
+		{name: "computed attribute that only read gives", change: func(d *declaration.Document) {
+			delete(d.Resources[0].Create.Request.Response, "address")
+		}},
+		{name: "secret whose file form has 64 characters", change: func(d *declaration.Document) {
+			d.Provider.Config[1].Name = strings.Repeat("t", 59)
+			d.HTTP.Auth.Token = "{config." + strings.Repeat("t", 59) + "}"
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			d := load(t, "ipam.json")
+			tt.change(&d)
+
+			if err := d.Validate(); err != nil {
+				t.Fatalf("Validate() = %v, want nil", err)
+			}
+		})
+	}
+}
+
+func TestReadsAfter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		change      func(r *declaration.Resource)
+		create, upd bool
+	}{
+		{name: "the example", change: func(*declaration.Resource) {}, create: false, upd: true},
+		{name: "create does not give the address", change: func(r *declaration.Resource) {
+			delete(r.Create.Request.Response, "address")
+		}, create: true, upd: true},
+		{name: "update gives the address", change: func(r *declaration.Resource) {
+			r.Update.Request.Response["address"] = "/address"
+		}, create: false, upd: false},
+		{name: "the address is stable", change: func(r *declaration.Resource) {
+			r.Attributes[3].Stable = true
+		}, create: false, upd: false},
+		{name: "no update", change: func(r *declaration.Resource) { r.Update = nil }, create: false, upd: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := load(t, "ipam.json").Resources[0]
+			tt.change(&r)
+
+			if r.ReadsAfterCreate() != tt.create || r.ReadsAfterUpdate() != tt.upd {
+				t.Fatalf("ReadsAfterCreate(), ReadsAfterUpdate() = %v, %v, want %v, %v",
+					r.ReadsAfterCreate(), r.ReadsAfterUpdate(), tt.create, tt.upd)
+			}
+		})
+	}
+}
+
+func TestCheckEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		url string
+		ok  bool
+	}{
+		{url: "https://ipam.example.org", ok: true},
+		{url: "https://ipam.example.org:8443/v1/", ok: true},
+		{url: "http://localhost:8080", ok: true},
+		{url: "http://[::1]:8080/v1", ok: true},
+		{url: "http://ipam.example.org", ok: false},
+		{url: "ftp://ipam.example.org", ok: false},
+		{url: "https://user@ipam.example.org", ok: false},
+		{url: "https://ipam.example.org/?key=1", ok: false},
+		{url: "https://ipam.example.org/#x", ok: false},
+		{url: "ipam.example.org", ok: false},
+		{url: "", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			t.Parallel()
+
+			err := declaration.CheckEndpoint(tt.url)
+			if tt.ok && err != nil {
+				t.Fatalf("CheckEndpoint(%q) = %v, want nil", tt.url, err)
+			}
+
+			if !tt.ok && !errors.Is(err, lifecycle.ErrInvalidConfig) {
+				t.Fatalf("CheckEndpoint(%q) = %v, want ErrInvalidConfig", tt.url, err)
+			}
+		})
+	}
+}
+
+func TestPathSegment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		in, want string
+		ok       bool
+	}{
+		{in: "a1", want: "a1", ok: true},
+		{in: "a/b", want: "a%2Fb", ok: true},
+		{in: "a?b", want: "a%3Fb", ok: true},
+		{in: "...", want: "...", ok: true},
+		{in: "%2e%2e", want: "%252e%252e", ok: true},
+		{in: "", want: "", ok: false},
+		{in: ".", want: "", ok: false},
+		{in: "..", want: "", ok: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := declaration.PathSegment(tt.in)
+			if tt.ok && (err != nil || got != tt.want) {
+				t.Fatalf("PathSegment(%q) = %q, %v, want %q", tt.in, got, err, tt.want)
+			}
+
+			if !tt.ok && !errors.Is(err, lifecycle.ErrInvalidConfig) {
+				t.Fatalf("PathSegment(%q) error = %v, want ErrInvalidConfig", tt.in, err)
+			}
+		})
+	}
+}
+
 // TestValidateCLI changes one thing in the on-call example and expects
 // ErrInvalid.
 func TestValidateCLI(t *testing.T) {
@@ -170,7 +372,7 @@ func TestValidateCLI(t *testing.T) {
 		{name: "config attribute that takes the file form of a secret", change: func(d *declaration.Document) {
 			d.Provider.Config = append(d.Provider.Config, declaration.Attribute{
 				Name: "api_key_file", Type: "string", Mode: "optional",
-				Sensitive: false, WriteOnly: false, Replace: false, Description: "",
+				Sensitive: false, WriteOnly: false, Replace: false, Stable: false, Description: "",
 			})
 		}},
 		{name: "relative program path", change: func(d *declaration.Document) { d.CLI.Program = "bin/oncall" }},
@@ -219,6 +421,12 @@ func TestValidateCLI(t *testing.T) {
 		}},
 		{name: "unclosed reference", change: func(d *declaration.Document) {
 			d.Resources[0].Delete.Command.Args = []string{"override", "delete", "{id"}
+		}},
+		{name: "read argument references more than the id", change: func(d *declaration.Document) {
+			d.Resources[0].Read.Command.Args = []string{"override", "show", "{id}", "--schedule={schedule}"}
+		}},
+		{name: "read input references more than the id", change: func(d *declaration.Document) {
+			d.Resources[0].Read.Command.Stdin = map[string]string{"/person": "{person}"}
 		}},
 	}
 
@@ -296,7 +504,7 @@ var errNoValue = errors.New("no value")
 func TestExpandArg(t *testing.T) {
 	t.Parallel()
 
-	values := map[string]string{"id": "o-1", "name": "-rf", "team": "ops"}
+	values := map[string]string{"id": "o-1", "name": "-rf", "team": "ops", "empty": ""}
 	lookup := func(r declaration.Ref) (string, error) {
 		v, ok := values[r.Name]
 		if !ok {
@@ -318,6 +526,11 @@ func TestExpandArg(t *testing.T) {
 		{arg: "{name}-suffix", want: "", err: declaration.ErrOptionValue},
 		{arg: "$(id) {team}", want: "$(id) ops", err: nil},
 		{arg: "--x={missing}", want: "", err: errNoValue},
+		{arg: "{empty}{name}", want: "", err: declaration.ErrOptionValue},
+		{arg: "{empty}-x", want: "", err: declaration.ErrOptionValue},
+		{arg: "{empty}{team}", want: "ops", err: nil},
+		{arg: "{empty}", want: "", err: nil},
+		{arg: "{team}{name}", want: "ops-rf", err: nil},
 	}
 
 	for _, tt := range tests {

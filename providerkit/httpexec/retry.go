@@ -1,7 +1,6 @@
 package httpexec
 
 import (
-	"context"
 	"errors"
 	"net/http"
 	"slices"
@@ -59,6 +58,10 @@ type Attempt struct {
 	Reply Reply
 	// Err is the error of the call, or nil when a reply came back.
 	Err error
+	// CtxErr is the error of the context of the whole operation, ctx.Err()
+	// of the engine, read after the attempt. A context error in Err with a
+	// nil CtxErr is the timeout of one attempt, which the engine retries.
+	CtxErr error
 }
 
 // Next returns the wait before the next attempt, and false when the engine
@@ -67,7 +70,9 @@ type Attempt struct {
 //
 // The rules, in order:
 //   - No attempt after MaxAttempts.
-//   - No retry of a canceled or expired context, or of ErrTooLarge.
+//   - No retry when the context of the whole operation ended (CtxErr), and
+//     no retry of ErrTooLarge or ErrOtherOrigin. The timeout of one attempt
+//     is a network error.
 //   - No retry of a POST or a PATCH that is not idempotent, also not after a
 //     network error: the server can have applied it.
 //   - A retry of a network error, and of a status in Statuses.
@@ -101,7 +106,7 @@ func (p RetryPolicy) Next(a Attempt) (time.Duration, bool) {
 
 func (p RetryPolicy) retryable(a Attempt) bool {
 	switch {
-	case errors.Is(a.Err, context.Canceled), errors.Is(a.Err, context.DeadlineExceeded), errors.Is(a.Err, ErrTooLarge):
+	case a.CtxErr != nil, errors.Is(a.Err, ErrTooLarge), errors.Is(a.Err, ErrOtherOrigin):
 		return false
 	case (a.Method == http.MethodPost || a.Method == http.MethodPatch) && !a.Idempotent:
 		return false
@@ -112,18 +117,23 @@ func (p RetryPolicy) retryable(a Attempt) bool {
 	}
 }
 
+// maxRetryAfter is the largest Retry-After that retryAfter reads exactly. A
+// larger value becomes this one before the conversion to a duration, so it
+// cannot overflow, and it ends the retries as any value above MaxWait does.
+const maxRetryAfter = 24 * time.Hour
+
 // retryAfter reads a Retry-After header in seconds. The HTTP-date form falls
 // back to the policy's own wait.
 func retryAfter(h http.Header) (time.Duration, bool) {
 	v := strings.TrimSpace(h.Get("Retry-After"))
-	if v == "" {
+	if v == "" || strings.Trim(v, "0123456789") != "" {
 		return 0, false
 	}
 
-	secs, err := strconv.Atoi(v)
-	if err != nil || secs < 0 {
+	secs, err := strconv.ParseInt(v, 10, 64)
+	if err != nil && !errors.Is(err, strconv.ErrRange) {
 		return 0, false
 	}
 
-	return time.Duration(secs) * time.Second, true
+	return time.Duration(min(secs, int64(maxRetryAfter/time.Second))) * time.Second, true
 }

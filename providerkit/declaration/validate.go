@@ -3,7 +3,6 @@ package declaration
 import (
 	"fmt"
 	"net/http"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -29,6 +28,9 @@ type scope struct {
 	attrs  schema.Schema
 	config schema.Schema
 	cli    bool
+	// onlyID limits the attribute references to "{id}", for the read of a
+	// resource: an import has only the id.
+	onlyID bool
 }
 
 func (sc scope) check(text string, sl slot) error {
@@ -52,6 +54,9 @@ func (sc scope) checkRef(ref Ref, sl slot) error {
 	switch {
 	case err != nil:
 		return err
+	case sc.onlyID && ref.Kind == RefAttribute && ref.Name != schema.IDAttribute:
+		return fmt.Errorf("%w: %s: the read of a resource can reference only {%s} and the configuration, "+
+			"because an import gives only the id", ErrInvalid, ref, schema.IDAttribute)
 	case ref.Kind == RefFile && (!sc.cli || sl != slotPublic):
 		return fmt.Errorf("%w: %s is allowed only in a command argument or an environment variable", ErrInvalid, ref)
 	case ref.Kind != RefFile && a.Sensitive && sl == slotPublic:
@@ -102,7 +107,7 @@ func (d Document) validateResource(r Resource, config schema.Schema) error {
 		return err
 	}
 
-	sc := scope{attrs: s, config: config, cli: d.CLI != nil}
+	sc := scope{attrs: s, config: config, cli: d.CLI != nil, onlyID: false}
 	for _, o := range []struct {
 		name string
 		op   *Operation
@@ -116,16 +121,68 @@ func (d Document) validateResource(r Resource, config schema.Schema) error {
 			continue
 		}
 
+		sc.onlyID = o.name == "read"
 		if err := sc.operation(*o.op); err != nil {
 			return fmt.Errorf("%s: %w", o.name, err)
 		}
 	}
 
+	return checkRemoteSet(r, s)
+}
+
+// checkRemoteSet checks that create gives a computed id, and that create or
+// read gives each attribute that the remote system sets.
+func checkRemoteSet(r Resource, s schema.Schema) error {
 	if id, _ := s.Lookup(schema.IDAttribute); id.Mode == schema.ModeComputed && !r.Create.maps(schema.IDAttribute) {
 		return fmt.Errorf("%w: create: the reply must give %q", ErrInvalid, schema.IDAttribute)
 	}
 
+	for _, a := range s.Attributes {
+		if setByRemote(a) && !r.Create.maps(a.Name) && !r.Read.maps(a.Name) {
+			return fmt.Errorf("%w: create or read must give the attribute %q, which the remote system sets",
+				ErrInvalid, a.Name)
+		}
+	}
+
 	return nil
+}
+
+// setByRemote reports whether the remote system can set the attribute.
+func setByRemote(a schema.Attribute) bool {
+	return a.Mode == schema.ModeComputed || a.Mode == schema.ModeOptionalComputed
+}
+
+// ReadsAfterCreate reports whether the engine runs Read after Create: the
+// reply or output of create does not give every attribute that the remote
+// system sets. The values of the apply then have no unknown value.
+func (r Resource) ReadsAfterCreate() bool {
+	return r.misses(r.Create, func(Attribute) bool { return false })
+}
+
+// ReadsAfterUpdate reports whether the engine runs Read after Update: the
+// reply or output of update does not give every attribute that the remote
+// system sets and that is not stable or the id. The plan of an update makes
+// those values unknown.
+func (r Resource) ReadsAfterUpdate() bool {
+	return r.Update != nil &&
+		r.misses(*r.Update, func(a Attribute) bool { return a.Stable || a.Name == schema.IDAttribute })
+}
+
+// misses reports whether the operation does not give an attribute that the
+// remote system sets and that skip does not exclude.
+func (r Resource) misses(o Operation, skip func(Attribute) bool) bool {
+	for _, a := range r.Attributes {
+		mode := parseMode(a.Mode)
+		if mode != schema.ModeComputed && mode != schema.ModeOptionalComputed || skip(a) {
+			continue
+		}
+
+		if !o.maps(a.Name) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // needsUpdate checks that a resource without an update replaces the object
@@ -156,7 +213,7 @@ func (d Document) validateDataSource(ds DataSource, config schema.Schema) error 
 		return err
 	}
 
-	sc := scope{attrs: s, config: config, cli: d.CLI != nil}
+	sc := scope{attrs: s, config: config, cli: d.CLI != nil, onlyID: false}
 	if err := sc.operation(ds.Read); err != nil {
 		return fmt.Errorf("read: %w", err)
 	}
@@ -244,6 +301,10 @@ func (sc scope) urlPath(p string) error {
 	}
 
 	for seg := range strings.SplitSeq(p[1:], "/") {
+		if seg == "." || seg == ".." {
+			return fmt.Errorf("%w: path %q has the segment %q", ErrInvalid, p, seg)
+		}
+
 		t, err := ParseTemplate(seg)
 		if err != nil {
 			return err
@@ -383,9 +444,9 @@ func validPointer(p string) bool {
 }
 
 func validateHTTPEngine(e HTTPEngine, config schema.Schema) error {
-	sc := scope{attrs: schema.Schema{Version: 0, Attributes: nil}, config: config, cli: false}
+	sc := scope{attrs: schema.Schema{Version: 0, Attributes: nil}, config: config, cli: false, onlyID: false}
 
-	if err := checkBaseURL(sc, e.BaseURL); err != nil {
+	if err := checkEndpointTemplate(sc, "http baseURL", e.BaseURL); err != nil {
 		return err
 	}
 
@@ -410,28 +471,23 @@ func validateHTTPEngine(e HTTPEngine, config schema.Schema) error {
 	return checkDuration("http timeout", e.Timeout)
 }
 
-func checkBaseURL(sc scope, base string) error {
-	if err := sc.check(base, slotPublic); err != nil {
-		return fmt.Errorf("http baseURL: %w", err)
+// checkEndpointTemplate checks a URL of the HTTP engine. A URL with references is
+// checked by CheckEndpoint when the provider is configured.
+func checkEndpointTemplate(sc scope, what, raw string) error {
+	if err := sc.check(raw, slotPublic); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
 	}
 
-	t, err := ParseTemplate(base)
+	t, err := ParseTemplate(raw)
 	if err != nil || len(t.Refs()) > 0 {
 		return err
 	}
 
-	u, err := url.Parse(base)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && !loopback(u)) {
-		return fmt.Errorf("%w: http baseURL %q must be an https URL", ErrInvalid, base)
+	if problem := endpointProblem(raw); problem != "" {
+		return fmt.Errorf("%w: %s %q %s", ErrInvalid, what, raw, problem)
 	}
 
 	return nil
-}
-
-func loopback(u *url.URL) bool {
-	host := u.Hostname()
-
-	return u.Scheme == "http" && (host == "localhost" || host == "127.0.0.1" || host == "::1")
 }
 
 func checkAuth(sc scope, a Auth) error {
@@ -454,6 +510,10 @@ func checkAuth(sc scope, a Auth) error {
 		if err := sc.check(p, slotPublic); err != nil {
 			return err
 		}
+	}
+
+	if a.Kind == AuthOAuth2 {
+		return checkEndpointTemplate(sc, "tokenURL", a.TokenURL)
 	}
 
 	return nil
@@ -512,7 +572,7 @@ func validateCLIEngine(e CLIEngine, config schema.Schema) error {
 		return fmt.Errorf("%w: cli program %q must be a bare name or a clean absolute path", ErrInvalid, e.Program)
 	}
 
-	sc := scope{attrs: schema.Schema{Version: 0, Attributes: nil}, config: config, cli: true}
+	sc := scope{attrs: schema.Schema{Version: 0, Attributes: nil}, config: config, cli: true, onlyID: false}
 
 	for _, name := range sortedKeys(e.Env) {
 		if cliexec.ReservedEnv(name) {

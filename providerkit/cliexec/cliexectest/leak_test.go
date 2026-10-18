@@ -13,7 +13,7 @@ import (
 // binary as one. Otherwise it runs the tests and fails the package when a
 // test leaves a goroutine running.
 func TestMain(m *testing.M) {
-	if code, ok := cliexectest.RunHelper(os.Args, os.Stdin, os.Stdout); ok {
+	if code, ok := cliexectest.RunHelper(os.Args, os.Stdin, os.Stdout, os.Stderr); ok {
 		os.Exit(code) //nolint:forbidigo // The helper program ends with its own exit code.
 	}
 

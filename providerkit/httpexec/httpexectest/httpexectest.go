@@ -4,7 +4,7 @@
 //	func TestConformance(t *testing.T) {
 //		t.Parallel()
 //		httpexectest.Run(t, func(t *testing.T, o httpexectest.Options) httpexec.Caller {
-//			return newCaller(o.MaxReplyBytes, o.Authorizer)
+//			return newCaller(o.Origin, o.MaxReplyBytes, o.Authorizer)
 //		})
 //	}
 //
@@ -26,6 +26,8 @@ import (
 
 // Options configure the caller under test.
 type Options struct {
+	// Origin is the only origin that the caller may send to.
+	Origin httpexec.Origin
 	// MaxReplyBytes is the limit of a reply body.
 	MaxReplyBytes int64
 	// Authorizer adds the credential to each request.
@@ -56,6 +58,7 @@ func Run(t *testing.T, newCaller Factory) {
 		{name: "a reply over the limit is ErrTooLarge", test: testTooLarge},
 		{name: "an Authorizer error stops the call", test: testAuthorizerError},
 		{name: "a canceled context ends the call", test: testCanceled},
+		{name: "a request to another origin is refused and gets no credential", test: testOtherOrigin},
 	}
 
 	for _, c := range cases {
@@ -66,9 +69,15 @@ func Run(t *testing.T, newCaller Factory) {
 	}
 }
 
-type staticAuth struct{ err error }
+// staticAuth sets testToken, or fails with err. It counts its calls.
+type staticAuth struct {
+	err   error
+	calls *atomic.Int32
+}
 
 func (a staticAuth) Authorize(_ context.Context, h http.Header) error {
+	a.calls.Add(1)
+
 	if a.err != nil {
 		return a.err
 	}
@@ -78,8 +87,16 @@ func (a staticAuth) Authorize(_ context.Context, h http.Header) error {
 	return nil
 }
 
-func options() Options {
-	return Options{MaxReplyBytes: maxReply, Authorizer: staticAuth{err: nil}}
+// options returns the options of a caller for the origin of srv.
+func options(t *testing.T, srv *httptest.Server) Options {
+	t.Helper()
+
+	o, err := httpexec.OriginOf(srv.URL)
+	if err != nil {
+		t.Fatalf("OriginOf(%q) error = %v", srv.URL, err)
+	}
+
+	return Options{Origin: o, MaxReplyBytes: maxReply, Authorizer: staticAuth{err: nil, calls: new(atomic.Int32)}}
 }
 
 func server(t *testing.T, h http.HandlerFunc) *httptest.Server {
@@ -126,7 +143,7 @@ func testRoundTrip(t *testing.T, newCaller Factory) {
 		Header: http.Header{"X-Test": {mark}}, Body: []byte(`{"name":"n"}`),
 	}
 
-	got, err := newCaller(t, options()).Call(t.Context(), req)
+	got, err := newCaller(t, options(t, srv)).Call(t.Context(), req)
 	if err != nil {
 		t.Fatalf("Call() error = %v", err)
 	}
@@ -157,7 +174,7 @@ func testServerError(t *testing.T, newCaller Factory) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	})
 
-	got, err := newCaller(t, options()).Call(t.Context(), get(srv.URL))
+	got, err := newCaller(t, options(t, srv)).Call(t.Context(), get(srv.URL))
 	if err != nil || got.Status != http.StatusInternalServerError {
 		t.Fatalf("Call() = %d, %v, want 500 and nil", got.Status, err)
 	}
@@ -173,7 +190,7 @@ func testRedirect(t *testing.T, newCaller Factory) {
 		http.Redirect(w, r, other.URL, http.StatusFound)
 	})
 
-	got, err := newCaller(t, options()).Call(t.Context(), get(srv.URL))
+	got, err := newCaller(t, options(t, srv)).Call(t.Context(), get(srv.URL))
 	if err != nil || got.Status != http.StatusFound {
 		t.Fatalf("Call() = %d, %v, want 302 and nil", got.Status, err)
 	}
@@ -190,7 +207,7 @@ func testTooLarge(t *testing.T, newCaller Factory) {
 		write(t, w, bytes.Repeat([]byte("x"), maxReply+1))
 	})
 
-	if _, err := newCaller(t, options()).Call(t.Context(), get(srv.URL)); !errors.Is(err, httpexec.ErrTooLarge) {
+	if _, err := newCaller(t, options(t, srv)).Call(t.Context(), get(srv.URL)); !errors.Is(err, httpexec.ErrTooLarge) {
 		t.Fatalf("Call() error = %v, want ErrTooLarge", err)
 	}
 }
@@ -203,7 +220,8 @@ func testAuthorizerError(t *testing.T, newCaller Factory) {
 	var hits atomic.Int32
 
 	srv := server(t, func(http.ResponseWriter, *http.Request) { hits.Add(1) })
-	o := Options{MaxReplyBytes: maxReply, Authorizer: staticAuth{err: errNoToken}}
+	o := options(t, srv)
+	o.Authorizer = staticAuth{err: errNoToken, calls: new(atomic.Int32)}
 
 	if _, err := newCaller(t, o).Call(t.Context(), get(srv.URL)); !errors.Is(err, errNoToken) {
 		t.Fatalf("Call() error = %v, want the Authorizer's error", err)
@@ -222,7 +240,32 @@ func testCanceled(t *testing.T, newCaller Factory) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	if _, err := newCaller(t, options()).Call(ctx, get(srv.URL)); !errors.Is(err, context.Canceled) {
+	if _, err := newCaller(t, options(t, srv)).Call(ctx, get(srv.URL)); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Call() error = %v, want context.Canceled", err)
+	}
+}
+
+func testOtherOrigin(t *testing.T, newCaller Factory) {
+	t.Helper()
+
+	var hits atomic.Int32
+
+	other := server(t, func(http.ResponseWriter, *http.Request) { hits.Add(1) })
+	srv := server(t, func(http.ResponseWriter, *http.Request) {})
+
+	o := options(t, srv)
+	auth := staticAuth{err: nil, calls: new(atomic.Int32)}
+	o.Authorizer = auth
+
+	if _, err := newCaller(t, o).Call(t.Context(), get(other.URL+"/next")); !errors.Is(err, httpexec.ErrOtherOrigin) {
+		t.Fatalf("Call() error = %v, want ErrOtherOrigin", err)
+	}
+
+	if hits.Load() != 0 {
+		t.Fatal("Call() sent the request to another origin")
+	}
+
+	if auth.calls.Load() != 0 {
+		t.Fatal("Call() asked for the credential of a request to another origin")
 	}
 }

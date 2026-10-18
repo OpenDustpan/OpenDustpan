@@ -20,19 +20,42 @@ port (ADR 173) and the CLI execution port (ADR 174).
    for each type the configuration of one object. The suite drives each
    resource type through the core port and the shared planner:
    - The schemas are valid, and each type has a case in the fixture.
-   - Create returns an ID, every attribute, no unknown value, no write-only
-     value, and the planned values unchanged.
-   - Read after create finds no drift.
+   - Each sensitive configuration attribute has its file form (ADR 175
+     decision 2). The provider configures with the file form of each secret
+     of the fixture, and refuses a secret together with its file form.
+   - Create returns an ID, every attribute, no unknown value, and the known
+     planned values unchanged. `lifecycle.ForTool` then makes each
+     write-only value null.
+   - When the fixture gives `Received`, each write-only value of the
+     configuration reached the fake of the remote system, in create and in
+     update.
+   - Read after create finds no drift, and a plan of the same configuration
+     is a no-op.
    - Import by ID gives the same values.
-   - An update changes the object in place and keeps its ID.
-   - Read after delete is `ErrNotFound`, and a second delete returns nil.
-   - A data source returns known values, and two reads agree.
+   - An update changes the object in place and keeps its ID, and a plan of
+     the same configuration after it is a no-op.
+   - When the fixture gives `Replace`, the plan is a replace, and the suite
+     deletes the object and creates the new one, in the default order of
+     OpenTofu.
+   - Read after delete is `ErrNotFound`, an import of the deleted ID is
+     `ErrNotFound`, and a second delete returns nil.
+   - A second object of the type goes through create, read and delete at
+     the same time as the first, through one session (ADR 172 decision 11).
+   - A data source returns known values, and two reads agree. When the
+     fixture gives `NotFound`, a read of that configuration is
+     `ErrNotFound`.
 2. **`httpexectest` for callers.** An HTTP caller adapter runs the suite
-   against local servers (ADR 173). The suite tests itself against a small
-   reference caller on `net/http`.
+   against local servers (ADR 173). It also checks that the caller refuses
+   a request to another origin and gives it no credential (ADR 173
+   decision 13).
+   The suite tests itself against a small reference caller on `net/http`.
 3. **`cliexectest` for runners.** A runner adapter runs the suite with a
    helper program (ADR 174). The test binary of the adapter is the helper:
-   its `TestMain` calls `cliexectest.RunHelper` first. The suite tests
+   its `TestMain` calls `cliexectest.RunHelper` first. In the mode `spawn`,
+   the helper starts a grandchild that sleeps and writes its process ID to
+   a file. After `ErrTimeout`, the suite checks that the grandchild no
+   longer runs, so a runner that stops only its child fails. The suite also checks a
+   canceled context, and standard error over the limit. The suite tests
    itself against a small reference runner on `os/exec`.
 4. **Declared providers run the provider suite too.** The HTTP engine runs
    `lifecycletest` against each example declaration with a fake API on a

@@ -80,6 +80,12 @@ type Attribute struct {
 	// Replace makes a change to the value replace the resource, not update
 	// it in place.
 	Replace bool
+	// Stable marks a computed or optional computed value that an update in
+	// place never changes, for example a creation time. The plan of an
+	// update keeps its prior value. Without the flag, the plan of an update
+	// makes the value unknown, because an API can change it on any write,
+	// as it does with an update time, an etag or a version.
+	Stable bool
 	// Description is the text that the tool's documentation shows.
 	Description string
 }
@@ -180,6 +186,11 @@ func (a Attribute) validate() error {
 		return fmt.Errorf("%w: attribute %q has an unknown mode", ErrInvalid, a.Name)
 	}
 
+	return a.validateFlags()
+}
+
+// validateFlags checks the flags against the mode.
+func (a Attribute) validateFlags() error {
 	if a.WriteOnly && a.Mode != ModeRequired && a.Mode != ModeOptional {
 		return fmt.Errorf("%w: write-only attribute %q must be required or optional", ErrInvalid, a.Name)
 	}
@@ -190,6 +201,10 @@ func (a Attribute) validate() error {
 
 	if a.Replace && a.WriteOnly {
 		return fmt.Errorf("%w: write-only attribute %q cannot force a replace", ErrInvalid, a.Name)
+	}
+
+	if a.Stable && a.Mode != ModeComputed && a.Mode != ModeOptionalComputed {
+		return fmt.Errorf("%w: only a computed attribute can be stable, not %q", ErrInvalid, a.Name)
 	}
 
 	return nil

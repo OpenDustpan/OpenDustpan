@@ -43,15 +43,22 @@ The rules are in `providerkit/declaration`. The examples are in
    its credentials. A team with an API and a command-line tool for one
    system makes two providers, or writes one with the SDK.
 7. **Attributes.** An attribute has a name in snake_case, a type, a mode,
-   and the flags `sensitive`, `writeOnly` and `replace`.
+   and the flags `sensitive`, `writeOnly`, `replace` and `stable`.
    - Types: `string`, `number`, `bool`, `list(T)` and `map(T)`. Version 1
      has no object type. A nested object is a map of strings or a resource
      of its own.
    - Modes: `required`, `optional`, `computed` and `optionalComputed`.
+   - `stable` marks a `computed` or `optionalComputed` attribute that an
+     update in place never changes, for example a creation time (PM, for
+     the project owner). The plan of an update keeps its value. Every other
+     computed value is unknown in the plan of an update (ADR 172
+     decision 7).
    - Each resource has an `id` string.
    - A resource without `update` must mark each attribute that the user
      sets as `replace`.
-   - Provider configuration attributes are `required` or `optional`.
+   - Provider configuration attributes are `required` or `optional`. The
+     name of a sensitive one is at most 59 characters, so that its file
+     form `<name>_file` (ADR 175) fits in the limit of 64.
 8. **References, and no expressions.** A string in a request or a command
    can hold `{name}`, `{config.name}` and `{file:config.name}` (ADR 175).
    There are no functions, no conditions and no escape for a brace. The
@@ -61,7 +68,19 @@ The rules are in `providerkit/declaration`. The examples are in
    and a query. A reference in one of these places cannot name a sensitive
    attribute. A sensitive value goes in a request body, on the standard
    input, through authentication, or as a file. `Validate` enforces this.
-10. **OpenAPI is input to the build, not to the provider.** The build tool
+10. **The values that the remote system sets (PM, for the project
+    owner).** `create` or `read` must give each `computed` and
+    `optionalComputed` attribute. When the reply or output of `create` does
+    not give all of them, the engine runs `read` after `create`
+    (`Resource.ReadsAfterCreate`). The same holds for `update` and each such
+    attribute that is not `stable` and not the `id`
+    (`Resource.ReadsAfterUpdate`). The values of an apply then have no
+    unknown value.
+11. **The read of a resource needs only the id (PM, for the project
+    owner).** An import gives only the `id` (ADR 172 decision 4). The `read`
+    operation of a resource can therefore reference only `{id}` and the
+    provider configuration. `Validate` refuses any other reference in it.
+12. **OpenAPI is input to the build, not to the provider.** The build tool
     (ADR 177) has two steps for an OpenAPI document:
     - `dustpan-provider derive` writes a first declaration from chosen
       operations of the document. The team reviews it, changes it and
@@ -72,7 +91,7 @@ The rules are in `providerkit/declaration`. The examples are in
 
     The built provider never reads the OpenAPI document. A provider of a
     few resources does not carry a document of thousands of operations.
-11. **State versions.** Version 1 of the format has no key for the version of
+13. **State versions.** Version 1 of the format has no key for the version of
     the stored shape of a resource. A built provider reports version 0 for
     every type.
 
@@ -84,14 +103,18 @@ The rules are in `providerkit/declaration`. The examples are in
   credential, because a credential field must be a reference to a sensitive
   configuration attribute.
 - Teams that keep their mapping in YAML convert it to JSON before a build,
-  until the PM decides the YAML question.
+  until the project owner decides the YAML question.
 
 ## Open questions
 
 - YAML. The root module already uses `go.yaml.in/yaml/v3` (MIT and
   Apache-2.0). Adding it to `providerkit` is a new dependency of that
-  module, so the PM decides.
+  module, so the project owner decides.
 - An object type, and the version key for stored shapes, which an upgrade of
   state needs. Both can come in version 2.
 - Reading OpenAPI documents in YAML has the same dependency question. The
   standard library reads OpenAPI in JSON.
+- A composite import ID. Some APIs find an object only by two values, for
+  example a zone and a record name. Decision 11 leaves such an API out of
+  version 1, or to an `id` that the API itself accepts. An ID of several
+  parts, which the read could split, is open.
