@@ -1,6 +1,6 @@
 # 128. Agents in the job model and the history model
 
-Status: accepted · 2026-10-18 · supersedes parts of ADRs 100, 103, 124 and 125 (see "What this ADR replaces")
+Status: accepted · 2026-10-18 · supersedes parts of ADRs 100, 103, 122, 124 and 125 (see "What this ADR replaces")
 
 ## Context
 
@@ -46,7 +46,8 @@ of the three designs:
 - N5: one audit encoding for the actions of agents: the `agent/1` block of
   ADR 126.
 - The maximum age of the authentication of a confirmation is the lower of
-  15 minutes and the window of ADR 71.
+  15 minutes and W when W is above 0, else 15 minutes. W is the window of
+  ADR 71.
 
 The project owner decided on 2026-10-18:
 
@@ -57,9 +58,9 @@ The project owner decided on 2026-10-18:
   agent never resolves it. Each dismissal goes to the audit log with a
   reason.
 
-The owner said "change order" for the change that a person or an agent
-proposes. In the job model, that change is a job (ADR 100). This ADR uses
-"job".
+A change order is a later design above jobs. This ADR states the rules
+for the approvals of a job. The same rules apply to the approvals of a
+change order when that design lands.
 
 ADR 1 forbids edits to the text of an accepted ADR. So this ADR records
 what it replaces, and the status line of each ADR that it replaces names
@@ -103,27 +104,42 @@ it.
    | `ErrDelivered` (a cancel after a push or a merge) | `ErrChangeDelivered`, a new error |
    | `ErrAgentDenied` for a service principal | `ErrServicePrincipal` |
    | `ErrAgentDenied` for direct mode with a switch off | `ErrDirectNotAllowed` |
+   | `ErrAgentDenied` when no confirmation is possible (decision 9) | `ErrConfirmationUnavailable`, a new error |
+   | `ErrAgentDenied` for a cancel of a job of another person (decision 10) | `ErrChangeNotOwn`, a new error |
+   | `ErrAgentDenied` for a runner job that changes, or a direct push, in review-request mode (ADR 103 decision 12) | `ErrModeNotSupported` |
+   | `ErrAgentDenied` with any other cause | `ErrAgentDenied` |
    | `ErrTokenRevealed` (decision 8) | `ErrProposeAfterReveal` |
+   | `ErrUnitBusy` | `ErrChangeBusy`, a new error |
+   | `ErrLimit` | `ErrChangeLimit`, a new error |
+   | `ErrUnsupported` | `ErrModeNotSupported` |
+   | `ErrInvalid` | `ErrInvalidArguments` (ADR 122) |
+   | `identity.ErrDenied` from `Get` | `ErrChangeNotFound`, as ADR 125 decision 7 says |
+   | `identity.ErrDenied` from another method | `identity.ErrDenied`, not changed |
+   | any other error | the same error, wrapped with `%w`. The tool answers it as an internal error, with no detail. |
 
    The `job` errors keep the reason in their text. The adapter tells
    `ErrAgentDenied` cases apart with `errors.Is` on a wrapped cause
-   (`job.ErrServicePrincipal`, `job.ErrDirectSwitchOff`), never by the
-   text.
+   (`job.ErrServicePrincipal`, `job.ErrDirectSwitchOff`,
+   `job.ErrNoConfirmation`, `job.ErrNotOwnJob`, `job.ErrModeRefused`),
+   never by the text.
 
 ### The confirmation gate
 
 4. **A confirmation of the deliver phase in every mode (N2).** The plan
    of a change of an agent follows the table of ADR 125 decision 2. A
    write-back job that an agent started has a confirmation gate on its
-   deliver phase in each mode: review-request, approve-first and direct.
-   A runner job of an agent has a confirmation gate on its apply phase in
-   approve-first mode and in the default mode, and none in direct mode. A
-   runner job that only plans has no confirmation gate. `job.CheckAgent`
-   gives these gates, and its table-driven test has one row for each row
-   of the table of ADR 125.
+   deliver phase in each mode: review-request, approve-first, direct, and
+   the default (no mode). A runner job of an agent has a confirmation gate
+   on each phase that changes (apply, destroy, refresh) in approve-first
+   mode and in the default, as ADR 103 decision 2 says, and none in direct
+   mode. The column "apply" of the table of ADR 125 names this phase that
+   changes. A runner job that only plans has no confirmation gate.
+   `job.CheckAgent` gives these gates. Its table-driven test has one row
+   for each row of the table of ADR 125, and one row each for a destroy
+   and a refresh in the default mode.
 5. **Only a console session gives a confirmation (N3).** `job.Service.Confirm`
    accepts a confirmation only when all of these are true:
-   - the principal is `Job.StartedBy`,
+   - the principal is `Job.StartedBy`, else `job.ErrNotRequester`,
    - the actor has no agent reference,
    - the credential of the request is an interactive console session,
      never an access token (`job.Actor.Credential`, decision 6),
@@ -131,9 +147,9 @@ it.
 
    An access token, also a personal token of the person who asked, fails
    with the new error `job.ErrSessionRequired`. So an agent that holds a
-   token of its person cannot give the confirmation of its own change. A request that has
-   an agent reference fails with `ErrAgentDenied`, as in ADR 103 decision
-   7.
+   token of its person cannot give the confirmation of its own change. A
+   request that has an agent reference fails with `ErrAgentDenied`, as in
+   ADR 103 decision 7.
 6. **The job actor names the credential.** `job.Actor` gets the field
    `Credential`: the kind (`session` or `token`) and the ID of the console
    session or of the access token. The transport sets it from the
@@ -141,12 +157,14 @@ it.
    The job model uses it for decision 5 and decision 8. It stores the kind
    and the ID with the confirmation, never the credential.
 7. **The maximum age of the authentication.** The authentication of a
-   confirmation is at most `min(15 minutes, W)` old. W is the token
-   freshness window of the session policy (`tokenFreshnessSeconds`, ADR
-   71). A window of 0 turns off the check of ADR 71 for tokens. It does
-   not turn off the check of a confirmation: with a window of 0 the
-   maximum age is 15 minutes. `job.ConfirmMaxAge(window)` holds the rule,
-   and a table-driven test covers 0, 60 seconds, 15 minutes and 7 days.
+   confirmation is at most the lower of 15 minutes and W when W is above
+   0, else 15 minutes. W is the token freshness window of the session
+   policy (`tokenFreshnessSeconds`, ADR 71). A window of 0 turns off the
+   check of ADR 71 for tokens. It does not turn off the check of a
+   confirmation. A session policy that cannot be read gives 15 minutes,
+   never no limit. `job.ConfirmMaxAge(window)` holds the rule, and a
+   table-driven test covers 0, 60 seconds, 15 minutes, 7 days and a policy
+   that cannot be read.
    The same maximum age applies to a new MFA step (ADR 56) and to a new
    SSO authentication. A confirmation with an older authentication fails
    with `ErrAuthStale`. This answers the open question of ADR 103 on a
@@ -155,39 +173,53 @@ it.
    start whose credential is an access token that revealed secret values
    in plain text. The job model asks the new port `job.RevealMarks`, which
    the wiring implements with `agent.ConsentStore.Revealed` (ADR 124
-   decision 12). The refusal is `job.ErrTokenRevealed`. It applies to each
+   decision 12). The port gets the token ID from `job.Actor.Credential`
+   and the MCP session ID from the agent reference (`SessionID`, empty for
+   the channel `agent` and with no agent). The refusal is
+   `job.ErrTokenRevealed`. An error of the port fails the start, and the
+   start creates no job: the check fails closed. It applies to each
    caller of `job.Service`: the REST API, the Catalog and the agent. A run
    with `Run.ReadPlainSecrets` stays refused by the `Toolset` before the
    port (ADR 124 decision 12). A console session is not marked: the mark
    is on the token and on the MCP session, as ADR 124 says. The
-   conformance suite `jobtest` gets a case for a marked token and an
-   unmarked one.
+   conformance suite `jobtest` gets a case for a marked token, an
+   unmarked one and an error of the port.
 9. **A person who cannot give a confirmation gets no change of an agent.** With
    decision 4, every change of an agent waits for a confirmation, also in
    review-request mode. When the server cannot ask the person for a fresh
    authentication, or the principal cannot sign in to the console, nobody
    can pass the gate. So `job.Service.Start` refuses each change of an
-   agent for that person with `ErrAgentDenied` at once, and creates no
-   job. A runner job that only plans still starts. ADR 103 decision 12
-   sent such a person to review-request mode. That is no longer a path.
+   agent for that person with `ErrAgentDenied` (cause
+   `job.ErrNoConfirmation`) at once, and creates no job. A runner job
+   that only plans still starts. ADR 103 decision 12 sent such a person to
+   review-request mode. That is no longer a path.
 
 ### Agents never reject
+
+Decisions 10 to 14 apply to an object that takes approvals. Today that
+object is a job, so the text names the job.
 
 10. **An agent records no verdict.** `job.Service.Approve` refuses each
     verdict, `approve` and `reject`, whose actor has an agent reference,
     with `ErrAgentDenied`, on each gate. `job.Service.Confirm` refuses a
     rejection of a confirmation by an agent in the same way. A cancel is
-    not a verdict: an agent can cancel a job that its person can cancel
-    (`cancel_change`, ADR 122), with `job:cancel` as for every principal.
-11. **An agent can leave a blocking comment.** `job.Service.Comment` adds
-    a comment to a job that is not terminal. A comment holds the text (at
+    not a verdict. An agent cancels only a job whose `StartedBy` is its own
+    person, with `job:cancel` as for every principal. A cancel by an agent
+    of any other job fails with `ErrAgentDenied` (cause
+    `job.ErrNotOwnJob`), also when the person holds `job:cancel` on the
+    unit. This narrows the row `cancel_change` of ADR 122 decision 1.
+11. **The job model accepts a blocking comment from an agent.**
+    `job.Service.Comment` adds a comment to a job that is not terminal. A comment holds the text (at
     most 4,000 bytes), the author (the principal and the agent reference,
     if any), the time, and the flag `Blocking`. A comment with
     `Blocking: true` opens a **request-changes thread** on the job. A
     comment needs `job:read` on the unit. A blocking comment also needs
     `job:approve` on the unit, for the person and so for an agent of that
-    person. The principal of `Job.StartedBy` cannot open a thread on the
-    own job: a thread asks the author of the job for a change.
+    person. The principal of `Job.StartedBy` cannot open a thread on a job
+    that they started: a thread asks the author of the job for a change.
+    The server treats the text of a comment as untrusted text under the
+    rules of ADR 124 decision 13. Each answer to an agent and the console
+    label it with its author, as data, never as instructions.
 12. **An open thread blocks approval.** While a job has an open
     request-changes thread, these fail with `job.ErrChangesRequested`, and
     name the thread:
@@ -195,40 +227,45 @@ it.
     - a confirmation.
 
     A `reject` verdict by a person, a cancel and the expiry of a gate
-    still apply. The thread does not stop the timeout of a gate.
-    `job.GatesStatus` reports a gate with an open thread as closed, with
-    the reason `changes-requested`. An approval that a person recorded
-    before the thread opened stays recorded, and counts again when no
-    thread is open. When the gate binds approvals to the plan, a replan
+    still apply. The thread does not stop the timeout of a gate. While a
+    thread is open, `job.GatesStatus` reports each gate of each phase that
+    did not dispatch as closed, with the reason `changes-requested`. The
+    dispatch check of the store reads the open threads in the same
+    transaction as the gates, so a phase never dispatches while a thread is
+    open. An approval that a person recorded before the thread opened
+    stays recorded, and counts again when no thread is open. When the gate binds approvals to the plan, a replan
     still clears them (ADR 102 decision 7).
 13. **Who resolves a thread.** `job.Service.ResolveThread` closes a
     request-changes thread. It accepts only:
     - the person who opened the thread, in a request with no agent
       reference, or
-    - another holder of `job:approve` on the unit, in a request with no
-      agent reference.
+    - an approver who may dismiss, in a request with no agent reference:
+      a principal who may record an `approve` verdict on an open gate of
+      the job (`job:approve` on the unit and the groups of that gate). That
+      principal is never the author whom the thread asks for a change: never
+      `Job.StartedBy`, never an agent.
 
     It refuses `Job.StartedBy` with the new error `job.ErrSelfResolve`,
-    also when that person holds `job:approve`. It
-    refuses each actor with an agent reference with `ErrAgentDenied`, also
+    also when that person holds `job:approve`. It refuses each actor with an agent reference with `ErrAgentDenied`, also
     for a thread that an agent of the same person opened. So an agent
     cannot clear a block, also not its own. A thread that an agent opened
     has the person of the agent as its author: that person can resolve it
     in a request of their own, unless that person is `Job.StartedBy`.
 14. **A dismissal needs a reason.** A resolve by anyone other than the
     author of the thread is a **dismissal**. A dismissal needs a reason of
-    1 to 2,000 bytes, else it fails with `ErrInvalid`. A resolve by the
-    author can have a reason.
+    1 to 1000 characters of plain text with no control characters, as for
+    the reason of ADR 151 decision 27, else it fails with `ErrInvalid`. A
+    resolve by the author can have a reason with the same limits.
 15. **Audit entries for comments and threads.** Each of these writes one
     audit entry of the kind `change` in the transaction of the change, with
     the unit reference as the object, the job ID, and the agent block of
-    decision 16 when an agent acted:
+    decision 17 when an agent acted:
 
     | Event | Subject | Action |
     | --- | --- | --- |
     | Comment, blocking or not | the author | `job:read`, or `job:approve` for a blocking comment |
     | Resolve by the author | the author | `job:approve` |
-    | Dismissal | the person who dismisses | `job:approve`, with the reason |
+    | Dismissal | the person who dismisses | `job:approve`, with the reason in the field `reason` |
 
     The entry never holds the text of the comment. The job record holds
     it. A comment is namespace data with the fence of its job (ADR 100
@@ -244,7 +281,8 @@ it.
 17. **The `agent/1` block for each entry of an agent (N5).** The job model
     writes the agent of each of its audit entries in the agent block of ADR
     126 decision 10, never in a field of its own. `audit.Entry` gets no
-    field `Agent`. For a job entry:
+    field `Agent`. The job model writes the block only when the actor has
+    an agent reference. For a job entry with an agent:
     - `agentRun` is the run ID for the channel `agent`, else empty,
     - `agentSession` is the MCP session ID, or the run ID for the channel
       `agent`, as ADR 126 decision 2 says,
@@ -270,10 +308,13 @@ it.
     `read_state` holds content of one or two state items, and
     `read_run_output` holds content of a job log or of an update. The store
     records with each such result the item keys of its history items (ADR
-    151 decision 1). It seals the result with a fresh data key, wrapped in
-    turn with each of those item keys, so that a shred of any one of them
-    makes the result unreadable. This is also true for the copy of the
-    transcript in a backup.
+    151 decision 1). It seals the result with a fresh data key. It wraps
+    the data key with the first item key, then wraps that output with the
+    next item key, and so on. So a read of the result needs every item key,
+    and a shred of any one of them makes the result unreadable. This is
+    also true for the copy of the transcript in a backup. A test of the
+    store seals a result with two item keys, shreds one of them, and checks
+    that the result cannot be read.
     - A redaction or a purge (ADR 151, ADR 153) of an item shreds the item
       key, so the transcript copies of the item cannot be read. The
       transcript route answers such a result as `redacted`, with no part of
@@ -309,7 +350,7 @@ it.
     | Does a window of 0 of ADR 71 apply to a confirmation? | ADR 103, open question | Decision 7 |
     | Redaction and purge cannot reach copies outside the item | ADR 151 | Decision 19 for transcripts. Copies outside the server stay out of reach, as ADR 151 says. |
     | Status notes on ADRs 13, 20, 28, 30, 37, 38, 41, 43 and 47 for ADRs 150 and 151 | ADR 150, ADR 151 | Done before this ADR. Each of these ADRs has the note. |
-    | The `reason` field of `audit.Entry` (ADR 151 decision 26) | ADR 151 | Not changed here. A dismissal (decision 14) puts its reason in that field when it exists, else in `changes`. |
+    | The `reason` field of `audit.Entry` (ADR 151 decision 26) | ADR 151 | A dismissal (decision 14) puts its reason in that field only, with the limits of ADR 151 decision 27. |
     | Masking matches exact strings only | ADR 124 decision 12 | No change. The confirmation of decision 4 is the guarantee, in every mode. |
 
 ## What this ADR replaces
@@ -322,7 +363,9 @@ it.
 - **ADR 103, decision 2:** "one confirmation by the starter, in a request
   of their own with no agent, with a fresh authentication". It also needs
   a console session (decision 5). "The authentication is at most 15
-  minutes old" becomes `min(15 minutes, W)` (decision 7).
+  minutes old (`job.ConfirmFreshness`)" becomes the lower of 15 minutes
+  and W when W is above 0, else 15 minutes (decision 7).
+  `job.ConfirmFreshness` becomes `job.ConfirmMaxAge`.
 - **ADR 103, decision 7:** "An agent can record a rejection, because a
   rejection only stops a change." An agent records no verdict, and can
   leave a blocking comment (decisions 10 to 16).
@@ -331,10 +374,20 @@ it.
   decision 15.
 - **ADR 103, decision 10:** the field `Agent` of `audit.Entry` and its
   place in the hash encoding. Decision 17 uses the agent block of ADR 126.
+  Also the last sentence: "An agent needs no audit channel of its own: the
+  channel stays where the request came from." The field `channel` of an
+  entry of an agent holds the channel of the agent (decision 17).
 - **ADR 103, decision 12:** "The review of the forge is the check of a
   person, so the job gets no confirmation gate", and the rule that sends
   a person with no fresh authentication to review-request mode. Decisions
   4 and 9 replace them.
+- **ADR 103, Consequences:** "In an installation with static tokens only,
+  approve-first mode is not available: an agent there works in
+  review-request mode". Decision 9 replaces it: an agent there starts no
+  change.
+- **ADR 122, decision 1:** the row `cancel_change`, "cancels a change that
+  did not end", with `job:cancel`. An agent cancels only a job that its
+  person started (decision 10).
 - **ADR 124, decision 12:** "the job routes refuse a start with that
   token too". The job model refuses it in `job.Service.Start`, for each
   caller (decision 8).
@@ -343,6 +396,10 @@ it.
   says.
 - **ADR 125, decision 6:** "An agent may record a rejection". An agent
   records no verdict (decision 10).
+- **ADR 125, decision 7:** the row `Approve`, "the job model refuses an
+  approve verdict of an agent and accepts a reject", and the row `Cancel`
+  with `job:cancel` only. The job model refuses both verdicts of an agent,
+  and an agent cancels only a job that its person started (decision 10).
 - **ADR 125, decision 13:** "A reject verdict of an agent is allowed".
   Decision 10 replaces it.
 
@@ -351,10 +408,13 @@ it.
 - `pkg/job` changes: `job.AgentRef`, `job.Actor.Credential`,
   `job.ConfirmMaxAge`, the port `job.RevealMarks`, the methods `Comment`
   and `ResolveThread`, and the errors `ErrSessionRequired`,
-  `ErrTokenRevealed`, `ErrChangesRequested`, `ErrSelfResolve`,
-  `ErrServicePrincipal` and `ErrDirectSwitchOff`. `jobtest` gets a case for
+  `ErrTokenRevealed`, `ErrChangesRequested`, `ErrSelfResolve`, and the
+  causes `ErrServicePrincipal`, `ErrDirectSwitchOff`, `ErrNoConfirmation`,
+  `ErrNotOwnJob` and `ErrModeRefused`. `jobtest` gets a case for
   each rule of decisions 4 to 15.
-- `pkg/agent` gets `ErrChangeDelivered` and the method `Changes.Comment`.
+- `pkg/agent` gets the errors `ErrChangeDelivered`, `ErrChangeBusy`,
+  `ErrChangeLimit`, `ErrConfirmationUnavailable` and `ErrChangeNotOwn`, and
+  the method `Changes.Comment`.
   `agenttest.RunChanges` gets cases for an agent reject (refused), a
   blocking comment, and a confirmation from a token (refused).
 - `pkg/audit` gets no field `Agent`. The job model writes the agent block.

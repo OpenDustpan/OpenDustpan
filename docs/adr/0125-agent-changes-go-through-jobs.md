@@ -1,6 +1,6 @@
 # 125. Agent changes go through the job model as review requests or approve-first
 
-Status: accepted · 2026-10-17 · decisions 5, 6 and 13 superseded in part by ADR 128
+Status: accepted · 2026-10-17 · decisions 5, 6, 7 and 13 superseded in part by ADR 128
 
 ## Context
 
