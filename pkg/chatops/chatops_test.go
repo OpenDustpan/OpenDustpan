@@ -327,6 +327,15 @@ func TestCheckIntentLink(t *testing.T) {
 			"the link of a user of another chat tool",
 			func(l chatops.Link) *chatops.Link { l.Platform = "chat-b"; return &l }, chatops.ErrNotLinked,
 		},
+		{
+			"a link made again after the intent",
+			func(l chatops.Link) *chatops.Link { l.LinkedAt = now().Add(30 * time.Second); return &l },
+			chatops.ErrNotLinked,
+		},
+		{
+			"a link made before the intent",
+			func(l chatops.Link) *chatops.Link { l.LinkedAt = now().Add(-time.Hour); return &l }, nil,
+		},
 	}
 
 	for _, tc := range cases {

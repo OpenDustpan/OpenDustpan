@@ -360,6 +360,15 @@ type Auth struct {
 	At         time.Time
 }
 
+// linkHolds reports whether link is the link that in was made with: the
+// link of the chat user of the request of in, to the principal of in, and
+// made at or before in. A link made after in is a new link, also for the
+// same principal.
+func linkHolds(in Intent, link *Link) bool {
+	return link != nil && sameUser(*link, in.Request) && link.Principal == in.Principal &&
+		!link.LinkedAt.After(in.CreatedAt)
+}
+
 // CheckIntent returns nil when auth can complete in at now, for the job
 // whose current state is current: the kind and the ID of the job, the
 // index of the phase that waits, the type of the gate that waits, and the
@@ -371,9 +380,10 @@ type Auth struct {
 //   - ErrNeedsSession for a request with an access token or with no
 //     console session,
 //   - ErrDenied for another principal, an agent, or a break-glass session,
-//   - ErrNotLinked when link is nil, is the link of another chat user, or
-//     names another principal than in, so an intent stops when its link
-//     is deleted or replaced,
+//   - ErrNotLinked when link is nil, is the link of another chat user,
+//     names another principal than in, or was made after in, so an intent
+//     stops when its link is deleted or replaced, also when the same
+//     principal links the same chat user again,
 //   - ErrGateChanged when the job waits on another phase or gate than in,
 //   - job.ErrPlanChanged when the plans changed since the message,
 //   - ErrAuthStale for an authentication that is missing, of an unknown
@@ -393,7 +403,7 @@ func CheckIntent(in Intent, link *Link, auth Auth, current Target, now time.Time
 		return err
 	}
 
-	if link == nil || !sameUser(*link, in.Request) || link.Principal != in.Principal {
+	if !linkHolds(in, link) {
 		return fmt.Errorf("%w: the chat user of the intent is no longer linked to %s", ErrNotLinked, in.Principal)
 	}
 

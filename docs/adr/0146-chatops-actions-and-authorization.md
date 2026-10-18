@@ -163,7 +163,10 @@ a click on it.
    - the chat user of the intent is still linked to the principal of the
      intent (`ErrNotLinked`): the server reads the link with
      `Links.LinkOf` before the check, so a deleted or replaced link stops
-     the intent,
+     the intent. A link made after the intent (`LinkedAt` after the
+     `CreatedAt` of the intent) also stops it, so a delete and a new link
+     of the same chat user to the same principal does not bring back the
+     intent,
    - the job still waits on the same phase and the same gate
      (`ErrGateChanged`), so an intent never approves a later gate of the
      same job, and the plans did not change (`job.ErrPlanChanged`),
