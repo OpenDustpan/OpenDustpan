@@ -13,10 +13,12 @@ import (
 	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/collection"
 	"opendustpan.org/opendustpan/pkg/graph"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/objectcontext/objectcontexttest"
 	"opendustpan.org/opendustpan/pkg/store/postgres"
+	"opendustpan.org/opendustpan/pkg/workspace"
 )
 
 // contextNamespace makes the namespace name in s and returns its fence.
@@ -36,6 +38,69 @@ func contextNamespace(t *testing.T, s *postgres.Store, name string) namespace.Fe
 	}
 
 	return ns.Fence()
+}
+
+// contextUnit makes the OpenTofu workspace with the ID u.ID, named like its
+// ID, in the namespace of u: the unit is live in the inventory.
+func contextUnit(t *testing.T, s *postgres.Store, u graph.Unit) {
+	t.Helper()
+
+	n, err := s.GetNamespace(t.Context(), u.Namespace)
+	if err != nil {
+		t.Fatalf("get namespace %s: %v", u.Namespace, err)
+	}
+
+	name, err := workspace.ParseName(u.ID)
+	if err != nil {
+		t.Fatalf("parse workspace name %q: %v", u.ID, err)
+	}
+
+	w := workspace.Workspace{
+		CreatedAt: n.CreatedAt, UpdatedAt: n.CreatedAt,
+		Lock:      workspace.Lock{LockedAt: time.Time{}, ID: "", Holder: "", Reason: ""},
+		ID:        workspace.ID(u.ID),
+		Ref:       workspace.Ref{Namespace: n.Name, Name: name},
+		Overrides: namespace.Overrides{Forced: false, Unlocked: false},
+		Revision:  1,
+	}
+
+	if err = s.CreateWorkspace(t.Context(), w, n.Fence()); err != nil {
+		t.Fatalf("create workspace %s: %v", u.ID, err)
+	}
+}
+
+// contextPurge deletes the workspace with the ID u.ID and purges it at once,
+// so the inventory holds the unit neither live nor deleted.
+func contextPurge(t *testing.T, s *postgres.Store, u graph.Unit) {
+	t.Helper()
+
+	n, err := s.GetNamespace(t.Context(), u.Namespace)
+	if err != nil {
+		t.Fatalf("get namespace %s: %v", u.Namespace, err)
+	}
+
+	name, err := workspace.ParseName(u.ID)
+	if err != nil {
+		t.Fatalf("parse workspace name %q: %v", u.ID, err)
+	}
+
+	e := audit.Entry{
+		At: n.CreatedAt, Namespace: n.Name, Subject: "admin", IDPSubject: "", TokenID: "",
+		Action: "workspace:delete", Object: u.Namespace.String() + "/" + u.ID, Version: "", ValuePath: "",
+		ValueCount: nil, SourceIP: "", UserAgent: "", Channel: audit.ChannelAPI, Kind: audit.KindChange,
+		Outcome: audit.OutcomeSuccess, RequestID: "", PrevHash: "", Hash: "", Sequence: 0, Changes: nil,
+		ObjectID: "", FenceVersion: 0,
+	}
+	d := inventory.Deletion{Entry: e, PurgeAfter: e.At}
+	ref := workspace.Ref{Namespace: n.Name, Name: name}
+
+	if err = s.DeleteWorkspace(t.Context(), ref, n.Fence(), d); err != nil {
+		t.Fatalf("delete workspace %s: %v", u.ID, err)
+	}
+
+	if err = s.PurgeWorkspace(t.Context(), workspace.ID(u.ID), n.Fence(), time.Time{}, e); err != nil {
+		t.Fatalf("purge workspace %s: %v", u.ID, err)
+	}
 }
 
 // contextHarness returns the conformance harness over s.
@@ -71,6 +136,16 @@ func contextHarness(s *postgres.Store) objectcontexttest.Harness {
 			if err := s.CreateCollection(t.Context(), c, n.Fence(), e); err != nil {
 				t.Fatalf("create collection %s: %v", name, err)
 			}
+		},
+		Unit: func(t *testing.T, u graph.Unit) {
+			t.Helper()
+
+			contextUnit(t, s, u)
+		},
+		Purge: func(t *testing.T, u graph.Unit) {
+			t.Helper()
+
+			contextPurge(t, s, u)
 		},
 		Audited: func(t *testing.T, ns string) []audit.Entry {
 			t.Helper()
@@ -125,6 +200,8 @@ func TestObjectContextOwnerRows(t *testing.T) {
 	h := contextHarness(s)
 	fence := h.Namespace(t, "acme")
 	ref := objectcontext.UnitRef(graph.Unit{Namespace: "acme", Tool: "opentofu", ID: "ws-1"})
+
+	contextUnit(t, s, ref.Unit)
 
 	conn, err := pgx.Connect(t.Context(), schemaURL)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/access"
+	"opendustpan.org/opendustpan/pkg/audit"
 	"opendustpan.org/opendustpan/pkg/blob/fs"
 	"opendustpan.org/opendustpan/pkg/dustpan"
 	"opendustpan.org/opendustpan/pkg/identity"
@@ -451,6 +452,64 @@ func TestContextUnitSurvivesRename(t *testing.T) {
 
 	if name := got.Sections.Identity.Data.Name; !strings.HasSuffix(name, "live") {
 		t.Errorf("identity name after the rename = %q, want the new name live", name)
+	}
+}
+
+// TestContextWorkspaceSurvivesRename proves that the context of an OpenTofu
+// workspace stays with its stable ID. A workspace gets a new name when a
+// restore of the deleted workspace names it: the same context route then
+// answers the same owners and the new name.
+func TestContextWorkspaceSurvivesRename(t *testing.T) {
+	t.Parallel()
+
+	w := newContextWorld(t)
+	path := ctxNamespacePath + "/units/opentofu/" + w.workspace
+
+	w.expectPatch(t, http.StatusOK, path, ctxWriterToken, `{"owners":["group:net"]}`)
+
+	oldName, err := workspace.ParseName("net")
+	if err != nil {
+		t.Fatalf("parse workspace name: %v", err)
+	}
+
+	newName, err := workspace.ParseName("core")
+	if err != nil {
+		t.Fatalf("parse workspace name: %v", err)
+	}
+
+	at := time.UnixMilli(1_800_000_000_000).UTC()
+	e := audit.Entry{
+		At: at, Namespace: "acme", Subject: "operator", IDPSubject: "", TokenID: "", Action: "workspace:delete",
+		Object: "acme/net", Version: "", ValuePath: "", ValueCount: nil, SourceIP: "", UserAgent: "",
+		Channel: audit.ChannelAPI, Kind: audit.KindChange, Outcome: audit.OutcomeSuccess, RequestID: "",
+		PrevHash: "", Hash: "", Sequence: 0, Changes: nil, ObjectID: "", FenceVersion: 0,
+	}
+
+	if err = w.srv.Workspaces().Delete(t.Context(), workspace.Ref{Namespace: "acme", Name: oldName}, e); err != nil {
+		t.Fatalf("delete workspace: %v", err)
+	}
+
+	e.Action = "workspace:restore"
+
+	_, err = w.srv.Workspaces().RestoreDeleted(t.Context(), "acme", workspace.ID(w.workspace), newName, e)
+	if err != nil {
+		t.Fatalf("restore workspace under the name core: %v", err)
+	}
+
+	w.expectOwners(t, "after a rename", path, []string{"group:net"}, "unit")
+
+	code, body := w.call(t, http.MethodGet, path, ctxViewerToken, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET %s = %d %s, want 200", path, code, body)
+	}
+
+	var got ctxIdentityDocWire
+	if err = json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("decode %s: %v", body, err)
+	}
+
+	if name := got.Sections.Identity.Data.Name; !strings.HasSuffix(name, "core") {
+		t.Errorf("identity name after the rename = %q, want the new name core", name)
 	}
 }
 

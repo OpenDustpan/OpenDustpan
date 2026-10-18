@@ -207,6 +207,9 @@ func classify(err error) (int, string) {
 	switch {
 	case errors.Is(err, errNotFound), errors.Is(err, namespace.ErrNotFound):
 		return http.StatusNotFound, errNotFound.Error()
+	case errors.Is(err, objectcontext.ErrInvalidObject):
+		// A purge removed the unit after the route resolved it.
+		return http.StatusNotFound, errNotFound.Error()
 	case errors.Is(err, objectcontext.ErrNotFound):
 		return http.StatusNotFound, "no API context to clear"
 	case errors.Is(err, errBody), errors.Is(err, errInclude):

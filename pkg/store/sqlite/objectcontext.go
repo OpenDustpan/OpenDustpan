@@ -66,6 +66,41 @@ func resolveContext(ctx context.Context, q *db.Queries, ref objectcontext.Ref) (
 	return contextTarget{namespaceID: nsID, key: key}, true, nil
 }
 
+// requireContextUnit returns ErrInvalidObject when object names a unit, or a
+// resource of one, that the namespace holds neither live nor deleted. A purge
+// removes the unit from both, and its context rows with DropUnit. The check
+// runs in the transaction of the write, so a write never leaves rows for a
+// unit that a purge already removed.
+func requireContextUnit(ctx context.Context, q *db.Queries, object objectcontext.Ref) error {
+	if object.Kind != objectcontext.KindUnit && object.Kind != objectcontext.KindResource {
+		return nil
+	}
+
+	present, err := q.ContextUnitExists(ctx, db.ContextUnitExistsParams{
+		Namespace: object.Unit.Namespace.String(), Tool: object.Unit.Tool, UnitID: object.Unit.ID,
+	})
+	if err != nil {
+		return fmt.Errorf("select unit: %w", err)
+	}
+
+	if present == 0 {
+		return fmt.Errorf("%w: %s does not exist", objectcontext.ErrInvalidObject, object.Key())
+	}
+
+	return nil
+}
+
+// resolveForWrite resolves ref as resolveContext does, and for a unit or a
+// resource also checks that the unit exists, in the transaction of the write.
+func resolveForWrite(ctx context.Context, q *db.Queries, ref objectcontext.Ref) (contextTarget, bool, error) {
+	target, found, err := resolveContext(ctx, q, ref)
+	if err != nil || !found {
+		return target, found, err
+	}
+
+	return target, true, requireContextUnit(ctx, q, ref)
+}
+
 // contextRows returns the stored rows of target, both sources, API first.
 func contextRows(ctx context.Context, q *db.Queries, t contextTarget) ([]db.ListObjectContextRow, error) {
 	rows, err := q.ListObjectContext(ctx, db.ListObjectContextParams{
@@ -175,7 +210,7 @@ func (s *Store) SetAPI(
 	var result objectcontext.Entry
 
 	err := s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		target, found, err := resolveContext(ctx, q, object)
+		target, found, err := resolveForWrite(ctx, q, object)
 		if err != nil {
 			return err
 		}
@@ -317,7 +352,7 @@ func (s *Store) DeleteAPI(
 	defer s.mu.RUnlock()
 
 	return s.inFencedAuditedTx(ctx, fence, &e, func(q *db.Queries) error {
-		target, found, err := resolveContext(ctx, q, object)
+		target, found, err := resolveForWrite(ctx, q, object)
 		if err != nil {
 			return err
 		}
@@ -379,7 +414,7 @@ func (s *Store) ReplaceOutput(
 	defer s.mu.RUnlock()
 
 	return s.inFencedTx(ctx, fence, func(q *db.Queries) error {
-		target, found, err := resolveContext(ctx, q, unit)
+		target, found, err := resolveForWrite(ctx, q, unit)
 		if err != nil {
 			return err
 		}

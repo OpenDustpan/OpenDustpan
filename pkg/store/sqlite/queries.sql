@@ -1393,6 +1393,13 @@ SELECT unit_id
 FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
+-- name: ContextUnitExists :one
+-- Whether the namespace holds the unit in its live inventory or in its deleted
+-- units. A context write checks it in its own transaction, so a purge that
+-- committed before the write refuses the write.
+SELECT CAST(EXISTS (SELECT 1 FROM inventory AS i WHERE i.namespace = ?1 AND i.tool = ?2 AND i.unit_id = ?3)
+    OR EXISTS (SELECT 1 FROM inventory_deleted AS d WHERE d.namespace = ?1 AND d.tool = ?2 AND d.unit_id = ?3) AS INTEGER) AS present;
+
 -- name: GetUnitCollection :one
 -- The collection of one unit by its ID, as written.
 SELECT c.name

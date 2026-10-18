@@ -18,12 +18,17 @@ import (
 // Harness is one fresh, empty store for one subtest. Namespace makes the
 // namespace name in the store and returns its current fence.
 //
-// Collection makes the collection name in the namespace ns. Audited returns
+// Collection makes the collection name in the namespace ns. Unit makes the
+// unit u live in its namespace, as the inventory holds it, and Purge removes
+// u from the live and the deleted units of its namespace, as the purge of a
+// unit does. Audited returns
 // the audit entries of the context writes of the namespace ns, oldest first.
 type Harness struct {
 	Store      objectcontext.Store
 	Namespace  func(t *testing.T, name string) namespace.Fence
 	Collection func(t *testing.T, ns, name string)
+	Unit       func(t *testing.T, u graph.Unit)
+	Purge      func(t *testing.T, u graph.Unit)
 	Audited    func(t *testing.T, ns string) []audit.Entry
 }
 
@@ -51,11 +56,12 @@ func Run(t *testing.T, newHarness Factory) {
 		{"an empty output deletes the output entries", testOutputEmpty},
 		{"delete of a missing API entry", testDeleteMissing},
 		{"a purge drops the unit and its resources", testDropUnit},
+		{"a write for a purged unit is refused", testPurgedUnit},
 		{"list by owner in pages", testByOwner},
 		{"the owner index follows the owners", testOwnerIndex},
 		{"a write appends one audit entry with its changes", testAuditChanges},
 		{"a stale fence appends no audit entry", testFencedNoAudit},
-		{"one unit ID in two namespaces holds two entries", testNamespaceIsolation},
+		{"units in two namespaces hold two entries", testNamespaceIsolation},
 		{"a collection that does not exist", testCollectionMissing},
 		{"an empty output keeps its order", testOutputEmptyOrder},
 		{"a stale fence refuses each write", testFenced},
@@ -73,6 +79,17 @@ func Run(t *testing.T, newHarness Factory) {
 // unitOf returns the unit id of tool "opentofu" in namespace acme.
 func unitOf(id string) graph.Unit {
 	return graph.Unit{Namespace: "acme", Tool: "opentofu", ID: id}
+}
+
+// liveUnit makes the unit id of tool "opentofu" in namespace acme in the store
+// and returns it. The namespace must exist.
+func liveUnit(t *testing.T, h Harness, id string) graph.Unit {
+	t.Helper()
+
+	u := unitOf(id)
+	h.Unit(t, u)
+
+	return u
 }
 
 // entryAudit returns the audit entry of a context write in namespace acme.
@@ -180,7 +197,7 @@ func testFieldFromCode(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := h.Namespace(t, "acme")
-	u := unitOf("ws-1")
+	u := liveUnit(t, h, "ws-1")
 	ref := objectcontext.UnitRef(u)
 	out := objectcontext.Output{
 		SchemaVersion: 1,
@@ -226,7 +243,7 @@ func testOutputOrder(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := h.Namespace(t, "acme")
-	u := unitOf("ws-1")
+	u := liveUnit(t, h, "ws-1")
 	ref := objectcontext.UnitRef(u)
 
 	put := func(seq int64, summary string) {
@@ -265,7 +282,7 @@ func testOutputConcurrent(t *testing.T, h Harness) {
 	const items = 8
 
 	fence := h.Namespace(t, "acme")
-	u := unitOf("ws-1")
+	u := liveUnit(t, h, "ws-1")
 	ref := objectcontext.UnitRef(u)
 
 	var (
@@ -309,7 +326,7 @@ func testOutputEmpty(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := h.Namespace(t, "acme")
-	u := unitOf("ws-1")
+	u := liveUnit(t, h, "ws-1")
 	ref := objectcontext.UnitRef(u)
 	out := objectcontext.Output{
 		SchemaVersion: 1,
@@ -359,7 +376,7 @@ func testDropUnit(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := h.Namespace(t, "acme")
-	u, other := unitOf("ws-1"), unitOf("ws-2")
+	u, other := liveUnit(t, h, "ws-1"), liveUnit(t, h, "ws-2")
 	res := objectcontext.ResourceRef(u, "aws_s3_bucket.logs")
 
 	for _, ref := range []objectcontext.Ref{objectcontext.UnitRef(u), res, objectcontext.UnitRef(other)} {
@@ -386,13 +403,64 @@ func testDropUnit(t *testing.T, h Harness) {
 	}
 }
 
+func testPurgedUnit(t *testing.T, h Harness) {
+	t.Helper()
+
+	fence := h.Namespace(t, "acme")
+	u := liveUnit(t, h, "ws-1")
+	ref := objectcontext.UnitRef(u)
+	res := objectcontext.ResourceRef(u, "aws_s3_bucket.logs")
+	patch := objectcontext.Patch{Summary: new("x"), Runbook: nil, OnCall: nil, Owners: nil, Links: nil}
+
+	_, err := h.Store.SetAPI(t.Context(), ref, patch, "user:ada", fence, entryAudit())
+	if err != nil {
+		t.Fatalf("SetAPI: %v", err)
+	}
+
+	h.Purge(t, u)
+
+	for _, object := range []objectcontext.Ref{ref, res} {
+		_, err = h.Store.SetAPI(t.Context(), object, patch, "user:ada", fence, entryAudit())
+		if !errors.Is(err, objectcontext.ErrInvalidObject) {
+			t.Errorf("SetAPI %s: %v, want ErrInvalidObject", object.Key(), err)
+		}
+
+		err = h.Store.DeleteAPI(t.Context(), object, fence, entryAudit())
+		if !errors.Is(err, objectcontext.ErrInvalidObject) {
+			t.Errorf("DeleteAPI %s: %v, want ErrInvalidObject", object.Key(), err)
+		}
+	}
+
+	out := objectcontext.Output{
+		SchemaVersion: 1,
+		Owners:        []string{"group:net"},
+		Resources:     nil,
+		Summary:       "",
+		Runbook:       "",
+		OnCall:        "",
+		Links:         nil,
+	}
+
+	err = h.Store.ReplaceOutput(
+		t.Context(), ref, objectcontext.OutputItem{ID: "sv-1", Seq: 1}, out.Entries(u, "", "sv-1", at()), fence,
+	)
+	if !errors.Is(err, objectcontext.ErrInvalidObject) {
+		t.Errorf("ReplaceOutput: %v, want ErrInvalidObject", err)
+	}
+
+	err = h.Store.ReplaceOutput(t.Context(), ref, objectcontext.OutputItem{ID: "sv-2", Seq: 2}, nil, fence)
+	if !errors.Is(err, objectcontext.ErrInvalidObject) {
+		t.Errorf("ReplaceOutput with no entries: %v, want ErrInvalidObject", err)
+	}
+}
+
 func testByOwner(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := h.Namespace(t, "acme")
 
 	for _, id := range []string{"ws-1", "ws-2", "ws-3"} {
-		ref := objectcontext.UnitRef(unitOf(id))
+		ref := objectcontext.UnitRef(liveUnit(t, h, id))
 		_, err := h.Store.SetAPI(
 			t.Context(),
 			ref,
@@ -432,7 +500,7 @@ func testFenced(t *testing.T, h Harness) {
 
 	fence := h.Namespace(t, "acme")
 	stale := namespace.Fence{Namespace: fence.Namespace, FailoverVersion: fence.FailoverVersion + 1}
-	u := unitOf("ws-1")
+	u := liveUnit(t, h, "ws-1")
 	ref := objectcontext.UnitRef(u)
 
 	errs := map[string]error{}
@@ -531,7 +599,7 @@ func testOwnerIndex(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := h.Namespace(t, "acme")
-	ref := objectcontext.UnitRef(unitOf("ws-1"))
+	ref := objectcontext.UnitRef(liveUnit(t, h, "ws-1"))
 
 	steps := []struct {
 		name   string
@@ -646,8 +714,10 @@ func testNamespaceIsolation(t *testing.T, h Harness) {
 	t.Helper()
 
 	acme, beta := h.Namespace(t, "acme"), h.Namespace(t, "beta")
-	inAcme := objectcontext.UnitRef(unitOf("ws-1"))
-	inBeta := objectcontext.UnitRef(graph.Unit{Namespace: "beta", Tool: "opentofu", ID: "ws-1"})
+	inAcme := objectcontext.UnitRef(liveUnit(t, h, "ws-1"))
+	inBeta := objectcontext.UnitRef(graph.Unit{Namespace: "beta", Tool: "opentofu", ID: "ws-2"})
+
+	h.Unit(t, inBeta.Unit)
 
 	setSummary(t, h, inAcme, acme, "acme")
 
@@ -700,7 +770,7 @@ func testOutputEmptyOrder(t *testing.T, h Harness) {
 	t.Helper()
 
 	fence := h.Namespace(t, "acme")
-	u := unitOf("ws-1")
+	u := liveUnit(t, h, "ws-1")
 	ref := objectcontext.UnitRef(u)
 
 	put := func(seq int64, summary string) {

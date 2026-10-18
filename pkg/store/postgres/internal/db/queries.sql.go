@@ -613,6 +613,27 @@ func (q *Queries) CloseJournal(ctx context.Context, arg CloseJournalParams) erro
 	return err
 }
 
+const contextUnitExists = `-- name: ContextUnitExists :one
+SELECT (EXISTS (SELECT 1 FROM inventory AS i WHERE i.namespace = $1 AND i.tool = $2 AND i.unit_id = $3)
+    OR EXISTS (SELECT 1 FROM inventory_deleted AS d WHERE d.namespace = $1 AND d.tool = $2 AND d.unit_id = $3))::boolean AS present
+`
+
+type ContextUnitExistsParams struct {
+	Namespace string
+	Tool      string
+	UnitID    string
+}
+
+// Whether the namespace holds the unit in its live inventory or in its deleted
+// units. A context write checks it in its own transaction, so a purge that
+// committed before the write refuses the write.
+func (q *Queries) ContextUnitExists(ctx context.Context, arg ContextUnitExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, contextUnitExists, arg.Namespace, arg.Tool, arg.UnitID)
+	var present bool
+	err := row.Scan(&present)
+	return present, err
+}
+
 const countAccessToken = `-- name: CountAccessToken :one
 SELECT COUNT(*) FROM access_tokens WHERE id = $1
 `

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/graph"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/objectcontext"
 	"opendustpan.org/opendustpan/pkg/objectcontext/objectcontexttest"
@@ -22,6 +23,7 @@ type memStore struct {
 	output  map[string]objectcontext.Entry
 	seq     map[string]int64
 	cols    map[string]bool
+	units   map[string]bool
 	audited []audit.Entry
 	mu      sync.Mutex
 }
@@ -33,6 +35,7 @@ func newMem() *memStore {
 		output:  map[string]objectcontext.Entry{},
 		seq:     map[string]int64{},
 		cols:    map[string]bool{},
+		units:   map[string]bool{},
 		audited: nil,
 		mu:      sync.Mutex{},
 	}
@@ -82,6 +85,10 @@ func (m *memStore) SetAPI(
 		return objectcontext.Entry{}, fmt.Errorf("%w: no collection %q", objectcontext.ErrInvalidObject, object.Name)
 	}
 
+	if err := m.checkUnit(object); err != nil {
+		return objectcontext.Entry{}, err
+	}
+
 	var output *objectcontext.Entry
 	if o, ok := m.output[object.Key()]; ok {
 		output = &o
@@ -124,6 +131,10 @@ func (m *memStore) DeleteAPI(_ context.Context, object objectcontext.Ref, fence 
 		return err
 	}
 
+	if err := m.checkUnit(object); err != nil {
+		return err
+	}
+
 	prev, ok := m.api[object.Key()]
 	if !ok {
 		return objectcontext.ErrNotFound
@@ -162,6 +173,10 @@ func (m *memStore) ReplaceOutput(
 	defer m.mu.Unlock()
 
 	if err := m.checkFence(fence); err != nil {
+		return err
+	}
+
+	if err := m.checkUnit(unit); err != nil {
 		return err
 	}
 
@@ -255,6 +270,20 @@ func (m *memStore) checkFence(f namespace.Fence) error {
 	return nil
 }
 
+// checkUnit returns ErrInvalidObject when object names a unit, or a resource of
+// one, that the store does not hold.
+func (m *memStore) checkUnit(object objectcontext.Ref) error {
+	if object.Kind != objectcontext.KindUnit && object.Kind != objectcontext.KindResource {
+		return nil
+	}
+
+	if !m.units[objectcontext.UnitRef(object.Unit).Key()] {
+		return fmt.Errorf("%w: %s does not exist", objectcontext.ErrInvalidObject, object.Key())
+	}
+
+	return nil
+}
+
 // dropUnitEntries deletes the entries of unit and of its resources from src.
 func dropUnitEntries(src map[string]objectcontext.Entry, unit objectcontext.Ref) {
 	for k := range src {
@@ -286,6 +315,18 @@ func TestMemStore(t *testing.T) {
 				defer m.mu.Unlock()
 
 				m.cols[objectcontext.CollectionRef(namespace.Name(ns), name).Key()] = true
+			},
+			Unit: func(_ *testing.T, u graph.Unit) {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				m.units[objectcontext.UnitRef(u).Key()] = true
+			},
+			Purge: func(_ *testing.T, u graph.Unit) {
+				m.mu.Lock()
+				defer m.mu.Unlock()
+
+				delete(m.units, objectcontext.UnitRef(u).Key())
 			},
 			Audited: func(_ *testing.T, ns string) []audit.Entry {
 				m.mu.Lock()

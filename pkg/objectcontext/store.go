@@ -36,13 +36,16 @@ type Store interface {
 	// fields before. It returns the new entry. It returns ErrInvalidObject,
 	// ErrInvalidContext, ErrFieldFromCode, and namespace.ErrFenced when the
 	// fence is stale. A namespace or a collection that the store does not
-	// hold is ErrInvalidObject. The store does not check that a unit exists:
-	// the caller does.
+	// hold is ErrInvalidObject. So is a unit, or a resource of a unit, that
+	// the inventory holds neither live nor deleted: the store checks it in
+	// the transaction of the write, so a purge that committed first refuses
+	// the write and no row stays for a purged unit.
 	SetAPI(ctx context.Context, object Ref, p Patch, by string, fence namespace.Fence, e audit.Entry) (Entry, error)
 	// DeleteAPI deletes the API entry of object and appends e, with the
 	// Changes of e set to the fields that the delete cleared (ChangesOf). It
-	// returns ErrNotFound when the object has no API entry, ErrInvalidObject,
-	// and namespace.ErrFenced.
+	// returns ErrNotFound when the object has no API entry, ErrInvalidObject
+	// (also for a unit that a purge removed, as SetAPI), and
+	// namespace.ErrFenced.
 	DeleteAPI(ctx context.Context, object Ref, fence namespace.Fence, e audit.Entry) error
 	// ReplaceOutput replaces the output entries of one unit and its
 	// resources with entries, which come from item. When the stored entries
@@ -50,7 +53,8 @@ type Store interface {
 	// nil, so an operation that runs again or late does no harm. Each entry
 	// names the unit or a resource of it, with the source SourceOutput. An
 	// empty entries deletes the output entries of the unit. It returns
-	// ErrInvalidObject, ErrInvalidContext and namespace.ErrFenced.
+	// ErrInvalidObject (also for a unit that a purge removed, as SetAPI),
+	// ErrInvalidContext and namespace.ErrFenced.
 	ReplaceOutput(ctx context.Context, unit Ref, item OutputItem, entries []Entry, fence namespace.Fence) error
 	// DropUnit deletes every entry of unit and of its resources, of both
 	// sources, at the purge of the unit. A soft delete keeps them, so a
