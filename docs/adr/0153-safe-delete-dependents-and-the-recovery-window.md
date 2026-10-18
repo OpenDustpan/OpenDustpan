@@ -200,7 +200,7 @@ rounds 1 and 2 of the pull request that adds it.
 12. **Purge.** A purge before the end of the retention period
     (`unit:purge`) runs the same check. With a blocking edge, it needs the
     request field `confirmDependents: true`, else it answers 409. The
-    retention sweep purges without the check, because the retention period is
+    retention expiry purges without the check, because the retention period is
     the recovery window that the team had.
 
 ### The recovery window

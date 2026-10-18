@@ -1,6 +1,6 @@
 # 72. Scale out on one database with durable operations
 
-Status: accepted · 2026-10-16 · supersedes ADR 33, ADR 48, ADR 60 and ADR 64 in part (see "Superseded decisions"). Decision 7 superseded in part by ADR 73
+Status: accepted · 2026-10-16 · supersedes ADR 33, ADR 48, ADR 60 and ADR 64 in part (see "Superseded decisions"). Decision 7 superseded in part by ADR 73. Decision 6 superseded in part by ADR 126
 
 ## Context
 

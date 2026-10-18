@@ -8,7 +8,7 @@ take the unit out of every list and free its name at once. OpenDustpan keeps
 the state, the history and the secrets of the unit until its retention
 period ends.
 
-When the retention period of a unit ends, the retention sweep purges the
+When the retention period of a unit ends, the retention expiry purges the
 unit. An admin can also purge a unit through the API before that time.
 
 ## Set the retention period
@@ -91,10 +91,10 @@ nothing.
 Each restore and each purge writes one audit entry with the kind `change`.
 See [Audit log](audit-log.md).
 
-## The retention sweep
+## The retention expiry
 
-The server runs the retention sweep one time each hour. The first sweep runs
-one hour after the server starts. The sweep does two things:
+The server runs the retention expiry one time each hour. The first run starts
+one hour after the server starts. The run does two things:
 
 1. It purges each deleted unit whose retention period ended, in every
    namespace that has its home in this region. Each purge runs in its own
@@ -103,24 +103,24 @@ one hour after the server starts. The sweep does two things:
 2. It finishes the blob purge records. A purge deletes the blobs of the unit
    after its rows, and keeps a blob purge record. A checkpoint save or a
    state upload that started before the purge can still write a blob after
-   that delete. So the sweep deletes the blobs of a record again when the
+   that delete. So the run deletes the blobs of a record again when the
    record is older than 24 hours, and finishes the record only when no blob
    remains.
 
-A sweep purges a unit only when its retention period ended at the start of
-the sweep. The purge checks this again in its transaction. So a unit that you
-restore and delete again during a sweep gets its new retention period. A
-restore and a sweep purge of the same unit can run at the same time. One of
-them wins, and the sweep counts the other unit as skipped. A failed purge
-does not stop the sweep. The server logs a warning with the unit reference
-and the error kind, and the next sweep tries again.
+An expiry run purges a unit only when its retention period ended at the start of
+the run. The purge checks this again in its transaction. So a unit that you
+restore and delete again during an expiry run gets its new retention period. A
+restore and an expiry purge of the same unit can run at the same time. One of
+them wins, and the run counts the other unit as skipped. A failed purge
+does not stop the run. The server logs a warning with the unit reference
+and the error kind, and the next run tries again.
 
-When a sweep purges units, the server logs one line with the count and the
+When an expiry run purges units, the server logs one line with the count and the
 oldest purge time among them.
 
-`POST /api/server/deleted-units/sweep` runs one sweep now. It needs the action
+`POST /api/server/deleted-units/sweep` runs the retention expiry now. It needs the action
 `server:maintenance` on the installation. Each purge writes its audit entry
-with you as the subject. While another sweep of the server runs, the route
+with you as the subject. While another expiry run continues on the server, the route
 answers 409 at once. Try again later. The answer names each purged unit and
 counts the other outcomes:
 
@@ -135,19 +135,19 @@ counts the other outcomes:
 ```
 
 The metric `dustpan_deleted_unit_sweep_total` counts the outcomes of each
-sweep. See [Observe](observe.md).
+expiry run. See [Observe](observe.md).
 
 ## After an upgrade or an installation restore
 
 At the start, the server logs one line with the count of deleted units whose
-retention period has already ended. The first sweep, one hour later, purges
+retention period has already ended. The first run, one hour later, purges
 them. After an upgrade, these are units that you deleted before the server
-had a sweep. After an installation restore, these are units whose retention
+had an expiry run. After an installation restore, these are units whose retention
 period ended after the backup.
 
-To keep such a unit, restore it before the first sweep. First list the
+To keep such a unit, restore it before the first run. First list the
 deleted units whose retention period ends within one day. The units that the
-first sweep purges are in this list. The list holds the units of one
+first run purges are in this list. The list holds the units of one
 namespace, so list each namespace. The list comes in pages: when the answer has a
 `nextCursor`, send it as `cursor` to get the next page.
 

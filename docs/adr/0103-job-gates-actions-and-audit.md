@@ -1,6 +1,6 @@
 # 103. Job gates, actions and audit entries
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17 · decision 10 superseded in part by ADR 126
 
 ## Context
 

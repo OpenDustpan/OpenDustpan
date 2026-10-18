@@ -1,6 +1,6 @@
 # 161. One tool-neutral context read API
 
-Status: proposed · 2026-10-17
+Status: accepted · 2026-10-17
 
 ## Context
 

@@ -181,6 +181,21 @@ promote units from them, inside guard rails.
 | server  | [RFC 16](rfc/0016-egress-proxy.md) Egress proxy                                 | all                     | draft |
 | console | [RFC 14](rfc/0014-blueprints.md) Blueprints                                     | catalog and create form | draft |
 
+## Accepted designs that wait for adapters
+
+The owner accepted these designs on 17 and 18 October 2026. Each has its
+ports and conformance suites in `pkg/`, and no SQL adapter, HTTP handler or
+binary yet. Each row says what the design unblocks. The open work of each
+design is in its ADRs.
+
+| Design                                                         | ADRs       | Unblocks                                                                   |
+|----------------------------------------------------------------|------------|----------------------------------------------------------------------------|
+| The shared job model (`pkg/job`)                               | 100 to 103 | the Catalog, Dusty, the runner protocol and the write-back executor        |
+| Runners, the runner protocol, the launcher and sources         | 130 to 138 | remote runs on runners (RFC 6), cloud sweeps (ADR 164)                      |
+| Dusty, the built-in agent, the MCP endpoint and the stdio proxy | 120 to 127 | agent runs and agent changes through jobs                                   |
+| Unit history, redaction, history policy and safe delete        | 150 to 153 | blame, point-in-time views, redaction, retention of job artifacts          |
+| Context, the context read API, the graph and Sweep             | 160 to 165 | the context API, the graph and focus view, the state check, Sweep, findings |
+
 ## Later
 
 Wanted, but not in an ordered milestone yet. Each row says what it waits on.

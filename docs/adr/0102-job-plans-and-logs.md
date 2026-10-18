@@ -187,14 +187,14 @@ The owner approved the decisions of this ADR on 17 October 2026.
       log version when it creates it (`ExpiresAt`, with
       `history.ExpiresAt`), so a change of a setting applies to new items
       only.
-    - At the end of the period, the retention sweep redacts the item
+    - At the end of the period, the retention expiry redacts the item
       through the `history.Redactor` of the job model (decision 11), with
       the actor `@server`, the cause `retention`
       (`history.CauseRetention`) and the reason `retention period ended`.
       This is the same path as a redaction by a person. Retention may
       expire the current version of a log. A plan of a job that has not
       ended does not expire before the end of its job
-      (`history.ErrInProgress`), and the next sweep after the end redacts
+      (`history.ErrInProgress`), and the next expiry run after the end redacts
       it.
 11. **Redaction.** A redaction of a plan or of a log version is the
     redaction of ADR 151, with the action `unit:redact`. The job model

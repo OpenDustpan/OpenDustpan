@@ -27,4 +27,5 @@ git forges only.
 
 ## Outcome
 
-None yet.
+Not answered. ADR 135 (the source pipeline) covers git only, and lists sources
+that are not git as an open question.

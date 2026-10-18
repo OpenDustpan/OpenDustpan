@@ -1,6 +1,6 @@
 # 162. The unit graph: queries, limits and the focus view
 
-Status: proposed · 2026-10-17
+Status: accepted · 2026-10-17
 
 ## Context
 

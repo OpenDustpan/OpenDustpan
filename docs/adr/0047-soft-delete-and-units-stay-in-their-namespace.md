@@ -1,6 +1,6 @@
 # 47. Soft delete, and a unit never moves between namespaces
 
-Status: accepted · 2026-10-12
+Status: accepted · 2026-10-12 · the final delete superseded in part by ADR 151
 
 ## Context
 

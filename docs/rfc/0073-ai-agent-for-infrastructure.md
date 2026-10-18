@@ -53,4 +53,5 @@ Each option was open when this RFC was written.
 
 ## Outcome
 
-None yet.
+Accepted on 2026-10-17 as ADRs 120 to 127: Dusty, the built-in agent, runs in
+the server as an agent loop on durable operations.

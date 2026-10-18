@@ -1,6 +1,6 @@
 # 160. Context on every object: sources, precedence and storage
 
-Status: proposed · 2026-10-17 · changes the output schema of ADR 127 before it ships (see "Changes to ADR 127")
+Status: accepted · 2026-10-17 · changes the output schema of ADR 127 before it ships (see "Changes to ADR 127")
 
 ## Context
 

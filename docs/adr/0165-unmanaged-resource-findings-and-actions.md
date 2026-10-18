@@ -1,6 +1,6 @@
 # 165. Unmanaged-resource findings and the actions on them
 
-Status: proposed · 2026-10-17
+Status: accepted · 2026-10-17
 
 ## Context
 
