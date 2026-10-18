@@ -119,8 +119,12 @@ type EstimateStore interface {
 	// returns namespace.ErrFenced for a stale fence and
 	// namespace.ErrNotFound for an unknown namespace.
 	PutEstimate(ctx context.Context, est Estimate, fence namespace.Fence, entry *audit.Entry) error
-	// GetEstimate returns the estimate of s and o, or ErrNotFound.
-	GetEstimate(ctx context.Context, s Subject, o Origin) (Estimate, error)
+	// GetEstimate returns the estimate of s and o in scope: a namespace,
+	// or audit.ServerScope for the estimate of a blueprint of the
+	// installation. It returns ErrNotFound for no estimate and for an
+	// estimate of another scope, so a read never tells whether a subject
+	// of another namespace has an estimate.
+	GetEstimate(ctx context.Context, scope namespace.Name, s Subject, o Origin) (Estimate, error)
 	// PendingEstimates returns the estimates of the plans of the jobs of
 	// ns that wait or run and that have not applied their plan: for each
 	// job, the estimates of its highest phase with an estimate, one of
@@ -169,7 +173,8 @@ type BudgetStore interface {
 	// ErrConflict for another version, and namespace.ErrFenced. The
 	// evaluation of a budget writes no audit entry.
 	SaveStatus(ctx context.Context, st Status, version int64, fence namespace.Fence) error
-	// LastStatus returns the last status of the budget id for p, with its
-	// Warned thresholds and its version, or ErrNotFound.
-	LastStatus(ctx context.Context, id string, p Period) (Status, int64, error)
+	// LastStatus returns the last status of the budget id of ns for p,
+	// with its Warned thresholds and its version. It returns ErrNotFound
+	// for no status and for a budget of another namespace than ns.
+	LastStatus(ctx context.Context, ns namespace.Name, id string, p Period) (Status, int64, error)
 }

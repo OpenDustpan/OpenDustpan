@@ -23,20 +23,34 @@ import (
 // append to the audit chain of another namespace.
 type Store interface {
 	// Create persists s with version 1. It returns ErrInvalid for a
-	// schedule that fails Validate, that has copied shifts or a sync
-	// time, or whose namespace is not the namespace of fence. It returns
-	// ErrExists for a used ID or a name that the namespace already has,
-	// and namespace.ErrFenced.
+	// schedule that fails Validate, that has copied shifts, a sync time
+	// or overrides, or whose namespace is not the namespace of fence. It
+	// returns ErrExists for a used ID or a name that the namespace
+	// already has, and namespace.ErrFenced. Only AddOverride writes
+	// overrides, so each one has its own action, the time of the store
+	// and the cap.
 	Create(ctx context.Context, s Schedule, fence namespace.Fence, e audit.Entry) error
-	// Get returns the schedule ref names, or ErrNotFound.
+	// Get returns the schedule ref names, or ErrNotFound. Overrides come
+	// in the order of their adds: the store gives each add a sequence
+	// number in its transaction and orders by it, so the last add wins
+	// where two overrides cover one time, also when two adds have the
+	// same time.
 	Get(ctx context.Context, ref Ref) (Schedule, error)
 	// Update replaces the stored schedule s.ID when s.Version is the
 	// stored version, and increments the version. It keeps the stored
-	// copied shifts and sync time, and ignores those of s. It returns
-	// ErrNotFound for an unknown ID or a stored schedule of another
-	// namespace than fence, ErrInvalid for a schedule that fails Validate
-	// or that names another namespace than the stored one, ErrExists for
-	// a new name that the namespace already has, ErrConflict, and
+	// overrides, copied shifts and sync time, and ignores the copied
+	// shifts and the sync time of s. s.Overrides is empty or the stored
+	// list (SameOverrides), so an update with no overrides does not delete
+	// the live ones, and a client that reads a schedule, changes it and
+	// sends it back keeps working. A request with other overrides is
+	// refused, so a caller never thinks that Update wrote an override. It
+	// checks the version before the overrides: a request at a stale
+	// version gets ErrConflict, also when its overrides are the list of
+	// that version and not the stored list. It returns ErrNotFound for an unknown ID or a stored schedule of
+	// another namespace than fence, ErrInvalid for a schedule that fails
+	// Validate, that names another namespace than the stored one, or whose
+	// overrides are not empty and not the stored list, ErrExists for a new
+	// name that the namespace already has, ErrConflict, and
 	// namespace.ErrFenced.
 	Update(ctx context.Context, s Schedule, fence namespace.Fence, e audit.Entry) error
 	// Delete deletes the schedule ref names. It returns ErrNotFound for
@@ -44,9 +58,10 @@ type Store interface {
 	// and namespace.ErrFenced. A context whose on-call field names the
 	// schedule then shows the field as it is, with a warning.
 	Delete(ctx context.Context, ref Ref, fence namespace.Fence, e audit.Entry) error
-	// AddOverride adds o to the schedule ref names, and increments the
-	// version, with no check of the version: two people can add overrides
-	// at one time. It sets o.CreatedAt to the time of its transaction and
+	// AddOverride adds o after the overrides of the schedule ref names,
+	// and increments the version, with no check of the version: two
+	// people can add overrides at one time. It is the only write of
+	// overrides. It sets o.CreatedAt to the time of its transaction and
 	// ignores the CreatedAt of the request. In the same transaction, it
 	// first deletes each override of the schedule whose end is not after
 	// that time, so the cap counts only the overrides that did not end. It returns
@@ -130,7 +145,10 @@ type Handoffs interface {
 	// namespace than fence, ErrInvalid for an empty note or a note above
 	// MaxHandoffNoteLen, and namespace.ErrFenced.
 	AddHandoff(ctx context.Context, h Handoff, fence namespace.Fence, e audit.Entry) error
-	// Handoffs returns the notes of schedule in the range that starts at
-	// from and ends at to, newest first.
-	Handoffs(ctx context.Context, schedule string, from, to time.Time) ([]Handoff, error)
+	// Handoffs returns the notes of the schedule with the ID schedule of
+	// the namespace ns, in the range that starts at from and ends at to,
+	// newest first. It returns ErrNotFound for an unknown schedule or a
+	// schedule of another namespace than ns, so a read does not tell
+	// whether the schedule exists in another namespace.
+	Handoffs(ctx context.Context, ns namespace.Name, schedule string, from, to time.Time) ([]Handoff, error)
 }

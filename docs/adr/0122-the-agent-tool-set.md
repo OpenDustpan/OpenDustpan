@@ -1,6 +1,6 @@
 # 122. Twelve task-shaped tools, each with its action and object
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17 · decision 1 (the row `cancel_change`) narrowed by ADR 128
 
 ## Context
 

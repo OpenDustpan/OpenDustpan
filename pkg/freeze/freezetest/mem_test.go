@@ -78,7 +78,7 @@ func (m *memStore) Create(_ context.Context, s freeze.Schedule, fence namespace.
 	return scoped(err, freeze.ErrInvalid)
 }
 
-func (m *memStore) Get(_ context.Context, id string) (freeze.Schedule, error) {
+func (m *memStore) Get(_ context.Context, ns namespace.Name, id string) (freeze.Schedule, error) {
 	var (
 		s  freeze.Schedule
 		ok bool
@@ -86,8 +86,10 @@ func (m *memStore) Get(_ context.Context, id string) (freeze.Schedule, error) {
 
 	m.Read(func() { s, ok = m.schedules[id] })
 
-	if !ok {
-		return s, fmt.Errorf("get %s: %w", id, freeze.ErrNotFound)
+	if !ok || s.Namespace != ns {
+		var none freeze.Schedule
+
+		return none, fmt.Errorf("get %s/%s: %w", ns, id, freeze.ErrNotFound)
 	}
 
 	return s, nil
@@ -179,7 +181,7 @@ func (m *memStore) DeleteScheduled(_ context.Context, id string, fence namespace
 	subject := freeze.Subject(id)
 
 	scope := func() (namespace.Name, error) {
-		if _, ok := m.schedules[id]; ok {
+		if s, ok := m.schedules[id]; ok && s.Namespace == fence.Namespace {
 			return "", fmt.Errorf("delete freezes of %s: %w", id, freeze.ErrExists)
 		}
 
@@ -212,6 +214,10 @@ func (m *memStore) CreateFreeze(_ context.Context, f job.Freeze, fence namespace
 
 	if strings.HasPrefix(f.CreatedBy, freeze.SubjectPrefix) {
 		return fmt.Errorf("%w: a person cannot create a freeze as a schedule", job.ErrInvalid)
+	}
+
+	if freeze.IsOccurrenceID(f.ID) {
+		return fmt.Errorf("%w: only a schedule makes the ID %s", job.ErrInvalid, f.ID)
 	}
 
 	err := m.Write(fence, opsmem.Scope(f.Namespace), []audit.Entry{e}, func() error {

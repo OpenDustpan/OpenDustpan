@@ -65,6 +65,7 @@ func Run(t *testing.T, newHarness Factory) {
 		{"a link with an empty field is invalid", testLinkInvalid},
 		{"links of a principal list each chat user", testLinksOf},
 		{"delete of a link", testUnlink},
+		{"a link made again has the time of the new link", testRelinkTime},
 		{"link writes take the zero fence only", testLinkFences},
 		{"a link request is used once", testLinkRequestOnce},
 		{"an expired link request cannot be used", testLinkRequestExpired},
@@ -268,6 +269,28 @@ func testUnlink(t *testing.T, h Harness) {
 
 	put(t, h, link("U1", "bob"), "")
 	wantPrincipal(t, h, "U1", "bob")
+}
+
+// testRelinkTime deletes a link and makes it again for the same principal.
+// LinkOf gives the time of the new link, so an intent from before the new
+// link stops.
+func testRelinkTime(t *testing.T, h Harness) {
+	t.Helper()
+
+	put(t, h, link("U1", "alice"), "")
+
+	if err := h.Links.DeleteLink(t.Context(), zero(), chatUser("T1", "U1"), linkEntry()); err != nil {
+		t.Fatalf("DeleteLink: %v", err)
+	}
+
+	again := link("U1", "alice")
+	again.LinkedAt = now().Add(time.Hour)
+	put(t, h, again, "")
+
+	got, err := h.Links.LinkOf(t.Context(), chatUser("T1", "U1"))
+	if err != nil || got.Principal != "alice" || !got.LinkedAt.Equal(again.LinkedAt) {
+		t.Fatalf("LinkOf = %+v (%v), want alice linked at %v", got, err, again.LinkedAt)
+	}
 }
 
 func testLinkFences(t *testing.T, h Harness) {
