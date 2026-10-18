@@ -398,6 +398,118 @@ LIMIT sqlc.arg(page_limit);
 DELETE FROM inventory
 WHERE namespace = ? AND tool = ? AND name = ?;
 
+-- name: NextInventoryChangeSeq :one
+-- Takes the next number of the change log of one namespace. The statement runs
+-- last in the transaction of the write, after every other row lock, so the
+-- order of the numbers is the order of the commits of the namespace.
+INSERT INTO inventory_change_heads (namespace_id, last_seq)
+VALUES (?, 1)
+ON CONFLICT (namespace_id) DO UPDATE SET last_seq = inventory_change_heads.last_seq + 1
+RETURNING last_seq;
+
+-- name: InsertInventoryChange :exec
+INSERT INTO inventory_changes (
+    namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetUnitCollectionName :one
+-- The name of the collection that holds the unit, for a change log row.
+SELECT c.name
+FROM collection_members AS m
+JOIN collections AS c ON c.namespace = m.namespace AND c.name_key = m.collection_key
+WHERE m.unit_id = ?;
+
+-- name: ListInventoryChanges :many
+-- One page of the change log of a namespace in the order of the sequence.
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM inventory_changes
+WHERE namespace_id = sqlc.arg(namespace_id)
+  AND at_ms <= sqlc.arg(until_ms)
+  AND seq > sqlc.arg(after_seq)
+ORDER BY seq
+LIMIT sqlc.arg(page_limit);
+
+-- name: ListInventoryChangeBounds :many
+-- For each unit of a namespace, the row with the highest sequence among the
+-- rows at or before the time, and the row with the highest sequence of all.
+-- ReplayAt and ReplayView need no other row. A skip scan on the index finds
+-- each unit once, then two lookups on the index read its rows. The lookup at
+-- the time reads the rows of the unit after the time, so the cost follows the
+-- count of units and of the rows after the time.
+WITH RECURSIVE units(tool, unit_id) AS (
+    SELECT seed.tool, seed.unit_id
+    FROM (
+        SELECT f.tool, f.unit_id
+        FROM inventory_changes AS f
+        WHERE f.namespace_id = sqlc.arg(namespace_id)
+        ORDER BY f.tool, f.unit_id
+        LIMIT 1
+    ) AS seed
+    UNION ALL
+    SELECT n.tool, n.unit_id
+    FROM units AS u
+    JOIN inventory_changes AS n ON n.rowid = coalesce(
+        (SELECT s.rowid
+         FROM inventory_changes AS s
+         WHERE s.namespace_id = sqlc.arg(namespace_id) AND s.tool = u.tool AND s.unit_id > u.unit_id
+         ORDER BY s.unit_id
+         LIMIT 1),
+        (SELECT s.rowid
+         FROM inventory_changes AS s
+         WHERE s.namespace_id = sqlc.arg(namespace_id) AND s.tool > u.tool
+         ORDER BY s.tool, s.unit_id
+         LIMIT 1))
+)
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT r.namespace_id, r.seq, r.at_ms, r.tool, r.unit_id, r.name, r.display_name, r.status, r.collection,
+           r.kind, r.resource_count
+    FROM units AS u
+    JOIN inventory_changes AS r ON r.rowid = (
+        SELECT a.rowid
+        FROM inventory_changes AS a
+        WHERE a.namespace_id = sqlc.arg(namespace_id) AND a.tool = u.tool AND a.unit_id = u.unit_id
+          AND a.at_ms <= sqlc.arg(at_ms)
+        ORDER BY a.seq DESC
+        LIMIT 1)
+    UNION
+    SELECT r.namespace_id, r.seq, r.at_ms, r.tool, r.unit_id, r.name, r.display_name, r.status, r.collection,
+           r.kind, r.resource_count
+    FROM units AS u
+    JOIN inventory_changes AS r ON r.rowid = (
+        SELECT l.rowid
+        FROM inventory_changes AS l
+        WHERE l.namespace_id = sqlc.arg(namespace_id) AND l.tool = u.tool AND l.unit_id = u.unit_id
+        ORDER BY l.seq DESC
+        LIMIT 1)
+)
+ORDER BY seq;
+
+-- name: ListInventoryUnitBounds :many
+-- The rows of ListInventoryChangeBounds for one unit.
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT a.namespace_id, a.seq, a.at_ms, a.tool, a.unit_id, a.name, a.display_name, a.status, a.collection,
+           a.kind, a.resource_count
+    FROM inventory_changes AS a
+    WHERE a.namespace_id = sqlc.arg(namespace_id) AND a.tool = sqlc.arg(tool) AND a.unit_id = sqlc.arg(unit_id)
+      AND a.at_ms <= sqlc.arg(at_ms)
+    ORDER BY a.seq DESC
+    LIMIT 1
+)
+UNION
+SELECT namespace_id, seq, at_ms, tool, unit_id, name, display_name, status, collection, kind, resource_count
+FROM (
+    SELECT l.namespace_id, l.seq, l.at_ms, l.tool, l.unit_id, l.name, l.display_name, l.status, l.collection,
+           l.kind, l.resource_count
+    FROM inventory_changes AS l
+    WHERE l.namespace_id = sqlc.arg(namespace_id) AND l.tool = sqlc.arg(tool) AND l.unit_id = sqlc.arg(unit_id)
+    ORDER BY l.seq DESC
+    LIMIT 1
+)
+ORDER BY seq;
+
 -- name: ListInventory :many
 SELECT i.namespace, i.tool, i.name, i.unit_id, i.display_name, i.last_changed_ms, i.status, i.resource_count,
        i.lock_holder, i.lock_since_ms, i.lock_operation,

@@ -25,6 +25,7 @@ import (
 	"opendustpan.org/opendustpan/internal/token"
 	"opendustpan.org/opendustpan/pkg/blob"
 	"opendustpan.org/opendustpan/pkg/identity"
+	"opendustpan.org/opendustpan/pkg/inventory"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/stack"
 )
@@ -239,6 +240,7 @@ func (m *memUpdateStore) StateAt(_ context.Context, _ stack.ID, at time.Time) (s
 		CreatedBy: best.CreatedBy,
 		Version:   int(best.Version),
 		Running:   runningAbove(running, best),
+		Names:     inventory.Names{AtTime: "", Current: ""},
 	}, nil
 }
 
