@@ -73,6 +73,11 @@ each change, and the ADRs that it changes name it in their status line.
    | 145 | 27 | A sink, a subscription and a delivery, under `{ns}` or under `/api/server/`. The ports read sinks and subscriptions only by scope, and `Deliveries.History` takes the scope. |
    | 147 | 14 and 16 | An incident and its notes. `Store.Get` and `Store.Notes` take the namespace of the route. A read of an incident or of its notes in another namespace fails with `ErrNotFound`. |
 
+   The rule for incidents also applies to cyber threat records (ID prefix
+   `thr-`, ADR 148 decision 13). A threat record takes the same fence and
+   audit rules as an incident. So a read of a threat record in another
+   namespace fails with `ErrNotFound`, and its route answers 404.
+
 5. **The conformance suite of break-glass reviews.** The suite
    `pkg/breakglass/breakglasstest` of ADR 142 decision 15 also covers a
    read by ID in another scope.
@@ -242,7 +247,7 @@ each change, and the ADRs that it changes name it in their status line.
 | 144 | 15 | A budget, its status and an estimate of another scope are 404 (decision 4). |
 | 145 | 3, 13, 15, 24, 27, Consequences | The dedupe-key hash (decision 8). One ref names one value, sealed before the store (decisions 9 and 10). The `CreatedBy` rule, the sink-change suspend and notice, the skip of pending deliveries and `SendsFor` (decisions 11 to 13). `BeforeAttempt` (decision 14). The `Admins` recipient and enabled principals only (decisions 15 and 16). `RunContacts` (decision 17). A sink, a subscription or a delivery of another scope is 404 (decision 4). |
 | 146 | 9, 13 | A link after the intent stops it (decision 18). An intent of another principal is 404 (decision 6). |
-| 147 | 14, 16 | An incident and its notes of another namespace are 404 (decision 4). |
+| 147 | 14, 16 | An incident and its notes of another namespace are 404 (decision 4). The same rule applies to cyber threat records of ADR 148. |
 
 ## Consequences
 
