@@ -1,6 +1,6 @@
 # 193. Threads, anchors and draft reviews
 
-Status: accepted · 2026-10-18 · part of ADR 190
+Status: accepted · 2026-10-18 · part of ADR 190. Decisions 4 and 9 read the eligible approver of ADR 225 decision 7
 
 ## Context
 
