@@ -1,6 +1,6 @@
 # 54. Workload identity: OIDC and JWT token exchange, and mTLS
 
-Status: accepted · 2026-10-13 · decision 3 changed in part by ADR 204
+Status: accepted · 2026-10-13 · decision 3 changed in part by ADR 204. Decision 5 extended by ADR 223
 
 ## Context
 

@@ -30,4 +30,8 @@ Pulumi and HCP Terraform ship compliance packs (CIS, NIST, PCI).
 
 ## Outcome
 
-None yet.
+Part accepted on 2026-10-18 by ADR 229: one decision record shows the facts
+of each decision, the simulate route replays draft gates over stored
+records, `dustpan gates test` runs test files with no server, and starter
+packs are designed against named control frameworks and install in
+`evaluate` mode. The rest stays open.

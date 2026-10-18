@@ -1,6 +1,6 @@
 # 116. Request states, jobs, approvals and freezes
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17. Decisions 5 and 6 superseded in part by ADR 225
 
 ## Context
 
