@@ -808,6 +808,32 @@ _Avoid_: Alert, issue, violation, scan result, orphan
 A rule of a namespace that ignores each new finding that it matches, with its reason (`unmanaged.IgnoreRule`, ADR 165). It selects by provider, account scope, type, a tag key with an optional value, and kinds. Only the provider is required. A type can be exact, or a prefix that ends with `*`. A rule can have an end. A rule never ignores a finding that existed before the rule, and its delete opens no finding. A finding names the rule that ignored it. A namespace has at most 500 rules.
 _Avoid_: Suppression, filter, allowlist
 
+### Languages and accessibility
+
+**Language** (of a person):
+The language of the words that the console shows to a person, one of the 28 tags of ADR 181. The default is the first match in the browser's list, else `en`. A preference, separate from the formatting locale.
+_Avoid_: Locale (for the language)
+
+**Formatting locale**:
+The BCP 47 locale that sets how the console shows dates, times, numbers and lists, through the `Intl` APIs (ADR 181). The default is the browser's locale. A person can override the clock, the date style, the first day of the week and the time zone.
+_Avoid_: Language (for formats), region
+
+**Message file**:
+The file of the console that holds the messages of one language in ICU MessageFormat (ADR 181). It marks each high-stakes message, which needs native review before it ships.
+_Avoid_: Catalog (that is the self-service gateway), translation table
+
+**Term list**:
+The list of terms that stay in English in one language, for example "stack", "workspace", "plan" and "state" (ADR 181). An engineer whose first language is that language signs it off. The rule: use the word that does not make a user of that language cringe.
+_Avoid_: Glossary (that is this file), do-not-translate list
+
+**Pseudo-locale**:
+`en-XA`, a test language of the console (ADR 181). It makes each message longer, adds accents and puts brackets around it. Tests use it to find clipped text and text outside a message file. Release builds do not list it.
+_Avoid_: Test language, fake locale
+
+**Error code**:
+The stable machine code of an API error, for example `workspace.locked` (ADR 182). It is `errorCode` in the camelCase APIs and the JSON:API `code` member in the TFE-compatible API. A code never changes its meaning. The console selects its message by the code and never parses the English text. Not the `code` field of the camelCase error shapes, which is the HTTP status.
+_Avoid_: Error type, error ID, status code (for the machine code)
+
 ## Flagged ambiguities
 
 - **Account** is only a label of the hosted console for a namespace (ADR 59). The API, the CLI and error text say "namespace". There is no account object in the server.
