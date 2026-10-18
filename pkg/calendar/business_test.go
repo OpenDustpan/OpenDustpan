@@ -34,12 +34,12 @@ func berlin() calendar.Calendar {
 	return c
 }
 
-func mustLoad(t *testing.T, zone string) *time.Location {
+func berlinZone(t *testing.T) *time.Location {
 	t.Helper()
 
-	loc, err := time.LoadLocation(zone)
+	loc, err := time.LoadLocation("Europe/Berlin")
 	if err != nil {
-		t.Fatalf("load %s: %v", zone, err)
+		t.Fatalf("load Europe/Berlin: %v", err)
 	}
 
 	return loc
@@ -48,7 +48,7 @@ func mustLoad(t *testing.T, zone string) *time.Location {
 func TestEndOfNextBusinessDay(t *testing.T) {
 	t.Parallel()
 
-	loc := mustLoad(t, "Europe/Berlin")
+	loc := berlinZone(t)
 	at := func(y int, m time.Month, d, h, mi int) time.Time { return time.Date(y, m, d, h, mi, 0, 0, loc) }
 
 	cases := []struct {
@@ -93,7 +93,7 @@ func TestEndOfNextBusinessDay(t *testing.T) {
 func TestNextBusinessMoment(t *testing.T) {
 	t.Parallel()
 
-	loc := mustLoad(t, "Europe/Berlin")
+	loc := berlinZone(t)
 	at := func(m time.Month, d, h, mi int) time.Time { return time.Date(2026, m, d, h, mi, 0, 0, loc) }
 
 	cases := []struct {
@@ -128,7 +128,7 @@ func TestNextBusinessMoment(t *testing.T) {
 func TestAddBusinessTime(t *testing.T) {
 	t.Parallel()
 
-	loc := mustLoad(t, "Europe/Berlin")
+	loc := berlinZone(t)
 	at := func(m time.Month, d, h, mi int) time.Time { return time.Date(2026, m, d, h, mi, 0, 0, loc) }
 
 	cases := []struct {
@@ -205,6 +205,12 @@ func TestValidate(t *testing.T) {
 			calendar.ErrInvalid,
 		},
 		{"an unknown zone", func(c *calendar.Calendar) { c.Zone = "Mars/Olympus" }, calendar.ErrUnknownZone},
+		{"the zone of the host", func(c *calendar.Calendar) { c.Zone = "Local" }, calendar.ErrUnknownZone},
+		{
+			"an owner with a namespace and a group",
+			func(c *calendar.Calendar) { c.Owner = calendar.Scope{Namespace: "shop", Group: "network"} },
+			calendar.ErrInvalid,
+		},
 		{
 			"a holiday that is not a date",
 			func(c *calendar.Calendar) {

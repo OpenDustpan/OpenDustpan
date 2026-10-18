@@ -2,6 +2,7 @@ package calendartest_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -30,8 +31,7 @@ func TestMemConformance(t *testing.T) {
 }
 
 type row struct {
-	owner calendar.Scope
-	cal   calendar.Calendar
+	cal calendar.Calendar
 	// feeds maps a feed ID to the holidays of its last good read.
 	feeds map[string][]calendar.Holiday
 }
@@ -44,27 +44,33 @@ type memStore struct {
 	assigns map[calendar.Scope]calendar.ID
 }
 
-func (m *memStore) Create(
-	_ context.Context, owner calendar.Scope, c calendar.Calendar, fence namespace.Fence, e audit.Entry,
-) error {
-	if err := owner.Validate(); err != nil {
-		return err
+// scopeErr translates opsmem.ErrScope into the sentinel of a method.
+func scopeErr(err, sentinel error) error {
+	if errors.Is(err, opsmem.ErrScope) {
+		return fmt.Errorf("%w: %w", sentinel, err)
 	}
 
+	return err
+}
+
+func (m *memStore) Create(_ context.Context, c calendar.Calendar, fence namespace.Fence, e audit.Entry) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
 
-	return m.Write(fence, []audit.Entry{e}, func() error {
+	err := m.Write(fence, opsmem.Scope(c.Owner.WriteScope()), []audit.Entry{e}, func() error {
 		if _, ok := m.cals[c.ID]; ok || c.ID == calendar.DefaultID {
 			return fmt.Errorf("create %s: %w", c.ID, calendar.ErrExists)
 		}
 
 		c.Version = 1
-		m.cals[c.ID] = &row{owner: owner, cal: manualOnly(c), feeds: map[string][]calendar.Holiday{}}
+		c.Feeds, _ = calendar.MergeFeeds(nil, c.Feeds)
+		m.cals[c.ID] = &row{cal: manualOnly(c), feeds: map[string][]calendar.Holiday{}}
 
 		return nil
 	})
+
+	return scopeErr(err, calendar.ErrInvalid)
 }
 
 func (m *memStore) Get(_ context.Context, id calendar.ID) (calendar.Calendar, error) {
@@ -87,21 +93,37 @@ func (m *memStore) Update(_ context.Context, c calendar.Calendar, fence namespac
 		return err
 	}
 
-	return m.Write(fence, []audit.Entry{e}, func() error {
+	err := m.Write(fence, m.rowScope(c.ID), []audit.Entry{e}, func() error {
 		r, ok := m.cals[c.ID]
 		if !ok {
-			return fmt.Errorf("update %s: %w", c.ID, calendar.ErrNotFound)
+			// The default calendar before its first update.
+			r = &row{cal: calendar.Default(), feeds: map[string][]calendar.Holiday{}}
+		}
+
+		if c.Owner != r.cal.Owner {
+			return fmt.Errorf("update %s: %w: the owner of a calendar does not change", c.ID, calendar.ErrInvalid)
 		}
 
 		if r.cal.Version != c.Version {
 			return fmt.Errorf("update %s: %w", c.ID, calendar.ErrConflict)
 		}
 
+		feeds, keep := calendar.MergeFeeds(r.cal.Feeds, c.Feeds)
+		for id := range r.feeds {
+			if !keep[id] {
+				delete(r.feeds, id)
+			}
+		}
+
 		c.Version++
+		c.Feeds = feeds
 		r.cal = manualOnly(c)
+		m.cals[c.ID] = r
 
 		return nil
 	})
+
+	return scopeErr(err, calendar.ErrNotFound)
 }
 
 func (m *memStore) Delete(_ context.Context, id calendar.ID, fence namespace.Fence, e audit.Entry) error {
@@ -109,11 +131,7 @@ func (m *memStore) Delete(_ context.Context, id calendar.ID, fence namespace.Fen
 		return fmt.Errorf("delete the default calendar: %w", calendar.ErrInvalid)
 	}
 
-	return m.Write(fence, []audit.Entry{e}, func() error {
-		if _, ok := m.cals[id]; !ok {
-			return fmt.Errorf("delete %s: %w", id, calendar.ErrNotFound)
-		}
-
+	err := m.Write(fence, m.rowScope(id), []audit.Entry{e}, func() error {
 		for _, used := range m.assigns {
 			if used == id {
 				return fmt.Errorf("delete %s: %w", id, calendar.ErrInUse)
@@ -124,6 +142,8 @@ func (m *memStore) Delete(_ context.Context, id calendar.ID, fence namespace.Fen
 
 		return nil
 	})
+
+	return scopeErr(err, calendar.ErrNotFound)
 }
 
 func (m *memStore) Assign(_ context.Context, a calendar.Assignment, fence namespace.Fence, e audit.Entry) error {
@@ -131,7 +151,7 @@ func (m *memStore) Assign(_ context.Context, a calendar.Assignment, fence namesp
 		return err
 	}
 
-	return m.Write(fence, []audit.Entry{e}, func() error {
+	err := m.Write(fence, opsmem.Scope(a.Scope.WriteScope()), []audit.Entry{e}, func() error {
 		if a.Calendar == "" {
 			delete(m.assigns, a.Scope)
 
@@ -143,7 +163,7 @@ func (m *memStore) Assign(_ context.Context, a calendar.Assignment, fence namesp
 			return fmt.Errorf("assign %s: %w", a.Calendar, calendar.ErrNotFound)
 		}
 
-		if ok && r.owner.Namespace != "" && r.owner.Namespace != a.Scope.Namespace {
+		if ok && r.cal.Owner.Namespace != "" && r.cal.Owner.Namespace != a.Scope.Namespace {
 			return fmt.Errorf(
 				"assign %s: %w: the calendar belongs to another namespace",
 				a.Calendar,
@@ -155,6 +175,8 @@ func (m *memStore) Assign(_ context.Context, a calendar.Assignment, fence namesp
 
 		return nil
 	})
+
+	return scopeErr(err, calendar.ErrInvalid)
 }
 
 func (m *memStore) Resolve(_ context.Context, chain []calendar.Scope) (calendar.Resolved, error) {
@@ -179,28 +201,55 @@ func (m *memStore) Resolve(_ context.Context, chain []calendar.Scope) (calendar.
 }
 
 func (m *memStore) ReplaceFeedHolidays(
-	_ context.Context, id calendar.ID, feedID string, holidays []calendar.Holiday, status calendar.FeedStatus,
+	_ context.Context, id calendar.ID, read calendar.FeedRead, fence namespace.Fence,
 ) error {
+	feedID, holidays, status := read.Feed, read.Holidays, read.Status
+
 	if len(holidays) > calendar.MaxHolidays {
-		return fmt.Errorf("replace feed holidays: %w", calendar.ErrInvalid)
+		return fmt.Errorf("replace feed holidays: %w: more than %d holidays", calendar.ErrInvalid, calendar.MaxHolidays)
 	}
 
-	return m.Write(namespace.Fence{Namespace: "", FailoverVersion: 0}, nil, func() error {
-		r, ok := m.cals[id]
-		if !ok {
-			return fmt.Errorf("replace feed holidays of %s: %w", id, calendar.ErrNotFound)
+	if status.Error != "" {
+		return fmt.Errorf("replace feed holidays: %w: a good read has no error", calendar.ErrInvalid)
+	}
+
+	for _, h := range holidays {
+		if err := h.Validate(); err != nil {
+			return err
 		}
 
-		i := slices.IndexFunc(r.cal.Feeds, func(f calendar.Feed) bool { return f.ID == feedID })
-		if i < 0 {
-			return fmt.Errorf("replace holidays of feed %s: %w", feedID, calendar.ErrNotFound)
+		if h.Source != calendar.SourceFeed || h.Feed != feedID {
+			return fmt.Errorf("replace feed holidays: %w: a holiday of another source", calendar.ErrInvalid)
+		}
+	}
+
+	err := m.Write(fence, m.rowScope(id), nil, func() error {
+		r, i, err := m.feed(id, feedID)
+		if err != nil {
+			return err
 		}
 
-		if status.Error == "" {
-			r.feeds[feedID] = slices.Clone(holidays)
-			r.cal.Feeds[i].Status = status
+		status.Holidays = len(holidays)
+		r.feeds[feedID] = slices.Clone(holidays)
+		r.cal.Feeds[i].Status = status
 
-			return nil
+		return nil
+	})
+
+	return scopeErr(err, calendar.ErrNotFound)
+}
+
+func (m *memStore) RecordFeedStatus(
+	_ context.Context, id calendar.ID, feedID string, status calendar.FeedStatus, fence namespace.Fence,
+) error {
+	if !status.Error.Valid() {
+		return fmt.Errorf("record feed status: %w: unknown error class", calendar.ErrInvalid)
+	}
+
+	err := m.Write(fence, m.rowScope(id), nil, func() error {
+		r, i, err := m.feed(id, feedID)
+		if err != nil {
+			return err
 		}
 
 		kept := r.cal.Feeds[i].Status
@@ -209,6 +258,42 @@ func (m *memStore) ReplaceFeedHolidays(
 
 		return nil
 	})
+
+	return scopeErr(err, calendar.ErrNotFound)
+}
+
+// rowScope returns a scope function that looks up the calendar id under
+// the mutex and gives the scope of its owner, or ErrNotFound. The default
+// calendar is in the server scope also before its first update.
+func (m *memStore) rowScope(id calendar.ID) func() (namespace.Name, error) {
+	return func() (namespace.Name, error) {
+		r, ok := m.cals[id]
+
+		switch {
+		case ok:
+			return r.cal.Owner.WriteScope(), nil
+		case id == calendar.DefaultID:
+			return audit.ServerScope, nil
+		default:
+			return "", fmt.Errorf("calendar %s: %w", id, calendar.ErrNotFound)
+		}
+	}
+}
+
+// feed returns the row of the calendar id and the index of its feed
+// feedID, or ErrNotFound. The caller holds the mutex of the domain.
+func (m *memStore) feed(id calendar.ID, feedID string) (*row, int, error) {
+	r, ok := m.cals[id]
+	if !ok {
+		return nil, 0, fmt.Errorf("calendar %s: %w", id, calendar.ErrNotFound)
+	}
+
+	i := slices.IndexFunc(r.cal.Feeds, func(f calendar.Feed) bool { return f.ID == feedID })
+	if i < 0 {
+		return nil, 0, fmt.Errorf("feed %s of %s: %w", feedID, id, calendar.ErrNotFound)
+	}
+
+	return r, i, nil
 }
 
 // lookup returns the calendar id with the holidays of its feeds. The caller
@@ -233,7 +318,7 @@ func (m *memStore) lookup(id calendar.ID) (calendar.Calendar, bool) {
 		c.Holidays = append(c.Holidays, hs...)
 	}
 
-	slices.SortFunc(c.Holidays, func(a, b calendar.Holiday) int {
+	slices.SortStableFunc(c.Holidays, func(a, b calendar.Holiday) int {
 		switch {
 		case a.Date.Before(b.Date):
 			return -1

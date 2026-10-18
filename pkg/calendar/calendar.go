@@ -12,10 +12,13 @@ package calendar
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/audit"
+	"opendustpan.org/opendustpan/pkg/egress"
 	"opendustpan.org/opendustpan/pkg/namespace"
 )
 
@@ -53,6 +56,8 @@ const (
 	MaxFeeds = 5
 	// MaxHolidayNameLen caps the name of a holiday, in bytes.
 	MaxHolidayNameLen = 200
+	// MaxFeedIDLen caps the ID of a feed, in bytes.
+	MaxFeedIDLen = 64
 	// MaxSearchDays bounds each search for a business day. A calendar with
 	// no business day in this many days answers ErrNoBusinessDay.
 	MaxSearchDays = 400
@@ -141,10 +146,50 @@ func (c Clock) String() string {
 	return fmt.Sprintf("%02d:%02d", int(c)/minutesPerHour, int(c)%minutesPerHour)
 }
 
-// at returns the time of c on the date d in loc. A time that a daylight
-// saving change skips moves forward, as time.Date does.
+// zoneChangeWindow is the time before and after a wall clock time in which
+// at looks for the offsets of a zone. No zone changes its offset twice in
+// this window.
+const zoneChangeWindow = 12 * time.Hour
+
+// at returns the time of c on the date d in loc, with these rules for a
+// change of the offset of the zone (for example summer time):
+//
+//   - A wall clock time that occurs twice (the clock goes back) gives the
+//     first instant, in the offset before the change.
+//   - A wall clock time that the change skips (the clock goes forward)
+//     moves forward by the length of the gap: 02:30 on a day that goes
+//     from 02:00 to 03:00 gives 03:30.
 func (c Clock) at(d Date, loc *time.Location) time.Time {
-	return time.Date(d.Year, d.Month, d.Day, int(c)/minutesPerHour, int(c)%minutesPerHour, 0, 0, loc)
+	wall := time.Date(d.Year, d.Month, d.Day, int(c)/minutesPerHour, int(c)%minutesPerHour, 0, 0, time.UTC)
+
+	// near is within a few hours of the instant of the wall clock time.
+	_, guess := wall.In(loc).Zone()
+	near := wall.Add(-time.Duration(guess) * time.Second)
+
+	_, before := near.Add(-zoneChangeWindow).In(loc).Zone()
+	_, after := near.Add(zoneChangeWindow).In(loc).Zone()
+
+	for _, offset := range []int{before, after} {
+		t := wall.Add(-time.Duration(offset) * time.Second).In(loc)
+		if sameWallClock(t, wall) {
+			return t
+		}
+	}
+
+	// The change skips the wall clock time: read it in the offset before
+	// the gap, which moves it forward by the length of the gap.
+	return wall.Add(-time.Duration(before) * time.Second).In(loc)
+}
+
+// sameWallClock reports whether t shows the date, hour and minute of wall,
+// each in its own location.
+func sameWallClock(t, wall time.Time) bool {
+	ty, tm, td := t.Date()
+	wy, wm, wd := wall.Date()
+	th, tmin, _ := t.Clock()
+	wh, wmin, _ := wall.Clock()
+
+	return ty == wy && tm == wm && td == wd && th == wh && tmin == wmin
 }
 
 // WeekdaySet is a set of days of the week. Bit n is time.Weekday(n).
@@ -186,7 +231,7 @@ const (
 )
 
 // Holiday is a day with no business in a calendar. A holiday removes the
-// whole day, also when the feed event covers some hours only.
+// whole day.
 type Holiday struct {
 	Date Date
 	Name string
@@ -197,31 +242,133 @@ type Holiday struct {
 }
 
 // Feed is an iCal feed that the server reads holidays from on a schedule.
-// URL is an https URL. The server reads it through the egress rules of the
-// installation, refuses a private or loopback address, and never sends a
-// credential with it.
+// URL is an https URL that passes the egress rules (egress.CheckURL with
+// egress.HTTPSOnly). The URL of a private feed often holds a token, so the
+// URL is a credential: the store and the HolidaySource adapter get the full
+// URL, and every read through the API gets MaskURL of it (see
+// Calendar.Masked).
 type Feed struct {
 	ID  string
 	URL string
-	// Status is what the last read of the feed gave.
+	// Status is what the last read of the feed gave. The store sets it; a
+	// write through the API cannot.
 	Status FeedStatus
 }
 
-// FeedStatus is the outcome of the last read of a feed.
+// FeedError is the class of the error of the last read of a feed. The
+// store holds the class only, never the text of a network error, because
+// that text can hold an address of the network of the server.
+type FeedError string
+
+// Classes of the error of a feed read. The empty class is a read with no
+// error.
+const (
+	// FeedRefused is a URL or an address that the egress rules refuse.
+	FeedRefused FeedError = "refused"
+	// FeedUnreachable is a host that the source cannot resolve or reach.
+	FeedUnreachable FeedError = "unreachable"
+	// FeedTimeout is a read that took longer than egress.Timeout.
+	FeedTimeout FeedError = "timeout"
+	// FeedTooLarge is a body larger than egress.MaxBodyBytes.
+	FeedTooLarge FeedError = "too_large"
+	// FeedParse is a body that is not iCal, or a feed with more than
+	// MaxHolidays holidays in the import window.
+	FeedParse FeedError = "parse"
+	// FeedHTTPStatus is an answer with a status other than 200 or 304.
+	FeedHTTPStatus FeedError = "http_status"
+)
+
+// Valid reports whether e is the empty class or one of the classes above.
+func (e FeedError) Valid() bool {
+	switch e {
+	case "", FeedRefused, FeedUnreachable, FeedTimeout, FeedTooLarge, FeedParse, FeedHTTPStatus:
+		return true
+	default:
+		return false
+	}
+}
+
+// FeedErrorOf returns the class of err, an error of HolidaySource.Fetch.
+// It returns the empty class for nil and for ErrNotModified, and
+// FeedUnreachable for an error that it does not know.
+func FeedErrorOf(err error) FeedError {
+	switch {
+	case err == nil, errors.Is(err, ErrNotModified):
+		return ""
+	case errors.Is(err, ErrFeedRefused), errors.Is(err, egress.ErrRefused):
+		return FeedRefused
+	case errors.Is(err, ErrFeedTimeout):
+		return FeedTimeout
+	case errors.Is(err, ErrFeedTooLarge):
+		return FeedTooLarge
+	case errors.Is(err, ErrFeedInvalid):
+		return FeedParse
+	case errors.Is(err, ErrFeedHTTPStatus):
+		return FeedHTTPStatus
+	default:
+		return FeedUnreachable
+	}
+}
+
+// FeedStatus is the outcome of the reads of a feed.
 type FeedStatus struct {
 	// ReadAt is the time of the last read, or the zero time before the
 	// first read.
 	ReadAt time.Time
 	// Holidays is the number of holidays that the last good read gave.
 	Holidays int
-	// Skipped is the number of events of the last good read that were not
-	// whole days, or that were outside the import window.
+	// Skipped is the number of events of the last good read that the
+	// import did not take (see HolidaySource).
 	Skipped int
-	// Error is the text of the error of the last read, or empty. A failed
+	// Error is the class of the error of the last read, or empty. A failed
 	// read keeps the holidays of the last good read.
-	Error string
+	Error FeedError
 	// ETag is the validator of the last good read, for a conditional read.
 	ETag string
+}
+
+// maskedPath replaces the path, the query and the fragment of a masked URL.
+const maskedPath = "/…"
+
+// MaskURL returns the scheme and the host (with the port) of the URL raw,
+// with no user information, followed by
+// "/…", for example "https://calendar.example.com/…". The path and the
+// query of a feed URL can hold a token, so a read through the API returns
+// this form. It returns "" for a URL that does not parse or has no host.
+func MaskURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+
+	return u.Scheme + "://" + u.Host + maskedPath
+}
+
+// MergeFeeds returns the feeds of next, an update of a calendar whose
+// stored feeds are stored. A feed of next with the ID of a stored feed and
+// its URL, or MaskURL of its URL, keeps the stored URL and status; keep
+// holds its ID. Every other feed gets a zero status. The store keeps the
+// holidays of a feed only when keep holds its ID, and drops the holidays
+// of every other feed.
+func MergeFeeds(stored, next []Feed) ([]Feed, map[string]bool) {
+	merged := make([]Feed, 0, len(next))
+	keep := map[string]bool{}
+
+	for _, f := range next {
+		var zero FeedStatus
+
+		f.Status = zero
+
+		i := slices.IndexFunc(stored, func(s Feed) bool { return s.ID == f.ID })
+		if i >= 0 && (f.URL == stored[i].URL || f.URL == MaskURL(stored[i].URL)) {
+			f = stored[i]
+			keep[f.ID] = true
+		}
+
+		merged = append(merged, f)
+	}
+
+	return merged, keep
 }
 
 // Scope names who a calendar applies to: a namespace, a group of
@@ -247,6 +394,17 @@ func (s Scope) Validate() error {
 	return nil
 }
 
+// WriteScope returns the namespace whose fence a write in s carries: the
+// namespace of s, or audit.ServerScope for a group or the installation. A
+// write in audit.ServerScope carries the zero fence.
+func (s Scope) WriteScope() namespace.Name {
+	if s.Namespace != "" {
+		return s.Namespace
+	}
+
+	return audit.ServerScope
+}
+
 // String returns "namespace:<name>", "group:<name>" or "installation".
 func (s Scope) String() string {
 	switch {
@@ -259,12 +417,14 @@ func (s Scope) String() string {
 	}
 }
 
-// Calendar is a business calendar. Zone is an IANA time zone name.
-// WorkingDays and the working hours from DayStart to DayEnd say when
-// business happens. Holidays remove whole days. Version grows on each
+// Calendar is a business calendar. Owner is the scope that the calendar
+// belongs to; it does not change after the create. Zone is an IANA time
+// zone name. WorkingDays and the working hours from DayStart to DayEnd say
+// when business happens. Holidays remove whole days. Version grows on each
 // change, and a write names the version that it read.
 type Calendar struct {
 	ID          ID
+	Owner       Scope
 	Name        string
 	Zone        string
 	WorkingDays WeekdaySet
@@ -286,6 +446,7 @@ const (
 func Default() Calendar {
 	return Calendar{
 		ID:          DefaultID,
+		Owner:       Installation(),
 		Name:        "Default",
 		Zone:        "UTC",
 		WorkingDays: MondayToFriday,
@@ -297,8 +458,21 @@ func Default() Calendar {
 	}
 }
 
-// Validate returns ErrInvalid for a calendar that breaks a bound, and
-// ErrUnknownZone for a zone that the server cannot load.
+// Masked returns c with MaskURL of the URL of each feed. A read through the
+// API returns this form.
+func (c Calendar) Masked() Calendar {
+	c.Feeds = slices.Clone(c.Feeds)
+	for i := range c.Feeds {
+		c.Feeds[i].URL = MaskURL(c.Feeds[i].URL)
+	}
+
+	return c
+}
+
+// Validate returns ErrInvalid for a calendar that breaks a bound, or whose
+// feed URL the egress rules refuse (the error also matches
+// egress.ErrRefused), and ErrUnknownZone for a zone that is not a valid
+// IANA name.
 func (c Calendar) Validate() error {
 	if err := c.validateFields(); err != nil {
 		return err
@@ -308,14 +482,24 @@ func (c Calendar) Validate() error {
 		return err
 	}
 
+	if err := c.validateFeeds(); err != nil {
+		return err
+	}
+
 	return c.validateHolidays()
 }
 
+// utc is the one zone name with no area.
+const utc = "UTC"
+
 // Location loads the time zone of the calendar. It returns ErrUnknownZone
-// for a name that the time zone database does not hold.
+// for a name that is not "UTC" or of the IANA form Area/Location (for
+// example "Europe/Berlin" or "America/Argentina/Buenos_Aires"), and for a
+// name that the time zone database does not hold. So "Local", which is the
+// zone of the host, is refused.
 func (c Calendar) Location() (*time.Location, error) {
-	if c.Zone == "" {
-		return nil, fmt.Errorf("%w: empty zone", ErrUnknownZone)
+	if !validZoneName(c.Zone) {
+		return nil, fmt.Errorf("%w: %q is not an IANA name of the form Area/Location", ErrUnknownZone, c.Zone)
 	}
 
 	loc, err := time.LoadLocation(c.Zone)
@@ -324,6 +508,46 @@ func (c Calendar) Location() (*time.Location, error) {
 	}
 
 	return loc, nil
+}
+
+// Bounds of the parts of a zone name.
+const (
+	minZoneParts = 2
+	maxZoneParts = 3
+)
+
+// validZoneName reports whether name is "UTC", or has 2 or 3 parts split
+// by "/", each part starting with a letter A to Z and holding letters,
+// digits, "_", "+" and "-" only.
+func validZoneName(name string) bool {
+	if name == utc {
+		return true
+	}
+
+	parts := strings.Split(name, "/")
+	if len(parts) < minZoneParts || len(parts) > maxZoneParts {
+		return false
+	}
+
+	return !slices.ContainsFunc(parts, func(p string) bool { return !validZonePart(p) })
+}
+
+// validZonePart reports whether p starts with a letter A to Z and holds
+// letters, digits, "_", "+" and "-" only.
+func validZonePart(p string) bool {
+	if p == "" || p[0] < 'A' || p[0] > 'Z' {
+		return false
+	}
+
+	for _, r := range p {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '+', r == '-':
+		default:
+			return false
+		}
+	}
+
+	return true
 }
 
 // IsHoliday reports whether d is a holiday of the calendar, and its name.
@@ -351,6 +575,8 @@ func (c Calendar) validateFields() error {
 	switch {
 	case !strings.HasPrefix(string(c.ID), IDPrefix):
 		return fmt.Errorf("%w: a calendar ID starts with %q", ErrInvalid, IDPrefix)
+	case c.Owner.Validate() != nil:
+		return c.Owner.Validate()
 	case c.Name == "" || len(c.Name) > MaxNameLen:
 		return fmt.Errorf("%w: a calendar name has 1 to %d bytes", ErrInvalid, MaxNameLen)
 	case c.WorkingDays.Empty():
@@ -364,16 +590,34 @@ func (c Calendar) validateFields() error {
 	}
 }
 
+func (c Calendar) validateFeeds() error {
+	seen := map[string]bool{}
+
+	for _, f := range c.Feeds {
+		if f.ID == "" || len(f.ID) > MaxFeedIDLen {
+			return fmt.Errorf("%w: a feed ID has 1 to %d bytes", ErrInvalid, MaxFeedIDLen)
+		}
+
+		if seen[f.ID] {
+			return fmt.Errorf("%w: the feed ID %q is used twice", ErrInvalid, f.ID)
+		}
+
+		seen[f.ID] = true
+
+		if err := egress.CheckURL(f.URL, egress.HTTPSOnly); err != nil {
+			return fmt.Errorf("%w: feed %q: %w", ErrInvalid, f.ID, err)
+		}
+	}
+
+	return nil
+}
+
 func (c Calendar) validateHolidays() error {
 	manual := 0
 
 	for _, h := range c.Holidays {
-		if !h.Date.Valid() {
-			return fmt.Errorf("%w: holiday %s is not a real date", ErrInvalid, h.Date)
-		}
-
-		if len(h.Name) > MaxHolidayNameLen {
-			return fmt.Errorf("%w: a holiday name has at most %d bytes", ErrInvalid, MaxHolidayNameLen)
+		if err := h.Validate(); err != nil {
+			return err
 		}
 
 		if h.Source == SourceManual {
@@ -386,4 +630,22 @@ func (c Calendar) validateHolidays() error {
 	}
 
 	return nil
+}
+
+// Validate returns ErrInvalid for a holiday that is not a real date, whose
+// name is too long, or whose source is unknown. A holiday of SourceFeed
+// names its feed; a manual holiday names none.
+func (h Holiday) Validate() error {
+	switch {
+	case !h.Date.Valid():
+		return fmt.Errorf("%w: holiday %s is not a real date", ErrInvalid, h.Date)
+	case len(h.Name) > MaxHolidayNameLen:
+		return fmt.Errorf("%w: a holiday name has at most %d bytes", ErrInvalid, MaxHolidayNameLen)
+	case h.Source == SourceManual && h.Feed == "":
+		return nil
+	case h.Source == SourceFeed && h.Feed != "":
+		return nil
+	default:
+		return fmt.Errorf("%w: a holiday is manual with no feed, or from a feed that it names", ErrInvalid)
+	}
 }
