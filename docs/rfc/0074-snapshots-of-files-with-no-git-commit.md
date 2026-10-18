@@ -302,7 +302,8 @@ the digests.
 
 - The separator is `/`. A path has no leading `/` and no trailing `/`.
 - No part of a path is empty, `.` or `..`.
-- A part of a path is at most 255 bytes. A path is at most 4,096 bytes.
+- A part of a path is at most 255 bytes. A path is at most 4,096 bytes
+  and has at most 64 parts.
 - A path has no control character (U+0000 to U+001F and U+007F to U+009F)
   and no `\`.
 - A path is valid UTF-8 in Unicode Normalization Form C (NFC). A path that
@@ -335,6 +336,10 @@ no empty directory. The launcher makes each parent directory with mode
 - A target is relative. An absolute target is an error.
 - A target is in normal form: no empty part, no `.` part, and `..` only
   at the start.
+- A target is at most 4,096 bytes. It follows the rules of a path for the
+  characters, UTF-8 and NFC: no control character, no `\`, and valid UTF-8
+  in NFC. A target that is not in NFC is an error. The writer does not
+  normalize it.
 - The target, resolved from the directory of the link, is a regular file
   or a directory inside the file set. A target that leaves the file set or
   names nothing in it is an error.
@@ -344,6 +349,8 @@ no empty directory. The launcher makes each parent directory with mode
   So no chain goes through a link.
 - No path of the file set is below the path of a link. For example, the
   link `m` and the file `m/x` are an error.
+- A target never resolves at or below a mount path. The check compares
+  the resolved target and the mount path after full case folding.
 
 **Tar.** `pkg/source` owns the exact bytes of each header. It does not
 use the encoder of `archive/tar`, because that encoder can change between
@@ -366,7 +373,11 @@ a set of tar files, and the writer must give these bytes.
     `0777` for a link.
   - The user ID 0, the group ID 0, the time Unix 0 and the size. A link
     has the size 0.
-  - The typeflag: `0` for a regular file, `2` for a symbolic link.
+  - The typeflag: `0` for a regular file, `2` for a symbolic link. The
+    writer never writes the typeflag NUL. `archive/tar` reads the
+    typeflag NUL as `0`, so two tar files that differ only in this byte
+    give the same entries. The hash of the tar file pins the bytes, and a
+    golden vector shows the typeflag `0`.
   - The link name: the target in ASCII, or empty when a PAX record holds
     the target, or empty for a regular file.
   - The magic `ustar\0` and the version `00`.
@@ -425,7 +436,9 @@ covers the key of each mount, not the bytes of the pack. When the forge
 gives a different pack for the same commit, the digest does not change.
 
 A mount path follows the path rules of section 3. No mount path is equal
-to the path of a link or below it. The writer refuses a mount that breaks
+to the path of a link or below it. The comparison is after full case
+folding, as for the paths of section 3. The writer refuses a mount that
+breaks
 these rules, and the launcher checks them in step 1 of section 5. Can a
 mount path be equal to, above or below a file or another mount? This
 stays an open question.
@@ -451,25 +464,32 @@ hash of the tar file:
 
 1. It checks the SHA-256 of the manifest against the digest of the job
    spec, and checks the manifest against the rules of section 3, the
-   rules of the mount paths of section 4 and the limits of section 6.
+   rules of the mount paths of section 4 and the limits of section 6. The
+   implicit directories count against the entry limit, and a path has at
+   most 64 parts.
 2. It makes a staging directory with mode `0700`. The staging directory
    is a sibling of the work directory below the root directory of the job,
-   so it is on the same file system. It reads the tar file into the
-   staging directory. It stops at the size that the manifest gives, and at
+   so it is on the same file system. It reads the tar file to
+   `staging/tar`, beside the tree `staging/tree` that step 3 writes. It
+   stops at the size that the manifest gives, and at
    the limit. It checks the SHA-256 of the tar file against the manifest.
 3. It unpacks the tar file into the staging directory. For each entry, it
    checks the header (section 3), the path, the type, the mode and the
    order against the manifest, and the hash and the size of the content
    as it reads it. It then writes each mount at its path in the staging
    directory.
-4. It moves the tree to the work directory with one `rename(2)` only when
-   all checks pass. The work directory must not exist before the move. A
-   work directory that exists is an error. The error `EXDEV` is an error
-   too. The launcher never copies the tree instead of the move. On any
-   error, it deletes the staging directory and the job fails before its
-   first step.
+4. It moves `staging/tree`, and only that directory, to the work
+   directory when all checks pass. It uses `renameat2` with
+   `RENAME_NOREPLACE` on Linux, or `renamex_np` with `RENAME_EXCL` on
+   macOS. The launcher makes no separate check that the work directory
+   exists. The errors `EEXIST` and `ENOTEMPTY` are errors, and so is
+   `EXDEV`. The launcher never copies the tree instead of the move. The
+   launcher deletes `staging/tar` after the move, and it deletes the
+   staging directory on any error. The job fails before its first step on
+   any error.
 
-The unpack follows the rules of ADR 139 decision 2 (proposed): it writes
+The unpack follows the rules of ADR 139 decision 2 (proposed). Check the
+references to ADR 139 again when PR #840 merges. It writes
 through an `os.Root` on the staging directory, it creates each regular
 file with `O_CREATE|O_EXCL|O_NOFOLLOW`, and it writes each link with
 `Root.Symlink` after the checks of section 3. The launcher writes each
@@ -479,7 +499,9 @@ mount through the same `os.Root`, before the move.
 
 We propose limits for each pool, as ADR 139 decision 7 (proposed) gives
 for images. Each pool can change each limit. An entry is one regular file
-or one symbolic link of the manifest. Directories are not entries.
+or one symbolic link of the manifest. A directory is not an entry of the
+manifest, but each implicit directory (a parent of an entry) counts
+against the entry limit. A path has at most 64 parts.
 
 | Limit | Checked | Default |
 | --- | --- | --- |
@@ -593,9 +615,13 @@ manifests through these routes only (ADR 17).
 
 The content route answers:
 
-- 200 with the bytes of a regular file of the manifest.
+- 200 with the bytes of a regular file of the manifest. The answer always
+  has the headers `Content-Type: application/octet-stream`,
+  `X-Content-Type-Options: nosniff`, `Content-Disposition: attachment` and
+  `Content-Security-Policy: sandbox`.
 - 200 with the manifest entry of a link, which holds its target. The
-  route never follows a link.
+  answer is JSON with `Content-Type: application/json`. The route never
+  follows a link.
 - 404 for a path that is not an entry of the manifest. A path at or below
   a mount is not an entry, so it answers 404. The manifest gives the key
   of the mount, and the code of a mount stays in its forge.
