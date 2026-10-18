@@ -11,6 +11,7 @@
 package protocol
 
 import (
+	"slices"
 	"time"
 )
 
@@ -29,7 +30,7 @@ const (
 	// PathHeartbeat records that the runner lives and gets the cancels of
 	// its claims (Heartbeat, HeartbeatResponse).
 	PathHeartbeat = Prefix + "/heartbeat"
-	// PathPoll long-polls for one phase or scan of the pool of the runner
+	// PathPoll long-polls for one phase or sweep of the pool of the runner
 	// (PollRequest, Work). The answer is 200 with work, or 204 after
 	// PollRequest.Wait with none.
 	PathPoll = Prefix + "/poll"
@@ -48,7 +49,9 @@ const (
 const (
 	// PathSession exchanges a handoff token for a job session
 	// (SessionRequest, SessionResponse). The handoff token and the
-	// signature of the new key authenticate it.
+	// signature of the new key authenticate it. Its proof is signed by the
+	// new key, with the hex SHA-256 of the handoff token as the subject, so
+	// the server can keep its nonce (NoncePaths).
 	PathSession = Prefix + "/session"
 	// PathSessionRenew renews the claim of the session and gets a cancel
 	// (RenewResponse).
@@ -65,7 +68,7 @@ const (
 	// apply phase applies. Path parameter: {part}.
 	PathSessionPlanPart = Prefix + "/session/plan/parts/{part}"
 	// PathSessionCredentials gets the credentials of one step of the role
-	// tool, or of a scan (CredentialsRequest, CredentialsResponse).
+	// tool, or of a sweep (CredentialsRequest, CredentialsResponse).
 	PathSessionCredentials = Prefix + "/session/credentials"
 	// PathSessionStepBegin records the begin of a step. Path parameter:
 	// {step}. For a step that changes resources, the launcher waits for
@@ -85,9 +88,11 @@ const (
 	// PathSessionPlanCommit stores the staged parts as the plan of the
 	// phase, in one call (PlanCommit).
 	PathSessionPlanCommit = Prefix + "/session/plan/commit"
-	// PathSessionScanReport streams the report of a scan, as JSON Lines,
-	// under the claim. The upload ends the claim.
-	PathSessionScanReport = Prefix + "/session/scan-report"
+	// PathSessionSweepReport streams the report of a sweep, as JSON Lines,
+	// under the claim, with the header HeaderContentSHA256. The upload ends
+	// the claim (runner.SweepClaimer.Report). Only the session key of the
+	// claim can upload it.
+	PathSessionSweepReport = Prefix + "/session/sweep-report"
 	// PathSessionFinish ends the phase with its outcome (Finish).
 	PathSessionFinish = Prefix + "/session/finish"
 )
@@ -102,6 +107,10 @@ const (
 	// sig=<signature base64url>", with single spaces.
 	HeaderProof = "Dustpan-Proof"
 	// HeaderContentSHA256 carries the hex SHA-256 of the body of an upload.
+	// The proof signs its value as the hash of the body
+	// (runner.Signed.BodySHA256). The server checks the proof first,
+	// streams the body, and then compares the hash
+	// (runner.CheckContentHash).
 	HeaderContentSHA256 = "Dustpan-Content-SHA256"
 	// HeaderCommit carries the commit of a source snapshot.
 	HeaderCommit = "Dustpan-Commit"
@@ -116,10 +125,40 @@ const (
 	// idle timeouts of common proxies and load balancers.
 	MaxPollWait = 50 * time.Second
 	// MaxBody is the largest JSON body of a request or an answer. The
-	// streams of a source, a plan part, a log chunk and a scan report have
+	// streams of a source, a plan part, a log chunk and a sweep report have
 	// their own limits.
 	MaxBody = 4 << 20
 )
+
+// Caps of the uploads of one session. A request above a cap fails with
+// ErrorInvalid and changes nothing.
+const (
+	// MaxLogChunksPerStep and MaxLogBytesPerStep bound the log of one step.
+	MaxLogChunksPerStep = 20_000
+	MaxLogBytesPerStep  = 256 << 20
+	// MaxLogChunksPerPhase and MaxLogBytesPerPhase bound the logs of all
+	// the steps of one phase or sweep.
+	MaxLogChunksPerPhase = 100_000
+	MaxLogBytesPerPhase  = 1 << 30
+	// MaxPlanParts bounds the parts of a plan that a session stages. The
+	// server deletes the staged parts of a session that ends with no
+	// commit.
+	MaxPlanParts = 8
+)
+
+// NoncePaths are the paths whose requests are not safe to repeat. The
+// server keeps the nonce of each proof on them until
+// runner.NonceExpiry, and refuses a second proof with the same nonce with
+// ErrorBadProof (runner.SessionStore.UseNonce).
+//
+//nolint:gochecknoglobals // A fixed list, read only.
+var NoncePaths = []string{PathRotate, PathPoll, PathClaimHandoff, PathSession}
+
+// NeedsNonce reports whether the server keeps the nonce of a proof on the
+// path pattern p, one of the Path constants.
+func NeedsNonce(p string) bool {
+	return slices.Contains(NoncePaths, p)
+}
 
 // Error is the body of every answer with a status of 400 or above.
 type Error struct {
@@ -147,6 +186,7 @@ const (
 	ErrorSourceNotReady     = "source-not-ready"    // 409 with Retry-After
 	ErrorPlanStale          = "plan-stale"          // 409: the phase failed
 	ErrorVersionUnsupported = "version-unsupported" // 426
+	ErrorVersionAhead       = "version-ahead"       // 426: retry with backoff
 	ErrorRateLimited        = "rate-limited"        // 429 with Retry-After
 	ErrorUnavailable        = "unavailable"         // 503 with Retry-After
 )
@@ -215,21 +255,23 @@ type PollRequest struct {
 	AssignmentVersion int `json:"assignmentVersion"`
 }
 
-// Work is one claimed phase or scan. It holds no secret.
+// Work is one claimed phase or sweep. It holds no secret.
 type Work struct {
 	Operation string    `json:"operation"`
 	Token     int64     `json:"token"`
 	ExpiresAt time.Time `json:"expiresAt"`
 	Lease     Duration  `json:"lease"`
-	// Job and Phase name a phase, Scan names a scan.
+	// Job and Phase name a phase, Sweep names a sweep.
 	Job   string `json:"job,omitempty"`
 	Phase int    `json:"phase,omitempty"`
-	Scan  string `json:"scan,omitempty"`
+	Sweep string `json:"sweep,omitempty"`
 	// Image is the image of the steps, from the settings of the unit or of
-	// the scan target, or empty for the default image of the runner.
+	// the sweep target, or empty for the default image of the runner.
 	Image string `json:"image,omitempty"`
-	// ServiceAccount is the Kubernetes service account of the unit or of
-	// the scan target, or empty for the default of the runner.
+	// ServiceAccount is the Kubernetes service account of the unit, or
+	// empty for the default of the coordinator. It is always empty for a
+	// sweep: the coordinator of a pool for sweeps uses its own read-only
+	// service account.
 	ServiceAccount string   `json:"serviceAccount,omitempty"`
 	Deadline       Duration `json:"deadline"`
 	Grace          Duration `json:"grace"`
@@ -249,6 +291,12 @@ type RenewResponse struct {
 	// SIGINT to the step, waits for its grace period, sends SIGKILL, and
 	// finishes the phase.
 	Canceled bool `json:"canceled,omitempty"`
+	// SessionOpen is true on a renewal by the runner of a claim whose
+	// launcher opened its job session. The claim is live, and the server
+	// did not renew it. The runner stops its renewals of the claim and
+	// leaves the Job or the sandbox alone. It is never the code
+	// ErrorClaimLost.
+	SessionOpen bool `json:"sessionOpen,omitempty"`
 }
 
 // ReleaseRequest gives back a claim. Reason is for people.
@@ -280,15 +328,15 @@ type SessionResponse struct {
 type Assignment struct {
 	Namespace string `json:"namespace"`
 	// Unit is the unit reference of a phase, as a string, or empty for a
-	// scan.
+	// sweep.
 	Unit  string `json:"unit,omitempty"`
 	Tool  string `json:"tool,omitempty"`
 	Job   string `json:"job,omitempty"`
 	Phase string `json:"phase,omitempty"`
-	Scan  string `json:"scan,omitempty"`
+	Sweep string `json:"sweep,omitempty"`
 	// ServerURL is the URL that a tool uses for its state.
 	ServerURL string `json:"serverURL"`
-	// Source names the snapshot of the code, or nil for a scan.
+	// Source names the snapshot of the code, or nil for a sweep.
 	Source *Source `json:"source,omitempty"`
 	Steps  []Step  `json:"steps"`
 	// Plan is the plan of an apply phase, with the hashes of its parts.
@@ -372,7 +420,7 @@ type CredentialsRequest struct {
 // the tool. It never puts a value in a variable.
 type CredentialsResponse struct {
 	// Token is the job token of the phase, for the state of the unit, or
-	// empty for a scan.
+	// empty for a sweep.
 	Token     string    `json:"token,omitempty"`
 	ExpiresAt time.Time `json:"expiresAt"`
 	// Files are the credential files of the profile, by their name in the
@@ -401,7 +449,9 @@ type StepEnd struct {
 	LogSHA256 string `json:"logSha256"`
 }
 
-// PlanCommit stores the staged parts as the plan.
+// PlanCommit stores the staged parts as the plan. A second commit with the
+// same parts and hashes under the same claim changes nothing and answers
+// 204. A commit with other parts after a commit fails with ErrorConflict.
 type PlanCommit struct {
 	Parts []PlanPart `json:"parts"`
 }

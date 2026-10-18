@@ -167,12 +167,31 @@ type Masker interface {
 	Close() error
 }
 
-// MemoryVolume is the port that checks the credentials directory before
+// MemoryVolume is the port that prepares the credentials directory before
 // the first step. On Linux, the adapter reads the type of the file system
 // with statfs.
 type MemoryVolume interface {
-	// Check returns an error when dir is not on tmpfs or ramfs, when it is
-	// not a directory with mode 0700, or when another user owns it. The
-	// launcher then ends with ExitSandbox.
-	Check(dir string) error
+	// Prepare checks that dir is on tmpfs or ramfs, and then creates in it
+	// a new directory with mode 0700 that the user of the launcher owns,
+	// and returns its path. The volume itself can have another owner and
+	// mode, for example an emptyDir of Kubernetes with the medium Memory.
+	// It returns an error when dir is not on tmpfs or ramfs, or when the
+	// new directory does not have the mode 0700 and the user of the
+	// launcher as its owner after its creation. The launcher then ends with
+	// ExitSandbox.
+	Prepare(dir string) (string, error)
+}
+
+// StepUser is the user and the group of the processes of the steps, when
+// the place lets the launcher run them as a user other than its own.
+type StepUser struct {
+	UID uint32
+	GID uint32
+}
+
+// Isolated reports whether the steps of u run as a user other than the
+// launcher user launcherUID. A zero StepUser runs the steps as the user of
+// the launcher.
+func (u StepUser) Isolated(launcherUID uint32) bool {
+	return u.UID != 0 && u.UID != launcherUID
 }

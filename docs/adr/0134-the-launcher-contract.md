@@ -1,6 +1,6 @@
 # 134. The launcher contract
 
-Status: proposed · 2026-10-18 · adds to ADR 101 decisions 7, 10 and 13
+Status: accepted · 2026-10-18 · adds to ADR 101 decisions 7, 10 and 13
 
 ## Context
 
@@ -23,8 +23,9 @@ The project owner decided on 17 October 2026 (owner):
   launcher. The Pulumi CLI gets them from a file of mode 0600 on a
   memory-backed volume, for the tool step only.
 
-The label "(owner)" names a decision of the owner. The other decisions are
-proposals of this design. The rules are in `pkg/launcher`.
+The project owner approved every decision of this ADR. The label "(owner)"
+names a decision that the text of the owner of 17 October 2026 states.
+The rules are in `pkg/launcher`.
 
 ## Decision
 
@@ -35,7 +36,7 @@ proposals of this design. The rules are in `pkg/launcher`.
    publishes it in an image of its own, `opendustpan/launcher:<release>`,
    and in the release archive of the machine runner.
 2. **Modes.** The launcher has four modes (`launcher.Parse`):
-   - `run`: run one claimed phase or scan.
+   - `run`: run one claimed phase or sweep.
    - `copy --dest <dir>`: copy the launcher binary to a directory and end.
      The init container of a Kubernetes Job uses it, so the image of the
      team needs no launcher.
@@ -44,7 +45,7 @@ proposals of this design. The rules are in `pkg/launcher`.
    - The git credential helper of the mode `forge`, when the base name of
      the program is `git-credential-dustpan`.
 3. **The command line of `run`.** `dustpan-launcher run --server <URL>
-   --handoff kubernetes|stdin|pipe`, and for `kubernetes` also
+   --handoff kubernetes|stdin|vsock|pipe`, and for `kubernetes` also
    `--coordinator <URL> --ca-file <file> --token-file <file>`. The flags
    `--work-dir` and `--secrets-dir` default to `/dustpan/work` and
    `/dustpan/secrets`. The server and the coordinator are `https` URLs with
@@ -52,16 +53,22 @@ proposals of this design. The rules are in `pkg/launcher`.
    value ends the launcher with the exit code 64. No flag carries a
    credential.
 4. **The order of a run.**
-   1. Check the place: the secrets directory is on `tmpfs` or `ramfs`, has
-      mode 0700 and belongs to the user of the launcher
-      (`launcher.MemoryVolume`). Else end with exit code 67.
-   2. Get the handoff token through the handoff, and open the job session
+   1. Set `PR_SET_DUMPABLE` to 0 (decision 11).
+   2. Prepare the place (`launcher.MemoryVolume.Prepare`): check that the
+      secrets directory is on `tmpfs` or `ramfs`, then create in it a new
+      directory with mode 0700 that the user of the launcher owns, and
+      check its mode and owner after the create. The volume itself can
+      belong to another user, for example an `emptyDir` of Kubernetes with
+      `medium: Memory`. The launcher writes credentials only in the new
+      directory. A failure ends with exit code 67.
+   3. Get the handoff token through the handoff, and open the job session
       (ADR 133). A failure ends with exit code 65, or 66 for a release that
       the server refuses.
-   3. Get the source snapshot, check it, and write the checkout (ADR 135).
-      A failure reports the phase failed and ends with exit code 68.
-   4. Run each step in order (decisions 5 to 9).
-   5. Upload the plan, if the phase has one, then finish the phase.
+   4. Get the source snapshot, check it, and write the checkout, with the
+      allowed submodules and Git LFS objects (ADR 135). A failure reports
+      the phase failed and ends with exit code 68.
+   5. Run each step in order (decisions 5 to 9).
+   6. Upload the plan, if the phase has one, then finish the phase.
 5. **A step is an argument list (owner).** The launcher starts `Args[0]`
    with `Args[1:]`, with no shell. `Args[0]` is a bare name that the
    launcher finds on the `PATH` of the image, or a clean absolute path.
@@ -76,7 +83,7 @@ proposals of this design. The rules are in `pkg/launcher`.
      `LANG=C.UTF-8`,
    - the variables of the launcher, which start with `DUSTPAN_`: the job
      ID, the phase, the step, the unit, the namespace, the commit, the
-     server URL, and for a scan the path of the report,
+     server URL, and for a sweep the path of the report,
    - the variables of the step from the spec,
    - for a step of the role `tool` only: the variables of the tool and of
      the credential files. Each holds a path or a URL, never a credential.
@@ -119,22 +126,28 @@ proposals of this design. The rules are in `pkg/launcher`.
    session in the log of every step, with `[masked]`, also across the end
    of a chunk (`launcher.Masker`). A value shorter than 4 bytes is not
    masked, because it would hide common text.
-9. **Timeouts and signals (owner).** At the timeout of a step or at a
-   cancel, the launcher sends `SIGINT` to the process group of the step.
+9. **Timeouts and signals (owner).** The launcher owns the deadline of
+   each step. At the timeout of a step or at a cancel, the launcher sends
+   `SIGINT` to the process group of the step.
    After the grace period, 10 minutes for a step that changes resources and
    10 seconds for any other step, it sends `SIGKILL` to the group. As the
    first process of a container, the launcher gets `SIGTERM` when
    Kubernetes or the runtime stops it. It then stops the step in the same
-   way. The limits of the launcher (`runner.LimitsFor`) are the sum of the
-   timeouts and the grace periods of the steps, plus 2 minutes to report.
-   The runner sets them as the deadline of the Job or the sandbox.
+   way. The runner sets a generous deadline on the Job or the sandbox, so
+   the platform stops a launcher that does not end
+   (`runner.LimitsFor`). The deadline is the sum of the timeouts and the
+   grace periods of the steps, plus 2 minutes to report, plus a fixed
+   allowance of 40 minutes for the time before the first step
+   (`runner.StartAllowance`): 30 minutes for the schedule, the image pull
+   and the session (`runner.MaxSessionWait`), and 10 minutes for the
+   source (`runner.SourceWait`).
 10. **Exit codes.** The launcher ends with one of these codes
     (`launcher.ExitCode`). The runner reads the code to decide what to do
     with the claim (`launcher.DispositionFor`):
 
     | Code | Meaning | The runner |
     | --- | --- | --- |
-    | 0 | The phase or scan ended, and the server has its outcome, also a failure. | deletes the Job or sandbox |
+    | 0 | The phase or sweep ended, and the server has its outcome, also a failure. | deletes the Job or sandbox |
     | 64 | The command line is not valid. | releases the claim |
     | 65 | No handoff token, or the exchange failed. No step started. | releases the claim |
     | 66 | The server refused the release of the launcher. | releases the claim |
@@ -149,6 +162,26 @@ proposals of this design. The rules are in `pkg/launcher`.
     fails the phase when a step that changes resources started (ADR 100
     decision 9). The codes stay below 126, so they never clash with the
     codes of a shell or of a signal.
+11. **The launcher process and the user of the steps.** At its start, the
+    launcher sets `PR_SET_DUMPABLE` to 0. So a process of a step with the
+    same user ID cannot attach to the launcher with `ptrace` or read its
+    memory through `/proc`, where the job token and the session key are.
+    Where the place allows it, each step runs as a user ID other than the
+    user of the launcher (`launcher.StepUser`): in a Firecracker microVM,
+    in a gVisor container, and in a pod whose security context gives the
+    launcher `CAP_SETUID` and `CAP_SETGID`. The default pod of ADR 136
+    drops all capabilities, so its steps run as the user of the launcher.
+
+    The risk that stays when the steps run as the user of the launcher:
+    - A step can read the credential files that its own step got, as any
+      tool can.
+    - A process that a tool step starts and leaves running can ask the
+      helper socket while that step runs.
+
+    The launcher ends the process group of each step before the next step
+    starts, deletes the directory of the step at its end, and answers on
+    the helper socket only during a step of the role `tool`. A hook step
+    after a tool step finds no credential.
 
 ## Consequences
 

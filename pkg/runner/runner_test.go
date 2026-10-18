@@ -28,11 +28,11 @@ func TestPoolValidate(t *testing.T) {
 		ok     bool
 	}{
 		{"valid", func(*runner.Pool) {}, true},
-		{"scans", func(p *runner.Pool) { p.Purpose = runner.PurposeScans }, true},
+		{"sweeps", func(p *runner.Pool) { p.Purpose = runner.PurposeSweeps }, true},
 		{"empty name", func(p *runner.Pool) { p.Name = "" }, false},
 		{"upper case name", func(p *runner.Pool) { p.Name = "Prod" }, false},
 		{"name ends with dash", func(p *runner.Pool) { p.Name = "prod-" }, false},
-		{"unknown purpose", func(p *runner.Pool) { p.Purpose = "sweeps" }, false},
+		{"unknown purpose", func(p *runner.Pool) { p.Purpose = "scans" }, false},
 		{"lease below minimum", func(p *runner.Pool) { p.Lease = 10 * time.Second }, false},
 		{"lease at minimum", func(p *runner.Pool) { p.Lease = runner.MinLease }, true},
 		{"lease above maximum", func(p *runner.Pool) { p.Lease = runner.MaxLease + time.Second }, false},
@@ -100,7 +100,7 @@ func TestCheckUpdatePurposeNeverChanges(t *testing.T) {
 		want   error
 	}{
 		{"lease", func(p *runner.Pool) { p.Lease = 2 * time.Minute }, nil},
-		{"purpose", func(p *runner.Pool) { p.Purpose = runner.PurposeScans }, runner.ErrImmutable},
+		{"purpose", func(p *runner.Pool) { p.Purpose = runner.PurposeSweeps }, runner.ErrImmutable},
 		{"namespace", func(p *runner.Pool) { p.Namespace = "other" }, runner.ErrImmutable},
 		{"id", func(p *runner.Pool) { p.ID = "rp-2" }, runner.ErrImmutable},
 		{"bad name", func(p *runner.Pool) { p.Name = "" }, runner.ErrInvalid},
@@ -130,7 +130,7 @@ func TestClaimKindsFollowThePurpose(t *testing.T) {
 		want    durable.Kind
 	}{
 		{runner.PurposeJobs, "job.runner.rp-1"},
-		{runner.PurposeScans, "unmanaged.scan.rp-1"},
+		{runner.PurposeSweeps, "unmanaged.sweep.rp-1"},
 	}
 
 	for _, tc := range cases {
@@ -156,7 +156,7 @@ func TestCheckJobPool(t *testing.T) {
 	t.Parallel()
 
 	jobs := pool(runner.PurposeJobs)
-	scans := pool(runner.PurposeScans)
+	sweeps := pool(runner.PurposeSweeps)
 
 	cases := []struct {
 		name string
@@ -166,7 +166,7 @@ func TestCheckJobPool(t *testing.T) {
 	}{
 		{"same namespace, jobs", &jobs, "acme", nil},
 		{"other namespace", &jobs, "other", runner.ErrInvalid},
-		{"scan pool", &scans, "acme", runner.ErrPurpose},
+		{"sweep pool", &sweeps, "acme", runner.ErrPurpose},
 	}
 
 	for _, tc := range cases {
@@ -176,8 +176,8 @@ func TestCheckJobPool(t *testing.T) {
 		}
 	}
 
-	if !scans.ReadOnly() || jobs.ReadOnly() {
-		t.Error("only a pool for scans is read-only")
+	if !sweeps.ReadOnly() || jobs.ReadOnly() {
+		t.Error("only a pool for sweeps is read-only")
 	}
 }
 
@@ -226,7 +226,7 @@ func TestIsolationFitsAndHandoff(t *testing.T) {
 	}{
 		{runner.IsolationKubernetes, runner.KindKubernetes, true, runner.HandoffKubernetes},
 		{runner.IsolationKubernetes, runner.KindMachine, false, runner.HandoffKubernetes},
-		{runner.IsolationFirecracker, runner.KindMachine, true, runner.HandoffStdin},
+		{runner.IsolationFirecracker, runner.KindMachine, true, runner.HandoffVsock},
 		{runner.IsolationGVisor, runner.KindMachine, true, runner.HandoffStdin},
 		{runner.IsolationGVisor, runner.KindKubernetes, false, runner.HandoffStdin},
 		{runner.IsolationProcess, runner.KindMachine, true, runner.HandoffPipe},
@@ -281,6 +281,36 @@ func TestRunnerStatus(t *testing.T) {
 
 		if got := r.StatusAt(now); got != tc.want {
 			t.Errorf("%s: StatusAt = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestCanRejoin(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name   string
+		change func(r *runner.Runner)
+		want   bool
+	}{
+		{"online", func(*runner.Runner) {}, false},
+		{"draining and online", func(r *runner.Runner) { r.Draining = true }, false},
+		{"offline", func(r *runner.Runner) { r.LastSeenAt = now.Add(-runner.OfflineAfter - time.Second) }, true},
+		{"must rejoin", func(r *runner.Runner) { r.Key.CreatedAt = now.Add(-runner.MaxKeyAge - time.Second) }, true},
+		{"retired", func(r *runner.Runner) {
+			r.RetiredAt = now
+			r.LastSeenAt = now.Add(-time.Hour)
+		}, false},
+	}
+
+	for _, tc := range cases {
+		r := member(now)
+		tc.change(&r)
+
+		if got := r.CanRejoin(now); got != tc.want {
+			t.Errorf("%s: CanRejoin = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

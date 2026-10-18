@@ -1,6 +1,6 @@
 # 135. The source pipeline: snapshots of git packs
 
-Status: proposed · 2026-10-18 · supersedes the "Source" item of RFC 6 · adds to ADR 100 decision 5
+Status: accepted · 2026-10-18 · supersedes the "Source" item of RFC 6 · adds to ADR 100 decision 5
 
 ## Context
 
@@ -20,8 +20,9 @@ The project owner decided on 17 October 2026 (owner):
   policy, and the server gets them.
 - Git gets custom credential helpers, with a mode "none".
 
-The label "(owner)" names a decision of the owner. The other decisions are
-proposals of this design. The ports are in `pkg/source`. This ADR uses
+The project owner approved every decision of this ADR. The label "(owner)"
+names a decision that the text of the owner of 17 October 2026 states.
+The ports are in `pkg/source`. This ADR uses
 the verb "get" for the work of the source fetcher.
 
 ## Decision
@@ -67,6 +68,15 @@ the verb "get" for the work of the source fetcher.
      no path leaves the work directory,
    - a symbolic link points inside the work directory.
 
+   For each allowed submodule, the launcher checks its pack in the same way,
+   and checks that its commit is the commit of the gitlink at its path in
+   the tree of the superproject that it checked before
+   (`source.Checkout.Submodule`, `source.CheckGitlink`). For each allowed
+   Git LFS object, it reads the object through its session, checks its
+   SHA-256 and its size against the pointer file in the checked tree, and
+   only then replaces the pointer file (`source.Checkout.LargeFiles`,
+   `source.CheckLargeFile`).
+
    A check that fails ends the launcher with exit code 68 before the first
    step. The launcher reads the pack format with its own code, from the
    standard library, with no go-git.
@@ -87,10 +97,27 @@ the verb "get" for the work of the source fetcher.
      holds the empty directory of the gitlink or the pointer file as it is.
 
    A URL pattern is an `https` URL of a repository with no user, port,
-   query or fragment. A `*` can be the whole last path part, and matches
-   one part (`source.URLPattern`). A policy has at most 64 patterns in each
+   query, fragment or `%`. A `*` can be the whole last path part, and
+   matches one part (`source.URLPattern`). A URL to match with a `%`, or
+   with a path part `.` or `..`, matches no pattern, so an encoded `/` or
+   `.` cannot pass a pattern. A policy has at most 64 patterns in each
    list. A change of the policy needs `namespace:manage-runners`, and makes
    a new snapshot key.
+
+   The server applies the policy with these rules:
+   - A relative URL in `.gitmodules`, which starts with `./` or `../`,
+     resolves against the URL of the superproject before the match, as
+     git resolves it (`source.ResolveURL`). The server refuses a relative
+     URL that leaves the host of the superproject.
+   - When the server gets a submodule or a Git LFS object, it follows no
+     redirect to another host.
+   - The server sends the credentials of the forge connection only to the
+     host of the connection (`source.SameHost`). It gets an allowed
+     submodule of another host with no credentials.
+   - The server gets Git LFS objects only from the standard Git LFS
+     endpoint of the repository on the forge, `<repository>.git/info/lfs`
+     (`source.LFSEndpoint`). It never reads `lfs.url` from a `.lfsconfig`
+     file of the commit.
 7. **Git credentials of a step (owner).** A tool that runs git during a
    step, for example to get an OpenTofu module from a git URL, gets the
    git credential mode of its pool (ADR 130 decision 11): `none`, `forge`

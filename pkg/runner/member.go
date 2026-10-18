@@ -8,16 +8,16 @@ import (
 )
 
 // Kind names how a runner starts the launcher of each claimed phase or
-// scan. Every runner is a coordinator: it claims work for its pool and
+// sweep. Every runner is a coordinator: it claims work for its pool and
 // starts a launcher in an isolated place. It never runs a step itself.
 type Kind string
 
 // The kinds of runner.
 const (
 	// KindKubernetes creates one Kubernetes Job for each claimed phase or
-	// scan, with backoffLimit 0.
+	// sweep, with backoffLimit 0.
 	KindKubernetes Kind = "kubernetes"
-	// KindMachine starts one sandbox for each claimed phase or scan on its
+	// KindMachine starts one sandbox for each claimed phase or sweep on its
 	// own host.
 	KindMachine Kind = "machine"
 )
@@ -86,9 +86,15 @@ const (
 	// and answers the handoff token once.
 	HandoffKubernetes Handoff = "kubernetes"
 	// HandoffStdin: the coordinator writes the handoff token to the
-	// standard input of the launcher, and closes it. A container runtime
-	// and a microVM console use it.
+	// standard input of the launcher, and closes it. A gVisor container
+	// uses it.
 	HandoffStdin Handoff = "stdin"
+	// HandoffVsock: the coordinator writes the handoff token to a vsock
+	// connection to the launcher in a Firecracker microVM, and closes it.
+	// The serial console never carries the token. A console that the
+	// microVM has is raw, with no echo, and the coordinator never logs
+	// what it reads from it.
+	HandoffVsock Handoff = "vsock"
 	// HandoffPipe: the coordinator writes the handoff token to a pipe that
 	// the launcher inherits as file descriptor 3. The launcher reads it
 	// once and closes it.
@@ -101,7 +107,9 @@ func HandoffFor(k Isolation) (Handoff, error) {
 	switch k {
 	case IsolationKubernetes:
 		return HandoffKubernetes, nil
-	case IsolationFirecracker, IsolationGVisor:
+	case IsolationFirecracker:
+		return HandoffVsock, nil
+	case IsolationGVisor:
 		return HandoffStdin, nil
 	case IsolationProcess:
 		return HandoffPipe, nil
@@ -161,6 +169,13 @@ type Runner struct {
 	// in one write: the runner keeps its old key until a request with the
 	// new key succeeds.
 	Key Key
+	// PreviousKey is the key before the last rotation, and RotatedAt the
+	// time of that rotation. The server accepts PreviousKey for the
+	// rotation request only, for RotateGrace after RotatedAt, so a runner
+	// that lost the answer of its rotation can send it again
+	// (Runner.ProofKeys).
+	PreviousKey Key
+	RotatedAt   time.Time
 	// JoinedWith is the ID of the join token of the last join.
 	JoinedWith string
 	Draining   bool
@@ -183,6 +198,41 @@ func (r *Runner) StatusAt(now time.Time) Status {
 	default:
 		return StatusOnline
 	}
+}
+
+// CanRejoin reports whether a join with the name of r may replace its key
+// at now: r is offline, or its key is expired. A join with the name of an
+// online or draining runner that still sends heartbeats fails with
+// ErrRunnerOnline, so a leaked join token cannot take the name of a
+// working runner. A retired runner never rejoins: a join with its name
+// makes a new runner.
+func (r *Runner) CanRejoin(now time.Time) bool {
+	return r.RetiredAt.IsZero() && (r.Key.ExpiredAt(now) || now.Sub(r.LastSeenAt) > OfflineAfter)
+}
+
+// ProofKeys returns the keys whose proof the server accepts for a request
+// of r at now, other than a rotation: the current key while it is not
+// expired. A retired runner has no key.
+func (r *Runner) ProofKeys(now time.Time) []Key {
+	if !r.RetiredAt.IsZero() || r.Key.ExpiredAt(now) {
+		return nil
+	}
+
+	return []Key{r.Key}
+}
+
+// RotationKeys returns the keys whose proof the server accepts for a
+// rotation request of r at now: the keys of ProofKeys, and the previous key
+// for RotateGrace after the rotation.
+func (r *Runner) RotationKeys(now time.Time) []Key {
+	keys := r.ProofKeys(now)
+
+	if r.RetiredAt.IsZero() && len(r.PreviousKey.Public) != 0 && !r.RotatedAt.IsZero() &&
+		now.Sub(r.RotatedAt) <= RotateGrace {
+		keys = append(keys, r.PreviousKey)
+	}
+
+	return keys
 }
 
 // JoinRequest is what a runner sends with a join token.

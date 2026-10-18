@@ -89,6 +89,11 @@ const (
 	// RotateKeyAfter and MaxKeyAge let a runner that was offline for a
 	// short time rotate.
 	MaxKeyAge = 30 * 24 * time.Hour
+	// RotateGrace is the time after a rotation during which the server
+	// still accepts the previous key, for the rotation request only. A
+	// runner that lost the answer of its rotation sends it again with the
+	// old key, and the server answers as for the first request.
+	RotateGrace = 5 * time.Minute
 )
 
 // Key is a public key of a runner or of a launcher.
@@ -126,7 +131,7 @@ func (k Key) RotationDue(now time.Time) bool {
 	return now.Sub(k.CreatedAt) > RotateKeyAfter
 }
 
-// Handoff tokens and job sessions. At the claim of a phase or a scan, the
+// Handoff tokens and job sessions. At the claim of a phase or a sweep, the
 // coordinator asks the server for one handoff token for the claim. It gives
 // the token to the launcher through its Handoff. The launcher exchanges it
 // once for a job session bound to a key that the launcher makes in memory.
@@ -144,7 +149,7 @@ const (
 // claim is live.
 type HandoffToken struct {
 	SHA256 string
-	// Operation and Token name the durable claim of the phase or the scan.
+	// Operation and Token name the durable claim of the phase or the sweep.
 	Operation string
 	Token     int64
 	// Runner is the ID of the runner that asked for the token.
@@ -183,18 +188,31 @@ type Session struct {
 // Proofs of possession. A request of a runner or of a launcher carries the
 // ID of its runner or session, the time, a random nonce and an Ed25519
 // signature of ProofInput. The proof covers the hash of the body, so a
-// replay can only send the same request again. Every request of the
-// protocol is safe to repeat: a log chunk has a sequence number, a
-// heartbeat and a renewal change nothing twice, and a step begin or end of
-// a claim records once.
+// replay can only send the same request again. The server keeps the nonce
+// of each proof on the paths that are not safe to repeat (the handoff, the
+// poll, the session exchange and the rotation) until NonceExpiry, and
+// refuses a second proof with the same nonce with ErrReplay. Every other
+// request of the protocol is safe to repeat: a log chunk has a sequence
+// number, a heartbeat and a renewal change nothing twice, and a step begin
+// or end of a claim records once.
 const (
 	// ProofWindow is the largest difference between the time of a proof
 	// and the clock of the server.
 	ProofWindow = time.Minute
+	// NonceTTL is the time after the time of a proof for which the server
+	// keeps its nonce. After it, CheckProof refuses the proof, so the
+	// server needs the nonce no longer.
+	NonceTTL = ProofWindow
 	// proofContext starts the signed text, so that a signature of another
 	// protocol never counts as a proof.
 	proofContext = "opendustpan-runner-proof-v1"
 )
+
+// NonceExpiry returns the time until which the server keeps the nonce of
+// p: the time of the proof plus NonceTTL.
+func NonceExpiry(p Proof) time.Time {
+	return p.At.Add(NonceTTL)
+}
 
 // Proof is the proof of possession of one request.
 type Proof struct {
@@ -212,8 +230,23 @@ type Signed struct {
 	// PathQuery is the path of the request with its query, as sent.
 	PathQuery string
 	// BodySHA256 is the SHA-256 of the body. An empty body has the hash of
-	// no bytes.
+	// no bytes. For a streamed upload (a log chunk, a plan part or a sweep
+	// report), it is the value of the header Dustpan-Content-SHA256. The
+	// server checks the proof with that value before it reads the body,
+	// streams the body to the blob store, and then compares the hash of
+	// what it got with the signed value (CheckContentHash).
 	BodySHA256 []byte
+}
+
+// CheckContentHash compares the signed hash of a streamed upload with the
+// SHA-256 of the body that the server got. It returns ErrBadProof when
+// they differ. The server then deletes what it wrote.
+func CheckContentHash(signed, got []byte) error {
+	if len(signed) != sha256.Size || !bytes.Equal(signed, got) {
+		return fmt.Errorf("%w: the body does not have the signed hash", ErrBadProof)
+	}
+
+	return nil
 }
 
 // ProofInput returns the text that a proof signs: the context, the

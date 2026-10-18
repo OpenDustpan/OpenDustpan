@@ -29,13 +29,16 @@ func TestLimitsFor(t *testing.T) {
 	}{
 		{
 			"no step", nil,
-			runner.Limits{Deadline: runner.ReportTime, Grace: runner.GraceOther + runner.ReportTime},
+			runner.Limits{
+				Deadline: runner.StartAllowance + runner.ReportTime,
+				Grace:    runner.GraceOther + runner.ReportTime,
+			},
 		},
 		{
 			"default timeout, no change",
 			[]job.Step{step("init", 0, false)},
 			runner.Limits{
-				Deadline: time.Hour + runner.GraceOther + runner.ReportTime,
+				Deadline: runner.StartAllowance + time.Hour + runner.GraceOther + runner.ReportTime,
 				Grace:    runner.GraceOther + runner.ReportTime,
 			},
 		},
@@ -43,8 +46,9 @@ func TestLimitsFor(t *testing.T) {
 			"a change",
 			[]job.Step{step("init", time.Minute, false), step("apply", 2*time.Hour, true)},
 			runner.Limits{
-				Deadline: time.Minute + runner.GraceOther + 2*time.Hour + runner.GraceChanges + runner.ReportTime,
-				Grace:    runner.GraceChanges + runner.ReportTime,
+				Deadline: runner.StartAllowance + time.Minute + runner.GraceOther + 2*time.Hour + runner.GraceChanges +
+					runner.ReportTime,
+				Grace: runner.GraceChanges + runner.ReportTime,
 			},
 		},
 	}
@@ -139,9 +143,18 @@ func TestEveryEventHasAnAuditRule(t *testing.T) {
 	t.Parallel()
 
 	events := []runner.Event{
-		runner.EventPoolCreated, runner.EventPoolChanged, runner.EventPoolDeleted, runner.EventJoinTokenCreated,
-		runner.EventJoinTokenRevoked, runner.EventRunnerJoined, runner.EventKeyRotated, runner.EventRunnerDrained,
-		runner.EventRunnerRetired, runner.EventCredentialsIssued, runner.EventHandoffRefused,
+		runner.EventPoolCreated,
+		runner.EventPoolChanged,
+		runner.EventPoolDeleted,
+		runner.EventJoinTokenCreated,
+		runner.EventJoinTokenRevoked,
+		runner.EventRunnerJoined,
+		runner.EventRunnerRejoined,
+		runner.EventKeyRotated,
+		runner.EventRunnerDrained,
+		runner.EventRunnerRetired,
+		runner.EventCredentialsIssued,
+		runner.EventHandoffRefused,
 	}
 	rules := runner.AuditRules()
 
@@ -158,5 +171,73 @@ func TestEveryEventHasAnAuditRule(t *testing.T) {
 
 	if rules[runner.EventCredentialsIssued].Kind != audit.KindReveal {
 		t.Error("the hand of credentials to a session is a reveal")
+	}
+}
+
+func TestServiceAccountFor(t *testing.T) {
+	t.Parallel()
+
+	sa := runner.ServiceAccounts{
+		Own: "dustpan-coordinator", Sweep: "dustpan-sweep-readonly", Default: "units",
+		Allowed: []string{"units", "network", "dustpan-coordinator"},
+	}
+
+	cases := []struct {
+		name    string
+		purpose runner.Purpose
+		account string
+		want    string
+		ok      bool
+	}{
+		{"job with the default", runner.PurposeJobs, "", "units", true},
+		{"job with an allowed account", runner.PurposeJobs, "network", "network", true},
+		{"job with an account that is not allowed", runner.PurposeJobs, "cluster-admin", "", false},
+		{"job as the coordinator, also when listed", runner.PurposeJobs, "dustpan-coordinator", "", false},
+		{"sweep takes the read-only account", runner.PurposeSweeps, "", "dustpan-sweep-readonly", true},
+		{"sweep that names an account", runner.PurposeSweeps, "network", "", false},
+		{"unknown purpose", "scans", "", "", false},
+	}
+
+	for _, tc := range cases {
+		got, err := runner.ServiceAccountFor(tc.purpose, new(work(tc.account)), &sa)
+		if tc.ok != (err == nil) || got != tc.want || (err != nil && !errors.Is(err, runner.ErrInvalid)) {
+			t.Errorf("%s: ServiceAccountFor = %q, %v, want %q ok %v", tc.name, got, err, tc.want, tc.ok)
+		}
+	}
+
+	own := sa
+	own.Sweep = own.Own
+
+	_, err := runner.ServiceAccountFor(runner.PurposeSweeps, new(work("")), &own)
+	if !errors.Is(err, runner.ErrInvalid) {
+		t.Errorf("ServiceAccountFor a sweep as the coordinator = %v, want ErrInvalid", err)
+	}
+}
+
+func TestCheckRunnerRenew(t *testing.T) {
+	t.Parallel()
+
+	claimed := time.Date(2026, time.October, 17, 12, 0, 0, 0, time.UTC)
+
+	if err := runner.CheckRunnerRenew(claimed, false, claimed.Add(runner.MaxSessionWait)); err != nil {
+		t.Errorf("CheckRunnerRenew at the wait limit = %v, want nil", err)
+	}
+
+	err := runner.CheckRunnerRenew(claimed, true, claimed.Add(time.Minute))
+	if !errors.Is(err, runner.ErrSessionOpen) || errors.Is(err, runner.ErrClaimLost) {
+		t.Errorf("CheckRunnerRenew with a session = %v, want ErrSessionOpen and not ErrClaimLost", err)
+	}
+
+	err = runner.CheckRunnerRenew(claimed, false, claimed.Add(runner.MaxSessionWait+time.Second))
+	if !errors.Is(err, runner.ErrClaimLost) {
+		t.Errorf("CheckRunnerRenew after the wait limit = %v, want ErrClaimLost", err)
+	}
+}
+
+// work returns the work of a phase with the service account sa.
+func work(sa string) runner.Work {
+	return runner.Work{
+		Operation: "op-1", Token: 1, ExpiresAt: time.Time{}, Lease: runner.DefaultLease, Job: "", Phase: 0, Sweep: "",
+		Image: "", ServiceAccount: sa, Deadline: 0, Grace: 0,
 	}
 }

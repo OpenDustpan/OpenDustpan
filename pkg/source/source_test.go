@@ -1,6 +1,8 @@
 package source_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -141,6 +143,13 @@ func TestURLPattern(t *testing.T) {
 		},
 		{"git@git.example.com:platform/modules", "git@git.example.com:platform/modules", false, false},
 		{"https://git.example.com//modules", "https://git.example.com//modules", false, false},
+		{"https://git.example.com/platform%2Fmodules", "https://git.example.com/platform%2Fmodules", false, false},
+		{"https://git.example.com/platform/*", "https://git.example.com/platform/a%2Fb", true, false},
+		{"https://git.example.com/platform/*", "https://git.example.com/platform/%2e%2e", true, false},
+		{"https://git.example.com/platform/modules", "https://git.example.com/platform/modul%65s", true, false},
+		{"https://git.example.com/platform/*", "https://git.example.com/platform/./network", true, false},
+		{"https://git.example.com/platform/*", "https://git.example.com/a/../platform/network", true, false},
+		{"https://git.example.com/platform/../modules", "https://git.example.com/modules", false, false},
 	}
 
 	for _, tc := range cases {
@@ -230,5 +239,118 @@ func TestParsePointer(t *testing.T) {
 		if ok != tc.ok || (ok && (f.OID != oid || f.Size != tc.size)) {
 			t.Errorf("%s: ParsePointer = %+v, %v, want ok %v", tc.name, f, ok, tc.ok)
 		}
+	}
+}
+
+func TestResolveURL(t *testing.T) {
+	t.Parallel()
+
+	base := "https://git.example.com/acme/infra.git"
+
+	cases := []struct {
+		ref  string
+		want string
+		ok   bool
+	}{
+		{"../modules", "https://git.example.com/acme/modules", true},
+		{"../../platform/vpc", "https://git.example.com/platform/vpc", true},
+		{"./sub", "https://git.example.com/acme/infra.git/sub", true},
+		{"https://other.example.com/a/b", "https://other.example.com/a/b", true},
+		{"../../../escape", "", false},
+		{"../a/../../b", "", false},
+		{"../a%2F..%2Fb", "", false},
+		{"../", "", false},
+		{"git@git.example.com:acme/modules", "", false},
+		{"http://git.example.com/acme/modules", "", false},
+		{"/srv/git/modules", "", false},
+	}
+
+	for _, tc := range cases {
+		got, err := source.ResolveURL(base, tc.ref)
+		if tc.ok != (err == nil) || got != tc.want || (err != nil && !errors.Is(err, source.ErrNotAllowed)) {
+			t.Errorf("ResolveURL(%q) = %q, %v, want %q ok %v", tc.ref, got, err, tc.want, tc.ok)
+		}
+	}
+
+	p := source.Policy{
+		Submodules: []source.URLPattern{"https://git.example.com/acme/*"}, LargeFiles: nil, FailOnDenied: true,
+	}
+
+	resolved, err := source.ResolveURL(base, "../modules")
+	if err != nil || !p.AllowsSubmodule(resolved) {
+		t.Errorf("the policy does not allow the resolved URL %q, %v", resolved, err)
+	}
+
+	if p.AllowsSubmodule("../modules") {
+		t.Error("the policy matches a relative URL that is not resolved")
+	}
+}
+
+func TestSameHostAndLFSEndpoint(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		a, b string
+		same bool
+	}{
+		{"https://git.example.com/acme/infra", "https://GIT.example.com/platform/vpc", true},
+		{"https://git.example.com/acme/infra", "https://evil.example.com/acme/infra", false},
+		{"https://git.example.com/acme/infra", "https://git.example.com.evil.test/acme/infra", false},
+		{"https://git.example.com/acme/infra", "https://user@git.example.com/acme/infra", false},
+		{"https://git.example.com/acme/infra", "http://git.example.com/acme/infra", false},
+	}
+
+	for _, tc := range cases {
+		if got := source.SameHost(tc.a, tc.b); got != tc.same {
+			t.Errorf("SameHost(%s, %s) = %v, want %v", tc.a, tc.b, got, tc.same)
+		}
+	}
+
+	for in, want := range map[string]string{
+		"https://git.example.com/acme/infra":     "https://git.example.com/acme/infra.git/info/lfs",
+		"https://git.example.com/acme/infra.git": "https://git.example.com/acme/infra.git/info/lfs",
+	} {
+		if got, err := source.LFSEndpoint(in); err != nil || got != want {
+			t.Errorf("LFSEndpoint(%s) = %s, %v, want %s", in, got, err, want)
+		}
+	}
+
+	if _, err := source.LFSEndpoint("https://git.example.com"); !errors.Is(err, source.ErrNotAllowed) {
+		t.Errorf("LFSEndpoint of a URL with no path = %v, want ErrNotAllowed", err)
+	}
+}
+
+func TestCheckLargeFileAndGitlink(t *testing.T) {
+	t.Parallel()
+
+	content := "binary content"
+	sum := sha256.Sum256([]byte(content))
+	want := source.LargeFile{OID: hex.EncodeToString(sum[:]), Size: int64(len(content))}
+
+	if err := source.CheckLargeFile(want, strings.NewReader(content)); err != nil {
+		t.Fatalf("CheckLargeFile: %v", err)
+	}
+
+	for name, r := range map[string]string{"other content": "binary c0ntent", "longer": content + "x", "shorter": "b"} {
+		if err := source.CheckLargeFile(want, strings.NewReader(r)); !errors.Is(err, source.ErrCorrupt) {
+			t.Errorf("%s: CheckLargeFile = %v, want ErrCorrupt", name, err)
+		}
+	}
+
+	big := source.LargeFile{OID: want.OID, Size: source.MaxLargeFile + 1}
+	if err := source.CheckLargeFile(big, strings.NewReader("")); !errors.Is(err, source.ErrTooLarge) {
+		t.Errorf("CheckLargeFile above the limit = %v, want ErrTooLarge", err)
+	}
+
+	sub := source.Submodule{
+		Path: "modules/vpc", URL: "https://git.example.com/platform/vpc", Commit: commit1,
+		PackSHA256: "", PackSize: 0,
+	}
+	if err := source.CheckGitlink(&sub, commit1); err != nil {
+		t.Errorf("CheckGitlink of the pinned commit: %v", err)
+	}
+
+	if err := source.CheckGitlink(&sub, strings.Repeat("f", 40)); !errors.Is(err, source.ErrCorrupt) {
+		t.Errorf("CheckGitlink of another commit = %v, want ErrCorrupt", err)
 	}
 }

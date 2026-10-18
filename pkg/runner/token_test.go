@@ -126,6 +126,30 @@ func TestKeyRotationAndExpiry(t *testing.T) {
 	}
 }
 
+func TestCheckContentHash(t *testing.T) {
+	t.Parallel()
+
+	sum := sha256.Sum256([]byte("chunk"))
+	other := sha256.Sum256([]byte("other"))
+
+	if err := runner.CheckContentHash(sum[:], sum[:]); err != nil {
+		t.Errorf("CheckContentHash of the signed hash = %v", err)
+	}
+
+	if err := runner.CheckContentHash(sum[:], other[:]); !errors.Is(err, runner.ErrBadProof) {
+		t.Errorf("CheckContentHash of another body = %v, want ErrBadProof", err)
+	}
+
+	if err := runner.CheckContentHash(nil, nil); !errors.Is(err, runner.ErrBadProof) {
+		t.Errorf("CheckContentHash with no signed hash = %v, want ErrBadProof", err)
+	}
+
+	p := runner.Proof{Subject: "rn-1", At: time.Unix(1_700_000_000, 0), Nonce: "", Signature: nil}
+	if got := runner.NonceExpiry(p); !got.Equal(p.At.Add(runner.ProofWindow)) {
+		t.Errorf("NonceExpiry = %v, want the time of the proof plus the proof window", got)
+	}
+}
+
 func TestCheckProof(t *testing.T) {
 	t.Parallel()
 

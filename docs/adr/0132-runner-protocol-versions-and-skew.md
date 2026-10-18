@@ -1,6 +1,6 @@
 # 132. Versions of the runner protocol and the skew between releases
 
-Status: proposed · 2026-10-18
+Status: accepted · 2026-10-18
 
 ## Context
 
@@ -24,16 +24,26 @@ its own rules.
    both, and the server checks each.
 2. **The skew rule (owner).** A server of release `X.Y.Z` accepts a runner
    or a launcher of release `X.Y.*`, `X.(Y-1).*` and `X.(Y-2).*`
-   (`runner.CheckSkew`). A patch release never counts. The server refuses:
-   - a client that is newer than the server,
+   (`runner.CheckSkew`). A patch release never counts. The server accepts a
+   pre-release tag, for example `0.15.0-rc.1`, and counts it as its base
+   version `0.15.0` (`runner.ParseRelease`). The server refuses:
    - a client more than two minor releases older,
-   - a client of another major release.
+   - a client of an older major release.
 
    The refusal is the code `version-unsupported` with the status 426. Its
    body names the range that the server accepts, so the console and the
    runner log show the release to install.
-3. **A server updates first.** A runner newer than its server is refused.
-   So the order of an update is: the server, then the runners. The rolling
+
+   A client that is newer than the server, of a newer minor or major
+   release, gets the code `version-ahead` with the status 426
+   (`runner.ErrVersionAhead`). The client does not stop: it retries with
+   exponential backoff from 1 second to 5 minutes, with jitter. A rolling
+   deploy of the server, or a rollback of the server after a runner
+   update, causes this answer, and it ends when the server catches up. The
+   runner log and the heartbeat of the console show the two releases.
+3. **A server updates first.** A runner newer than its server gets no
+   work until the server catches up. So the order of an update is: the
+   server, then the runners. The rolling
    deploy of the server keeps R-2 to R on one schema. The runner skew uses
    the same number, so a runner of R-2 works with every instance of a
    rolling deploy.
@@ -49,11 +59,11 @@ its own rules.
    a field that it does not know. A change that an old runner cannot read
    in this way needs `/runner/v2`, and the server then serves both paths
    for at least two minor releases.
-6. **The assignment has a version.** The work of a phase or of a scan is
+6. **The assignment has a version.** The work of a phase or of a sweep is
    the **assignment**: the steps, the source, the plan and the settings
    that the launcher reads. Its shape has a version
    (`runner.AssignmentVersion`). The server stores the version that it
-   wrote as the version of the durable operation of the phase or scan. A
+   wrote as the version of the durable operation of the phase or sweep. A
    runner sends the highest version that its launcher reads, and the claim
    never takes an operation above it (`durable.ClaimRequest.MaxVersions`).
    So a phase with a new field that an old launcher cannot honor waits for

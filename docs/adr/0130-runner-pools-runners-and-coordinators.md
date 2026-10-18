@@ -1,6 +1,6 @@
 # 130. Runner pools, runners and coordinators
 
-Status: proposed · 2026-10-18 · adds to ADR 101 decisions 12 and 14
+Status: accepted · 2026-10-18 · adds to ADR 101 decisions 12 and 14
 
 ## Context
 
@@ -11,7 +11,7 @@ pools, runners and the places where steps run to the runner design.
 
 ADR 164 (a draft on another branch)
 asks that a pool get a purpose that cannot change after its creation, and
-that a pool for scans carry a read-only identity.
+that a pool for sweeps carry a read-only identity.
 
 The project owner decided on 17 October 2026:
 
@@ -29,8 +29,9 @@ The project owner decided on 17 October 2026:
 - Pools belong to a namespace. A pool has a fixed purpose: jobs or
   sweeps. A pool for sweeps carries a read-only identity.
 
-The label "(owner)" names a decision of the owner. The other decisions are
-proposals of this design. The ports are in `pkg/runner`.
+The project owner approved every decision of this ADR. The label "(owner)"
+names a decision that the text of the owner of 17 October 2026 states.
+The ports are in `pkg/runner`.
 
 ## Decision
 
@@ -55,27 +56,32 @@ proposals of this design. The ports are in `pkg/runner`.
    list `process` by name to allow it, and the console shows a warning on
    such a pool.
 3. **A pool has a purpose that never changes (owner).** The purpose is
-   `jobs` or `scans` (`runner.Purpose`). The server takes the durable kinds
+   `jobs` or `sweeps` (`runner.Purpose`). The server takes the durable kinds
    that a runner claims from the pool of the runner, never from the runner
    (`runner.ClaimKinds`):
    - A runner of a pool for jobs claims only `job.runner.<pool ID>`.
-   - A runner of a pool for scans claims only `unmanaged.scan.<pool ID>`.
+   - A runner of a pool for sweeps claims only `unmanaged.sweep.<pool ID>`.
 
    A change of the purpose fails with `runner.ErrImmutable`
    (`runner.CheckUpdate`). A team that wants the other purpose creates a
-   second pool. A runner job that names a pool for scans fails at start
+   second pool. A runner job that names a pool for sweeps fails at start
    with `runner.ErrPurpose` (`runner.CheckJobPool`). This adds to ADR 101
    decision 14.
-4. **The word.** The owner's text says "sweeps". The glossary already has
-   the **retention sweep** for the purge of deleted units, and ADR 163
-   (draft) uses **scan** for the work that finds unmanaged resources. This
-   ADR uses `scans` as the value of the purpose, so one word names one
-   concept. The console labels the purpose "Scans".
-5. **A pool for scans is read-only (owner).** A pool for scans carries a
+4. **The word (owner).** The owner's text says "sweeps", and this design
+   uses that word for the work that finds unmanaged resources:
+   - the purpose value in the API is `sweeps`,
+   - the durable kind of a sweep starts with `unmanaged.sweep.`,
+   - the launcher gives the path of the report in `DUSTPAN_SWEEP_REPORT`,
+   - the console labels the purpose "Sweeps".
+
+   The glossary already has the **retention sweep** for the purge of
+   deleted units. The glossary entry of the new term tells the two apart
+   (see the pull request).
+5. **A pool for sweeps is read-only (owner).** A pool for sweeps carries a
    read-only identity: the workload identity of its hosts, or the read-only
    entry of a profile (ADR 164 decision 4). `Pool.ReadOnly` is true for
    such a pool. The server cannot check the role of a host. The console and
-   the guide say so on each pool for scans, and give the read-only role of
+   the guide say so on each pool for sweeps, and give the read-only role of
    each cloud.
 6. **One claim at a time by default (owner).** A pool has a concurrency
    from 1 to 64 (`Pool.Concurrency`). The default is 1. Each runner of the
@@ -103,7 +109,7 @@ proposals of this design. The ports are in `pkg/runner`.
    - `retired`: an administrator retired the runner. Its key authenticates
      nothing, and the record stays for the audit log.
 10. **A delete of a pool in use fails.** A delete of a pool fails with
-    `runner.ErrPoolInUse` while a job that is not terminal or a scan target
+    `runner.ErrPoolInUse` while a job that is not terminal or a sweep target
     names it. A delete of a pool also deletes its runners and its join
     tokens.
 11. **Git credentials of a step.** A pool sets what a step gets when its
@@ -119,7 +125,10 @@ proposals of this design. The ports are in `pkg/runner`.
       form.
 12. **Ports.** `runner.PoolStore` holds pools and join tokens,
     `runner.MemberStore` holds runners and their keys, and
-    `runner.SessionStore` holds handoff tokens and job sessions. The suite
+    `runner.SessionStore` holds handoff tokens, job sessions and the nonces
+    of proofs (ADR 133). `runner.SweepClaimer` claims, renews and releases
+    the sweeps of a pool for sweeps, and the upload of the report ends the
+    claim (ADR 131). The suite
     `pkg/runner/runnertest` states their behavior. A reference adapter in
     memory, in the tests of that package, runs each case today. Pools,
     runners and join tokens are namespace data. Each write carries the
@@ -133,13 +142,13 @@ proposals of this design. The ports are in `pkg/runner`.
   the coordinator or with another claim.
 - A takeover of a claim starts a new Job or a new sandbox. Kubernetes and
   the sandbox never start a launcher of one claim twice.
-- A team that wants scans and jobs on one cluster runs two pools, each with
+- A team that wants sweeps and jobs on one cluster runs two pools, each with
   its own service accounts. The purpose cannot drift.
 - The console needs a pool page with its runners, their status and the
   command to join again (ADR 133).
-- `GLOSSARY.md` needs the terms Coordinator, Isolation, Pool purpose, Join
-  token, Runner key, Handoff token, Job session, Handoff, Source snapshot
-  and Source policy (see the pull request).
+- `GLOSSARY.md` needs the terms Coordinator, Isolation, Pool purpose,
+  Sweep, Join token, Runner key, Handoff token, Job session, Handoff, Source
+  snapshot and Source policy (see the pull request).
 
 ## Open questions
 

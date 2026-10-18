@@ -31,10 +31,22 @@ func newKey(t *testing.T, at time.Time) (runner.Key, ed25519.PrivateKey) {
 // created at now.
 func member(now time.Time) runner.Runner {
 	return runner.Runner{
-		ID: "rn-1", Pool: "rp-1", Namespace: "acme", Name: "cluster-a", Kind: runner.KindKubernetes,
-		Isolation: runner.IsolationKubernetes, Labels: nil, Release: runner.Release{Major: 0, Minor: 14, Patch: 0},
-		Key:        runner.Key{Public: make([]byte, ed25519.PublicKeySize), CreatedAt: now},
-		JoinedWith: "rjt-1", Draining: false, RetiredAt: time.Time{}, LastSeenAt: now, JoinedAt: now,
+		ID:          "rn-1",
+		Pool:        "rp-1",
+		Namespace:   "acme",
+		Name:        "cluster-a",
+		Kind:        runner.KindKubernetes,
+		Isolation:   runner.IsolationKubernetes,
+		Labels:      nil,
+		Release:     runner.Release{Major: 0, Minor: 14, Patch: 0, Pre: ""},
+		Key:         runner.Key{Public: make([]byte, ed25519.PublicKeySize), CreatedAt: now},
+		PreviousKey: runner.Key{Public: nil, CreatedAt: time.Time{}},
+		RotatedAt:   time.Time{},
+		JoinedWith:  "rjt-1",
+		Draining:    false,
+		RetiredAt:   time.Time{},
+		LastSeenAt:  now,
+		JoinedAt:    now,
 	}
 }
 
@@ -47,6 +59,6 @@ func joinRequest(t *testing.T) runner.JoinRequest {
 	return runner.JoinRequest{
 		Token: runner.JoinTokenPrefix + "secret", Name: "cluster-a", Kind: runner.KindKubernetes,
 		Isolation: runner.IsolationKubernetes, Labels: map[string]string{"region": "eu-west-1"},
-		Release: runner.Release{Major: 0, Minor: 14, Patch: 0}, Key: k, Proof: nil,
+		Release: runner.Release{Major: 0, Minor: 14, Patch: 0, Pre: ""}, Key: k, Proof: nil,
 	}
 }

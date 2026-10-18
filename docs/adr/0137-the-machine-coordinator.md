@@ -1,6 +1,6 @@
 # 137. The machine coordinator
 
-Status: proposed · 2026-10-18
+Status: accepted · 2026-10-18
 
 ## Context
 
@@ -16,8 +16,9 @@ The project owner decided on 17 October 2026 (owner):
 - A container gets its handoff credential on its standard input, and a
   sandboxed process reads it once from an inherited pipe.
 
-The label "(owner)" names a decision of the owner. The other decisions are
-proposals of this design. The port is `runner.Sandbox` in `pkg/runner`.
+The project owner approved every decision of this ADR. The label "(owner)"
+names a decision that the text of the owner of 17 October 2026 states.
+The port is `runner.Sandbox` in `pkg/runner`.
 
 ## Decision
 
@@ -53,12 +54,20 @@ proposals of this design. The port is `runner.Sandbox` in `pkg/runner`.
 
    The coordinator starts each external program, for example `runsc` or
    `firecracker`, as an argument list, with no shell.
+
+   The project owner decides how the coordinator gets and unpacks an OCI
+   image: with its own code, with a library, or with a container runtime
+   of the host such as `containerd`. This design parks the choice for the
+   owner and sets no default. The code of the machine coordinator does not land before the
+   owner decides.
 5. **The handoff (owner)** (`runner.HandoffFor`):
    - `gvisor`: the coordinator writes the handoff token to the standard
      input of the launcher and closes it.
-   - `firecracker`: the coordinator writes the handoff token to the serial
-     console of the microVM, which is the standard input of the launcher,
-     and closes it.
+   - `firecracker`: the coordinator writes the handoff token to a vsock
+     connection to the launcher in the microVM, and closes it
+     (`runner.HandoffVsock`). The serial console never carries the token.
+     If the microVM has a serial console at all, it is raw, with no echo,
+     and the coordinator never logs the input of the console.
    - `process`: the coordinator writes the handoff token to a pipe that
      the launcher inherits as file descriptor 3. The launcher reads it
      once and closes it.
@@ -96,10 +105,6 @@ proposals of this design. The port is `runner.Sandbox` in `pkg/runner`.
 
 ## Open questions
 
-- Does the coordinator unpack OCI images with its own code, or does it use
-  a container runtime of the host, for example `containerd`, to get and
-  unpack them? A library is a dependency that the project manager
-  decides.
 - Which kernel does a Firecracker microVM boot, and who builds it: the
   release of OpenDustpan, or the team?
 - Does a Firecracker host keep a pool of started microVMs to make the time

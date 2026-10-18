@@ -32,7 +32,14 @@ func TestReferenceStore(t *testing.T) {
 // op is a durable operation of the reference adapter.
 type op struct {
 	kind  durable.Kind
+	owner string
 	token int64
+}
+
+// nonceKey is a nonce of one subject.
+type nonceKey struct {
+	subject string
+	nonce   string
 }
 
 // mem is the reference adapter: one lock over maps.
@@ -49,6 +56,7 @@ type mem struct {
 	ops       map[durable.ID]op
 	entries   map[namespace.Name][]audit.Entry
 	sessionOf map[durable.ID]string
+	nonces    map[nonceKey]time.Time
 }
 
 func newMem() *mem {
@@ -57,6 +65,7 @@ func newMem() *mem {
 		inUse: map[string]bool{}, tokens: map[string]runner.JoinToken{}, runners: map[string]runner.Runner{},
 		launches: map[string]runner.HandoffToken{}, sessions: map[string]runner.Session{}, ops: map[durable.ID]op{},
 		entries: map[namespace.Name][]audit.Entry{}, sessionOf: map[durable.ID]string{},
+		nonces: map[nonceKey]time.Time{},
 	}
 }
 
@@ -106,7 +115,7 @@ func (m *mem) Claim(_ context.Context, kind durable.Kind, owner string) (durable
 	defer m.mu.Unlock()
 
 	id := durable.ID(nextID(m, "op-"))
-	m.ops[id] = op{kind: kind, token: 1}
+	m.ops[id] = op{kind: kind, owner: owner, token: 1}
 
 	return durable.Claim{Operation: id, Owner: owner, Token: 1, ExpiresAt: time.Time{}}, nil
 }
@@ -121,6 +130,7 @@ func (m *mem) Takeover(_ context.Context, c durable.Claim) (durable.Claim, error
 	}
 
 	o.token++
+	o.owner = c.Owner
 	m.ops[c.Operation] = o
 
 	return durable.Claim{Operation: c.Operation, Owner: c.Owner, Token: o.token, ExpiresAt: time.Time{}}, nil
@@ -404,9 +414,18 @@ func (m *mem) Join(_ context.Context, j runner.Joining, fence namespace.Fence, e
 	}
 
 	r := runnerNamed(m, p.ID, req.Name)
-	if r.ID == "" {
+
+	switch {
+	case r.ID != j.Rejoin:
+		return runner.Runner{}, fmt.Errorf("%w: the join expected runner %q, the pool has %q", runner.ErrConflict,
+			j.Rejoin, r.ID)
+	case r.ID == "":
 		r.ID = nextID(m, runner.RunnerIDPrefix)
 		r.JoinedAt = now
+	case !r.CanRejoin(now):
+		return runner.Runner{}, runner.ErrRunnerOnline
+	default:
+		expireClaims(m, r.ID)
 	}
 
 	key := req.Key
@@ -517,7 +536,7 @@ func (m *mem) RotateKey(
 		return r, nil
 	}
 
-	r.Key = next
+	r.PreviousKey, r.RotatedAt, r.Key = r.Key, next.CreatedAt, next
 	m.runners[id] = r
 	appendAudit(m, fence, e)
 
@@ -567,9 +586,22 @@ func (m *mem) Retire(_ context.Context, id string, now time.Time, fence namespac
 
 	r.RetiredAt = now
 	m.runners[id] = r
+	expireClaims(m, id)
 	appendAudit(m, fence, e)
 
 	return nil
+}
+
+// expireClaims ends every live claim of the runner id, as an expiry does:
+// the next claim of each operation gets a new token.
+func expireClaims(m *mem, id string) {
+	for k, o := range m.ops {
+		if o.owner == id {
+			o.token++
+			o.owner = ""
+			m.ops[k] = o
+		}
+	}
 }
 
 // SessionStore.
@@ -577,14 +609,14 @@ func (m *mem) Retire(_ context.Context, id string, now time.Time, fence namespac
 func liveClaim(m *mem, c durable.Claim) bool {
 	o, ok := m.ops[c.Operation]
 
-	return ok && o.token == c.Token
+	return ok && o.token == c.Token && o.owner == c.Owner
 }
 
 func (m *mem) IssueHandoffToken(_ context.Context, t runner.HandoffToken, c durable.Claim) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if !liveClaim(m, c) {
+	if !liveClaim(m, c) || c.Owner != t.Runner || m.ops[c.Operation].owner != t.Runner {
 		return runner.ErrClaimLost
 	}
 
@@ -659,12 +691,30 @@ func (m *mem) Session(_ context.Context, id string) (runner.Session, error) {
 		return runner.Session{}, runner.ErrNotFound
 	}
 
+	if !m.runners[s.Runner].RetiredAt.IsZero() {
+		return runner.Session{}, runner.ErrRetired
+	}
+
 	c := durable.Claim{Operation: durable.ID(s.Operation), Owner: s.Runner, Token: s.Token, ExpiresAt: time.Time{}}
 	if !liveClaim(m, c) {
 		return runner.Session{}, runner.ErrClaimLost
 	}
 
 	return s, nil
+}
+
+func (m *mem) UseNonce(_ context.Context, subject, nonce string, expires, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k := nonceKey{subject: subject, nonce: nonce}
+	if until, ok := m.nonces[k]; ok && now.Before(until) {
+		return runner.ErrReplay
+	}
+
+	m.nonces[k] = expires
+
+	return nil
 }
 
 // compare orders two strings.

@@ -36,6 +36,12 @@ func TestParse(t *testing.T) {
 			true,
 		},
 		{
+			"vsock",
+			[]string{"dustpan-launcher", "run", "--server", server, "--handoff", "vsock"},
+			launcher.ModeRun,
+			true,
+		},
+		{
 			"pipe with dirs",
 			[]string{
 				"dustpan-launcher",
@@ -335,6 +341,25 @@ func TestGitConfig(t *testing.T) {
 		got := string(launcher.GitConfig(tc.helper))
 		if got != tc.want || strings.Contains(got, "!") {
 			t.Errorf("GitConfig(%q) = %q, want %q", tc.helper, got, tc.want)
+		}
+	}
+}
+
+func TestStepUserIsolated(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		user launcher.StepUser
+		want bool
+	}{
+		{launcher.StepUser{UID: 0, GID: 0}, false},
+		{launcher.StepUser{UID: 1000, GID: 1000}, false},
+		{launcher.StepUser{UID: 2000, GID: 2000}, true},
+	}
+
+	for _, tc := range cases {
+		if got := tc.user.Isolated(1000); got != tc.want {
+			t.Errorf("%+v.Isolated(1000) = %v, want %v", tc.user, got, tc.want)
 		}
 	}
 }

@@ -1,6 +1,6 @@
 # 133. Runner identities, join tokens, handoff tokens and job sessions
 
-Status: proposed · 2026-10-18 · supersedes ADR 101 decision 10 in part · answers an open question of ADR 101
+Status: accepted · 2026-10-18 · supersedes ADR 101 decision 10 in part · answers an open question of ADR 101
 
 ## Context
 
@@ -49,10 +49,18 @@ the meaning of ADR 100.
    challenge with the new key: the server URL, the pool, the runner name
    and the hash of the join token (`runner.JoinChallenge`). It sends the
    token, the public key and the signature. In one transaction, the server
-   checks and uses the token, and stores the runner with the key. A join
-   with a name that the pool has, of a runner that is not retired, keeps
-   the runner ID and replaces its key: this is a **join again**. A second
+   checks and uses the token, and stores the runner with the key. A second
    join with one token fails with `token-used`.
+
+   A join with a name that the pool has, of a runner that is not retired,
+   is a **join again**. It keeps the runner ID and replaces its key, and
+   only for a runner that is offline or has the status `must-rejoin`
+   (`runner.Runner.CanRejoin`). A join again of a runner that still sends
+   heartbeats fails with `runner.ErrRunnerOnline`, so a leaked join token
+   cannot take the name of a working runner. In the same transaction, a
+   join again expires every live claim of the runner, so the claims and
+   the job sessions of the old key end and a takeover gets them. It
+   appends the audit entry `runner-rejoined` (ADR 138).
 4. **Where the runner keeps its key.** The machine runner keeps its private
    key in a file of mode 0600 that only its user reads. The Kubernetes
    runner keeps it in a Kubernetes Secret of its own namespace. The
@@ -64,18 +72,33 @@ the meaning of ADR 100.
    context, the subject, the method, the path with its query, the SHA-256
    of the body, the time and the nonce (`runner.ProofInput`). The server
    refuses a time more than 60 seconds from its clock
-   (`runner.CheckProof`). The server keeps no list of nonces. A proof that
+   (`runner.CheckProof`).
+
+   On the four paths that are not safe to repeat (the rotation, the poll,
+   the handoff and the session exchange), the server keeps the nonce of
+   each proof in a nonce store until 60 seconds after the time of the
+   proof (`runner.NonceExpiry`, `runner.SessionStore.UseNonce`). It refuses
+   a second proof with the same nonce for the same subject with
+   `bad-proof` (`runner.ErrReplay`). After the 60 seconds, the proof window
+   refuses the proof anyway, so the store can delete the nonce. The
+   session exchange carries a proof by the new session key, whose subject
+   is the SHA-256 of the handoff token. On every other path, a proof that
    an attacker replays inside its window can only repeat the same request,
-   with the same body. Every request of the protocol is safe to repeat
-   (ADR 131 decision 13). TLS protects the requests, and the proof makes a
-   leaked request useless after 60 seconds.
+   with the same body, and that request is safe to repeat (ADR 131
+   decision 13). TLS protects the requests, and the proof makes a leaked
+   request useless after 60 seconds.
 6. **Key rotation (owner).** A key older than 25 days gets `rotateKey` in
    the heartbeat answer. The runner then makes a new key pair and calls
    the rotation. The proof of the request uses the old key, and the body
    holds a signature of the new key (`runner.RotateChallenge`). The server
-   replaces the key in one write. The runner keeps the old key until a
-   request with the new key succeeds, so a lost answer does not lock it
-   out. A key older than 30 days authenticates nothing: the server answers
+   replaces the key in one write, and keeps the old key as the previous
+   key. For 5 minutes after the rotation (`runner.RotateGrace`), the server
+   accepts a proof of the previous key for the rotation request only
+   (`runner.Runner.RotationKeys`). Every other request needs the new key
+   at once (`runner.Runner.ProofKeys`). So a runner that lost the answer of
+   its rotation sends it again with the old key and the same new key, and
+   gets the same answer. The runner keeps the old key until a request with
+   the new key succeeds. A key older than 30 days authenticates nothing: the server answers
    `key-expired`, and the runner must join again (`runner.MaxKeyAge`).
 7. **A join again of an idle runner (owner).** A runner that was offline
    for more than 30 days has an expired key. Its status is `must-rejoin`.
@@ -93,20 +116,26 @@ the meaning of ADR 100.
    in. It never puts the token in a command line or a variable.
 8. **Retire a runner.** A principal with `namespace:manage-runners` can
    drain a runner or retire it. A retired runner authenticates nothing.
-   Its claims expire, and the takeover rules apply. Its record stays for
+   The retire expires its claims in the same transaction, and the takeover
+   rules apply. It also ends every job session of the runner: each later
+   request of such a session fails with `retired`. Its record stays for
    the audit log.
 9. **Handoff tokens (owner, for the deliveries).** For each claim, the
    runner asks the server for one handoff token, and gives it to the
    launcher. The handoff token:
-   - is good for one exchange, for one claim, while that claim is live,
+   - is good for one exchange, for one claim of the runner that asks for
+     it, while that claim is live. The server checks that the owner of the
+     claim is the runner of the request, so a runner never gets a token
+     for the claim of another runner (`claim-lost` or `not-found`),
    - lives 10 minutes (`runner.HandoffTokenTTL`),
    - starts with `dph_`, and the server keeps only its SHA-256,
    - never passes through an environment variable, a command-line
      argument or a file on a disk.
 
    The runner keeps no copy after the handoff. A second token for a claim
-   with no session replaces the first, so a pod that waited for a node
-   longer than 10 minutes can get a new one.
+   with no session replaces the first: the first then opens nothing. So a
+   pod that waited for a node longer than 10 minutes can get a new one. A
+   token for a claim with a session fails with `conflict`.
 10. **The deliveries of a handoff token (owner)** (`runner.HandoffFor`):
     - **Kubernetes: TokenReview pull.** The pod gets a projected service
       account token with the audience `opendustpan-coordinator` and the
@@ -115,10 +144,14 @@ the meaning of ADR 100.
       reads the pod, and checks that the pod belongs to the Job of the
       claim (`runner.CheckHandoffPod`). Then it answers the handoff token,
       once (ADR 136).
-    - **Containers and microVMs: standard input.** The machine runner
-      writes the token to the standard input of the launcher in a gVisor
-      container, or to the console of the launcher in a Firecracker
-      microVM, and closes it (ADR 137).
+    - **gVisor containers: standard input.** The machine runner writes
+      the token to the standard input of the launcher in a gVisor
+      container, and closes it (ADR 137).
+    - **Firecracker microVMs: vsock.** The machine runner writes the token
+      to a vsock connection to the launcher in the microVM, and closes it.
+      The serial console never carries the token. If the microVM has a
+      console, it is raw with no echo, and the coordinator never logs
+      what it reads from it (ADR 137).
     - **Sandboxed process: an inherited pipe.** The machine runner writes
       the token to a pipe that the launcher inherits as file descriptor 3.
       The launcher reads it once and closes it.
@@ -147,24 +180,30 @@ the meaning of ADR 100.
 
 ## Consequences
 
-- A stolen runner key claims work of one pool and reads no credential: the
-  credentials go to sessions, which need a handoff token that the runner
-  gets for one claim at a time. A stolen key still lets an attacker take
-  claims and see the steps and the source of jobs. The audit log records
-  every join, rotation and credential issue (ADR 138).
+- A stolen runner key gives the attacker every credential of every job
+  that the server routes to the pool of the runner, until an
+  administrator retires the runner. With the key, the attacker claims
+  work, asks for the handoff token of each claim, opens the job session
+  and asks for the credentials of each tool step. The limit is one pool,
+  in one namespace: the key claims no work of another pool, and no pool
+  of another namespace. A team that keeps the jobs of production apart
+  gives them a pool of their own. The audit log records every join,
+  rotation and credential issue (ADR 138), and a retire ends the claims
+  and the sessions of the key at once.
 - A leaked handoff token is good for at most 10 minutes and one exchange.
   The launcher of the claim then fails its exchange, and the runner
   releases the claim. The audit log records the refused exchange.
 - A runner that is off for more than 30 days needs a person. This is the
   cost of the rotation rule.
-- The server needs no list of nonces, because every request is safe to
-  repeat.
+- The server keeps a nonce store for four paths. Its size is the number
+  of those requests in the last 2 minutes, because each nonce goes after
+  60 seconds past the time of its proof.
 
 ## Open questions
 
 - Should the server sign a short-lived workload identity token for each
-  session, for a cloud role that trusts only one unit or one scan target?
-  ADR 164 asks the same for scans. It needs a token issuer in the server.
+  session, for a cloud role that trusts only one unit or one sweep target?
+  ADR 164 asks the same for sweeps. It needs a token issuer in the server.
 - Does the console send a reminder to the creator of a join token that
   expires unused?
 - Does a Kubernetes runner keep its key in a Secret, or does it join again

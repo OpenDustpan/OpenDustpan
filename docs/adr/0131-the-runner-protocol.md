@@ -1,6 +1,6 @@
 # 131. The runner protocol
 
-Status: proposed · 2026-10-18 · adds to ADR 101 decisions 2, 13 and 15
+Status: accepted · 2026-10-18 · adds to ADR 101 decisions 2, 13 and 15
 
 ## Context
 
@@ -10,8 +10,8 @@ of `Claimer.Claim`, claims with an expiry, and runners of the two releases
 before the server release. It fixes the ports that the protocol calls:
 `job.Claimer` and `job.Recorder`.
 
-ADR 164 (draft) asks the protocol for the claim of a scan, and for the
-upload of a scan report as a stream under the claim.
+ADR 164 (draft) asks the protocol for the claim of a sweep, and for the
+upload of a sweep report as a stream under the claim.
 
 The project owner decided on 17 October 2026:
 
@@ -22,8 +22,9 @@ The project owner decided on 17 October 2026:
   WebSockets may come later.
 - A cancel sends `SIGINT`, then `SIGKILL`.
 
-The label "(owner)" names a decision of the owner. The other decisions are
-proposals of this design. The Go types of the messages are in
+The project owner approved every decision of this ADR. The label "(owner)"
+names a decision that the text of the owner of 17 October 2026 states.
+The Go types of the messages are in
 `pkg/runner/protocol`, so the HTTP adapter, the runner and the launcher
 share one shape.
 
@@ -64,26 +65,30 @@ share one shape.
    | `PUT /runner/v1/session/steps/{step}/logs/{seq}` | a chunk | 204 |
    | `PUT /runner/v1/session/plan/uploads/{part}` | a part | 204 |
    | `POST /runner/v1/session/plan/commit` | `PlanCommit` | 204 |
-   | `PUT /runner/v1/session/scan-report` | JSON Lines | 204 |
+   | `PUT /runner/v1/session/sweep-report` | JSON Lines | 204 |
    | `POST /runner/v1/session/finish` | `Finish` | 204 |
 
    The session exchange is the one request of the launcher with no proof
    of an existing key. The handoff token and the signature of the new key
-   authenticate it.
+   authenticate it. The sweep report path is under the session, so only
+   the session key of the claim of the sweep can upload a report. A runner
+   key cannot.
 4. **Each path calls one port.** The HTTP adapter of the protocol is a thin
    layer over the ports of the job model and of this design:
-   - The poll calls `job.Claimer.Claim` for a pool for jobs, and the claim
-     of a scan for a pool for scans. The server takes the kinds from the
-     pool (ADR 130 decision 3).
+   - The poll calls `job.Claimer.Claim` for a pool for jobs, and
+     `runner.SweepClaimer.Claim` for a pool for sweeps. The server takes
+     the kinds from the pool (ADR 130 decision 3).
    - The renewals call `job.Claimer.Renew`, and the release
-     `job.Claimer.Release`. The finish calls `job.Claimer.Finish`.
+     `job.Claimer.Release`. The finish calls `job.Claimer.Finish`. For a
+     sweep, they call `SweepClaimer.Renew` and `SweepClaimer.Release`.
    - The step, log and plan paths call `job.Recorder`. The plan upload
      stages each part in a blob of the session. The commit calls
      `Recorder.PutPlan` with the staged parts in one call, as ADR 102
      decision 5 needs.
    - The source paths read a source snapshot (ADR 135).
-   - The scan report path streams the report to the blob store and ends
-     the claim of the scan, as ADR 164 decision 12 says.
+   - The sweep report path calls `SweepClaimer.Report`, which streams the
+     report to the blob store and ends the claim of the sweep, as ADR 164
+     decision 12 says. A sweep has no finish.
 
    So the protocol adds no rule about claims, cancel, steps, logs or plans.
    A difference between the protocol and write-back is a bug in one
@@ -96,18 +101,30 @@ share one shape.
    uses the `SKIP LOCKED` query of the durable adapter, so two runners
    never get one operation. A poll with no work answers 204. A runner with
    no free claim slot does not poll. A draining runner does not poll.
-6. **Work holds no secret.** `Work` names the claim, the job and the phase
-   or the scan, the image and the service account of the unit or of the
-   scan target, and the limits of the launcher (ADR 134). The launcher gets
+6. **Work holds no secret.** `Work` (`protocol.Work` and `runner.Work`)
+   names the claim and its lease, the job and the phase or the sweep, the
+   image of the unit or of the sweep target, the service account of the
+   unit, and the limits of the launcher (ADR 134). The work of a sweep
+   names no service account: the coordinator of a pool for sweeps uses its
+   own read-only service account (ADR 136 decision 2). The launcher gets
    the steps and the credentials through its session, never through the
    runner.
 7. **Who renews a claim.** Before the launcher opens its session, the
    runner renews the claim (`/claims/{operation}/renew`). After the
-   session opens, the launcher renews it (`/session/renew`), and a renewal
-   by the runner fails with `claim-lost`. The holder renews after a third
-   of the lease of the pool (ADR 130 decision 7). A runner that sees no
-   session after the handoff token expired, for example a pod that waits
-   for a node, asks for a new handoff token, or releases the claim.
+   session opens, the launcher renews it (`/session/renew`). A renewal by
+   the runner then answers 200 with `sessionOpen: true`
+   (`RenewResponse.SessionOpen`, `runner.ErrSessionOpen`), and does not
+   renew the claim. The runner then stops its renewals of the claim and
+   leaves the Job or the sandbox alone. This answer is never `claim-lost`,
+   because the claim is live. The holder renews after a third of the lease
+   of the pool (ADR 130 decision 7).
+
+   A runner that sees no session after the handoff token expired, for
+   example a pod that waits for a node, asks for a new handoff token, or
+   releases the claim. The time from the claim to the session is at most
+   30 minutes (`runner.MaxSessionWait`). After it, a renewal by the runner
+   fails with `claim-lost`, and the server releases the claim
+   (`runner.CheckRunnerRenew`).
 8. **Heartbeats.** A runner sends a heartbeat every 15 seconds, also while
    it polls. The answer lists the claims of the runner that a cancel stops,
    the claims that are no longer live, whether the key must rotate and
@@ -124,6 +141,13 @@ share one shape.
    paths still accept writes (ADR 101 decision 2).
 10. **Logs.** The launcher sends the output of each step in chunks of at
     most 1 MiB, with numbers from 0 and the header `Dustpan-Content-SHA256`.
+    The proof of the request signs the value of that header as the hash of
+    the body (`runner.Signed`). The server checks the signature first, then
+    streams the body to the blob store, then compares the hash of what it
+    got with the signed value (`runner.CheckContentHash`). A body with
+    another hash fails with `bad-proof`, and the server deletes what it
+    wrote. A plan part and a sweep report use the same header and the same
+    order.
     It sends a chunk at least every 2 seconds while the step writes output,
     so the console shows the log while the step runs. It masks the secret
     values of the session before it sends a chunk (ADR 134). A retry of a
@@ -141,7 +165,7 @@ share one shape.
     | Code | Status | The caller |
     | --- | --- | --- |
     | `invalid` | 400 | stops: a bug or a bad setting. |
-    | `bad-proof` | 401 | checks its clock, then stops. |
+    | `bad-proof` | 401 | checks its clock, then stops. A replayed nonce gets this code too. |
     | `key-expired` | 401 | stops and shows the command to join again. |
     | `retired` | 403 | stops. |
     | `token-used`, `token-expired` | 401 | the runner asks for a new handoff token. |
@@ -152,22 +176,43 @@ share one shape.
     | `source-not-ready` | 409 | waits for `Retry-After`. |
     | `plan-stale` | 409 | stops: the server failed the phase. |
     | `version-unsupported` | 426 | stops and shows the range of releases. |
+    | `version-ahead` | 426 | retries with backoff: the server is older than the caller (ADR 132). |
     | `rate-limited`, `unavailable` | 429, 503 | waits for `Retry-After`. |
 
     A network error or a status of 500 or more retries with exponential
     backoff from 1 second to 30 seconds, with jitter, until the claim
     expires.
-13. **Every request is safe to repeat.** A join with a used token fails
-    and changes nothing. A heartbeat and a renewal change nothing twice. A
-    step start or end of a claim records once. A log chunk has its number.
-    A plan commit of a phase with a plan fails with `conflict`. A finish of
-    a finished phase fails with `claim-lost`. So a proof that an attacker
-    replays inside its window can only repeat a request that the server
-    already did (ADR 133).
+13. **Replays.** Four paths are not safe to repeat: the rotation, the
+    poll, the handoff and the session exchange (`protocol.NoncePaths`).
+    On these paths, the server keeps the nonce of each proof for 60 seconds
+    after the time of the proof (`runner.NonceTTL`,
+    `runner.SessionStore.UseNonce`), and refuses a second proof with the
+    same nonce for the same subject with `bad-proof`. After the 60
+    seconds, the proof window refuses the proof anyway (ADR 133 decision
+    5). Every other request is safe to repeat, and the server keeps no
+    nonce for it:
+    - A join with a used token fails and changes nothing.
+    - A heartbeat and a renewal change nothing twice.
+    - A step start or end of a claim records once.
+    - A log chunk has its number.
+    - A plan commit with the same parts and hashes under the same claim
+      changes nothing and answers 204. A plan commit with other parts
+      after a commit fails with `conflict`.
+    - A finish of a finished phase fails with `claim-lost`.
+
+    So a proof that an attacker replays inside its window can only repeat
+    a request that the server already did.
 14. **Limits.** A JSON body has at most 4 MiB. A log chunk has at most
-    1 MiB, a part of a plan at most 256 MiB, and a scan report at most the
-    limit of ADR 164. The server answers `rate-limited` to a runner above
-    10 polls each second, and to a session above 50 requests each second.
+    1 MiB, a part of a plan at most 256 MiB, and a sweep report at most the
+    limit of ADR 164. The uploads of one session have caps:
+    - the log of one step: 20,000 chunks and 256 MiB,
+    - the logs of one phase or sweep: 100,000 chunks and 1 GiB,
+    - the staged parts of a plan: 8.
+
+    A request above a cap fails with `invalid` and changes nothing. The
+    server deletes the staged parts of a session that ends with no commit.
+    The server answers `rate-limited` to a runner above 10 polls each
+    second, and to a session above 50 requests each second.
 
 ## Consequences
 
@@ -190,7 +235,3 @@ share one shape.
 - Does a log chunk every 2 seconds put too many small blobs in the blob
   store for a long phase? ADR 102 asks whether the server joins the chunks
   of a closed log.
-- ADR 164 proposes `PUT /runner/v1/scans/{id}/report` for the scan report.
-  This ADR proposes the path under the session, because the session
-  authenticates the launcher, not the runner. The two designs must agree
-  on one path.

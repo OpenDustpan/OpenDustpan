@@ -1,10 +1,10 @@
 // Package runner defines runner pools, runners and the rules of the runner
 // protocol: the identities and tokens of a runner, the skew between the
 // releases of the server and of a runner, and the ports of the
-// coordinators that start a launcher for each claimed phase or scan.
+// coordinators that start a launcher for each claimed phase or sweep.
 //
 // A runner pool belongs to one namespace and has a fixed purpose: it runs
-// the phases of jobs, or it runs scans with a read-only identity. A runner
+// the phases of jobs, or it runs sweeps with a read-only identity. A runner
 // belongs to one pool. It is a long-lived process that the team hosts: a
 // coordinator of the kind kubernetes, which starts one Kubernetes Job for
 // each claimed phase, or of the kind machine, which starts one sandbox for
@@ -41,7 +41,7 @@ var (
 	// creation of a pool: its purpose and its namespace.
 	ErrImmutable = errors.New("this field of the runner pool cannot change")
 	// ErrPoolInUse reports a delete of a pool that a job that did not end,
-	// or a scan target, still names.
+	// or a sweep target, still names.
 	ErrPoolInUse = errors.New("runner pool is in use")
 	// ErrLimit reports a create above a limit of this package.
 	ErrLimit = errors.New("too many runner pools, runners or join tokens")
@@ -62,11 +62,24 @@ var (
 	// retired.
 	ErrRetired = errors.New("runner is retired")
 	// ErrPurpose reports work for a pool of the other purpose: a job that
-	// names a pool for scans, or a scan target that names a pool for jobs.
+	// names a pool for sweeps, or a sweep target that names a pool for jobs.
 	ErrPurpose = errors.New("runner pool has another purpose")
-	// ErrConflict reports a handoff token for a claim that has a job
-	// session already.
-	ErrConflict = errors.New("claim has a job session already")
+	// ErrConflict reports a request that conflicts with the state of the
+	// store: a handoff token for a claim that has a job session already, or
+	// a join that expected another runner of the same name.
+	ErrConflict = errors.New("runner request conflicts with the state of the store")
+	// ErrRunnerOnline reports a join with the name of a runner that is not
+	// offline and whose key is not expired. A join again is only for an
+	// offline runner or a runner that must join again (Runner.CanRejoin).
+	ErrRunnerOnline = errors.New("a runner with this name is online")
+	// ErrReplay reports a proof whose nonce the server saw before for the
+	// same subject, on a path that NeedsNonce names.
+	ErrReplay = errors.New("proof of possession is a replay")
+	// ErrSessionOpen reports a renewal by the runner of a claim whose
+	// launcher opened its job session. The launcher renews the claim from
+	// then on. The runner stops its renewals and leaves the Job or the
+	// sandbox alone. It is not a lost claim.
+	ErrSessionOpen = errors.New("the launcher of the claim holds a job session")
 	// ErrClaimLost reports a handoff token, a session or a write for a
 	// claim that is no longer the live claim of its operation. It wraps
 	// durable.ErrClaimLost.
@@ -74,6 +87,11 @@ var (
 	// ErrVersionUnsupported reports a runner or a launcher release outside
 	// the skew that the server accepts (CheckSkew).
 	ErrVersionUnsupported = errors.New("runner release is not supported by this server")
+	// ErrVersionAhead reports a runner or a launcher release that is newer
+	// than the server, for example during a rolling deploy or after a
+	// rollback of the server. The caller retries with backoff. It does not
+	// wrap ErrVersionUnsupported.
+	ErrVersionAhead = errors.New("runner release is newer than this server")
 )
 
 // ID prefixes of this package. The server makes each ID with a random part
@@ -99,38 +117,38 @@ const (
 	// PurposeJobs runs the phases of runner jobs. A runner of the pool
 	// claims only the durable kind job.RunnerKind of its pool.
 	PurposeJobs Purpose = "jobs"
-	// PurposeScans runs scans of unmanaged resources with a read-only
-	// identity. A runner of the pool claims only ScanKind of its pool. No
+	// PurposeSweeps runs sweeps of unmanaged resources with a read-only
+	// identity. A runner of the pool claims only SweepKind of its pool. No
 	// job can name the pool.
-	PurposeScans Purpose = "scans"
+	PurposeSweeps Purpose = "sweeps"
 )
 
 // Valid reports whether p is one of the purposes of this package.
 func (p Purpose) Valid() bool {
-	return p == PurposeJobs || p == PurposeScans
+	return p == PurposeJobs || p == PurposeSweeps
 }
 
-// ScanKindPrefix starts the durable kind of a scan for a pool. The kind of a
-// scan for the pool with the ID p is ScanKindPrefix + p.
-const ScanKindPrefix = "unmanaged.scan."
+// SweepKindPrefix starts the durable kind of a sweep for a pool. The kind of a
+// sweep for the pool with the ID p is SweepKindPrefix + p.
+const SweepKindPrefix = "unmanaged.sweep."
 
-// ScanKind returns the durable kind of the scans of the pool with the ID
+// SweepKind returns the durable kind of the sweeps of the pool with the ID
 // pool.
-func ScanKind(pool string) durable.Kind {
-	return durable.Kind(ScanKindPrefix + pool)
+func SweepKind(pool string) durable.Kind {
+	return durable.Kind(SweepKindPrefix + pool)
 }
 
 // ClaimKinds returns the durable kinds that a runner of p claims: the kind
-// of the phases of the pool for PurposeJobs, and the kind of its scans for
-// PurposeScans. It returns ErrInvalid for an unknown purpose. A runner never
+// of the phases of the pool for PurposeJobs, and the kind of its sweeps for
+// PurposeSweeps. It returns ErrInvalid for an unknown purpose. A runner never
 // sends kinds: the server takes them from the pool of the runner, so a
 // runner cannot claim the work of another pool or of the other purpose.
 func ClaimKinds(p *Pool) ([]durable.Kind, error) {
 	switch p.Purpose {
 	case PurposeJobs:
 		return []durable.Kind{job.RunnerKind(p.ID)}, nil
-	case PurposeScans:
-		return []durable.Kind{ScanKind(p.ID)}, nil
+	case PurposeSweeps:
+		return []durable.Kind{SweepKind(p.ID)}, nil
 	default:
 		return nil, fmt.Errorf("%w: unknown purpose %q", ErrInvalid, p.Purpose)
 	}
@@ -138,7 +156,7 @@ func ClaimKinds(p *Pool) ([]durable.Kind, error) {
 
 // CheckJobPool checks that a runner job may name p: p belongs to the
 // namespace ns of the unit and has PurposeJobs. It returns ErrInvalid for a
-// pool of another namespace and ErrPurpose for a pool for scans. The runner
+// pool of another namespace and ErrPurpose for a pool for sweeps. The runner
 // executor calls it from job.Executor.Phases.
 func CheckJobPool(p *Pool, ns namespace.Name) error {
 	if p.Namespace != ns {
@@ -163,7 +181,7 @@ const (
 	// MaxOpenJoinTokens bounds the join tokens of one pool that are not
 	// used, revoked or expired.
 	MaxOpenJoinTokens = 100
-	// DefaultConcurrency is the number of phases or scans that one runner
+	// DefaultConcurrency is the number of phases or sweeps that one runner
 	// runs at a time, unless the pool sets more.
 	DefaultConcurrency = 1
 	// MaxConcurrency bounds the concurrency of a runner.
@@ -209,7 +227,7 @@ type Pool struct {
 	// Lease is the lease of each claim of a runner of the pool, from
 	// MinLease to MaxLease. Zero takes DefaultLease.
 	Lease time.Duration
-	// Concurrency is the number of phases or scans that each runner of the
+	// Concurrency is the number of phases or sweeps that each runner of the
 	// pool runs at a time, from 1 to MaxConcurrency. Zero takes
 	// DefaultConcurrency.
 	Concurrency int
@@ -225,11 +243,11 @@ type Pool struct {
 }
 
 // ReadOnly reports whether the runners of p run with a read-only identity:
-// a pool for scans. The console and the guide tell the team to give the
+// a pool for sweeps. The console and the guide tell the team to give the
 // hosts of such a pool a role that cannot write. The server cannot check
 // the role of a host.
 func (p *Pool) ReadOnly() bool {
-	return p.Purpose == PurposeScans
+	return p.Purpose == PurposeSweeps
 }
 
 // EffectiveLease returns the lease of p, with DefaultLease for zero.

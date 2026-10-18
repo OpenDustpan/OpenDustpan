@@ -29,9 +29,12 @@ const (
 	EventJoinTokenCreated Event = "join-token-created" //nolint:gosec // An event name, not a credential.
 	EventJoinTokenRevoked Event = "join-token-revoked" //nolint:gosec // An event name, not a credential.
 	EventRunnerJoined     Event = "runner-joined"
-	EventKeyRotated       Event = "runner-key-rotated"
-	EventRunnerDrained    Event = "runner-drained"
-	EventRunnerRetired    Event = "runner-retired"
+	// EventRunnerRejoined is a join again: the runner keeps its ID, gets a
+	// new key, and its claims and sessions of the old key end.
+	EventRunnerRejoined Event = "runner-rejoined"
+	EventKeyRotated     Event = "runner-key-rotated"
+	EventRunnerDrained  Event = "runner-drained"
+	EventRunnerRetired  Event = "runner-retired"
 	// EventCredentialsIssued is the hand of the secrets of a profile, or of
 	// a job token, to the session of a claim. One entry for each step that
 	// gets them.
@@ -66,6 +69,7 @@ func AuditRules() map[Event]AuditRule {
 		EventRunnerDrained:     manage,
 		EventRunnerRetired:     manage,
 		EventRunnerJoined:      {Action: ActionRunnerJoin, Kind: audit.KindChange},
+		EventRunnerRejoined:    {Action: ActionRunnerJoin, Kind: audit.KindChange},
 		EventKeyRotated:        {Action: job.ActionRunnerClaim, Kind: audit.KindChange},
 		EventCredentialsIssued: {Action: job.ActionRunnerClaim, Kind: audit.KindReveal},
 		EventHandoffRefused:    {Action: job.ActionRunnerClaim, Kind: audit.KindChange},

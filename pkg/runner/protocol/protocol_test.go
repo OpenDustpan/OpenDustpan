@@ -41,7 +41,7 @@ func TestPathsAreUnderThePrefix(t *testing.T) {
 		protocol.PathSessionSource, protocol.PathSessionSourceObject, protocol.PathSessionPlanPart,
 		protocol.PathSessionCredentials, protocol.PathSessionStepBegin, protocol.PathSessionStepEnd,
 		protocol.PathSessionLog, protocol.PathSessionPlanUpload, protocol.PathSessionPlanCommit,
-		protocol.PathSessionScanReport, protocol.PathSessionFinish,
+		protocol.PathSessionSweepReport, protocol.PathSessionFinish,
 	} {
 		if len(p) <= len(protocol.Prefix) || p[:len(protocol.Prefix)+1] != protocol.Prefix+"/" {
 			t.Errorf("path %s is not under %s", p, protocol.Prefix)
@@ -55,5 +55,32 @@ func TestErrorShape(t *testing.T) {
 	b, err := json.Marshal(protocol.Error{Code: protocol.ErrorClaimLost, Message: "claim is lost", Supported: ""})
 	if err != nil || string(b) != `{"code":"claim-lost","message":"claim is lost"}` {
 		t.Fatalf("Marshal = %s, %v", b, err)
+	}
+}
+
+func TestNeedsNonce(t *testing.T) {
+	t.Parallel()
+
+	for _, p := range []string{protocol.PathRotate, protocol.PathPoll, protocol.PathClaimHandoff, protocol.PathSession} {
+		if !protocol.NeedsNonce(p) {
+			t.Errorf("NeedsNonce(%s) = false, want true", p)
+		}
+	}
+
+	for _, p := range []string{
+		protocol.PathHeartbeat, protocol.PathClaimRenew, protocol.PathSessionRenew, protocol.PathSessionLog,
+		protocol.PathSessionStepBegin, protocol.PathSessionPlanCommit, protocol.PathSessionFinish,
+	} {
+		if protocol.NeedsNonce(p) {
+			t.Errorf("NeedsNonce(%s) = true, want false: the request is safe to repeat", p)
+		}
+	}
+}
+
+func TestSweepReportIsASessionPath(t *testing.T) {
+	t.Parallel()
+
+	if protocol.PathSessionSweepReport != "/runner/v1/session/sweep-report" {
+		t.Fatalf("PathSessionSweepReport = %s", protocol.PathSessionSweepReport)
 	}
 }

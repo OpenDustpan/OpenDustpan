@@ -1,6 +1,6 @@
 # 138. Runner actions, audit entries and the REST API
 
-Status: proposed · 2026-10-18 · adds to ADR 103 decisions 8 and 9
+Status: accepted · 2026-10-18 · adds to ADR 103 decisions 8 and 9
 
 ## Context
 
@@ -14,7 +14,8 @@ changes resources.
 
 ADRs 130 to 137 add pools, join tokens, runners, keys, handoff tokens, job
 sessions and source policies. This ADR gives their actions, their audit
-entries and their routes. The decisions are proposals of this design.
+entries and their routes. The project owner approved every decision of this
+ADR.
 
 ## Decision
 
@@ -47,13 +48,16 @@ entries and their routes. The decisions are proposals of this design.
    | `pool-created`, `pool-changed`, `pool-deleted` | the principal | `namespace:manage-runners` | `change` |
    | `join-token-created`, `join-token-revoked` | the principal | `namespace:manage-runners` | `change` |
    | `runner-joined` | the join token ID | `runner:join` | `change` |
+   | `runner-rejoined` | the join token ID | `runner:join` | `change` |
    | `runner-key-rotated` | the runner | `runner:claim` | `change` |
    | `runner-drained`, `runner-retired` | the principal | `namespace:manage-runners` | `change` |
    | `credentials-issued` | the runner and the session | `runner:claim` | `reveal` |
    | `handoff-refused` | the runner or the session | `runner:claim` | `change`, outcome `denied` |
 
    The object is the pool, or the unit of the job for
-   `credentials-issued`. An entry holds IDs, names, releases, key IDs,
+   `credentials-issued`. The entry `runner-rejoined` names the runner, the
+   ID of the old key and of the new key, and the claims that the join
+   again ended. An entry holds IDs, names, releases, key IDs,
    isolation kinds and the changed fields. It never holds a token, a
    private key, a credential value or the content of a credential file.
    The change of a pool records the old and the new isolation list and
@@ -62,9 +66,8 @@ entries and their routes. The decisions are proposals of this design.
    renewal, a step record and a log chunk write no audit entry. The job
    record holds what a person reads about a phase. The claim of a phase
    that changes resources writes its entry, as ADR 103 decision 9 says.
-6. **Routes.** The tool-neutral OpenDustpan API gets these routes. The
-   paths are proposals, and the e2e step of each route sets the final
-   path:
+6. **Routes.** The tool-neutral OpenDustpan API gets these routes. Each
+   route lands with its e2e step:
 
    | Method and path | Action |
    | --- | --- |

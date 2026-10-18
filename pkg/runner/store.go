@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"io"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/audit"
@@ -41,7 +42,7 @@ type PoolStore interface {
 	UpdatePool(ctx context.Context, p Pool, fence namespace.Fence, e []audit.Entry) (Pool, error)
 	// DeletePool deletes the pool id, its runners and its join tokens. It
 	// returns ErrNotFound for an unknown pool, and ErrPoolInUse while a job
-	// that is not terminal or a scan target names it.
+	// that is not terminal or a sweep target names it.
 	DeletePool(ctx context.Context, id string, fence namespace.Fence, e []audit.Entry) error
 	// Pool returns the pool id, or ErrNotFound.
 	Pool(ctx context.Context, id string) (Pool, error)
@@ -72,13 +73,24 @@ type MemberStore interface {
 	// Join registers the runner of j.Request with the join token whose
 	// secret has the hash j.TokenSHA256, at j.At. In one transaction it
 	// checks the token with JoinToken.CheckUse, marks it used, and stores
-	// the runner with j.Request.Key, created at j.At. A runner name that the pool has, of a runner
-	// that is not retired, keeps its runner ID and gets the new key: this
-	// is a join again. It returns ErrNotFound for an unknown hash,
-	// ErrTokenUsed and ErrTokenExpired from CheckUse, ErrInvalid for an
-	// isolation that the pool does not allow, and ErrLimit when the pool
-	// has MaxRunnersPerPool runners. The caller checks JoinRequest.Validate
-	// and the proof of j.Request against JoinChallenge first.
+	// the runner with j.Request.Key, created at j.At.
+	//
+	// A runner name that the pool has, of a runner that is not retired, is
+	// a join again: the runner keeps its ID and gets the new key, only when
+	// Runner.CanRejoin is true at j.At, else Join returns ErrRunnerOnline.
+	// A join again expires every live claim of the runner in the same
+	// transaction, so the claims and the sessions of the old key end and a
+	// takeover gets them. The caller reads the runners of the pool first,
+	// and sets j.Rejoin to the ID of the runner that the join replaces, or
+	// to empty for a new runner, so that it appends the entry of
+	// EventRunnerRejoined or EventRunnerJoined. Join returns ErrConflict
+	// when j.Rejoin does not match the store, and the caller reads again.
+	//
+	// It returns ErrNotFound for an unknown hash, ErrTokenUsed and
+	// ErrTokenExpired from CheckUse, ErrInvalid for an isolation that the
+	// pool does not allow, and ErrLimit when the pool has
+	// MaxRunnersPerPool runners. The caller checks JoinRequest.Validate and
+	// the proof of j.Request against JoinChallenge first.
 	Join(ctx context.Context, j Joining, fence namespace.Fence, e []audit.Entry) (Runner, error)
 
 	// Runner returns the runner id, also a retired one, or ErrNotFound.
@@ -92,31 +104,37 @@ type MemberStore interface {
 	// of the runner is older than MaxKeyAge. It appends no audit entry.
 	Heartbeat(ctx context.Context, id string, rel Release, now time.Time) (Runner, error)
 	// RotateKey replaces the key of the runner id with next, whose
-	// CreatedAt is the time of the rotation, and returns the runner. It returns ErrNotFound, ErrRetired and
-	// ErrKeyExpired as Heartbeat does. The caller checks a proof of the
-	// old key and a signature of RotateChallenge by next first. A rotation
-	// to the current key changes nothing, so a retry after a lost answer is
-	// safe.
+	// CreatedAt is the time of the rotation, and returns the runner. It
+	// keeps the old key as Runner.PreviousKey, with Runner.RotatedAt, so
+	// that a retry signed by the old key passes Runner.RotationKeys for
+	// RotateGrace. It returns ErrNotFound, ErrRetired and ErrKeyExpired as
+	// Heartbeat does. The caller checks a proof of the old key and a
+	// signature of RotateChallenge by next first. A rotation to the current
+	// key changes nothing, so a retry after a lost answer is safe.
 	RotateKey(ctx context.Context, id string, next Key, fence namespace.Fence, e []audit.Entry) (Runner, error)
 	// SetDraining sets or clears the drain of the runner id. A draining
 	// runner claims no new work. It returns ErrNotFound and ErrRetired.
 	SetDraining(ctx context.Context, id string, draining bool, fence namespace.Fence, e []audit.Entry) error
 	// Retire retires the runner id at now. Its key then authenticates
-	// nothing, and its claims expire and go to a takeover. It returns
-	// ErrNotFound for an unknown runner. A retire of a retired runner
-	// changes nothing.
+	// nothing. In the same transaction it expires every live claim of the
+	// runner, so its claims go to a takeover, and it ends every job session
+	// of the runner: SessionStore.Session returns ErrRetired for them. It
+	// returns ErrNotFound for an unknown runner. A retire of a retired
+	// runner changes nothing.
 	Retire(ctx context.Context, id string, now time.Time, fence namespace.Fence, e []audit.Entry) error
 }
 
 // SessionStore is the persistence port for handoff tokens and job sessions.
 type SessionStore interface {
-	// IssueHandoffToken stores t for the live claim c of the runner t.Runner.
-	// It returns ErrClaimLost when c is not the live claim of its
-	// operation, ErrInvalid when the operation is not of a kind of the pool
-	// of the runner (ClaimKinds), and ErrConflict when the claim has a
-	// session already. A second token for a claim with no session replaces
-	// the first, so a pod that waited past HandoffTokenTTL can get a new
-	// one.
+	// IssueHandoffToken stores t for the live claim c of the runner
+	// t.Runner. It returns ErrClaimLost when c is not the live claim of its
+	// operation, or when the owner of c is not t.Runner, so a runner never
+	// gets a token for the claim of another runner. It returns ErrInvalid
+	// when the operation is not of a kind of the pool of the runner
+	// (ClaimKinds), and ErrConflict when the claim has a session already. A
+	// second token for a claim with no session replaces the first: the
+	// first then opens nothing (ErrNotFound). So a pod that waited past
+	// HandoffTokenTTL can get a new one.
 	IssueHandoffToken(ctx context.Context, t HandoffToken, c durable.Claim) error
 	// OpenSession exchanges the handoff token whose secret has the hash
 	// sha256 for a job session with the key k, at now. In one transaction
@@ -127,8 +145,50 @@ type SessionStore interface {
 	OpenSession(ctx context.Context, sha256 string, k Key, now time.Time) (Session, error)
 	// Session returns the session id, or ErrNotFound. It returns
 	// ErrClaimLost when the claim of the session is no longer live, so a
-	// launcher of a claim that another claim replaced writes nothing.
+	// launcher of a claim that another claim replaced writes nothing, and
+	// ErrRetired when an administrator retired the runner of the session.
 	Session(ctx context.Context, id string) (Session, error)
+
+	// UseNonce records the nonce of a proof of subject, a runner ID, a
+	// session ID or the hash of a handoff token, and keeps it until
+	// expires (NonceExpiry). It returns ErrReplay when the store holds the
+	// same nonce for subject and it has not expired at now. The protocol
+	// adapter calls it after CheckProof, on the paths that
+	// protocol.NeedsNonce names. The store can delete a nonce after its
+	// expiry. Nonces are control data, and a backup does not hold them.
+	UseNonce(ctx context.Context, subject, nonce string, expires, now time.Time) error
+}
+
+// SweepClaimer is the port through which the runner protocol claims the
+// sweeps of a pool for sweeps, as job.Claimer claims the phases of a pool
+// for jobs. A sweep is a durable operation of SweepKind. The design of
+// sweeps owns the adapter. The protocol adds no rule to it.
+type SweepClaimer interface {
+	// Claim takes one sweep of req.Kinds that can run, and returns its
+	// work. It returns durable.ErrNoWork when no sweep can run now, and
+	// ErrInvalid for a request with no owner, a kind that is not a
+	// SweepKind, or a lease that is not positive.
+	Claim(ctx context.Context, req durable.ClaimRequest) (SweepClaim, error)
+	// Renew moves the expiry of c to now plus d on the clock of the
+	// store, and returns the new claim. It returns ErrClaimLost when c is
+	// not live.
+	Renew(ctx context.Context, c durable.Claim, d time.Duration) (durable.Claim, error)
+	// Release gives the sweep back before its report, so that the next
+	// claim runs it from its start. It returns ErrClaimLost when c is not
+	// live.
+	Release(ctx context.Context, c durable.Claim) error
+	// Report stores the report of the sweep from r, and ends the claim and
+	// the operation in one transaction: the upload of the report is the
+	// end of a sweep. It returns ErrClaimLost when c is not live, and
+	// ErrInvalid for a report above the limit of the design of sweeps.
+	Report(ctx context.Context, c durable.Claim, r io.Reader) error
+}
+
+// SweepClaim is one claimed sweep: the claim and the work of the
+// coordinator.
+type SweepClaim struct {
+	Claim durable.Claim
+	Work  Work
 }
 
 // Joining is the input of MemberStore.Join. The caller clears the secret
@@ -137,4 +197,7 @@ type Joining struct {
 	TokenSHA256 string
 	Request     JoinRequest
 	At          time.Time
+	// Rejoin is the ID of the runner that the caller expects the join to
+	// replace, or empty for a new runner.
+	Rejoin string
 }

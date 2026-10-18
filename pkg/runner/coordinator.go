@@ -6,31 +6,134 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"time"
 
 	"opendustpan.org/opendustpan/pkg/job"
 )
 
-// Work is one claimed phase or scan, as a coordinator sees it. It holds no
-// secret: the launcher gets the credentials through its job session.
+// Work is one claimed phase or sweep, as a coordinator sees it. It holds
+// no secret: the launcher gets the credentials through its job session.
+// It has the fields of protocol.Work.
 type Work struct {
 	// Operation and Token name the durable claim.
 	Operation string
 	Token     int64
 	ExpiresAt time.Time
-	// Job and Phase name a claimed phase. Both are empty for a scan.
+	// Lease is the lease of the pool. The holder renews after RenewEvery.
+	Lease time.Duration
+	// Job and Phase name a claimed phase. Both are empty for a sweep.
 	Job   job.ID
 	Phase int
-	// Scan is the ID of a claimed scan, or empty for a phase.
-	Scan string
+	// Sweep is the ID of a claimed sweep, or empty for a phase.
+	Sweep string
+	// Image is the image of the steps, from the settings of the unit or of
+	// the sweep target, or empty for the default image of the runner.
+	Image string
+	// ServiceAccount is the Kubernetes service account of the unit, or
+	// empty for the default of the coordinator. It is always empty for a
+	// sweep: the coordinator of a pool for sweeps uses its own read-only
+	// service account (ServiceAccountFor).
+	ServiceAccount string
 	// Deadline is the longest time that the launcher may run: the sum of
-	// the timeouts of the steps or the timeout of the scan, plus the grace
-	// periods (LimitsFor).
+	// the timeouts of the steps or the timeout of the sweep, plus the grace
+	// periods and the allowances (LimitsFor).
 	Deadline time.Duration
 	// Grace is the time from the first signal of a cancel to the end of
 	// the launcher (LimitsFor).
 	Grace time.Duration
+}
+
+// ServiceAccounts are the service accounts that the Helm values of a
+// Kubernetes coordinator name.
+type ServiceAccounts struct {
+	// Own is the service account of the coordinator. No Job runs as it,
+	// because it can create Jobs and read pods.
+	Own string
+	// Sweep is the read-only service account of every Job of a pool for
+	// sweeps.
+	Sweep string
+	// Default is the service account of a Job of a pool for jobs whose
+	// unit names none. It must be in Allowed.
+	Default string
+	// Allowed lists the service accounts that a Job of a pool for jobs may
+	// run as.
+	Allowed []string
+}
+
+// ServiceAccountFor returns the service account of the Job of w for a
+// coordinator of a pool with the purpose p and the settings sa:
+//   - For PurposeSweeps, sa.Sweep. A Work of a sweep that names a service
+//     account fails.
+//   - For PurposeJobs, w.ServiceAccount, or sa.Default when it is empty,
+//     only when sa.Allowed lists it.
+//
+// It returns ErrInvalid for a service account that is empty, that
+// sa.Allowed does not list, or that is sa.Own. The coordinator then starts
+// no Job and releases the claim with the reason.
+func ServiceAccountFor(p Purpose, w *Work, sa *ServiceAccounts) (string, error) {
+	var name string
+
+	switch p {
+	case PurposeSweeps:
+		if w.ServiceAccount != "" {
+			return "", fmt.Errorf("%w: the work of a sweep names a service account", ErrInvalid)
+		}
+
+		name = sa.Sweep
+	case PurposeJobs:
+		name = w.ServiceAccount
+		if name == "" {
+			name = sa.Default
+		}
+
+		if !slices.Contains(sa.Allowed, name) {
+			return "", fmt.Errorf("%w: service account %q is not in the allowlist of the coordinator", ErrInvalid, name)
+		}
+	default:
+		return "", fmt.Errorf("%w: unknown purpose %q", ErrInvalid, p)
+	}
+
+	if name == "" || name == sa.Own {
+		return "", fmt.Errorf("%w: a Job never runs as the service account of the coordinator, or as none", ErrInvalid)
+	}
+
+	return name, nil
+}
+
+// The time from a claim to the job session. A Job or a sandbox can wait
+// for a node, an image pull or the source before its launcher opens a
+// session. The runner renews the claim until then, for MaxSessionWait at
+// most.
+const (
+	// MaxSessionWait is the longest time from a claim to the job session
+	// of its launcher. After it, a renewal by the runner fails with
+	// ErrClaimLost, and the server releases the claim.
+	MaxSessionWait = 30 * time.Minute
+	// SourceWait is the longest time that the launcher waits for a source
+	// snapshot that is not ready.
+	SourceWait = 10 * time.Minute
+	// StartAllowance is the fixed part of the deadline of a Job or a
+	// sandbox for the time before the first step: the schedule, the image
+	// pull, the session and the source.
+	StartAllowance = MaxSessionWait + SourceWait
+)
+
+// CheckRunnerRenew checks a renewal by the runner of a claim that it took
+// at claimedAt. It returns ErrSessionOpen when the launcher of the claim
+// opened its session: the runner then stops its renewals and leaves the
+// Job or the sandbox alone. It returns ErrClaimLost after MaxSessionWait
+// with no session: the server releases the claim.
+func CheckRunnerRenew(claimedAt time.Time, sessionOpen bool, now time.Time) error {
+	switch {
+	case sessionOpen:
+		return ErrSessionOpen
+	case now.Sub(claimedAt) > MaxSessionWait:
+		return fmt.Errorf("%w: no job session %v after the claim", ErrClaimLost, MaxSessionWait)
+	default:
+		return nil
+	}
 }
 
 // Grace periods of a step after a cancel or a timeout: SIGINT first, then
@@ -55,7 +158,10 @@ func GraceFor(s *job.Step) time.Duration {
 	return GraceOther
 }
 
-// Limits are the time limits of one launcher.
+// Limits are the time limits of one launcher. The launcher owns the
+// deadline of each step: it stops a step at its timeout. The deadline of
+// the Job or the sandbox is a generous limit after which the platform
+// stops a launcher that does not end.
 type Limits struct {
 	// Deadline is the longest time that the launcher may run. A Kubernetes
 	// coordinator sets it as activeDeadlineSeconds of the Job, and a
@@ -68,8 +174,8 @@ type Limits struct {
 
 // LimitsFor returns the limits of a launcher that runs steps: the deadline
 // is the sum of the timeout (job.DefaultStepTimeout for zero) and the grace
-// period of each step, plus ReportTime. The grace is the largest grace
-// period of the steps, plus ReportTime.
+// period of each step, plus StartAllowance and ReportTime. The grace is the
+// largest grace period of the steps, plus ReportTime.
 func LimitsFor(steps []job.Step) Limits {
 	var deadline time.Duration
 
@@ -88,7 +194,7 @@ func LimitsFor(steps []job.Step) Limits {
 		maxGrace = max(maxGrace, g)
 	}
 
-	return Limits{Deadline: deadline + ReportTime, Grace: maxGrace + ReportTime}
+	return Limits{Deadline: StartAllowance + deadline + ReportTime, Grace: maxGrace + ReportTime}
 }
 
 // Kubernetes Jobs. The Kubernetes coordinator creates one Job for each

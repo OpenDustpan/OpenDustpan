@@ -18,10 +18,13 @@ package source
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -158,7 +161,7 @@ type Snapshot struct {
 	Failed    string
 	CreatedAt time.Time
 	// ExpiresAt is Retention after the end of the last job that names the
-	// snapshot. A sweep deletes the blobs after it.
+	// snapshot. The server deletes the blobs after it.
 	ExpiresAt time.Time
 }
 
@@ -213,17 +216,27 @@ type Fetcher interface {
 	// repository that the forge does not have or does not give, and
 	// ErrTooLarge after MaxPack bytes. An error that can pass, for example
 	// a timeout, wraps neither, and the durable fetch retries it.
-	Fetch(ctx context.Context, r Request, w io.Writer) (size int64, sha256 string, err error)
+	Fetch(ctx context.Context, r Request, w io.Writer) (size int64, sum string, err error)
 	// Submodules reads the .gitmodules file and the gitlinks of the commit
 	// of r from the pack in p, and returns the submodules with their URL
-	// and pinned commit.
+	// and pinned commit. A relative URL resolves against the URL of the
+	// repository of r first (ResolveURL), so the policy matches the URL
+	// that the server fetches.
+	//
+	// The adapter that fetches a submodule follows no redirect to another
+	// host. It sends the credentials of the forge connection only to the
+	// host of the connection (SameHost), and fetches a submodule of another
+	// host with no credentials.
 	Submodules(ctx context.Context, r Request, p io.ReaderAt, size int64) ([]Submodule, error)
 	// LargeFiles reads the Git LFS pointer files of the commit of r from
 	// the pack in p, and returns their objects.
 	LargeFiles(ctx context.Context, r Request, p io.ReaderAt, size int64) ([]LargeFile, error)
 	// LargeFile writes the Git LFS object oid of the repository of r to w.
-	// It returns ErrCorrupt when the content does not have the hash oid or
-	// the size of the pointer.
+	// It gets the object only from the standard Git LFS endpoint of the
+	// repository on the forge (LFSEndpoint), never from an lfs.url of a
+	// .lfsconfig file in the commit. It returns ErrCorrupt when the
+	// content does not have the hash oid or the size of the pointer
+	// (CheckLargeFile).
 	LargeFile(ctx context.Context, r Request, oid string, size int64, w io.Writer) error
 }
 
@@ -261,9 +274,66 @@ type Checkout interface {
 	//   - a symbolic link points inside dir.
 	//
 	// It returns ErrCorrupt for a check that fails, and ErrTooLarge above
-	// MaxCheckout or MaxFiles. A submodule writes at its path in the same
-	// way. It writes no .git directory.
+	// MaxCheckout or MaxFiles. It writes no .git directory.
 	Write(ctx context.Context, s Snapshot, p io.ReaderAt, size int64, dir string) error
+	// Submodule reads the pack of the submodule at index i of s.Submodules
+	// in p, and checks it as Write does. It also checks that the commit of
+	// the submodule is the commit of the gitlink at its path in the tree of
+	// the superproject that Write checked (CheckGitlink). Then it writes
+	// the tree of the submodule at that path in dir. It returns ErrCorrupt
+	// for a check that fails.
+	Submodule(ctx context.Context, s Snapshot, i int, p io.ReaderAt, size int64, dir string) error
+	// LargeFiles replaces each Git LFS pointer file of the checkout in dir
+	// whose object s.LargeFiles names with the object from objects. Before
+	// it replaces a file, it checks that the pointer names the object, and
+	// that the content has the SHA-256 and the size of the pointer
+	// (CheckLargeFile). A pointer whose object s does not name stays as it
+	// is. It returns ErrCorrupt for a check that fails, and ErrTooLarge
+	// above MaxLargeFile or MaxCheckout.
+	LargeFiles(ctx context.Context, s Snapshot, dir string, objects LargeFileSource) error
+}
+
+// LargeFileSource gives the Git LFS objects of a snapshot to the
+// launcher, through its job session.
+type LargeFileSource interface {
+	// Open returns the content of the object oid. It returns ErrNotFound
+	// for an object that the snapshot does not hold.
+	Open(ctx context.Context, oid string) (io.ReadCloser, error)
+}
+
+// CheckGitlink checks that the submodule sub has the commit of the gitlink
+// at its path in the checked tree of the superproject. It returns
+// ErrCorrupt otherwise, so a pack of another commit never lands at the
+// path.
+func CheckGitlink(sub *Submodule, gitlink string) error {
+	if sub.Commit == "" || sub.Commit != gitlink {
+		return fmt.Errorf("%w: submodule %s is at %s, the superproject pins %s", ErrCorrupt, sub.Path, sub.Commit,
+			gitlink)
+	}
+
+	return nil
+}
+
+// CheckLargeFile reads r to its end and checks that it has the size and
+// the SHA-256 of want. It returns ErrTooLarge above MaxLargeFile, and
+// ErrCorrupt for another size or hash.
+func CheckLargeFile(want LargeFile, r io.Reader) error {
+	if want.Size > MaxLargeFile {
+		return fmt.Errorf("%w: a Git LFS object has at most %d bytes", ErrTooLarge, MaxLargeFile)
+	}
+
+	h := sha256.New()
+
+	n, err := io.Copy(h, io.LimitReader(r, want.Size+1))
+	if err != nil {
+		return fmt.Errorf("read Git LFS object %s: %w", want.OID, err)
+	}
+
+	if n != want.Size || hex.EncodeToString(h.Sum(nil)) != want.OID {
+		return fmt.Errorf("%w: Git LFS object %s does not match its pointer", ErrCorrupt, want.OID)
+	}
+
+	return nil
 }
 
 // Policy is the source policy of a namespace: which submodules and which
@@ -356,8 +426,8 @@ func matchAny(list []URLPattern, u string) bool {
 type URLPattern string
 
 // Validate returns ErrInvalid for a pattern that is not an https URL with a
-// host and a path, that has a user, a query, a fragment or a port, or that
-// has a "*" that is not the whole last path part.
+// host and a path, that has a user, a query, a fragment, a port or a '%',
+// or that has a "*" that is not the whole last path part.
 func (u URLPattern) Validate() error {
 	h, ok := splitHTTPS(string(u))
 	if !ok || h.host == "" || len(h.parts) == 0 {
@@ -375,7 +445,10 @@ func (u URLPattern) Validate() error {
 
 // Match reports whether the repository URL target matches u. The host
 // matches with no regard to case, the path parts exactly, and a ".git" at
-// the end of the target does not count.
+// the end of the target does not count. A target with a '%' never
+// matches, so an encoded '/' or '.' cannot pass a pattern. A target with
+// a "." or ".." part never matches. The caller resolves a relative URL
+// with ResolveURL first.
 func (u URLPattern) Match(target string) bool {
 	p, ok := splitHTTPS(string(u))
 	t, ok2 := splitHTTPS(target)
@@ -415,12 +488,15 @@ type httpsURL struct {
 	parts []string
 }
 
-// splitHTTPS splits an https URL with no user, port, query or fragment into
-// its host and its path parts.
+// splitHTTPS splits an https URL with no user, port, query, fragment or
+// '%' into its host and its path parts. It refuses a path part "." or
+// "..".
 func splitHTTPS(s string) (httpsURL, bool) {
+	none := httpsURL{host: "", parts: nil}
+
 	rest, found := strings.CutPrefix(s, "https://")
-	if !found || strings.ContainsAny(rest, "@?#:\\ ") {
-		return httpsURL{host: "", parts: nil}, false
+	if !found || strings.ContainsAny(rest, "@?#:%\\ \t\n\r") || strings.ContainsRune(rest, 0) {
+		return none, false
 	}
 
 	host, p, _ := strings.Cut(rest, "/")
@@ -430,7 +506,96 @@ func splitHTTPS(s string) (httpsURL, bool) {
 		return httpsURL{host: host, parts: nil}, true
 	}
 
-	return httpsURL{host: host, parts: strings.Split(p, "/")}, true
+	parts := strings.Split(p, "/")
+	for _, part := range parts {
+		if part == "." || part == ".." {
+			return none, false
+		}
+	}
+
+	return httpsURL{host: host, parts: parts}, true
+}
+
+// ResolveURL returns the URL of a submodule whose .gitmodules URL is ref,
+// in the superproject with the repository URL base. A ref that starts with
+// "./" or "../" resolves against base as git does: each "../" takes away
+// one path part of base, and "./" takes away none. Any other ref is the
+// URL as it is. It returns ErrNotAllowed for a ref or a base that is not
+// an https URL that splitHTTPS accepts, and for a ref that leaves the host
+// of base. The policy then matches the result.
+func ResolveURL(base, ref string) (string, error) {
+	b, ok := splitHTTPS(base)
+	if !ok || b.host == "" {
+		return "", fmt.Errorf("%w: superproject URL %q", ErrNotAllowed, base)
+	}
+
+	if !strings.HasPrefix(ref, "./") && !strings.HasPrefix(ref, "../") {
+		if _, valid := splitHTTPS(ref); !valid {
+			return "", fmt.Errorf("%w: submodule URL %q", ErrNotAllowed, ref)
+		}
+
+		return ref, nil
+	}
+
+	parts, rest, ok := upParts(b.parts, ref)
+	if !ok {
+		return "", fmt.Errorf("%w: submodule URL %q leaves the host", ErrNotAllowed, ref)
+	}
+
+	out := "https://" + b.host + "/" + strings.Join(append(parts, rest), "/")
+	if _, valid := splitHTTPS(out); !valid || rest == "" {
+		return "", fmt.Errorf("%w: submodule URL %q", ErrNotAllowed, ref)
+	}
+
+	return out, nil
+}
+
+// upParts takes the leading "./" and "../" off ref, and one part off a
+// copy of parts for each "../". It returns false when a "../" has no part
+// to take off.
+func upParts(parts []string, ref string) ([]string, string, bool) {
+	out := slices.Clone(parts)
+
+	for {
+		switch {
+		case strings.HasPrefix(ref, "./"):
+			ref = ref[len("./"):]
+		case strings.HasPrefix(ref, "../"):
+			if len(out) == 0 {
+				return nil, "", false
+			}
+
+			out, ref = out[:len(out)-1], ref[len("../"):]
+		default:
+			return out, ref, true
+		}
+	}
+}
+
+// SameHost reports whether the https URLs a and b have one host, with no
+// regard to case. The server sends the credentials of a forge connection
+// only to a URL whose host is the host of the connection.
+func SameHost(a, b string) bool {
+	x, ok := splitHTTPS(a)
+	y, ok2 := splitHTTPS(b)
+
+	return ok && ok2 && x.host != "" && strings.EqualFold(x.host, y.host)
+}
+
+// LFSEndpoint returns the standard Git LFS endpoint of the repository URL
+// repo: the URL with ".git" at its end, and "/info/lfs". The server gets
+// Git LFS objects only from it, never from an lfs.url of a .lfsconfig
+// file. It returns ErrNotAllowed for a URL that splitHTTPS refuses.
+func LFSEndpoint(repo string) (string, error) {
+	u, ok := splitHTTPS(repo)
+	if !ok || u.host == "" || len(u.parts) == 0 {
+		return "", fmt.Errorf("%w: repository URL %q", ErrNotAllowed, repo)
+	}
+
+	last := len(u.parts) - 1
+	u.parts[last] = strings.TrimSuffix(u.parts[last], ".git") + ".git"
+
+	return "https://" + u.host + "/" + strings.Join(u.parts, "/") + "/info/lfs", nil
 }
 
 // lfsPointer is the first line of a Git LFS pointer file.

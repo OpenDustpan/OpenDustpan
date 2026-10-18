@@ -2,6 +2,7 @@ package runner
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -17,7 +18,7 @@ const ProtocolVersion = 1
 const MaxSkew = 2
 
 // AssignmentVersion is the version of the assignment that this release of
-// the server writes for a phase or a scan, and the highest that this
+// the server writes for a phase or a sweep, and the highest that this
 // release of a runner reads. The server stores it as the version of each
 // durable operation of a runner kind. A runner sends the highest version
 // that it reads, and the claim never takes an operation above it
@@ -25,23 +26,40 @@ const MaxSkew = 2
 // cannot honor never reaches an old launcher.
 const AssignmentVersion = 1
 
-// Release is a release of OpenDustpan: major, minor and patch. A runner, a
-// launcher and the server of one release have one Release.
+// Release is a release of OpenDustpan: major, minor and patch, and an
+// optional pre-release tag. A runner, a launcher and the server of one
+// release have one Release.
 type Release struct {
 	Major int
 	Minor int
 	Patch int
+	// Pre is the pre-release tag after '-', for example "rc.1", or empty.
+	// CheckSkew compares the base version only, so a pre-release counts as
+	// its base version.
+	Pre string
 }
 
 // releaseParts is the number of parts of a release.
 const releaseParts = 3
 
-// ParseRelease parses "1.2.3" or "v1.2.3". It returns ErrInvalid for any
-// other text.
+var preRelease = regexp.MustCompile(`^[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*$`)
+
+// ParseRelease parses "1.2.3" or "v1.2.3", with an optional pre-release
+// tag after '-', for example "1.2.3-rc.1", and an optional build tag after
+// '+', which it drops. It returns ErrInvalid for any other text.
 func ParseRelease(s string) (Release, error) {
-	parts := strings.Split(strings.TrimPrefix(s, "v"), ".")
+	bad := fmt.Errorf("%w: release %q is not major.minor.patch", ErrInvalid, s)
+
+	rest, build, hasBuild := strings.Cut(strings.TrimPrefix(s, "v"), "+")
+	base, pre, hasPre := strings.Cut(rest, "-")
+
+	if (hasBuild && !preRelease.MatchString(build)) || (hasPre && !preRelease.MatchString(pre)) {
+		return Release{}, bad
+	}
+
+	parts := strings.Split(base, ".")
 	if len(parts) != releaseParts {
-		return Release{}, fmt.Errorf("%w: release %q is not major.minor.patch", ErrInvalid, s)
+		return Release{}, bad
 	}
 
 	var n [releaseParts]int
@@ -49,36 +67,46 @@ func ParseRelease(s string) (Release, error) {
 	for i, p := range parts {
 		v, err := strconv.Atoi(p)
 		if err != nil || v < 0 || (len(p) > 1 && p[0] == '0') {
-			return Release{}, fmt.Errorf("%w: release %q is not major.minor.patch", ErrInvalid, s)
+			return Release{}, bad
 		}
 
 		n[i] = v
 	}
 
-	return Release{Major: n[0], Minor: n[1], Patch: n[2]}, nil
+	return Release{Major: n[0], Minor: n[1], Patch: n[2], Pre: pre}, nil
 }
 
-// String returns the release as major.minor.patch.
+// String returns the release as major.minor.patch, with "-" and the
+// pre-release tag when it has one.
 func (r Release) String() string {
+	if r.Pre != "" {
+		return fmt.Sprintf("%d.%d.%d-%s", r.Major, r.Minor, r.Patch, r.Pre)
+	}
+
 	return fmt.Sprintf("%d.%d.%d", r.Major, r.Minor, r.Patch)
 }
 
 // CheckSkew checks that the server of release server accepts a runner or a
 // launcher of release client. The skew counts minor releases inside one
 // major release: client may be the release of the server or up to MaxSkew
-// minor releases older. A patch release never counts. It returns
-// ErrVersionUnsupported, with the range that the server accepts, for a
-// client that is newer than the server, more than MaxSkew minor releases
-// older, or of another major release. The rolling deploys of the server
-// have the same number, so a runner never needs an upgrade before the
-// server.
+// minor releases older. A patch release and a pre-release tag never count.
+// It returns:
+//   - ErrVersionAhead for a client of a newer minor or major release than
+//     the server. A rolling deploy or a rollback of the server causes it,
+//     so the client retries with backoff.
+//   - ErrVersionUnsupported, with the range that the server accepts, for a
+//     client more than MaxSkew minor releases older, or of an older major
+//     release.
 func CheckSkew(server, client Release) error {
 	lowest := max(server.Minor-MaxSkew, 0)
 
-	if client.Major != server.Major || client.Minor > server.Minor || client.Minor < lowest {
+	switch {
+	case client.Major > server.Major || (client.Major == server.Major && client.Minor > server.Minor):
+		return fmt.Errorf("%w: release %s, the server is %s", ErrVersionAhead, client, server)
+	case client.Major != server.Major || client.Minor < lowest:
 		return fmt.Errorf("%w: release %s, the server %s accepts %d.%d.x to %d.%d.x",
 			ErrVersionUnsupported, client, server, server.Major, lowest, server.Major, server.Minor)
+	default:
+		return nil
 	}
-
-	return nil
 }

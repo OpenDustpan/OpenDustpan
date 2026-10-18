@@ -1,5 +1,5 @@
 // Package launcher defines the contract of the launcher: the static binary
-// that a coordinator starts for each claimed phase or scan, in a Kubernetes
+// that a coordinator starts for each claimed phase or sweep, in a Kubernetes
 // Job or a machine sandbox. The launcher gets its handoff token through a
 // handoff, opens a job session with a key that it makes in memory, checks
 // out the source snapshot, and starts each step as an argument list with
@@ -7,6 +7,19 @@
 // credentials of a tool step to the tool through a credentials helper or a
 // file on a memory-backed volume. The image of the team holds only the
 // tools.
+//
+// At its start, the launcher sets PR_SET_DUMPABLE to 0, so that a process
+// of a step with the same user ID cannot attach to it with ptrace or read
+// its memory through /proc. Where the place allows it (a Firecracker
+// microVM, a gVisor container, or a pod whose security context gives the
+// launcher the capabilities to change its user), each step runs as a user
+// ID other than the user of the launcher (StepUser). Where it does not,
+// for example a pod with all capabilities dropped, the steps run as the
+// user of the launcher. The remaining risk is then: a step can read the
+// files of the memory-backed volume that its own step got, and a process
+// that a tool step leaves running can ask the helper socket while that
+// step runs. The launcher deletes the directory of each step at its end,
+// and ends the process group of the step before the next step.
 //
 // This package holds the rules that the launcher, the coordinators and the
 // tests share: the command line, the exit codes, the environment of a step
@@ -53,7 +66,7 @@ type Mode string
 
 // The modes of the launcher binary.
 const (
-	// ModeRun runs one claimed phase or scan.
+	// ModeRun runs one claimed phase or sweep.
 	ModeRun Mode = "run"
 	// ModeCopy copies the launcher binary to a directory and ends. The init
 	// container of a Kubernetes Job runs it, so the image of the team needs
@@ -243,7 +256,7 @@ func checkHandoff(a *Args) error {
 		}
 
 		return checkHTTPS(a.Coordinator, "--coordinator")
-	case runner.HandoffStdin, runner.HandoffPipe:
+	case runner.HandoffStdin, runner.HandoffVsock, runner.HandoffPipe:
 		if a.Coordinator != "" || a.CAFile != "" || a.TokenFile != "" {
 			return fmt.Errorf("%w: --coordinator, --ca-file and --token-file are for handoff %s only",
 				ErrUsage, runner.HandoffKubernetes)
@@ -286,7 +299,7 @@ type ExitCode int
 
 // The exit codes of the launcher.
 const (
-	// ExitOK: the phase or the scan ended and the launcher reported it,
+	// ExitOK: the phase or the sweep ended and the launcher reported it,
 	// also a phase that failed. The server has the outcome.
 	ExitOK ExitCode = 0
 	// ExitUsage: the command line is not valid.
@@ -358,14 +371,14 @@ const dispositionUnknown = DispositionExpire
 // Variables that the launcher sets for a step. A step cannot set a name
 // with the prefix job.ReservedEnvPrefix.
 const (
-	EnvJob        = "DUSTPAN_JOB_ID"
-	EnvPhase      = "DUSTPAN_PHASE"
-	EnvStep       = "DUSTPAN_STEP"
-	EnvUnit       = "DUSTPAN_UNIT"
-	EnvNamespace  = "DUSTPAN_NAMESPACE"
-	EnvCommit     = "DUSTPAN_COMMIT"
-	EnvServer     = "DUSTPAN_SERVER_URL"
-	EnvScanReport = "DUSTPAN_SCAN_REPORT"
+	EnvJob         = "DUSTPAN_JOB_ID"
+	EnvPhase       = "DUSTPAN_PHASE"
+	EnvStep        = "DUSTPAN_STEP"
+	EnvUnit        = "DUSTPAN_UNIT"
+	EnvNamespace   = "DUSTPAN_NAMESPACE"
+	EnvCommit      = "DUSTPAN_COMMIT"
+	EnvServer      = "DUSTPAN_SERVER_URL"
+	EnvSweepReport = "DUSTPAN_SWEEP_REPORT"
 )
 
 // Variables of the tool that the launcher sets for a step of the role tool

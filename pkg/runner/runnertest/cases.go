@@ -2,10 +2,12 @@ package runnertest
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	"opendustpan.org/opendustpan/pkg/durable"
 	"opendustpan.org/opendustpan/pkg/job"
 	"opendustpan.org/opendustpan/pkg/namespace"
 	"opendustpan.org/opendustpan/pkg/runner"
@@ -25,14 +27,14 @@ func testCreatePool(t *testing.T, h Harness) {
 		t.Fatalf("Pool = %+v, %v", got, err)
 	}
 
-	_, err = h.Pools.CreatePool(t.Context(), newPool("acme", "scan", runner.PurposeScans), f.fence, entries(f.fence))
+	_, err = h.Pools.CreatePool(t.Context(), newPool("acme", "sweep", runner.PurposeSweeps), f.fence, entries(f.fence))
 	if err != nil {
-		t.Fatalf("CreatePool scan: %v", err)
+		t.Fatalf("CreatePool sweep: %v", err)
 	}
 
 	list, err := h.Pools.Pools(t.Context(), "acme")
-	if err != nil || len(list) != 2 || list[0].Name != "prod" || list[1].Name != "scan" {
-		t.Fatalf("Pools = %+v, %v, want prod and scan in order", list, err)
+	if err != nil || len(list) != 2 || list[0].Name != "prod" || list[1].Name != "sweep" {
+		t.Fatalf("Pools = %+v, %v, want prod and sweep in order", list, err)
 	}
 
 	_, err = h.Pools.Pool(t.Context(), "rp-unknown")
@@ -47,7 +49,7 @@ func testPoolNameUnique(t *testing.T, h Harness) {
 
 	f := setUp(t, h)
 
-	_, err := h.Pools.CreatePool(t.Context(), newPool("acme", "prod", runner.PurposeScans), f.fence, entries(f.fence))
+	_, err := h.Pools.CreatePool(t.Context(), newPool("acme", "prod", runner.PurposeSweeps), f.fence, entries(f.fence))
 	wantErr(t, "CreatePool of a name that exists", err, runner.ErrAlreadyExists)
 
 	other, err := h.Domain.CreateNamespace(t.Context(), "other")
@@ -67,7 +69,7 @@ func testPurposeImmutable(t *testing.T, h Harness) {
 	f := setUp(t, h)
 
 	next := f.pool
-	next.Purpose = runner.PurposeScans
+	next.Purpose = runner.PurposeSweeps
 
 	_, err := h.Pools.UpdatePool(t.Context(), next, f.fence, entries(f.fence))
 	wantErr(t, "UpdatePool of the purpose", err, runner.ErrImmutable)
@@ -342,13 +344,20 @@ func testRotateKey(t *testing.T, h Harness) {
 		t.Fatalf("RotateKey = %+v, %v", got, err)
 	}
 
+	if !bytes.Equal(got.PreviousKey.Public, r.Key.Public) || !got.RotatedAt.Equal(at) {
+		t.Fatalf("RotateKey kept the previous key %x at %v, want %x at %v", got.PreviousKey.Public, got.RotatedAt,
+			r.Key.Public, at)
+	}
+
 	retry := next
 	retry.CreatedAt = at.Add(time.Minute)
 
 	again, err := h.Members.RotateKey(t.Context(), r.ID, retry, f.fence, entries(f.fence))
-	if err != nil || !again.Key.CreatedAt.Equal(at) {
+	if err != nil || !again.Key.CreatedAt.Equal(at) || !bytes.Equal(again.PreviousKey.Public, r.Key.Public) {
 		t.Fatalf("RotateKey retry = %+v, %v, want no change", again, err)
 	}
+
+	checkRotationKeys(t, &again, r.Key, at)
 
 	if _, err := h.Members.Heartbeat(t.Context(), r.ID, r.Release, now.Add(runner.MaxKeyAge+time.Hour)); err != nil {
 		t.Fatalf("Heartbeat after a rotation, past the age of the old key: %v", err)
@@ -424,17 +433,17 @@ func testHandoffTokenClaim(t *testing.T, h Harness) {
 	_, err := h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), now.Add(runner.HandoffTokenTTL))
 	wantErr(t, "OpenSession at the expiry of the token", err, runner.ErrTokenExpired)
 
-	scan, err := h.Domain.Claim(t.Context(), runner.ScanKind(f.pool.ID), r.ID)
+	sweep, err := h.Domain.Claim(t.Context(), runner.SweepKind(f.pool.ID), r.ID)
 	if err != nil {
 		t.Fatalf("Claim: %v", err)
 	}
 
 	tok := runner.HandoffToken{
-		SHA256: hash(runner.HandoffTokenPrefix + randomHex(t)), Operation: string(scan.Operation), Token: scan.Token,
+		SHA256: hash(runner.HandoffTokenPrefix + randomHex(t)), Operation: string(sweep.Operation), Token: sweep.Token,
 		Runner: r.ID, ExpiresAt: now.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
 	}
 
-	err = h.Sessions.IssueHandoffToken(t.Context(), tok, scan)
+	err = h.Sessions.IssueHandoffToken(t.Context(), tok, sweep)
 	wantErr(t, "IssueHandoffToken for a kind of the other purpose", err, runner.ErrInvalid)
 
 	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), r.ID)
@@ -491,5 +500,182 @@ func testAuditEntries(t *testing.T, h Harness) {
 			t.Errorf("entry %s has the fence version %d, want %d", got[i].Action, got[i].FenceVersion,
 				f.fence.FailoverVersion)
 		}
+	}
+}
+
+func testRejoinNeedsOffline(t *testing.T, h Harness) {
+	t.Helper()
+
+	f := setUp(t, h)
+
+	first, err := join(t, f, joinToken(t, f, time.Hour), "cluster-a", now)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), first.ID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	online := now.Add(runner.OfflineAfter)
+
+	_, err = join(t, f, joinTokenAt(t, f, online, time.Hour), "cluster-a", online)
+	wantErr(t, "Join again of an online runner", err, runner.ErrRunnerOnline)
+
+	offline := now.Add(runner.OfflineAfter + time.Second)
+	secret := joinTokenAt(t, f, offline, time.Hour)
+
+	_, err = joinExpecting(t, f, runner.Joining{
+		TokenSHA256: hash(secret), Request: joinRequest(t, secret, "cluster-a"), At: offline, Rejoin: "",
+	})
+	wantErr(t, "Join again that expects a new runner", err, runner.ErrConflict)
+
+	again, err := join(t, f, secret, "cluster-a", offline)
+	if err != nil || again.ID != first.ID || bytes.Equal(again.Key.Public, first.Key.Public) {
+		t.Fatalf("Join again of an offline runner = %+v, %v, want ID %s with a new key", again, err, first.ID)
+	}
+
+	tok := runner.HandoffToken{
+		SHA256: hash(runner.HandoffTokenPrefix + randomHex(t)), Operation: string(c.Operation), Token: c.Token,
+		Runner: first.ID, ExpiresAt: offline.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
+	}
+
+	err = h.Sessions.IssueHandoffToken(t.Context(), tok, c)
+	wantErr(t, "IssueHandoffToken for a claim of the old key", err, runner.ErrClaimLost)
+}
+
+func testRetireEndsSessions(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+
+	s, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), newKey(t), now)
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+
+	if err = h.Members.Retire(t.Context(), l.r.ID, now, l.f.fence, entries(l.f.fence)); err != nil {
+		t.Fatalf("Retire: %v", err)
+	}
+
+	_, err = h.Sessions.Session(t.Context(), s.ID)
+	wantErr(t, "Session of a retired runner", err, runner.ErrRetired)
+}
+
+func testHandoffTokenOwner(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	f := l.f
+
+	other, err := join(t, f, joinToken(t, f, time.Hour), "cluster-b", now)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	c, err := h.Domain.Claim(t.Context(), job.RunnerKind(f.pool.ID), l.r.ID)
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+
+	stolen := runner.HandoffToken{
+		SHA256: hash(runner.HandoffTokenPrefix + randomHex(t)), Operation: string(c.Operation), Token: c.Token,
+		Runner: other.ID, ExpiresAt: now.Add(runner.HandoffTokenTTL), UsedAt: time.Time{},
+	}
+
+	err = h.Sessions.IssueHandoffToken(t.Context(), stolen, c)
+	if !errors.Is(err, runner.ErrClaimLost) && !errors.Is(err, runner.ErrNotFound) {
+		t.Fatalf("IssueHandoffToken for the claim of another runner = %v, want ErrClaimLost or ErrNotFound", err)
+	}
+
+	asOwner := c
+	asOwner.Owner = other.ID
+
+	err = h.Sessions.IssueHandoffToken(t.Context(), stolen, asOwner)
+	if !errors.Is(err, runner.ErrClaimLost) && !errors.Is(err, runner.ErrNotFound) {
+		t.Fatalf("IssueHandoffToken with a claim that names another owner = %v, want ErrClaimLost or ErrNotFound", err)
+	}
+
+	_, err = h.Sessions.OpenSession(t.Context(), stolen.SHA256, newKey(t), now)
+	wantErr(t, "OpenSession with a refused token", err, runner.ErrNotFound)
+}
+
+func testHandoffTokenReplace(t *testing.T, h Harness) {
+	t.Helper()
+
+	l := handoffSetUp(t, h)
+	c := durable.Claim{
+		Operation: durable.ID(l.tok.Operation),
+		Owner:     l.r.ID,
+		Token:     l.tok.Token,
+		ExpiresAt: time.Time{},
+	}
+
+	secret := runner.HandoffTokenPrefix + randomHex(t)
+	next := l.tok
+	next.SHA256 = hash(secret)
+
+	if err := h.Sessions.IssueHandoffToken(t.Context(), next, c); err != nil {
+		t.Fatalf("IssueHandoffToken again: %v", err)
+	}
+
+	_, err := h.Sessions.OpenSession(t.Context(), hash(l.secret), newKey(t), now)
+	wantErr(t, "OpenSession with the replaced token", err, runner.ErrNotFound)
+
+	if _, err = h.Sessions.OpenSession(t.Context(), hash(secret), newKey(t), now); err != nil {
+		t.Fatalf("OpenSession with the new token: %v", err)
+	}
+
+	late := next
+	late.SHA256 = hash(runner.HandoffTokenPrefix + randomHex(t))
+
+	err = h.Sessions.IssueHandoffToken(t.Context(), late, c)
+	wantErr(t, "IssueHandoffToken for a claim with a session", err, runner.ErrConflict)
+}
+
+func testNonce(t *testing.T, h Harness) {
+	t.Helper()
+
+	nonce := randomHex(t)
+	expires := now.Add(runner.NonceTTL)
+
+	if err := h.Sessions.UseNonce(t.Context(), "rn-1", nonce, expires, now); err != nil {
+		t.Fatalf("UseNonce: %v", err)
+	}
+
+	err := h.Sessions.UseNonce(t.Context(), "rn-1", nonce, expires, now.Add(time.Second))
+	wantErr(t, "UseNonce of a nonce that the store holds", err, runner.ErrReplay)
+
+	if err = h.Sessions.UseNonce(t.Context(), "rn-2", nonce, expires, now); err != nil {
+		t.Fatalf("UseNonce of the nonce for another subject: %v", err)
+	}
+
+	if err = h.Sessions.UseNonce(t.Context(), "rn-1", randomHex(t), expires, now); err != nil {
+		t.Fatalf("UseNonce of another nonce: %v", err)
+	}
+
+	if err = h.Sessions.UseNonce(t.Context(), "rn-1", nonce, expires.Add(runner.NonceTTL), expires); err != nil {
+		t.Fatalf("UseNonce after the expiry: %v", err)
+	}
+}
+
+// checkRotationKeys checks the keys that r, rotated from old at at, gives
+// for a proof.
+func checkRotationKeys(t *testing.T, r *runner.Runner, old runner.Key, at time.Time) {
+	t.Helper()
+
+	inGrace := r.RotationKeys(at.Add(runner.RotateGrace))
+	if len(inGrace) != len([]runner.Key{r.Key, old}) || !bytes.Equal(inGrace[1].Public, old.Public) {
+		t.Fatalf("RotationKeys in the grace window = %d keys, want the new and the old", len(inGrace))
+	}
+
+	other := r.ProofKeys(at.Add(time.Minute))
+	if len(other) != 1 || !bytes.Equal(other[0].Public, r.Key.Public) {
+		t.Fatalf("ProofKeys of another request = %d keys, want the new key only", len(other))
+	}
+
+	if late := r.RotationKeys(at.Add(runner.RotateGrace + time.Second)); len(late) != 1 {
+		t.Fatalf("RotationKeys after the grace window = %d keys, want the new key only", len(late))
 	}
 }

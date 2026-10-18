@@ -81,11 +81,16 @@ func Run(t *testing.T, newHarness Factory) {
 		{"an expired or revoked join token registers nothing", testJoinTokenExpiredRevoked},
 		{"the pool decides the isolation of a runner", testJoinIsolation},
 		{"a join again with one name keeps the runner ID", testRejoinKeepsID},
+		{"a join again needs an offline runner and ends its claims", testRejoinNeedsOffline},
 		{"a key older than 30 days must join again", testKeyExpired},
 		{"a retired runner authenticates nothing", testRetired},
+		{"a retire ends the sessions of the runner", testRetireEndsSessions},
 		{"a key rotation replaces the key, and a retry changes nothing", testRotateKey},
 		{"a handoff token opens one session for a live claim", testHandoffTokenSingleUse},
 		{"a handoff token needs a live claim of the pool", testHandoffTokenClaim},
+		{"a handoff token is only for a claim of its own runner", testHandoffTokenOwner},
+		{"a new handoff token replaces the old one until a session opens", testHandoffTokenReplace},
+		{"a nonce is good for one proof until its expiry", testNonce},
 		{"a session of a claim that a takeover replaced is lost", testSessionAfterTakeover},
 		{"each change appends its audit entry", testAuditEntries},
 	}
@@ -181,7 +186,8 @@ func join(t *testing.T, f fixture, secret, name string, at time.Time) (runner.Ru
 }
 
 // joinWith registers the runner of req, at at, as the protocol adapter
-// does: it checks the request, and gives the store the hash of the secret.
+// does: it checks the request, reads the runner of the same name, and
+// gives the store the hash of the secret.
 func joinWith(t *testing.T, f fixture, secret string, req runner.JoinRequest, at time.Time) (runner.Runner, error) {
 	t.Helper()
 
@@ -189,10 +195,29 @@ func joinWith(t *testing.T, f fixture, secret string, req runner.JoinRequest, at
 		t.Fatalf("JoinRequest.Validate: %v", err)
 	}
 
-	req.Token = ""
+	runners, err := f.h.Members.Runners(t.Context(), f.pool.ID)
+	if err != nil {
+		t.Fatalf("Runners: %v", err)
+	}
 
-	return f.h.Members.Join(t.Context(), runner.Joining{TokenSHA256: hash(secret), Request: req, At: at}, f.fence,
-		entries(f.fence))
+	rejoin := ""
+
+	for i := range runners {
+		if runners[i].Name == req.Name {
+			rejoin = runners[i].ID
+		}
+	}
+
+	return joinExpecting(t, f, runner.Joining{TokenSHA256: hash(secret), Request: req, At: at, Rejoin: rejoin})
+}
+
+// joinExpecting registers the runner of j, with no secret in the request.
+func joinExpecting(t *testing.T, f fixture, j runner.Joining) (runner.Runner, error) {
+	t.Helper()
+
+	j.Request.Token = ""
+
+	return f.h.Members.Join(t.Context(), j, f.fence, entries(f.fence))
 }
 
 // joinRequest returns a join request of a Kubernetes runner with a new key.
@@ -208,7 +233,7 @@ func joinRequest(t *testing.T, secret, name string) runner.JoinRequest {
 // release is the release of the runners of the cases.
 //
 //nolint:gochecknoglobals,mnd // A fixed value of the cases, read only.
-var release = runner.Release{Major: 0, Minor: 14, Patch: 0}
+var release = runner.Release{Major: 0, Minor: 14, Patch: 0, Pre: ""}
 
 // newKey makes a new Ed25519 public key.
 func newKey(t *testing.T) runner.Key {
