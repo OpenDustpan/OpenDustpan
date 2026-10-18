@@ -889,6 +889,21 @@ the owner's approval.
 
 ## Outcome
 
+Decided in part on 2026-10-18 (owner decisions):
+
+- "Multi-tenancy" and open question 10: OpenDustpan Cloud is multitenant,
+  and the namespace is the tenant
+  ([ADR 215](../adr/0215-the-namespace-is-the-tenant-of-a-multitenant-hosted-service.md)).
+  The server gets no tenant layer above namespaces and no new settings
+  scope. Option A and option B of that section are not taken.
+- "Storage quota": the key is `limits.storageBytes`, shown as "storage
+  limit" ([ADR 220](../adr/0220-isolation-between-namespaces-on-shared-infrastructure.md)
+  decision 13).
+- Open question 11: a lock in the static layer can turn a feature off
+  ([ADR 219](../adr/0219-a-static-lock-can-turn-a-feature-off.md)).
+- "API request rate": the namespace bucket, and shares of shared resources
+  for each namespace (ADR 220).
+
 Accepted in part as [ADR 212](../adr/0212-planner-role-smtp-settings-fresh-mfa-proxies-restore-audit-and-branding.md)
 decision 3 on 2026-10-18: a setting change that reduces security needs a
 fresh MFA step (open question 4). A value from the static layer needs no

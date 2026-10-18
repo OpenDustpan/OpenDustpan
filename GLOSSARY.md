@@ -17,8 +17,12 @@ The short name of a tool, as a label in the console, the API and the docs: "Pulu
 _Avoid_: "Pulumi CLI" as a label, "Pulumi Cloud" for the Pulumi CLI, "Terraform" for OpenTofu, tool label
 
 **Namespace**:
-The unit of tenancy that owns units, access rules and secrets. Each tool calls it an organization.
+The unit of tenancy that owns units, access rules and secrets, and the tenant of OpenDustpan Cloud (ADR 215). It has its own fence, home region, audit scope, backup, blueprints, profiles, OIDC issuer, settings and namespace key (ADR 218). With `identity.principalHome: namespace`, it also has its own principals, groups and sign-in. Each tool calls it an organization, and the hosted console calls it an account. A namespace name is unique in the installation.
 _Avoid_: Organization (except when naming a tool's own protocol field), tenant, account, org
+
+**Namespace state**:
+The state of a namespace: `active`, `suspended` (read-only, new work refused), `disabled` (31 days after the suspension) or `deleted` (90 days after the suspension). The write path reads it with the fence (ADR 215 decision 16).
+_Avoid_: Namespace status, account status
 
 **Namespace ID**:
 The stable, opaque identifier of a namespace, with the prefix `ns-`. The server makes it when it creates the namespace, and it never changes. A new namespace with the name of a purged namespace gets a new Namespace ID. So rows that hold the old ID never reach it.
@@ -128,6 +132,10 @@ _Avoid_: Minimum schema version, compatibility level
 The copy of the SQL data of a whole installation with the blob references that the data names. The SQL part is in the portable format. A restore accepts a backup of either dialect and of the same or an older schema version (ADR 42).
 _Avoid_: Dump, snapshot
 
+**Namespace backup**:
+The copy of the rows and blobs of one namespace in the portable format (ADR 218 decision 4). It holds the namespace key records, wrapped. It holds the grants of the namespace, and the principals and groups whose home is the namespace. It writes item key blobs only to a backup target that the `backups` table names, so a download holds no item keys. It restores only into its own namespace.
+_Avoid_: Partial backup, namespace export
+
 **Baseline migration**:
 The one migration of each dialect that replaced every migration before it, before the first tag. Its version is 100. The server refuses a database that records a lower version, and a restore refuses a backup with a lower schema version. Both errors name the baseline.
 _Avoid_: Squash, initial migration
@@ -200,12 +208,16 @@ _Avoid_: Token, guard
 ### Identity
 
 **Principal**:
-A caller whose identity OpenDustpan checked: a person, a service or a workload. Most principals belong to the whole installation. A principal of a namespace is the exception.
+A caller whose identity OpenDustpan checked: a person, a service or a workload. Each principal has a principal home: the installation or one namespace (ADR 215).
 _Avoid_: User (when the caller can be a machine), actor
 
 **Principal of a namespace**:
-A service principal that belongs to one namespace. A holder of `namespace:manage-principals` on the namespace makes it. It can only hold grants on its namespace or on an object inside it, and it cannot be a member of a group. Its subject is unique on the whole installation. A holder of `namespace:manage-principal-tokens` on the namespace makes the tokens of its principals.
+A principal whose home is one namespace. It can only hold grants on its namespace or on an object inside it. It can be a member of a group of its namespace only. A service principal of a namespace is made by a holder of `namespace:manage-principals` (ADR 67). With `identity.principalHome: namespace`, a person who signs in through the identity provider of a namespace is a principal of that namespace (ADR 215). A holder of `namespace:manage-principal-tokens` on the namespace makes the tokens of its service principals.
 _Avoid_: Namespace service account, local principal
+
+**Principal home**:
+The place where a principal, a group or a custom role belongs: the installation or one namespace (ADR 215). The installation setting `identity.principalHome` chooses the home of new people and groups. A grant never crosses homes: a principal of a namespace holds grants only inside its namespace.
+_Avoid_: Principal scope, tenant, realm
 
 **Principal source**:
 Where a principal comes from. The API makes a `local` principal. The first sign-in of a person through an OpenID Connect provider makes an `oidc` principal, and through a plain OAuth 2.0 provider an `oauth` principal. A directory sync keeps an `ldap` or `scim` principal. The subject of an `oidc` principal is the provider ID and the subject of the identity provider, separated by a colon. So a provider ID must never change after its first sign-in.
@@ -255,7 +267,7 @@ A rule in one namespace that matches a JWT from an issuer or a TLS client certif
 _Avoid_: Trust policy, federation rule
 
 **Group**:
-A named set of principals of the whole installation. A principal can be a member of more than one group (ADR 52).
+A named set of principals of one principal home: the installation or one namespace. A group of a namespace holds principals of that namespace only. A principal can be a member of more than one group of its home (ADR 52, ADR 215).
 _Avoid_: Team (except when naming a tool's own protocol field), collection
 
 **Role**:
@@ -421,8 +433,20 @@ The random key that encrypts all secret values of one scope. OpenDustpan stores 
 _Avoid_: DEK, secret key
 
 **Key-encryption key**:
-The key, kept outside the OpenDustpan database, that encrypts data keys.
+The key, kept outside the OpenDustpan database, at the top of the key hierarchy. It wraps each namespace key version, the data keys of the installation scope and the sign-in secrets of each namespace (ADR 217). It is a key file or a KMS key of the operator.
 _Avoid_: Master key, root key, KEK
+
+**Customer key**:
+A key in the key management service (KMS) of a customer that wraps the namespace key versions of one namespace (ADR 217). The server never holds it. It is optional. When the customer disables it, the sealed content of the namespace cannot be opened, and the key state of the namespace is `revoked`.
+_Avoid_: BYOK key, CMK, master key
+
+**Namespace key**:
+The random 256-bit key of one namespace, with the prefix `nk-` and numbered versions. The customer key, when the namespace has one, and the key-encryption key wrap each version. The newest version wraps new data keys and item keys. Older versions only unwrap until a rewrap moves each key to the newest version (ADR 217).
+_Avoid_: Namespace data key (a data key has a scope), namespace KEK
+
+**Key state**:
+The state of the namespace key of a namespace: `active`, `unavailable` (the KMS cannot answer) or `revoked` (the customer disabled its key). The server keeps it in SQL and reads it at each open of a key (ADR 217).
+_Avoid_: Key status, KMS state
 
 **Sealed**:
 Encrypted at rest with the data key of a scope, or with the item key of a history item. The server seals each checkpoint blob, event payload and journal batch of a Pulumi update with the item key of the update (ADR 151). It seals the state blob and the outputs document of an OpenTofu state version with the item key of the state version. The part of the server that seals and opens content is the sealer.
@@ -481,6 +505,14 @@ _Avoid_: Secret count
 **OpenDustpan Cloud**:
 The hosted service that the project runs. It is the build of the server and the console with shims for sign-up, onboarding and billing, hosted defaults and limits, and console labels. It is public source and has no feature that the open-source server lacks (ADR 59, ADR 77).
 _Avoid_: Fork, enterprise edition, hosted distribution, cloud edition (as an edition with its own features)
+
+**Federation member**:
+One installation in a federation of installations (RFC 79). Federation is opt-in, on a self-hosted installation and on OpenDustpan Cloud. It is not decided: OpenDustpan Cloud is one installation now (ADR 215 decision 21). No API answer, error, ID or host name tells a tenant which member holds its namespace.
+_Avoid_: Shard, cell, pod
+
+**Storage limit**:
+The fair-use limit on the stored bytes of a namespace (ADR 220 decision 13). Its setting is `limits.storageBytes`. At the limit, the server refuses the start of new work, never work in progress.
+_Avoid_: Quota (the catalog quota is another concept), storage quota
 
 ### Resources and self-service
 
@@ -931,7 +963,7 @@ The state item of a unit that no redaction can target (ADR 150, ADR 151). For a 
 _Avoid_: Current item, head
 
 **Item key**:
-The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The `Wrapper` wraps it, as it wraps a data key. The server writes the wrapped key one time, as the blob `item-keys/<item key ID>`. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
+The random 256-bit key that seals all content of one history item (ADR 151). The server never derives it from another key. The namespace key wraps it (ADR 217). The server writes the wrapped key as the blob `item-keys/<item key ID>/v<namespace key version>`, and a rewrap writes it as a new blob. SQL keeps only a record of the key. An item key ID has the prefix `ik-`. The Pulumi CLI never sees an item key, and the data key of the unit does not change.
 _Avoid_: Version key, derived key, data key (that is the one key of a scope)
 
 **Redaction**:
@@ -1005,7 +1037,7 @@ The JSON Lines file that the command of a cloud sweep writes to the path in `DUS
 _Avoid_: Sweep result, scan output
 
 **Namespace link**:
-A record that lets the classification of one namespace read the units of another namespace (ADR 163). Two teams can use one cloud account from two namespaces. An installation administrator with `installation:link-namespaces` makes the link. A link goes both ways. It holds the stable IDs of the two namespaces, never their names. Each write appends an audit entry. A soft delete of a namespace stops its links, and a purge of the namespace deletes them. Without a link, the classification of a namespace reads the units of that namespace only.
+A record that lets the classification of one namespace read the units of another namespace (ADR 163). Two teams can use one cloud account from two namespaces. A link is active only when an administrator of each namespace accepts it with `namespace:accept-link`. The operator cannot make one alone (ADR 216). A link is one of the joins between namespaces (ADR 216 decision 8). A link goes both ways. It holds the stable IDs of the two namespaces, never their names. Each write appends an audit entry. A soft delete of a namespace stops its links, and a purge of the namespace deletes them. Without a link, the classification of a namespace reads the units of that namespace only.
 _Avoid_: Link (alone), namespace trust, federation
 
 **Context**:
