@@ -671,8 +671,12 @@ _Avoid_: Approval (that is a job gate), opt-in, permission
 ### History
 
 **History item**:
-One entry with content in the history of a unit (ADR 150). It is one Pulumi update with its checkpoints, events and journal entries, or one OpenTofu state version. It can also be one stored plan or one version of a job log, which the job model owns (ADR 152). Shared code names an item by its unit, its kind (`state`, `plan` or `job-log`) and the ID that the tool gives the item. The core never parses the item ID. A preview is not a history item.
+One entry with content in the history of a unit (ADR 150). It is one Pulumi update with its checkpoints, events and journal entries, or one OpenTofu state version. It can also be one stored plan or one version of a job log, which the job model owns (ADR 152). Shared code names an item by its item owner, its kind and the ID that the tool gives the item. The kinds are an open set that the server registers (ADR 154): `state`, `plan`, `job-log` and `comment` now. The core never parses the item ID. A preview is not a history item.
 _Avoid_: Revision, version (alone), history entry
+
+**Item owner**:
+The object that a history item belongs to (`history.Owner`, ADR 154). The owner kinds are an open set that the server registers: `unit` for state items, plans and job logs, and `change-order` for comments (ADR 198). The scope of an item key is the namespace and the owner ID. Each owner kind names the object of a read, the action of a redaction and the end of its items.
+_Avoid_: Parent, container, unit (alone, when the owner can be a change order)
 
 **Latest state item**:
 The state item of a unit that no redaction can target (ADR 150, ADR 151). For a stack, it is the update that holds the checkpoint that `stack export` answers. For a workspace, it is the current state version. It also holds the replay base of each update that has not ended or whose journal the server did not replay yet. A request to redact it answers 409 with `history.ErrLatest`.
@@ -715,7 +719,7 @@ A read of a unit, or of the inventory of a namespace, at a time `at` in Unix mil
 _Avoid_: Snapshot, time travel, historical state
 
 **Inventory change log**:
-The append-only log of each inventory write (ADR 150). Each tool appends one row in the transaction of each inventory write: `created`, `changed`, `renamed`, `deleted`, `restored` or `purged`. A row holds the fields of the inventory entry at that time, the time of the write and a sequence number. The store assigns the sequence number in the order of commits. A purge keeps the rows of the unit, which hold names and counts and never state. The server keeps the log forever, and no setting changes this. A rebuild of the inventory cannot rebuild the log in full.
+The append-only log of each inventory write (ADR 150). Each tool appends one row in the transaction of each inventory write: `created`, `changed`, `renamed`, `deleted`, `restored` or `purged`. A row holds the fields of the inventory entry at that time, the time of the write and a sequence number. The sequence is per namespace. A counter row of the namespace assigns it in the write transaction, so it follows the order of commits (ADR 154). A purge keeps the rows of the unit, which hold names and counts and never state. The server keeps the log forever, and no setting changes this. A rebuild of the inventory cannot rebuild the log in full.
 _Avoid_: Inventory history, audit log (that records actions)
 
 **Dependency edge**:
