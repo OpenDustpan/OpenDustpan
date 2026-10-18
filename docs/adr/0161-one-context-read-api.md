@@ -1,6 +1,6 @@
 # 161. One tool-neutral context read API
 
-Status: accepted · 2026-10-17
+Status: accepted · 2026-10-17 · decisions 1 and 3 superseded in part by ADR 166
 
 ## Context
 
