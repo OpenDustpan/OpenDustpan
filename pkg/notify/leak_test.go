@@ -1,4 +1,4 @@
-package event_test
+package notify_test
 
 import (
 	"testing"
