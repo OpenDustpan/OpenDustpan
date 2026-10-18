@@ -54,7 +54,8 @@ func durableSchema(t *testing.T, conn *pgx.Conn, key string, token int64) string
 		t.Fatalf("load migrations: %v", err)
 	}
 
-	stmts := []string{"CREATE SCHEMA " + ident, "SET search_path TO " + ident}
+	stmts := make([]string, 0, len(all)+2)
+	stmts = append(stmts, "CREATE SCHEMA "+ident, "SET search_path TO "+ident)
 	for _, m := range all {
 		stmts = append(stmts, m.SQL)
 	}
