@@ -217,14 +217,21 @@ links.
    - `os.Root` refuses a path that leaves the root, but it follows a
      symbolic link that stays inside the root. It follows such a link in
      each parent component of a path, and in the last component for
-     `OpenFile`, `Chmod` and `Chtimes`. On Unix, `Root.Chmod`,
+     `OpenFile`, `Chmod`, `Chown`, `Chtimes` and `Stat`. On Unix, `Root.Chmod`,
      `Root.Chown` and `Root.Chtimes` can race with a change of the path.
      So the coordinator obeys these rules:
      - It creates each regular file with `Root.OpenFile` and the flags
        `O_CREATE|O_EXCL|O_NOFOLLOW`. The create mode already has the
-       setuid and setgid bits cleared. It creates each directory with
-       `Root.Mkdir` and a mode without those bits. It calls no
-       `Root.Chmod`, `Root.Chown` or `Root.Chtimes` after the create.
+       setuid and setgid bits cleared. It creates every directory with
+       mode `0700`, with `Root.MkdirAll` for a missing parent, and it
+       accepts `EEXIST` when the path is already a directory. It records
+       the mode from the header of the entry. In a last pass, deepest
+       directory first, it opens each directory with
+       `Root.OpenFile(O_RDONLY|O_DIRECTORY|O_NOFOLLOW)` and calls
+       `File.Chmod` on the file descriptor with the recorded mode, with
+       the setuid and setgid bits cleared. There is no path-based
+       `Root.Chmod`, and no `Root.Chown` or `Root.Chtimes` after the
+       create.
      - It writes each symbolic link as it is, with `Root.Symlink`.
        `Root.Symlink` does not check its target, so a link can have an
        absolute target or a target that leaves the root. The coordinator
@@ -234,13 +241,20 @@ links.
      - `mutate.Extract` emits an entry of a lower layer under a path
        that a higher layer replaced. For example, a higher layer has the
        symbolic link `d -> sub` and a lower layer has `d/x`. Docker hides
-       `d/x`, but a write through the `os.Root` makes `sub/x`. So the
-       coordinator drops each entry with a parent path that it already
-       wrote as a symbolic link or as an entry that is not a directory.
+       `d/x`, but a write through the `os.Root` makes `sub/x`. In
+       v0.22.1, `mutate.Extract` already drops the children of a path
+       that a higher layer wrote as a non-directory
+       (`pkg/v1/mutate/mutate.go`, `inWhiteoutDir`). Only an order inside
+       one layer gets through: the child before the link. Then
+       `Root.Symlink` fails with `EEXIST`. As defense in depth, the
+       coordinator also drops each entry with a parent path that it
+       already wrote as a symbolic link or as an entry that is not a
+       directory.
      - It makes the hard links with `Root.Link` after it wrote all
        regular files. It skips a hard link whose target is missing. A
-       hard link whose target is absolute or leaves the root, which
-       `Root.Link` refuses with an error, fails the phase.
+       hard link whose target is absolute or leaves the root, or is a
+       directory, which `Root.Link` refuses with an error, fails the
+       phase.
      - It changes an owner only at the create, with `Root.Lchown` on the
        new entry, and only when it runs as root.
    - It applies the unpack limits of decision 7.
@@ -316,6 +330,9 @@ links.
      `application/vnd.oci.image.manifest.v1+json`,
      `application/vnd.docker.distribution.manifest.list.v2+json` and
      `application/vnd.docker.distribution.manifest.v2+json`.
+   - The `Content-Type` of the manifest answer must be one of these four
+     media types. Else the resolution fails. This finds a schema 1
+     manifest and an unknown manifest at plan time.
    - The tag can name an image index. The server then records the digest
      of the index. The machine coordinator selects the image for its
      platform (decision 2), and the Kubernetes node selects the image for
@@ -424,6 +441,10 @@ links.
      only to the token realm, and only when the realm passes the
      outbound rules of decision 6. It sends the bearer token only to
      host `H`.
+   - With a `Bearer` challenge, the Basic credentials of the registry
+     host go only to a realm whose host is the registry host, the fixed
+     pair of `docker.io` (`auth.docker.io`), or a host listed for that
+     credential. For any other realm, the server sends no credential.
    - The server never sends a credential after a redirect or to another
      host.
    - A new action, `namespace:manage-registries` (object: a namespace),

@@ -202,11 +202,11 @@ linters:
             - "$all"
             - "!**/cmd/dustpan-runner/**"
           deny:
-            - pkg: k8s.io
+            - pkg: k8s.io/
               desc: Only the runner speaks to the Kubernetes API; the server never links a Kubernetes client (ADR 139).
-            - pkg: sigs.k8s.io
+            - pkg: sigs.k8s.io/
               desc: Only the runner speaks to the Kubernetes API; the server never links a Kubernetes client (ADR 139).
-            - pkg: github.com/google/go-containerregistry
+            - pkg: github.com/google/go-containerregistry/
               desc: Only the machine runner pulls and unpacks OCI images (ADR 139).
             - pkg: opendustpan.org/opendustpan/cmd/dustpan-runner
               desc: The runner module imports the server module, never the reverse (ADR 139).
