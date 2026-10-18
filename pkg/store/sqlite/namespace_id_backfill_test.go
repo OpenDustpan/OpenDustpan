@@ -38,12 +38,12 @@ func TestNamespaceIDBackfill(t *testing.T) {
 
 	const insert = `INSERT INTO namespaces (name, home_region, failover_version, created_at_ms)
 		VALUES ('acme', 'eu-west', 1, 0), ('globex', 'eu-west', 1, 0)`
-	if _, err := conn.ExecContext(ctx, insert); err != nil {
-		t.Fatalf("insert namespaces: %v", err)
+	if _, execErr := conn.ExecContext(ctx, insert); execErr != nil {
+		t.Fatalf("insert namespaces: %v", execErr)
 	}
 
-	if err := conn.Close(); err != nil {
-		t.Fatalf("close raw database: %v", err)
+	if closeErr := conn.Close(); closeErr != nil {
+		t.Fatalf("close raw database: %v", closeErr)
 	}
 
 	s, err := sqlite.Open(ctx, path)
@@ -73,8 +73,8 @@ func checkBackfilledIDs(t *testing.T, s *sqlite.Store, names ...namespace.Name) 
 			t.Fatalf("get namespace %q: %v", name, err)
 		}
 
-		if _, err := namespace.ParseID(ns.ID.String()); err != nil {
-			t.Fatalf("namespace %q has ID %q: %v", name, ns.ID, err)
+		if _, parseErr := namespace.ParseID(ns.ID.String()); parseErr != nil {
+			t.Fatalf("namespace %q has ID %q: %v", name, ns.ID, parseErr)
 		}
 
 		if seen[ns.ID] {

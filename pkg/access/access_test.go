@@ -909,6 +909,7 @@ func TestCreateNamespaceGrantsTheCreator(t *testing.T) {
 	})
 
 	ns.Name = "delta"
+	ns.ID = namespace.NewID()
 
 	g, err = f.svc.CreateNamespace(t.Context(), testEntry(), admin, ns)
 	if err != nil || g != nil {

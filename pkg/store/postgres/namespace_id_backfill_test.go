@@ -69,8 +69,8 @@ func checkBackfilledIDs(t *testing.T, s *postgres.Store, names ...namespace.Name
 			t.Fatalf("get namespace %q: %v", name, err)
 		}
 
-		if _, err := namespace.ParseID(ns.ID.String()); err != nil {
-			t.Fatalf("namespace %q has ID %q: %v", name, ns.ID, err)
+		if _, parseErr := namespace.ParseID(ns.ID.String()); parseErr != nil {
+			t.Fatalf("namespace %q has ID %q: %v", name, ns.ID, parseErr)
 		}
 
 		if seen[ns.ID] {
